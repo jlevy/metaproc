@@ -23,6 +23,14 @@ Every byte-exact destination was copied as a complete file and checked with
 `git hash-object` against the source ledger before standalone edits.
 The checkpoint had 291 matches, no missing destinations, and no mismatches.
 
+An ignored-path audit after the initial root commit found that the exact
+`tests/fixtures/claude_api_signals/oauth_refresh_400.log` blob remained in the worktree
+but had been omitted from the commit by the scaffold’s generic `*.log` rule.
+Its source and destination Git blob hashes were both
+`f189a0a2fc1cdc4b8d93b4cb64a9428865877e46`. The fixture was force-added, the ignore rule
+was narrowed, and all other classified source paths were checked against the standalone
+ignore rules; no other source file was omitted.
+
 ## Intentional Post-Copy Changes
 
 Files classified for rewriting or synthetic replacement were changed only after the
