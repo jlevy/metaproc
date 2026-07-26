@@ -1,0 +1,25 @@
+{
+  "batch": "synthetic-batch-288199d5ea81",
+  "fixtures": {
+    "claude": {
+      "lines": "19",
+      "size_kb": "19",
+      "source_log": "arb-2030-01-01-tue-amc-five-adapter-tier1-amc-claude-opus/.logs/tasks/synthetic/API/alt-data-research_API_2026-05-26T03-55-24.jsonl.gz"
+    },
+    "codex": {
+      "lines": "11",
+      "size_kb": "4",
+      "source_log": "arb-2030-01-01-tue-amc-five-adapter-tier1-amc-codex-gpt55/.logs/tasks/edge-candidate-ledger/API/edge-candidate-ledger_API_2026-05-26T06-36-27.jsonl"
+    },
+    "gemini": {
+      "lines": "19",
+      "size_kb": "7",
+      "source_log": "arb-2030-01-01-tue-amc-five-adapter-tier1-amc-gemini-flash/.logs/tasks/synthetic/API/alt-data-research_API_2026-05-26T06-09-40.jsonl"
+    },
+    "pi": {
+      "lines": "19",
+      "size_kb": "64",
+      "source_log": "arb-2030-01-01-tue-amc-five-adapter-tier1-amc-pi-glm5/.logs/tasks/synthetic/API/alt-data-research_API_2026-05-26T03-38-10.jsonl.gz"
+    }
+  }
+}

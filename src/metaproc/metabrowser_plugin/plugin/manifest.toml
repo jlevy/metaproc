@@ -1,0 +1,199 @@
+[plugin]
+name = "metaproc"
+display_name = "Metaproc views"
+version = "0.0.1"
+sdk_version = "0.1"
+
+# Extra scripts load before the plugin entry point. The packaged ELK bundle must load
+# before `viz.js`; `domain_views.js` owns process, resource, chart, and stats views.
+extra_scripts = ["elk.bundled.js", "viz.js", "domain_views.js"]
+extra_styles = ["viz.css", "domain_views.css"]
+
+# ── Kind detection ────────────────────────────────────────────
+#
+# These rules own the metaproc-specific kinds. The plugin classifier
+# wins over the metabrowser core fallback (priority 100 vs 0), so
+# removing this plugin from the install set drops these kinds back
+# to their generic fallbacks (markdown / unknown-jsonl / json) —
+# proving no metaproc knowledge leaks into metabrowser core's
+# manifest layer.
+#
+# Server-side: the data-hook handlers in sidekick.py
+# (viz-model / charts / stats / resources / info) own all
+# metaproc-domain HTTP responses; metabrowser core has no knowledge
+# of these endpoints.
+#
+# Client-side renderers and their state live entirely in this plugin. MetaBrowser core
+# discovers the manifest and mounts registered views without knowing their view IDs.
+
+[[kind]]
+id = "process-spec"
+match = { ext = ".md", frontmatter_has_key = "process" }
+priority = 100
+
+# Schema-prefix detection (used by ProcessSpec/0.1 docs that don't have
+# a top-level `process:` key — schema is in frontmatter as
+# "metaproc:ProcessSpec/0.1").
+[[kind]]
+id = "process-spec"
+match = { ext = ".md", frontmatter_schema_prefix = "metaproc:ProcessSpec/" }
+priority = 100
+
+[[kind]]
+id = "resource-report"
+match = { ext = ".json", basename = "resources.json", json_has_key = "schema", json_value_prefix = "metaproc.resources/" }
+priority = 100
+
+[[kind]]
+id = "structure-report"
+match = { ext = ".md", frontmatter_has_key = "structure_report" }
+priority = 110
+
+[[kind]]
+id = "runpool-log"
+match = { ext = ".jsonl", adapter = "runpool" }
+priority = 100
+
+[[kind]]
+id = "process-log"
+match = { ext = ".jsonl", adapter = "process" }
+priority = 100
+
+# Python sidekick exposes the canonical metaproc-domain data hooks under
+# /api/plugin/metaproc/<route>. MetaBrowser core has no corresponding routes.
+
+[[data_hook]]
+route = "info"
+sidekick = "metaproc.metabrowser_plugin.sidekick:info_handler"
+methods = ["GET"]
+
+[[data_hook]]
+route = "viz-model"
+sidekick = "metaproc.metabrowser_plugin.sidekick:viz_model_handler"
+methods = ["GET"]
+
+[[data_hook]]
+route = "charts"
+sidekick = "metaproc.metabrowser_plugin.sidekick:charts_handler"
+methods = ["GET"]
+
+[[data_hook]]
+route = "stats"
+sidekick = "metaproc.metabrowser_plugin.sidekick:stats_handler"
+methods = ["GET"]
+
+[[data_hook]]
+route = "resources"
+sidekick = "metaproc.metabrowser_plugin.sidekick:resources_handler"
+methods = ["GET"]
+
+[[data_hook]]
+route = "structure-report"
+sidekick = "metaproc.metabrowser_plugin.sidekick:structure_report_handler"
+methods = ["GET"]
+
+# Views are owned by this plugin. MetaBrowser core's view registry has no process-spec,
+# resource-report, runpool-log, or process-log entries.
+
+# process-spec: viz DAG + rendered markdown body + source + plugin "Steps"
+[[view]]
+kind = "process-spec"
+id = "visual"
+label = "Visual"
+default = true
+
+[[view]]
+kind = "process-spec"
+id = "rendered"
+label = "Document"
+container_class = "content-body metabrowser-kpress-host md-body"
+printable = true
+print_profile = "document"
+render_runtime = "kpress"
+
+[[view]]
+kind = "process-spec"
+id = "source"
+label = "Source"
+container_class = "content-body metabrowser-source-host"
+printable = true
+print_profile = "source"
+render_runtime = "client"
+
+[[view]]
+kind = "process-spec"
+id = "steps"
+label = "Steps"
+
+# runpool-log: charts + stats + log + raw
+[[view]]
+kind = "runpool-log"
+id = "charts"
+label = "Charts"
+default = true
+
+[[view]]
+kind = "runpool-log"
+id = "stats"
+label = "Stats"
+
+[[view]]
+kind = "runpool-log"
+id = "log"
+label = "Log"
+
+[[view]]
+kind = "runpool-log"
+id = "raw"
+label = "Raw JSON"
+
+# process-log: log + raw
+[[view]]
+kind = "process-log"
+id = "log"
+label = "Log"
+default = true
+
+[[view]]
+kind = "process-log"
+id = "raw"
+label = "Raw JSON"
+
+# resource-report: resources + treemap + raw
+[[view]]
+kind = "resource-report"
+id = "resources"
+label = "Resources"
+default = true
+
+[[view]]
+kind = "resource-report"
+id = "treemap"
+label = "Treemap"
+
+[[view]]
+kind = "resource-report"
+id = "raw"
+label = "Raw JSON"
+
+# structure-report: generated softschema artifact summary + source
+[[view]]
+kind = "structure-report"
+id = "summary"
+label = "Summary"
+default = true
+
+[[view]]
+kind = "structure-report"
+id = "artifacts"
+label = "Artifacts"
+
+[[view]]
+kind = "structure-report"
+id = "graph"
+label = "Graph"
+
+[[view]]
+kind = "structure-report"
+id = "source"
+label = "Source"

@@ -1,0 +1,236 @@
+# ---- Project Info and Dependencies ----
+
+[project.urls]
+Homepage = "https://github.com/jlevy/metaproc"
+Repository = "https://github.com/jlevy/metaproc"
+Documentation = "https://github.com/jlevy/metaproc#readme"
+Issues = "https://github.com/jlevy/metaproc/issues"
+
+[project]
+name = "metaproc"
+dynamic = ["version"]
+description = "Generic process framework for structured multi-step agent workflows"
+authors = [
+    { name = "Joshua Levy", email = "joshua@cal.berkeley.edu" },
+]
+maintainers = [
+    { name = "Joshua Levy", email = "joshua@cal.berkeley.edu" },
+]
+readme = "README.md"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE", "NOTICE.md"]
+requires-python = ">=3.12,<4.0"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+    "Topic :: Software Development :: Build Tools",
+]
+keywords = ["agents", "automation", "process", "workflows"]
+dependencies = [
+    "softschema>=0.1.4,<0.2",
+    "pydantic>=2.13.1",
+    "typer>=0.24.1",
+    "ruamel.yaml>=0.19.1",
+    "pyyaml>=6.0.3",
+    "frontmatter-format>=0.3.0",
+    "jsonschema>=4.26.0",
+    "strif>=3.1.0",
+    "prettyfmt>=0.4.1",
+    "starlette>=1.3.1",
+    "uvicorn>=0.44.0",
+    "psutil>=7.2.2",
+    "pathspec>=1.0.4",
+    "cachetools>=7.0.5",
+    # Browser realtime-streaming — native-watcher backend on
+    # local mounts (P5). Falls through to polling on NFS / FUSE.
+    "watchfiles>=1.1.1",
+]
+
+[project.optional-dependencies]
+gcp = ["google-auth>=2.49", "requests>=2.0"]
+gcp-batch = [
+    "metaproc[gcp]",
+    "google-cloud-batch>=0.17",
+    "google-cloud-storage>=2.18",
+    "google-cloud-logging>=3.11",
+    "google-cloud-asset>=3.27",
+    "google-cloud-filestore>=1.9",
+    "google-cloud-monitoring>=2.21",
+    "google-cloud-secret-manager>=2.20",
+]
+
+[dependency-groups]
+build = [
+    "hatchling==1.30.1",
+    "uv-dynamic-versioning==0.14.0",
+]
+dev = [
+    "metaproc[gcp,gcp-batch]",
+    # MetaBrowser is a dev-time dep so `uv sync --dev` from the metaproc
+    # directory gets a working browser stack. The metaproc-domain
+    # MetaBrowser plugin lives at `metaproc/src/metaproc/metabrowser_plugin/`
+    # and ships in metaproc's wheel — no separate package needed.
+    "metabrowser==0.1.0",
+    "pytest>=9.1.1",
+    "pytest-sugar>=1.1.1",
+    "pytest-cov>=7.1.0",
+    "pytest-timeout>=2.4.0",
+    "ruff>=0.15.20",
+    "codespell>=2.4.2",
+    "rich>=14.3.2",
+    "basedpyright>=1.39.9",
+    "funlog>=0.2.1",
+    "httpx>=0.28.1",
+    "httpx2>=2.5.0",
+]
+
+[project.scripts]
+metaproc = "metaproc.cli:main"
+
+# Register the metaproc-domain metabrowser plugin (kinds: process-spec,
+# resource-report, runpool-log, process-log). metabrowser walks this
+# entry-point group at startup; the value points at the plugin
+# subpackage's `plugin_dir` factory, which returns the packaged directory
+# containing manifest.toml, index.js, and supporting assets.
+[project.entry-points."metaproc.skills"]
+metaproc = "metaproc.skill.builtin:metaproc_skill_spec"
+
+[project.entry-points."metabrowser.plugins"]
+metaproc = "metaproc.metabrowser_plugin:plugin_dir"
+
+# ---- Build system ----
+
+[build-system]
+requires = ["hatchling==1.30.1", "uv-dynamic-versioning==0.14.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+exclude = [
+    "/.agents/",
+    "/.claude/",
+    "/.codex/",
+    "/.github/",
+    "/.tbd/",
+    "/.copier-answers.yml",
+    "/AGENTS.md",
+    "/CLAUDE.md",
+    "/.venv/",
+    "/dist/",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/metaproc"]
+
+[tool.hatch.version]
+source = "uv-dynamic-versioning"
+
+[tool.uv-dynamic-versioning]
+vcs = "git"
+style = "pep440"
+bump = true
+
+# ---- Ruff ----
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "UP", "B", "I", "PLC0415", "FURB", "G", "ICN", "ISC", "LOG", "PIE", "PYI", "RET", "TID"]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "E402",  # module import not at top of file
+    "E731",  # lambda assignment
+    "B008",  # function call in argument defaults (Typer idiom)
+    # Formatter-conflict rules (must be disabled when using ruff formatter + linter).
+    # See: https://docs.astral.sh/ruff/formatter/#conflicting-lint-rules
+    "W191",
+    "E111",
+    "E114",
+    "E117",
+    "D206",
+    "D300",
+    "Q000",
+    "Q001",
+    "Q002",
+    "Q003",
+    "COM812",
+    "COM819",
+    "ISC002",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["metaproc"]
+known-third-party = ["metabrowser"]
+
+# ---- Pytest ----
+
+[tool.pytest.ini_options]
+python_files = ["*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+testpaths = ["tests"]
+norecursedirs = []
+filterwarnings = []
+# Per-test backstop so a hung test can't burn a CI run (see internal review postmortem:
+# a test built RunPool with MagicMock() as config and yaml.safe_load looped
+# forever on the resulting stream, stalling CI for 46 minutes).
+timeout = 60
+timeout_method = "thread"
+
+# ---- Codespell ----
+
+[tool.codespell]
+ignore-words-list = "ue,fo,theses"
+# Real-data adapter log fixtures occasionally include truncated tokens that
+# trigger false-positive typo hits (`usag` from `usage`, `FPT`, `mor`, `fals`).
+# The fixtures are checked-in verbatim agent logs, not source content we want
+# codespell to police.
+skip = "tests/fixtures/trace_agents/*.jsonl,tests/fixtures/trace_agents/*.json"
+
+# ---- Type checking ----
+#
+# Phase 5 complete: engine functions migrated from dict[str, Any] to Pydantic models.
+# All 12 previously-suppressed FIXME(Phase 5) rules are now re-enabled globally.
+# Per-file pyright comments suppress rules in files with legitimate Any usage
+# (JSON/YAML parsing, adapter subprocess I/O, test fixtures).
+#
+# Current state: 0 errors, 0 warnings.
+
+[tool.basedpyright]
+include = ["src", "tests", "devtools", "examples"]
+reportIgnoreCommentWithoutRule = false
+reportUnnecessaryTypeIgnoreComment = false
+reportMissingTypeStubs = false
+reportUnusedCallResult = false
+reportImplicitStringConcatenation = false
+reportUnreachable = false
+reportCallInDefaultInitializer = false  # Typer Option()/Argument() idiom — keep disabled
+reportImportCycles = false              # structural cycles — keep disabled
+reportMissingModuleSource = false       # PyYAML and other C-extension packages — keep disabled
+# Any-related rules: this codebase does heavy YAML/JSON parsing (ruamel.yaml returns Any).
+# Suppressing reportAny on 15+ source files and all test files means the rule doesn't fit.
+reportAny = false
+reportExplicitAny = false
+# Test-pattern rules: pytest's unannotated self/fixtures, mock objects, and testing
+# private internals trigger these on 21/27 test files. Not useful for this project.
+reportMissingParameterType = false
+reportUnknownParameterType = false
+reportUnknownMemberType = false
+reportUnknownVariableType = false
+reportUnknownArgumentType = false
+reportUnknownLambdaType = false
+reportUnannotatedClassAttribute = false
+reportUnusedParameter = false
+reportUntypedFunctionDecorator = false
+reportImplicitOverride = false
+reportUnusedImport = "none"
+reportUnusedFunction = "none"
+reportUnusedClass = "none"
+reportPrivateUsage = false

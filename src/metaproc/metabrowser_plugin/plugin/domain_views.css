@@ -1,0 +1,413 @@
+/* Consumer-owned styles for stats, resource reports, and visual overlays. */
+
+:root {
+  --ft-md-process: hsl(261 51% 61%);
+  --ft-md-process-bg: hsl(261 45% 95%);
+  --ft-md-process-border: hsl(261 30% 82%);
+  --viz-accent-process-bg: hsl(200 18% 98%);
+  --viz-accent-process-border: hsl(200 12% 75%);
+  --viz-accent-process-icon: var(--ft-md-process);
+  --standalone-node-process-fill: hsl(260 50% 96%);
+}
+
+/* ── Stats tab ─────────────────────────────────────────────── */
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+  padding: 12px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+.stats-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-document);
+  padding: 12px;
+}
+.stats-card-wide {
+  grid-column: 1 / -1;
+}
+.stats-card-header {
+  font-size: 13px;
+  font-weight: var(--weight-bold);
+  color: var(--text);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.stats-badge {
+  font-size: 10px;
+  font-weight: var(--weight-bold);
+  padding: 2px 6px;
+  border-radius: var(--radius-chrome);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.stat-running {
+  background: var(--status-info-bg);
+  color: var(--status-info-text);
+}
+.stat-complete {
+  background: var(--status-success-bg);
+  color: var(--status-success);
+}
+.stats-meta {
+  color: var(--muted-slate);
+  font-size: 11px;
+  margin: 4px 0;
+}
+.stats-kv {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--border);
+}
+.stats-kv:last-child {
+  border-bottom: none;
+}
+.stats-label {
+  color: var(--muted-slate);
+}
+.stats-value {
+  font-weight: var(--weight-bold);
+  color: var(--text);
+}
+.stats-error {
+  color: var(--status-error);
+  font-weight: var(--weight-bold);
+}
+.stats-failures {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 0;
+  color: var(--status-error);
+}
+.stats-progress-bar {
+  height: 6px;
+  background: var(--border);
+  border-radius: var(--radius-chrome);
+  margin: 6px 0;
+  position: relative;
+  overflow: hidden;
+}
+.stats-progress-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: var(--status-info);
+  border-radius: var(--radius-chrome);
+  transition: width 0.3s;
+}
+.stats-progress-fail {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  background: var(--status-error-strong);
+  border-radius: var(--radius-chrome);
+}
+.stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+  font-size: 11px;
+}
+.stats-table th {
+  text-align: left;
+  color: var(--muted-slate);
+  font-weight: var(--weight-bold);
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.stats-table td {
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.stats-table th:not(:first-child),
+.stats-table td:not(:first-child) {
+  text-align: right;
+}
+
+/* ── Resource report ─────────────────────────────────────────── */
+
+.resource-report-view {
+  padding: 12px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+.resource-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.resource-title {
+  font-size: 14px;
+  font-weight: var(--weight-bold);
+  color: var(--text);
+}
+.resource-subtitle {
+  color: var(--muted-slate);
+  font-size: 11px;
+  margin-top: 3px;
+}
+.resource-metric-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted-slate);
+}
+.resource-metric-control select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chrome);
+  padding: 4px 6px;
+  font: inherit;
+}
+.resource-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.resource-summary-cell {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-document);
+  padding: 8px;
+  background: var(--bg);
+}
+.resource-summary-cell span {
+  display: block;
+  color: var(--muted-slate);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+.resource-summary-cell strong {
+  font-size: 14px;
+  color: var(--text);
+}
+.resource-section-title {
+  font-size: 12px;
+  font-weight: var(--weight-bold);
+  color: var(--text);
+  margin: 14px 0 6px;
+}
+.resource-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.resource-table th {
+  text-align: left;
+  color: var(--muted-slate);
+  font-weight: var(--weight-bold);
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.resource-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.resource-table tbody tr {
+  cursor: pointer;
+}
+.resource-table tbody tr:hover {
+  background: var(--hover-bg);
+}
+.resource-row-selected {
+  background: var(--status-info-bg);
+}
+.resource-table th:not(:first-child),
+.resource-table td:not(:first-child) {
+  text-align: right;
+}
+.resource-table th:nth-child(2),
+.resource-table td:nth-child(2),
+.resource-table th:nth-child(3),
+.resource-table td:nth-child(3) {
+  text-align: left;
+}
+.resource-node-label {
+  display: inline-block;
+  white-space: nowrap;
+}
+.resource-link {
+  border: 0;
+  background: transparent;
+  color: var(--link);
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.resource-link:hover {
+  text-decoration: underline;
+}
+.resource-node-detail {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-document);
+  padding: 10px;
+  background: var(--bg);
+}
+.resource-detail-main {
+  margin-bottom: 8px;
+}
+.resource-detail-title {
+  font-weight: var(--weight-bold);
+  color: var(--text);
+  font-size: 13px;
+}
+.resource-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+/* ── Grouped log evidence + taxonomy rollups + treemap ── */
+
+.resource-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.resource-section-title > span {
+  flex: 1;
+}
+.resource-copy-btn {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chrome);
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.resource-copy-btn:hover {
+  background: var(--hover-bg);
+}
+
+.resource-log-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-document);
+  padding: 8px;
+  margin-bottom: 8px;
+  background: var(--bg);
+}
+.resource-log-group-header {
+  color: var(--muted-slate);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+.resource-log-group-header strong {
+  color: var(--text);
+}
+.resource-log-errors {
+  color: var(--status-error);
+}
+
+.resource-taxonomy-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+.resource-taxonomy-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-document);
+  padding: 8px;
+  background: var(--bg);
+}
+.resource-taxonomy-title {
+  font-weight: var(--weight-bold);
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+.resource-treemap-view {
+  padding: 12px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+.resource-treemap-crumbs {
+  color: var(--muted-slate);
+  font-size: 11px;
+  margin-top: 3px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: baseline;
+}
+.resource-crumb-current {
+  color: var(--text);
+  font-weight: var(--weight-bold);
+}
+.resource-crumb-sep {
+  color: var(--border);
+}
+.resource-treemap-canvas-wrap {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-document);
+  padding: 4px;
+  background: var(--bg);
+}
+.resource-treemap-canvas {
+  width: 100%;
+  height: auto;
+}
+.resource-treemap-tile rect {
+  stroke: var(--bg);
+  stroke-width: 1.5;
+  fill: #88aabb;
+  transition: filter 0.1s ease;
+  cursor: pointer;
+}
+.resource-treemap-tile:hover rect {
+  filter: brightness(1.15);
+}
+.resource-treemap-tile.resource-heat-hot rect {
+  fill: #c95c4a;
+}
+.resource-treemap-tile.resource-heat-warm rect {
+  fill: #d8a24f;
+}
+.resource-treemap-tile.resource-heat-cool rect {
+  fill: #4e8ab7;
+}
+.resource-treemap-tile.resource-heat-cold rect {
+  fill: #5a6771;
+}
+.resource-treemap-label {
+  fill: #ffffff;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  pointer-events: none;
+}
+.resource-treemap-value {
+  fill: rgba(255, 255, 255, 0.85);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  pointer-events: none;
+}
+
+/* Visual-tab overlay — hook into the existing viz accent-token mechanism. */
+.viz-node.viz-accent-resource-heat-hot {
+  box-shadow: inset 0 0 0 3px #c95c4a;
+}
+.viz-node.viz-accent-resource-heat-warm {
+  box-shadow: inset 0 0 0 3px #d8a24f;
+}
+.viz-node.viz-accent-resource-heat-cool {
+  box-shadow: inset 0 0 0 3px #4e8ab7;
+}
+.viz-node.viz-accent-resource-heat-cold {
+  box-shadow: inset 0 0 0 2px #5a6771;
+}

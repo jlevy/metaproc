@@ -1,0 +1,175 @@
+---
+runbook:
+  title: Cloud Dispatch
+  description: Prepare, submit, monitor, and recover Metaproc workloads on GCP Batch without embedding consumer-specific policy.
+  category: metaproc
+---
+# Cloud Dispatch
+
+This runbook covers the framework-owned GCP Batch path.
+A downstream repository owns its process specs, schemas, handlers, fixtures, images,
+infrastructure, and cost approval.
+Metaproc owns job construction, worker/orchestrator dispatch, status, logs, scaling,
+cancellation, and artifact transport.
+
+Adapter/model routing details live in
+[adapter compatibility](adapter-compatibility.runbook.md).
+Credential and Secret Manager setup lives in
+[credential setup](credential-setup.runbook.md).
+
+## 1. Pre-Launch Gates
+
+Run these gates from the exact branch and source state you intend to ship:
+
+```bash
+make verify
+
+uv --config-file uv.toml run --frozen metaproc run-process \
+  path/to/workflow.process.md \
+  --var RUNS_DIR=/absolute/path/to/runs \
+  --var RUN_ID=preflight \
+  --dry-run
+
+uv --config-file uv.toml run --frozen metaproc auth-check \
+  --live \
+  --variant <execution-profile>
+```
+
+Also run the consumer repository’s own verification command.
+A framework-green result does not validate domain schemas, prompts, handlers, or QA.
+
+## 2. Required Configuration
+
+Start from [`.env.example`](../../.env.example) and set only what the chosen execution
+mode requires. Never commit `.env`.
+
+| Variable | Purpose |
+| --- | --- |
+| `METAPROC_GCP_PROJECT` | GCP project containing Batch resources |
+| `METAPROC_GCP_REGION` | Batch region |
+| `METAPROC_GCP_SERVICE_ACCOUNT` | Worker/orchestrator service account |
+| `METAPROC_GCP_CONTAINER_IMAGE` | Image that can run Metaproc and the consumer |
+| `METAPROC_GCS_BUCKET` | Wheel and workspace artifact transport |
+| `METAPROC_GCP_SECRET_GH_TOKEN` | Secret Manager ref used when a private repo must be cloned |
+| `METAPROC_GCP_FILESTORE_*` | Optional shared run storage |
+| `METAPROC_REPO_URL` / `METAPROC_RUN_BRANCH` | Optional repository source for remote bootstrap |
+| `METAPROC_WHEEL_GCS` | Optional exact prebuilt Metaproc wheel |
+| `METAPROC_WORKSPACE_GCS` | Optional exact consumer workspace archive |
+
+Prefer immutable wheels/images and a pinned workspace artifact for repeatable runs.
+Branch checkout is useful during development but is mutable and must point at a pushed
+commit containing every required file.
+
+## 3. Render Before Submitting
+
+The committed cloud-plan self-test renders a single-task Batch job and exits without a
+network submission or spend:
+
+```bash
+uv --config-file uv.toml run --frozen metaproc run-process \
+  process/self-test/test-cloud.process.md \
+  --var RUNS_DIR="$(pwd)/.runs" \
+  --var RUN_ID=self-test-cloud-plan \
+  --var GCP_PROJECT=your-project \
+  --var IMAGE=us-central1-docker.pkg.dev/your-project/tools/metaproc:latest
+```
+
+Inspect the rendered job for the intended project, region, image, service account,
+machine type, secret references, and mounts before removing any `--dry-run` gate.
+
+## 4. Dispatch a Process
+
+```bash
+uv run metaproc run-process path/to/workflow.process.md \
+  --var RUNS_DIR=/mnt/filestore/runs \
+  --var RUN_ID=<new-run-id> \
+  --backend gcp-worker \
+  --cloud \
+  --num-workers <count> \
+  --max-concurrency <per-worker-count>
+```
+
+Add process variables and an execution-profile override only when required by the
+consumer. Use `--spot` only when the workflow tolerates preemption.
+The product of workers and per-worker concurrency is the maximum task concurrency,
+subject to runtime resource and provider limits.
+
+## 5. Dispatch an Arbitrary Command
+
+`metaproc gcp run` sends one command to one Batch task.
+By default it builds and ships the current Metaproc wheel and repository workspace.
+
+```bash
+# Render only.
+metaproc gcp run --dry-run -- python -m metaproc --help
+
+# Submit and stream logs.
+metaproc gcp run -- python -m my_consumer.batch_task --shard shard-a
+
+# Submit without waiting.
+metaproc gcp run --detach -- python -m my_consumer.batch_task --shard shard-b
+```
+
+Useful controls:
+
+- `--no-wheel` uses the image-baked Metaproc.
+- `--no-workspace` skips repository transport.
+- `--sync PATH` and `--sync-only PATH` narrow workspace transport.
+- `--env K=V` adds non-secret configuration.
+- `--secret K=REF` binds a Secret Manager version.
+- `--timeout <seconds>` sets the task deadline.
+
+Do not pass credentials through `--env`. Use Secret Manager references.
+
+## 6. Monitor Through Metaproc
+
+Use the framework commands rather than hand-parsing run directories or calling raw
+cloud-provider listing/logging commands:
+
+| Question | Command |
+| --- | --- |
+| Which runs are active? | `metaproc gcp runs` |
+| What is the Batch state? | `metaproc gcp status <run-id>` |
+| What is the per-step/item state? | `metaproc status <run-id>` |
+| Is the orchestrator healthy? | `metaproc pulse <run-id>` |
+| What are workers logging? | `metaproc gcp logs <run-id> --follow` |
+| What is the pool pressure? | `metaproc pool status <run-id>` |
+| How has concurrency changed? | `metaproc pool concurrency-timeline <run-id>` |
+| Stop the run | `metaproc gcp cancel <run-id>` |
+
+For unattended runs, use the supported automation/monitoring mechanism in the active
+agent environment and have it call these commands.
+Store wrapper logs and evidence under persistent run storage, never `/tmp`.
+
+## 7. Recovery
+
+1. Read `metaproc gcp status`, `metaproc status`, and `metaproc gcp logs`.
+2. Classify the failure: bootstrap, auth, quota, process validation, provider, resource,
+   or infrastructure.
+3. Fix the owning layer and push/build any code or image change.
+4. Re-run with the same `RUN_ID` when completion fingerprints should preserve valid
+   work. Use a new run ID only for an intentional clean duplicate.
+5. Use `metaproc pool retry-missing`, `override`, or `--force` only after reviewing
+   their audit and caching semantics in the
+   [operator reference](../../src/metaproc/docs/metaproc-operator-reference.md).
+
+Plaintext `GH_TOKEN`, `CLAUDE_CODE_CREDS_JSON`, and similar credentials are refused on
+cloud dispatch when their registered Secret Manager references are absent.
+Keep that fail-closed behavior intact.
+
+## Consumer Boundary
+
+The downstream repository must document:
+
+- how its container image is built and pinned;
+- which process variables and execution profiles are approved;
+- expected cost and who authorizes it;
+- domain preflight and QA;
+- output retention and incident evidence;
+- the exact Metaproc version or submodule commit used.
+
+Keep those policies out of this framework runbook.
+
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
+-->

@@ -1,0 +1,7 @@
+# Generated, vendored, and byte-exact files must retain their source formatting.
+src/metaproc/metabrowser_plugin/plugin/elk.bundled.js
+src/metaproc/metabrowser_plugin/plugin/elkjs-license.txt
+tests/fixtures/
+*.template.md
+.agents/skills/
+.claude/skills/

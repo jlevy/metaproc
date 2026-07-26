@@ -1,0 +1,20 @@
+{
+  "name": "metaproc-devtools",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pinned JavaScript toolchain for Metaproc plugin linting and type checking.",
+  "engines": {
+    "node": ">=24.18.0 <25",
+    "npm": ">=11.10.0 <12"
+  },
+  "scripts": {
+    "check:browser": "biome ci --config-path=biome.json src/metaproc/metabrowser_plugin/plugin tests/dom && tsc --project tsconfig.json",
+    "format:browser": "biome check --write --unsafe --config-path=biome.json src/metaproc/metabrowser_plugin/plugin tests/dom",
+    "prepare": "lefthook install"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.2",
+    "lefthook": "2.1.9",
+    "typescript": "6.0.3"
+  }
+}

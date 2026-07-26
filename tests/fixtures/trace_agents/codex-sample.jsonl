@@ -1,0 +1,11 @@
+{"adapter":"codex","original_lines":17,"original_size":103102,"timestamp":"2026-05-26T06:37:58.643914+00:00","type":"compaction","version":1}
+{"thread_id":"019e62ff-c086-7d70-9dfc-94479de8f786","type":"thread.started"}
+{"type":"turn.started"}
+{"item":{"aggregated_output":"Synthetic fixture aggregated_output content.","command":"printf 'synthetic fixture output\\n'","exit_code":0,"id":"item_0","status":"completed","type":"command_execution"},"type":"item.completed"}
+{"item":{"aggregated_output":"Synthetic fixture aggregated_output content.","command":"printf 'synthetic fixture output\\n'","exit_code":0,"id":"item_1","status":"completed","type":"command_execution"},"type":"item.completed"}
+{"item":{"aggregated_output":"Synthetic fixture aggregated_output content.","command":"printf 'synthetic fixture output\\n'","exit_code":0,"id":"item_2","status":"completed","type":"command_execution"},"type":"item.completed"}
+{"item":{"aggregated_output":"Synthetic fixture aggregated_output content.","command":"printf 'synthetic fixture output\\n'","exit_code":0,"id":"item_3","status":"completed","type":"command_execution"},"type":"item.completed"}
+{"item":{"aggregated_output":"Synthetic fixture aggregated_output content.","command":"printf 'synthetic fixture output\\n'","exit_code":0,"id":"item_4","status":"completed","type":"command_execution"},"type":"item.completed"}
+{"item":{"changes":[{"kind":"add","path":"/workspace/synthetic-project/synthetic-file-b2e3a56478f2.md"}],"id":"item_5","status":"completed","type":"file_change"},"type":"item.completed"}
+{"item":{"id":"item_6","text":"Synthetic fixture text content.","type":"agent_message"},"type":"item.completed"}
+{"type":"turn.completed","usage":{"cached_input_tokens":72320,"input_tokens":119548,"output_tokens":4397,"reasoning_output_tokens":944}}

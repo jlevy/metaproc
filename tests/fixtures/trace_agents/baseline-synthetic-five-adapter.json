@@ -1,0 +1,78 @@
+{
+  "batch": "synthetic-batch-288199d5ea81",
+  "lanes": {
+    "claude": {
+      "files_scanned": 125,
+      "parse_errors": 0,
+      "run_dir": "/workspace/synthetic-home/wrk/synthetic/synthetic-data/runs/local/earnings-information-arb/arb-2030-01-01-tue-amc-five-adapter-tier1-amc-claude-opus",
+      "tool_counts": {
+        "Bash": 1683,
+        "Monitor": 28,
+        "Read": 640,
+        "WebFetch": 67,
+        "WebSearch": 82,
+        "Write": 114
+      }
+    },
+    "codex": {
+      "files_scanned": 113,
+      "parse_errors": 0,
+      "run_dir": "/workspace/synthetic-home/wrk/synthetic/synthetic-data/runs/local/earnings-information-arb/arb-2030-01-01-tue-amc-five-adapter-tier1-amc-codex-gpt55",
+      "tool_counts": {
+        "command_execution": 2746,
+        "file_change": 120
+      }
+    },
+    "gemini-flash": {
+      "files_scanned": 150,
+      "parse_errors": 0,
+      "run_dir": "/workspace/synthetic-home/wrk/synthetic/synthetic-data/runs/local/earnings-information-arb/arb-2030-01-01-tue-amc-five-adapter-tier1-amc-gemini-flash",
+      "tool_counts": {
+        "glob": 148,
+        "google_web_search": 95,
+        "grep_search": 72,
+        "list_background_processes": 1,
+        "list_directory": 76,
+        "read_file": 1122,
+        "run_shell_command": 1763,
+        "update_topic": 271,
+        "write_file": 148
+      }
+    },
+    "gemini-pro": {
+      "files_scanned": 191,
+      "parse_errors": 0,
+      "run_dir": "/workspace/synthetic-home/wrk/synthetic/synthetic-data/runs/local/earnings-information-arb/arb-2030-01-01-tue-amc-five-adapter-tier1-amc-gemini-pro",
+      "tool_counts": {
+        "google_web_search": 92,
+        "list_directory": 3,
+        "read_file": 475,
+        "run_shell_command": 598,
+        "update_topic": 339,
+        "web_fetch": 4,
+        "write_file": 129
+      }
+    },
+    "pi-gemini-flash": {
+      "files_scanned": 112,
+      "parse_errors": 0,
+      "run_dir": "/workspace/synthetic-home/wrk/synthetic/synthetic-data/runs/local/earnings-information-arb/arb-2030-01-01-tue-amc-five-adapter-tier1-amc-pi-gemini-flash",
+      "tool_counts": {
+        "bash": 1513,
+        "read": 578,
+        "write": 131
+      }
+    },
+    "pi-glm5": {
+      "files_scanned": 113,
+      "parse_errors": 0,
+      "run_dir": "/workspace/synthetic-home/wrk/synthetic/synthetic-data/runs/local/earnings-information-arb/arb-2030-01-01-tue-amc-five-adapter-tier1-amc-pi-glm5",
+      "tool_counts": {
+        "bash": 1070,
+        "read": 681,
+        "write": 112
+      }
+    }
+  },
+  "source": "adapter_footprint.count_agent_tool_uses"
+}

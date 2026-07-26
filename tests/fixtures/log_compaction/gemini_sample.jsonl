@@ -1,0 +1,20 @@
+{"text":"Synthetic fixture text content.","type":"synthetic-raw"}
+{"text":"Synthetic fixture text content.","type":"synthetic-raw"}
+{"model":"gemini-3.1-pro-preview-customtools","session_id":"ecfe5591-9a9e-4145-838d-97ea072907e4","timestamp":"2026-04-01T07:06:41.414Z","type":"init"}
+{"content":"Synthetic fixture content content.","role":"user","timestamp":"2026-04-01T07:06:41.414Z","type":"message"}
+{"parameters":{"file_path":"synthetic/process/predict/predict-ticker.runbook.md"},"timestamp":"2026-04-01T07:06:47.499Z","tool_id":"jfy89q2v","tool_name":"read_file","type":"tool_use"}
+{"output":"Synthetic fixture output content.","status":"success","timestamp":"2026-04-01T07:06:48.001Z","tool_id":"jfy89q2v","type":"tool_result"}
+{"parameters":{"pattern":"synthetic/process/predict/v*"},"timestamp":"2026-04-01T07:06:53.907Z","tool_id":"oih8rn05","tool_name":"glob","type":"tool_use"}
+{"output":"Synthetic fixture output content.","status":"success","timestamp":"2026-04-01T07:06:54.418Z","tool_id":"oih8rn05","type":"tool_result"}
+{"parameters":{"dir_path":"synthetic/process/predict"},"timestamp":"2026-04-01T07:07:01.444Z","tool_id":"ltsvv0tw","tool_name":"list_directory","type":"tool_use"}
+{"output":"Synthetic fixture output content.","status":"success","timestamp":"2026-04-01T07:07:01.904Z","tool_id":"ltsvv0tw","type":"tool_result"}
+{"parameters":{"dir_path":"synthetic/process/predict/v9"},"timestamp":"2026-04-01T07:07:07.678Z","tool_id":"g16y5x4j","tool_name":"list_directory","type":"tool_use"}
+{"output":"Synthetic fixture output content.","status":"success","timestamp":"2026-04-01T07:07:08.416Z","tool_id":"g16y5x4j","type":"tool_result"}
+{"parameters":{"command":"printf 'synthetic fixture output\\n'","description":"Synthetic fixture description content."},"timestamp":"2026-04-01T07:07:15.650Z","tool_id":"kvqhq3so","tool_name":"run_shell_command","type":"tool_use"}
+{"output":"Synthetic fixture output content.","status":"success","timestamp":"2026-04-01T07:07:18.494Z","tool_id":"kvqhq3so","type":"tool_result"}
+{"parameters":{"command":"printf 'synthetic fixture output\\n'","description":"Synthetic fixture description content."},"timestamp":"2026-04-01T07:07:31.273Z","tool_id":"kcdtnf0q","tool_name":"run_shell_command","type":"tool_use"}
+{"output":"Synthetic fixture output content.","status":"success","timestamp":"2026-04-01T07:08:52.536Z","tool_id":"kcdtnf0q","type":"tool_result"}
+{"parameters":{"command":"printf 'synthetic fixture output\\n'","description":"Synthetic fixture description content."},"timestamp":"2026-04-01T07:09:02.645Z","tool_id":"akpxxcc5","tool_name":"run_shell_command","type":"tool_use"}
+{"output":"Synthetic fixture output content.","status":"success","timestamp":"2026-04-01T07:09:15.613Z","tool_id":"akpxxcc5","type":"tool_result"}
+{"parameters":{"command":"printf 'synthetic fixture output\\n'","description":"Synthetic fixture description content."},"timestamp":"2026-04-01T07:09:24.956Z","tool_id":"j331go58","tool_name":"run_shell_command","type":"tool_use"}
+{"output":"Synthetic fixture output content.","status":"success","timestamp":"2026-04-01T07:11:08.155Z","tool_id":"j331go58","type":"tool_result"}

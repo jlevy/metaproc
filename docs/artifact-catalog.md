@@ -1,0 +1,140 @@
+# Metaproc Artifact Catalog
+
+Every artifact metaproc writes to, or reads from, a run directory.
+Each entry names the filename pattern, path, format, schema, lifecycle, writer, and
+readers. Format choices follow
+[conventions.md §File Format Policy](conventions.md#file-format-policy); the
+run-directory layout is described in
+[conventions.md §Harness-Owned Runtime Artifacts](conventions.md#harness-owned-runtime-artifacts).
+
+Use this catalog when adding a new artifact, renaming one, or auditing format
+consistency. The companion programmatic registry is
+[`metaproc.paths`](../src/metaproc/paths.py), which holds the filename constants.
+
+## Summary by format
+
+| Format | Count | Where it lives |
+| --- | --- | --- |
+| YAML | ~14 | `<run>/.state/` |
+| JSONL | ~9 | `<run>/.logs/` |
+| JSON | 3 writers | `<run>/.state/` sidecars, `<run>/resources.json`, arena cache |
+| Softschema MD | 4 | `<run>/<artifact-tree>/` (post-run human reports) |
+| Plain text | 2 | `<run>/.logs/` (raw subprocess captures) |
+
+## State artifacts (YAML)
+
+Durable engine bookkeeping under `<run>/.state/`. Machine-internal records; agents must
+not hand-edit them. Atomic writes via `strif.atomic_output_file`.
+
+| Filename | Path | Schema (Pydantic) | Lifecycle | Writer | Primary readers |
+| --- | --- | --- | --- | --- | --- |
+| `run-config.yaml` | `<run>/.state/` | ad-hoc dict (typed envelope pending) | atomic, once at creation | `commands/run_process.py:_write_run_config` | engine resume validation, metabrowser, `metaproc status` |
+| `process-status.yaml` | `<run>/.state/` | ad-hoc dict (typed envelope pending) | atomic, rewritten each DAG tick | `commands/run_process.py:_write_process_status` | human, `metaproc status`, metabrowser |
+| `orchestrator-lease.yaml` | `<run>/.state/` | ad-hoc dict | heartbeat-updated every 30s | `io/orchestrator_lease.py:acquire_lease` | engine lease check |
+| `overrides.yaml` | `<run>/.state/` | `OverridesDocument` (`metaproc:OverridesDocument/0.1`) | atomic, on `metaproc override` | `io/overrides.py:_write_overrides` | `_verify_ancestors`, `metaproc status` footer |
+| `status.yaml` (per-task) | `<run>/.state/tasks/<step>/<item>/` | `StatusRecord` | atomic, on each transition | `io/state_io.py:write_status_at` | engine, CLI status, metabrowser |
+| `attempt.yaml` (per-task) | `<run>/.state/tasks/<step>/<item>/` | `AttemptRecord` | atomic, once per attempt | `io/state_io.py:write_attempt_at` | engine |
+| `result.yaml` (per-task) | `<run>/.state/tasks/<step>/<item>/` | `ResultRecord` | atomic, once at completion | `io/state_io.py:write_result_at` | engine, downstream steps |
+| `manual-ack.yaml` (per-task) | `<run>/.state/tasks/<step>/<item>/` | `ManualAckRecord` | atomic, on operator command | `io/state_io.py:write_manual_ack_at` | engine |
+| `runpool-status.yaml` | `<run>/.state/steps/<step>/` | `RunPoolStatus` | atomic, rewritten each tick | `runpool/status.py:write_status` | human, `metaproc pool`, metabrowser |
+| `scale-state.yaml` | `<run>/.state/steps/<step>/` | `ScaleState` | atomic, each tick | `runpool/status.py:write_scale_state` | engine controller on reconnect |
+| `scale-override.yaml` | `<run>/.state/steps/<step>/` | `ScaleOverride` | atomic, on operator command | `runpool/status.py:write_scale_override` | engine controller |
+| `dispatch-manifest.yaml` | `<run>/.state/steps/<step>/` | ad-hoc dict (typed envelope pending) | atomic, once after dispatch (appendable) | `io/dispatch_manifest.py:write_dispatch_manifest` | engine on resume |
+| `claimed-items.yaml` | `<run>/.state/steps/<step>/worker-<id>/` | `ClaimedItemsRecord` | atomic, on each claim | `io/claimed_items.py:write_claimed_items` | engine claim coordinator |
+| `runpool-status.yaml` (worker-scoped) | `<run>/.state/workers/worker-<id>/` | `RunPoolStatus` | atomic, rewritten each tick | `runpool/status.py:write_status` | human, `metaproc pool`, metabrowser |
+| `pool-kill-requested.yaml` | `<run>/.state/steps/<step>/` | ad-hoc dict | atomic, once | `runpool/kill.py:_write_sentinel` | engine pool loop |
+
+## Stream artifacts (JSONL)
+
+Append-only operational streams under `<run>/.logs/`. Line-recoverable, parseable in
+chunks. Gzip-passthrough (`.jsonl.gz`) supported via metaproc’s gz-aware readers; the
+logical type stays `.jsonl`.
+
+| Filename | Path | Schema (Pydantic) | Writer | Primary readers |
+| --- | --- | --- | --- | --- |
+| `process-events.jsonl` | `<run>/.logs/` | `ProcessEvent` (discriminated union) | `runpool/process_events.py:ProcessEventLogger._write` | trace builder, resource joiner, metabrowser process-log view |
+| `events.jsonl` (per-step) | `<run>/.logs/runpool/steps/<step>/` | ad-hoc dicts (typed schema pending) | `runpool/events.py:EventLogger._write` | trace builder, auth-usage aggregator, operator inspection |
+| `events.jsonl` (per-worker) | `<run>/.logs/runpool/workers/<worker-id>/` | ad-hoc dicts | `runpool/events.py:EventLogger` | same as above |
+| `health.jsonl` (per-step/worker) | `<run>/.logs/runpool/...` | ad-hoc dicts (typed schema pending) | `runpool/events.py:EventLogger` (health channel) | `metaproc pool health`, operator triage |
+| `dispatch-config-changes.jsonl` | `<run>/.logs/` | ad-hoc dict (typed envelope pending) | `commands/run_process.py:_record_resume_config_change` | resource aggregator timeline |
+| `trace.jsonl` | `<run>/.logs/derived/` | `TraceEvent` | `trace/store.py:write_trace` | metabrowser trace view, `metaproc trace` |
+| `<step>_<context>_<ts>.jsonl` | `<run>/.logs/tasks/<step>/<item>/` | depends on agent adapter | `runpool/backend.py` (subprocess stdout capture) | trace extractor, human debugging |
+| `invocations.jsonl` | `<run>/.logs/tools/<tool-name>/` | `ArenaToolRecord` on read side; write side currently ad-hoc | `example_workflow/arena_wrapper.py:log_tool_invocation` (for arena) | resource joiner, eval judge, usage aggregator |
+| `web-searches.jsonl` | `<run>/.logs/tools/arena/` | `WebSearchLog` | `arena_wrapper.py:_log_web_search` | eval judge, human debugging |
+| `resource-events.jsonl` | `<run>/.logs/` | `ResourceEvent` (discriminated union) | `logutil/resource_events.py:ResourceEventLogger.write` plus atomic rewrite by rollup | resource rollup builder |
+
+Legacy: `runpool-events.jsonl` is the pre-V2 equivalent of `events.jsonl`. Still parsed
+by the trace extractor as a fallback; new runs do not emit it.
+
+## Structured documents (JSON)
+
+| Filename | Path | Schema (Pydantic) | Lifecycle | Writer | Primary readers |
+| --- | --- | --- | --- | --- | --- |
+| `resources.json` | `<run>/` | `ResourcesDocument` (`metaproc:ResourcesDocument/v1`) | atomic, once or on refresh | `engine/resource_rollup.py:write_resource_artifacts` | metabrowser `/api/resources`, `metaproc resource-report` |
+| `*.invocation.json` (sidecar) | `<run>/.state/tasks/<step>/<item>/<attempt>/` | ad-hoc dict | atomic, once before spawn | `runpool/backend.py:write_invocation_sidecar` | trace claude_agent extractor, human debugging |
+| arena tool cache `*.json` | `<run>/.logs/tools/arena/cache/...` (typical) | ad-hoc (externally-owned upstream payload) | atomic, once per cache miss | `example_workflow/arena_wrapper.py` | arena wrapper on re-run |
+
+JSON is reserved for deeply-nested / large machine documents (`resources.json`) and
+externally-owned payloads (arena cache).
+The invocation sidecar is misaligned with the policy and is planned to convert to
+`*.invocation.yaml` — see **Pending renames** below.
+
+## Human reports (softschema MD)
+
+YAML frontmatter (typed envelope) plus markdown body.
+Generated post-run for operator consumption.
+Pattern documented in the standalone
+[softschema-guide.md](https://github.com/jlevy/softschema/blob/main/docs/softschema-guide.md)
+(or `softschema docs guide` locally) and in
+[conventions.md §Frontmatter Document Model](conventions.md#frontmatter-document-model).
+
+| Filename | Path | Envelope key + schema | Writer | Primary readers |
+| --- | --- | --- | --- | --- |
+| `usage.md` | `<run>/` | `usage` / `metaproc:UsageReport/0.2` | `commands/write_usage.py` via `logutil/usage.py:write_usage_report` | human operator |
+| `qa-report.md` (per-item) | `<run>/<artifact-tree>/.../` | `qa` / domain-defined | `example_workflow/qa/handler.py` (line ~177) | human operator |
+| `qa-summary.md` (per-process) | `<run>/<artifact-tree>/.../` | `qa_summary` / domain-defined | `example_workflow/qa/handler.py` (line ~185) | human operator |
+
+The `usage.md` envelope is registered in `metaproc.io.frontmatter.ENVELOPE_MAP`; the
+`qa` / `qa_summary` envelopes are registered the same way.
+
+## Plain text captures
+
+| Filename | Path | Writer | Notes |
+| --- | --- | --- | --- |
+| `process_<ts>.log` | `<run>/.logs/tasks/<step>/` or `<run>/.logs/tasks/<step>/<item>/` | `runpool/backend.py` | Captured subprocess stdout and stderr; gzip on close |
+| `probe.stderr` | `<run>/.state/steps/<step>/...` | `dispatch/pool_dispatch.py` | Captured stderr from a failed preflight probe |
+
+## Pending renames
+
+Tracked in
+[plan-2026-05-20-metaproc-resource-usage-and-file-format-policy.md](conventions.md):
+
+| Current | Planned | Reason |
+| --- | --- | --- |
+| `resources.json` | `resource-usage.json` | Generic name does not signal contents (tokens, cost, time, calls); paired with `resource-events.jsonl`. |
+| `usage.md` | `resource-usage-summary.md` | Pairs the trio (`resource-events.jsonl`, `resource-usage.json`, `resource-usage-summary.md`); “summary” reflects the flat-slice digest role. |
+| `*.invocation.json` | `*.invocation.yaml` | State-shaped sidecar; YAML matches the surrounding `.state/` convention. |
+
+Pending envelope/schema hygiene (separate plan, listed for completeness):
+
+- Typed Pydantic envelopes for `run-config.yaml`, `process-status.yaml`,
+  `dispatch-manifest.yaml`, `dispatch-config-changes.jsonl`.
+- Typed Pydantic discriminated unions for `events.jsonl` and `health.jsonl`.
+- Symmetrize arena `invocations.jsonl` writer to use the same Pydantic model the reader
+  enforces.
+
+## Companion references
+
+- [conventions.md §File Format Policy](conventions.md#file-format-policy) — when to pick
+  which format.
+- [conventions.md §Harness-Owned Runtime Artifacts](conventions.md#harness-owned-runtime-artifacts)
+  — the three-branch run-directory layout.
+- [`metaproc.paths`](../src/metaproc/paths.py) — programmatic filename registry.
+- [`metaproc.io.frontmatter`](../src/metaproc/io/frontmatter.py) — `ENVELOPE_MAP` and
+  softschema auto-detection.
+- [metaproc-operator-reference.md](../src/metaproc/docs/metaproc-operator-reference.md)
+  — operator-facing commands.
+
+<!-- This document follows std-doc-guidelines.md.
+Review guidelines before editing.
+-->
