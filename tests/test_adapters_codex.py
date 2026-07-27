@@ -1,4 +1,4 @@
-"""Tests for metaproc.adapters.codex — CodexCliAdapter (internal-reference)."""
+"""Tests for metaproc.adapters.codex — CodexCliAdapter."""
 
 from __future__ import annotations
 
@@ -87,7 +87,8 @@ class TestCodexBuildCommand:
 
     def test_bypass_permissions_emits_dangerous_flag(self, tmp_path: Path):
         cmd = self._cmd(tmp_path, {"permission_mode": "bypassPermissions"})
-        assert cmd[0] == "codex"
+        assert cmd[:2] == ["/bin/sh", "-c"]
+        assert "codex" in cmd
         assert "--dangerously-bypass-approvals-and-sandbox" in cmd
         # Dangerous flag must land before `exec`.
         dangerous_idx = cmd.index("--dangerously-bypass-approvals-and-sandbox")
@@ -185,9 +186,10 @@ class TestCodexBuildCommand:
         assert "RandomCustomTool" not in cmd
         assert "--random" not in cmd
 
-    def test_prompt_is_trailing_positional(self, tmp_path: Path):
+    def test_prompt_is_redirected_to_stdin(self, tmp_path: Path):
         cmd = self._cmd(tmp_path, {"permission_mode": "default"})
-        assert cmd[-1] == "Say hello."
+        assert cmd[-1] == "-"
+        assert Path(cmd[4]).read_text(encoding="utf-8") == "Say hello."
 
     def test_effort_default(self, tmp_path: Path):
         cmd = self._cmd(tmp_path, {"permission_mode": "default"})
@@ -224,11 +226,11 @@ class TestCodexBuildCommand:
                 "append_system_prompt": "Be terse. User={{NAME}}",
             },
         )
-        prompt_arg = cmd[-1]
+        prompt_text = Path(cmd[4]).read_text(encoding="utf-8")
         # Templates resolve; if variable absent, leaves placeholder.
-        assert "Be terse" in prompt_arg
-        assert "Say hello." in prompt_arg
-        assert prompt_arg.index("Be terse") < prompt_arg.index("Say hello.")
+        assert "Be terse" in prompt_text
+        assert "Say hello." in prompt_text
+        assert prompt_text.index("Be terse") < prompt_text.index("Say hello.")
 
 
 class TestCodexValidateConfig:

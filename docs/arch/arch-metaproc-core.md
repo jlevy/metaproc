@@ -59,7 +59,7 @@ Imported invariants:
 - **Step modes are `manual | agent | code | composite`.** The framework treats all four
   uniformly for state, validation, retry, and observation.
 - **Items file is the framework term** for a list-typed dep that drives a fan-out step.
-  Earnings-domain code uses *roster* as a synonym; the framework does not.
+  Analysis-domain code uses *roster* as a synonym; the framework does not.
 - **The orchestrator is deterministic Python code.** A coding agent as the top-level
   orchestrator would introduce non-determinism, context-window limits, and
   conversational drift into the control plane.
@@ -210,7 +210,7 @@ Logs use producer and writer scope rather than mirroring every `.state/` branch:
 
 Application profile (via plugins)
 ----------------------------------
-earnings-specific forms, frontmatter schemas, versioning, learn/proposal/apply rules
+analysis-specific forms, frontmatter schemas, versioning, learn/proposal/apply rules
 ```
 
 ### 5.2 Communication Model
@@ -270,7 +270,7 @@ declare and which step modes they use.
 ---
 process:
   name: example-workflow
-  description: Earnings lifecycle -- predict, retro, learn
+  description: Analysis lifecycle -- predict, retro, learn
 
   defaults:
     default_adapter: claude-code-cli
@@ -298,7 +298,7 @@ process:
       mode: composite
       uses: deps.predict_process
       with:
-        earnings_date: "{{earnings_date}}"
+        event_date: "{{event_date}}"
         run_mode: "{{run_mode}}"
         form_version: "{{form_version}}"
 
@@ -307,7 +307,7 @@ process:
       uses: deps.retro_process
       needs: [predict]
       with:
-        date: "{{earnings_date}}"
+        date: "{{event_date}}"
 
     - id: learn
       mode: composite
@@ -450,7 +450,7 @@ Typical entries:
 Runtime prompt composition uses a structured envelope:
 
 ```xml
-<prompt-file path="process/predict/predict-ticker.runbook.md">
+<prompt-file path="process/predict/predict-item.runbook.md">
 ...
 </prompt-file>
 ```
@@ -465,19 +465,19 @@ The items-file source must be declared explicitly and must produce a list-typed 
 
 ```yaml
 deps:
-  tickers:
-    path: "{{run.dir}}/predict/tickers.md"
+  items:
+    path: "{{run.dir}}/predict/items.md"
     as: list<map<string, string>>
     parse: {format: frontmatter-md, extract: items}
 
 steps:
-  - id: predict-ticker
+  - id: predict-item
     inputs:
-      tickers: deps.tickers
+      items: deps.items
     for_each:
-      over: deps.tickers
-      bind: ticker
-      bind_fields: [ticker, sector, earnings_date, cutoff_date]
+      over: deps.items
+      bind: item
+      bind_fields: [item, category, event_date, cutoff_date]
       batch_size: 10
       retry:
         max_retries: 2
@@ -498,7 +498,7 @@ invocation-specific bindings, not long procedure text.
 ```yaml
 prompt_prefix: |
   Follow the runbook: {{step.prompt_path}}
-  ticker={{ticker}} earnings_date={{earnings_date}} cutoff_date={{cutoff_date}}
+  item={{item}} event_date={{event_date}} cutoff_date={{cutoff_date}}
 ```
 
 The harness composes the agent invocation from:
@@ -599,9 +599,9 @@ fan-out dispatch.
 | `token_budget` | agent | per-step token budget (`.process.md` config field, no CLI flag equivalent) |
 | `reuse_policy` | all | `validated_outputs`, `exact_inputs`, or `never` |
 
-## 7. Earnings Reference Profile
+## 7. Analysis Reference Profile
 
-The earnings workflow is the proving ground for the framework and serves as the primary
+The analysis workflow is the proving ground for the framework and serves as the primary
 application profile.
 
 ## 7.1 Predict Process
@@ -610,7 +610,7 @@ application profile.
 ---
 process:
   name: predict
-  description: Pre-earnings packet generation and per-ticker prediction
+  description: Pre-analysis packet generation and per-item prediction
 
   defaults:
     default_adapter: claude-code-cli
@@ -629,10 +629,10 @@ process:
       path: "process/predict/{{form_version}}/packet.yaml"
       as: path
     predict_runbook:
-      path: "process/predict/predict-ticker.runbook.md"
+      path: "process/predict/predict-item.runbook.md"
       as: path
-    tickers:
-      path: "{{run.dir}}/predict/tickers.md"
+    items:
+      path: "{{run.dir}}/predict/items.md"
       as: list<map<string, string>>
       parse: {format: frontmatter-md, extract: items}
       produced_by: scaffold-day
@@ -649,44 +649,44 @@ process:
     - id: scaffold-day
       mode: code
       handler: "scaffold_day.py:scaffold_day"
-      description: Materialize the shared ticker roster
+      description: Materialize the shared item roster
 
     - id: generate-research-packet
       mode: code
       needs: [scaffold-day]
       inputs:
-        tickers: deps.tickers
+        items: deps.items
 
-    - id: predict-ticker
+    - id: predict-item
       mode: agent
       needs: [scaffold-day, generate-research-packet, retrieve-precedent]
       inputs:
-        tickers: deps.tickers
+        items: deps.items
         packet_manifest: deps.packet_manifest
         research_packets: deps.research_packets
         precedent: deps.precedent
       for_each:
-        over: tickers
-        bind: ticker
-        bind_fields: [ticker, sector, earnings_date, report_session, cutoff_date]
+        over: items
+        bind: item
+        bind_fields: [item, category, event_date, report_session, cutoff_date]
         batch_size: 5
       prompt_paths:
         - deps.predict_runbook
-      description: Run the full prediction packet for one ticker
+      description: Run the full prediction packet for one item
       prompt_prefix: |
         Follow the runbook at {{step.prompt_path}}.
-        ticker={{ticker}}
-        earnings_date={{earnings_date}}
+        item={{item}}
+        event_date={{event_date}}
         cutoff_date={{cutoff_date}}
         packet={{packet_manifest}}
       outputs:
         prediction:
-          path: "{{run.dir}}/predict/{{run.variant}}/{{ticker}}/prediction.md"
+          path: "{{run.dir}}/predict/{{run.variant}}/{{item}}/prediction.md"
 
     - id: qa-check
       mode: code
-      needs: [predict-ticker]
-      handler: "example_workflow.qa.handler:check"
+      needs: [predict-item]
+      handler: "example_plugin.qa.handler:check"
 ---
 ```
 
@@ -695,7 +695,7 @@ Notes:
 - `FORM_VERSION` selects a packet manifest on disk; the process spec no longer embeds
   packet-selection metadata in frontmatter
 - packet ordering and required forms are read from `packet.yaml`, not duplicated in
-  `predict-ticker.runbook.md`
+  `predict-item.runbook.md`
 - the roster is a shared process-level dep; per-item outputs stay variant-scoped
 
 ## 7.2 Retro Process
@@ -711,28 +711,28 @@ deps:
   integrity_template:
     path: "process/retro/{{form_version}}/integrity.template.md"
     as: path
-  tickers:
-    path: "{{run.dir}}/retro/tickers.md"
+  items:
+    path: "{{run.dir}}/retro/items.md"
     as: list<map<string, string>>
     parse: {format: frontmatter-md, extract: items}
     produced_by: scaffold-retro
   prediction:
-    path: "{{run.dir}}/predict/{{run.variant}}/{{ticker}}/prediction.md"
+    path: "{{run.dir}}/predict/{{run.variant}}/{{item}}/prediction.md"
     as: path
-    produced_by: predict.predict-ticker
+    produced_by: predict.predict-item
 
 steps:
   - id: predict-retro
     mode: agent
     inputs:
-      tickers: deps.tickers
+      items: deps.items
       retro_template: deps.retro_template
       integrity_template: deps.integrity_template
       prediction: deps.prediction
     for_each:
-      over: deps.tickers
-      bind: ticker
-      bind_fields: [ticker, sector, earnings_date]
+      over: deps.items
+      bind: item
+      bind_fields: [item, category, event_date]
 ```
 
 Version bumps become packet/template changes on disk, not edits to process frontmatter.
@@ -747,7 +747,7 @@ directly into shared mutable KB state.
 ---
 process:
   name: mine
-  description: Historic precedent mining with stage / validate / publish
+  description: Historic precedent research with stage / validate / publish
 
   deps:
     roster:
@@ -773,7 +773,7 @@ process:
       for_each:
         over: roster
         bind: event_id
-        bind_fields: [event_id, ticker, fiscal_quarter, earnings_date, sector]
+        bind_fields: [event_id, item, period, event_date, category]
         batch_size: 50
       prompt_paths:
         - "{{deps.generate_record_runbook.path}}"
@@ -846,7 +846,7 @@ The resolved plan uses the `plan:` envelope convention with a `schema` token.
 plan:
   schema: metaproc:Plan/0.5
   generated_at: '2026-04-17T17:54:42'
-  process: example_workflow/process/mine/mine.process.md
+  process: example_plugin/process/mine/mine.process.md
   params:
     RUN_ID: doc-sync-demo
     DATASET: tech-mix-5
@@ -873,7 +873,7 @@ plan:
         over: deps.roster
         bind: event_id
         source: runs/local/example-workflow/doc-sync-demo/mine/progress.md
-        bind_fields: [event_id, ticker, fiscal_quarter, earnings_date, sector]
+        bind_fields: [event_id, item, period, event_date, category]
         batch_size: 20
         items: []
         filtered_count: 0
@@ -1039,10 +1039,10 @@ It is not a synonym for the item itself.
 
 ```yaml
 run_id: 2026-03-24-daily
-step_id: predict-ticker
+step_id: predict-item
 item:
-  ticker: AAPL
-  sector: technology
+  item: AAPL
+  category: technology
 state: completed
 attempt: 2
 started_at: "2026-03-24T08:35:22Z"
@@ -1067,19 +1067,19 @@ Only the harness writes this file, and it must write it atomically.
 
 ```yaml
 run_id: 2026-03-24-daily
-step_id: predict-ticker
+step_id: predict-item
 item:
-  ticker: AAPL
-  sector: technology
+  item: AAPL
+  category: technology
 params:
   DATE: "2026-03-24"
   REFERENCE_DATE: "2026-03-21"
   RUN_ID: 2026-03-24-daily
-  ticker: AAPL
+  item: AAPL
 inputs:
-  tickers: example_workflow/runs/2026-03-24-daily/predict/tickers.md
+  items: example_plugin/runs/2026-03-24-daily/predict/items.md
 outputs:
-  prediction: example_workflow/runs/2026-03-24-daily/predict/claude-cli/AAPL/prediction.md
+  prediction: example_plugin/runs/2026-03-24-daily/predict/claude-cli/AAPL/prediction.md
 runtime:
   adapter_type: claude-code-cli
   model: opus
@@ -1094,11 +1094,11 @@ This fills the gap between raw JSONL logs and human-facing items files.
 
 ```yaml
 run_id: 2026-03-24-daily
-step_id: predict-ticker
+step_id: predict-item
 state: completed
 validated: true
 outputs:
-  prediction: example_workflow/runs/2026-03-24-daily/predict/claude-cli/AAPL/prediction.md
+  prediction: example_plugin/runs/2026-03-24-daily/predict/claude-cli/AAPL/prediction.md
 published_at: "2026-03-24T08:48:11Z"
 ```
 
@@ -1336,9 +1336,9 @@ needs the generic items-file contract.
 
 **Terminology note: items file vs roster.** *Items file* is the framework’s primary term
 for this concept. *Roster* is retained as domain-specific language inside the
-example_workflow profile (where step IDs, dep names, and module names like
-`setup-roster`, `mine/roster.py` use the older word) but is not part of the framework’s
-vocabulary. The two terms refer to the same construct.
+example_plugin profile (where step IDs, dep names, and module names like `setup-roster`,
+`mine/roster.py` use the older word) but is not part of the framework’s vocabulary.
+The two terms refer to the same construct.
 
 **Fan-out and map.** Two framings of the same operation: *fan-out* names the operational
 shape (one step, many parallel workers, dispatch via run pool or worker dispatch), and
@@ -1350,9 +1350,9 @@ Code keeps `fan-out`; design conversations may use either.
 
 ## 11.1 Candidate Source, Not Canonical Completion State
 
-For the earnings profile:
+For the analysis profile:
 
-- `tickers.md` or `events.md` is the shared candidate items file at process scope
+- `items.md` or `events.md` is the shared candidate items file at process scope
 - per-item `.state/tasks/{step_id}/{item_key}/status.yaml` is the canonical completion
   record
 - the harness joins those two surfaces to compute actionable work
@@ -1360,29 +1360,29 @@ For the earnings profile:
 This avoids concurrent writers mutating one shared frontmatter file and keeps the same
 items file reusable across variants.
 
-## 11.2 Example Items File (`tickers.md`)
+## 11.2 Example Items File (`items.md`)
 
 ```yaml
 ---
-tickers:
-  schema: "example_workflow:TickersDocument/0.1"
-  earnings_date: "2026-03-24"
+items:
+  schema: "example_plugin:ItemsDocument/0.1"
+  event_date: "2026-03-24"
   items:
-    - ticker: AAPL
-      sector: technology
+    - item: AAPL
+      category: technology
       report_session: after_close
-    - ticker: MSFT
-      sector: technology
+    - item: MSFT
+      category: technology
       report_session: after_close
 ---
-# Tickers
+# Items
 
 Shared items file for all variants. Per-item completion state lives in
 `.state/tasks/{step_id}/{item_key}/status.yaml`.
-(Earnings-domain code calls this a *roster*; the framework calls it an *items file*.)
+(Analysis-domain code calls this a *roster*; the framework calls it an *items file*.)
 ```
 
-The framework does not need to know what a ticker is.
+The framework does not need to know what a item is.
 It only needs a declared items file whose parsed value is `list<map<...>>`.
 
 ## 11.3 Example Events File (`events.md`)
@@ -1390,14 +1390,14 @@ It only needs a declared items file whose parsed value is `list<map<...>>`.
 ```yaml
 ---
 events:
-  schema: "example_workflow:MineRosterDocument/0.1"
+  schema: "example_plugin:MineRosterDocument/0.1"
   source_dataset: tech-mix-500
   items:
     - event_id: AAPL_2025-Q1
-      ticker: AAPL
-      fiscal_quarter: 2025-Q1
-      earnings_date: "2025-01-30"
-      sector: technology
+      item: AAPL
+      period: 2025-Q1
+      event_date: "2025-01-30"
+      category: technology
 ---
 # Mine Events
 
@@ -1407,7 +1407,7 @@ Fan-out source for mine. Canonical completion state still lives in per-task
 
 The exact envelope name is domain-owned.
 From the framework’s perspective this is just an items-file dep produced by
-`setup-roster` (an earnings step ID; the framework would name a similar step
+`setup-roster` (an analysis step ID; the framework would name a similar step
 `setup-items`).
 
 ## 11.4 Fan-Out Lifecycle
@@ -1625,9 +1625,9 @@ dependency ordering -- but has no opinion on check taxonomies, severity models, 
 report formats.
 
 Domains implement QA as ordinary `mode: code` step handlers.
-The earnings domain owns its QA end-to-end in `example_workflow.qa`: contracts, check
+The analysis domain owns its QA end-to-end in `example_plugin.qa`: contracts, check
 rules (generic OP/OM/CO/RE + domain-specific), reporting, and a CLI handler.
-Process specs reference `example_workflow.qa.handler:check` as the `qa-check` step
+Process specs reference `example_plugin.qa.handler:check` as the `qa-check` step
 handler.
 
 This follows the three-layer model:
@@ -1657,7 +1657,7 @@ class MetaprocPlugin(Protocol):
 The registry supports registering:
 
 - **Schemas** -- Pydantic models by schema token
-- **Envelopes** -- Pydantic models by document type (e.g., `prediction:`, `tickers:`)
+- **Envelopes** -- Pydantic models by document type (e.g., `prediction:`, `items:`)
 - **Schema-to-envelope mappings** -- which envelope wraps which schema
 - **Terminal statuses** -- for progress tracking (e.g., `completed`, `cached`)
 - **Process rules** -- validation rules for process specs
@@ -1680,13 +1680,13 @@ Two-phase plugin discovery:
 The workspace fallback ensures plugins work when running `uv run --project metaproc`
 without `--all-packages`.
 
-### 13.1.3 Earnings Plugin Registration
+### 13.1.3 Analysis Plugin Registration
 
-The earnings plugin (`example_workflow.metaproc_plugin`) registers:
+The analysis plugin (`example_plugin.metaproc_plugin`) registers:
 
-- Envelope types from `models_earnings.EARNINGS_ENVELOPES`
-- Schema models from `models_earnings.SCHEMA_REGISTRY`
-- Schema-to-envelope mappings for the earnings document set
+- Envelope types from `models_analysis.ANALYSIS_ENVELOPES`
+- Schema models from `models_analysis.SCHEMA_REGISTRY`
+- Schema-to-envelope mappings for the analysis document set
 - Terminal progress statuses
 - Compare-matrix defaults (direction, move_pct, position_type, allocation)
 
@@ -1694,7 +1694,7 @@ Entry point declaration in `pyproject.toml`:
 
 ```toml
 [project.entry-points."metaproc.plugins"]
-earnings = "example_workflow.metaproc_plugin:plugin"
+analysis = "example_plugin.metaproc_plugin:plugin"
 ```
 
 ## 14. Robustness Subsystems
@@ -1957,9 +1957,9 @@ for the full terminology note.
 
 Three independent sources feed the aggregation:
 
-1. **Arena wrapper invocation logs** (one file per ticker-event at
+1. **Tool wrapper invocation logs** (one file per item-event at
    `<phase_dir>/<variant>/<event>/.logs/tools/arena/invocations.jsonl`). Written by the
-   arena wrapper in example_workflow; metaproc only reads it.
+   tool wrapper in example_plugin; metaproc only reads it.
    Starts with a config-stub line (`type: config`, `mode`, `backtest_date`,
    `native_web_search`) and continues with one line per tool invocation: `tool_name`,
    `tier`, `exit_code`, `duration_s`, `error`.
@@ -1971,7 +1971,7 @@ Three independent sources feed the aggregation:
    the native web-search activity visibility gap — see the partial-closure invariant
    below.
 
-Pi-cli and arena wrapper logs cover different layers: pi-cli sees every tool call the
+Pi-cli and tool wrapper logs cover different layers: pi-cli sees every tool call the
 model issued (including the model’s internal retry loops); arena logs see the
 wrapper-side outcome of each call (exit code, wall time).
 Both feed the same per-variant profile; neither alone is sufficient.
@@ -2018,10 +2018,10 @@ Both fail hard on shape changes instead of silently bucketing as `unknown`.
 #### Cutoff-discipline invariant (runbook gap B, closed)
 
 `ToolRunProfile.cutoff_disc_pct = live_mode_configs / total_configs * 100` when
-`total_configs > 0`, else `None`. Measures the share of per-ticker sessions that
-defaulted to `mode=live`, `backtest_date=null` instead of launching with a valid pinned
+`total_configs > 0`, else `None`. Measures the share of per-item sessions that defaulted
+to `mode=live`, `backtest_date=null` instead of launching with a valid pinned
 `backtest_date`. Higher values are worse: a session running in live mode can pull
-information published after the earnings event it is supposed to predict — that is
+information published after the analysis event it is supposed to predict — that is
 future-knowledge leakage on the dataset.
 Reported per-variant on every usage report; no one-shot evidence backfill required.
 
@@ -2323,9 +2323,9 @@ Shared by worker and orchestrator entrypoints via
 `bootstrap_container() -> BootstrapResult`:
 
 1. Configure git identity and credential helper (via `GH_TOKEN`).
-2. Use bundled `example_workflow/` from the image by default, or sparse-clone the
+2. Use bundled `example_plugin/` from the image by default, or sparse-clone the
    requested branch from `METAPROC_RUN_BRANCH` / `METAPROC_REPO_URL` when needed.
-3. Install `example_workflow` editable so plugin entry points resolve inside the
+3. Install `example_plugin` editable so plugin entry points resolve inside the
    container.
 4. Optionally bootstrap the private `arena` CLI when `METAPROC_ARENA_BOOTSTRAP=1`.
 5. Ensure `RUNS_DIR` exists.
@@ -2601,7 +2601,7 @@ plaintext env without the Secret Manager ref fails dispatch up front.
 
 - Extract the per-adapter reference (§12.2) into a separate adapter-catalog doc as the
   adapter count grows, keeping this doc focused on the contract and wire format.
-- The earnings reference profile (§7) could move to an application-profile doc, leaving
+- The analysis reference profile (§7) could move to an application-profile doc, leaving
   this doc strictly framework-scoped.
 - Add a “Reading Guide” section at the top to help readers navigate the 21+ sections by
   use case (operator, process author, adapter implementer, framework contributor).
@@ -2621,10 +2621,10 @@ the original future-work backlog.
 
 ### rev2i (2026-04-20)
 
-Tool-use operational observability (epic `internal-reference`):
+Tool-use operational observability (the original design):
 
 - **Section 14.7 (new)**: Tool-use Observability.
-  Documents the three-source triad (arena wrapper invocation logs + pi-cli JSONL logs +
+  Documents the three-source triad (tool wrapper invocation logs + pi-cli JSONL logs +
   `native_web_search` config flag), the `ToolCallStats` / `ToolRunProfile` /
   `ProviderRateLimitStats` aggregation contract, the nine-member `FailureKind` taxonomy
   (`ok` / `malformed_args` / `tool_timeout` / `tool_error` / `help_invocation` /
@@ -2639,11 +2639,11 @@ Tool-use operational observability (epic `internal-reference`):
 
 Validated 2026-04-20 by the regenerated `_mine-tech-mix-100-2026-04-06-c` usage snapshot
 (`tool_profiles` frontmatter + `## Tool-use by Variant` table; see
-[docs/project/specs/active/evidence/tool-use-observability-2026-04-20/usage-snapshot-mine-tech-mix-100-2026-04-06-c.md](../arch/arch-metaproc-core.md#147-tool-use-observability)).
+[docs/arch/arch-metaproc-core.md](../arch/arch-metaproc-core.md#147-tool-use-observability)).
 
 ### rev2h (2026-04-19)
 
-Claude Code CLI Personal-Plan auth on GCP Batch (epic `internal-reference`):
+Claude Code CLI Personal-Plan auth on GCP Batch (the original design):
 
 - **Section 12.2**: `claude-code-cli` reference adapter entry now lists three auth modes
   (API key, interactive login, Personal-Plan OAuth via Secret Manager) and the

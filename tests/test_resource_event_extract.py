@@ -12,7 +12,10 @@ from metaproc.engine.resource_rollup import (
     build_resource_artifacts,
     write_resource_artifacts,
 )
+from metaproc.logutil.parsing import LogEvent, LogFile
+from metaproc.logutil.resource_event_extract import extract_resource_events
 from metaproc.models.resources import (
+    HierarchyRef,
     ItemCompleteEvent,
     ItemFailEvent,
     ItemStartEvent,
@@ -35,6 +38,58 @@ process:
 
 Parent body.
 """
+
+
+def test_extract_resource_events_emits_process_item_lifecycle(tmp_path: Path) -> None:
+    log_path = tmp_path / "process-events.jsonl"
+    log_file = LogFile(log_path, color_idx=0)
+    event = LogEvent(
+        kind="item_complete",
+        summary="completed",
+        adapter="process",
+        timestamp="2026-07-27T12:00:00+00:00",
+        raw={
+            "event": "item_complete",
+            "item_key": "item-1",
+            "step_id": "analyze",
+            "elapsed_s": 1.5,
+        },
+    )
+
+    events = extract_resource_events(
+        log_path=log_path,
+        log_file=log_file,
+        log_events=[event],
+        hierarchy=HierarchyRef(run_id="run-1"),
+        source_kind="process_events",
+        source_path=str(log_path),
+    )
+
+    assert len(events) == 1
+    assert isinstance(events[0], ItemCompleteEvent)
+    assert events[0].hierarchy.item_key == "item-1"
+    assert events[0].metrics.wall_time_s == 1.5
+
+
+def test_extract_resource_events_skips_malformed_process_item(tmp_path: Path) -> None:
+    log_path = tmp_path / "process-events.jsonl"
+    event = LogEvent(
+        kind="item_complete",
+        summary="malformed",
+        adapter="process",
+        raw={"event": "item_complete", "item_key": 123, "step_id": "analyze"},
+    )
+
+    events = extract_resource_events(
+        log_path=log_path,
+        log_file=LogFile(log_path, color_idx=0),
+        log_events=[event],
+        hierarchy=HierarchyRef(run_id="run-1"),
+        source_kind="process_events",
+        source_path=str(log_path),
+    )
+
+    assert events == []
 
 
 def _write(tmp_path: Path, rel: str, content: str) -> Path:

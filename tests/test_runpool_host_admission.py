@@ -9,6 +9,8 @@ import shutil
 import time
 from pathlib import Path
 
+import pytest
+
 from metaproc.runpool.host_admission import (
     UNRECORDED_LEASE_GRACE_S,
     HostAdmissionGate,
@@ -134,3 +136,20 @@ def test_does_not_reclaim_recent_unrecorded_lease(tmp_path: Path) -> None:
     asyncio.run(_run())
     assert slot_dir.exists()
     shutil.rmtree(slot_dir)
+
+
+def test_acquire_times_out_when_all_slots_remain_live(tmp_path: Path) -> None:
+    gate = HostAdmissionGate(
+        root_dir=tmp_path / "slots",
+        limit=1,
+        poll_interval_s=0.005,
+        acquire_timeout_s=0.02,
+    )
+
+    async def _run() -> None:
+        lease = await gate.acquire(label="first", pool_id="pool-first")
+        with pytest.raises(TimeoutError, match="host admission slot"):
+            await gate.acquire(label="second", pool_id="pool-second")
+        gate.release(lease)
+
+    asyncio.run(_run())

@@ -40,7 +40,7 @@ def _write_record_at(state_dir: Path, filename: str, data: dict[str, object]) ->
     state_dir.mkdir(parents=True, exist_ok=True)
     target = state_dir / filename
     with atomic_output_file(target) as tmp_path:
-        Path(tmp_path).write_text(to_yaml_string(data))
+        Path(tmp_path).write_text(to_yaml_string(data), encoding="utf-8")
     return target
 
 

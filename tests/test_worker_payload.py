@@ -1,7 +1,7 @@
 """Tests for WorkerDispatchPayload — orchestrator → worker cohort.
 
-Phase 10 follow-up of the Vehicle A pool redesign (epic internal-reference,
-bead internal-reference).
+Phase 10 follow-up of the Vehicle A pool redesign (the original design,
+this regression).
 """
 
 from __future__ import annotations

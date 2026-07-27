@@ -98,10 +98,7 @@ class GlobSpec:
 
     Used for auto-discovering new orchestrator-lease.yaml files (or other
     per-lane state files) as new lanes launch during a multi-tier batch.
-    See bead internal issue + logbook arb-2026-05-28-thu-ensemble § L10:
-    on 2026-05-28, T3 claude orchestrator died at 10:33 UTC and went
-    unnoticed for 8 hours because the liveness monitor was keyed on the
-    initial 3 T1 lease paths only.
+    Re-evaluating the glob prevents newly launched lanes from going unmonitored.
     """
 
     label_prefix: str
@@ -197,7 +194,7 @@ def liveness_watch(
             "Watch every file mtime matching a glob pattern. Re-evaluated each "
             "poll cycle so new files (e.g., new orchestrator-lease.yaml as "
             "lanes launch) are auto-discovered. Repeatable. Format: GLOB or "
-            "GLOB=STALE_SECONDS. See bead internal issue."
+            "GLOB=STALE_SECONDS."
         ),
     ),
     heartbeat_glob: list[str] = typer.Option(
@@ -208,8 +205,7 @@ def liveness_watch(
             "pattern. Re-evaluated each poll cycle for auto-discovery of new "
             "lane lease files. Repeatable. Format: GLOB:FIELD or "
             "GLOB:FIELD=STALE_SECONDS. Example: "
-            "'<runs-dir>/arb-<date>-*/.state/orchestrator-lease.yaml:last_heartbeat_at=300'. "
-            "See bead internal issue + logbook arb-2026-05-28-thu-ensemble § L10."
+            "'<runs-dir>/run-*/.state/orchestrator-lease.yaml:last_heartbeat_at=300'."
         ),
     ),
     stale_seconds: int = typer.Option(

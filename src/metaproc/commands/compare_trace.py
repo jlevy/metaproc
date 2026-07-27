@@ -1,7 +1,7 @@
 """metaproc compare-trace — cross-run-dir trace-store comparison matrix.
 
-P4 (internal issue) under spec
-`docs/project/specs/active/plan-2026-05-26-multi-adapter-resource-rollup.md`.
+P4 under spec
+`docs/arch/arch-metaproc-core.md`.
 
 Reads `<run-dir>/.logs/derived/trace.jsonl` from N run-dirs and produces
 a row-per-(group) × column-per-run-dir matrix using the same

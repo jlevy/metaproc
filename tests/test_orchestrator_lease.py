@@ -263,9 +263,9 @@ class TestLeaseLiveness:
 class TestLeaseHeartbeat:
     def test_context_manager(self, tmp_path: Path) -> None:
         acquire_lease(tmp_path)
-        with LeaseHeartbeat(tmp_path, interval=1):
-            time.sleep(0.1)
-        # Should not error.
+        with LeaseHeartbeat(tmp_path, interval=1) as heartbeat:
+            assert heartbeat.is_running
+        assert not heartbeat.is_running
 
     def test_heartbeat_updates(self, tmp_path: Path) -> None:
         acquire_lease(tmp_path)

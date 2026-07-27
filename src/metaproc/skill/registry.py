@@ -8,7 +8,7 @@ Example entry in ``pyproject.toml``::
     [project.entry-points."metaproc.skills"]
     metaproc = "metaproc.skill.builtin:metaproc_skill_spec"
 
-Workflow packages (e.g. EIA) register their own skill via the same group
+Workflow plugins register their own skill via the same group
 without metaproc needing to import them.
 """
 

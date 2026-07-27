@@ -1,6 +1,6 @@
 """``metaproc gcp run`` — dispatch arbitrary commands to a single GCP Batch task.
 
-See ``docs/project/specs/active/plan-2026-04-19-metaproc-gcp-run-primitive.md``
+See ``docs/arch/arch-metaproc-core.md``
 for the full design. This module owns:
 
 - argv parsing for the ``gcp run`` Typer subcommand,

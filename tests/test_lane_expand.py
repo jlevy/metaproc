@@ -112,7 +112,7 @@ class TestMaterializeExecutionLanes:
     ) -> None:
         """Non-empty lane overrides are refused at materialization.
 
-        Bead internal-reference (internal review P2): the lane id hashes overrides
+        Regression coverage (review P2): the lane id hashes overrides
         in (so two lanes that differ only by overrides get distinct
         ids), but the execution path does not yet route per-lane
         adapter config. Accepting non-empty overrides silently would

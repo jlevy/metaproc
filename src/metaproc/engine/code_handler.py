@@ -39,7 +39,7 @@ def resolve_code_handler(
       live next to a process spec.
     - Module path: ``"package.module.path:function_name"`` — resolved via
       ``importlib.import_module``. Use for handlers that live in an
-      installed package (e.g. ``workflow_package.qa.handler:check_handler``).
+      installed package (e.g. ``example_plugin.qa.handler:check_handler``).
 
     The form is inferred from the ref itself: a ``.py`` suffix or any
     ``/`` forces file-path resolution; anything else is treated as a

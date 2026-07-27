@@ -3,11 +3,11 @@
 Covers P2b.6 from `plan-2026-04-21-auth-credential-pool.md` and the four
 P0 framework fixes that landed on `dispatch/2026-04-28-tuesday`:
 
-- internal-reference + internal-reference — selector primary path used on every attempt
+- the selector and fallback regressions — selector primary path used on every attempt
   and respects exclude_labels.
-- internal-reference (TBD-B) — select_primary raises on missing explicit_label.
-- internal-reference — run-process wires --auth-account / --auth-include-labels.
-- internal-reference — cooling-aware retry helper.
+- the fix (TBD-B) — select_primary raises on missing explicit_label.
+- the fix — run-process wires --auth-account / --auth-include-labels.
+- the fix — cooling-aware retry helper.
 
 Uses an in-memory ``LocalFilesystemBackend`` rooted in tmp_path so the
 test never touches the real ``~/.metaproc/credentials.json``.
@@ -98,7 +98,7 @@ class TestTuesdayWorkerPoolShape:
 
 
 class TestPrimaryLeaseAcrossAttempts:
-    """Phase 1 P0: internal-reference + internal-reference — selector primary path."""
+    """Phase 1 P0: the selector and fallback regressions — selector primary path."""
 
     def test_attempt_zero_primary(
         self, coord: SlotCoordinator, lease_kwargs: dict[str, Any]
@@ -111,7 +111,7 @@ class TestPrimaryLeaseAcrossAttempts:
     def test_attempt_one_still_uses_primary(
         self, coord: SlotCoordinator, lease_kwargs: dict[str, Any]
     ) -> None:
-        # internal-reference regression: attempt=1 (real first attempt from
+        # this regression: attempt=1 (real first attempt from
         # run_parallel) used to skip primary and fall through to
         # FallbackPolicy.NONE → None. After the fix, primary is tried
         # on every attempt.
@@ -127,7 +127,7 @@ class TestPrimaryLeaseAcrossAttempts:
     def test_exclude_at_attempt_zero_picks_alternate(
         self, coord: SlotCoordinator, lease_kwargs: dict[str, Any]
     ) -> None:
-        # internal-reference (TBD-A) regression: at attempt=0 with one label
+        # the fix (TBD-A) regression: at attempt=0 with one label
         # excluded, the previous guard `not exclude` short-circuited to
         # fallback. Now: primary respects exclude and finds the next
         # eligible label.
@@ -144,7 +144,7 @@ class TestPrimaryLeaseAcrossAttempts:
 
 
 class TestExplicitLabelHandling:
-    """Phase 1 P0: internal-reference (TBD-B) — explicit_label raises on missing."""
+    """Phase 1 P0: the fix (TBD-B) — explicit_label raises on missing."""
 
     def test_explicit_label_present(
         self, coord: SlotCoordinator, lease_kwargs: dict[str, Any]
@@ -211,7 +211,7 @@ class TestSlotMaterialization:
 
 
 class TestExhaustionAndRecovery:
-    """Phase 1 P0: internal-reference — orchestrator survives full pool exhaustion."""
+    """Phase 1 P0: the fix — orchestrator survives full pool exhaustion."""
 
     def test_exclude_all_returns_none(
         self, coord: SlotCoordinator, lease_kwargs: dict[str, Any]

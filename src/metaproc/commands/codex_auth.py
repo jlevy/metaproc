@@ -3,9 +3,9 @@
 Reads ``~/.codex/auth.json`` (the file-on-disk OAuth blob managed by
 ``codex login``) and ships it to a per-user Secret Manager secret that
 Batch workers bind at runtime. Phase 2 of the codex-adapter spec; see
-``docs/project/specs/active/plan-2026-04-23-codex-adapter-and-openai-pi-models.md``
+``docs/arch/arch-metaproc-core.md``
 and the auth research brief at
-``docs/project/research/research-2026-04-23-codex-cli-auth.md``.
+``docs/arch/arch-metaproc-core.md``.
 
 Zero plaintext on disk: the payload is piped from the auth.json blob
 via stdin to ``gcloud secrets versions add --data-file=-``.
@@ -63,7 +63,7 @@ def _config_toml_path() -> Path:
     return _codex_home() / "config.toml"
 
 
-# ── Preflight (internal issue) ─────────────────────────────────────
+# ── Preflight ─────────────────────────────────────
 
 
 def _preflight_check_config_store() -> None:

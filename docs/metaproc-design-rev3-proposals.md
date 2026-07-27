@@ -17,7 +17,7 @@ That includes:
   step
 - tool-use operational observability (per-call telemetry, failure-kind taxonomy,
   `cutoff_disc_pct`, partial native web-search closure via `native_web_search_configs`)
-  landed in `arch-metaproc-core.md §14.7` under epic `internal-reference`
+  landed in `arch-metaproc-core.md §14.7` under the original design
 
 ## Categories
 
@@ -114,7 +114,7 @@ Proposal:
 
 Why it remains future work:
 
-- The current earnings workflows do not need first-class worktree/workspace
+- The current analysis workflows do not need first-class worktree/workspace
   orchestration.
 - The write-boundary work solved the immediate safety problem without requiring a new
   workspace runtime.
@@ -213,9 +213,9 @@ These two design constraints are load-bearing for the primitives once they exist
   tables, cross-tabs, and validation metrics are declared up front — the same discipline
   a data scientist brings to an experiment.
 
-### Grounding example: example_workflow experiment process
+### Grounding example: example_plugin experiment process
 
-[example_workflow/process/experiment/](metaproc-design-rev3-proposals.md) is a working
+[example_plugin/process/experiment/](metaproc-design-rev3-proposals.md) is a working
 domain implementation of this pattern, manually orchestrated:
 
 - The **manifest** (`experiments/{name}/manifest.md`) is the experiment entity —
@@ -240,7 +240,7 @@ Why it remains future work:
 
 - Today’s `for_each` is fan-out over items, not a sweep over knobs; the operator
   manually invokes `run-process` once per arm.
-- The example_workflow experiment process is the only domain implementation; the pattern
+- The example_plugin experiment process is the only domain implementation; the pattern
   needs to recur in at least one more domain before promoting to typed infrastructure
   (codification follows experiment).
 - The Type A and Type C optimization loops are blocked on this proposal landing.

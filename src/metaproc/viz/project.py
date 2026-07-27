@@ -316,7 +316,7 @@ def _io_summaries(
 ) -> list[IOSummaryEntry]:
     """Compact entries for on-canvas step cards.
 
-    The authored shorthand ``inputs: { tickers: deps.tickers }`` resolves to
+    The authored shorthand ``inputs: { items: deps.items }`` resolves to
     an :class:`IOSpec` with the dep's path inlined and no back-reference, so
     the projection reconnects inputs to deps here by name+path: when an
     input's name matches a dep and their paths agree, pull the dep's

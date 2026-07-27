@@ -1065,7 +1065,7 @@ class TestRunPool:
         assert pool.current_max_concurrency == 15
 
     def test_elevated_holds_not_reduces(self, tmp_path: Path):
-        """Regression for 2026-05-13 AMC rerun: sustained ELEVATED pressure
+        """Regression for sustained elevated pressure:
         must not ratchet memory_ceiling down to min_concurrency over time.
 
         PressureLevel.ELEVATED's docstring says "20-40% — hold current
@@ -1111,7 +1111,7 @@ class TestRunPool:
         assert pool._memory_ceiling < starting, "HIGH pressure must still reduce memory_ceiling"
 
     def test_restored_governor_ceilings_floored_at_fresh_estimate(self, tmp_path: Path):
-        """Regression for the 2026-05-13 AMC rerun bug: a prior low-cap run's
+        """Regression for a prior low-cap run:
         converged ceiling must not pin a relaunch at a higher cap.
 
         Sequence: launch at `--max-concurrency 3` → scaler converges at
@@ -1457,7 +1457,7 @@ class TestRunPool:
 
 class TestQuotaPauseResume:
     """End-to-end coverage for the QuotaExhaustedError-triggered pool pause
-    (B7 + B10 from plan-2026-05-13-eia-dispatch-robustness.md).
+    This covers the dispatch-robustness contract.
 
     Scenario: a quota signal lands mid-cohort, pool pauses until the named
     reset_at + buffer, queued submissions block during the pause, no tickers

@@ -24,8 +24,8 @@ status: Approved
 RunPool is Metaproc’s local agent process manager.
 It owns subprocess lifecycle, adaptive concurrency, host-level coordination, health
 telemetry, event logs, and kill coordination for local runs.
-It does not own process DAG planning, prompt generation, domain workflows, ticker
-rosters, auth policy, or result schemas.
+It does not own process DAG planning, prompt generation, domain workflows, item rosters,
+auth policy, or result schemas.
 
 Module-local docs are code navigation, not a second copy of the design.
 
@@ -75,7 +75,7 @@ Metaproc orchestration owns:
 - adapter, prompt, auth, and environment construction
 - retry policy and output validation
 - cloud worker topology
-- domain playbooks, ticker rosters, source-health policy, and result rollups
+- domain playbooks, item rosters, source-health policy, and result rollups
 
 The interface should stay narrow: orchestration prepares `ProcessConfig` values, RunPool
 returns `ProcessResult` values, and operator commands read structured status and event
@@ -232,8 +232,8 @@ Setting the operator cap low to “be safe” silently caps
 adaptive controller would have allowed more, and the operator gets no warning —
 wall-clock just stretches by 2-8×. Per-adapter memory profiles still shift with CLI
 version, model, and active-count (see § “Per-adapter RSS benchmarks”), so a tight cap is
-the wrong knob: keep the operator cap as a floor (≥20 for local EIA-class workloads) and
-treat `--cap N` with `N < 20` as a documented incident-time exception.
+the wrong knob: keep the operator cap as a floor (≥20 for local large workflow-class
+workloads) and treat `--cap N` with `N < 20` as a documented incident-time exception.
 
 ## Host Coordination
 
@@ -335,8 +335,8 @@ cannot be collected.
   “Operator cap floor”.
 - Use `pool override --cap` only for explicit temporary interventions, and clear it once
   host health is stable.
-  A `--cap` value below the operator-cap floor (20 for local EIA-class workloads) needs
-  a logbook entry plus a follow-up `--clear`.
+  A `--cap` value below the operator-cap floor (20 for local large workflow-class
+  workloads) needs a logbook entry plus a follow-up `--clear`.
 - Treat sustained `elevated` memory as a hold state, not an automatic collapse to one
   worker.
 - Treat `high` or `critical` memory, or fast positive swap growth, as a reason to reduce
@@ -385,14 +385,14 @@ RunPool tests should be deterministic by default:
 - mock macOS `sysctl`, Linux `/proc/meminfo`, and Linux PSI inputs
 - gate live historical smoke tests behind explicit environment variables
 
-End-to-end earnings-arb tests should include a RunPool status check that verifies
+End-to-end analysis-arb tests should include a RunPool status check that verifies
 component levels, swap growth, and active count are visible before and after a fan-out.
 
 ## Per-Adapter RSS Benchmarks (macOS, 2026-05-23)
 
 Measurements taken during the 2026-05-25 mon-thru-wed-ensemble batch (see
-[arb-2026-05-25-mon-thru-wed-ensemble.logbook.md](../arch/arch-runpool.md)) on macOS
-25.2.0, Apple Silicon, 32 GB RAM. Methodology: read `active_rss_bytes` from
+[the production incident analysis](../arch/arch-runpool.md)) on macOS 25.2.0, Apple
+Silicon, 32 GB RAM. Methodology: read `active_rss_bytes` from
 `runpool/steps/*/health.jsonl` and divide by `active_count` to get per-process-tree RSS
 at 10s sample intervals.
 This includes all `psutil.children(recursive=True)` per
@@ -451,7 +451,7 @@ and Linux benchmarks remain open.
   `metaproc.dispatch.pool_dispatch.classify_failure_for_slot`. See
   [arch-claude-code-harness.md § False-positive classifier pitfall](arch-claude-code-harness.md)
   for the diagnostic checklist and fix candidates.
-  Cost: 16 tickers permanent-failed on 2026-05-23 batch; ABORT severity prevented retry.
+  Cost: 16 items permanent-failed on 2026-05-23 batch; ABORT severity prevented retry.
 
 ### Potential Improvements
 

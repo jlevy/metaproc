@@ -33,7 +33,7 @@ from metaproc.runpool.status import (
     write_status,
 )
 from metaproc.stats.analysis import analyze_runpool_events
-from metaproc.stats.engine import _compute_pool_stats
+from metaproc.stats.engine import _compute_api_stats, _compute_pool_stats
 from metaproc.stats.formatters import format_full
 from metaproc.stats.models import (
     PoolFinding,
@@ -44,6 +44,35 @@ from metaproc.stats.models import (
     ThroughputStats,
     VariantProgress,
 )
+
+
+def test_compute_api_stats_reads_v2_task_log_layout(tmp_path: Path) -> None:
+    log_dir = tmp_path / ".logs" / "tasks" / "analyze" / "item-1"
+    log_dir.mkdir(parents=True)
+    records = [
+        {"type": "system", "subtype": "init", "model": "synthetic-model"},
+        {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "tool_use", "name": "Read", "input": {"file_path": "input.md"}}
+                ]
+            },
+        },
+        {"type": "result", "is_error": False, "cost_usd": 0.25},
+    ]
+    (log_dir / "attempt.jsonl").write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+
+    stats = _compute_api_stats(tmp_path)
+
+    assert stats is not None
+    assert stats.total_calls == 1
+    assert stats.models == {"synthetic-model": 1}
+    assert stats.total_cost_usd == 0.25
+
 
 # ── Event model fixtures ────────────────────────────────────────
 

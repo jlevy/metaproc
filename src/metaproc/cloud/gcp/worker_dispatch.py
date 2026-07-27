@@ -55,7 +55,7 @@ DEFAULT_MACHINE_TYPE = "n2-highmem-8"
 # 50 per worker × 2 workers = 100 total concurrent items.
 # At 50/worker, observed ~1.0x runs/record (no retry amplification).
 # At higher concurrency, DSQ 429s cause retry cascades (7x+ runs/record).
-# See: devops/src/devops/settings.py for rationale.
+# Keep this aligned with the worker image's mounted workspace.
 DEFAULT_MAX_CONCURRENCY_PER_WORKER = 50
 DEFAULT_NUM_WORKERS = 2
 MAX_INLINE_ITEM_CONTEXTS_BYTES = 32_000

@@ -1,4 +1,4 @@
-"""P1.4 (internal-reference) — Pi CLI trace extractor.
+"""P1.4 — Pi CLI trace extractor.
 
 Pi CLI wraps any underlying model (glm-5, gemini-flash, claude-opus, etc.)
 and emits camelCase stream-json. These tests use the real fixture at
@@ -488,7 +488,7 @@ def test_attempt_carries_sidecar_adapter_metadata(tmp_path: Path) -> None:
                     "adapter_trace_source": "pi-agent",
                     "adapter_model": "glm-5-maas",
                     "lane_id": "lane-pi-glm5",
-                    "execution_profile": "amc-five-adapter",
+                    "execution_profile": "synthetic-five-adapter",
                 },
             }
         )
@@ -501,7 +501,7 @@ def test_attempt_carries_sidecar_adapter_metadata(tmp_path: Path) -> None:
     assert attempt.attributes.get("adapter.trace_source") == "pi-agent"
     assert attempt.attributes.get("adapter.model") == "glm-5-maas"
     assert attempt.attributes.get("lane_id") == "lane-pi-glm5"
-    assert attempt.attributes.get("execution_profile") == "amc-five-adapter"
+    assert attempt.attributes.get("execution_profile") == "synthetic-five-adapter"
 
 
 def test_model_from_agent_end_as_fallback_when_sidecar_lacks_it(tmp_path: Path) -> None:

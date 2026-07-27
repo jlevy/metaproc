@@ -128,9 +128,8 @@ def _format_text(status: RunStatus, *, steps_only: bool = False, stale_only: boo
         lines.append(f"Started: {status.started_at:%Y-%m-%d %H:%M:%S} ({elapsed_str} ago)")
     # Three-way label so the operator can distinguish work-in-flight from
     # quiescent-between-steps from truly terminal. `is_active` collapses
-    # them; the sub-flags expose what's actually happening. See bead
-    # internal issue for the 2026-05-18 case where the variant table read
-    # 100% while the orchestrator had queued the next step.
+    # them; the sub-flags expose what's actually happening. This prevents the
+    # variant table from reading 100% while the orchestrator has queued work.
     if status.items_running:
         status_label = "RUNNING"
     elif status.orchestrator_alive or (status.pending_retries > 0 and status.is_active):

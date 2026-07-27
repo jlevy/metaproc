@@ -1059,7 +1059,7 @@ class TestUsageModels:
 
 
 class TestToolUseModels:
-    """New models for tool-use telemetry (internal-reference / plan spec tool4)."""
+    """New models for tool-use telemetry (plan spec tool4)."""
 
     def test_tool_call_stats_defaults(self) -> None:
         stats = ToolCallStats(tool_name="filtered_web_search")
@@ -1245,7 +1245,7 @@ class TestWriteUsageArenaToolsDiscovery:
     The write-usage CLI's default discovery glob was not updated, so it
     silently reported '0 with usage data' for every post-cutover run dir
     until the operator passed --arena-tools-glob explicitly. Surfaced
-    2026-05-21 mid-AMC-resume validation pass.
+    a mid-resume validation pass.
     """
 
     def _write_event(self, events_path: Path) -> None:

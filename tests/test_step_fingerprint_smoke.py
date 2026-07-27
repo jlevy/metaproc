@@ -1,6 +1,6 @@
 """End-to-end test for the step-fingerprint edit-and-rerun cascade.
 
-Spec: ``docs/project/specs/active/plan-2026-05-20-metaproc-step-fingerprint-and-status.md``
+Spec: ``docs/arch/arch-metaproc-core.md``
 (Phase 1.5 — "End-to-end test: edit step-2 runbook, rerun, only step 2+3
 re-execute").
 

@@ -34,7 +34,7 @@ def override(
             "<run_dir>/.state/overrides.yaml where <run_dir> is computed from "
             "the spec's run.dir + variables. Without this argument the CLI "
             "cannot place the file where the engine will read it. "
-            "Example: --process workflow_package/process/predict."
+            "Example: --process example_plugin/process/predict."
         ),
     ),
     var: list[str] = typer.Option(

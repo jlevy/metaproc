@@ -21,8 +21,8 @@ status: Approved
 
 ## Overview
 
-metaproc dispatches earnings-prediction work by spawning the Claude Code CLI (`claude`)
-as a non-interactive subprocess for each unit of work.
+metaproc dispatches agent work by spawning the Claude Code CLI (`claude`) as a
+non-interactive subprocess for each unit of work.
 The slot adapter
 ([src/metaproc/adapters/claude_code.py](../../src/metaproc/adapters/claude_code.py)) is
 responsible for materializing per-attempt credentials, scoping the inner process’s
@@ -296,8 +296,8 @@ For incident triage, the three classes of failure rooted in this surface:
    the adapter config and the resolved command).
 3. **File-scope failure.** Validator reports file-not-found while the artifact is on
    disk. Almost always a template-render mismatch in the validator’s variables dict;
-   check `{{run.variant}}`, `{{run.dir}}`, `{{ticker}}` resolution at the validate site
-   vs the build-command site.
+   check `{{run.variant}}`, `{{run.dir}}`, `{{item}}` resolution at the validate site vs
+   the build-command site.
 
 ## Version Compatibility Matrix (Claude Code CLI 2.1.x)
 
@@ -348,15 +348,15 @@ lookaheads cannot see them, and the regex fires on the rate-limit failure.
 Result: `severity=ABORT`, no retry, the work ships as `permanent failure`.
 
 **Symptom on the wrapper-log surface**: cascading
-`ticker=X: permanent failure [known-bug:claude-startup-exit-1-silent]` events that
-*look* like the ENV_SCRUB issue (because the “Permission mode forced to default —
+`item=X: permanent failure [known-bug:claude-startup-exit-1-silent]` events that *look*
+like the ENV_SCRUB issue (because the “Permission mode forced to default —
 CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is set” warning is present in the debug log), but the
 structured event records `api_status: 429` and the error body contains
 `rate_limit_error`.
 
 **Diagnostic checklist** before assuming an ENV_SCRUB problem:
 
-1. Check `events.jsonl` for the affected ticker — is `api_status == 429`?
+1. Check `events.jsonl` for the affected item — is `api_status == 429`?
 2. Grep the per-attempt debug log for `rate_limit_error` or `monthly usage limit`.
 3. Look at `metaproc auth usage <run-dir>` — is the alt pool saturated?
 4. Verify the adapter command line in the `.jsonl.invocation.json` artifact actually

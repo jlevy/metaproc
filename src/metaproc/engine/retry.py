@@ -53,7 +53,7 @@ _PERMANENT_PATTERNS: list[str] = [
     # Anthropic personal-plan monthly-cap exhaustion (claude-code-cli). Keyed off
     # the verbatim error text from the JSONL `result` field on a 429 response:
     # "You've hit your org's monthly usage limit". Distinct from a 429 burst
-    # rate-limit — a monthly cap will not lift on retry timescales (internal issue).
+    # rate-limit — a monthly cap will not lift on retry timescales.
     "monthly usage limit",
     "monthly limit",
     "out of extra usage",
@@ -103,7 +103,7 @@ _TRANSIENT_PATTERNS: list[str] = [
     # `exit code 1 (log: API Error: {...Internal server error...})`. Without
     # these patterns the classifier fell through to bare-exit-code → CRASH,
     # which is operator-confusing — a process didn't crash, the upstream
-    # vendor 5xx'd. 2026-05-13 AMC rest dispatch caught this (DFDV).
+    # vendor returned a 5xx response.
     "500",
     "internal server error",
     "api_error",
@@ -220,13 +220,9 @@ def classify_failure(error: str) -> FailureClass:
 
 # Content failures (INVALID_OUTPUT) re-run the same prompt against the same
 # inputs; retrying past a small budget rarely produces a different outcome and
-# burns the operator's wall clock. SNOW in the 2026-05-25 Wave 2 batch hit the
-# 12-attempt transient-network budget on what was actually a deterministic
-# content failure — 5 retries × ~4min = ~20 minutes lost before manual
-# intervention. Cap content failures separately from the transient-network
+# burns the operator's wall clock. Cap content failures separately from the transient-network
 # RetryPolicy.max_retries default (12). Override via METAPROC_MAX_CONTENT_RETRIES
 # if the operator wants different behaviour for a specific batch.
-# See internal issue.
 MAX_CONTENT_FAILURE_RETRIES_DEFAULT = 3
 
 
@@ -236,7 +232,7 @@ def max_retries_for(failure_class: FailureClass, default_max_retries: int) -> in
     Most failure classes use ``default_max_retries`` (transient-network budget,
     typically 12). ``INVALID_OUTPUT`` is capped at
     :data:`MAX_CONTENT_FAILURE_RETRIES_DEFAULT` because re-running the same
-    deterministic prompt rarely changes the outcome (see internal issue).
+    deterministic prompt rarely changes the outcome.
     """
     if failure_class == FailureClass.INVALID_OUTPUT:
         return min(default_max_retries, MAX_CONTENT_FAILURE_RETRIES_DEFAULT)

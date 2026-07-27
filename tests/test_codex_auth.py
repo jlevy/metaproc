@@ -1,4 +1,4 @@
-"""Tests for metaproc codex-auth command (internal-reference + internal-reference)."""
+"""Tests for metaproc codex-auth command (the selector and fallback regressions)."""
 
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ class TestCodexHomeResolution:
 
 
 class TestPreflightCheckConfigStore:
-    """internal-reference: fail hard if cli_auth_credentials_store != 'file'."""
+    """Regression coverage: fail hard if cli_auth_credentials_store != 'file'."""
 
     def test_missing_config_toml_raises(self, tmp_path: Path, monkeypatch):
         monkeypatch.setenv("CODEX_HOME", str(tmp_path))

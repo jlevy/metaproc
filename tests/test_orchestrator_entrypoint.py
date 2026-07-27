@@ -26,7 +26,7 @@ def _baseline_cmd(
 ) -> list[str]:
     """Build a baseline run-process cmd; auth_* kwargs construct AuthPoolFlags.
 
-    Phase 10 / internal-reference: build_runprocess_cmd takes a single
+    Phase 10: build_runprocess_cmd takes a single
     AuthPoolFlags argument. The test helpers preserve the ergonomics
     of CSV-string fields by going through the dataclass's encoding.
     """

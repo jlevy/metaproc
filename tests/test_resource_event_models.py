@@ -216,7 +216,7 @@ def test_taxonomy_serialises_lists_not_objects() -> None:
 
 
 def test_hierarchy_carries_execution_profile_and_lane_id() -> None:
-    """internal-reference: HierarchyRef must carry execution_profile + lane_id so
+    """Regression coverage: HierarchyRef must carry execution_profile + lane_id so
     per-lane rollups can group without joining against another table.
     """
     hierarchy = HierarchyRef(

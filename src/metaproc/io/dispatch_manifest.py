@@ -51,7 +51,7 @@ def write_dispatch_manifest(
     }
 
     with atomic_output_file(path) as tmp:
-        Path(tmp).write_text(to_yaml_string(data))
+        Path(tmp).write_text(to_yaml_string(data), encoding="utf-8")
 
     log.info("Wrote dispatch manifest: %s (%d workers)", path, len(worker_jobs))
     return path
@@ -96,5 +96,5 @@ def append_dispatch_manifest(
     path = _manifest_path(run_dir, step_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     with atomic_output_file(path) as tmp:
-        Path(tmp).write_text(to_yaml_string(data))
+        Path(tmp).write_text(to_yaml_string(data), encoding="utf-8")
     return path

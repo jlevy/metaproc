@@ -1,7 +1,7 @@
 """Text + JSON rendering for ``metaproc auth usage`` / ``auth doctor``.
 
-Spec: ``docs/project/specs/active/plan-2026-05-03-auth-observability-and-load-balancing.md``
-Bead: ``internal issue``.
+Spec: ``docs/arch/arch-metaproc-core.md``
+
 
 Pure functions over the :class:`metaproc.dispatch.auth_usage.LabelUsage`
 data the aggregator builds. The CLI layer (``metaproc auth …`` in
@@ -61,8 +61,7 @@ def render_run_usage_text(
     *config* is the optional run-config snapshot — operators read it
     to confirm what auth flags / concurrency were in effect. Empty
     dict / None renders a "no config snapshot" line so the output is
-    diagnostic even when run-config persistence (Phase 3 internal issue)
-    hasn't shipped yet.
+    diagnostic even when a run has no persisted configuration snapshot.
     """
     lines: list[str] = []
     lines.append(f"RUN: {run_dir}")

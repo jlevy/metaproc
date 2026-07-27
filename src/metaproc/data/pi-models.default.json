@@ -1,11 +1,11 @@
 {
   "_note": "Canonical pi-cli models.json for Vertex AI. Committed to the repo so cloud dispatches succeed from environments without a workstation-configured ~/.pi/agent/models.json. metaproc.cloud.gcp.batch_backend.build_pi_models_json reads this as a fallback and rewrites the project ID in baseUrl at dispatch time.",
-  "_source": "vertex-maas providers extracted from a successful past Batch job env (mp-worker-cloud-100-glm5-push-1-w0-1775861703-64be3a, 2026-04-10). google-vertex provider added 2026-04-17 and migrated 2026-04-18 to pi-mono's native `google-vertex` API (was `openai-completions`) so Gemini 3 preview thought_signature round-trip works — see metaproc/docs/adapter-compatibility.runbook.md.",
+  "_source": "The vertex-maas catalog is maintained from public Vertex AI model metadata. The google-vertex provider uses pi-mono's native `google-vertex` API so Gemini thought-signature round trips are preserved; see the adapter compatibility runbook.",
   "providers": {
     "vertex-maas": {
       "baseUrl": "https://aiplatform.googleapis.com/v1/projects/PROJECT_ID_PLACEHOLDER/locations/global/endpoints/openapi",
       "api": "openai-completions",
-      "apiKey": "!gcp-access-token.sh",
+      "apiKey": "!sh -c 'if [ -n \"$METAPROC_PI_API_KEY\" ]; then printf \"%s\" \"$METAPROC_PI_API_KEY\"; else exec gcp-access-token.sh; fi'",
       "authHeader": true,
       "compat": {"supportsDeveloperRole": false},
       "models": [

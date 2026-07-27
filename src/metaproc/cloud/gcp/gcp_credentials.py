@@ -17,12 +17,14 @@ Thread-safe: multiple concurrent callers (e.g., during batch runs) can call
 
 from __future__ import annotations
 
+import atexit
 import base64
 import hashlib
 import logging
 import os
 import tempfile
 import threading
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -41,6 +43,13 @@ _REFRESH_MARGIN = timedelta(minutes=GCP_TOKEN_REFRESH_MARGIN_MINUTES)
 _lock = threading.Lock()
 _credentials: Any = None
 _request: Request | None = None
+_temporary_credential_path: Path | None = None
+
+
+def _remove_temporary_credential(path: Path) -> None:
+    """Remove a temporary credential file if it still exists."""
+    with suppress(OSError):
+        path.unlink()
 
 
 def _is_on_cloud_vm() -> bool:
@@ -81,11 +90,23 @@ def _bootstrap_credentials_from_base64() -> None:
     b64 = MetaprocEnv.GCP_CREDENTIALS_BASE64.read_str(default="")
     if not b64:
         return
-    key_dir = Path(tempfile.gettempdir()) / "gcp" / "keys"
-    key_dir.mkdir(parents=True, exist_ok=True)
-    key_file = key_dir / "sa-key.json"
-    key_file.write_bytes(base64.b64decode(b64))
-    _ = key_file.chmod(0o600)
+
+    global _temporary_credential_path  # noqa: PLW0603
+    key_fd, key_name = tempfile.mkstemp(
+        prefix="metaproc-gcp-",
+        suffix=".json",
+        dir=tempfile.gettempdir(),
+    )
+    key_file = Path(key_name)
+    try:
+        with os.fdopen(key_fd, "wb") as stream:
+            stream.write(base64.b64decode(b64, validate=True))
+    except BaseException:
+        _remove_temporary_credential(key_file)
+        raise
+
+    _temporary_credential_path = key_file
+    atexit.register(_remove_temporary_credential, key_file)
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(key_file)
     log.debug("Decoded GCP_CREDENTIALS_BASE64 to %s", key_file)
 
@@ -149,7 +170,15 @@ def get_token_expiry() -> datetime | None:
 
 def reset() -> None:
     """Reset cached credentials. Useful for testing."""
-    global _credentials, _request  # noqa: PLW0603
+    global _credentials, _request, _temporary_credential_path  # noqa: PLW0603
     with _lock:
         _credentials = None
         _request = None
+        credential_path = _temporary_credential_path
+        _temporary_credential_path = None
+        if credential_path is not None:
+            if MetaprocEnv.GOOGLE_APPLICATION_CREDENTIALS.read_str(default="") == str(
+                credential_path
+            ):
+                os.environ.pop(MetaprocEnv.GOOGLE_APPLICATION_CREDENTIALS.name, None)
+            _remove_temporary_credential(credential_path)

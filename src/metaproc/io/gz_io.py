@@ -93,7 +93,7 @@ def iter_artifact_paths(root: Path, pattern: str) -> Iterable[Path]:
     by_logical: dict[Path, Path] = {}
     for path in sorted(root.glob(pattern)):
         if path.is_file():
-            by_logical[logical_path(path)] = path
+            _ = by_logical.setdefault(logical_path(path), path)
 
     for path in sorted(root.glob(pattern + GZIP_SUFFIX)):
         if not path.is_file():
@@ -201,8 +201,8 @@ class ArtifactPath:
     def open_text(self, errors: str = "replace") -> IO[str]:
         """Open as text. Always text mode; never returns a binary handle."""
         if self.is_gzip:
-            return gzip.open(self.disk_path, "rt", errors=errors)
-        return open(self.disk_path, errors=errors)
+            return gzip.open(self.disk_path, "rt", encoding="utf-8", errors=errors)
+        return open(self.disk_path, encoding="utf-8", errors=errors)
 
     def open_binary(self) -> IO[bytes]:
         """Open as binary, decompressing transparently when gzipped."""

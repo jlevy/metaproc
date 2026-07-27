@@ -35,8 +35,8 @@ requests = sum of provider_call.requests, etc.)."""
 _GENERIC_METRIC_PREFIXES: tuple[str, ...] = ("sum:", "avg:", "max:", "min:")
 """Generic prefixed metrics: ``sum:<attr>``, ``avg:<attr>``, ``max:<attr>``,
 ``min:<attr>``. The suffix is any numeric attribute path
-(``attempt.cost_usd``, ``attempt.tokens_input``, etc.). Added by P2.1
-(internal issue) so callers can sum/avg the canonical cost+token attrs
+(``attempt.cost_usd``, ``attempt.tokens_input``, etc.) so callers can sum or
+average the canonical cost and token attributes
 written by P1.6 without having to enumerate them here."""
 
 
@@ -112,7 +112,7 @@ def _compute_metric(metric: str, members: list[TraceEvent]) -> Any:
         return round(sum(durations) / len(durations), 3) if durations else None
     if metric == "requests":
         return int(sum(_attr_numeric(s, "provider_call.requests") for s in members))
-    # Generic prefixed metrics (P2.1, internal issue).
+    # Generic prefixed metrics (P2.1).
     for prefix in _GENERIC_METRIC_PREFIXES:
         if metric.startswith(prefix):
             attr = metric[len(prefix) :]

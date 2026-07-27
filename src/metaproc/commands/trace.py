@@ -267,7 +267,7 @@ def trace(
             typer.echo(format_source_tool(rows), nl=False)
         return
 
-    # P2.1 (internal issue) — --project: emit filtered rows with explicit columns,
+    # P2.1 — --project: emit filtered rows with explicit columns,
     # skipping aggregation entirely. Useful for "list every web search query"
     # and similar slice-and-dice queries.
     if project:
@@ -283,7 +283,7 @@ def trace(
             typer.echo(format_projected_table(rows_proj, columns), nl=False)
         return
 
-    # P2.1 (internal issue) — --preset expands to known group/metric/filter combos.
+    # P2.1 — --preset expands to known group/metric/filter combos.
     if preset:
         if preset not in TRACE_PRESETS:
             raise typer.BadParameter(

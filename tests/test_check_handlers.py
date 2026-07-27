@@ -102,7 +102,7 @@ process:
 def test_check_handlers_fails_on_unknown_dep_ref(runner: CliRunner, tmp_path: Path) -> None:
     """A typo in ``uses: deps.foo`` must error, not silently skip.
 
-    Pinned by internal review (jlevy, 2026-05-02 issue 3): the previous
+    Pinned by review (jlevy, 2026-05-02 issue 3): the previous
     behavior printed SKIP and exited 0, which made this command weaker
     than its name implied — composite handlers could fail to resolve and
     the gate would still be green.

@@ -1,6 +1,6 @@
 """Tests for the dispatch-start ambient-auth env sweep.
 
-plan-2026-05-03 § Phase 5 bead internal-reference.
+plan-2026-05-03 § Phase 5 this regression.
 
 The per-item ``compose_slot_env`` check only fires when the first
 matching-adapter item tries to launch — a long pool-bypass step can

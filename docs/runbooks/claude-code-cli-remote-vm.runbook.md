@@ -29,9 +29,8 @@ that state lives in the login Keychain, which pins execution to the dev laptop.
 When the laptop dispatches work directly to Filestore via SSHFS/FUSE-T, a single dropped
 SSH session can wedge the entire mount and cascade every worker into uninterruptible
 wait (`U` state), recoverable only by reboot.
-See
-[`docs/project/research/research-2026-04-19-filestore-mount-alternatives.md`](../arch/arch-cloud-execution.md)
-for the full failure analysis.
+See [`docs/arch/arch-metaproc-core.md`](../arch/arch-cloud-execution.md) for the full
+failure analysis.
 
 This runbook documents the verified alternative: ship the Keychain-held OAuth blob to a
 GCP VM and run `claude -p` there.
@@ -204,7 +203,7 @@ comfortably handles concurrency 10.
 ## Related
 
 - Research brief (failure analysis + alternatives):
-  [`docs/project/research/research-2026-04-19-filestore-mount-alternatives.md`](../arch/arch-cloud-execution.md)
+  [`docs/arch/arch-metaproc-core.md`](../arch/arch-cloud-execution.md)
 - Original tactical fix (local APFS + rsync-after): commit `b787061dc`
 - Adapter source:
   [`src/metaproc/adapters/claude_code.py`](../../src/metaproc/adapters/claude_code.py)

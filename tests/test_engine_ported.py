@@ -1,4 +1,4 @@
-"""Direct tests for process engine functions — ported from example_workflow.
+"""Direct tests for process engine functions — ported from example_plugin.
 
 Tests the core engine functions as pure units — no CLI, no temp file setup.
 """
@@ -92,7 +92,7 @@ def test_resolve_templates_supports_dotted_run_namespace_aliases() -> None:
 
 
 def test_resolve_templates_derives_run_dir(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """`{{run.dir}}` resolves to an absolute path (internal-reference).
+    """`{{run.dir}}` resolves to an absolute path.
 
     Previously this returned the joined relative string verbatim, which
     broke code-mode `command:` subprocesses that ran with their own cwd.
@@ -114,7 +114,7 @@ def test_resolve_templates_derives_run_dir(tmp_path) -> None:  # type: ignore[no
 
 
 def test_resolve_templates_raises_on_empty_string_substitution() -> None:
-    """A placeholder explicitly set to empty must raise (internal-reference).
+    """A placeholder explicitly set to empty must raise.
 
     Silent empty substitution produces malformed paths like `mine//<event>`
     where one component disappears. The guard fires before the path lands
@@ -479,7 +479,7 @@ def test_resolve_code_handler_syntax_error(tmp_path):
 def test_resolve_code_handler_future_annotations_with_dataclass(tmp_path):
     """Handler using both `from __future__ import annotations` and @dataclass loads OK.
 
-    Regression test for internal-reference: the dynamic loader did not register the
+    Regression test for the fix: the dynamic loader did not register the
     synthetic module in ``sys.modules``, so ``dataclasses._is_type`` could not
     resolve stringised annotations and raised ``AttributeError``.
     """

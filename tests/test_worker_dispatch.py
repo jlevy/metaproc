@@ -170,7 +170,7 @@ class TestWorkerDispatchRuntimeVars:
                     context_partitions=[[{"TICKER": "AAPL"}]],
                     config=config,
                     step="mine",
-                    process_spec_rel="example_workflow",
+                    process_spec_rel="example_plugin",
                     vars_json=json.dumps(
                         {
                             "RUN_ID": "test-run",
@@ -195,10 +195,10 @@ class TestWorkerDispatchRuntimeVars:
         }
 
     def test_submit_workers_forwards_auth_pool_env_vars(self, monkeypatch):
-        """Phase 6 / internal-reference — closes internal-reference.
+        """Phase 6 — closes the gap.
 
         When the orchestrator process has METAPROC_AUTH_* env vars set
-        (which it does after internal review / internal-reference), worker_dispatch
+        (which it does after review), worker_dispatch
         must propagate them onto each fan-out worker Batch job's
         environment so the worker entrypoint can rebuild --auth-* flags
         on the inner run-parallel command. Without this, cloud workers
@@ -206,7 +206,7 @@ class TestWorkerDispatchRuntimeVars:
         """
 
         # Simulate the orchestrator's environment as set by
-        # orchestrator_dispatch (internal review). All five auth vars present.
+        # orchestrator_dispatch (review). All five auth vars present.
         monkeypatch.setenv("METAPROC_AUTH_ACCOUNT", "claude-code-cli")
         monkeypatch.setenv("METAPROC_AUTH_BACKEND", "gcp-secret-manager")
         monkeypatch.setenv("METAPROC_AUTH_FALLBACK_POLICY", "same-provider")
@@ -241,7 +241,7 @@ class TestWorkerDispatchRuntimeVars:
                     context_partitions=[[{"TICKER": "AAPL"}]],
                     config=config,
                     step="predict-ticker",
-                    process_spec_rel="example_workflow/process/predict/predict.process.md",
+                    process_spec_rel="example_plugin/process/predict/predict.process.md",
                     vars_json=json.dumps({"RUN_ID": "test-run"}),
                     run_dir=None,
                     out=MagicMock(),
@@ -265,7 +265,7 @@ class TestWorkerDispatchRuntimeVars:
         assert "METAPROC_AUTH_EXCLUDE_LABELS" not in env_vars
 
     def test_submit_workers_uses_config_auth_flags_when_set(self, monkeypatch):
-        """internal-reference: hybrid CLI propagation.
+        """Regression coverage: hybrid CLI propagation.
 
         Hybrid (`run-process --backend gcp-worker --auth-*`) builds a
         resolved AuthPoolFlags at the orchestrator level and passes it
@@ -318,7 +318,7 @@ class TestWorkerDispatchRuntimeVars:
                     context_partitions=[[{"TICKER": "AAPL"}]],
                     config=config,
                     step="predict-ticker",
-                    process_spec_rel="example_workflow/process/predict/predict.process.md",
+                    process_spec_rel="example_plugin/process/predict/predict.process.md",
                     vars_json=json.dumps({"RUN_ID": "test-run"}),
                     run_dir=None,
                     out=MagicMock(),
@@ -339,7 +339,7 @@ class TestWorkerDispatchRuntimeVars:
         assert env_vars["METAPROC_AUTH_INCLUDE_LABELS"] == "alt1,alt2"
 
     def test_submit_workers_config_auth_flags_override_ambient_env(self, monkeypatch):
-        """internal-reference: config wins over ambient env.
+        """Regression coverage: config wins over ambient env.
 
         If the orchestrator both has METAPROC_AUTH_* set AND passes a
         config.auth_flags (mixed legacy + new caller), the explicit
@@ -381,7 +381,7 @@ class TestWorkerDispatchRuntimeVars:
                     context_partitions=[[{"TICKER": "AAPL"}]],
                     config=config,
                     step="predict-ticker",
-                    process_spec_rel="example_workflow/process/predict/predict.process.md",
+                    process_spec_rel="example_plugin/process/predict/predict.process.md",
                     vars_json=json.dumps({"RUN_ID": "test-run"}),
                     run_dir=None,
                     out=MagicMock(),
@@ -434,7 +434,7 @@ class TestWorkerDispatchRuntimeVars:
                     context_partitions=[[{"TICKER": "AAPL"}]],
                     config=config,
                     step="mine",
-                    process_spec_rel="example_workflow",
+                    process_spec_rel="example_plugin",
                     vars_json=json.dumps({"RUN_ID": "test-run"}),
                     run_dir=None,
                     out=MagicMock(),
@@ -484,7 +484,7 @@ class TestWorkerDispatchRuntimeVars:
                     context_partitions=[[{"TICKER": "AAPL"}]],
                     config=config,
                     step="mine",
-                    process_spec_rel="example_workflow",
+                    process_spec_rel="example_plugin",
                     vars_json=json.dumps(
                         {
                             "RUN_ID": "mine-smoke-us-traded-20-2026-04-16-cloud-replaysa",
@@ -534,7 +534,7 @@ class TestWorkerDispatchRuntimeVars:
                     context_partitions=[large_contexts],
                     config=config,
                     step="mine",
-                    process_spec_rel="example_workflow",
+                    process_spec_rel="example_plugin",
                     vars_json=json.dumps({"RUN_ID": "test-run"}),
                     run_dir=tmp_path,
                     out=MagicMock(),

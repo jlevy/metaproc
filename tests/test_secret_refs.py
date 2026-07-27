@@ -1,8 +1,6 @@
 """Tests for the SecretRefSet typed wrapper for the GCP_SECRET_REFS cohort.
 
-Phase 10 follow-up of the Vehicle A pool redesign (epic internal-reference,
-bead internal-reference). Spec: docs/project/specs/active/plan-2026-04-28-
-claude-code-auth-vehicle-a-pool-redesign.md §Phase 10.
+Phase 10 follow-up of the Vehicle A pool redesign.
 
 Mirrors the AuthPoolFlags shape: SecretRef.resolve handles per-ref
 env reads with plaintext-leakage refusal; SecretRefSet.to_secret_-

@@ -96,7 +96,7 @@ class ClaudeAgentExtractor:
                 adapter = metadata.get("adapter") or metadata.get("adapter_type")
                 if isinstance(adapter, str) and adapter:
                     attempt_attrs["adapter.type"] = adapter
-                # P0.2 (internal issue) adds canonical adapter metadata to the
+                # P0.2 adds canonical adapter metadata to the
                 # sidecar so we don't have to infer from argv[0] or env vars.
                 # Read whichever keys are present; sidecars from older runs
                 # may not have them.
@@ -123,7 +123,7 @@ class ClaudeAgentExtractor:
                 # METAPROC_LANE_ID is injected by run_parallel for every
                 # subprocess (degenerate runs see the profile name). Carrying
                 # it on the attempt span lets lane-comparison consumers join
-                # cleanly against arena_wrapper / web_bundle spans whose own
+                # cleanly against consumer tool spans whose own
                 # extractors already read this key.
                 if "lane_id" not in attempt_attrs:
                     lane_id = env.get("METAPROC_LANE_ID") or env.get("LANE_ID")

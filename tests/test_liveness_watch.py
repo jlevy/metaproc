@@ -1,10 +1,10 @@
-"""Tests for metaproc liveness-watch glob expansion (bead internal-reference).
+"""Tests for metaproc liveness-watch glob expansion (this regression).
 
 Covers the --heartbeat-glob / --mtime-glob auto-discovery behavior added to
-support multi-lane EIA batches where new lanes launch over time and the
+support multi-lane batches where new lanes launch over time and the
 supervising agent's monitor needs to pick them up without restart.
 
-See logbook arb-2026-05-28-thu-ensemble § L10.
+See the incident analysis.
 """
 
 from __future__ import annotations
@@ -58,14 +58,14 @@ def test_glob_spec_expand_picks_up_new_files(tmp_path: Path) -> None:
     # Start with no matching files.
     spec = GlobSpec(
         label_prefix="hb",
-        pattern=str(tmp_path / "arb-*/lease.yaml"),
+        pattern=str(tmp_path / "synthetic-*/lease.yaml"),
         field="last_heartbeat_at",
         stale_seconds=300,
     )
     assert spec.expand() == []
 
     # Add one lane lease file → expand sees it.
-    lane1 = tmp_path / "arb-2026-05-28-tier1-lane-a"
+    lane1 = tmp_path / "synthetic-tier1-lane-a"
     lane1.mkdir()
     (lane1 / "lease.yaml").write_text("last_heartbeat_at: '2026-05-28T20:00:00'\n")
     signals = spec.expand()
@@ -73,7 +73,7 @@ def test_glob_spec_expand_picks_up_new_files(tmp_path: Path) -> None:
     assert "lane-a" in signals[0].label
 
     # Add a second lane → next expand picks it up too (no restart needed).
-    lane2 = tmp_path / "arb-2026-05-28-tier2-lane-b"
+    lane2 = tmp_path / "synthetic-tier2-lane-b"
     lane2.mkdir()
     (lane2 / "lease.yaml").write_text("last_heartbeat_at: '2026-05-28T20:00:00'\n")
     signals = spec.expand()

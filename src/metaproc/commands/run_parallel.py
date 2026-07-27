@@ -157,8 +157,8 @@ def _compute_pool_cooling_delay(
 ) -> float:
     """Return seconds to wait before re-attempting an item that hit pool exhaustion.
 
-    internal issue: when ``acquire_slot`` raises PoolSlotUnavailableError,
-    distinguish two failure modes and pick a delay matched to each:
+    When ``acquire_slot`` raises ``PoolSlotUnavailableError``, distinguish two
+    failure modes and pick a delay matched to each:
 
     1. **Cooling exhaustion** — at least one entry has
        ``cooling_until_ts``. Wait for the earliest reset (capped to
@@ -178,7 +178,7 @@ def _compute_pool_cooling_delay(
     if pool_dispatch is None:
         return ceiling_s
     try:
-        backend = pool_dispatch.coordinator._backend  # noqa: SLF001 — internal probe
+        backend = pool_dispatch.coordinator.backend
         entries = backend.list_entries(adapter=pool_dispatch.adapter)
         now = time.time()
         earliest: float | None = None
@@ -219,7 +219,7 @@ def _expand_pool_exclude_by_quota_group(
     """Add every sibling label sharing the failing label's quota_group to
     *exclude_list*.
 
-    Phase 4 / internal issue: on a 429 cooling classification, the next
+    Phase 4: on a 429 cooling classification, the next
     retry should skip the entire quota group, not just the failing
     label. Otherwise a same-org alt label gets a wasted 429 in lockstep.
 
@@ -234,7 +234,7 @@ def _expand_pool_exclude_by_quota_group(
     ``quota_group_*`` fields, not via dispatch logs.
     """
     try:
-        backend = pool_dispatch.coordinator._backend  # noqa: SLF001 — private but used here only
+        backend = pool_dispatch.coordinator.backend
         failing_entry = backend.get_entry(lease.adapter, lease.label)
     except (KeyError, AttributeError):
         # Backend doesn't have this entry (rare race) or coordinator is
@@ -319,11 +319,11 @@ def _teardown_pool_slot(
         # the *output* was bad. Two consecutive ``unknown`` failures used to
         # exhaust the per-item label set permanently, sending the worker
         # into a "pool exhausted — waiting 60s for slot recovery" loop with
-        # no escape (2026-05-21 tier5 BULL/CAE: 53 min stuck before the fix).
+        # no escape.
         exclude_list = shared.setdefault("pool_exclude", [])
         if classification.status in ("cooling", "expired"):
             exclude_list.append((lease.adapter, lease.label))
-        # ── Phase 4 / internal issue: quota-group walk on 429 cooling ──
+        # ── Phase 4: quota-group walk on 429 cooling ──
         # When the failure is rate-limit cooling AND the failing label
         # has a known quota_group (org or account), exclude every
         # sibling label in the same group from this retry. Anthropic
@@ -400,9 +400,8 @@ def _build_pool_dispatch_template(
     (run-process already did that once at orchestrator time and
     persisted any state transitions to the shared SM-backed pool).
 
-    Phase 6 / internal issue — closes the worker-leg of internal issue so
-    cloud workers receive --auth-* flags and dispatch via the pool
-    just like local run-process does.
+    Cloud workers must receive the same ``--auth-*`` flags and use the same pool
+    dispatch path as local ``run-process``.
     """
     if not auth_account:
         return None
@@ -480,7 +479,7 @@ def _build_pool_dispatch_template(
     priority_repr = list(strategy.labels) or "(any active)"
     out.progress(
         f"Auth pool: adapter={auth_account} backend={resolved_auth_backend} "
-        f"strategy=priority-order labels={priority_repr} "
+        f"strategy={resolved_policy.value} labels={priority_repr} "
         f"fallback={fallback_policy_enum.value}"
     )
     return template
@@ -619,7 +618,7 @@ def run_parallel(
             "warn (compute verdict, log a warning event, always proceed). "
             "refuse blocks the dispatch when projected demand > 80% of "
             "headroom; off skips the gate entirely. plan-2026-05-03 "
-            "Phase 3 / internal issue."
+            "Phase 3."
         ),
     ),
 ) -> None:
@@ -670,7 +669,7 @@ def run_parallel(
     # variant is just a run-dir label and the step's own spec drives adapter
     # selection. Without this branch, a worker invoked with
     # `--variant pi-cli-glm-5-maas` (the cloud worker leg of mine-adhoc) was
-    # rejected by build_plan as `unknown adapter override` (internal issue).
+    # rejected by build_plan as `unknown adapter override`.
     if adapter:
         effective_adapter_override: str | None = adapter
     elif variant_flag and (
@@ -1186,13 +1185,13 @@ def run_parallel(
         f"min_concurrency={_pool_config.min_concurrency}"
     )
 
-    # ── Auth-pool dispatch template (Phase 6 / internal issue) ────────
+    # ── Auth-pool dispatch template (Phase 6) ────────
     # Construct the same PoolDispatchConfig run-process builds at
-    # docs/project/specs/active/plan-2026-04-28-claude-code-auth-vehicle-a-pool-redesign.md
+    # docs/arch/arch-metaproc-core.md
     # Phase 6. Without this, run-parallel as a worker entrypoint
     # ignores --auth-* flags and falls back to the legacy
     # single-credential bootstrap, which is exactly the cloud
-    # multi-account gap (internal issue). Workers do NOT re-run the
+    # multi-account gap. Workers do NOT re-run the
     # pre-fan-out probe gate — the orchestrator's run-process did
     # that once and persisted state transitions to the SM-backed
     # pool, so each worker's select_credential will already see any
@@ -1340,7 +1339,7 @@ def _build_prepare_launch(  # noqa: PLR0913
         # the agent actually produced on the failed attempt. Without this,
         # an invalid_output cascading to a permanent failure leaves only
         # the final attempt's artifact on disk and the actual failed content
-        # is permanently lost. See internal issue.
+        # is permanently lost.
         if shared["item_dir"] is not None and effective_outputs:
             resolved_outputs = resolve_record_output_paths(
                 effective_outputs,
@@ -1595,7 +1594,7 @@ async def _run_agent_pool(  # noqa: PLR0913
     all_results: list[tuple[str, int]] = []
     worker_id = MetaprocEnv.METAPROC_WORKER_ID.read_str(default="")
 
-    # Per-step preflight quota gate (plan-2026-05-03 internal issue).
+    # Per-step preflight quota gate.
     # Only fires when the step uses the auth pool — non-pool dispatches
     # have no headroom signal to gate on. Posture comes from the
     # operator's --auth-preflight-quota-guard flag.
@@ -1612,7 +1611,7 @@ async def _run_agent_pool(  # noqa: PLR0913
         )
 
         verdict = check_step_preflight(
-            pool_dispatch.coordinator._backend,  # noqa: SLF001 — internal probe
+            pool_dispatch.coordinator.backend,
             adapter=pool_dispatch.adapter,
             step_id=step,
             fan_out_size=len(item_contexts),
@@ -1776,7 +1775,7 @@ async def _run_agent_pool(  # noqa: PLR0913
         of what ``classify_error`` says — retrying past ABORT wastes
         attempts and, for known bugs, re-fires the exact failure.
 
-        internal issue: when the failure is "no eligible pool label"
+        When the failure is "no eligible pool label"
         (PoolSlotUnavailableError surfaced from acquire_slot during
         prepare_launch), schedule a cooling-aware retry that pauses
         until the earliest pool slot's ``cooling_until_ts`` rather
@@ -1829,7 +1828,7 @@ async def _run_agent_pool(  # noqa: PLR0913
                 f"for reset_at={quota_reset_at.isoformat()} (attempt {shared['attempt_number']})"
             )
             return
-        # internal issue: detect pool-exhausted failures and override the
+        # Detect pool-exhausted failures and override the
         # retry strategy. The error_str shape is "launch failed: no
         # eligible pool label for adapter=..." (see PoolSlotUnavailableError).
         is_pool_exhausted = pool_dispatch is not None and "no eligible pool label" in error_str
@@ -1923,7 +1922,7 @@ async def _run_agent_pool(  # noqa: PLR0913
             # log via ``atomic_output_file``, which has a documented brief
             # window where the original path is absent (between rename to
             # ``.bak`` and rename of the temp file into place). The 2026-04-27
-            # BMO/AMC mis-classification was the failure mode: classifier
+            # multi-label mis-classification was the failure mode: classifier
             # ran during that window, saw no session log, and fell through
             # to the bug-regex on stderr "exit code 1".
             _classify_and_maybe_retry(shared, error_str)

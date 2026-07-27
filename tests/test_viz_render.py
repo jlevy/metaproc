@@ -110,6 +110,18 @@ def test_render_svg_round_trips_to_vizmodel(tmp_path: Path) -> None:
     assert restored == viz
 
 
+def test_render_svg_metadata_handles_xml_special_characters(tmp_path: Path) -> None:
+    bundle = load_plan_bundle(_write_process(tmp_path), params={"CUTOFF": "today"})
+    viz = build_viz_model(bundle)
+    special = viz.nodes[0].model_copy(update={"label": "A < B & C"})
+    viz = viz.model_copy(update={"nodes": [special, *viz.nodes[1:]]})
+
+    svg = render_svg(viz)
+
+    assert "<![CDATA[" in svg
+    assert parse_svg_metadata(svg) == viz
+
+
 def test_parse_svg_metadata_fails_clearly_on_missing_block() -> None:
     with pytest.raises(ValueError, match="does not contain"):
         parse_svg_metadata("<svg></svg>")

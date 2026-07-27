@@ -74,7 +74,7 @@ def _clear_openai_codex_creds_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def _isolate_vehicle_b_lock_dir(
     monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
-    """Isolate the V-B per-label lock dir per-test (Phase 5 / internal-reference).
+    """Isolate the V-B per-label lock dir per-test (Phase 5).
 
     SlotCoordinator.acquire_slot creates a mkdir-based per-label lock
     in ``METAPROC_AUTH_POOL_LOCK_DIR`` (or ``~/.metaproc/auth-pool/locks``

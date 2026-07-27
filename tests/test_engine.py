@@ -923,13 +923,13 @@ class TestValidateItemOutputs:
         assert "envelope_mismatch" in errors[0]
 
     def test_run_dir_rendered_path_works_regardless_of_cwd(self, tmp_path, monkeypatch):
-        """Regression for internal-reference / internal-reference.
+        """Regression for the fix.
 
         The pilot mine review-batch step failed validation with `review.md:
         file not found` even though the file was on disk: the output path
         rendered with a relative {{run.dir}}, then validate_item_outputs
         checked Path(rel).exists() against whatever cwd the parent process
-        happened to have. With internal-reference the rendered run.dir is always
+        happened to have. With the fix the rendered run.dir is always
         absolute, so cwd no longer matters.
 
         This test reproduces the original failure mode (cwd != expected) and
@@ -947,7 +947,7 @@ class TestValidateItemOutputs:
         monkeypatch.chdir(unrelated)
 
         # Variables include RUN_ID + RUNS_DIR; resolve_templates renders
-        # {{run.dir}} to an absolute path via Path.resolve() (internal-reference).
+        # {{run.dir}} to an absolute path via Path.resolve().
         variables = {
             "RUNS_DIR": str(tmp_path / "runs"),
             "RUN_ID": "test-run",

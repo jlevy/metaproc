@@ -203,7 +203,7 @@ class TestOverrideCLI:
     def test_missing_process_arg_errors(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Regression: internal-reference. Without --process the engine cannot
+        # Regression: the fix. Without --process the engine cannot
         # know the process-level run_dir layout (varies per spec). Refuse
         # at startup rather than silently writing to the wrong path.
         runs_dir, _run_dir, _spec_path = _make_run(tmp_path)

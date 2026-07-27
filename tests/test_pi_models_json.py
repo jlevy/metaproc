@@ -25,7 +25,8 @@ def test_rewrite_swaps_gcloud_apikey_helper() -> None:
         }
     )
     out = json.loads(_rewrite_pi_models_json(src, "exampletool"))
-    assert out["providers"]["vertex-maas"]["apiKey"] == "!gcp-access-token.sh"
+    assert "METAPROC_PI_API_KEY" in out["providers"]["vertex-maas"]["apiKey"]
+    assert "gcp-access-token.sh" in out["providers"]["vertex-maas"]["apiKey"]
 
 
 def test_rewrite_retargets_project_in_vertex_base_url() -> None:
@@ -70,7 +71,8 @@ def test_build_merges_operator_file_into_packaged(tmp_path: Path) -> None:
     assert "zai-org/glm-5-maas" in model_ids
     # Project rewrite and apiKey swap both fire on the merged result.
     assert "projects/exampletool/" in out["providers"]["vertex-maas"]["baseUrl"]
-    assert out["providers"]["vertex-maas"]["apiKey"] == "!gcp-access-token.sh"
+    assert "METAPROC_PI_API_KEY" in out["providers"]["vertex-maas"]["apiKey"]
+    assert "gcp-access-token.sh" in out["providers"]["vertex-maas"]["apiKey"]
 
 
 def test_build_falls_back_to_packaged_default(tmp_path: Path) -> None:
@@ -83,7 +85,10 @@ def test_build_falls_back_to_packaged_default(tmp_path: Path) -> None:
     providers = out["providers"]
     assert "vertex-maas" in providers
     vertex = providers["vertex-maas"]
-    assert vertex["apiKey"] == "!gcp-access-token.sh"
+    assert vertex["apiKey"] == (
+        '!sh -c \'if [ -n "$METAPROC_PI_API_KEY" ]; then '
+        'printf "%s" "$METAPROC_PI_API_KEY"; else exec gcp-access-token.sh; fi\''
+    )
     assert (
         vertex["baseUrl"]
         == "https://aiplatform.googleapis.com/v1/projects/exampletool/locations/global/endpoints/openapi"
@@ -150,7 +155,7 @@ def test_packaged_default_includes_openai_provider(tmp_path: Path) -> None:
     model_ids = {m["id"] for m in oa["models"]}
     # gpt-5.5-pro is deliberately absent — it requires /v1/responses and
     # pi-cli's openai-completions provider cannot dispatch it. It lives
-    # in CODEX_VALID_MODELS instead. See bead internal-reference.
+    # in CODEX_VALID_MODELS instead. See this regression.
     assert {"gpt-5.5", "gpt-5.4-mini", "gpt-5.4-nano"} <= model_ids
     assert "gpt-5.5-pro" not in model_ids
 

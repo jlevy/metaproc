@@ -12,6 +12,10 @@ Metaproc’s license.
   vendored as `src/metaproc/metabrowser_plugin/plugin/elk.bundled.js` for offline
   process-graph layout.
 
+The browser plugin calls this JavaScript bundle as a separately licensed component.
+The bundle remains under EPL-2.0; Metaproc’s AGPL license does not replace or alter
+those terms.
+
 ## Runtime Dependencies
 
 Python dependencies are declared in `pyproject.toml`. They are installed under their own

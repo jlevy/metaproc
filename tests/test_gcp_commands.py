@@ -38,6 +38,7 @@ from metaproc.commands.gcp import (
     _query_filestore_utilization,
     _read_events,
     _remote_editable_install_command,
+    _resolve_gateway_host,
     _resolve_job_names_and_project,
     _resolve_scale_run_dir,
     _search_resources,
@@ -1063,7 +1064,15 @@ class TestArchiveCLI:
         ):
             result = runner.invoke(
                 app,
-                ["gcp", "archive", str(run_dir), "--delete-local", "--yes"],
+                [
+                    "gcp",
+                    "archive",
+                    str(run_dir),
+                    "--bucket",
+                    "test-bucket",
+                    "--delete-local",
+                    "--yes",
+                ],
             )
         assert result.exit_code == 0
         assert "Deleted local" in result.output
@@ -1086,7 +1095,7 @@ class TestArchiveCLI:
         ):
             result = runner.invoke(
                 app,
-                ["gcp", "archive", str(run_dir), "--yes"],
+                ["gcp", "archive", str(run_dir), "--bucket", "test-bucket", "--yes"],
             )
         assert result.exit_code == 1
 
@@ -1504,22 +1513,11 @@ class TestGcpRemote:
             result = runner.invoke(app, ["gcp", "remote", "status"])
         assert result.exit_code != 0
 
-    def test_defaults_host_to_metaproc_browser(self) -> None:
-        """Defaults to metaproc-browser when no --host/env override is set."""
-
-        runner = CliRunner()
-        ssh_result = MagicMock(returncode=0)
-
-        with (
-            patch("metaproc.commands.gcp._ensure_remote_repo"),
-            patch("subprocess.run", return_value=ssh_result) as mock_run,
-            patch.dict("os.environ", {"METAPROC_GCP_PROJECT": "proj"}, clear=True),
-        ):
-            result = runner.invoke(app, ["gcp", "remote", "status"])
-
-        assert result.exit_code == 0
-        ssh_cmd = mock_run.call_args[0][0]
-        assert "metaproc-browser" in ssh_cmd
+    def test_requires_gateway_host(self) -> None:
+        """A missing host fails with an actionable configuration error."""
+        with patch.dict("os.environ", {}, clear=True):
+            with pytest.raises(CLIError, match="METAPROC_GATEWAY_HOST"):
+                _resolve_gateway_host("")
 
     def test_raw_flag_skips_metaproc_prefix(self) -> None:
         """--raw passes command through without prepending 'metaproc'."""
@@ -1547,7 +1545,7 @@ class TestGcpRemote:
                     "--",
                     "python",
                     "-m",
-                    "example_workflow.compare_records",
+                    "example_plugin.compare_records",
                     "--bulk",
                 ],
             )
@@ -1555,7 +1553,7 @@ class TestGcpRemote:
         assert result.exit_code == 0
         remote_cmd = mock_run.call_args[0][0][-1]
         assert "python" in remote_cmd
-        assert "example_workflow.compare_records" in remote_cmd
+        assert "example_plugin.compare_records" in remote_cmd
         assert "--bulk" in remote_cmd
         # Should NOT have 'metaproc' prefix (only in PATH setup)
         assert "metaproc python" not in remote_cmd
@@ -1569,7 +1567,14 @@ class TestGcpRemote:
         with (
             patch("metaproc.commands.gcp._ensure_remote_repo") as ensure_repo,
             patch("subprocess.run", return_value=ssh_result),
-            patch.dict("os.environ", {"METAPROC_GCP_PROJECT": "test-proj"}, clear=True),
+            patch.dict(
+                "os.environ",
+                {
+                    "METAPROC_GATEWAY_HOST": "browser-vm",
+                    "METAPROC_GCP_PROJECT": "test-proj",
+                },
+                clear=True,
+            ),
         ):
             result = runner.invoke(
                 app,
@@ -1860,7 +1865,7 @@ class TestGcpRemoteRun:
                 [
                     "gcp",
                     "remote-run",
-                    "example_workflow/process/mine",
+                    "example_plugin/process/mine",
                     "--var",
                     "RUN_ID=p4a-test",
                     "--variant",

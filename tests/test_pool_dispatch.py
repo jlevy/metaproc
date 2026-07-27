@@ -906,7 +906,7 @@ class TestBuildAuthLeaseAcquired:
 
     def test_policy_defaults_empty(self, tmp_path):
         # Empty policy is allowed for the legacy PRIORITY_ORDER path
-        # before --auth-policy plumbing lands in internal-reference.
+        # before --auth-policy plumbing lands in the fix.
         payload = build_auth_lease_acquired(self._lease_with_keys(tmp_path))
         assert payload["policy"] == ""
 
@@ -1375,7 +1375,7 @@ class TestEventLoggerAuthOutcome:
 
 
 class TestComputePoolCoolingDelay:
-    """internal-reference: cooling-aware retry delay for pool-exhausted items."""
+    """Regression coverage: cooling-aware retry delay for pool-exhausted items."""
 
     def _make_dispatch(self, entries: list[PoolEntry]) -> PoolDispatchConfig:
 

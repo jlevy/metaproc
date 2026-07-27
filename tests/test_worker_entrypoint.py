@@ -1,7 +1,7 @@
 """Tests for the worker entrypoint command builder.
 
 Covers the auth-pool flag passthrough on the **worker leg** of cloud
-multi-account dispatch (Phase 6 / internal-reference, closes internal-reference).
+multi-account dispatch (Phase 6, closes the gap).
 The orchestrator-leg is covered by ``test_orchestrator_entrypoint``.
 
 The full chain:
@@ -139,7 +139,7 @@ class TestPlumbingFlags:
 
 
 class TestAuthPoolFlags:
-    """Phase 6 / internal-reference — the worker-leg of the auth-pool flag chain."""
+    """Phase 6 — the worker-leg of the auth-pool flag chain."""
 
     def test_auth_account_alone_emits_account_flag(self) -> None:
         cmd = _baseline_cmd(auth_flags=_auth(auth_account="claude-code-cli"))
@@ -241,7 +241,7 @@ class TestEmptyAuthMeansLegacyPath:
 
 
 class TestLegacyBootstrapGuard:
-    """internal-reference: METAPROC_AUTH_POOL_RUN gate before adapter bootstrap.
+    """Regression coverage: METAPROC_AUTH_POOL_RUN gate before adapter bootstrap.
 
     When auth-pool dispatch is enabled, the worker entrypoint must set
     METAPROC_AUTH_POOL_RUN=1 BEFORE the per-adapter ``bootstrap(home)``

@@ -1,4 +1,4 @@
-"""P0.2 (internal-reference) — invocation sidecar adapter metadata.
+"""P0.2 — invocation sidecar adapter metadata.
 
 Pins the contract that:
 - `metaproc.adapters.registry.adapter_provider()` and `.adapter_trace_source()`

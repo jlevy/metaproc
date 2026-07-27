@@ -76,7 +76,7 @@ _KEY_DEFAULT_WARNED: set[str] = set()
 def resolve_item_key(for_each: ForEach, variables: dict[str, str], step_id: str) -> str:
     """Render ``for_each.key`` against *variables* and return the safe item-key.
 
-    An omitted ``key`` defaults to ``"{{<bind>}}"`` (e.g. ``"{{ticker}}"``)
+    An omitted ``key`` defaults to ``"{{<bind>}}"`` (e.g. ``"{{item}}"``)
     and emits a once-per-step deprecation warning.
 
     Raises ``ValueError`` if the template is unresolved at runtime
@@ -186,7 +186,7 @@ def find_item_dir(run_dir: Path, item: str) -> Path | None:
     direct = run_dir / item
     if direct.is_dir():
         return direct
-    # Fallback: sector-based layout
+    # Fallback: category-based layout
     matches = glob_mod.glob(str(run_dir / "*" / item))
     if matches and Path(matches[0]).is_dir():
         return Path(matches[0])

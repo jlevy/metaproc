@@ -1,25 +1,25 @@
 """Regression: lane-comparison consumers can recover lane_id +
-execution_profile from trace spans without EIA-specific parsing.
+execution_profile from trace spans without workflow-specific parsing.
 
-Beads: internal-reference (env-var key parity for METAPROC_LANE_ID),
-internal-reference (lane metadata in trace events and source logs),
+Beads: the fix (env-var key parity for METAPROC_LANE_ID),
+the fix (lane metadata in trace events and source logs),
 and the final Phase-3 checklist item in the provenance/status/trace
 spec ("Add regression coverage that lane-comparison consumers can
 recover item, execution profile, lane id, raw-log reference,
 artifact namespace, provider, status, duration, and cost context
-from trace rows without EIA-specific parsing").
+from trace rows without workflow-specific parsing").
 
 This file pins the contract end-to-end:
 - ``run_parallel`` injects ``METAPROC_LANE_ID`` and ``EXECUTION_PROFILE``
-  into the subprocess env (internal review / Phase 2).
+  into the subprocess env (review / Phase 2).
 - ``write_invocation_sidecar`` captures ``env_redacted`` from that env.
 - ``ClaudeAgentExtractor`` reads the sidecar and stamps lane_id +
   execution_profile + artifact_namespace on the attempt span.
 
 Together these mean a lane-native consumer can join
 ``(item.key, lane_id, execution_profile)`` across Claude attempts,
-arena_wrapper resource events, and web_bundle spans without ever
-looking at run id, dispatch plan, or EIA-specific YAML.
+consumer tool resource events and spans without ever
+looking at run id, dispatch plan, or workflow-specific YAML.
 """
 
 from __future__ import annotations
@@ -134,14 +134,14 @@ def _write_attempt(
 
 @pytest.fixture
 def run_dir(tmp_path: Path) -> Path:
-    return tmp_path / "arb-2026-05-19-cava"
+    return tmp_path / "synthetic-lane-recovery-run"
 
 
 def _attempt_span(spans: list[TraceEvent]) -> TraceEvent:
     return next(s for s in spans if s.kind == "attempt")
 
 
-# ── Lane env-var parity (bead internal-reference) ─────────────────────
+# ── Lane env-var parity (this regression) ─────────────────────
 
 
 def test_attempt_span_recovers_lane_id_from_metaproc_lane_id_env(run_dir: Path) -> None:
@@ -153,7 +153,7 @@ def test_attempt_span_recovers_lane_id_from_metaproc_lane_id_env(run_dir: Path) 
         execution_profile="codex-gpt55",
         artifact_namespace="example-artifacts-v0",
     )
-    spans = list(ClaudeAgentExtractor().extract(run_dir, trace_id="arb-2026-05-19-cava"))
+    spans = list(ClaudeAgentExtractor().extract(run_dir, trace_id="synthetic-lane-recovery-run"))
     attempt = _attempt_span(spans)
     assert attempt.attributes["lane_id"] == "codex-gpt55"
     assert attempt.attributes["execution_profile"] == "codex-gpt55"
@@ -170,7 +170,12 @@ def test_attempt_span_falls_back_to_legacy_lane_id_env(run_dir: Path) -> None:
         legacy_lane_id_key=True,
     )
     attempt = _attempt_span(
-        list(ClaudeAgentExtractor().extract(run_dir, trace_id="arb-2026-05-19-cava"))
+        list(
+            ClaudeAgentExtractor().extract(
+                run_dir,
+                trace_id="synthetic-lane-recovery-run",
+            )
+        )
     )
     assert attempt.attributes["lane_id"] == "claude-opus"
 
@@ -180,7 +185,12 @@ def test_attempt_span_has_no_lane_id_when_env_missing(run_dir: Path) -> None:
     jsonl_path = _write_attempt(run_dir)
     _write_invocation_sidecar(jsonl_path, execution_profile="codex-gpt55")
     attempt = _attempt_span(
-        list(ClaudeAgentExtractor().extract(run_dir, trace_id="arb-2026-05-19-cava"))
+        list(
+            ClaudeAgentExtractor().extract(
+                run_dir,
+                trace_id="synthetic-lane-recovery-run",
+            )
+        )
     )
     assert "lane_id" not in attempt.attributes
     # execution_profile still flows.
@@ -194,7 +204,7 @@ def test_lane_comparison_consumer_can_join_attempt_to_lane_metadata(
     run_dir: Path,
 ) -> None:
     """Two attempts for the same item, different lanes, must be addressable
-    by (item.key, lane_id, execution_profile) without EIA-specific parsing.
+    by (item.key, lane_id, execution_profile) without workflow-specific parsing.
     """
     codex_jsonl = _write_attempt(
         run_dir,
@@ -255,7 +265,10 @@ def test_lane_comparison_consumer_can_join_attempt_to_lane_metadata(
     )
     attempts = [
         s
-        for s in ClaudeAgentExtractor().extract(run_dir, trace_id="arb-2026-05-19-cava")
+        for s in ClaudeAgentExtractor().extract(
+            run_dir,
+            trace_id="synthetic-lane-recovery-run",
+        )
         if s.kind == "attempt"
     ]
     by_lane = {a.attributes["lane_id"]: a.attributes for a in attempts if "lane_id" in a.attributes}

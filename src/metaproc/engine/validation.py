@@ -220,10 +220,10 @@ def validate_item_outputs(
 ) -> list[str]:
     """Validate declared outputs exist in the item directory.
 
-    ``variables`` is used to render any per-item templates (e.g. ``{{ticker}}``)
+    ``variables`` is used to render any per-item templates (e.g. ``{{item}}``)
     in output paths before checking existence. Without it, a for_each step
     whose output path contains a bind var will fail validation because
-    ``Path("{{ticker}}").name`` compares as the literal placeholder.
+    ``Path("{{item}}").name`` compares as the literal placeholder.
 
     Directory-kind outputs must be non-empty — an empty directory indicates
     the step produced zero records and is treated as a silent-success failure
@@ -247,8 +247,8 @@ def validate_item_outputs(
             fpath = _resolve_output_fpath(rendered, item_dir)
             # Preserve the fan-out convenience where a directory output's
             # rendered basename equals item_dir.name (e.g. output path
-            # ``{{run.dir}}/.../{{ticker}}/`` against item_dir
-            # ``.../<ticker>/``): treat item_dir itself as the target.
+            # ``{{run.dir}}/.../{{item}}/`` against item_dir
+            # ``.../<item>/``): treat item_dir itself as the target.
             if not fpath.exists() and item_dir.name == fname:
                 fpath = item_dir
             if not fpath.exists() or not fpath.is_dir():

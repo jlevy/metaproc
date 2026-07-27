@@ -1,4 +1,4 @@
-"""Tests for runtime models and .state/ I/O — ported from example_workflow.
+"""Tests for runtime models and .state/ I/O — ported from example_plugin.
 
 Validates StatusRecord/AttemptRecord/ResultRecord models,
 .state/ atomic I/O, harness transition helpers, and MapItem.

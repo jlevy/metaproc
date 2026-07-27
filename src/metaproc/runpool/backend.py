@@ -263,14 +263,14 @@ class LocalBackend:
 
         if prepared.filter_log and read_fd is not None and prepared.log_path is not None:
             from metaproc.engine.runtime import (  # noqa: PLC0415 -- pre-existing local import; needs review
-                _start_log_filter_thread,
+                start_log_filter_thread,
             )
 
             # Close our copy of the write end — the subprocess owns it now.
             os.close(write_fd)  # pyright: ignore[reportPossiblyUnboundVariable]
             pipe_reader = os.fdopen(read_fd, "rb")
             log_file_for_filter = open(prepared.log_path, "w")  # noqa: SIM115
-            filter_thread = _start_log_filter_thread(pipe_reader, log_file_for_filter)
+            filter_thread = start_log_filter_thread(pipe_reader, log_file_for_filter)
         elif log_file is not None:
             # Close our copy of the file descriptor — the subprocess owns it now.
             log_file.close()

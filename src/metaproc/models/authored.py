@@ -72,7 +72,7 @@ class ParamDef(BaseModel):
 # ── Core Model value types ──────────────────────────────────────
 #
 # Closed value type set for process-level inputs/outputs (Phase 2A).
-# Spec: docs/project/specs/active/plan-2026-04-16-process-file-design-cleanups.md
+# Spec: docs/arch/arch-metaproc-core.md
 # The authored surface accepts the short string form (e.g. ``list<map>``);
 # ``ValueType.parse`` turns it into a structured tree the engine can consume.
 
@@ -334,7 +334,7 @@ class ForEach(BaseModel):
         stripped = re.sub(r"\{\{[^{}]+\}\}", "", v)
         if not stripped:
             return v
-        if not re.fullmatch(r"[A-Za-z0-9._\-_]+", stripped):
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", stripped):
             raise ValueError(
                 f"for_each.key template must use only "
                 f"[A-Za-z0-9._-] outside of {{{{...}}}} placeholders; got: {v!r}"

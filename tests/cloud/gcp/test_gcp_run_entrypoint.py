@@ -238,7 +238,7 @@ class TestGcpRunEntrypoint:
     def test_adapter_bootstrap_loop_invokes_every_registered_adapter(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ):
-        """internal-reference: every registered adapter's bootstrap() fires in the entrypoint.
+        """Regression coverage: every registered adapter's bootstrap() fires in the entrypoint.
 
         Without this invariant, adding a new adapter with a bootstrap hook
         (e.g. codex-cli's ~/.codex/auth.json materialization) would silently

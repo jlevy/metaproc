@@ -3,7 +3,7 @@ process:
   name: layout-smoke
   description: |
     Tiny fixture used by the run-dir layout integration test
-    (golden-layout test, bead internal-reference). Exercises:
+    (golden-layout test, this regression). Exercises:
     - a code-mode scaffold step (non-fan-out)
     - an agent-mode fan-out step writing one artifact per item, dispatched
       against a mock adapter registered by the test

@@ -378,8 +378,7 @@
   // for the hierarchy, and hiding them would orphan surviving children.
   // When a surviving node's parent gets filtered out, we reparent it up to
   // the nearest surviving ancestor so the compound graph stays connected
-  // (this is the fix for the bug Levy's review caught — toggling Steps off
-  // with Artifacts on used to produce a blank graph because every dep node
+  // (toggling Steps off with Artifacts on used to produce a blank graph because every dep node
   // sat under a composite step node which had been filtered away).
   //
   // After reparenting, process nodes that end up as empty containers (no

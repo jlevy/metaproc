@@ -605,11 +605,10 @@ class TestBuildPiFlags:
         idx = flags.index("--model")
         assert flags[idx + 1] == "sonnet"
 
-    def test_api_key_passed_through(self):
+    def test_api_key_is_not_passed_through_argv(self):
         flags = _build_pi_flags({"api_key": "ya29.test-token-123"}, {})
-        assert "--api-key" in flags
-        idx = flags.index("--api-key")
-        assert flags[idx + 1] == "ya29.test-token-123"
+        assert "--api-key" not in flags
+        assert "ya29.test-token-123" not in flags
 
     def test_no_api_key_by_default(self):
         flags = _build_pi_flags({}, {})

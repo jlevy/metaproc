@@ -231,7 +231,7 @@ def probe_tool_use(
         help=(
             "Use this execution profile to derive harness, model, and provider. "
             "Mutually exclusive with --harness. Exercises the same profile "
-            "resolution path EIA dispatch uses, so a green probe here proves "
+            "resolution path large workflow dispatch uses, so a green probe here proves "
             "the profile is dispatch-ready end-to-end."
         ),
     ),

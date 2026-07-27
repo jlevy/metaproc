@@ -1,4 +1,4 @@
-"""Tests for model separation — ported from example_workflow.
+"""Tests for model separation — ported from example_plugin.
 
 Validates that framework models are cleanly structured with proper exports.
 Domain-specific tests (earnings models, schema registry, earnings envelopes,

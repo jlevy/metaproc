@@ -1,6 +1,6 @@
 """Tests for ``metaproc auth usage`` and ``metaproc auth doctor`` commands.
 
-Spec / bead: internal-reference (Phase 2 of plan-2026-05-03).
+Spec / bead: the fix (Phase 2 of plan-2026-05-03).
 
 End-to-end via Typer's CliRunner. Reuses the in-memory backend fake
 pattern from test_auth_command (duplicated here to keep tests
@@ -190,7 +190,7 @@ class TestAuthDoctorCommand:
         fake_pool: _InMemoryBackend,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        # internal review (P2): --probe used to be a no-op. Now it
+        # review (P2): --probe used to be a no-op. Now it
         # invokes _probe_label_state per label and the result lands
         # on LabelUsage.probe_state. Stub the helper so this test
         # doesn't shell out to ``claude``.

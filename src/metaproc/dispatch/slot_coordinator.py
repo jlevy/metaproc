@@ -49,6 +49,7 @@ from metaproc.config.env_vars import MetaprocEnv
 from metaproc.dispatch.credential_pool import (
     ActiveLeaseCounter,
     AtomicCounter,
+    ConcurrentModificationError,
     FallbackPolicy,
     PoolBackend,
     SelectionStrategy,
@@ -304,6 +305,11 @@ class SlotCoordinator:
         """Expose the active-lease counter for observability snapshots."""
         return self._active_counter
 
+    @property
+    def backend(self) -> PoolBackend:
+        """Expose the configured backend for read-only coordination queries."""
+        return self._backend
+
     # ── Slot acquisition ────────────────────────────────────────
 
     def acquire_slot(
@@ -458,49 +464,54 @@ class SlotCoordinator:
         adapter_impl = self._resolve_adapter(lease.adapter)
 
         flushed_blob: str | None = None
-        if failure is None or failure.status == "ok":
-            if adapter_impl is not None:
-                flushed_blob = adapter_impl.flush_refreshed_credential(lease.slot_dir)
-                if flushed_blob is not None:
-                    write_back_rotated(
+        try:
+            try:
+                if failure is None or failure.status == "ok":
+                    if adapter_impl is not None:
+                        flushed_blob = adapter_impl.flush_refreshed_credential(lease.slot_dir)
+                        if flushed_blob is not None:
+                            write_back_rotated(
+                                self._backend,
+                                lease.adapter,
+                                lease.label,
+                                new_blob=flushed_blob,
+                            )
+                        else:
+                            mark_ok(self._backend, lease.adapter, lease.label)
+                elif failure.status == "cooling":
+                    mark_cooling(
                         self._backend,
                         lease.adapter,
                         lease.label,
-                        new_blob=flushed_blob,
+                        cooling_until_ts=failure.cooling_until_ts,
+                        reason=failure.reason,
                     )
-                else:
-                    mark_ok(self._backend, lease.adapter, lease.label)
-        elif failure.status == "cooling":
-            mark_cooling(
-                self._backend,
-                lease.adapter,
-                lease.label,
-                cooling_until_ts=failure.cooling_until_ts,
-                reason=failure.reason,
-            )
-        elif failure.status == "expired":
-            mark_expired(
-                self._backend,
-                lease.adapter,
-                lease.label,
-                reason=failure.reason,
-            )
-
-        try:
-            if lease.slot_dir.exists():
-                shutil.rmtree(lease.slot_dir)
-        except OSError:
-            log.warning("slot_coordinator: failed to rm -rf %s", lease.slot_dir, exc_info=True)
-        # Release the V-B per-label lock (if any) AFTER state writeback
-        # and slot cleanup. Held across the whole lease lifetime so a
-        # parallel dispatch only sees the post-rotation pool blob,
-        # not the in-flight blob.
-        if lease.label_lock_path is not None:
-            _release_vehicle_b_label_lock(lease.label_lock_path)
-        # Active-lease counter -1, paired with the +1 in acquire_slot.
-        # Symmetric across success and failure so LEAST_ACTIVE selection
-        # accurately reflects in-flight load even when retries pile up.
-        self._active_counter.release(lease.adapter, lease.label)
+                elif failure.status == "expired":
+                    mark_expired(
+                        self._backend,
+                        lease.adapter,
+                        lease.label,
+                        reason=failure.reason,
+                    )
+            except ConcurrentModificationError:
+                log.warning(
+                    "slot_coordinator: pool state changed during teardown for %s/%s",
+                    lease.adapter,
+                    lease.label,
+                )
+        finally:
+            try:
+                if lease.slot_dir.exists():
+                    shutil.rmtree(lease.slot_dir)
+            except OSError:
+                log.warning(
+                    "slot_coordinator: failed to rm -rf %s",
+                    lease.slot_dir,
+                    exc_info=True,
+                )
+            if lease.label_lock_path is not None:
+                _release_vehicle_b_label_lock(lease.label_lock_path)
+            self._active_counter.release(lease.adapter, lease.label)
         return flushed_blob
 
     def preserve_diagnostics(self, lease: SlotLease, target_log_path: Path) -> None:

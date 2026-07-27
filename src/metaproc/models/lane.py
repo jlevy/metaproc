@@ -6,7 +6,7 @@ across. Materializing the matrix yields :class:`ExecutionLane` rows; each
 domain item × lane pair becomes a :class:`TaskInstance` that runpool
 admission and trace metadata can address by ``lane_id``.
 
-See ``docs/project/specs/active/plan-2026-05-18-metaproc-execution-lanes-and-runpool.md``
+See ``docs/arch/arch-metaproc-core.md``
 for the design.
 """
 

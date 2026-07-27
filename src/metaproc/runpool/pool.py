@@ -196,7 +196,7 @@ def resolve_host_max_concurrency(
 ) -> int:
     """Resolve optional host-wide local launch cap from runtime config.
 
-    Precedence (closes internal issue + internal issue):
+    Precedence:
     1. ``METAPROC_HOST_MAX_LOCAL_AGENTS`` env var — HARD aggregate cap across
        ALL profiles sharing the host. Set this when running multiple parallel
        orchestrators on a single machine to bound TOTAL concurrent agents
@@ -249,7 +249,7 @@ def resolve_min_concurrency(
 ) -> int:
     """Resolve optional per-profile min_concurrency floor from runtime config.
 
-    Closes internal issue. A profile can override the global ``POOL_MIN_CONCURRENCY``
+    A profile can override the global ``POOL_MIN_CONCURRENCY``
     floor (default 2). Values < 1 are rejected at validate time.
     """
     raw = runtime_config.get("min_concurrency")
@@ -568,7 +568,7 @@ class RunPool:
                 stale_sentinel.unlink()
                 log.info("Cleared stale kill sentinel from previous run")
             # Clear stale runpool-status.yaml from a dead prior orchestrator
-            # (internal issue). Otherwise `metaproc pool rollup` and operators
+            # . Otherwise `metaproc pool rollup` and operators
             # see the prior orchestrator's plan values (e.g. old profile RSS,
             # old host_max) until the new orchestrator writes its first status
             # snapshot some seconds later. The 2026-05-24 three-lane batch hit
@@ -587,7 +587,7 @@ class RunPool:
                         self._status_path,
                         exc_info=True,
                     )
-            # Clear stale .partial atomic-write fragments (internal issue hint).
+            # Clear stale .partial atomic-write fragments.
             # If a prior orchestrator ENOSPC'd during atomic_output_file, the
             # .partial files can confuse the next atomic write's tmp-name.
             for partial in self._config.state_dir.glob("*.partial"):
@@ -660,7 +660,7 @@ class RunPool:
         # there — the operator-increased cap is silently ignored. With the
         # floor, the relaunch starts at the fresh estimate (e.g. 12) and the
         # adaptive scaler ratchets down if real memory pressure binds.
-        # 2026-05-13: caught during AMC rerun.
+        # 2026-05-13: caught during production rerun.
         #
         # `provider_ceiling` is sticky only while the saved controller state
         # still carries live provider pressure. A prior low-cap launch can
@@ -1503,7 +1503,7 @@ class RunPool:
         normal pressure. Setting this override lets the controller lift the
         ramp ceiling live without an orchestrator kill+restart.
 
-        See logbook arb-2026-05-28-thu-ensemble § L7 (live-validated: lifting
+        See logbook the incident analysis (live-validated: lifting
         the launch envelope lets the controller scale 8 → 19 effective in
         ~15 min when pressure stays normal).
         """
@@ -1762,7 +1762,7 @@ class RunPool:
             # ratchets all the way to min_concurrency over a few minutes
             # — even though pressure isn't actually worsening. Reductions
             # now only fire at HIGH / CRITICAL where memory is genuinely
-            # under threat. 2026-05-13 AMC rerun: a tech smoke at sustained
+            # under threat. 2026-05-13 production rerun: a tech smoke at sustained
             # ELEVATED dropped 13→1 in 5 minutes.
         elif level == PressureLevel.HIGH:
             self._consecutive_normal = 0

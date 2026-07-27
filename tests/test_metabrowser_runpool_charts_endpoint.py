@@ -1,6 +1,6 @@
 """Runpool chart extraction must dispatch on the adapter, not the metabrowser kind.
 
-Regression for the internal review: after Phase 2 moved runpool/process
+Regression for the review: after Phase 2 moved runpool/process
 kinds out of metabrowser core into the metaproc plugin's manifest,
 ``classify_by_ext('.jsonl', 'runpool')`` correctly returns
 ``unknown-jsonl`` (the manifest classifier owns runpool now). The

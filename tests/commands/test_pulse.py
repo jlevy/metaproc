@@ -84,7 +84,7 @@ def test_gather_pulse_empty_run_dir(tmp_path: Path) -> None:
     assert m.auth_dist == {}
 
 
-# ── internal-reference: conc / ceil / pressure fields ────────────────
+# ── the fix: conc / ceil / pressure fields ────────────────
 
 
 def test_format_pulse_with_concurrency_and_pressure() -> None:
@@ -155,7 +155,7 @@ def test_format_pulse_no_new_fields_omits_segments() -> None:
 
 
 def test_gather_pulse_reads_concurrency_and_pressure(tmp_path: Path) -> None:
-    """internal-reference: runpool-status.yaml current_concurrency / controller.memory_ceiling /
+    """Regression coverage: runpool-status.yaml current_concurrency / controller.memory_ceiling /
     pressure fields are surfaced through to PulseMetrics."""
     run = tmp_path / "run"
     state = run / ".state"
@@ -185,7 +185,7 @@ pressure:
     assert m.pressure_available_pct == 18.5
 
 
-# ── internal-reference Part B: --batch glob/parent resolution ────────
+# ── the fix Part B: --batch glob/parent resolution ────────
 
 
 def test_resolve_batch_finds_sibling_runs_under_parent(tmp_path: Path) -> None:

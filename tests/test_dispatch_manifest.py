@@ -259,7 +259,7 @@ class TestReconcileDispatchedWorkers:
                     ],
                     each="EVENT_ID",
                     config=config,
-                    process_spec_rel="example_workflow/process/mine",
+                    process_spec_rel="example_plugin/process/mine",
                     variables={"RUN_ID": "run-1"},
                     out=out,
                 )
@@ -341,7 +341,7 @@ class TestReconcileDispatchedWorkers:
                     item_contexts=[{"EVENT_ID": "AAPL"}],
                     each="EVENT_ID",
                     config=config,
-                    process_spec_rel="example_workflow/process/mine",
+                    process_spec_rel="example_plugin/process/mine",
                     variables={"RUN_ID": "run-1"},
                     out=MagicMock(),
                     wait_for_completion=False,

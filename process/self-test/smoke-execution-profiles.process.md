@@ -15,7 +15,7 @@ process:
     model coverage). This smoke is the operator-facing readiness gate:
     a green run proves every shipped execution profile is ready to be
     used by `--execution-profiles <name>` from any dispatch entry point
-    (EIA `dispatch_control.py`, ad-hoc `metaproc run-process`, etc.) with
+    (large workflow `dispatch_control.py`, ad-hoc `metaproc run-process`, etc.) with
     tool use intact.
 
     All cells run in parallel. Each takes ~5-30s. Total wall clock is
@@ -163,7 +163,7 @@ Last verified: 2026-05-25 — all 6 cells PASS (wall clock: 48s).
 ## Why this is the right shape for a workflow smoke
 
 The user-facing operator surface is `--execution-profiles <name>` (per
-[EIA tier.process.md](../../README.md#process-specs)). A smoke that bypasses profile
-resolution (e.g. `--adapter` + `--model` directly) proves the model works but not that
-the profile-driven dispatch path works.
+[large workflow tier.process.md](../../README.md#process-specs)). A smoke that bypasses
+profile resolution (e.g. `--adapter` + `--model` directly) proves the model works but
+not that the profile-driven dispatch path works.
 This smoke closes that gap.

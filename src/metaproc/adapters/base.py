@@ -350,7 +350,7 @@ class AuthCapableCliAdapter(Adapter, Protocol):
         """Map an adapter failure to a pool state transition + reset timestamp.
 
         ``session_log_path`` is the per-step CLI session log (e.g.
-        ``.logs/mine-adhoc_<ticker>_<ts>.jsonl``). When the CLI emits
+        ``.logs/tool-adhoc_<item>_<ts>.jsonl``). When the CLI emits
         HTTP response metadata in the session log
         (``anthropic-ratelimit-*-reset`` / ``retry-after``), prefer
         those as the source of ``cooling_until_ts``. Otherwise fall
@@ -457,7 +457,7 @@ class AuthCapableCliAdapter(Adapter, Protocol):
         rate-limit-event records): this is a network call against the
         vendor's own quota-rendering endpoint, working before the first
         429 of a run. Required for the ``metaproc auth quota`` pre-dispatch
-        gate (internal issue / internal issue / internal issue).
+        gate.
 
         Returns ``None`` when:
 

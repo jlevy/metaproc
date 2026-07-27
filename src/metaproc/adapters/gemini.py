@@ -6,6 +6,8 @@ import json
 import logging
 import shutil
 import tempfile
+import threading
+from hashlib import sha256
 from pathlib import Path
 
 from metaproc.adapters.base import AuthStatus, ConfigRejection, parse_jsonl_event
@@ -42,6 +44,23 @@ _GEMINI_ALLOWED_KEYS = frozenset(
     }
 )
 
+_TEMP_FILES_LOCK = threading.Lock()
+_temp_files_dir: tempfile.TemporaryDirectory[str] | None = None
+
+
+def _materialize_temp_file(*, prefix: str, suffix: str, content: str) -> Path:
+    """Return a process-scoped, content-addressed Gemini configuration file."""
+    global _temp_files_dir
+    digest = sha256(content.encode("utf-8")).hexdigest()
+    with _TEMP_FILES_LOCK:
+        if _temp_files_dir is None:
+            _temp_files_dir = tempfile.TemporaryDirectory(prefix="metaproc-gemini-")
+        path = Path(_temp_files_dir.name) / f"{prefix}{digest}{suffix}"
+        if not path.exists():
+            path.write_text(content, encoding="utf-8")
+            path.chmod(0o600)
+    return path
+
 
 def _build_gemini_flags(
     merged_config: dict[str, object],
@@ -77,12 +96,10 @@ def _build_gemini_flags(
     flags.append("--skip-trust")
 
     # gemini-cli's read_file tool refuses to read files outside cwd unless
-    # the parent directory is in --include-directories. a workflow writes per-item
-    # artifacts under <RUNS_DIR>/<RUN_ID>/, which is typically outside the
-    # process's cwd (the consumer workflow repo root). Without this flag, downstream
-    # agent steps that read prior step outputs (e.g. edge-candidate-ledger
-    # reading market-timeline-priced.md) fail with "Path not in workspace".
-    # See 2026-05-26 Tue AMC batch logbook [Services-4] for the incident.
+    # the parent directory is in --include-directories. A workflow writes
+    # per-item artifacts under <RUNS_DIR>/<RUN_ID>/, which is typically
+    # outside the process cwd. Include the run directory so later steps can
+    # read artifacts produced by earlier steps.
     runs_dir = variables.get("RUNS_DIR")
     run_id = variables.get("RUN_ID")
     if runs_dir and run_id:
@@ -110,8 +127,7 @@ class GeminiCliAdapter:
         variables: dict[str, str],
     ) -> list[str]:
         flags = _build_gemini_flags(merged_config, variables)
-        prompt_arg = prompt_file.read_text() if prompt_file.exists() else f"@{prompt_file}"
-        return ["gemini", "-p", prompt_arg, *flags]
+        return ["gemini", "-p", f"@{prompt_file}", *flags]
 
     def validate_config(self, merged_config: dict[str, object]) -> list[ConfigRejection]:
         rejections: list[ConfigRejection] = []
@@ -138,24 +154,23 @@ class GeminiCliAdapter:
         env = dict(env)
         append_system_prompt = merged_config.get("append_system_prompt")
         if append_system_prompt:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                suffix=".md",
-                prefix="gemini-system-",
-                delete=False,
-            ) as tmp:
-                tmp.write(str(append_system_prompt))
-                env["GEMINI_SYSTEM_MD"] = tmp.name
+            env["GEMINI_SYSTEM_MD"] = str(
+                _materialize_temp_file(
+                    prefix="system-",
+                    suffix=".md",
+                    content=str(append_system_prompt),
+                )
+            )
         native_settings = merged_config.get("native_settings", GEMINI_DEFAULT_NATIVE_SETTINGS)
         if native_settings:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                suffix=".json",
-                prefix="gemini-settings-",
-                delete=False,
-            ) as tmp:
-                json.dump(native_settings, tmp)
-                env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = tmp.name
+            content = json.dumps(native_settings, sort_keys=True, separators=(",", ":"))
+            env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = str(
+                _materialize_temp_file(
+                    prefix="settings-",
+                    suffix=".json",
+                    content=content,
+                )
+            )
         return env
 
     def working_directory(self, _merged_config: dict[str, object]) -> Path | None:

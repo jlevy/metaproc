@@ -6,7 +6,7 @@ both with graceful degradation), the never-print-payload invariant on
 the new path, and the token-handling discipline (env-var scoped only
 during inner push, restored on exit).
 
-Spec: docs/project/specs/active/plan-2026-04-28-claude-code-auth-vehicle-a-pool-redesign.md.
+Spec: docs/arch/arch-metaproc-core.md.
 """
 
 from __future__ import annotations

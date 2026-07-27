@@ -1,6 +1,6 @@
 """Tests for the dispatch.preflight quota gate's ratio-based path.
 
-internal-reference P1 follow-up (internal review): the preflight gate must
+the fix P1 follow-up (review): the preflight gate must
 refuse when the Claude utilization signal says the binding window is
 exhausted, even if no token-unit data is available. Before this fix,
 ``query_quota_usage`` populated only ``remaining_ratio`` and the gate
@@ -57,7 +57,7 @@ def _seed_active(pool: _InMemoryBackend, adapter: str, label: str) -> None:
 @dataclass
 class _RatioOnlyAdapter:
     """Stub adapter that returns ratio-but-no-units, mimicking
-    ``ClaudeCodeCliAdapter.query_quota_usage`` after internal-reference."""
+    ``ClaudeCodeCliAdapter.query_quota_usage`` after the fix."""
 
     ratio_by_label: dict[str, float | None]
 
@@ -231,7 +231,7 @@ class TestCheckStepPreflightRatioOnly:
         assert "binding window" in verdict.message
 
 
-# ── Guard posture validation (internal review P2) ────────────────
+# ── Guard posture validation (review P2) ────────────────
 
 
 class TestValidateGuardPosture:

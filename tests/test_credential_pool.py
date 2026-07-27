@@ -579,7 +579,7 @@ class TestGcpSecretManagerBackend:
     def test_stale_etag_on_blob_plus_state_rotation_leaves_reader_on_old_version(
         self, fake_backend
     ):
-        # Regression for jlevy senior review 2026-04-24 on internal review.
+        # Regression for review.
         # When a rotate passes blob AND state with a stale etag, the
         # old code pushed the new version unconditionally and then
         # failed the state CAS — leaving `latest` pointing at the new

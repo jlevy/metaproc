@@ -166,7 +166,7 @@ def main() -> int:
     only_step = MetaprocEnv.METAPROC_ONLY_STEP.read_str(default="")
     force = MetaprocEnv.METAPROC_FORCE.read_str(default="false")
     continue_on_error = MetaprocEnv.METAPROC_CONTINUE_ON_ERROR.read_str(default="false")
-    # Phase 10 / internal issue — single-source the env-var names via
+    # Phase 10 — single-source the env-var names via
     # AuthPoolFlags so a registry rename doesn't silently desync.
     auth_flags = AuthPoolFlags.from_env()
 

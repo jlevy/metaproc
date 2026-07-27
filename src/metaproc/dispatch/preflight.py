@@ -26,8 +26,8 @@ Three postures via ``--auth-preflight-quota-guard``:
 The gate is intentionally code-only; no LLM judgment in the
 critical path (G15).
 
-Companion dispatch-start ambient-auth env sweep (plan-2026-05-03
-internal issue) is :func:`check_dispatch_auth_env` — separate from the
+The companion dispatch-start ambient-auth environment sweep is
+:func:`check_dispatch_auth_env` — separate from the
 quota check because it consults ``os.environ`` rather than pool
 telemetry, but shares the :data:`GuardPosture` semantics so the
 operator-facing flag set stays small.
@@ -122,7 +122,7 @@ class QuotaHeadroom:
     pool_total_units: int | None
     earliest_reset_ts: int | None
     eligible_label_count: int
-    # Phase 3 / internal issue: Anthropic publishes per-window
+    # Phase 3: Anthropic publishes per-window
     # utilization not token caps; this gives the gate a signal it
     # can actually refuse on when token-unit data is unavailable.
     min_remaining_ratio: float | None = None
@@ -156,7 +156,7 @@ class PreflightVerdict:
 # overhead the projector already bakes in. Tunable later.
 _REFUSE_RATIO: float = 0.8
 
-# Ratio-based gate threshold (Phase 3 / internal issue). When token
+# Ratio-based gate threshold (Phase 3). When token
 # units are unavailable but per-window utilization is, the gate
 # refuses if the binding window has < 20% remaining (== the same
 # 80% utilization risk the unit-based path bakes in). Mirrors
@@ -391,8 +391,8 @@ def check_step_preflight(  # noqa: PLR0913
     # data (Anthropic's per-window utilization is the canonical
     # case). Refuse when the binding window has < 20% remaining,
     # mirroring the 80%-of-headroom risk threshold the unit path
-    # bakes in. plan-2026-05-03 internal issue: this is the path that
-    # actually fires when claude_code.query_quota_usage synthesizes
+    # bakes in. This is the path that fires when
+    # claude_code.query_quota_usage synthesizes
     # from rate_limit_event records.
     if headroom.min_remaining_ratio is not None:
         if headroom.min_remaining_ratio < _REFUSE_REMAINING_RATIO:

@@ -1,7 +1,7 @@
 """Tests for AuthPoolFlags — the centralized auth-pool dispatch shape.
 
-Phase 10 of the Vehicle A pool redesign (epic internal-reference, bead internal-reference).
-Spec: docs/project/specs/active/plan-2026-04-28-claude-code-auth-vehicle-a-pool-redesign.md.
+Phase 10 of the Vehicle A pool redesign (the original design, this regression).
+Spec: docs/arch/arch-metaproc-core.md.
 
 The dataclass is the single source of truth for the five-flag chain
 (METAPROC_AUTH_ACCOUNT / _BACKEND / _FALLBACK_POLICY / _INCLUDE_LABELS /

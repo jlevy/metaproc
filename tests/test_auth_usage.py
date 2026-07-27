@@ -1,6 +1,6 @@
-"""Tests for the auth_usage aggregator (internal-reference).
+"""Tests for the auth_usage aggregator.
 
-Spec: docs/project/specs/active/plan-2026-05-03-auth-observability-and-load-balancing.md
+Spec: docs/arch/arch-metaproc-core.md
 """
 
 from __future__ import annotations
@@ -356,7 +356,7 @@ class TestAggregateLabelUsageForRun:
         assert alt2.seven_day.utilization == 0.94
 
     def test_per_window_ts_picks_newest_record(self, tmp_path: Path):
-        # internal review (P2): older session's high-utilization 5h
+        # review (P2): older session's high-utilization 5h
         # was previously able to clobber a newer session's low-
         # utilization 5h depending on set-iteration order. The fix
         # tracks per-window timestamps; this test pins the behavior.
@@ -432,7 +432,7 @@ class TestAggregateLabelUsageForRun:
         assert alt1.invocations_total == 2
 
     def test_label_in_pool_but_unused_in_run_surfaces_as_zero_invocations(self, tmp_path: Path):
-        # The diagnostic shape that internal-reference's fix prevents: alt2
+        # The diagnostic shape that the fix prevents: alt2
         # in the pool, never invoked. LabelUsage shape lets doctor
         # flag it.
         pool = _InMemoryPool()

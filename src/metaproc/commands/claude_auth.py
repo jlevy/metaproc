@@ -3,7 +3,7 @@
 Reads the Keychain-held OAuth credential on macOS via the ``security``
 CLI and ships it to a per-user Secret Manager secret that Batch workers
 bind at runtime. See
-``docs/project/specs/active/plan-2026-04-19-claude-code-cli-personal-plan-auth.md``.
+``docs/arch/arch-metaproc-core.md``.
 
 Zero plaintext on disk: the payload is read from the Keychain and piped
 via stdin to ``gcloud secrets versions add --data-file=-``.

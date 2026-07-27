@@ -48,6 +48,8 @@ def parse_svg_metadata(svg_text: str) -> VizModel:
         msg = "SVG metadata block is not closed"
         raise ValueError(msg)
     payload = svg_text[start:end]
+    if payload.startswith("<![CDATA[") and payload.endswith("]]>"):
+        payload = payload[len("<![CDATA[") : -len("]]>")]
     return VizModel.model_validate_json(_unescape_cdata(payload))
 
 
@@ -84,8 +86,7 @@ def _metadata_block(model: VizModel) -> str:
     return (
         "<metadata>"
         f'<metaproc:vizmodel xmlns:metaproc="{_METAPROC_NS}">'
-        + _escape_cdata(payload)
-        + "</metaproc:vizmodel>"
+        "<![CDATA[" + _escape_cdata(payload) + "]]>" + "</metaproc:vizmodel>"
         "</metadata>"
     )
 

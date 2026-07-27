@@ -31,6 +31,11 @@ checksum_for() {
 # Check if gh is already installed
 if command -v gh &> /dev/null; then
     echo "[gh] CLI found at $(which gh)"
+elif [ "${METAPROC_AUTO_INSTALL_GH:-0}" != "1" ]; then
+    echo "[gh] CLI not found. Automatic installation is disabled by default."
+    echo "[gh] Install gh yourself, or set METAPROC_AUTO_INSTALL_GH=1 to install"
+    echo "[gh] the pinned, checksum-verified release from this script."
+    exit 0
 else
     echo "[gh] CLI not found, installing pinned v${GH_VERSION}..."
 
@@ -117,7 +122,7 @@ if [ -n "${GH_TOKEN:-}" ]; then
     fi
 else
     echo "[gh] NOTE: GH_TOKEN not set - some operations may require authentication"
-    echo "[gh] See: docs/general/agent-setup/github-cli-setup.md"
+    echo "[gh] Authenticate with 'gh auth login' or provide GH_TOKEN."
 fi
 
 exit 0

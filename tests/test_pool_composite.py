@@ -1,10 +1,10 @@
-"""Composite-aware pool discovery — covers ``internal-reference``.
+"""Composite-aware pool discovery — covers the fix.
 
 Walks the shared discovery helper :func:`_iter_composite_run_dirs` plus the
 four operator-facing commands (status, events, health, rollup) under a
 parent run dir that has child run dirs at ``<parent>/<step_id>/``.
 
-The fixture mimics the EIA dispatch layout: a top-level run dir with no
+The fixture mimics a composite dispatch layout: a top-level run dir with no
 runpool of its own and one composite child (``analysis-research``) that owns
 two per-step pools.
 """
@@ -95,7 +95,7 @@ def _write_runpool_status(state_dir: Path, *, pool_id: str, completed_count: int
 @pytest.fixture
 def composite_run(tmp_path: Path) -> Path:
     """Parent run dir with no top-level pool + one composite child running
-    two per-step pools. Mirrors EIA dispatch fanning out to analysis-research."""
+    two per-step pools. Mirrors a composite dispatch fanning out to child runs."""
     parent = tmp_path / "dispatch-2026-05-19"
     _mark_v2(parent)
 
@@ -273,7 +273,7 @@ class TestPoolStatusCommand:
 class TestPoolEventsCommand:
     def test_pool_events_discovers_child_run_events(self, composite_run: Path):
         # Parent run has no events of its own, but the composite child
-        # writes V2 step-scoped events. Pre-internal-reference the parent-rooted
+        # writes V2 step-scoped events. Previously, the parent-rooted
         # invocation reported "No RunPool event files".
         result = runner.invoke(app, ["pool", "events", str(composite_run), "--json"])
         assert result.exit_code == 0, result.output
@@ -294,7 +294,7 @@ class TestPoolRollupCommand:
     def test_rollup_walks_composite_child_per_step_pools(self, composite_run: Path):
         sub_pools = _collect_sub_pools(composite_run, with_auth_outcomes=False)
         # Two per-step pools nested under <parent>/analysis-research/.state/steps/
-        # — pre-internal-reference, _collect_sub_pools only walked
+        # — previously, _collect_sub_pools only walked
         # <parent>/.state/steps/ and found nothing.
         step_dirs = sorted(entry["step_dir"] for entry in sub_pools)
         assert step_dirs == [

@@ -167,7 +167,7 @@ class TestSummarizeGeneric:
         assert "auth_outcome" not in report
 
 
-# ── auth_lease_acquired specialization (internal-reference) ──
+# ── auth_lease_acquired specialization ──
 
 
 def _lease_event(label: str, *, policy: str = "round-robin"):
@@ -184,7 +184,7 @@ def _lease_event(label: str, *, policy: str = "round-robin"):
 
 
 class TestSummarizeAuthLeaseAcquired:
-    """Phase 1 verifiability hook (plan-2026-05-03 internal-reference).
+    """Phase 1 verifiability hook (plan-2026-05-03 the fix).
 
     Operators run ``metaproc pool events --type=auth_lease_acquired
     --summary`` to confirm ROUND_ROBIN actually distributed acquisitions

@@ -1,21 +1,12 @@
-"""Typed registry of every env var consumed by metaproc itself.
+"""Typed registry of every environment variable consumed by Metaproc.
 
 Metaproc is a generic process-orchestration engine; this registry holds only
-its workflow-agnostic env vars. Domain-specific env vars (e.g. consumer workflow
-run-root settings, earnings external-wrapper knobs) live in their owning
-workflow registry — see
-``workflow_package/src/workflow_package/config/env_vars.py``.
+workflow-agnostic variables. Workflow plugins own their domain-specific
+registries. Metaproc treats those variables as opaque pass-through values.
 
-Every env-var read in this repo should go through a typed registry. The
-coverage test at ``metaproc/tests/test_env_vars_coverage.py`` enforces this
-for `metaproc/src/` against :class:`MetaprocEnv` and for
-`workflow_package/src/` against the union of :class:`MetaprocEnv` and the
-earnings-domain registry. See
-``docs/guidelines/python-structural-quality-guidelines.md`` section
-"Environment Variables: Typed Registry, Not Scattered Reads" for the
-principles, and the project spec at
-``docs/project/specs/active/plan-2026-04-21-env-var-registry-hardening.md``
-for the metaproc-specific rollout.
+Every environment-variable read in this package should go through
+:class:`MetaprocEnv`. The coverage test at
+``tests/test_env_vars_coverage.py`` enforces that contract for ``src/metaproc``.
 
 Each member is declared with one of the :func:`~metaproc.config.env_enum.real` /
 :func:`~metaproc.config.env_enum.tunable` /
@@ -291,11 +282,9 @@ class MetaprocEnv(EnvEnum):
     )
     METAPROC_PREFLIGHT_MIN_DISK_GB = optional(
         "Override the preflight disk-space minimum (float GB). Defaults to "
-        "5.0. The 2026-05-21 EIA dispatch hit the 5 GB default with 3.6 GB "
-        "free; the actual per-tier disk delta was ~300 MB. Lower this when "
+        "5.0. Lower this only when "
         "the operator has accepted the risk of a mid-run fill on a near-full "
-        "disk (e.g. when retrying a tier whose work is mostly cached by "
-        "step-fingerprint)."
+        "disk."
     )
     # Orchestrator → entrypoint passthrough for `run-process --auth-*` flags
     # (mirrors the METAPROC_VARIANT / METAPROC_FORCE / METAPROC_SKIP_STEPS

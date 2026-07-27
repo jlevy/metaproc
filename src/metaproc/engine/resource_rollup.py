@@ -705,7 +705,7 @@ def _metrics_for_family(family: str, value: float) -> Metrics:
         return Metrics(actual_cost_usd=value)
     if family == "policy_path" or family.endswith("_path"):
         return Metrics(tool_exec_s=value)
-    return Metrics()
+    raise ValueError(f"unknown metric family: {family}")
 
 
 # ── Bottom-up totals ───────────────────────────────────────────────
@@ -769,8 +769,9 @@ def _merge_log_summary(into: LogSummary, addition: LogSummary) -> LogSummary:
 
 def _source_ref(log_path: Path, run_dir: Path, kind: SourceKind) -> SourceRef:
     try:
-        size = log_path.stat().st_size
-        mtime_ns = log_path.stat().st_mtime_ns
+        file_stat = log_path.stat()
+        size = file_stat.st_size
+        mtime_ns = file_stat.st_mtime_ns
     except OSError:
         size, mtime_ns = None, None
     return SourceRef(

@@ -382,7 +382,7 @@ class EventLogger:
         lease with the eventual ``auth_outcome`` at teardown by primary
         key (run_id/step_id/item/attempt/session_log_path) instead of
         timestamp inference. Spec:
-        ``docs/project/specs/active/plan-2026-05-03-auth-observability-and-load-balancing.md``.
+        ``docs/arch/arch-metaproc-core.md``.
 
         *payload* is the dict produced by
         :func:`metaproc.dispatch.pool_dispatch.build_auth_lease_acquired`.

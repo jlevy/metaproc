@@ -2,7 +2,7 @@
 
 Token format: ``<module>:<ClassName>/<version>``
 
-Example: ``workflow_package:RecordDocument/0.1``
+Example: ``example_plugin:RecordDocument/0.1``
 
 The token is stored in the model's ``schema`` field (``schema_`` in Python).
 Existing fields like ``form_version`` and ``retro_schema_version`` are domain
@@ -10,7 +10,7 @@ payload versions, not schema contract versions — they describe the content
 format, not the envelope contract.
 
 The namespace is the broad module name only (``metaproc`` or
-``workflow_package``), not a nested sub-module path.
+``example_plugin``), not a nested sub-module path.
 """
 
 from __future__ import annotations

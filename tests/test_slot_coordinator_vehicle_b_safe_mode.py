@@ -1,8 +1,7 @@
 """Vehicle B safe-mode coverage for the slot coordinator.
 
-Phase 5 of the Vehicle A pool redesign (epic ``internal-reference``, bead
-``internal-reference``). Spec: ``docs/project/specs/active/plan-2026-04-28-
-claude-code-auth-vehicle-a-pool-redesign.md``.
+Phase 5 of the Vehicle A pool redesign (epic the fix, bead
+the credential-pool compatibility path).
 
 V-B safe mode introduces a per-label mkdir-lock acquired in
 ``acquire_slot`` and released in ``teardown``. Two parallel V-B

@@ -34,7 +34,7 @@ class UnsupportedTelemetryPlatformError(RuntimeError):
 
 
 class PressureLevel(StrEnum):
-    # Thresholds sized for an EIA-style agent batch on a workstation:
+    # Thresholds sized for a large workflow-style agent batch on a workstation:
     # claude/codex agents at ~500 MB-1 GB RSS, target conc=8-10. Operating
     # state on a 32 GB box with VS Code + browser open is ~30-50% free; the
     # thresholds keep that range in NORMAL (ramp up), and only treat memory
@@ -79,7 +79,7 @@ def max_pressure(*levels: PressureLevel) -> PressureLevel:
 
 
 def _classify_available(available_pct: float) -> PressureLevel:
-    # Thresholds match the PressureLevel docstring; tuned for EIA batch on
+    # Thresholds match the PressureLevel docstring; tuned for large workflow batch on
     # workstation. Common misunderstanding: 40% free is "fine, ramp up", not
     # "be cautious" — the 32 GB box is doing its job when memory is in active
     # use by agents + other apps.

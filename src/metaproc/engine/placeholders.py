@@ -66,16 +66,12 @@ def _absolute_run_dir(parent: str, run_id: str) -> str:
     """Combine `parent` + `run_id` and return an absolute path string.
 
     Resolving to absolute means the rendered ``{{run.dir}}`` does not depend on
-    where any downstream consumer happens to be running. Code-mode steps
+    where a downstream command happens to be running. Code-mode steps
     invoke their `command:` via ``subprocess.run(..., cwd=process_dir)``;
     agents fork their own subprocesses with their own cwds. A relative
     ``{{run.dir}}`` like ``relative-runs-root/<id>`` resolves relative
-    to whatever cwd the subprocess inherits, which has bitten us repeatedly
-    (internal issue: code-mode `command:` failed in the pilot because the
-    subprocess cwd was `<repo>/workflow_package/process/mine` and the
-    template rendered to a relative path the subprocess could not find).
-    Anchoring at the operator's cwd at template-resolution time fixes that
-    once for every consumer.
+    to whatever cwd the subprocess inherits. Anchoring at the operator's cwd
+    at template-resolution time makes the path stable for every consumer.
     """
     return str((Path(parent) / run_id).resolve())
 
@@ -142,13 +138,12 @@ def resolve_templates(text: str, variables: Mapping[str, object]) -> str:
 
     A placeholder that resolves to a present-but-empty value (``""`` or all
     whitespace) raises ``TemplateResolutionError`` rather than silently
-    substituting nothing. This catches the BBBY-style layout corruption
-    where ``mine/{{run.variant}}/<event>`` becomes ``mine//<event>`` with a
-    component missing — paths look right at a glance but downstream
-    consumers find nothing on disk. The "missing key" branch (None) is
+    substituting nothing. This prevents a path such as
+    ``outputs/{{run.variant}}/<item>`` from becoming
+    ``outputs//<item>`` with a component missing. The "missing key" branch (None) is
     different: it leaves the literal ``{{KEY}}`` token in the output, which
     is visible and easy to debug. Empty-string substitution is the silent
-    failure mode this guard exists to prevent (internal issue).
+    failure mode this guard exists to prevent.
     """
 
     def replace(match: re.Match[str]) -> str:

@@ -25,9 +25,8 @@ notice below
 
 This doc was written 2026-04-21 against the original Vehicle B credential pool design.
 The 2026-04-27 senior engineering review and the resulting Vehicle A pool redesign
-([`docs/project/specs/archive/plan-2026-04-28-claude-code-auth-vehicle-a-pool-redesign.md`](../arch/arch-authentication.md))
-have shipped Phases 1-7, 10, and 11. Vehicle B remains as an ongoing backup (no
-scheduled deprecation).
+(documented in this architecture) have shipped Phases 1-7, 10, and 11. Vehicle B remains
+as an ongoing backup (no scheduled deprecation).
 Sections **§N.14, §N.15, §N.16** (below) and the operator runbook
 [`metaproc/docs/runbooks/credential-setup.runbook.md` § Claude Code CLI](../runbooks/credential-setup.runbook.md#claude-code-cli-claude-code-cli)
 reflect the current design.
@@ -35,9 +34,8 @@ reflect the current design.
 The bulk of this doc (§1 env-var registry, line numbers throughout, §5 adapter Protocol,
 §6 `auth-check`, §N.1-§N.10) is **partially stale** in detail — the system architecture
 is correct but cited line numbers, env-var lists, and code examples reflect pre-redesign
-state. Trust the redesign spec, the research doc
-([`docs/project/research/research-2026-04-19-claude-code-cli-personal-plan-auth.md`](../arch/arch-authentication.md)),
-the operator runbook, and the source code over the older sections of this doc.
+state. Trust the current sections of this architecture, the operator runbook, and the
+source code over the older sections of this doc.
 A full structural rewrite is filed as a follow-up.
 
 **Quick map of what’s current vs.
@@ -54,7 +52,7 @@ stale**:
 | §N.1-§N.10 (pool surface) | Mostly current; line numbers stale | Redesign spec + source |
 | §1 env-var registry | Stale — missing METAPROC_AUTH_* group, CLAUDE_CODE_OAUTH_TOKEN, CLAUDE_CONFIG_DIR | Source: `src/metaproc/config/env_vars.py` |
 | §5 adapter Protocol | Stale — `AuthCapableCliAdapter` shape extended in Phase 2 (vehicle/blob kwargs) and Phase 7 (`setup_token_command`) | Source: `src/metaproc/adapters/base.py` |
-| Line numbers throughout | Stale (50-300 lines off post-internal review) | Source files |
+| Line numbers throughout | Stale (50-300 lines off post-review) | Source files |
 
 ## Overview
 
@@ -88,7 +86,8 @@ and the code paths referenced inline.
 - Operator setup walkthroughs — those live in
   [metaproc/docs/runbooks/credential-setup.runbook.md](../runbooks/credential-setup.runbook.md)
   and the cloud dispatch runbook.
-- Model cost / routing policy (covered in the runtime-roles memory and mining-run docs).
+- Model cost / routing policy (covered in the runtime-roles memory and research-run
+  docs).
 - Non-metaproc auth (the example-tool site, IDE sign-in, etc.).
 
 ## System Context
@@ -157,7 +156,7 @@ The factories live in
 | `GOOGLE_API_KEY` | `secret` | `gemini-cli` (Vertex AI Express fallback) |
 | `GOOGLE_GENAI_USE_VERTEXAI` | `optional` | `gemini-cli` mode switch |
 | `GOOGLE_CLOUD_PROJECT` | `optional` | `pi-cli` (vertex-ai provider detection), Vertex SDK routing |
-| `PERPLEXITY_API_KEY` | `secret` | Arena wrapper web-search provider |
+| `PERPLEXITY_API_KEY` | `secret` | Tool wrapper web-search provider |
 | `GH_TOKEN` | `secret` | Git credential helper on Batch containers (not read on laptops) |
 | `GH_PROMPT_DISABLED` | `real` | `gh` CLI — disables interactive prompts |
 | `GCP_CREDENTIALS_BASE64` | `secret` | `gcp_credentials.py` (laptop/CI ADC bootstrap) |
@@ -484,7 +483,7 @@ chain resolved (laptop: typically `GCP_CREDENTIALS_BASE64`).
 #### UC-6: GCP Batch worker with Pi CLI + Vertex MaaS
 
 Same logical flow as UC-5, but the source of the GCP token is ADC via the attached SA
-(`METAPROC_GCP_SERVICE_ACCOUNT`, usually `dev-shared-2`), not a base64 blob.
+(`METAPROC_GCP_SERVICE_ACCOUNT`, usually `<worker-sa>`), not a base64 blob.
 
 Additional per-container rewrites
 ([batch_backend.py:249](../../src/metaproc/cloud/gcp/batch_backend.py#L249)
@@ -534,7 +533,7 @@ Used much less than Pi / Claude Code in current runs.
 4. No plaintext `GH_TOKEN` ever appears in the Batch job spec.
    Setting `GH_TOKEN` locally without the ref env var → dispatch refuses to submit.
 
-IAM bootstrap: both the Batch SA (`dev-shared-2`) and the Cloud Build builder SA need
+IAM bootstrap: both the Batch SA (`<worker-sa>`) and the Cloud Build builder SA need
 `roles/secretmanager.secretAccessor` on the `gh-token` secret.
 See
 [credential-setup.md § GH_TOKEN via Secret Manager](../runbooks/credential-setup.runbook.md#gh_token-via-secret-manager).
@@ -614,7 +613,7 @@ auth).
 | GCP Filestore (NFS) | network-level (SA needs VPC) | all cloud VMs |
 | GCP Cloud Storage | ADC | `container_bootstrap._download_from_gcs` (wheel/workspace) |
 | GitHub (private clone) | `GH_TOKEN` | container-level git credential helper |
-| Perplexity | `PERPLEXITY_API_KEY` | Arena wrapper web search |
+| Perplexity | `PERPLEXITY_API_KEY` | Tool wrapper web search |
 
 #### Internal contracts
 
@@ -1029,9 +1028,8 @@ What is empirically certain: when this gap manifests, the pool’s stored refres
 goes stale on the next server-side rotation, and a future probe / dispatch fails with
 `oauth_refresh_status=400` (`invalid_grant`). Anthropic’s changelog claims related fixes
 for the OAuth refresh race in Claude Code 2.1.81 / 2.1.117 / 2.1.118; the incident-time
-local was 2.1.114; latest at writing is 2.1.119.
-[`internal-reference`](https://github.com/example-org/consumer) tracks the retest on
-2.1.119 to characterize behavior on the latest CLI.
+local was 2.1.114; latest at writing is 2.1.119. The behavior should be retested
+whenever the pinned CLI version changes.
 
 [research-2026-04-27-claude-code-oauth-multi-account-failover.md](../arch/arch-authentication.md)
 §2.5 + §5.3 walks through the empirical reproduction.
@@ -1061,19 +1059,15 @@ Anthropic-supported paths over reverse-engineered ones —
 1. `CLAUDE_CODE_OAUTH_TOKEN` / `claude setup-token` — Anthropic-supported long-lived
    OAuth token (~1 year).
    Sidesteps the refresh race entirely.
-   Test whether it covers our use cases
-   ([`internal-reference`](https://github.com/example-org/consumer) spike).
+   Test whether it covers the supported adapter use cases.
 2. `apiKeyHelper` — Anthropic-supported credential-extension hook.
    Output sent as both `X-Api-Key` and `Authorization: Bearer`; unclear whether OAuth
-   subscription tokens work via this path or only API keys
-   ([`internal-reference`](https://github.com/example-org/consumer)).
+   subscription tokens work via this path or only API keys.
 3. `ANTHROPIC_API_KEY` direct — sanctioned high-throughput path; per-token billing
    tradeoff vs Pro/Max flat-fee.
 4. Bedrock / Vertex MaaS — sanctioned, multi-cloud, also per-token billing.
-5. **Direct OAuth refresh**
-   ([`internal-reference`](https://github.com/example-org/consumer)) —
-   reverse-engineered, unsupported for Pro/Max subscription OAuth (per
-   opencode-claude-auth’s own disclaimers).
+5. **Direct OAuth refresh** — reverse-engineered, unsupported for Pro/Max subscription
+   OAuth (per opencode-claude-auth’s own disclaimers).
    ToS / breakage risk.
    Last resort.
 
@@ -1140,22 +1134,20 @@ Two implications:
 
 - **`api_status in (401, 403)` is `RETRY_AFTER_WAIT`, not `ABORT`.** The earlier `ABORT`
   for api-401 was over-conservative under the (incorrect) assumption that retry meant
-  same-label retry. In the 2026-04-27 BMO/AMC incident, that mistake caused 52/52 items
-  to permanently fail with `retry_count=0` even though `alt2` was eligible the whole
-  time. With `RETRY_AFTER_WAIT`, the cohort recovers within a single dispatch.
+  same-label retry. In the 2026-04-27 multi-label incident, that mistake caused 52/52
+  items to permanently fail with `retry_count=0` even though `alt2` was eligible the
+  whole time. With `RETRY_AFTER_WAIT`, the cohort recovers within a single dispatch.
 - **`mark_expired(label)` from a sibling teardown is a separate guard.** It flips the
   label ineligible for new acquisitions, independent of the retry path.
   The combination — `pool_exclude` for in-flight retries + `mark_expired` for new
   acquisitions — means once the failure is correctly classified, no future item on the
   bad label is possible without operator action.
 
-The `LabelCircuit + canary-confirm migration` design
-([`internal-reference`](https://github.com/example-org/consumer)) is a future
-optimization that would cap wasted-compute on the failing label at ~3 items rather than
-cohort_size, by tripping a pool-level circuit and pausing new acquisitions before the
-entire cohort burns through the bad label.
-Deferred P2 because the failover semantics above already guarantee single-dispatch
-recovery.
+The `LabelCircuit + canary-confirm migration` design is a future optimization that would
+cap wasted-compute on the failing label at ~3 items rather than cohort_size, by tripping
+a pool-level circuit and pausing new acquisitions before the entire cohort burns through
+the bad label. Deferred P2 because the failover semantics above already guarantee
+single-dispatch recovery.
 
 ### §N.14 Vehicle A pool redesign (2026-04-28)
 
@@ -1173,8 +1165,8 @@ primary architecture:
    bearer credential* (no refresh writeback path), Anthropic- documented for CI use,
    supported on Pro/Max/Team/Enterprise, and eliminates every snapshot-staleness failure
    mode by construction.
-   The 2026-04-27 BMO+AMC dispatch’s 52/52 burn was the snapshot-pool architecture
-   failing exactly as predicted by the failure-mode list in research §F12.
+   The 2026-04-27 production+production dispatch’s 52/52 burn was the snapshot-pool
+   architecture failing exactly as predicted by the failure-mode list in research §F12.
 
 #### Two vehicles, one pool
 
@@ -1268,14 +1260,14 @@ preserves the existing single-label exclude (operators resolve by annotating pus
 
 #### Cloud parity
 
-The Phase 6 / `internal-reference` work closed `internal-reference`: cloud workers now
-construct the same `PoolDispatchConfig` as local dispatch.
+The Phase 6 work closed the gap: cloud workers now construct the same
+`PoolDispatchConfig` as local dispatch.
 The chain is
 `run-process --cloud --auth-* → OrchestratorDispatchConfig → orchestrator entrypoint → inner run-process --backend gcp-worker --auth-* → worker_dispatch propagates METAPROC_AUTH_* → worker entrypoint → inner run-parallel --backend local --auth-*`.
 Each layer calls `AuthPoolFlags.from_env()` / `to_cli_flags()` / `to_env_vars()` so the
 five env-var names and CSV encoding are sourced from a single typed dataclass.
 
-#### AuthPoolFlags — single source of truth (Phase 10 / `internal-reference`)
+#### AuthPoolFlags — single source of truth (Phase 10)
 
 `src/metaproc/dispatch/auth_pool_flags.py` defines the `AuthPoolFlags` frozen dataclass
 with the five fields and ClassVar env- var names sourced from
@@ -1287,10 +1279,8 @@ AuthPoolFlags(...).to_env_vars()   # for Batch job env_vars dicts
 AuthPoolFlags.from_env().to_cli_flags()   # for inner cmd builders
 ```
 
-Pattern is reusable: the redesign spec §Phase 10 enumerates four follow-up beads
-applying the same shape to the secret-refs cohort (`internal-reference`),
-worker-dispatch payload (`internal-reference`), orchestrator-dispatch payload
-(`internal-reference`), and repo/git cohort (`internal-reference`).
+The same pattern applies to the secret-reference, worker-dispatch,
+orchestrator-dispatch, and repository synchronization payloads.
 
 #### Long-term option ranking (revised 2026-04-28)
 
@@ -1301,13 +1291,12 @@ Per research §F7 + senior review, the recommended option ranking is:
 2. **Stored `/login` credentials in Vehicle B safe mode** — fallback only.
    Per-label durable state with CAS writeback (Phase 5 design).
 3. **`apiKeyHelper`** — Anthropic-supported credential-extension hook.
-   Whether subscription OAuth tokens work via this path is the `internal-reference` open
-   spike.
+   Whether subscription OAuth tokens work via this path is the an open investigation.
 4. **`ANTHROPIC_API_KEY`** — sanctioned high-throughput path; per-token billing
    tradeoff.
 5. **Bedrock / Vertex MaaS** — sanctioned, multi-cloud, also per-token.
-6. **Direct OAuth refresh** (`internal-reference`) — **deprecated** per research §F7 +
-   senior review. Reverse-engineered, not Anthropic- supported for Pro/Max OAuth.
+6. **Direct OAuth refresh** — **deprecated** per research §F7 + senior review.
+   Reverse-engineered, not Anthropic- supported for Pro/Max OAuth.
    Acceptable for diagnostic spikes only.
 
 ### §N.15 Phase 11 — V-A end-to-end + V-B safe mode (ongoing-backup hardening)
@@ -1326,9 +1315,9 @@ not at the capability layer.
 threaded the default vehicle (Vehicle B) into materialize / scope / scrub, so a Vehicle
 A label probed at fan-out time got V-B materialization (writes `.credentials.json`,
 omits the bearer token from scope env) and the probe always failed.
-Phase 11.1 (`internal-reference`) adds a `vehicle` kwarg to `probe_credential`
-defaulting to `LOGIN_CREDENTIALS` for back-compat; `pre_fan_out_probe` reads each
-entry’s `state.vehicle` and threads it through.
+Phase 11.1 adds a `vehicle` kwarg to `probe_credential` defaulting to
+`LOGIN_CREDENTIALS` for back-compat; `pre_fan_out_probe` reads each entry’s
+`state.vehicle` and threads it through.
 Mirrors the operator-facing `auth probe` callsite in
 [`src/metaproc/commands/auth.py`](../../src/metaproc/commands/auth.py).
 
@@ -1345,9 +1334,9 @@ Sibling of `test_two_label_smoke.py` (which covers the Vehicle B path).
 
 #### `--auth-cross-quota-group` flag
 
-The classifier’s 429 quota-group expansion (Phase 4 / `internal-reference`) fired
-unconditionally — more aggressive than the spec calls for.
-Phase 11.3 (`internal-reference`) adds an opt-out flag:
+The classifier’s 429 quota-group expansion (Phase 4) fired unconditionally — more
+aggressive than the spec calls for.
+Phase 11.3 adds an opt-out flag:
 
 ```
 metaproc run-process ... --no-auth-cross-quota-group
@@ -1366,10 +1355,10 @@ dispatches stay free of the new var.
 
 #### Vehicle B safe mode — per-label lock
 
-Phase 5 / `internal-reference` adds a per-label mkdir-based lock acquired in
-`SlotCoordinator.acquire_slot` for V-B leases and released in `teardown`. Two parallel
-V-B attempts on the same label serialize through the lock so the refresh-window race
-that produces snapshot-staleness is eliminated.
+Phase 5 adds a per-label mkdir-based lock acquired in `SlotCoordinator.acquire_slot` for
+V-B leases and released in `teardown`. Two parallel V-B attempts on the same label
+serialize through the lock so the refresh-window race that produces snapshot-staleness
+is eliminated.
 
 - New `SlotLease.label_lock_path` field (`None` for V-A; populated for V-B).
 - `vehicle_b_lock_dir()` resolves to `~/.metaproc/auth-pool/locks` by default; override
@@ -1389,28 +1378,27 @@ needed (V-A is the recommended primary).
 
 ### §N.16 Phase 10 follow-ups — typed payload cohorts
 
-Phase 10 / `internal-reference` introduced
-[`AuthPoolFlags`](../../src/metaproc/dispatch/auth_pool_flags.py) — a frozen dataclass
-that wraps the `METAPROC_AUTH_*` env-var cohort with `from_env` / `to_env_vars` /
-`to_cli_flags` and `ClassVar` env-var names sourced from `MetaprocEnv`. The pattern
-eliminates ~25 hardcoded `"METAPROC_AUTH_*"` string literals across the dispatch chain
-and made the `internal-reference` worker-leg gap impossible (any rename now fails at
-import-time, not silently at dispatch).
+Phase 10 introduced [`AuthPoolFlags`](../../src/metaproc/dispatch/auth_pool_flags.py) —
+a frozen dataclass that wraps the `METAPROC_AUTH_*` env-var cohort with `from_env` /
+`to_env_vars` / `to_cli_flags` and `ClassVar` env-var names sourced from `MetaprocEnv`.
+The pattern eliminates ~25 hardcoded `"METAPROC_AUTH_*"` string literals across the
+dispatch chain and made the implementation worker-leg gap impossible (any rename now
+fails at import-time, not silently at dispatch).
 
 Phase 11 closed the four follow-up beads applying the same pattern to other env-var
 cohorts that travel together.
 
 | Module | Cohort | Bead |
 | --- | --- | --- |
-| [`metaproc/dispatch/secret_refs.py`](../../src/metaproc/dispatch/secret_refs.py) | `SecretRef` + `SecretRefSet` for the `GCP_SECRET_REFS` cohort (plaintext env → SM ref env → human description). `SecretRefSet.all_known()` composes static refs (`GH_TOKEN`, `CLAUDE_CODE_CREDS_JSON`, `CODEX_CREDS_JSON`) with provider-derived refs from `gcp_secret_refs()`. `to_secret_variables()` produces the Batch API’s `secret_variables` mapping. `as_tuples()` preserves the legacy 3-tuple shape for back-compat. | [`internal-reference`](../arch/arch-authentication.md) |
-| [`metaproc/dispatch/repo_sync_payload.py`](../../src/metaproc/dispatch/repo_sync_payload.py) | `RepoSyncPayload` for the four-field repo-sync cohort: `METAPROC_REPO_URL`, `METAPROC_RUN_BRANCH`, `METAPROC_WHEEL_GCS`, `METAPROC_WORKSPACE_GCS`. Used by `container_bootstrap`, `orchestrator_dispatch`, `worker_dispatch`. | [`internal-reference`](../arch/arch-authentication.md) |
-| [`metaproc/dispatch/orchestrator_payload.py`](../../src/metaproc/dispatch/orchestrator_payload.py) | `OrchestratorDispatchPayload` for the 13-field operator-CLI → orchestrator cohort. Replaces ~50 lines of conditional `env_vars` manipulation with one constructor + `update`. Spot defaults to True (silent emission); `num_workers` always emits both `METAPROC_NUM_WORKERS` and `METAPROC_DEFAULT_NUM_WORKERS` (belt-and-suspenders for code-version drift). | [`internal-reference`](../arch/arch-authentication.md) |
-| [`metaproc/dispatch/worker_payload.py`](../../src/metaproc/dispatch/worker_payload.py) | `WorkerDispatchPayload` for the 12-field orchestrator → worker cohort. Worker identity is load-bearing (always emitted); inline vs file item-contexts is mutually exclusive (file path wins when both populated). Call-site migration in `worker_dispatch` deferred — the existing inline construction is intricate (size-gated spill, NFS path resolution); the dataclass is ready for new sites. | [`internal-reference`](../arch/arch-authentication.md) |
+| [`metaproc/dispatch/secret_refs.py`](../../src/metaproc/dispatch/secret_refs.py) | `SecretRef` + `SecretRefSet` for the `GCP_SECRET_REFS` cohort (plaintext env → SM ref env → human description). `SecretRefSet.all_known()` composes static refs (`GH_TOKEN`, `CLAUDE_CODE_CREDS_JSON`, `CODEX_CREDS_JSON`) with provider-derived refs from `gcp_secret_refs()`. `to_secret_variables()` produces the Batch API’s `secret_variables` mapping. `as_tuples()` preserves the legacy 3-tuple shape for back-compat. | [architecture details](../arch/arch-authentication.md) |
+| [`metaproc/dispatch/repo_sync_payload.py`](../../src/metaproc/dispatch/repo_sync_payload.py) | `RepoSyncPayload` for the four-field repo-sync cohort: `METAPROC_REPO_URL`, `METAPROC_RUN_BRANCH`, `METAPROC_WHEEL_GCS`, `METAPROC_WORKSPACE_GCS`. Used by `container_bootstrap`, `orchestrator_dispatch`, `worker_dispatch`. | [architecture details](../arch/arch-authentication.md) |
+| [`metaproc/dispatch/orchestrator_payload.py`](../../src/metaproc/dispatch/orchestrator_payload.py) | `OrchestratorDispatchPayload` for the 13-field operator-CLI → orchestrator cohort. Replaces ~50 lines of conditional `env_vars` manipulation with one constructor + `update`. Spot defaults to True (silent emission); `num_workers` always emits both `METAPROC_NUM_WORKERS` and `METAPROC_DEFAULT_NUM_WORKERS` (belt-and-suspenders for code-version drift). | [architecture details](../arch/arch-authentication.md) |
+| [`metaproc/dispatch/worker_payload.py`](../../src/metaproc/dispatch/worker_payload.py) | `WorkerDispatchPayload` for the 12-field orchestrator → worker cohort. Worker identity is load-bearing (always emitted); inline vs file item-contexts is mutually exclusive (file path wins when both populated). Call-site migration in `worker_dispatch` deferred — the existing inline construction is intricate (size-gated spill, NFS path resolution); the dataclass is ready for new sites. | [architecture details](../arch/arch-authentication.md) |
 
 The pattern is now well-trodden: any new env-var cohort that travels together gets a
 typed module mirroring this shape.
-The `setup_token_command` capability seam (Phase 7.3 / `internal-reference`) follows the
-same principle at the Protocol level.
+The `setup_token_command` capability seam (Phase 7.3) follows the same principle at the
+Protocol level.
 
 <!-- This document follows std-doc-guidelines.md.
 Review guidelines before editing.

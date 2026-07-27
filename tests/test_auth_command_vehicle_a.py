@@ -1,7 +1,7 @@
 """Tests for the Vehicle A operator surface on ``metaproc auth``.
 
-Spec: docs/project/specs/active/plan-2026-04-28-claude-code-auth-vehicle-a-pool-redesign.md
-Bead: internal-reference (Phase 2 of epic internal-reference).
+Spec: docs/arch/arch-metaproc-core.md
+Regression coverage (Phase 2 of the original design).
 
 Exercises the new flags on ``auth push`` (``--vehicle``, ``--token-file``,
 ``--account-id``, ``--organization-uuid``, ``--quota-group``) plus the

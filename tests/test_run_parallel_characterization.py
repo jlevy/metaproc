@@ -103,7 +103,7 @@ class TestCodeModeOutputValidationRetry:
     ) -> None:
         """Code-mode: output validation failure calls classify_error for retry decision.
 
-        This pins the current behavior where classify_error IS called. If this
+        This pins the fix where classify_error IS called. If this
         test breaks, the code-mode retry path has regressed.
         """
 
@@ -277,7 +277,7 @@ class TestPoolPrepareEnv:
     ) -> None:
         """_build_prepare_launch's inner _prepare() calls adapter.prepare_env().
 
-        This pins the current behavior. If prepare_env stops being called,
+        This pins the fix. If prepare_env stops being called,
         adapter-specific env setup (API keys, auth tokens) will be lost.
         """
         mock_adapter = MagicMock()

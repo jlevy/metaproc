@@ -1,4 +1,4 @@
-"""P1.6 (internal-reference) — attempt_cost_attrs helper + per-extractor cost stamping.
+"""P1.6 — attempt_cost_attrs helper + per-extractor cost stamping.
 
 Tests that `attempt_cost_attrs` in common.py builds the canonical
 `attempt.cost_usd`, `attempt.cost_is_estimated`, and `attempt.tokens_*`

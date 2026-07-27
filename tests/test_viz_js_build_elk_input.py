@@ -240,7 +240,7 @@ def test_build_elk_input_override_layout_options() -> None:
 def test_filter_viz_artifacts_only_reparents_dep_under_surviving_ancestor() -> None:
     """Regression: Steps=false, Artifacts=true must not produce a blank graph.
 
-    Caught by Levy's internal review: every dep node sits under a composite
+    Caught by review: every dep node sits under a composite
     step which is filtered out when Steps is off. The filter now reparents
     survivors up to the nearest surviving ancestor (here: the root process
     node) so ELK still builds a compound graph with the dep visible.
@@ -439,7 +439,7 @@ def test_render_side_panel_includes_step_adapter_and_io_tables() -> None:
     # Adapter section renders its fields.
     assert "pi-cli" in html
     assert "sonnet" in html
-    # Fan-out section present, including retry policy (B7 gap Levy called out).
+    # Fan-out section present, including retry policy (retry-policy coverage gap).
     assert "deps.tickers" in html
     assert "max=3" in html
     assert "init=2s" in html
@@ -459,13 +459,13 @@ def test_render_side_panel_process_shows_defaults_and_schemas_and_body() -> None
     process_node = {
         "id": "process:root",
         "kind": "process",
-        "label": "example_workflow",
+        "label": "example_plugin",
         "parent": None,
         "process": {
-            "name": "example_workflow",
+            "name": "example_plugin",
             "description": "End-to-end earnings lifecycle.",
             "process_schema_token": "metaproc:ProcessSpec/0.1",
-            "source_path": "example_workflow/main.process.md",
+            "source_path": "example_plugin/main.process.md",
             "process_inputs": {},
             "defaults": {
                 "default_adapter": "main",

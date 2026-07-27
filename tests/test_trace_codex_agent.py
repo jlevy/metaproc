@@ -5,7 +5,7 @@ discriminator is the `metadata.adapter` (or `argv[0]`) entry in the
 per-attempt `*.invocation.json` sidecar. These tests pin:
 
 - the `source` flips from `claude-agent` to `codex-agent`
-  (closes internal-reference — Codex failures no longer mislabel as
+  (closes the gap — Codex failures no longer mislabel as
   `claude-agent`);
 - `execution_profile` and `artifact_namespace` from the sidecar env
   carry through to the attempt span;

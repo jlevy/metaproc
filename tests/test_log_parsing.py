@@ -419,7 +419,7 @@ class TestPiLogParser:
                 "version": 3,
                 "id": "12d00295-b778-4ae2-8eee-0cd5f512a02c",
                 "timestamp": "2026-04-01T01:18:58.441Z",
-                "cwd": "/workspace/user/wrk/example-org/consumer",
+                "cwd": "/workspace/project",
             }
         )
         events = self.parser.parse_line(line)
@@ -443,7 +443,7 @@ class TestPiLogParser:
                 "type": "tool_execution_start",
                 "toolCallId": "toolu_01GUECqtjhqkVjupwJYhdqr8",
                 "toolName": "read",
-                "args": {"path": "example_workflow/process/predict/predict-ticker.runbook.md"},
+                "args": {"path": "example_plugin/process/predict/predict-ticker.runbook.md"},
             }
         )
         events = self.parser.parse_line(line)

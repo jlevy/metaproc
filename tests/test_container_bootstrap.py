@@ -440,7 +440,7 @@ def test_worker_entrypoint_runs_adapter_bootstrap_materializes_claude_creds(
 
     env = {
         "METAPROC_WORKER_ITEMS": "AAPL-2025Q3",
-        "METAPROC_PROCESS_DIR": "example_workflow/process/mine",
+        "METAPROC_PROCESS_DIR": "example_plugin/process/mine",
         "METAPROC_STEP": "generate-record",
         "METAPROC_VARS": '{"RUN_ID":"run-1"}',
         CLAUDE_CREDS_ENV_VAR: creds_payload,
@@ -472,7 +472,7 @@ def test_worker_entrypoint_passes_runs_dir_as_var(tmp_path: Path) -> None:
     runs_dir = str(tmp_path / "runs")
     env = {
         "METAPROC_WORKER_ITEMS": "AAPL-2025Q3",
-        "METAPROC_PROCESS_DIR": "example_workflow/process/mine",
+        "METAPROC_PROCESS_DIR": "example_plugin/process/mine",
         "METAPROC_STEP": "generate-record",
         "METAPROC_VARS": '{"RUN_ID":"run-1"}',
         "RUNS_DIR": runs_dir,
@@ -495,13 +495,13 @@ def test_worker_entrypoint_passes_runs_dir_as_var(tmp_path: Path) -> None:
 
 def test_orchestrator_entrypoint_passes_runs_dir_as_var(tmp_path: Path) -> None:
     work_dir = tmp_path / "repo"
-    dataset_dir = work_dir / "example_workflow" / "datasets"
+    dataset_dir = work_dir / "example_plugin" / "datasets"
     dataset_dir.mkdir(parents=True)
     (dataset_dir / "smoke.dataset.yml").write_text("dataset: smoke\n")
     runs_dir = str(tmp_path / "runs")
 
     env = {
-        "METAPROC_PROCESS_DIR": "example_workflow/process/mine",
+        "METAPROC_PROCESS_DIR": "example_plugin/process/mine",
         "METAPROC_VARS": '{"RUN_ID":"run-1","DATASET":"smoke"}',
         "RUNS_DIR": runs_dir,
     }
@@ -524,12 +524,12 @@ def test_orchestrator_entrypoint_passes_runs_dir_as_var(tmp_path: Path) -> None:
 
 def test_orchestrator_entrypoint_passes_num_workers_to_inner_run_process(tmp_path: Path) -> None:
     work_dir = tmp_path / "repo"
-    dataset_dir = work_dir / "example_workflow" / "datasets"
+    dataset_dir = work_dir / "example_plugin" / "datasets"
     dataset_dir.mkdir(parents=True)
     (dataset_dir / "smoke.dataset.yml").write_text("dataset: smoke\n")
 
     env = {
-        "METAPROC_PROCESS_DIR": "example_workflow/process/mine",
+        "METAPROC_PROCESS_DIR": "example_plugin/process/mine",
         "METAPROC_VARS": '{"RUN_ID":"run-1","DATASET":"smoke"}',
         "METAPROC_NUM_WORKERS": "2",
         "RUNS_DIR": str(tmp_path / "runs"),

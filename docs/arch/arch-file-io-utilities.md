@@ -7,8 +7,8 @@ status: Approved
 # Architecture: File I/O Utilities (`metaproc.io`)
 
 `metaproc.io` is the curated public surface for file utilities used inside metaproc and
-by downstream callers (notably `earnings_information_arb`). Every helper documented here
-is importable directly from `metaproc.io`:
+by downstream callers.
+Every helper documented here is importable directly from `metaproc.io`:
 
 ```python
 from metaproc.io import (

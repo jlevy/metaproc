@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import json
 
-from metaproc.engine.runtime import _should_drop_line, _start_log_filter_thread
+from metaproc.engine.runtime import _should_drop_line, start_log_filter_thread
 
 # ── _should_drop_line unit tests ──────────────────────────────────
 
@@ -100,7 +100,7 @@ class TestShouldDropLine:
         assert _should_drop_line(line) is True
 
 
-# ── _start_log_filter_thread integration tests ───────────────────
+# ── start_log_filter_thread integration tests ───────────────────
 
 
 class TestLogFilterThread:
@@ -115,7 +115,7 @@ class TestLogFilterThread:
         original_close = output.close
         output.close = lambda: None  # type: ignore[assignment]
 
-        thread = _start_log_filter_thread(pipe, output)
+        thread = start_log_filter_thread(pipe, output)
         thread.join(timeout=5.0)
 
         output.close = original_close  # type: ignore[assignment]

@@ -108,8 +108,8 @@ The focused test boundary includes:
 - integration coverage under the other `test_metabrowser_*.py` modules for file kinds,
   server hooks, KPress rendering, charts, visualizations, and CSS contracts
 
-An isolated wheel environment containing released MetaBrowser and the internal-reference
-plugin wheels must report every discovered plugin as healthy through
+An isolated wheel environment containing released MetaBrowser and the historical
+implementation plugin wheels must report every discovered plugin as healthy through
 `metab plugins doctor`.
 
 The consumer repository also owns the browser-asset quality gate after extraction.

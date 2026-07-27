@@ -1850,7 +1850,7 @@ class TestProcessContractValidation:
     ) -> None:
         """Concurrent writes outside run_dir must not fail the step.
 
-        Regression test for internal-reference: boundary snapshot formerly covered
+        Regression test for the fix: boundary snapshot formerly covered
         the entire repo, so any external write during the step (e.g. another
         process editing source files) was falsely attributed to the agent.
         The observation zone must be scoped to run_dir.
@@ -2064,7 +2064,7 @@ class TestProcessContractValidation:
     ) -> None:
         """Legitimate writes must not be flagged when RUNS_DIR is relative.
 
-        Regression test for internal-reference. Previously, allowed_targets came
+        Regression test for the fix. Previously, allowed_targets came
         out as relative paths (from ``Path(resolve_templates(...))`` with a
         relative ``RUNS_DIR``) while changed_paths were absolute (resolved
         against repo_root). ``is_path_under`` rejected the mismatch and
@@ -2179,7 +2179,7 @@ class TestProcessContractValidation:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Two non-for_each agent steps that output sibling files in the same dir
-        must each keep their own .state/status.yaml (internal-reference).
+        must each keep their own .state/status.yaml.
 
         Before the fix, both steps used compute_item_dir which returned the
         output's parent — `<run_dir>/mine/<variant>/`. Both wrote
@@ -2414,10 +2414,10 @@ class TestGCPWorkerResumeAdoption:
 
 
 class TestCompositePoolDispatchPropagation:
-    """Regression test for internal-reference — pool_dispatch_template must propagate
+    """Regression test for the fix — pool_dispatch_template must propagate
     from parent _orchestrate → _execute_composite_step → child _orchestrate.
 
-    Without this, every composite-child step (e.g. EIA analysis-research run-parallel)
+    Without this, every composite-child fan-out step
     gets pool_dispatch=None and bypasses the auth pool — Claude calls fall back
     to ambient ~/.claude creds, defeating the pool's load-balancing intent.
 
@@ -2434,7 +2434,7 @@ class TestCompositePoolDispatchPropagation:
         assert "pool_dispatch_template" in params, (
             "_execute_composite_step must accept pool_dispatch_template — "
             "without it the parent dispatcher cannot propagate auth-pool config "
-            "to composite children. See internal-reference."
+            "to composite children. See the fix."
         )
         assert "auth_flags" in params
         assert "preflight_quota_guard" in params
@@ -2520,6 +2520,6 @@ class TestCompositePoolDispatchPropagation:
         # The sentinel pool config must have been threaded through to the child.
         assert captured["pool_dispatch_template"] is sentinel_pool, (
             "pool_dispatch_template was DROPPED at the composite-child boundary — "
-            "this is the internal-reference regression: child run_parallel calls "
+            "this is this regression: child run_parallel calls "
             "will see pool_dispatch=None and bypass the auth pool."
         )

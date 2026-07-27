@@ -219,7 +219,7 @@ def _lease_lock_is_stale(lock_path: Path) -> bool:
 
 def _write_lease_lock_owner(path: Path, data: dict[str, object]) -> None:
     with atomic_output_file(path, make_parents=True) as tmp:
-        Path(tmp).write_text(to_yaml_string(data))
+        Path(tmp).write_text(to_yaml_string(data), encoding="utf-8")
 
 
 class _LeaseWriteLock:
@@ -325,7 +325,7 @@ def acquire_lease(
         }
 
         with atomic_output_file(path) as tmp:
-            Path(tmp).write_text(to_yaml_string(data))
+            Path(tmp).write_text(to_yaml_string(data), encoding="utf-8")
 
     _remember_owned_lease(path, owner_token)
 
@@ -343,7 +343,7 @@ def update_heartbeat(run_dir: Path) -> None:
 
         raw["last_heartbeat_at"] = _now_iso()
         with atomic_output_file(path) as tmp:
-            Path(tmp).write_text(to_yaml_string(raw))
+            Path(tmp).write_text(to_yaml_string(raw), encoding="utf-8")
 
 
 def release_lease(run_dir: Path) -> None:
@@ -387,6 +387,11 @@ class LeaseHeartbeat:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=5)
+
+    @property
+    def is_running(self) -> bool:
+        """Return whether the heartbeat thread is alive."""
+        return self._thread is not None and self._thread.is_alive()
 
     def _heartbeat_loop(self) -> None:
         while not self._stop.wait(self._interval):

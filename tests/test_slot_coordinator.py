@@ -333,7 +333,7 @@ class TestAcquireSlot:
         assert lease.label == "home"
 
     def test_attempt_one_picks_primary_under_none_policy(self, tmp_path, coord, pool):
-        # Regression: internal-reference. run_parallel.py's first attempt arrives
+        # Regression: the fix. run_parallel.py's first attempt arrives
         # as attempt=1 (1-based), not attempt=0. Previously
         # `use_primary = attempt == 0 and not exclude` skipped the primary
         # path entirely on attempt=1, forcing select_fallback under the
@@ -353,7 +353,7 @@ class TestAcquireSlot:
         assert lease.label == "laptop"
 
     def test_exclude_at_attempt_zero_picks_alternate_primary(self, tmp_path, coord, pool):
-        # Regression: internal-reference (TBD-A). At attempt=0 with one label
+        # Regression: the fix (TBD-A). At attempt=0 with one label
         # excluded, the previous guard `not exclude` short-circuited to
         # the fallback path, returning None under NONE policy even when
         # another active primary remained. Now: primary respects exclude
@@ -514,7 +514,7 @@ class TestAcquireSlot:
     def test_active_counter_snapshot_after_acquire_for_event_payload(
         self, tmp_path, coord, pool, adapter
     ):
-        # internal review (P2): production run_parallel emits
+        # review (P2): production run_parallel emits
         # auth_lease_acquired with the coordinator's active-lease
         # snapshot. After acquire_slot, the snapshot must contain the
         # leased label with count == 1 so the event payload isn't

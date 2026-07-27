@@ -34,7 +34,7 @@ def _sample_step_details() -> StepDetails:
             "description": "Run predictions",
             "needs": ["scaffold-day"],
             "process_schema_token": "metaproc:ProcessSpec/0.1",
-            "source_path": "example_workflow/main.process.md",
+            "source_path": "example_plugin/main.process.md",
             "prompt_paths": ["predict.runbook.md"],
             "prompt_prefix": "You are a predictor.",
             "inputs": {"tickers": IOSpec(path="deps.tickers", type="list")},
@@ -65,16 +65,16 @@ def _sample_dep_details() -> DepDetails:
         produced_by="scaffold-day",
         consumers=["predict", "retro"],
         process_schema_token="metaproc:ProcessSpec/0.1",
-        source_path="example_workflow/main.process.md",
+        source_path="example_plugin/main.process.md",
     )
 
 
 def _sample_process_header() -> ProcessHeader:
     return ProcessHeader(
-        name="example_workflow",
+        name="example_plugin",
         description="Predict → retro → learn → mine",
         process_schema_token="metaproc:ProcessSpec/0.1",
-        source_path="example_workflow/main.process.md",
+        source_path="example_plugin/main.process.md",
         process_inputs={
             "run_id": InputSpec(name="run_id", param="run-id", as_type="string"),
         },
@@ -118,7 +118,7 @@ def _sample_process_header() -> ProcessHeader:
         ),
         (
             lambda: VizViewState(
-                process_path="example_workflow/main.process.md",
+                process_path="example_plugin/main.process.md",
                 expanded_composites=["predict"],
                 zoom=1.5,
             ),
@@ -143,7 +143,7 @@ def test_viz_model_round_trip_with_full_payload():
         nodes={"predict": NodeProgress(state="completed", completed=10, total=10)},
     )
     model = VizModel(
-        root_process="example_workflow/main.process.md",
+        root_process="example_plugin/main.process.md",
         header=header,
         nodes=[node, dep_node],
         edges=[edge],
@@ -155,7 +155,7 @@ def test_viz_model_round_trip_with_full_payload():
     restored = VizModel.model_validate_json(model.model_dump_json(by_alias=True))
     assert restored == model
     assert restored.model_dump(by_alias=True)["schema"] == "metaproc:VizModel/0.2"
-    assert restored.header.name == "example_workflow"
+    assert restored.header.name == "example_plugin"
     assert restored.nodes[0].step is not None
     assert restored.nodes[0].step.fan_out is not None
     assert restored.nodes[0].step.fan_out.retry is not None

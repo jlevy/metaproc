@@ -66,12 +66,12 @@ profiles:
       shell: true
     resources:
       # Lowered 4096 → 1024 MB and host_max 2 → 6 (2026-05-24 three-lane batch),
-      # then lifted cap 6 → 20 after the 2026-06-03 EIA run exposed that the
+      # then lifted cap 6 → 20 after the 2026-06-03 large workflow run exposed that the
       # profile cap silently defeated high --max-concurrency launch envelopes.
       # The legacy 4 GB / host_max=2 estimate dated from earlier codex versions
-      # and capped 17-/28-ticker Codex lanes to ~5-8 h wall-clock. The later
-      # host_max=6 setting was still too low for normal EIA batch posture. Current
-      # codex-cli runs at observed 0.8-1.2 GB RSS per agent under EIA
+      # and capped medium-sized Codex lanes to multi-hour wall-clock. The later
+      # host_max=6 setting was still too low for normal large workflow batch posture. Current
+      # codex-cli runs at observed 0.8-1.2 GB RSS per agent under large workflow
       # analysis-research load. Predecessor logbook (2026-05-23 mon-thru-wed)
       # flagged "codex-gpt55 still open" in the per-adapter RSS benchmark
       # work. The adaptive controller still clamps under genuine pressure.
@@ -145,15 +145,15 @@ profiles:
     notes: |
       Gemini 3.5 Flash (GA 2026-05-19, Google I/O) via gemini-cli through
       Vertex AI. Speed-tilted profile for opt-in ensemble lanes; tool use is
-      exercised by smoke-gemini-matrix before any EIA dispatch. Promote
-      status to "tested" only after a clean tier-1 EIA dry run.
+      exercised by smoke-gemini-matrix before any large workflow dispatch. Promote
+      status to "tested" only after a clean tier-1 large workflow dry run.
     capabilities:
       native_tools: [Read, Write, Edit, Bash, Glob, Grep, LS]
       native_web_search: false
       shell: true
     resources:
       # Placeholder mirroring claude-* baseline (500 MB) until a few hours
-      # of health.jsonl samples are collected under EIA load; refine per
+      # of health.jsonl samples are collected under large workflow load; refine per
       # the arch-runpool RSS-benchmark methodology in the same way as
       # claude-opus / pi-glm5.
       estimated_process_rss_mb: 500
@@ -172,7 +172,7 @@ profiles:
     notes: |
       Gemini 3.1 Pro (preview) via gemini-cli through Vertex AI. Deeper-
       reasoning lane intended for parity comparisons against claude-opus.
-      Promote status to "tested" only after a clean tier-1 EIA dry run.
+      Promote status to "tested" only after a clean tier-1 large workflow dry run.
     capabilities:
       native_tools: [Read, Write, Edit, Bash, Glob, Grep, LS]
       native_web_search: false
@@ -197,7 +197,7 @@ profiles:
       exercise google-vertex's pi quirks (notably the Gemini-3
       thought_signature contract on tool calls). Smoke is
       smoke-adapter-pi-gemini. Promote to "tested" after a clean tier-1
-      EIA dry run.
+      large workflow dry run.
     capabilities:
       native_tools: [Read, Write]
       native_web_search: false
@@ -220,7 +220,7 @@ profiles:
       OpenAI GPT-5.5 routed through pi-cli (vs codex-gpt55 which uses
       codex-cli). Same underlying model on a different harness, so this
       profile isolates harness effects from model effects in ensemble
-      comparisons. Promote to "tested" after a clean tier-1 EIA dry run.
+      comparisons. Promote to "tested" after a clean tier-1 large workflow dry run.
     capabilities:
       native_tools: [Read, Write]
       native_web_search: false
@@ -245,7 +245,7 @@ profiles:
       to exercise google-vertex's pi quirks (Gemini-3 thought_signature
       contract on tool calls). Companion to pi-gemini-flash for the
       4-Gemini-lane ensemble shape. Promote to "tested" after a clean
-      tier-1 EIA dry run.
+      tier-1 large workflow dry run.
     capabilities:
       native_tools: [Read, Write]
       native_web_search: false

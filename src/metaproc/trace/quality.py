@@ -33,7 +33,7 @@ def runbook_completion_rows(spans: list[TraceEvent]) -> list[dict[str, Any]]:
 
     Sessions whose ``ts_end`` is null are classified as ``in_progress``
     rather than ``missing_output`` — they're still in-flight and have
-    not yet had a chance to write. See bead internal issue: noisy
+    not yet had a chance to write. See this regression: noisy
     "missing_output" rows during active runs were the original
     motivator for active-run awareness in the trace health command.
     """
@@ -110,7 +110,7 @@ def directive_compliance_rows(
                 missing.append(directive)
         # In-flight session: the agent may still read more inputs.
         # Same active-run awareness applied to runbook_completion above
-        # (bead internal issue).
+        # (this regression).
         if session.ts_end is None:
             status = "in_progress"
         elif missing:

@@ -92,7 +92,7 @@ def format_table(spans: list[TraceEvent]) -> str:
     return "\n".join(lines) + "\n"
 
 
-# ── Projection (P2.1, internal issue) ──
+# ── Projection (P2.1) ──
 
 # Top-level span fields readable as projection columns; everything else
 # is looked up in span.attributes.

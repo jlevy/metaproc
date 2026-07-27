@@ -33,7 +33,7 @@ def test_metaproc_does_not_import_domain_packages() -> None:
     for module in _python_modules():
         rel = module.relative_to(SRC_ROOT)
         for imported in _imported_modules(module):
-            if imported == "example_workflow" or imported.startswith("example_workflow."):
+            if imported == "example_plugin" or imported.startswith("example_plugin."):
                 offenders.append((rel, imported))
 
     assert not offenders, "metaproc imports domain packages:\n" + "\n".join(

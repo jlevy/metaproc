@@ -1,8 +1,6 @@
 """Tests for the RepoSyncPayload typed wrapper.
 
-Phase 10 follow-up of the Vehicle A pool redesign (epic internal-reference,
-bead internal-reference). Spec: docs/project/specs/active/plan-2026-04-28-
-claude-code-auth-vehicle-a-pool-redesign.md §Phase 10.
+Phase 10 follow-up of the Vehicle A pool redesign.
 """
 
 from __future__ import annotations

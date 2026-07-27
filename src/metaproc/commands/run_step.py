@@ -41,9 +41,9 @@ from metaproc.engine.placeholders import (
 )
 from metaproc.engine.process_scope import expand_process_vars
 from metaproc.engine.runtime import (
-    _start_log_filter_thread,
     launch_step,
     prepare_step,
+    start_log_filter_thread,
     validate_step_inputs_exist,
 )
 from metaproc.engine.validation import validate_item_outputs
@@ -355,7 +355,12 @@ def run_step(
                     raise CLIError(f"no command or handler configured for step '{step}'")
                 resolved_cmd = resolve_templates(command_ref, variables)
                 env = dict(os.environ)
-                env.update(target.env or {})
+                env.update(
+                    {
+                        key: resolve_templates(value, variables)
+                        for key, value in (target.env or {}).items()
+                    }
+                )
                 proc = subprocess.run(
                     shlex.split(resolved_cmd),
                     env=env,
@@ -494,7 +499,9 @@ def run_step(
 
         env = adapter_obj.prepare_env(dict(os.environ), runtime_config)
         if target.env:
-            env.update(target.env)
+            env.update(
+                {key: resolve_templates(value, variables) for key, value in target.env.items()}
+            )
         cmd = adapter_obj.build_command(prompt_file, runtime_config, variables)
         cwd = adapter_obj.working_directory(runtime_config)
         timeout_s = runtime_config.get("timeout_s")
@@ -503,20 +510,20 @@ def run_step(
         timeout_val = int(str(timeout_s)) if timeout_s is not None else None
         try:
             if use_filter:
-                log_fh = log_path.open("w")
-                fg_proc = subprocess.Popen(
-                    cmd,
-                    env=env,
-                    cwd=cwd,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                )
-                ft = _start_log_filter_thread(fg_proc.stdout, log_fh)  # pyright: ignore[reportArgumentType]
-                fg_proc.wait(timeout=timeout_val)
-                ft.join(timeout=5.0)
+                with log_path.open("w", encoding="utf-8") as log_fh:
+                    fg_proc = subprocess.Popen(
+                        cmd,
+                        env=env,
+                        cwd=cwd,
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                    )
+                    ft = start_log_filter_thread(fg_proc.stdout, log_fh)  # pyright: ignore[reportArgumentType]
+                    fg_proc.wait(timeout=timeout_val)
+                    ft.join(timeout=5.0)
             else:
-                with log_path.open("w") as log_fh:
+                with log_path.open("w", encoding="utf-8") as log_fh:
                     fg_proc = subprocess.run(
                         cmd,
                         env=env,

@@ -5,8 +5,10 @@ from __future__ import annotations
 import base64
 import json
 import os
+import stat
 import threading
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -187,17 +189,40 @@ class TestBootstrapSkipsOnCloudVM:
             assert "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ
 
     def test_uses_base64_locally(self, tmp_path):
-
         fake_key = json.dumps({"type": "service_account", "project_id": "test"})
         b64 = base64.b64encode(fake_key.encode()).decode()
 
-        with patch.dict("os.environ", {"GCP_CREDENTIALS_BASE64": b64}, clear=False):
+        with (
+            patch.dict("os.environ", {"GCP_CREDENTIALS_BASE64": b64}, clear=False),
+            patch("tempfile.gettempdir", return_value=str(tmp_path)),
+        ):
             os.environ.pop("GOOGLE_APPLICATION_CREDENTIALS", None)
             os.environ.pop("BATCH_TASK_INDEX", None)
             _bootstrap_credentials_from_base64()
-            assert "GOOGLE_APPLICATION_CREDENTIALS" in os.environ
-            # Clean up
+            credential_path = Path(os.environ["GOOGLE_APPLICATION_CREDENTIALS"])
+
+            assert credential_path.parent == tmp_path
+            assert credential_path.name.startswith("metaproc-gcp-")
+            assert stat.S_IMODE(credential_path.stat().st_mode) == 0o600
+            assert json.loads(credential_path.read_text(encoding="utf-8")) == json.loads(fake_key)
+
+            reset()
+            assert not credential_path.exists()
+            assert "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ
+
+    def test_invalid_base64_does_not_leave_a_file(self, tmp_path):
+        with (
+            patch.dict("os.environ", {"GCP_CREDENTIALS_BASE64": "not-base64!"}, clear=False),
+            patch("tempfile.gettempdir", return_value=str(tmp_path)),
+        ):
             os.environ.pop("GOOGLE_APPLICATION_CREDENTIALS", None)
+            os.environ.pop("BATCH_TASK_INDEX", None)
+
+            with pytest.raises(ValueError):
+                _bootstrap_credentials_from_base64()
+
+        assert list(tmp_path.iterdir()) == []
+        assert "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ
 
 
 class TestThreadSafety:

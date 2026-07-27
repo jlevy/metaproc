@@ -61,8 +61,19 @@ before publishing through PyPI trusted publishing.
 
 The sealed source tree has been copied and the framework boundary has been separated
 from its former consumer.
-Standalone repository scaffolding, dependency locks, public documentation, artifact
-validation, CI, and the downstream submodule pin are the active implementation work.
+Standalone scaffolding, AGPL licensing, dependency locks, public documentation, artifact
+validation, CI, and an initial downstream submodule pin are complete.
+
+The first release-readiness review produced 100 tracked findings.
+Accepted fixes have been implemented, design decisions have been documented, and the
+complete local gate passes: 3,783 tests pass, 8 live or environment-dependent tests
+skip, dependency audits are clean, and both built distributions pass installed-package
+smoke checks.
+
+Remaining handoff work is to publish the consolidated review commit, verify the hosted
+Python matrix, and advance the downstream submodule pin to that exact commit.
+The separate v0.1.0 publication bead remains intentionally open until trusted publishing
+is validated against the final tag.
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

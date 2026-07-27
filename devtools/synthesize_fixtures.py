@@ -20,6 +20,20 @@ HOME_PATH_PATTERN = re.compile(r"/(?:Users|home)/[^/\s\"']+")
 EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 ISO_DATE_PATTERN = re.compile(r"\b20\d{2}-\d{2}-\d{2}\b")
 CALL_ID_PATTERN = re.compile(r"\bcall_[A-Za-z0-9_-]+\b")
+PRIVATE_IPV4_PATTERN = re.compile(
+    r"\b(?:10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|"
+    r"172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})\b"
+)
+TRACE_ENV_KEYS = frozenset(
+    {
+        "EXECUTION_PROFILE",
+        "LANE_ID",
+        "METAPROC_ITEM_KEY",
+        "METAPROC_LANE_ID",
+        "METAPROC_STEP",
+        "METAPROC_VARIANT",
+    }
+)
 PRIVATE_TOKEN_HASHES = frozenset(
     {
         "31523fdddcd5294e2bc6cc775fba79e2597e6d45bc0a995c548493038ebea33f",
@@ -48,8 +62,11 @@ PROSE_KEYS = {
     "output",
     "prompt",
     "result",
+    "strategic_intent",
+    "summary",
     "text",
     "thinking",
+    "title",
 }
 
 
@@ -66,35 +83,49 @@ def _replace_private_token(match: re.Match[str]) -> str:
 
 def sanitize_string(value: str, *, key: str = "") -> str:
     """Return a stable synthetic string while retaining parser-relevant shape."""
-    if key.lower() == "vars_json":
+    normalized_key = key.lower()
+    if normalized_key == "vars_json":
         return "{}"
-    if key.lower() == "argv" and len(value) > 80:
+    if normalized_key == "argv" and len(value) > 80:
         return "Synthetic fixture argument."
-    if key.lower() in PROSE_KEYS:
-        if key.lower() == "command":
+    if normalized_key in PROSE_KEYS:
+        if normalized_key == "command":
             return "printf 'synthetic fixture output\\n'"
-        return f"Synthetic fixture {key.lower()} content."
-    if key.lower() in {
+        return f"Synthetic fixture {normalized_key} content."
+    if normalized_key in {
         "batch",
         "company",
         "customer",
         "key",
         "run_id",
+        "step",
         "ticker",
         "tickers",
         "symbol",
     }:
         if value.startswith("synthetic-"):
             return value
-        return _stable_label(key.lower(), value)
-    if key.lower() in {"path", "cwd", "log_path", "process_dir"}:
+        return _stable_label(normalized_key, value)
+    if normalized_key in {
+        "cwd",
+        "filepath",
+        "log_path",
+        "path",
+        "process_dir",
+        "source_log",
+    } or normalized_key.endswith(("_dir", "_file", "_path", "_root")):
         if value.startswith("/workspace/synthetic-project/"):
             return value
         suffix = Path(value).suffix or ".txt"
         return f"/workspace/synthetic-project/{_stable_label('file', value)}{suffix}"
+    if normalized_key in {"branch", "git_branch", "run_branch"}:
+        return "synthetic-branch"
+    if normalized_key in {"logname", "user", "username"}:
+        return "synthetic-user"
 
     value = HOME_PATH_PATTERN.sub("/workspace/synthetic-home", value)
     value = EMAIL_PATTERN.sub("synthetic-user@example.invalid", value)
+    value = PRIVATE_IPV4_PATTERN.sub("192.0.2.10", value)
     value = ISO_DATE_PATTERN.sub("2030-01-01", value)
     value = CALL_ID_PATTERN.sub(lambda match: _stable_label("call", match.group()), value)
     value = TOKEN_PATTERN.sub(_replace_private_token, value)
@@ -104,6 +135,17 @@ def sanitize_string(value: str, *, key: str = "") -> str:
 def sanitize_value(value: Any, *, key: str = "") -> Any:
     """Recursively sanitize JSON-compatible fixture data."""
     if isinstance(value, dict):
+        if key.lower() == "env_redacted":
+            value = {
+                child_key: child_value
+                for child_key, child_value in value.items()
+                if str(child_key) in TRACE_ENV_KEYS
+            }
+        if key.lower() == "memory_paths":
+            return {
+                sanitize_string(str(child_key)): sanitize_value(child_value, key="path")
+                for child_key, child_value in value.items()
+            }
         return {
             sanitize_string(str(child_key)): sanitize_value(child_value, key=str(child_key))
             for child_key, child_value in value.items()
@@ -119,7 +161,7 @@ def synthetic_bytes(path: Path) -> bytes:
     """Render the canonical synthetic representation for one fixture."""
     if path.suffix == ".jsonl":
         records: list[Any] = []
-        for line in path.read_text().splitlines():
+        for line in path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
             try:
@@ -134,9 +176,9 @@ def synthetic_bytes(path: Path) -> bytes:
             + "\n"
         ).encode()
     if path.suffix == ".json":
-        value = json.loads(path.read_text())
+        value = json.loads(path.read_text(encoding="utf-8"))
         return (json.dumps(sanitize_value(value), indent=2, sort_keys=True) + "\n").encode()
-    return sanitize_string(path.read_text()).encode()
+    return sanitize_string(path.read_text(encoding="utf-8")).encode()
 
 
 def fixture_paths() -> list[Path]:

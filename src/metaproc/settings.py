@@ -66,7 +66,7 @@ POOL_ESTIMATED_PROCESS_RSS_BYTES = 500 * 1024 * 1024  # 500 MB
 #
 # Overridable via env var POOL_STALL_TIMEOUT_MINUTES.
 #
-# Default raised from 5 → 15 minutes (2026-05-26) after the Tue AMC batch:
+# Default raised from 5 → 15 minutes (2026-05-26) after the Tue production batch:
 # claude-opus agents legitimately go silent for 5-10 min during long internal
 # reasoning passes, deep WebFetches, and tool-call sequences. The previous
 # 5-minute default was killing in-progress claude agents 8+ times in a single
@@ -77,7 +77,7 @@ POOL_ESTIMATED_PROCESS_RSS_BYTES = 500 * 1024 * 1024  # 500 MB
 # diagnostic runs can set POOL_STALL_TIMEOUT_MINUTES=5 explicitly.
 #
 # See `metaproc help operator` § "Top mistakes to avoid" row about stall
-# kills and the 2026-05-26 Tue AMC batch logbook for the root-cause analysis.
+# kills and the production incident analysis for the root-cause analysis.
 _pool_stall_env = _os.environ.get("POOL_STALL_TIMEOUT_MINUTES")
 POOL_STALL_TIMEOUT_MINUTES: int | None = (
     int(_pool_stall_env)
@@ -133,7 +133,7 @@ GEMINI_VALID_MODELS: set[str] = {
 #
 # codex-cli (OpenAI Codex CLI, npm @openai/codex) defaults. The adapter
 # dispatches through `codex exec --json`; see
-# docs/project/specs/active/plan-2026-04-23-codex-adapter-and-openai-pi-models.md
+# docs/arch/arch-metaproc-core.md
 # for design context and the empirical 0.124.0 surface.
 
 CODEX_DEFAULT_MODEL = "gpt-5.5"
@@ -199,8 +199,7 @@ PI_VALID_MODELS: set[str] = {
     # /v1/responses endpoint and pi-cli's `openai-completions` api
     # cannot dispatch it (returns "404 not a chat model"). gpt-5.5-pro
     # is still in CODEX_VALID_MODELS — codex-cli handles responses
-    # internally — and in pricing.md for cost rollups. See bead
-    # internal issue for the pi-cli responses-routing follow-up.
+    # internally — and in pricing.md for cost rollups.
     "gpt-5.5",
     "gpt-5.4-mini",
     "gpt-5.4-nano",
@@ -239,7 +238,7 @@ PI_VALID_MODELS: set[str] = {
     # DeepSeek first-party API (V4 family). Released 2026-04-24.
     # Both IDs support 1M context and dual mode (thinking /
     # non-thinking) on the same model ID. See
-    # docs/project/specs/active/plan-2026-04-27-deepseek-v4-and-model-registry-refresh.md.
+    # docs/arch/arch-metaproc-core.md.
     "deepseek-v4-pro",
     "deepseek-v4-flash",
     # Moonshot first-party API (Kimi K2.6). GA April 2026,

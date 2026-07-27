@@ -1,4 +1,4 @@
-"""Tests for the auth_usage renderers (internal-reference).
+"""Tests for the auth_usage renderers.
 
 Pure-function tests over LabelUsage shapes — no Typer harness, no
 file I/O. CLI integration is covered separately via the existing

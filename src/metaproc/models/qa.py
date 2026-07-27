@@ -2,7 +2,7 @@
 
 These are metaproc-level envelope types for the ``qa:`` and ``qa_summary:``
 frontmatter blocks. The domain-specific ``QAReport`` model lives in the
-workflow_package plugin; these envelopes wrap the frontmatter shape
+example_plugin plugin; these envelopes wrap the frontmatter shape
 that metaproc reads and validates.
 """
 

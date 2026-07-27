@@ -1,6 +1,6 @@
-"""Tests for internal-reference: auth preflight CLI + query_quota_usage wiring.
+"""Tests for the fix: auth preflight CLI + query_quota_usage wiring.
 
-Spec: docs/project/specs/active/plan-2026-05-03-auth-observability-and-load-balancing.md
+Spec: docs/arch/arch-metaproc-core.md
 """
 
 from __future__ import annotations

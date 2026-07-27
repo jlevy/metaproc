@@ -52,7 +52,7 @@ def resolve_process_dep_path(
 
     Relative dep paths are interpreted from the owning package root so authored
     ``deps:`` entries can consistently use package-root paths like
-    ``process/predict/predict.process.md`` or ``src/workflow_package/...``.
+    ``process/predict/predict.process.md`` or ``src/example_plugin/...``.
     """
 
     resolved = resolve_templates(path_template, variables)

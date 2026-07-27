@@ -58,7 +58,12 @@ BANNED_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "credential material",
         re.compile(
-            r"(?:gh[opsu]_[A-Za-z0-9]{20,}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)"
+            r"(?:"
+            r"gh[opsu]_[A-Za-z0-9]{20,}|"
+            r"AKIA[0-9A-Z]{16}|"
+            r"xox[bpras]-[A-Za-z0-9-]+|"
+            r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"
+            r")"
         ),
     ),
     (

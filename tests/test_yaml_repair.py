@@ -119,7 +119,7 @@ class TestRepairFrontmatterFile:
         assert repaired is False
 
     def test_self_check_uses_ruamel_yaml_strictness(self, tmp_path: Path) -> None:
-        """Regression for internal-reference parser harmonization: the self-check
+        """Regression for the fix parser harmonization: the self-check
         must use the same parser as the downstream validator (ruamel.yaml).
 
         Verify by reading the source: an old version of repair_frontmatter_file
@@ -134,7 +134,7 @@ class TestRepairFrontmatterFile:
         # Pre-check + post-check should both go through ruamel via _ruamel_safe_load.
         assert "_ruamel_safe_load" in src, (
             "repair_frontmatter_file must use _ruamel_safe_load (not yaml.safe_load) "
-            "so its parser tracks the downstream validator's strictness. See internal-reference."
+            "so its parser tracks the downstream validator's strictness. See the fix."
         )
         # The bare PyYAML self-check is gone — both call sites must use ruamel.
         assert "yaml.safe_load" not in src, (

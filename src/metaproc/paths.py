@@ -19,7 +19,7 @@ from metaproc.io import artifact_exists, from_yaml_string, resolve_existing_arti
 ITEM_KEY_RE = re.compile(r"[A-Za-z0-9._\-]+")
 """Allowed characters for a resolved per-task item-key (used as a path component).
 
-A ``for_each.key`` template (e.g. ``"{{ticker}}"``) is rendered with the
+A ``for_each.key`` template (e.g. ``"{{item}}"``) is rendered with the
 loop variables; the resulting string must fully match this pattern so it
 is safe to use as a path component on every supported filesystem.
 """

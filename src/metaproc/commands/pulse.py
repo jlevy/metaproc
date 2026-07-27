@@ -16,7 +16,7 @@ The ``conc``/``ceil``/``pressure`` fields are populated when ``runpool-status.ya
 includes the matching ``current_concurrency`` / ``controller.memory_ceiling`` /
 ``pressure`` blocks. They are the canary the supervising agent uses to spot
 the classic conc=1 clamp regression without grepping ``health.jsonl``
-(operator pushback during the 2026-05-25 Wave 2 batch, internal issue).
+(operator pushback during the 2026-05-25 Wave 2 batch).
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ class PulseMetrics:
     queue: int
     recent_halts: int
     auth_dist: dict[str, int] = field(default_factory=dict)
-    # Concurrency/pressure fields (internal issue — operator observability).
+    # Concurrency and pressure fields provide operator observability.
     # All ``None`` when ``runpool-status.yaml`` is missing the corresponding
     # field, in which case the segment is omitted from the rendered line.
     current_concurrency: int | None = None
@@ -238,8 +238,7 @@ def pulse(
             "Treat run_dir as a glob (or parent dir) matching multiple sibling-run"
             " directories. Prints one PULSE line per match, prefixed with the lane"
             " name (last path segment of the run dir). For a 9-lane batch the"
-            " operator gets the full status in one command instead of 9× pulse"
-            " (internal issue Part B)."
+            " operator gets the full status in one command instead of 9× pulse."
         ),
     ),
 ) -> None:

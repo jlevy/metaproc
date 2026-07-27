@@ -34,7 +34,7 @@ forever.
 - **Extend metaproc for run-state views.** A new way to see run state is a `metaproc`
   subcommand, not a script that hand-parses run-dir files.
 - **Small focused helpers are fine.** Single-purpose, non-orchestration helpers
-  (calendar pull, ticker classification, template rendering) are healthy.
+  (calendar pull, item classification, template rendering) are healthy.
   A multi-step helper that calls metaproc in sequence is a process spec in disguise.
 
 ## Antipatterns
@@ -44,8 +44,8 @@ forever.
 2. **Shell script that hand-parses run-dir state** (lease files, `process-events.jsonl`,
    `runpool-events.jsonl`) — use `metaproc pulse` and the status commands.
 3. **Per-project Python “setup” helper with multiple subcommands wrapping metaproc** —
-   write the process spec or the missing metaproc subcommand instead (the EIA kickoff
-   skill deliberately ships no `setup_batch.py`).
+   write the process spec or the missing metaproc subcommand instead (the large workflow
+   kickoff skill deliberately ships no `setup_batch.py`).
 4. **Dual paths during a refactor** — switch every call site; do not keep the old
    wrapper alongside the native path beyond the parity window.
 5. **Conditional process steps gated by a top-level flag** — express multiplicity and
@@ -76,7 +76,7 @@ The contract:
 | HTTP 401 / 403, `Expected OAuth2`, `invalid_grant`, `unauthorized`, expired or missing credential | `AuthFailureClassification(status="expired", severity=FailureSeverity.ABORT, reason="<adapter>-<specific>")` | Deterministic; retrying with the same bad credential will keep failing. |
 | Binary not on PATH, version too old, mandatory CLI flag rejected | `severity=FailureSeverity.ABORT, reason="<adapter>-binary-or-version"` | The CLI can’t run. |
 | Same validator rejection across N attempts, or `known_bugs.py` signature match | `severity=FailureSeverity.ABORT, known_bug_signature=<name>` | Software bug; retrying won’t fix it. |
-| Required env var missing AND strictness flag on (e.g. `EIA_REQUIRE_ALL_WEB_BUNDLE_KEYS=1`) | `severity=FailureSeverity.ABORT, reason="<adapter>-missing-env-<KEY>"` | Same deterministic class. |
+| Required env var missing under strict validation | `severity=FailureSeverity.ABORT, reason="<adapter>-missing-env-<KEY>"` | Same deterministic class. |
 | Terminal quota — “monthly usage limit reached” with no reset, billing failure, account suspended | `severity=FailureSeverity.ABORT, reason="<adapter>-terminal-quota"` | Operator must intervene. |
 | HTTP 429, `rate_limited`, `Overloaded`, Anthropic ratelimit headers | `severity=FailureSeverity.RETRY_AFTER_WAIT` (parse `cooling_until_ts` from reset headers/text when available) | Transient; will recover after the named window. |
 | HTTP 5xx, network errors, connection reset, stream-idle timeout (host suspend) | `severity=FailureSeverity.RETRY_NOW` | Transient; immediate retry usually works. |
@@ -87,13 +87,12 @@ Reference implementations: `src/metaproc/adapters/claude_code.py` and
 structure: check terminal signals first, then `known_bugs.py`, then soft rate-limit
 family, then return `unknown`.
 
-**Today’s gaps** (filed in
-[`plan-2026-05-25-metaproc-autopilot-and-step-budgets.md`](../../../TODO.md) § Phase 0):
+**Current adapter gaps:**
 
 - `src/metaproc/adapters/gemini.py` — no `classify_failure`. 401 from Vertex
   (`Expected OAuth2 access token` because `GOOGLE_API_KEY` conflicts with
   `GOOGLE_GENAI_USE_VERTEXAI=true`) falls through to generic retry.
-  The 2026-05-26 Tue AMC batch burned 88 retries on this.
+  Repeated retries can waste an entire attempt budget.
 - `src/metaproc/adapters/pi_cli.py` — same gap.
   `pi` routed through `--provider google-vertex` has the same auth surface and the same
   risk; classifier must cover the pi-side 401 / `Unauthenticated` patterns as well as

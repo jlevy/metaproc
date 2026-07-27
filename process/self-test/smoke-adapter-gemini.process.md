@@ -30,7 +30,7 @@ process:
     - id: live-probe
       mode: code
       command: >-
-        bash -lc "GEMINI_ORIG_HOME=\"$HOME\" && export HOME=\"$(mktemp -d -t gemini-smoke-XXXXXX)\" && trap 'rm -rf \"$HOME\"' EXIT && export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && export GOOGLE_APPLICATION_CREDENTIALS=\"${GOOGLE_APPLICATION_CREDENTIALS:-$GEMINI_ORIG_HOME/.config/gcloud/application_default_credentials.json}\" && cd \"$GEMINI_ORIG_HOME/wrk/example-org/consumer\" && SMOKE_MODEL=\"${GEMINI_SMOKE_MODEL:-gemini-3.1-pro-preview-customtools}\" && SMOKE_ASSERT=\"${GEMINI_SMOKE_ASSERT_MODEL:-$SMOKE_MODEL}\" && uv run metaproc auth-check --live --variant \"gemini-cli-$SMOKE_MODEL\" --assert-model \"$SMOKE_ASSERT\""
+        bash -lc "GEMINI_ORIG_HOME=\"$HOME\" && export HOME=\"$(mktemp -d -t gemini-smoke-XXXXXX)\" && trap 'rm -rf \"$HOME\"' EXIT && export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && export GOOGLE_APPLICATION_CREDENTIALS=\"${GOOGLE_APPLICATION_CREDENTIALS:-$GEMINI_ORIG_HOME/.config/gcloud/application_default_credentials.json}\" && cd \"${METAPROC_SMOKE_WORKDIR:-$GEMINI_ORIG_HOME}\" && SMOKE_MODEL=\"${GEMINI_SMOKE_MODEL:-gemini-3.1-pro-preview-customtools}\" && SMOKE_ASSERT=\"${GEMINI_SMOKE_ASSERT_MODEL:-$SMOKE_MODEL}\" && uv run metaproc auth-check --live --variant \"gemini-cli-$SMOKE_MODEL\" --assert-model \"$SMOKE_ASSERT\""
       description: >-
         Send a trivial "Respond with exactly: OK" prompt via
         `gemini -p` and assert the `model` field in the stream-json
@@ -54,7 +54,7 @@ process:
     - id: tool-probe
       mode: code
       command: >-
-        bash -lc "GEMINI_ORIG_HOME=\"$HOME\" && export HOME=\"$(mktemp -d -t gemini-smoke-XXXXXX)\" && trap 'rm -rf \"$HOME\"' EXIT && export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && export GOOGLE_APPLICATION_CREDENTIALS=\"${GOOGLE_APPLICATION_CREDENTIALS:-$GEMINI_ORIG_HOME/.config/gcloud/application_default_credentials.json}\" && cd \"$GEMINI_ORIG_HOME/wrk/example-org/consumer\" && SMOKE_MODEL=\"${GEMINI_SMOKE_MODEL:-gemini-3.1-pro-preview-customtools}\" && uv run metaproc probe-tool-use --harness gemini-cli --model \"$SMOKE_MODEL\""
+        bash -lc "GEMINI_ORIG_HOME=\"$HOME\" && export HOME=\"$(mktemp -d -t gemini-smoke-XXXXXX)\" && trap 'rm -rf \"$HOME\"' EXIT && export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && export GOOGLE_APPLICATION_CREDENTIALS=\"${GOOGLE_APPLICATION_CREDENTIALS:-$GEMINI_ORIG_HOME/.config/gcloud/application_default_credentials.json}\" && cd \"${METAPROC_SMOKE_WORKDIR:-$GEMINI_ORIG_HOME}\" && SMOKE_MODEL=\"${GEMINI_SMOKE_MODEL:-gemini-3.1-pro-preview-customtools}\" && uv run metaproc probe-tool-use --harness gemini-cli --model \"$SMOKE_MODEL\""
       description: >-
         Round-trip a single tool call (file read) through the model
         and verify both that a tool event was emitted and that the

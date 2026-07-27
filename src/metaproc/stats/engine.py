@@ -689,7 +689,9 @@ def _compute_api_stats(run_dir: Path) -> APIStats | None:
     error_count = 0
     items_with_logs = 0
 
-    # Walk variant/item directories looking for agent logs under <item>/.logs/
+    log_groups: list[list[Path]] = []
+
+    # V1 layout: walk variant/item directories looking under <item>/.logs/.
     for variant_dir in sorted(run_dir.iterdir()) if run_dir.is_dir() else []:
         if not variant_dir.is_dir() or variant_dir.name.startswith("."):
             continue
@@ -704,42 +706,52 @@ def _compute_api_stats(run_dir: Path) -> APIStats | None:
             log_files.extend(iter_artifact_paths(item_dir, "*.jsonl"))
             if not log_files:
                 continue
+            log_groups.append(sorted(set(log_files)))
 
-            items_with_logs += 1
-            for log_path in log_files:
-                try:
-                    first_lines: list[str] = []
-                    for _line_no, raw in iter_text_lines(log_path):
-                        s = raw.strip()
-                        if s:
-                            first_lines.append(s)
-                        if len(first_lines) >= 20:
-                            break
-                    adapter = detect_adapter(first_lines)
-                    parser = create_parser(adapter)
+    # V2 layout: group logs by task/item directory beneath .logs/tasks/.
+    v2_tasks_dir = run_dir / LOGS_DIR / "tasks"
+    v2_groups: dict[Path, list[Path]] = {}
+    if v2_tasks_dir.is_dir():
+        for log_path in iter_artifact_paths(v2_tasks_dir, "**/*.jsonl"):
+            v2_groups.setdefault(log_path.parent, []).append(log_path)
+    log_groups.extend(v2_groups.values())
 
-                    for _line_no, raw in iter_text_lines(log_path):
-                        s = raw.strip()
-                        if not s or len(s) > 256 * 1024:
-                            continue
-                        for ev in parser.parse_line(s):
-                            if ev.kind == "tool_call":
-                                total_calls += 1
-                            if ev.kind == "init":
-                                raw_dict = ev.raw if isinstance(ev.raw, dict) else {}
-                                model = raw_dict.get("model")
-                                if model and isinstance(model, str):
-                                    models[model] = models.get(model, 0) + 1
-                            if ev.kind == "result":
-                                if ev.cost_usd is not None:
-                                    total_cost += ev.cost_usd
-                                if ev.is_error:
-                                    error_count += 1
-                    for ev in parser.flush():
-                        if ev.kind == "result" and ev.cost_usd is not None:
-                            total_cost += ev.cost_usd
-                except (OSError, ValueError) as exc:
-                    log.warning("Skipping malformed API log %s: %s", log_path, exc)
+    for log_files in log_groups:
+        items_with_logs += 1
+        for log_path in log_files:
+            try:
+                first_lines: list[str] = []
+                for _line_no, raw in iter_text_lines(log_path):
+                    s = raw.strip()
+                    if s:
+                        first_lines.append(s)
+                    if len(first_lines) >= 20:
+                        break
+                adapter = detect_adapter(first_lines)
+                parser = create_parser(adapter)
+
+                for _line_no, raw in iter_text_lines(log_path):
+                    s = raw.strip()
+                    if not s or len(s) > 256 * 1024:
+                        continue
+                    for ev in parser.parse_line(s):
+                        if ev.kind == "tool_call":
+                            total_calls += 1
+                        if ev.kind == "init":
+                            raw_dict = ev.raw if isinstance(ev.raw, dict) else {}
+                            model = raw_dict.get("model")
+                            if model and isinstance(model, str):
+                                models[model] = models.get(model, 0) + 1
+                        if ev.kind == "result":
+                            if ev.cost_usd is not None:
+                                total_cost += ev.cost_usd
+                            if ev.is_error:
+                                error_count += 1
+                for ev in parser.flush():
+                    if ev.kind == "result" and ev.cost_usd is not None:
+                        total_cost += ev.cost_usd
+            except (OSError, ValueError) as exc:
+                log.warning("Skipping malformed API log %s: %s", log_path, exc)
 
     if items_with_logs == 0:
         return None

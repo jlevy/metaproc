@@ -7,8 +7,8 @@ a slot, and assert the per-lease invariants — token in scope_env, no
 ``.credentials.json`` written, scrub_env contents reflect the V-A
 variant.
 
-Spec: ``docs/project/specs/active/plan-2026-04-28-claude-code-auth-vehicle-a-pool-redesign.md``
-§Phase 11 Band A. Bead: ``internal-reference``.
+Spec: ``docs/arch/arch-metaproc-core.md``
+§Phase 11 Band A.
 """
 
 from __future__ import annotations

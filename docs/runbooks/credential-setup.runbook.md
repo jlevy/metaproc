@@ -42,9 +42,8 @@ is the pay-per-token sidecar for non-subscription dispatch.
 Static long-lived OAuth token (~1 year per Anthropic).
 The token is the credential — slot bootstrap injects it via env var; no
 `.credentials.json` is materialized into the slot.
-Eliminates the snapshot-staleness failure mode that affected Vehicle B fan-out (see
-[`docs/project/research/research-2026-04-19-claude-code-cli-personal-plan-auth.md`](../arch/arch-authentication.md)
-for the empirical history).
+Eliminates the snapshot-staleness failure mode that affected Vehicle B fan-out; see
+[the authentication architecture](../arch/arch-authentication.md) for the design.
 
 **Per-account, once per token rotation (~yearly):**
 
@@ -180,8 +179,7 @@ if all are present, so a stray inherited value bypasses the pool and bills per-t
 | Backwards compat with pre-pool deploys | Vehicle B via legacy `claude-auth` push |
 | Pay-per-token (subscription not in use) | `ANTHROPIC_API_KEY` |
 
-Spec:
-[`docs/project/specs/archive/plan-2026-04-28-claude-code-auth-vehicle-a-pool-redesign.md`](../arch/arch-authentication.md).
+Architecture: [arch-authentication.md](../arch/arch-authentication.md).
 Operator runbook for full dispatch:
 [`metaproc/docs/runbooks/cloud-dispatch.runbook.md`](cloud-dispatch.runbook.md) → *GCP
 Batch (Personal Plan)*.
@@ -285,9 +283,7 @@ The adapter’s `bootstrap(home)` hook reads `CODEX_CREDS_JSON`, validates that
 `tokens.auth_mode == "chatgpt"` (rejecting `apikey` blobs — those should arrive as
 `OPENAI_API_KEY` directly), writes `{home}/.codex/auth.json` (mode 0600, parent 0700),
 and pops the env var so it does not leak to child processes.
-See `docs/project/specs/active/plan-2026-04-23-codex-adapter-and-openai-pi-models.md`
-for the design context and `docs/project/research/research-2026-04-23-codex-cli-auth.md`
-for the auth research brief.
+See [arch-authentication.md](../arch/arch-authentication.md) for the design context.
 
 ### Gemini CLI (`gemini-cli`)
 
@@ -352,8 +348,8 @@ These are the current GCP resources used by metaproc cloud execution.
 | --- | --- |
 | GCP project | `exampletool` |
 | Container image | `us-central1-docker.pkg.dev/exampletool/metaproc/agent:latest` |
-| Filestore | `10.33.178.202:/metaproc_runs` (1 TB) |
-| Service account | `dev-shared-2@exampletool` |
+| Filestore | `<filestore-ip>:/metaproc_runs` (1 TB) |
+| Service account | `<worker-sa>@exampletool` |
 
 Auth chain: `.env` contains `GCP_CREDENTIALS_BASE64` (see Vertex AI MaaS above).
 metaproc’s CLI loads `.env` at startup (`cli.py:_load_dotenv`), which feeds into
@@ -414,7 +410,7 @@ same project):
 ```bash
 PROJECT=exampletool
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')
-BATCH_SA=dev-shared-2@${PROJECT}.iam.gserviceaccount.com
+BATCH_SA=<worker-sa>@${PROJECT}.iam.gserviceaccount.com
 CLOUDBUILD_SA=${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com
 
 for SA in "$BATCH_SA" "$CLOUDBUILD_SA"; do

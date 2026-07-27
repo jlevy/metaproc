@@ -14,8 +14,7 @@ def test_wheel_contains_one_copy_of_every_plugin_asset(tmp_path: Path) -> None:
     result = subprocess.run(
         [
             "uv",
-            "--config-file",
-            str(repo_root / "uv.toml"),
+            "--no-config",
             "build",
             "--package",
             "metaproc",

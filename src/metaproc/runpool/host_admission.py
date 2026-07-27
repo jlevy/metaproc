@@ -27,6 +27,7 @@ from strif import atomic_output_file
 log = logging.getLogger(__name__)
 
 DEFAULT_HOST_ADMISSION_NAMESPACE = "local-agents"
+DEFAULT_HOST_ADMISSION_TIMEOUT_S = 300.0
 EMPTY_SLOT_GRACE_S = 30.0
 UNRECORDED_LEASE_GRACE_S = 120.0
 PROCESS_CREATE_TIME_TOLERANCE_S = 1.0
@@ -102,15 +103,19 @@ class HostAdmissionGate:
         namespace: str = DEFAULT_HOST_ADMISSION_NAMESPACE,
         limit: int,
         poll_interval_s: float = 1.0,
+        acquire_timeout_s: float | None = DEFAULT_HOST_ADMISSION_TIMEOUT_S,
     ) -> None:
         if limit <= 0:
             raise ValueError("host admission limit must be > 0")
         if poll_interval_s <= 0:
             raise ValueError("host admission poll interval must be > 0")
+        if acquire_timeout_s is not None and acquire_timeout_s <= 0:
+            raise ValueError("host admission timeout must be > 0 or None")
         self.root_dir: Path = root_dir or Path.home() / ".metaproc" / "runpool" / "host-slots"
         self.namespace: str = _safe_segment(namespace)
         self.limit: int = limit
         self.poll_interval_s: float = poll_interval_s
+        self.acquire_timeout_s: float | None = acquire_timeout_s
         self.namespace_dir: Path = self.root_dir / self.namespace
 
     async def acquire(
@@ -120,8 +125,16 @@ class HostAdmissionGate:
         pool_id: str,
         metadata: dict[str, object] | None = None,
     ) -> HostAdmissionLease:
-        """Wait until a host slot is available and return its lease."""
+        """Wait until a host slot is available and return its lease.
+
+        Raises :class:`TimeoutError` after ``acquire_timeout_s`` so a
+        permanently occupied or corrupted namespace cannot stall a run forever.
+        Pass ``None`` explicitly to retain unbounded waiting.
+        """
         self.namespace_dir.mkdir(parents=True, exist_ok=True)
+        deadline = (
+            None if self.acquire_timeout_s is None else time.monotonic() + self.acquire_timeout_s
+        )
         while True:
             for slot_id in range(self.limit):
                 lease = self._try_acquire_slot(
@@ -132,7 +145,17 @@ class HostAdmissionGate:
                 )
                 if lease is not None:
                     return lease
-            await asyncio.sleep(self.poll_interval_s)
+            if deadline is not None:
+                remaining_s = deadline - time.monotonic()
+                if remaining_s <= 0:
+                    raise TimeoutError(
+                        "timed out waiting for a host admission slot "
+                        f"in namespace {self.namespace!r} after "
+                        f"{self.acquire_timeout_s:g}s"
+                    )
+                await asyncio.sleep(min(self.poll_interval_s, remaining_s))
+            else:
+                await asyncio.sleep(self.poll_interval_s)
 
     def release(self, lease: HostAdmissionLease) -> None:
         """Release *lease* if this process still owns its token."""

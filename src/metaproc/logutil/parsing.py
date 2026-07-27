@@ -1238,8 +1238,7 @@ class CodexLogParser:
     """Parser for codex-cli 0.124.0 JSONL output.
 
     codex-cli 0.124.0 uses a flat top-level ``type`` envelope with these
-    events (see docs/project/specs/active/plan-2026-04-23-codex-adapter-
-    and-openai-pi-models.md): ``thread.started``, ``turn.started``,
+    events: ``thread.started``, ``turn.started``,
     ``item.started``/``item.updated``/``item.completed`` (each with an
     ``item.item_type`` of ``agent_message`` / ``reasoning`` /
     ``command_execution`` / ``file_change`` / ``mcp_tool_call`` /

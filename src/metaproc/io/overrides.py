@@ -73,7 +73,7 @@ def _write_overrides(run_dir: Path, doc: OverridesDocument) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     data = doc.model_dump(by_alias=True, exclude_none=True)
     with atomic_output_file(path) as tmp:
-        Path(tmp).write_text(to_yaml_string(data))
+        Path(tmp).write_text(to_yaml_string(data), encoding="utf-8")
 
 
 def upsert_override(

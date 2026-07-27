@@ -1,7 +1,7 @@
 """Tests for SlotCoordinator vehicle-aware materialization (Phase 3).
 
-Spec: docs/project/specs/active/plan-2026-04-28-claude-code-auth-vehicle-a-pool-redesign.md
-Bead: internal-reference (Phase 3 of epic internal-reference).
+Spec: docs/arch/arch-metaproc-core.md
+Regression coverage (Phase 3 of the original design).
 
 Verifies that ``SlotCoordinator.acquire_slot`` reads
 ``entry.state.vehicle`` from the selected pool entry and threads it

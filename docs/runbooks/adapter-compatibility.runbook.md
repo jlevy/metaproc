@@ -31,7 +31,7 @@ Operational dispatch checklist lives in
 `src/metaproc/data/pi-models.default.json`. Routing through `openai-completions` causes
 every second-turn tool call to drop `extra_content.google.thought_signature` on the way
 out, and Vertex returns 400. This is the failure mode that retry-stormed the Gemini r5
-100-ticker baselines for 100 events each.
+100-item baselines for 100 events each.
 
 ## 2. Vertex multi-turn tool probe
 
@@ -48,19 +48,19 @@ curl -sS -X POST "$BASE/chat/completions" \
   -d '{"model":"google/gemini-3-flash-preview","messages":[
     {"role":"user","content":"Look up AAPL fundamentals"},
     {"role":"assistant","content":null,"tool_calls":[
-       {"id":"c1","type":"function","function":{"name":"get_fund","arguments":"{\"ticker\":\"AAPL\"}"}}]},
+       {"id":"c1","type":"function","function":{"name":"get_fund","arguments":"{\"item\":\"AAPL\"}"}}]},
     {"role":"tool","tool_call_id":"c1","content":"{\"price\":237.59}"}],
    "max_tokens":80,
    "tools":[{"type":"function","function":{"name":"get_fund",
-      "parameters":{"type":"object","properties":{"ticker":{"type":"string"}},"required":["ticker"]}}}]}'
+      "parameters":{"type":"object","properties":{"item":{"type":"string"}},"required":["item"]}}}]}'
 ```
 
 Run the same payload against every entry in `google-vertex` and `vertex-maas` providers
-before a 100-ticker dispatch.
+before a 100-item dispatch.
 Any 400/5xx cancels dispatch.
 
-Folds into `metaproc auth-check --live --catalog-matrix` (bead `internal-reference`);
-use the manual reproducer above until that lands.
+This should eventually fold into `metaproc auth-check --live --catalog-matrix`; use the
+manual reproducer above until that lands.
 
 ## 3. ADC on GCP Batch (no apiKey path)
 
@@ -212,7 +212,7 @@ Last verified: 2026-05-25 — all 9 cells PASS (full matrix wall clock: 2m).
 
 Cross-harness “deep” smoke that exercises every shipped execution profile via
 `metaproc probe-tool-use --execution-profile <name>`. Proves operator
-`--execution-profiles <name>` invocations from EIA dispatch (or ad-hoc
+`--execution-profiles <name>` invocations from large workflow dispatch (or ad-hoc
 `metaproc run-process`) actually work end-to-end including tool use.
 Lives at
 [`process/self-test/smoke-execution-profiles.process.md`](../../process/self-test/smoke-execution-profiles.process.md).

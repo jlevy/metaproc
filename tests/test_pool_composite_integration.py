@@ -6,7 +6,7 @@ composite-child layout, then invoking the four operator-facing
 ``metaproc pool`` subcommands (``status``, ``events``, ``health``,
 ``rollup``) against the parent run dir.
 
-Layout produced (mirrors EIA dispatch + analysis-research):
+Layout produced (mirrors a composite dispatch with child runs):
 
     <parent>/.state/run-config.yaml         (V2 marker)
     <parent>/analysis-research/.state/run-config.yaml
@@ -17,7 +17,7 @@ Layout produced (mirrors EIA dispatch + analysis-research):
 The two per-step pools are real ``RunPool`` instances submitting short
 ``echo`` subprocesses, so the status / events / health files exposed to
 the CLI are the same shape produced in production. Closes the
-``internal-reference`` integration coverage gap.
+the fix integration coverage gap.
 """
 
 from __future__ import annotations

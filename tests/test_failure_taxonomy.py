@@ -223,7 +223,7 @@ class TestClaudeClassifierTaxonomy:
         # and the next acquire picks the alt. ``mark_expired`` from a
         # sibling teardown also flips the label ineligible for new
         # acquisitions in parallel. Earlier ``ABORT`` semantics burned
-        # the cohort with retry_count=0 (the 2026-04-27 BMO/AMC failure
+        # the cohort with retry_count=0 (the multi-label failure
         # mode); fixed so a single dispatch can recover end-to-end.
         debug_text = "[ERROR] API error (attempt 1/11): 401 authentication_error\n"
         r = self.adapter.classify_failure(None, debug_text, None)

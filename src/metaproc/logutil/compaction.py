@@ -263,7 +263,7 @@ def compact_log(path: Path, *, keep_original: bool = False) -> CompactionResult:
             compacted_lines=0,
             already_compact=True,
         )
-    raw_lines = path.read_text().splitlines(keepends=True)
+    raw_lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
     original_lines = len(raw_lines)
 
     # Detect if already compacted.
@@ -318,7 +318,7 @@ def compact_log(path: Path, *, keep_original: bool = False) -> CompactionResult:
     # Atomic write: temp -> backup original -> move temp into place.
     backup_suffix = ".bak"
     with atomic_output_file(path, backup_suffix=backup_suffix) as tmp_path:
-        Path(tmp_path).write_text(compacted_content)
+        Path(tmp_path).write_text(compacted_content, encoding="utf-8")
 
     # Remove backup unless asked to keep it.
     backup_path = path.with_suffix(path.suffix + backup_suffix)

@@ -18,8 +18,8 @@ from metaproc.models.usage import UsageReport
 
 class TestParseSchemaToken:
     def test_valid_token(self) -> None:
-        result = parse_schema_token("example_workflow:RecordDocument/0.1")
-        assert result == SchemaToken("example_workflow", "RecordDocument", "0.1")
+        result = parse_schema_token("example_plugin:RecordDocument/0.1")
+        assert result == SchemaToken("example_plugin", "RecordDocument", "0.1")
 
     def test_metaproc_namespace(self) -> None:
         result = parse_schema_token("metaproc:UsageEnvelope/0.1")
@@ -74,7 +74,7 @@ class TestRoundTrip:
         "token",
         [
             "metaproc:UsageEnvelope/0.1",
-            "example_workflow:RecordDocument/0.1",
+            "example_plugin:RecordDocument/0.1",
             "metaproc:QaReport/1.0rc1",
         ],
     )
@@ -106,7 +106,7 @@ class TestEnvelopeSchemaEnforcement:
         return results
 
     # Envelope keys owned by metaproc core (not plugin-registered).
-    # Plugin envelopes (example_workflow) will gain schema_ in Phase 2.
+    # Plugin envelopes (example_plugin) will gain schema_ in Phase 2.
     _METAPROC_ENVELOPE_KEYS = {"plan", "process", "progress", "qa", "qa_summary", "usage"}
 
     def test_all_metaproc_envelope_inner_models_have_schema(self) -> None:

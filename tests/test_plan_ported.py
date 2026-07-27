@@ -1,4 +1,4 @@
-"""Tests for Plan data model and build_plan() — ported from example_workflow.
+"""Tests for Plan data model and build_plan() — ported from example_plugin.
 
 Validates the Plan/ResolvedStep/FanOut models and the build_plan() function.
 CLI tests and domain-specific cleanup tests are skipped.

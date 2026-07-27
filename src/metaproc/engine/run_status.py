@@ -123,9 +123,8 @@ class RunStatus(BaseModel):
     # parent run-process / composite engine still holds its lease.
     # ``is_active`` is the disjunction of these two plus pending-retry
     # state; exposing the inputs lets callers distinguish "items
-    # running" from "between steps" from "fully terminal" — the
-    # situation `internal issue` flagged where the variant table reads
-    # 100 percent but the next step has been queued.
+    # running" from "between steps" from "fully terminal", including when
+    # the variant table reads 100 percent but the next step has been queued.
     items_running: bool = False
     orchestrator_alive: bool = False
 
@@ -724,7 +723,7 @@ def _scan_fan_out_step(step_state_root: Path, expected_total: int) -> NodeProgre
         record = read_status_at(item_state)
         if record is not None:
             all_statuses.append(record)
-    counts = compute_progress(all_statuses, total=expected_total or None)
+    counts = compute_progress(all_statuses, total=expected_total)
     return NodeProgress(
         state=_derive_fan_out_state(counts),
         completed=counts.completed + counts.cached,

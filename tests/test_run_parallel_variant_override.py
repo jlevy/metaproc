@@ -1,4 +1,4 @@
-"""Tests for run-parallel's variant_flag → adapter_override coercion (internal-reference).
+"""Tests for run-parallel's variant_flag → adapter_override coercion.
 
 The cloud worker leg of a fan-out step like ``mine-adhoc`` receives
 ``--variant pi-cli-glm-5-maas`` because the engine derives that
@@ -72,7 +72,7 @@ class TestVariantOverrideResolution:
         # `--variant pi-cli-glm-5-maas` is the synthetic name the engine
         # derives for a mine-adhoc step. It's neither in defaults.adapters
         # nor ADAPTER_REGISTRY; do NOT coerce — let step spec drive
-        # adapter resolution. This is internal-reference's failure mode.
+        # adapter resolution. This is the failure mode.
         assert _resolve_override("pi-cli-glm-5-maas", None, stub_spec) is None
 
     def test_empty_variant_returns_none(self, stub_spec):

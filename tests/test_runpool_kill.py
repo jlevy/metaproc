@@ -279,8 +279,8 @@ def test_kill_pool_variant_filter(tmp_path: Path) -> None:
 def test_reap_subprocess_tree_kills_descendants() -> None:
     """reap_subprocess_tree() SIGKILLs all descendants recursively.
 
-    Regression test for bead internal-reference + logbook
-    arb-2026-05-28-thu-ensemble § L5: when orchestrator is SIGTERM'd, adapter
+    Regression test for this regression + logbook
+    Regression coverage: when the orchestrator is SIGTERM'd, adapter
     CLI subprocess children must not survive as orphans.
     """
 

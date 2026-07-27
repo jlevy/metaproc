@@ -35,7 +35,7 @@ class TestWriteRunConfig:
         config_path = _write_run_config(
             run_dir,
             process_name="mine",
-            process_path=Path("example_workflow/process/mine/mine.process.md"),
+            process_path=Path("example_plugin/process/mine/mine.process.md"),
             run_id="run-1",
             variables={"RUN_ID": "run-1", "DATASET": "tech-500"},
             backend="gcp-worker",
@@ -287,7 +287,7 @@ class TestValidateRunConfig:
         _validate_run_config(config_path, process_name="mine", run_dir=tmp_path)
 
 
-# ── Phase 3: auth + concurrency persistence (internal-reference) ──
+# ── Phase 3: auth + concurrency persistence ──
 
 
 from metaproc.dispatch.auth_pool_flags import AuthPoolFlags  # noqa: E402

@@ -1,25 +1,14 @@
-"""metaproc auth — generalized labeled credential pool CLI.
+"""Labeled credential-pool commands.
 
-plan-2026-04-21-auth-credential-pool.md §Components 1.
-
-Replaces (additively, through P2.E) the single-secret ``metaproc
-claude-auth`` subcommand. Subcommands operate over the
-:class:`metaproc.dispatch.credential_pool.PoolBackend` protocol so the
-same Typer surface drives both the GCP Secret Manager backend (Phase
-1) and the local filesystem backend (Phase 2b).
-
-Phase 1 ships: push / list / enable / disable / rotate. ``check``
-lands in P2.2. ``usage`` lands behind an adapter that implements
-``query_quota_usage`` (P0.4 follow-up). ``prune`` lands in P3.1.
-
-Never-print-payload invariant applies to every subcommand here: only
-labels, timestamps, and fingerprints leave this module via stdout.
+The same Typer surface drives the GCP Secret Manager and local-filesystem
+backends through :class:`metaproc.dispatch.credential_pool.PoolBackend`.
+Credential payloads are never printed; only labels, timestamps, and fingerprints leave
+this module through stdout.
 """
 
 from __future__ import annotations
 
 import getpass
-import json
 import json as _json
 import logging
 import os
@@ -614,7 +603,7 @@ def push_cmd(
             "static CLAUDE_CODE_OAUTH_TOKEN injected via env var, no .credentials.json "
             "materialized) or 'login-credentials' (Vehicle B — refresh-rotating "
             "OAuth session snapshot, default for back-compat). See "
-            "docs/project/specs/active/plan-2026-04-28-claude-code-auth-vehicle-a-pool-redesign.md."
+            "docs/arch/arch-metaproc-core.md."
         ),
     ),
     token_file: Path | None = typer.Option(
@@ -1700,7 +1689,7 @@ def status_cmd(
     out.data(render_text(report, use_color=use_color))
 
 
-# ── Phase 2 (internal issue): aggregator-backed observability commands ──
+# ── Phase 2: aggregator-backed observability commands ──
 
 
 @auth_app.command("usage")
@@ -1733,8 +1722,7 @@ def usage_cmd(
     - ``auth_lease_acquired`` events (schema-v2 join keys).
     - Per-session JSONL ``rate_limit_event`` records (5h / 7d
       utilization + resetsAt).
-    - The dispatch's run-config snapshot (when run-config v2 has
-      landed; pending internal issue).
+    - The dispatch's run-config snapshot, when available.
 
     Spec: plan-2026-05-03-auth-observability-and-load-balancing.md
     § metaproc auth usage.
@@ -1747,7 +1735,7 @@ def usage_cmd(
 
     usage_by_label = aggregate_label_usage_for_run(run_dir, backend=pool_backend, adapter=adapter)
 
-    # Load run-config.yaml for the snapshot block. Phase 3 (internal issue)
+    # Load run-config.yaml for the snapshot block. Phase 3
     # added the auth: + concurrency: blocks — we render those plus any
     # legacy flat fields so older dispatches still surface something.
     config: dict[str, Any] | None = None
@@ -2065,8 +2053,8 @@ def preflight_cmd(
     Wraps :func:`metaproc.dispatch.preflight.summarize_headroom` /
     :func:`check_step_preflight` so operators can ask "can I dispatch
     N items right now?" before kicking off the run. Uses the synthesized
-    QuotaUsage that lands via Phase 3 internal issue
-    (claude_code.query_quota_usage now derives utilization from recent
+    ``QuotaUsage`` synthesized by
+    ``claude_code.query_quota_usage`` from recent
     rate_limit_event records under $RUNS_DIR).
 
     Aligns with the future-command reference in
@@ -2114,7 +2102,7 @@ def preflight_cmd(
 def env_cmd(
     process: Path = typer.Argument(
         ...,
-        help="Process spec path (e.g. workflow_package/process/predict/predict.process.md).",
+        help="Process spec path (e.g. example_plugin/process/predict/predict.process.md).",
     ),
     posture: str = typer.Option(
         "refuse",
@@ -2148,8 +2136,8 @@ def env_cmd(
     - ``refuse``: returns ``refuse`` when any conflict is found; exit 1 so the
       caller can use it as a shell-script gate.
 
-    Plan-2026-05-03 § Phase 5 bead internal issue. Promotes the dispatch-start
-    sweep (bead internal issue) to a standalone operator tool.
+    Plan-2026-05-03 § Phase 5 this regression. Promotes the dispatch-start
+    sweep (this regression) to a standalone operator tool.
     """
     out = get_output()
 
@@ -2195,7 +2183,7 @@ def env_cmd(
                 for adapter, v in per_adapter_verdicts.items()
             },
         }
-        out.data(json.dumps(report, indent=2, default=str))
+        out.data(_json.dumps(report, indent=2, default=str))
         if overall == "refuse":
             raise typer.Exit(code=1)
         return

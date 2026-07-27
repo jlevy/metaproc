@@ -25,7 +25,7 @@ mirroring the `tests/` + `test_*.py` pattern.
 | Suffix | Meaning | Example |
 | --- | --- | --- |
 | `.process.md` | Canonical process-node definition (typed spec) | `mine.process.md` |
-| `.runbook.md` | Agent execution instructions for one step | `predict-ticker.runbook.md` |
+| `.runbook.md` | Agent execution instructions for one step | `predict-item.runbook.md` |
 | `.template.md` | Template (`{{ }}` placeholders) filled to produce an artifact; rigor declared by `template.status` — see § Template files and format status | `prediction.template.md` |
 | `.plan.yaml` | Resolved execution plan emitted by `metaproc plan` | `predict.plan.yaml` |
 | `.draft.md` | Non-canonical exploration or work in progress | `overview.draft.md` |
@@ -46,7 +46,7 @@ Use dot-separated suffixes such as `name.template.md`, not `name-template.md`.
   `changelog.md`, `TODO.md`). Only `README.md` and `TODO.md` are ALL-CAPS; every other
   doc follows kebab-case (see §ALL-CAPS filename rule).
 - **Dot-separated suffixes** compose with kebab-case: `retrieval-kb.generated.yaml`,
-  `predict-ticker.runbook.md`, `prediction.template.md`.
+  `predict-item.runbook.md`, `prediction.template.md`.
 
 ## Process Structure
 
@@ -235,9 +235,8 @@ Pure-YAML files (no body) are appropriate when there’s no human prose to bundl
 machine-emitted runtime state (`runpool-status.yaml`, `dispatch-manifest.yaml`) or
 schema sidecars produced by `softschema.compile_model`.
 
-See [`docs/general/guidelines/development-rules.md`](../AGENTS.md) and
-[`docs/general/guidelines/softschema-guidelines.md`](conventions.md#file-format-policy)
-for the full rule and examples.
+See [AGENTS.md](../AGENTS.md) and the
+[File Format Policy](conventions.md#file-format-policy) for the full rule and examples.
 
 ### Envelope convention
 
@@ -308,15 +307,15 @@ Examples:
 - `metaproc:ProcessSpec/0.1`
 - `metaproc:UsageReport/0.2`
 - `metaproc:Plan/0.4`
-- `example_workflow:ScoreboardV2/0.2`
-- `example_workflow:JudgeVerdictsV2/0.2`
-- `example_workflow:RecordDocument/0.1`
+- `example_plugin:ScoreboardV2/0.2`
+- `example_plugin:JudgeVerdictsV2/0.2`
+- `example_plugin:RecordDocument/0.1`
 
 Components:
 
 | Part | Rule |
 | --- | --- |
-| `module` | Broad package name (`metaproc`, `example_workflow`), not a nested sub-module |
+| `module` | Broad package name (`metaproc`, `example_plugin`), not a nested sub-module |
 | `ClassName` | PascalCase, matches the **inner** Pydantic model’s class name exactly (not the envelope — see §Pydantic model conventions) |
 | `version` | Semver-ish, opaque to the framework (e.g. `0.1`, `0.2beta`) |
 
@@ -381,7 +380,7 @@ See `arch-metaproc-core.md` §11.6 for the full rationale.
 
 ### Template namespaces
 
-- Template expressions use double curly braces, such as `{{run.id}}` or `{{ticker}}`.
+- Template expressions use double curly braces, such as `{{run.id}}` or `{{item}}`.
 - Framework-owned names live only under reserved dotted namespaces: `run.*` and
   `step.*`.
 - Domain-authored names stay bare lowercase with no prefix: process params, composite
@@ -408,10 +407,10 @@ The framework-owned template surface is closed and intentionally small:
 | `{{step.prompt_paths}}` | List-valued prompt-file set for the current step |
 | `{{step.outputs_list}}` | Comma-joined resolved output paths for the current step |
 
-Names such as `date`, `run_mode`, `ticker`, `sector`, and `earnings_date` are not
-framework built-ins.
-They are ordinary domain bindings and should be declared explicitly where they enter
-scope.
+Names such as `date`, `run_mode`, `item`, `category`, and `event_date` are not framework
+built-ins.
+They are ordinary domain bindings and should be declared explicitly where they
+enter scope.
 
 ### Template files and format status
 
@@ -437,7 +436,7 @@ without renaming the file:
 ```yaml
 template:
   status: validated
-  vars: [date, slug, ticker_table]   # required when status is `validated`
+  vars: [date, slug, item_table]   # required when status is `validated`
 ```
 
 A `validated` template may be enforced by a softschema binding so its declared
@@ -468,7 +467,7 @@ New code-rendered templates should be `validated`; pre-existing agent-filled for
 - Domain params and fan-out item fields share the same bare identifier namespace.
 - A name that would appear in both process scope and item scope in the same resolution
   stack is invalid and must be renamed before execution.
-- Avoid case-only distinctions such as `ticker` and `TICKER` in the same contract.
+- Avoid case-only distinctions such as `item` and `ITEM` in the same contract.
 
 ## CLI Documentation Rules
 
@@ -538,12 +537,12 @@ lives where the runs live, not in `/tmp/`.
 
 ## Observability
 
-Three canonical artifacts carry tool-use observability for every mining run.
+Three canonical artifacts carry tool-use observability for every workflow run.
 Full contract in [`arch-metaproc-core.md §14.7`](arch/arch-metaproc-core.md).
 
 | Artifact | Scope | Owner | Role |
 | --- | --- | --- | --- |
-| `<event>/.logs/tools/arena/invocations.jsonl` | Per ticker-event | arena wrapper (example_workflow) | Config stub (`type: config`, `mode`, `backtest_date`, `native_web_search`) + one line per tool invocation |
+| `<item>/.logs/tools/<tool-name>/invocations.jsonl` | Per workflow item | workflow plugin | Optional config record plus one line per tool invocation |
 | `<variant>/.logs/*.jsonl` | Per pi-cli session | pi-cli | `tool_execution_start` / `tool_execution_end` / `rate_limit_event` records |
 | `<run>/usage.md` frontmatter `tool_profiles` block | Per run | metaproc `write_usage_report` | Aggregated per-variant `ToolRunProfile`, including cutoff-discipline and native web-search signals |
 

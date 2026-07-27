@@ -68,8 +68,8 @@ def materialize_execution_lanes(
         # silently would mislead operators: trace spans would group cleanly
         # by lane_id, but every lane would actually run with the same
         # adapter config. Refuse here and let it light up when the
-        # same-runpool multi-lane drive (internal issue epic, follow-up to
-        # internal issue) wires per-lane configs through to execution.
+        # Refuse until same-runpool multi-lane execution can preserve
+        # per-lane adapter configuration.
         if spec.overrides:
             raise ValueError(
                 f"lane_matrix lane {spec.lane_id or spec.execution_profile!r}: "
@@ -77,7 +77,7 @@ def materialize_execution_lanes(
                 "every lane currently runs with the run-level adapter config. "
                 "Remove the 'overrides' block until same-runpool multi-lane "
                 "drive lands. See "
-                "docs/project/specs/active/plan-2026-05-18-metaproc-execution-lanes-and-runpool.md "
+                "docs/arch/arch-metaproc-core.md "
                 "§ Phase 2 follow-up."
             )
         resolved = _resolve_lane_profile(registry, spec)

@@ -45,7 +45,7 @@ def find_metaproc_source_dir(start: Path | None = None) -> Path:
     """Locate the metaproc source root (the dir whose ``pyproject.toml`` lives next to ``src/metaproc/``)."""
     p = (start or Path(__file__)).resolve()
     while p != p.parent:
-        if (p / "pyproject.toml").exists() and p.name == "metaproc":
+        if (p / "pyproject.toml").is_file() and (p / "src" / "metaproc").is_dir():
             return p
         p = p.parent
     raise RuntimeError("Could not find metaproc source directory")

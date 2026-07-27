@@ -1,9 +1,9 @@
 """Real-Batch smoke tests for ``metaproc gcp run`` (G5).
 
-Skipped unless ``METAPROC_GCP_PROJECT`` and ``METAPROC_GCP_CONTAINER_IMAGE``
-are set in the env. Each case dispatches a Batch job and waits for a
-terminal state — tens of seconds to a few minutes per case, costs cents
-per run on the dispatcher project.
+Skipped unless ``METAPROC_RUN_LIVE_GCP_TESTS=1`` is explicitly set alongside
+``METAPROC_GCP_PROJECT`` and ``METAPROC_GCP_CONTAINER_IMAGE``. Each case dispatches a
+Batch job and waits for a terminal state, so an ordinary developer environment cannot
+incur cloud cost accidentally.
 
 Run with::
 
@@ -22,11 +22,16 @@ from typer.testing import CliRunner
 
 from metaproc.commands.gcp_run import run_command
 
-REQUIRED_ENV = ("METAPROC_GCP_PROJECT", "METAPROC_GCP_CONTAINER_IMAGE")
+REQUIRED_ENV = (
+    "METAPROC_RUN_LIVE_GCP_TESTS",
+    "METAPROC_GCP_PROJECT",
+    "METAPROC_GCP_CONTAINER_IMAGE",
+)
 
 pytestmark = [
     pytest.mark.skipif(
-        any(not os.environ.get(v) for v in REQUIRED_ENV),
+        os.environ.get("METAPROC_RUN_LIVE_GCP_TESTS") != "1"
+        or any(not os.environ.get(v) for v in REQUIRED_ENV[1:]),
         reason=f"Requires real GCP env: {', '.join(REQUIRED_ENV)}",
     ),
     # Batch task spinup is ~1-3 min; full path with wheel + workspace

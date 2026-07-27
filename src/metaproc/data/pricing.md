@@ -346,9 +346,9 @@ rates.
 The GPT-5.4 family (gpt-5.4, gpt-5.4-mini, gpt-5.4-nano, gpt-5.4-pro) carries verified
 rates.
 
-**Reinstated 2026-04-24 (internal-reference):** `gpt-5.3-codex`, `gpt-5.2`, and
-`gpt-5.2-codex` are listed in the OpenAI API public catalog and are now admitted to
-`PI_VALID_MODELS` + `CODEX_VALID_MODELS` for codex-cli adapter dispatch.
+**Reinstated 2026-04-24:** `gpt-5.3-codex`, `gpt-5.2`, and `gpt-5.2-codex` are listed in
+the OpenAI API public catalog and are now admitted to `PI_VALID_MODELS` +
+`CODEX_VALID_MODELS` for codex-cli adapter dispatch.
 Rates for these three are **approximate estimates** in this file (derived from the
 GPT-5.4 family pattern and typical OpenAI tier discounting) and **operators should
 cross-verify against openai.com/api/pricing** before using their cost rollups for

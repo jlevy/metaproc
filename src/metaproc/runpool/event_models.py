@@ -134,7 +134,7 @@ class RetryScheduledEvent(BaseModel):
 
 
 class AuthOutcomeEvent(BaseModel):
-    """Schema-v2 ``auth_outcome`` event (plan-2026-05-03 internal issue).
+    """Schema-v2 ``auth_outcome`` event.
 
     Permissive to support both schema-v1 (legacy, missing the join keys)
     and schema-v2 (full join keys); schema-v1 events default the
@@ -173,9 +173,9 @@ class AuthOutcomeEvent(BaseModel):
 
 
 class AuthLeaseAcquiredEvent(BaseModel):
-    """Schema-v2 ``auth_lease_acquired`` event (plan-2026-05-03 internal issue).
+    """Schema-v2 ``auth_lease_acquired`` event.
 
-    Always schema-v2 — this event was added by internal issue so there
+    Always schema-v2 because there
     is no legacy v1 shape to tolerate. Companion to
     :class:`AuthOutcomeEvent`; the two share the (run_id, step_id,
     item, attempt, session_log_path) primary-key tuple.

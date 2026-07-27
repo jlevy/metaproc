@@ -73,7 +73,7 @@ class GCPBatchConfig:
 # Any credential injected into a Batch job must go through Secret Manager;
 # plaintext values would persist in the job spec (`gcloud batch jobs describe`).
 #
-# Phase 10 follow-up / internal issue: the cohort lives as a typed
+# Phase 10 follow-up: the cohort lives as a typed
 # :class:`SecretRefSet` in metaproc.dispatch.secret_refs. The legacy
 # ``GCP_SECRET_REFS`` tuple shape is preserved here as a back-compat
 # alias so existing imports keep working; new call sites should use
@@ -248,8 +248,9 @@ def build_compute_resource(machine_type: str) -> Any:
 def _rewrite_pi_models_json(raw: str, project: str) -> str:
     """Apply the cloud-dispatch rewrites to a pi-cli models.json string.
 
-    - ``!gcloud auth print-access-token`` apiKey commands become
-      ``!gcp-access-token.sh`` so the container does not need gcloud.
+    - ``!gcloud auth print-access-token`` apiKey commands become a command that reads
+      ``METAPROC_PI_API_KEY`` when supplied and otherwise invokes
+      ``gcp-access-token.sh``, so neither path needs gcloud or exposes a token in argv.
     - Any Vertex ``baseUrl`` has its project path normalized to ``project``,
       so a packaged template with a placeholder project stays correct and
       a workstation-authored file still dispatches to the intended project.
@@ -260,7 +261,10 @@ def _rewrite_pi_models_json(raw: str, project: str) -> str:
     for provider in providers.values():
         api_key = provider.get("apiKey", "")
         if isinstance(api_key, str) and api_key.startswith("!gcloud"):
-            provider["apiKey"] = "!gcp-access-token.sh"
+            provider["apiKey"] = (
+                '!sh -c \'if [ -n "$METAPROC_PI_API_KEY" ]; then '
+                'printf "%s" "$METAPROC_PI_API_KEY"; else exec gcp-access-token.sh; fi\''
+            )
         base_url = provider.get("baseUrl", "")
         if "aiplatform.googleapis.com" in base_url and project:
             provider["baseUrl"] = _re.sub(
@@ -544,7 +548,9 @@ def is_transient_api_error(exc: Exception) -> bool:
             "transport",
             "broken pipe",
             "eof occurred",
-            "token",
+            "token refresh",
+            "token_exchange",
+            "failed to refresh",
         )
     )
 
@@ -558,8 +564,7 @@ async def get_job_with_retry(client: Any, batch_v1: Any, job_name: str) -> Any:
     """Get a Batch job status with retry-and-backoff for transient errors.
 
     Retries up to ``_POLL_RETRY_MAX`` times on transient GCP API / auth
-    transport errors (``internal issue``).  Non-transient errors propagate
-    immediately.
+    transport errors. Non-transient errors propagate immediately.
     """
     for attempt in range(1, _POLL_RETRY_MAX + 1):
         try:

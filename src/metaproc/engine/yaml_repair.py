@@ -18,13 +18,12 @@ exclusively the agent output-validation path (see
 ``metaproc/src/metaproc/commands/run_parallel.py`` around the agent-output
 validate block) where the input is a freshly-emitted LLM artifact.
 
-**Upstream questions (tracked):** see ``internal issue`` for the open
-investigation into whether we should be generating YAML from LLMs at all
+**Upstream question:** should workflows generate YAML from language models at all
 (JSON is more constrained, schema-aware generation could avoid the problem,
 two-pass generation with a deterministic templater could be safer). This
 module is a stopgap until that lands.
 
-**Parser harmonization (internal issue):** downstream validation (via
+**Parser harmonization:** downstream validation (via
 ``frontmatter_format`` → ``ruamel.yaml``) is stricter than PyYAML. A document
 that passed PyYAML's ``yaml.safe_load`` could still fail ``ruamel.yaml``
 validation, so the operator would see "repaired YAML" log lines followed by

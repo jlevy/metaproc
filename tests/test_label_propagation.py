@@ -102,7 +102,7 @@ class TestWorkerDispatchLabelPropagation:
                     context_partitions=[[{"TICKER": "AAPL"}, {"TICKER": "GOOG"}]],
                     config=config,
                     step="mine",
-                    process_spec_rel="example_workflow",
+                    process_spec_rel="example_plugin",
                     vars_json=vars_json,
                     run_dir=None,
                     out=MagicMock(),
@@ -142,7 +142,7 @@ class TestOrchestratorDispatchLabelPropagation:
         )
         config = OrchestratorDispatchConfig(
             gcp=gcp_config,
-            process_spec_rel="example_workflow",
+            process_spec_rel="example_plugin",
             variables={"RUN_ID": "test-run"},
             variant="deepseek",
             poll_interval=0,
@@ -190,7 +190,7 @@ class TestOrchestratorDispatchLabelPropagation:
         )
         config = OrchestratorDispatchConfig(
             gcp=gcp_config,
-            process_spec_rel="example_workflow",
+            process_spec_rel="example_plugin",
             variables={
                 "RUN_ID": "test-run",
                 "RUNS_DIR": "runs/local/example-workflow",
@@ -234,7 +234,7 @@ class TestOrchestratorDispatchLabelPropagation:
         )
         config = OrchestratorDispatchConfig(
             gcp=gcp_config,
-            process_spec_rel="example_workflow",
+            process_spec_rel="example_plugin",
             variables={"RUN_ID": "test-run"},
             variant="deepseek",
             poll_interval=0,
@@ -273,7 +273,7 @@ class TestOrchestratorDispatchLabelPropagation:
         )
         config = OrchestratorDispatchConfig(
             gcp=gcp_config,
-            process_spec_rel="example_workflow",
+            process_spec_rel="example_plugin",
             variables={"RUN_ID": "test-run"},
             poll_interval=0,
         )
@@ -316,7 +316,7 @@ class TestOrchestratorDispatchLabelPropagation:
         )
         config = OrchestratorDispatchConfig(
             gcp=gcp_config,
-            process_spec_rel="example_workflow",
+            process_spec_rel="example_plugin",
             variables={"RUN_ID": "mine-smoke-us-traded-20-2026-04-16-cloud-replaysa"},
             variant="deepseek",
             poll_interval=0,
@@ -362,7 +362,7 @@ class TestOrchestratorDispatchLabelPropagation:
         )
         config = OrchestratorDispatchConfig(
             gcp=gcp_config,
-            process_spec_rel="example_workflow",
+            process_spec_rel="example_plugin",
             variables={"RUN_ID": "test-run"},
             variant="pi-glm-5",
             poll_interval=0,
@@ -430,7 +430,7 @@ class TestOrchestratorDispatchLabelPropagation:
         )
         config = OrchestratorDispatchConfig(
             gcp=gcp_config,
-            process_spec_rel="example_workflow",
+            process_spec_rel="example_plugin",
             variables={"RUN_ID": "test-run"},
             variant="claude-code-cli",
             poll_interval=0,
@@ -478,7 +478,7 @@ class TestOrchestratorDispatchLabelPropagation:
         )
         config = OrchestratorDispatchConfig(
             gcp=gcp_config,
-            process_spec_rel="example_workflow",
+            process_spec_rel="example_plugin",
             variables={"RUN_ID": "test-run"},
             variant="claude-code-cli",
             poll_interval=0,
@@ -533,7 +533,7 @@ class TestOrchestratorDispatchLabelPropagation:
                     context_partitions=[[{"TICKER": "AAPL"}]],
                     config=config,
                     step="mine",
-                    process_spec_rel="example_workflow",
+                    process_spec_rel="example_plugin",
                     vars_json=vars_json,
                     run_dir=None,
                     out=MagicMock(),
@@ -582,7 +582,7 @@ class TestOrchestratorDispatchLabelPropagation:
                     context_partitions=[[{"TICKER": "AAPL"}]],
                     config=config,
                     step="mine",
-                    process_spec_rel="example_workflow",
+                    process_spec_rel="example_plugin",
                     vars_json=json.dumps({"RUN_ID": "test-run"}),
                     run_dir=None,
                     out=MagicMock(),
@@ -628,7 +628,7 @@ class TestOrchestratorDispatchLabelPropagation:
                     context_partitions=[[{"TICKER": "AAPL"}]],
                     config=config,
                     step="mine",
-                    process_spec_rel="example_workflow",
+                    process_spec_rel="example_plugin",
                     vars_json=vars_json,
                     run_dir=None,
                     out=MagicMock(),

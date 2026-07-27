@@ -183,9 +183,9 @@ class ScaleOverride(BaseModel):
         the controller ramp memory_ceiling and provider_ceiling above the
         launch-time max as long as actual memory + provider pressure stays
         normal.  Cleared by removing the file or setting to ``null``.
-        See logbook arb-2026-05-28-thu-ensemble § L7 for the live-validated
+        See logbook the incident analysis for the live-validated
         rationale and the spec
-        plan-2026-05-28-eia-orchestrator-resilience-and-concurrency-cleanup.md
+        the orchestrator resilience design
         for design notes.
     """
 

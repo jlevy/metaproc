@@ -38,6 +38,13 @@ uv tool install metaproc
 metaproc --help
 ```
 
+Install the optional local browser integration with
+`uv tool install 'metaproc[browser]'`. Cloud dependencies are similarly isolated in the
+`gcp` and `gcp-batch` extras.
+
+Metaproc currently supports Linux and macOS. Its process-control and resource-monitoring
+features require a POSIX operating system.
+
 See [installation](docs/installation.md) for source-checkout and upgrade instructions.
 
 ## Entry Points
@@ -56,13 +63,14 @@ See [installation](docs/installation.md) for source-checkout and upgrade instruc
 | [docs/arch/arch-authentication.md](docs/arch/arch-authentication.md) | Credential pool design (labels, fallback policy, probes, rotation) |
 | [docs/runbooks/adding-a-new-llm-provider.runbook.md](docs/runbooks/adding-a-new-llm-provider.runbook.md) | Provider onboarding runbook (adapter wiring, auth registration, smoke tests) |
 | [docs/development.md](docs/development.md) | **Concise dev guide for hacking on metaproc itself** — code layout, conventions, testing |
-| [docs/performance-notes.md](docs/performance-notes.md) | Performance principles, tooling (`make bench`, `metaprocPerf`), and anti-patterns |
-| [docs/runbooks/environment-bootstrap.runbook.md](docs/runbooks/environment-bootstrap.runbook.md) | End-to-end setup for *running* workflows (gcloud, pi CLI, preflight, mine commands) |
+| [docs/performance-notes.md](docs/performance-notes.md) | Historical measurements and performance principles for the external browser integration |
+| [docs/runbooks/environment-bootstrap.runbook.md](docs/runbooks/environment-bootstrap.runbook.md) | End-to-end setup for running workflows (gcloud, agent CLIs, and preflight) |
 | [docs/metaproc-operator-reference.md § Domain Dispatch Pattern](src/metaproc/docs/metaproc-operator-reference.md#domain-dispatch-pattern) | How client workflows keep roster/tier/source-health policy outside metaproc while using the standard status, pool, trace, and kill commands |
 | [MetaBrowser architecture](https://github.com/jlevy/metabrowser/blob/main/docs/architecture.md) | Standalone browser architecture and package boundary |
 | [Metaproc MetaBrowser plugin](src/metaproc/metabrowser_plugin/README.md) | Metaproc-owned file kinds, visualizations, log adapters, data hooks, and plugin validation |
 | [docs/arch/arch-testing.md](docs/arch/arch-testing.md) | Smoke / unit / integration testing tiers and commands |
 | [src/metaproc/data/pricing.md](src/metaproc/data/pricing.md) | **Per-model token / cache pricing** for every provider + model the framework touches. Drives cost-per-record math; update whenever a provider publishes new rate cards or when a new model lands in `pi-models.default.json`. |
+| [CHANGELOG.md](CHANGELOG.md) | Release history and upgrade notes |
 | [TODO.md](TODO.md) | Current focus, active-spec status, and pointers to blocking beads |
 
 ## Usage
@@ -165,9 +173,11 @@ Process specs define multi-step DAGs that `run-process` walks automatically.
 | self-test/smoke-adapter-codex | [process/self-test/smoke-adapter-codex.process.md](process/self-test/smoke-adapter-codex.process.md) | Codex adapter: binary + credential + live prompt |
 | self-test/smoke-adapter-gemini | [process/self-test/smoke-adapter-gemini.process.md](process/self-test/smoke-adapter-gemini.process.md) | Gemini adapter: binary + credential + live prompt |
 | self-test/smoke-adapter-pi | [process/self-test/smoke-adapter-pi.process.md](process/self-test/smoke-adapter-pi.process.md) | pi adapter: binary + credential + live prompt (Vertex MaaS) |
-| See [testing architecture](docs/arch/arch-testing.md) for when to use each tier and how |  |  |
-| to set up per-adapter credentials. Downstream packages own their domain process specs, |  |  |
-| schemas, handlers, fixtures, and runbooks. |  |  |
+
+See [testing architecture](docs/arch/arch-testing.md) for when to use each tier and how
+to set up per-adapter credentials.
+Downstream packages own their domain process specs, schemas, handlers, fixtures, and
+runbooks.
 
 ## Notes
 
@@ -198,10 +208,21 @@ dependency audits, public hygiene, source and wheel contents, and an isolated in
 wheel. See [development](docs/development.md), [contributing](CONTRIBUTING.md), and
 [supply-chain security](SUPPLY-CHAIN-SECURITY.md).
 
+## Compatibility
+
+During the 0.x series, the command-line interface, process-spec format, documented
+plugin entry points, and Pydantic models explicitly linked from the architecture docs
+are the supported integration surfaces.
+Other Python imports are implementation details and may change between minor releases.
+
 ## License
 
-AGPL-3.0-or-later; see [LICENSE](LICENSE). The vendored ELK browser component and its
-license are listed in [NOTICE.md](NOTICE.md).
+Metaproc is AGPL-3.0-or-later; see [LICENSE](LICENSE). If you modify Metaproc and let
+users interact with that modified version over a network, AGPL section 13 requires
+offering those users the corresponding source code for the running version.
+
+The vendored ELK browser component is a separately licensed work; its license and
+distribution notice are listed in [NOTICE.md](NOTICE.md).
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

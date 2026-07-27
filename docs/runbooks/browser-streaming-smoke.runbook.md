@@ -4,19 +4,20 @@ description: Manual end-to-end sanity check after Phase 1 + Phase 3 + Phase 5 la
 ---
 # Browser Realtime-Streaming Smoke Check
 
-When to run: after merging the realtime-streaming branch, or after touching any of
-`inventory.py`, `events_route.py`, `active_tracker.py`, `watch_backends.py`,
-`recent.py`, or `app.js` / `styles.css`.
+Run this from a Metabrowser source checkout after changing its inventory, event,
+watcher, recent-file, or browser asset code.
 
 This runbook covers what the automated test suite can’t — actual cold-start latency on a
 35k-file repo, browser-side DOM behaviour, watcher latency on the real filesystem.
 
 ## 1. Cold-start budgets (Phase 1)
 
-Start the browser against the workspace root and watch the perf log:
+Set a workspace path and start the browser against it:
 
 ```bash
-.venv/bin/metabrowser /workspace/user/consumer --no-open 2>&1 | tee "$RUNS_DIR_ROOT/.logs/metaproc-browser.log"  # never /tmp — see metaproc/docs/conventions.md § Logging Rules
+WORKSPACE_ROOT=/path/to/a/representative/workspace
+uv run metabrowser "$WORKSPACE_ROOT" --no-open 2>&1 \
+  | tee "$WORKSPACE_ROOT/.logs/metaproc-browser.log"
 ```
 
 Open the browser to the printed URL. Watch the log for:
@@ -28,8 +29,8 @@ Open the browser to the printed URL. Watch the log for:
 * `api_recent ... took Xms` — first GET should be **<100 ms**; warm GETs should be **<10
   ms**.
 
-If any of those budgets fails, run `make bench` against `/workspace/user/consumer` to
-capture a structured report:
+If a budget fails, use the benchmark tooling in the Metabrowser repository against
+`$WORKSPACE_ROOT` to capture a structured report.
 
 ```bash
 make bench
@@ -60,7 +61,8 @@ Or temporarily bump the fixture to a larger directory so the walker takes longer
 In a separate terminal, write a fresh file into the watched tree:
 
 ```bash
-echo "smoke" > /workspace/user/consumer/scratch/smoke-$(date +%s).md
+mkdir -p "$WORKSPACE_ROOT/scratch"
+echo "smoke" > "$WORKSPACE_ROOT/scratch/smoke-$(date +%s).md"
 ```
 
 In the browser:
@@ -83,8 +85,8 @@ smoke roster). In the Recent tab:
 
 If every file shows as its own row (no collapse), the cluster threshold isn’t matching —
 the spread is wider than 5 %, or the single-dir compaction didn’t fold the chain.
-Check `docs/project/specs/active/plan-2026-04-28-browser-realtime-streaming.md` for the
-spec; constants live in metabrowser’s external `settings.py` (`RECENT_CLUSTER_PCT`).
+Check `docs/arch/arch-metaproc-core.md` for the spec; constants live in metabrowser’s
+external `settings.py` (`RECENT_CLUSTER_PCT`).
 
 ## 5. Active-file badges (active_tracker)
 
@@ -131,13 +133,13 @@ Stop and restart `metabrowser`. In the still-open browser:
 * No stale state survives the restart (verified by an `fs.resync_required` if the server
   detected a root swap).
 
-## 10. Walker truncation banner (internal-reference)
+## 10. Walker truncation banner
 
 Serve a workspace large enough to hit `INVENTORY_MAX_FILES` (200 000 by default; bump it
 down in metabrowser’s external `settings.py` to force the case):
 
 ```bash
-.venv/bin/metabrowser /workspace/user/big-workspace --no-open 2>&1 | tee "$RUNS_DIR_ROOT/.logs/metaproc-browser.log"  # never /tmp — see metaproc/docs/conventions.md § Logging Rules
+.venv/bin/metabrowser "$WORKSPACE_ROOT" --no-open 2>&1 | tee "$RUNS_DIR_ROOT/.logs/metaproc-browser.log"  # never /tmp — see metaproc/docs/conventions.md § Logging Rules
 ```
 
 * Server log shows `inventory walker complete: status=truncated …`.
@@ -145,7 +147,7 @@ down in metabrowser’s external `settings.py` to force the case):
   cap…”.
 * Banner is absent when the walker reached `done`.
 
-## 11. Slow-request log on SSE (internal-reference)
+## 11. Slow-request log on SSE
 
 Open the browser; leave it idle for ~30 s. The SSE heartbeat is 15 s.
 
@@ -153,7 +155,7 @@ Open the browser; leave it idle for ~30 s. The SSE heartbeat is 15 s.
   warnings (the long-poll connection is intentionally held open).
   The skip list lives on `_SlowRequestLogMiddleware._LONG_LIVED_PATHS`.
 
-## 12. Recent panel deep-window coverage (internal-reference)
+## 12. Recent panel deep-window coverage
 
 Pick a 24h / 7d / 30d window in the Recent tab on a workspace with files at depth 3+
 (e.g. inside `runs/<date>/<roster>/<task>/...`). The panel must show all of them, not

@@ -1,4 +1,4 @@
-"""P2.1 (internal-reference) — generic sum:/avg:/max:/min: metrics + presets.
+"""P2.1 — generic sum:/avg:/max:/min: metrics + presets.
 
 Pins the contract that `metaproc trace --rollup --metric sum:<attr>` works
 for any numeric attribute path, and the named presets expand correctly.

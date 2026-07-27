@@ -5,7 +5,7 @@ declared :class:`~metaproc.models.authored.ValueType`, read the file and
 return a Python value that conforms to the type.
 
 Used by the Phase 2A process-level ``inputs:`` machinery.
-Spec: docs/project/specs/active/plan-2026-04-16-process-file-design-cleanups.md
+Spec: docs/arch/arch-metaproc-core.md
 """
 
 from __future__ import annotations

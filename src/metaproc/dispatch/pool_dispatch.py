@@ -177,8 +177,7 @@ def classify_failure_for_slot(
     # envelope/mismatch → FAIL; otherwise → RETRY). Returning ``unknown`` with
     # ``reason="invalid_outputs"`` here lets the engine's decision win without
     # the misleading network-failure label in the auth_outcome event stream.
-    # See internal issue (2026-05-25 Wave 2 SNOW retry loop, ~20 min wasted on
-    # 12-attempt transient-retry budget against a deterministic content error).
+    # A deterministic content error must not consume the transient-retry budget.
     if error_str.startswith("output validation failed:"):
         return AuthFailureClassification(status="unknown", reason="invalid_outputs")
 
@@ -272,7 +271,7 @@ class AuthOutcome:
       see legacy events with the new fields defaulting to ``""`` /
       ``0`` / ``None``.
 
-    Spec: docs/project/specs/active/plan-2026-05-03-auth-observability-and-load-balancing.md
+    Spec: docs/arch/arch-metaproc-core.md
     """
 
     schema_version: int = 2

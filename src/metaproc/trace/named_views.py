@@ -148,7 +148,7 @@ def source_tool_rows(spans: list[TraceEvent]) -> list[dict[str, Any]]:
     """Return a generic source/tool rollup over trace tool-usage attrs.
 
     The view is intentionally workflow-neutral: all dimensions are either
-    top-level trace fields or TraceEvent/0.1 tool-usage attributes, so EIA
+    top-level trace fields or TraceEvent/0.1 tool-usage attributes, so large workflow
     and future workflows can filter/render without a separate provenance log.
     """
     groups: dict[tuple[str, ...], list[TraceEvent]] = {}

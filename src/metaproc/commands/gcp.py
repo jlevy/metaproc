@@ -87,7 +87,7 @@ app.add_typer(gcp_app)
 # Imported after gcp_app is created because gcp_run.py registers via the
 # returned function rather than via decorator.
 # Guarded by try/except so `metaproc.commands.gcp` remains importable in
-# environments without the [gcp-batch] extra (e.g. workflow_package CI):
+# environments without the [gcp-batch] extra (e.g. example_plugin CI):
 # `gcp run` then drops out, and the other gcp subcommands surface the same
 # friendly error via _require_gcp_batch() at invocation time.
 try:
@@ -1814,9 +1814,7 @@ def _require_gcp_storage() -> None:
 @gcp_app.command("archive")
 def gcp_archive(
     run_dir: Path = typer.Argument(..., help="Local run directory to archive"),
-    bucket: str = typer.Option(
-        "", "--bucket", help="GCS bucket name (default: METAPROC_GCS_BUCKET or metaproc-runs)"
-    ),
+    bucket: str = typer.Option("", "--bucket", help="GCS bucket name (or set METAPROC_GCS_BUCKET)"),
     delete_local: bool = typer.Option(False, "--delete-local", help="Delete local dir after sync"),
     yes: bool = typer.Option(False, "--yes", help="Skip confirmation prompt"),
 ) -> None:
@@ -1834,7 +1832,9 @@ def gcp_archive(
         typer.echo(f"Not a directory: {resolved}", err=True)
         raise typer.Exit(code=1)
 
-    effective_bucket = bucket or MetaprocEnv.METAPROC_GCS_BUCKET.read_str(default="metaproc-runs")
+    effective_bucket = bucket or MetaprocEnv.METAPROC_GCS_BUCKET.read_str(default="")
+    if not effective_bucket:
+        raise CLIError("--bucket required or METAPROC_GCS_BUCKET must be set")
     run_name = resolved.name
     dest = f"gs://{effective_bucket}/archives/{run_name}/"
 
@@ -2141,7 +2141,6 @@ _REMOTE_RUN_ENV_VARS = [
     "METAPROC_GCP_FILESTORE_SERVER",
     "METAPROC_GCP_FILESTORE_MOUNT_PATH",
     "METAPROC_GCP_SECRET_GH_TOKEN",
-    "GH_TOKEN",  # plain token fallback when Secret Manager is not configured
     "METAPROC_REPO_URL",
     "METAPROC_RUN_BRANCH",
     "METAPROC_REPO_PACKAGE_PATH",
@@ -2478,7 +2477,7 @@ def _resolve_gateway_host(host: str) -> str:
     env_host = MetaprocEnv.METAPROC_GATEWAY_HOST.read_str(default="")
     if env_host:
         return env_host
-    return "metaproc-browser"
+    raise CLIError("--host required or METAPROC_GATEWAY_HOST must be set")
 
 
 def run_remote_metaproc(

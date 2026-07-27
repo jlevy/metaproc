@@ -1,6 +1,6 @@
 """Regression: run-process refuses multi-lane plans on real launches.
 
-Bead internal-reference: internal review P1. The lane planner can materialize
+Regression coverage: review P1. The lane planner can materialize
 ``plan.execution_lanes`` with more than one row, but the runner does
 not yet drive multiple lanes in a single pool — RunPoolConfig still
 carries one ``execution_profile`` and ``run_parallel`` stamps that

@@ -1,6 +1,6 @@
 """Tests for typed pydantic event models, including auth events.
 
-internal-reference (Phase 4 of plan-2026-05-03). Adds typed model coverage
+the fix (Phase 4 of plan-2026-05-03). Adds typed model coverage
 for AuthOutcomeEvent, AuthLeaseAcquiredEvent, and RetryScheduledEvent
 so read_runpool_events no longer silently drops them.
 """
@@ -127,7 +127,7 @@ class TestResourceTelemetryErrorEvent:
 
 
 class TestReadRunpoolEventsPicksUpAuth:
-    """Before internal-reference, read_runpool_events silently dropped
+    """Before the fix, read_runpool_events silently dropped
     auth_outcome / auth_lease_acquired because they weren't in the
     discriminated union. Now they show up in the typed reader.
     """

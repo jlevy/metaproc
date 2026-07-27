@@ -1,4 +1,4 @@
-"""Phase 2 browser surface contracts (spec §§8.1–8.5, epic internal-reference)."""
+"""Phase 2 browser surface contracts (spec §§8.1–8.5, the original design)."""
 
 from __future__ import annotations
 

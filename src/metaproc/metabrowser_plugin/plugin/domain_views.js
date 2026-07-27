@@ -108,7 +108,7 @@ function setCurrentResourceReportPayload(payload, path) {
   }
   // NOTE: we intentionally do NOT seed ``currentVisualResources`` from the
   // resource report any more. Process specs for a run typically live outside
-  // the run directory (e.g., ``example_workflow/process/mine/...``) while
+  // the run directory (e.g., ``example_plugin/process/mine/...``) while
   // ``resources.json`` lives under ``runs/<timestamp>/``, so there is no
   // reliable path-based way to tell whether a given Visual tab belongs to the
   // same run as the current resources payload. Silently reusing the payload
@@ -1044,8 +1044,8 @@ function renderResourceNodeDetail(node) {
       html += "<tr>";
       html += "<td>" + esc(ref.path || "") + "</td>";
       html += "<td>" + esc(ref.kind || "") + "</td>";
-      html += "<td>" + ((ref.span_ids || []).join(", ") || "-") + "</td>";
-      html += "<td>" + ((ref.line_offsets || []).join(", ") || "-") + "</td>";
+      html += "<td>" + esc((ref.span_ids || []).join(", ") || "-") + "</td>";
+      html += "<td>" + esc((ref.line_offsets || []).join(", ") || "-") + "</td>";
       html += "</tr>";
     }
     html += "</tbody></table>";

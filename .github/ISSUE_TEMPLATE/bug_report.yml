@@ -1,0 +1,57 @@
+name: Bug report
+description: Report a reproducible Metaproc defect
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Metaproc. Remove credentials, private paths,
+        customer data, and unsanitized run artifacts before submitting.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the observed behavior and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include the smallest process spec or command sequence that reproduces the issue.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Metaproc version
+      placeholder: "0.1.0 or commit SHA"
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: "Linux distribution or macOS version, architecture, Python version"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized diagnostics
+      description: Paste only the relevant, sanitized log excerpt or traceback.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues for this problem.
+          required: true
+        - label: I removed credentials, private data, and private repository references.
+          required: true
+        - label: This is not a security vulnerability; those follow SECURITY.md.
+          required: true

@@ -1,7 +1,7 @@
 """Single-source-of-truth aggregator for credential-pool usage signals.
 
-Spec: ``docs/project/specs/active/plan-2026-05-03-auth-observability-and-load-balancing.md``
-Bead: ``internal issue``.
+Spec: ``docs/arch/arch-metaproc-core.md``
+
 
 Pulls every signal an operator needs to answer "which accounts are
 live, how much have they used, and is the dispatch using them as I
@@ -24,7 +24,7 @@ Sources (none authoritative on its own):
 The aggregator reads JSONL through the shared compressed-stream helpers —
 same pattern as :mod:`metaproc.commands.pool` :func:`_collect_sub_pools`.
 Typed pydantic models for ``auth_outcome`` / ``auth_lease_acquired``
-are a Phase 4 follow-up (internal issue); until they land,
+are a Phase 4 follow-up; until they land,
 :func:`metaproc.runpool.event_reader.read_runpool_events` silently
 drops these events, so this module raw-parses and the typed reader
 stays the path for the seven event types it does know.
@@ -222,7 +222,7 @@ def _parse_session_rate_limits(
     if not session_log_path.is_file():
         return {}, None
     # Per window: (window, event_ts). Carrying the per-window ts is
-    # what fixes the internal issue review finding — previously the
+    # what fixes a review finding — previously the
     # aggregator overwrote windows based on a single per-session ts,
     # which let an older session's high-utilization 5h record clobber
     # a newer session's low-utilization 5h record by set-iteration
@@ -681,7 +681,7 @@ def query_label_headroom(
     common for fresh labels.
 
     Used by :func:`metaproc.adapters.claude_code.ClaudeCodeCliAdapter.
-    query_quota_usage` (Phase 3 internal issue) so the existing
+    query_quota_usage` so the existing
     :mod:`metaproc.dispatch.preflight` ``summarize_headroom`` lights
     up without a native Anthropic quota endpoint.
 

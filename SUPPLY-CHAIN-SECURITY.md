@@ -50,10 +50,10 @@ Three exact first-party releases are exempt from the ordinary cool-off for this 
 The exceptions are package-scoped in configuration and do not weaken the global gate.
 Changing either version requires a new review and an updated rationale.
 
-The generated agent-integration scripts name exact `get-tbd@0.4.1` bootstrap commands.
-Those commands are operator-invoked documentation for installing this repository’s issue
-tracker; no build, hook, CI, test, or publishing path executes them.
-The skill files own that reviewed version and must be updated deliberately.
+The generated agent-integration scripts name the exact `get-tbd@0.4.1` release.
+Installation is an explicit operator action.
+Hooks use an already-installed `tbd` binary and never download or execute a missing npm
+package. The skill files own the reviewed version and must be updated deliberately.
 
 ## Verification
 

@@ -48,8 +48,7 @@ class ExecutionProfileResources(BaseModel):
     initial_memory_budget_fraction: float | None = None
     max_concurrency_hint: int | None = None
     host_max_concurrency: int | None = None
-    # Per-profile override for the runpool's min_concurrency floor. Defaults to
-    # POOL_MIN_CONCURRENCY (2 as of internal issue). Profiles with very heavy
+    # Per-profile override for the runpool's min_concurrency floor. Profiles with very heavy
     # per-agent RSS may need to raise this floor higher to avoid degenerate
     # over-clamping; profiles with very light agents can lower to 1 if the
     # operator accepts the degenerate-state risk.

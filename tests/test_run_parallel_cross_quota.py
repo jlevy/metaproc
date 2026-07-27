@@ -1,4 +1,4 @@
-"""Tests for run-parallel's --auth-cross-quota-group flag (internal-reference).
+"""Tests for run-parallel's --auth-cross-quota-group flag.
 
 The flag was added so cloud workers (which run inner ``run-parallel
 --backend local``) can honor the operator's diagnostic cross-quota

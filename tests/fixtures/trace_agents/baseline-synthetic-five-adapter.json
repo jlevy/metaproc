@@ -4,7 +4,7 @@
     "claude": {
       "files_scanned": 125,
       "parse_errors": 0,
-      "run_dir": "/workspace/synthetic-home/wrk/synthetic/synthetic-data/runs/local/earnings-information-arb/arb-2030-01-01-tue-amc-five-adapter-tier1-amc-claude-opus",
+      "run_dir": "/workspace/synthetic-project/synthetic-file-107e1411395a.txt",
       "tool_counts": {
         "Bash": 1683,
         "Monitor": 28,
@@ -17,7 +17,7 @@
     "codex": {
       "files_scanned": 113,
       "parse_errors": 0,
-      "run_dir": "/workspace/synthetic-home/wrk/synthetic/synthetic-data/runs/local/earnings-information-arb/arb-2030-01-01-tue-amc-five-adapter-tier1-amc-codex-gpt55",
+      "run_dir": "/workspace/synthetic-project/synthetic-file-11641cb7144c.txt",
       "tool_counts": {
         "command_execution": 2746,
         "file_change": 120
@@ -26,7 +26,7 @@
     "gemini-flash": {
       "files_scanned": 150,
       "parse_errors": 0,
-      "run_dir": "/workspace/synthetic-home/wrk/synthetic/synthetic-data/runs/local/earnings-information-arb/arb-2030-01-01-tue-amc-five-adapter-tier1-amc-gemini-flash",
+      "run_dir": "/workspace/synthetic-project/synthetic-file-25155934ac37.txt",
       "tool_counts": {
         "glob": 148,
         "google_web_search": 95,
@@ -42,7 +42,7 @@
     "gemini-pro": {
       "files_scanned": 191,
       "parse_errors": 0,
-      "run_dir": "/workspace/synthetic-home/wrk/synthetic/synthetic-data/runs/local/earnings-information-arb/arb-2030-01-01-tue-amc-five-adapter-tier1-amc-gemini-pro",
+      "run_dir": "/workspace/synthetic-project/synthetic-file-7655ab426c93.txt",
       "tool_counts": {
         "google_web_search": 92,
         "list_directory": 3,
@@ -56,7 +56,7 @@
     "pi-gemini-flash": {
       "files_scanned": 112,
       "parse_errors": 0,
-      "run_dir": "/workspace/synthetic-home/wrk/synthetic/synthetic-data/runs/local/earnings-information-arb/arb-2030-01-01-tue-amc-five-adapter-tier1-amc-pi-gemini-flash",
+      "run_dir": "/workspace/synthetic-project/synthetic-file-e0d83155f721.txt",
       "tool_counts": {
         "bash": 1513,
         "read": 578,
@@ -66,7 +66,7 @@
     "pi-glm5": {
       "files_scanned": 113,
       "parse_errors": 0,
-      "run_dir": "/workspace/synthetic-home/wrk/synthetic/synthetic-data/runs/local/earnings-information-arb/arb-2030-01-01-tue-amc-five-adapter-tier1-amc-pi-glm5",
+      "run_dir": "/workspace/synthetic-project/synthetic-file-e1dd2c214aa5.txt",
       "tool_counts": {
         "bash": 1070,
         "read": 681,

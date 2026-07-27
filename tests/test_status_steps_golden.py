@@ -192,7 +192,7 @@ def test_format_json_includes_steps_array_and_process_state() -> None:
     assert json.loads(encoded)["process_state"] == "stale"
 
 
-# ── Terminal-state label (bead internal-reference) ────────────────────
+# ── Terminal-state label (this regression) ────────────────────
 
 
 def _bare_run_status(
@@ -221,7 +221,7 @@ def test_status_label_running_when_items_in_flight() -> None:
 
 
 def test_status_label_waiting_when_orchestrator_alive_but_no_items() -> None:
-    """The case bead internal-reference was filed for: visible rows are 100 percent
+    """The case this regression was filed for: visible rows are 100 percent
     but the orchestrator has queued the next step. Should not say COMPLETE.
     """
     rs = _bare_run_status(is_active=True, items_running=False, orchestrator_alive=True)

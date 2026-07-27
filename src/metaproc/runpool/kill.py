@@ -240,7 +240,7 @@ def reap_subprocess_tree(parent_pid: int | None = None) -> dict[str, int]:
     Returns a dict with counts of killed / not-found / permission-denied
     descendants, for logging by the caller.
 
-    See bead internal issue + logbook arb-2026-05-28-thu-ensemble § L5 for the
+    See this regression + the incident analysis for the
     motivating incident: 25 orphan adapter-cli processes from SIGTERM'd T1
     orchestrators consumed 30-90% CPU each for 6+ hours on a single batch.
     """
@@ -300,7 +300,7 @@ def install_subprocess_reaper_signal_handlers() -> None:
     not stacked).
 
     Call this once at orchestrator startup, BEFORE any subprocess work
-    begins. See bead internal issue + logbook arb-2026-05-28-thu-ensemble § L5.
+    begins. See this regression + the incident analysis.
     """
 
     def _handler(signum: int, _frame: object) -> None:

@@ -1,8 +1,8 @@
 """Tests for `metaproc auth env <process>` subcommand.
 
-plan-2026-05-03 § Phase 5 bead internal-reference.
+plan-2026-05-03 § Phase 5 this regression.
 
-Promotes the dispatch-start ambient-auth env sweep (bead internal-reference)
+Promotes the dispatch-start ambient-auth env sweep (this regression)
 to a standalone operator tool. Loads a process spec, identifies the
 adapter set, and reports per-adapter env-conflict verdicts so an
 operator can diagnose before launching.

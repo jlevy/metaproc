@@ -1,4 +1,4 @@
-"""P1.2 (internal-reference) — Codex CLI (v0.130+) trace extractor.
+"""P1.2 — Codex CLI (v0.130+) trace extractor.
 
 Codex switched from a claude-shaped stream-json (handled by claude_agent
 with adapter discriminator) to a new schema: `turn.completed` /
@@ -6,7 +6,7 @@ with adapter discriminator) to a new schema: `turn.completed` /
 old codex-on-claude-schema case stays with ClaudeAgentExtractor.
 
 These tests use real (truncated) fixture data from the 2026-05-26 Tue
-AMC five-adapter batch, exercising the actual wire format.
+synthetic five-adapter batch, exercising the actual wire format.
 """
 
 from __future__ import annotations
@@ -292,7 +292,7 @@ def test_attempt_carries_sidecar_adapter_metadata(tmp_path: Path) -> None:
                     "adapter_trace_source": "codex-agent",
                     "adapter_model": "gpt-5.5",
                     "lane_id": "lane-codex",
-                    "execution_profile": "amc-five-adapter",
+                    "execution_profile": "synthetic-five-adapter",
                 },
             }
         )
@@ -305,7 +305,7 @@ def test_attempt_carries_sidecar_adapter_metadata(tmp_path: Path) -> None:
     assert attempt.attributes.get("adapter.trace_source") == "codex-agent"
     assert attempt.attributes.get("adapter.model") == "gpt-5.5"
     assert attempt.attributes.get("lane_id") == "lane-codex"
-    assert attempt.attributes.get("execution_profile") == "amc-five-adapter"
+    assert attempt.attributes.get("execution_profile") == "synthetic-five-adapter"
 
 
 # ── disambiguation: codex vs claude logs ──

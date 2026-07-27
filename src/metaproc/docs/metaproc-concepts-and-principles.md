@@ -336,7 +336,7 @@ Three levels of generality, *orthogonal* to the planes:
   (`manual | agent | code | composite`), `for_each`, task execution, parameter binding,
   reuse policy, publication semantics, adapter contract.
 - **Application profile:** domain conventions registered as plugins.
-  Examples: domain prediction workflows, retrospectives, research mining,
+  Examples: domain prediction workflows, retrospectives, research research,
   learn/proposal/apply loops, autoresearch-style mutation/evaluation loops.
 
 Application examples never leak back into the core schema.
@@ -394,9 +394,9 @@ Steps operate on specific values, or items.
   Structurally a map; functionally the element being mapped over.
   The type `list<map_item>` is the binding type for an items file.
 - **Items file:** a list-typed dep whose contents are `list<map_item>`, driving a
-  fan-out step (e.g., `tickers.md`, `events.md`). The items file is the *candidate
+  fan-out step (e.g., `items.md`, `events.md`). The items file is the *candidate
   source*; per-item completion state lives separately.
-  Earnings-domain code uses *roster* as a synonym; the framework does not.
+  Analysis-domain code uses *roster* as a synonym; the framework does not.
 - **Map:** a step applied to each element of a set of items.
 - **Fan-out:** the operation of running a map using parallel workers across input items,
   dispatched by the harness.
@@ -434,7 +434,7 @@ Run context contains **parameters**, distinguished by *how the value is used*:
 - **Parameter:** a value used as a variable *inside* the step’s content, substituted
   into prompts, paths, or runbooks via `{{...}}`, or read by a code handler as input.
   The agent or handler sees parameters as data.
-  Examples: `run_id`, `ticker`, `event_id`, dates, resolved dep paths.
+  Examples: `run_id`, `item`, `event_id`, dates, resolved dep paths.
 - **Metaparameter:** a value that determines *how* Metaproc runs the step: which
   adapter, which model, with what timeout and retry policy, whether and how to ensemble,
   which evaluators to apply, what gate thresholds.
@@ -447,9 +447,9 @@ harness dispatch the agent and judge the result?”. Some values cross over (a
 metaparameter like `model` may also appear as a templated `{{model}}` inside a prompt);
 the classification is by *primary use*.
 
-**Reuse semantics.** Most parameters are inert (`run_id`, `ticker`) and excluded from
-the reuse key. Most metaparameters are semantic (model, prompt version, ensemble size)
-and included. Two runs with identical inputs and identical metaparameters are the same
+**Reuse semantics.** Most parameters are inert (`run_id`, `item`) and excluded from the
+reuse key. Most metaparameters are semantic (model, prompt version, ensemble size) and
+included. Two runs with identical inputs and identical metaparameters are the same
 experiment.
 
 ### 4.5 Execution concepts
@@ -536,7 +536,7 @@ full bundle is **run record**.
   per-step opt-in.
 - **Domain evals:** per-step, author-defined.
   Includes anything rubric-based, ground-truth-comparing, or with domain-specific
-  quality dimensions (mining’s *completeness, correctness, consistency, usefulness*).
+  quality dimensions (research’s *completeness, correctness, consistency, usefulness*).
 
 The Type A loop (improve the step) varies metaparameters across a comparison set with
 framework evals held constant, so comparisons are fair.
@@ -769,7 +769,7 @@ Reliability comes from absence of moving parts.
 
    - agents write only their own outputs
    - the harness writes shared status state
-   - the items file (e.g., `tickers.md`) is a planning and summary surface, not a lock
+   - the items file (e.g., `items.md`) is a planning and summary surface, not a lock
      manager
    - source artifacts used for fan-out must remain readable and trustworthy
 

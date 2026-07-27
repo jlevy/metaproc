@@ -107,7 +107,7 @@ class TestPackageWorkspace:
         _git_init_with_files(
             repo,
             {
-                "example_workflow/specs/foo.yaml": "x: 1",
+                "example_plugin/specs/foo.yaml": "x: 1",
                 "metaproc/src/metaproc/__init__.py": "pass",
                 "metaproc/pyproject.toml": "[project]\nname='metaproc'",
                 "docs/readme.md": "hi",
@@ -116,7 +116,7 @@ class TestPackageWorkspace:
         out = package_workspace(repo_root=repo, out_path=tmp_path / "ws.tar.gz")
         with tarfile.open(out) as tar:
             names = set(tar.getnames())
-        assert "example_workflow/specs/foo.yaml" in names
+        assert "example_plugin/specs/foo.yaml" in names
         assert "docs/readme.md" in names
         assert not any(n.startswith("metaproc/") for n in names)
 

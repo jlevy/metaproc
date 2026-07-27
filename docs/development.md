@@ -1,7 +1,7 @@
 # Development
 
 The essentials a developer needs to start working on metaproc itself.
-For details about running workflows built on metaproc (mining, GCP dispatch,
+For details about running workflows built on metaproc (research, GCP dispatch,
 credentials), see
 [environment-bootstrap.runbook.md](runbooks/environment-bootstrap.runbook.md).
 

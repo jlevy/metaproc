@@ -142,7 +142,7 @@ class TestClassifyErrorEdgeCases:
         assert classify_error("Rate Limit Exceeded") == RetryVerdict.RETRY
 
     def test_anthropic_monthly_usage_limit_is_permanent(self) -> None:
-        """Anthropic personal-plan monthly cap on claude-code-cli (internal-reference).
+        """Anthropic personal-plan monthly cap on claude-code-cli.
 
         The claude-code-cli adapter emits this string in the JSONL `result`
         field on a 429 response with `api_error_status=429`. Distinct from a
@@ -185,7 +185,7 @@ class TestClassifyFailure:
             ("exit code 1", FailureClass.CRASH),
             ("command exit code 1", FailureClass.CRASH),
             ("something unexpected", FailureClass.UNKNOWN),
-            # internal-reference: monthly-cap exhaustion is QUOTA_EXHAUSTED (distinct
+            # the fix: monthly-cap exhaustion is QUOTA_EXHAUSTED (distinct
             # from RATE_LIMITED so the operator surface can distinguish the two
             # — wait until reset vs. wait a few seconds and retry).
             (
@@ -219,7 +219,7 @@ class TestClassifyFailure:
         """The exact error string the run_parallel orchestrator sees when
         an Anthropic 500 lands inside a claude-code subprocess. Was being
         classified as CRASH because no 500/api_error pattern matched.
-        2026-05-13 AMC rest: DFDV business-setup hit this."""
+        A production run encountered this in a setup step."""
         err = (
             'exit code 1 (log: API Error: {"type":"error",'
             '"error":{"details":null,"type":"api_error",'
@@ -456,7 +456,7 @@ class TestExtractLogError:
 
 
 class TestMaxRetriesFor:
-    """Per-failure-class retry budget cap (internal-reference)."""
+    """Per-failure-class retry budget cap."""
 
     def test_invalid_output_capped_at_default(self) -> None:
         """INVALID_OUTPUT failures cap at MAX_CONTENT_FAILURE_RETRIES_DEFAULT."""

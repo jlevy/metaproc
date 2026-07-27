@@ -286,10 +286,10 @@ Shared by worker and orchestrator entrypoints via
 `bootstrap_container() -> BootstrapResult`:
 
 1. Configure git identity and credential helper (via `GH_TOKEN`).
-2. Use bundled `example_workflow/` from the image by default, or sparse-clone the
+2. Use bundled `example_plugin/` from the image by default, or sparse-clone the
    requested branch from `METAPROC_RUN_BRANCH` / `METAPROC_REPO_URL` when an override is
    required.
-3. Install `example_workflow` editable so plugin entry points resolve inside the
+3. Install `example_plugin` editable so plugin entry points resolve inside the
    container.
 4. Optionally bootstrap the private `arena` CLI when `METAPROC_ARENA_BOOTSTRAP=1`.
 5. Ensure `RUNS_DIR` exists.
@@ -637,9 +637,9 @@ prefixed `[gcp-run]` until the job hits a terminal state, then exits with
 `SUCCEEDED → 0`, `CANCELLED` / `DELETION_IN_PROGRESS → 130`, otherwise `1`. `--detach`
 skips the tail entirely and prints job name + console URL.
 
-**Why a separate primitive.** Worker dispatch (§3.3) is shaped around the predict-loop’s
-per-item partitioning and resume contract; that machinery is overkill for “run `echo`
-once” or “run a package-specific analyzer against a fixed input file.”
+**Why a separate primitive.** Worker dispatch (§3.3) is shaped around per-item
+partitioning and resume contracts; that machinery is overkill for “run `echo` once” or
+“run a package-specific analyzer against a fixed input file.”
 The two paths share `batch_backend.py`, `container_bootstrap.py`, the `GCP_SECRET_REFS`
 registry, and the Filestore mount script — but `metaproc gcp run` carries no
 orchestrator lease, no claim registry, no per-item dispatch manifest.
@@ -649,15 +649,13 @@ orchestrator lease, no claim registry, no per-item dispatch manifest.
 `run-process --cloud` dispatch forwards both env vars into the worker and orchestrator
 Batch envs, and `bootstrap_container()` honors them the same way `bootstrap_gcp_run()`
 does (wheel force-reinstalls into `/opt/venv`; workspace tarball extracts into
-`/workspace` and reinstalls `example_workflow/` from it, replacing the sparse clone).
+`/workspace` and reinstalls `example_plugin/` from it, replacing the sparse clone).
 This is the supported way to ship a current-branch `metaproc/` fix to workers without an
-agent-image rebuild — see
-[`../../devops/README.md` § Shipping metaproc code changes to workers](../arch/arch-cloud-execution.md).
+agent-image rebuild.
 
 See [`cloud-dispatch.runbook.md`](../runbooks/cloud-dispatch.runbook.md) §4b for
-operator recipes and the
-[`plan-2026-04-19-metaproc-gcp-run-primitive.md`](../arch/arch-cloud-execution.md) spec
-for the full design.
+operator recipes and the [this architecture](../arch/arch-cloud-execution.md) for the
+full design.
 
 ## 4. AWS Implementation
 
@@ -735,7 +733,7 @@ Runtime/doc sync refresh for the current branch:
 
 - documented the filesystem-first resume contract beyond `run-config.yaml`, including
   orchestrator leases, dispatch manifests, claim registries, and scale files
-- updated container bootstrap to describe bundled `example_workflow`, sparse clone
+- updated container bootstrap to describe bundled `example_plugin`, sparse clone
   fallback, editable install, and optional `arena` bootstrap
 - refreshed worker/orchestrator sections to match current GCP behavior and command
   surface, including `gcp scale`, `gcp remote-run`, and the broader operator tooling
@@ -744,7 +742,7 @@ Runtime/doc sync refresh for the current branch:
 
 ### rev3 (2026-04-19)
 
-Claude Code CLI Personal-Plan auth on GCP Batch (epic `internal-reference`):
+Claude Code CLI Personal-Plan auth on GCP Batch (the original design):
 
 - **§2.8 Container Bootstrap Contract**: added step 7 — adapter `bootstrap(home)` hook
   for credential files not safe to keep as env vars for the job lifetime.
@@ -762,7 +760,7 @@ Claude Code CLI Personal-Plan auth on GCP Batch (epic `internal-reference`):
 
 ### rev4 (2026-04-19)
 
-`metaproc gcp run` arbitrary-command dispatch primitive (epic `internal-reference`):
+`metaproc gcp run` arbitrary-command dispatch primitive:
 
 - **§3.14 Module Summary**: added `dispatch_artifacts.py`, `gcp_run_dispatch.py`,
   `gcp_run_entrypoint.py`, `gcp_run_logs.py`.

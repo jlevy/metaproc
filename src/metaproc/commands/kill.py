@@ -160,7 +160,7 @@ def _wait_for_exit(pid: int) -> str:
         except ProcessLookupError:
             return "terminated"
         except PermissionError:
-            return "terminated"
+            return "permission_denied"
         time.sleep(0.2)
     return "still_running"
 

@@ -1,7 +1,7 @@
 """Enforce that every env-var read goes through a typed registry.
 
 This is the Phase 2 merge gate for
-``docs/project/specs/active/plan-2026-04-21-env-var-registry-hardening.md``.
+``docs/arch/arch-metaproc-core.md``.
 
 Rule
 ----
@@ -42,10 +42,10 @@ ALLOWLIST: dict[tuple[str, int], str] = {
         "SecretRef.resolve: dynamic env via Mapping default to os.environ"
     ),
     # _build_env_exports iterates a literal list of var names.
-    ("src/metaproc/commands/gcp.py", 2158): "iterates _REMOTE_RUN_ENV_VARS literal list",
+    ("src/metaproc/commands/gcp.py", 2157): "iterates _REMOTE_RUN_ENV_VARS literal list",
     # Template-placeholder fallback: the key is an arbitrary template
     # variable name, not a fixed env var, so the call is genuinely dynamic.
-    ("src/metaproc/engine/placeholders.py", 88): "template {{key}} dynamic env fallback",
+    ("src/metaproc/engine/placeholders.py", 84): "template {{key}} dynamic env fallback",
 }
 
 

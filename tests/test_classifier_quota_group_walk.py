@@ -1,7 +1,7 @@
 """Tests for the 429-cooling quota-group walk in _teardown_pool_slot.
 
-Phase 4 of the Vehicle A pool redesign (epic internal-reference, bead internal-reference).
-Spec: docs/project/specs/active/plan-2026-04-28-claude-code-auth-vehicle-a-pool-redesign.md.
+Phase 4 of the Vehicle A pool redesign (the original design, this regression).
+Spec: docs/arch/arch-metaproc-core.md.
 
 When the classifier returns ``status=cooling`` (429 rate-limit), the
 retry path should walk past the entire quota group of the failing
@@ -70,7 +70,7 @@ class _FakeBackend:
 
 @dataclass
 class _FakeCoordinator:
-    _backend: _FakeBackend
+    backend: _FakeBackend
 
 
 @dataclass
@@ -103,7 +103,7 @@ def _seed_three_labels(
     backend.entries[("claude-code-cli", "alt1")] = _entry("alt1", quota_group=alt1_group)
     backend.entries[("claude-code-cli", "alt2")] = _entry("alt2", quota_group=alt2_group)
     backend.entries[("claude-code-cli", "alt3")] = _entry("alt3", quota_group=alt3_group)
-    return _FakePoolDispatch(coordinator=_FakeCoordinator(_backend=backend))
+    return _FakePoolDispatch(coordinator=_FakeCoordinator(backend=backend))
 
 
 def _lease(label: str) -> SlotLease:
@@ -236,7 +236,7 @@ class TestClassificationVerdictGating:
 
 
 class TestCrossQuotaGroupOptOut:
-    """Phase 11.3 (internal-reference): --no-auth-cross-quota-group skips expansion.
+    """Phase 11.3: --no-auth-cross-quota-group skips expansion.
 
     The expansion is unconditional inside the helper; the gate is in
     ``_teardown_pool_slot`` which only calls the helper when

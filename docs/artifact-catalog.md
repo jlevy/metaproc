@@ -59,8 +59,8 @@ logical type stays `.jsonl`.
 | `dispatch-config-changes.jsonl` | `<run>/.logs/` | ad-hoc dict (typed envelope pending) | `commands/run_process.py:_record_resume_config_change` | resource aggregator timeline |
 | `trace.jsonl` | `<run>/.logs/derived/` | `TraceEvent` | `trace/store.py:write_trace` | metabrowser trace view, `metaproc trace` |
 | `<step>_<context>_<ts>.jsonl` | `<run>/.logs/tasks/<step>/<item>/` | depends on agent adapter | `runpool/backend.py` (subprocess stdout capture) | trace extractor, human debugging |
-| `invocations.jsonl` | `<run>/.logs/tools/<tool-name>/` | `ArenaToolRecord` on read side; write side currently ad-hoc | `example_workflow/arena_wrapper.py:log_tool_invocation` (for arena) | resource joiner, eval judge, usage aggregator |
-| `web-searches.jsonl` | `<run>/.logs/tools/arena/` | `WebSearchLog` | `arena_wrapper.py:_log_web_search` | eval judge, human debugging |
+| `invocations.jsonl` | `<run>/.logs/tools/<tool-name>/` | Tool-specific record on read side; write side currently ad-hoc | consumer plugin | resource joiner, eval judge, usage aggregator |
+| `web-searches.jsonl` | `<run>/.logs/tools/<tool-name>/` | Consumer-defined search log | consumer plugin | eval judge, human debugging |
 | `resource-events.jsonl` | `<run>/.logs/` | `ResourceEvent` (discriminated union) | `logutil/resource_events.py:ResourceEventLogger.write` plus atomic rewrite by rollup | resource rollup builder |
 
 Legacy: `runpool-events.jsonl` is the pre-V2 equivalent of `events.jsonl`. Still parsed
@@ -72,7 +72,7 @@ by the trace extractor as a fallback; new runs do not emit it.
 | --- | --- | --- | --- | --- | --- |
 | `resources.json` | `<run>/` | `ResourcesDocument` (`metaproc:ResourcesDocument/v1`) | atomic, once or on refresh | `engine/resource_rollup.py:write_resource_artifacts` | metabrowser `/api/resources`, `metaproc resource-report` |
 | `*.invocation.json` (sidecar) | `<run>/.state/tasks/<step>/<item>/<attempt>/` | ad-hoc dict | atomic, once before spawn | `runpool/backend.py:write_invocation_sidecar` | trace claude_agent extractor, human debugging |
-| arena tool cache `*.json` | `<run>/.logs/tools/arena/cache/...` (typical) | ad-hoc (externally-owned upstream payload) | atomic, once per cache miss | `example_workflow/arena_wrapper.py` | arena wrapper on re-run |
+| tool cache `*.json` | `<run>/.logs/tools/<tool-name>/cache/...` (typical) | ad-hoc (externally-owned upstream payload) | atomic, once per cache miss | consumer plugin | tool wrapper on re-run |
 
 JSON is reserved for deeply-nested / large machine documents (`resources.json`) and
 externally-owned payloads (arena cache).
@@ -91,8 +91,8 @@ Pattern documented in the standalone
 | Filename | Path | Envelope key + schema | Writer | Primary readers |
 | --- | --- | --- | --- | --- |
 | `usage.md` | `<run>/` | `usage` / `metaproc:UsageReport/0.2` | `commands/write_usage.py` via `logutil/usage.py:write_usage_report` | human operator |
-| `qa-report.md` (per-item) | `<run>/<artifact-tree>/.../` | `qa` / domain-defined | `example_workflow/qa/handler.py` (line ~177) | human operator |
-| `qa-summary.md` (per-process) | `<run>/<artifact-tree>/.../` | `qa_summary` / domain-defined | `example_workflow/qa/handler.py` (line ~185) | human operator |
+| `qa-report.md` (per-item) | `<run>/<artifact-tree>/.../` | `qa` / domain-defined | `example_plugin/qa/handler.py` (line ~177) | human operator |
+| `qa-summary.md` (per-process) | `<run>/<artifact-tree>/.../` | `qa_summary` / domain-defined | `example_plugin/qa/handler.py` (line ~185) | human operator |
 
 The `usage.md` envelope is registered in `metaproc.io.frontmatter.ENVELOPE_MAP`; the
 `qa` / `qa_summary` envelopes are registered the same way.
@@ -106,8 +106,7 @@ The `usage.md` envelope is registered in `metaproc.io.frontmatter.ENVELOPE_MAP`;
 
 ## Pending renames
 
-Tracked in
-[plan-2026-05-20-metaproc-resource-usage-and-file-format-policy.md](conventions.md):
+Tracked per the [file-format policy](conventions.md):
 
 | Current | Planned | Reason |
 | --- | --- | --- |

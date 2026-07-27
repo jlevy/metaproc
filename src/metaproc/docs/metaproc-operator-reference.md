@@ -7,40 +7,28 @@ description: The runtime command and recovery reference for operators (human or 
 > **READ THIS FIRST.** If you are an operator agent (human or AI) about to launch,
 > monitor, or recover a metaproc workflow, the rules in this doc are not optional.
 > They are derived from concrete failures where an operator skipped them and lost hours.
-> The CLI surfaces this doc via `metaproc help operator`; the agent-orch-guidelines and
-> EIA `batch.playbook.md` both link here as a pre-launch checkbox.
-> If you have NOT read § Top mistakes to avoid + § Operating Rules below, stop and read
-> them before touching a run.
+> The CLI surfaces this doc via `metaproc help operator`. If you have NOT read § Top
+> mistakes to avoid + § Operating Rules below, stop and read them before touching a run.
 
 Related docs: [concepts](metaproc-concepts-and-principles.md) (first principles) ·
 [developer guide](metaproc-developer-guide.md) (extending metaproc).
 This reference and the other bundled docs are served at runtime via
 `metaproc help <operator|concepts|developer>`.
 
-## Top Mistakes to Avoid (Learnings from Real Incidents)
+## Top Mistakes to Avoid
 
-These are mistakes a supervising operator (human or agent) has actually made; each one
-cost hours and is preventable by reading this manual before launch.
-Treat as a pre-flight checklist.
-Add new rows when a new failure mode is debriefed in a logbook.
+Treat this as a pre-flight checklist.
 
-| # | Mistake | Right thing to do | Source incident |
-| --- | --- | --- | --- |
-| 1 | Used `find` / `ls` / `tail` / `grep` to count artifacts, parse leases, infer state | Use `metaproc status`, `metaproc pulse`, `metaproc pool status/events`, `metaproc stats`, `metaproc tail --summary` — see § Reusable command set. **Rule #1 below.** | `arb-2026-05-26-tue-amc-five-adapter` logbook |
-| 2 | Set `--max-concurrency` low (e.g. 8) to “play safe” — caused runpool to clamp to 1 under mild pressure | Keep operator cap at **≥20**; let the adaptive memory + provider ceilings ratchet down. **Rule #7 below.** | Same logbook; 76 clamp events, 19 `pressure_critical` to conc=1, 2× wall-clock blow-up |
-| 3 | Wrote a bash autopilot script (`wave3-autopilot.sh`) to release held lanes when active < cap | `metaproc` IS the wrapper. Add a metaproc subcommand instead. The framework’s autopilot work is tracked in `plan-2026-05-25-metaproc-autopilot-and-step-budgets.md`. | Same logbook |
-| 4 | Held queued lanes for hours under the orchestrator cap, treating “Wave 1 first” as a serial completion gate | Stay AT the cap whenever a held lane exists. The 4-orch hard rule is “max 4 active,” not “1 at a time.” | Same logbook; 3 Gemini lanes idle 3+ hours when the cap was open |
-| 5 | Treated repeated `exit_145` events as transient crashes and let runpool retry 7× per ticker | Every adapter’s `classify_failure` MUST return `severity=ABORT` for any non-retriable error from the coding-agent CLI: HTTP 401/403, `invalid_grant`, missing binary, malformed config, schema-validator rejection, version mismatch. Same principle as “Python can’t start → fatal.” Today only `claude_code.py` and `codex.py` implement it; `gemini.py` and `pi_cli.py` use the default no-op classifier → 401s look like crashes and get retried 7×. See § “Adapter failure-classification contract” below. | Same logbook; 88 wasted `exit_145` retries on Gemini lanes for a config error |
-| 6 | Launched without sourcing the right env file (`.env` had placeholder API keys; real keys live in `.env.claude-code`) | Always run `metaproc auth-check --live --variant <profile>` per intended profile before launch. The auth-check would have failed loudly with the real cause. | Same logbook; wasted ~30 min recovering from the first Wave 1 failure |
-| 7 | Used `caffeinate -dimu -- VAR=value cmd` to pass env vars to a backgrounded launch | `caffeinate --` consumes the first arg as a command, so `VAR=value` becomes a command. Use `caffeinate -dimu -- env VAR=value ... cmd` (the `env` binary explicitly accepts var assignments). | Same logbook |
-| 8 | Built per-batch monitor filters from scratch instead of using the canonical alternation | Use the alternation from `docs/general/guidelines/agent-orch-guidelines.md` § “Canonical pattern” verbatim; widen but never narrow. | Repeated across multiple batches (2026-04-28/29/30 cohort + 2026-05-26 Tue AMC) |
-| 9 | Mistook macOS “free memory percentage” for actual pressure ("39% free!") | macOS reclaims `inactive` + `speculative` + `purgeable` pages on demand; the real signal is `kern.memorystatus_level` + the runpool’s pressure events. Check `vm_stat` + `metaproc pool status` together, not free%. | Same logbook; misdiagnosed clamping cause |
-| 10 | Re-launched lanes without verifying `metaproc auth-check` passed for the variant first | Auth-check is the deterministic preflight. If gemini-cli is going to 401 with `Expected OAuth2`, auth-check catches it. Don’t skip. | Same logbook; would have caught the API-key env conflict |
-| 11 | `stall_timeout_s` killed long-but-progressing claude-opus agents because they go silent for >5 min during a single deep WebFetch / tool-call sequence | Default raised from 5 → 15 minutes (2026-05-26). claude-opus agents legitimately spend 5-10 min without stdout during internal reasoning + tool calls. The 5-min threshold caused 8+ false-positive kills per batch run, each triggering a 5-20 min retry. Override per-batch with `POOL_STALL_TIMEOUT_MINUTES=N`. | 2026-05-26 Tue AMC batch; 15 kills cost ~2.5 hours of the 4h56m claude lane wall-clock (the gap between predicted 2h50m and actual 4h56m) |
-| 12 | Stall-watcher kills surfaced silently as `Killed ticker=X: stalled` lines in the wrapper log; supervising agent missed the cumulative pattern (15 kills in one batch) and treated slow wall-clock as “agents being slow” instead of “agents being killed prematurely” | `metaproc stats` should surface a kill count alongside Done/Run/Fail/Pend — tracked in `plan-2026-05-25-metaproc-autopilot-and-step-budgets.md` § Phase 0 follow-ups. Until then: `metaproc pool rollup <run-dir>/analysis-research --json \| jq '.totals.killed'` and add `Killed ticker=` to the canonical monitor filter. **Treat ≥3 kills in a single batch as a signal to investigate stall threshold or pool config.** | Same batch; supervising agent had to dig 4 hours deep into the wrapper log to find the kill pattern when it should have been obvious from the first cron fire |
-
-When a new failure mode lands a logbook entry, add a row here with the link.
-Keep it ordered by frequency — the most-repeated mistakes come first.
+| Mistake | Right thing to do |
+| --- | --- |
+| Parsing run directories with `find`, `ls`, `tail`, or `grep` | Use `metaproc status`, `pulse`, `pool`, `stats`, and `tail --summary`; these commands understand leases and both supported layouts. |
+| Treating a low operator cap as a memory-safety control | Set the intended upper bound and let adaptive memory and provider ceilings reduce concurrency from there. |
+| Writing an external autopilot or state parser | Add the missing Metaproc command or express the flow as a process spec. |
+| Retrying deterministic failures | Adapter classifiers must abort on authentication, installation, version, schema, and configuration failures. |
+| Launching without live authentication checks | Run `metaproc auth-check --live --variant <profile>` for every intended profile. |
+| Passing environment assignments directly to `caffeinate` | Use `caffeinate ... -- env VAR=value command`; the first argument after `--` must be an executable. |
+| Reading macOS free-memory percentage as pressure | Use the runpool pressure events and `metaproc pool status`; reclaimable pages make the raw percentage misleading. |
+| Using an aggressive stall timeout for long agent turns | Start with the documented default and change it only after inspecting progress and kill events. |
 
 ## Adapter Failure-Classification Contract
 
@@ -59,7 +47,7 @@ What MUST escalate to `severity=ABORT` (terminal, no retry — operator action r
 | **Auth / authz** | HTTP 401, HTTP 403, `Expected OAuth2 access token`, `API keys are not supported by this API`, `invalid_grant`, `unauthorized`, `Unauthenticated`, expired credential, missing credential file | Deterministic config error. Retrying doesn’t fix it. |
 | **Binary / install** | `command not found`, `No such file or directory: <cli>`, version too old (e.g. `gemini-cli < 0.40` workspace-trust gate exits 55), required Node/Python version not present | The CLI literally cannot run. |
 | **Schema / contract** | Adapter returned output that fails validator on every attempt (same error across N attempts), unsupported model name rejected by the CLI’s pre-flight (e.g. `_pi_validate_registration`), known-bug signature match (`metaproc/dispatch/known_bugs.py`) | Software bug or operator misconfig — needs a fix, not retries. |
-| **Config / env** | Required env var missing AND strictness flag on (e.g. `EIA_REQUIRE_ALL_WEB_BUNDLE_KEYS=1`), workspace permission denied, sandbox refused, trust-gate not satisfied | Deterministic; will keep failing identically. |
+| **Config / env** | Required env var missing under strict validation, workspace permission denied, sandbox refused, trust-gate not satisfied | Deterministic; will keep failing identically. |
 | **Quota — terminal** | “Monthly usage limit reached” with no reset clock, billing failure, account suspended | Cannot recover until operator intervenes. |
 
 What MAY retry (`severity=RETRY_NOW` or `RETRY_AFTER_WAIT`):
@@ -76,11 +64,9 @@ contract):
   default returns `unknown` (→ generic retry).
   Override is currently OPTIONAL — that is the gap that allowed mistake #5 above.
 - `claude_code.py` and `codex.py` implement it; `gemini.py` and `pi_cli.py` do NOT.
-- Open work (tracked in
-  [`plan-2026-05-25-metaproc-autopilot-and-step-budgets.md`](../../../TODO.md) § Phase
-  0): make `classify_failure` REQUIRED (no default fallback to generic retry); add the
-  missing implementations for both `gemini.py` and `pi_cli.py`; surface ABORT events to
-  the wrapper log with the actual error message (not just `status=exit_N`);
+- Open work: make `classify_failure` REQUIRED (no default fallback to generic retry);
+  add the missing implementations for both `gemini.py` and `pi_cli.py`; surface ABORT
+  events to the wrapper log with the actual error message (not just `status=exit_N`);
   cascade-abort the whole step after N consecutive ABORTs in one fan-out (suggested
   threshold N=3).
 
@@ -89,18 +75,18 @@ message in the alternation pattern, not the opaque exit code:
 
 ```
 # Wrong (current behavior for gemini-cli 401):
-Done step=business-setup ticker=BBAR attempt=4 status=exit_145 (10s)
-ticker=BBAR: retryable [crash] -- retry scheduled (attempt 5, backoff 17s)
+Done step=business-setup item=BBAR attempt=4 status=exit_145 (10s)
+item=BBAR: retryable [crash] -- retry scheduled (attempt 5, backoff 17s)
 
 # Right (target behavior):
-Done step=business-setup ticker=BBAR attempt=1 status=auth_failed (10s) severity=ABORT
+Done step=business-setup item=BBAR attempt=1 status=auth_failed (10s) severity=ABORT
   reason=gemini-401-oauth2-required
   detail: API Error: 401 — API keys are not supported by this API. Expected OAuth2
   access token. (See adapter-compatibility.runbook.md § Gemini auth modes.)
 ABORTING step business-setup (cascade: 3 consecutive ABORT in fan-out)
 ```
 
-The agent-orch-guidelines canonical filter alternation MUST include the tokens
+Any external monitor filter SHOULD include the tokens
 `auth_failed|ABORTING|severity=ABORT|reason=gemini-|reason=pi-|reason=codex-|reason=claude-`
 so a content monitor catches this immediately.
 
@@ -529,11 +515,11 @@ closed once the attempt exits.
 Broader ad hoc sweeps can include runpool and tool logs, but only run them when you are
 done resuming that run.
 
-For old completed earnings-arb Dataroom text blobs, use an explicit Dataroom sweep
-rather than changing the automatic log policy:
+For old completed workflow text blobs, use an explicit artifact sweep rather than
+changing the automatic log policy:
 
 ```bash
-uv run metaproc gzip-text <old-run-dir>/analysis-research/datalib \
+uv run metaproc gzip-text <old-run-dir>/artifacts \
   --include .html,.md \
   --min-size 262144
 ```
@@ -628,7 +614,7 @@ for unmarked old runs.
 | Agent session logs | `<run>/.logs/tasks/<step_id>/<item_key>/*.jsonl` | Per-attempt adapter stream JSONL |
 | Captured process output | `<run>/.logs/tasks/<step_id>/process_<ts>.log` | Scalar code/subprocess stdout and stderr |
 | Captured item output | `<run>/.logs/tasks/<step_id>/<item_key>/process_<ts>.log` | Item-scoped code/subprocess stdout and stderr |
-| Workflow tool logs | `<run>/.logs/tools/<tool-name>/invocations.jsonl` | Workflow-owned tool invocation streams, such as arena wrapper calls |
+| Workflow tool logs | `<run>/.logs/tools/<tool-name>/invocations.jsonl` | Workflow-owned tool invocation streams |
 | Trace output | `<run>/.logs/derived/trace.jsonl` | Derived `TraceEvent/0.1` output from `metaproc trace --extract` |
 
 `tools/<tool-name>/` marks workflow ownership even though the file is operationally a
@@ -674,8 +660,7 @@ When runtime paths change, update these documents in the same PR:
 - [arch-runpool.md](../../../docs/arch/arch-runpool.md)
 - [../README.md](../../../README.md)
 - active specs that name source log paths
-- workflow runbooks or process specs that pin environment variables such as
-  `ARENA_WRAPPER_LOG_FILE`
+- workflow runbooks or process specs that pin tool-specific environment variables
 
 The operator reference owns command sequences and current paths.
 Design docs should explain the underlying contracts and link here for operator flows.

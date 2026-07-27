@@ -1,4 +1,4 @@
-"""P1.3 (internal-reference) -- Gemini CLI trace extractor.
+"""P1.3 -- Gemini CLI trace extractor.
 
 Gemini-cli emits flat tool_use/tool_result events paired by tool_id
 (NOT FIFO). Results return out of order when the scheduler runs
@@ -607,7 +607,7 @@ def test_attempt_carries_sidecar_adapter_metadata(tmp_path: Path) -> None:
                     "adapter_trace_source": "gemini-agent",
                     "adapter_model": "gemini-3.5-flash",
                     "lane_id": "gemini-flash",
-                    "execution_profile": "amc-five-adapter",
+                    "execution_profile": "synthetic-five-adapter",
                 },
             }
         )
@@ -620,7 +620,7 @@ def test_attempt_carries_sidecar_adapter_metadata(tmp_path: Path) -> None:
     assert attempt.attributes.get("adapter.trace_source") == "gemini-agent"
     assert attempt.attributes.get("adapter.model") == "gemini-3.5-flash"
     assert attempt.attributes.get("lane_id") == "gemini-flash"
-    assert attempt.attributes.get("execution_profile") == "amc-five-adapter"
+    assert attempt.attributes.get("execution_profile") == "synthetic-five-adapter"
 
 
 # -- sidecar from real fixture --

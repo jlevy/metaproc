@@ -1,7 +1,7 @@
 """Tests for schema_version 2 fields on EntryState (Vehicle A pool redesign).
 
-Spec: docs/project/specs/active/plan-2026-04-28-claude-code-auth-vehicle-a-pool-redesign.md
-Bead: internal-reference (Phase 1 of epic internal-reference).
+Spec: docs/arch/arch-metaproc-core.md
+Regression coverage (Phase 1 of the original design).
 
 Exercises:
 - :class:`Vehicle` enum + :class:`QuotaGroup` dataclass.

@@ -64,7 +64,10 @@ def write_claimed_items(
     path.parent.mkdir(parents=True, exist_ok=True)
     record = ClaimedItemsRecord(worker_id=worker_id, updated_at=_now_iso(), items=items)
     with atomic_output_file(path) as tmp_path:
-        Path(tmp_path).write_text(to_yaml_string(record.model_dump()))
+        Path(tmp_path).write_text(
+            to_yaml_string(record.model_dump()),
+            encoding="utf-8",
+        )
     return path
 
 
@@ -132,5 +135,7 @@ def claim_item(run_dir: Path, step_id: str, *, worker_id: str, item: str) -> boo
 def clear_claimed_items(run_dir: Path, step_id: str, *, worker_id: str) -> None:
     """Delete one worker's claim registry if it exists."""
     path = claimed_items_path(run_dir, step_id, worker_id)
-    if path.exists():
+    try:
         path.unlink()
+    except FileNotFoundError:
+        pass

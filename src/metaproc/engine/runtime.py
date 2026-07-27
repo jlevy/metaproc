@@ -205,7 +205,7 @@ def _should_drop_line(line: str) -> bool:
     return event.get("type") in _PI_LIVE_DROP_EVENTS
 
 
-def _start_log_filter_thread(pipe: IO[bytes], log_fh: IO[str]) -> threading.Thread:
+def start_log_filter_thread(pipe: IO[bytes], log_fh: IO[str]) -> threading.Thread:
     """Spawn a daemon thread that filters cumulative Pi streaming events from *pipe*
     and writes surviving lines to *log_fh* with per-line flush.
 
@@ -281,7 +281,7 @@ def launch_step(
                 start_new_session=True,
             )
             # Filter thread owns log_fh from this point.
-            filter_thread = _start_log_filter_thread(proc.stdout, log_fh)  # pyright: ignore[reportArgumentType]
+            filter_thread = start_log_filter_thread(proc.stdout, log_fh)  # pyright: ignore[reportArgumentType]
         else:
             proc = subprocess.Popen(
                 cmd,

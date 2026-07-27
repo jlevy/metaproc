@@ -169,7 +169,7 @@ def test_built_in_registry_contains_gemini_profiles() -> None:
 
     ``gemini-flash``, ``gemini-pro``, and ``pi-gemini-flash`` must remain in the
     packaged profile catalog so operators can `--execution-profiles <name>`
-    from EIA dispatch without custom YAML.
+    from a generic dispatch without custom YAML.
     """
     registry = ExecutionProfileRegistry.load(include_builtins=True)
 

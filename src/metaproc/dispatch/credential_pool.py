@@ -120,7 +120,7 @@ class Vehicle(StrEnum):
     """Credential delivery shape for a pool label.
 
     Added in schema_version 2 (Vehicle A pool redesign — see
-    ``docs/project/specs/active/plan-2026-04-28-claude-code-auth-vehicle-a-pool-redesign.md``).
+    ``docs/arch/arch-metaproc-core.md``).
 
     - ``OAUTH_TOKEN`` — static bearer credential injected via the
       ``CLAUDE_CODE_OAUTH_TOKEN`` env var. The pool stores the long-lived
@@ -423,10 +423,8 @@ class GcpSecretManagerBackend:
     """Secret-Manager-backed :class:`PoolBackend`.
 
     Authenticates via Application Default Credentials (metadata server
-    on Batch VMs, operator ``gcloud`` ADC on laptops).  Does NOT shell
-    out to ``gcloud``: the agent container at
-    ``devops/containers/Dockerfile.agent`` intentionally ships without
-    the CLI, and re-introducing it would add ~500 MB to the image.
+    on Batch VMs, operator ``gcloud`` ADC on laptops). It does not shell
+    out to ``gcloud`` because worker images need only the Python SDK.
 
     CAS uses Secret Manager etags; see
     https://cloud.google.com/secret-manager/docs/etags.
@@ -998,7 +996,7 @@ class LocalFilesystemBackend:
                 }
             entries_typed[label] = new_record
             self._write_document(doc)
-        return self._compute_etag()
+            return self._compute_etag()
 
     def delete_entry(self, adapter: str, label: str) -> None:
 
@@ -1128,6 +1126,7 @@ def safe_apply_state(
     label: str,
     entry: PoolEntry,
     compute_new: Callable[[EntryState], EntryState],
+    blob: str | None = None,
     max_attempts: int = _DEFAULT_SAFE_APPLY_MAX_ATTEMPTS,
 ) -> EntryState | None:
     """Apply a pool-state transition with race-tolerant CAS retry.
@@ -1152,12 +1151,15 @@ def safe_apply_state(
             pool_backend.upsert_entry(
                 adapter,
                 label,
-                blob=None,
+                blob=blob,
                 state=new_state,
                 expected_etag=current_entry.etag,
             )
         except ConcurrentModificationError:
-            current_entry = pool_backend.get_entry(adapter, label)
+            try:
+                current_entry = pool_backend.get_entry(adapter, label)
+            except KeyError:
+                return None
             continue
         return new_state
     # Exhausted retries — treat as a no-op observability write rather than
@@ -1261,7 +1263,7 @@ class PoolSelection:
     label: str
     secret_ref: str
     fingerprint: str
-    blob: str
+    blob: str = field(repr=False)
     vehicle: Vehicle = Vehicle.LOGIN_CREDENTIALS
 
 
@@ -1610,13 +1612,13 @@ def mark_ok(
     fp = new_fingerprint
     if fp is None and new_blob is not None:
         fp = fingerprint_blob(new_blob)
-    new_state = state_mark_ok(entry.state, new_fp=fp)
-    backend.upsert_entry(
-        adapter,
-        label,
+    _ = safe_apply_state(
+        backend,
+        adapter=adapter,
+        label=label,
+        entry=entry,
+        compute_new=lambda state: state_mark_ok(state, new_fp=fp),
         blob=new_blob,
-        state=new_state,
-        expected_etag=entry.etag,
     )
 
 
@@ -1637,8 +1639,13 @@ def mark_cooling(
         entry = backend.get_entry(adapter, label)
     except KeyError:
         return
-    new_state = state_mark_cooling(entry.state, cooling_until_ts=cooling_until_ts)
-    backend.upsert_entry(adapter, label, blob=None, state=new_state, expected_etag=entry.etag)
+    _ = safe_apply_state(
+        backend,
+        adapter=adapter,
+        label=label,
+        entry=entry,
+        compute_new=lambda state: state_mark_cooling(state, cooling_until_ts=cooling_until_ts),
+    )
 
 
 def mark_expired(
@@ -1657,8 +1664,13 @@ def mark_expired(
         entry = backend.get_entry(adapter, label)
     except KeyError:
         return
-    new_state = state_mark_expired(entry.state)
-    backend.upsert_entry(adapter, label, blob=None, state=new_state, expected_etag=entry.etag)
+    _ = safe_apply_state(
+        backend,
+        adapter=adapter,
+        label=label,
+        entry=entry,
+        compute_new=state_mark_expired,
+    )
 
 
 def write_back_rotated(
@@ -1699,13 +1711,13 @@ def write_back_rotated(
         # last_ok_ts reflects this run.
         mark_ok(backend, adapter, label)
         return
-    new_state = state_mark_ok(entry.state, new_fp=new_fp)
-    backend.upsert_entry(
-        adapter,
-        label,
+    _ = safe_apply_state(
+        backend,
+        adapter=adapter,
+        label=label,
+        entry=entry,
+        compute_new=lambda state: state_mark_ok(state, new_fp=new_fp),
         blob=new_blob,
-        state=new_state,
-        expected_etag=entry.etag,
     )
 
 

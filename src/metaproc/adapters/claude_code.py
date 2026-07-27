@@ -38,23 +38,19 @@ from metaproc.settings import (
     CLAUDE_VALID_MODELS,
 )
 
-# Env var carrying the Keychain-blob credentials payload to Batch workers.
-# See docs/project/specs/active/plan-2026-04-19-claude-code-cli-personal-plan-auth.md.
-# Deprecated alongside claude-auth; removed at P2.E per
-# plan-2026-04-21-auth-credential-pool.md.
+# Environment variable carrying the Keychain credential payload to Batch
+# workers. Retained for compatibility with the legacy credential path.
 CLAUDE_CREDS_ENV_VAR = "CLAUDE_CODE_CREDS_JSON"
 
 # macOS Keychain service name that `claude login` writes to. Used by
 # capture_credential to source blobs for `metaproc auth push`.
 CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials"
 
-# Pinned Claude Code CLI version. Bumping this is a four-step ritual:
+# Pinned Claude Code CLI version. To update it:
 #   1. update this constant
-#   2. update CLAUDE_CODE_VERSION arg default in devops/containers/Dockerfile.agent
-#   3. install the matching version locally (`claude` self-updates; verify
+#   2. install the matching version locally (`claude` self-updates; verify
 #      `claude --version` matches)
-#   4. rebuild + push agent image; smoke 1-ticker; verify Bash in tools list
-# See devops/process/update-claude-code-version.runbook.md for the full process.
+#   3. rebuild any deployment images and run an adapter smoke test
 PINNED_CLAUDE_CODE_CLI_VERSION = "2.1.126"
 CLAUDE_CODE_INSTALL_HINT = (
     f"Install: npm install -g @anthropic-ai/claude-code@{PINNED_CLAUDE_CODE_CLI_VERSION}"
@@ -113,9 +109,8 @@ def verify_claude_version(
         msg = (
             f"Claude Code CLI version mismatch: pinned={expected!r}, "
             f"actual={actual!r} (`{claude_path} --version` -> {output!r}). "
-            "Bump PINNED_CLAUDE_CODE_CLI_VERSION + Dockerfile.agent's "
-            "CLAUDE_CODE_VERSION together; see "
-            "devops/process/update-claude-code-version.runbook.md."
+            "Update PINNED_CLAUDE_CODE_CLI_VERSION and any deployment-image "
+            "pins together."
         )
         raise ClaudeCodeVersionMismatch(msg)
     return actual
@@ -618,7 +613,7 @@ class ClaudeCodeCliAdapter:
         # tool surface (Monitor / PushNotification / RemoteTrigger) instead
         # of the standard execution surface (Bash / Read / Write / Edit /
         # Grep / Glob). Result: process-item produces template-shell
-        # output because claude can't run arena_wrapper.py via Bash. Drop
+        # output because Claude cannot run the configured wrapper via Bash. Drop
         # both vars before invoking claude.
         env = {k: v for k, v in env.items() if k not in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
         # IS_SANDBOX=1 bypasses Claude Code's root-user refusal for
@@ -911,9 +906,7 @@ class ClaudeCodeCliAdapter:
         # bakes parallel files at /root/.claude{,.json} for non-slot
         # paths (orchestrator pre-flight, ad-hoc invocations).
         #
-        # Research:
-        #   docs/project/research/research-2026-05-02-claude-code-onboarding-gate.md
-        #   https://code.claude.com/docs/en/sandboxing
+        # Reference: https://code.claude.com/docs/en/sandboxing
         onboarding_marker = slot_dir / ".claude.json"
         onboarding_marker.write_text('{"hasCompletedOnboarding": true}\n')
         onboarding_marker.chmod(0o600)
@@ -1106,7 +1099,7 @@ class ClaudeCodeCliAdapter:
             # api-401-only was over-conservative: it assumed retry meant
             # same-label retry, but the orchestrator's retry path always
             # excludes the failed label first. Keeping ABORT was the
-            # reason 52/52 BMO+AMC items burned with retry_count=0
+            # reason 52/52 production+production items burned with retry_count=0
             # despite alt2 being eligible — fixed here.
             return AuthFailureClassification(
                 status="expired",
@@ -1241,8 +1234,7 @@ class ClaudeCodeCliAdapter:
         for Claude Code, so this adapter derives utilization from the
         most-recent ``rate_limit_event`` records found across recent
         runs under ``$RUNS_DIR``, attributed to this label via the
-        Phase 1 ``auth_lease_acquired`` join keys (plan-2026-05-03
-        internal issue).
+        Phase 1 ``auth_lease_acquired`` join keys.
 
         ``slot_dir`` is the sentinel path
         :func:`metaproc.dispatch.preflight.summarize_headroom` passes
@@ -1316,8 +1308,7 @@ class ClaudeCodeCliAdapter:
         Unlike :meth:`query_quota_usage`, this works before the first
         429 of a run — it asks the vendor directly instead of deriving
         from rate-limit-event records. The endpoint is the same one
-        Claude's own desktop HUD calls; internal issue from
-        plan-2026-05-12-live-auth-quota-probes.md.
+        Claude's own desktop HUD calls.
 
         Errors (missing creds, network failure, 401, schema drift) all
         return ``None`` so the CLI surface can render ``—`` rather than

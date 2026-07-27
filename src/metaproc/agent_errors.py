@@ -7,7 +7,7 @@ Used by:
   failed attempts.
 - :mod:`metaproc.adapters.claude_code` to raise typed exceptions (e.g.
   ``QuotaExhaustedError``) so the runpool can pause-and-resume at the
-  pool level instead of crashing every queued ticker.
+  pool level instead of crashing every queued item.
 
 Patterns are intentionally narrow: a span/attempt that doesn't match a
 known pattern stays classified as ``agent_error`` so it's still surfaced,

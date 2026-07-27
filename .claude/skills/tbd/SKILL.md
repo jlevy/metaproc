@@ -25,7 +25,7 @@ Run 'tbd setup' to update.
 ## Installation
 
 ```bash
-npm install -g get-tbd@latest      # Install or upgrade the CLI (same command for both)
+npm install -g get-tbd@0.4.1      # Install or upgrade the CLI (same command for both)
 tbd setup --auto --prefix=<name>   # Fresh project (--prefix is REQUIRED: 2-8 alphabetic chars recommended. ALWAYS ASK THE USER FOR THE PREFIX; do not guess it)
 tbd setup --auto                   # Existing tbd project — also the upgrade step (applies any format migration; commit the diff it reports)
 tbd setup --from-beads             # Migration from .beads/ if `bd` has been used

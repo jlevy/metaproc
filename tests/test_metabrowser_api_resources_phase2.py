@@ -1,4 +1,4 @@
-"""Phase 2 /api/resources payload contracts (spec §8.4, epic internal-reference)."""
+"""Phase 2 /api/resources payload contracts (spec §8.4, the original design)."""
 
 from __future__ import annotations
 

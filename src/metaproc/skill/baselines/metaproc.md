@@ -34,8 +34,8 @@ what metaproc already does:
   A multi-step flow is a `*.process.md`; a new run-state view is a `metaproc`
   subcommand. See `metaproc help developer`.
 - **Env hygiene for long runs** (`env -u ANTHROPIC_API_KEY`; wrapper log on persistent
-  storage, never `/tmp/`; `caffeinate`): `metaproc/docs/conventions.md` Logging Rules
-  and `docs/general/guidelines/agent-orch-guidelines.md`.
+  storage, never `/tmp/`; `caffeinate`): see `metaproc help operator` and the
+  repository’s `docs/conventions.md`.
 
 ## When to Invoke
 
@@ -45,8 +45,8 @@ what metaproc already does:
 - Arming autonomous supervision with `metaproc pulse`
 - Deciding whether new functionality belongs in metaproc, a workflow helper, or a skill
 
-Workflow-specific skills (such as the EIA-batch skill) delegate here for the kickoff
-sequence and defer to the metaproc CLI for execution.
+Workflow-specific skills (such as the large workflow-batch skill) delegate here for the
+kickoff sequence and defer to the metaproc CLI for execution.
 
 ## Kickoff Sequence: Preflight → Confirm → Launch → Supervise
 

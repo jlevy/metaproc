@@ -8,7 +8,7 @@ import tarfile
 import zipfile
 from pathlib import Path
 
-from devtools.public_hygiene import find_hygiene_findings
+from devtools.public_hygiene import find_binary_findings, find_hygiene_findings
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
@@ -50,6 +50,9 @@ def _check_text_member(name: str, payload: bytes) -> None:
     try:
         text = payload.decode("utf-8")
     except UnicodeDecodeError:
+        findings = find_binary_findings(name, payload)
+        if findings:
+            raise RuntimeError(f"artifact hygiene failed: {findings[:10]}") from None
         return
     findings = find_hygiene_findings(name, text)
     if findings:

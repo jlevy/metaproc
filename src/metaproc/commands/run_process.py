@@ -283,10 +283,11 @@ def _get_git_sha() -> str:
             ["git", "rev-parse", "--short", "HEAD"],
             capture_output=True,
             text=True,
+            timeout=10,
         )
         if result.returncode == 0:
             return result.stdout.strip()
-    except FileNotFoundError:
+    except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
     return ""
 
@@ -308,7 +309,7 @@ def _write_run_config(  # noqa: PLR0913
 ) -> Path:
     """Write run-config.yaml at run creation time; record changes on resume.
 
-    Schema v2 (plan-2026-05-03 internal issue): adds an ``auth:`` block
+    Schema v2 adds an ``auth:`` block
     capturing the dispatch's auth-pool configuration and a
     ``concurrency:`` block capturing the operator's max-concurrency
     intent. On resume, compares the new flags against the persisted
@@ -1027,7 +1028,7 @@ async def _run_agent_subprocess(
     def _run() -> int:
         if use_filter:
             from metaproc.engine.runtime import (  # noqa: PLC0415 -- optional filter path
-                _start_log_filter_thread,
+                start_log_filter_thread,
             )
 
             log_fh = log_path.open("w")
@@ -1044,7 +1045,7 @@ async def _run_agent_subprocess(
                 if stdout_pipe is None:
                     msg = "adapter subprocess did not expose the requested stdout pipe"
                     raise RuntimeError(msg)
-                ft = _start_log_filter_thread(stdout_pipe, log_fh)
+                ft = start_log_filter_thread(stdout_pipe, log_fh)
                 fg_proc.wait(timeout=timeout_s)
                 ft.join(timeout=5.0)
                 return fg_proc.returncode
@@ -1246,9 +1247,8 @@ async def _execute_agent_step(
         # effective_variant. Without it, output paths containing {{run.variant}}
         # render with the literal placeholder and fpath.exists() reports false
         # even when the agent wrote the artifact at the correct path. Hit by
-        # create-ops-review and create-prediction-summary on Wed 2026-04-29 +
-        # Thu 2026-04-30 Tier 1 smoke (ops-review.md / pre-earnings-prediction-
-        # summary.md present on disk, step transitioned to FAILED).
+        # A production smoke exposed this when artifacts existed on disk but the
+        # unresolved placeholder made the step transition to FAILED.
         output_errors = validate_item_outputs(artifact_dir, effective_outputs, variables=step_vars)
         if output_errors:
             mark_failed_at(
@@ -1304,9 +1304,8 @@ async def _execute_composite_step(
     the child's `run_parallel` invocations get `pool_dispatch=None` and bypass
     the pool entirely — Claude calls fall back to ambient `~/.claude` creds
     (the operator's interactive-login session) instead of the pool labels.
-    Surfaced 2026-05-21: EIA tier1 ran 3 hours of Claude calls but
+    Surfaced 2026-05-21: large workflow tier1 ran 3 hours of Claude calls but
     `metaproc auth usage <tier1>` reported 0 invocations on alt1/alt2.
-    See `internal issue`.
     """
     step_id = step_def.id
 
@@ -1388,7 +1387,7 @@ async def _execute_composite_step(
     except CLIError as exc:
         # Surface the inner failure message — without this the operator
         # sees `Step '<composite>': FAILED` with no reason. Caught during
-        # 2026-05-13 AMC rerun where two dispatches died at the
+        # 2026-05-13 production rerun where two dispatches died at the
         # bundle→agent boundary with no visible error.
         out.progress(f"  Step '{step_id}': inner CLIError — {exc}")
         return False
@@ -2204,7 +2203,6 @@ async def _orchestrate(
         # on `--from <step>` resumes via _verify_ancestors. Friday 2026-05-01
         # cohort: bare resume cleaned adhoc-kb-candidates and rebuilt mine-adhoc
         # despite an earlier `override mine-adhoc --satisfied`.
-        # See internal issue.
         level_overrides_doc = _read_overrides_for_verify(run_dir)
 
         # Filter steps: skip blocked, user-skipped, override-satisfied, and already-completed.
@@ -2539,7 +2537,7 @@ def run_process_command(
             "Defaults to warn. refuse blocks dispatch when projected demand "
             "exceeds 80% of pool headroom (computed via "
             "claude_code.query_quota_usage's recent rate_limit_event "
-            "synthesis); off skips the gate. plan-2026-05-03 internal issue."
+            "synthesis); off skips the gate."
         ),
     ),
 ) -> None:
@@ -2557,7 +2555,7 @@ def run_process_command(
     except ValueError as exc:
         raise CLIError(str(exc)) from exc
 
-    # Dispatch-start ambient-auth env sweep (plan-2026-05-03 internal issue).
+    # Dispatch-start ambient-auth environment sweep.
     # Fires before any further setup — including --dry-run plan rendering
     # — so operators previewing an upcoming dispatch see the conflict
     # surfaced at the same point a real launch would. The per-item
@@ -2680,8 +2678,8 @@ def run_process_command(
     # operator would get the dry-run preview's items×lanes count but only
     # items×1 worth of actual work, silently under the run profile. Refuse
     # the launch and direct operators at the sibling-run shape until
-    # same-runpool multi-lane drive lands (bead internal issue epic, follow-up
-    # to internal issue). Dry-run remains permissive so plan inspection works.
+    # same-runpool multi-lane execution can preserve per-lane configuration.
+    # Dry-run remains permissive so plan inspection works.
     if not dry_run and len(plan.execution_lanes) > 1:
         lane_ids = ", ".join(lane.lane_id for lane in plan.execution_lanes)
         raise CLIError(
@@ -2692,7 +2690,7 @@ def run_process_command(
             "the other lanes. For multi-lane comparisons today, compile a "
             "dispatch plan with --execution-profiles (one sibling run per "
             "lane) — see "
-            "docs/project/specs/active/plan-2026-05-18-metaproc-execution-lanes-and-runpool.md "
+            "docs/arch/arch-metaproc-core.md "
             "§ Phase 2 follow-up."
         )
 
@@ -2900,13 +2898,13 @@ def run_process_command(
     out.progress(f"Run dir: {run_dir}")
     out.progress(f"Backend: {backend}")
 
-    # ── Auth-pool dispatch template (internal issue) ────────────────────
+    # ── Auth-pool dispatch template ────────────────────
     # Constructed once at top level and threaded through to fan-out steps.
     # `step` is filled per-step inside _execute_fan_out_step via
     # dataclasses.replace before passing to _run_agent_pool.
     #
     # ``auth_flags_resolved`` is the AuthPoolFlags shape the gcp-worker
-    # leg consumes (internal issue). Built alongside pool_dispatch_template
+    # leg consumes. Built alongside pool_dispatch_template
     # with the worker-default backend resolved (gcp-secret-manager for
     # cloud workers) so the worker run-parallel receives an explicit
     # --auth-backend even when the operator omitted it.
@@ -2952,10 +2950,6 @@ def run_process_command(
         # has ≥ 2 labels and --auth-policy is unset; PRIORITY_ORDER
         # otherwise. Explicit --auth-policy priority-order reproduces
         # legacy behavior bit-for-bit.
-        if auth_include_labels and auth_exclude_labels:
-            raise CLIError(
-                "--auth-include-labels and --auth-exclude-labels are mutually exclusive."
-            )
         if auth_policy:
             try:
                 resolved_selection_policy = SelectionPolicy(auth_policy)
@@ -3015,7 +3009,7 @@ def run_process_command(
         priority_repr = list(strategy.labels) or "(any active)"
         out.progress(
             f"Auth pool: adapter={auth_account} backend={resolved_auth_backend} "
-            f"strategy=priority-order labels={priority_repr} "
+            f"strategy={resolved_selection_policy.value} labels={priority_repr} "
             f"fallback={fallback_policy_enum.value}"
         )
 

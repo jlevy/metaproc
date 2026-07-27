@@ -1,4 +1,4 @@
-"""Unit tests for adapters — ported from example_workflow.
+"""Unit tests for adapters — ported from example_plugin.
 
 Tests cover:
   - Registry lookup (get_adapter)
@@ -286,11 +286,11 @@ class TestGeminiCliAdapter:
         idx = cmd.index("-m")
         assert cmd[idx + 1] == "flash"
 
-    def test_existing_prompt_file_is_inlined(self, tmp_path: Path) -> None:
+    def test_existing_prompt_file_is_referenced(self, tmp_path: Path) -> None:
         prompt_file = tmp_path / "prompt.txt"
         prompt_file.write_text("Analyze PAYX")
         cmd = self.adapter.build_command(prompt_file, {}, {})
-        assert cmd[:3] == ["gemini", "-p", "Analyze PAYX"]
+        assert cmd[:3] == ["gemini", "-p", f"@{prompt_file}"]
 
     def test_bypass_permissions_maps_to_yolo(self) -> None:
         cmd = self.adapter.build_command(
@@ -362,8 +362,8 @@ class TestGeminiCliAdapter:
         system_md_path = Path(result["GEMINI_SYSTEM_MD"])
         assert system_md_path.exists()
         assert system_md_path.read_text() == "Be helpful."
-        # Cleanup
-        system_md_path.unlink()
+        second = self.adapter.prepare_env(env, {"append_system_prompt": "Be helpful."})
+        assert Path(second["GEMINI_SYSTEM_MD"]) == system_md_path
 
     def test_prepare_env_no_system_prompt(self) -> None:
         env = {"PATH": "/usr/bin"}
@@ -380,7 +380,8 @@ class TestGeminiCliAdapter:
         written = json.loads(settings_path.read_text())
         assert written == GEMINI_DEFAULT_NATIVE_SETTINGS
         assert written["agents"]["overrides"]["generalist"]["enabled"] is False
-        settings_path.unlink()
+        second = self.adapter.prepare_env(env, {})
+        assert Path(second["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]) == settings_path
 
     def test_prepare_env_explicit_native_settings(self) -> None:
         """Explicit native_settings overrides the default."""
@@ -390,7 +391,6 @@ class TestGeminiCliAdapter:
         settings_path = Path(result["GEMINI_CLI_SYSTEM_SETTINGS_PATH"])
         written = json.loads(settings_path.read_text())
         assert written["agents"]["overrides"]["generalist"]["enabled"] is True
-        settings_path.unlink()
 
     def test_prepare_env_native_settings_null_skips_injection(self) -> None:
         """native_settings: null (None) skips injection entirely."""
@@ -514,6 +514,26 @@ class TestPiCliAdapter:
 
     def test_working_directory_returns_none(self) -> None:
         assert self.adapter.working_directory({}) is None
+
+    def test_prepare_env_injects_direct_provider_key_without_argv(self) -> None:
+        result = self.adapter.prepare_env(
+            {},
+            {"provider": "openai", "api_key": "secret-value"},
+        )
+        assert result["OPENAI_API_KEY"] == "secret-value"
+        cmd = self.adapter.build_command(
+            self.prompt_file,
+            {"provider": "openai", "api_key": "secret-value"},
+            {},
+        )
+        assert "secret-value" not in cmd
+
+    def test_prepare_env_injects_vertex_token_without_argv(self) -> None:
+        result = self.adapter.prepare_env(
+            {},
+            {"provider": "vertex-maas", "api_key": "short-lived-token"},
+        )
+        assert result["METAPROC_PI_API_KEY"] == "short-lived-token"
 
     def test_parse_result_event_returns_none(self) -> None:
         """Phase 1: print mode has no structured events."""

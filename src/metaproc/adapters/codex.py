@@ -11,6 +11,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, cast
 
+from strif import atomic_output_file
+
 from metaproc.adapters.base import (
     AuthFailureClassification,
     AuthStatus,
@@ -32,7 +34,7 @@ from metaproc.settings import (
 )
 
 # Env var carrying the ChatGPT-OAuth ~/.codex/auth.json payload to Batch workers.
-# See docs/project/specs/active/plan-2026-04-23-codex-adapter-and-openai-pi-models.md.
+# See docs/arch/arch-metaproc-core.md.
 CODEX_CREDS_ENV_VAR = "CODEX_CREDS_JSON"
 
 # Minimal config.toml emitted alongside auth.json in a pool slot. The two
@@ -214,9 +216,8 @@ def _build_codex_flag_groups(
     ``codex <top-level> exec <exec> [PROMPT]``; running
     ``codex exec -a never …`` fails with ``unexpected argument``.
 
-    prompt_parts holds any append_system_prompt content that will be inlined
-    into the prompt text passed as the positional argv (Codex has no
-    ``@<file>`` surrogate; this mirrors Gemini's read-and-inline pattern).
+    ``prompt_parts`` holds any ``append_system_prompt`` content that is prepended
+    to the file-backed stdin stream.
     """
     top_level: list[str] = []
     exec_flags: list[str] = []
@@ -330,24 +331,37 @@ class CodexCliAdapter:
         _ensure_codex_version_pinned()
         top_level, exec_flags, prompt_parts = _build_codex_flag_groups(merged_config, variables)
 
-        # Codex has no @<file> surrogate and the engine launches subprocesses
-        # with stdin=DEVNULL, so the prompt must be read from disk and passed
-        # as a trailing positional argv. Mirrors gemini.py's approach. Fail
-        # fast on a missing file rather than passing a literal "@/path"
-        # string that codex would interpret as the prompt body.
+        # Codex reads "-" from stdin. Launch through a constant POSIX-shell
+        # wrapper that redirects the prompt file, keeping large or sensitive
+        # prompt bodies out of argv and avoiding ARG_MAX failures.
         if not prompt_file.exists():
             msg = f"codex-cli: prompt file does not exist: {prompt_file}"
             raise FileNotFoundError(msg)
-        prompt_body = prompt_file.read_text()
-        prompt_text = "\n\n".join([*prompt_parts, prompt_body]) if prompt_parts else prompt_body
+        effective_prompt_file = prompt_file
+        if prompt_parts:
+            prompt_body = prompt_file.read_text(encoding="utf-8")
+            effective_prompt_file = prompt_file.with_suffix(".codex-prompt.txt")
+            with atomic_output_file(effective_prompt_file) as tmp_path:
+                Path(tmp_path).write_text(
+                    "\n\n".join([*prompt_parts, prompt_body]),
+                    encoding="utf-8",
+                )
 
-        return [
+        codex_command = [
             "codex",
             *top_level,
             "exec",
             "--json",
             *exec_flags,
-            prompt_text,
+            "-",
+        ]
+        return [
+            "/bin/sh",
+            "-c",
+            'prompt_file=$1; shift; exec "$@" < "$prompt_file"',
+            "metaproc-codex",
+            str(effective_prompt_file),
+            *codex_command,
         ]
 
     def validate_config(self, merged_config: dict[str, object]) -> list[ConfigRejection]:
@@ -780,7 +794,7 @@ class CodexCliAdapter:
         blob: str = "",  # noqa: ARG002
     ) -> QuotaUsage | None:
         """Return ``None`` pending Codex live-quota implementation
-        (internal issue / Phase 1 of plan-2026-05-12-live-auth-quota-probes.md).
+        (Phase 1 of plan-2026-05-12-live-auth-quota-probes.md).
 
         The live endpoint is JSON-RPC ``account/rateLimits/read`` over stdio
         against a subprocess of ``codex app-server`` (Codex CLI ≥ 0.32; the

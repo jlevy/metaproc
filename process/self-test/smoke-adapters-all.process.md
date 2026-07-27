@@ -98,9 +98,9 @@ shelling out through a second `metaproc run-process` process.
   ```
 
 - **Negative-control smoke** (bogus model name → red) — see
-  `smoke-adapters-negative-control.process.md` once it lands (`internal-reference`).
-  That is the codex-side guarantee, since codex-cli’s JSONL stream does not carry a
-  model ID and cannot be verified via `--assert-model` alone.
+  `smoke-adapters-negative-control.process.md` once it lands . That is the codex-side
+  guarantee, since codex-cli’s JSONL stream does not carry a model ID and cannot be
+  verified via `--assert-model` alone.
 
 - **Full mine pipeline** — see [`test-local.process.md`](test-local.process.md).
 

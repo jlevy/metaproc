@@ -107,7 +107,7 @@ def pool_status(
     and renders one block per pool found. When
     no pool file exists at the parent level and no child pools are found
     either, the output distinguishes "missing pool file" from "no active
-    pool anywhere under the composite run". See ``internal issue``.
+    pool anywhere under the composite run".
     """
     out = get_output()
 
@@ -543,7 +543,6 @@ def _summarize_events(
         return base
 
     if event_type == "auth_lease_acquired":
-        # Phase 1 verifiability hook (plan-2026-05-03 internal issue).
         # Schema-v2 acquisition-time companion to auth_outcome —
         # by-label distribution lets operators verify ROUND_ROBIN
         # actually distributed in production before the full Phase 2
@@ -809,9 +808,8 @@ def _iter_composite_run_dirs(run_dir: Path) -> Iterable[Path]:
       ``slot-*`` directories (those are runpool internals, not nested runs);
     - dedupes by resolved path so symlinked composite mounts don't double-up.
 
-    This is the shared discovery helper called out in
-    ``internal issue`` — extracting it collapsed three near-identical walkers
-    (pool events, pool health, pool rollup) onto one source of truth.
+    This shared discovery helper keeps pool events, pool health, and pool rollup
+    on one source of truth.
     """
     yield run_dir
     if not run_dir.is_dir():
@@ -869,7 +867,7 @@ def _composite_pool_status_files(run_dir: Path) -> list[dict[str, Any]]:
     2. **Per-step pools**: ``<run>/.state/steps/<step>/runpool-status.yaml``
 
     This ensures composite-parent runs whose child pools live under
-    ``.state/steps/`` (the canonical EIA dispatch layout) are surfaced by
+    ``.state/steps/`` (the canonical large workflow dispatch layout) are surfaced by
     ``pool status`` rather than silently missed.
     """
     entries: list[dict[str, Any]] = []
@@ -1234,7 +1232,7 @@ def _collect_sub_pools(
 
     Status files live at ``<run>/.state/steps/<step_id>/runpool-status.yaml``
     with matching events at ``<run>/.logs/runpool/steps/<step_id>/events.jsonl``.
-    Composite parent runs (e.g. EIA dispatch) also discover pools nested under
+    Composite parent runs (e.g. large workflow dispatch) also discover pools nested under
     ``<parent>/<step_id>/.state/steps/...`` via :func:`_iter_composite_run_dirs`,
     so a rollup invoked on the parent answers "every sub-pool below this
     composite run" rather than only the parent's own steps.
@@ -1607,7 +1605,7 @@ def pool_override(
             "and the host has memory + provider headroom to go higher. The "
             "controller will ramp memory_ceiling and provider_ceiling up to "
             "this new ceiling on subsequent pressure checks. See logbook "
-            "arb-2026-05-28-thu-ensemble § L7 + bead internal issue."
+            "the incident analysis + this regression."
         ),
     ),
     mode: str = typer.Option("adaptive", "--mode", help="Pool mode override: adaptive | manual"),

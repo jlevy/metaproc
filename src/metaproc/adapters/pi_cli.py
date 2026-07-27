@@ -22,7 +22,7 @@ from metaproc.adapters.base import (
 )
 from metaproc.cloud.gcp.resolve_token import resolve_gcp_token
 from metaproc.config.env_vars import MetaprocEnv
-from metaproc.config.providers import providers_with_api_keys
+from metaproc.config.providers import provider_by_name, providers_with_api_keys
 from metaproc.settings import (
     PI_DEFAULT_MODEL,
     PI_DEFAULT_PROVIDER,
@@ -63,7 +63,7 @@ _PI_ALLOWED_KEYS = frozenset(
 # (fs.read, fs.write, shell, web.search, etc.) as proposed in rev3 design
 # Section 13.1. Process specs should declare capabilities; adapters declare
 # which capabilities they support and how they map to vendor tool names.
-# See: docs/project/design/metaprocess-framework-design-draft-rev3.md
+# See: docs/arch/arch-metaproc-core.md
 
 # Map canonical (Claude-style) tool names to Pi equivalents.
 # Tools without a Pi equivalent are silently dropped.
@@ -146,11 +146,6 @@ def _build_pi_flags(
     if append_system_prompt:
         resolved = resolve_templates(str(append_system_prompt), variables)
         flags.extend(["--append-system-prompt", resolved])
-
-    # API key override (e.g. pre-resolved gcloud token)
-    api_key = merged_config.get("api_key")
-    if api_key:
-        flags.extend(["--api-key", str(api_key)])
 
     # tool_choice: recognized at the adapter layer so process specs can declare
     # intent (notably pi-qwen3-* variants, which the scaling plan wants to run
@@ -266,11 +261,26 @@ class PiCliAdapter:
     def prepare_env(
         self,
         env: dict[str, str],
-        _merged_config: dict[str, object],
+        merged_config: dict[str, object],
     ) -> dict[str, str]:
         env = dict(env)
         # Skip version check to avoid startup delays
         env["PI_SKIP_VERSION_CHECK"] = "1"
+        api_key = merged_config.get("api_key")
+        if api_key:
+            provider = str(merged_config.get("provider") or PI_DEFAULT_PROVIDER)
+            provider_spec = provider_by_name(provider)
+            if provider_spec is not None and provider_spec.api_key_env is not None:
+                env[provider_spec.api_key_env.name] = str(api_key)
+            elif provider == "vertex-maas":
+                # The packaged provider's apiKey command reads this variable.
+                # Keeping the token out of argv prevents process-list disclosure.
+                env["METAPROC_PI_API_KEY"] = str(api_key)
+            else:
+                raise ValueError(
+                    "pi-cli: api_key cannot be injected safely for provider "
+                    f"{provider!r}; use the provider's documented environment variable"
+                )
         return env
 
     def working_directory(self, _merged_config: dict[str, object]) -> Path | None:

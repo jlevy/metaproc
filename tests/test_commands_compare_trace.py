@@ -1,4 +1,4 @@
-"""P4 (internal-reference) — cross-run-dir trace comparison matrix.
+"""P4 — cross-run-dir trace comparison matrix.
 
 Pins the contract that `cross_run_matrix()` (and `metaproc compare-trace`)
 loads N trace stores and produces a side-by-side matrix using the same

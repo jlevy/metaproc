@@ -21,7 +21,7 @@ def run_dir(tmp_path: Path) -> Path:
     """A minimal run dir with one Claude attempt, one arena tool call,
     one web bundle, plus DAG + result.yaml state.
     """
-    d = tmp_path / "arb-2026-05-12-smoke"
+    d = tmp_path / "synthetic-trace-run"
     # Engine process events
     (d / ".logs").mkdir(parents=True)
     with (d / ".logs" / "process-events.jsonl").open("w") as f:
@@ -31,7 +31,7 @@ def run_dir(tmp_path: Path) -> Path:
                     "ts": "2026-05-12T00:00:00Z",
                     "event": "process_start",
                     "process": "analysis-research",
-                    "run_id": "arb-2026-05-12-smoke",
+                    "run_id": "synthetic-trace-run",
                     "backend": "local",
                     "step_count": 1,
                 }
@@ -67,7 +67,7 @@ def run_dir(tmp_path: Path) -> Path:
     (item_dir / "result.yaml").write_text(
         yaml.safe_dump(
             {
-                "run_id": "arb-2026-05-12-smoke",
+                "run_id": "synthetic-trace-run",
                 "step_id": "research-step",
                 "state": "completed",
                 "validated": True,
@@ -208,8 +208,8 @@ def run_dir(tmp_path: Path) -> Path:
 
 def test_extract_writes_trace_file(run_dir: Path):
     """Confirm the bundled framework extractors fire on the synthetic
-    run-dir. Consumer-specific extractors (arena_wrapper, web_bundle)
-    register via entry points from ``example_workflow``; this
+    run-dir. Consumer-specific tool extractors
+    register via entry points from ``example_plugin``; this
     test stays inside metaproc and only asserts on what the framework
     ships by default.
     """
@@ -226,7 +226,7 @@ def test_extract_writes_trace_file(run_dir: Path):
         "agent_session",
         "tool_call",
     }.issubset(kinds), f"missing framework kinds: {kinds}"
-    assert spans[0].trace_id == "arb-2026-05-12-smoke"
+    assert spans[0].trace_id == "synthetic-trace-run"
 
 
 def test_extract_includes_extractor_sources(run_dir: Path):

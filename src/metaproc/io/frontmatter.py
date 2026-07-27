@@ -141,15 +141,21 @@ class _temporary_text_artifact:
 
     def __enter__(self) -> Path:
         suffix = self.path.with_suffix("").suffix
-        with tempfile.NamedTemporaryFile(
+        tmp = tempfile.NamedTemporaryFile(
             "w",
             encoding="utf-8",
             delete=False,
             suffix=suffix,
-        ) as tmp:
-            with ArtifactPath(self.path).open_text() as src:
+        )
+        self._path = Path(tmp.name)
+        try:
+            with tmp, ArtifactPath(self.path).open_text() as src:
                 tmp.write(src.read())
-            self._path = Path(tmp.name)
+        except BaseException:
+            with suppress(OSError):
+                self._path.unlink()
+            self._path = None
+            raise
         return self._path
 
     def __exit__(self, *_exc: object) -> None:

@@ -1,6 +1,6 @@
 """Tests for the per-step preflight quota gate in _run_agent_pool.
 
-internal-reference (Phase 3 of plan-2026-05-03). Verifies the gate fires
+the fix (Phase 3 of plan-2026-05-03). Verifies the gate fires
 before fan-out, honors --auth-preflight-quota-guard posture (off /
 warn / refuse), and skips when no auth pool is configured.
 """

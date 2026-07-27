@@ -79,7 +79,7 @@ def first_positional_arg(args: object) -> str | None:
 
 # ── Adapter-neutral tool-name → (family, operation, usage_role) classifier ──
 #
-# Moved here from claude_agent.py under P1.1 (internal issue). Every per-adapter
+# Moved here from claude_agent.py under P1.1. Every per-adapter
 # extractor (claude, codex, gemini, pi) routes its raw tool name through this
 # helper so the canonical attribute taxonomy (`tool.family`, `tool.operation`,
 # `tool.usage_role`) is identical across adapters and roll-ups stay
@@ -236,7 +236,7 @@ def bash_tool_usage_attrs(command: str | None) -> dict[str, Any]:
     return attrs
 
 
-# ── Attempt cost attributes (P1.6, internal issue) ──
+# ── Attempt cost attributes (P1.6) ──
 
 
 _pricing_cache: dict[str, dict[str, Any]] | None = None

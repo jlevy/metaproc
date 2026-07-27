@@ -1,6 +1,6 @@
 """Unit tests for the hierarchical PathTally helper.
 
-Spec: docs/project/specs/active/plan-2026-04-22-hierarchical-run-resource-observability.md
+Spec: docs/arch/arch-metaproc-core.md
 §3.4 + §4.4.3.
 """
 

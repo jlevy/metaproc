@@ -29,9 +29,8 @@ Every endpoint has two latencies that matter for different reasons:
 - **Warm** — steady state, what a user feels clicking around.
 
 Optimizing the wrong one is a waste of time.
-The browser bench harness (`make bench`) reports both for every endpoint and writes a
-JSON report with the full distribution, not just the median.
-Always start there.
+The external Metabrowser package owns its benchmark harness.
+It reports cold and warm latencies with the full distribution, not just the median.
 
 If you don’t have a harness for the area you’re touching, **build one before you
 optimize**. Build it as in-process as possible — see “Tooling” below for the no-httpx
@@ -172,22 +171,11 @@ Anywhere a frontend timer fires repeatedly, this is the shape to default to.
 
 ## Tooling
 
-### Backend: `make bench` (offline, in-process)
+### Backend benchmark (offline, in-process)
 
-`metaproc/devtools/browser_bench.py` drives the Starlette app via a minimal in-process
-ASGI client (no httpx, no socket, no uvicorn).
-Pick sample files automatically by walking the served root, time every endpoint cold +
-warm, write a JSON report.
-
-```bash
-cd metaproc
-make bench           # 8 warm iterations, full report
-make bench-quick     # 3 warm iterations, smoke
-uv run python devtools/browser_bench.py --label before-fix
-```
-
-Reports land at `scratch/browser-bench/<timestamp>.json`. Two reports diff cleanly with
-`jq`:
+The Metabrowser repository owns the in-process ASGI benchmark and its command-line entry
+points. Run that harness from a Metabrowser checkout.
+Two JSON reports diff cleanly with `jq`:
 
 ```bash
 jq -s '.[0].results as $a | .[1].results as $b
@@ -198,14 +186,9 @@ jq -s '.[0].results as $a | .[1].results as $b
    before.json after.json
 ```
 
-Adding a new endpoint?
-Add a case to `_build_cases` and re-run.
+### Frontend instrumentation
 
-### Frontend: `window.metaprocPerf` (devtools-side)
-
-`src/metaproc/browser/static/perf.js` ships with the SPA. It auto-wraps `window.fetch`
-for HTTP timings and exposes `metaprocPerf.measure / measureAsync` for synchronous and
-async render spans. `app.js` already wraps the heavy renderers.
+The Metabrowser package also owns browser-side fetch and render instrumentation.
 
 To capture a snapshot:
 
@@ -347,8 +330,8 @@ regex Python, smaller JSON payload, GFM-spec compliance from a maintained librar
 
 ### Browser refactor PR context
 
-internal review used a “what’s measured vs what’s a code change” framing in the test
-plan because the bench harness only covers the backend.
+review used a “what’s measured vs what’s a code change” framing in the test plan because
+the bench harness only covers the backend.
 The frontend optimizations (lazy hljs, array-join, activity-poll DOM diff) were
 informed-but-unmeasured changes; the PR body separated those out explicitly so reviewers
 knew which claims had numbers behind them and which they had to verify in a real browser
@@ -379,13 +362,11 @@ the same commit. Stale perf docs are worse than no perf docs.
   Metaproc-owned browser integration.
 - [conventions.md](conventions.md) — naming and structure rules; some apply to
   perf-relevant code (e.g. caching key naming).
-- [`metaproc/devtools/browser_bench.py`](../TODO.md) — the bench harness source, ~300
-  lines.
-- metabrowser’s `static/perf.js` — frontend instrumentation source (external package).
+- Metabrowser’s benchmark and frontend instrumentation sources.
 
 ## Phase 1 Cold-Start Baseline (2026-05-05)
 
-Measured against `/workspace/user/consumer` (~35 k files) before the streaming-spec
+Measured against a representative workspace (~35 k files) before the streaming-spec
 Phase 1 work landed:
 
 | Endpoint | Cold (after restart) | Warm |
@@ -405,18 +386,17 @@ Phase 1 work landed:
 | `loadTree` total (fetch + render) | **<4 s** | both above + skeleton render |
 | Live decoration update from local mtime change to DOM | **<1 s** | fs.change ops on /api/events |
 
-`make bench` against `/workspace/user/consumer` is the gate; record a new measurement
-here when Phase 1 ships and again when Phase 5 adds the watcher cascade.
+Run Metabrowser’s external benchmark harness against a representative large workspace;
+record a new measurement here when the implementation or watcher cascade changes.
 
-## Phase 1 Cold-Start Results (2026-05-06, Post-internal review)
+## Phase 1 Cold-Start Results (2026-05-06, Post-review)
 
-Measured with the new `--skip-prewarm`-toggleable inventory pre-warm in the bench
-harness (internal-reference).
-Workspace: `/workspace/user/consumer` (~70 k files, 56 353 indexed — the rest are
-excluded from the BFS by `_is_visible` filtering).
+Measured with the new `--skip-prewarm`-toggleable inventory pre-warm in the external
+benchmark harness. The synthetic workspace had about 70,000 files, with 56,353 indexed
+after visibility filtering.
 Idle disk, no concurrent dispatch.
 
-| Endpoint | Pre-internal review baseline (filesystem walk) | Post-internal review (inventory-backed) | Target |
+| Endpoint | Pre-review baseline (filesystem walk) | Post-review (inventory-backed) | Target |
 | --- | --- | --- | --- |
 | `/api/tree?depth=2` cold | 1044 ms | **372 ms** | <500 ms ✓ |
 | `/api/tree?depth=4` cold | 1239 ms | 669 ms | (no target) |
@@ -435,8 +415,8 @@ clear; a real browser session pays it once, then sees the warm number on every
 subsequent poll. Filing as “follow-up” rather than “regression” — the post-Phase-5
 watcher cascade may close the gap.
 
-Recent jumped from sub-ms to ~20 ms cold because internal-reference added an
-`entries_flat` payload (the SPA’s live-overlay base) on top of the clustered tree.
+Recent jumped from sub-ms to ~20 ms cold because the live overlay adds an `entries_flat`
+payload (the SPA’s live-overlay base) on top of the clustered tree.
 Still well under any user-perceptible threshold.
 
 <!-- This document follows std-doc-guidelines.md.

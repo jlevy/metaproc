@@ -173,7 +173,7 @@ class TestIsStepOverridden:
 
 
 class TestIsStepSatisfiedUniversally:
-    """internal-reference — universal-satisfied check used by run-process to skip
+    """the fix — universal-satisfied check used by run-process to skip
     overridden steps on whole-DAG resume (without --from).
     """
 

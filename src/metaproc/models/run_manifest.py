@@ -1,10 +1,8 @@
 """RunManifest — Pydantic schema for scaling-validation run manifests.
 
-The master plan (`plan-2026-04-17-incremental-mining-predict-scaling-validation.md`
-§ Run manifest) specifies that every validation run records a manifest
-YAML before launch. This module owns the canonical schema so evidence
-stays consistent across phases. See also the parallel-cleanup handoff,
-Item 4.
+The scaling design specifies that every validation run records a manifest YAML before
+launch. This module owns the canonical schema so evidence stays consistent across
+phases.
 
 Round-trip contract: ``RunManifest.from_yaml_file(path)`` parses an
 operator-authored manifest, validates it, and ``.to_yaml(path)`` writes

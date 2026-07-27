@@ -111,6 +111,45 @@ process:
     assert "MISSING_ROOT" in error_text
 
 
+def test_run_step_executes_code_mode_and_resolves_environment(tmp_path: Path) -> None:
+    process_path = tmp_path / "test.process.md"
+    _write(
+        process_path,
+        """---
+process:
+  name: executable
+  inputs:
+    message: {param: MESSAGE, as: string}
+  steps:
+    - id: verify-env
+      mode: code
+      command: /bin/sh -c 'test "$VALUE" = resolved'
+      env:
+        VALUE: "{{MESSAGE}}"
+---
+# Executable
+""",
+    )
+
+    result = RUNNER.invoke(
+        app,
+        [
+            "run-step",
+            str(process_path),
+            "--step",
+            "verify-env",
+            "--var",
+            "MESSAGE=resolved",
+            "--var",
+            "RUN_ID=test-run",
+            *_runs_var(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "completed (code mode)" in result.output
+
+
 # ── for_each --item tests ────────────────────────────────────────
 
 
@@ -152,7 +191,7 @@ process:
 
 _TICKERS_MD = """\
 ---
-tickers:
+progress:
   earnings_date: '2026-01-29'
   process: predict
   items:
