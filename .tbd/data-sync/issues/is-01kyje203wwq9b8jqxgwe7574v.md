@@ -1,0 +1,119 @@
+---
+type: is
+id: is-01kyje203wwq9b8jqxgwe7574v
+title: "Address review: PR #1 release readiness"
+kind: task
+status: closed
+priority: 1
+version: 103
+spec_path: docs/project/specs/active/plan-2026-07-26-standalone-extraction.md
+labels: []
+dependencies: []
+parent_id: is-01kygat035xcheze599f3yxqrb
+child_order_hints:
+  - is-01kyje3ef1n8ayz4m4bqa48fsh
+  - is-01kyje3er7ya8xzbesc03re57x
+  - is-01kyje3ez9rqek944pzma8kyg0
+  - is-01kyje3f5vxpr7krqbk4m60as1
+  - is-01kyje3fcsnr51rmy3c3ezp2rq
+  - is-01kyje3fkfn29rp0grvr24pxem
+  - is-01kyje3ft964h024mcb0z5d6br
+  - is-01kyje3g0wdj7gztxnr4an089q
+  - is-01kyje3g7km4fxfe7r5v739mad
+  - is-01kyje3gegq4nfsce0mg777dsy
+  - is-01kyje3gna63y2xchq0mkvezrc
+  - is-01kyje3gw5maqcxa1r0ty5rm24
+  - is-01kyje3h35q946xr42r9es32sy
+  - is-01kyje3h9vmy6tzz8mf1tmnvr3
+  - is-01kyje3hgrhpjcze9fpm77tbk5
+  - is-01kyje3hqpyn8cr74qhj4xb8je
+  - is-01kyje3hz38keb4z3vc70mm3ec
+  - is-01kyje3j63wjhwxb9vx4kg81gq
+  - is-01kyje3jcsezb6avhqsbkd0t1h
+  - is-01kyje3jkyfkz0aw8xh6rh1d84
+  - is-01kyje3jv1n89wppjch3ts9207
+  - is-01kyje3k4jn7wp19epdkgczyat
+  - is-01kyje3kba5kvqaz4jt2rc7gn2
+  - is-01kyje3kjg6nfs0g2r1dbdvjrr
+  - is-01kyje3ktk90ew8b43qwhj3fk9
+  - is-01kyje3m19pra9kran9faja604
+  - is-01kyje3m80wgdnh61gn2te4ww9
+  - is-01kyje3mepcs11aamnabac7j7k
+  - is-01kyje3mnn80g2ghkt0xmbn4qy
+  - is-01kyje3mwvscj181tqkw8t4v87
+  - is-01kyje3n3t3sks140ss8evbdas
+  - is-01kyje3nawjyqxy0cnnjwagdqe
+  - is-01kyje3nhz3ksaae1b1b1d9pqz
+  - is-01kyje3ns39kkd0epd00y0snnc
+  - is-01kyje3p0ja7q0wty30sg1xyd2
+  - is-01kyje3p7dg7beffcesw4j0z8d
+  - is-01kyje3pee28scqzbpvsd1bv3c
+  - is-01kyje3pndpqgf12q03sc57pby
+  - is-01kyje3pwkzz08cdyd7659ypg8
+  - is-01kyje3q3qpbjez37wkm3gmcbk
+  - is-01kyje3qapk6gd5kz33jkh4agv
+  - is-01kyje3qhjph5jhcxr5vcszmke
+  - is-01kyje3qs1zrsnvg5yy482qef0
+  - is-01kyje3r0650beqeasv08894fr
+  - is-01kyje3r70gq9807334a8rsc78
+  - is-01kyje3re4354287fyepewzgh3
+  - is-01kyje3rn9f16pk53jkz8jhgkr
+  - is-01kyje3rx31nwn1dd6wxrx7vd2
+  - is-01kyje3s4j431gheha6kgsw390
+  - is-01kyje3sbm5p7frb0q9rqxqy0j
+  - is-01kyje3sjkbbrftzyg2amq92e5
+  - is-01kyje3ssh7favvjjb0d0egwjg
+  - is-01kyje3t0sk59d9tkdb0rb0117
+  - is-01kyje3t841qqw541kjnvrmbc0
+  - is-01kyje3tfag1fyp84phk38f88n
+  - is-01kyje3tpe9z1ypq2n3y88bjqq
+  - is-01kyje3tx95d6h40j4p8q50z2q
+  - is-01kyje3v4kk0y9jkxm5yvzjaga
+  - is-01kyje3vbhewvs6b9m22c2qm83
+  - is-01kyje3vjb0aa5gxjvvwgyb6nm
+  - is-01kyje3vs66jpq30r5rhaxypwd
+  - is-01kyje3w0a43jevdrah2s9n62y
+  - is-01kyje3w7kmhpczp7ft35zxj0q
+  - is-01kyje3wfg6en0s6k6n7we0gs6
+  - is-01kyje3wpcrfzyam5r7hwgfh1c
+  - is-01kyje3wxbr358h8gja1qacpvr
+  - is-01kyje3x45as3yffeta59r2rsc
+  - is-01kyje3xb08v2hvf0rmyy7xj0t
+  - is-01kyje3xj2yvky82ewqkpe6me9
+  - is-01kyje3xscdcpkh5qrsgfcgsec
+  - is-01kyje3y0etrhxpb1p2nk0s8n9
+  - is-01kyje3y7gc1qp8cpe3ymf8yhb
+  - is-01kyje3yeawr99n63gqvckzg0k
+  - is-01kyje3yn6mbj2emdvkveyzzp7
+  - is-01kyje3yvy2yq5w1ehepeaftwr
+  - is-01kyje3z2xaav3dfev9vhh2yqj
+  - is-01kyje3za6pyntnctkmye9drjz
+  - is-01kyje3zmdayy2mnsvem65rhvy
+  - is-01kyje3zvap8z2s0j72vye15kp
+  - is-01kyje402b361jezbrnmn8nqzh
+  - is-01kyje409hc5f4xq5dxnsa05tn
+  - is-01kyje40gkghn092zk6g5hp6hj
+  - is-01kyje40qkger86ceep803659s
+  - is-01kyje40zq3a7kcxtsevjjt14q
+  - is-01kyje416vmt9h5xz9zsvxnw5d
+  - is-01kyje41dz8wj78envf8s0tdcq
+  - is-01kyje41nd3nhsq0fgp4ffk178
+  - is-01kyje41wq1zmcgcp9cbzecrtp
+  - is-01kyje423qnpezvk7f10hndvxs
+  - is-01kyje42ask0z36648anqbn0jz
+  - is-01kyje42hw5sx68zv718977z6n
+  - is-01kyje42stf9e2etnb9n8y8xgd
+  - is-01kyje430wtnbntbax7hxbk3hr
+  - is-01kyje4382eyfaf22rcsbvs2mj
+  - is-01kyje43f6gq1y7g1p5yh1qpe3
+  - is-01kyje43pbercww92kv6b47h0r
+  - is-01kyje43xhwntxzywf8jbeangg
+  - is-01kyje444tcf3s5r8d8awe61qs
+  - is-01kyje44c6rfvezg3aaa33c2y6
+  - is-01kyje44k3xg0cc9z9da7skgjw
+created_at: 2026-07-27T18:40:36.987Z
+updated_at: 2026-07-27T20:14:14.441Z
+closed_at: 2026-07-27T20:14:14.441Z
+close_reason: "All 100 review findings are dispositioned: 88 fixed, 11 accepted by design with recorded rationale, and 1 explicitly deferred. Standalone local and hosted gates pass; the exact reviewed commit is pinned downstream."
+---
+Track and disposition every finding in the PR #1 release-readiness review. Each child must be fixed, rebutted with evidence, or explicitly deferred; public tracking text must remain consumer-agnostic.

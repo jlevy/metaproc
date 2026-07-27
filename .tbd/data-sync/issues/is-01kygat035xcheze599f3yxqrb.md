@@ -5,7 +5,7 @@ title: Complete standalone Metaproc extraction
 kind: epic
 status: open
 priority: 1
-version: 14
+version: 17
 spec_path: docs/project/specs/active/plan-2026-07-26-standalone-extraction.md
 labels: []
 dependencies: []
@@ -20,11 +20,13 @@ child_order_hints:
   - is-01kygat425c758vpvw64cwr5jv
   - is-01kyh26keebb99grmnv3szck5f
   - is-01kyj68ywbgzvtcxxgt3qr5zgz
+  - is-01kyje203wwq9b8jqxgwe7574v
+  - is-01kyjjswdamtc9d94pwbfqn79r
 created_at: 2026-07-26T23:05:20.229Z
-updated_at: 2026-07-27T16:26:30.623Z
+updated_at: 2026-07-27T20:14:14.760Z
 ---
 Deliver the complete clean-history extraction, standalone package, validation, branch publication, and downstream submodule pin.
 
 ## Notes
 
-Standalone source-preview extraction is published as ready-for-review PR #1 at a89af85c058eebe85b4978df707a52b1cd828b2f. Main is the clean migration base and repository default. Lint, distribution, and Python 3.12/3.13/3.14 CI all pass. A downstream consumer pins the same commit. Remaining scope is the first public v0.1.0 release and immutable-package cutover tracked by mp-0mra.
+Standalone review commit 8aacb14 is pushed on PR #1. All 100 review findings are dispositioned (88 fixed, 11 accepted by design, 1 deferred). Local verification passes 3,783 Metaproc tests plus downstream integration suites; standalone lint, distribution, and Python 3.12/3.13/3.14 CI pass. Downstream commit e68de4a16 merges current upstream main and pins the exact reviewed revision. First v0.1.0 publication remains tracked by mp-0mra; cross-repository CI access while private is tracked by mp-o07k.
