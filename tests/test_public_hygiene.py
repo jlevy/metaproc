@@ -8,6 +8,7 @@ import subprocess
 import tarfile
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 from devtools.public_hygiene import (
     _git_ignored,
@@ -166,3 +167,16 @@ def test_reachable_git_refs_and_commit_messages_are_scanned(tmp_path: Path) -> N
     findings = scan_git_history(root)
     assert any("copied issue identifier" in finding for finding in findings)
     assert any("private name" in finding for finding in findings)
+
+
+def test_git_history_scan_timeouts_are_reported_as_findings(tmp_path: Path) -> None:
+    with patch(
+        "devtools.public_hygiene.subprocess.run",
+        side_effect=subprocess.TimeoutExpired(cmd=["git"], timeout=30),
+    ):
+        findings = scan_git_history(tmp_path)
+
+    assert findings == [
+        "git-refs: reachable Git metadata scan timed out",
+        "git-commits: reachable Git metadata scan timed out",
+    ]

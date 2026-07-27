@@ -275,13 +275,20 @@ def scan_git_history(root: Path = ROOT) -> list[str]:
         ("commits", ["git", "-C", str(root), "log", "--all", "--format=%H%n%s%n%b"]),
     )
     for label, command in commands:
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=GIT_TIMEOUT_SECONDS,
-            check=False,
-        )
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=GIT_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            findings.append(f"git-{label}: reachable Git metadata scan timed out")
+            continue
+        except OSError:
+            findings.append(f"git-{label}: unable to scan reachable Git metadata")
+            continue
         if result.returncode != 0:
             findings.append(f"git-{label}: unable to scan reachable Git metadata")
             continue
