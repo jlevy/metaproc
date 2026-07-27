@@ -5,7 +5,7 @@ title: Complete standalone Metaproc extraction
 kind: epic
 status: open
 priority: 1
-version: 19
+version: 20
 spec_path: docs/project/specs/active/plan-2026-07-26-standalone-extraction.md
 labels: []
 dependencies: []
@@ -24,10 +24,10 @@ child_order_hints:
   - is-01kyjjswdamtc9d94pwbfqn79r
   - is-01kyjmbrs0r2gf47zfdb1rr08c
 created_at: 2026-07-26T23:05:20.229Z
-updated_at: 2026-07-27T20:30:48.604Z
+updated_at: 2026-07-27T20:45:19.105Z
 ---
 Deliver the complete clean-history extraction, standalone package, validation, branch publication, and downstream submodule pin.
 
 ## Notes
 
-Standalone final review commit 00d0f14 is pushed on PR #1. The original 100 findings plus one follow-up finding are fully dispositioned (89 fixed, 11 accepted by design, 1 deferred). Local verification passes 3,783 Metaproc tests plus downstream integration suites; standalone lint, distribution, Cursor review, and Python 3.12/3.13/3.14 CI pass. Downstream commit 7ad0233c4 merges current upstream main and pins the exact final revision. First v0.1.0 publication remains tracked by mp-0mra; cross-repository CI access while private is tracked by mp-o07k.
+Standalone candidate b266f5c95d3919be1672fb74046d3c24d8c33bda is pushed on PR #1. All 101 review findings are dispositioned (89 fixed, 11 accepted by design, 1 deferred), and the agent-facing cleanup mp-agzb is closed. Local make verify passes 3,784 tests with 8 expected skips; hosted lint, distribution, Cursor review, and Python 3.12/3.13/3.14 checks are terminal and successful. Downstream commit 57173ea150e3cb801f9e94dd8ceb155ab9d0fd6a pins the exact candidate revision. First v0.1.0 publication remains tracked by mp-0mra; cross-repository CI access while private remains tracked by mp-o07k.
