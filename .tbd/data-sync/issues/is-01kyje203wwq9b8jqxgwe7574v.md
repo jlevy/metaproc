@@ -5,7 +5,7 @@ title: "Address review: PR #1 release readiness"
 kind: task
 status: closed
 priority: 1
-version: 103
+version: 106
 spec_path: docs/project/specs/active/plan-2026-07-26-standalone-extraction.md
 labels: []
 dependencies: []
@@ -111,9 +111,14 @@ child_order_hints:
   - is-01kyje444tcf3s5r8d8awe61qs
   - is-01kyje44c6rfvezg3aaa33c2y6
   - is-01kyje44k3xg0cc9z9da7skgjw
+  - is-01kyjkea45dqqqexhjm2njd66q
 created_at: 2026-07-27T18:40:36.987Z
-updated_at: 2026-07-27T20:14:14.441Z
-closed_at: 2026-07-27T20:14:14.441Z
-close_reason: "All 100 review findings are dispositioned: 88 fixed, 11 accepted by design with recorded rationale, and 1 explicitly deferred. Standalone local and hosted gates pass; the exact reviewed commit is pinned downstream."
+updated_at: 2026-07-27T20:19:40.688Z
+closed_at: 2026-07-27T20:19:40.688Z
+close_reason: "All 101 review findings are dispositioned: 89 fixed, 11 accepted by design with recorded rationale, and 1 explicitly deferred. Local and hosted gates pass, all review threads are resolved, and the exact final commit is pinned downstream."
 ---
 Track and disposition every finding in the PR #1 release-readiness review. Each child must be fixed, rebutted with evidence, or explicitly deferred; public tracking text must remain consumer-agnostic.
+
+## Notes
+
+A fresh review of commit 8aacb14 added one actionable low-severity finding. Track and close the new child before final review closure.

@@ -5,7 +5,7 @@ title: Complete standalone Metaproc extraction
 kind: epic
 status: open
 priority: 1
-version: 17
+version: 18
 spec_path: docs/project/specs/active/plan-2026-07-26-standalone-extraction.md
 labels: []
 dependencies: []
@@ -23,10 +23,10 @@ child_order_hints:
   - is-01kyje203wwq9b8jqxgwe7574v
   - is-01kyjjswdamtc9d94pwbfqn79r
 created_at: 2026-07-26T23:05:20.229Z
-updated_at: 2026-07-27T20:14:14.760Z
+updated_at: 2026-07-27T20:19:41.052Z
 ---
 Deliver the complete clean-history extraction, standalone package, validation, branch publication, and downstream submodule pin.
 
 ## Notes
 
-Standalone review commit 8aacb14 is pushed on PR #1. All 100 review findings are dispositioned (88 fixed, 11 accepted by design, 1 deferred). Local verification passes 3,783 Metaproc tests plus downstream integration suites; standalone lint, distribution, and Python 3.12/3.13/3.14 CI pass. Downstream commit e68de4a16 merges current upstream main and pins the exact reviewed revision. First v0.1.0 publication remains tracked by mp-0mra; cross-repository CI access while private is tracked by mp-o07k.
+Standalone final review commit 00d0f14 is pushed on PR #1. The original 100 findings plus one follow-up finding are fully dispositioned (89 fixed, 11 accepted by design, 1 deferred). Local verification passes 3,783 Metaproc tests plus downstream integration suites; standalone lint, distribution, Cursor review, and Python 3.12/3.13/3.14 CI pass. Downstream commit 7ad0233c4 merges current upstream main and pins the exact final revision. First v0.1.0 publication remains tracked by mp-0mra; cross-repository CI access while private is tracked by mp-o07k.
