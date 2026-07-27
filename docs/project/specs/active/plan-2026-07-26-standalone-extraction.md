@@ -63,17 +63,20 @@ The sealed source tree has been copied and the framework boundary has been separ
 from its former consumer.
 Standalone scaffolding, AGPL licensing, dependency locks, public documentation, artifact
 validation, CI, and an initial downstream submodule pin are complete.
+Repository workflow is agent-facing: `AGENTS.md`, tbd beads, development guidance,
+runbooks, and executable process specifications define the process without GitHub issue
+or pull request forms.
 
-The first release-readiness review produced 100 tracked findings.
-Accepted fixes have been implemented, design decisions have been documented, and the
-complete local gate passes: 3,783 tests pass, 8 live or environment-dependent tests
+The first release-readiness review produced 101 tracked findings.
+One hundred findings are closed after implementation or an explicit design decision, and
+one publication-access item is deferred.
+The complete local gate passes: 3,784 tests pass, 8 live or environment-dependent tests
 skip, dependency audits are clean, and both built distributions pass installed-package
 smoke checks.
 
-Remaining handoff work is to publish the consolidated review commit, verify the hosted
-Python matrix, and advance the downstream submodule pin to that exact commit.
-The separate v0.1.0 publication bead remains intentionally open until trusted publishing
-is validated against the final tag.
+Every proposed merge head must pass the hosted Python matrix and be pinned downstream by
+exact commit. The separate v0.1.0 publication bead remains intentionally open until
+trusted publishing is validated against the final tag.
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

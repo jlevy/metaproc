@@ -205,7 +205,7 @@ make verify
 
 `make verify` checks both locks, formatting, Python and browser lint, types, tests,
 dependency audits, public hygiene, source and wheel contents, and an isolated installed
-wheel. See [development](docs/development.md), [contributing](CONTRIBUTING.md), and
+wheel. See [agent instructions](AGENTS.md), [development](docs/development.md), and
 [supply-chain security](SUPPLY-CHAIN-SECURITY.md).
 
 ## Compatibility

@@ -1,7 +1,7 @@
 # Metaproc Roadmap
 
 This roadmap tracks the remaining work for the standalone preview.
-Detailed work items live in the public issue tracker after repository initialization.
+Detailed work items live in the repository’s tbd beads.
 
 ## Preview Release Blockers
 
@@ -32,8 +32,7 @@ Detailed work items live in the public issue tracker after repository initializa
 - Consolidate present-state architecture, developer, operator, authentication, testing,
   and release guidance.
 - Ensure packaged help topics are byte-equivalent to their canonical documentation.
-- Add security, contributing, changelog, release-note, publishing, and supply-chain
-  policies.
+- Add security, changelog, release-note, publishing, and supply-chain policies.
 
 ## Post-Preview
 
