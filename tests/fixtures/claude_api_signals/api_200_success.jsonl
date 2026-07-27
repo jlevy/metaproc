@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","session_id":"b1c2d3"}
+{"type":"assistant","message":{"id":"asst_999","content":[{"type":"text","text":"OK"}]}}
+{"type":"result","subtype":"success","is_error":false,"duration_ms":1234,"num_turns":1,"result":"OK","stop_reason":"end_turn","total_cost_usd":0.001}

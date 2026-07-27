@@ -1,0 +1,31 @@
+{
+  "argv": [
+    "gemini",
+    "-p",
+    "Synthetic fixture argument.",
+    "-m",
+    "gemini-3.5-flash",
+    "--approval-mode",
+    "yolo",
+    "--output-format",
+    "stream-json",
+    "--skip-trust"
+  ],
+  "captured_at": "2026-05-26T06:09:40Z",
+  "cwd": null,
+  "env_redacted": {
+    "EXECUTION_PROFILE": "gemini-flash",
+    "METAPROC_LANE_ID": "gemini-flash"
+  },
+  "metadata": {
+    "item_id": "API",
+    "log_path": "/workspace/synthetic-project/synthetic-file-785b7c136adc.jsonl",
+    "process_dir": "/workspace/synthetic-project/synthetic-file-63299e4c2d37.txt",
+    "repo_url": "https://github.com/synthetic/synthetic.git",
+    "run_branch": "synthetic-branch",
+    "run_id": "synthetic-run_id-9d2d9f5603b9",
+    "step": "synthetic-step-b3cc0475bb78",
+    "variant": "synthetic",
+    "vars_json": "{}"
+  }
+}

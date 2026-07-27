@@ -1,0 +1,25 @@
+{
+  "batch": "synthetic-batch-288199d5ea81",
+  "fixtures": {
+    "claude": {
+      "lines": "19",
+      "size_kb": "19",
+      "source_log": "/workspace/synthetic-project/synthetic-file-1e65e6021a5d.gz"
+    },
+    "codex": {
+      "lines": "11",
+      "size_kb": "4",
+      "source_log": "/workspace/synthetic-project/synthetic-file-db34419c9831.jsonl"
+    },
+    "gemini": {
+      "lines": "19",
+      "size_kb": "7",
+      "source_log": "/workspace/synthetic-project/synthetic-file-eb264a30d0c4.jsonl"
+    },
+    "pi": {
+      "lines": "19",
+      "size_kb": "64",
+      "source_log": "/workspace/synthetic-project/synthetic-file-9cd9af990659.gz"
+    }
+  }
+}

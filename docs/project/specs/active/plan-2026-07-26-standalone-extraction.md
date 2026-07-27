@@ -1,0 +1,83 @@
+# Metaproc Standalone Extraction
+
+Date: 2026-07-26
+
+## Goal
+
+Publish Metaproc as an independently installable, testable, and releasable Python
+project. Preserve extracted implementation files byte-for-byte unless the standalone
+boundary requires a documented rewrite.
+
+## Required Outcome
+
+- The repository builds and tests without a parent workspace.
+- Package metadata, documentation, CI, and release automation target
+  `github.com/jlevy/metaproc`.
+- The project is licensed under AGPL-3.0-or-later.
+- Python 3.12, 3.13, and 3.14 are tested.
+- Python and JavaScript dependencies are locked and subject to a 14-day release
+  cool-off.
+- The wheel contains the CLI, data, packaged help, Agent Skill, and Metabrowser plugin
+  assets, including the vendored ELK license.
+- Public-hygiene checks cover repository files, archives, and reachable Git metadata.
+- A downstream repository can pin one exact commit through a Git submodule.
+
+## Migration Map
+
+| Phase | Contract | Completion Evidence |
+| --- | --- | --- |
+| Extract | Copy every approved implementation file from the sealed source tree before editing. | Exact-copy hashes match the extraction ledger. |
+| Separate | Remove consumer-owned commands, fixtures, schemas, configuration, and documentation. | Domain-boundary and public-hygiene tests pass. |
+| Scaffold | Merge the pinned `simple-modern-uv` v0.4.0 structure without replacing project code. | Copier answers, AGPL license, locks, and standalone developer commands are committed. |
+| Package | Build source and wheel distributions and inspect required and forbidden contents. | Clean-wheel CLI, plugin, data, documentation, and skill smoke tests pass. |
+| Verify | Run formatting, lint, type, test, audit, and distribution gates locally and in CI. | `make verify` and the supported Python matrix pass. |
+| Integrate | Push an exact standalone commit and pin it from the consumer repository as a submodule. | Both repositories resolve to the same Metaproc commit. |
+
+## Guardrails
+
+- Never reconstruct extracted files from memory.
+  Start from the complete source blob, verify its hash, and then make any intentional
+  standalone rewrite.
+- Do not graft source Git objects or private history into this repository.
+- Do not make the consumer submodule an undeclared production dependency.
+  Published package versions remain the runtime integration contract.
+- Do not publish a release until trusted publishing, package metadata, artifact
+  contents, and CI are green for the exact tag target.
+- Keep cloud support optional; local planning and execution must work without GCP
+  packages or credentials.
+
+## Validation
+
+The handoff gate is `make verify`. It installs both committed locks, checks Python and
+browser code, verifies documentation formatting and public hygiene, runs the complete
+test suite, audits locked dependencies, builds both distributions, inspects their
+contents, and exercises the installed wheel in an isolated environment.
+
+CI repeats lint and distribution checks once and runs tests on Python 3.12, 3.13, and
+3.14. The release workflow checks out the exact release tag and repeats the full gate
+before publishing through PyPI trusted publishing.
+
+## Current Status
+
+The sealed source tree has been copied and the framework boundary has been separated
+from its former consumer.
+Standalone scaffolding, AGPL licensing, dependency locks, public documentation, artifact
+validation, CI, and an initial downstream submodule pin are complete.
+Repository workflow is agent-facing: `AGENTS.md`, tbd beads, development guidance,
+runbooks, and executable process specifications define the process without GitHub issue
+or pull request forms.
+
+The first release-readiness review produced 101 tracked findings.
+One hundred findings are closed after implementation or an explicit design decision, and
+one publication-access item is deferred.
+The complete local gate passes: 3,784 tests pass, 8 live or environment-dependent tests
+skip, dependency audits are clean, and both built distributions pass installed-package
+smoke checks.
+
+Every proposed merge head must pass the hosted Python matrix and be pinned downstream by
+exact commit. The separate v0.1.0 publication bead remains intentionally open until
+trusted publishing is validated against the final tag.
+
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
+-->

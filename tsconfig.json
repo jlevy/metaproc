@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "target": "ES2022",
+    "noImplicitAny": false
+  },
+  "include": [
+    "src/metaproc/metabrowser_plugin/plugin/**/*.js",
+    "types/**/*.d.ts"
+  ],
+  "exclude": ["src/metaproc/metabrowser_plugin/plugin/elk.bundled.js"]
+}

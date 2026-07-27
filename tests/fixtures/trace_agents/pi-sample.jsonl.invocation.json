@@ -1,0 +1,35 @@
+{
+  "argv": [
+    "Synthetic fixture argument.",
+    "--mode",
+    "json",
+    "-p",
+    "Synthetic fixture argument.",
+    "--no-session",
+    "--provider",
+    "vertex-maas",
+    "--model",
+    "glm-5-maas",
+    "--tools",
+    "read,write,bash",
+    "--api-key",
+    "Synthetic fixture argument."
+  ],
+  "captured_at": "2026-05-26T03:38:10Z",
+  "cwd": null,
+  "env_redacted": {
+    "EXECUTION_PROFILE": "pi-glm5",
+    "METAPROC_LANE_ID": "pi-glm5"
+  },
+  "metadata": {
+    "item_id": "API",
+    "log_path": "/workspace/synthetic-project/synthetic-file-a53258fb672d.jsonl",
+    "process_dir": "/workspace/synthetic-project/synthetic-file-63299e4c2d37.txt",
+    "repo_url": "https://github.com/synthetic/synthetic.git",
+    "run_branch": "synthetic-branch",
+    "run_id": "synthetic-run_id-96a714594166",
+    "step": "synthetic-step-b3cc0475bb78",
+    "variant": "synthetic",
+    "vars_json": "{}"
+  }
+}

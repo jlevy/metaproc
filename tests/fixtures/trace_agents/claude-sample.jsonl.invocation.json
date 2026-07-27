@@ -1,0 +1,47 @@
+{
+  "argv": [
+    "claude",
+    "-p",
+    "Synthetic fixture argument.",
+    "--model",
+    "opus",
+    "--effort",
+    "high",
+    "--permission-mode",
+    "bypassPermissions",
+    "--dangerously-skip-permissions",
+    "--add-dir",
+    "/workspace/synthetic-home/wrk/synthetic/synthetic",
+    "--allowedTools",
+    "Bash Write Edit Read Glob Grep WebSearch WebFetch Task TodoWrite NotebookEdit",
+    "--setting-sources",
+    "user",
+    "--tools",
+    "Read,Write,Bash,WebSearch,WebFetch",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--no-session-persistence",
+    "-d",
+    "api",
+    "--debug-file",
+    "Synthetic fixture argument."
+  ],
+  "captured_at": "2026-05-26T03:55:24Z",
+  "cwd": null,
+  "env_redacted": {
+    "EXECUTION_PROFILE": "claude-opus",
+    "METAPROC_LANE_ID": "claude-opus"
+  },
+  "metadata": {
+    "item_id": "API",
+    "log_path": "/workspace/synthetic-project/synthetic-file-9422f95a52de.jsonl",
+    "process_dir": "/workspace/synthetic-project/synthetic-file-63299e4c2d37.txt",
+    "repo_url": "https://github.com/synthetic/synthetic.git",
+    "run_branch": "synthetic-branch",
+    "run_id": "synthetic-run_id-45ba3c4d080f",
+    "step": "synthetic-step-b3cc0475bb78",
+    "variant": "synthetic",
+    "vars_json": "{}"
+  }
+}

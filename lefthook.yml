@@ -1,0 +1,40 @@
+# Git hooks managed by Lefthook.
+# Install once with `make hooks-install`.
+
+pre-commit:
+  parallel: false
+  commands:
+    ruff-format:
+      glob: "*.py"
+      run: uv --config-file uv.toml run --frozen ruff format {staged_files}
+      stage_fixed: true
+
+    ruff-check:
+      glob: "*.py"
+      run: uv --config-file uv.toml run --frozen ruff check --fix {staged_files}
+      stage_fixed: true
+
+    browser-format:
+      glob: "*.{js,css,json}"
+      exclude: "src/metaproc/metabrowser_plugin/plugin/elk.bundled.js"
+      run: npm run format:browser
+      stage_fixed: true
+
+    browser-types:
+      glob: "*.{js,json}"
+      run: npm run check:browser
+
+    codespell:
+      glob: "*.{py,md}"
+      run: uv --config-file uv.toml run --frozen codespell --write-changes {staged_files}
+      stage_fixed: true
+
+    format-markdown:
+      glob: "*.md"
+      run: make format-markdown
+      stage_fixed: true
+
+pre-push:
+  commands:
+    quality:
+      run: make lint-check test

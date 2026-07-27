@@ -1,0 +1,259 @@
+profiles:
+  claude-opus:
+    schema: metaproc:ExecutionProfile/0.1
+    status: tested
+    adapter: claude-code-cli
+    provider: anthropic
+    model: opus
+    notes: High-quality Claude profile for deep agent work with native web and shell tools.
+    capabilities:
+      native_tools: [Read, Write, Edit, Bash, WebSearch, WebFetch, Glob, Grep, LS]
+      native_web_search: true
+      shell: true
+    resources:
+      # Per metaproc/docs/arch/arch-runpool.md § "Per-adapter RSS benchmarks
+      # (macOS, 2026-05-23)": 5,714 health.jsonl samples over 3 days show
+      # claude-opus process-tree (root + psutil children) at P50=384 MB,
+      # P95=748 MB across all concurrency levels. At active≥3 (the regime
+      # where the initial-concurrency estimate actually matters for
+      # multi-process throughput), P95 drops to 530-641 MB. 500 MB sits
+      # at ~1.3× P95 in the multi-process regime. The prior 1536 MB
+      # estimate was ~3× the observed P95 and clamped 32 GB Mac launches
+      # to initial conc=2 at kern.memorystatus_level=44, even when the
+      # operator cap was 6-8. The adaptive controller still ratchets
+      # down under genuine pressure (HIGH/CRITICAL); the estimator just
+      # needs to start in the right ballpark.
+      estimated_process_rss_mb: 500
+      initial_memory_budget_fraction: 0.25
+    config:
+      permission_mode: bypassPermissions
+      output_format: stream-json
+      model: opus
+
+  claude-sonnet:
+    schema: metaproc:ExecutionProfile/0.1
+    status: tested
+    adapter: claude-code-cli
+    provider: anthropic
+    model: sonnet
+    notes: Faster Claude profile for routine passes when Opus depth is not required.
+    capabilities:
+      native_tools: [Read, Write, Edit, Bash, WebSearch, WebFetch, Glob, Grep, LS]
+      native_web_search: true
+      shell: true
+    resources:
+      # Same binary as claude-opus; the model flag does not change local
+      # subprocess RSS materially. See claude-opus block above for the
+      # 5,714-sample basis behind the 500 MB estimate.
+      estimated_process_rss_mb: 500
+      initial_memory_budget_fraction: 0.25
+    config:
+      permission_mode: bypassPermissions
+      output_format: stream-json
+      model: sonnet
+
+  codex-gpt55:
+    schema: metaproc:ExecutionProfile/0.1
+    status: experimental
+    adapter: codex-cli
+    provider: openai
+    model: gpt-5.5
+    effort: high
+    notes: Codex GPT-5.5 high-effort profile for all-Codex analysis runs.
+    capabilities:
+      native_tools: [Read, Write, Edit, Bash, WebSearch, WebFetch, Glob, Grep, LS]
+      native_web_search: true
+      shell: true
+    resources:
+      # Lowered 4096 → 1024 MB and host_max 2 → 6 (2026-05-24 three-lane batch),
+      # then lifted cap 6 → 20 after the 2026-06-03 large workflow run exposed that the
+      # profile cap silently defeated high --max-concurrency launch envelopes.
+      # The legacy 4 GB / host_max=2 estimate dated from earlier codex versions
+      # and capped medium-sized Codex lanes to multi-hour wall-clock. The later
+      # host_max=6 setting was still too low for normal large workflow batch posture. Current
+      # codex-cli runs at observed 0.8-1.2 GB RSS per agent under large workflow
+      # analysis-research load. Predecessor logbook (2026-05-23 mon-thru-wed)
+      # flagged "codex-gpt55 still open" in the per-adapter RSS benchmark
+      # work. The adaptive controller still clamps under genuine pressure.
+      estimated_process_rss_mb: 1024
+      initial_memory_budget_fraction: 0.25
+      max_concurrency_hint: 20
+      host_max_concurrency: 20
+    config:
+      model: gpt-5.5
+      effort: high
+      permission_mode: bypassPermissions
+      web_search: true
+
+  pi-glm5:
+    schema: metaproc:ExecutionProfile/0.1
+    status: tested
+    adapter: pi-cli
+    provider: vertex-maas
+    model: glm-5-maas
+    thinking: high
+    notes: GLM-5 Vertex MaaS profile; no native web or shell tool support.
+    capabilities:
+      native_tools: [Read, Write]
+      native_web_search: false
+      shell: false
+    resources:
+      # Per metaproc/docs/arch/arch-runpool.md § "Per-adapter RSS benchmarks
+      # (macOS, 2026-05-23)": 3,324 health.jsonl samples show pi-glm5
+      # process-tree at P50=176 MB. At active=1 P95 is 1303 MB (a single-
+      # process I/O spike); at active≥4 P95 drops to 629-635 MB. 500 MB
+      # sits at ~1.3× P95 in the multi-process regime and matches the
+      # claude-* estimate for budget-formula consistency. The prior
+      # 768 MB was based on a smaller sample with active_count not
+      # accounted for separately.
+      estimated_process_rss_mb: 500
+      initial_memory_budget_fraction: 0.25
+    config:
+      provider: vertex-maas
+      model: glm-5-maas
+      no_session_persistence: true
+
+  gemini-flash-36:
+    schema: metaproc:ExecutionProfile/0.1
+    status: tested
+    adapter: gemini-cli
+    provider: google-vertex
+    model: gemini-3.6-flash
+    notes: |
+      Gemini 3.6 Flash (GA 2026-07-21) via gemini-cli through Vertex AI.
+      Current stable Flash profile for bounded agentic workflows. A direct
+      model check and bounded CAT and NAGE Google Trends keyword runs passed
+      on 2026-07-24.
+    capabilities:
+      native_tools: [Read, Write, Edit, Bash, WebSearch, Glob, Grep, LS]
+      native_web_search: true
+      shell: true
+    resources:
+      estimated_process_rss_mb: 500
+      initial_memory_budget_fraction: 0.25
+    config:
+      model: gemini-3.6-flash
+      permission_mode: bypassPermissions
+      output_format: stream-json
+
+  gemini-flash:
+    schema: metaproc:ExecutionProfile/0.1
+    status: experimental
+    adapter: gemini-cli
+    provider: google-vertex
+    model: gemini-3.5-flash
+    notes: |
+      Gemini 3.5 Flash (GA 2026-05-19, Google I/O) via gemini-cli through
+      Vertex AI. Speed-tilted profile for opt-in ensemble lanes; tool use is
+      exercised by smoke-gemini-matrix before any large workflow dispatch. Promote
+      status to "tested" only after a clean tier-1 large workflow dry run.
+    capabilities:
+      native_tools: [Read, Write, Edit, Bash, Glob, Grep, LS]
+      native_web_search: false
+      shell: true
+    resources:
+      # Placeholder mirroring claude-* baseline (500 MB) until a few hours
+      # of health.jsonl samples are collected under large workflow load; refine per
+      # the arch-runpool RSS-benchmark methodology in the same way as
+      # claude-opus / pi-glm5.
+      estimated_process_rss_mb: 500
+      initial_memory_budget_fraction: 0.25
+    config:
+      model: gemini-3.5-flash
+      permission_mode: bypassPermissions
+      output_format: stream-json
+
+  gemini-pro:
+    schema: metaproc:ExecutionProfile/0.1
+    status: experimental
+    adapter: gemini-cli
+    provider: google-vertex
+    model: gemini-3.1-pro-preview
+    notes: |
+      Gemini 3.1 Pro (preview) via gemini-cli through Vertex AI. Deeper-
+      reasoning lane intended for parity comparisons against claude-opus.
+      Promote status to "tested" only after a clean tier-1 large workflow dry run.
+    capabilities:
+      native_tools: [Read, Write, Edit, Bash, Glob, Grep, LS]
+      native_web_search: false
+      shell: true
+    resources:
+      estimated_process_rss_mb: 500
+      initial_memory_budget_fraction: 0.25
+    config:
+      model: gemini-3.1-pro-preview
+      permission_mode: bypassPermissions
+      output_format: stream-json
+
+  pi-gemini-flash:
+    schema: metaproc:ExecutionProfile/0.1
+    status: experimental
+    adapter: pi-cli
+    provider: google-vertex
+    model: gemini-3.5-flash
+    notes: |
+      Gemini 3.5 Flash via pi-cli routed through Vertex AI. Mirrors
+      gemini-flash (gemini-cli harness) but uses the pi-cli harness to
+      exercise google-vertex's pi quirks (notably the Gemini-3
+      thought_signature contract on tool calls). Smoke is
+      smoke-adapter-pi-gemini. Promote to "tested" after a clean tier-1
+      large workflow dry run.
+    capabilities:
+      native_tools: [Read, Write]
+      native_web_search: false
+      shell: false
+    resources:
+      estimated_process_rss_mb: 500
+      initial_memory_budget_fraction: 0.25
+    config:
+      provider: google-vertex
+      model: gemini-3.5-flash
+      no_session_persistence: true
+
+  pi-gpt55:
+    schema: metaproc:ExecutionProfile/0.1
+    status: experimental
+    adapter: pi-cli
+    provider: openai
+    model: gpt-5.5
+    notes: |
+      OpenAI GPT-5.5 routed through pi-cli (vs codex-gpt55 which uses
+      codex-cli). Same underlying model on a different harness, so this
+      profile isolates harness effects from model effects in ensemble
+      comparisons. Promote to "tested" after a clean tier-1 large workflow dry run.
+    capabilities:
+      native_tools: [Read, Write]
+      native_web_search: false
+      shell: false
+    resources:
+      estimated_process_rss_mb: 500
+      initial_memory_budget_fraction: 0.25
+    config:
+      provider: openai
+      model: gpt-5.5
+      no_session_persistence: true
+
+  pi-gemini-pro:
+    schema: metaproc:ExecutionProfile/0.1
+    status: experimental
+    adapter: pi-cli
+    provider: google-vertex
+    model: gemini-3.1-pro-preview
+    notes: |
+      Gemini 3.1 Pro (preview) via pi-cli routed through Vertex AI.
+      Mirrors gemini-pro (gemini-cli harness) but uses the pi-cli harness
+      to exercise google-vertex's pi quirks (Gemini-3 thought_signature
+      contract on tool calls). Companion to pi-gemini-flash for the
+      4-Gemini-lane ensemble shape. Promote to "tested" after a clean
+      tier-1 large workflow dry run.
+    capabilities:
+      native_tools: [Read, Write]
+      native_web_search: false
+      shell: false
+    resources:
+      estimated_process_rss_mb: 500
+      initial_memory_budget_fraction: 0.25
+    config:
+      provider: google-vertex
+      model: gemini-3.1-pro-preview
+      no_session_persistence: true

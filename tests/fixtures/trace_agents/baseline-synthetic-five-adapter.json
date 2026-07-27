@@ -1,0 +1,78 @@
+{
+  "batch": "synthetic-batch-288199d5ea81",
+  "lanes": {
+    "claude": {
+      "files_scanned": 125,
+      "parse_errors": 0,
+      "run_dir": "/workspace/synthetic-project/synthetic-file-107e1411395a.txt",
+      "tool_counts": {
+        "Bash": 1683,
+        "Monitor": 28,
+        "Read": 640,
+        "WebFetch": 67,
+        "WebSearch": 82,
+        "Write": 114
+      }
+    },
+    "codex": {
+      "files_scanned": 113,
+      "parse_errors": 0,
+      "run_dir": "/workspace/synthetic-project/synthetic-file-11641cb7144c.txt",
+      "tool_counts": {
+        "command_execution": 2746,
+        "file_change": 120
+      }
+    },
+    "gemini-flash": {
+      "files_scanned": 150,
+      "parse_errors": 0,
+      "run_dir": "/workspace/synthetic-project/synthetic-file-25155934ac37.txt",
+      "tool_counts": {
+        "glob": 148,
+        "google_web_search": 95,
+        "grep_search": 72,
+        "list_background_processes": 1,
+        "list_directory": 76,
+        "read_file": 1122,
+        "run_shell_command": 1763,
+        "update_topic": 271,
+        "write_file": 148
+      }
+    },
+    "gemini-pro": {
+      "files_scanned": 191,
+      "parse_errors": 0,
+      "run_dir": "/workspace/synthetic-project/synthetic-file-7655ab426c93.txt",
+      "tool_counts": {
+        "google_web_search": 92,
+        "list_directory": 3,
+        "read_file": 475,
+        "run_shell_command": 598,
+        "update_topic": 339,
+        "web_fetch": 4,
+        "write_file": 129
+      }
+    },
+    "pi-gemini-flash": {
+      "files_scanned": 112,
+      "parse_errors": 0,
+      "run_dir": "/workspace/synthetic-project/synthetic-file-e0d83155f721.txt",
+      "tool_counts": {
+        "bash": 1513,
+        "read": 578,
+        "write": 131
+      }
+    },
+    "pi-glm5": {
+      "files_scanned": 113,
+      "parse_errors": 0,
+      "run_dir": "/workspace/synthetic-project/synthetic-file-e1dd2c214aa5.txt",
+      "tool_counts": {
+        "bash": 1070,
+        "read": 681,
+        "write": 112
+      }
+    }
+  },
+  "source": "adapter_footprint.count_agent_tool_uses"
+}

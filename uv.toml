@@ -1,0 +1,7 @@
+required-version = ">=0.11.26"
+exclude-newer = "14 days"
+
+[exclude-newer-package]
+flowmark-rs = "2026-07-16T00:00:00Z"
+kpress = "2026-07-16T00:00:00Z"
+metabrowser = "2026-07-18T00:00:00Z"

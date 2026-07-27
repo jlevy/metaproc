@@ -1,0 +1,8 @@
+2026-04-27T18:58:41.487Z [DEBUG] MDM settings load completed in 1ms
+2026-04-27T18:58:45.115Z [DEBUG] [API:request] Creating client, ANTHROPIC_CUSTOM_HEADERS present: false
+2026-04-27T18:58:45.115Z [DEBUG] [API:auth] OAuth token check starting
+2026-04-27T18:58:45.359Z [ERROR] AxiosError: [url=https://platform.claude.com/v1/oauth/token,status=400] AxiosError: Request failed with status code 400
+    at CU (/$bunfs/root/src/entrypoints/cli.js:110:1194)
+2026-04-27T18:58:45.393Z [DEBUG] [API:auth] OAuth token check complete
+2026-04-27T18:58:45.395Z [DEBUG] [API REQUEST] /v1/messages x-client-request-id=d21c89b0-fa78-4a7e-a468-0a8f345f876f source=sdk
+2026-04-27T18:58:45.960Z [ERROR] API error (attempt 1/11): 401 401 {"type":"error","error":{"type":"authentication_error","message":"Invalid authentication credentials"},"request_id":"req_011CaUniwgrZotHqXq9wE63G"}
