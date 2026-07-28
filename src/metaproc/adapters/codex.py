@@ -322,6 +322,12 @@ class CodexCliAdapter:
     # by operators in step spec rather than baked in here.
     compatible_fallback_adapters: list[str] = []  # noqa: RUF012
 
+    def preflight(self) -> None:
+        # Plan-time prerequisite check: verify the on-PATH `codex` matches the
+        # pin before any step runs, so drift fails fast at launch instead of
+        # mid-DAG. Cached, so build_command's later call is a no-op cache hit.
+        _ensure_codex_version_pinned()
+
     def build_command(
         self,
         prompt_file: Path,

@@ -11,6 +11,11 @@ from hashlib import sha256
 from pathlib import Path
 
 from metaproc.adapters.base import AuthStatus, ConfigRejection, parse_jsonl_event
+from metaproc.adapters.cli_version import (
+    CliVersionMismatch,
+    CliVersionSpec,
+    ensure_cli_version,
+)
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.settings import (
     GEMINI_DEFAULT_MODEL,
@@ -22,6 +27,29 @@ log = logging.getLogger(__name__)
 
 PINNED_GEMINI_CLI_VERSION = "0.40.1"
 GEMINI_CLI_INSTALL_HINT = f"Install: npm install -g @google/gemini-cli@{PINNED_GEMINI_CLI_VERSION}"
+
+
+class GeminiCliVersionMismatch(CliVersionMismatch):
+    """Raised when the on-PATH ``gemini`` binary does not match the pin."""
+
+
+_GEMINI_VERSION_SPEC = CliVersionSpec(
+    label="Gemini",
+    cli_path="gemini",
+    expected=PINNED_GEMINI_CLI_VERSION,
+    exception=GeminiCliVersionMismatch,
+)
+
+
+def _ensure_gemini_version_pinned() -> str:
+    """Verify the on-PATH ``gemini`` matches the pin (cached, once per process).
+
+    Set ``METAPROC_SKIP_GEMINI_VERSION_CHECK=1`` to bypass in CI / tests where
+    the binary isn't installed.
+    """
+    skip = MetaprocEnv.METAPROC_SKIP_GEMINI_VERSION_CHECK.read_str(default="").lower()
+    return ensure_cli_version(_GEMINI_VERSION_SPEC, skip=skip in ("1", "true", "yes"))
+
 
 _GEMINI_ALLOWED_KEYS = frozenset(
     {
@@ -120,12 +148,19 @@ class GeminiCliAdapter:
     short_name: str = "gemini-cli"
     default_model: str | None = GEMINI_DEFAULT_MODEL
 
+    def preflight(self) -> None:
+        # Plan-time prerequisite check: verify the on-PATH `gemini` matches the
+        # pin before any step runs, so drift fails fast at launch instead of
+        # mid-DAG. Cached, so build_command's later call is a no-op cache hit.
+        _ensure_gemini_version_pinned()
+
     def build_command(
         self,
         prompt_file: Path,
         merged_config: dict[str, object],
         variables: dict[str, str],
     ) -> list[str]:
+        _ensure_gemini_version_pinned()
         flags = _build_gemini_flags(merged_config, variables)
         return ["gemini", "-p", f"@{prompt_file}", *flags]
 
