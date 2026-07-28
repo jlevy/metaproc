@@ -60,6 +60,14 @@ def test_personal_email_and_real_ticker_fixture_are_rejected() -> None:
     assert any("non-synthetic customer or ticker fixture" in finding for finding in findings)
 
 
+def test_agent_attribution_emails_are_allowed() -> None:
+    trailers = (
+        "Co-Authored-By: Claude <noreply@anthropic.com>\n"
+        "Co-authored-by: github-actions <noreply@github.com>"
+    )
+    assert find_hygiene_findings("git-commits", trailers) == []
+
+
 def test_public_package_contact_email_is_allowed() -> None:
     assert (
         find_hygiene_findings(
