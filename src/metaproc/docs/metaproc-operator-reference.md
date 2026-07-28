@@ -665,6 +665,6 @@ When runtime paths change, update these documents in the same PR:
 The operator reference owns command sequences and current paths.
 Design docs should explain the underlying contracts and link here for operator flows.
 
-<!-- This document follows std-doc-guidelines.md.
-Review guidelines before editing.
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
 -->

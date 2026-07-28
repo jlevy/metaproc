@@ -15,7 +15,7 @@ status: Approved
 > The full arch-doc index lives in
 > [development.md § Architecture docs](../development.md#architecture-docs).
 > 
-> Companion docs (in `metaproc/docs/`): [arch-metaproc-core](arch-metaproc-core.md),
+> Companion docs (in `docs/arch/`): [arch-metaproc-core](arch-metaproc-core.md),
 > [arch-runpool](arch-runpool.md), [arch-cloud-execution](arch-cloud-execution.md),
 > [arch-authentication](arch-authentication.md),
 > [arch-claude-code-harness](arch-claude-code-harness.md),
@@ -390,8 +390,7 @@ component levels, swap growth, and active count are visible before and after a f
 
 ## Per-Adapter RSS Benchmarks (macOS, 2026-05-23)
 
-Measurements taken during the 2026-05-25 mon-thru-wed-ensemble batch (see
-[the production incident analysis](../arch/arch-runpool.md)) on macOS 25.2.0, Apple
+Measurements taken during a 2026-05-25 production ensemble batch on macOS 25.2.0, Apple
 Silicon, 32 GB RAM. Methodology: read `active_rss_bytes` from
 `runpool/steps/*/health.jsonl` and divide by `active_count` to get per-process-tree RSS
 at 10s sample intervals.
@@ -470,6 +469,6 @@ and Linux benchmarks remain open.
 - [Linux proc_meminfo(5)](https://www.man7.org/linux/man-pages/man5/proc_meminfo.5.html)
 - [Linux kernel PSI documentation](https://www.kernel.org/doc/html/v6.10/accounting/psi.html)
 
-<!-- This document follows std-doc-guidelines.md.
-Review guidelines before editing.
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
 -->

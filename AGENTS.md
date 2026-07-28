@@ -2,7 +2,18 @@
 
 Start with [development](docs/development.md),
 [supply-chain security](SUPPLY-CHAIN-SECURITY.md), and the documentation relevant to the
-change.
+change. The full documentation map is in
+[README.md § Documentation](README.md#documentation).
+
+## Metaproc Self-Documentation
+
+Metaproc documents itself.
+Before running, monitoring, or debugging any metaproc process, read
+`metaproc help operator`; `metaproc help developer` and `metaproc help concepts` cover
+extension policy and the process model.
+The generated Agent Skill in `.agents/skills/metaproc/` routes to the same manuals.
+After changing the skill baseline, spec, or help topics, regenerate the committed copies
+with `metaproc skill metaproc --install` (a drift test enforces this).
 
 ## Build and Test
 

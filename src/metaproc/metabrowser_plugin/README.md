@@ -120,6 +120,6 @@ The completed
 [standalone extraction plan](../../../docs/project/provenance/extraction.md) records the
 publication evidence and final deletion checklist.
 
-<!-- This document follows std-doc-guidelines.md.
-Review guidelines before editing.
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
 -->

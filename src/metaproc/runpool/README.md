@@ -27,6 +27,6 @@ This module contains the implementation:
 - `mock_backend.py`: deterministic backend for tests
 - `registry.py`: backend registration and resolution
 
-<!-- This document follows std-doc-guidelines.md.
-Review guidelines before editing.
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
 -->

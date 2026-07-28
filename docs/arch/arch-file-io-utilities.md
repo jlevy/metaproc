@@ -104,6 +104,6 @@ these. The longer version:
 If a specific call site relies on any of these behaviors in a non-obvious way, add a
 one-line `# XXX:` at the site.
 
-<!-- This document follows std-doc-guidelines.md.
-Review guidelines before editing.
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
 -->
