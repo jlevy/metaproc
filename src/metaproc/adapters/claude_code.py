@@ -568,6 +568,13 @@ class ClaudeCodeCliAdapter:
     # operators declare compatibility explicitly per-adapter later.
     compatible_fallback_adapters: list[str] = []  # noqa: RUF012
 
+    def preflight(self) -> None:
+        # Plan-time prerequisite check: verify the on-PATH `claude` matches the
+        # pinned version before any step runs, so a mismatch fails fast at
+        # launch instead of when the first claude step executes mid-DAG. Cached
+        # process-wide, so build_command's later call is a no-op cache hit.
+        _ensure_claude_version_pinned()
+
     def build_command(
         self,
         prompt_file: Path,

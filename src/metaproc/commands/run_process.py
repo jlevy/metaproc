@@ -402,6 +402,25 @@ def _serialize_auth_flags(flags: AuthPoolFlags) -> dict[str, object]:
     return out
 
 
+def _preflight_plan_adapters(plan: Plan, *, active_step_ids: set[str]) -> None:
+    """Run each distinct adapter's plan-time prerequisite check before any step
+    executes.
+
+    Adapters that expose a ``preflight()`` (e.g. the claude adapter's pinned-CLI
+    version check) get invoked once, up front, for the adapters the active steps
+    will actually use. This turns a mid-DAG failure — discovered only when the
+    first step using that adapter runs, after minutes of upstream work — into an
+    immediate, clear failure at launch. Any raised error propagates as-is.
+    """
+    adapter_types = dict.fromkeys(
+        step.adapter.type for step in plan.steps if step.step_id in active_step_ids
+    )
+    for adapter_type in adapter_types:
+        preflight = getattr(get_adapter(adapter_type), "preflight", None)
+        if preflight is not None:
+            preflight()
+
+
 def _serialize_plan_profiles(plan: Plan) -> list[dict[str, object]]:
     """Render profile-related plan metadata for run-config.yaml."""
     profiles: dict[str, dict[str, object]] = {}
@@ -2667,6 +2686,11 @@ def run_process_command(
     levels = topo_sort(plan.steps, step_ids=active_step_ids)
     step_map = {s.step_id: s for s in plan.steps}
     skip_set = set(skip)
+
+    # Fail fast on unrunnable adapters (e.g. pinned-CLI version drift) before
+    # spending any time on upstream steps. Dry runs stay side-effect-free.
+    if not dry_run:
+        _preflight_plan_adapters(plan, active_step_ids=active_step_ids - skip_set)
 
     # ── Multi-lane execution guard ──
     # The lane planner can materialize plan.execution_lanes with more than one
