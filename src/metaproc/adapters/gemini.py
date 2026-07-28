@@ -14,7 +14,7 @@ from metaproc.adapters.base import AuthStatus, ConfigRejection, parse_jsonl_even
 from metaproc.adapters.cli_version import (
     CliVersionMismatch,
     CliVersionSpec,
-    ensure_cli_version,
+    check_cli_version,
 )
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.settings import (
@@ -41,14 +41,13 @@ _GEMINI_VERSION_SPEC = CliVersionSpec(
 )
 
 
-def _ensure_gemini_version_pinned() -> str:
-    """Verify the on-PATH ``gemini`` matches the pin (cached, once per process).
-
-    Set ``METAPROC_SKIP_GEMINI_VERSION_CHECK=1`` to bypass in CI / tests where
-    the binary isn't installed.
+def _gemini_version_drift() -> str | None:
+    """Return a drift message if the on-PATH ``gemini`` mismatches the pin, else
+    None. Non-blocking: version drift is surfaced as a prominent warning, not a
+    hard error. Set ``METAPROC_SKIP_GEMINI_VERSION_CHECK=1`` to bypass entirely.
     """
     skip = MetaprocEnv.METAPROC_SKIP_GEMINI_VERSION_CHECK.read_str(default="").lower()
-    return ensure_cli_version(_GEMINI_VERSION_SPEC, skip=skip in ("1", "true", "yes"))
+    return check_cli_version(_GEMINI_VERSION_SPEC, skip=skip in ("1", "true", "yes"))
 
 
 _GEMINI_ALLOWED_KEYS = frozenset(
@@ -148,11 +147,10 @@ class GeminiCliAdapter:
     short_name: str = "gemini-cli"
     default_model: str | None = GEMINI_DEFAULT_MODEL
 
-    def preflight(self) -> None:
-        # Plan-time prerequisite check: verify the on-PATH `gemini` matches the
-        # pin before any step runs, so drift fails fast at launch instead of
-        # mid-DAG. Cached, so build_command's later call is a no-op cache hit.
-        _ensure_gemini_version_pinned()
+    def preflight(self) -> str | None:
+        # Plan-time prerequisite check: surface any `gemini` version drift at
+        # launch (as a prominent warning, not a block) rather than mid-DAG.
+        return _gemini_version_drift()
 
     def build_command(
         self,
@@ -160,7 +158,7 @@ class GeminiCliAdapter:
         merged_config: dict[str, object],
         variables: dict[str, str],
     ) -> list[str]:
-        _ensure_gemini_version_pinned()
+        _gemini_version_drift()
         flags = _build_gemini_flags(merged_config, variables)
         return ["gemini", "-p", f"@{prompt_file}", *flags]
 

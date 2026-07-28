@@ -135,6 +135,23 @@ def _ensure_claude_version_pinned() -> str:
     return verify_claude_version()
 
 
+@functools.cache
+def _claude_version_drift() -> str | None:
+    """Return a drift message if the on-PATH ``claude`` mismatches the pin, else
+    None. Non-blocking: version drift is surfaced as a prominent warning, not a
+    hard error. Honors ``METAPROC_SKIP_CLAUDE_VERSION_CHECK``.
+    """
+    skip = MetaprocEnv.METAPROC_SKIP_CLAUDE_VERSION_CHECK.read_str(default="").lower()
+    if skip in ("1", "true", "yes"):
+        return None
+    try:
+        verify_claude_version()
+    except ClaudeCodeVersionMismatch as exc:
+        log.warning("harness CLI version drift — %s", exc)
+        return str(exc)
+    return None
+
+
 def _validate_claude_creds_blob(blob: str) -> None:
     """Raise if *blob* is not a JSON object with a top-level ``claudeAiOauth`` key."""
     try:
@@ -568,12 +585,11 @@ class ClaudeCodeCliAdapter:
     # operators declare compatibility explicitly per-adapter later.
     compatible_fallback_adapters: list[str] = []  # noqa: RUF012
 
-    def preflight(self) -> None:
-        # Plan-time prerequisite check: verify the on-PATH `claude` matches the
-        # pinned version before any step runs, so a mismatch fails fast at
-        # launch instead of when the first claude step executes mid-DAG. Cached
-        # process-wide, so build_command's later call is a no-op cache hit.
-        _ensure_claude_version_pinned()
+    def preflight(self) -> str | None:
+        # Plan-time prerequisite check: surface any `claude` version drift at
+        # launch (as a prominent warning, not a block) rather than when the
+        # first claude step executes mid-DAG.
+        return _claude_version_drift()
 
     def build_command(
         self,
@@ -581,11 +597,9 @@ class ClaudeCodeCliAdapter:
         merged_config: dict[str, object],
         variables: dict[str, str],
     ) -> list[str]:
-        # Verify the on-PATH `claude` matches the pinned version. Cached
-        # process-wide via the module-level guard below so we shell out
-        # at most once per worker process. Raises
-        # ClaudeCodeVersionMismatch loudly on drift.
-        _ensure_claude_version_pinned()
+        # Surface any pinned-version drift as a warning (cached, once per
+        # process); non-blocking so the run proceeds even on version skew.
+        _claude_version_drift()
         flags = _build_claude_flags(merged_config, variables)
         return ["claude", "-p", f"@{prompt_file}", *flags]
 

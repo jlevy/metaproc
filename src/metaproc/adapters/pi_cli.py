@@ -23,7 +23,7 @@ from metaproc.adapters.base import (
 from metaproc.adapters.cli_version import (
     CliVersionMismatch,
     CliVersionSpec,
-    ensure_cli_version,
+    check_cli_version,
 )
 from metaproc.cloud.gcp.resolve_token import resolve_gcp_token
 from metaproc.config.env_vars import MetaprocEnv
@@ -55,15 +55,15 @@ _PI_VERSION_SPEC = CliVersionSpec(
 )
 
 
-def _ensure_pi_version_pinned() -> str:
-    """Verify the on-PATH ``pi`` matches the pin (cached, once per process).
+def _pi_version_drift() -> str | None:
+    """Return a drift message if the on-PATH ``pi`` mismatches the pin, else None.
+    Non-blocking: drift is surfaced as a prominent warning, not a hard error.
 
     Distinct from pi's own internal ``PI_SKIP_VERSION_CHECK``; set
-    ``METAPROC_SKIP_PI_VERSION_CHECK=1`` to bypass this metaproc-side check in
-    CI / tests where the binary isn't installed.
+    ``METAPROC_SKIP_PI_VERSION_CHECK=1`` to bypass this metaproc-side check.
     """
     skip = MetaprocEnv.METAPROC_SKIP_PI_VERSION_CHECK.read_str(default="").lower()
-    return ensure_cli_version(_PI_VERSION_SPEC, skip=skip in ("1", "true", "yes"))
+    return check_cli_version(_PI_VERSION_SPEC, skip=skip in ("1", "true", "yes"))
 
 
 _PI_ALLOWED_KEYS = frozenset(
@@ -259,10 +259,10 @@ class PiCliAdapter:
     short_name: str = "pi-cli"
     default_model: str | None = PI_DEFAULT_MODEL
 
-    def preflight(self) -> None:
-        # Plan-time prerequisite check: verify the on-PATH `pi` matches the pin
-        # before any step runs, so drift fails fast at launch instead of mid-DAG.
-        _ensure_pi_version_pinned()
+    def preflight(self) -> str | None:
+        # Plan-time prerequisite check: surface any `pi` version drift at launch
+        # (as a prominent warning, not a block) rather than mid-DAG.
+        return _pi_version_drift()
 
     def build_command(
         self,
@@ -270,7 +270,7 @@ class PiCliAdapter:
         merged_config: dict[str, object],
         variables: dict[str, str],
     ) -> list[str]:
-        _ensure_pi_version_pinned()
+        _pi_version_drift()
         flags = _build_pi_flags(merged_config, variables)
         pi_binary = _resolve_pi_binary()
         return [pi_binary, "--mode", "json", "-p", f"@{prompt_file}", "--no-session", *flags]

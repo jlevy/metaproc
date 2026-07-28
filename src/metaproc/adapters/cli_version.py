@@ -12,9 +12,12 @@ immediate, clear failure at launch instead of a mid-DAG surprise.
 from __future__ import annotations
 
 import functools
+import logging
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
+
+log = logging.getLogger(__name__)
 
 
 class CliVersionMismatch(RuntimeError):
@@ -92,7 +95,8 @@ def _verify_cached(spec: CliVersionSpec) -> str:
 
 
 def ensure_cli_version(spec: CliVersionSpec, *, skip: bool = False) -> str:
-    """Verify the pin once per process (cached over the frozen *spec*).
+    """Verify the pin once per process (cached over the frozen *spec*), raising
+    :class:`CliVersionMismatch` on drift.
 
     ``skip`` bypasses the check and returns the pinned value — for CI / test
     environments where the binary isn't installed. Callers read their own typed
@@ -101,3 +105,29 @@ def ensure_cli_version(spec: CliVersionSpec, *, skip: bool = False) -> str:
     if skip:
         return spec.expected
     return _verify_cached(spec)
+
+
+@functools.cache
+def _drift_or_none(spec: CliVersionSpec) -> str | None:
+    """Cached: return a drift message if the on-PATH CLI mismatches the pin,
+    else None. Logs the drift once per process."""
+    try:
+        verify_cli_version(spec)
+    except CliVersionMismatch as exc:
+        log.warning("harness CLI version drift — %s", exc)
+        return str(exc)
+    return None
+
+
+def check_cli_version(spec: CliVersionSpec, *, skip: bool = False) -> str | None:
+    """Non-raising drift check. Returns a human-readable message on drift (for a
+    caller to surface prominently), or None on match / skip.
+
+    Unlike :func:`ensure_cli_version`, a version mismatch does **not** raise —
+    version drift is surfaced as a prominent warning rather than a hard block, so
+    an operator debugging odd behavior sees the likely cause without the run
+    being stopped. The underlying shell-out is cached once per process.
+    """
+    if skip:
+        return None
+    return _drift_or_none(spec)
