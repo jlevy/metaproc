@@ -171,3 +171,30 @@ def test_skill_install_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
     skill_file = tmp_path / ".claude" / "skills" / "metaproc" / "SKILL.md"
     assert skill_file.exists()
+
+
+# ---------------------------------------------------------------------------
+# Drift: committed installed copies must match the current composed output
+# ---------------------------------------------------------------------------
+
+
+def test_committed_skill_copies_match_composed_output() -> None:
+    """The repo dogfoods its own skill; committed copies must not drift.
+
+    Regenerate with ``metaproc skill metaproc --install`` from the repo root.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    installed = [
+        repo_root / ".agents" / "skills" / "metaproc" / "SKILL.md",
+        repo_root / ".claude" / "skills" / "metaproc" / "SKILL.md",
+    ]
+    if not all(path.exists() for path in installed):
+        pytest.skip("committed skill copies not present (not a source checkout)")
+
+    spec = get_skill("metaproc")
+    assert spec is not None
+    composed = compose_skill(spec)
+    for path in installed:
+        assert path.read_text() == composed, (
+            f"{path} is stale; run `metaproc skill metaproc --install` at the repo root"
+        )

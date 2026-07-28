@@ -55,7 +55,10 @@ def metaproc_skill_spec() -> SkillSpec:
             "built-in manuals (`metaproc help operator/developer/concepts`) and the "
             "monitoring commands instead of improvising ad-hoc bash."
         ),
-        allowed_tools="Bash(metaproc:*), Bash(uv run metaproc:*), Read",
+        # Space-separated per the Agent Skills specification. `uv run metaproc`
+        # invocations are not pre-approved: entries with embedded spaces cannot be
+        # expressed in the space-separated form, so source checkouts prompt instead.
+        allowed_tools="Bash(metaproc:*) Read",
         baseline_package="metaproc.skill.baselines",
         baseline_name="metaproc",
         catalog_fn=_help_topic_catalog,
