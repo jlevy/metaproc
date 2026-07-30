@@ -343,12 +343,10 @@ see the whole picture.
 Re-run `make bench` and check that the **Measured speedups** table above still holds
 after any change to:
 
-- `src/metaproc/browser/tree.py`
-- `src/metaproc/browser/activity.py`
-- `src/metaproc/browser/jsonl_view.py`
-- `src/metaproc/browser/proc_browser.py` (the route layer)
 - `src/metaproc/logutil/parsing.py` (the JSONL parsers feed every JSONL view + chart)
 - `src/metaproc/osutils/ignore_filter.py` (gitignore checker)
+- browser tree, activity, and JSONL-view modules, which now live in the external
+  [metabrowser](https://github.com/jlevy/metabrowser) package
 
 If a change moves a number by more than ~20% in either direction, update the table in
 the same commit. Stale perf docs are worse than no perf docs.
@@ -419,6 +417,6 @@ Recent jumped from sub-ms to ~20 ms cold because the live overlay adds an `entri
 payload (the SPA’s live-overlay base) on top of the clustered tree.
 Still well under any user-perceptible threshold.
 
-<!-- This document follows std-doc-guidelines.md.
-Review guidelines before editing.
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
 -->

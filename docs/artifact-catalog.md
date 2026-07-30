@@ -91,8 +91,8 @@ Pattern documented in the standalone
 | Filename | Path | Envelope key + schema | Writer | Primary readers |
 | --- | --- | --- | --- | --- |
 | `usage.md` | `<run>/` | `usage` / `metaproc:UsageReport/0.2` | `commands/write_usage.py` via `logutil/usage.py:write_usage_report` | human operator |
-| `qa-report.md` (per-item) | `<run>/<artifact-tree>/.../` | `qa` / domain-defined | `example_plugin/qa/handler.py` (line ~177) | human operator |
-| `qa-summary.md` (per-process) | `<run>/<artifact-tree>/.../` | `qa_summary` / domain-defined | `example_plugin/qa/handler.py` (line ~185) | human operator |
+| `qa-report.md` (per-item) | `<run>/<artifact-tree>/.../` | `qa` / domain-defined | downstream QA plugin handler | human operator |
+| `qa-summary.md` (per-process) | `<run>/<artifact-tree>/.../` | `qa_summary` / domain-defined | downstream QA plugin handler | human operator |
 
 The `usage.md` envelope is registered in `metaproc.io.frontmatter.ENVELOPE_MAP`; the
 `qa` / `qa_summary` envelopes are registered the same way.
@@ -134,6 +134,6 @@ Pending envelope/schema hygiene (separate plan, listed for completeness):
 - [metaproc-operator-reference.md](../src/metaproc/docs/metaproc-operator-reference.md)
   — operator-facing commands.
 
-<!-- This document follows std-doc-guidelines.md.
-Review guidelines before editing.
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
 -->

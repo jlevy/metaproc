@@ -145,6 +145,6 @@ The deterministic
 [offline example](../../../examples/offline-smoke/offline-smoke.process.md) shows the
 same process/handler boundary without domain-specific policy.
 
-<!-- This document follows std-doc-guidelines.md.
-Review guidelines before editing.
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
 -->

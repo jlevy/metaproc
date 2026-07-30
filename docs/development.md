@@ -167,6 +167,7 @@ This is the canonical index — keep entries here in sync with the files on disk
 | [arch-authentication.md](arch/arch-authentication.md) | Credential vehicles (A and B), per-attempt slot lifecycle, the auth-pool, cross-account leakage prevention. | Draft (currency notice) |
 | [arch-claude-code-harness.md](arch/arch-claude-code-harness.md) | The non-interactive Claude Code CLI subprocess wrapper: env scoping, settings hierarchy, permission-mode + ENV_SCRUB hardening, version compatibility matrix. | Approved |
 | [arch-testing.md](arch/arch-testing.md) | Test tiers (smoke-core, smoke-adapter-*, smoke-adapters-all, self-test-local, self-test-cloud) and the process specs that implement them. | Approved |
+| [arch-file-io-utilities.md](arch/arch-file-io-utilities.md) | The `metaproc.io` public surface: atomic writes, gzip-transparent reads, frontmatter helpers, path utilities. | Reference |
 
 Companion conceptual + reference docs that are NOT architecture but are commonly
 cross-linked from the arch docs:

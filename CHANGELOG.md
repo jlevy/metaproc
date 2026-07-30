@@ -7,9 +7,8 @@ development series.
 
 ## [Unreleased][unreleased]
 
-- Prepare the standalone package for its first public release.
-
-## [0.1.0][] - 2026-07-27
+The first public release is planned as v0.1.0 with the feature set below; see
+[publishing](docs/publishing.md) for the release process.
 
 ### Added
 
@@ -20,5 +19,4 @@ development series.
 - A packaged Metabrowser plugin and portable Agent Skill.
 - Reproducible uv-based development, verification, build, and publishing workflows.
 
-[unreleased]: https://github.com/jlevy/metaproc/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/jlevy/metaproc/releases/tag/v0.1.0
+[unreleased]: https://github.com/jlevy/metaproc/commits/main

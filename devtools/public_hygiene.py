@@ -26,6 +26,9 @@ ASCII_RUN_PATTERN = re.compile(rb"[\x20-\x7e]{4,}")
 ISSUE_ID_PATTERN = re.compile(r"\b([a-z][a-z0-9]{1,15})-[a-z0-9]{4,}\b", re.IGNORECASE)
 EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})\b")
 PUBLIC_CONTACT_EMAILS = {"joshua@cal.berkeley.edu"}
+# No-reply attribution addresses used in Co-Authored-By trailers by coding agents
+# and by GitHub itself. These are not personal addresses.
+AGENT_ATTRIBUTION_EMAILS = {"noreply@anthropic.com", "noreply@github.com"}
 REAL_FIXTURE_FIELD_PATTERN = re.compile(
     r'["\']?(?:company|customer|symbol|ticker)["\']?\s*[:=]\s*["\']?(?!synthetic-)[A-Za-z0-9]',
     re.IGNORECASE,
@@ -93,7 +96,7 @@ def _token_findings(source: str, text: str) -> list[str]:
             line = text.count("\n", 0, offset) + 1
             findings.append(f"{source}:{line}: copied issue identifier")
     for match in EMAIL_PATTERN.finditer(combined):
-        if match.group(0).lower() in PUBLIC_CONTACT_EMAILS:
+        if match.group(0).lower() in PUBLIC_CONTACT_EMAILS | AGENT_ATTRIBUTION_EMAILS:
             continue
         domain = match.group(1).lower()
         if domain.endswith(("example.invalid", "users.noreply.github.com")):

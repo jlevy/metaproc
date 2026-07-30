@@ -15,7 +15,7 @@ status: Approved
 > The full arch-doc index lives in
 > [development.md § Architecture docs](../development.md#architecture-docs).
 > 
-> Companion docs (in `metaproc/docs/`): [arch-metaproc-core](arch-metaproc-core.md),
+> Companion docs (in `docs/arch/`): [arch-metaproc-core](arch-metaproc-core.md),
 > [arch-runpool](arch-runpool.md), [arch-cloud-execution](arch-cloud-execution.md),
 > [arch-authentication](arch-authentication.md), [arch-testing](arch-testing.md).
 
@@ -397,6 +397,6 @@ recommended action.
 - [adapters/claude_code.py](../../src/metaproc/adapters/claude_code.py) — current
   implementation.
 
-<!-- This document follows std-doc-guidelines.md.
-Review guidelines before editing.
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
 -->
