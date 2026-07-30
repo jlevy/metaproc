@@ -254,6 +254,17 @@ class MetaprocEnv(EnvEnum):
         "build_command time. Use only in CI or tests that construct commands "
         "without launching Codex."
     )
+    METAPROC_SKIP_GEMINI_VERSION_CHECK = optional(
+        "When truthy, bypass the `gemini --version` pin check at plan-time "
+        "preflight and adapter build_command time. Use only in CI or tests "
+        "where the gemini binary isn't on PATH."
+    )
+    METAPROC_SKIP_PI_VERSION_CHECK = optional(
+        "When truthy, bypass the `pi --version` pin check at plan-time "
+        "preflight and adapter build_command time. Distinct from pi's own "
+        "internal PI_SKIP_VERSION_CHECK; use only in CI or tests where the pi "
+        "binary isn't on PATH."
+    )
 
     # ── Auth credential pool (plan-2026-04-21-auth-credential-pool.md) ──
     METAPROC_AUTH_POOL = optional(

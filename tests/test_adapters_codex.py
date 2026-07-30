@@ -73,17 +73,17 @@ class TestCodexBuildCommand:
         with pytest.raises(ValueError, match="permission_mode"):
             self._cmd(tmp_path, {})
 
-    def test_unusable_cli_prevents_command_build(self, tmp_path: Path, monkeypatch):
-        def fail_version_check():
-            raise CodexCliVersionMismatch("launcher child executable is missing")
-
+    def test_version_drift_warns_but_does_not_block_command_build(
+        self, tmp_path: Path, monkeypatch
+    ):
+        # Version drift is surfaced as a prominent warning, not a hard error:
+        # build_command must still produce a command so the run proceeds.
         monkeypatch.setattr(
-            "metaproc.adapters.codex._ensure_codex_version_pinned",
-            fail_version_check,
+            "metaproc.adapters.codex._codex_version_drift",
+            lambda: "Codex CLI version mismatch: pinned='0.144.1', actual='0.135.0'",
         )
-
-        with pytest.raises(CodexCliVersionMismatch, match="child executable"):
-            self._cmd(tmp_path, {"permission_mode": "default"})
+        cmd = self._cmd(tmp_path, {"permission_mode": "default"})
+        assert cmd, "build_command must still build a command despite version drift"
 
     def test_bypass_permissions_emits_dangerous_flag(self, tmp_path: Path):
         cmd = self._cmd(tmp_path, {"permission_mode": "bypassPermissions"})

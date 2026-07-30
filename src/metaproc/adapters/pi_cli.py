@@ -20,6 +20,11 @@ from metaproc.adapters.base import (
     parse_jsonl_event,
     resolve_templates,
 )
+from metaproc.adapters.cli_version import (
+    CliVersionMismatch,
+    CliVersionSpec,
+    check_cli_version,
+)
 from metaproc.cloud.gcp.resolve_token import resolve_gcp_token
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.config.providers import provider_by_name, providers_with_api_keys
@@ -36,6 +41,30 @@ PINNED_PI_CODING_AGENT_VERSION = "0.72.1"
 PI_CLI_INSTALL_HINT = (
     f"Install: npm install -g @mariozechner/pi-coding-agent@{PINNED_PI_CODING_AGENT_VERSION}"
 )
+
+
+class PiCliVersionMismatch(CliVersionMismatch):
+    """Raised when the on-PATH ``pi`` binary does not match the pin."""
+
+
+_PI_VERSION_SPEC = CliVersionSpec(
+    label="Pi",
+    cli_path="pi",
+    expected=PINNED_PI_CODING_AGENT_VERSION,
+    exception=PiCliVersionMismatch,
+)
+
+
+def _pi_version_drift() -> str | None:
+    """Return a drift message if the on-PATH ``pi`` mismatches the pin, else None.
+    Non-blocking: drift is surfaced as a prominent warning, not a hard error.
+
+    Distinct from pi's own internal ``PI_SKIP_VERSION_CHECK``; set
+    ``METAPROC_SKIP_PI_VERSION_CHECK=1`` to bypass this metaproc-side check.
+    """
+    skip = MetaprocEnv.METAPROC_SKIP_PI_VERSION_CHECK.read_str(default="").lower()
+    return check_cli_version(_PI_VERSION_SPEC, skip=skip in ("1", "true", "yes"))
+
 
 _PI_ALLOWED_KEYS = frozenset(
     {
@@ -230,12 +259,18 @@ class PiCliAdapter:
     short_name: str = "pi-cli"
     default_model: str | None = PI_DEFAULT_MODEL
 
+    def preflight(self) -> str | None:
+        # Plan-time prerequisite check: surface any `pi` version drift at launch
+        # (as a prominent warning, not a block) rather than mid-DAG.
+        return _pi_version_drift()
+
     def build_command(
         self,
         prompt_file: Path,
         merged_config: dict[str, object],
         variables: dict[str, str],
     ) -> list[str]:
+        _pi_version_drift()
         flags = _build_pi_flags(merged_config, variables)
         pi_binary = _resolve_pi_binary()
         return [pi_binary, "--mode", "json", "-p", f"@{prompt_file}", "--no-session", *flags]

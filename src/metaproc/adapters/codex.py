@@ -104,6 +104,23 @@ def _ensure_codex_version_pinned() -> str:
     return verify_codex_version()
 
 
+@functools.cache
+def _codex_version_drift() -> str | None:
+    """Return a drift message if the on-PATH ``codex`` mismatches the pin, else
+    None. Non-blocking: drift is surfaced as a prominent warning, not a hard
+    error. Honors ``METAPROC_SKIP_CODEX_VERSION_CHECK``.
+    """
+    skip = MetaprocEnv.METAPROC_SKIP_CODEX_VERSION_CHECK.read_str(default="").lower()
+    if skip in ("1", "true", "yes"):
+        return None
+    try:
+        verify_codex_version()
+    except CodexCliVersionMismatch as exc:
+        log.warning("harness CLI version drift — %s", exc)
+        return str(exc)
+    return None
+
+
 def _validate_codex_creds_blob(blob: str) -> None:
     """Raise if *blob* is not a ChatGPT-OAuth ``auth.json`` payload.
 
@@ -322,13 +339,18 @@ class CodexCliAdapter:
     # by operators in step spec rather than baked in here.
     compatible_fallback_adapters: list[str] = []  # noqa: RUF012
 
+    def preflight(self) -> str | None:
+        # Plan-time prerequisite check: surface any `codex` version drift at
+        # launch (as a prominent warning, not a block) rather than mid-DAG.
+        return _codex_version_drift()
+
     def build_command(
         self,
         prompt_file: Path,
         merged_config: dict[str, object],
         variables: dict[str, str],
     ) -> list[str]:
-        _ensure_codex_version_pinned()
+        _codex_version_drift()
         top_level, exec_flags, prompt_parts = _build_codex_flag_groups(merged_config, variables)
 
         # Codex reads "-" from stdin. Launch through a constant POSIX-shell

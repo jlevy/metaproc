@@ -402,6 +402,31 @@ def _serialize_auth_flags(flags: AuthPoolFlags) -> dict[str, object]:
     return out
 
 
+def _preflight_plan_adapters(plan: Plan, *, active_step_ids: set[str]) -> list[str]:
+    """Collect harness-CLI version-drift warnings for the adapters the active
+    steps use, before any step runs.
+
+    Adapters expose a ``preflight()`` that returns a drift message (or ``None``)
+    for their pinned CLI. Surfacing this at launch turns a would-be mid-DAG
+    surprise — discovered only when the first step using that adapter runs, after
+    minutes of upstream work — into an immediate, prominent heads-up. It is
+    deliberately **non-blocking**: a drifted CLI may behave differently from the
+    pin, but stopping the run outright would get in the way of debugging, so we
+    warn loudly and proceed. Returns the drift messages (empty if none).
+    """
+    messages: list[str] = []
+    for adapter_type in dict.fromkeys(
+        step.adapter.type for step in plan.steps if step.step_id in active_step_ids
+    ):
+        preflight = getattr(get_adapter(adapter_type), "preflight", None)
+        if preflight is None:
+            continue
+        message = preflight()
+        if message:
+            messages.append(message)
+    return messages
+
+
 def _serialize_plan_profiles(plan: Plan) -> list[dict[str, object]]:
     """Render profile-related plan metadata for run-config.yaml."""
     profiles: dict[str, dict[str, object]] = {}
@@ -2667,6 +2692,22 @@ def run_process_command(
     levels = topo_sort(plan.steps, step_ids=active_step_ids)
     step_map = {s.step_id: s for s in plan.steps}
     skip_set = set(skip)
+
+    # Surface harness-CLI version drift up front — prominently, but without
+    # blocking. A drifted CLI can behave differently from the pin (a common
+    # source of confusing debugging), so we warn loudly at launch rather than
+    # letting it surface mid-DAG. Dry runs stay side-effect-free.
+    if not dry_run:
+        drift_warnings = _preflight_plan_adapters(plan, active_step_ids=active_step_ids - skip_set)
+        if drift_warnings:
+            out.progress("!" * 78)
+            out.progress(
+                "WARNING: harness CLI version drift detected (not blocking; "
+                "behavior may differ from the pin):"
+            )
+            for message in drift_warnings:
+                out.progress(f"  - {message}")
+            out.progress("!" * 78)
 
     # ── Multi-lane execution guard ──
     # The lane planner can materialize plan.execution_lanes with more than one
