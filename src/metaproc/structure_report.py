@@ -2,7 +2,7 @@
 
 The `StructureReport*` Pydantic models are owned by metaproc — they describe a
 metaproc process graph (producer_step, consumers, carrier) and default to the
-`metaproc.structure_report.v1` contract id. They used to live in
+`metaproc:StructureReport/v1` contract id. They used to live in
 `softschema.reports` while the in-repo workspace package owned softschema, but
 the standalone `softschema` package correctly does not ship them; they moved
 here as part of the consumer workflow cutover.
@@ -75,7 +75,7 @@ class StructureReportEdge(BaseModel):
 class StructureReport(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    contract_id: str = Field(default="metaproc.structure_report.v1", alias="schema")
+    contract_id: str = Field(default="metaproc:StructureReport/v1", alias="schema")
     generated_at: str
     process_path: str
     run_dir: str | None = None

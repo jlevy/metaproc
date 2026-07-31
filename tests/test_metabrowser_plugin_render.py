@@ -198,7 +198,7 @@ def test_structure_report_artifacts_renders_table() -> None:
                 "artifacts": [
                     {
                         "id": "predict.prediction",
-                        "schema": "earnings.prediction.v1",
+                        "schema": "earnings:Prediction/v1",
                         "status": "enforced",
                         "stage": "validated_frontmatter",
                         "producer_step": "predict",
@@ -213,6 +213,6 @@ def test_structure_report_artifacts_renders_table() -> None:
     html = _render("structure-report", "artifacts", payload)
 
     assert "predict.prediction" in html
-    assert "earnings.prediction.v1" in html
+    assert "earnings:Prediction/v1" in html
     assert "validated_frontmatter" in html
     assert "qa" in html

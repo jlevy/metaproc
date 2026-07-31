@@ -106,7 +106,7 @@ class PluginRegistryImpl:
             ("metaproc:QaReport/0.2", QaReport, "qa"),
             ("metaproc:QaSummary/0.1", QaSummary, "qa_summary"),
             ("metaproc:UsageReport/0.2", UsageReport, "usage"),
-            ("metaproc.structure_report.v1", StructureReport, "structure_report"),
+            ("metaproc:StructureReport/v1", StructureReport, "structure_report"),
         ]:
             self.register_softschema(
                 Contract(

@@ -9,6 +9,23 @@ development series.
 
 - Prepare the standalone package for its first public release.
 
+### Changed
+
+- Require `softschema>=0.3.0,<0.4` (previously `>=0.1.4,<0.2`).
+
+### Breaking
+
+- `metaproc softschema compile` now requires `--contract CONTRACT_ID`.
+  softschema 0.3 makes the contract id a required input to `compile_model`, so the
+  sidecar always records the contract it was compiled for.
+- The structure-report contract id is now `metaproc:StructureReport/v1`, renamed from
+  `metaproc.structure_report.v1`.
+  softschema 0.3 enforces a contract-id grammar (`[namespace:]Name[/version]`) that the
+  old dotted form does not satisfy.
+  Structure reports written by earlier versions no longer validate; regenerate them with
+  `metaproc structure-report`, or update the `softschema.contract` value in place.
+  All other built-in contract ids were already in the required form and are unchanged.
+
 ## [0.1.0][] - 2026-07-27
 
 ### Added

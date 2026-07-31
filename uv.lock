@@ -1190,7 +1190,7 @@ requires-dist = [
     { name = "requests", marker = "extra == 'gcp'", specifier = ">=2.0" },
     { name = "requests", marker = "extra == 'gcp-batch'", specifier = ">=2.0" },
     { name = "ruamel-yaml", specifier = ">=0.19.1" },
-    { name = "softschema", specifier = ">=0.1.4,<0.2" },
+    { name = "softschema", specifier = ">=0.3.0,<0.4" },
     { name = "starlette", marker = "extra == 'browser'", specifier = ">=1.3.1" },
     { name = "strif", specifier = ">=3.1.0" },
     { name = "typer", specifier = ">=0.24.1" },
@@ -1809,7 +1809,7 @@ wheels = [
 
 [[package]]
 name = "softschema"
-version = "0.1.4"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "frontmatter-format" },
@@ -1818,9 +1818,9 @@ dependencies = [
     { name = "ruamel-yaml" },
     { name = "strif" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/fb/4d/cb4bb7a1ca5b15719503b525174aca1c01374de82115560ba671d2bd357c/softschema-0.1.4.tar.gz", hash = "sha256:7a3568facb7ae492cfeccfbbfc0b2d302f1a7a1e7decd2f880d361f9b3d9e9f2", size = 88649, upload-time = "2026-06-11T10:17:26.831Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/90/4c/5ee56936897bff23e2869bb2775b5d9f9f1a1b51b5ac2a108abc0c77e264/softschema-0.3.0.tar.gz", hash = "sha256:c8683bb78d9ae459bbe838ad4608c6ac2d58c470114a25d3c2c5f1b86bc3f54a", size = 108917, upload-time = "2026-07-12T19:05:04.928Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f5/ea/4a3379d15010fed5df0886ebb4a32bd6bd567193609b2cb9af6915f94d9d/softschema-0.1.4-py3-none-any.whl", hash = "sha256:b110f982883365ebdfbced2bf737a7f9df874311c87ba37f235c5d54c85311df", size = 80481, upload-time = "2026-06-11T10:17:27.743Z" },
+    { url = "https://files.pythonhosted.org/packages/91/7c/fcfd6729e76a921fa2c96ff9a722a2ec0a722437a620e53196be19607785/softschema-0.3.0-py3-none-any.whl", hash = "sha256:bd00424d6b54af87164417930d17fa5859fb194b7737899e7dc7faf3636dd2cb", size = 94231, upload-time = "2026-07-12T19:05:05.949Z" },
 ]
 
 [[package]]

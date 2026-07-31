@@ -86,7 +86,7 @@ def test_structure_report_classified_and_views_registered(tmp_path: Path) -> Non
     fixture = _write(
         tmp_path,
         "structure-report.md",
-        "---\nstructure_report:\n  schema: metaproc.structure_report.v1\n---\n\n# Report\n",
+        "---\nstructure_report:\n  schema: metaproc:StructureReport/v1\n---\n\n# Report\n",
     )
 
     assert _classify_with_plugins(fixture, ".md") == "structure-report"
@@ -200,7 +200,7 @@ def test_structure_report_sidekick_returns_process_projection(
     payload = json.loads(bytes(resp.body))
 
     assert resp.status_code == 200
-    assert payload["structure_report"]["schema"] == "metaproc.structure_report.v1"
+    assert payload["structure_report"]["schema"] == "metaproc:StructureReport/v1"
     assert payload["structure_report"]["summary"]["artifacts"] == 1
 
 

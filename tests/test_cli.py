@@ -156,10 +156,10 @@ class TestSoftschemaCommands:
         assert report_path.exists()
         text = report_path.read_text()
         assert "structure_report:" in text
-        assert "metaproc.structure_report.v1" in text
+        assert "metaproc:StructureReport/v1" in text
         validation = validate_artifact(
             report_path,
-            contract_id="metaproc.structure_report.v1",
+            contract_id="metaproc:StructureReport/v1",
             registry=get_plugin_registry().softschemas,
         )
         assert validation.ok

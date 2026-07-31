@@ -59,8 +59,8 @@ class TestIOSpec:
             IOSpec(path="output.md", ref="generate.record")
 
     def test_schema_alias(self):
-        spec = IOSpec(path="out.md", schema="earnings.prediction.v1")  # pyright: ignore[reportCallIssue]
-        assert spec.schema_ == "earnings.prediction.v1"
+        spec = IOSpec(path="out.md", schema="earnings:Prediction/v1")  # pyright: ignore[reportCallIssue]
+        assert spec.schema_ == "earnings:Prediction/v1"
 
 
 class TestForEach:

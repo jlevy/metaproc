@@ -59,11 +59,12 @@ def validate(
 def compile(
     model: str = typer.Argument(..., help="Model as module:ClassName"),
     out: Path = typer.Option(..., "--out", help="YAML schema sidecar path"),
+    contract: str = typer.Option(..., "--contract", help="Contract id recorded in the sidecar"),
     check: bool = typer.Option(False, "--check", help="Check committed sidecar drift"),
 ) -> None:
     """Compile a Pydantic model to a JSON-Schema YAML sidecar."""
     model_cls = _load_model(model)
-    result = compile_model(model_cls, out, check_only=check)
+    result = compile_model(model_cls, out, contract_id=contract, check_only=check)
     get_output().data(
         {
             "out_path": str(result.out_path),
@@ -138,7 +139,7 @@ def _artifact_result_payload(result: ArtifactValidationResult) -> dict[str, obje
 def _write_structure_report(out: Path, report_payload: dict[str, object]) -> None:
     metadata = {
         "softschema": {
-            "contract": "metaproc.structure_report.v1",
+            "contract": "metaproc:StructureReport/v1",
             "status": "enforced",
         },
         "structure_report": report_payload,
