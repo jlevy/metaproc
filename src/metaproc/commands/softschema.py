@@ -7,16 +7,21 @@ from pathlib import Path
 
 import typer
 from pydantic import BaseModel
-from softschema import ArtifactValidationResult, compile_model, validate_artifact
+from pydantic import ValidationError as PydanticValidationError
+from softschema import ArtifactValidationResult, SchemaMetadata, compile_model, validate_artifact
 from strif import atomic_output_file
 
 from metaproc.cli import app, get_output
 from metaproc.commands.helpers import load_process_spec, resolve_process_path
 from metaproc.engine.yaml_repair import repair_frontmatter_file
-from metaproc.errors import CLIError
+from metaproc.errors import CLIError, ValidationError
 from metaproc.io import fmf_write
 from metaproc.plugins.discovery import get_plugin_registry
-from metaproc.structure_report import build_structure_report, inspect_frontmatter_path
+from metaproc.structure_report import (
+    STRUCTURE_REPORT_CONTRACT_ID,
+    build_structure_report,
+    inspect_frontmatter_path,
+)
 
 softschema_app = typer.Typer(help="Inspect and validate softschema artifacts.")
 app.add_typer(softschema_app, name="softschema")
@@ -48,7 +53,12 @@ def validate(
     """Validate one artifact by schema id."""
     if not path.exists():
         raise CLIError(f"path not found: {path}")
-    result = validate_artifact(path, contract_id=schema, registry=get_plugin_registry().softschemas)
+    contract_id = _require_contract_id(schema, option="--schema")
+    result = validate_artifact(
+        path,
+        contract_id=contract_id,
+        registry=get_plugin_registry().softschemas,
+    )
     payload = _artifact_result_payload(result)
     get_output().data(payload)
     if not result.ok:
@@ -63,8 +73,9 @@ def compile(
     check: bool = typer.Option(False, "--check", help="Check committed sidecar drift"),
 ) -> None:
     """Compile a Pydantic model to a JSON-Schema YAML sidecar."""
+    contract_id = _require_contract_id(contract, option="--contract")
     model_cls = _load_model(model)
-    result = compile_model(model_cls, out, contract_id=contract, check_only=check)
+    result = compile_model(model_cls, out, contract_id=contract_id, check_only=check)
     get_output().data(
         {
             "out_path": str(result.out_path),
@@ -115,11 +126,21 @@ def _load_model(model_ref: str) -> type[BaseModel]:
     return model_cls
 
 
+def _require_contract_id(value: str, *, option: str) -> str:
+    try:
+        return SchemaMetadata(contract=value).contract_id
+    except PydanticValidationError as exc:
+        raise ValidationError(
+            f"{option} must match [namespace:]Name[/version], got {value!r}"
+        ) from exc
+
+
 def _artifact_result_payload(result: ArtifactValidationResult) -> dict[str, object]:
     return {
         "path": str(result.path),
         "schema": result.contract_id,
         "ok": result.ok,
+        "outcome": result.outcome,
         "status": result.status.value,
         "profile": result.profile.value,
         "warnings": [warning.model_dump() for warning in result.warnings],
@@ -137,9 +158,13 @@ def _artifact_result_payload(result: ArtifactValidationResult) -> dict[str, obje
 
 
 def _write_structure_report(out: Path, report_payload: dict[str, object]) -> None:
+    if report_payload.get("schema") != STRUCTURE_REPORT_CONTRACT_ID:
+        raise ValueError(
+            f"structure-report payload schema must be {STRUCTURE_REPORT_CONTRACT_ID!r}"
+        )
     metadata = {
         "softschema": {
-            "contract": "metaproc:StructureReport/v1",
+            "contract": STRUCTURE_REPORT_CONTRACT_ID,
             "status": "enforced",
         },
         "structure_report": report_payload,

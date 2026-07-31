@@ -122,7 +122,7 @@ See [docs/conventions.md](docs/conventions.md) for the full casing rules.
 | `validate` | Check expected outputs for a specific completed step |
 | `softschema inspect` | Inspect a frontmatter artifact’s declared schema, binding, status, stage, and envelope |
 | `softschema validate --schema <id>` | Validate one artifact through the registered softschema binding |
-| `softschema compile --check` | Compile or drift-check a Pydantic model’s YAML schema sidecar |
+| `softschema compile --contract <id> [--check]` | Compile or drift-check a Pydantic model’s YAML schema sidecar |
 | `structure-report` | Generate a process boundary map with schema/status/stage/profile summaries |
 | `check-headers` | Walk the process tree and validate frontmatter |
 | `status` | Check run completion and progress |

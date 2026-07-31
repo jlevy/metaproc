@@ -23,7 +23,7 @@ from metaproc.plugins.protocol import (
     VizDecoratorCallback,
     VizDecoratorPredicate,
 )
-from metaproc.structure_report import StructureReport
+from metaproc.structure_report import STRUCTURE_REPORT_CONTRACT_ID, StructureReport
 
 
 class PluginRegistryImpl:
@@ -106,7 +106,7 @@ class PluginRegistryImpl:
             ("metaproc:QaReport/0.2", QaReport, "qa"),
             ("metaproc:QaSummary/0.1", QaSummary, "qa_summary"),
             ("metaproc:UsageReport/0.2", UsageReport, "usage"),
-            ("metaproc:StructureReport/v1", StructureReport, "structure_report"),
+            (STRUCTURE_REPORT_CONTRACT_ID, StructureReport, "structure_report"),
         ]:
             self.register_softschema(
                 Contract(
