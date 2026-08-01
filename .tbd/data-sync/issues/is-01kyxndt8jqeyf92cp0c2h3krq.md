@@ -5,7 +5,7 @@ title: "Complete Metaproc PR #3 dependency and review hardening"
 kind: epic
 status: in_progress
 priority: 1
-version: 10
+version: 11
 labels:
   - pr-3
   - softschema
@@ -19,6 +19,10 @@ child_order_hints:
   - is-01kyxne92teback2pjnmsjhcw3
   - is-01kyxpharxskce7vawekfey3n9
 created_at: 2026-08-01T03:21:02.994Z
-updated_at: 2026-08-01T03:40:26.780Z
+updated_at: 2026-08-01T04:10:58.810Z
 ---
 Deliver PR #3 end to end now that first-party softschema v0.4.0 and frontmatter-format updates are available: refresh project tooling and guidelines, adopt the released dependency contracts, resolve every review finding, validate the complete branch, publish the update, and confirm final CI.
+
+## Notes
+
+PR #3 implementation and delivery are complete at dfb4deb. Full review: https://github.com/jlevy/metaproc/pull/3#issuecomment-5149734888. Final CI run 30683271859 is green for lint, distribution, and Python 3.12-3.14. Keep the epic open for its two explicitly mapped lint ratchets: mp-608l (deferred promise-safety overlay after cool-off) and mp-kptm (incremental noImplicitAny migration).
