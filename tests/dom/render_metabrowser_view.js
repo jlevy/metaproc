@@ -18,6 +18,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { loadPluginScripts } = require("./plugin_test_utils.js");
 
+/** @returns {never} */
 function fail(msg) {
   process.stderr.write(`${msg}\n`);
   process.exit(1);
@@ -31,7 +32,15 @@ if (args.length !== 6) {
       "<kind> <view_id> '<json_payload>'",
   );
 }
-const [metabrowserRoot, metaprocPluginRoot, contractsJson, kind, viewId, payloadStr] = args;
+const metabrowserRoot = args[0];
+const metaprocPluginRoot = args[1];
+const contractsJson = args[2];
+const kind = args[3];
+const viewId = args[4];
+const payloadStr = args[5];
+if (!metabrowserRoot || !metaprocPluginRoot || !contractsJson || !kind || !viewId || !payloadStr) {
+  fail("required view-renderer argument is empty");
+}
 const manifestContracts = JSON.parse(contractsJson);
 
 function manifestContract(pluginRoot) {
@@ -47,7 +56,7 @@ let payload;
 try {
   payload = JSON.parse(payloadStr);
 } catch (err) {
-  fail(`payload JSON parse error: ${err.message}`);
+  fail(`payload JSON parse error: ${err instanceof Error ? err.message : String(err)}`);
 }
 
 // ── Sandbox ────────────────────────────────────────────────────────
@@ -149,7 +158,7 @@ const result = view.render(fakeContainer, ctx);
 if (result && typeof result.then === "function") {
   result
     .then(() => process.stdout.write(fakeContainer.innerHTML))
-    .catch((err) => fail(`render error: ${err.message}`));
+    .catch((err) => fail(`render error: ${err instanceof Error ? err.message : String(err)}`));
 } else {
   process.stdout.write(fakeContainer.innerHTML);
 }

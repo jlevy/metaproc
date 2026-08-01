@@ -83,8 +83,9 @@ if (window.document?.addEventListener) {
 
 var currentResourceReportPayload = null;
 var currentResourceSelectedNodeId = null;
+var DEFAULT_RESOURCE_METRIC = { key: "actual_cost_usd", label: "Actual cost" };
 var RESOURCE_METRICS = [
-  { key: "actual_cost_usd", label: "Actual cost" },
+  DEFAULT_RESOURCE_METRIC,
   { key: "list_cost_usd", label: "List cost" },
   { key: "total_tokens", label: "Total tokens" },
   { key: "input_tokens", label: "Input tokens" },
@@ -217,7 +218,7 @@ function renderResourceReportPayload(report, metricKey, selectedNodeId) {
   currentResourceSelectedNodeId = selectedNodeId;
   resourceSelectionBus.set(selectedNodeId, "resource-report");
   var selectedNode = selectedNodeId ? rowsById[selectedNodeId] : null;
-  var selected = RESOURCE_METRICS.find((m) => m.key === metricKey) || RESOURCE_METRICS[0];
+  var selected = RESOURCE_METRICS.find((m) => m.key === metricKey) || DEFAULT_RESOURCE_METRIC;
   var options = RESOURCE_METRICS.map(
     (m) =>
       '<option value="' +
@@ -445,7 +446,8 @@ var TAXONOMY_FAMILIES = [
 function renderTaxonomyRollups(rollups, metricKey) {
   var hasAny = false;
   for (var i = 0; i < TAXONOMY_FAMILIES.length; i++) {
-    if ((rollups[TAXONOMY_FAMILIES[i].key] || []).length) {
+    var candidateFamily = TAXONOMY_FAMILIES[i];
+    if (candidateFamily && (rollups[candidateFamily.key] || []).length) {
       hasAny = true;
       break;
     }
@@ -458,6 +460,9 @@ function renderTaxonomyRollups(rollups, metricKey) {
   html += '<div class="resource-taxonomy-grid">';
   for (var f = 0; f < TAXONOMY_FAMILIES.length; f++) {
     var family = TAXONOMY_FAMILIES[f];
+    if (!family) {
+      continue;
+    }
     var entries = rollups[family.key] || [];
     if (!entries.length) {
       continue;
@@ -622,7 +627,7 @@ function renderResourceTreemapPayload(report, metricKey, rootId) {
   collectNodesById(root, byId);
   var focusNode = rootId && byId[rootId] ? byId[rootId] : root;
   var crumbs = buildTreemapBreadcrumbs(focusNode, byId);
-  var selected = RESOURCE_METRICS.find((m) => m.key === metricKey) || RESOURCE_METRICS[0];
+  var selected = RESOURCE_METRICS.find((m) => m.key === metricKey) || DEFAULT_RESOURCE_METRIC;
   var options = RESOURCE_METRICS.map(
     (m) =>
       '<option value="' +
@@ -1241,7 +1246,13 @@ function renderStatsCards(container, stats) {
             '<table class="stats-table"><thead><tr><th>Variant</th><th>Done</th><th>Run</th><th>Fail</th><th>Pend</th><th>Total</th><th>%</th></tr></thead><tbody>';
           for (var i = 0; i < variants.length; i++) {
             var vname = variants[i];
+            if (vname === undefined) {
+              continue;
+            }
             var vp = p.variants[vname];
+            if (!vp) {
+              continue;
+            }
             html +=
               "<tr><td>" +
               esc(vname) +
@@ -1342,6 +1353,9 @@ function renderStatsCards(container, stats) {
           var liveCapWorkers = Object.keys(pl.live_worker_caps).sort();
           for (var j = 0; j < liveCapWorkers.length; j++) {
             var workerId = liveCapWorkers[j];
+            if (workerId === undefined) {
+              continue;
+            }
             liveCapParts.push(workerId + "=" + pl.live_worker_caps[workerId]);
           }
         }

@@ -1013,21 +1013,30 @@
       // height. Natural width measured in pass 1 is what the node will render
       // at — ensures content wraps the same way for measurement and render,
       // so ELK-declared height exactly matches rendered content height.
-      var targets = [];
-      for (var j = 0; j < els.length; j++) {
-        var natural = Math.ceil(els[j].getBoundingClientRect().width);
+      var targets = new Map();
+      for (var el of els) {
+        var natural = Math.ceil(el.getBoundingClientRect().width);
         var target = Math.max(CARD_MIN_WIDTH, Math.min(CARD_MAX_WIDTH, natural));
-        targets.push(target);
+        targets.set(el, target);
       }
-      for (var k = 0; k < els.length; k++) {
-        els[k].style.width = targets[k] + "px";
-        els[k].style.minWidth = targets[k] + "px";
-        els[k].style.maxWidth = targets[k] + "px";
+      for (var resized of els) {
+        var resizedTarget = targets.get(resized);
+        if (resizedTarget === undefined) {
+          continue;
+        }
+        resized.style.width = resizedTarget + "px";
+        resized.style.minWidth = resizedTarget + "px";
+        resized.style.maxWidth = resizedTarget + "px";
       }
-      for (var m = 0; m < els.length; m++) {
-        var r = els[m].getBoundingClientRect();
-        dims[els[m].dataset.id] = {
-          width: targets[m],
+      for (var measured of els) {
+        var measuredTarget = targets.get(measured);
+        var measuredId = measured.dataset.id;
+        if (measuredTarget === undefined || !measuredId) {
+          continue;
+        }
+        var r = measured.getBoundingClientRect();
+        dims[measuredId] = {
+          width: measuredTarget,
           height: Math.max(CARD_MIN_HEIGHT, Math.ceil(r.height)),
         };
       }
@@ -1255,9 +1264,9 @@
 
       function _clearFocusClass() {
         var prev = canvas.querySelectorAll(".viz-node-focused,.viz-frame-focused");
-        for (var i = 0; i < prev.length; i++) {
-          prev[i].classList.remove("viz-node-focused");
-          prev[i].classList.remove("viz-frame-focused");
+        for (var focused of prev) {
+          focused.classList.remove("viz-node-focused");
+          focused.classList.remove("viz-frame-focused");
         }
       }
       function _applyFocusClass(nodeId) {

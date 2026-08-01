@@ -15,13 +15,13 @@ pre-commit:
       stage_fixed: true
 
     browser-format:
-      glob: "*.{js,css,json}"
+      glob: "*.{js,mjs,css,json}"
       exclude: "src/metaproc/metabrowser_plugin/plugin/elk.bundled.js"
       run: npm run format:browser
       stage_fixed: true
 
     browser-types:
-      glob: "*.{js,json}"
+      glob: "*.{js,mjs,json}"
       run: npm run check:browser
 
     codespell:
@@ -36,5 +36,5 @@ pre-commit:
 
 pre-push:
   commands:
-    quality:
-      run: make lint-check test
+    verify:
+      run: make verify

@@ -5,14 +5,23 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ES2022",
     "moduleResolution": "bundler",
+    "exactOptionalPropertyTypes": true,
+    "forceConsistentCasingInFileNames": true,
+    "noFallthroughCasesInSwitch": true,
     "noEmit": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    // Legacy checked-JavaScript annotation migration: mp-kptm.
+    "noImplicitAny": false,
+    "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
     "strict": true,
     "target": "ES2022",
-    "noImplicitAny": false
+    "types": ["node"]
   },
   "include": [
     "src/metaproc/metabrowser_plugin/plugin/**/*.js",
+    "tests/dom/**/*.js",
     "types/**/*.d.ts"
   ],
   "exclude": ["src/metaproc/metabrowser_plugin/plugin/elk.bundled.js"]

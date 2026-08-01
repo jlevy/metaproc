@@ -26,7 +26,7 @@ install:
 	npm ci
 
 hooks-install: install
-	npx --no-install lefthook install
+	npm run prepare
 
 format lint lint-check test audit build: | install
 

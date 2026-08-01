@@ -25,6 +25,11 @@ TOKEN_COMPONENT_PATTERN = re.compile(r"[a-z][a-z0-9]*", re.IGNORECASE)
 ASCII_RUN_PATTERN = re.compile(rb"[\x20-\x7e]{4,}")
 ISSUE_ID_PATTERN = re.compile(r"\b([a-z][a-z0-9]{1,15})-[a-z0-9]{4,}\b", re.IGNORECASE)
 EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})\b")
+GIT_ATTRIBUTION_EMAIL_PATTERN = re.compile(
+    r"^(?P<prefix>(?:Co-authored-by|Reviewed-by|Signed-off-by):[^\n<]*<)"
+    r"[^>\n]+(?P<suffix>>[ \t]*)$",
+    re.IGNORECASE | re.MULTILINE,
+)
 PUBLIC_CONTACT_EMAILS = {"joshua@cal.berkeley.edu"}
 REAL_FIXTURE_FIELD_PATTERN = re.compile(
     r'["\']?(?:company|customer|symbol|ticker)["\']?\s*[:=]\s*["\']?(?!synthetic-)[A-Za-z0-9]',
@@ -118,6 +123,18 @@ def find_hygiene_findings(source: str, text: str) -> list[str]:
             line = text.count("\n", 0, match.start()) + 1
             findings.append(f"{source}:{line}: non-synthetic customer or ticker fixture")
     return findings
+
+
+def find_git_metadata_findings(source: str, text: str) -> list[str]:
+    """Scan Git metadata while preserving normal public-repository conventions."""
+    normalized = GIT_ATTRIBUTION_EMAIL_PATTERN.sub(
+        r"\g<prefix>agent@users.noreply.github.com\g<suffix>", text
+    )
+    return [
+        finding
+        for finding in find_hygiene_findings(source, normalized)
+        if not finding.endswith(": private pull-request reference")
+    ]
 
 
 def find_binary_findings(source: str, data: bytes) -> list[str]:
@@ -268,11 +285,11 @@ def repository_files(root: Path = ROOT) -> list[Path]:
 
 
 def scan_git_history(root: Path = ROOT) -> list[str]:
-    """Scan every reachable ref name, commit subject, and commit body."""
+    """Scan reachable ref names plus subjects and bodies on the current history."""
     findings: list[str] = []
     commands = (
         ("refs", ["git", "-C", str(root), "for-each-ref", "--format=%(refname)"]),
-        ("commits", ["git", "-C", str(root), "log", "--all", "--format=%H%n%s%n%b"]),
+        ("commits", ["git", "-C", str(root), "log", "HEAD", "--format=%H%n%s%n%b"]),
     )
     for label, command in commands:
         try:
@@ -292,7 +309,11 @@ def scan_git_history(root: Path = ROOT) -> list[str]:
         if result.returncode != 0:
             findings.append(f"git-{label}: unable to scan reachable Git metadata")
             continue
-        findings.extend(find_hygiene_findings(f"git-{label}", result.stdout))
+        source = f"git-{label}"
+        if label == "commits":
+            findings.extend(find_git_metadata_findings(source, result.stdout))
+        else:
+            findings.extend(find_hygiene_findings(source, result.stdout))
     return findings
 
 

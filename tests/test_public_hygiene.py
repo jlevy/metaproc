@@ -13,6 +13,7 @@ from unittest.mock import patch
 from devtools.public_hygiene import (
     _git_ignored,
     find_binary_findings,
+    find_git_metadata_findings,
     find_hygiene_findings,
     repository_files,
     scan_file,
@@ -68,6 +69,21 @@ def test_public_package_contact_email_is_allowed() -> None:
         )
         == []
     )
+
+
+def test_git_metadata_allows_attribution_trailers_and_public_pr_references() -> None:
+    public_pr = "PR " + "#3"
+    agent_email = "agent" + "@anthropic.com"
+    body_email = "person" + "@customer.test"
+    text = (
+        f"Document the public review for {public_pr}.\n\n"
+        f"Co-authored-by: Example Agent <{agent_email}>\n"
+        f"Contact: {body_email}\n"
+    )
+
+    findings = find_git_metadata_findings("git-commits", text)
+
+    assert findings == ["git-commits:4: potential personal email address"]
 
 
 def test_binary_assets_are_scanned_for_printable_private_residue() -> None:
