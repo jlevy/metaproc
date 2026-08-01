@@ -7,7 +7,16 @@ development series.
 
 ## [Unreleased][unreleased]
 
-- Prepare the standalone package for its first public release.
+## [0.2.0][] - 2026-07-31
+
+### Added
+
+- Dependency-aware execution of Markdown process specs.
+- Local, agent-CLI, and optional GCP Batch execution backends.
+- Resumable run state, validation, tracing, resource reports, and RunPool controls.
+- Credential-pool operations and adapter integrations.
+- A packaged Metabrowser plugin and portable Agent Skill.
+- Reproducible uv-based development, verification, build, and publishing workflows.
 
 ### Changed
 
@@ -48,16 +57,5 @@ development series.
   implicitly. Schemas consumed through Metaproc must be self-contained: use local `$defs`
   references or a registered Pydantic model instead of network-resolved references.
 
-## [0.1.0][] - 2026-07-27
-
-### Added
-
-- Dependency-aware execution of Markdown process specs.
-- Local, agent-CLI, and optional GCP Batch execution backends.
-- Resumable run state, validation, tracing, resource reports, and RunPool controls.
-- Credential-pool operations and adapter integrations.
-- A packaged Metabrowser plugin and portable Agent Skill.
-- Reproducible uv-based development, verification, build, and publishing workflows.
-
-[unreleased]: https://github.com/jlevy/metaproc/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/jlevy/metaproc/releases/tag/v0.1.0
+[unreleased]: https://github.com/jlevy/metaproc/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/jlevy/metaproc/releases/tag/v0.2.0

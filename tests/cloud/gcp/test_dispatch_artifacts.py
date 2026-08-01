@@ -278,7 +278,7 @@ class TestUploadToGcs:
 
 class TestUploadWheelAndWorkspace:
     def test_wheel_uri_shape(self, tmp_path: Path):
-        wheel = tmp_path / "metaproc-0.1.0-py3-none-any.whl"
+        wheel = tmp_path / "metaproc-0.2.0-py3-none-any.whl"
         wheel.write_text("")
 
         client = MagicMock()
@@ -293,12 +293,12 @@ class TestUploadWheelAndWorkspace:
         ):
             uri = upload_wheel_to_gcs(wheel, bucket="dispatch-bucket", job_id="job-abc-123")
 
-        assert uri == "gs://dispatch-bucket/gcp-run/job-abc-123/metaproc-0.1.0-py3-none-any.whl"
-        bucket.blob.assert_called_once_with("gcp-run/job-abc-123/metaproc-0.1.0-py3-none-any.whl")
+        assert uri == "gs://dispatch-bucket/gcp-run/job-abc-123/metaproc-0.2.0-py3-none-any.whl"
+        bucket.blob.assert_called_once_with("gcp-run/job-abc-123/metaproc-0.2.0-py3-none-any.whl")
 
     def test_wheel_uri_distinct_job_ids_disjoint_keys(self, tmp_path: Path):
         """Two dispatches of the same wheel version must not overwrite each other."""
-        wheel = tmp_path / "metaproc-0.1.0-py3-none-any.whl"
+        wheel = tmp_path / "metaproc-0.2.0-py3-none-any.whl"
         wheel.write_text("")
 
         client = MagicMock()
@@ -312,8 +312,8 @@ class TestUploadWheelAndWorkspace:
             uri_a = upload_wheel_to_gcs(wheel, bucket="b", job_id="job-a")
             uri_b = upload_wheel_to_gcs(wheel, bucket="b", job_id="job-b")
 
-        assert uri_a == "gs://b/gcp-run/job-a/metaproc-0.1.0-py3-none-any.whl"
-        assert uri_b == "gs://b/gcp-run/job-b/metaproc-0.1.0-py3-none-any.whl"
+        assert uri_a == "gs://b/gcp-run/job-a/metaproc-0.2.0-py3-none-any.whl"
+        assert uri_b == "gs://b/gcp-run/job-b/metaproc-0.2.0-py3-none-any.whl"
         assert uri_a != uri_b
 
     def test_workspace_uri_shape(self, tmp_path: Path):
