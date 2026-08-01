@@ -288,6 +288,15 @@ def _init_git_repo(root: Path) -> None:
     run("git", "update-ref", "refs/remotes/origin/main", "HEAD")
 
 
+def _write_vendored_metaproc_config(root: Path) -> None:
+    """Register the consumer's Metaproc source without needing a remote repo."""
+    (root / ".gitmodules").write_text(
+        '[submodule "metaproc"]\n'
+        "\tpath = vendor/metaproc\n"
+        "\turl = https://github.com/example/metaproc.git\n"
+    )
+
+
 class TestCheckMetaprocWheelForBranchEdits:
     def test_passes_when_wheel_override_is_set(self, tmp_path: Path):
         env = {"METAPROC_WHEEL_GCS": "gs://bucket/metaproc.whl"}
@@ -333,6 +342,15 @@ class TestCheckMetaprocWheelForBranchEdits:
         assert "origin/main" in msg
         assert "not fetched" in msg
 
+    def test_warns_when_gitmodules_cannot_be_parsed(self, tmp_path: Path):
+        _init_git_repo(tmp_path)
+        (tmp_path / ".gitmodules").write_text('[submodule "metaproc"\n')
+        with patch.dict("os.environ", {}, clear=True):
+            ok, msg = check_metaproc_wheel_for_branch_edits(repo_root=tmp_path)
+        assert ok is False
+        assert "cannot inspect .gitmodules" in msg
+        assert "METAPROC_WHEEL_GCS" in msg
+
     def test_passes_when_branch_matches_base(self, tmp_path: Path):
         _init_git_repo(tmp_path)
         with patch.dict("os.environ", {}, clear=True):
@@ -363,10 +381,46 @@ class TestCheckMetaprocWheelForBranchEdits:
         assert "1 commit" in msg
         assert "METAPROC_WHEEL_GCS" in msg
 
+    def test_warns_when_vendored_metaproc_commit_is_ahead(self, tmp_path: Path):
+        _init_git_repo(tmp_path)
+        _write_vendored_metaproc_config(tmp_path)
+        source = tmp_path / "vendor" / "metaproc"
+        source.mkdir(parents=True)
+        (source / "x.py").write_text("x = 1\n")
+
+        subprocess.run(
+            ["git", "add", ".gitmodules", "vendor/metaproc/x.py"],
+            cwd=str(tmp_path),
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-q", "--no-gpg-sign", "-m", "metaproc change"],
+            cwd=str(tmp_path),
+            check=True,
+            capture_output=True,
+        )
+        with patch.dict("os.environ", {}, clear=True):
+            ok, msg = check_metaproc_wheel_for_branch_edits(repo_root=tmp_path)
+        assert ok is False
+        assert "1 commit" in msg
+        assert "METAPROC_WHEEL_GCS" in msg
+
     def test_warns_when_metaproc_is_dirty_and_no_override(self, tmp_path: Path):
         _init_git_repo(tmp_path)
         (tmp_path / "metaproc").mkdir()
         (tmp_path / "metaproc" / "dirty.py").write_text("# not staged\n")
+        with patch.dict("os.environ", {}, clear=True):
+            ok, msg = check_metaproc_wheel_for_branch_edits(repo_root=tmp_path)
+        assert ok is False
+        assert "uncommitted" in msg
+
+    def test_warns_when_vendored_metaproc_is_dirty(self, tmp_path: Path):
+        _init_git_repo(tmp_path)
+        _write_vendored_metaproc_config(tmp_path)
+        source = tmp_path / "vendor" / "metaproc"
+        source.mkdir(parents=True)
+        (source / "dirty.py").write_text("# not staged\n")
         with patch.dict("os.environ", {}, clear=True):
             ok, msg = check_metaproc_wheel_for_branch_edits(repo_root=tmp_path)
         assert ok is False

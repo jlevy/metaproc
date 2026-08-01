@@ -7,6 +7,7 @@ cloud infrastructure readiness (Filestore mount, ADC, CLIs).
 
 from __future__ import annotations
 
+import configparser
 import logging
 import shutil
 import subprocess
@@ -319,13 +320,34 @@ def _git(args: list[str], *, cwd: Path) -> str | None:
     return result.stdout.strip()
 
 
+def _metaproc_source_paths(root: Path) -> tuple[str, ...]:
+    """Return consumer paths that represent the Metaproc source checkout."""
+    paths = ["metaproc"]
+    gitmodules = root / ".gitmodules"
+    if not gitmodules.is_file():
+        return tuple(paths)
+
+    config = configparser.ConfigParser(interpolation=None)
+    config.read_string(gitmodules.read_text())
+
+    for section in config.sections():
+        if not section.startswith("submodule "):
+            continue
+        path = config.get(section, "path", fallback="").strip()
+        url = config.get(section, "url", fallback="").rstrip("/")
+        repository_name = url.rsplit("/", maxsplit=1)[-1].removesuffix(".git")
+        if path and (Path(path).name == "metaproc" or repository_name == "metaproc"):
+            paths.append(path)
+    return tuple(dict.fromkeys(paths))
+
+
 def check_metaproc_wheel_for_branch_edits(
     *, repo_root: Path | None = None, base_ref: str = "origin/main"
 ) -> tuple[bool, str]:
-    """Warn when the tracked branch has ``metaproc/`` edits but no wheel override.
+    """Warn when the tracked branch has Metaproc source edits but no wheel override.
 
-    ``metaproc/`` is baked into the agent image at build time, so Batch
-    workers don't consume tracked-branch ``metaproc/`` changes unless the
+    Metaproc is baked into the agent image at build time, so Batch
+    workers don't consume tracked-branch source changes unless the
     operator sets ``METAPROC_WHEEL_GCS`` so ``container_bootstrap`` reinstalls
     metaproc from the uploaded wheel. ``METAPROC_WORKSPACE_GCS`` is **not**
     a valid substitute: the workspace installs only the configured companion
@@ -361,19 +383,29 @@ def check_metaproc_wheel_for_branch_edits(
             "retry, or set METAPROC_WHEEL_GCS explicitly.",
         )
 
-    # Committed metaproc/ changes ahead of the base ref.
+    try:
+        source_paths = _metaproc_source_paths(root)
+    except (OSError, configparser.Error) as exc:
+        return (
+            False,
+            "Metaproc artifact: cannot inspect .gitmodules to locate the source "
+            f"checkout ({exc}). Fix .gitmodules or set METAPROC_WHEEL_GCS explicitly.",
+        )
+    source_pathspecs = [f":(literal){path}" for path in source_paths]
+
+    # Committed Metaproc source changes ahead of the base ref.
     ahead = _git(
-        ["rev-list", "--count", f"{base_ref}..HEAD", "--", "metaproc/"],
+        ["rev-list", "--count", f"{base_ref}..HEAD", "--", *source_pathspecs],
         cwd=root,
     )
     ahead_count = int(ahead) if ahead and ahead.isdigit() else 0
 
-    # Uncommitted metaproc/ changes in the working tree or index.
-    dirty = _git(["status", "--porcelain", "--", "metaproc/"], cwd=root)
+    # Uncommitted Metaproc source changes in the working tree or index.
+    dirty = _git(["status", "--porcelain", "--", *source_pathspecs], cwd=root)
     dirty_count = len([ln for ln in (dirty or "").splitlines() if ln.strip()])
 
     if ahead_count == 0 and dirty_count == 0:
-        return True, f"Metaproc artifact: no tracked changes under metaproc/ vs. {base_ref}"
+        return True, f"Metaproc artifact: no tracked changes in source vs. {base_ref}"
 
     pieces: list[str] = []
     if ahead_count:
@@ -384,9 +416,9 @@ def check_metaproc_wheel_for_branch_edits(
     return (
         False,
         "Metaproc artifact: tracked branch has "
-        f"{detail} under metaproc/ but METAPROC_WHEEL_GCS is not set — Batch "
+        f"{detail} in Metaproc source but METAPROC_WHEEL_GCS is not set — Batch "
         "will run the image-baked metaproc code, not this branch's. Build a "
-        "wheel (`uv build --wheel --project metaproc`), upload it to gs://, "
+        "wheel from the Metaproc source checkout, upload it to gs://, "
         "and `export METAPROC_WHEEL_GCS=gs://…`. METAPROC_WORKSPACE_GCS does "
         "NOT cover metaproc itself — only configured companion packages.",
     )
