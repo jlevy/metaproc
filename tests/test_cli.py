@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from softschema import validate_artifact
 from typer.testing import CliRunner
 
@@ -137,10 +138,13 @@ class TestSoftschemaCommands:
         assert result.exit_code == 0, result.output
         assert "ok: true" in result.output
 
-    def test_softschema_validate_reports_portable_yaml_rejection(self, tmp_path):
+    @pytest.mark.parametrize("temporal_value", ["2026-01-01", "2026-01-01 12:34:56"])
+    def test_softschema_validate_treats_bare_yaml_temporal_as_string(
+        self, tmp_path, temporal_value
+    ):
         process_path = tmp_path / "timestamp.process.md"
         process_path.write_text(
-            "---\nprocess:\n  name: 2026-01-01\n  steps:\n"
+            f"---\nprocess:\n  name: {temporal_value}\n  steps:\n"
             "    - id: s1\n      mode: agent\n      prompt_prefix: Hello\n"
             "      outputs:\n        main:\n          path: out.md\n---\n"
         )
@@ -156,9 +160,9 @@ class TestSoftschemaCommands:
             ],
         )
 
-        assert result.exit_code == 1, result.output
-        assert "outcome: invalid" in result.output
-        assert "yaml_unsupported_scalar" in result.output
+        assert result.exit_code == 0, result.output
+        assert "outcome: valid" in result.output
+        assert "ok: true" in result.output
 
     def test_softschema_compile_accepts_documented_contract_option(self, tmp_path):
         schema_path = tmp_path / "process.schema.yaml"

@@ -11,12 +11,18 @@ development series.
 
 ### Changed
 
-- Require `softschema>=0.3.0,<0.4` (previously `>=0.1.4,<0.2`). See the
+- Require `softschema>=0.4.0,<0.5` and `frontmatter-format>=0.4.0,<0.5` (previously
+  `softschema>=0.1.4,<0.2` and `frontmatter-format>=0.3.0`). See the
   [softschema 0.2.0](https://github.com/jlevy/softschema/releases/tag/v0.2.0) and
-  [softschema 0.3.0](https://github.com/jlevy/softschema/releases/tag/v0.3.0) release
-  notes for the complete upstream migration surface.
+  [softschema 0.3.0](https://github.com/jlevy/softschema/releases/tag/v0.3.0),
+  [softschema 0.4.0](https://github.com/jlevy/softschema/releases/tag/v0.4.0), and
+  [frontmatter-format 0.4.0](https://github.com/jlevy/frontmatter-format/releases/tag/v0.4.0)
+  release notes for the complete upstream migration surface.
 - `metaproc softschema validate` now includes softschema’s `outcome` discriminator
   (`valid`, `invalid`, or `input_error`) alongside the existing `ok` field.
+- Mapping-based YAML and frontmatter writes are deterministic and alias-free: repeated
+  lists and mappings are expanded instead of emitting anchors.
+  Cyclic values raise `YamlSerializationError` without replacing an existing target.
 
 ### Breaking
 
@@ -32,11 +38,12 @@ development series.
 - Structure reports written by earlier versions no longer validate.
   Regenerate them with `metaproc structure-report`, or update both `softschema.contract`
   and `structure_report.schema` to `metaproc:StructureReport/v1`.
-- Softschema 0.3 restricts YAML inputs to bounded, JSON-compatible values.
-  Timestamps, aliases and anchors, merge keys, explicit tags, duplicate or non-string
-  keys, unsafe integers, negative zero, non-finite numbers, excessive depth, and
-  oversized inputs are rejected.
-  Quote timestamp-shaped strings and remove YAML-only constructs before validation.
+- Softschema 0.3 and 0.4 restrict YAML inputs to bounded, JSON-compatible values.
+  Aliases and anchors, merge keys, explicit tags, duplicate or non-string keys, unsafe
+  integers, negative zero, non-finite numbers, excessive depth, and oversized inputs are
+  rejected. Bare and quoted date- or timestamp-shaped scalars are accepted as strings in
+  0.4; callers that need temporal objects must construct them explicitly after
+  validation.
 - Compiled schemas are validated offline and remote `$ref` targets are never fetched
   implicitly. Schemas consumed through Metaproc must be self-contained: use local `$defs`
   references or a registered Pydantic model instead of network-resolved references.

@@ -7,6 +7,7 @@ and resolves to the expected helper from its source module.
 from __future__ import annotations
 
 import frontmatter_format
+import pytest
 import strif
 
 import metaproc.io as io_mod
@@ -18,6 +19,7 @@ EXPECTED_PUBLIC = {
     "ArtifactPath",
     "FmFormatError",
     "TemplateRenderError",
+    "YamlSerializationError",
     "artifact_exists",
     "atomic_output_file",
     "fmf_read",
@@ -78,6 +80,7 @@ def test_frontmatter_format_reexports_resolve_to_source() -> None:
 
     for name in (
         "FmFormatError",
+        "YamlSerializationError",
         "fmf_read",
         "fmf_read_frontmatter",
         "fmf_write",
@@ -99,3 +102,31 @@ def test_templating_helpers_resolve_to_source_module() -> None:
 def test_atomic_output_file_resolves_to_strif() -> None:
 
     assert io_mod.atomic_output_file is strif.atomic_output_file
+
+
+def test_yaml_mapping_serialization_is_alias_free() -> None:
+    shared_value = {"items": ["one", "two"]}
+    sharing = {"left": shared_value, "right": shared_value}
+    unshared = {
+        "left": {"items": ["one", "two"]},
+        "right": {"items": ["one", "two"]},
+    }
+
+    serialized = io_mod.to_yaml_string(sharing)
+
+    assert serialized == io_mod.to_yaml_string(unshared)
+    assert "&id" not in serialized
+    assert "*id" not in serialized
+
+
+def test_cyclic_frontmatter_write_preserves_existing_target(tmp_path) -> None:
+    target = tmp_path / "artifact.md"
+    original = "existing content\n"
+    target.write_text(original)
+    cyclic: dict[str, object] = {}
+    cyclic["self"] = cyclic
+
+    with pytest.raises(io_mod.YamlSerializationError, match="cyclic"):
+        io_mod.fmf_write(target, "body\n", cyclic)
+
+    assert target.read_text() == original

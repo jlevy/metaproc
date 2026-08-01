@@ -27,12 +27,12 @@ classifiers = [
 ]
 keywords = ["agents", "automation", "process", "workflows"]
 dependencies = [
-    "softschema>=0.3.0,<0.4",
+    "softschema>=0.4.0,<0.5",
     "pydantic>=2.13.1",
     "typer>=0.24.1",
     "ruamel.yaml>=0.19.1",
     "pyyaml>=6.0.3",
-    "frontmatter-format>=0.3.0",
+    "frontmatter-format>=0.4.0,<0.5",
     "jsonschema>=4.26.0",
     "strif>=3.1.0",
     "prettyfmt>=0.4.1",
