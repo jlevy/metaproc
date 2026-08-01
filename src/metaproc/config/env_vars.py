@@ -103,7 +103,7 @@ class MetaprocEnv(EnvEnum):
     METAPROC_WHEEL_GCS = optional(
         "GCS path to a prebuilt metaproc wheel. When set, workers install from the "
         "wheel instead of cloning.",
-        "gs://<your-gcs-bucket>/wheels/metaproc-0.1.0-py3-none-any.whl",
+        "gs://<your-gcs-bucket>/wheels/metaproc-0.2.0-py3-none-any.whl",
     )
     METAPROC_WHEEL_SHA256 = optional(
         "Required SHA-256 digest for METAPROC_WHEEL_GCS artifact verification."

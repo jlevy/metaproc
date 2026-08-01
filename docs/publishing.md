@@ -18,6 +18,10 @@ The repository must be public before the first trusted-publisher release when re
 by the selected PyPI configuration.
 Confirm the complete public-hygiene and distribution gates before changing visibility.
 
+The first public release is `v0.2.0`. No `v0.1.0` tag or PyPI distribution was
+published; `0.1.0` appeared only in pre-release documentation and must not be published
+retroactively.
+
 ## Release Checklist
 
 1. Update local `main` and confirm the worktree is clean.
@@ -35,6 +39,7 @@ Confirm the complete public-hygiene and distribution gates before changing visib
 5. Write release notes following `tbd guidelines release-notes-guidelines`. Describe the
    aggregate user-visible delta, compatibility notes, and shipped Agent Skill or
    process-content changes.
+   The prepared `v0.2.0` notes are in [releases/v0.2.0.md](releases/v0.2.0.md).
    End with a concrete compare link.
 
 6. Create a GitHub release with a `vX.Y.Z` tag:
@@ -58,8 +63,6 @@ Confirm the complete public-hygiene and distribution gates before changing visib
    uvx metaproc@X.Y.Z skill metaproc
    uvx metaproc@X.Y.Z env --template
    ```
-
-For the first release, the intended tag and package version are `v0.1.0` and `0.1.0`.
 
 ## Failure Handling
 

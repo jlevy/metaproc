@@ -1,38 +1,32 @@
 # Metaproc Roadmap
 
-This roadmap tracks the remaining work for the standalone preview.
+This roadmap tracks the remaining work after the standalone preview.
 Detailed work items live in the repository’s tbd beads.
 
-## Preview Release Blockers
+## Release Candidate
 
-- Complete the public-hygiene pass over source, tests, fixtures, documentation, static
-  assets, package artifacts, and reachable Git metadata.
-- Finalize package metadata, license, supported Python and operating-system versions,
-  optional cloud scope, and governance.
-- Verify that framework behavior is independent of any consumer workflow when no plugins
-  are installed.
-- Publish migration guidance for consumer-owned commands, configuration, and artifact
-  conventions.
-- Reconcile direct runtime dependencies and optional extras from import evidence.
-- Make development, lint, test, documentation, asset, and build tooling package-local.
-- Add a deterministic offline smoke test for planning, validation, execution, resume,
-  status, tail, trace, statistics, artifacts, and plugin discovery.
-- Validate source and binary distributions from a clean checkout and confirm their
-  required and forbidden contents.
-- Run the complete Python version matrix and dependency, package-age, secret, link,
-  frontmatter, formatting, lint, type, test, and artifact-hygiene gates in CI.
-- Complete a trusted-publishing dry run before the first release.
+Repository-local preview work is complete.
+The first public release is `v0.2.0`, tracked by `mp-yxay`. After the upgrade and
+release-preparation pull requests merge:
 
-## Preview Documentation
+- confirm the PyPI pending publisher matches the `publish.yml` workflow and `pypi`
+  environment;
+- create the `v0.2.0` GitHub release from the validated `main` commit using the
+  checked-in release notes;
+- watch the trusted-publishing workflow to completion; and
+- verify the PyPI metadata, artifacts, and isolated installed-package smoke tests.
 
-- Provide a synthetic quickstart and tested examples for sequential work, fan-out, and
-  plugins.
-- Document the supported command, process-file, artifact, adapter, plugin, and optional
-  cloud surfaces.
-- Consolidate present-state architecture, developer, operator, authentication, testing,
-  and release guidance.
-- Ensure packaged help topics are byte-equivalent to their canonical documentation.
-- Add security, changelog, release-note, publishing, and supply-chain policies.
+## Completed Preview Scope
+
+- Standalone package metadata, AGPL licensing, dependency locks, and optional cloud
+  scope
+- Public-hygiene, artifact-content, secret, link, frontmatter, format, lint, type, test,
+  dependency-audit, and Python-version-matrix gates
+- Deterministic offline smoke coverage and clean installed-wheel validation
+- Package-local development, documentation, browser assets, Agent Skill, CI, and
+  trusted-publishing workflow
+- Synthetic examples and operator, architecture, installation, development, migration,
+  release, security, and supply-chain guidance
 
 ## Post-Preview
 

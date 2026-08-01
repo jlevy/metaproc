@@ -67,16 +67,17 @@ Repository workflow is agent-facing: `AGENTS.md`, tbd beads, development guidanc
 runbooks, and executable process specifications define the process without GitHub issue
 or pull request forms.
 
-The first release-readiness review produced 101 tracked findings.
-One hundred findings are closed after implementation or an explicit design decision, and
-one publication-access item is deferred.
-The complete local gate passes: 3,784 tests pass, 8 live or environment-dependent tests
-skip, dependency audits are clean, and both built distributions pass installed-package
-smoke checks.
+The initial release-readiness review produced 101 tracked findings.
+One hundred findings are closed after implementation or an explicit design decision; the
+remaining publication-access check belongs to the first release operation.
+The current complete local gate passes: 3,793 tests pass, 8 live or
+environment-dependent tests skip, dependency audits are clean, and both built
+distributions pass installed-package smoke checks.
 
 Every proposed merge head must pass the hosted Python matrix and be pinned downstream by
-exact commit. The separate v0.1.0 publication bead remains intentionally open until
-trusted publishing is validated against the final tag.
+exact commit. No `v0.1.0` tag or PyPI distribution was published.
+The `v0.2.0` publication bead remains open until the upgrade and release-preparation
+pull requests merge and trusted publishing is validated against the final tag.
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

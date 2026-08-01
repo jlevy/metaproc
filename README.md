@@ -24,11 +24,11 @@ prompts, handlers, and policies to downstream packages.
 
 ## Installation
 
-Metaproc requires Python 3.12 or newer and uses [uv](https://docs.astral.sh/uv/). After
-the first public release, run a pinned version without a persistent installation:
+Metaproc requires Python 3.12 or newer and uses [uv](https://docs.astral.sh/uv/). Run an
+exact release without a persistent installation:
 
 ```shell
-uvx metaproc@0.1.0 --help
+uvx metaproc@0.2.0 --help
 ```
 
 For a persistent tool installation:
