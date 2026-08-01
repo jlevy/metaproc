@@ -28,8 +28,8 @@ Metaproc still owns the commands that load process specs and plugins:
 
 ```bash
 uv run metaproc structure-report path/to/workflow.process.md
-uv run metaproc softschema validate path/to/artifact.md --schema example.record.v1
-uv run metaproc softschema compile module:Model --out schemas/model.schema.yaml --check
+uv run metaproc softschema validate path/to/artifact.md --schema example:Record/v1
+uv run metaproc softschema compile module:Model --out schemas/model.schema.yaml --contract example:Model/v1 --check
 ```
 
 Use the package docs for reusable behavior and this path as a compatibility pointer for

@@ -93,6 +93,12 @@ retains historical framework [performance notes](performance-notes.md).
 - Live integration tests under `tests/integration/` and `tests/cloud/` require their
   documented credentials or infrastructure and otherwise skip.
 
+The Metabrowser plugin is checked JavaScript validated by Biome and TypeScript.
+Biome does not provide static floating-promise analysis for JavaScript, so this project
+does not yet claim the shared promise-safety lint floor.
+The typescript-eslint overlay is tracked by `mp-608l` and remains gated on a patched
+dependency graph clearing the third-party supply-chain cool-off.
+
 ## Performance Discipline
 
 When you change anything in `logutil/`, `engine/run_status`, `stats/`, or

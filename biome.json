@@ -2,8 +2,11 @@
   "$schema": "https://biomejs.dev/schemas/2.5.2/schema.json",
   "files": {
     "includes": [
+      "biome.json",
+      "package.json",
       "src/metaproc/metabrowser_plugin/plugin/**",
       "tests/dom/**",
+      "tsconfig.json",
       "!src/metaproc/metabrowser_plugin/plugin/elk.bundled.js"
     ]
   },
@@ -23,9 +26,14 @@
     "enabled": true,
     "rules": {
       "preset": "recommended",
+      "correctness": {
+        "noUnusedImports": "error",
+        "noUnusedVariables": "error"
+      },
       "style": {
         "noDescendingSpecificity": "off",
         "useBlockStatements": "error",
+        "useImportType": "error",
         "useTemplate": "off"
       }
     }

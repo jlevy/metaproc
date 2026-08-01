@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from frontmatter_format import (
     FmFormatError,
+    YamlSerializationError,
     fmf_read,
     fmf_read_frontmatter,
     fmf_write,
@@ -45,6 +46,7 @@ __all__ = [
     "ArtifactPath",
     "FmFormatError",
     "TemplateRenderError",
+    "YamlSerializationError",
     "artifact_exists",
     "atomic_output_file",
     "fmf_read",

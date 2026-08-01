@@ -48,6 +48,31 @@ type MetaprocVisualizationRuntime = Record<string, unknown> & {
   renderViz(container: HTMLElement, visualization: unknown, options: object): Promise<void>;
 };
 
+type MetaprocVizData = {
+  viz?: {
+    header?: { name?: string };
+    nodes?: Array<{
+      id?: string;
+      kind?: string;
+      label?: string;
+      step?: { mode?: string };
+    }>;
+  };
+};
+
+type MetaprocDomainViewRuntime = {
+  [name: string]: CallableFunction;
+  clearPluginDataRequests(): void;
+  disposeCharts(): void;
+  loadCharts(container: HTMLElement, path: string, isCurrent: () => boolean): Promise<void>;
+  loadStats(container: HTMLElement, path: string, isCurrent: () => boolean): Promise<void>;
+  loadVisual(container: HTMLElement, path: string, isCurrent: () => boolean): Promise<void>;
+  loadVizModel(path: string): Promise<MetaprocVizData>;
+  renderResourceReportPayload(payload: unknown, metricKey: string): string;
+  renderResourceTreemapPayload(payload: unknown, metricKey: string): string;
+  setCurrentResourceReportPayload(payload: unknown, path: string): unknown;
+};
+
 declare global {
   interface Window {
     ELK?: new () => {
@@ -66,7 +91,7 @@ declare global {
       move(event: MouseEvent): void;
       show(html: string, event: MouseEvent): void;
     };
-    MetaprocDomainViews: Record<string, CallableFunction>;
+    MetaprocDomainViews: MetaprocDomainViewRuntime;
     MetaprocResourceSelection?: {
       get(): string | null;
       set(nodeId: string | null, sourceTag: string): void;

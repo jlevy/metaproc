@@ -2,7 +2,7 @@
 
 The `StructureReport*` Pydantic models are owned by metaproc — they describe a
 metaproc process graph (producer_step, consumers, carrier) and default to the
-`metaproc.structure_report.v1` contract id. They used to live in
+`metaproc:StructureReport/v1` contract id. They used to live in
 `softschema.reports` while the in-repo workspace package owned softschema, but
 the standalone `softschema` package correctly does not ship them; they moved
 here as part of the consumer workflow cutover.
@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from softschema import (
     Contract,
     Contracts,
@@ -28,6 +28,8 @@ from softschema import (
 
 from metaproc.io import fmf_read
 from metaproc.models.authored import IOSpec, ProcessSpec
+
+STRUCTURE_REPORT_CONTRACT_ID = "metaproc:StructureReport/v1"
 
 
 class SchemaStage(StrEnum):
@@ -75,7 +77,7 @@ class StructureReportEdge(BaseModel):
 class StructureReport(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    contract_id: str = Field(default="metaproc.structure_report.v1", alias="schema")
+    contract_id: str = Field(default=STRUCTURE_REPORT_CONTRACT_ID, alias="schema", frozen=True)
     generated_at: str
     process_path: str
     run_dir: str | None = None
@@ -83,6 +85,13 @@ class StructureReport(BaseModel):
     artifacts: list[StructureReportArtifact] = Field(default_factory=list)
     edges: list[StructureReportEdge] = Field(default_factory=list)
     warnings: list[SchemaWarning] = Field(default_factory=list)
+
+    @field_validator("contract_id")
+    @classmethod
+    def _require_structure_report_contract(cls, value: str) -> str:
+        if value != STRUCTURE_REPORT_CONTRACT_ID:
+            raise ValueError(f"schema must be {STRUCTURE_REPORT_CONTRACT_ID!r}")
+        return value
 
 
 class StructureReportEnvelope(BaseModel):

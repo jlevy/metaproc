@@ -1323,7 +1323,7 @@ Mirrors the operator-facing `auth probe` callsite in
 
 #### V-A two-label integration smoke test
 
-[`metaproc/tests/integration/test_two_label_smoke_vehicle_a.py`](../../../metaproc/tests/integration/test_two_label_smoke_vehicle_a.py)
+[`tests/integration/test_two_label_smoke_vehicle_a.py`](../../tests/integration/test_two_label_smoke_vehicle_a.py)
 covers the Vehicle A end-to-end at the slot coordinator level: `scope_env` injects
 `CLAUDE_CODE_OAUTH_TOKEN` plus the hardening flags
 (`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`, `DISABLE_UPDATES=1`); no `.credentials.json` is

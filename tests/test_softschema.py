@@ -28,6 +28,8 @@ from softschema import (
 
 from metaproc.structure_report import inspect_frontmatter_path
 
+SAMPLE_CONTRACT = "example:Sample/v1"
+
 # Fixture model: small, self-contained, exercises the full surface.
 
 
@@ -62,33 +64,33 @@ class SampleModel(BaseModel):
 
 def test_compile_writes_yaml(tmp_path: Path) -> None:
     out = tmp_path / "sample.schema.yaml"
-    result = compile_model(SampleModel, out)
+    result = compile_model(SampleModel, out, contract_id=SAMPLE_CONTRACT)
     assert out.is_file()
     assert "x-softschema" in result.schema_yaml
     assert "schema_sha256" in result.schema_yaml
-    assert "softschema_format_version" in result.schema_yaml
+    assert SAMPLE_CONTRACT in result.schema_yaml
     assert "direction:" in result.schema_yaml
 
 
 def test_compile_check_only_passes_when_in_sync(tmp_path: Path) -> None:
     out = tmp_path / "sample.schema.yaml"
-    compile_model(SampleModel, out)
+    compile_model(SampleModel, out, contract_id=SAMPLE_CONTRACT)
     # Re-running in check_only mode should report no drift.
-    check = compile_model(SampleModel, out, check_only=True)
+    check = compile_model(SampleModel, out, contract_id=SAMPLE_CONTRACT, check_only=True)
     assert check.drift is False
 
 
 def test_compile_check_only_detects_drift(tmp_path: Path) -> None:
     out = tmp_path / "sample.schema.yaml"
     out.write_text("# stale committed schema\nproperties: {}\n")
-    check = compile_model(SampleModel, out, check_only=True)
+    check = compile_model(SampleModel, out, contract_id=SAMPLE_CONTRACT, check_only=True)
     assert check.drift is True
     assert check.drift_diff is not None
 
 
 def test_compile_check_only_missing_file(tmp_path: Path) -> None:
     out = tmp_path / "nonexistent.schema.yaml"
-    check = compile_model(SampleModel, out, check_only=True)
+    check = compile_model(SampleModel, out, contract_id=SAMPLE_CONTRACT, check_only=True)
     assert check.drift is True
 
 
@@ -97,7 +99,7 @@ def test_compile_check_only_missing_file(tmp_path: Path) -> None:
 
 def test_validate_structural_happy_path(tmp_path: Path) -> None:
     schema_path = tmp_path / "sample.schema.yaml"
-    compile_model(SampleModel, schema_path)
+    compile_model(SampleModel, schema_path, contract_id=SAMPLE_CONTRACT)
     values = {"name": "hello", "direction": "up", "delta": 1.5}
     result = validate_structural(values, schema_path)
     assert result.ok, f"unexpected errors: {result.errors}"
@@ -105,7 +107,7 @@ def test_validate_structural_happy_path(tmp_path: Path) -> None:
 
 def test_validate_structural_catches_missing_required(tmp_path: Path) -> None:
     schema_path = tmp_path / "sample.schema.yaml"
-    compile_model(SampleModel, schema_path)
+    compile_model(SampleModel, schema_path, contract_id=SAMPLE_CONTRACT)
     # Missing required `name`.
     values = {"direction": "up", "delta": 1.5}
     result = validate_structural(values, schema_path)
@@ -117,7 +119,7 @@ def test_validate_structural_catches_missing_required(tmp_path: Path) -> None:
 
 def test_validate_structural_catches_type_mismatch(tmp_path: Path) -> None:
     schema_path = tmp_path / "sample.schema.yaml"
-    compile_model(SampleModel, schema_path)
+    compile_model(SampleModel, schema_path, contract_id=SAMPLE_CONTRACT)
     values = {"name": "hello", "direction": "up", "delta": "not a number"}
     result = validate_structural(values, schema_path)
     assert not result.ok
@@ -161,7 +163,7 @@ def _write_doc(path: Path, frontmatter_yaml: str, body: str = "# title\n\nbody.\
 
 def test_validate_values_combines_model_and_schema(tmp_path: Path) -> None:
     schema_path = tmp_path / "sample.schema.yaml"
-    compile_model(SampleModel, schema_path)
+    compile_model(SampleModel, schema_path, contract_id=SAMPLE_CONTRACT)
     result = validate_values(
         {"name": "hello", "direction": "up", "delta": 1.5},
         model=SampleModel,
@@ -172,7 +174,7 @@ def test_validate_values_combines_model_and_schema(tmp_path: Path) -> None:
 
 def test_validate_values_skips_semantic_when_no_model(tmp_path: Path) -> None:
     schema_path = tmp_path / "sample.schema.yaml"
-    compile_model(SampleModel, schema_path)
+    compile_model(SampleModel, schema_path, contract_id=SAMPLE_CONTRACT)
     result = validate_values(
         {"name": "hello", "direction": "up", "delta": 1.5},
         schema=schema_path,
@@ -195,7 +197,7 @@ def test_validate_artifact_uses_envelope_binding(tmp_path: Path) -> None:
     _write_doc(
         doc,
         """
-        softschema: example.sample.v1
+        softschema: example:Sample/v1
         sample:
           name: hello
           direction: up
@@ -203,7 +205,7 @@ def test_validate_artifact_uses_envelope_binding(tmp_path: Path) -> None:
         """,
     )
     binding = Contract(
-        id="example.sample.v1",
+        id="example:Sample/v1",
         model=SampleModel,
         envelope_key="sample",
         status=SchemaStatus.enforced,
@@ -212,7 +214,7 @@ def test_validate_artifact_uses_envelope_binding(tmp_path: Path) -> None:
     result = validate_artifact(doc, contract=binding)
 
     assert result.ok
-    assert result.contract_id == "example.sample.v1"
+    assert result.contract_id == "example:Sample/v1"
     assert result.status == SchemaStatus.enforced
     assert result.values == {"name": "hello", "direction": "up", "delta": 1.5}
 
@@ -231,7 +233,7 @@ def test_validate_artifact_fails_when_document_softschema_contract_disagrees(
         doc,
         """
         softschema:
-          contract: other.sample.v1
+          contract: other:Sample/v1
           status: soft
         sample:
           name: hello
@@ -240,7 +242,7 @@ def test_validate_artifact_fails_when_document_softschema_contract_disagrees(
         """,
     )
     binding = Contract(
-        id="example.sample.v1",
+        id="example:Sample/v1",
         model=SampleModel,
         envelope_key="sample",
         status=SchemaStatus.enforced,
@@ -264,7 +266,7 @@ def test_validate_artifact_reports_envelope_mismatch(tmp_path: Path) -> None:
         """,
     )
     binding = Contract(
-        id="example.sample.v1",
+        id="example:Sample/v1",
         model=SampleModel,
         envelope_key="sample",
     )
@@ -289,7 +291,7 @@ def test_validate_artifact_reports_missing_compiled_schema_sidecar(
         """,
     )
     binding = Contract(
-        id="example.sample.v1",
+        id="example:Sample/v1",
         model=SampleModel,
         envelope_key="sample",
         schema_path=tmp_path / "missing.schema.yaml",
@@ -298,7 +300,7 @@ def test_validate_artifact_reports_missing_compiled_schema_sidecar(
     result = validate_artifact(doc, contract=binding)
 
     assert not result.ok
-    assert result.structural.errors[0]["kind"] == "schema_sidecar_missing"
+    assert result.structural.errors[0]["kind"] == "schema_missing"
 
 
 def test_inspect_frontmatter_reports_invalid_document_softschema(

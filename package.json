@@ -8,12 +8,13 @@
     "npm": ">=11.10.0 <12"
   },
   "scripts": {
-    "check:browser": "biome ci --config-path=biome.json src/metaproc/metabrowser_plugin/plugin tests/dom && tsc --project tsconfig.json",
-    "format:browser": "biome check --write --unsafe --config-path=biome.json src/metaproc/metabrowser_plugin/plugin tests/dom",
+    "check:browser": "biome ci --error-on-warnings --config-path=biome.json . && tsc --project tsconfig.json",
+    "format:browser": "biome check --write --unsafe --config-path=biome.json .",
     "prepare": "lefthook install"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.2",
+    "@types/node": "24.13.3",
     "lefthook": "2.1.9",
     "typescript": "6.0.3"
   }

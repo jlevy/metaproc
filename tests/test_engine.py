@@ -868,7 +868,7 @@ class TestValidateItemOutputs:
         registry = Contracts()
         registry.register(
             Contract(
-                id="sample.v1",
+                id="sample:Sample/v1",
                 model=Sample,
                 envelope_key="sample",
                 status=SchemaStatus.enforced,
@@ -876,7 +876,9 @@ class TestValidateItemOutputs:
         )
         f = tmp_path / "output.md"
         f.write_text("---\nsample:\n  ticker: AAPL\n  score: 3\n---\nBody\n")
-        outputs = {"main": IOSpec(path="output.md", format="frontmatter-md", schema="sample.v1")}
+        outputs = {
+            "main": IOSpec(path="output.md", format="frontmatter-md", schema="sample:Sample/v1")
+        }
 
         errors = validate_item_outputs(tmp_path, outputs, softschema_registry=registry)
 
@@ -890,7 +892,7 @@ class TestValidateItemOutputs:
         registry = Contracts()
         registry.register(
             Contract(
-                id="sample.v1",
+                id="sample:Sample/v1",
                 model=Sample,
                 envelope_key="sample",
                 status=SchemaStatus.enforced,
@@ -901,7 +903,9 @@ class TestValidateItemOutputs:
         with f.open("rb") as src, gzip.open(f.with_name(f.name + ".gz"), "wb") as dst:
             dst.write(src.read())
         f.unlink()
-        outputs = {"main": IOSpec(path="output.md", format="frontmatter-md", schema="sample.v1")}
+        outputs = {
+            "main": IOSpec(path="output.md", format="frontmatter-md", schema="sample:Sample/v1")
+        }
 
         errors = validate_item_outputs(tmp_path, outputs, softschema_registry=registry)
 
@@ -912,10 +916,12 @@ class TestValidateItemOutputs:
             ticker: str
 
         registry = Contracts()
-        registry.register(Contract(id="sample.v1", model=Sample, envelope_key="sample"))
+        registry.register(Contract(id="sample:Sample/v1", model=Sample, envelope_key="sample"))
         f = tmp_path / "output.md"
         f.write_text("---\nwrong:\n  ticker: AAPL\n---\nBody\n")
-        outputs = {"main": IOSpec(path="output.md", format="frontmatter-md", schema="sample.v1")}
+        outputs = {
+            "main": IOSpec(path="output.md", format="frontmatter-md", schema="sample:Sample/v1")
+        }
 
         errors = validate_item_outputs(tmp_path, outputs, softschema_registry=registry)
 

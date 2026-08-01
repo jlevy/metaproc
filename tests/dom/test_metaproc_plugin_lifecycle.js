@@ -10,9 +10,15 @@ if (args.length !== 3) {
       "<metaproc_plugin_root> '<manifest_contracts_json>'",
   );
 }
-const metabrowserRoot = path.resolve(args[0]);
-const metaprocPluginRoot = path.resolve(args[1]);
-const manifestContracts = JSON.parse(args[2]);
+const metabrowserRootArg = args[0];
+const metaprocPluginRootArg = args[1];
+const manifestContractsArg = args[2];
+if (!metabrowserRootArg || !metaprocPluginRootArg || !manifestContractsArg) {
+  throw new Error("required lifecycle-test argument is empty");
+}
+const metabrowserRoot = path.resolve(metabrowserRootArg);
+const metaprocPluginRoot = path.resolve(metaprocPluginRootArg);
+const manifestContracts = JSON.parse(manifestContractsArg);
 const metaprocContract = manifestContracts[metaprocPluginRoot];
 if (!metaprocContract) {
   throw new Error(`manifest contract missing for ${metaprocPluginRoot}`);

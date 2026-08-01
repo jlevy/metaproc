@@ -21,6 +21,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { loadPluginScripts } = require("./plugin_test_utils.js");
 
+/** @returns {never} */
 function fail(msg) {
   process.stderr.write(`${msg}\n`);
   process.exit(1);
@@ -33,9 +34,15 @@ if (args.length < 3) {
       "<metaproc_plugin_root> '<manifest_contracts_json>' [extra_plugin_dir ...]",
   );
 }
-const metabrowserRoot = path.resolve(args[0]);
-const metaprocPluginRoot = path.resolve(args[1]);
-const manifestContracts = JSON.parse(args[2]);
+const metabrowserRootArg = args[0];
+const metaprocPluginRootArg = args[1];
+const manifestContractsArg = args[2];
+if (!metabrowserRootArg || !metaprocPluginRootArg || !manifestContractsArg) {
+  fail("required plugin-loader argument is empty");
+}
+const metabrowserRoot = path.resolve(metabrowserRootArg);
+const metaprocPluginRoot = path.resolve(metaprocPluginRootArg);
+const manifestContracts = JSON.parse(manifestContractsArg);
 const extraDirs = args.slice(3).map((d) => path.resolve(d));
 
 function manifestContract(pluginRoot) {
@@ -97,7 +104,7 @@ function load(filepath, label) {
     const src = fs.readFileSync(filepath, "utf-8");
     vm.runInContext(src, sandbox, { filename: label });
   } catch (err) {
-    errors.push({ file: label, error: String(err?.message ? err.message : err) });
+    errors.push({ file: label, error: err instanceof Error ? err.message : String(err) });
   }
 }
 

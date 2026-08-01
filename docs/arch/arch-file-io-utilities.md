@@ -41,6 +41,7 @@ There is no metaproc-named wrapper layer.
 | `fmf_read_frontmatter` | `frontmatter_format` | Read frontmatter MD (metadata only) |
 | `fmf_write` | `frontmatter_format` | Write frontmatter MD (atomic) |
 | `FmFormatError` | `frontmatter_format` | Exception raised by frontmatter parse failures |
+| `YamlSerializationError` | `frontmatter_format` | Exception raised for cyclic mapping-based writes |
 | `fmf_read_artifact` | `metaproc.io.frontmatter` | gz-aware `fmf_read` |
 | `fmf_read_frontmatter_artifact` | `metaproc.io.frontmatter` | gz-aware `fmf_read_frontmatter` |
 | `read_yaml_artifact` | `metaproc.io.frontmatter` | gz-aware `read_yaml_file` |
@@ -100,10 +101,16 @@ these. The longer version:
 4. **Hash-style frontmatter (`#---`) allows `#`-prefixed lines (shebang, PEP 723
    metadata) before the delimiter.** Other styles do not — any non-delimiter content
    before the opener is an error.
+5. **Mapping-based writes are alias-free by default.** Repeated acyclic lists and
+   mappings are expanded, so equal values serialize identically regardless of Python
+   object identity. Cycles raise `YamlSerializationError` before an atomic target is
+   replaced. Low-level YAML helpers expose `allow_aliases=True` when aliases are
+   deliberate; `fmf_write` callers can supply raw YAML frontmatter for that advanced
+   case.
 
 If a specific call site relies on any of these behaviors in a non-obvious way, add a
 one-line `# XXX:` at the site.
 
-<!-- This document follows std-doc-guidelines.md.
-Review guidelines before editing.
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
 -->

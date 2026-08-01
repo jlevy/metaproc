@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from softschema import validate_artifact
 from typer.testing import CliRunner
 
@@ -137,6 +138,52 @@ class TestSoftschemaCommands:
         assert result.exit_code == 0, result.output
         assert "ok: true" in result.output
 
+    @pytest.mark.parametrize("temporal_value", ["2026-01-01", "2026-01-01 12:34:56"])
+    def test_softschema_validate_treats_bare_yaml_temporal_as_string(
+        self, tmp_path, temporal_value
+    ):
+        process_path = tmp_path / "timestamp.process.md"
+        process_path.write_text(
+            f"---\nprocess:\n  name: {temporal_value}\n  steps:\n"
+            "    - id: s1\n      mode: agent\n      prompt_prefix: Hello\n"
+            "      outputs:\n        main:\n          path: out.md\n---\n"
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "softschema",
+                "validate",
+                str(process_path),
+                "--schema",
+                "metaproc:ProcessSpec/0.1",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "outcome: valid" in result.output
+        assert "ok: true" in result.output
+
+    def test_softschema_compile_accepts_documented_contract_option(self, tmp_path):
+        schema_path = tmp_path / "process.schema.yaml"
+
+        result = runner.invoke(
+            app,
+            [
+                "softschema",
+                "compile",
+                "metaproc.models.authored:ProcessSpec",
+                "--out",
+                str(schema_path),
+                "--contract",
+                "example:Process/v1",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert schema_path.exists()
+        assert "example:Process/v1" in schema_path.read_text()
+
     def test_structure_report_writes_frontmatter_artifact(self, tmp_path):
         process_path = tmp_path / "test.process.md"
         report_path = tmp_path / "structure-report.md"
@@ -156,10 +203,10 @@ class TestSoftschemaCommands:
         assert report_path.exists()
         text = report_path.read_text()
         assert "structure_report:" in text
-        assert "metaproc.structure_report.v1" in text
+        assert text.count("metaproc:StructureReport/v1") == 2
         validation = validate_artifact(
             report_path,
-            contract_id="metaproc.structure_report.v1",
+            contract_id="metaproc:StructureReport/v1",
             registry=get_plugin_registry().softschemas,
         )
         assert validation.ok

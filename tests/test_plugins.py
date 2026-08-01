@@ -40,14 +40,14 @@ class TestPluginRegistry:
 
         reg.register_softschema(
             Contract(
-                id="test.v1",
+                id="test:Test/v1",
                 model=MyModel,
                 envelope_key="test",
                 status=SchemaStatus.permissive,
             )
         )
 
-        binding = reg.softschemas.resolve("test.v1")
+        binding = reg.softschemas.resolve("test:Test/v1")
         assert binding is not None
         assert binding.model is MyModel
         assert binding.envelope_key == "test"
@@ -203,7 +203,7 @@ class TestFakePlugin:
 
                 registry.register_softschema(
                     Contract(
-                        id="test.ticker.v1",
+                        id="test:Ticker/v1",
                         model=MyModel,
                         envelope_key="ticker",
                         status=SchemaStatus.permissive,
@@ -215,6 +215,6 @@ class TestFakePlugin:
         plugin = FakePlugin()
         plugin.register(reg)
 
-        assert reg.softschemas.resolve("test.ticker.v1") is not None
+        assert reg.softschemas.resolve("test:Ticker/v1") is not None
         assert "test_done" in reg.terminal_statuses
         assert reg.compare_defaults["tickers"] == ["ticker"]

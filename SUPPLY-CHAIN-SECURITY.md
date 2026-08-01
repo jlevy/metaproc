@@ -37,23 +37,30 @@ Confirm:
 
 ## Audited First-Party Exceptions
 
-Three exact first-party releases are exempt from the ordinary cool-off for this release:
+Six exact first-party releases are exempt from the ordinary cool-off for this release:
 
+- `softschema==0.4.0`, required for portable date- and timestamp-shaped YAML scalars;
+- `frontmatter-format==0.4.0`, required by SoftSchema 0.4.0 and used directly for
+  deterministic alias-free Metaproc artifact writes;
 - `metabrowser==0.1.0`, used only by the development and plugin test group;
 - `kpress==0.2.2`, pulled by the exact Metabrowser development dependency and reviewed
   as a compatible first-party maintenance update with no added dependencies;
 - `flowmark-rs==0.3.2`, used to format and verify Markdown.
   This first-party release was reviewed against `0.3.1`; its formatting output is
   unchanged, while its skill, publishing, and Markdown-parser configuration are more
-  reliable.
+  reliable;
+- `get-tbd==0.4.2`, used by the exact fallback in generated agent-integration hooks.
 
 The exceptions are package-scoped in configuration and do not weaken the global gate.
-Changing either version requires a new review and an updated rationale.
+Changing any version requires a new review and an updated rationale.
 
-The generated agent-integration scripts name the exact `get-tbd@0.4.1` release.
-Installation is an explicit operator action.
-Hooks use an already-installed `tbd` binary and never download or execute a missing npm
-package. The skill files own the reviewed version and must be updated deliberately.
+The generated agent-integration scripts name the exact `get-tbd@0.4.2` release, adopted
+through the supported `tbd setup --auto` migration.
+Hooks prefer an already-installed `tbd` binary and otherwise use that exact pinned npm
+release as a zero-install fallback.
+The session bootstrap also installs the pinned, checksum-verified `gh` 2.92.0 binary
+into a user-local bin directory when `gh` is missing.
+Refresh generated hooks and skill files deliberately with `tbd setup --auto`.
 
 ## Verification
 
