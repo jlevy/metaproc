@@ -1,11 +1,11 @@
 ---
 type: is
 id: is-01kyx37mj1agq5zha1x5gn574f
-title: Upgrade to softschema 0.3 and release
+title: Upgrade to softschema 0.4 and release
 kind: epic
 status: open
 priority: 1
-version: 6
+version: 7
 labels: []
 dependencies: []
 child_order_hints:
@@ -15,6 +15,10 @@ child_order_hints:
   - is-01kyx385z9ab0pdr0aajs4c32e
   - is-01kyx38gn4gwmp93rst4psbm0x
 created_at: 2026-07-31T22:03:06.176Z
-updated_at: 2026-07-31T22:03:34.947Z
+updated_at: 2026-08-01T04:05:37.780Z
 ---
-softschema 0.3 tightens the contract-ID grammar and makes compile_model contract_id required. Metaproc must adopt it, then cut a release so downstream consumers can pin a published version instead of a git branch.
+Metaproc now adopts the complete SoftSchema 0.2-0.4 compatibility boundary and frontmatter-format 0.4 behavior on PR #3. Implementation, review hardening, and delivery are tracked under mp-9u9s; this original epic remains open only for the post-merge Metaproc 0.2.0 release.
+
+## Notes
+
+Superseded for implementation tracking by mp-9u9s. Keep mp-yxay open until PR #3 merges and Metaproc 0.2.0 is tagged.
