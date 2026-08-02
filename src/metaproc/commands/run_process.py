@@ -89,6 +89,7 @@ from metaproc.engine.placeholders import (
 )
 from metaproc.engine.preflight import run_preflight
 from metaproc.engine.process_scope import expand_process_vars
+from metaproc.engine.resource_finalizer import finalize_run_resources, state_for_terminal_error
 from metaproc.engine.runtime import prepare_step, resolve_batch_size, validate_step_inputs_exist
 from metaproc.engine.validation import validate_item_outputs
 from metaproc.engine.write_boundary import (
@@ -122,6 +123,7 @@ from metaproc.io.state_io import (
 from metaproc.logutil.compaction import try_compact_log
 from metaproc.models.authored import IOSpec, ProcessSpec, ProcessStep
 from metaproc.models.plan import Plan, ResolvedStep
+from metaproc.models.resource_budget import ResourceBudgetSpec, collect_resource_budgets
 from metaproc.models.runtime import AttemptRecord, ResultRecord, StatusRecord
 from metaproc.paths import (
     LOGS_DIR,
@@ -306,6 +308,7 @@ def _write_run_config(  # noqa: PLR0913
     resolved_profiles: list[dict[str, object]] | None = None,
     auth_flags: AuthPoolFlags | None = None,
     max_concurrency: int | None = None,
+    resource_budgets: Sequence[ResourceBudgetSpec] | None = None,
 ) -> Path:
     """Write run-config.yaml at run creation time; record changes on resume.
 
@@ -371,6 +374,10 @@ def _write_run_config(  # noqa: PLR0913
             "initial": int(max_concurrency),
             "effective": int(max_concurrency),
         }
+    if resource_budgets:
+        data["resource_budgets"] = [
+            budget.model_dump(mode="json", by_alias=True) for budget in resource_budgets
+        ]
 
     with atomic_output_file(config_path) as tmp_path:
         Path(tmp_path).write_text(to_yaml_string(data))
@@ -400,6 +407,22 @@ def _serialize_auth_flags(flags: AuthPoolFlags) -> dict[str, object]:
     if not flags.auth_cross_quota_group:
         out["cross_quota_group"] = False
     return out
+
+
+def _resource_budgets_from_run_config(
+    config_path: Path,
+    *,
+    fallback: Sequence[ResourceBudgetSpec],
+) -> list[ResourceBudgetSpec]:
+    """Read the immutable run's budget snapshot, falling back only on first-write drift."""
+    try:
+        raw = read_yaml_file(config_path)
+        raw_budgets = raw.get("resource_budgets") if isinstance(raw, dict) else None
+        if isinstance(raw_budgets, list):
+            return [ResourceBudgetSpec.model_validate(item) for item in raw_budgets]
+    except (OSError, ValueError, YAMLError):
+        log.warning("could not read resource budget snapshot from %s", config_path, exc_info=True)
+    return [budget.model_copy(deep=True) for budget in fallback]
 
 
 def _preflight_plan_adapters(plan: Plan, *, active_step_ids: set[str]) -> list[str]:
@@ -2895,7 +2918,9 @@ def run_process_command(
     )
     # Write or validate run-config.yaml (immutable run identity +
     # additive auth/concurrency capture per plan-2026-05-03 Phase 3).
-    _write_run_config(
+    planned_resource_budgets = collect_resource_budgets(plan)
+    is_resume = paths_mod.run_config_file(run_dir).exists()
+    run_config_path = _write_run_config(
         run_dir,
         process_name=spec.name,
         process_path=process_path,
@@ -2908,6 +2933,11 @@ def run_process_command(
         resolved_profiles=_serialize_plan_profiles(plan),
         auth_flags=auth_flags_for_config,
         max_concurrency=max_concurrency,
+        resource_budgets=planned_resource_budgets,
+    )
+    run_resource_budgets = _resource_budgets_from_run_config(
+        run_config_path,
+        fallback=planned_resource_budgets,
     )
 
     # Hybrid-mode alignment check: warn if a cloud backend is used but the
@@ -3113,7 +3143,13 @@ def run_process_command(
         generated_at=plan.generated_at,
         process=plan.process,
         params=plan.params,
+        execution_profile=plan.execution_profile,
+        artifact_namespace=plan.artifact_namespace,
+        deps=plan.deps,
+        resource_budgets=plan.resource_budgets,
         steps=[s for s in plan.steps if s.step_id in active_step_ids],
+        lane_matrix=plan.lane_matrix,
+        execution_lanes=plan.execution_lanes,
     )
 
     logs_dir = run_dir / LOGS_DIR
@@ -3131,6 +3167,7 @@ def run_process_command(
 
     install_subprocess_reaper_signal_handlers()
 
+    terminal_error: BaseException | None = None
     try:
         with (
             LeaseHeartbeat(run_dir),
@@ -3169,8 +3206,28 @@ def run_process_command(
         if output_errors:
             msg = "process output validation failed:\n  " + "\n  ".join(output_errors)
             raise CLIError(msg)
+    except BaseException as exc:
+        terminal_error = exc
+        raise
     finally:
-        release_lease(run_dir)
+        try:
+            from metaproc.plan_bundle_loader import (  # noqa: PLC0415 -- avoid command import cycle
+                load_plan_bundle,
+            )
+
+            finalize_run_resources(
+                run_dir,
+                bundle=load_plan_bundle(process_path, params=variables, validate_spec=False),
+                run_id=run_context or run_dir.name,
+                state=state_for_terminal_error(terminal_error),
+                trigger="resume" if is_resume else "terminal",
+                budgets=run_resource_budgets,
+                terminal_error=terminal_error,
+            )
+        except Exception:  # noqa: BLE001 -- observability must not replace run outcome
+            log.warning("resource finalization failed under %s", run_dir, exc_info=True)
+        finally:
+            release_lease(run_dir)
 
     overall_elapsed = fmt_timedelta(time.monotonic() - overall_start)
     out.progress(f"\n=== Process '{spec.name}' completed ({overall_elapsed}) ===")

@@ -157,6 +157,12 @@ matching `metaproc.models.resources.ResourceEvent`; readers parse via
 `invocations.jsonl` (no legacy fallback retained — see
 `feedback_no_legacy_shims_by_default`)."""
 
+RESOURCES_FILE = "resources.json"
+"""Canonical machine-readable run resource roll-up."""
+
+RESOURCE_USAGE_SUMMARY_FILE = "resource-usage-summary.md"
+"""Human-reviewable soft-schema summary of terminal resource usage."""
+
 
 # ── Run-dir helper paths ─────────────────────────────────────────
 
@@ -179,6 +185,21 @@ def run_config_file(run_dir: Path) -> Path:
 def process_events_log(run_dir: Path) -> Path:
     """Return run-level process events path: ``<run_dir>/.logs/process-events.jsonl``."""
     return run_logs_dir(run_dir) / PROCESS_EVENTS_FILE
+
+
+def resources_file(run_dir: Path) -> Path:
+    """Return the canonical run-level machine resource report path."""
+    return run_dir / RESOURCES_FILE
+
+
+def run_resource_events_file(run_dir: Path) -> Path:
+    """Return the derived run-level resource evidence stream path."""
+    return run_logs_dir(run_dir) / RESOURCE_EVENTS_FILE
+
+
+def resource_usage_summary_file(run_dir: Path) -> Path:
+    """Return the human-reviewable terminal resource summary path."""
+    return run_dir / RESOURCE_USAGE_SUMMARY_FILE
 
 
 def dispatch_config_changes_log(run_dir: Path) -> Path:

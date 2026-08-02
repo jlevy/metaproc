@@ -141,7 +141,7 @@ See [docs/conventions.md](docs/conventions.md) for the full casing rules.
 | `override` | Mark a step as satisfied so downstream resumes when partial-fail blocks the DAG (audit trail in `.state/overrides.yaml`) |
 | `kill` | Terminate a running pool and its child processes |
 | `write-usage` | Roll up token and cost usage into `usage.md` |
-| `resource-report` | Build or refresh the hierarchical `resources.json` run report |
+| `resource-report` | Build or render hierarchical usage, exact provider meters, coverage, and resource budgets |
 | `stats` | Summarize throughput, timing, pool, API, and resource usage |
 | `gcp status` | Show GCP Batch job status for a run |
 | `gcp scale` | Update desired worker topology for an active cloud fan-out step |

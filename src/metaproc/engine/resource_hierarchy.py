@@ -1,6 +1,6 @@
 """Build a `Node` hierarchy skeleton from a `PlanBundle`.
 
-Walks the recursive `PlanBundle` from `metaproc.viz_loader` and emits the
+Walks the recursive `PlanBundle` from `metaproc.models.plan_bundle` and emits the
 `run → process → step → item` tree the resource roll-up document
 (`metaproc.models.resources.ResourcesDocument`) needs. Reuses the same
 qualified node IDs the visualization plane uses by importing from the

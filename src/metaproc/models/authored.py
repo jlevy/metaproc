@@ -13,6 +13,7 @@ from typing import ClassVar, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from metaproc.models.lane import LaneMatrix
+from metaproc.models.resource_budget import ResourceBudgetSpec
 
 # ── Code-mode handler types ──────────────────────────────────────
 
@@ -471,6 +472,7 @@ class ProcessSpec(BaseModel):
     inputs: dict[str, ProcessInput] = Field(default_factory=dict)
     deps: dict[str, ProcessDep] = Field(default_factory=dict)
     outputs: dict[str, ProcessOutput] = Field(default_factory=dict)
+    resource_budgets: list[ResourceBudgetSpec] = Field(default_factory=list)
     steps: list[ProcessStep] = Field(default_factory=list)
     lane_matrix: LaneMatrix | None = Field(
         default=None,
@@ -482,6 +484,17 @@ class ProcessSpec(BaseModel):
             "``metaproc.models.lane.LaneMatrix``."
         ),
     )
+
+    @field_validator("resource_budgets")
+    @classmethod
+    def _validate_resource_budget_ids(
+        cls,
+        budgets: list[ResourceBudgetSpec],
+    ) -> list[ResourceBudgetSpec]:
+        ids = [budget.budget_id for budget in budgets]
+        if len(ids) != len(set(ids)):
+            raise ValueError("process resource budget IDs must be unique")
+        return budgets
 
     @property
     def param_inputs(self) -> dict[str, ProcessInput]:

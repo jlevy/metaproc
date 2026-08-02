@@ -163,7 +163,55 @@ def _render_tree(document: ReadableResourcesDocument) -> str:
         f"generated_at={document.generated_at.isoformat()}",
         "",
     ]
+    if isinstance(document, ResourcesDocument):
+        if document.usage_id is not None:
+            lines.insert(1, f"usage_id={document.usage_id}")
+        if document.finalization is not None:
+            lines.insert(
+                2,
+                "finalization="
+                f"{document.finalization.state.value} "
+                f"trigger={document.finalization.trigger} "
+                f"recovered={str(document.finalization.recovered).lower()}",
+            )
     _render_node(lines, document.hierarchy_root, indent=0)
+
+    if isinstance(document, ResourcesDocument) and document.meter_rollups:
+        lines.append("")
+        lines.append("provider_meters:")
+        for rollup in document.meter_rollups:
+            key = "/".join(rollup.key.sort_key())
+            quantity = (
+                rollup.actual_quantity
+                if rollup.actual_quantity is not None
+                else rollup.estimated_quantity
+            )
+            rendered = "unmeasured" if quantity is None else f"{quantity:g}"
+            lines.append(f"  {key}: {rendered} ({rollup.coverage.value})")
+
+    if isinstance(document, ResourcesDocument) and document.budget_evaluations:
+        lines.append("")
+        lines.append("budgets:")
+        for evaluation in document.budget_evaluations:
+            budget = evaluation.budget
+            target = (
+                budget.metric.value
+                if budget.metric is not None
+                else "/".join(budget.meter.sort_key())
+                if budget.meter is not None
+                else "meter"
+            )
+            observed = (
+                evaluation.actual_quantity
+                if evaluation.actual_quantity is not None
+                else evaluation.estimated_quantity
+            )
+            rendered = "unmeasured" if observed is None else f"{observed:g}"
+            lines.append(
+                f"  {budget.budget_id}: {evaluation.status.value} "
+                f"target={target} observed={rendered} threshold={budget.threshold:g} "
+                f"unit={budget.unit or '?'} coverage={evaluation.coverage.value}"
+            )
 
     if document.taxonomy_rollups:
         lines.append("")

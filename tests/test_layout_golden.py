@@ -99,6 +99,7 @@ def smoke_run(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setitem(ADAPTER_REGISTRY, "layout-smoke-mock", _LayoutSmokeMockAdapter())
         monkeypatch.setitem(ENVELOPE_MAP, "items", _TickersEnvelope)
+        monkeypatch.setenv("METAPROC_PREFLIGHT_MIN_DISK_GB", "1")
 
         runs_dir = tmp_path_factory.mktemp("layout-smoke") / "runs"
         run_id = "layout-smoke-run"
@@ -143,8 +144,16 @@ def test_artifact_tree_has_no_state_or_logs_siblings(smoke_run: Path) -> None:
 
 
 def test_run_dir_has_three_top_level_branches(smoke_run: Path) -> None:
-    """A run dir should expose exactly three concepts: .state/, .logs/, and the artifact tree."""
-    expected_top_level = {".state", ".logs", "artifacts", "items.md", "summary.md"}
+    """A run dir keeps state, logs, artifacts, and canonical run reports distinct."""
+    expected_top_level = {
+        ".state",
+        ".logs",
+        "artifacts",
+        "items.md",
+        "summary.md",
+        "resources.json",
+        "resource-usage-summary.md",
+    }
     actual = {entry.name for entry in smoke_run.iterdir()}
     assert actual == expected_top_level, (
         f"unexpected top-level entries in {smoke_run}: "

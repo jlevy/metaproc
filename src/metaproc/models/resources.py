@@ -31,6 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from metaproc.ids import require_typed_id
 from metaproc.logutil.tool_failures import FailureKind
+from metaproc.models.resource_budget import BudgetEvaluation, ResourceFinalization
 
 # ── Common envelopes ───────────────────────────────────────────────
 
@@ -484,6 +485,7 @@ class ResourcesDocument(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal["metaproc.resources/v2"] = Field(default=SCHEMA_V2, alias="schema")
+    usage_id: str | None = None
     run_id: str
     generated_at: datetime
     source_events_path: str
@@ -493,6 +495,14 @@ class ResourcesDocument(BaseModel):
     unattributed: Metrics = Field(default_factory=Metrics)
     meter_rollups: list[MeterRollup] = Field(default_factory=list)
     unattributed_meters: list[MeterRollup] = Field(default_factory=list)
+    budget_evaluations: list[BudgetEvaluation] = Field(default_factory=list)
+    finalization: ResourceFinalization | None = None
+    summary_path: str | None = None
+
+    @field_validator("usage_id")
+    @classmethod
+    def _validate_usage_id(cls, value: str | None) -> str | None:
+        return require_typed_id(value, "use") if value is not None else None
 
 
 class PrefixRollupV1(BaseModel):

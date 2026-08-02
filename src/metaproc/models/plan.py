@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from metaproc.models.authored import IOSpec, ParseConfig, RetryPolicy, ValueType
 from metaproc.models.lane import ExecutionLane, LaneMatrix
+from metaproc.models.resource_budget import ResourceBudgetSpec
 
 
 class ResolvedAdapter(BaseModel):
@@ -112,6 +113,7 @@ class Plan(BaseModel):
     execution_profile: str | None = None
     artifact_namespace: str | None = None
     deps: dict[str, ResolvedDep] = Field(default_factory=dict)
+    resource_budgets: list[ResourceBudgetSpec] = Field(default_factory=list)
     steps: list[ResolvedStep] = Field(default_factory=list)
     lane_matrix: LaneMatrix | None = None
     execution_lanes: list[ExecutionLane] = Field(default_factory=list)

@@ -1,11 +1,13 @@
 # Resource Roll-Up
 
-Metaproc records operational evidence once and projects it into two machine-readable
-artifacts:
+Metaproc records operational evidence once and projects it into a reviewable artifact
+trio:
 
 - `.logs/resource-events.jsonl` is the typed, append-oriented evidence stream.
 - `resources.json` is the deterministic hierarchical projection used by
   `metaproc resource-report` and the Metabrowser resource view.
+- `resource-usage-summary.md` is a SoftSchema-style frontmatter plus Markdown review
+  projection of the same events, provider meters, coverage, and budgets.
 
 The current machine schema is `metaproc.resources/v2`. The explicit
 `ResourcesDocumentV1` model and `read_resources_document_json` reader keep historical
@@ -69,6 +71,25 @@ When an LLM session identifies its provider but exposes no authoritative request
 the built-in extractor emits an `unmeasured` request meter.
 It never turns the absence of billing telemetry into a zero or estimates a provider
 quota from the number of Metaproc steps.
+
+## Budgets and terminal finalization
+
+An authored process may declare `resource_budgets`. Each `ResourceBudgetSpec` has a
+self-identifying `bud_` ID, run/step/provider/model/tool scope, either one canonical
+metric or one exact provider-meter key, an explicit canonical unit, a threshold, a
+near-threshold ratio, and an `observe`, `warn`, or `refuse-new-work` posture.
+The common evaluator reports `within`, `near`, `exceeded`, or `unmeasured`; unavailable
+evidence is never rendered as zero.
+Existing step `token_budget` and `max_budget_usd` guards are projected into the report
+and continue to enforce exactly where they did before.
+
+`run-process` finalizes the trio before releasing its orchestrator lease on success,
+failure, timeout, or graceful cancellation.
+The original exception always wins over an additive reporting failure.
+For an abruptly interrupted inactive run, `metaproc status` can reconstruct missing
+reports from the immutable run config and persisted events without making a provider
+call. Repeated terminal, resume, status, or rehydration finalization preserves report
+bytes when substantive evidence is unchanged.
 
 <!-- This document follows std-doc-guidelines.md.
 Review guidelines before editing. -->

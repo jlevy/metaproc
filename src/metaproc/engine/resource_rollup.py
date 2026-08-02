@@ -74,6 +74,7 @@ from metaproc.models.resources import (
     MeterRollup,
     Metrics,
     Node,
+    NodeType,
     PrefixRollup,
     ResourceEvent,
     ResourcesDocument,
@@ -400,6 +401,134 @@ def build_resource_artifacts(
     if write:
         write_resource_artifacts(result)
     return result
+
+
+def build_resource_artifacts_from_events(
+    *,
+    run_id: str,
+    events: Sequence[ResourceEvent],
+    source_events_path: str = ".logs/resource-events.jsonl",
+    document_path: Path | None = None,
+    events_path: Path | None = None,
+) -> ResourceBuildResult:
+    """Rebuild a minimal resource projection from its persisted event ledger.
+
+    This recovery path deliberately has no process-spec, adapter, plugin, or
+    provider dependency. It preserves the hierarchy references carried by each
+    event and is therefore suitable after a run has moved to another machine or
+    its original source checkout is no longer available.
+    """
+    root = Node(node_type="run", node_id=run_id, label=run_id)
+    nodes_by_id = {root.node_id: root}
+    tally = PathTally[float]()
+    reconciled: list[ResourceEvent] = []
+    seen_events: dict[str, str] = {}
+
+    for raw_event in events:
+        event = _reconcile_resource_event(raw_event, seen_events)
+        if event is None:
+            continue
+        leaf = _ensure_recovery_event_leaf(root, nodes_by_id, event)
+        _add_metrics_into(leaf.self_metrics, event.metrics)
+        if event.meters:
+            _add_meter_rollups_into(
+                leaf.self_meters,
+                aggregate_meter_rollups([(event.event_id or "", event.meters)]),
+            )
+        _tally_external_event_taxonomy(tally, event)
+        reconciled.append(event)
+
+    _propagate_totals(root)
+    rollups = _persist_tally_as_prefix_rollups(tally)
+    document = ResourcesDocument(
+        run_id=run_id,
+        generated_at=datetime.now(UTC),
+        source_events_path=source_events_path,
+        hierarchy_root=root,
+        taxonomy_rollups=rollups,
+        meter_rollups=[rollup.model_copy(deep=True) for rollup in root.total_meters],
+    )
+    return ResourceBuildResult(
+        document=document,
+        events=reconciled,
+        document_path=document_path,
+        events_path=events_path,
+    )
+
+
+def _ensure_recovery_event_leaf(
+    root: Node,
+    nodes_by_id: dict[str, Node],
+    event: ResourceEvent,
+) -> Node:
+    """Materialize the hierarchy chain encoded on one persisted event."""
+    hierarchy = event.hierarchy
+    parent = root
+    if hierarchy.process_node_id:
+        parent = _ensure_recovery_node(
+            nodes_by_id,
+            parent,
+            node_type="process",
+            node_id=hierarchy.process_node_id,
+            label=hierarchy.process_node_id,
+        )
+    if hierarchy.step_node_id:
+        parent = _ensure_recovery_node(
+            nodes_by_id,
+            parent,
+            node_type="step",
+            node_id=hierarchy.step_node_id,
+            label=hierarchy.step_node_id,
+        )
+    if hierarchy.item_key:
+        item_parent = hierarchy.step_node_id or parent.node_id
+        parent = _ensure_recovery_node(
+            nodes_by_id,
+            parent,
+            node_type="item",
+            node_id=f"{item_parent}::{hierarchy.item_key}",
+            label=hierarchy.item_key,
+        )
+    if hierarchy.file_path:
+        parent = _ensure_recovery_node(
+            nodes_by_id,
+            parent,
+            node_type="file",
+            node_id=f"file:{hierarchy.file_path}",
+            label=Path(hierarchy.file_path).name,
+        )
+    if hierarchy.tool_name:
+        file_key = hierarchy.file_path or parent.node_id
+        parent = _ensure_recovery_node(
+            nodes_by_id,
+            parent,
+            node_type="tool",
+            node_id=f"tool:{file_key}:{hierarchy.tool_name}",
+            label=hierarchy.tool_name,
+        )
+    return parent
+
+
+def _ensure_recovery_node(
+    nodes_by_id: dict[str, Node],
+    parent: Node,
+    *,
+    node_type: NodeType,
+    node_id: str,
+    label: str,
+) -> Node:
+    existing = nodes_by_id.get(node_id)
+    if existing is not None:
+        return existing
+    node = Node(
+        node_type=node_type,
+        node_id=node_id,
+        label=label,
+        parent_id=parent.node_id,
+    )
+    parent.children.append(node)
+    nodes_by_id[node_id] = node
+    return node
 
 
 def _hierarchy_for_log(run_id: str, owner: LogOwner, log_path: Path, run_dir: Path) -> HierarchyRef:

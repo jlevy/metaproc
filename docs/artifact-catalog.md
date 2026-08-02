@@ -91,6 +91,7 @@ Pattern documented in the standalone
 | Filename | Path | Envelope key + schema | Writer | Primary readers |
 | --- | --- | --- | --- | --- |
 | `usage.md` | `<run>/` | `usage` / `metaproc:UsageReport/0.2` | `commands/write_usage.py` via `logutil/usage.py:write_usage_report` | human operator |
+| `resource-usage-summary.md` | `<run>/` | frontmatter / `metaproc:ResourceUsageSummary/0.1` | `engine/resource_finalizer.py:finalize_run_resources` | human operator, static viewers, sync/rehydration tooling |
 | `qa-report.md` (per-item) | `<run>/<artifact-tree>/.../` | `qa` / domain-defined | `example_plugin/qa/handler.py` (line ~177) | human operator |
 | `qa-summary.md` (per-process) | `<run>/<artifact-tree>/.../` | `qa_summary` / domain-defined | `example_plugin/qa/handler.py` (line ~185) | human operator |
 
@@ -111,7 +112,7 @@ Tracked per the [file-format policy](conventions.md):
 | Current | Planned | Reason |
 | --- | --- | --- |
 | `resources.json` | `resource-usage.json` | Generic name does not signal contents (tokens, cost, time, calls); paired with `resource-events.jsonl`. |
-| `usage.md` | `resource-usage-summary.md` | Pairs the trio (`resource-events.jsonl`, `resource-usage.json`, `resource-usage-summary.md`); “summary” reflects the flat-slice digest role. |
+| `usage.md` | `resource-usage-summary.md` | The new common finalizer already writes the planned summary additively; the legacy `usage.md` writer remains readable during the transition. |
 | `*.invocation.json` | `*.invocation.yaml` | State-shaped sidecar; YAML matches the surrounding `.state/` convention. |
 
 Pending envelope/schema hygiene (separate plan, listed for completeness):

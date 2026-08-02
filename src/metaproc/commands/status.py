@@ -15,6 +15,7 @@ from ruamel.yaml import YAMLError
 from metaproc.cli import app, get_output
 from metaproc.commands.gcp import run_remote_metaproc
 from metaproc.config.env_vars import MetaprocEnv
+from metaproc.engine.resource_finalizer import recover_incomplete_resource_artifacts
 from metaproc.engine.run_status import (
     # fmt: skip -- re-export block
     RunStatus,
@@ -567,6 +568,7 @@ def status(
 
     plan = _load_plan_from_run(run_path)
     run_status = scan_run_status(run_path, variant=variant, include_system=not no_system, plan=plan)
+    recover_incomplete_resource_artifacts(run_path, is_active=run_status.is_active)
 
     # Determine output format (CLI --format overrides global)
     use_json = (format in _STATUS_FORMAT_JSON) or (out.format == OutputFormat.JSON)

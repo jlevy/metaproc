@@ -938,6 +938,7 @@ def build_plan(
         execution_profile=run_execution_profile,
         artifact_namespace=run_artifact_namespace,
         deps=resolved_deps,
+        resource_budgets=[budget.model_copy(deep=True) for budget in spec.resource_budgets],
         steps=resolved_steps,
         lane_matrix=spec.lane_matrix,
         execution_lanes=execution_lanes,
