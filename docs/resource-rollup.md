@@ -72,6 +72,28 @@ the built-in extractor emits an `unmeasured` request meter.
 It never turns the absence of billing telemetry into a zero or estimates a provider
 quota from the number of Metaproc steps.
 
+The built-in terminal-log coverage is deliberately narrow:
+
+- Claude reports measured turns plus measured server-side web-search and web-fetch
+  request counts, including measured zeroes.
+- Codex reports measured completed turns, while its provider request count remains
+  unmeasured.
+- Gemini reports token/tool statistics through the existing usage extractor, while its
+  turn and provider request counts remain unmeasured because the terminal record does
+  not expose authoritative counters.
+
+Observed native web-tool spans can establish that a product was used, but they do not
+establish its provider billing unit.
+When no exact counter accompanies the span, the matching request meter is present with
+`unmeasured` coverage.
+
+Plugins register a `ResourceEventSource` when an external subprocess already emits the
+full typed `ResourceEvent` wire format.
+The source may discover a shared run-level log; producer-stamped process, step, item,
+worker, execution-profile, and lane scope wins over path-derived fallback scope.
+This makes append-only logs safe to aggregate after concurrent subprocess execution or
+cross-machine synchronization without inventing ownership from file placement.
+
 ## Budgets and terminal finalization
 
 An authored process may declare `resource_budgets`. Each `ResourceBudgetSpec` has a

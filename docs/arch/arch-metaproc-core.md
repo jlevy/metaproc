@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: Metaproc Core
 
-**Date:** 2026-03-23 (last updated 2026-05-23) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-08-02) **Status:** Approved
 
 > **Maintenance**: This is a maintained architecture doc.
 > Revise via `tbd shortcut revise-architecture-doc` (which prompts you to verify content
@@ -21,7 +21,7 @@ status: Approved
 > [arch-claude-code-harness](arch-claude-code-harness.md),
 > [arch-testing](arch-testing.md).
 
-Revision: rev2i
+Revision: rev2j
 
 Implementation reference for Metaproc, covering how the conceptual model defined in
 [metaproc-concepts-and-principles.md](../../src/metaproc/docs/metaproc-concepts-and-principles.md)
@@ -137,7 +137,9 @@ memory_pressure (cross-platform measurement, pressure levels)
 preflight (disk space, gcloud auth checks)
 yaml_repair (unquoted-colon auto-fix)
 discovery (resume-safe item filtering)
-usage (extraction, pricing, aggregation)
+usage (legacy usage extraction, pricing, aggregation)
+resource_rollup (typed resource-event extraction, provider meters, hierarchy aggregation)
+resource_finalizer (terminal budgets, summaries, and provider-free recovery)
 process_events (structured DAG event logging)
 viz (pure projection of Plan -> VizModel; browser + static SVG/HTML renderers; see MetaBrowser architecture)
 
@@ -206,7 +208,11 @@ Logs use producer and writer scope rather than mirroring every `.state/` branch:
   {run_dir}/.logs/tasks/{step_id}/process_<ts>.log
   {run_dir}/.logs/tasks/{step_id}/<item_key>/process_<ts>.log
   {run_dir}/.logs/tools/<tool-name>/invocations.jsonl
+  {run_dir}/.logs/tools/<tool-name>/resource-events.jsonl
+  {run_dir}/.logs/resource-events.jsonl
   {run_dir}/.logs/derived/trace.jsonl
+  {run_dir}/resources.json
+  {run_dir}/resource-usage-summary.md
 
 Application profile (via plugins)
 ----------------------------------
@@ -2025,22 +2031,29 @@ information published after the analysis event it is supposed to predict — tha
 future-knowledge leakage on the dataset.
 Reported per-variant on every usage report; no one-shot evidence backfill required.
 
-#### Native web-search partial-closure invariant (runbook gap A, partial)
+#### Native web-search accounting invariant
 
 `ToolRunProfile.native_web_search_configs` counts sessions whose config stub carried
-`native_web_search: true`. Presence-only signal: tells operators which variants asked
-for native web search at dispatch time, but does not capture per-turn activity (search
-queries, citations, grounding supports on Vertex).
-Per-turn visibility requires a per-provider activity sidecar.
-Vertex is today’s blocker — the vendored pi-mono adapter strips `groundingMetadata`
-before surfacing `AssistantMessage`, so metaproc cannot see it.
-Anthropic `web_search_*` and OpenAI `web_search_preview` would need their own parallel
-sidecars when those providers move into production.
-Tracked in the
-[tool-use-observability runbook](../arch/arch-metaproc-core.md#147-tool-use-observability)
-as the remaining open gap.
+`native_web_search: true`. This remains a presence-only dispatch-intent signal: it tells
+operators which sessions enabled native web search, but it is not a request count.
 
-## 15. Usage and Cost Tracking
+Provider activity is accounted separately in the resource-event plane (§15.5).
+`AgentProviderMeterSource` reads authoritative terminal adapter records and emits exact
+named units only when the provider reports them.
+Claude terminal results expose exact `num_turns`, `web_search_requests`, and
+`web_fetch_requests`; reported zeroes remain measured zeroes.
+Codex `turn.completed` records provide an exact completed-turn count.
+Gemini terminal statistics do not currently expose an authoritative turn/request count,
+and observed Gemini or Codex native web-tool calls likewise do not prove the provider’s
+billed request count.
+Those rows are emitted with `coverage: unmeasured` rather than guessed from tool spans
+or Metaproc step counts.
+
+This closes the ambiguity in the old presence-only signal without overstating provider
+coverage. Exact request counts for additional providers can be added through the common
+`ProviderMeterSource` extension once their terminal response formats expose them.
+
+## 15. Usage, Cost, and Resource Tracking
 
 A dual-view cost tracking system that computes both **actual cost** (self-reported by
 the adapter) and **list cost** (vendor API rates).
@@ -2058,6 +2071,11 @@ the adapter) and **list cost** (vendor API rates).
 `rate_limit_stats: list[ProviderRateLimitStats]` — see §14.7 Tool-use Observability for
 the full contract.
 
+The newer resource plane is additive to this report.
+It projects typed evidence into `.logs/resource-events.jsonl`, `resources.json`, and
+`resource-usage-summary.md`; it does not change existing adapter execution, usage
+reports, or enforcement behavior.
+
 ### 15.2 Pricing Table
 
 Loaded from `metaproc/data/pricing.md` (YAML frontmatter).
@@ -2070,6 +2088,15 @@ for input, output, cache_read, cache_write.
   messages (`input`, `output`, `cacheRead`, `cacheWrite` tokens and `cost.total`).
 - **Gemini CLI**: extracts per-model breakdown from `stats.models` or falls back to
   aggregate stats.
+- **Agent terminal provider meters**: the common `AgentProviderMeterSource` extracts
+  only authoritative named units from Claude, Codex, and Gemini logs.
+  Unknown request quantities are emitted as explicit coverage gaps, never inferred from
+  session or step counts.
+- **External tools**: plugins may register `ResourceEventSource` implementations for
+  already typed `ResourceEvent` JSONL emitted by subprocesses.
+  Producer-stamped run, process, step, item, worker, profile, and lane scope takes
+  precedence over path-derived fallback scope, which permits concurrent subprocesses to
+  share a run-level append-only log without losing attribution.
 
 ### 15.4 Aggregation and Output
 
@@ -2082,6 +2109,38 @@ prose summary with markdown tables for provider and model breakdowns.
 
 CLI: `metaproc write-usage <phase-dir>` scans all `.jsonl` files, parses, aggregates,
 and writes `usage.md`.
+
+### 15.5 Typed Resource Evidence and Provider Meters
+
+The resource plane has one source of truth and two review projections:
+
+- `.logs/resource-events.jsonl` is the normalized typed evidence ledger.
+- `resources.json` is the deterministic `metaproc.resources/v2` hierarchy and meter
+  roll-up consumed by `metaproc resource-report` and browser integrations.
+- `resource-usage-summary.md` is the SoftSchema-style Markdown/frontmatter projection
+  for direct human and agent review.
+
+Every `ResourceEvent` carries hierarchy, metrics, optional provider identity, typed
+meter quantities, taxonomy paths, and a source reference.
+Event IDs use the `evt_` self-identifying immutable-ID prefix.
+Producers should stamp a stable ID at the authoritative request boundary; Metaproc
+deterministically derives one for legacy adapter evidence.
+Identical duplicates reconcile once, while conflicting reuse of an ID fails the build.
+
+Provider meters aggregate only on the full `(provider, product, meter, unit)` key.
+Each quantity declares `measured`, `estimated`, or `unmeasured` coverage.
+A numeric zero is valid measured evidence; missing evidence is never converted to zero.
+Mixed or incomplete meter roll-ups preserve partial quantities while retaining overall
+`unmeasured` coverage and `evt_` lineage.
+
+Authored `resource_budgets` use `bud_` IDs and can target a canonical metric or one
+exact provider-meter key at run, step, provider, model, or tool scope.
+Terminal finalization evaluates those budgets and writes all three resource artifacts on
+success, failure, timeout, and graceful cancellation before the orchestrator lease is
+released. Status/resume recovery can rebuild a missing terminal projection from the
+persisted event ledger without provider calls.
+See [resource-rollup.md](../resource-rollup.md) for the complete wire contract and
+recovery rules.
 
 ## 16. Optional Workspace/State Surface (Future)
 
@@ -2582,32 +2641,49 @@ plaintext env without the Secret Manager ref fails dispatch up front.
 
 ### Open Questions
 
+- Claude exposes exact terminal turn and server-side web request counts, but Gemini and
+  Codex do not currently expose authoritative provider request counts in the adapter
+  records Metaproc receives.
+  Which upstream terminal fields or provider response sidecars should become the
+  canonical source when those surfaces add stable counters?
+
 - The Plan schema is now at `metaproc:Plan/0.5` (adds `lane_matrix` and
   `ExecutionLane`). The lane execution model is not yet documented in this arch doc.
   [unverified] whether lane-based dispatch is fully integrated into `run-process` or
   still under development.
+
 - `overrides.yaml` (operator escape hatches via `metaproc override`) is referenced in
   the runtime state inventory (section 5.1) but not covered in its own subsection.
   The interaction between overrides and the resume/fingerprint system (section 10) is
   undocumented.
+
 - Several newer CLI commands (`liveness-watch`, `resume-daemon`, `run-manifest`,
   `softschema`, `trace`) lack design-level documentation in this doc.
   Their operational semantics are only in code docstrings.
+
 - The `codex-cli` adapter section (§12.2) is thorough but the Codex adapter is
   relatively new. [unverified] whether all described auth modes have been validated
   end-to-end in production cloud runs.
 
 ### Potential Improvements
 
+- Add provider-specific conformance fixtures whenever a terminal adapter gains an
+  authoritative request, credit, quota, cache, or retry counter, and promote the
+  matching resource meter from `unmeasured` to `measured` without changing its key.
+
 - Extract the per-adapter reference (§12.2) into a separate adapter-catalog doc as the
   adapter count grows, keeping this doc focused on the contract and wire format.
+
 - The analysis reference profile (§7) could move to an application-profile doc, leaving
   this doc strictly framework-scoped.
+
 - Add a “Reading Guide” section at the top to help readers navigate the 21+ sections by
   use case (operator, process author, adapter implementer, framework contributor).
+
 - Consolidate the cloud execution summary (§21) further: much of its content is now
   covered in [arch-cloud-execution.md](arch-cloud-execution.md), and the duplication
   creates maintenance burden.
+
 - Document the `dispatch` subsystem (slot coordinator, credential pool) which is
   referenced by the adapter registry but not covered in this doc.
   See `src/metaproc/dispatch/` for the implementation.
@@ -2618,6 +2694,23 @@ the original future-work backlog.
 * * *
 
 ## Revision History
+
+### rev2j (2026-08-02)
+
+Typed resource accounting and provider-meter coverage:
+
+- **Sections 5 and 15**: document the additive resource-event ledger,
+  `metaproc.resources/v2` hierarchy, SoftSchema summary, exact meter keys, coverage
+  states, typed IDs, budgets, terminal finalization, and provider-free recovery.
+- **Sections 14.7 and 15.3**: replace the former native-web-search partial-closure claim
+  with the implemented accounting boundary.
+  Claude terminal counts are exact; Codex completed turns are exact; unavailable
+  Gemini/Codex provider request quantities stay explicitly unmeasured.
+- **Plugin boundary**: document `ResourceEventSource` for typed external subprocess
+  evidence and producer-stamped concurrent hierarchy attribution.
+
+Validated 2026-08-02 by the resource-rollup, terminal-finalization, provider-meter, and
+plugin-source test suites.
 
 ### rev2i (2026-04-20)
 
