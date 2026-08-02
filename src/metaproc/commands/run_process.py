@@ -128,6 +128,7 @@ from metaproc.models.runtime import AttemptRecord, ResultRecord, StatusRecord
 from metaproc.paths import (
     LOGS_DIR,
     MANUAL_ACK_FILE,
+    ORCHESTRATOR_LEASE_FILE,
     RUN_LAYOUT_VERSION,
     STATE_DIR,
     STATUS_FILE,
@@ -1290,6 +1291,7 @@ async def _execute_agent_step(
     )
     ignored_targets = _dedupe_write_targets(
         [
+            WriteTarget(run_dir / STATE_DIR / ORCHESTRATOR_LEASE_FILE, "exact"),
             WriteTarget(logs_dir, "tree"),
             WriteTarget(run_dir / LOGS_DIR, "tree"),
         ]
@@ -1828,6 +1830,7 @@ async def _execute_fan_out_step(
     )
     ignored_targets = _dedupe_write_targets(
         [
+            WriteTarget(run_dir / STATE_DIR / ORCHESTRATOR_LEASE_FILE, "exact"),
             WriteTarget(step_state_dir_path, "tree"),
             WriteTarget(step_logs_dir_path, "tree"),
             WriteTarget(compute_logs_dir(spec, step_vars), "tree"),

@@ -2007,6 +2007,112 @@ class TestProcessContractValidation:
         assert status is not None
         assert status.state == "completed"
 
+    def test_boundary_check_ignores_engine_state_changes_inside_run(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Orchestrator heartbeats must not be attributed to the running agent."""
+
+        repo_dir = tmp_path / "boundary-repo"
+        process_dir = repo_dir / "boundary-process"
+        process_dir.mkdir(parents=True)
+        subprocess.run(
+            ["git", "init"],
+            cwd=repo_dir,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        run_dir = repo_dir / "runs" / "test-run"
+        allowed_path = run_dir / "boundary" / "out.md"
+        engine_state_path = run_dir / ".state" / "orchestrator-lease.yaml"
+
+        (process_dir / "test.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: boundary
+                  defaults:
+                    default_adapter: boundary-test
+                    adapters:
+                      boundary-test:
+                        type: boundary-test
+                  inputs:
+                    allowed_path: { param: ALLOWED_PATH, as: path }
+                    engine_state_path: { param: ENGINE_STATE_PATH, as: path }
+                  steps:
+                    - id: agent-step
+                      mode: agent
+                      prompt_prefix: write the output while engine state changes
+                      outputs:
+                        main:
+                          path: "{{ALLOWED_PATH}}"
+                          kind: file
+                ---
+                """
+            )
+        )
+
+        class BoundaryAdapter:
+            adapter_type = "boundary-test"
+            short_name = "boundary-test"
+            default_model = None
+
+            def build_command(self, prompt_file, merged_config, variables):
+                script = (
+                    "from pathlib import Path; "
+                    f"allowed = Path({variables['ALLOWED_PATH']!r}); "
+                    "allowed.parent.mkdir(parents=True, exist_ok=True); "
+                    "allowed.write_text('ok'); "
+                    f"state = Path({variables['ENGINE_STATE_PATH']!r}); "
+                    "state.touch()"
+                )
+                return [sys.executable, "-c", script]
+
+            def prepare_env(self, env, merged_config):
+                return env
+
+            def working_directory(self, merged_config):
+                return None
+
+            def parse_result_event(self, line):
+                return None
+
+            def check_auth(self):
+                raise NotImplementedError
+
+            def auth_info(self):
+                return ""
+
+        monkeypatch.setitem(ADAPTER_REGISTRY, "boundary-test", BoundaryAdapter())
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            [
+                "run-process",
+                str(process_dir / "test.process.md"),
+                "--var",
+                f"RUNS_DIR={repo_dir / 'runs'}",
+                "--var",
+                "RUN_ID=test-run",
+                "--var",
+                f"ALLOWED_PATH={allowed_path}",
+                "--var",
+                f"ENGINE_STATE_PATH={engine_state_path}",
+            ],
+        )
+
+        assert result.exit_code == 0, result.stdout
+        assert allowed_path.read_text() == "ok"
+        step_state_dir = _task_state_dir_for(run_dir, "agent-step")
+        status = read_status_at(step_state_dir)
+        assert status is not None
+        assert status.state == "completed"
+
     def test_agent_adapter_receives_existing_prompt_file(
         self,
         tmp_path: Path,
