@@ -91,6 +91,14 @@ def derive_owner_for_bundle(log_path: Path, run_dir: Path, bundle: PlanBundle) -
 
 
 def _relative_to_run(log_path: Path, run_dir: Path) -> Path | None:
+    if not log_path.is_absolute():
+        # Artifact discovery may return a cwd-relative path that already includes
+        # the cwd-relative run directory. Prefer that interpretation when it
+        # resolves under the run, then fall back to a path relative to run_dir.
+        try:
+            return log_path.resolve().relative_to(run_dir.resolve())
+        except (ValueError, OSError):
+            pass
     candidate = log_path if log_path.is_absolute() else run_dir / log_path
     try:
         return candidate.resolve().relative_to(run_dir.resolve())
@@ -100,6 +108,12 @@ def _relative_to_run(log_path: Path, run_dir: Path) -> Path | None:
 
 def _structural_parts(relative: Path) -> list[str]:
     parts = list(relative.parts)
+    # V2 task logs live under ``<run>/.logs/tasks/<step>/<item?>/<file>``.
+    # Preserve the ownership suffix after ``tasks`` instead of treating every
+    # root-level .logs file as process-owned. Other .logs namespaces such as
+    # runpool and derived remain run-level unless they carry their own events.
+    if len(parts) >= 4 and parts[:2] == [LOGS_DIRNAME, "tasks"]:
+        return parts[2:-1]
     # Trim everything from the trailing ``.logs`` segment onward so what
     # remains is just the structural ownership chain.
     if LOGS_DIRNAME in parts:

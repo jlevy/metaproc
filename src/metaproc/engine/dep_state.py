@@ -6,8 +6,10 @@ import glob as glob_mod
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from pydantic import ValidationError as PydanticValidationError
 from ruamel.yaml import YAMLError as _RuamelYAMLError
@@ -21,6 +23,7 @@ from metaproc.paths import STATE_DIR, STATUS_FILE
 
 _PROCESS_STATUS_FILE = "process-status.yaml"
 _STALE_SUFFIX = ".yaml.stale"
+_TYPED_PARTITION_COMPONENT = re.compile(r"^(?:run|coh)_[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 log = logging.getLogger(__name__)
 
@@ -72,7 +75,7 @@ def fingerprint_step(step: ResolvedStep) -> str:
     changes are still detected; only the content-edit sensitivity is lost
     for that one entry.
     """
-    payload = step.model_dump(mode="json", exclude_none=True)
+    payload = _portable_step_payload(step)
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     hasher = hashlib.sha256(encoded)
     for path_str in _referenced_runbook_paths(step):
@@ -96,6 +99,43 @@ def fingerprint_step(step: ResolvedStep) -> str:
         hasher.update(b"\x00")
         hasher.update(content)
     return hasher.hexdigest()[:16]
+
+
+def _portable_step_payload(step: ResolvedStep) -> dict[str, Any]:
+    """Serialize a contract without machine-local typed-partition parents."""
+    payload = _normalize_typed_partition_paths(step.model_dump(mode="json", exclude_none=True))
+    assert isinstance(payload, dict)
+    if step.prompt_paths:
+        payload["prompt_paths"] = [_portable_reference_locator(path) for path in step.prompt_paths]
+    if step.uses_path:
+        payload["uses_path"] = _portable_reference_locator(step.uses_path)
+    return payload
+
+
+def _normalize_typed_partition_paths(value: Any) -> Any:
+    """Replace only the parent of a self-identifying run/cohort path."""
+    if isinstance(value, dict):
+        return {key: _normalize_typed_partition_paths(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_normalize_typed_partition_paths(item) for item in value]
+    if not isinstance(value, str):
+        return value
+    components = [part for part in re.split(r"[/\\]+", value) if part]
+    typed_indices = [
+        index for index, part in enumerate(components) if _TYPED_PARTITION_COMPONENT.fullmatch(part)
+    ]
+    if not typed_indices:
+        return value
+    return "@typed/" + "/".join(components[typed_indices[-1] :])
+
+
+def _portable_reference_locator(path_str: str) -> str:
+    """Keep a referenced file's logical name; its bytes are hashed separately."""
+    normalized = _normalize_typed_partition_paths(path_str)
+    if normalized != path_str:
+        return normalized
+    path = Path(path_str)
+    return f"@referenced/{path.name}" if path.is_absolute() else path_str
 
 
 def _referenced_runbook_paths(step: ResolvedStep) -> list[str]:

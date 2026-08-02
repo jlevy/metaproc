@@ -273,8 +273,16 @@ class TestGeminiCliAdapter:
         assert self.adapter.adapter_type == "gemini-cli"
 
     def test_minimal_command(self) -> None:
+        self.prompt_file.write_text("Analyze PAYX")
         cmd = self.adapter.build_command(self.prompt_file, {}, {})
-        assert cmd[:3] == ["gemini", "-p", f"@{self.prompt_file}"]
+        assert cmd[:5] == [
+            "/bin/sh",
+            "-c",
+            'prompt_file=$1; shift; exec "$@" < "$prompt_file"',
+            "metaproc-gemini",
+            str(self.prompt_file),
+        ]
+        assert cmd[5:8] == ["gemini", "-p", ""]
         assert "--output-format" in cmd
         assert "stream-json" in cmd
         # Gemini should NOT have --verbose or --no-session-persistence
@@ -282,6 +290,7 @@ class TestGeminiCliAdapter:
         assert "--no-session-persistence" not in cmd
 
     def test_model_flag_uses_dash_m(self) -> None:
+        self.prompt_file.write_text("Analyze PAYX")
         cmd = self.adapter.build_command(self.prompt_file, {"model": "flash"}, {})
         idx = cmd.index("-m")
         assert cmd[idx + 1] == "flash"
@@ -290,9 +299,20 @@ class TestGeminiCliAdapter:
         prompt_file = tmp_path / "prompt.txt"
         prompt_file.write_text("Analyze PAYX")
         cmd = self.adapter.build_command(prompt_file, {}, {})
-        assert cmd[:3] == ["gemini", "-p", f"@{prompt_file}"]
+        assert str(prompt_file) == cmd[4]
+        assert f"@{prompt_file}" not in cmd
+
+    def test_missing_prompt_file_is_rejected(self, tmp_path: Path) -> None:
+        with pytest.raises(FileNotFoundError, match="prompt file does not exist"):
+            self.adapter.build_command(tmp_path / "missing.txt", {}, {})
+
+    def test_dry_run_prompt_sentinel_is_renderable(self) -> None:
+        cmd = self.adapter.build_command(Path("<prompt-file>"), {}, {})
+
+        assert cmd[4] == "<prompt-file>"
 
     def test_bypass_permissions_maps_to_yolo(self) -> None:
+        self.prompt_file.write_text("Analyze PAYX")
         cmd = self.adapter.build_command(
             self.prompt_file, {"permission_mode": "bypassPermissions"}, {}
         )
@@ -301,25 +321,36 @@ class TestGeminiCliAdapter:
 
     def test_non_bypass_permission_mode_omitted(self) -> None:
         """Non-bypass permission modes should NOT default to yolo."""
+        self.prompt_file.write_text("Analyze PAYX")
         cmd = self.adapter.build_command(self.prompt_file, {"permission_mode": "default"}, {})
         assert "--approval-mode" not in cmd
 
     def test_no_permission_mode_no_approval(self) -> None:
+        self.prompt_file.write_text("Analyze PAYX")
         cmd = self.adapter.build_command(self.prompt_file, {}, {})
         assert "--approval-mode" not in cmd
 
     def test_sandbox_flag(self) -> None:
+        self.prompt_file.write_text("Analyze PAYX")
         cmd = self.adapter.build_command(self.prompt_file, {"sandbox": "docker"}, {})
         idx = cmd.index("-s")
         assert cmd[idx + 1] == "docker"
 
-    def test_tools_not_passed_as_flag(self) -> None:
-        """Gemini uses policy engine for tools, not CLI flag."""
+    def test_tools_are_enforced_with_generated_policy(self) -> None:
+        """Claude-style tool names become a strict Gemini policy boundary."""
+        self.prompt_file.write_text("Analyze PAYX")
         cmd = self.adapter.build_command(self.prompt_file, {"tools": ["Read", "Write"]}, {})
         assert "--tools" not in cmd
+        policy_path = Path(cmd[cmd.index("--policy") + 1])
+        policy = policy_path.read_text()
+        assert 'toolName = "*"' in policy
+        assert 'decision = "deny"' in policy
+        assert 'toolName = ["read_file", "write_file"]' in policy
+        assert 'decision = "allow"' in policy
 
     def test_max_budget_not_passed(self) -> None:
         """Gemini has no --max-budget-usd; timeout enforcement is external."""
+        self.prompt_file.write_text("Analyze PAYX")
         cmd = self.adapter.build_command(self.prompt_file, {"max_budget_usd": 5}, {})
         assert "--max-budget-usd" not in cmd
 
@@ -331,11 +362,17 @@ class TestGeminiCliAdapter:
             "output_format": "stream-json",
             "sandbox": "seatbelt",
         }
+        self.prompt_file.write_text("Analyze PAYX")
         cmd = self.adapter.build_command(self.prompt_file, config, {})
         assert cmd == [
+            "/bin/sh",
+            "-c",
+            'prompt_file=$1; shift; exec "$@" < "$prompt_file"',
+            "metaproc-gemini",
+            str(self.prompt_file),
             "gemini",
             "-p",
-            f"@{self.prompt_file}",
+            "",
             "-m",
             "pro",
             "--approval-mode",

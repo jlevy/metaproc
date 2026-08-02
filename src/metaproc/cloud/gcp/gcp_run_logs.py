@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
@@ -82,12 +83,38 @@ def _format_entry(entry: Any) -> str:
     return f"{timestamp} {message}".strip()
 
 
+def _rfc3339_timestamp(value: object) -> str:
+    """Normalize a Cloud Logging entry timestamp for the next filter watermark."""
+    if isinstance(value, datetime):
+        normalized = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+        return normalized.isoformat().replace("+00:00", "Z")
+    raw = str(value or "")
+    if " " in raw and "T" not in raw:
+        raw = raw.replace(" ", "T", 1)
+    return raw.replace("+00:00", "Z")
+
+
+def _status_event_lines(job: Any) -> list[str]:
+    """Render Batch status events that explain failures before task stdout exists."""
+    status = getattr(job, "status", None)
+    events = getattr(status, "status_events", ()) if status is not None else ()
+    lines: list[str] = []
+    for event in events or ():
+        event_type = getattr(event, "type_", None) or getattr(event, "type", None) or "status"
+        description = str(getattr(event, "description", "") or "").strip()
+        timestamp = _rfc3339_timestamp(getattr(event, "event_time", ""))
+        if description:
+            lines.append(f"{timestamp} Batch {event_type}: {description}".strip())
+    return lines[-10:]
+
+
 def _fetch_log_entries(
     *,
     project: str,
     job_uid: str,
     job_id: str,
     since: str = "",
+    max_results: int | None = 500,
 ) -> list[Any]:
     """List Cloud Logging entries scoped to a single Batch job.
 
@@ -113,7 +140,7 @@ def _fetch_log_entries(
         client.list_entries(
             filter_=filter_str,
             order_by="timestamp asc",
-            max_results=500,
+            max_results=max_results,
         )
     )
 
@@ -142,6 +169,7 @@ def tail_gcp_run_logs(
     seen_insert_ids: set[str] = set()
     watermark = ""
     state = ""
+    job: Any | None = None
     consecutive_errors = 0
 
     while state not in TERMINAL_STATES:
@@ -172,7 +200,14 @@ def tail_gcp_run_logs(
 
         try:
             entries = _fetch_log_entries(
-                project=project, job_uid=job_uid, job_id=job_id, since=watermark
+                project=project,
+                job_uid=job_uid,
+                job_id=job_id,
+                since=watermark,
+                # A fast job can become terminal before the first successful log poll.
+                # Drain the iterator's pages in that final poll instead of returning the
+                # oldest 500 image-bootstrap entries and hiding the task failure.
+                max_results=None if state in TERMINAL_STATES else 500,
             )
             consecutive_errors = 0
         except Exception as exc:  # noqa: BLE001
@@ -197,11 +232,14 @@ def tail_gcp_run_logs(
                 continue
             if insert_id:
                 seen_insert_ids.add(insert_id)
-            ts = str(getattr(entry, "timestamp", "") or "")
+            ts = _rfc3339_timestamp(getattr(entry, "timestamp", ""))
             if ts and ts > watermark:
                 watermark = ts
             out(f"{LOG_PREFIX} {_format_entry(entry)}")
 
+    if state != "SUCCEEDED" and job is not None:
+        for line in _status_event_lines(job):
+            out(f"{LOG_PREFIX} {line}")
     return _state_to_exit_code(state)
 
 

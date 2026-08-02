@@ -22,16 +22,18 @@ _REQUEST_METER = "requests"
 _REQUEST_UNIT = "request"
 _TURN_METER = "turns"
 _TURN_UNIT = "turn"
+_INVOCATION_METER = "agent_invocations"
+_INVOCATION_UNIT = "invocation"
 
 
 class AgentProviderMeterSource:
     """Extract exact named units without treating agent steps as API requests.
 
     Token and cost metrics already flow through ``LogFile.usage_stats``. This source
-    adds only provider units terminal records expose explicitly: Claude's
-    ``num_turns`` and server-side web-tool counts, and Codex's completed-turn records.
-    Gemini reports tokens and aggregate tool calls but no request/turn count, so its
-    turn meter is deliberately unmeasured.
+    adds only provider units adapter records expose explicitly: one agent invocation
+    per adapter init, Claude's ``num_turns`` and server-side web-tool counts, and
+    Codex's completed-turn records. Gemini reports tokens and aggregate tool calls but
+    no request/turn count, so its internal turn meter is deliberately unmeasured.
     """
 
     name = "agent_terminal_provider_meters"
@@ -55,10 +57,15 @@ class AgentProviderMeterSource:
             observations = _gemini_observations(log_file, log_events)
         else:
             return []
+        provider = {"claude": "anthropic", "codex": "openai", "gemini": "google"}[adapter]
+        if _has_agent_init(adapter, log_events):
+            observations.append(
+                _invocation_observation(provider=provider, model=log_file.model or None)
+            )
         exact_products = {observation.provider.product for observation in observations}
         observations.extend(
             _web_coverage_gaps(
-                provider={"claude": "anthropic", "codex": "openai", "gemini": "google"}[adapter],
+                provider=provider,
                 model=log_file.model or None,
                 log_events=log_events,
                 exact_products=exact_products,
@@ -175,6 +182,21 @@ def _request_observation(
     )
 
 
+def _invocation_observation(*, provider: str, model: str | None) -> ProviderMeterObservation:
+    return ProviderMeterObservation(
+        provider=ProviderRef(provider=provider, product=_LLM_PRODUCT, model=model),
+        meters=[
+            _quantity(
+                provider=provider,
+                product=_LLM_PRODUCT,
+                meter=_INVOCATION_METER,
+                unit=_INVOCATION_UNIT,
+                quantity=1,
+            )
+        ],
+    )
+
+
 def _web_coverage_gaps(
     *,
     provider: str,
@@ -228,6 +250,18 @@ def _last_raw_event(log_events: Sequence[LogEvent], *, event_type: str) -> dict[
         if isinstance(event.raw, dict) and event.raw.get("type") == event_type:
             return event.raw
     return None
+
+
+def _has_agent_init(adapter: str, log_events: Sequence[LogEvent]) -> bool:
+    expected_types = {
+        "claude": {"system"},
+        "codex": {"thread.started"},
+        "gemini": {"init"},
+    }[adapter]
+    return any(
+        isinstance(event.raw, dict) and event.raw.get("type") in expected_types
+        for event in log_events
+    )
 
 
 def _nonnegative_int(value: object) -> int | None:

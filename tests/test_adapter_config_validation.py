@@ -63,6 +63,41 @@ def _make_predict_like_spec() -> ProcessSpec:
 
 
 class TestAdapterConfigValidation:
+    def test_harness_runtime_config_survives_adapter_validation(self) -> None:
+        spec = ProcessSpec.model_validate(
+            {
+                "name": "test",
+                "defaults": {
+                    "default_adapter": "gemini-cli",
+                    "adapters": {
+                        "gemini-cli": {
+                            "type": "gemini-cli",
+                            "config": {
+                                "model": "gemini-3.6-flash",
+                                "accept_valid_outputs_on_timeout": True,
+                                "capture_final_response_to": "result",
+                            },
+                        }
+                    },
+                },
+                "steps": [
+                    {
+                        "id": "author",
+                        "mode": "agent",
+                        "prompt_prefix": "do thing",
+                        "outputs": {"result": {"path": "result.md", "kind": "file"}},
+                    }
+                ],
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            process_path = Path(tmpdir) / "test.process.md"
+            _write(process_path, "---\nprocess:\n  name: test\n---\n")
+            plan = build_plan(spec, {}, process_path=process_path)
+
+        assert plan.steps[0].adapter.config["accept_valid_outputs_on_timeout"] is True
+        assert plan.steps[0].adapter.config["capture_final_response_to"] == "result"
+
     def test_variant_specific_step_config_applies_only_to_matching_variant(self) -> None:
         spec = _make_predict_like_spec()
         with tempfile.TemporaryDirectory() as tmpdir:

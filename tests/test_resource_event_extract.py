@@ -203,6 +203,62 @@ def test_pi_agent_end_emits_usage_event(tmp_path: Path) -> None:
     assert request_meter.actual_quantity is None
 
 
+def test_gemini_usage_rollup_includes_billed_thinking_tokens_and_estimated_cost(
+    tmp_path: Path,
+) -> None:
+    parent = _write(tmp_path, "parent/test.process.md", _PARENT_PROCESS)
+    bundle = load_plan_bundle(parent)
+    run_dir = tmp_path / "runs" / "2026-04-21"
+    log_path = run_dir / "predict" / "AAPL" / ".logs" / "session.jsonl"
+    log_path.parent.mkdir(parents=True)
+    log_path.write_text(
+        "\n".join(
+            json.dumps(record)
+            for record in (
+                {
+                    "type": "init",
+                    "model": "gemini-3.6-flash",
+                    "session_id": "ses_fixture",
+                },
+                {
+                    "type": "result",
+                    "status": "success",
+                    "stats": {
+                        "total_tokens": 1500,
+                        "input_tokens": 1000,
+                        "input": 800,
+                        "cached": 200,
+                        "output_tokens": 100,
+                        "models": {
+                            "gemini-3.6-flash": {
+                                "total_tokens": 1500,
+                                "input_tokens": 1000,
+                                "input": 800,
+                                "cached": 200,
+                                "output_tokens": 100,
+                            }
+                        },
+                    },
+                },
+            )
+        )
+        + "\n"
+    )
+
+    result = build_resource_artifacts(bundle=bundle, run_dir=run_dir, run_id="run-1")
+    usage = next(
+        event
+        for event in result.events
+        if isinstance(event, UsageEvent) and event.metrics.list_cost_usd is not None
+    )
+
+    assert usage.metrics.input_tokens == 800
+    assert usage.metrics.cache_read_tokens == 200
+    assert usage.metrics.output_tokens == 500
+    assert usage.metrics.list_cost_usd == pytest.approx(0.00498)
+    assert result.document.hierarchy_root.total_metrics.list_cost_usd == pytest.approx(0.00498)
+
+
 def test_registered_provider_meter_source_emits_authoritative_nested_observation(
     tmp_path: Path,
 ) -> None:

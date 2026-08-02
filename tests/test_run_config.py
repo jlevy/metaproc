@@ -202,6 +202,50 @@ class TestWriteRunConfig:
             run_dir=Path("/workspace/user/mnt/filestore/runs/run-5c/mine"),
         )
 
+    def test_resume_accepts_relocated_typed_partition(self, tmp_path: Path) -> None:
+        run_id = "run_company-info-amzn-2026-07-31"
+        run_dir = tmp_path / "machine-b" / run_id
+        config_path = run_dir / STATE_DIR / RUN_CONFIG_FILE
+        config_path.parent.mkdir(parents=True)
+        config_path.write_text(
+            to_yaml_string(
+                {
+                    "process": "company-info",
+                    "run_id": run_id,
+                    "run_dir": f"/machine-a/runs/{run_id}",
+                }
+            )
+        )
+
+        _validate_run_config(
+            config_path,
+            process_name="company-info",
+            run_dir=run_dir,
+        )
+
+    def test_resume_rejects_different_typed_partition(self, tmp_path: Path) -> None:
+        saved_run_id = "run_company-info-amzn-2026-07-31"
+        current_run_id = "run_company-info-amzn-2026-07-31-revision-2"
+        run_dir = tmp_path / current_run_id
+        config_path = run_dir / STATE_DIR / RUN_CONFIG_FILE
+        config_path.parent.mkdir(parents=True)
+        config_path.write_text(
+            to_yaml_string(
+                {
+                    "process": "company-info",
+                    "run_id": saved_run_id,
+                    "run_dir": f"/machine-a/runs/{saved_run_id}",
+                }
+            )
+        )
+
+        with pytest.raises(CLIError, match="Resume mismatch.*run_dir"):
+            _validate_run_config(
+                config_path,
+                process_name="company-info",
+                run_dir=run_dir,
+            )
+
     def test_resume_rejects_unrelated_local_runs_directory(self, tmp_path: Path) -> None:
         run_dir = tmp_path / "run-5d" / "mine"
         run_dir.mkdir(parents=True)

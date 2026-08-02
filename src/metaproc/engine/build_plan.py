@@ -192,6 +192,11 @@ def _strict_adapter_validation_enabled() -> bool:
     return MetaprocEnv.METAPROC_ADAPTER_STRICT.read_bool(default=False)
 
 
+_HARNESS_RUNTIME_CONFIG_KEYS = frozenset(
+    {"accept_valid_outputs_on_timeout", "capture_final_response_to"}
+)
+
+
 def _apply_adapter_validation(
     *,
     adapter_type: str,
@@ -204,7 +209,12 @@ def _apply_adapter_validation(
     if validate_config is None:
         return merged_config
 
-    rejections = validate_config(merged_config)
+    adapter_config = {
+        key: value
+        for key, value in merged_config.items()
+        if key not in _HARNESS_RUNTIME_CONFIG_KEYS
+    }
+    rejections = validate_config(adapter_config)
     if not rejections:
         return merged_config
 

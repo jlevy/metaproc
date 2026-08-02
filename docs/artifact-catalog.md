@@ -18,7 +18,7 @@ consistency. The companion programmatic registry is
 | YAML | ~14 | `<run>/.state/` |
 | JSONL | ~9 | `<run>/.logs/` |
 | JSON | 3 writers | `<run>/.state/` sidecars, `<run>/resources.json`, arena cache |
-| Softschema MD | 4 | `<run>/<artifact-tree>/` (post-run human reports) |
+| Softschema MD | 4 framework writers plus domain reports | `<run>/` and `<run>/<artifact-tree>/` |
 | Plain text | 2 | `<run>/.logs/` (raw subprocess captures) |
 
 ## State artifacts (YAML)
@@ -97,6 +97,20 @@ Pattern documented in the standalone
 
 The `usage.md` envelope is registered in `metaproc.io.frontmatter.ENVELOPE_MAP`; the
 `qa` / `qa_summary` envelopes are registered the same way.
+
+Domain processes may add portable SoftSchema reports while keeping their schemas in the
+run. They use the same frontmatter rules but remain owned by the domain package rather
+than `metaproc.paths`. A fixed-comparison workflow can use this additive sequence:
+
+| Filename | Envelope key + schema | Lifecycle | Primary readers |
+| --- | --- | --- | --- |
+| `<domain>-evaluation-cohort.md` | domain-owned cohort contract | copied once from a digest-pinned source freeze | evaluator, reviewer, sync tooling |
+| `<domain>-evaluation-core.md` | domain-owned evaluation contract | written once by the process before terminal resource finalization | terminal projector, QA |
+| `<domain>-evaluation.md` | domain-owned evaluation contract | written after terminal finalization; immutable on publication | reviewer, static HTML, later analysis |
+
+The companion `<domain>-evaluation-report.md` can be a derived Markdown view, with a
+self-contained `<domain>-evaluation.html` static view.
+Structured consumers read the SoftSchema artifacts, never those rendered bodies.
 
 ## Plain text captures
 

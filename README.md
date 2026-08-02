@@ -146,7 +146,7 @@ See [docs/conventions.md](docs/conventions.md) for the full casing rules.
 | `gcp status` | Show GCP Batch job status for a run |
 | `gcp scale` | Update desired worker topology for an active cloud fan-out step |
 | `gcp logs` | Stream Cloud Logging for a run’s GCP Batch jobs |
-| `gcp cancel` | Cancel running/queued Batch jobs for a run |
+| `gcp cancel` | Cancel running/queued Batch jobs by run, explicit resource, or `gcprun-*` ID |
 | `gcp runs` | List all active metaproc runs across the GCP project |
 | `gcp resources` | Snapshot metaproc-related GCP assets via Cloud Asset Inventory |
 | `gcp filestore` | Inspect Filestore instance status and utilization |

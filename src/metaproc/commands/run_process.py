@@ -239,6 +239,7 @@ def _now_iso() -> str:
 
 
 StepState = str  # "pending" | "running" | "completed" | "failed" | "skipped" | "blocked"
+_TYPED_PARTITION_DIR_PATTERN = re.compile(r"^(?:run|coh)_[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 def _write_process_status(
@@ -593,15 +594,22 @@ def _validate_run_config(
 
 
 def _resume_run_dir_identity(run_dir: str) -> str:
-    """Normalize run_dir for resume validation across Filestore mount aliases.
+    """Normalize run_dir for verified relocation and Filestore mount aliases.
 
-    Cloud and operator hosts can mount the same Filestore share at different
-    prefixes (for example ``/mnt/disks/filestore`` vs ``/mnt/filestore`` vs a
-    local workstation mount under ``.../mnt/filestore``). Normalize only those
-    known Filestore aliases. All other paths keep their full normalized form so
-    unrelated local ``runs/`` directories cannot collide.
+    A self-identifying ``run_`` or ``coh_`` path component is the immutable
+    partition boundary used by the receipt-verified synchronization layer. Keep
+    that component and its process suffix while allowing the machine-local parent
+    path to change. Legacy paths remain strict except for known Filestore aliases.
     """
     normalized = os.path.normpath(run_dir)
+    parts = Path(normalized).parts
+    typed_indices = [
+        index for index, part in enumerate(parts) if _TYPED_PARTITION_DIR_PATTERN.fullmatch(part)
+    ]
+    if typed_indices:
+        typed_suffix = "/".join(parts[typed_indices[-1] :])
+        return f"typed:{typed_suffix}"
+
     filestore_markers = (
         f"{os.sep}mnt{os.sep}disks{os.sep}filestore{os.sep}runs{os.sep}",
         f"{os.sep}mnt{os.sep}filestore{os.sep}runs{os.sep}",
@@ -1024,26 +1032,34 @@ async def _execute_code_step(
         mark_failed_at(
             state_dir, error=f"command exit code {exc.returncode}", running_record=running_record
         )
+        out.progress(
+            f"  Step '{step_id}': command failed with exit code {exc.returncode} "
+            f"(details in {log_file.name})"
+        )
         return False
     except Exception as exc:
         tb = traceback.format_exc()
         with atomic_output_file(log_file) as tmp_path:
             tmp_path.write_text(tb)
+        error_summary = f"{type(exc).__name__}: {exc}"
         mark_failed_at(
             state_dir,
-            error=f"{type(exc).__name__}: {exc} (traceback in {log_file.name})",
+            error=f"{error_summary} (traceback in {log_file.name})",
             running_record=running_record,
         )
+        out.progress(f"  Step '{step_id}': {error_summary} (traceback in {log_file.name})")
         return False
 
     if effective_outputs and artifact_dir is not None:
         output_errors = validate_item_outputs(artifact_dir, effective_outputs, variables=variables)
         if output_errors:
+            error_summary = f"output validation failed: {'; '.join(output_errors)}"
             mark_failed_at(
                 state_dir,
-                error=f"output validation failed: {'; '.join(output_errors)}",
+                error=error_summary,
                 running_record=running_record,
             )
+            out.progress(f"  Step '{step_id}': {error_summary}")
             return False
 
     mark_completed_at(state_dir, running_record=running_record)
@@ -1114,6 +1130,84 @@ async def _run_agent_subprocess(
         return completed.returncode
 
     return await asyncio.to_thread(_run)
+
+
+def _captured_assistant_response(log_path: Path) -> str:
+    """Reconstruct text from structured assistant-message records in one agent log."""
+    chunks: list[str] = []
+    for line in log_path.read_text(errors="replace").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "message" and event.get("role") == "assistant":
+            content = event.get("content")
+            if isinstance(content, str):
+                chunks.append(content)
+            continue
+        if event.get("type") != "assistant":
+            continue
+        direct_content = event.get("content")
+        if isinstance(direct_content, str):
+            chunks.append(direct_content)
+            continue
+        message = event.get("message")
+        content_rows = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content_rows, list):
+            continue
+        chunks.extend(
+            str(row["text"])
+            for row in content_rows
+            if isinstance(row, dict)
+            and row.get("type") == "text"
+            and isinstance(row.get("text"), str)
+        )
+    response = "".join(chunks).strip()
+    if not response:
+        raise ValueError("structured agent log contains no assistant response text")
+    lines = response.splitlines()
+    if len(lines) >= 3 and lines[0].strip().startswith("```") and lines[-1].strip() == "```":
+        response = "\n".join(lines[1:-1]).strip()
+    if not response:
+        raise ValueError("captured assistant response is empty after removing its code fence")
+    return f"{response}\n"
+
+
+def _publish_captured_agent_response(
+    *,
+    output_name: object,
+    effective_outputs: dict[str, IOSpec],
+    variables: dict[str, str],
+    process_dir: Path,
+    log_path: Path,
+) -> tuple[Path, bool]:
+    if not isinstance(output_name, str) or not output_name.strip():
+        raise ValueError("capture_final_response_to must name one declared file output")
+    output_name = output_name.strip()
+    output_spec = effective_outputs.get(output_name)
+    if output_spec is None:
+        raise ValueError(f"capture_final_response_to references undeclared output {output_name!r}")
+    if output_spec.kind != "file":
+        raise ValueError("capture_final_response_to requires a file output")
+    resolved_outputs = resolve_record_output_paths(effective_outputs, variables)
+    output_path = Path(resolved_outputs[output_name])
+    if not output_path.is_absolute():
+        output_path = process_dir / output_path
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    captured_response = _captured_assistant_response(log_path)
+    if output_spec.format == "frontmatter-md" and not captured_response.lstrip().startswith(
+        "---\n"
+    ):
+        if output_path.is_file() and output_path.read_text(errors="replace").lstrip().startswith(
+            "---\n"
+        ):
+            return output_path, False
+        raise ValueError("captured assistant response is not a frontmatter Markdown artifact")
+    with atomic_output_file(output_path) as tmp_path:
+        tmp_path.write_text(captured_response)
+    return output_path, True
 
 
 async def _execute_agent_step(
@@ -1250,6 +1344,7 @@ async def _execute_agent_step(
     timeout_val = int(str(timeout_s)) if timeout_s is not None else None
 
     use_filter = adapter_type == "pi-cli"
+    timed_out = False
     try:
         exit_code = await _run_agent_subprocess(
             cmd,
@@ -1260,16 +1355,46 @@ async def _execute_agent_step(
             use_filter=use_filter,
         )
     except subprocess.TimeoutExpired:
-        mark_failed_at(
-            state_dir, error=f"timeout after {timeout_s}s", running_record=running_record
-        )
-        return False
+        timed_out = True
+        exit_code = None
 
     try_compact_log(log_path)
 
-    if exit_code != 0:
-        mark_failed_at(state_dir, error=f"exit code {exit_code}", running_record=running_record)
+    if timed_out and runtime_config.get("accept_valid_outputs_on_timeout") is not True:
+        error_summary = f"timeout after {timeout_s}s"
+        mark_failed_at(state_dir, error=error_summary, running_record=running_record)
+        out.progress(f"  Step '{step_id}': {error_summary}")
         return False
+
+    if not timed_out and exit_code != 0:
+        error_summary = f"adapter exited with code {exit_code}"
+        mark_failed_at(state_dir, error=error_summary, running_record=running_record)
+        out.progress(f"  Step '{step_id}': {error_summary} (details in {log_path.name})")
+        return False
+
+    capture_output_name = runtime_config.get("capture_final_response_to")
+    if capture_output_name is not None:
+        try:
+            captured_path, response_was_published = _publish_captured_agent_response(
+                output_name=capture_output_name,
+                effective_outputs=effective_outputs,
+                variables=step_vars,
+                process_dir=process_dir,
+                log_path=log_path,
+            )
+        except (OSError, ValueError) as exc:
+            error_summary = f"final-response capture failed: {exc}"
+            mark_failed_at(state_dir, error=error_summary, running_record=running_record)
+            out.progress(f"  Step '{step_id}': {error_summary}")
+            return False
+        if response_was_published:
+            out.progress(
+                f"  Step '{step_id}': captured final assistant response -> {captured_path.name}"
+            )
+        else:
+            out.progress(
+                f"  Step '{step_id}': retained valid tool-published output -> {captured_path.name}"
+            )
 
     if boundary_before is not None and allowed_targets:
         boundary_after = capture_repo_snapshot(process_dir, observation_zone=[run_dir])
@@ -1280,15 +1405,30 @@ async def _execute_agent_step(
             base_dir=boundary_after.repo_root if boundary_after else None,
         )
         if violations:
+            error_summary = (
+                "write boundary violated: "
+                f"{_format_boundary_paths(violations, base_dir=boundary_after.repo_root if boundary_after else None)}"
+            )
             mark_failed_at(
                 state_dir,
-                error=(
-                    "write boundary violated: "
-                    f"{_format_boundary_paths(violations, base_dir=boundary_after.repo_root if boundary_after else None)}"
-                ),
+                error=error_summary,
                 running_record=running_record,
             )
+            out.progress(f"  Step '{step_id}': {error_summary}")
             return False
+
+    if timed_out and (not effective_outputs or artifact_dir is None):
+        error_summary = (
+            f"timeout after {timeout_s}s; accept_valid_outputs_on_timeout requires "
+            "at least one declared output"
+        )
+        mark_failed_at(
+            state_dir,
+            error=error_summary,
+            running_record=running_record,
+        )
+        out.progress(f"  Step '{step_id}': {error_summary}")
+        return False
 
     if effective_outputs and artifact_dir is not None:
         # step_vars (not variables): only step_vars has VARIANT bound to
@@ -1299,12 +1439,21 @@ async def _execute_agent_step(
         # unresolved placeholder made the step transition to FAILED.
         output_errors = validate_item_outputs(artifact_dir, effective_outputs, variables=step_vars)
         if output_errors:
+            prefix = f"timeout after {timeout_s}s; " if timed_out else ""
+            error_summary = f"{prefix}output validation failed: {'; '.join(output_errors)}"
             mark_failed_at(
                 state_dir,
-                error=f"output validation failed: {'; '.join(output_errors)}",
+                error=error_summary,
                 running_record=running_record,
             )
+            out.progress(f"  Step '{step_id}': {error_summary}")
             return False
+
+    if timed_out:
+        out.progress(
+            f"  Step '{step_id}': adapter reached its {timeout_s}s ceiling after publishing "
+            "valid declared outputs; accepting the outputs by explicit policy"
+        )
 
     mark_completed_at(state_dir, running_record=running_record)
     write_result_at(

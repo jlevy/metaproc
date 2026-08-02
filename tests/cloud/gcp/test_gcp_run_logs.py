@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -199,6 +201,96 @@ class TestTailGcpRunLogs:
         assert observed_since[0] == ""
         assert observed_since[1] == first_ts
         assert observed_since[2] == first_ts
+
+    def test_normalizes_datetime_watermark_to_rfc3339(self, monkeypatch: pytest.MonkeyPatch):
+        states = iter(["RUNNING", "SUCCEEDED"])
+        client = MagicMock()
+        client.get_job.side_effect = lambda req: _job(next(states))
+        fake_batch_v1 = MagicMock()
+        fake_batch_v1.BatchServiceClient.return_value = client
+        fake_batch_v1.GetJobRequest = MagicMock(side_effect=lambda **kw: kw)
+        monkeypatch.setattr(gcp_run_logs, "_get_batch_v1", lambda: fake_batch_v1)
+
+        entry = _log_entry("first", insert_id="i1")
+        entry.timestamp = datetime(2026, 8, 2, 10, 53, 15, 203195, tzinfo=UTC)
+        log_calls = iter([[entry], []])
+        observed_since: list[str] = []
+
+        def fake_fetch(**kw):
+            observed_since.append(kw.get("since", ""))
+            return next(log_calls)
+
+        monkeypatch.setattr(gcp_run_logs, "_fetch_log_entries", fake_fetch)
+
+        assert (
+            gcp_run_logs.tail_gcp_run_logs(
+                job_resource_name="projects/p/locations/r/jobs/j",
+                project="p",
+                poll_interval_s=0.0,
+                out=lambda _s: None,
+                sleep=lambda _s: None,
+            )
+            == 0
+        )
+        assert observed_since == ["", "2026-08-02T10:53:15.203195Z"]
+
+    def test_terminal_poll_drains_all_log_pages(self, monkeypatch: pytest.MonkeyPatch):
+        client = MagicMock()
+        client.get_job.return_value = _job("FAILED")
+        fake_batch_v1 = MagicMock()
+        fake_batch_v1.BatchServiceClient.return_value = client
+        fake_batch_v1.GetJobRequest = MagicMock(side_effect=lambda **kw: kw)
+        monkeypatch.setattr(gcp_run_logs, "_get_batch_v1", lambda: fake_batch_v1)
+        observed_limits: list[int | None] = []
+
+        def fake_fetch(**kw):
+            observed_limits.append(kw.get("max_results"))
+            return []
+
+        monkeypatch.setattr(gcp_run_logs, "_fetch_log_entries", fake_fetch)
+
+        assert (
+            gcp_run_logs.tail_gcp_run_logs(
+                job_resource_name="projects/p/locations/r/jobs/j",
+                project="p",
+                poll_interval_s=0.0,
+                out=lambda _s: None,
+                sleep=lambda _s: None,
+            )
+            == 1
+        )
+        assert observed_limits == [None]
+
+    def test_failed_job_prints_batch_status_events(self, monkeypatch: pytest.MonkeyPatch):
+        failed_job = _job("FAILED")
+        failed_job.status.status_events = [
+            SimpleNamespace(
+                type_="FAILED",
+                description="Secret access denied before the runnable started.",
+                event_time=datetime(2026, 8, 2, 10, 53, 20, tzinfo=UTC),
+            )
+        ]
+        client = MagicMock()
+        client.get_job.return_value = failed_job
+        fake_batch_v1 = MagicMock()
+        fake_batch_v1.BatchServiceClient.return_value = client
+        fake_batch_v1.GetJobRequest = MagicMock(side_effect=lambda **kw: kw)
+        monkeypatch.setattr(gcp_run_logs, "_get_batch_v1", lambda: fake_batch_v1)
+        monkeypatch.setattr(gcp_run_logs, "_fetch_log_entries", lambda **kw: [])
+        printed: list[str] = []
+
+        assert (
+            gcp_run_logs.tail_gcp_run_logs(
+                job_resource_name="projects/p/locations/r/jobs/j",
+                project="p",
+                poll_interval_s=0.0,
+                out=printed.append,
+                sleep=lambda _s: None,
+            )
+            == 1
+        )
+        assert any("Secret access denied" in line for line in printed)
+        assert any("2026-08-02T10:53:20Z" in line for line in printed)
 
     def test_bounded_retry_on_persistent_get_job_failures(self, monkeypatch: pytest.MonkeyPatch):
         client = MagicMock()

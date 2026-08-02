@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import cast
 
+import pytest
+
 from metaproc.logutil.log_path_owner import LogOwner, derive_owner
 from metaproc.models.usage import (
     UsageBucket,
@@ -119,6 +121,29 @@ def test_derive_owner_root_logs_dir(tmp_path: Path) -> None:
     assert owner.item_key is None
 
 
+def test_derive_owner_v2_scalar_task_log(tmp_path: Path) -> None:
+    log = tmp_path / ".logs" / "tasks" / "decompose-keywords" / "session.jsonl"
+    log.parent.mkdir(parents=True)
+    log.touch()
+
+    owner = derive_owner(log, tmp_path)
+
+    assert owner.process_node_id == "process:root"
+    assert owner.step_node_id == "decompose-keywords"
+    assert owner.item_key is None
+
+
+def test_derive_owner_v2_fan_out_task_log(tmp_path: Path) -> None:
+    log = tmp_path / ".logs" / "tasks" / "predict" / "AAPL" / "session.jsonl"
+    log.parent.mkdir(parents=True)
+    log.touch()
+
+    owner = derive_owner(log, tmp_path)
+
+    assert owner.step_node_id == "predict"
+    assert owner.item_key == "AAPL"
+
+
 def test_derive_owner_handles_path_outside_run_dir(tmp_path: Path) -> None:
     other = tmp_path / "other"
     other.mkdir()
@@ -138,3 +163,19 @@ def test_derive_owner_treats_relative_log_path_as_run_dir_relative(tmp_path: Pat
     owner = derive_owner(log, tmp_path)
     assert owner.step_node_id == "predict"
     assert owner.item_key == "AAPL"
+
+
+def test_derive_owner_handles_cwd_relative_path_that_includes_relative_run_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "run"
+    log = run_dir / ".logs" / "tasks" / "predict" / "session.jsonl"
+    log.parent.mkdir(parents=True)
+    log.touch()
+    monkeypatch.chdir(tmp_path)
+
+    owner = derive_owner(Path("run/.logs/tasks/predict/session.jsonl"), Path("run"))
+
+    assert owner.step_node_id == "predict"
+    assert owner.item_key is None

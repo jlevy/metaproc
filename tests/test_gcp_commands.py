@@ -142,11 +142,42 @@ class TestFormatJobResults:
         assert len(data) == 1
         assert data[0]["state"] == "FAILED"
 
+    def test_status_accepts_explicit_gcp_run_resource(self) -> None:
+        runner = CliRunner()
+        job = MagicMock()
+        job.labels = {"metaproc-role": "gcp-run"}
+        job.status.state = JobStatus.State.RUNNING
+        job.name = "projects/test-proj/locations/us-central1/jobs/gcprun-source"
+
+        with (
+            patch("metaproc.commands.gcp._require_gcp_batch"),
+            patch("metaproc.commands.gcp._query_job_by_name", return_value=job) as query,
+        ):
+            result = runner.invoke(app, ["gcp", "status", job.name, "--json"])
+
+        assert result.exit_code == 0, result.output
+        query.assert_called_once_with(job.name)
+        payload = json.loads(result.output)
+        assert payload[0]["job_id"] == "gcprun-source"
+        assert payload[0]["state"] == "RUNNING"
+
 
 # ── Resolve job names (auto-detect) ─────────────────────────────
 
 
 class TestResolveJobNamesAndProject:
+    def test_explicit_gcp_run_resource_is_resolved_directly(self) -> None:
+        job_name = "projects/test-proj/locations/us-central1/jobs/gcprun-source"
+        job = MagicMock(name=job_name)
+        job.name = job_name
+
+        with patch("metaproc.commands.gcp._query_job_by_name", return_value=job) as query:
+            names, project = _resolve_job_names_and_project(job_name, "", "us-central1")
+
+        assert names == [job_name]
+        assert project == "test-proj"
+        query.assert_called_once_with(job_name)
+
     def test_local_dir_mode(self, tmp_path: Path):
 
         events_file = runpool_events(tmp_path)
@@ -319,6 +350,39 @@ class TestGcpLogs:
         assert result.exit_code == 0
         filter_str = mock_client.list_entries.call_args.kwargs["filter_"]
         assert 'logName:"batch_task_logs"' in filter_str
+        assert "logs/batch_agent_logs" in filter_str
+
+    def test_explicit_gcp_run_job_resource_includes_agent_logs(self) -> None:
+        """Ad-hoc gcp-run jobs are diagnosable without a metaproc-run-id label."""
+
+        runner = CliRunner()
+        mock_client = MagicMock()
+        mock_client.list_entries.return_value = []
+
+        job = MagicMock()
+        job.name = "projects/test-proj/locations/us-central1/jobs/gcprun-source"
+        job.uid = "job-uid-explicit"
+        job.labels = {"metaproc-role": "gcp-run"}
+
+        with (
+            patch("metaproc.commands.gcp._require_gcp_batch"),
+            patch("google.cloud.logging.Client", return_value=mock_client),
+            patch("metaproc.commands.gcp._query_job_by_name", return_value=job) as query,
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "gcp",
+                    "logs",
+                    job.name,
+                    "--include-agent-logs",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        query.assert_called_once_with(job.name)
+        filter_str = mock_client.list_entries.call_args.kwargs["filter_"]
+        assert 'labels."job_uid"="job-uid-explicit"' in filter_str
         assert "logs/batch_agent_logs" in filter_str
 
     def test_run_id_mode_role_filter_restricts_job_uids(self) -> None:
@@ -624,7 +688,7 @@ class TestGCPCLIHelp:
         result = runner.invoke(app, ["gcp", "status", "--help"])
         assert result.exit_code == 0
         assert "target" in result.output.lower()
-        assert "run directory or run-id" in result.output.lower()
+        assert "run directory, run id, or batch job" in result.output.lower()
 
     def test_logs_help(self):
 

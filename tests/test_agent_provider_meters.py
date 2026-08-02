@@ -69,6 +69,7 @@ def test_claude_reports_exact_turn_and_server_web_request_counts(tmp_path: Path)
     turns = _meter(events, "llm", "turns")
     assert turns.coverage is CoverageState.MEASURED
     assert turns.actual_quantity == 3
+    assert _meter(events, "llm", "agent_invocations").actual_quantity == 1
     llm_requests = _meter(events, "llm", "requests")
     assert llm_requests.coverage is CoverageState.UNMEASURED
     search_requests = _meter(events, "web_search", "requests")
@@ -105,6 +106,7 @@ def test_codex_completed_turn_is_measured_but_api_requests_are_not_inferred(
     events = _extract(path)
 
     assert _meter(events, "llm", "turns").actual_quantity == 1
+    assert _meter(events, "llm", "agent_invocations").actual_quantity == 1
     assert _meter(events, "llm", "requests").coverage is CoverageState.UNMEASURED
     assert all(event.metrics.api_requests is None for event in events)
 
@@ -143,5 +145,6 @@ def test_gemini_turn_coverage_stays_unmeasured_when_stats_have_no_call_count(
     events = _extract(path)
 
     assert _meter(events, "llm", "turns").coverage is CoverageState.UNMEASURED
+    assert _meter(events, "llm", "agent_invocations").actual_quantity == 1
     assert _meter(events, "llm", "requests").coverage is CoverageState.UNMEASURED
     assert _meter(events, "web_search", "requests").coverage is CoverageState.UNMEASURED

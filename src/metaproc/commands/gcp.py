@@ -228,6 +228,22 @@ def _query_jobs_by_run_id(run_id: str, project: str, region: str) -> list[Any]:
     return list(client.list_jobs(request=request))
 
 
+def _direct_job_resource_name(target: str, project: str, region: str) -> str | None:
+    """Resolve an explicit Batch job resource or ``gcp run`` job ID."""
+    if re.fullmatch(r"projects/[^/]+/locations/[^/]+/jobs/[^/]+", target):
+        return target
+    if target.startswith("gcprun-") and project:
+        return f"projects/{project}/locations/{region}/jobs/{target}"
+    return None
+
+
+def _query_job_by_name(job_name: str) -> Any:
+    """Fetch one explicitly named Batch job."""
+    from google.cloud import batch_v1  # noqa: PLC0415 -- optional [gcp-batch] dependency
+
+    return batch_v1.BatchServiceClient().get_job(name=job_name)
+
+
 def _format_job_results(
     jobs: list[Any],
     *,
@@ -303,7 +319,7 @@ def _format_job_results(
 
 @gcp_app.command("status")
 def gcp_status(
-    target: str = typer.Argument(..., help="Run directory or run-id string"),
+    target: str = typer.Argument(..., help="Run directory, run ID, or Batch job name"),
     failed_only: bool = typer.Option(False, "--failed", help="Show only failed/cancelled jobs"),
     project: str = typer.Option("", "--project", help="GCP project (default: from env)"),
     region: str = typer.Option("us-central1", "--region", help="GCP region"),
@@ -311,8 +327,9 @@ def gcp_status(
 ) -> None:
     """Show Batch job status for a run.
 
-    If <target> is an existing directory: read local runpool events, query jobs by name.
-    If <target> is a string: query Batch API by metaproc-run-id label.
+    If <target> is an existing directory, read local runpool events and query jobs by
+    name. A full Batch resource or ``gcprun-`` job ID selects that job directly; any
+    other string queries the Batch API by ``metaproc-run-id`` label.
     """
     _require_gcp_batch()
     from google.cloud import batch_v1  # noqa: PLC0415 -- optional [gcp-batch] dependency
@@ -346,16 +363,26 @@ def gcp_status(
         first_labels = dict(jobs[0].labels)
         run_id = first_labels.get("metaproc-run-id", str(run_dir))
     else:
-        # Run-id mode: query Batch API by label.
+        # Run-ID or explicit Batch-job mode.
         run_id = target
-        effective_project = project or MetaprocEnv.METAPROC_GCP_PROJECT.read_str(default="")
+        direct_project_match = re.fullmatch(r"projects/([^/]+)/locations/[^/]+/jobs/[^/]+", target)
+        effective_project = (
+            project
+            or (direct_project_match.group(1) if direct_project_match else "")
+            or MetaprocEnv.METAPROC_GCP_PROJECT.read_str(default="")
+        )
         if not effective_project:
             raise CLIError("--project or METAPROC_GCP_PROJECT is required")
 
         try:
-            jobs = _query_jobs_by_run_id(run_id, effective_project, region)
+            direct_job_name = _direct_job_resource_name(target, effective_project, region)
+            jobs = (
+                [_query_job_by_name(direct_job_name)]
+                if direct_job_name is not None
+                else _query_jobs_by_run_id(run_id, effective_project, region)
+            )
         except Exception as exc:
-            raise CLIError(f"Failed to list Batch jobs: {exc}") from exc
+            raise CLIError(f"Failed to inspect Batch jobs: {exc}") from exc
 
         if not jobs:
             out.progress(f"No Batch jobs found for run-id '{run_id}'.")
@@ -568,8 +595,10 @@ def _infer_scale_spot_from_manifest(
 def _resolve_job_names_and_project(target: str, project: str, region: str) -> tuple[list[str], str]:
     """Resolve target to a list of job names and the GCP project.
 
-    If target is a directory, read local events. If it's a run-id, query Batch API.
-    Returns (job_names, project_id).
+    If target is a directory, read local events. Explicit Batch resources and
+    ``gcprun-*`` IDs resolve directly because ad-hoc jobs do not carry a
+    ``metaproc-run-id`` label. Other strings query Batch by that label.
+    Returns ``(job_names, project_id)``.
     """
     if _is_run_dir(target):
         run_dir = Path(target)
@@ -581,8 +610,15 @@ def _resolve_job_names_and_project(target: str, project: str, region: str) -> tu
         match = re.match(r"projects/([^/]+)/", job_names[0])
         resolved_project = match.group(1) if match else ""
         return job_names, resolved_project
-    # Run-id mode: query Batch API by label.
     effective_project = project or MetaprocEnv.METAPROC_GCP_PROJECT.read_str(default="")
+    direct_job_name = _direct_job_resource_name(target, effective_project, region)
+    if direct_job_name is not None:
+        job = _query_job_by_name(direct_job_name)
+        match = re.match(r"projects/([^/]+)/", job.name)
+        resolved_project = match.group(1) if match else effective_project
+        return [job.name], resolved_project
+
+    # Run-id mode: query Batch API by label.
     if not effective_project:
         raise CLIError("--project or METAPROC_GCP_PROJECT is required")
 
@@ -996,7 +1032,7 @@ def _format_log_entry(entry: Any) -> str:
 
 @gcp_app.command("logs")
 def gcp_logs(
-    target: str = typer.Argument(..., help="Run directory or run-id string"),
+    target: str = typer.Argument(..., help="Run directory, run ID, or Batch job name"),
     item: str = typer.Option("", "--item", help="Filter to a specific item label"),
     errors_only: bool = typer.Option(False, "--errors", help="Show only ERROR+ severity"),
     limit: int = typer.Option(100, "--limit", help="Maximum number of log entries"),
@@ -1024,9 +1060,9 @@ def gcp_logs(
 ) -> None:
     """Stream logs from Cloud Logging for a run's GCP Batch jobs.
 
-    Resolves Batch job IDs from run events (for local run directories) or
-    from the ``metaproc-run-id`` label (for run-id strings), then filters
-    Cloud Logging on those jobs. By default only container stdout
+    Resolves Batch job IDs from run events (for local run directories), from the
+    ``metaproc-run-id`` label (for run-id strings), or from an explicit ``gcp run``
+    job ID/resource name, then filters Cloud Logging on those jobs. By default only container stdout
     (``batch_task_logs``) is included; pass ``--include-agent-logs`` to
     include VM agent startup logs (useful for early bootstrap failures
     such as NFS mount errors).
@@ -1050,7 +1086,12 @@ def gcp_logs(
         raise CLIError("--worker requires --role worker")
 
     # Resolve project — from flag, env, or local events. No Batch API call.
-    resolved_project = project or MetaprocEnv.METAPROC_GCP_PROJECT.read_str(default="")
+    direct_project_match = re.fullmatch(r"projects/([^/]+)/locations/[^/]+/jobs/[^/]+", target)
+    resolved_project = (
+        project
+        or (direct_project_match.group(1) if direct_project_match else "")
+        or MetaprocEnv.METAPROC_GCP_PROJECT.read_str(default="")
+    )
     if not resolved_project and _is_run_dir(target):
         events = _read_events(Path(target))
         job_names = _extract_job_names(events)
@@ -1081,8 +1122,13 @@ def gcp_logs(
             out.progress("No Batch job UIDs resolved for recorded job names.")
             raise typer.Exit(code=0)
     else:
+        direct_job_name = _direct_job_resource_name(target, resolved_project, region)
         run_id = target
-        jobs = _query_jobs_by_run_id(run_id, resolved_project, region)
+        jobs = (
+            [_query_job_by_name(direct_job_name)]
+            if direct_job_name is not None
+            else _query_jobs_by_run_id(run_id, resolved_project, region)
+        )
         if role != "all":
             jobs = [
                 job
@@ -1096,7 +1142,11 @@ def gcp_logs(
                 if (getattr(job, "labels", {}) or {}).get("metaproc-worker-id") == str(worker_index)
             ]
         if not jobs:
-            scope = f"run-id '{run_id}'"
+            scope = (
+                f"Batch job '{direct_job_name}'"
+                if direct_job_name is not None
+                else f"run-id '{run_id}'"
+            )
             if role != "all":
                 scope = f"{scope} with role '{role}'"
             if worker_index is not None:
@@ -1208,7 +1258,10 @@ def _follow_logs(
 
 @gcp_app.command("cancel")
 def gcp_cancel(
-    target: str = typer.Argument(..., help="Run directory or run-id string"),
+    target: str = typer.Argument(
+        ...,
+        help="Run directory, run ID, or explicit Batch job resource / gcprun-* ID",
+    ),
     confirm: bool = typer.Option(False, "--yes", help="Skip confirmation prompt"),
     project: str = typer.Option("", "--project", help="GCP project (default: from env)"),
     region: str = typer.Option("us-central1", "--region", help="GCP region"),
@@ -1216,7 +1269,8 @@ def gcp_cancel(
     """Cancel all running/queued/scheduled Batch jobs for a run.
 
     If <target> is an existing directory: read local runpool events, extract job names.
-    If <target> is a string: query Batch API by metaproc-run-id label.
+    Explicit Batch resources and ``gcprun-*`` IDs resolve directly; other strings
+    query Batch by the ``metaproc-run-id`` label.
     Writes a kill sentinel if a local run directory exists.
     """
     _require_gcp_batch()

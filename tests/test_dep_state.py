@@ -324,6 +324,58 @@ class TestDepsCommand:
 
 
 class TestFingerprintStep:
+    def test_verified_typed_partition_relocation_keeps_hash(self, tmp_path: Path) -> None:
+        run_id = "run_company-info-amzn-2026-07-31"
+        step_a = ResolvedStep(
+            step_id="collect",
+            mode="code",
+            adapter=ResolvedAdapter(type="test", config={}),
+            outputs={"out": IOSpec(path=f"/machine-a/runs/{run_id}/result.yaml")},
+        )
+        step_b = step_a.model_copy(
+            update={"outputs": {"out": IOSpec(path=f"{tmp_path}/machine-b/{run_id}/result.yaml")}}
+        )
+
+        assert fingerprint_step(step_a) == fingerprint_step(step_b)
+
+    def test_typed_partition_output_change_still_changes_hash(self) -> None:
+        run_id = "run_company-info-amzn-2026-07-31"
+        step_a = ResolvedStep(
+            step_id="collect",
+            mode="code",
+            adapter=ResolvedAdapter(type="test", config={}),
+            outputs={"out": IOSpec(path=f"/machine-a/runs/{run_id}/result.yaml")},
+        )
+        step_b = step_a.model_copy(
+            update={"outputs": {"out": IOSpec(path=f"/machine-b/runs/{run_id}/different.yaml")}}
+        )
+
+        assert fingerprint_step(step_a) != fingerprint_step(step_b)
+
+    def test_relocated_checkout_runbook_bytes_keep_hash(self, tmp_path: Path) -> None:
+        run_id = "run_company-info-amzn-2026-07-31"
+        runbook_a = tmp_path / "checkout-a" / "runbooks" / "profile.md"
+        runbook_b = tmp_path / "checkout-b" / "runbooks" / "profile.md"
+        runbook_a.parent.mkdir(parents=True)
+        runbook_b.parent.mkdir(parents=True)
+        runbook_a.write_text("same instructions\n")
+        runbook_b.write_text("same instructions\n")
+        step_a = ResolvedStep(
+            step_id="profile",
+            mode="agent",
+            adapter=ResolvedAdapter(type="test", config={}),
+            prompt_paths=[str(runbook_a)],
+            outputs={"out": IOSpec(path=f"/machine-a/runs/{run_id}/profile.md")},
+        )
+        step_b = step_a.model_copy(
+            update={
+                "prompt_paths": [str(runbook_b)],
+                "outputs": {"out": IOSpec(path=f"/machine-b/runs/{run_id}/profile.md")},
+            }
+        )
+
+        assert fingerprint_step(step_a) == fingerprint_step(step_b)
+
     def test_runbook_edit_changes_hash(self, tmp_path: Path) -> None:
         runbook = tmp_path / "runbook.md"
         runbook.write_text("# Step 1\n\nDo the thing.\n")

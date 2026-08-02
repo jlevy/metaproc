@@ -231,6 +231,10 @@ def extract_gemini_usage(stats_dict: dict[str, Any]) -> list[UsageStats]:
     """Extract per-model usage from a Gemini CLI ``stats`` dict.
 
     Gemini reports an aggregate plus per-model breakdown in ``stats.models``.
+    Its ``input_tokens`` includes cached tokens, while ``input`` is the uncached
+    quantity. Its ``output_tokens`` omits hidden thinking tokens, which remain in
+    ``total_tokens`` and are billed as output. Normalize those fields into mutually
+    exclusive uncached input, cached input, and billed generated output quantities.
     Returns a list of ``UsageStats``, one per model. If no per-model breakdown
     exists, returns a single entry with the aggregate.
     """
@@ -239,10 +243,11 @@ def extract_gemini_usage(stats_dict: dict[str, Any]) -> list[UsageStats]:
     if models:
         result: list[UsageStats] = []
         for model_name, model_stats in models.items():
+            uncached_input, billed_output, cached_input = _gemini_billed_tokens(model_stats)
             us = UsageStats(
-                input_tokens=model_stats.get("input_tokens", 0),
-                output_tokens=model_stats.get("output_tokens", 0),
-                cache_read_tokens=model_stats.get("cached", 0),
+                input_tokens=uncached_input,
+                output_tokens=billed_output,
+                cache_read_tokens=cached_input,
                 model=model_name,
                 provider="google",
             )
@@ -250,15 +255,29 @@ def extract_gemini_usage(stats_dict: dict[str, Any]) -> list[UsageStats]:
         return result
 
     # No per-model breakdown — use aggregate
+    uncached_input, billed_output, cached_input = _gemini_billed_tokens(stats_dict)
     return [
         UsageStats(
-            input_tokens=stats_dict.get("input_tokens", 0),
-            output_tokens=stats_dict.get("output_tokens", 0),
-            cache_read_tokens=stats_dict.get("cached", 0),
+            input_tokens=uncached_input,
+            output_tokens=billed_output,
+            cache_read_tokens=cached_input,
             tool_calls=stats_dict.get("tool_calls", 0),
             provider="google",
         )
     ]
+
+
+def _gemini_billed_tokens(stats: dict[str, Any]) -> tuple[int, int, int]:
+    total_input = int(stats.get("input_tokens", 0) or 0)
+    cached_input = int(stats.get("cached", 0) or 0)
+    uncached_raw = stats.get("input")
+    uncached_input = (
+        int(uncached_raw) if uncached_raw is not None else max(total_input - cached_input, 0)
+    )
+    visible_output = int(stats.get("output_tokens", 0) or 0)
+    total_tokens = int(stats.get("total_tokens", 0) or 0)
+    billed_output = max(visible_output, total_tokens - total_input, 0)
+    return uncached_input, billed_output, cached_input
 
 
 # ── Aggregation ─────────────────────────────────────────────────

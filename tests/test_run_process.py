@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import subprocess
 import sys
 import textwrap
@@ -48,6 +49,7 @@ from metaproc.commands.run_process import (
     _invalidate_downstream,
     _is_step_completed,
     _maybe_cascade_for_fingerprint,
+    _publish_captured_agent_response,
     _read_recorded_step_hash,
     _read_step_status,
     _run_agent_subprocess,
@@ -1191,6 +1193,48 @@ class TestCodeStepLogs:
         assert task_logs[0].read_text(encoding="utf-8") == "hello"
         assert not list((run_dir / LOGS_DIR).glob("echo-output_*.log"))
 
+    def test_handler_exception_is_visible_and_traceback_stays_in_task_log(
+        self, tmp_path: Path
+    ) -> None:
+        handler = tmp_path / "handler.py"
+        handler.write_text(
+            "def explode(_variables, _step):\n"
+            "    raise ValueError('candidate budget must contain 20 terms')\n",
+            encoding="utf-8",
+        )
+        step_def = ProcessStep(id="finalize", mode="code", handler="handler.py:explode")
+        target = ResolvedStep(
+            step_id="finalize",
+            mode="code",
+            handler="handler.py:explode",
+        )
+        run_dir = tmp_path / "run"
+        out = FakeOut()
+
+        result = asyncio.run(
+            _execute_code_step(
+                spec=ProcessSpec(name="test"),
+                step_def=step_def,
+                target=target,
+                variables={},
+                process_dir=tmp_path,
+                run_dir=run_dir,
+                run_id="run-1",
+                out=out,
+            )
+        )
+
+        assert result is False
+        task_logs = sorted((run_dir / LOGS_DIR / "tasks" / "finalize").glob("process_*.log"))
+        assert len(task_logs) == 1
+        assert out.messages == [
+            "  Step 'finalize': ValueError: candidate budget must contain 20 terms "
+            f"(traceback in {task_logs[0].name})"
+        ]
+        assert "ValueError: candidate budget must contain 20 terms" in task_logs[0].read_text(
+            encoding="utf-8"
+        )
+
 
 # ── CLI integration via typer.testing ────────────────────────────
 
@@ -1832,6 +1876,8 @@ class TestProcessContractValidation:
         )
 
         assert result.exit_code != 0
+        assert "write boundary violated" in result.output
+        assert "stray.md" in result.output
         assert rogue_path.exists()
         # Per-task state lives at <run>/.state/tasks/<step_id>/ under the
         # new run-dir layout (plan-2026-05-10-metaproc-run-dir-layout.md).
@@ -2312,6 +2358,244 @@ class TestProcessContractValidation:
         run_state_names = [p.name for p in run_state_files]
         assert "status.yaml" not in run_state_names
         assert "attempt.yaml" not in run_state_names
+
+    @pytest.mark.parametrize(
+        ("accept_valid_outputs", "expected_exit_code"),
+        [(True, 0), (False, 1)],
+    )
+    def test_agent_timeout_accepts_published_outputs_only_by_explicit_policy(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        accept_valid_outputs: bool,
+        expected_exit_code: int,
+    ) -> None:
+        repo_dir = tmp_path / "timeout-repo"
+        process_dir = repo_dir / "timeout-process"
+        process_dir.mkdir(parents=True)
+        subprocess.run(["git", "init"], cwd=repo_dir, check=True, capture_output=True, text=True)
+        output_path = repo_dir / "runs" / "test-run" / "result.md"
+        (process_dir / "test.process.md").write_text(
+            textwrap.dedent(
+                f"""\
+                ---
+                process:
+                  name: timeout-output
+                  defaults:
+                    default_adapter: timeout-test
+                    adapters:
+                      timeout-test:
+                        type: timeout-test
+                        config:
+                          timeout_s: 1
+                          accept_valid_outputs_on_timeout: {str(accept_valid_outputs).lower()}
+                  inputs:
+                    output_path: {{ param: OUTPUT_PATH, as: path }}
+                  steps:
+                    - id: author
+                      mode: agent
+                      prompt_prefix: write the result
+                      outputs:
+                        main:
+                          path: "{{{{OUTPUT_PATH}}}}"
+                          kind: file
+                          format: frontmatter-md
+                ---
+                """
+            )
+        )
+
+        class TimeoutAdapter:
+            adapter_type = "timeout-test"
+            short_name = "timeout-test"
+            default_model = None
+
+            def build_command(self, prompt_file, merged_config, variables):
+                del prompt_file, merged_config
+                script = (
+                    "from pathlib import Path; import time; "
+                    f"target = Path({variables['OUTPUT_PATH']!r}); "
+                    "target.parent.mkdir(parents=True, exist_ok=True); "
+                    "target.write_text('---\\nstatus: complete\\n---\\n'); "
+                    "time.sleep(5)"
+                )
+                return [sys.executable, "-c", script]
+
+            def prepare_env(self, env, merged_config):
+                return env
+
+            def working_directory(self, merged_config):
+                return None
+
+            def parse_result_event(self, line):
+                return None
+
+            def check_auth(self):
+                raise NotImplementedError
+
+            def auth_info(self):
+                return ""
+
+        monkeypatch.setitem(ADAPTER_REGISTRY, "timeout-test", TimeoutAdapter())
+        result = CliRunner().invoke(
+            app,
+            [
+                "run-process",
+                str(process_dir / "test.process.md"),
+                "--var",
+                f"RUNS_DIR={repo_dir / 'runs'}",
+                "--var",
+                "RUN_ID=test-run",
+                "--var",
+                f"OUTPUT_PATH={output_path}",
+            ],
+        )
+
+        assert result.exit_code == expected_exit_code, result.output
+        assert output_path.is_file()
+        if accept_valid_outputs:
+            assert "accepting the outputs by explicit policy" in result.output
+        else:
+            assert "timeout after 1s" in result.output
+
+    def test_agent_can_capture_tool_free_final_response_into_declared_output(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        repo_dir = tmp_path / "capture-repo"
+        process_dir = repo_dir / "capture-process"
+        process_dir.mkdir(parents=True)
+        subprocess.run(["git", "init"], cwd=repo_dir, check=True, capture_output=True, text=True)
+        output_path = repo_dir / "runs" / "test-run" / "result.md"
+        (process_dir / "test.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: capture-output
+                  defaults:
+                    default_adapter: capture-test
+                    adapters:
+                      capture-test:
+                        type: capture-test
+                        config:
+                          capture_final_response_to: main
+                  inputs:
+                    output_path: { param: OUTPUT_PATH, as: path }
+                  steps:
+                    - id: author
+                      mode: agent
+                      prompt_prefix: return the artifact
+                      outputs:
+                        main:
+                          path: "{{OUTPUT_PATH}}"
+                          kind: file
+                          format: frontmatter-md
+                ---
+                """
+            )
+        )
+
+        class CaptureAdapter:
+            adapter_type = "capture-test"
+            short_name = "capture-test"
+            default_model = None
+
+            def build_command(self, prompt_file, merged_config, variables):
+                del prompt_file, merged_config, variables
+                records = [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "```markdown\n---\nstatus: ",
+                        "delta": True,
+                    },
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "complete\n---\n# Captured\n```",
+                        "delta": True,
+                    },
+                ]
+                script = (
+                    "import json; "
+                    f"records = {records!r}; "
+                    "[print(json.dumps(record)) for record in records]"
+                )
+                return [sys.executable, "-c", script]
+
+            def prepare_env(self, env, merged_config):
+                del merged_config
+                return env
+
+            def working_directory(self, merged_config):
+                del merged_config
+
+            def parse_result_event(self, line):
+                del line
+
+            def check_auth(self):
+                raise NotImplementedError
+
+            def auth_info(self):
+                return ""
+
+        monkeypatch.setitem(ADAPTER_REGISTRY, "capture-test", CaptureAdapter())
+        result = CliRunner().invoke(
+            app,
+            [
+                "run-process",
+                str(process_dir / "test.process.md"),
+                "--var",
+                f"RUNS_DIR={repo_dir / 'runs'}",
+                "--var",
+                "RUN_ID=test-run",
+                "--var",
+                f"OUTPUT_PATH={output_path}",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "captured final assistant response" in result.output
+        assert output_path.read_text() == "---\nstatus: complete\n---\n# Captured\n"
+
+    def test_agent_capture_retains_existing_frontmatter_output_for_tool_fallback(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        output_path = tmp_path / "result.md"
+        output_path.write_text("---\nstatus: complete\n---\n# Tool output\n")
+        log_path = tmp_path / "agent.jsonl"
+        log_path.write_text(
+            json.dumps(
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": "I wrote the requested artifact.",
+                }
+            )
+            + "\n"
+        )
+
+        published_path, response_was_published = _publish_captured_agent_response(
+            output_name="main",
+            effective_outputs={
+                "main": IOSpec(
+                    path=str(output_path),
+                    kind="file",
+                    format="frontmatter-md",
+                )
+            },
+            variables={},
+            process_dir=tmp_path,
+            log_path=log_path,
+        )
+
+        assert published_path == output_path
+        assert response_was_published is False
+        assert output_path.read_text() == "---\nstatus: complete\n---\n# Tool output\n"
 
 
 class TestGCPWorkerResumeAdoption:

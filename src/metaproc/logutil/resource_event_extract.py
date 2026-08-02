@@ -17,6 +17,7 @@ from metaproc.cloud.gcp.billing import billable_for_span
 from metaproc.logutil.parsing import LogEvent, LogFile
 from metaproc.logutil.throttling import ThrottleSpan, attribute_throttling
 from metaproc.logutil.tool_spans import ToolSpan, pair_tool_events
+from metaproc.logutil.usage import compute_cost, load_pricing
 from metaproc.models.node_ids import ROOT_SUBGRAPH_KEY, process_node_id, step_node_id
 from metaproc.models.resources import (
     BillingEvent,
@@ -404,6 +405,10 @@ def _usage_event_for_file(
             metrics.list_cost_usd = stats.cost_usd
         else:
             metrics.actual_cost_usd = stats.cost_usd
+    elif stats.model:
+        estimated_cost = compute_cost(stats, load_pricing())
+        if estimated_cost:
+            metrics.list_cost_usd = estimated_cost
 
     taxonomy = TaxonomyPaths(
         provider_path=["provider", stats.provider] if stats.provider else None,

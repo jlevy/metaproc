@@ -399,6 +399,7 @@ class TestExtractGeminiUsage:
                 "gemini-3.1-pro-preview-customtools": {
                     "total_tokens": 1238040,
                     "input_tokens": 1208999,
+                    "input": 153268,
                     "output_tokens": 18751,
                     "cached": 1055731,
                 },
@@ -413,21 +414,24 @@ class TestExtractGeminiUsage:
         result = extract_gemini_usage(stats_dict)
         assert len(result) == 2
         pro = next(r for r in result if r.model == "gemini-3.1-pro-preview-customtools")
-        assert pro.input_tokens == 1208999
-        assert pro.output_tokens == 18751
+        assert pro.input_tokens == 153268
+        assert pro.output_tokens == 29041
         assert pro.cache_read_tokens == 1055731
         assert pro.provider == "google"
 
     def test_aggregate_fallback(self) -> None:
         stats_dict = {
+            "total_tokens": 6500,
             "input_tokens": 5000,
+            "input": 4800,
             "output_tokens": 1000,
             "cached": 200,
             "tool_calls": 5,
         }
         result = extract_gemini_usage(stats_dict)
         assert len(result) == 1
-        assert result[0].input_tokens == 5000
+        assert result[0].input_tokens == 4800
+        assert result[0].output_tokens == 1500
         assert result[0].cache_read_tokens == 200
         assert result[0].tool_calls == 5
 
@@ -592,7 +596,8 @@ class TestLogFileUsageStats:
         lf.read_new_events()
 
         assert lf.usage_stats is not None
-        assert lf.usage_stats.input_tokens == 10000
+        assert lf.usage_stats.input_tokens == 2000
+        assert lf.usage_stats.input_tokens + lf.usage_stats.cache_read_tokens == 10000
         assert lf.usage_stats.output_tokens == 500
         assert lf.usage_stats.cache_read_tokens == 8000
         assert lf.usage_stats.cost_is_estimated is True

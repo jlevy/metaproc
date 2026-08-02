@@ -118,7 +118,7 @@ def plan(
     except (TypeError, ValueError) as exc:
         raise ValidationError(str(exc)) from exc
 
-    plan_data = {"plan": resolved_plan.model_dump(by_alias=True, exclude_none=True)}
+    plan_data = {"plan": resolved_plan.model_dump(by_alias=True, exclude_none=True, mode="json")}
     yaml_text = to_yaml_string(plan_data)
 
     if output:

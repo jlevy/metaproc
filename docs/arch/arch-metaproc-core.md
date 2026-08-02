@@ -958,8 +958,8 @@ Implemented CLI surface:
   fan-out step
 - `gcp logs <target>` -- stream Cloud Logging entries (auto-detect: local run dir or
   run-id)
-- `gcp cancel <target>` -- cancel running/queued Batch jobs (auto-detect: local run dir
-  or run-id)
+- `gcp cancel <target>` -- cancel running/queued Batch jobs (auto-detect: local run dir,
+  run ID, explicit Batch job resource, or `gcprun-*` ID)
 - `gcp runs` -- list all active metaproc runs across the project
 - `gcp self-install` -- install metaproc on a remote GCP VM via SSH
 - `gcp resources` -- show metaproc-related GCP assets via Cloud Asset Inventory
@@ -2592,10 +2592,16 @@ runs, Filestore NFS for all cloud-backed modes.
 
 **`run-config.yaml`** (`{run_dir}/.state/run-config.yaml`): written at run creation time
 with immutable run identity (process name, run_id, backend, variant, git SHA, creation
-timestamp). On resume, validated against current launch parameters -- process identity
-and run directory must match.
-Cross-topology resume (e.g. hybrid to full cloud) is allowed because they share the same
-authoritative filesystem.
+timestamp). On resume, the process identity and run-directory identity must match.
+A self-identifying `run_` or `coh_` partition may move under a different machine-local
+parent after receipt-verified synchronization; its typed component and any process
+suffix remain the identity.
+Legacy paths remain absolute except for known Filestore mount aliases.
+Cross-topology resume (e.g. hybrid to full cloud) is allowed because the same
+authoritative state is available at that identity.
+Step fingerprints apply the same normalization and hash referenced-file bytes
+independently of checkout location, so relocation alone does not invalidate
+already-verified outputs.
 
 **`orchestrator-lease.yaml`** (`{run_dir}/.state/orchestrator-lease.yaml`): records the
 current orchestrator owner and heartbeat so a second orchestrator will refuse to start

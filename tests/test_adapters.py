@@ -524,8 +524,11 @@ class TestGeminiCliAdapter:
         prompt = tmp_path / "prompt.md"
         prompt.write_text("Do something.")
         cmd = self.adapter.build_command(prompt, {}, {})
-        assert cmd[0] == "gemini"
+        assert cmd[0] == "/bin/sh"
+        assert "gemini" in cmd
         assert "-p" in cmd
+        assert f"@{prompt}" not in cmd
+        assert str(prompt) in cmd
 
     def test_build_command_bypass_permissions(self, tmp_path):
         prompt = tmp_path / "prompt.md"

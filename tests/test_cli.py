@@ -114,6 +114,32 @@ class TestPlanCommand:
         assert result.exit_code == 0
         assert "v1" in result.output
 
+    def test_plan_serializes_resource_budget_enums(self, tmp_path):
+        process_path = tmp_path / "budget.process.md"
+        process_path.write_text(
+            "---\n"
+            "process:\n"
+            "  name: budget-plan\n"
+            "  resource_budgets:\n"
+            "    - budget_id: bud_plan-run\n"
+            "      scope: {kind: run}\n"
+            "      metric: wall_time_s\n"
+            "      threshold: 60\n"
+            "      near_ratio: 0.8\n"
+            "      posture: warn\n"
+            "  steps:\n"
+            "    - id: s1\n"
+            "      mode: code\n"
+            "      handler: test.py:run\n"
+            "---\n"
+        )
+
+        result = runner.invoke(app, ["plan", str(process_path)])
+
+        assert result.exit_code == 0, result.output
+        assert "kind: run" in result.output
+        assert "posture: warn" in result.output
+
 
 class TestSoftschemaCommands:
     def test_softschema_validate_process_artifact(self, tmp_path):
