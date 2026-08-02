@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -209,7 +210,7 @@ def test_legacy_step_budgets_project_without_changing_step_fields() -> None:
 
     assert len(budgets) == 2
     assert {budget.metric for budget in budgets} == {"total_tokens", "actual_cost_usd"}
-    assert all(budget.budget_id.startswith("bud_") for budget in budgets)
+    assert all(re.fullmatch(r"bud_[a-z0-9]{14}", budget.budget_id) for budget in budgets)
     assert all(budget.scope.kind == "step" for budget in budgets)
     assert plan.steps[0].token_budget == 2_000
     assert plan.steps[0].max_budget_usd == 1.5

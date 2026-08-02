@@ -877,6 +877,22 @@ def _invalidate_downstream(
     return invalidated
 
 
+def _clear_step_invalidation_markers(run_dir: Path, step_id: str) -> None:
+    """Consume stale status markers after the whole step succeeds.
+
+    Fingerprint and ``--force`` invalidation preserve the prior status as a
+    ``*.yaml.stale`` marker so status inspection can explain why a step needs
+    to rerun. A successful replacement status supersedes those markers. This
+    cleanup runs at the orchestrator's step boundary so a partially successful
+    fan-out retains every invalidation marker until all items have completed.
+    """
+    step_state = _step_item_dir(run_dir, step_id)
+    if not step_state.is_dir():
+        return
+    for stale_path in step_state.rglob("*.yaml.stale"):
+        stale_path.unlink()
+
+
 # ── Ancestor verification ─────────────────────────────────────────
 
 
@@ -2372,6 +2388,7 @@ async def _orchestrate(
 
         elapsed = time.monotonic() - step_start
         if success:
+            _clear_step_invalidation_markers(run_dir, step_id)
             step_states[step_id] = {
                 "state": "completed",
                 "started_at": step_states[step_id].get("started_at"),
@@ -2441,6 +2458,9 @@ async def _orchestrate(
                 is_fan_out=target.fan_out is not None,
                 step=target,
             ):
+                # Repair runs completed by older orchestrators that wrote a
+                # replacement status but left the consumed invalidation marker.
+                _clear_step_invalidation_markers(run_dir, step_id)
                 completed_entry: dict[str, Any] = {
                     "state": "completed",
                     "note": "previously completed",

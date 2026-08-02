@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import textwrap
 from pathlib import Path
@@ -113,6 +114,7 @@ def test_finalizer_writes_machine_and_structured_human_reports_idempotently(
         state=FinalizationState.COMPLETED,
         trigger="terminal",
     )
+    assert re.fullmatch(r"use_[a-z0-9]{14}", first.usage_id or "")
     first_bytes = (
         resources_file(run_dir).read_bytes(),
         run_resource_events_file(run_dir).read_bytes(),

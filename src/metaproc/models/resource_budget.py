@@ -8,8 +8,6 @@ Metaproc already derives from typed resource events. Existing adapter-level
 
 from __future__ import annotations
 
-import base64
-import hashlib
 from collections.abc import Sequence
 from datetime import datetime
 from enum import StrEnum
@@ -17,7 +15,7 @@ from typing import TYPE_CHECKING, ClassVar, Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from metaproc.ids import new_typed_id, require_typed_id
+from metaproc.ids import derive_typed_id_from_key, require_typed_id
 
 if TYPE_CHECKING:
     from metaproc.models.plan import Plan
@@ -28,8 +26,6 @@ if TYPE_CHECKING:
         ResourceEvent,
         ResourcesDocument,
     )
-
-_DERIVED_BUDGET_DIGEST_BYTES = 20
 
 
 class BudgetStatus(StrEnum):
@@ -321,10 +317,8 @@ def _legacy_budget(
     threshold: float,
 ) -> ResourceBudgetSpec:
     identity = f"{plan.process}\x1f{step_id}\x1f{metric.value}"
-    digest = hashlib.sha256(identity.encode()).digest()
-    suffix = base64.b32encode(digest[:_DERIVED_BUDGET_DIGEST_BYTES]).decode().lower().rstrip("=")
     return ResourceBudgetSpec(
-        budget_id=new_typed_id("bud", unique_suffix=suffix),
+        budget_id=derive_typed_id_from_key("bud", identity),
         scope=BudgetScope(kind=BudgetScopeKind.STEP, key=step_id),
         metric=metric,
         threshold=threshold,

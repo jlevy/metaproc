@@ -1,10 +1,10 @@
-"""Run ID generation from a configurable template.
+"""Compact timestamped run-ID generation with a legacy template escape hatch.
 
-Default form: ``run_{timestamped_uid}-{process_slug}-{title_slug}``
+Default form: ``run_{timestamped_uid}``
 
 Uses ``strif.new_timestamped_uid()`` for the timestamped component, which produces
-IDs like ``20260408T003012Z-2555210000-foayjjh`` that sort chronologically and
-are globally unique.
+chronologically sortable, globally unique IDs. Process and title are run metadata, not
+identity components.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import re
 from strif import new_timestamped_uid
 
 from metaproc.config.env_vars import MetaprocEnv
-from metaproc.ids import new_typed_id
+from metaproc.ids import new_timestamped_typed_id
 
 
 def slugify(text: str, max_length: int = 60) -> str:
@@ -36,15 +36,12 @@ def generate_run_id(
         title: Optional human-readable title (e.g., "tech mix 500").
 
     Returns:
-        A run ID like ``run_20260408T003012Z-2555210000-foayjjh-mine-tech-mix-500``.
+        A run ID like ``run_20260408T003012Z-2555210000-foayjjh``.
     """
     template = MetaprocEnv.RUN_ID_TEMPLATE.read_str(default=None)
     title_slug = slugify(title) if title else ""
     if template is None:
-        safe_process_slug = slugify(process_slug)
-        raw = "-".join(
-            part for part in (new_typed_id("run"), safe_process_slug, title_slug) if part
-        )
+        raw = new_timestamped_typed_id("run")
     else:
         raw = template.format_map(
             {

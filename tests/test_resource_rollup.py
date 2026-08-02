@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -260,6 +261,7 @@ def test_generated_event_ids_are_stable_across_rebuilds(tmp_path: Path) -> None:
     second = build_resource_artifacts(bundle=bundle, run_dir=run_dir, run_id="run-1")
 
     assert [event.event_id for event in first.events] == [event.event_id for event in second.events]
+    assert all(re.fullmatch(r"evt_[a-z0-9]{14}", event.event_id or "") for event in first.events)
 
 
 def test_attributes_agent_log_to_owning_step(tmp_path: Path) -> None:

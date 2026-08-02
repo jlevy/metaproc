@@ -136,6 +136,30 @@ def test_edit_step2_runbook_cascades_to_step3_only(tmp_path: Path) -> None:
     assert s3_hash_v2 == s3_hash_v1
     assert _read_process_status_hash(run_dir, "s3") == s3_hash_v2
 
+    # A successful rerun consumes the invalidation marker. Keeping the old
+    # ``status.yaml.stale`` beside a new completed status makes the status
+    # surface claim the already-repaired step is still invalidated.
+    stale_markers = sorted(
+        path.relative_to(run_dir).as_posix()
+        for path in (run_dir / STATE_DIR / TASKS_SUBDIR).rglob("*.stale")
+    )
+    assert stale_markers == []
+
+    runner = CliRunner()
+    status = runner.invoke(app, ["status", str(run_dir), "--steps", "--format", "json"])
+    assert status.exit_code == 0, status.output
+    status_payload = yaml.safe_load(status.output)
+    assert {row["step_id"]: row["state"] for row in status_payload["steps"]} == {
+        "s1": "current",
+        "s2": "current",
+        "s3": "current",
+    }
+
+    # A third resume is clean: every repaired step is reused.
+    exit_code, output = _run(process_path, runs_dir, run_id)
+    assert exit_code == 0, f"third run failed: {output}"
+    assert invocations_path.read_text().splitlines() == ["s1", "s2", "s3", "s2", "s3"]
+
 
 def test_status_steps_works_from_unrelated_cwd(
     tmp_path: Path,

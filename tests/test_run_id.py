@@ -35,20 +35,18 @@ _UID_PATTERN = r"\d{8}T\d{6}Z-\d+-[a-z0-9]+"
 
 
 def test_generate_run_id_default_template() -> None:
-    """Default generation produces a typed run ID with readable context."""
+    """Default generation produces only the compact timestamped identity."""
     result = generate_run_id("mine", title="tech mix 500")
-    assert result.startswith("run_")
-    assert result.endswith("-mine-tech-mix-500")
-    assert re.search(_UID_PATTERN, result)
+    assert re.fullmatch(rf"run_{_UID_PATTERN}", result)
+    assert "mine" not in result
+    assert "tech-mix-500" not in result
 
 
 def test_generate_run_id_no_title() -> None:
-    """Without title, no trailing slug or doubled hyphens."""
+    """Process metadata does not alter the generated run identity."""
     result = generate_run_id("predict")
-    assert result.startswith("run_")
-    assert result.endswith("-predict")
-    assert not result.endswith("-")
-    assert "--" not in result
+    assert re.fullmatch(rf"run_{_UID_PATTERN}", result)
+    assert "predict" not in result
 
 
 def test_generate_run_id_custom_template(monkeypatch: pytest.MonkeyPatch) -> None:

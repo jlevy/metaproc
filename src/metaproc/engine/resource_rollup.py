@@ -36,8 +36,6 @@ Still intentionally limited:
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import json
 import logging
 from collections.abc import Iterable, Sequence
@@ -50,7 +48,7 @@ from pydantic import TypeAdapter
 from strif import atomic_output_file
 
 from metaproc.engine.resource_hierarchy import build_hierarchy_skeleton
-from metaproc.ids import new_typed_id, require_typed_id
+from metaproc.ids import derive_typed_id_from_key, require_typed_id
 from metaproc.io import iter_artifact_paths, logical_path
 from metaproc.logutil.agent_provider_meters import AgentProviderMeterSource
 from metaproc.logutil.log_path_owner import LogOwner, derive_owner_for_bundle
@@ -116,8 +114,6 @@ _ADDITIVE_METRIC_FIELDS = (
     "billable_vcpu_hours",
     "billable_memory_gib_hours",
 )
-
-_EVENT_ID_DIGEST_BYTES = 20
 
 
 @dataclass
@@ -1056,11 +1052,8 @@ def _ensure_event_id(event: ResourceEvent) -> ResourceEvent:
         update={"source": event.source.model_copy(update={"mtime_ns": None})}
     )
     payload = portable_event.model_dump(mode="json", exclude={"event_id"})
-    digest = hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    ).digest()
-    suffix = base64.b32encode(digest[:_EVENT_ID_DIGEST_BYTES]).decode().lower().rstrip("=")
-    event_id = new_typed_id("evt", unique_suffix=suffix)
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    event_id = derive_typed_id_from_key("evt", canonical)
     return _RESOURCE_EVENT_ADAPTER.validate_python(
         {**event.model_dump(mode="python"), "event_id": event_id}
     )

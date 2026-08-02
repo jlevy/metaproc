@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import hashlib
 import json
 import logging
 import subprocess
@@ -21,7 +19,7 @@ from metaproc.engine.resource_rollup import (
     build_resource_artifacts_from_events,
     write_resource_artifacts,
 )
-from metaproc.ids import new_typed_id
+from metaproc.ids import derive_typed_id_from_key
 from metaproc.io import atomic_output_file, iter_artifact_paths, read_yaml_file, to_yaml_string
 from metaproc.logutil.resource_events import read_events
 from metaproc.models.plan_bundle import PlanBundle
@@ -50,8 +48,6 @@ from metaproc.runpool.process_events import read_process_events
 from metaproc.runpool.status import read_status as read_pool_status
 
 log = logging.getLogger(__name__)
-
-_DERIVED_USAGE_DIGEST_BYTES = 20
 
 
 def state_for_terminal_error(error: BaseException | None) -> FinalizationState:
@@ -264,9 +260,7 @@ def _substantive_document(document: ResourcesDocument) -> dict[str, object]:
 
 
 def _derived_usage_id(run_id: str) -> str:
-    digest = hashlib.sha256(run_id.encode()).digest()
-    suffix = base64.b32encode(digest[:_DERIVED_USAGE_DIGEST_BYTES]).decode().lower().rstrip("=")
-    return new_typed_id("use", unique_suffix=suffix)
+    return derive_typed_id_from_key("use", run_id)
 
 
 def _state_from_local_terminal_evidence(
