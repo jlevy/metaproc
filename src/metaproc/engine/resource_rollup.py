@@ -52,6 +52,7 @@ from strif import atomic_output_file
 from metaproc.engine.resource_hierarchy import build_hierarchy_skeleton
 from metaproc.ids import new_typed_id, require_typed_id
 from metaproc.io import iter_artifact_paths, logical_path
+from metaproc.logutil.agent_provider_meters import AgentProviderMeterSource
 from metaproc.logutil.log_path_owner import LogOwner, derive_owner_for_bundle
 from metaproc.logutil.parsing import (
     LogEvent,
@@ -212,7 +213,10 @@ def build_resource_artifacts(
 
     generated_events_path = run_dir / source_events_path
     resource_sources = get_plugin_registry().resource_event_sources
-    provider_meter_sources = get_plugin_registry().provider_meter_sources
+    provider_meter_sources = [
+        AgentProviderMeterSource(),
+        *get_plugin_registry().provider_meter_sources,
+    ]
     external_paths = {path for source in resource_sources for path in source.discover(run_dir)}
     discovered = _discover_log_files(
         run_dir,
