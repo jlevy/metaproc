@@ -127,7 +127,7 @@ def test_first_call_builds_when_no_cache(tmp_path: Path) -> None:
     process_rel, run_dir_rel = _setup(tmp_path)
     status, payload = _call(run_dir=run_dir_rel, process=process_rel)
     assert status == 200, payload
-    assert payload["schema"] == "metaproc.resources/v1"
+    assert payload["schema"] == "metaproc.resources/v2"
     assert payload["hierarchy_root"]["node_type"] == "run"
     assert (tmp_path / run_dir_rel / "resources.json").exists()
 
@@ -137,6 +137,31 @@ def test_cached_call_does_not_require_process_param(tmp_path: Path) -> None:
     _call(run_dir=run_dir_rel, process=process_rel)  # prime cache
 
     status, payload = _call(run_dir=run_dir_rel)
+    assert status == 200
+    assert payload["schema"] == "metaproc.resources/v2"
+
+
+def test_cached_v1_document_remains_available_through_api(tmp_path: Path) -> None:
+    _process_rel, run_dir_rel = _setup(tmp_path)
+    cache = tmp_path / run_dir_rel / "resources.json"
+    cache.write_text(
+        json.dumps(
+            {
+                "schema": "metaproc.resources/v1",
+                "run_id": "run-legacy",
+                "generated_at": "2026-04-24T12:00:00Z",
+                "source_events_path": ".logs/resource-events.jsonl",
+                "hierarchy_root": {
+                    "node_type": "run",
+                    "node_id": "run-legacy",
+                    "label": "legacy",
+                },
+            }
+        )
+    )
+
+    status, payload = _call(run_dir=run_dir_rel)
+
     assert status == 200
     assert payload["schema"] == "metaproc.resources/v1"
 
@@ -161,7 +186,7 @@ def test_refresh_param_overwrites_existing_cache(tmp_path: Path) -> None:
 
     status, _ = _call(run_dir=run_dir_rel, process=process_rel, refresh="1")
     assert status == 200
-    assert json.loads(cache.read_text())["schema"] == "metaproc.resources/v1"
+    assert json.loads(cache.read_text())["schema"] == "metaproc.resources/v2"
 
 
 def test_cached_call_rejects_cache_symlink_outside_served_root(tmp_path: Path) -> None:
@@ -223,7 +248,7 @@ def test_stale_flag_set_when_events_log_newer_than_cache(tmp_path: Path) -> None
     status, payload = _call(run_dir=run_dir_rel)
     assert status == 200
     assert payload["stale"] is True
-    assert payload["schema"] == "metaproc.resources/v1"
+    assert payload["schema"] == "metaproc.resources/v2"
 
 
 def test_stale_flag_false_when_events_log_older_than_cache(tmp_path: Path) -> None:

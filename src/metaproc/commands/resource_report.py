@@ -22,8 +22,12 @@ from metaproc.engine.resource_rollup import build_resource_artifacts
 from metaproc.errors import CLIError
 from metaproc.models.resources import (
     Metrics,
+    MetricsV1,
     Node,
+    NodeV1,
+    ReadableResourcesDocument,
     ResourcesDocument,
+    read_resources_document_json,
 )
 from metaproc.output import OutputFormat
 from metaproc.viz_loader import load_plan_bundle
@@ -139,13 +143,13 @@ def _persist_document_atomic(document: ResourcesDocument, cache_path: Path) -> N
         tmp.write_text(document.model_dump_json(by_alias=True, indent=2))
 
 
-def _read_cached(cache_path: Path) -> ResourcesDocument:
+def _read_cached(cache_path: Path) -> ReadableResourcesDocument:
     try:
         raw = cache_path.read_text()
     except OSError as exc:
         raise CLIError(f"Failed to read {cache_path}: {exc}") from exc
     try:
-        return ResourcesDocument.model_validate_json(raw)
+        return read_resources_document_json(raw)
     except Exception as exc:  # noqa: BLE001
         raise CLIError(
             f"Cached resources.json is malformed at {cache_path} ({exc!s}); "
@@ -153,7 +157,7 @@ def _read_cached(cache_path: Path) -> ResourcesDocument:
         ) from exc
 
 
-def _render_tree(document: ResourcesDocument) -> str:
+def _render_tree(document: ReadableResourcesDocument) -> str:
     lines: list[str] = [
         f"resource-report run={document.run_id} schema={document.schema_version}",
         f"generated_at={document.generated_at.isoformat()}",
@@ -182,7 +186,7 @@ def _render_tree(document: ResourcesDocument) -> str:
     return "\n".join(lines)
 
 
-def _render_node(lines: list[str], node: Node, *, indent: int) -> None:
+def _render_node(lines: list[str], node: Node | NodeV1, *, indent: int) -> None:
     pad = "  " * indent
     summary = _summary_value(node.total_metrics)
     lines.append(f"{pad}- [{node.node_type}] {node.label} ({node.node_id}) — {summary}")
@@ -190,7 +194,7 @@ def _render_node(lines: list[str], node: Node, *, indent: int) -> None:
         _render_node(lines, child, indent=indent + 1)
 
 
-def _summary_value(metrics: Metrics) -> str:
+def _summary_value(metrics: Metrics | MetricsV1) -> str:
     parts: list[str] = []
     if metrics.wall_time_s is not None:
         parts.append(f"wall={metrics.wall_time_s:.2f}s")

@@ -10,7 +10,7 @@ from softschema import Contract, SchemaStatus
 
 from metaproc.io.frontmatter import ENVELOPE_MAP
 from metaproc.models.authored import ProcessStep
-from metaproc.models.resources import HierarchyRef, ResourceEvent
+from metaproc.models.resources import HierarchyRef, ProviderMeterObservation, ResourceEvent
 from metaproc.models.runtime import get_terminal_statuses
 from metaproc.models.usage import ToolRunProfile
 from metaproc.models.viz import NodeDecoration, StepDetails, VizNode
@@ -163,17 +163,26 @@ class TestPluginRegistry:
                 _ = (paths, variant_fn)
                 return {}
 
+        class FakeProviderMeterSource:
+            name = "fake"
+
+            def extract(self, **_kwargs: object) -> Sequence[ProviderMeterObservation]:
+                return []
+
         reg.register_adapter_config_transform(adapter_transform)
         reg.register_execution_env_transform(env_transform)
         reg.register_resource_event_source(FakeResourceSource())
+        reg.register_provider_meter_source(FakeProviderMeterSource())
         reg.register_tool_profile_source(FakeToolProfileSource())
         reg.register_resource_event_source(FakeResourceSource())
+        reg.register_provider_meter_source(FakeProviderMeterSource())
         reg.register_tool_profile_source(FakeToolProfileSource())
         reg.register_quality_directives({"research": ("setup.md", "sources.json")})
 
         assert reg.adapter_config_transforms == [adapter_transform]
         assert reg.execution_env_transforms == [env_transform]
         assert reg.resource_event_sources[0].name == "fake"
+        assert reg.provider_meter_sources[0].name == "fake"
         assert reg.tool_profile_sources[0].name == "fake"
         assert reg.quality_directives["research"] == ("setup.md", "sources.json")
 

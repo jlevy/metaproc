@@ -10,13 +10,19 @@ from pydantic import ValidationError
 
 from metaproc.models.resources import (
     SCHEMA_V1,
+    SCHEMA_V2,
+    CoverageState,
     LogSummary,
+    MeterKey,
+    MeterRollup,
     Metrics,
     Node,
     PrefixRollup,
     ResourcesDocument,
+    ResourcesDocumentV1,
     SourceLog,
     SourceRef,
+    read_resources_document_json,
 )
 
 
@@ -66,10 +72,10 @@ def test_schema_field_persists_under_alias() -> None:
     """Per §4.4.2 the persisted top-level field is literally ``schema``."""
     doc = _doc()
     dumped = doc.model_dump(mode="json", by_alias=True)
-    assert dumped["schema"] == SCHEMA_V1
+    assert dumped["schema"] == SCHEMA_V2
 
 
-def test_schema_field_pinned_to_v1() -> None:
+def test_schema_field_pinned_to_v2() -> None:
     with pytest.raises(ValidationError):
         ResourcesDocument.model_validate(
             {
@@ -155,6 +161,68 @@ def test_round_trip_serialisation() -> None:
     assert restored.run_id == "run-1"
     assert restored.source_logs[0].adapter == "claude"
     assert restored.unattributed.actual_cost_usd == 0.05
+
+
+def test_v1_document_has_a_strict_compatibility_reader() -> None:
+    legacy = ResourcesDocumentV1.model_validate(
+        {
+            "schema": SCHEMA_V1,
+            "run_id": "run-1",
+            "generated_at": _ts(),
+            "source_events_path": ".logs/resource-events.jsonl",
+            "hierarchy_root": _root_with_one_step().model_dump(exclude_defaults=True),
+        }
+    )
+
+    restored = read_resources_document_json(legacy.model_dump_json(by_alias=True))
+
+    assert isinstance(restored, ResourcesDocumentV1)
+    assert restored.schema_version == SCHEMA_V1
+    assert restored.run_id == "run-1"
+
+
+def test_v1_reader_rejects_v2_metrics_and_meters() -> None:
+    payload = {
+        "schema": SCHEMA_V1,
+        "run_id": "run-1",
+        "generated_at": _ts().isoformat(),
+        "source_events_path": ".logs/resource-events.jsonl",
+        "hierarchy_root": {
+            "node_type": "run",
+            "node_id": "run-1",
+            "label": "run-1",
+            "self_metrics": {"api_requests": 1},
+            "self_meters": [],
+        },
+    }
+
+    with pytest.raises(ValidationError):
+        read_resources_document_json(json.dumps(payload))
+
+
+def test_v2_document_carries_node_and_document_meter_rollups() -> None:
+    key = MeterKey(
+        provider="serpapi",
+        product="google_trends",
+        meter="credits",
+        unit="credit",
+    )
+    rollup = MeterRollup(
+        key=key,
+        coverage=CoverageState.MEASURED,
+        actual_quantity=4,
+        source_event_ids=["evt_panel-1", "evt_panel-2"],
+    )
+    root = _root_with_one_step().model_copy(
+        update={"self_meters": [rollup], "total_meters": [rollup]}
+    )
+    doc = _doc(hierarchy_root=root, meter_rollups=[rollup])
+
+    restored = ResourcesDocument.model_validate_json(doc.model_dump_json(by_alias=True))
+
+    assert restored.schema_version == SCHEMA_V2
+    assert restored.meter_rollups[0].key.unit == "credit"
+    assert restored.hierarchy_root.total_meters[0].actual_quantity == 4
 
 
 def test_unknown_top_level_field_rejected() -> None:

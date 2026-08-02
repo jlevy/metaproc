@@ -81,7 +81,7 @@ def test_first_invocation_builds_and_persists_resources_json(tmp_path: Path) -> 
     cached = run_dir / "resources.json"
     assert cached.exists()
     payload = json.loads(cached.read_text())
-    assert payload["schema"] == "metaproc.resources/v1"
+    assert payload["schema"] == "metaproc.resources/v2"
     assert "[run]" in result.output
 
 
@@ -103,6 +103,31 @@ def test_subsequent_invocation_reads_cached_resources_json(tmp_path: Path) -> No
     result = runner.invoke(app, ["resource-report", str(run_dir)])
     assert result.exit_code == 0, result.output
     assert "schema=" in result.output
+
+
+def test_cached_v1_resource_document_remains_readable(tmp_path: Path) -> None:
+    run_dir = tmp_path / "runs" / "legacy"
+    run_dir.mkdir(parents=True)
+    (run_dir / "resources.json").write_text(
+        json.dumps(
+            {
+                "schema": "metaproc.resources/v1",
+                "run_id": "run-legacy",
+                "generated_at": "2026-04-24T12:00:00Z",
+                "source_events_path": ".logs/resource-events.jsonl",
+                "hierarchy_root": {
+                    "node_type": "run",
+                    "node_id": "run-legacy",
+                    "label": "legacy",
+                },
+            }
+        )
+    )
+
+    result = runner.invoke(app, ["resource-report", str(run_dir)])
+
+    assert result.exit_code == 0, result.output
+    assert "schema=metaproc.resources/v1" in result.output
 
 
 def test_missing_spec_on_first_build_returns_clean_error(tmp_path: Path) -> None:
@@ -130,7 +155,7 @@ def test_json_flag_emits_valid_resources_document(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["schema"] == "metaproc.resources/v1"
+    assert payload["schema"] == "metaproc.resources/v2"
     assert payload["run_id"] == run_dir.name
     assert payload["hierarchy_root"]["node_type"] == "run"
 
@@ -154,7 +179,7 @@ def test_refresh_rebuilds_even_when_cache_present(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.output
     payload = json.loads(cached.read_text())
-    assert payload.get("schema") == "metaproc.resources/v1"
+    assert payload.get("schema") == "metaproc.resources/v2"
 
 
 def test_does_not_shadow_existing_resources_command(tmp_path: Path) -> None:

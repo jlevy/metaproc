@@ -11,11 +11,15 @@ from pydantic import TypeAdapter, ValidationError
 from metaproc.logutil.tool_failures import FailureKind
 from metaproc.models.resources import (
     BillingEvent,
+    CoverageState,
     HierarchyRef,
     ItemCompleteEvent,
     ItemFailEvent,
     ItemStartEvent,
+    MeteredQuantity,
+    MeterKey,
     Metrics,
+    ProviderRef,
     ResourceEvent,
     SampleEvent,
     SourceRef,
@@ -47,6 +51,98 @@ def test_metrics_null_vs_zero() -> None:
     m = Metrics(wall_time_s=0.0, input_tokens=None)
     assert m.wall_time_s == 0.0
     assert m.input_tokens is None
+
+
+def test_api_metrics_preserve_unmeasured_and_measured_zero() -> None:
+    missing = Metrics()
+    measured_zero = Metrics(
+        api_requests=0,
+        api_failures=0,
+        retries=0,
+        cache_hits=0,
+        cache_misses=0,
+    )
+
+    assert missing.api_requests is None
+    assert measured_zero.api_requests == 0
+    assert measured_zero.api_failures == 0
+    assert measured_zero.retries == 0
+    assert measured_zero.cache_hits == 0
+    assert measured_zero.cache_misses == 0
+
+
+def test_metered_quantity_separates_actual_estimated_and_unmeasured() -> None:
+    key = MeterKey(
+        provider="serpapi",
+        product="google_trends",
+        meter="requests",
+        unit="request",
+    )
+
+    measured = MeteredQuantity(key=key, coverage=CoverageState.MEASURED, actual_quantity=0)
+    estimated = MeteredQuantity(
+        key=key,
+        coverage=CoverageState.ESTIMATED,
+        estimated_quantity=1.5,
+    )
+    unmeasured = MeteredQuantity(key=key, coverage=CoverageState.UNMEASURED)
+
+    assert measured.actual_quantity == 0
+    assert measured.estimated_quantity is None
+    assert estimated.actual_quantity is None
+    assert estimated.estimated_quantity == 1.5
+    assert unmeasured.actual_quantity is None
+    assert unmeasured.estimated_quantity is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"coverage": "measured"},
+        {"coverage": "measured", "estimated_quantity": 1},
+        {"coverage": "estimated", "actual_quantity": 1},
+        {"coverage": "unmeasured", "actual_quantity": 0},
+    ],
+)
+def test_metered_quantity_rejects_crossed_coverage_fields(payload: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        MeteredQuantity.model_validate(
+            {
+                "key": {
+                    "provider": "serpapi",
+                    "product": "google_trends",
+                    "meter": "requests",
+                    "unit": "request",
+                },
+                **payload,
+            }
+        )
+
+
+def test_provider_models_have_no_secret_or_request_body_surface() -> None:
+    with pytest.raises(ValidationError):
+        ProviderRef.model_validate(
+            {
+                "provider": "google",
+                "product": "gemini",
+                "model": "gemini-2.5-flash",
+                "api_key": "secret",
+            }
+        )
+    with pytest.raises(ValidationError):
+        MeteredQuantity.model_validate(
+            {
+                "key": {
+                    "provider": "google",
+                    "product": "gemini",
+                    "meter": "requests",
+                    "unit": "request",
+                },
+                "coverage": "measured",
+                "actual_quantity": 1,
+                "request_body": {"prompt": "secret"},
+            }
+        )
 
 
 def test_metrics_rejects_unknown_fields() -> None:
@@ -137,6 +233,51 @@ def test_resource_event_union_round_trip() -> None:
     parsed = adapter.validate_json(serialised)
     assert isinstance(parsed, ItemStartEvent)
     assert parsed.hierarchy.item_key == "AAPL"
+
+
+def test_resource_event_round_trip_preserves_provider_and_meters() -> None:
+    adapter: TypeAdapter[ResourceEvent] = TypeAdapter(ResourceEvent)
+    original = UsageEvent(
+        event_id="evt_usage-1",
+        ts=_ts(),
+        hierarchy=_hier(),
+        source=_src(),
+        provider=ProviderRef(
+            provider="google",
+            product="gemini",
+            model="gemini-2.5-flash",
+            request_id="req_123",
+        ),
+        meters=[
+            MeteredQuantity(
+                key=MeterKey(
+                    provider="google",
+                    product="gemini",
+                    meter="requests",
+                    unit="request",
+                ),
+                coverage=CoverageState.MEASURED,
+                actual_quantity=1,
+            )
+        ],
+    )
+
+    parsed = adapter.validate_json(adapter.dump_json(original))
+    assert isinstance(parsed, UsageEvent)
+    assert parsed.event_id == "evt_usage-1"
+    assert parsed.provider is not None
+    assert parsed.provider.model == "gemini-2.5-flash"
+    assert parsed.meters[0].actual_quantity == 1
+
+
+def test_resource_event_rejects_untyped_event_id() -> None:
+    with pytest.raises(ValidationError):
+        UsageEvent(
+            event_id="5f6c9a",
+            ts=_ts(),
+            hierarchy=_hier(),
+            source=_src(),
+        )
 
 
 def test_unknown_event_discriminator_rejected() -> None:

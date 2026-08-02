@@ -15,10 +15,15 @@ from metaproc.engine.resource_rollup import (
 from metaproc.logutil.parsing import LogEvent, LogFile
 from metaproc.logutil.resource_event_extract import extract_resource_events
 from metaproc.models.resources import (
+    CoverageState,
     HierarchyRef,
     ItemCompleteEvent,
     ItemFailEvent,
     ItemStartEvent,
+    MeteredQuantity,
+    MeterKey,
+    ProviderMeterObservation,
+    ProviderRef,
     ResourcesDocument,
     ToolCallEvent,
     UsageEvent,
@@ -191,6 +196,63 @@ def test_pi_agent_end_emits_usage_event(tmp_path: Path) -> None:
     # Pi parser routes input/output token totals through UsageStats.
     assert u.metrics.input_tokens == 100
     assert u.metrics.output_tokens == 50
+    assert u.provider is not None
+    assert u.provider.provider == "anthropic"
+    request_meter = next(meter for meter in u.meters if meter.key.meter == "requests")
+    assert request_meter.coverage is CoverageState.UNMEASURED
+    assert request_meter.actual_quantity is None
+
+
+def test_registered_provider_meter_source_emits_authoritative_nested_observation(
+    tmp_path: Path,
+) -> None:
+    class FakeProviderMeterSource:
+        name = "fake-provider-meter"
+
+        def extract(self, **_kwargs: object) -> list[ProviderMeterObservation]:
+            return [
+                ProviderMeterObservation(
+                    event_id="evt_nested-1",
+                    provider=ProviderRef(
+                        provider="serpapi",
+                        product="google_trends",
+                        request_id="req_123",
+                    ),
+                    api_requests=1,
+                    meters=[
+                        MeteredQuantity(
+                            key=MeterKey(
+                                provider="serpapi",
+                                product="google_trends",
+                                meter="credits",
+                                unit="credit",
+                            ),
+                            coverage=CoverageState.MEASURED,
+                            actual_quantity=1,
+                        )
+                    ],
+                )
+            ]
+
+    log_path = tmp_path / "session.jsonl"
+    events = extract_resource_events(
+        log_path=log_path,
+        log_file=LogFile(log_path, color_idx=0),
+        log_events=[],
+        hierarchy=HierarchyRef(run_id="run-1"),
+        source_kind="agent_log",
+        source_path=".logs/session.jsonl",
+        provider_meter_sources=[FakeProviderMeterSource()],
+    )
+
+    assert len(events) == 1
+    observation = events[0]
+    assert isinstance(observation, UsageEvent)
+    assert observation.event_id == "evt_nested-1"
+    assert observation.metrics.api_requests == 1
+    assert observation.provider is not None
+    assert observation.provider.request_id == "req_123"
+    assert observation.meters[0].actual_quantity == 1
 
 
 def test_event_carries_step_and_item_attribution(tmp_path: Path) -> None:

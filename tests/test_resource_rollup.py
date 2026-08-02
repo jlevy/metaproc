@@ -3,13 +3,32 @@
 from __future__ import annotations
 
 import json
+import os
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from metaproc.engine.resource_rollup import build_resources_document
+from metaproc.engine import resource_rollup
+from metaproc.engine.resource_rollup import (
+    aggregate_meter_rollups,
+    build_resource_artifacts,
+    build_resources_document,
+)
 from metaproc.io.state_io import write_status_at
-from metaproc.models.resources import ResourcesDocument
+from metaproc.models.resources import (
+    CoverageState,
+    HierarchyRef,
+    MeteredQuantity,
+    MeterKey,
+    Metrics,
+    ProviderRef,
+    ResourceEvent,
+    ResourcesDocument,
+    SourceRef,
+    UsageEvent,
+)
 from metaproc.models.runtime import StatusRecord
 from metaproc.viz_loader import load_plan_bundle
 
@@ -103,7 +122,7 @@ def _make_claude_log(path: Path) -> None:
     path.write_text("\n".join(lines) + "\n")
 
 
-def test_document_has_root_run_node_and_v1_schema(tmp_path: Path) -> None:
+def test_document_has_root_run_node_and_v2_schema(tmp_path: Path) -> None:
     parent = _write(tmp_path, "parent/test.process.md", _PARENT_PROCESS)
     _write(tmp_path, "parent/child/test.process.md", _CHILD_PROCESS)
     bundle = load_plan_bundle(parent, params={"CUTOFF_DATE": "2026-04-21"})
@@ -118,7 +137,129 @@ def test_document_has_root_run_node_and_v1_schema(tmp_path: Path) -> None:
     assert doc.hierarchy_root.node_id == "run-1"
     assert doc.source_logs == []  # no logs yet
     payload = doc.model_dump_json(by_alias=True)
-    assert json.loads(payload)["schema"] == "metaproc.resources/v1"
+    assert json.loads(payload)["schema"] == "metaproc.resources/v2"
+
+
+def _meter(unit: str, coverage: CoverageState, quantity: float | None) -> MeteredQuantity:
+    values: dict[str, object] = {
+        "key": MeterKey(
+            provider="serpapi",
+            product="google_trends",
+            meter="requests",
+            unit=unit,
+        ),
+        "coverage": coverage,
+    }
+    if coverage is CoverageState.MEASURED:
+        values["actual_quantity"] = quantity
+    elif coverage is CoverageState.ESTIMATED:
+        values["estimated_quantity"] = quantity
+    return MeteredQuantity.model_validate(values)
+
+
+def test_meter_rollup_uses_exact_keys_and_deduplicates_event_ids() -> None:
+    request = _meter("request", CoverageState.MEASURED, 1)
+    credit = _meter("credit", CoverageState.MEASURED, 1)
+
+    rollups = aggregate_meter_rollups(
+        [
+            ("evt_request-1", [request, credit]),
+            ("evt_request-1", [request, credit]),
+            ("evt_request-2", [request]),
+        ]
+    )
+
+    assert [(rollup.key.unit, rollup.actual_quantity) for rollup in rollups] == [
+        ("credit", 1),
+        ("request", 2),
+    ]
+
+
+def test_meter_rollup_preserves_estimates_and_coverage_gaps() -> None:
+    rollups = aggregate_meter_rollups(
+        [
+            ("evt_estimate-1", [_meter("request", CoverageState.ESTIMATED, 2)]),
+            ("evt_gap-1", [_meter("request", CoverageState.UNMEASURED, None)]),
+        ]
+    )
+
+    assert len(rollups) == 1
+    rollup = rollups[0]
+    assert rollup.coverage is CoverageState.UNMEASURED
+    assert rollup.actual_quantity is None
+    assert rollup.estimated_quantity == 2
+    assert rollup.unmeasured_event_count == 1
+
+
+def test_meter_rollup_rejects_conflicting_duplicate_event_identity() -> None:
+    with pytest.raises(ValueError, match="duplicate resource event identity"):
+        aggregate_meter_rollups(
+            [
+                ("evt_request-1", [_meter("request", CoverageState.MEASURED, 1)]),
+                ("evt_request-1", [_meter("request", CoverageState.MEASURED, 2)]),
+            ]
+        )
+
+
+def test_builder_deduplicates_provider_events_and_propagates_meters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = _write(tmp_path, "predict/test.process.md", _PREDICT_PROCESS)
+    bundle = load_plan_bundle(parent)
+    run_dir = tmp_path / "runs" / "2026-04-21"
+    source_path = run_dir / ".logs" / "provider-events.jsonl"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text("{}\n")
+
+    event = UsageEvent(
+        event_id="evt_request-1",
+        ts=datetime(2026, 4, 24, 12, 0, tzinfo=UTC),
+        hierarchy=HierarchyRef(run_id="run-1", step_node_id="predict"),
+        source=SourceRef(kind="provider", path=".logs/provider-events.jsonl"),
+        provider=ProviderRef(provider="serpapi", product="google_trends"),
+        metrics=Metrics(api_requests=1),
+        meters=[_meter("credit", CoverageState.MEASURED, 1)],
+    )
+
+    class FakeResourceSource:
+        name = "provider"
+        source_kind = "provider"
+        adapter = "provider"
+
+        def discover(self, _run_dir: Path) -> Sequence[Path]:
+            return [source_path]
+
+        def extract(self, **_kwargs: object) -> Sequence[ResourceEvent]:
+            return [event, event.model_copy(deep=True)]
+
+    class FakeRegistry:
+        resource_event_sources = [FakeResourceSource()]
+        provider_meter_sources: list[object] = []
+
+    monkeypatch.setattr(resource_rollup, "get_plugin_registry", FakeRegistry)
+
+    result = build_resource_artifacts(bundle=bundle, run_dir=run_dir, run_id="run-1")
+
+    assert len(result.events) == 1
+    assert result.document.hierarchy_root.total_metrics.api_requests == 1
+    assert len(result.document.meter_rollups) == 1
+    assert result.document.meter_rollups[0].actual_quantity == 1
+    assert result.document.hierarchy_root.total_meters == result.document.meter_rollups
+
+
+def test_generated_event_ids_are_stable_across_rebuilds(tmp_path: Path) -> None:
+    parent = _write(tmp_path, "predict/test.process.md", _PREDICT_PROCESS)
+    bundle = load_plan_bundle(parent)
+    run_dir = tmp_path / "runs" / "2026-04-21"
+    _make_claude_log(run_dir / "predict" / ".logs" / "session.jsonl")
+
+    first = build_resource_artifacts(bundle=bundle, run_dir=run_dir, run_id="run-1")
+    log_path = run_dir / "predict" / ".logs" / "session.jsonl"
+    original_mtime = log_path.stat().st_mtime
+    os.utime(log_path, (original_mtime + 30, original_mtime + 30))
+    second = build_resource_artifacts(bundle=bundle, run_dir=run_dir, run_id="run-1")
+
+    assert [event.event_id for event in first.events] == [event.event_id for event in second.events]
 
 
 def test_attributes_agent_log_to_owning_step(tmp_path: Path) -> None:

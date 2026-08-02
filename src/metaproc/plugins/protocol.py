@@ -15,8 +15,13 @@ from softschema import Contract
 from metaproc.models.viz import NodeDecoration, VizNode
 
 if TYPE_CHECKING:
+    from metaproc.logutil.parsing import LogEvent, LogFile
     from metaproc.models.authored import ProcessStep
-    from metaproc.models.resources import HierarchyRef, ResourceEvent
+    from metaproc.models.resources import (
+        HierarchyRef,
+        ProviderMeterObservation,
+        ResourceEvent,
+    )
     from metaproc.models.usage import ToolRunProfile
 
 
@@ -45,6 +50,22 @@ class ResourceEventSource(Protocol):
         source_size_bytes: int | None = None,
         source_mtime_ns: int | None = None,
     ) -> Sequence[ResourceEvent]: ...
+
+
+class ProviderMeterSource(Protocol):
+    """Consumer-owned extractor for sanitized nested provider observations."""
+
+    name: str
+
+    def extract(
+        self,
+        *,
+        log_path: Path,
+        log_file: LogFile,
+        log_events: Sequence[LogEvent],
+        hierarchy: HierarchyRef,
+        source_path: str,
+    ) -> Sequence[ProviderMeterObservation]: ...
 
 
 class ToolProfileSource(Protocol):
@@ -103,6 +124,7 @@ class PluginRegistry(Protocol):
     def register_adapter_config_transform(self, transform: AdapterConfigTransform) -> None: ...
     def register_execution_env_transform(self, transform: ExecutionEnvTransform) -> None: ...
     def register_resource_event_source(self, source: ResourceEventSource) -> None: ...
+    def register_provider_meter_source(self, source: ProviderMeterSource) -> None: ...
     def register_tool_profile_source(self, source: ToolProfileSource) -> None: ...
     def register_bootstrap_env(self, defaults: Mapping[str, str]) -> None: ...
     def register_shell_command_classifier(self, classifier: ShellCommandClassifier) -> None: ...

@@ -70,7 +70,7 @@ by the trace extractor as a fallback; new runs do not emit it.
 
 | Filename | Path | Schema (Pydantic) | Lifecycle | Writer | Primary readers |
 | --- | --- | --- | --- | --- | --- |
-| `resources.json` | `<run>/` | `ResourcesDocument` (`metaproc:ResourcesDocument/v1`) | atomic, once or on refresh | `engine/resource_rollup.py:write_resource_artifacts` | metabrowser `/api/resources`, `metaproc resource-report` |
+| `resources.json` | `<run>/` | `ResourcesDocument` (`metaproc.resources/v2`; strict V1 reader retained) | atomic, once or on refresh | `engine/resource_rollup.py:write_resource_artifacts` | metabrowser `/api/resources`, `metaproc resource-report` |
 | `*.invocation.json` (sidecar) | `<run>/.state/tasks/<step>/<item>/<attempt>/` | ad-hoc dict | atomic, once before spawn | `runpool/backend.py:write_invocation_sidecar` | trace claude_agent extractor, human debugging |
 | tool cache `*.json` | `<run>/.logs/tools/<tool-name>/cache/...` (typical) | ad-hoc (externally-owned upstream payload) | atomic, once per cache miss | consumer plugin | tool wrapper on re-run |
 
@@ -129,6 +129,8 @@ Pending envelope/schema hygiene (separate plan, listed for completeness):
 - [conventions.md §Harness-Owned Runtime Artifacts](conventions.md#harness-owned-runtime-artifacts)
   — the three-branch run-directory layout.
 - [`metaproc.paths`](../src/metaproc/paths.py) — programmatic filename registry.
+- [resource-rollup.md](resource-rollup.md) — hierarchy, meter coverage, event identity,
+  and provider-extension contracts.
 - [`metaproc.io.frontmatter`](../src/metaproc/io/frontmatter.py) — `ENVELOPE_MAP` and
   softschema auto-detection.
 - [metaproc-operator-reference.md](../src/metaproc/docs/metaproc-operator-reference.md)

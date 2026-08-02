@@ -9,6 +9,7 @@ local samples, and billing estimates.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -19,11 +20,16 @@ from metaproc.logutil.tool_spans import ToolSpan, pair_tool_events
 from metaproc.models.node_ids import ROOT_SUBGRAPH_KEY, process_node_id, step_node_id
 from metaproc.models.resources import (
     BillingEvent,
+    CoverageState,
     HierarchyRef,
     ItemCompleteEvent,
     ItemFailEvent,
     ItemStartEvent,
+    MeteredQuantity,
+    MeterKey,
     Metrics,
+    ProviderMeterObservation,
+    ProviderRef,
     ResourceEvent,
     SampleEvent,
     SourceKind,
@@ -33,6 +39,7 @@ from metaproc.models.resources import (
     UsageEvent,
     WaitEvent,
 )
+from metaproc.plugins.protocol import ProviderMeterSource
 
 
 def extract_resource_events(
@@ -45,6 +52,7 @@ def extract_resource_events(
     source_path: str,
     source_size_bytes: int | None = None,
     source_mtime_ns: int | None = None,
+    provider_meter_sources: Sequence[ProviderMeterSource] = (),
 ) -> list[ResourceEvent]:
     """Return one typed `ResourceEvent` per attributable atom in ``log_events``.
 
@@ -72,10 +80,38 @@ def extract_resource_events(
             continue
         out.append(_wait_event(throttle_span, hierarchy, base_source))
 
-    # Session-level usage (one event per file when LogFile picked up usage_stats)
-    usage_event = _usage_event_for_file(log_file, hierarchy, base_source)
+    provider_observations: list[ProviderMeterObservation] = []
+    for provider_source in provider_meter_sources:
+        provider_observations.extend(
+            provider_source.extract(
+                log_path=log_path,
+                log_file=log_file,
+                log_events=log_events,
+                hierarchy=hierarchy,
+                source_path=source_path,
+            )
+        )
+
+    # Session-level usage (one event per file when LogFile picked up usage_stats).
+    # Provider-specific observations below remain separate child evidence so nested
+    # requests never inflate the agent session's token or cost totals.
+    authoritative_keys = {
+        meter.key.sort_key()
+        for observation in provider_observations
+        for meter in observation.meters
+    }
+    usage_event = _usage_event_for_file(
+        log_file,
+        hierarchy,
+        base_source,
+        authoritative_meter_keys=authoritative_keys,
+    )
     if usage_event is not None:
         out.append(usage_event)
+    out.extend(
+        _provider_observation_event(observation, hierarchy, base_source)
+        for observation in provider_observations
+    )
 
     # Runpool process_exit → Sample (always) + Billing (when machine_type known)
     if source_kind == "runpool_events":
@@ -109,7 +145,7 @@ def _item_lifecycle_events_from_log(
         item_hierarchy = _hierarchy_from_process_event(raw, hierarchy)
         elapsed_s = _float_or_none(raw.get("elapsed_s"))
         metrics = Metrics(wall_time_s=elapsed_s) if elapsed_s is not None else Metrics()
-        ts_value = _ts_from_event(ev)
+        ts_value = _ts_from_event(ev, source)
 
         if event_type == "item_start":
             out.append(
@@ -203,7 +239,7 @@ def _runpool_events_from_log(
 
         elapsed_s = _float_or_none(raw.get("elapsed_s"))
         peak_rss = _int_or_none(raw.get("peak_rss_bytes"))
-        ts_value = _ts_from_event(ev)
+        ts_value = _ts_from_event(ev, source)
 
         out.append(
             SampleEvent(
@@ -256,13 +292,13 @@ def _runpool_events_from_log(
     return out
 
 
-def _ts_from_event(ev: LogEvent) -> datetime:
+def _ts_from_event(ev: LogEvent, source: SourceRef) -> datetime:
     if ev.timestamp:
         try:
             return datetime.fromisoformat(ev.timestamp)
         except ValueError:
             pass
-    return _now_utc()
+    return _source_timestamp(source)
 
 
 def _float_or_none(value: object) -> float | None:
@@ -290,7 +326,7 @@ def _tool_call_event(span: ToolSpan, hierarchy: HierarchyRef, source: SourceRef)
     taxonomy = TaxonomyPaths(tool_path=list(span.tool_path))
     span_hierarchy = hierarchy.model_copy(update={"tool_name": span.tool_name})
     return ToolCallEvent(
-        ts=span.ended_at or span.started_at or _now_utc(),
+        ts=span.ended_at or span.started_at or _source_timestamp(source),
         span_id=_tool_span_id(span),
         hierarchy=span_hierarchy,
         metrics=metrics,
@@ -315,7 +351,7 @@ def _wait_event(span: ThrottleSpan, hierarchy: HierarchyRef, source: SourceRef) 
         provider_path=["provider", span.provider] if span.provider else None,
     )
     return WaitEvent(
-        ts=span.ended_at or span.started_at or _now_utc(),
+        ts=span.ended_at or span.started_at or _source_timestamp(source),
         span_id=_throttle_span_id(span),
         hierarchy=hierarchy,
         metrics=metrics,
@@ -325,7 +361,11 @@ def _wait_event(span: ThrottleSpan, hierarchy: HierarchyRef, source: SourceRef) 
 
 
 def _usage_event_for_file(
-    log_file: LogFile, hierarchy: HierarchyRef, source: SourceRef
+    log_file: LogFile,
+    hierarchy: HierarchyRef,
+    source: SourceRef,
+    *,
+    authoritative_meter_keys: set[tuple[str, str, str, str]] | None = None,
 ) -> ResourceEvent | None:
     """Emit a session-level UsageEvent when the file carries terminal usage stats."""
     stats = log_file.usage_stats
@@ -344,7 +384,7 @@ def _usage_event_for_file(
             model_path=["model", log_file.model] if log_file.model else None,
         )
         return UsageEvent(
-            ts=_now_utc(),
+            ts=_source_timestamp(source),
             hierarchy=hierarchy,
             metrics=metrics,
             taxonomy=taxonomy,
@@ -374,11 +414,75 @@ def _usage_event_for_file(
         ),
     )
 
+    provider = (
+        ProviderRef(
+            provider=stats.provider,
+            product="llm",
+            model=stats.model or None,
+        )
+        if stats.provider
+        else None
+    )
+    meters: list[MeteredQuantity] = []
+    if provider is not None:
+        request_key = MeterKey(
+            provider=provider.provider,
+            product=provider.product,
+            meter="requests",
+            unit="request",
+        )
+        if request_key.sort_key() not in (authoritative_meter_keys or set()):
+            meters.append(
+                MeteredQuantity(
+                    key=request_key,
+                    coverage=CoverageState.UNMEASURED,
+                )
+            )
+
     return UsageEvent(
-        ts=_now_utc(),
+        ts=_source_timestamp(source),
         hierarchy=hierarchy,
         metrics=metrics,
+        provider=provider,
+        meters=meters,
         taxonomy=taxonomy,
+        source=source,
+    )
+
+
+def _provider_observation_event(
+    observation: ProviderMeterObservation,
+    hierarchy: HierarchyRef,
+    source: SourceRef,
+) -> ResourceEvent:
+    """Project one sanitized provider observation into the common event stream."""
+    return UsageEvent(
+        event_id=observation.event_id,
+        ts=observation.ts or _source_timestamp(source),
+        span_id=observation.span_id,
+        parent_span_id=observation.parent_span_id,
+        hierarchy=hierarchy,
+        metrics=Metrics(
+            api_requests=observation.api_requests,
+            api_failures=observation.api_failures,
+            retries=observation.retries,
+            cache_hits=observation.cache_hits,
+            cache_misses=observation.cache_misses,
+        ),
+        provider=observation.provider,
+        meters=observation.meters,
+        taxonomy=TaxonomyPaths(
+            provider_path=["provider", observation.provider.provider],
+            model_path=(
+                [
+                    "model",
+                    observation.provider.provider,
+                    observation.provider.model,
+                ]
+                if observation.provider.model
+                else None
+            ),
+        ),
         source=source,
     )
 
@@ -393,5 +497,7 @@ def _throttle_span_id(span: ThrottleSpan) -> str:
     return f"throttle:{span.provider or 'unknown'}:{started}"
 
 
-def _now_utc() -> datetime:
-    return datetime.now(UTC)
+def _source_timestamp(source: SourceRef) -> datetime:
+    """Return a portable sentinel when a source record lacks an event timestamp."""
+    _ = source
+    return datetime.fromtimestamp(0, tz=UTC)

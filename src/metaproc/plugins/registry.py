@@ -16,6 +16,7 @@ from metaproc.plugins.protocol import (
     AdapterConfigTransform,
     ExecutionEnvTransform,
     ProcessRule,
+    ProviderMeterSource,
     ResourceEventSource,
     ShellCommandClassifier,
     ToolProfileSource,
@@ -39,6 +40,7 @@ class PluginRegistryImpl:
         self.adapter_config_transforms: list[AdapterConfigTransform] = []
         self.execution_env_transforms: list[ExecutionEnvTransform] = []
         self.resource_event_sources: list[ResourceEventSource] = []
+        self.provider_meter_sources: list[ProviderMeterSource] = []
         self.tool_profile_sources: list[ToolProfileSource] = []
         self.bootstrap_env_defaults: dict[str, str] = {}
         self.shell_command_classifiers: list[ShellCommandClassifier] = []
@@ -78,6 +80,12 @@ class PluginRegistryImpl:
             existing for existing in self.resource_event_sources if existing.name != source.name
         ]
         self.resource_event_sources.append(source)
+
+    def register_provider_meter_source(self, source: ProviderMeterSource) -> None:
+        self.provider_meter_sources = [
+            existing for existing in self.provider_meter_sources if existing.name != source.name
+        ]
+        self.provider_meter_sources.append(source)
 
     def register_tool_profile_source(self, source: ToolProfileSource) -> None:
         self.tool_profile_sources = [

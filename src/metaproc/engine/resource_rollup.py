@@ -36,8 +36,11 @@ Still intentionally limited:
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -47,6 +50,7 @@ from pydantic import TypeAdapter
 from strif import atomic_output_file
 
 from metaproc.engine.resource_hierarchy import build_hierarchy_skeleton
+from metaproc.ids import new_typed_id, require_typed_id
 from metaproc.io import iter_artifact_paths, logical_path
 from metaproc.logutil.log_path_owner import LogOwner, derive_owner_for_bundle
 from metaproc.logutil.parsing import (
@@ -61,9 +65,13 @@ from metaproc.logutil.throttling import (
 from metaproc.logutil.tool_spans import ToolSpan, pair_tool_events
 from metaproc.models.plan_bundle import PlanBundle
 from metaproc.models.resources import (
-    SCHEMA_V1,
+    SCHEMA_V2,
+    CoverageState,
     HierarchyRef,
     LogSummary,
+    MeteredQuantity,
+    MeterKey,
+    MeterRollup,
     Metrics,
     Node,
     PrefixRollup,
@@ -97,10 +105,17 @@ _ADDITIVE_METRIC_FIELDS = (
     "wait_network_s",
     "tool_exec_s",
     "local_compute_s",
+    "api_requests",
+    "api_failures",
+    "retries",
+    "cache_hits",
+    "cache_misses",
     "billable_vm_hours",
     "billable_vcpu_hours",
     "billable_memory_gib_hours",
 )
+
+_EVENT_ID_DIGEST_BYTES = 20
 
 
 @dataclass
@@ -196,6 +211,7 @@ def build_resource_artifacts(
 
     generated_events_path = run_dir / source_events_path
     resource_sources = get_plugin_registry().resource_event_sources
+    provider_meter_sources = get_plugin_registry().provider_meter_sources
     external_paths = {path for source in resource_sources for path in source.discover(run_dir)}
     discovered = _discover_log_files(
         run_dir,
@@ -209,6 +225,7 @@ def build_resource_artifacts(
     tally = PathTally[float]()
     source_logs: list[SourceLog] = []
     resource_events: list[ResourceEvent] = []
+    seen_events: dict[str, str] = {}
     unattributed = Metrics()
 
     for log_path in discovered:
@@ -264,8 +281,12 @@ def build_resource_artifacts(
             source_path=str(_relative_or_str(log_path, run_dir)),
             source_size_bytes=size_bytes,
             source_mtime_ns=mtime_ns,
+            provider_meter_sources=provider_meter_sources,
         )
-        for event in emitted:
+        for raw_event in emitted:
+            event = _reconcile_resource_event(raw_event, seen_events)
+            if event is None:
+                continue
             leaf = _ensure_event_leaf(
                 nodes_by_id=nodes_by_id,
                 root=root,
@@ -273,7 +294,11 @@ def build_resource_artifacts(
                 fallback_owner=owner_node,
             )
             _add_metrics_into(leaf.self_metrics, event.metrics)
-        resource_events.extend(emitted)
+            _add_meter_rollups_into(
+                leaf.self_meters,
+                aggregate_meter_rollups([(event.event_id or "", event.meters)]),
+            )
+            resource_events.append(event)
 
         source_logs.append(
             SourceLog(
@@ -306,7 +331,11 @@ def build_resource_artifacts(
                     source_mtime_ns=source_mtime,
                 )
             )
-            for event in events:
+            accepted_events: list[ResourceEvent] = []
+            for raw_event in events:
+                event = _reconcile_resource_event(raw_event, seen_events)
+                if event is None:
+                    continue
                 leaf = _ensure_event_leaf(
                     nodes_by_id=nodes_by_id,
                     root=root,
@@ -314,13 +343,20 @@ def build_resource_artifacts(
                     fallback_owner=owner_node,
                 )
                 _add_metrics_into(leaf.self_metrics, event.metrics)
+                _add_meter_rollups_into(
+                    leaf.self_meters,
+                    aggregate_meter_rollups([(event.event_id or "", event.meters)]),
+                )
                 _tally_external_event_taxonomy(tally, event)
-            resource_events.extend(events)
-            if events:
-                tool_call_events = [event for event in events if isinstance(event, ToolCallEvent)]
+                accepted_events.append(event)
+            resource_events.extend(accepted_events)
+            if accepted_events:
+                tool_call_events = [
+                    event for event in accepted_events if isinstance(event, ToolCallEvent)
+                ]
                 summary = LogSummary(
                     source_log_count=1,
-                    event_count=len(events),
+                    event_count=len(accepted_events),
                     tool_call_count=len(tool_call_events),
                     tool_failure_count=sum(
                         1 for event in tool_call_events if event.metrics.tool_failures
@@ -341,7 +377,7 @@ def build_resource_artifacts(
 
     document = ResourcesDocument.model_validate(
         {
-            "schema": SCHEMA_V1,
+            "schema": SCHEMA_V2,
             "run_id": run_id,
             "generated_at": datetime.now(UTC),
             "source_events_path": source_events_path,
@@ -351,6 +387,8 @@ def build_resource_artifacts(
             },
             "source_logs": [sl.model_dump() for sl in source_logs],
             "unattributed": unattributed.model_dump(),
+            "meter_rollups": [rollup.model_dump() for rollup in root.total_meters],
+            "unattributed_meters": [],
         }
     )
     result = ResourceBuildResult(
@@ -722,6 +760,11 @@ def _propagate_totals(node: Node) -> None:
     for child in node.children:
         _add_metrics_into(total, child.total_metrics)
     node.total_metrics = total
+    total_meters: list[MeterRollup] = []
+    _add_meter_rollups_into(total_meters, node.self_meters)
+    for child in node.children:
+        _add_meter_rollups_into(total_meters, child.total_meters)
+    node.total_meters = total_meters
 
 
 def _add_metrics_into(target: Metrics, source: Metrics) -> None:
@@ -733,6 +776,161 @@ def _add_metrics_into(target: Metrics, source: Metrics) -> None:
         current = cast(float | int | None, getattr(target, field_name))
         new_value = (current or 0) + src_value
         setattr(target, field_name, new_value)
+
+
+def aggregate_meter_rollups(
+    event_quantities: Iterable[tuple[str, Sequence[MeteredQuantity]]],
+) -> list[MeterRollup]:
+    """Aggregate exact meter keys while reconciling duplicate event identities."""
+    seen: dict[str, str] = {}
+    grouped: dict[tuple[str, str, str, str], dict[str, object]] = {}
+    for event_id, quantities in event_quantities:
+        require_typed_id(event_id, "evt")
+        canonical = json.dumps(
+            [quantity.model_dump(mode="json") for quantity in quantities],
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        existing = seen.get(event_id)
+        if existing is not None:
+            if existing != canonical:
+                raise ValueError(
+                    f"duplicate resource event identity {event_id!r} has conflicting meters"
+                )
+            continue
+        seen[event_id] = canonical
+        for quantity in quantities:
+            key_tuple = quantity.key.sort_key()
+            bucket = grouped.setdefault(
+                key_tuple,
+                {
+                    "key": quantity.key,
+                    "actual": None,
+                    "estimated": None,
+                    "unmeasured": 0,
+                    "event_ids": [],
+                },
+            )
+            event_ids = cast(list[str], bucket["event_ids"])
+            event_ids.append(event_id)
+            if quantity.coverage is CoverageState.MEASURED:
+                bucket["actual"] = _sum_optional(
+                    cast(float | None, bucket["actual"]), quantity.actual_quantity
+                )
+            elif quantity.coverage is CoverageState.ESTIMATED:
+                bucket["estimated"] = _sum_optional(
+                    cast(float | None, bucket["estimated"]),
+                    quantity.estimated_quantity,
+                )
+            else:
+                bucket["unmeasured"] = cast(int, bucket["unmeasured"]) + 1
+
+    return [
+        _meter_rollup_from_parts(
+            key=cast(MeterKey, bucket["key"]),
+            actual=cast(float | None, bucket["actual"]),
+            estimated=cast(float | None, bucket["estimated"]),
+            unmeasured=cast(int, bucket["unmeasured"]),
+            source_event_ids=sorted(cast(list[str], bucket["event_ids"])),
+        )
+        for _, bucket in sorted(grouped.items())
+    ]
+
+
+def _sum_optional(left: float | None, right: float | None) -> float | None:
+    if right is None:
+        return left
+    return (left if left is not None else 0.0) + right
+
+
+def _meter_rollup_from_parts(
+    *,
+    key: MeterKey,
+    actual: float | None,
+    estimated: float | None,
+    unmeasured: int,
+    source_event_ids: list[str],
+) -> MeterRollup:
+    coverage = (
+        CoverageState.MEASURED
+        if actual is not None and estimated is None and unmeasured == 0
+        else CoverageState.ESTIMATED
+        if actual is None and estimated is not None and unmeasured == 0
+        else CoverageState.UNMEASURED
+    )
+    return MeterRollup(
+        key=key,
+        coverage=coverage,
+        actual_quantity=actual,
+        estimated_quantity=estimated,
+        unmeasured_event_count=unmeasured,
+        source_event_ids=source_event_ids,
+    )
+
+
+def _add_meter_rollups_into(target: list[MeterRollup], additions: Sequence[MeterRollup]) -> None:
+    by_key = {rollup.key.sort_key(): rollup for rollup in target}
+    for addition in additions:
+        key_tuple = addition.key.sort_key()
+        existing = by_key.get(key_tuple)
+        if existing is None:
+            by_key[key_tuple] = addition.model_copy(deep=True)
+            continue
+        overlap = set(existing.source_event_ids) & set(addition.source_event_ids)
+        if overlap:
+            if existing == addition:
+                continue
+            raise ValueError(
+                "overlapping source event identities cannot be merged from aggregate meter rows: "
+                + ", ".join(sorted(overlap))
+            )
+        by_key[key_tuple] = _meter_rollup_from_parts(
+            key=existing.key,
+            actual=_sum_optional(existing.actual_quantity, addition.actual_quantity),
+            estimated=_sum_optional(existing.estimated_quantity, addition.estimated_quantity),
+            unmeasured=(existing.unmeasured_event_count + addition.unmeasured_event_count),
+            source_event_ids=sorted([*existing.source_event_ids, *addition.source_event_ids]),
+        )
+    target[:] = [by_key[key] for key in sorted(by_key)]
+
+
+def _reconcile_resource_event(
+    raw_event: ResourceEvent,
+    seen_events: dict[str, str],
+) -> ResourceEvent | None:
+    event = _ensure_event_id(raw_event)
+    event_id = event.event_id
+    if event_id is None:
+        raise AssertionError("resource event identity generation failed")
+    substantive_payload = event.model_dump(
+        mode="json",
+        exclude={"event_id", "source"},
+    )
+    canonical = json.dumps(substantive_payload, sort_keys=True, separators=(",", ":"))
+    existing = seen_events.get(event_id)
+    if existing is not None:
+        if existing != canonical:
+            raise ValueError(f"duplicate resource event identity {event_id!r} conflicts")
+        return None
+    seen_events[event_id] = canonical
+    return event
+
+
+def _ensure_event_id(event: ResourceEvent) -> ResourceEvent:
+    if event.event_id is not None:
+        return event
+    portable_event = event.model_copy(
+        update={"source": event.source.model_copy(update={"mtime_ns": None})}
+    )
+    payload = portable_event.model_dump(mode="json", exclude={"event_id"})
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).digest()
+    suffix = base64.b32encode(digest[:_EVENT_ID_DIGEST_BYTES]).decode().lower().rstrip("=")
+    event_id = new_typed_id("evt", unique_suffix=suffix)
+    return _RESOURCE_EVENT_ADAPTER.validate_python(
+        {**event.model_dump(mode="python"), "event_id": event_id}
+    )
 
 
 # ── Source-log helpers ─────────────────────────────────────────────

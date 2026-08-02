@@ -162,6 +162,9 @@ See [docs/conventions.md](docs/conventions.md) for the full casing rules.
 | `pool rollup --auth-outcomes` | Roll up + per-label `auth_outcome` event stats (success / cooling / expired) |
 | `pool retry-missing` | Reset completed markers when cloud outputs are missing |
 
+Provider counters, exact meter keys, telemetry coverage, and compatibility semantics are
+documented in [docs/resource-rollup.md](docs/resource-rollup.md).
+
 ## Process Specs
 
 Process specs define multi-step DAGs that `run-process` walks automatically.

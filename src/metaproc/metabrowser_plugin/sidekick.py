@@ -309,11 +309,11 @@ def resources_handler(request: Request) -> JSONResponse:
             return JSONResponse({"error": str(exc)}, status_code=500)
     else:
         from metaproc.models.resources import (  # noqa: PLC0415 -- pre-existing local import; needs review
-            ResourcesDocument,
+            read_resources_document_json,
         )
 
         try:
-            document = ResourcesDocument.model_validate_json(cache_path.read_text())
+            document = read_resources_document_json(cache_path.read_text())
         except Exception as exc:  # noqa: BLE001
             return JSONResponse(
                 {"error": f"cached resources.json is malformed: {exc!s}"},
