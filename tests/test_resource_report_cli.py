@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 from metaproc.cli import app
 from metaproc.commands.run_process import _write_run_config
+from metaproc.engine.resource_finalization import resource_artifacts_need_recovery
 from metaproc.errors import CLIError
 from metaproc.models.resource_snapshot import ResourceRunSnapshot, ResourceTopologyNode
 
@@ -86,6 +87,32 @@ def test_first_invocation_builds_and_persists_resources_json(tmp_path: Path) -> 
     payload = json.loads(cached.read_text())
     assert payload["schema"] == "metaproc.resources/v2"
     assert "[run]" in result.output
+
+
+def test_inactive_legacy_build_writes_complete_resource_artifact_set(tmp_path: Path) -> None:
+    spec_path, run_dir = _setup_run(tmp_path)
+    (run_dir / ".state").mkdir()
+    (run_dir / ".state" / "process-status.yaml").write_text("state: completed\n")
+
+    result = runner.invoke(
+        app,
+        [
+            "resource-report",
+            str(run_dir),
+            "--spec",
+            str(spec_path),
+            "--param",
+            "CUTOFF_DATE=2026-04-21",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["finalization"]["state"] == "completed"
+    assert (run_dir / "resource-usage-summary.md").is_file()
+    assert (run_dir / ".state" / "schemas" / "resource-usage-summary.v1.schema.yaml").is_file()
+    assert resource_artifacts_need_recovery(run_dir) is False
 
 
 def test_subsequent_invocation_reads_cached_resources_json(tmp_path: Path) -> None:

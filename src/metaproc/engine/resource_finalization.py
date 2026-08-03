@@ -81,6 +81,7 @@ def finalize_run_resources(
     run_dir: Path,
     *,
     outcome: FinalizationState,
+    legacy_run_id: str | None = None,
     trigger: Literal["terminal", "resume", "status", "recovery"] = "terminal",
     terminal_error: BaseException | None = None,
     finalized_at: datetime | None = None,
@@ -93,21 +94,23 @@ def finalize_run_resources(
     """
     snapshot = read_resource_run_snapshot(run_dir)
     config = _read_run_config(run_dir)
-    run_id = _run_id(
-        snapshot_root_id=snapshot.hierarchy.node_id if snapshot else None, config=config
+    resolved_run_id = (
+        snapshot.hierarchy.node_id
+        if snapshot is not None
+        else legacy_run_id or _run_id(config=config)
     )
     if snapshot is not None:
         hierarchy = snapshot.hierarchy_node()
     elif bundle is not None:
-        hierarchy = build_hierarchy_skeleton(bundle, run_id=run_id, run_dir=run_dir)
+        hierarchy = build_hierarchy_skeleton(bundle, run_id=resolved_run_id, run_dir=run_dir)
     else:
-        hierarchy = Node(node_type="run", node_id=run_id, label=run_id)
+        hierarchy = Node(node_type="run", node_id=resolved_run_id, label=resolved_run_id)
 
     extracted = build_resource_artifacts(
         bundle=None if snapshot is not None else bundle,
         hierarchy_root=hierarchy,
         run_dir=run_dir,
-        run_id=run_id,
+        run_id=resolved_run_id,
         write=False,
     )
     extracted_events: list[ResourceEvent] = list(extracted.events)
@@ -129,7 +132,7 @@ def finalize_run_resources(
         # Keep item/file/tool leaves materialized while parsing raw evidence.
         # Projection clears their derived metrics before replaying the ledger.
         hierarchy_root=extracted.document.hierarchy_root,
-        run_id=run_id,
+        run_id=resolved_run_id,
         events=events,
         source_events_path=RESOURCE_EVENTS_RELATIVE,
         source_logs=source_logs,
@@ -183,9 +186,7 @@ def _read_run_config(run_dir: Path) -> Mapping[str, object]:
     return raw if isinstance(raw, Mapping) else {}
 
 
-def _run_id(*, snapshot_root_id: str | None, config: Mapping[str, object]) -> str:
-    if snapshot_root_id:
-        return snapshot_root_id
+def _run_id(*, config: Mapping[str, object]) -> str:
     process = config.get("process")
     context = config.get("run_id")
     if isinstance(process, str) and process and isinstance(context, str) and context:

@@ -146,8 +146,17 @@ def _build_and_persist(
     cache_path: Path,
     params: dict[str, str],
 ) -> ResourcesDocument:
-    """Build the rollup, persist resources.json + resource-events.jsonl atomically."""
+    """Persist a live rollup or the complete projections for an inactive run."""
     bundle = load_plan_bundle(spec, params=params)
+    status = scan_run_status(run_dir, include_system=False)
+    if not status.is_active:
+        return finalize_run_resources(
+            run_dir,
+            outcome=infer_recovery_outcome(run_dir, totals=status.totals),
+            legacy_run_id=run_id,
+            trigger="recovery",
+            bundle=bundle,
+        ).document
     result = build_resource_artifacts(
         bundle=bundle,
         run_dir=run_dir,
