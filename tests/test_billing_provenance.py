@@ -20,7 +20,6 @@ from metaproc.adapters.billing import (
     UNKNOWN,
     default_cost_provenance,
     resolve_auth_route,
-    resolve_charge_status,
 )
 from metaproc.trace.extractors.claude_agent import ClaudeAgentExtractor
 from metaproc.trace.extractors.common import attempt_cost_attrs, auth_route_from_invocation
@@ -109,11 +108,7 @@ class TestOtherAdapterRoutes:
         assert resolve_auth_route("mystery-cli", {"ANTHROPIC_API_KEY": "x"}) == UNKNOWN
 
 
-class TestChargeStatusIsNeverAsserted:
-    def test_every_route_yields_unknown(self) -> None:
-        for route in ("api_key", "chatgpt_plan", "claude_plan", "vertex", None):
-            assert resolve_charge_status(route) == UNKNOWN
-
+class TestCostProvenanceDefaults:
     def test_self_reported_agent_cost_is_a_client_estimate(self) -> None:
         assert default_cost_provenance("api_key", self_reported=True) == "client_list_estimate"
         assert default_cost_provenance("claude_plan", self_reported=True) == "client_list_estimate"
@@ -193,7 +188,6 @@ class TestClaudeTokenExtraction:
         attrs = self._attempt(tmp_path).attributes
         assert attrs["attempt.cost_provenance"] == "client_list_estimate"
         assert attrs["attempt.cost_is_estimated"] is True
-        assert attrs["attempt.charge_status"] == UNKNOWN
 
     def test_rendered_claude_totals_are_nonzero(self, tmp_path: Path) -> None:
         rows = cost_rows([self._attempt(tmp_path)])
@@ -216,7 +210,6 @@ class TestAttemptCostAttrs:
             )
             assert attrs["attempt.cost_usd"] == 1.25
             assert attrs["attempt.cost_provenance"] == "client_list_estimate"
-            assert attrs["attempt.charge_status"] == UNKNOWN
 
     def test_provider_authoritative_is_not_estimated(self) -> None:
         attrs = attempt_cost_attrs(
@@ -377,4 +370,3 @@ class TestPiFallbackKeepsProvenance:
         attrs = next(s for s in spans if s.kind == "attempt").attributes
         assert attrs["attempt.cost_usd"] > 0
         assert attrs["attempt.cost_provenance"] == "pricing_table_estimate"
-        assert attrs["attempt.charge_status"] == UNKNOWN

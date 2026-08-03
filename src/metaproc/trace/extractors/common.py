@@ -10,7 +10,6 @@ from metaproc.adapters.billing import (
     default_cost_provenance,
     is_authoritative,
     resolve_auth_route,
-    resolve_charge_status,
 )
 from metaproc.logutil.usage import UsageStats, compute_cost
 from metaproc.logutil.usage import load_pricing as _load
@@ -325,8 +324,8 @@ def attempt_cost_attrs(
       price table. Not a bill.
     - ``pricing_table_estimate`` — we computed it from ``pricing.md``.
 
-    ``attempt.charge_status`` records whether the amount is owed, and is always
-    ``unknown`` here: that requires reconciliation against provider billing.
+    Whether the amount is actually owed is deliberately not recorded: it needs
+    reconciliation against provider billing, which no run artifact supports.
 
     ``attempt.cost_is_estimated`` is retained for existing consumers and is
     false only for ``provider_authoritative``.
@@ -349,7 +348,6 @@ def attempt_cost_attrs(
         provenance = cost_provenance or default_cost_provenance(auth_route, self_reported=True)
         attrs["attempt.cost_usd"] = self_reported_cost
         attrs["attempt.cost_provenance"] = provenance
-        attrs["attempt.charge_status"] = resolve_charge_status(auth_route)
         attrs["attempt.cost_is_estimated"] = not is_authoritative(provenance)
         return attrs
 
@@ -369,7 +367,6 @@ def attempt_cost_attrs(
             attrs["attempt.cost_provenance"] = cost_provenance or default_cost_provenance(
                 auth_route, self_reported=False
             )
-            attrs["attempt.charge_status"] = resolve_charge_status(auth_route)
             attrs["attempt.cost_is_estimated"] = True
         else:
             log.debug("No pricing entry for model %r; cost not computed", model)

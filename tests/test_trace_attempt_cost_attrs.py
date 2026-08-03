@@ -306,7 +306,6 @@ def test_codex_chatgpt_plan_attempt_records_route_without_claiming_charge(
     assert attempt.attributes["attempt.tokens_output"] == 100_000
     assert attempt.attributes["attempt.cost_usd"] == pytest.approx(8.0)
     assert attempt.attributes["attempt.cost_provenance"] == "pricing_table_estimate"
-    assert attempt.attributes["attempt.charge_status"] == "unknown"
     assert attempt.attributes["attempt.auth_route"] == "chatgpt_plan"
 
 

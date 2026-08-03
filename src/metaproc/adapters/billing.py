@@ -8,7 +8,7 @@ Three independent facts get confused whenever anyone says "what did this cost":
    amount, a client-side estimate the CLI computed from a bundled price table,
    or our own pricing-table lookup are three different kinds of number.
 3. **Charge status** — whether that amount is actually owed. This is a billing
-   outcome, not a property of the run.
+   outcome, not a property of the run, and is deliberately not recorded.
 
 They are recorded separately because they genuinely vary independently, and
 because collapsing them produces confident-looking numbers that are wrong:
@@ -24,10 +24,12 @@ because collapsing them produces confident-looking numbers that are wrong:
 - Neither route tells us about promotional credits, contracted rates, or
   committed-spend discounts.
 
-**Metaproc cannot determine charge status from a run artifact.** Nothing here
-returns anything but `unknown` for it; populating it requires reconciliation
-against provider billing, which is a separate layer. Reporting therefore groups
-by *cost provenance*, and never asserts that an amount is or is not owed.
+**Metaproc cannot determine charge status from a run artifact**, so it does not
+record one. Whether an amount is owed depends on plan allowances, purchased
+credits, and contracted rates that no log contains; answering it requires
+reconciliation against provider billing, which is a separate layer. Reporting
+therefore groups by *cost provenance* and never asserts that an amount is or is
+not owed.
 
 Resolution is per-adapter rather than one central table, because each CLI has
 its own precedence chain and several supported routes are ambiguous from the
@@ -70,9 +72,6 @@ CostProvenance = Literal[
   counts.
 - ``unknown``: no basis to characterize it.
 """
-
-ChargeStatus = Literal["included", "paid_credits_or_overage", "metered", "unknown"]
-"""Whether an amount is actually owed. Always ``unknown`` without reconciliation."""
 
 UNKNOWN = "unknown"
 
@@ -240,18 +239,6 @@ def default_cost_provenance(auth_route: str | None, *, self_reported: bool) -> C
     return "pricing_table_estimate"
 
 
-def resolve_charge_status(_auth_route: str | None) -> ChargeStatus:
-    """Always ``unknown``.
-
-    Whether an amount is owed depends on plan allowances consumed, purchased
-    credits, promotional and contracted rates — none of which appear in a run
-    artifact, and all of which can change after a limit is reached mid-run.
-    This exists so callers have somewhere honest to read the answer from, and
-    so a future reconciliation layer has a defined field to populate.
-    """
-    return UNKNOWN
-
-
 def is_authoritative(cost_provenance: str | None) -> bool:
     """True when a figure came from the provider and may be summed as spend."""
     return cost_provenance == "provider_authoritative"
@@ -260,10 +247,8 @@ def is_authoritative(cost_provenance: str | None) -> bool:
 __all__ = [
     "UNKNOWN",
     "AuthRoute",
-    "ChargeStatus",
     "CostProvenance",
     "default_cost_provenance",
     "is_authoritative",
     "resolve_auth_route",
-    "resolve_charge_status",
 ]

@@ -36,7 +36,6 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-from metaproc.adapters.billing import UNKNOWN
 from metaproc.io import iter_artifact_paths, iter_jsonl_objects
 from metaproc.io.gz_io import artifact_sidecar_path
 from metaproc.trace.extractors.common import (
@@ -130,7 +129,6 @@ class PiAgentExtractor:
                 if usage_totals["has_cost"]:
                     attempt_attrs["attempt.cost_usd"] = usage_totals["cost_total"]
                     attempt_attrs["attempt.cost_provenance"] = "client_list_estimate"
-                    attempt_attrs["attempt.charge_status"] = UNKNOWN
                     attempt_attrs["attempt.cost_is_estimated"] = True
                 model_from_messages = usage_totals["model"]
 
@@ -166,7 +164,6 @@ class PiAgentExtractor:
                 for key in (
                     "attempt.cost_usd",
                     "attempt.cost_provenance",
-                    "attempt.charge_status",
                     "attempt.cost_is_estimated",
                 ):
                     if key in cost_attrs:

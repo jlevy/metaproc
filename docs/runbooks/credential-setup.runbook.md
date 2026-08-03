@@ -452,13 +452,12 @@ actually spawned with; the launcher stamps it into the invocation sidecar as
 `auth_route`, and trace extractors copy it onto the attempt span as
 `attempt.auth_route`.
 
-Three separate things are recorded, because they vary independently:
+Two things are recorded, because they vary independently:
 
 | Attribute | Answers | Values |
 | --- | --- | --- |
 | `attempt.auth_route` | Which credential chain the CLI used | `api_key`, `chatgpt_plan`, `claude_plan`, `bedrock`, `vertex`, `gateway`, `unknown` |
 | `attempt.cost_provenance` | Where the dollar figure came from | `provider_authoritative`, `client_list_estimate`, `pricing_table_estimate`, `unknown` |
-| `attempt.charge_status` | Whether the amount is owed | always `unknown` without billing reconciliation |
 
 **An auth route does not determine what was charged.** Both OpenAI and Anthropic sell
 usage credits that let a plan user continue past the included allowance, billed at
@@ -470,7 +469,8 @@ table, and Anthropic documents that Console/API billing data is authoritative.
 Promotional credits, contracted rates, and committed-spend discounts are invisible to
 all of it.
 
-Metaproc therefore never asserts that an amount is or is not owed.
+Whether an amount is actually owed is a third, separate fact — and one no run artifact
+contains, so metaproc does not record it and never asserts it.
 `metaproc trace --cost` groups by **provenance** and gives each group its own subtotal,
 with no grand total, because adding a provider-reported amount to a locally estimated
 one produces a figure that is neither.
