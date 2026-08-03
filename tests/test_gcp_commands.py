@@ -23,6 +23,7 @@ from typer.main import get_command
 from typer.testing import CliRunner
 
 from metaproc.cli import app
+from metaproc.cloud.gcp.batch_backend import run_identity_label, sanitize_label
 from metaproc.commands.gcp import (
     _ASSET_TYPES,
     _build_env_exports,
@@ -36,6 +37,7 @@ from metaproc.commands.gcp import (
     _is_run_dir,
     _list_filestore_instances,
     _query_filestore_utilization,
+    _query_jobs_by_run_id,
     _read_events,
     _remote_editable_install_command,
     _resolve_gateway_host,
@@ -177,6 +179,42 @@ class TestResolveJobNamesAndProject:
 
         assert job_names == ["projects/p/locations/r/jobs/j1"]
         assert project == "test-project"
+
+
+class TestRunIdentityLookup:
+    def test_colliding_readable_labels_use_distinct_exact_queries(self) -> None:
+        assert sanitize_label("run_abc") == sanitize_label("run-abc")
+        assert run_identity_label("run_abc") != run_identity_label("run-abc")
+
+        client = MagicMock()
+        exact_job = MagicMock()
+        client.list_jobs.return_value = [exact_job]
+        with patch("google.cloud.batch_v1.BatchServiceClient", return_value=client):
+            jobs = _query_jobs_by_run_id("run_abc", "project", "region")
+
+        assert jobs == [exact_job]
+        request = client.list_jobs.call_args.kwargs["request"]
+        assert run_identity_label("run_abc") in request.filter
+        assert "metaproc-run-key" in request.filter
+
+    def test_legacy_fallback_excludes_modern_jobs_with_colliding_readable_label(self) -> None:
+        legacy_job = MagicMock()
+        legacy_job.labels = {"metaproc-run-id": "run-abc"}
+        modern_collision = MagicMock()
+        modern_collision.labels = {
+            "metaproc-run-id": "run-abc",
+            "metaproc-run-key": "v1-other",
+        }
+        client = MagicMock()
+        client.list_jobs.side_effect = [[], [legacy_job, modern_collision]]
+
+        with patch("google.cloud.batch_v1.BatchServiceClient", return_value=client):
+            jobs = _query_jobs_by_run_id("run_abc", "project", "region")
+
+        assert jobs == [legacy_job]
+        assert client.list_jobs.call_count == 2
+        fallback_request = client.list_jobs.call_args.kwargs["request"]
+        assert 'labels.metaproc-run-id="run-abc"' == fallback_request.filter
 
 
 class TestResolveScaleRunDir:

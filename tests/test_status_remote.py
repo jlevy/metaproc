@@ -25,6 +25,7 @@ class TestLooksLikeRunId:
             "cloud-500-ds-2026-04-12",
             "eval-v2-batch",
             "a-b-c",  # minimum segment count
+            "run-20260802T193000Z.1234560000.abc123def4",
         ],
     )
     def test_valid_run_ids(self, target: str) -> None:

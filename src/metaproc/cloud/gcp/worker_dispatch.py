@@ -32,6 +32,7 @@ from metaproc.cloud.gcp.batch_backend import (
     get_container_runs_dir,
     get_job_with_retry,
     resolve_gcp_secret_ref,
+    run_identity_labels,
     sanitize_label,
 )
 from metaproc.config.env_vars import MetaprocEnv
@@ -713,7 +714,7 @@ async def _submit_workers(
         job_labels = {
             "metaproc-role": "worker",
             "metaproc-dispatch": "worker",
-            "metaproc-run-id": sanitize_label(run_id),
+            **run_identity_labels(run_id),
             "metaproc-step": sanitize_label(step),
             "metaproc-variant": sanitize_label(config.variant),
             "metaproc-worker-id": str(wi),

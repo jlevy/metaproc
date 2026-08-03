@@ -217,15 +217,25 @@ def _query_jobs_by_run_id(run_id: str, project: str, region: str) -> list[Any]:
     from google.cloud import batch_v1  # noqa: PLC0415 -- optional [gcp-batch] dependency
 
     from metaproc.cloud.gcp.batch_backend import (  # noqa: PLC0415 -- optional [gcp-batch] dependency
+        RUN_ID_LABEL,
+        RUN_IDENTITY_LABEL,
+        run_identity_label,
         sanitize_label,
     )
 
     client = batch_v1.BatchServiceClient()
     parent = f"projects/{project}/locations/{region}"
+    identity_filter = f'labels.{RUN_IDENTITY_LABEL}="{run_identity_label(run_id)}"'
+    request = batch_v1.ListJobsRequest(parent=parent, filter=identity_filter)
+    exact_jobs = list(client.list_jobs(request=request))
+    if exact_jobs:
+        return exact_jobs
+
     sanitized_id = sanitize_label(run_id)
-    filter_str = f'labels.metaproc-run-id="{sanitized_id}"'
+    filter_str = f'labels.{RUN_ID_LABEL}="{sanitized_id}"'
     request = batch_v1.ListJobsRequest(parent=parent, filter=filter_str)
-    return list(client.list_jobs(request=request))
+    legacy_jobs = list(client.list_jobs(request=request))
+    return [job for job in legacy_jobs if not dict(job.labels).get(RUN_IDENTITY_LABEL)]
 
 
 def _format_job_results(
