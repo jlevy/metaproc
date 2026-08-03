@@ -23,16 +23,58 @@ from metaproc.engine.resource_summary import (
 )
 from metaproc.io import iter_artifact_paths, read_yaml_file
 from metaproc.logutil.resource_events import read_events
+from metaproc.models.authored import ProgressCounts
 from metaproc.models.plan_bundle import PlanBundle
 from metaproc.models.resource_budget import (
     FinalizationState,
     ResourceFinalization,
 )
-from metaproc.models.resources import Node, ResourceEvent, SourceLog
+from metaproc.models.resources import (
+    Node,
+    ResourceEvent,
+    ResourcesDocument,
+    SourceLog,
+    read_resources_document,
+)
 from metaproc.paths import run_config_file
 
 RESOURCE_EVENTS_RELATIVE = ".logs/resource-events.jsonl"
 RESOURCES_RELATIVE = "resources.json"
+
+
+def infer_recovery_outcome(
+    run_dir: Path,
+    *,
+    totals: ProgressCounts | None = None,
+) -> FinalizationState:
+    """Preserve a causal state, then infer only from persisted terminal progress."""
+    resources_path = run_dir / RESOURCES_RELATIVE
+    if resources_path.exists():
+        try:
+            document = read_resources_document(resources_path)
+            if isinstance(document, ResourcesDocument) and document.finalization is not None:
+                return document.finalization.state
+        except Exception:  # noqa: BLE001 - stale or malformed projections are rebuilt
+            pass
+
+    process_status_path = run_dir / ".state" / "process-status.yaml"
+    if process_status_path.exists():
+        try:
+            process_status = read_yaml_file(process_status_path)
+            if isinstance(process_status, Mapping):
+                state = process_status.get("state")
+                if isinstance(state, str):
+                    try:
+                        return FinalizationState(state)
+                    except ValueError:
+                        pass
+        except Exception:  # noqa: BLE001 - recovery falls back to task progress
+            pass
+
+    if totals is not None and totals.total > 0:
+        if totals.completed + totals.cached >= totals.total:
+            return FinalizationState.COMPLETED
+    return FinalizationState.FAILED
 
 
 def finalize_run_resources(

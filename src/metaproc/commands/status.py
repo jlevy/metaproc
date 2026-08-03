@@ -17,6 +17,7 @@ from metaproc.commands.gcp import run_remote_metaproc
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.engine.resource_finalization import (
     finalize_run_resources,
+    infer_recovery_outcome,
     resource_artifacts_need_recovery,
 )
 from metaproc.engine.run_status import (
@@ -31,8 +32,6 @@ from metaproc.ids import is_typed_id
 from metaproc.io import read_yaml_file
 from metaproc.io.overrides import read_overrides
 from metaproc.models.plan import Plan
-from metaproc.models.resource_budget import FinalizationState
-from metaproc.models.resources import ResourcesDocument, read_resources_document
 from metaproc.models.runtime import StepState
 from metaproc.output import OutputFormat
 from metaproc.viz_loader import load_plan_bundle_from_run
@@ -139,7 +138,7 @@ def _recover_resource_artifacts(run_dir: Path, status: RunStatus) -> None:
     if not needs_recovery:
         return
 
-    outcome = _recovery_outcome(run_dir, status)
+    outcome = infer_recovery_outcome(run_dir, totals=status.totals)
     try:
         finalize_run_resources(
             run_dir,
@@ -149,33 +148,6 @@ def _recover_resource_artifacts(run_dir: Path, status: RunStatus) -> None:
         )
     except Exception:  # noqa: BLE001 - status remains available if reporting recovery fails
         log.exception("resource artifact recovery failed for inactive run %s", run_dir)
-
-
-def _recovery_outcome(run_dir: Path, status: RunStatus) -> FinalizationState:
-    """Preserve a prior causal state; otherwise use only terminal progress facts."""
-    resources_path = run_dir / "resources.json"
-    if resources_path.exists():
-        try:
-            document = read_resources_document(resources_path)
-            if isinstance(document, ResourcesDocument) and document.finalization is not None:
-                return document.finalization.state
-        except Exception:  # noqa: BLE001 - stale/malformed cache is intentionally ignored
-            pass
-    process_status_path = run_dir / ".state" / "process-status.yaml"
-    if process_status_path.exists():
-        try:
-            process_status = read_yaml_file(process_status_path)
-            if isinstance(process_status, dict):
-                if process_status.get("state") == "completed":
-                    return FinalizationState.COMPLETED
-                if process_status.get("state") == "failed":
-                    return FinalizationState.FAILED
-        except Exception:  # noqa: BLE001 - recovery remains best-effort
-            pass
-    totals = status.totals
-    if totals.total > 0 and totals.completed + totals.cached >= totals.total:
-        return FinalizationState.COMPLETED
-    return FinalizationState.FAILED
 
 
 def _format_text(status: RunStatus, *, steps_only: bool = False, stale_only: bool = False) -> str:

@@ -216,7 +216,7 @@ def test_snapshot_refresh_rejects_active_run(
         ),
     )
     monkeypatch.setattr(
-        "metaproc.commands.resource_report.is_orchestrator_alive",
+        "metaproc.engine.run_status.is_orchestrator_alive",
         lambda _run_dir: True,
     )
 
@@ -225,3 +225,30 @@ def test_snapshot_refresh_rejects_active_run(
     assert isinstance(result.exception, CLIError)
     assert "active" in str(result.exception)
     assert not (run_dir / "resources.json").exists()
+
+
+def test_snapshot_recovery_preserves_completed_process_outcome(tmp_path: Path) -> None:
+    spec_path, run_dir = _setup_run(tmp_path)
+    _write_run_config(
+        run_dir,
+        process_name="parent",
+        process_path=spec_path,
+        run_id="2026-04-21",
+        variables={},
+        backend="local",
+        variant=None,
+        resource_snapshot=ResourceRunSnapshot(
+            hierarchy=ResourceTopologyNode(
+                node_type="run",
+                node_id="parent/2026-04-21",
+                label="parent/2026-04-21",
+            )
+        ),
+    )
+    (run_dir / ".state" / "process-status.yaml").write_text("state: completed\n")
+
+    result = runner.invoke(app, ["resource-report", str(run_dir), "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["finalization"]["state"] == "completed"

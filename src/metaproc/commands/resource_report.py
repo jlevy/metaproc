@@ -18,12 +18,14 @@ import typer
 from strif import atomic_output_file
 
 from metaproc.cli import app, get_output
-from metaproc.engine.resource_finalization import finalize_run_resources
+from metaproc.engine.resource_finalization import (
+    finalize_run_resources,
+    infer_recovery_outcome,
+)
 from metaproc.engine.resource_rollup import build_resource_artifacts
 from metaproc.engine.resource_snapshot import read_resource_run_snapshot
+from metaproc.engine.run_status import scan_run_status
 from metaproc.errors import CLIError
-from metaproc.io.orchestrator_lease import is_orchestrator_alive
-from metaproc.models.resource_budget import FinalizationState
 from metaproc.models.resources import (
     MetricsV1,
     Node,
@@ -94,11 +96,12 @@ def resource_report(
         except Exception as exc:  # noqa: BLE001 - normalize persisted-contract errors for CLI
             raise CLIError(f"Invalid immutable resource snapshot under {run_dir}: {exc}") from exc
         if snapshot is not None:
-            if is_orchestrator_alive(run_dir):
+            status = scan_run_status(run_dir, include_system=False)
+            if status.is_active:
                 raise CLIError("Resource recovery is unavailable while the run is active.")
             document = finalize_run_resources(
                 run_dir,
-                outcome=_cached_outcome(cached),
+                outcome=infer_recovery_outcome(run_dir, totals=status.totals),
                 trigger="recovery",
                 bundle=load_plan_bundle_from_run(run_dir),
             ).document
@@ -174,18 +177,6 @@ def _read_cached(cache_path: Path) -> ReadableResourcesDocument:
             f"Cached resources.json is malformed at {cache_path} ({exc!s}); "
             "rerun with --refresh to rebuild."
         ) from exc
-
-
-def _cached_outcome(cache_path: Path) -> FinalizationState:
-    """Preserve a causal V2 state when refreshing; default interrupted runs to failed."""
-    if cache_path.exists():
-        try:
-            document = _read_cached(cache_path)
-            if isinstance(document, ResourcesDocument) and document.finalization is not None:
-                return document.finalization.state
-        except CLIError:
-            pass
-    return FinalizationState.FAILED
 
 
 def _render_tree(document: ReadableResourcesDocument) -> str:
