@@ -3,18 +3,20 @@ type: is
 id: is-01kz2x8c1fepv4hn5myvcedrgp
 title: "PR #8 review MP8-01: carve typed IDs directly onto main"
 kind: bug
-status: in_progress
+status: closed
 priority: 0
-version: 4
+version: 6
 labels:
   - direct-main
 dependencies: []
 parent_id: is-01kz2x7xfhk0qsxn4ytw7et2bw
 created_at: 2026-08-03T04:14:05.358Z
-updated_at: 2026-08-03T04:53:50.683Z
+updated_at: 2026-08-03T05:10:06.105Z
+closed_at: 2026-08-03T05:10:06.101Z
+close_reason: "Superseded stacked PR #8 with focused direct-to-main PR #9; full local gate and all GitHub checks passed, and PR #8 was closed with its branch preserved."
 ---
 Rework PR #8 as a focused typed-ID change directly on main. Include only the minimum typed-ID allocation/parsing/run-ID/GCP compatibility prerequisites; exclude PR #6 resource accounting, budget, capture, and finalization code. Verify the isolated diff and CI before retargeting or rewriting the remote branch.
 
 ## Notes
 
-Direct-main prototype completed on local branch codex/typed-id-direct-main: 14 files, +742/-46, no PR6 resource/budget/capture/finalizer dependencies. 155 focused tests passed; static gate green; 3805 non-layout tests passed before one stale-bytecode path failure, which was isolated and passed after cache refresh; 10 disk-dependent layout tests pass separately with the host disk threshold disabled. Remote PR has not been rewritten or retargeted.
+Implemented as a fresh direct-to-main branch codex/typed-identifiers and PR #9 rather than rewriting the stacked PR #8 branch. Scope is 15 files: typed ID allocation/parsing/run IDs, exact GCP lookup compatibility, tests/docs, and hook safety. Full local gate passed (3816 passed, 8 skipped); GitHub CI is pending.
