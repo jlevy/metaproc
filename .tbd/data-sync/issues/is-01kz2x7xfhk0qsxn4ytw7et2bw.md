@@ -5,8 +5,9 @@ title: "Address review: PR #8 — typed IDs and resource correctness"
 kind: task
 status: in_progress
 priority: 1
-version: 11
-labels: []
+version: 12
+labels:
+  - direct-main
 dependencies: []
 child_order_hints:
   - is-01kz2x8c1fepv4hn5myvcedrgp
@@ -19,6 +20,6 @@ child_order_hints:
   - is-01kz2x8drbpq3t43awbf1sbjvj
   - is-01kz2x8e020tvdgn7htfszeenx
 created_at: 2026-08-03T04:13:50.449Z
-updated_at: 2026-08-03T04:14:07.691Z
+updated_at: 2026-08-03T04:34:48.349Z
 ---
-Address every actionable finding in the senior engineering review at https://github.com/jlevy/metaproc/pull/8#issuecomment-5162195240. Preserve the intended stack: inherited runtime/resource fixes land on PR #6; ID-layer and topology fixes land on PR #8. Publish a per-finding disposition map and require green CI on both PRs.
+Address the actionable PR #8 review findings while keeping the ID work independent of PR #6. PR #8 should land directly on main as a focused typed-ID/compatibility change. PR #6 resource-accounting work is paused for consolidation and its incomplete redesigns remain separate deferred beads.
