@@ -3,9 +3,9 @@ type: is
 id: is-01kz3c2j1me5ng0pkjym3k42rr
 title: "Spec: Focused resource observability"
 kind: epic
-status: open
+status: closed
 priority: 1
-version: 12
+version: 13
 spec_path: docs/project/specs/active/plan-2026-08-03-focused-resource-observability.md
 labels:
   - resources
@@ -23,6 +23,8 @@ child_order_hints:
   - is-01kz3c4emrbq58fss2nths2dnd
   - is-01kz3c4jwq9t8fe17nrm0xxxqy
 created_at: 2026-08-03T08:33:03.540Z
-updated_at: 2026-08-03T08:34:26.638Z
+updated_at: 2026-08-03T10:15:12.930Z
+closed_at: 2026-08-03T10:15:12.930Z
+close_reason: "Focused replacement published as PR #10, formal senior review posted with zero findings, PR #6 closed as superseded, and all required GitHub CI checks passed."
 ---
 Replace the resource-accounting portion of Metaproc PR #6 with the narrow ledger-first design in the linked spec. Deliver strict V2/V1 compatibility, exact provider meters and coverage, immutable reporting budgets, causal finalization/recovery, a validated summary, and operator projections; explicitly exclude the unrelated PR #6 work.
