@@ -74,17 +74,18 @@ Allocate every ID through `metaproc.ids`; never build one with an f-string.
 
 Only the prefix is parsed, by splitting once through `parse_typed_id()`. Dashes inside a
 payload are cosmetic word separators, and **no consumer may split a payload on them**.
-Reverse-engineering fields out of an ID couples every reader to one producer's format;
-read the run's own metadata instead.
+Reverse-engineering fields out of an ID couples every reader to one producer’s format;
+read the run’s own metadata instead.
 
 Where structure genuinely is machine-parsed, the interior uses `.` so the intent is
-explicit and cannot be mistaken for a word separator. The timestamped form is the only
-current case, and `derive_timestamped_typed_child_id()` is its only reader.
+explicit and cannot be mistaken for a word separator.
+The timestamped form is the only current case, and `derive_timestamped_typed_child_id()`
+is its only reader.
 
 Readers accept a small set of historical identifier shapes so published partitions stay
 resolvable; `metaproc.ids` owns that entirely, and nothing else needs to know about it.
-Two identifiers are equal only when their strings are equal, so no lookup, comparison, or
-dedup path may rewrite a delimiter to make a match.
+Two identifiers are equal only when their strings are equal, so no lookup, comparison,
+or dedup path may rewrite a delimiter to make a match.
 
 ### Randomness
 
