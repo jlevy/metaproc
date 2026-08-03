@@ -26,6 +26,7 @@ from typing import Any
 from metaproc.agent_errors import classify_agent_error
 from metaproc.io import iter_artifact_paths, iter_jsonl_objects
 from metaproc.io.gz_io import artifact_sidecar_path
+from metaproc.logutil.claude_usage import claude_attempt_usage
 from metaproc.trace.extractors.codex_agent import _is_codex_log
 from metaproc.trace.extractors.common import (
     attempt_cost_attrs,
@@ -220,46 +221,27 @@ class ClaudeAgentExtractor:
 
 
 def _attempt_token_totals(result_event: Mapping[str, Any]) -> dict[str, Any]:
-    """Whole-attempt token totals from a Claude ``result`` event.
-
-    Prefers ``modelUsage``, which covers the full attempt tree **including
-    subagents**; the top-level ``usage`` block excludes subagent activity, so
-    using it would silently undercount any run that delegated work. Falls back
-    to ``usage`` when ``modelUsage`` is absent (older logs).
+    """Whole-attempt token totals, via the shared Claude normalizer.
 
     ``models`` lists the models seen, since one attempt routinely spans several
     and no single ``adapter.model`` describes it.
     """
-    totals: dict[str, Any] = {
-        "input": None,
-        "output": None,
-        "cache_read": None,
-        "cache_write": None,
-        "models": [],
+    usage = claude_attempt_usage(result_event)
+    if not usage.measured:
+        return {
+            "input": None,
+            "output": None,
+            "cache_read": None,
+            "cache_write": None,
+            "models": [],
+        }
+    return {
+        "input": usage.input_tokens,
+        "output": usage.output_tokens,
+        "cache_read": usage.cache_read_tokens,
+        "cache_write": usage.cache_write_tokens,
+        "models": usage.models,
     }
-
-    model_usage = result_event.get("modelUsage")
-    if isinstance(model_usage, dict) and model_usage:
-        acc = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
-        for model_name, usage in model_usage.items():
-            if not isinstance(usage, dict):
-                continue
-            totals["models"].append(str(model_name))
-            acc["input"] += int(usage.get("inputTokens") or 0)
-            acc["output"] += int(usage.get("outputTokens") or 0)
-            acc["cache_read"] += int(usage.get("cacheReadInputTokens") or 0)
-            acc["cache_write"] += int(usage.get("cacheCreationInputTokens") or 0)
-        totals.update(acc)
-        totals["models"].sort()
-        return totals
-
-    usage = result_event.get("usage")
-    if isinstance(usage, dict):
-        totals["input"] = int(usage.get("input_tokens") or 0)
-        totals["output"] = int(usage.get("output_tokens") or 0)
-        totals["cache_read"] = int(usage.get("cache_read_input_tokens") or 0)
-        totals["cache_write"] = int(usage.get("cache_creation_input_tokens") or 0)
-    return totals
 
 
 def _parse_step_and_item_key(jsonl_path: Path, *, run_dir: Path) -> tuple[str, str]:

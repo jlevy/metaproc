@@ -959,7 +959,8 @@ class TestLogFile:
         lf = LogFile(log_file, 0)
         lf.read_new_events()
         assert lf.usage_stats is not None
-        assert lf.usage_stats.input_tokens == 1000
+        # 1000 reported input includes 200 cached; the disjoint split is 800.
+        assert lf.usage_stats.input_tokens == 800
         assert lf.usage_stats.cache_read_tokens == 200
         assert lf.usage_stats.output_tokens == 50
         assert lf.usage_stats.provider == "openai"

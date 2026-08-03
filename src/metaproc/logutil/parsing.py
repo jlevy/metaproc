@@ -24,6 +24,7 @@ from typing import Any, Protocol, cast, runtime_checkable
 from prettyfmt import fmt_timedelta
 
 from metaproc.io import ArtifactPath, logical_path
+from metaproc.logutil.claude_usage import claude_attempt_usage
 from metaproc.logutil.usage import (
     UsageStats,
     extract_gemini_usage,
@@ -1756,13 +1757,21 @@ class LogFile:
                 us.cost_is_estimated = True
                 self.usage_stats = us
         elif adapter == "claude":
-            usage = raw.get("usage", {})
+            # Shared with the trace extractor so both planes report the same
+            # totals for the same file: modelUsage covers the whole attempt
+            # tree including subagents, while top-level `usage` does not.
+            attempt_usage = claude_attempt_usage(raw)
             self.usage_stats = UsageStats(
-                input_tokens=usage.get("input_tokens", 0),
-                output_tokens=usage.get("output_tokens", 0),
-                cache_read_tokens=usage.get("cache_read_input_tokens", 0),
-                cache_write_tokens=usage.get("cache_creation_input_tokens", 0),
+                input_tokens=attempt_usage.input_tokens,
+                output_tokens=attempt_usage.output_tokens,
+                cache_read_tokens=attempt_usage.cache_read_tokens,
+                cache_write_tokens=attempt_usage.cache_write_tokens,
                 cost_usd=ev.cost_usd or 0.0,
+                # Claude Code computes total_cost_usd locally from a bundled
+                # price table; Anthropic documents it as an estimate and says
+                # not to make billing decisions from it. Publishing it as
+                # actual spend is the defect this flag prevents.
+                cost_is_estimated=True,
                 duration_s=ev.duration_s or 0.0,
                 model=self.model or "",
                 provider="anthropic",

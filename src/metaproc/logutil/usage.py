@@ -221,8 +221,14 @@ def sum_codex_usage(turn_completed_event: dict[str, Any]) -> UsageStats:
     if not isinstance(usage_raw, dict):
         return stats
     usage = cast(dict[str, Any], usage_raw)
-    stats.input_tokens = int(usage.get("input_tokens", 0) or 0)
-    stats.cache_read_tokens = int(usage.get("cached_input_tokens", 0) or 0)
+    total_input = int(usage.get("input_tokens", 0) or 0)
+    cached_input = int(usage.get("cached_input_tokens", 0) or 0)
+    # Codex reports `cached_input_tokens` as a SUBSET of `input_tokens` (its own
+    # `non_cached_input()` is the difference). Copying both through verbatim
+    # charges the cached portion twice: once at the full input rate and again at
+    # the cache rate. Split it here so downstream pricing sees disjoint buckets.
+    stats.input_tokens = max(total_input - cached_input, 0)
+    stats.cache_read_tokens = cached_input
     stats.output_tokens = int(usage.get("output_tokens", 0) or 0)
     return stats
 

@@ -452,7 +452,9 @@ class TestSumCodexUsage:
             },
         }
         stats = sum_codex_usage(event)
-        assert stats.input_tokens == 6740
+        # cached_input_tokens is a subset of input_tokens, so the full-price
+        # bucket is the difference: 6740 - 1024.
+        assert stats.input_tokens == 5716
         assert stats.cache_read_tokens == 1024
         assert stats.output_tokens == 123
         assert stats.provider == "openai"

@@ -374,9 +374,12 @@ def _usage_event_for_file(
         # Fall back to scalar tracking that LogFile collects before usage_stats lands.
         if log_file.cost_usd is None and log_file.input_tokens is None:
             return None
+        # `log_file.cost_usd` is whatever the adapter printed, which for every
+        # agent CLI is a locally computed estimate. Calling it actual spend
+        # would assert provenance we do not have, so it lands in the list view.
         metrics = Metrics(
             wall_time_s=log_file.duration_s,
-            actual_cost_usd=log_file.cost_usd,
+            list_cost_usd=log_file.cost_usd,
             input_tokens=log_file.input_tokens,
             output_tokens=log_file.output_tokens,
             tool_calls=log_file.tool_calls,
@@ -400,15 +403,23 @@ def _usage_event_for_file(
         cache_write_tokens=stats.cache_write_tokens or None,
         tool_calls=stats.tool_calls or None,
     )
-    if stats.cost_usd:
-        if stats.cost_is_estimated:
-            metrics.list_cost_usd = stats.cost_usd
-        else:
-            metrics.actual_cost_usd = stats.cost_usd
-    elif stats.model:
-        estimated_cost = compute_cost(stats, load_pricing())
-        if estimated_cost:
-            metrics.list_cost_usd = estimated_cost
+    # Two independent views, never one substituting for the other:
+    #   actual_cost_usd — provider-reported/reconciled spend only.
+    #   list_cost_usd   — what these tokens cost at published list rates.
+    # An adapter's self-reported dollars are a client-side estimate (Claude Code
+    # and codex both compute them locally from a bundled price table), so they
+    # populate neither view as "actual" and must not suppress the list
+    # comparison. See metaproc.adapters.billing for the provenance vocabulary.
+    if stats.cost_usd and not stats.cost_is_estimated:
+        metrics.actual_cost_usd = stats.cost_usd
+    if stats.model:
+        list_cost = compute_cost(stats, load_pricing(), use_list_prices=True)
+        if list_cost:
+            metrics.list_cost_usd = list_cost
+    if metrics.list_cost_usd is None and stats.cost_usd and stats.cost_is_estimated:
+        # No pricing entry for the model, but the adapter gave us its own
+        # estimate. Better than nothing, and still not "actual".
+        metrics.list_cost_usd = stats.cost_usd
 
     taxonomy = TaxonomyPaths(
         provider_path=["provider", stats.provider] if stats.provider else None,
