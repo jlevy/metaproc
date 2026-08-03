@@ -148,3 +148,29 @@ def test_gemini_turn_coverage_stays_unmeasured_when_stats_have_no_call_count(
     assert _meter(events, "llm", "agent_invocations").actual_quantity == 1
     assert _meter(events, "llm", "requests").coverage is CoverageState.UNMEASURED
     assert _meter(events, "web_search", "requests").coverage is CoverageState.UNMEASURED
+
+
+def test_codex_zero_completed_turns_is_a_measured_zero(tmp_path: Path) -> None:
+    """An attempt that started and never completed measured zero turns.
+
+    Reporting it as unmeasured hides exactly the case the meter exists for: a
+    session that burned an attempt and finished nothing.
+    """
+    path = tmp_path / "codex.jsonl"
+    path.write_text(
+        "\n".join(
+            json.dumps(record)
+            for record in (
+                {"type": "thread.started", "thread_id": "thread_fixture"},
+                {"type": "turn.started"},
+                {"type": "turn.failed"},
+            )
+        )
+        + "\n"
+    )
+
+    events = _extract(path)
+    turns = _meter(events, "llm", "turns")
+
+    assert turns.actual_quantity == 0
+    assert turns.coverage is not CoverageState.UNMEASURED

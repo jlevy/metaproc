@@ -129,9 +129,19 @@ def _build_gemini_flags(
 
     if "tools" in merged_config:
         configured = merged_config.get("tools")
-        values = configured if isinstance(configured, list | tuple | set) else []
+        if not isinstance(configured, list | tuple | set):
+            # Falling back to an empty allow list here would still write the
+            # deny-all rule below, silently blocking every tool. That surfaces
+            # as an agent that mysteriously refuses to work rather than as a
+            # config error, so refuse instead.
+            msg = (
+                "gemini-cli: step config 'tools' must be a list of tool names, got "
+                f"{type(configured).__name__}. Remove the key to allow all tools, or "
+                "give an explicit list."
+            )
+            raise ValueError(msg)
         allowed = sorted(
-            {_GEMINI_TOOL_NAMES.get(str(tool).casefold(), str(tool)) for tool in values}
+            {_GEMINI_TOOL_NAMES.get(str(tool).casefold(), str(tool)) for tool in configured}
         )
         allow_rule = ""
         if allowed:

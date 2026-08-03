@@ -124,11 +124,15 @@ def _codex_observations(
     )
     if not attempted:
         return []
+    # `attempted` already establishes that turn lifecycle events exist, so zero
+    # completions is a measured zero — an attempt that started and never
+    # finished. Passing `completed or None` would report it as unmeasured,
+    # which is the one case where the distinction matters most.
     return [
         _turn_observation(
             provider="openai",
             model=log_file.model or None,
-            quantity=completed or None,
+            quantity=completed,
         )
     ]
 

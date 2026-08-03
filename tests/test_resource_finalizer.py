@@ -14,6 +14,7 @@ from typer.testing import CliRunner
 from metaproc.cli import app
 from metaproc.commands.resource_report import _render_tree
 from metaproc.engine.resource_finalizer import (
+    _state_from_local_terminal_evidence,
     finalize_run_resources,
     recover_incomplete_resource_artifacts,
     state_for_terminal_error,
@@ -22,12 +23,22 @@ from metaproc.io import fmf_read_frontmatter, read_yaml_file
 from metaproc.io.state_io import mark_failed_at, mark_running_at
 from metaproc.models.resource_budget import FinalizationState, ResourceUsageSummary
 from metaproc.models.resources import ResourcesDocument
+from metaproc.osutils.memory_pressure import PressureLevel
 from metaproc.paths import (
+    POOL_STATUS_FILE,
     resource_usage_summary_file,
     resources_file,
     run_resource_events_file,
+    run_state_dir,
 )
 from metaproc.runpool.process_events import ProcessEventLogger
+from metaproc.runpool.status import (
+    FailureCounts,
+    PressureStatus,
+    ProcessStatus,
+    RunPoolStatus,
+    write_status,
+)
 from metaproc.viz_loader import load_plan_bundle
 
 
@@ -397,3 +408,81 @@ def test_run_process_finalizes_success_failure_and_status_recovery(tmp_path: Pat
     recovered_failed = json.loads(resources_file(runs_dir / "run_finalizer-failed").read_text())
     assert recovered_failed["finalization"]["state"] == "failed"
     assert recovered_failed["finalization"]["terminal_error_type"] == "CLIError"
+
+
+def _pool_status(
+    *, updated_at: str, timeouts: int = 0, kill_reason: str | None = None
+) -> RunPoolStatus:
+    return RunPoolStatus(
+        pool_id="p",
+        pid=1,
+        started_at="2026-08-02T00:00:00Z",
+        updated_at=updated_at,
+        backend="local",
+        max_concurrency=1,
+        current_concurrency=1,
+        active_count=0,
+        pending_count=0,
+        completed_count=1,
+        failed_count=0,
+        killed_count=0,
+        pressure=PressureStatus(
+            level=PressureLevel.NORMAL, available_pct=90.0, swap_used_gb=0.0, source="test"
+        ),
+        failure_counts=FailureCounts(timeout=timeouts),
+        recent_completions=[
+            ProcessStatus(
+                backend="local",
+                label="item",
+                started_at="2026-08-02T00:00:00Z",
+                elapsed_s=1.0,
+                status="killed" if kill_reason else "completed",
+                kill_reason=kill_reason,
+            )
+        ],
+    )
+
+
+def test_earlier_step_timeouts_do_not_relabel_a_later_failure(tmp_path: Path) -> None:
+    """Pool timeout counters are cumulative and per-step.
+
+    A fan-out step that recorded timeouts earlier in the run must not make an
+    unrelated later orchestrator failure report as `timed_out`.
+    """
+    run_dir = tmp_path / "run_scoped-timeout"
+    state_root = run_state_dir(run_dir)
+
+    early = state_root / "pools" / "step-a"
+    early.mkdir(parents=True)
+    write_status(
+        early / POOL_STATUS_FILE, _pool_status(updated_at="2026-08-02T01:00:00Z", timeouts=3)
+    )
+
+    late = state_root / "pools" / "step-b"
+    late.mkdir(parents=True)
+    write_status(late / POOL_STATUS_FILE, _pool_status(updated_at="2026-08-02T02:00:00Z"))
+
+    assert (
+        _state_from_local_terminal_evidence(run_dir, FinalizationState.FAILED)
+        is FinalizationState.FAILED
+    )
+
+
+def test_timeout_in_the_terminal_pool_is_still_detected(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run_terminal-timeout"
+    state_root = run_state_dir(run_dir)
+
+    early = state_root / "pools" / "step-a"
+    early.mkdir(parents=True)
+    write_status(early / POOL_STATUS_FILE, _pool_status(updated_at="2026-08-02T01:00:00Z"))
+
+    late = state_root / "pools" / "step-b"
+    late.mkdir(parents=True)
+    write_status(
+        late / POOL_STATUS_FILE, _pool_status(updated_at="2026-08-02T02:00:00Z", timeouts=1)
+    )
+
+    assert (
+        _state_from_local_terminal_evidence(run_dir, FinalizationState.FAILED)
+        is FinalizationState.TIMED_OUT
+    )

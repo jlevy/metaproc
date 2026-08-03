@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from metaproc.adapters.claude_code import ClaudeCodeCliAdapter
-from metaproc.adapters.gemini import GeminiCliAdapter
+from metaproc.adapters.gemini import GeminiCliAdapter, _build_gemini_flags
 from metaproc.adapters.pi_cli import PiCliAdapter
 from metaproc.adapters.registry import (
     ADAPTER_REGISTRY,
@@ -645,3 +645,20 @@ class TestSanitizeTag:
 
     def test_dots_and_underscores_preserved(self) -> None:
         assert _sanitize_tag("model_v2.1") == "model_v2.1"
+
+
+class TestGeminiToolsBoundaryValidation:
+    """An unusable `tools` value must fail loudly, not deny everything."""
+
+    def test_non_collection_tools_raises_instead_of_denying_all(self) -> None:
+        with pytest.raises(ValueError, match="must be a list of tool names"):
+            _build_gemini_flags({"tools": "Read,Write"}, {})
+
+    def test_empty_tools_list_still_denies_all_deliberately(self) -> None:
+        # An explicit empty list is a real boundary ("no tools"), unlike a
+        # malformed value, so it keeps installing the deny-all policy.
+        flags = _build_gemini_flags({"tools": []}, {})
+        assert "--policy" in flags
+
+    def test_absent_tools_key_installs_no_policy(self) -> None:
+        assert "--policy" not in _build_gemini_flags({}, {})

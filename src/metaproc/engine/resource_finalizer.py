@@ -282,21 +282,28 @@ def _state_from_local_terminal_evidence(
         if isinstance(error, str) and _is_timeout_error(error):
             return FinalizationState.TIMED_OUT
 
-    saw_cancel = False
+    # Only the pool that was live when the run failed is evidence about *this*
+    # failure. Pool statuses accumulate across a run's fan-out steps, and their
+    # timeout counters are cumulative, so scanning all of them would let an
+    # earlier step's timeouts relabel an unrelated later orchestrator failure as
+    # a timeout. Take the most recently updated status as the terminal one.
+    statuses = []
     for path in iter_artifact_paths(state_root, f"**/{POOL_STATUS_FILE}"):
         try:
-            status = read_pool_status(path)
+            statuses.append(read_pool_status(path))
         except (OSError, ValueError, YAMLError):
             continue
-        if status.failure_counts.timeout > 0 or any(
-            item.kill_reason == "timeout" for item in status.recent_completions
-        ):
-            return FinalizationState.TIMED_OUT
-        if any(
-            item.kill_reason in {"external_kill", "shutdown"} for item in status.recent_completions
-        ):
-            saw_cancel = True
-    return FinalizationState.CANCELLED if saw_cancel else state
+    if not statuses:
+        return state
+
+    latest = max(statuses, key=lambda s: s.updated_at)
+    if latest.failure_counts.timeout > 0 or any(
+        item.kill_reason == "timeout" for item in latest.recent_completions
+    ):
+        return FinalizationState.TIMED_OUT
+    if any(item.kill_reason in {"external_kill", "shutdown"} for item in latest.recent_completions):
+        return FinalizationState.CANCELLED
+    return state
 
 
 def _is_timeout_error(error: str) -> bool:
