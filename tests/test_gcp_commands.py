@@ -342,6 +342,45 @@ class TestGcpRunsIdentity:
             "run-abc [v1-second]",
         }
 
+    def test_absent_runnable_metadata_uses_identity_key_fallback(self) -> None:
+        run_id = "run_abc"
+        missing_variables = self._job(run_id, "missing-variables", include_exact_metadata=False)
+        environment = SimpleNamespace(variables=None)
+        runnable = SimpleNamespace(environment=environment)
+        missing_variables.task_groups = [
+            SimpleNamespace(task_spec=SimpleNamespace(runnables=[runnable]))
+        ]
+        missing_groups = self._job(run_id, "missing-groups", include_exact_metadata=False)
+        missing_groups.task_groups = None
+        missing_runnables = self._job(run_id, "missing-runnables", include_exact_metadata=False)
+        missing_runnables.task_groups = [SimpleNamespace(task_spec=SimpleNamespace(runnables=None))]
+        client = MagicMock()
+        client.list_jobs.return_value = [
+            missing_variables,
+            missing_groups,
+            missing_runnables,
+        ]
+
+        with (
+            patch("metaproc.commands.gcp._require_gcp_batch"),
+            patch("google.cloud.batch_v1.BatchServiceClient", return_value=client),
+        ):
+            result = CliRunner().invoke(
+                app,
+                ["gcp", "runs", "--project", "p", "--json"],
+            )
+
+        assert result.exit_code == 0, result.output
+        identity_key = run_identity_label(run_id)
+        inventory = json.loads(result.output)
+        fallback_key = f"run-abc [{identity_key}]"
+        assert set(inventory) == {fallback_key}
+        assert {job["job_id"] for job in inventory[fallback_key]} == {
+            "missing-variables",
+            "missing-groups",
+            "missing-runnables",
+        }
+
     def test_legacy_job_without_identity_key_keeps_readable_group(self) -> None:
         job = self._job("legacy-run-id", "legacy", include_exact_metadata=False)
         job.labels.pop("metaproc-run-key")

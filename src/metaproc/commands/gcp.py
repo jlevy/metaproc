@@ -27,6 +27,7 @@ import shutil
 import subprocess
 import time
 from collections import defaultdict, deque
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -226,11 +227,13 @@ def _run_id_from_job_metadata(job: Any, identity_key: str) -> str | None:
         run_identity_label,
     )
 
-    for task_group in getattr(job, "task_groups", ()):
+    for task_group in getattr(job, "task_groups", None) or ():
         task_spec = getattr(task_group, "task_spec", None)
-        for runnable in getattr(task_spec, "runnables", ()):
+        for runnable in getattr(task_spec, "runnables", None) or ():
             environment = getattr(runnable, "environment", None)
-            variables = getattr(environment, "variables", {})
+            variables = getattr(environment, "variables", None)
+            if not isinstance(variables, Mapping):
+                continue
             raw_variables = variables.get(MetaprocEnv.METAPROC_VARS.name, "")
             if not isinstance(raw_variables, str) or not raw_variables:
                 continue
