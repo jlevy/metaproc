@@ -5,7 +5,7 @@ title: "Address review: PR #6 — resource accounting follow-ups"
 kind: task
 status: in_progress
 priority: 1
-version: 8
+version: 11
 labels:
   - pr-6
   - review
@@ -17,7 +17,10 @@ child_order_hints:
   - is-01kz2xz09nkhtaywj4zb75tbmp
   - is-01kz2xz0q71daf6p8jdks6nw85
   - is-01kz2xz14jvbkjs2gh7gk55xdg
+  - is-01kz2y3hdgz6zveescccx821xh
+  - is-01kz2y3hxx4817s9sny6qr0629
+  - is-01kz2y3jccrsgpfe375naa07dg
 created_at: 2026-08-03T04:26:18.232Z
-updated_at: 2026-08-03T04:26:35.127Z
+updated_at: 2026-08-03T04:28:56.587Z
 ---
 Track the unresolved review findings required to make Metaproc PR #6 safe to land before stacked PR #8. Scope is limited to PR #6 and its inherited review fixes; PR #2 is explicitly out of scope.
