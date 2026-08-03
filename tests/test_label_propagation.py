@@ -16,7 +16,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 from google.cloud.batch_v1.types import JobStatus
 
-from metaproc.cloud.gcp.batch_backend import GCPBatchConfig, _build_secret_env_vars
+from metaproc.cloud.gcp.batch_backend import (
+    GCPBatchConfig,
+    _build_secret_env_vars,
+    run_identity_label,
+)
 from metaproc.cloud.gcp.orchestrator_dispatch import (
     OrchestratorDispatchConfig,
     dispatch_orchestrator,
@@ -121,6 +125,7 @@ class TestWorkerDispatchLabelPropagation:
         assert job.allocation_policy.labels == job.labels
         assert job.labels["metaproc-role"] == "worker"
         assert job.labels["metaproc-run-id"] == "test-run"
+        assert job.labels["metaproc-run-key"] == run_identity_label("test-run")
         assert len(task_spec.runnables) == 2
         assert task_spec.runnables[0].display_name == "mount-filestore"
         assert "mount -t nfs" in task_spec.runnables[0].script.text
@@ -173,6 +178,7 @@ class TestOrchestratorDispatchLabelPropagation:
         assert job.allocation_policy.labels == job.labels
         assert job.labels["metaproc-role"] == "orchestrator"
         assert job.labels["metaproc-run-id"] == "test-run"
+        assert job.labels["metaproc-run-key"] == run_identity_label("test-run")
         assert len(task_spec.runnables) == 2
         assert task_spec.runnables[0].display_name == "mount-filestore"
         assert "mount -t nfs" in task_spec.runnables[0].script.text

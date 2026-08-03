@@ -23,6 +23,7 @@ from metaproc.engine.run_status import (
     scan_run_status,
 )
 from metaproc.errors import CLIError
+from metaproc.ids import is_typed_id
 from metaproc.io import read_yaml_file
 from metaproc.io.overrides import read_overrides
 from metaproc.models.plan import Plan
@@ -94,18 +95,23 @@ def _load_plan_from_run(run_dir: Path) -> Plan | None:
 
 
 def _looks_like_run_id(target: str) -> bool:
-    """Return True if ``target`` looks like a GCP-sanitized run-id.
+    """Return True if ``target`` looks like a run-id rather than a path.
 
-    Run-ids are lowercase alphanumeric, hyphen-separated, with at least
+    A typed identifier is recognized by its registered prefix, which is exact rather than
+    heuristic. The pattern below still covers historical untyped run-ids.
+
+    Historical run-ids are lowercase alphanumeric, hyphen-separated, with at least
     three segments (e.g. ``mine-2026-04-09``, ``cloud-500-ds-2026-04-12``).
-    No path separators; max 63 chars per the GCP label constraint in
-    ``metaproc.cloud.gcp.batch_backend.sanitize_label``.
+    Their heuristic retains the old 63-character GCP-label bound. Exact typed IDs are
+    not label-limited because modern cloud lookup uses a fixed-width identity hash.
 
     Requiring multiple segments avoids false positives on short bare
     words like ``abc`` or ``cache`` that happen to live in cwd. Operators
     can still force remote mode with ``--remote`` when the heuristic
     rejects a legitimate run-id.
     """
+    if is_typed_id(target, "run"):
+        return True
     return len(target) <= 63 and bool(_RUN_ID_RE.match(target))
 
 

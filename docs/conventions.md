@@ -48,6 +48,68 @@ Use dot-separated suffixes such as `name.template.md`, not `name-template.md`.
 - **Dot-separated suffixes** compose with kebab-case: `retrieval-kb.generated.yaml`,
   `predict-item.runbook.md`, `prediction.template.md`.
 
+## Typed Identifiers
+
+Every self-identifying immutable ID is `prefix-payload`, modeled on AWS resource IDs
+(`i-0abc123def456`, `subnet-04ccf456919e69055`).
+
+```text
+id      := prefix "-" payload
+prefix  := [a-z][a-z0-9]{0,7}          # never contains a dash
+payload := readable, dash-separated
+```
+
+A prefix carries the type, so an ID is self-describing and a value of the wrong type is
+obvious on sight rather than at the point of failure.
+Allocate every ID through `metaproc.ids`; never build one with an f-string.
+
+| Form | Example | When |
+| --- | --- | --- |
+| Compact random | `run-a7x3mq9bk2f0wp` | default |
+| Timestamped | `run-20260408T003012Z.2555210000.foayjjhknb` | time-ordered allocation |
+| Derived | `rev-3f9a2kx7m1b0c4` | stable child or keyed identity |
+| Readable locator | `run-company-info-aapl-2026-07-31` | resumable, human-browsed runs |
+
+### Readable, not parsable
+
+Only the prefix is parsed, by splitting once through `parse_typed_id()`. Dashes inside a
+payload are cosmetic word separators, and **no consumer may split a payload on them**.
+Reverse-engineering fields out of an ID couples every reader to one producer’s format;
+read the run’s own metadata instead.
+
+Where structure genuinely is machine-parsed, the interior uses `.` so the intent is
+explicit and cannot be mistaken for a word separator.
+The timestamped form is the only current case.
+Only helpers in `metaproc.ids`, including `derive_timestamped_typed_child_id()` and
+`require_compact_timestamped_typed_id()`, may read that structure.
+
+Readers accept a small set of historical identifier shapes so published partitions stay
+resolvable; `metaproc.ids` owns that entirely, and nothing else needs to know about it.
+Two identifiers are equal only when their strings are equal, so no lookup, comparison,
+or dedup path may rewrite a delimiter to make a match.
+Historical underscore IDs remain read-only except when a deterministic derivation must
+replay an identity that was already published.
+New allocations and derivations use the dash writer form.
+
+### Randomness
+
+`RANDOM_TYPED_ID_BITS` and `TIMESTAMPED_TYPED_ID_RANDOM_BITS` are the defaults; both
+allocators take a `bits` parameter so a caller can widen or narrow a namespace without a
+new API. Non-temporal allocations allow 64 through 256 requested bits.
+At one million allocations, the birthday-bound approximation `n(n-1)/(2*2^b)` is about
+`2.7e-8` at the 64-bit minimum and `1.1e-10` at the 72-bit default.
+Timestamped allocations allow 48 through 256 random bits because collisions compete only
+within the same timestamp and fractional-second bucket; even 10,000 allocations in one
+bucket have an approximate `1.8e-7` collision probability at 48 bits.
+
+Deterministic non-temporal payloads allow 12 through 50 base36 characters.
+Twelve characters provide about 62 bits and an approximate `1.1e-7` birthday bound at
+one million identities; the 14-character default provides about 72 bits.
+Timestamped child IDs allow 10 through 50 characters because the parent timestamp and
+immutable parent ID also scope the derived namespace.
+These bounds keep custom widths compatible with compact classification and recursive
+timestamp-child derivation.
+
 ## Process Structure
 
 - `process/` holds authored methodology and templates.
@@ -248,7 +310,7 @@ payload fields.
 ---
 usage:
   schema: "metaproc:UsageReport/0.2"
-  run_id: mine-tech-mix-100-2026-04-10
+  run_id: run-20260410T090000Z.1180400000.mq3xk7vb2p
   # ... payload fields ...
 ---
 ```

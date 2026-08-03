@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: Metaproc Core
 
-**Date:** 2026-03-23 (last updated 2026-05-23) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-08-02) **Status:** Approved
 
 > **Maintenance**: This is a maintained architecture doc.
 > Revise via `tbd shortcut revise-architecture-doc` (which prompts you to verify content
@@ -21,7 +21,7 @@ status: Approved
 > [arch-claude-code-harness](arch-claude-code-harness.md),
 > [arch-testing](arch-testing.md).
 
-Revision: rev2i
+Revision: rev2j
 
 Implementation reference for Metaproc, covering how the conceptual model defined in
 [metaproc-concepts-and-principles.md](../../src/metaproc/docs/metaproc-concepts-and-principles.md)
@@ -1154,7 +1154,7 @@ The framework provides six complementary monitoring layers:
 | Item-level | `status` | `.state/tasks/.../status.yaml` plus `process-status.yaml` | Run progress counts, timing, completion checks |
 | Process-level | `pool status` | `runpool-status.yaml` | Live process health (RSS, descendants, kills) |
 | DAG-level | `tail` | `process-events.jsonl` | Process orchestrator events (step lifecycle, levels) |
-| Cloud-level | `gcp status <run-id>` | GCP Batch API | Orchestrator + worker job states by run-id label |
+| Cloud-level | `gcp status <run-id>` | GCP Batch API | Orchestrator + worker states by exact run key, with a legacy-label fallback |
 | Visual | `metab` (external MetaBrowser CLI) | source logs, runpool events, process events, derived trace | Browser-based charts and log exploration |
 
 `tail` answers “what is this agent doing right now?”
@@ -2357,7 +2357,9 @@ Shared by worker and orchestrator entrypoints via
   On failure, reads NFS `runpool-status.yaml` for error detail (failure counts, kill
   reasons). During polling, reads NFS pool status for live progress
   (completed/failed/active counts).
-- **Labels**: `metaproc-role=worker`, `metaproc-worker-id=N`, `metaproc-step=<step_id>`.
+- **Labels**: `metaproc-role=worker`, `metaproc-worker-id=N`, `metaproc-step=<step_id>`,
+  plus readable `metaproc-run-id=<sanitized_run_id>` and exact
+  `metaproc-run-key=v1-<sha256_prefix>` run identity.
 - **Defaults**: `n2-highmem-8` machine type, 50 concurrency per worker, Spot VMs.
 
 `WorkerDispatchConfig` (frozen dataclass): `gcp`, `num_workers`, `max_concurrency`,
@@ -2385,7 +2387,8 @@ Unified container entrypoint for worker containers:
 - `RUNS_DIR` is set to `<filestore_mount_path>/runs` (e.g., `/mnt/filestore/runs`) when
   Filestore is configured.
   This is the run root, not the bare NFS mount point.
-- Labels: `metaproc-role=orchestrator`, `metaproc-run-id=<run_id>`.
+- Labels: `metaproc-role=orchestrator`, readable `metaproc-run-id=<sanitized_run_id>`,
+  and exact `metaproc-run-key=v1-<sha256_prefix>`.
 - Polls in a while-True loop until terminal state.
 
 `OrchestratorDispatchConfig` (frozen dataclass): `gcp`, `process_dir_rel`, `variables`,
@@ -2414,10 +2417,11 @@ Unified container entrypoint for worker containers:
 `network`/`subnetwork`, `labels`, `secret_env_vars`, `runs_dir`,
 `filestore_server`/`filestore_share`/`filestore_mount_path`, `queue_timeout_s`.
 
-Utility functions: `sanitize_label()` (GCP-safe resource names),
-`_build_secret_env_vars()` (Secret Manager mapping from env vars),
-`build_pi_models_json()` (rewrite pi CLI config for cloud), `is_transient_api_error()`
-(retry classification).
+Utility functions: `sanitize_label()` (GCP-safe resource names and readable labels),
+`run_identity_label()` / `run_identity_labels()` (fixed-width exact run locator plus
+readable compatibility label), `_build_secret_env_vars()` (Secret Manager mapping from
+env vars), `build_pi_models_json()` (rewrite pi CLI config for cloud),
+`is_transient_api_error()` (retry classification).
 
 ### 21.8 LaunchBackend Protocol
 
@@ -2448,17 +2452,25 @@ tracking). `MockBackend` is available for testing.
 ### 21.9 Monitoring Cloud Runs
 
 - **`gcp status <target>`**: auto-detects local run directory or run-id string.
-  Queries Batch API by job name (local) or `metaproc-run-id` label (run-id).
+  Queries Batch API by job name (local) or both exact `metaproc-run-key` and readable
+  `metaproc-run-id` (run-id).
+  Local display resolves the immutable ID from `run-config.yaml`, then hash-verified job
+  metadata, before a path fallback.
+  When exact jobs exist, it adds only unkeyed legacy jobs whose structured `RUN_ID`
+  verifies as the same run; fully legacy runs retain the readable-label fallback.
   Shows orchestrator + worker jobs with role, state, step, worker_id.
 - **`gcp scale <target> --step <step>`**: updates desired worker topology for an active
   fan-out step by writing `scale-state.yaml` and, when possible, reconciling new worker
   jobs immediately.
 - **`gcp logs <target>`**: streams logs from Cloud Logging.
-  Auto-detects local dir or run-id.
+  Auto-detects local dir or run-id and uses the same exact-first job resolution.
 - **`gcp cancel <target>`**: cancels all running/queued Batch jobs.
-  Auto-detects local dir or run-id.
+  Auto-detects local dir or run-id and uses the same exact-first job resolution.
   Writes pool kill sentinel if local dir exists.
-- **`gcp runs`**: lists all active metaproc runs across the project, grouped by run-id.
+- **`gcp runs`**: lists metaproc runs across the project.
+  Modern jobs group by `metaproc-run-key`; the command recovers `RUN_ID` from
+  hash-verified structured `METAPROC_VARS` metadata so exact IDs survive display and
+  JSON output. Legacy jobs continue to group by readable label.
 - **`gcp resources` / `gcp filestore` / `gcp archive` / `gcp cleanup`**: operator tools
   for cloud inventory, Filestore utilization, long-term run archiving, and terminal-job
   cleanup.
@@ -2618,6 +2630,18 @@ the original future-work backlog.
 * * *
 
 ## Revision History
+
+### rev2j (2026-08-02)
+
+Typed run identity and cloud correlation:
+
+- Updated cloud monitoring and dispatch summaries for readable `metaproc-run-id` and
+  exact `metaproc-run-key` labels.
+- Documented exact lookup, hash-verified mixed-generation jobs, the safe fully legacy
+  fallback, and exact run-ID recovery in `gcp runs`.
+- Documented canonical local status identity resolution for process-subdirectory
+  layouts.
+- Updated the cloud monitoring-layer summary and Batch utility inventory.
 
 ### rev2i (2026-04-20)
 

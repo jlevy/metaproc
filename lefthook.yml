@@ -37,4 +37,6 @@ pre-commit:
 pre-push:
   commands:
     verify:
-      run: make verify
+      # Git exports repository-local variables to hooks. Tests that create
+      # fixture repositories must not inherit them and mutate this checkout.
+      run: env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES make verify

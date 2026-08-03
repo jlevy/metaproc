@@ -32,22 +32,22 @@ def test_slugify_empty() -> None:
 
 # Pattern for strif timestamped_uid: 20260408T003012Z-2555210000-foayjjh
 _UID_PATTERN = r"\d{8}T\d{6}Z-\d+-[a-z0-9]+"
+_TYPED_RUN_PATTERN = r"run-\d{8}T\d{6}Z\.\d+\.[a-z0-9]+"
 
 
 def test_generate_run_id_default_template() -> None:
-    """Default template produces {process_slug}-{uid}-{title_slug}."""
+    """Default generation produces only the compact timestamped identity."""
     result = generate_run_id("mine", title="tech mix 500")
-    assert result.startswith("mine-")
-    assert result.endswith("-tech-mix-500")
-    assert re.search(_UID_PATTERN, result)
+    assert re.fullmatch(_TYPED_RUN_PATTERN, result)
+    assert "mine" not in result
+    assert "tech-mix-500" not in result
 
 
 def test_generate_run_id_no_title() -> None:
-    """Without title, no trailing slug or doubled hyphens."""
+    """Process metadata does not alter the generated run identity."""
     result = generate_run_id("predict")
-    assert result.startswith("predict-")
-    assert not result.endswith("-")
-    assert "--" not in result
+    assert re.fullmatch(_TYPED_RUN_PATTERN, result)
+    assert "predict" not in result
 
 
 def test_generate_run_id_custom_template(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -57,6 +57,14 @@ def test_generate_run_id_custom_template(monkeypatch: pytest.MonkeyPatch) -> Non
     # Should be just the uid, no process slug or title
     assert not result.startswith("mine")
     assert re.fullmatch(_UID_PATTERN, result)
+
+
+def test_custom_legacy_template_receives_the_original_process_slug(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RUN_ID_TEMPLATE", "legacy-{process_slug}")
+
+    assert generate_run_id("Mine / Batch") == "legacy-Mine / Batch"
 
 
 def test_explicit_run_id_overrides_generation() -> None:

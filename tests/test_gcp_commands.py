@@ -13,6 +13,7 @@ import re
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -23,6 +24,7 @@ from typer.main import get_command
 from typer.testing import CliRunner
 
 from metaproc.cli import app
+from metaproc.cloud.gcp.batch_backend import run_identity_label, sanitize_label
 from metaproc.commands.gcp import (
     _ASSET_TYPES,
     _build_env_exports,
@@ -36,6 +38,7 @@ from metaproc.commands.gcp import (
     _is_run_dir,
     _list_filestore_instances,
     _query_filestore_utilization,
+    _query_jobs_by_run_id,
     _read_events,
     _remote_editable_install_command,
     _resolve_gateway_host,
@@ -177,6 +180,323 @@ class TestResolveJobNamesAndProject:
 
         assert job_names == ["projects/p/locations/r/jobs/j1"]
         assert project == "test-project"
+
+
+class TestRunIdentityLookup:
+    @staticmethod
+    def _legacy_job(run_id: str, job_id: str) -> MagicMock:
+        job = MagicMock()
+        job.name = f"projects/p/locations/r/jobs/{job_id}"
+        job.labels = {"metaproc-run-id": sanitize_label(run_id)}
+        environment = SimpleNamespace(variables={"METAPROC_VARS": json.dumps({"RUN_ID": run_id})})
+        runnable = SimpleNamespace(environment=environment)
+        task_spec = SimpleNamespace(runnables=[runnable])
+        job.task_groups = [SimpleNamespace(task_spec=task_spec)]
+        return job
+
+    def test_colliding_readable_labels_use_distinct_exact_queries(self) -> None:
+        assert sanitize_label("run_abc") == sanitize_label("run-abc")
+        assert run_identity_label("run_abc") != run_identity_label("run-abc")
+
+        client = MagicMock()
+        exact_job = MagicMock()
+        client.list_jobs.return_value = [exact_job]
+        with patch("google.cloud.batch_v1.BatchServiceClient", return_value=client):
+            jobs = _query_jobs_by_run_id("run_abc", "project", "region")
+
+        assert jobs == [exact_job]
+        assert client.list_jobs.call_count == 2
+        identity_request = client.list_jobs.call_args_list[0].kwargs["request"]
+        readable_request = client.list_jobs.call_args_list[1].kwargs["request"]
+        assert run_identity_label("run_abc") in identity_request.filter
+        assert "metaproc-run-key" in identity_request.filter
+        assert 'labels.metaproc-run-id="run-abc"' == readable_request.filter
+
+    def test_legacy_fallback_excludes_modern_jobs_with_colliding_readable_label(self) -> None:
+        legacy_job = MagicMock()
+        legacy_job.labels = {"metaproc-run-id": "run-abc"}
+        modern_collision = MagicMock()
+        modern_collision.labels = {
+            "metaproc-run-id": "run-abc",
+            "metaproc-run-key": "v1-other",
+        }
+        client = MagicMock()
+        client.list_jobs.side_effect = [[], [legacy_job, modern_collision]]
+
+        with patch("google.cloud.batch_v1.BatchServiceClient", return_value=client):
+            jobs = _query_jobs_by_run_id("run_abc", "project", "region")
+
+        assert jobs == [legacy_job]
+        assert client.list_jobs.call_count == 2
+        fallback_request = client.list_jobs.call_args.kwargs["request"]
+        assert 'labels.metaproc-run-id="run-abc"' == fallback_request.filter
+
+    def test_exact_lookup_includes_only_verified_legacy_jobs_from_same_run(self) -> None:
+        requested_run_id = "run_abc"
+        exact_job = MagicMock()
+        exact_job.labels = {"metaproc-run-key": run_identity_label(requested_run_id)}
+        same_run_legacy = self._legacy_job(requested_run_id, "same-run-worker")
+        colliding_legacy = self._legacy_job("run-abc", "other-run-worker")
+        unverifiable_legacy = MagicMock()
+        unverifiable_legacy.labels = {"metaproc-run-id": sanitize_label(requested_run_id)}
+        unverifiable_legacy.task_groups = []
+
+        client = MagicMock()
+        client.list_jobs.side_effect = [
+            [exact_job],
+            [exact_job, same_run_legacy, colliding_legacy, unverifiable_legacy],
+        ]
+
+        with patch("google.cloud.batch_v1.BatchServiceClient", return_value=client):
+            jobs = _query_jobs_by_run_id(requested_run_id, "project", "region")
+
+        assert jobs == [exact_job, same_run_legacy]
+        assert client.list_jobs.call_count == 2
+
+
+class TestGcpRunsIdentity:
+    @staticmethod
+    def _job(
+        run_id: str,
+        job_id: str,
+        *,
+        include_exact_metadata: bool = True,
+        identity_key: str | None = None,
+    ) -> MagicMock:
+        job = MagicMock()
+        job.name = f"projects/p/locations/r/jobs/{job_id}"
+        job.labels = {
+            "metaproc-run-id": sanitize_label(run_id),
+            "metaproc-run-key": identity_key or run_identity_label(run_id),
+            "metaproc-role": "orchestrator",
+        }
+        job.status.state = JobStatus.State.RUNNING
+        if include_exact_metadata:
+            environment = SimpleNamespace(
+                variables={"METAPROC_VARS": json.dumps({"RUN_ID": run_id})}
+            )
+            runnable = SimpleNamespace(environment=environment)
+            task_spec = SimpleNamespace(runnables=[runnable])
+            job.task_groups = [SimpleNamespace(task_spec=task_spec)]
+        else:
+            job.task_groups = []
+        return job
+
+    def test_exact_metadata_keeps_colliding_and_dot_separated_ids_distinct(self) -> None:
+        dot_id = "run-20260803T010203Z.1234560000.abc123def4"
+        jobs = [
+            self._job("run_abc", "underscore"),
+            self._job("run-abc", "dash"),
+            self._job(dot_id, "timestamped"),
+        ]
+        client = MagicMock()
+        client.list_jobs.return_value = jobs
+
+        with (
+            patch("metaproc.commands.gcp._require_gcp_batch"),
+            patch("google.cloud.batch_v1.BatchServiceClient", return_value=client),
+        ):
+            result = CliRunner().invoke(
+                app,
+                ["gcp", "runs", "--project", "p", "--json"],
+            )
+
+        assert result.exit_code == 0, result.output
+        inventory = json.loads(result.output)
+        assert set(inventory) == {"run_abc", "run-abc", dot_id}
+        assert inventory["run_abc"][0]["job_id"] == "underscore"
+        assert inventory["run-abc"][0]["job_id"] == "dash"
+        assert inventory[dot_id][0]["job_id"] == "timestamped"
+
+    def test_unreadable_modern_metadata_falls_back_to_distinct_identity_keys(self) -> None:
+        jobs = [
+            self._job(
+                "run_abc",
+                "first",
+                include_exact_metadata=False,
+                identity_key="v1-first",
+            ),
+            self._job(
+                "run-abc",
+                "second",
+                include_exact_metadata=False,
+                identity_key="v1-second",
+            ),
+        ]
+        client = MagicMock()
+        client.list_jobs.return_value = jobs
+
+        with (
+            patch("metaproc.commands.gcp._require_gcp_batch"),
+            patch("google.cloud.batch_v1.BatchServiceClient", return_value=client),
+        ):
+            result = CliRunner().invoke(
+                app,
+                ["gcp", "runs", "--project", "p", "--json"],
+            )
+
+        assert result.exit_code == 0, result.output
+        inventory = json.loads(result.output)
+        assert set(inventory) == {
+            "run-abc [v1-first]",
+            "run-abc [v1-second]",
+        }
+
+    def test_absent_runnable_metadata_uses_identity_key_fallback(self) -> None:
+        run_id = "run_abc"
+        missing_variables = self._job(run_id, "missing-variables", include_exact_metadata=False)
+        environment = SimpleNamespace(variables=None)
+        runnable = SimpleNamespace(environment=environment)
+        missing_variables.task_groups = [
+            SimpleNamespace(task_spec=SimpleNamespace(runnables=[runnable]))
+        ]
+        missing_groups = self._job(run_id, "missing-groups", include_exact_metadata=False)
+        missing_groups.task_groups = None
+        missing_runnables = self._job(run_id, "missing-runnables", include_exact_metadata=False)
+        missing_runnables.task_groups = [SimpleNamespace(task_spec=SimpleNamespace(runnables=None))]
+        client = MagicMock()
+        client.list_jobs.return_value = [
+            missing_variables,
+            missing_groups,
+            missing_runnables,
+        ]
+
+        with (
+            patch("metaproc.commands.gcp._require_gcp_batch"),
+            patch("google.cloud.batch_v1.BatchServiceClient", return_value=client),
+        ):
+            result = CliRunner().invoke(
+                app,
+                ["gcp", "runs", "--project", "p", "--json"],
+            )
+
+        assert result.exit_code == 0, result.output
+        identity_key = run_identity_label(run_id)
+        inventory = json.loads(result.output)
+        fallback_key = f"run-abc [{identity_key}]"
+        assert set(inventory) == {fallback_key}
+        assert {job["job_id"] for job in inventory[fallback_key]} == {
+            "missing-variables",
+            "missing-groups",
+            "missing-runnables",
+        }
+
+    def test_legacy_job_without_identity_key_keeps_readable_group(self) -> None:
+        job = self._job("legacy-run-id", "legacy", include_exact_metadata=False)
+        job.labels.pop("metaproc-run-key")
+        client = MagicMock()
+        client.list_jobs.return_value = [job]
+
+        with (
+            patch("metaproc.commands.gcp._require_gcp_batch"),
+            patch("google.cloud.batch_v1.BatchServiceClient", return_value=client),
+        ):
+            result = CliRunner().invoke(
+                app,
+                ["gcp", "runs", "--project", "p", "--json"],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert set(json.loads(result.output)) == {"legacy-run-id"}
+
+    def test_modern_and_legacy_groups_with_same_display_are_not_combined(self) -> None:
+        modern = self._job("run-abc", "modern")
+        legacy = self._job("run-abc", "legacy", include_exact_metadata=False)
+        legacy.labels.pop("metaproc-run-key")
+        client = MagicMock()
+        client.list_jobs.return_value = [legacy, modern]
+
+        with (
+            patch("metaproc.commands.gcp._require_gcp_batch"),
+            patch("google.cloud.batch_v1.BatchServiceClient", return_value=client),
+        ):
+            result = CliRunner().invoke(
+                app,
+                ["gcp", "runs", "--project", "p", "--json"],
+            )
+
+        assert result.exit_code == 0, result.output
+        inventory = json.loads(result.output)
+        assert set(inventory) == {"run-abc", "run-abc [legacy]"}
+        assert inventory["run-abc"][0]["job_id"] == "modern"
+        assert inventory["run-abc [legacy]"][0]["job_id"] == "legacy"
+
+    def test_structured_run_id_must_match_the_identity_hash(self) -> None:
+        identity_key = run_identity_label("run-other")
+        job = self._job("run_abc", "mismatch", identity_key=identity_key)
+        client = MagicMock()
+        client.list_jobs.return_value = [job]
+
+        with (
+            patch("metaproc.commands.gcp._require_gcp_batch"),
+            patch("google.cloud.batch_v1.BatchServiceClient", return_value=client),
+        ):
+            result = CliRunner().invoke(
+                app,
+                ["gcp", "runs", "--project", "p", "--json"],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert set(json.loads(result.output)) == {f"run-abc [{identity_key}]"}
+
+    def test_local_status_displays_exact_run_directory_identity(self, tmp_path: Path) -> None:
+        run_id = "run-20260803T010203Z.1234560000.abc123def4"
+        run_dir = tmp_path / run_id
+        events_file = runpool_events(run_dir)
+        events_file.parent.mkdir(parents=True)
+        events_file.write_text(
+            json.dumps(
+                {
+                    "event": "process_start",
+                    "external_id": "projects/p/locations/r/jobs/exact-run",
+                }
+            )
+        )
+        job = self._job(run_id, "exact-run", include_exact_metadata=False)
+        client = MagicMock()
+        client.get_job.return_value = job
+
+        with (
+            patch("metaproc.commands.gcp._require_gcp_batch"),
+            patch("google.cloud.batch_v1.BatchServiceClient", return_value=client),
+        ):
+            result = CliRunner().invoke(app, ["gcp", "status", str(run_dir)])
+
+        assert result.exit_code == 0, result.output
+        assert f"Run: {run_id}" in result.output
+        assert f"Run: {sanitize_label(run_id)}" not in result.output
+
+    def test_local_status_reads_run_id_from_process_run_config(self, tmp_path: Path) -> None:
+        run_id = "run-20260803T010203Z.1234560000.abc123def4"
+        run_dir = tmp_path / "runs" / run_id / "mine"
+        events_file = runpool_events(run_dir)
+        events_file.parent.mkdir(parents=True)
+        events_file.write_text(
+            json.dumps(
+                {
+                    "event": "process_start",
+                    "external_id": "projects/p/locations/r/jobs/exact-run",
+                }
+            )
+        )
+        state_dir = run_dir / STATE_DIR
+        state_dir.mkdir(parents=True)
+        (state_dir / RUN_CONFIG_FILE).write_text(
+            f"run_id: {run_id}\nvariables:\n  RUN_ID: {run_id}\n"
+        )
+        job = self._job(run_id, "exact-run", include_exact_metadata=False)
+        client = MagicMock()
+        client.get_job.return_value = job
+
+        with (
+            patch("metaproc.commands.gcp._require_gcp_batch"),
+            patch("google.cloud.batch_v1.BatchServiceClient", return_value=client),
+        ):
+            result = CliRunner().invoke(app, ["gcp", "status", str(run_dir)])
+
+        assert result.exit_code == 0, result.output
+        assert f"Run: {run_id}" in result.output
+        assert "Run: mine" not in result.output
 
 
 class TestResolveScaleRunDir:

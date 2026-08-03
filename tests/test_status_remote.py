@@ -25,9 +25,15 @@ class TestLooksLikeRunId:
             "cloud-500-ds-2026-04-12",
             "eval-v2-batch",
             "a-b-c",  # minimum segment count
+            "run-20260802T193000Z.1234560000.abc123def4",
         ],
     )
     def test_valid_run_ids(self, target: str) -> None:
+        assert _looks_like_run_id(target) is True
+
+    def test_wide_typed_run_id_is_not_limited_by_legacy_gcp_label_width(self) -> None:
+        target = f"run-20260802T193000Z.1234560000.{'a' * 50}"
+        assert len(target) > 63
         assert _looks_like_run_id(target) is True
 
     @pytest.mark.parametrize(

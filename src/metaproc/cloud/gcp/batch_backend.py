@@ -13,6 +13,7 @@ via the existing ``gcp_credentials`` module (``google.auth.default()`` chain).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json as _json
 import logging
 import os as _os
@@ -27,6 +28,15 @@ from typing import Any, cast
 from metaproc.config.env_vars import MetaprocEnv
 
 log = logging.getLogger(__name__)
+
+RUN_ID_LABEL = "metaproc-run-id"
+"""Readable, historically lossy run label retained for display and legacy lookup."""
+
+RUN_IDENTITY_LABEL = "metaproc-run-key"
+"""Collision-resistant locator for the exact immutable run identity."""
+
+_RUN_IDENTITY_DIGEST_HEX_LENGTH = 32
+"""Hex characters retained from SHA-256 for a 128-bit GCP label locator."""
 
 # ── Configuration ─────────────────────────────────────────────────
 
@@ -594,6 +604,20 @@ def sanitize_label(label: str) -> str:
     GCP Batch job IDs: lowercase, alphanumeric, hyphens only, max 63 chars.
     """
     return re.sub(r"[^a-z0-9-]", "-", label.lower())[:63].strip("-")
+
+
+def run_identity_label(run_id: str) -> str:
+    """Return a versioned GCP-safe locator derived from the exact run ID bytes."""
+    digest = hashlib.sha256(run_id.encode()).hexdigest()[:_RUN_IDENTITY_DIGEST_HEX_LENGTH]
+    return f"v1-{digest}"
+
+
+def run_identity_labels(run_id: str) -> dict[str, str]:
+    """Return readable and collision-resistant labels for a run identity."""
+    return {
+        RUN_ID_LABEL: sanitize_label(run_id),
+        RUN_IDENTITY_LABEL: run_identity_label(run_id),
+    }
 
 
 def create_single_task_job(

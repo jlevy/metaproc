@@ -28,6 +28,7 @@ from metaproc.cloud.gcp.batch_backend import (
     get_container_runs_dir,
     get_job_with_retry,
     resolve_gcp_secret_ref,
+    run_identity_labels,
     sanitize_label,
 )
 from metaproc.config.env_vars import MetaprocEnv
@@ -336,7 +337,7 @@ async def dispatch_orchestrator(
     # propagate to VM/disk resources for billing and monitoring.
     job_labels = {
         "metaproc-role": "orchestrator",
-        "metaproc-run-id": sanitize_label(run_id),
+        **run_identity_labels(run_id),
         "metaproc-variant": sanitize_label(config.variant),
     }
     allocation_policy.labels = job_labels
