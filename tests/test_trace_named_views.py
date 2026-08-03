@@ -190,7 +190,7 @@ def test_cost_rows_sums_cost_usd_attribute():
             attributes={"cost.usd": 0.02},
         ),
     ]
-    rows = cost_rows(spans)["metered"]
+    rows = cost_rows(spans)
     web = next(r for r in rows if r["source"] == "web-bundle")
     arena = next(r for r in rows if r["source"] == "arena-wrapper")
     assert web["cost"] == pytest.approx(0.15)
@@ -201,25 +201,23 @@ def test_cost_rows_promotes_claude_attempt_total_cost_usd():
     """Claude attempt spans carry ``attempt.total_cost_usd`` (not cost.usd);
     the cost view should promote that so the agent total joins cleanly.
 
-    Applies to *metered* Claude attempts. A subscription attempt keeps its
-    dollars in ``attempt.cost_list_equiv_usd``; see
-    ``tests/test_billing_class.py``.
+    Provenance grouping is covered in ``tests/test_billing_provenance.py``.
     """
     spans = [
         _span(
             span_id="a",
             kind="attempt",
             source="claude-agent",
-            attributes={"attempt.total_cost_usd": 0.42, "attempt.billing_class": "metered"},
+            attributes={"attempt.total_cost_usd": 0.42},
         ),
         _span(
             span_id="b",
             kind="attempt",
             source="claude-agent",
-            attributes={"attempt.total_cost_usd": 0.10, "attempt.billing_class": "metered"},
+            attributes={"attempt.total_cost_usd": 0.10},
         ),
     ]
-    rows = cost_rows(spans)["metered"]
+    rows = cost_rows(spans)
     claude = next(r for r in rows if r["source"] == "claude-agent")
     assert claude["cost"] == pytest.approx(0.52)
     assert claude["count"] == 2
@@ -231,26 +229,37 @@ def test_cost_rows_omits_spans_without_any_cost_signal():
         _span(span_id="b"),  # no cost at all
     ]
     rows = cost_rows(spans)
-    assert len(rows["metered"]) == 1
-    assert rows["metered"][0]["count"] == 1
-    assert rows["subscription"] == []
+    assert len(rows) == 1
+    assert rows[0]["count"] == 1
 
 
-def test_format_cost_includes_metered_total_line():
-    rows = {
-        "metered": [
-            {"source": "web-bundle", "kind": "provider_call", "cost": 0.10, "count": 1},
-            {"source": "claude-agent", "kind": "attempt", "cost": 0.42, "count": 1},
-        ],
-        "subscription": [],
-    }
+def test_format_cost_subtotals_within_a_provenance_group():
+    rows = [
+        {
+            "source": "web-bundle",
+            "kind": "provider_call",
+            "cost_provenance": "provider_authoritative",
+            "cost": 0.10,
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "count": 1,
+        },
+        {
+            "source": "arena",
+            "kind": "provider_call",
+            "cost_provenance": "provider_authoritative",
+            "cost": 0.42,
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "count": 1,
+        },
+    ]
     text = format_cost(rows)
-    assert "total metered spend" in text
-    assert "$0.5200" in text
+    assert "subtotal: $0.5200" in text
 
 
 def test_format_cost_empty():
-    assert "no cost data" in format_cost({"metered": [], "subscription": []})
+    assert "no cost data" in format_cost([])
 
 
 # --- Source/tool rollup view ---

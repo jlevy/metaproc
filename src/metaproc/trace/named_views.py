@@ -6,9 +6,9 @@ primitives that answers a single operational question:
 - ``--health`` surfaces failure-mode clusters (silent_failure, error,
   partial), grouped by source + status; the single command that would
   have caught the 2026-05-10 Perplexity outage in one query.
-- ``--cost`` reconciles spend across every trace source in one query, split
-  into metered (money owed) and subscription (flat plan fee, reported in
-  tokens) so the two are never summed.
+- ``--cost`` reconciles cost across every trace source in one query, grouped by
+  provenance (provider-reported vs client-side vs pricing-table estimate) so
+  amounts obtained in different ways are never summed together.
 - ``--quality runbook-completion`` / ``directive-compliance`` are V1
   agent-output validators (implemented in :mod:`metaproc.trace.quality`).
 """
@@ -17,7 +17,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from metaproc.adapters.billing import is_subscription
 from metaproc.trace.aggregation import aggregate, format_rollup_table
 from metaproc.trace.schema import TraceEvent
 from metaproc.trace.views import Filter, apply_filter
@@ -48,12 +47,12 @@ _SOURCE_TOOL_KINDS: frozenset[str] = frozenset(
     {"tool_call", "subprocess", "provider_call", "llm_call"}
 )
 
-SUBSCRIPTION_EQUIV_COLUMN = "list_equiv_usd"
-"""Column name for a subscription row's dollar figure.
+PROVENANCE_COLUMN = "cost_provenance"
+"""Column naming where a row's dollar figure came from.
 
-Deliberately not ``cost``: under a flat plan fee this is what the tokens would
-have cost metered, not money owed. The name travels into ``--cost --json``, so
-downstream consumers cannot mistake it for spend either."""
+Travels into ``--cost --json`` alongside the historical ``source``/``kind``/
+``cost``/``count`` keys, so consumers can tell a provider-reported amount from a
+locally computed estimate without the output shape changing."""
 
 
 def health_rows(spans: list[TraceEvent]) -> list[dict[str, Any]]:
@@ -131,67 +130,44 @@ def _with_cost_usd(span: TraceEvent, value: float) -> TraceEvent:
     )
 
 
-def cost_rows(spans: list[TraceEvent]) -> dict[str, list[dict[str, Any]]]:
-    """Split spend into its two billing classes; never merge them.
+def cost_rows(spans: list[TraceEvent]) -> list[dict[str, Any]]:
+    """Cost rollup grouped by source, kind, and **cost provenance**.
 
-    Returns ``{"metered": rows, "subscription": rows}``.
+    Returns the historical top-level array shape; ``cost_provenance`` and the
+    token columns are additive. Consumers that read ``source`` / ``kind`` /
+    ``cost`` / ``count`` keep working unchanged.
 
-    - **metered** rows carry ``cost``: money owed, from ``cost.usd`` or a
-      metered attempt's ``attempt.cost_usd``. Summing these is meaningful.
-    - **subscription** rows carry ``tokens_in`` / ``tokens_out`` plus a
-      ``list_equiv`` column. The tokens are the real quantity consumed against
-      a flat plan fee; ``list_equiv`` is only what those tokens would have cost
-      metered. Summing ``list_equiv`` into a spend figure would be wrong, so
-      the two classes are returned separately and rendered separately.
-
-    A subscription attempt is identified by ``attempt.billing_class``; its
-    dollar figure lives in ``attempt.cost_list_equiv_usd``, never in
-    ``cost.usd``, so no caller can pick it up by accident.
+    Grouping by provenance is what keeps the numbers honest. A dollar figure an
+    agent CLI computed locally from a bundled price table is not the same kind
+    of number as one a provider returned for a call, so the two never collapse
+    into a single total — but neither is claimed to be, or not to be, money
+    owed, because that depends on plan allowances and purchased credits which
+    no run artifact records. See :mod:`metaproc.adapters.billing`.
     """
-    metered: list[TraceEvent] = []
-    subscription: list[TraceEvent] = []
-
+    spans_with_cost: list[TraceEvent] = []
     for s in spans:
-        attrs = s.attributes
-        if is_subscription(attrs.get("attempt.billing_class")):
-            equiv = attrs.get("attempt.cost_list_equiv_usd")
-            subscription.append(
-                _with_cost_usd(s, float(equiv)) if isinstance(equiv, (int, float)) else s
-            )
+        if s.attributes.get("cost.usd") is not None:
+            spans_with_cost.append(s)
             continue
-        if attrs.get("cost.usd") is not None:
-            metered.append(s)
-            continue
-        # Metered attempt spans keep their dollars in attempt.cost_usd (and
-        # Claude's raw result field in attempt.total_cost_usd). Promote to
-        # cost.usd so the agent total joins cleanly with provider spend.
+        # Attempt spans keep their dollars in attempt.cost_usd (and Claude's
+        # raw result field in attempt.total_cost_usd). Promote to cost.usd so
+        # the agent rows join cleanly with provider rows.
         for key in ("attempt.cost_usd", "attempt.total_cost_usd"):
-            value = attrs.get(key)
+            value = s.attributes.get(key)
             if isinstance(value, (int, float)):
-                metered.append(_with_cost_usd(s, float(value)))
+                spans_with_cost.append(_with_cost_usd(s, float(value)))
                 break
 
-    subscription_rows = aggregate(
-        subscription,
-        group_keys=["source", "adapter.model"],
-        metrics=[
-            "sum:attempt.tokens_input",
-            "sum:attempt.tokens_output",
-            "cost",
-            "count",
-        ],
+    rows = aggregate(
+        spans_with_cost,
+        group_keys=["source", "kind", "attempt.cost_provenance"],
+        metrics=["cost", "count", "sum:attempt.tokens_input", "sum:attempt.tokens_output"],
     )
-    # Rename on the way out: a column headed "cost" in a subscription table is
-    # the exact ambiguity this split exists to remove.
-    for row in subscription_rows:
+    for row in rows:
+        row[PROVENANCE_COLUMN] = row.pop("attempt.cost_provenance")
         row["tokens_in"] = row.pop("sum:attempt.tokens_input")
         row["tokens_out"] = row.pop("sum:attempt.tokens_output")
-        row[SUBSCRIPTION_EQUIV_COLUMN] = row.pop("cost")
-
-    return {
-        "metered": aggregate(metered, group_keys=["source", "kind"], metrics=["cost", "count"]),
-        "subscription": subscription_rows,
-    }
+    return rows
 
 
 def source_tool_rows(spans: list[TraceEvent]) -> list[dict[str, Any]]:
@@ -243,46 +219,53 @@ def format_health(rows: list[dict[str, Any]]) -> str:
     return format_rollup_table(rows, group_keys=group_keys, metrics=["count"])
 
 
-def format_cost(rows: dict[str, list[dict[str, Any]]]) -> str:
-    """Render the two billing classes as two sections with two totals.
+_PROVENANCE_SECTIONS: tuple[tuple[str, str], ...] = (
+    ("provider_authoritative", "Provider-reported (the provider returned this amount)"),
+    ("client_list_estimate", "Client-side estimate (agent CLI's own price table — not a bill)"),
+    ("pricing_table_estimate", "Pricing-table estimate (computed here from token counts)"),
+)
 
-    There is deliberately no combined total. Metered dollars are money;
-    subscription dollars are a list-price equivalent against a flat plan fee.
-    Adding them produces a number that overstates cash by whatever the
-    subscription agents did.
+
+def format_cost(rows: list[dict[str, Any]]) -> str:
+    """Render one section per cost provenance, each with its own subtotal.
+
+    There is deliberately no single grand total: adding a provider-reported
+    amount to a locally estimated one produces a figure that is neither. Each
+    section states what kind of number it holds. None of them asserts whether
+    the amount is owed — that depends on plan allowances and purchased credits
+    that no run artifact records, so it is reported as unknown rather than
+    guessed.
     """
-    metered = rows.get("metered") or []
-    subscription = rows.get("subscription") or []
-    if not metered and not subscription:
+    if not rows:
         return "(no cost data in trace)\n"
 
+    metrics = ["cost", "tokens_in", "tokens_out", "count"]
+    by_provenance: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        by_provenance.setdefault(str(row.get(PROVENANCE_COLUMN) or "(none)"), []).append(row)
+
+    ordered = [*_PROVENANCE_SECTIONS]
+    known = {key for key, _ in _PROVENANCE_SECTIONS}
+    ordered += [
+        (key, f"Unclassified provenance ({key})") for key in by_provenance if key not in known
+    ]
+
     out: list[str] = []
-    if metered:
-        out.append("Metered (pay-per-call — money owed):")
-        out.append(
-            format_rollup_table(metered, group_keys=["source", "kind"], metrics=["cost", "count"])
-        )
-        total = sum(float(r.get("cost") or 0.0) for r in metered)
-        out.append(f"total metered spend: ${total:.4f}\n")
+    for key, heading in ordered:
+        section = by_provenance.get(key)
+        if not section:
+            continue
+        subtotal = sum(float(r.get("cost") or 0.0) for r in section)
+        out.append(f"{heading}:")
+        out.append(format_rollup_table(section, group_keys=["source", "kind"], metrics=metrics))
+        out.append(f"subtotal: ${subtotal:.4f}\n")
 
-    if subscription:
-        out.append("Subscription (flat plan fee — tokens are the real quantity):")
-        out.append(
-            format_rollup_table(
-                subscription,
-                group_keys=["source", "adapter.model"],
-                metrics=["tokens_in", "tokens_out", SUBSCRIPTION_EQUIV_COLUMN, "count"],
-            )
-        )
-        tok_in = sum(float(r.get("tokens_in") or 0.0) for r in subscription)
-        tok_out = sum(float(r.get("tokens_out") or 0.0) for r in subscription)
-        equiv = sum(float(r.get(SUBSCRIPTION_EQUIV_COLUMN) or 0.0) for r in subscription)
-        out.append(
-            f"total subscription tokens: {tok_in:,.0f} in / {tok_out:,.0f} out\n"
-            f"  (list-price equivalent ${equiv:.4f} — NOT money owed; "
-            f"billed as a flat plan fee, do not add to metered spend)\n"
-        )
-
+    out.append(
+        "Amounts are grouped by how they were obtained and are not summed across "
+        "groups.\nWhether any of it is owed depends on plan allowances and purchased "
+        "credits, which\nare not recorded in run artifacts; charge status is unknown "
+        "without billing\nreconciliation.\n"
+    )
     return "\n".join(out)
 
 

@@ -265,7 +265,7 @@ codex login                           # opens browser, writes ~/.codex/auth.json
 | Variable | Required | Notes |
 | --- | --- | --- |
 | `METAPROC_GCP_SECRET_CODEX_CREDS` | Yes | Secret Manager resource name carrying the `~/.codex/auth.json` blob. Workers materialize the file at 0600 under a 0700 parent. |
-| `OPENAI_API_KEY` | **MUST NOT be set** | When both are present codex prefers the API key, which silently bypasses the subscription (pay-per-token instead of free-per-request). Leave it unset on workers. |
+| `OPENAI_API_KEY` | **MUST NOT be set** | Leave it unset on workers so the slot’s ChatGPT-OAuth `auth.json` is unambiguously the credential in play. Note the per-invocation API-key override `codex exec` actually reads is `CODEX_API_KEY`; `OPENAI_API_KEY` is what `codex login --with-api-key` consumes to create persisted API-key auth. |
 
 ```bash
 metaproc codex-auth push              # push ~/.codex/auth.json to Secret Manager
@@ -445,29 +445,57 @@ metaproc auth-check \
 
 ## How the vehicle shows up in cost reporting
 
-The vehicle you pick decides how spend is counted, so it is recorded per attempt rather
-than inferred later.
-`metaproc.adapters.billing.resolve_billing_class` reads the env each adapter is actually
-spawned with, using the same precedence the CLIs use, and the launcher stamps the result
-into the invocation sidecar as `billing_class`. Trace extractors copy it onto the
-attempt span as `attempt.billing_class`.
+The vehicle you pick is recorded per attempt, because the environment is knowable at the
+spawn boundary and not reconstructable afterwards.
+`metaproc.adapters.billing.resolve_auth_route` resolves it from the env each adapter is
+actually spawned with; the launcher stamps it into the invocation sidecar as
+`auth_route`, and trace extractors copy it onto the attempt span as
+`attempt.auth_route`.
 
-The two classes are never combined:
+Three separate things are recorded, because they vary independently:
 
-| Class | When | Dollar attribute | What the dollars mean |
-| --- | --- | --- | --- |
-| `metered` | An API key is in scope (Vehicle C for Claude, `OPENAI_API_KEY` for codex, any `pi-cli` run) | `attempt.cost_usd` | Money owed; summing is meaningful |
-| `subscription` | Vehicle A/B — a plan credential with no API key present | `attempt.cost_list_equiv_usd` | List-price equivalent only; a flat plan fee was paid instead |
+| Attribute | Answers | Values |
+| --- | --- | --- |
+| `attempt.auth_route` | Which credential chain the CLI used | `api_key`, `chatgpt_plan`, `claude_plan`, `bedrock`, `vertex`, `gateway`, `unknown` |
+| `attempt.cost_provenance` | Where the dollar figure came from | `provider_authoritative`, `client_list_estimate`, `pricing_table_estimate`, `unknown` |
+| `attempt.charge_status` | Whether the amount is owed | always `unknown` without billing reconciliation |
 
-`metaproc trace --cost` renders them as two sections with two totals and no combined
-figure. Metered spend totals in dollars; subscription usage totals in **tokens**, with
-the list-price equivalent shown alongside and labeled as not-money.
-Token counts are recorded identically under both classes, which makes them the only
-quantity comparable across vehicles.
+**An auth route does not determine what was charged.** Both OpenAI and Anthropic sell
+usage credits that let a plan user continue past the included allowance, billed at
+rate-card or API rates while still authenticating as that plan — so a `chatgpt_plan` or
+`claude_plan` route can produce real charges.
+In the other direction, an API-key route does not make a locally computed number an
+invoice: Claude Code’s `total_cost_usd` is a client-side estimate from a bundled price
+table, and Anthropic documents that Console/API billing data is authoritative.
+Promotional credits, contracted rates, and committed-spend discounts are invisible to
+all of it.
 
-This is also how a silent vehicle change becomes visible: a stray `ANTHROPIC_API_KEY` or
-`OPENAI_API_KEY` flips affected attempts to `metered`, and their cost starts appearing
-in the spend total.
+Metaproc therefore never asserts that an amount is or is not owed.
+`metaproc trace --cost` groups by **provenance** and gives each group its own subtotal,
+with no grand total, because adding a provider-reported amount to a locally estimated
+one produces a figure that is neither.
+Token counts are recorded on every route, which makes them the one quantity comparable
+across vehicles.
+
+Resolution is per-adapter rather than one central table, since each CLI has its own
+precedence chain. Notes that are easy to get wrong:
+
+- **Codex** reads `CODEX_API_KEY` for a per-invocation API-key override;
+  `OPENAI_API_KEY` is what `codex login --with-api-key` consumes to *create* persisted
+  API-key auth, so its mere presence does not settle the effective route.
+  Persisted `auth.json` (`tokens.auth_mode`) does, and pool slots additionally pin
+  `forced_login_method = "chatgpt"`.
+- **Claude** puts cloud-provider routing (`CLAUDE_CODE_USE_BEDROCK` / `_VERTEX`) and
+  `ANTHROPIC_AUTH_TOKEN` above `ANTHROPIC_API_KEY`. A stored `/login` credential and an
+  `apiKeyHelper` leave no environment trace, so they resolve to `unknown`.
+- **Gemini** on Vertex + ADC — the recommended mode — carries no API key.
+  Absence of a key is not evidence of a plan.
+- **Pi** delegates auth to whichever provider its own config selects, so only an
+  unambiguous single-provider key is evidence.
+
+Every resolver returns `unknown` rather than guessing, and `unknown` is a common,
+correct answer. The one thing this does make visible is a silent vehicle change: a stray
+key alters the recorded `auth_route` for affected attempts.
 
 <!-- This document follows std-doc-guidelines.md.
 Review guidelines before editing.

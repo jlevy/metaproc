@@ -42,8 +42,8 @@ from metaproc.io import iter_artifact_paths, iter_jsonl_objects
 from metaproc.io.gz_io import artifact_sidecar_path
 from metaproc.trace.extractors.common import (
     attempt_cost_attrs,
+    auth_route_from_invocation,
     bash_tool_usage_attrs,
-    billing_class_from_invocation,
     collapse_consecutive_file_edits,
     tool_usage_classification,
 )
@@ -149,7 +149,7 @@ class CodexAgentExtractor:
                 output_tokens=attempt_attrs.get("attempt.tokens_output"),
                 cached_tokens=attempt_attrs.get("attempt.tokens_cached"),
                 self_reported_cost=None,
-                billing_class=billing_class_from_invocation(invocation, adapter_type="codex-cli"),
+                auth_route=auth_route_from_invocation(invocation, adapter_type="codex-cli"),
             )
         )
 
