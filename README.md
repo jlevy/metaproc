@@ -15,8 +15,8 @@ prompts, handlers, and policies to downstream packages.
 - Local Python and shell handlers plus Claude Code, Codex, Gemini, and pi CLI adapters
 - Resumable DAG execution with fingerprints, completion validation, overrides, and
   structured `.state` and `.logs` artifacts
-- RunPool concurrency, retry, resource-pressure, credential-pool, and observability
-  controls
+- RunPool concurrency, retry, resource-pressure, credential-pool, and ledger-backed
+  resource observability controls
 - Optional GCP Batch dispatch and Secret Manager integration
 - A packaged Metabrowser plugin for process specs, plans, traces, logs, and resource
   reports
@@ -141,7 +141,7 @@ See [docs/conventions.md](docs/conventions.md) for the full casing rules.
 | `override` | Mark a step as satisfied so downstream resumes when partial-fail blocks the DAG (audit trail in `.state/overrides.yaml`) |
 | `kill` | Terminate a running pool and its child processes |
 | `write-usage` | Roll up token and cost usage into `usage.md` |
-| `resource-report` | Build or refresh the hierarchical `resources.json` run report |
+| `resource-report` | Inspect or locally refresh hierarchical metrics, provider meters, coverage, budgets, costs, and terminal outcome |
 | `stats` | Summarize throughput, timing, pool, API, and resource usage |
 | `gcp status` | Show GCP Batch job status for a run |
 | `gcp scale` | Update desired worker topology for an active cloud fan-out step |

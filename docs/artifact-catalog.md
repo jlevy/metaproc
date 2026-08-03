@@ -15,10 +15,10 @@ consistency. The companion programmatic registry is
 
 | Format | Count | Where it lives |
 | --- | --- | --- |
-| YAML | ~14 | `<run>/.state/` |
+| YAML | ~15 | `<run>/.state/` |
 | JSONL | ~9 | `<run>/.logs/` |
 | JSON | 3 writers | `<run>/.state/` sidecars, `<run>/resources.json`, arena cache |
-| Softschema MD | 4 | `<run>/<artifact-tree>/` (post-run human reports) |
+| Softschema MD | 5 | `<run>/` and `<run>/<artifact-tree>/` (post-run human reports) |
 | Plain text | 2 | `<run>/.logs/` (raw subprocess captures) |
 
 ## State artifacts (YAML)
@@ -28,7 +28,8 @@ not hand-edit them. Atomic writes via `strif.atomic_output_file`.
 
 | Filename | Path | Schema (Pydantic) | Lifecycle | Writer | Primary readers |
 | --- | --- | --- | --- | --- | --- |
-| `run-config.yaml` | `<run>/.state/` | ad-hoc dict (typed envelope pending) | atomic, once at creation | `commands/run_process.py:_write_run_config` | engine resume validation, metabrowser, `metaproc status` |
+| `run-config.yaml` | `<run>/.state/` | ad-hoc outer dict with typed `ResourceRunSnapshot` resources block | atomic, once at creation | `commands/run_process.py:_write_run_config` | engine resume validation, terminal resource finalizer, metabrowser, `metaproc status` |
+| `resource-usage-summary.v1.schema.yaml` | `<run>/.state/schemas/` | compiled SoftSchema JSON Schema | atomic, terminal/recovery refresh | `engine/resource_summary.py` | SoftSchema validators, operator audit |
 | `process-status.yaml` | `<run>/.state/` | ad-hoc dict (typed envelope pending) | atomic, rewritten each DAG tick | `commands/run_process.py:_write_process_status` | human, `metaproc status`, metabrowser |
 | `orchestrator-lease.yaml` | `<run>/.state/` | ad-hoc dict | heartbeat-updated every 30s | `io/orchestrator_lease.py:acquire_lease` | engine lease check |
 | `overrides.yaml` | `<run>/.state/` | `OverridesDocument` (`metaproc:OverridesDocument/0.1`) | atomic, on `metaproc override` | `io/overrides.py:_write_overrides` | `_verify_ancestors`, `metaproc status` footer |
@@ -70,7 +71,7 @@ by the trace extractor as a fallback; new runs do not emit it.
 
 | Filename | Path | Schema (Pydantic) | Lifecycle | Writer | Primary readers |
 | --- | --- | --- | --- | --- | --- |
-| `resources.json` | `<run>/` | `ResourcesDocument` (`metaproc:ResourcesDocument/v1`) | atomic, once or on refresh | `engine/resource_rollup.py:write_resource_artifacts` | metabrowser `/api/resources`, `metaproc resource-report` |
+| `resources.json` | `<run>/` | strict `ResourcesDocument` (`metaproc.resources/v2`; V1 readable) | atomic at terminal finalization or inactive recovery | `engine/resource_rollup.py:write_resource_artifacts` | metabrowser `/api/resources`, `metaproc resource-report` |
 | `*.invocation.json` (sidecar) | `<run>/.state/tasks/<step>/<item>/<attempt>/` | ad-hoc dict | atomic, once before spawn | `runpool/backend.py:write_invocation_sidecar` | trace claude_agent extractor, human debugging |
 | tool cache `*.json` | `<run>/.logs/tools/<tool-name>/cache/...` (typical) | ad-hoc (externally-owned upstream payload) | atomic, once per cache miss | consumer plugin | tool wrapper on re-run |
 
@@ -91,6 +92,7 @@ Pattern documented in the standalone
 | Filename | Path | Envelope key + schema | Writer | Primary readers |
 | --- | --- | --- | --- | --- |
 | `usage.md` | `<run>/` | `usage` / `metaproc:UsageReport/0.2` | `commands/write_usage.py` via `logutil/usage.py:write_usage_report` | human operator |
+| `resource-usage-summary.md` | `<run>/` | `resource_usage` / `metaproc.resources:ResourceUsageSummary/v1` | `engine/resource_summary.py` | human operator, SoftSchema validation |
 | `qa-report.md` (per-item) | `<run>/<artifact-tree>/.../` | `qa` / domain-defined | `example_plugin/qa/handler.py` (line ~177) | human operator |
 | `qa-summary.md` (per-process) | `<run>/<artifact-tree>/.../` | `qa_summary` / domain-defined | `example_plugin/qa/handler.py` (line ~185) | human operator |
 
@@ -110,9 +112,11 @@ Tracked per the [file-format policy](conventions.md):
 
 | Current | Planned | Reason |
 | --- | --- | --- |
-| `resources.json` | `resource-usage.json` | Generic name does not signal contents (tokens, cost, time, calls); paired with `resource-events.jsonl`. |
-| `usage.md` | `resource-usage-summary.md` | Pairs the trio (`resource-events.jsonl`, `resource-usage.json`, `resource-usage-summary.md`); “summary” reflects the flat-slice digest role. |
 | `*.invocation.json` | `*.invocation.yaml` | State-shaped sidecar; YAML matches the surrounding `.state/` convention. |
+
+The earlier paired rename proposal for `resources.json` and `usage.md` was superseded by
+the additive `resource-usage-summary.md` artifact.
+Existing filenames remain stable.
 
 Pending envelope/schema hygiene (separate plan, listed for completeness):
 

@@ -89,6 +89,8 @@ from metaproc.engine.placeholders import (
 )
 from metaproc.engine.preflight import run_preflight
 from metaproc.engine.process_scope import expand_process_vars
+from metaproc.engine.resource_finalization import finalize_run_resources
+from metaproc.engine.resource_snapshot import build_resource_run_snapshot
 from metaproc.engine.runtime import prepare_step, resolve_batch_size, validate_step_inputs_exist
 from metaproc.engine.validation import validate_item_outputs
 from metaproc.engine.write_boundary import (
@@ -122,6 +124,8 @@ from metaproc.io.state_io import (
 from metaproc.logutil.compaction import try_compact_log
 from metaproc.models.authored import IOSpec, ProcessSpec, ProcessStep
 from metaproc.models.plan import Plan, ResolvedStep
+from metaproc.models.resource_budget import FinalizationState
+from metaproc.models.resource_snapshot import ResourceRunSnapshot
 from metaproc.models.runtime import AttemptRecord, ResultRecord, StatusRecord
 from metaproc.paths import (
     LOGS_DIR,
@@ -141,6 +145,7 @@ from metaproc.runpool.pool import (
 )
 from metaproc.runpool.process_events import ProcessEventLogger
 from metaproc.runpool.registry import get_backend
+from metaproc.viz_loader import load_plan_bundle
 
 log = logging.getLogger(__name__)
 
@@ -306,6 +311,7 @@ def _write_run_config(  # noqa: PLR0913
     resolved_profiles: list[dict[str, object]] | None = None,
     auth_flags: AuthPoolFlags | None = None,
     max_concurrency: int | None = None,
+    resource_snapshot: ResourceRunSnapshot | None = None,
 ) -> Path:
     """Write run-config.yaml at run creation time; record changes on resume.
 
@@ -371,6 +377,8 @@ def _write_run_config(  # noqa: PLR0913
             "initial": int(max_concurrency),
             "effective": int(max_concurrency),
         }
+    if resource_snapshot is not None:
+        data["resources"] = resource_snapshot.model_dump(mode="json", by_alias=True)
 
     with atomic_output_file(config_path) as tmp_path:
         Path(tmp_path).write_text(to_yaml_string(data))
@@ -2893,6 +2901,13 @@ def run_process_command(
         auth_exclude_labels=tuple(auth_exclude_labels),
         auth_cross_quota_group=auth_cross_quota_group,
     )
+    snapshot_bundle = load_plan_bundle(process_path, params=variables)
+    snapshot_bundle = dataclasses.replace(snapshot_bundle, plan=plan, spec=spec)
+    resource_snapshot = (
+        None
+        if paths_mod.run_config_file(run_dir).exists()
+        else build_resource_run_snapshot(snapshot_bundle, run_id=run_id)
+    )
     # Write or validate run-config.yaml (immutable run identity +
     # additive auth/concurrency capture per plan-2026-05-03 Phase 3).
     _write_run_config(
@@ -2908,6 +2923,7 @@ def run_process_command(
         resolved_profiles=_serialize_plan_profiles(plan),
         auth_flags=auth_flags_for_config,
         max_concurrency=max_concurrency,
+        resource_snapshot=resource_snapshot,
     )
 
     # Hybrid-mode alignment check: warn if a cloud backend is used but the
@@ -3131,6 +3147,8 @@ def run_process_command(
 
     install_subprocess_reaper_signal_handlers()
 
+    finalization_state = FinalizationState.COMPLETED
+    terminal_error: BaseException | None = None
     try:
         with (
             LeaseHeartbeat(run_dir),
@@ -3169,8 +3187,39 @@ def run_process_command(
         if output_errors:
             msg = "process output validation failed:\n  " + "\n  ".join(output_errors)
             raise CLIError(msg)
+    except (TimeoutError, subprocess.TimeoutExpired) as exc:
+        finalization_state = FinalizationState.TIMED_OUT
+        terminal_error = exc
+        raise
+    except (KeyboardInterrupt, asyncio.CancelledError) as exc:
+        finalization_state = FinalizationState.CANCELLED
+        terminal_error = exc
+        raise
+    except BaseException as exc:
+        finalization_state = FinalizationState.FAILED
+        terminal_error = exc
+        raise
     finally:
-        release_lease(run_dir)
+        try:
+            try:
+                finalize_run_resources(
+                    run_dir,
+                    outcome=finalization_state,
+                    trigger="terminal",
+                    terminal_error=terminal_error,
+                    bundle=snapshot_bundle,
+                )
+            except Exception:  # noqa: BLE001 - reporting cannot replace process outcome
+                log.exception("resource finalization failed for %s", run_dir)
+            except BaseException:
+                # Preserve an already-propagating process failure even if reporting is
+                # interrupted. With no prior failure, retain normal BaseException
+                # semantics after releasing the lease below.
+                if terminal_error is None:
+                    raise
+                log.exception("resource finalization interrupted for %s", run_dir)
+        finally:
+            release_lease(run_dir)
 
     overall_elapsed = fmt_timedelta(time.monotonic() - overall_start)
     out.progress(f"\n=== Process '{spec.name}' completed ({overall_elapsed}) ===")

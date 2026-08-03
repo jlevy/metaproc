@@ -5,10 +5,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from metaproc.cli import app
+from metaproc.commands.run_process import _write_run_config
 from metaproc.errors import CLIError
+from metaproc.models.resource_snapshot import ResourceRunSnapshot, ResourceTopologyNode
 
 runner = CliRunner()
 
@@ -81,7 +84,7 @@ def test_first_invocation_builds_and_persists_resources_json(tmp_path: Path) -> 
     cached = run_dir / "resources.json"
     assert cached.exists()
     payload = json.loads(cached.read_text())
-    assert payload["schema"] == "metaproc.resources/v1"
+    assert payload["schema"] == "metaproc.resources/v2"
     assert "[run]" in result.output
 
 
@@ -103,6 +106,32 @@ def test_subsequent_invocation_reads_cached_resources_json(tmp_path: Path) -> No
     result = runner.invoke(app, ["resource-report", str(run_dir)])
     assert result.exit_code == 0, result.output
     assert "schema=" in result.output
+    assert "actual_usd: unmeasured" in result.output
+    assert "list_estimate_usd:" in result.output
+
+
+def test_cached_v1_document_remains_readable(tmp_path: Path) -> None:
+    _spec_path, run_dir = _setup_run(tmp_path)
+    (run_dir / "resources.json").write_text(
+        json.dumps(
+            {
+                "schema": "metaproc.resources/v1",
+                "run_id": "historical",
+                "generated_at": "2026-04-21T00:00:00Z",
+                "source_events_path": ".logs/resource-events.jsonl",
+                "hierarchy_root": {
+                    "node_type": "run",
+                    "node_id": "historical",
+                    "label": "historical",
+                },
+            }
+        )
+    )
+
+    result = runner.invoke(app, ["resource-report", str(run_dir), "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["schema"] == "metaproc.resources/v1"
 
 
 def test_missing_spec_on_first_build_returns_clean_error(tmp_path: Path) -> None:
@@ -130,7 +159,7 @@ def test_json_flag_emits_valid_resources_document(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["schema"] == "metaproc.resources/v1"
+    assert payload["schema"] == "metaproc.resources/v2"
     assert payload["run_id"] == run_dir.name
     assert payload["hierarchy_root"]["node_type"] == "run"
 
@@ -154,7 +183,7 @@ def test_refresh_rebuilds_even_when_cache_present(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.output
     payload = json.loads(cached.read_text())
-    assert payload.get("schema") == "metaproc.resources/v1"
+    assert payload.get("schema") == "metaproc.resources/v2"
 
 
 def test_does_not_shadow_existing_resources_command(tmp_path: Path) -> None:
@@ -163,3 +192,36 @@ def test_does_not_shadow_existing_resources_command(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     # Existing host-context output is JSON; should parse cleanly.
     json.loads(result.output)
+
+
+def test_snapshot_refresh_rejects_active_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec_path, run_dir = _setup_run(tmp_path)
+    _write_run_config(
+        run_dir,
+        process_name="parent",
+        process_path=spec_path,
+        run_id="2026-04-21",
+        variables={},
+        backend="local",
+        variant=None,
+        resource_snapshot=ResourceRunSnapshot(
+            hierarchy=ResourceTopologyNode(
+                node_type="run",
+                node_id="parent/2026-04-21",
+                label="parent/2026-04-21",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "metaproc.commands.resource_report.is_orchestrator_alive",
+        lambda _run_dir: True,
+    )
+
+    result = runner.invoke(app, ["resource-report", str(run_dir), "--refresh"])
+
+    assert isinstance(result.exception, CLIError)
+    assert "active" in str(result.exception)
+    assert not (run_dir / "resources.json").exists()

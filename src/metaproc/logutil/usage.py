@@ -51,8 +51,11 @@ class UsageStats:
     cache_write_tokens: int = 0
     cost_usd: float = 0.0
     cost_is_estimated: bool = False
+    has_token_usage: bool = False
+    has_cost: bool = False
     duration_s: float = 0.0
     tool_calls: int = 0
+    has_tool_calls: bool = False
     model: str = ""
     provider: str = ""
     steps: int = 0
@@ -67,9 +70,12 @@ class UsageStats:
         self.cost_usd += other.cost_usd
         self.duration_s += other.duration_s
         self.tool_calls += other.tool_calls
+        self.has_tool_calls = self.has_tool_calls or other.has_tool_calls
         self.steps += other.steps
         if other.cost_is_estimated:
             self.cost_is_estimated = True
+        self.has_token_usage = self.has_token_usage or other.has_token_usage
+        self.has_cost = self.has_cost or other.has_cost
         # Carry forward non-empty string fields (first non-empty value wins).
         if not self.model and other.model:
             self.model = other.model
@@ -170,38 +176,128 @@ def compute_cost(
     return cost
 
 
+def estimate_list_cost(
+    stats: UsageStats,
+    pricing: dict[str, dict[str, Any]] | None = None,
+) -> float | None:
+    """Return a CLI/list-price estimate, or ``None`` when no basis exists."""
+    if stats.has_cost:
+        return stats.cost_usd
+    if not stats.has_token_usage or not stats.model:
+        return None
+    table = pricing if pricing is not None else load_pricing()
+    if _lookup_model(stats.model, table) is None:
+        return None
+    return compute_cost(stats, table, use_list_prices=True)
+
+
 def sum_pi_usage(agent_end_event: dict[str, Any]) -> UsageStats:
     """Extract and sum per-turn usage from a Pi CLI ``agent_end`` event.
 
     Pi CLI includes ``messages[]`` in the ``agent_end`` event, where each
     assistant message carries a ``usage`` dict with token counts and cost.
     """
-    stats = UsageStats()
+    stats = UsageStats(cost_is_estimated=True)
     messages = agent_end_event.get("messages", [])
+    if not isinstance(messages, list):
+        return stats
 
     for msg in messages:
+        if not isinstance(msg, dict):
+            continue
         if msg.get("role") != "assistant":
             continue
         usage = msg.get("usage")
-        if not usage:
+        if not isinstance(usage, dict):
             continue
+        stats.has_token_usage = True
 
-        stats.input_tokens += usage.get("input", 0)
-        stats.output_tokens += usage.get("output", 0)
-        stats.cache_read_tokens += usage.get("cacheRead", 0)
-        stats.cache_write_tokens += usage.get("cacheWrite", 0)
+        stats.input_tokens += _nonnegative_int(usage.get("input"))
+        stats.output_tokens += _nonnegative_int(usage.get("output"))
+        stats.cache_read_tokens += _nonnegative_int(usage.get("cacheRead"))
+        stats.cache_write_tokens += _nonnegative_int(usage.get("cacheWrite"))
 
         cost_raw: Any = usage.get("cost", {})
         if isinstance(cost_raw, dict):
             cost_dict = cast(dict[str, Any], cost_raw)
-            stats.cost_usd += cost_dict.get("total", 0.0)
+            total_cost = cost_dict.get("total")
+            if isinstance(total_cost, (int, float)) and not isinstance(total_cost, bool):
+                stats.cost_usd += max(float(total_cost), 0.0)
+                stats.has_cost = True
 
         # Capture model/provider from the first assistant message that has them
-        if not stats.model:
-            stats.model = msg.get("model", "")
-        if not stats.provider:
-            stats.provider = msg.get("provider", "")
+        model = msg.get("model")
+        if not stats.model and isinstance(model, str):
+            stats.model = model
+        provider = msg.get("provider")
+        if not stats.provider and isinstance(provider, str):
+            stats.provider = provider
 
+    return stats
+
+
+def sum_claude_usage(
+    result_event: dict[str, Any],
+    *,
+    fallback_model: str = "",
+) -> UsageStats:
+    """Normalize a complete Claude Code result, including nested model usage.
+
+    ``modelUsage`` is the whole-attempt breakdown and includes subagent/model
+    contributions that the top-level ``usage`` object can omit. When present,
+    it is authoritative rather than additive with the top-level object.
+    """
+    stats = UsageStats(
+        model=fallback_model,
+        provider="anthropic",
+        cost_is_estimated=True,
+    )
+    model_usage = result_event.get("modelUsage")
+    dominant: tuple[int, str] | None = None
+    model_cost = 0.0
+    valid_model_usage = (
+        [
+            (model_name, cast(dict[str, Any], raw_entry))
+            for model_name, raw_entry in model_usage.items()
+            if isinstance(model_name, str) and isinstance(raw_entry, dict)
+        ]
+        if isinstance(model_usage, dict)
+        else []
+    )
+    if valid_model_usage:
+        stats.has_token_usage = True
+        for model_name, entry in valid_model_usage:
+            input_tokens = _nonnegative_int(entry.get("inputTokens"))
+            output_tokens = _nonnegative_int(entry.get("outputTokens"))
+            cache_read = _nonnegative_int(entry.get("cacheReadInputTokens"))
+            cache_write = _nonnegative_int(entry.get("cacheCreationInputTokens"))
+            stats.input_tokens += input_tokens
+            stats.output_tokens += output_tokens
+            stats.cache_read_tokens += cache_read
+            stats.cache_write_tokens += cache_write
+            contribution = input_tokens + output_tokens + cache_read + cache_write
+            if dominant is None or contribution > dominant[0]:
+                dominant = (contribution, model_name)
+            model_cost += _nonnegative_float(entry.get("costUSD"))
+            if isinstance(entry.get("costUSD"), (int, float)) and not isinstance(
+                entry.get("costUSD"), bool
+            ):
+                stats.has_cost = True
+        if dominant is not None:
+            stats.model = dominant[1]
+    else:
+        usage_raw = result_event.get("usage")
+        usage = cast(dict[str, Any], usage_raw) if isinstance(usage_raw, dict) else {}
+        stats.has_token_usage = bool(usage)
+        stats.input_tokens = _nonnegative_int(usage.get("input_tokens"))
+        stats.output_tokens = _nonnegative_int(usage.get("output_tokens"))
+        stats.cache_read_tokens = _nonnegative_int(usage.get("cache_read_input_tokens"))
+        stats.cache_write_tokens = _nonnegative_int(usage.get("cache_creation_input_tokens"))
+
+    reported_cost = result_event.get("total_cost_usd", result_event.get("cost_usd"))
+    if isinstance(reported_cost, (int, float)) and not isinstance(reported_cost, bool):
+        stats.has_cost = True
+    stats.cost_usd = _nonnegative_float(reported_cost) if reported_cost is not None else model_cost
     return stats
 
 
@@ -221,9 +317,13 @@ def sum_codex_usage(turn_completed_event: dict[str, Any]) -> UsageStats:
     if not isinstance(usage_raw, dict):
         return stats
     usage = cast(dict[str, Any], usage_raw)
-    stats.input_tokens = int(usage.get("input_tokens", 0) or 0)
-    stats.cache_read_tokens = int(usage.get("cached_input_tokens", 0) or 0)
-    stats.output_tokens = int(usage.get("output_tokens", 0) or 0)
+    total_input = _nonnegative_int(usage.get("input_tokens"))
+    cached_input = _nonnegative_int(usage.get("cached_input_tokens"))
+    stats.input_tokens = max(total_input - cached_input, 0)
+    stats.cache_read_tokens = cached_input
+    stats.output_tokens = _nonnegative_int(usage.get("output_tokens"))
+    stats.cost_is_estimated = True
+    stats.has_token_usage = bool(usage)
     return stats
 
 
@@ -234,31 +334,78 @@ def extract_gemini_usage(stats_dict: dict[str, Any]) -> list[UsageStats]:
     Returns a list of ``UsageStats``, one per model. If no per-model breakdown
     exists, returns a single entry with the aggregate.
     """
-    models: dict[str, Any] = stats_dict.get("models", {})
+    models_raw = stats_dict.get("models", {})
+    models = cast(dict[str, Any], models_raw) if isinstance(models_raw, dict) else {}
 
     if models:
         result: list[UsageStats] = []
         for model_name, model_stats in models.items():
+            if not isinstance(model_stats, dict):
+                continue
+            uncached_input, billed_output, cached_input = _gemini_billed_tokens(model_stats)
             us = UsageStats(
-                input_tokens=model_stats.get("input_tokens", 0),
-                output_tokens=model_stats.get("output_tokens", 0),
-                cache_read_tokens=model_stats.get("cached", 0),
+                input_tokens=uncached_input,
+                output_tokens=billed_output,
+                cache_read_tokens=cached_input,
                 model=model_name,
                 provider="google",
+                cost_is_estimated=True,
+                has_token_usage=True,
             )
             result.append(us)
-        return result
+        if result:
+            return result
 
     # No per-model breakdown — use aggregate
+    uncached_input, billed_output, cached_input = _gemini_billed_tokens(stats_dict)
+    raw_tool_calls = stats_dict.get("tool_calls")
+    tool_calls = _optional_nonnegative_int(raw_tool_calls)
     return [
         UsageStats(
-            input_tokens=stats_dict.get("input_tokens", 0),
-            output_tokens=stats_dict.get("output_tokens", 0),
-            cache_read_tokens=stats_dict.get("cached", 0),
-            tool_calls=stats_dict.get("tool_calls", 0),
+            input_tokens=uncached_input,
+            output_tokens=billed_output,
+            cache_read_tokens=cached_input,
+            tool_calls=tool_calls or 0,
+            has_tool_calls=tool_calls is not None,
             provider="google",
+            cost_is_estimated=True,
+            has_token_usage=bool(stats_dict),
         )
     ]
+
+
+def _gemini_billed_tokens(stats: dict[str, Any]) -> tuple[int, int, int]:
+    """Return disjoint uncached-input, billed-output, and cached-input buckets."""
+    total_input = _nonnegative_int(stats.get("input_tokens"))
+    cached_input = _nonnegative_int(stats.get("cached"))
+    uncached_raw = stats.get("input")
+    uncached_input = (
+        _nonnegative_int(uncached_raw)
+        if uncached_raw is not None
+        else max(total_input - cached_input, 0)
+    )
+    visible_output = _nonnegative_int(stats.get("output_tokens"))
+    total_tokens = _nonnegative_int(stats.get("total_tokens"))
+    billed_output = max(visible_output, total_tokens - total_input, 0)
+    return (uncached_input, billed_output, cached_input)
+
+
+def _nonnegative_int(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0
+    return max(int(value), 0)
+
+
+def _optional_nonnegative_int(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        return None
+    return int(value)
+
+
+def _nonnegative_float(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    return max(float(value), 0.0)
 
 
 # ── Aggregation ─────────────────────────────────────────────────
@@ -278,8 +425,10 @@ class _DualCostAccum:
     model: str = ""
     provider: str = ""
     actual_cost: float = 0.0
+    actual_has_value: bool = False
     actual_is_estimated: bool = False
     list_cost: float = 0.0
+    list_has_value: bool = False
     list_is_estimated: bool = False
     _model_tokens: dict[str, int] = field(default_factory=dict)
     _model_provider: dict[str, str] = field(default_factory=dict)
@@ -288,9 +437,9 @@ class _DualCostAccum:
         self,
         us: UsageStats,
         *,
-        actual: float,
+        actual: float | None,
         actual_estimated: bool,
-        list_: float,
+        list_: float | None,
         list_estimated: bool,
         include_timing: bool = False,
     ) -> None:
@@ -308,12 +457,16 @@ class _DualCostAccum:
             self._model_tokens[us.model] = self._model_tokens.get(us.model, 0) + tokens
             if us.provider:
                 self._model_provider[us.model] = us.provider
-        self.actual_cost += actual
-        if actual_estimated:
-            self.actual_is_estimated = True
-        self.list_cost += list_
-        if list_estimated:
-            self.list_is_estimated = True
+        if actual is not None:
+            self.actual_cost += actual
+            self.actual_has_value = True
+            if actual_estimated:
+                self.actual_is_estimated = True
+        if list_ is not None:
+            self.list_cost += list_
+            self.list_has_value = True
+            if list_estimated:
+                self.list_is_estimated = True
 
     def _resolve_model_provider(self) -> None:
         """Set model/provider from the model that contributed the most tokens."""
@@ -325,11 +478,11 @@ class _DualCostAccum:
     def to_bucket(self) -> UsageBucket:
         self._resolve_model_provider()
         actual_view = CostView(
-            cost_usd=self.actual_cost or None,
+            cost_usd=self.actual_cost if self.actual_has_value else None,
             is_estimated=self.actual_is_estimated,
         )
         list_view = CostView(
-            cost_usd=self.list_cost or None,
+            cost_usd=self.list_cost if self.list_has_value else None,
             is_estimated=self.list_is_estimated,
         )
         return UsageBucket(
@@ -400,21 +553,14 @@ def aggregate_usage(
             if rates:
                 us.provider = rates.get("provider", "")
 
-        # Compute actual cost: self-reported when available, computed otherwise.
-        actual_cost = us.cost_usd
-        actual_estimated = us.cost_is_estimated
-        if actual_cost == 0.0 and us.model:
-            computed = compute_cost(us, pricing)
-            if computed > 0:
-                actual_cost = computed
-                actual_estimated = True
-            elif _lookup_model(us.model, pricing) is None:
-                warnings.append(f"Unknown model '{us.model}' — cost not computed")
-
-        # Compute list cost: always from pricing table.
-        list_cost = compute_cost(us, pricing, use_list_prices=True)
-        list_estimated = True
-        if list_cost == 0.0 and _lookup_model(us.model, pricing) is None:
+        # Agent logs are not an authoritative provider-billing source. Prefer a
+        # CLI-reported dollar amount as the list estimate; use pricing as fallback.
+        actual_cost = None
+        actual_estimated = False
+        list_estimate = estimate_list_cost(us, pricing)
+        list_cost = list_estimate
+        list_estimated = list_estimate is not None
+        if list_estimate is None and us.model and _lookup_model(us.model, pricing) is None:
             warnings.append(f"Unknown model '{us.model}' — list cost not computed")
 
         totals.add(
@@ -485,6 +631,10 @@ def _fmt_cost(c: float) -> str:
     return f"${c:.2f}"
 
 
+def _fmt_optional_cost(value: float | None) -> str:
+    return "unmeasured" if value is None else _fmt_cost(value)
+
+
 def write_usage_report(
     output_path: Path,
     run_id: str,
@@ -533,15 +683,12 @@ def write_usage_report(
     totals = report.totals
 
     # Build prose summary.
-    actual_cost = totals.cost.actual.cost_usd or 0.0
-    list_cost = totals.cost.list.cost_usd or 0.0
-    cost_str = _fmt_cost(actual_cost)
-    list_cost_str = _fmt_cost(list_cost)
+    cost_str = _fmt_optional_cost(totals.cost.actual.cost_usd)
+    list_cost_str = _fmt_optional_cost(totals.cost.list.cost_usd)
     input_str = _fmt_tokens(totals.input_tokens)
     output_str = _fmt_tokens(totals.output_tokens)
     steps = totals.steps
     variants = len(report.by_variant)
-    estimated = " (includes estimated costs)" if totals.cost.actual.is_estimated else ""
 
     lines = [
         f"# Usage Report: {run_id} / {phase}",
@@ -550,8 +697,8 @@ def write_usage_report(
         "",
         "## Summary",
         "",
-        f"Total actual cost: **{cost_str}**{estimated}.",
-        f"Total list cost: **{list_cost_str}** (vendor API rates).",
+        f"Total actual cost: **{cost_str}** (requires provider-authoritative evidence).",
+        f"Total list cost: **{list_cost_str}** (agent CLI or vendor rate estimate).",
         f"Total tokens: {input_str} input, {output_str} output.",
         f"{steps} steps across {variants} variants.",
         "",
@@ -565,8 +712,8 @@ def write_usage_report(
         lines.append("| --- | --- | --- | --- | --- |")
         for prov, pdata in sorted(report.by_provider.items()):
             lines.append(
-                f"| {prov} | {_fmt_cost(pdata.cost.actual.cost_usd or 0)} "
-                f"| {_fmt_cost(pdata.cost.list.cost_usd or 0)} "
+                f"| {prov} | {_fmt_optional_cost(pdata.cost.actual.cost_usd)} "
+                f"| {_fmt_optional_cost(pdata.cost.list.cost_usd)} "
                 f"| {_fmt_tokens(pdata.input_tokens)} "
                 f"| {_fmt_tokens(pdata.output_tokens)} |"
             )
@@ -582,8 +729,8 @@ def write_usage_report(
             lines.append(
                 f"| {model} "
                 f"| {mdata.provider or '?'} "
-                f"| {_fmt_cost(mdata.cost.actual.cost_usd or 0)} "
-                f"| {_fmt_cost(mdata.cost.list.cost_usd or 0)} "
+                f"| {_fmt_optional_cost(mdata.cost.actual.cost_usd)} "
+                f"| {_fmt_optional_cost(mdata.cost.list.cost_usd)} "
                 f"| {_fmt_tokens(mdata.input_tokens)} "
                 f"| {_fmt_tokens(mdata.output_tokens)} "
                 f"| {mdata.steps} |"

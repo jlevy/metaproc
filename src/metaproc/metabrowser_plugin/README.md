@@ -17,7 +17,7 @@ generic fallbacks:
 | File kind | Views |
 | --- | --- |
 | `process-spec` | Visual DAG, rendered document, source, and steps |
-| `resource-report` | Resource table, treemap, and raw JSON |
+| `resource-report` | Resource table with meters/budgets/outcome, treemap, and raw JSON |
 | `runpool-log` | Charts, statistics, normalized log, and raw JSON |
 | `process-log` | Normalized log and raw JSON |
 | `structure-report` | Summary, artifacts, graph, and source |

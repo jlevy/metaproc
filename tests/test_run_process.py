@@ -32,6 +32,8 @@ from metaproc.dispatch.pool_dispatch import PoolDispatchConfig
 from metaproc.engine.dep_state import fingerprint_step
 from metaproc.errors import CLIError
 from metaproc.io.state_io import write_result_at
+from metaproc.models.resource_budget import FinalizationState
+from metaproc.models.resources import ResourcesDocument, read_resources_document
 from metaproc.models.runtime import ResultRecord
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -79,6 +81,94 @@ class FakeOut:
 
     def progress(self, msg: str) -> None:
         self.messages.append(msg)
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (TimeoutError("deadline"), FinalizationState.TIMED_OUT),
+        (RuntimeError("boom"), FinalizationState.FAILED),
+    ],
+)
+def test_run_process_passes_causal_failure_to_resource_finalizer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error: BaseException,
+    expected: FinalizationState,
+) -> None:
+    process_path = tmp_path / "causal.process.md"
+    process_path.write_text(
+        "---\nprocess:\n  name: causal\n  steps:\n    - id: noop\n"
+        "      mode: code\n      command: 'true'\n---\n"
+    )
+
+    async def fail_orchestration(**_kwargs: object) -> None:
+        raise error
+
+    monkeypatch.setattr("metaproc.commands.run_process._orchestrate", fail_orchestration)
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-process",
+            str(process_path),
+            "--var",
+            f"RUNS_DIR={tmp_path / 'runs'}",
+            "--var",
+            "RUN_ID=run-1",
+        ],
+    )
+
+    assert result.exit_code != 0
+    document = read_resources_document(tmp_path / "runs" / "run-1" / "resources.json")
+    assert isinstance(document, ResourcesDocument)
+    assert document.finalization is not None
+    assert document.finalization.state is expected
+    assert document.finalization.terminal_error_type == type(error).__name__
+
+
+def test_run_process_preserves_original_failure_and_releases_lease_when_finalizer_interrupts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process_path = tmp_path / "causal.process.md"
+    process_path.write_text(
+        "---\nprocess:\n  name: causal\n  steps:\n    - id: noop\n"
+        "      mode: code\n      command: 'true'\n---\n"
+    )
+
+    original_error = RuntimeError("orchestration failed")
+
+    async def fail_orchestration(**_kwargs: object) -> None:
+        raise original_error
+
+    def interrupt_finalizer(*_args: object, **_kwargs: object) -> None:
+        raise KeyboardInterrupt
+
+    released: list[Path] = []
+    monkeypatch.setattr("metaproc.commands.run_process._orchestrate", fail_orchestration)
+    monkeypatch.setattr(
+        "metaproc.commands.run_process.finalize_run_resources",
+        interrupt_finalizer,
+    )
+    monkeypatch.setattr(
+        "metaproc.commands.run_process.release_lease",
+        lambda run_dir: released.append(run_dir),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-process",
+            str(process_path),
+            "--var",
+            f"RUNS_DIR={tmp_path / 'runs'}",
+            "--var",
+            "RUN_ID=run-1",
+        ],
+    )
+
+    assert result.exception is original_error
+    assert released == [tmp_path / "runs" / "run-1"]
 
 
 def test_agent_subprocesses_do_not_block_the_dag_event_loop(

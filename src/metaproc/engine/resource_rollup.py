@@ -1,43 +1,15 @@
-"""Roll up evidence from a run dir into a `ResourcesDocument`.
+"""Normalize local evidence and project the canonical resource ledger.
 
-This builder joins structural, execution, and usage evidence into the typed
-`ResourcesDocument` contract that the CLI and `/api/resources` serve.
-
-Current builder scope:
-
-- **Structural skeleton** — call `build_hierarchy_skeleton` to get the
-  run → process → step → item tree.
-- **Per-leaf evidence** — for every source log under the run dir, parse
-  via the existing adapter parsers, derive plan-aware ownership, and
-  aggregate tokens / cost / duration / tool calls into `self_metrics` on
-  the deepest matching node.
-- **Tool span pairing** — feed each session's events through
-  `pair_tool_events` to build per-tool counts; classify durations by
-  taxonomy path on `tool_path`.
-- **Throttling attribution** — feed each session's events through
-  `attribute_throttling`; accrue durations to
-  `wait_throttling_s` / `wait_rate_limit_s` / `wait_budget_s` as
-  appropriate.
-- **Bottom-up totals** — recurse through the skeleton, compute
-  ``total_metrics = self_metrics + sum(child.total_metrics)`` for each
-  field, additive nulls behave as missing-evidence.
-- **Taxonomy rollups** — drive a `PathTally` from each evidence span
-  for `time_kind_path`, `provider_path`, `model_path`, `tool_path`;
-  emit JSON-friendly `PrefixRollup` lists.
-- **Source log inventory** — every parsed file yields a `SourceLog`
-  with adapter, owner, and an event count summary so the browser can
-  show "evidence behind this node" without rereading raw files.
-
-Still intentionally limited:
-
-- The runpool event reader is consulted only to enumerate worker
-  lifetimes for billable-hours approximation; no charts.
+Source adapters produce typed ``ResourceEvent`` records. Reconciliation assigns
+stable identities, deduplicates byte-equivalent evidence, and rejects conflicts.
+Every hierarchy total, taxonomy rollup, provider meter, and budget evaluation is
+then derived from that reconciled ledger; cached projections are never inputs.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -47,21 +19,31 @@ from pydantic import TypeAdapter
 from strif import atomic_output_file
 
 from metaproc.engine.resource_hierarchy import build_hierarchy_skeleton
+from metaproc.engine.resource_reconciliation import (
+    aggregate_meter_rollups,
+    merge_meter_rollups,
+    reconcile_resource_events,
+)
 from metaproc.io import iter_artifact_paths, logical_path
-from metaproc.logutil.log_path_owner import LogOwner, derive_owner_for_bundle
+from metaproc.logutil.log_path_owner import (
+    LogOwner,
+    derive_owner,
+    derive_owner_for_bundle,
+    derive_owner_for_hierarchy,
+)
 from metaproc.logutil.parsing import (
     LogEvent,
     LogFile,
 )
 from metaproc.logutil.resource_event_extract import extract_resource_events
-from metaproc.logutil.throttling import (
-    ThrottleSpan,
-    attribute_throttling,
-)
-from metaproc.logutil.tool_spans import ToolSpan, pair_tool_events
 from metaproc.models.plan_bundle import PlanBundle
+from metaproc.models.resource_budget import (
+    ResourceBudgetSpec,
+    ResourceFinalization,
+    evaluate_resource_budgets,
+)
 from metaproc.models.resources import (
-    SCHEMA_V1,
+    SCHEMA_V2,
     HierarchyRef,
     LogSummary,
     Metrics,
@@ -97,10 +79,27 @@ _ADDITIVE_METRIC_FIELDS = (
     "wait_network_s",
     "tool_exec_s",
     "local_compute_s",
+    "api_requests",
+    "api_failures",
+    "retries",
+    "cache_hits",
+    "cache_misses",
     "billable_vm_hours",
     "billable_vcpu_hours",
     "billable_memory_gib_hours",
 )
+
+_MAX_METRIC_FIELDS = (
+    "cpu_pct_max",
+    "rss_bytes_max",
+)
+
+_AVERAGE_METRIC_FIELDS = (
+    "cpu_pct_avg",
+    "rss_bytes_avg",
+)
+
+_AverageSamples = dict[str, dict[str, tuple[float, int]]]
 
 
 @dataclass
@@ -174,9 +173,10 @@ def build_resources_document(
 
 def build_resource_artifacts(
     *,
-    bundle: PlanBundle,
+    bundle: PlanBundle | None,
     run_dir: Path,
     run_id: str,
+    hierarchy_root: Node | None = None,
     extra_source_logs: Iterable[Path] | None = None,
     source_events_path: str = ".logs/resource-events.jsonl",
     write: bool = False,
@@ -188,11 +188,20 @@ def build_resource_artifacts(
     ``run_dir/**/.logs/*.jsonl`` layout (e.g., ad-hoc fixtures); they are
     parsed identically to discovered files.
 
+    Terminal recovery may pass ``bundle=None`` with an immutable
+    ``hierarchy_root``. Ownership is then resolved from that hierarchy, so raw
+    local logs remain usable even when the authored process files disappeared.
+
     When ``write=True`` the artifacts are persisted atomically via
     :func:`write_resource_artifacts`. ``document_path`` overrides the
     default ``run_dir/resources.json`` target.
     """
-    root = build_hierarchy_skeleton(bundle, run_id=run_id, run_dir=run_dir)
+    if hierarchy_root is not None:
+        root = hierarchy_root.model_copy(deep=True)
+    elif bundle is not None:
+        root = build_hierarchy_skeleton(bundle, run_id=run_id, run_dir=run_dir)
+    else:
+        root = Node(node_type="run", node_id=run_id, label=run_id)
 
     generated_events_path = run_dir / source_events_path
     resource_sources = get_plugin_registry().resource_event_sources
@@ -206,13 +215,11 @@ def build_resource_artifacts(
     discovered = _exclude_paths(sorted(set(discovered)), exclude=[generated_events_path])
 
     nodes_by_id = _index_nodes(root)
-    tally = PathTally[float]()
     source_logs: list[SourceLog] = []
     resource_events: list[ResourceEvent] = []
-    unattributed = Metrics()
 
     for log_path in discovered:
-        owner = derive_owner_for_bundle(log_path, run_dir, bundle)
+        owner = _derive_log_owner(log_path, run_dir, bundle=bundle, hierarchy=root)
         log_file, events = _parse_file(log_path)
         if log_file is None:
             continue
@@ -228,21 +235,11 @@ def build_resource_artifacts(
         log_summary = _log_summary_for(log_file, events)
 
         if owner_node is None:
-            _accrue_unattributed(unattributed, log_file)
+            root.log_summary = _merge_log_summary(root.log_summary, log_summary)
+            root.source_refs.append(_source_ref(log_path, run_dir, kind))
         else:
             owner_node.log_summary = _merge_log_summary(owner_node.log_summary, log_summary)
             owner_node.source_refs.append(_source_ref(log_path, run_dir, kind))
-
-        # Tally taxonomy paths from spans (separate from per-node accrual,
-        # which now happens via per-event routing below).
-        tool_spans = pair_tool_events(events)
-        throttle_spans = attribute_throttling(events)
-        _accrue_taxonomy(
-            tally,
-            log_file=log_file,
-            tool_spans=tool_spans,
-            throttle_spans=throttle_spans,
-        )
 
         # Per-line typed event extraction. Events carry the deepest
         # hierarchy assignment we know for this log file; the router sends them
@@ -265,14 +262,6 @@ def build_resource_artifacts(
             source_size_bytes=size_bytes,
             source_mtime_ns=mtime_ns,
         )
-        for event in emitted:
-            leaf = _ensure_event_leaf(
-                nodes_by_id=nodes_by_id,
-                root=root,
-                event=event,
-                fallback_owner=owner_node,
-            )
-            _add_metrics_into(leaf.self_metrics, event.metrics)
         resource_events.extend(emitted)
 
         source_logs.append(
@@ -287,7 +276,7 @@ def build_resource_artifacts(
 
     for source in resource_sources:
         for source_path in source.discover(run_dir):
-            owner = derive_owner_for_bundle(source_path, run_dir, bundle)
+            owner = _derive_log_owner(source_path, run_dir, bundle=bundle, hierarchy=root)
             owner_node_id = _resolve_owner_node_id(owner, nodes_by_id)
             owner_node = nodes_by_id.get(owner_node_id) if owner_node_id else None
             try:
@@ -306,15 +295,6 @@ def build_resource_artifacts(
                     source_mtime_ns=source_mtime,
                 )
             )
-            for event in events:
-                leaf = _ensure_event_leaf(
-                    nodes_by_id=nodes_by_id,
-                    root=root,
-                    event=event,
-                    fallback_owner=owner_node,
-                )
-                _add_metrics_into(leaf.self_metrics, event.metrics)
-                _tally_external_event_taxonomy(tally, event)
             resource_events.extend(events)
             if events:
                 tool_call_events = [event for event in events if isinstance(event, ToolCallEvent)]
@@ -336,22 +316,13 @@ def build_resource_artifacts(
                     )
                 )
 
-    _propagate_totals(root)
-    rollups = _persist_tally_as_prefix_rollups(tally)
-
-    document = ResourcesDocument.model_validate(
-        {
-            "schema": SCHEMA_V1,
-            "run_id": run_id,
-            "generated_at": datetime.now(UTC),
-            "source_events_path": source_events_path,
-            "hierarchy_root": root.model_dump(),
-            "taxonomy_rollups": {
-                family: [r.model_dump() for r in entries] for family, entries in rollups.items()
-            },
-            "source_logs": [sl.model_dump() for sl in source_logs],
-            "unattributed": unattributed.model_dump(),
-        }
+    resource_events = reconcile_resource_events(resource_events)
+    document = project_resource_document(
+        hierarchy_root=root,
+        run_id=run_id,
+        events=resource_events,
+        source_events_path=source_events_path,
+        source_logs=source_logs,
     )
     result = ResourceBuildResult(
         document=document,
@@ -362,6 +333,103 @@ def build_resource_artifacts(
     if write:
         write_resource_artifacts(result)
     return result
+
+
+def _derive_log_owner(
+    log_path: Path,
+    run_dir: Path,
+    *,
+    bundle: PlanBundle | None,
+    hierarchy: Node,
+) -> LogOwner:
+    if bundle is not None:
+        return derive_owner_for_bundle(log_path, run_dir, bundle)
+    if _root_process_node(hierarchy) is not None:
+        return derive_owner_for_hierarchy(log_path, run_dir, hierarchy)
+    return derive_owner(log_path, run_dir)
+
+
+def _root_process_node(root: Node) -> Node | None:
+    if root.node_type == "process":
+        return root
+    return next((child for child in root.children if child.node_type == "process"), None)
+
+
+def project_resource_document(
+    *,
+    hierarchy_root: Node,
+    run_id: str,
+    events: Sequence[ResourceEvent],
+    source_events_path: str = ".logs/resource-events.jsonl",
+    source_logs: Sequence[SourceLog] = (),
+    generated_at: datetime | None = None,
+    budgets: Sequence[ResourceBudgetSpec] = (),
+    finalization: ResourceFinalization | None = None,
+    summary_path: str | None = None,
+) -> ResourcesDocument:
+    """Project one V2 document solely from the reconciled event ledger.
+
+    Any metrics already present on ``hierarchy_root`` are discarded. This is
+    intentional: terminal finalization and recovery must never reuse cached
+    totals from a prior ``resources.json`` projection.
+    """
+    root = hierarchy_root.model_copy(deep=True)
+    _clear_projection(root)
+    nodes_by_id = _index_nodes(root)
+    tallies: _TaxonomyTallies = {}
+    average_samples: _AverageSamples = {}
+    reconciled = reconcile_resource_events(events)
+
+    for event in reconciled:
+        leaf = _ensure_event_leaf(
+            nodes_by_id=nodes_by_id,
+            root=root,
+            event=event,
+            fallback_owner=None,
+        )
+        _add_metrics_into(leaf.self_metrics, event.metrics)
+        _record_average_samples(average_samples, leaf, event.metrics)
+        if event.meters:
+            leaf.self_meters = merge_meter_rollups(
+                [leaf.self_meters, aggregate_meter_rollups([event])]
+            )
+        _tally_event_taxonomy(tallies, event)
+
+    _apply_self_averages(root, average_samples)
+    _propagate_totals(root, average_samples)
+    meter_rollups = root.total_meters
+    coverage_gaps = [
+        rollup.key for rollup in meter_rollups if rollup.coverage.value == "unmeasured"
+    ]
+    document = ResourcesDocument(
+        schema=SCHEMA_V2,
+        run_id=run_id,
+        generated_at=generated_at or datetime.now(UTC),
+        source_events_path=source_events_path,
+        hierarchy_root=root,
+        taxonomy_rollups=_persist_tally_as_prefix_rollups(tallies),
+        source_logs=list(source_logs),
+        unattributed=Metrics(),
+        meter_rollups=meter_rollups,
+        coverage_gaps=coverage_gaps,
+        finalization=finalization,
+        summary_path=summary_path,
+    )
+    document.budget_evaluations = evaluate_resource_budgets(
+        document,
+        budgets,
+        events=reconciled,
+    )
+    return document
+
+
+def _clear_projection(node: Node) -> None:
+    node.self_metrics = Metrics()
+    node.total_metrics = Metrics()
+    node.self_meters = []
+    node.total_meters = []
+    for child in node.children:
+        _clear_projection(child)
 
 
 def _hierarchy_for_log(run_id: str, owner: LogOwner, log_path: Path, run_dir: Path) -> HierarchyRef:
@@ -554,178 +622,185 @@ def _resolve_owner_node_id(owner: LogOwner, nodes: dict[str, Node]) -> str | Non
     return None
 
 
-# ── Self-metric accrual ────────────────────────────────────────────
-
-
-def _accrue_into_self(self_metrics: Metrics, log_file: LogFile) -> None:
-    stats = log_file.usage_stats
-    if stats is None:
-        # Even without typed usage stats, we can still pick up duration / cost
-        # from the file's tracked attributes.
-        if log_file.duration_s is not None:
-            self_metrics.wall_time_s = (self_metrics.wall_time_s or 0.0) + log_file.duration_s
-        if log_file.cost_usd is not None:
-            self_metrics.actual_cost_usd = (self_metrics.actual_cost_usd or 0.0) + log_file.cost_usd
-        return
-
-    if stats.input_tokens:
-        self_metrics.input_tokens = (self_metrics.input_tokens or 0) + stats.input_tokens
-    if stats.output_tokens:
-        self_metrics.output_tokens = (self_metrics.output_tokens or 0) + stats.output_tokens
-    if stats.cache_read_tokens:
-        self_metrics.cache_read_tokens = (
-            self_metrics.cache_read_tokens or 0
-        ) + stats.cache_read_tokens
-    if stats.cache_write_tokens:
-        self_metrics.cache_write_tokens = (
-            self_metrics.cache_write_tokens or 0
-        ) + stats.cache_write_tokens
-    if stats.duration_s:
-        self_metrics.wall_time_s = (self_metrics.wall_time_s or 0.0) + stats.duration_s
-    if stats.cost_usd:
-        if stats.cost_is_estimated:
-            self_metrics.list_cost_usd = (self_metrics.list_cost_usd or 0.0) + stats.cost_usd
-        else:
-            self_metrics.actual_cost_usd = (self_metrics.actual_cost_usd or 0.0) + stats.cost_usd
-    if stats.tool_calls:
-        self_metrics.tool_calls = (self_metrics.tool_calls or 0) + stats.tool_calls
-
-
-def _accrue_unattributed(unattributed: Metrics, log_file: LogFile) -> None:
-    """Capture metrics from a log we couldn't pin to a hierarchy node.
-
-    The per-event router handles attributable evidence; this is the
-    fallback for log files whose owner can't be resolved (e.g., paths
-    outside the run dir).
-    """
-    _accrue_into_self(unattributed, log_file)
-
-
 # ── Taxonomy tally ─────────────────────────────────────────────────
 
 
-def _tally_external_event_taxonomy(tally: PathTally[float], event: ResourceEvent) -> None:
-    """Feed a plugin-emitted ResourceEvent's taxonomy paths into the PathTally.
+_TaxonomyTallies = dict[str, PathTally[float]]
 
-    Arena (post-Strand C) stamps every event with the full TaxonomyPaths
-    envelope; the rollup builder needs to tally each populated family on
-    its own metric so per-tier / per-provider / per-tool roll-ups appear in
-    `resource-usage.json`. Routing key:
 
-    - tool_path tallies on tool_exec_s (matches the existing ToolSpan behavior)
-    - provider_path / model_path tally on actual_cost_usd when present,
-      otherwise fall back to wait/exec time so the family is at least visible
-    - wait_* metrics tally on the corresponding wait duration
-    - policy_path and extra_paths.mode tally on tool_exec_s so per-tier and
-      per-mode breakdowns roll up across all attempts
-    """
+def _tally_event_taxonomy(tallies: _TaxonomyTallies, event: ResourceEvent) -> None:
+    """Derive taxonomy totals from one canonical ledger event."""
     taxonomy = event.taxonomy
     metrics = event.metrics
-    exec_s = metrics.tool_exec_s or 0.0
-    cost = metrics.actual_cost_usd or metrics.list_cost_usd or 0.0
-    rate_limit_s = metrics.wait_rate_limit_s or 0.0
-    throttle_s = metrics.wait_throttling_s or 0.0
-    wait_total = rate_limit_s + throttle_s
+    exec_s = metrics.tool_exec_s
+    wait_s = metrics.wait_throttling_s
+    if wait_s is None:
+        waits = (
+            metrics.wait_rate_limit_s,
+            metrics.wait_budget_s,
+            metrics.wait_network_s,
+        )
+        wait_s = (
+            sum(value for value in waits if value is not None)
+            if any(value is not None for value in waits)
+            else None
+        )
 
-    if taxonomy.tool_path and exec_s:
-        tally.add("tool_path", tuple(taxonomy.tool_path), exec_s)
+    if taxonomy.tool_path and exec_s is not None:
+        _add_taxonomy(tallies, "tool_exec_s", "tool_path", taxonomy.tool_path, exec_s)
     if taxonomy.provider_path:
-        amount = cost or (exec_s or wait_total)
-        if amount:
-            tally.add("provider_path", tuple(taxonomy.provider_path), amount)
-    if taxonomy.model_path and cost:
-        tally.add("model_path", tuple(taxonomy.model_path), cost)
-    if taxonomy.time_kind_path and (wait_total or exec_s):
-        amount = wait_total or exec_s
-        tally.add("time_kind_path", tuple(taxonomy.time_kind_path), amount)
-    if taxonomy.cost_kind_path and cost:
-        tally.add("cost_kind_path", tuple(taxonomy.cost_kind_path), cost)
-    if taxonomy.policy_path and exec_s:
-        tally.add("policy_path", tuple(taxonomy.policy_path), exec_s)
-    if exec_s:
+        if metrics.actual_cost_usd is not None:
+            _add_taxonomy(
+                tallies,
+                "actual_cost_usd",
+                "provider_path",
+                taxonomy.provider_path,
+                metrics.actual_cost_usd,
+            )
+        if metrics.list_cost_usd is not None:
+            _add_taxonomy(
+                tallies,
+                "list_cost_usd",
+                "provider_path",
+                taxonomy.provider_path,
+                metrics.list_cost_usd,
+            )
+        if metrics.actual_cost_usd is None and metrics.list_cost_usd is None:
+            if exec_s is not None:
+                _add_taxonomy(
+                    tallies, "tool_exec_s", "provider_path", taxonomy.provider_path, exec_s
+                )
+            elif wait_s is not None:
+                _add_taxonomy(
+                    tallies,
+                    "wait_throttling_s",
+                    "provider_path",
+                    taxonomy.provider_path,
+                    wait_s,
+                )
+    if taxonomy.model_path:
+        for field_name in ("actual_cost_usd", "list_cost_usd"):
+            value = cast(float | None, getattr(metrics, field_name))
+            if value is not None:
+                _add_taxonomy(tallies, field_name, "model_path", taxonomy.model_path, value)
+    if taxonomy.time_kind_path:
+        if wait_s is not None:
+            _add_taxonomy(
+                tallies,
+                "wait_throttling_s",
+                "time_kind_path",
+                taxonomy.time_kind_path,
+                wait_s,
+            )
+        elif exec_s is not None:
+            _add_taxonomy(tallies, "tool_exec_s", "time_kind_path", taxonomy.time_kind_path, exec_s)
+    if taxonomy.cost_kind_path:
+        for field_name in ("actual_cost_usd", "list_cost_usd"):
+            value = cast(float | None, getattr(metrics, field_name))
+            if value is not None:
+                _add_taxonomy(tallies, field_name, "cost_kind_path", taxonomy.cost_kind_path, value)
+    if taxonomy.policy_path and exec_s is not None:
+        _add_taxonomy(tallies, "tool_exec_s", "policy_path", taxonomy.policy_path, exec_s)
+    if exec_s is not None:
         for family, path in taxonomy.extra_paths.items():
             if path:
-                tally.add(f"{family}_path", (family, *path), exec_s)
+                _add_taxonomy(
+                    tallies,
+                    "tool_exec_s",
+                    f"{family}_path",
+                    [family, *path],
+                    exec_s,
+                )
 
 
-def _accrue_taxonomy(
-    tally: PathTally[float],
-    *,
-    log_file: LogFile,
-    tool_spans: list[ToolSpan],
-    throttle_spans: list[ThrottleSpan],
+def _add_taxonomy(
+    tallies: _TaxonomyTallies,
+    metric_field: str,
+    family: str,
+    path: Sequence[str],
+    value: float,
 ) -> None:
-    for span in tool_spans:
-        if span.duration_s is not None:
-            tally.add("tool_path", span.tool_path, span.duration_s)
-    for span in throttle_spans:
-        if span.duration_s is not None and span.duration_s > 0:
-            tally.add("time_kind_path", span.time_kind_path, span.duration_s)
-            if span.provider:
-                tally.add("provider_path", ("provider", span.provider), span.duration_s)
-
-    stats = log_file.usage_stats
-    if stats is None:
-        return
-    cost = stats.cost_usd
-    if cost:
-        if stats.provider:
-            tally.add("provider_path", ("provider", stats.provider), float(cost))
-        if stats.model:
-            tally.add("model_path", ("model", stats.model), float(cost))
+    tallies.setdefault(metric_field, PathTally[float]()).add(family, tuple(path), value)
 
 
 def _persist_tally_as_prefix_rollups(
-    tally: PathTally[float],
+    tallies: _TaxonomyTallies,
 ) -> dict[str, list[PrefixRollup]]:
     """Turn the tuple-keyed tally into JSON-friendly `PrefixRollup` lists."""
-    out: dict[str, list[PrefixRollup]] = {}
-    for family in tally.families():
-        rolls: list[PrefixRollup] = []
-        for prefix, value in tally.iter_prefixes(family):
-            metrics = _metrics_for_family(family, value)
-            rolls.append(
-                PrefixRollup(
-                    path=list(prefix),
-                    canonical=render_canonical(prefix),
-                    metrics=metrics,
-                )
+    rows: dict[str, dict[tuple[str, ...], Metrics]] = {}
+    for metric_field, tally in tallies.items():
+        for family in tally.families():
+            family_rows = rows.setdefault(family, {})
+            for prefix, value in tally.iter_prefixes(family):
+                metrics = family_rows.setdefault(prefix, Metrics())
+                current = cast(float | None, getattr(metrics, metric_field))
+                setattr(metrics, metric_field, (current or 0.0) + value)
+    return {
+        family: [
+            PrefixRollup(
+                path=list(prefix),
+                canonical=render_canonical(prefix),
+                metrics=metrics,
             )
-        out[family] = rolls
-    return out
-
-
-def _metrics_for_family(family: str, value: float) -> Metrics:
-    """Map a tally value onto the most appropriate Metrics field for its family."""
-    if family == "tool_path":
-        return Metrics(tool_exec_s=value)
-    if family == "time_kind_path":
-        return Metrics(wait_throttling_s=value)
-    if family in ("provider_path", "model_path", "cost_kind_path"):
-        return Metrics(actual_cost_usd=value)
-    if family == "policy_path" or family.endswith("_path"):
-        return Metrics(tool_exec_s=value)
-    raise ValueError(f"unknown metric family: {family}")
+            for prefix, metrics in sorted(family_rows.items())
+        ]
+        for family, family_rows in sorted(rows.items())
+    }
 
 
 # ── Bottom-up totals ───────────────────────────────────────────────
 
 
-def _propagate_totals(node: Node) -> None:
-    """Recursively compute ``total_metrics = self_metrics + sum(child.total_metrics)``."""
+def _propagate_totals(node: Node, average_samples: _AverageSamples) -> dict[str, int]:
+    """Compute totals and return raw sample counts for weighted averages."""
+    child_counts: list[tuple[Node, dict[str, int]]] = []
     for child in node.children:
-        _propagate_totals(child)
+        child_counts.append((child, _propagate_totals(child, average_samples)))
 
     total = Metrics()
-    # Start from self_metrics
     _add_metrics_into(total, node.self_metrics)
-    for child in node.children:
+    for child, _counts in child_counts:
         _add_metrics_into(total, child.total_metrics)
+    total_average_counts: dict[str, int] = {}
+    for field_name in _AVERAGE_METRIC_FIELDS:
+        own_count = average_samples.get(node.node_id, {}).get(field_name, (0.0, 0))[1]
+        own_value = cast(float | None, getattr(node.self_metrics, field_name))
+        weighted_sum = (own_value or 0.0) * own_count
+        count = own_count
+        for child, counts in child_counts:
+            child_count = counts.get(field_name, 0)
+            child_value = cast(float | None, getattr(child.total_metrics, field_name))
+            weighted_sum += (child_value or 0.0) * child_count
+            count += child_count
+        if count:
+            setattr(total, field_name, weighted_sum / count)
+            total_average_counts[field_name] = count
     node.total_metrics = total
+    node.total_meters = merge_meter_rollups(
+        [node.self_meters, *(child.total_meters for child in node.children)]
+    )
+    return total_average_counts
+
+
+def _record_average_samples(samples: _AverageSamples, node: Node, metrics: Metrics) -> None:
+    node_samples = samples.setdefault(node.node_id, {})
+    for field_name in _AVERAGE_METRIC_FIELDS:
+        value = cast(float | None, getattr(metrics, field_name))
+        if value is None:
+            continue
+        total, count = node_samples.get(field_name, (0.0, 0))
+        node_samples[field_name] = (total + value, count + 1)
+
+
+def _apply_self_averages(node: Node, samples: _AverageSamples) -> None:
+    for field_name, (total, count) in samples.get(node.node_id, {}).items():
+        setattr(node.self_metrics, field_name, total / count)
+    for child in node.children:
+        _apply_self_averages(child, samples)
 
 
 def _add_metrics_into(target: Metrics, source: Metrics) -> None:
-    """In-place add every additive field from ``source`` into ``target`` with null discipline."""
+    """Merge additive and peak fields from ``source`` with null discipline."""
     for field_name in _ADDITIVE_METRIC_FIELDS:
         src_value = cast(float | int | None, getattr(source, field_name))
         if src_value is None:
@@ -733,6 +808,12 @@ def _add_metrics_into(target: Metrics, source: Metrics) -> None:
         current = cast(float | int | None, getattr(target, field_name))
         new_value = (current or 0) + src_value
         setattr(target, field_name, new_value)
+    for field_name in _MAX_METRIC_FIELDS:
+        src_value = cast(float | int | None, getattr(source, field_name))
+        if src_value is None:
+            continue
+        current = cast(float | int | None, getattr(target, field_name))
+        setattr(target, field_name, src_value if current is None else max(current, src_value))
 
 
 # ── Source-log helpers ─────────────────────────────────────────────

@@ -39,8 +39,8 @@ def _reset_pricing_cache():
 # ── attempt_cost_attrs helper ──
 
 
-def test_self_reported_cost_preferred_over_pricing_table() -> None:
-    """When self_reported_cost is provided, use it with is_estimated=False."""
+def test_cli_reported_cost_preferred_over_pricing_table_as_estimate() -> None:
+    """A CLI-reported value is preferred but remains an estimate."""
     result = attempt_cost_attrs(
         model="claude-opus-4-7",
         provider="anthropic",
@@ -50,14 +50,14 @@ def test_self_reported_cost_preferred_over_pricing_table() -> None:
         self_reported_cost=0.42,
     )
     assert result["attempt.cost_usd"] == 0.42
-    assert result["attempt.cost_is_estimated"] is False
+    assert result["attempt.cost_is_estimated"] is True
     assert result["attempt.tokens_input"] == 1000
     assert result["attempt.tokens_output"] == 200
     assert result["attempt.tokens_cached"] == 50
 
 
-def test_zero_self_reported_cost_is_not_estimated() -> None:
-    """A cost of 0.0 from the adapter is still self-reported (not estimated)."""
+def test_zero_cli_reported_cost_is_still_estimated() -> None:
+    """A zero CLI value is preserved without becoming provider billing evidence."""
     result = attempt_cost_attrs(
         model="glm-5-maas",
         provider="vertex-maas",
@@ -67,7 +67,7 @@ def test_zero_self_reported_cost_is_not_estimated() -> None:
         self_reported_cost=0.0,
     )
     assert result["attempt.cost_usd"] == 0.0
-    assert result["attempt.cost_is_estimated"] is False
+    assert result["attempt.cost_is_estimated"] is True
 
 
 def test_pricing_table_fallback_when_no_self_reported_cost() -> None:
@@ -124,7 +124,7 @@ def test_none_tokens_omitted() -> None:
         self_reported_cost=0.10,
     )
     assert result["attempt.cost_usd"] == 0.10
-    assert result["attempt.cost_is_estimated"] is False
+    assert result["attempt.cost_is_estimated"] is True
     assert "attempt.tokens_input" not in result
     assert "attempt.tokens_output" not in result
     assert "attempt.tokens_cached" not in result
@@ -190,7 +190,7 @@ def _write_claude_log(
 
 
 def test_claude_attempt_carries_canonical_cost_attrs(tmp_path: Path) -> None:
-    """Claude's result.total_cost_usd maps to attempt.cost_usd + attempt.cost_is_estimated=False."""
+    """Claude's CLI-reported result cost is retained as an estimate."""
 
     run_dir = tmp_path / "run"
     _write_claude_log(run_dir, total_cost_usd=1.23)
@@ -201,7 +201,7 @@ def test_claude_attempt_carries_canonical_cost_attrs(tmp_path: Path) -> None:
     assert attempt.attributes["attempt.total_cost_usd"] == 1.23
     # Canonical keys
     assert attempt.attributes["attempt.cost_usd"] == 1.23
-    assert attempt.attributes["attempt.cost_is_estimated"] is False
+    assert attempt.attributes["attempt.cost_is_estimated"] is True
 
 
 # ── Codex extractor: cost attrs on attempt span ──
@@ -332,11 +332,11 @@ def test_gemini_attempt_carries_cost_from_pricing_table(tmp_path: Path) -> None:
         extractor = GeminiAgentExtractor()
         spans = list(extractor.extract(run_dir, trace_id="t"))
     attempt = next(s for s in spans if s.kind == "attempt")
-    assert attempt.attributes["attempt.tokens_input"] == 1_000_000
+    assert attempt.attributes["attempt.tokens_input"] == 500_000
     assert attempt.attributes["attempt.tokens_output"] == 100_000
     assert attempt.attributes["attempt.tokens_cached"] == 500_000
-    # 0.15 + 0.06 + 0.01875 = 0.22875
-    assert attempt.attributes["attempt.cost_usd"] == pytest.approx(0.22875)
+    # 0.075 + 0.06 + 0.01875 = 0.15375 (cached input is disjoint).
+    assert attempt.attributes["attempt.cost_usd"] == pytest.approx(0.15375)
     assert attempt.attributes["attempt.cost_is_estimated"] is True
 
 
@@ -369,8 +369,8 @@ def _write_pi_log_with_cost(
     return path
 
 
-def test_pi_self_reported_cost_uses_canonical_keys(tmp_path: Path) -> None:
-    """Pi with cost.total present uses attempt.cost_usd with is_estimated=False."""
+def test_pi_cli_reported_cost_uses_canonical_estimate_keys(tmp_path: Path) -> None:
+    """Pi cost.total is useful but is not authoritative provider billing."""
 
     run_dir = tmp_path / "run"
     _write_pi_log_with_cost(run_dir, cost_total=0.05)
@@ -378,7 +378,7 @@ def test_pi_self_reported_cost_uses_canonical_keys(tmp_path: Path) -> None:
     spans = list(extractor.extract(run_dir, trace_id="t"))
     attempt = next(s for s in spans if s.kind == "attempt")
     assert attempt.attributes["attempt.cost_usd"] == 0.05
-    assert attempt.attributes["attempt.cost_is_estimated"] is False
+    assert attempt.attributes["attempt.cost_is_estimated"] is True
 
 
 def test_pi_no_cost_falls_back_to_pricing_table(tmp_path: Path) -> None:

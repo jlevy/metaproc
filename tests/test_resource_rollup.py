@@ -103,7 +103,7 @@ def _make_claude_log(path: Path) -> None:
     path.write_text("\n".join(lines) + "\n")
 
 
-def test_document_has_root_run_node_and_v1_schema(tmp_path: Path) -> None:
+def test_document_has_root_run_node_and_v2_schema(tmp_path: Path) -> None:
     parent = _write(tmp_path, "parent/test.process.md", _PARENT_PROCESS)
     _write(tmp_path, "parent/child/test.process.md", _CHILD_PROCESS)
     bundle = load_plan_bundle(parent, params={"CUTOFF_DATE": "2026-04-21"})
@@ -118,7 +118,7 @@ def test_document_has_root_run_node_and_v1_schema(tmp_path: Path) -> None:
     assert doc.hierarchy_root.node_id == "run-1"
     assert doc.source_logs == []  # no logs yet
     payload = doc.model_dump_json(by_alias=True)
-    assert json.loads(payload)["schema"] == "metaproc.resources/v1"
+    assert json.loads(payload)["schema"] == "metaproc.resources/v2"
 
 
 def test_attributes_agent_log_to_owning_step(tmp_path: Path) -> None:
@@ -135,7 +135,7 @@ def test_attributes_agent_log_to_owning_step(tmp_path: Path) -> None:
     # composite step's total_metrics aggregates the leaf via bottom-up sum.
     process_root = doc.hierarchy_root.children[0]
     composite_step = process_root.children[0]
-    assert composite_step.total_metrics.actual_cost_usd == pytest.approx(0.42)
+    assert composite_step.total_metrics.list_cost_usd == pytest.approx(0.42)
     assert composite_step.total_metrics.input_tokens == 100
     assert composite_step.total_metrics.output_tokens == 50
     assert composite_step.total_metrics.cache_read_tokens == 200
@@ -157,11 +157,11 @@ def test_totals_propagate_bottom_up(tmp_path: Path) -> None:
     doc = build_resources_document(bundle=bundle, run_dir=run_dir, run_id="run-1")
 
     # Root run_node total should equal the single leaf's self total.
-    assert doc.hierarchy_root.total_metrics.actual_cost_usd == pytest.approx(0.42)
+    assert doc.hierarchy_root.total_metrics.list_cost_usd == pytest.approx(0.42)
     assert doc.hierarchy_root.total_metrics.input_tokens == 100
     # Composite step contributes its self metrics to the run total.
     process_root = doc.hierarchy_root.children[0]
-    assert process_root.total_metrics.actual_cost_usd == pytest.approx(0.42)
+    assert process_root.total_metrics.list_cost_usd == pytest.approx(0.42)
 
 
 def test_unattributed_metrics_capture_logs_outside_run_dir(tmp_path: Path) -> None:
@@ -179,7 +179,7 @@ def test_unattributed_metrics_capture_logs_outside_run_dir(tmp_path: Path) -> No
     process_root = doc.hierarchy_root.children[0]
     # The summary log lacks a step prefix, so its events accrue to a file:
     # leaf under the root process node — visible via total_metrics.
-    assert process_root.total_metrics.actual_cost_usd == pytest.approx(0.42)
+    assert process_root.total_metrics.list_cost_usd == pytest.approx(0.42)
 
 
 def test_taxonomy_rollups_persist_as_lists(tmp_path: Path) -> None:
@@ -233,7 +233,7 @@ def test_round_trip_through_json(tmp_path: Path) -> None:
     assert restored.run_id == "run-1"
     assert restored.hierarchy_root.children[0].children[
         0
-    ].total_metrics.actual_cost_usd == pytest.approx(0.42)
+    ].total_metrics.list_cost_usd == pytest.approx(0.42)
 
 
 def test_variant_item_status_node_present(tmp_path: Path) -> None:
@@ -281,6 +281,6 @@ def test_composite_child_logs_resolve_to_qualified_child_step(tmp_path: Path) ->
     nested_process = composite_step.children[0]
     leaf_step = nested_process.children[0]
     assert leaf_step.node_id == "run_child::leaf"
-    assert leaf_step.total_metrics.actual_cost_usd == pytest.approx(0.42)
+    assert leaf_step.total_metrics.list_cost_usd == pytest.approx(0.42)
     assert any(child.node_id == "run_child::leaf::sonnet/AAPL" for child in leaf_step.children)
     assert doc.source_logs[0].owner_node_id == "run_child::leaf"

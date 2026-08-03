@@ -27,6 +27,7 @@ from metaproc.io import ArtifactPath, logical_path
 from metaproc.logutil.usage import (
     UsageStats,
     extract_gemini_usage,
+    sum_claude_usage,
     sum_codex_usage,
     sum_pi_usage,
 )
@@ -51,6 +52,8 @@ class LogEvent:
     is_done: bool = False  # True for result events (DONE or FAIL)
     cost_usd: float | None = None
     duration_s: float | None = None
+    tool_name: str | None = None
+    invocation_id: str | None = None
     raw: dict[str, Any] | str = field(default_factory=dict)
     summary_parts: list[dict[str, Any]] | None = (
         None  # structured [{type, text}] for rich rendering
@@ -148,6 +151,9 @@ class ClaudeLogParser:
     """Parser for Claude Code stream-json JSONL output."""
 
     adapter_name: str = "claude"
+
+    def __init__(self) -> None:
+        self._tool_names_by_id: dict[str, str] = {}
 
     def parse_line(self, line: str) -> list[LogEvent]:
         event = _parse_json(line)
@@ -260,6 +266,9 @@ class ClaudeLogParser:
             btype: str | None = b.get("type")
             if btype == "tool_use":
                 tool_name: str = b.get("name", "?")
+                invocation_id = b.get("id") if isinstance(b.get("id"), str) else None
+                if invocation_id is not None:
+                    self._tool_names_by_id[invocation_id] = tool_name
                 inp: Any = b.get("input", {})
                 inp_dict: dict[str, Any] = (
                     cast(dict[str, Any], inp) if isinstance(inp, dict) else {}
@@ -275,7 +284,9 @@ class ClaudeLogParser:
                         timestamp=ts,
                         summary=f"[call:{tool_name}] {param_str}",
                         summary_parts=parts,
-                        raw=event,
+                        tool_name=tool_name,
+                        invocation_id=invocation_id,
+                        raw=b,
                     )
                 )
             elif btype == "text":
@@ -341,6 +352,12 @@ class ClaudeLogParser:
                 continue
             blk: dict[str, Any] = cast(dict[str, Any], block)
             if blk.get("type") == "tool_result":
+                invocation_id = (
+                    blk.get("tool_use_id") if isinstance(blk.get("tool_use_id"), str) else None
+                )
+                tool_name = (
+                    self._tool_names_by_id.get(invocation_id) if invocation_id is not None else None
+                )
                 is_error: bool = blk.get("is_error", False)
                 result_content: Any = blk.get("content", "")
                 if isinstance(result_content, str):
@@ -364,7 +381,9 @@ class ClaudeLogParser:
                             {"type": "omitted", "text": f" ({size} chars)"},
                         ],
                         is_error=is_error,
-                        raw=event,
+                        tool_name=tool_name,
+                        invocation_id=invocation_id,
+                        raw=blk,
                     )
                 )
 
@@ -476,6 +495,7 @@ class GeminiLogParser:
         # Tool use (top-level in Gemini)
         if etype == "tool_use":
             tool_name: str = event.get("tool_name", "?")
+            invocation_id = event.get("tool_id") if isinstance(event.get("tool_id"), str) else None
             params: Any = event.get("parameters", {})
             params_dict: dict[str, Any] = (
                 cast(dict[str, Any], params) if isinstance(params, dict) else {}
@@ -495,6 +515,8 @@ class GeminiLogParser:
                     timestamp=ts,
                     summary=f"[call:{tool_name}] {param_str}",
                     summary_parts=parts,
+                    tool_name=tool_name,
+                    invocation_id=invocation_id,
                     raw=event,
                 )
             )
@@ -502,6 +524,10 @@ class GeminiLogParser:
         # Tool result (top-level in Gemini)
         if etype == "tool_result":
             tool_id = event.get("tool_id", "?")
+            invocation_id = tool_id if isinstance(tool_id, str) and tool_id != "?" else None
+            result_tool_name = (
+                event.get("tool_name") if isinstance(event.get("tool_name"), str) else None
+            )
             status = event.get("status", "?")
             output = event.get("output", "")
             size = len(output) if isinstance(output, str) else len(str(output))
@@ -520,6 +546,8 @@ class GeminiLogParser:
                         {"type": "omitted", "text": f" ({size} chars)"},
                     ],
                     is_error=is_error,
+                    tool_name=result_tool_name,
+                    invocation_id=invocation_id,
                     raw=event,
                 )
             )
@@ -711,6 +739,15 @@ def _extract_pi_thinking_events(
     return events
 
 
+def _pi_invocation_id(event: dict[str, Any]) -> str | None:
+    """Return the producer correlation ID used by current and legacy Pi logs."""
+    for key in ("executionId", "toolCallId", "execution_id", "tool_call_id"):
+        value = event.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 # ── Pi CLI parser ────────────────────────────────────────────────
 
 
@@ -780,6 +817,7 @@ class PiLogParser:
 
         if etype == "tool_execution_start":
             tool: str = event.get("toolName", event.get("tool", event.get("name", "?")))
+            invocation_id = _pi_invocation_id(event)
             args: Any = event.get("args", {})
             args_dict: dict[str, Any] = cast(dict[str, Any], args) if isinstance(args, dict) else {}
             param_str = _format_tool_params(args_dict) if isinstance(args, dict) else str(args)
@@ -791,12 +829,15 @@ class PiLogParser:
                     summary_parts=parts,
                     adapter="pi",
                     timestamp=ts,
+                    tool_name=tool,
+                    invocation_id=invocation_id,
                     raw=event,
                 )
             ]
 
         if etype == "tool_execution_end":
             tool = event.get("toolName", event.get("tool", event.get("name", "?")))
+            invocation_id = _pi_invocation_id(event)
             is_error = event.get("isError", False)
             result_data: Any = event.get("result", {})
             result_content: str = (
@@ -819,6 +860,8 @@ class PiLogParser:
                     is_error=is_error,
                     adapter="pi",
                     timestamp=ts,
+                    tool_name=tool,
+                    invocation_id=invocation_id,
                     raw=event,
                 )
             ]
@@ -1234,6 +1277,24 @@ class ProcessLogParser:
 # ── Codex parser (codex-cli 0.124.0 flat envelope) ──────────────
 
 
+def _codex_tool_identity(item_type: str, item: dict[str, Any]) -> tuple[str, str]:
+    """Normalize one self-contained Codex item into a tool name and detail."""
+    if item_type == "command_execution":
+        return ("exec", str(item.get("command", "?")))
+    if item_type == "file_change":
+        path_value = item.get("path")
+        if not isinstance(path_value, str):
+            changes = item.get("changes")
+            if isinstance(changes, list) and changes and isinstance(changes[0], dict):
+                path_value = cast(dict[str, Any], changes[0]).get("path")
+        return ("file_change", str(path_value or "?"))
+    if item_type == "mcp_tool_call":
+        return (f"mcp:{item.get('tool_name', '?')}", "")
+    if item_type == "web_search":
+        return ("web_search", str(item.get("query", "?")))
+    return (item_type, "")
+
+
 class CodexLogParser:
     """Parser for codex-cli 0.124.0 JSONL output.
 
@@ -1336,7 +1397,7 @@ class CodexLogParser:
                 )
             ]
         item = cast(dict[str, Any], item_raw)
-        item_type = str(item.get("item_type", "unknown"))
+        item_type = str(item.get("item_type") or item.get("type") or "unknown")
 
         # Only surface completed items for the main timeline; started/updated
         # produce a lot of streaming noise that the compactor can drop later.
@@ -1369,62 +1430,35 @@ class CodexLogParser:
                 )
             ]
 
-        if item_type == "command_execution":
-            cmd = str(item.get("command", "?"))
-            return [
-                LogEvent(
-                    kind="tool_call",
-                    adapter=self.adapter_name,
-                    timestamp=ts,
-                    summary=f"[call:exec] {cmd}",
-                    raw=event,
-                )
-            ]
-
-        if item_type == "file_change":
-            path_value = str(item.get("path", "?"))
-            return [
-                LogEvent(
-                    kind="tool_call",
-                    adapter=self.adapter_name,
-                    timestamp=ts,
-                    summary=f"[call:file_change] {path_value}",
-                    raw=event,
-                )
-            ]
-
-        if item_type == "mcp_tool_call":
-            name = str(item.get("tool_name", "?"))
-            return [
-                LogEvent(
-                    kind="tool_call",
-                    adapter=self.adapter_name,
-                    timestamp=ts,
-                    summary=f"[call:mcp:{name}]",
-                    raw=event,
-                )
-            ]
-
-        if item_type == "web_search":
-            query = str(item.get("query", "?"))
-            return [
-                LogEvent(
-                    kind="tool_call",
-                    adapter=self.adapter_name,
-                    timestamp=ts,
-                    summary=f"[call:web_search] {query}",
-                    raw=event,
-                )
-            ]
-
+        tool_name, detail = _codex_tool_identity(item_type, item)
+        invocation_id = item.get("id") if isinstance(item.get("id"), str) else None
+        status = str(item.get("status", "completed")).lower()
+        exit_code = item.get("exit_code")
+        is_error = status in {"error", "failed", "cancelled"} or (
+            isinstance(exit_code, int) and exit_code != 0
+        )
+        call_summary = f"[call:{tool_name}]" + (f" {detail}" if detail else "")
+        result_summary = f"[result:{tool_name}]" + (" ERROR" if is_error else "")
         return [
             LogEvent(
                 kind="tool_call",
                 adapter=self.adapter_name,
                 timestamp=ts,
-                summary=f"[call:{item_type}]",
-                raw=event,
-            )
+                summary=call_summary,
+                tool_name=tool_name,
+                invocation_id=invocation_id,
+                raw=item,
+            ),
+            LogEvent(
+                kind="tool_result",
+                adapter=self.adapter_name,
+                timestamp=ts,
+                summary=result_summary,
+                is_error=is_error,
+                tool_name=tool_name,
+                invocation_id=invocation_id,
+                raw=item,
+            ),
         ]
 
     def _parse_terminal(
@@ -1750,24 +1784,22 @@ class LogFile:
                 us = UsageStats(steps=1)
                 for entry in entries:
                     us += entry
-                us.tool_calls = stats_dict.get("tool_calls", 0)
+                raw_tool_calls = stats_dict.get("tool_calls")
+                if (
+                    isinstance(raw_tool_calls, (int, float))
+                    and not isinstance(raw_tool_calls, bool)
+                    and raw_tool_calls >= 0
+                ):
+                    us.tool_calls = int(raw_tool_calls)
+                    us.has_tool_calls = True
                 dur_ms = stats_dict.get("duration_ms")
                 us.duration_s = dur_ms / 1000 if dur_ms else (ev.duration_s or 0.0)
                 us.cost_is_estimated = True
                 self.usage_stats = us
         elif adapter == "claude":
-            usage = raw.get("usage", {})
-            self.usage_stats = UsageStats(
-                input_tokens=usage.get("input_tokens", 0),
-                output_tokens=usage.get("output_tokens", 0),
-                cache_read_tokens=usage.get("cache_read_input_tokens", 0),
-                cache_write_tokens=usage.get("cache_creation_input_tokens", 0),
-                cost_usd=ev.cost_usd or 0.0,
-                duration_s=ev.duration_s or 0.0,
-                model=self.model or "",
-                provider="anthropic",
-                steps=1,
-            )
+            self.usage_stats = sum_claude_usage(raw, fallback_model=self.model or "")
+            self.usage_stats.duration_s = ev.duration_s or 0.0
+            self.usage_stats.steps = 1
         elif adapter == "codex" and raw.get("type") == "turn.completed":
             # codex-cli 0.124.0 carries usage inline on the terminal
             # turn.completed event; sum_codex_usage maps cached_input_tokens

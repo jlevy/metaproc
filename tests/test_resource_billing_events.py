@@ -77,6 +77,7 @@ def test_runpool_process_exit_emits_sample_event(tmp_path: Path) -> None:
     assert s.metrics.local_compute_s == pytest.approx(60.0)
     assert s.metrics.rss_bytes_max == 256_000_000
     assert s.taxonomy.resource_path == ["resource", "local", "runpool_process"]
+    assert result.document.hierarchy_root.total_metrics.rss_bytes_max == 256_000_000
 
 
 def test_billing_event_emitted_when_machine_type_known(tmp_path: Path) -> None:

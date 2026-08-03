@@ -11,15 +11,10 @@ resource joiner consumes.
 
 Pairing strategy:
 
-- Within a single agent session (one log file), tool calls and their
-  results arrive in matching order: each `tool_result` closes the
-  most recent open `tool_call` for the same tool name. Adapters do not
-  expose explicit correlation IDs, so order-within-tool-name is the
-  contract we have today.
-- Pi log records can be matched even more strongly because
-  `tool_execution_start` and `tool_execution_end` carry an
-  ``executionId`` that we surface on `LogEvent.raw`; we prefer that ID
-  when present and fall back to FIFO-by-name otherwise.
+- Producer correlation IDs preserved on normalized `LogEvent` records are
+  authoritative across Claude, Gemini, Pi, and Codex.
+- Records without an ID receive a deterministic ordinal scoped to the
+  source stream, adapter, and tool name; FIFO-by-name closes those spans.
 - Unmatched starts (the session crashed mid-tool) yield a span with
   ``ended_at=None`` and ``failure_class="unmatched_start"`` so the
   resource report can flag them rather than silently dropping the
@@ -48,6 +43,7 @@ class ToolSpan:
 
     tool_name: str
     adapter: str
+    invocation_id: str
     started_at: datetime | None
     ended_at: datetime | None
     duration_s: float | None
@@ -63,7 +59,7 @@ def pair_tool_events(events: list[LogEvent]) -> list[ToolSpan]:
 
     Tool call/result pairing rules:
 
-    1. Match by ``executionId`` when both sides expose it (Pi ≥ 0.67).
+    1. Match by the adapter's normalized producer invocation ID when present.
     2. Otherwise, FIFO within tool name within adapter.
     3. Unmatched calls become orphan spans with
        ``failure_class="unmatched_start"``; unmatched results become
@@ -71,35 +67,75 @@ def pair_tool_events(events: list[LogEvent]) -> list[ToolSpan]:
        attribution audit can surface them.
     """
     pending: dict[tuple[str, str], list[_PendingCall]] = {}
-    by_exec_id: dict[str, _PendingCall] = {}
+    by_invocation_id: dict[tuple[str, str], _PendingCall] = {}
+    fallback_ordinals: dict[tuple[str, str], int] = {}
+    orphan_result_ordinals: dict[tuple[str, str], int] = {}
     spans: list[ToolSpan] = []
 
     for ev in events:
         if ev.kind == "tool_call":
-            call = _new_pending(ev)
-            if call.execution_id:
-                by_exec_id[call.execution_id] = call
+            tool_name = _extract_tool_name(ev)
+            producer_id = _extract_invocation_id(ev)
+            if producer_id is None:
+                ordinal_key = (ev.adapter, tool_name)
+                ordinal = fallback_ordinals.get(ordinal_key, 0) + 1
+                fallback_ordinals[ordinal_key] = ordinal
+                invocation_id = f"fallback:{ev.adapter}:{tool_name}:{ordinal}"
+            else:
+                invocation_id = producer_id
+            call = _new_pending(
+                ev,
+                tool_name=tool_name,
+                invocation_id=invocation_id,
+                has_producer_id=producer_id is not None,
+            )
+            identity_key = (ev.adapter, invocation_id)
+            if identity_key in by_invocation_id:
+                raise ValueError(f"duplicate pending tool invocation identity {invocation_id!r}")
+            by_invocation_id[identity_key] = call
             pending.setdefault((ev.adapter, call.tool_name), []).append(call)
             continue
 
         if ev.kind == "tool_result":
             tool_name = _extract_tool_name(ev)
-            execution_id = _extract_execution_id(ev)
+            producer_id = _extract_invocation_id(ev)
 
             matched: _PendingCall | None = None
-            if execution_id and execution_id in by_exec_id:
-                matched = by_exec_id.pop(execution_id)
+            if producer_id:
+                matched = by_invocation_id.pop((ev.adapter, producer_id), None)
+            if matched is not None:
                 queue = pending.get((ev.adapter, matched.tool_name), [])
                 if matched in queue:
                     queue.remove(matched)
             else:
                 queue = pending.get((ev.adapter, tool_name), [])
-                if queue:
-                    matched = queue.pop(0)
-                    if matched.execution_id and matched.execution_id in by_exec_id:
-                        by_exec_id.pop(matched.execution_id, None)
+                eligible = (
+                    next((call for call in queue if not call.has_producer_id), None)
+                    if producer_id is not None
+                    else (queue[0] if queue else None)
+                )
+                if eligible is not None:
+                    matched = eligible
+                    queue.remove(matched)
+                    by_invocation_id.pop((matched.adapter, matched.invocation_id), None)
 
-            spans.append(_build_paired_span(matched=matched, result=ev))
+            if producer_id is not None:
+                invocation_id = producer_id
+            elif matched is not None:
+                invocation_id = matched.invocation_id
+            else:
+                ordinal_key = (ev.adapter, tool_name)
+                ordinal = orphan_result_ordinals.get(ordinal_key, 0) + 1
+                orphan_result_ordinals[ordinal_key] = ordinal
+                invocation_id = f"fallback-result:{ev.adapter}:{tool_name}:{ordinal}"
+
+            spans.append(
+                _build_paired_span(
+                    matched=matched,
+                    result=ev,
+                    invocation_id=invocation_id,
+                )
+            )
 
     # Anything still pending was started but never ended (session crash,
     # unflushed buffer, etc.). Surface them so the audit notices.
@@ -119,7 +155,8 @@ class _PendingCall:
     adapter: str
     started_at: datetime | None
     raw: dict[str, Any]
-    execution_id: str | None = None
+    invocation_id: str
+    has_producer_id: bool
     summary: str = ""
 
     # Make the dataclass hashable on identity so we can safely .remove() it
@@ -127,19 +164,28 @@ class _PendingCall:
     __hash__ = object.__hash__  # type: ignore[assignment]
 
 
-def _new_pending(ev: LogEvent) -> _PendingCall:
+def _new_pending(
+    ev: LogEvent,
+    *,
+    tool_name: str,
+    invocation_id: str,
+    has_producer_id: bool,
+) -> _PendingCall:
     raw = ev.raw if isinstance(ev.raw, dict) else {}
     return _PendingCall(
-        tool_name=_extract_tool_name(ev),
+        tool_name=tool_name,
         adapter=ev.adapter,
         started_at=_parse_ts(ev.timestamp),
         raw=raw,
-        execution_id=_extract_execution_id(ev),
+        invocation_id=invocation_id,
+        has_producer_id=has_producer_id,
         summary=ev.summary,
     )
 
 
-def _build_paired_span(*, matched: _PendingCall | None, result: LogEvent) -> ToolSpan:
+def _build_paired_span(
+    *, matched: _PendingCall | None, result: LogEvent, invocation_id: str
+) -> ToolSpan:
     raw_result = result.raw if isinstance(result.raw, dict) else {}
     tool_name = matched.tool_name if matched is not None else _extract_tool_name(result)
     adapter = matched.adapter if matched is not None else result.adapter
@@ -158,6 +204,7 @@ def _build_paired_span(*, matched: _PendingCall | None, result: LogEvent) -> Too
     return ToolSpan(
         tool_name=tool_name,
         adapter=adapter,
+        invocation_id=invocation_id,
         started_at=started_at,
         ended_at=ended_at,
         duration_s=duration_s,
@@ -173,6 +220,7 @@ def _build_orphan_call(call: _PendingCall) -> ToolSpan:
     return ToolSpan(
         tool_name=call.tool_name,
         adapter=call.adapter,
+        invocation_id=call.invocation_id,
         started_at=call.started_at,
         ended_at=None,
         duration_s=None,
@@ -185,6 +233,8 @@ def _build_orphan_call(call: _PendingCall) -> ToolSpan:
 
 
 def _extract_tool_name(ev: LogEvent) -> str:
+    if ev.tool_name:
+        return ev.tool_name
     raw = ev.raw if isinstance(ev.raw, dict) else {}
     for key in ("toolName", "tool_name", "tool", "name"):
         value = raw.get(key)
@@ -196,11 +246,22 @@ def _extract_tool_name(ev: LogEvent) -> str:
     return _tool_from_summary(ev.summary)
 
 
-def _extract_execution_id(ev: LogEvent) -> str | None:
+def _extract_invocation_id(ev: LogEvent) -> str | None:
+    if ev.invocation_id:
+        return ev.invocation_id
     raw = ev.raw if isinstance(ev.raw, dict) else {}
-    value = raw.get("executionId") or raw.get("execution_id") or raw.get("id")
-    if isinstance(value, str) and value:
-        return value
+    for key in (
+        "executionId",
+        "toolCallId",
+        "tool_use_id",
+        "tool_id",
+        "execution_id",
+        "tool_call_id",
+        "id",
+    ):
+        value = raw.get(key)
+        if isinstance(value, str) and value:
+            return value
     return None
 
 

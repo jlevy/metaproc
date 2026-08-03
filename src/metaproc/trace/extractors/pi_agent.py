@@ -21,8 +21,8 @@ Pairing: ``tool_execution_start`` and ``tool_execution_end`` are paired by
 Token + cost extraction: ``agent_end.messages[]`` carries per-assistant-message
 usage with ``{input, output, cacheRead, cacheWrite}`` and optionally
 ``cost.total``. We sum across all assistant messages. If ``cost.total`` is
-present on any message, the sum is used as ``attempt.cost_usd`` with
-``attempt.cost_is_estimated=False``.
+present on any message, the sum is used as an estimated ``attempt.cost_usd``;
+agent CLI output is not authoritative provider billing.
 
 Path convention matches claude_agent.py:
 ``<run-dir>/.logs/tasks/<step>/<item>/<filename>.jsonl``.
@@ -37,6 +37,7 @@ from typing import Any
 
 from metaproc.io import iter_artifact_paths, iter_jsonl_objects
 from metaproc.io.gz_io import artifact_sidecar_path
+from metaproc.logutil.usage import sum_pi_usage
 from metaproc.trace.extractors.common import (
     attempt_cost_attrs,
     tool_usage_classification,
@@ -113,21 +114,16 @@ class PiAgentExtractor:
         # Token + cost from agent_end.messages.
         model_from_messages: str | None = None
         if isinstance(agent_end, dict):
-            messages = agent_end.get("messages")
-            if isinstance(messages, list):
-                usage_totals = _sum_assistant_usage(messages)
-                for attr_key, total in (
-                    ("attempt.tokens_input", usage_totals["input"]),
-                    ("attempt.tokens_output", usage_totals["output"]),
-                    ("attempt.tokens_cache_read", usage_totals["cache_read"]),
-                    ("attempt.tokens_cache_write", usage_totals["cache_write"]),
-                ):
-                    if total is not None:
-                        attempt_attrs[attr_key] = total
-                if usage_totals["has_cost"]:
-                    attempt_attrs["attempt.cost_usd"] = usage_totals["cost_total"]
-                    attempt_attrs["attempt.cost_is_estimated"] = False
-                model_from_messages = usage_totals["model"]
+            usage = sum_pi_usage(agent_end)
+            if usage.has_token_usage:
+                attempt_attrs["attempt.tokens_input"] = usage.input_tokens
+                attempt_attrs["attempt.tokens_output"] = usage.output_tokens
+                attempt_attrs["attempt.tokens_cache_read"] = usage.cache_read_tokens
+                attempt_attrs["attempt.tokens_cache_write"] = usage.cache_write_tokens
+            if usage.has_cost:
+                attempt_attrs["attempt.cost_usd"] = usage.cost_usd
+                attempt_attrs["attempt.cost_is_estimated"] = True
+            model_from_messages = usage.model or None
 
         _apply_sidecar_attrs(invocation, attempt_attrs)
 
@@ -328,69 +324,6 @@ class PiAgentExtractor:
                 status="unknown",
                 attributes=attrs,
             )
-
-
-def _sum_assistant_usage(messages: list[Any]) -> dict[str, Any]:
-    """Sum usage across all assistant messages in agent_end.
-
-    Returns dict with keys: input, output, cache_read, cache_write,
-    has_cost, cost_total, model.
-    """
-    total_input = 0
-    total_output = 0
-    total_cache_read = 0
-    total_cache_write = 0
-    total_cost = 0.0
-    has_cost = False
-    has_any_usage = False
-    model: str | None = None
-
-    for msg in messages:
-        if not isinstance(msg, dict):
-            continue
-        if msg.get("role") != "assistant":
-            continue
-        # Capture model from first assistant message.
-        if model is None:
-            m = msg.get("model")
-            if isinstance(m, str) and m:
-                model = m
-        usage = msg.get("usage")
-        if not isinstance(usage, dict):
-            continue
-        has_any_usage = True
-        for raw_key, add_to in (
-            ("input", "input"),
-            ("output", "output"),
-            ("cacheRead", "cache_read"),
-            ("cacheWrite", "cache_write"),
-        ):
-            val = usage.get(raw_key)
-            if isinstance(val, (int, float)):
-                if add_to == "input":
-                    total_input += val
-                elif add_to == "output":
-                    total_output += val
-                elif add_to == "cache_read":
-                    total_cache_read += val
-                elif add_to == "cache_write":
-                    total_cache_write += val
-        cost = usage.get("cost")
-        if isinstance(cost, dict) and "total" in cost:
-            has_cost = True
-            cost_val = cost.get("total")
-            if isinstance(cost_val, (int, float)):
-                total_cost += cost_val
-
-    return {
-        "input": total_input if has_any_usage else None,
-        "output": total_output if has_any_usage else None,
-        "cache_read": total_cache_read if has_any_usage else None,
-        "cache_write": total_cache_write if has_any_usage else None,
-        "has_cost": has_cost,
-        "cost_total": total_cost,
-        "model": model,
-    }
 
 
 def _parse_step_and_item_key(jsonl_path: Path, *, run_dir: Path) -> tuple[str, str]:

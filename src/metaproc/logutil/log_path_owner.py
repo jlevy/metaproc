@@ -1,7 +1,11 @@
 """Derive ownership IDs (process / step / item) from a log file path.
 
-Run directories already encode ownership in their layout. A pi-cli /
-agent log lives at one of these paths, relative to the run dir:
+Run directories already encode ownership in their layout. Current task logs live at:
+
+    .logs/tasks/<step_id>/<item_key>/<file>.jsonl
+
+Composite descendants prefix their own run directory. Historical layouts remain
+readable and placed ``.logs`` after the structural chain:
 
     <step_id>/<item_key>/.logs/<file>.jsonl       (fan-out, no variant)
     <step_id>/<variant>/<item_key>/.logs/<file>.jsonl  (fan-out with variant)
@@ -32,6 +36,7 @@ from metaproc.models.node_ids import (
     step_node_id,
 )
 from metaproc.models.plan_bundle import PlanBundle
+from metaproc.models.resources import Node
 
 LOGS_DIRNAME = ".logs"
 PROCESS_EVENTS_FILENAME = "process-events.jsonl"
@@ -90,6 +95,22 @@ def derive_owner_for_bundle(log_path: Path, run_dir: Path, bundle: PlanBundle) -
     )
 
 
+def derive_owner_for_hierarchy(log_path: Path, run_dir: Path, hierarchy: Node) -> LogOwner:
+    """Resolve ownership from the immutable hierarchy when source specs are unavailable."""
+    relative = _relative_to_run(log_path, run_dir)
+    if relative is None:
+        return _NULL_OWNER
+    parts = _structural_parts(relative)
+    process = _root_process_node(hierarchy)
+    if process is None:
+        return _NULL_OWNER
+    return _owner_from_hierarchy_parts(
+        parts,
+        process,
+        is_process_events_file=relative.name == PROCESS_EVENTS_FILENAME,
+    )
+
+
 def _relative_to_run(log_path: Path, run_dir: Path) -> Path | None:
     candidate = log_path if log_path.is_absolute() else run_dir / log_path
     try:
@@ -100,10 +121,16 @@ def _relative_to_run(log_path: Path, run_dir: Path) -> Path | None:
 
 def _structural_parts(relative: Path) -> list[str]:
     parts = list(relative.parts)
-    # Trim everything from the trailing ``.logs`` segment onward so what
-    # remains is just the structural ownership chain.
+    # Modern task logs are ``<composite-prefix>/.logs/tasks/<step>/<item>/<file>``.
+    # Older runs placed ``.logs`` after the step/item chain. Normalize both to
+    # one structural sequence consumed by the plan/hierarchy walkers.
     if LOGS_DIRNAME in parts:
-        return parts[: parts.index(LOGS_DIRNAME)]
+        index = parts.index(LOGS_DIRNAME)
+        prefix = parts[:index]
+        suffix = parts[index + 1 :]
+        if suffix and suffix[0] == "tasks":
+            return [*prefix, *suffix[1:-1]]
+        return prefix
     # No `.logs` segment: drop only the file name.
     if parts:
         parts.pop()
@@ -172,3 +199,60 @@ def _owner_from_bundle_parts(
             )
 
     return _owner_from_parts(parts, subgraph_key=subgraph_key)
+
+
+def _root_process_node(hierarchy: Node) -> Node | None:
+    if hierarchy.node_type == "process":
+        return hierarchy
+    return next((child for child in hierarchy.children if child.node_type == "process"), None)
+
+
+def _owner_from_hierarchy_parts(
+    parts: list[str],
+    process: Node,
+    *,
+    is_process_events_file: bool,
+) -> LogOwner:
+    subgraph_key = process.node_id.removeprefix("process:")
+    if not parts:
+        return LogOwner(
+            process_node_id=process.node_id,
+            step_node_id=None,
+            item_key=None,
+            subgraph_key=subgraph_key,
+        )
+
+    step = next(
+        (
+            child
+            for child in process.children
+            if child.node_type == "step" and (child.label == parts[0] or child.node_id == parts[0])
+        ),
+        None,
+    )
+    if step is None:
+        return LogOwner(
+            process_node_id=process.node_id,
+            step_node_id=None,
+            item_key=None,
+            subgraph_key=subgraph_key,
+        )
+
+    nested = next((child for child in step.children if child.node_type == "process"), None)
+    tail = parts[1:]
+    if nested is not None and (tail or is_process_events_file):
+        return _owner_from_hierarchy_parts(
+            tail,
+            nested,
+            is_process_events_file=is_process_events_file,
+        )
+
+    item_key = "/".join(tail) if tail else None
+    variant = tail[0] if len(tail) >= 2 else None
+    return LogOwner(
+        process_node_id=process.node_id,
+        step_node_id=step.node_id,
+        item_key=item_key,
+        subgraph_key=subgraph_key,
+        variant=variant,
+    )

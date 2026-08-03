@@ -163,31 +163,38 @@ function resourceNodeClicked(row) {
 function resourceMetric(metrics, key) {
   metrics = metrics || {};
   if (key === "total_tokens") {
-    return (
-      (metrics.input_tokens || 0) +
-      (metrics.output_tokens || 0) +
-      (metrics.cache_read_tokens || 0) +
-      (metrics.cache_write_tokens || 0)
-    );
+    var tokenFields = [
+      metrics.input_tokens,
+      metrics.output_tokens,
+      metrics.cache_read_tokens,
+      metrics.cache_write_tokens,
+    ];
+    if (tokenFields.some((value) => value == null)) {
+      return null;
+    }
+    return tokenFields.reduce((total, value) => total + (value || 0), 0);
   }
   var value = metrics[key];
-  return value == null ? 0 : value;
+  return value == null ? null : value;
 }
 
 function formatResourceMetric(key, value) {
+  if (value == null) {
+    return "unmeasured";
+  }
   if (key.indexOf("_cost_usd") >= 0) {
-    return "$" + (value || 0).toFixed(2);
+    return "$" + value.toFixed(2);
   }
   if (key.indexOf("_s") === key.length - 2) {
-    return fmtDuration(value || 0);
+    return fmtDuration(value);
   }
   if (key.indexOf("rss_bytes") >= 0) {
-    return formatSize(value || 0);
+    return formatSize(value);
   }
   if (key.indexOf("_hours") >= 0) {
-    return (value || 0).toFixed(2);
+    return value.toFixed(2);
   }
-  return (value || 0).toLocaleString();
+  return value.toLocaleString();
 }
 
 function flattenResourceRows(node, depth, rows) {
@@ -255,6 +262,12 @@ function renderResourceReportPayload(report, metricKey, selectedNodeId) {
     formatResourceMetric("actual_cost_usd", resourceMetric(totals, "actual_cost_usd")),
   );
   html += resourceSummaryCell(
+    "List estimate",
+    formatResourceMetric("list_cost_usd", resourceMetric(totals, "list_cost_usd")),
+  );
+  html += resourceSummaryCell("Outcome", report.finalization?.state || "not finalized");
+  html += resourceSummaryCell("Coverage gaps", (report.coverage_gaps || []).length);
+  html += resourceSummaryCell(
     "Tool calls",
     formatResourceMetric("tool_calls", resourceMetric(totals, "tool_calls")),
   );
@@ -277,7 +290,7 @@ function renderResourceReportPayload(report, metricKey, selectedNodeId) {
     '<table class="resource-table resource-hierarchy-table"><thead><tr>' +
     "<th>Node</th><th>Type</th><th>" +
     esc(selected.label) +
-    "</th><th>Tokens</th><th>Wall</th><th>Actual cost</th><th>Tools</th><th>Logs</th>" +
+    "</th><th>Tokens</th><th>Wall</th><th>Actual cost</th><th>List estimate</th><th>Tools</th><th>Logs</th>" +
     "</tr></thead><tbody>";
   for (var r = 0; r < rows.length; r++) {
     var node = rows[r].node;
@@ -311,12 +324,18 @@ function renderResourceReportPayload(report, metricKey, selectedNodeId) {
       formatResourceMetric("actual_cost_usd", resourceMetric(metrics, "actual_cost_usd")) +
       "</td>";
     html +=
+      "<td>" +
+      formatResourceMetric("list_cost_usd", resourceMetric(metrics, "list_cost_usd")) +
+      "</td>";
+    html +=
       "<td>" + formatResourceMetric("tool_calls", resourceMetric(metrics, "tool_calls")) + "</td>";
     html += "<td>" + (node.log_summary?.source_log_count || 0).toLocaleString() + "</td>";
     html += "</tr>";
   }
   html += "</tbody></table>";
   html += renderResourceNodeDetail(selectedNode);
+  html += renderProviderMeters(report.meter_rollups || [], report.coverage_gaps || []);
+  html += renderResourceBudgets(report.budget_evaluations || []);
   html += renderTaxonomyRollups(report.taxonomy_rollups || {}, metricKey);
   html += renderResourceSourceLogs(report.source_logs || []);
   html += "</div>";
@@ -331,6 +350,58 @@ function resourceSummaryCell(label, value) {
     esc(String(value)) +
     "</strong></div>"
   );
+}
+
+function renderProviderMeters(meters, gaps) {
+  var html = '<div class="resource-section-title">Provider meters</div>';
+  if (!meters.length) {
+    return html + '<div class="preview-empty">No provider meter evidence</div>';
+  }
+  html +=
+    '<table class="resource-table"><thead><tr><th>Provider</th><th>Product</th><th>Meter</th><th>Unit</th><th>Coverage</th><th>Quantity</th></tr></thead><tbody>';
+  for (var i = 0; i < meters.length; i++) {
+    var rollup = meters[i];
+    var key = rollup.key || {};
+    var quantity = null;
+    if (rollup.coverage !== "unmeasured") {
+      quantity = (rollup.actual_quantity || 0) + (rollup.estimated_quantity || 0);
+    }
+    html += "<tr>";
+    html += "<td>" + esc(key.provider || "") + "</td>";
+    html += "<td>" + esc(key.product || "") + "</td>";
+    html += "<td>" + esc(key.meter || "") + "</td>";
+    html += "<td>" + esc(key.unit || "") + "</td>";
+    html += "<td>" + esc(rollup.coverage || "unmeasured") + "</td>";
+    html += "<td>" + esc(quantity == null ? "unmeasured" : String(quantity)) + "</td>";
+    html += "</tr>";
+  }
+  html += "</tbody></table>";
+  if (gaps.length) {
+    html += '<div class="resource-subtitle">Coverage gaps: ' + gaps.length + "</div>";
+  }
+  return html;
+}
+
+function renderResourceBudgets(evaluations) {
+  var html = '<div class="resource-section-title">Resource budgets</div>';
+  if (!evaluations.length) {
+    return html + '<div class="preview-empty">No launch-time budgets</div>';
+  }
+  html +=
+    '<table class="resource-table"><thead><tr><th>Budget</th><th>Scope</th><th>Status</th><th>Coverage</th><th>Observation</th></tr></thead><tbody>';
+  for (var i = 0; i < evaluations.length; i++) {
+    var evaluation = evaluations[i];
+    var budget = evaluation.budget || {};
+    var scope = budget.scope || {};
+    html += "<tr>";
+    html += "<td>" + esc(budget.budget_id || "") + "</td>";
+    html += "<td>" + esc(scope.kind || "") + (scope.key ? ": " + esc(scope.key) : "") + "</td>";
+    html += "<td>" + esc(evaluation.status || "") + "</td>";
+    html += "<td>" + esc(evaluation.coverage || "") + "</td>";
+    html += "<td>" + esc(evaluation.message || "") + "</td>";
+    html += "</tr>";
+  }
+  return html + "</tbody></table>";
 }
 
 function renderResourceSourceLogs(logs) {

@@ -12,9 +12,12 @@ import os
 from pathlib import Path
 from typing import Any
 
+import pytest
 from metabrowser import server as proc_browser
 
+from metaproc.commands.run_process import _write_run_config
 from metaproc.metabrowser_plugin import sidekick
+from metaproc.models.resource_snapshot import ResourceRunSnapshot, ResourceTopologyNode
 
 _PARENT_PROCESS = """\
 ---
@@ -127,7 +130,7 @@ def test_first_call_builds_when_no_cache(tmp_path: Path) -> None:
     process_rel, run_dir_rel = _setup(tmp_path)
     status, payload = _call(run_dir=run_dir_rel, process=process_rel)
     assert status == 200, payload
-    assert payload["schema"] == "metaproc.resources/v1"
+    assert payload["schema"] == "metaproc.resources/v2"
     assert payload["hierarchy_root"]["node_type"] == "run"
     assert (tmp_path / run_dir_rel / "resources.json").exists()
 
@@ -138,7 +141,7 @@ def test_cached_call_does_not_require_process_param(tmp_path: Path) -> None:
 
     status, payload = _call(run_dir=run_dir_rel)
     assert status == 200
-    assert payload["schema"] == "metaproc.resources/v1"
+    assert payload["schema"] == "metaproc.resources/v2"
 
 
 def test_missing_process_when_no_cache_returns_400(tmp_path: Path) -> None:
@@ -161,7 +164,7 @@ def test_refresh_param_overwrites_existing_cache(tmp_path: Path) -> None:
 
     status, _ = _call(run_dir=run_dir_rel, process=process_rel, refresh="1")
     assert status == 200
-    assert json.loads(cache.read_text())["schema"] == "metaproc.resources/v1"
+    assert json.loads(cache.read_text())["schema"] == "metaproc.resources/v2"
 
 
 def test_cached_call_rejects_cache_symlink_outside_served_root(tmp_path: Path) -> None:
@@ -223,7 +226,7 @@ def test_stale_flag_set_when_events_log_newer_than_cache(tmp_path: Path) -> None
     status, payload = _call(run_dir=run_dir_rel)
     assert status == 200
     assert payload["stale"] is True
-    assert payload["schema"] == "metaproc.resources/v1"
+    assert payload["schema"] == "metaproc.resources/v2"
 
 
 def test_stale_flag_false_when_events_log_older_than_cache(tmp_path: Path) -> None:
@@ -259,3 +262,37 @@ def test_two_refreshes_do_not_ingest_generated_events_log(tmp_path: Path) -> Non
     source_paths = {log["path"] for log in second_payload["source_logs"]}
     assert "run_child/leaf/AAPL/.logs/session.jsonl" in source_paths
     assert ".logs/resource-events.jsonl" not in source_paths
+
+
+def test_snapshot_refresh_rejects_active_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process_rel, run_dir_rel = _setup(tmp_path)
+    run_dir = tmp_path / run_dir_rel
+    _write_run_config(
+        run_dir,
+        process_name="parent",
+        process_path=tmp_path / process_rel,
+        run_id="2026-04-21",
+        variables={},
+        backend="local",
+        variant=None,
+        resource_snapshot=ResourceRunSnapshot(
+            hierarchy=ResourceTopologyNode(
+                node_type="run",
+                node_id="parent/2026-04-21",
+                label="parent/2026-04-21",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "metaproc.io.orchestrator_lease.is_orchestrator_alive",
+        lambda _run_dir: True,
+    )
+
+    status, payload = _call(run_dir=run_dir_rel, refresh="1")
+
+    assert status == 409
+    assert "active" in payload["error"]
+    assert not (run_dir / "resources.json").exists()

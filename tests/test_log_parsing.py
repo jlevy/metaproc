@@ -7,6 +7,7 @@ from pathlib import Path
 
 from metaproc.logutil.parsing import (
     ClaudeLogParser,
+    CodexLogParser,
     GeminiLogParser,
     LogEvent,
     LogFile,
@@ -129,6 +130,7 @@ class TestClaudeLogParser:
                     "content": [
                         {
                             "type": "tool_use",
+                            "id": "toolu-read-1",
                             "name": "Read",
                             "input": {"file_path": "/foo/bar.py"},
                         }
@@ -140,6 +142,8 @@ class TestClaudeLogParser:
         assert len(events) == 1
         assert events[0].kind == "tool_call"
         assert "Read" in events[0].summary
+        assert events[0].tool_name == "Read"
+        assert events[0].invocation_id == "toolu-read-1"
 
     def test_assistant_text(self):
         parser = ClaudeLogParser()
@@ -167,6 +171,23 @@ class TestClaudeLogParser:
 
     def test_user_tool_result(self):
         parser = ClaudeLogParser()
+        parser.parse_line(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "toolu-read-1",
+                                "name": "Read",
+                                "input": {},
+                            }
+                        ]
+                    },
+                }
+            )
+        )
         line = json.dumps(
             {
                 "type": "user",
@@ -174,6 +195,7 @@ class TestClaudeLogParser:
                     "content": [
                         {
                             "type": "tool_result",
+                            "tool_use_id": "toolu-read-1",
                             "is_error": False,
                             "content": "file contents here",
                         }
@@ -185,6 +207,8 @@ class TestClaudeLogParser:
         assert len(events) == 1
         assert events[0].kind == "tool_result"
         assert "[result]" in events[0].summary
+        assert events[0].tool_name == "Read"
+        assert events[0].invocation_id == "toolu-read-1"
         # Char count is in summary_parts (omitted entry) when structured rendering is available
         if events[0].summary_parts:
             omitted = [p for p in events[0].summary_parts if p.get("type") == "omitted"]
@@ -277,6 +301,7 @@ class TestGeminiLogParser:
         line = json.dumps(
             {
                 "type": "tool_use",
+                "tool_id": "gemini-tool-1",
                 "tool_name": "shell",
                 "parameters": {"command": "ls -la"},
             }
@@ -285,6 +310,8 @@ class TestGeminiLogParser:
         assert len(events) == 1
         assert events[0].kind == "tool_call"
         assert "shell" in events[0].summary
+        assert events[0].tool_name == "shell"
+        assert events[0].invocation_id == "gemini-tool-1"
 
     def test_tool_result_success(self):
         parser = GeminiLogParser()
@@ -300,6 +327,7 @@ class TestGeminiLogParser:
         assert len(events) == 1
         assert events[0].kind == "tool_result"
         assert events[0].is_error is False
+        assert events[0].invocation_id == "t1"
 
     def test_tool_result_error(self):
         parser = GeminiLogParser()
@@ -452,6 +480,8 @@ class TestPiLogParser:
         assert "read" in events[0].summary
         assert "path=" in events[0].summary
         assert events[0].summary_parts is not None
+        assert events[0].tool_name == "read"
+        assert events[0].invocation_id == "toolu_01GUECqtjhqkVjupwJYhdqr8"
 
     def test_tool_execution_start_with_bash_command(self):
         line = json.dumps(
@@ -492,6 +522,8 @@ class TestPiLogParser:
         assert "file1.py" in events[0].summary
         assert events[0].is_error is False
         assert events[0].summary_parts is not None
+        assert events[0].tool_name == "bash"
+        assert events[0].invocation_id == "t1"
 
     def test_tool_execution_end_error(self):
         line = json.dumps(
@@ -623,6 +655,50 @@ class TestPiLogParser:
         assert kinds.count("text") == 1
         assert kinds.count("result") == 1
         assert all_events[-1].is_done is True
+
+
+class TestCodexLogParser:
+    def test_completed_tool_item_is_one_completed_invocation(self):
+        parser = CodexLogParser()
+
+        events = parser.parse_line(
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "item-42",
+                        "type": "command_execution",
+                        "command": "echo ok",
+                        "status": "completed",
+                        "exit_code": 0,
+                    },
+                }
+            )
+        )
+
+        assert [event.kind for event in events] == ["tool_call", "tool_result"]
+        assert {event.tool_name for event in events} == {"exec"}
+        assert {event.invocation_id for event in events} == {"item-42"}
+
+    def test_failed_completed_item_marks_only_the_result_as_error(self):
+        parser = CodexLogParser()
+
+        events = parser.parse_line(
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "item-43",
+                        "type": "command_execution",
+                        "command": "false",
+                        "status": "failed",
+                        "exit_code": 1,
+                    },
+                }
+            )
+        )
+
+        assert [event.is_error for event in events] == [False, True]
 
 
 # ── RunPoolLogParser ────────────────────────────────────────────
@@ -959,7 +1035,7 @@ class TestLogFile:
         lf = LogFile(log_file, 0)
         lf.read_new_events()
         assert lf.usage_stats is not None
-        assert lf.usage_stats.input_tokens == 1000
+        assert lf.usage_stats.input_tokens == 800
         assert lf.usage_stats.cache_read_tokens == 200
         assert lf.usage_stats.output_tokens == 50
         assert lf.usage_stats.provider == "openai"

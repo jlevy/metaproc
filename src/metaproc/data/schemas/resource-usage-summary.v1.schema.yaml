@@ -1,0 +1,575 @@
+$defs:
+  BudgetCoverage:
+    description: Evidence quality used by one evaluation.
+    enum:
+    - measured
+    - estimated
+    - unmeasured
+    title: BudgetCoverage
+    type: string
+  BudgetEvaluation:
+    additionalProperties: false
+    description: Observed quantity and threshold state for one budget.
+    properties:
+      actual_quantity:
+        anyOf:
+        - minimum: 0
+          type: number
+        - type: 'null'
+        default: null
+        title: Actual Quantity
+      budget:
+        $ref: '#/$defs/ResourceBudgetSpec'
+      coverage:
+        $ref: '#/$defs/BudgetCoverage'
+      estimated_quantity:
+        anyOf:
+        - minimum: 0
+          type: number
+        - type: 'null'
+        default: null
+        title: Estimated Quantity
+      message:
+        title: Message
+        type: string
+      status:
+        $ref: '#/$defs/BudgetStatus'
+    required:
+    - budget
+    - coverage
+    - message
+    - status
+    title: BudgetEvaluation
+    type: object
+  BudgetMeterKey:
+    additionalProperties: false
+    description: Exact provider-meter selector used by an authored budget.
+    properties:
+      meter:
+        maxLength: 128
+        minLength: 1
+        title: Meter
+        type: string
+      product:
+        maxLength: 128
+        minLength: 1
+        title: Product
+        type: string
+      provider:
+        maxLength: 128
+        minLength: 1
+        title: Provider
+        type: string
+      unit:
+        maxLength: 64
+        minLength: 1
+        title: Unit
+        type: string
+    required:
+    - meter
+    - product
+    - provider
+    - unit
+    title: BudgetMeterKey
+    type: object
+  BudgetMetric:
+    description: Canonical scalar resource metric.
+    enum:
+    - wall_time_s
+    - active_cpu_s
+    - input_tokens
+    - output_tokens
+    - cache_read_tokens
+    - cache_write_tokens
+    - total_tokens
+    - actual_cost_usd
+    - list_cost_usd
+    - tool_calls
+    - tool_failures
+    - api_requests
+    - api_failures
+    - retries
+    - cache_hits
+    - cache_misses
+    - wait_throttling_s
+    - wait_rate_limit_s
+    - wait_budget_s
+    - wait_network_s
+    - tool_exec_s
+    - local_compute_s
+    title: BudgetMetric
+    type: string
+  BudgetPosture:
+    description: |-
+      Authored operator response metadata.
+
+      Evaluation records posture but does not add a dispatch-refusal path.
+    enum:
+    - observe
+    - warn
+    - refuse-new-work
+    title: BudgetPosture
+    type: string
+  BudgetScope:
+    additionalProperties: false
+    description: One run, hierarchy node, or provider/product/model slice.
+    properties:
+      key:
+        anyOf:
+        - maxLength: 512
+          minLength: 1
+          type: string
+        - type: 'null'
+        default: null
+        title: Key
+      kind:
+        $ref: '#/$defs/BudgetScopeKind'
+        default: run
+    title: BudgetScope
+    type: object
+  BudgetScopeKind:
+    description: Hierarchy or provider slice selected by a budget.
+    enum:
+    - run
+    - process
+    - step
+    - provider
+    - product
+    - model
+    - tool
+    title: BudgetScopeKind
+    type: string
+  BudgetStatus:
+    description: Threshold evaluation state.
+    enum:
+    - within
+    - near
+    - exceeded
+    - unmeasured
+    title: BudgetStatus
+    type: string
+  CoverageState:
+    description: Evidence quality for one provider-meter quantity.
+    enum:
+    - measured
+    - estimated
+    - unmeasured
+    title: CoverageState
+    type: string
+  FinalizationState:
+    description: Terminal state retained on a resource report.
+    enum:
+    - completed
+    - failed
+    - timed_out
+    - cancelled
+    title: FinalizationState
+    type: string
+  MeterKey:
+    additionalProperties: false
+    description: Exact aggregation key for a provider-defined usage meter.
+    properties:
+      meter:
+        maxLength: 128
+        minLength: 1
+        title: Meter
+        type: string
+      product:
+        maxLength: 128
+        minLength: 1
+        title: Product
+        type: string
+      provider:
+        maxLength: 128
+        minLength: 1
+        title: Provider
+        type: string
+      unit:
+        maxLength: 64
+        minLength: 1
+        title: Unit
+        type: string
+    required:
+    - meter
+    - product
+    - provider
+    - unit
+    title: MeterKey
+    type: object
+  MeterRollup:
+    additionalProperties: false
+    description: Reconciled quantities for one exact meter key.
+    properties:
+      actual_quantity:
+        anyOf:
+        - minimum: 0
+          type: number
+        - type: 'null'
+        default: null
+        title: Actual Quantity
+      coverage:
+        $ref: '#/$defs/CoverageState'
+      estimated_quantity:
+        anyOf:
+        - minimum: 0
+          type: number
+        - type: 'null'
+        default: null
+        title: Estimated Quantity
+      key:
+        $ref: '#/$defs/MeterKey'
+      lineage:
+        items:
+          type: string
+        title: Lineage
+        type: array
+      source_event_ids:
+        items:
+          type: string
+        minItems: 1
+        title: Source Event Ids
+        type: array
+      unmeasured_event_count:
+        default: 0
+        minimum: 0
+        title: Unmeasured Event Count
+        type: integer
+    required:
+    - coverage
+    - key
+    - source_event_ids
+    title: MeterRollup
+    type: object
+  Metrics:
+    additionalProperties: false
+    description: Canonical V2 metrics, including provider-operation counters.
+    properties:
+      active_cpu_s:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Active Cpu S
+      actual_cost_usd:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Actual Cost Usd
+      api_failures:
+        anyOf:
+        - minimum: 0
+          type: integer
+        - type: 'null'
+        default: null
+        title: Api Failures
+      api_requests:
+        anyOf:
+        - minimum: 0
+          type: integer
+        - type: 'null'
+        default: null
+        title: Api Requests
+      billable_memory_gib_hours:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Billable Memory Gib Hours
+      billable_vcpu_hours:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Billable Vcpu Hours
+      billable_vm_hours:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Billable Vm Hours
+      cache_hits:
+        anyOf:
+        - minimum: 0
+          type: integer
+        - type: 'null'
+        default: null
+        title: Cache Hits
+      cache_misses:
+        anyOf:
+        - minimum: 0
+          type: integer
+        - type: 'null'
+        default: null
+        title: Cache Misses
+      cache_read_tokens:
+        anyOf:
+        - type: integer
+        - type: 'null'
+        default: null
+        title: Cache Read Tokens
+      cache_write_tokens:
+        anyOf:
+        - type: integer
+        - type: 'null'
+        default: null
+        title: Cache Write Tokens
+      cpu_pct_avg:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Cpu Pct Avg
+      cpu_pct_max:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Cpu Pct Max
+      input_tokens:
+        anyOf:
+        - type: integer
+        - type: 'null'
+        default: null
+        title: Input Tokens
+      list_cost_usd:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: List Cost Usd
+      local_compute_s:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Local Compute S
+      output_tokens:
+        anyOf:
+        - type: integer
+        - type: 'null'
+        default: null
+        title: Output Tokens
+      retries:
+        anyOf:
+        - minimum: 0
+          type: integer
+        - type: 'null'
+        default: null
+        title: Retries
+      rss_bytes_avg:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Rss Bytes Avg
+      rss_bytes_max:
+        anyOf:
+        - type: integer
+        - type: 'null'
+        default: null
+        title: Rss Bytes Max
+      tool_calls:
+        anyOf:
+        - type: integer
+        - type: 'null'
+        default: null
+        title: Tool Calls
+      tool_exec_s:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Tool Exec S
+      tool_failures:
+        anyOf:
+        - type: integer
+        - type: 'null'
+        default: null
+        title: Tool Failures
+      wait_budget_s:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Wait Budget S
+      wait_network_s:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Wait Network S
+      wait_rate_limit_s:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Wait Rate Limit S
+      wait_throttling_s:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Wait Throttling S
+      wall_time_s:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Wall Time S
+    title: Metrics
+    type: object
+  ResourceBudgetSpec:
+    additionalProperties: false
+    description: One immutable threshold over a scalar metric or exact meter.
+    properties:
+      budget_id:
+        title: Budget Id
+        type: string
+      description:
+        anyOf:
+        - maxLength: 500
+          type: string
+        - type: 'null'
+        default: null
+        title: Description
+      meter:
+        anyOf:
+        - $ref: '#/$defs/BudgetMeterKey'
+        - type: 'null'
+        default: null
+      metric:
+        anyOf:
+        - $ref: '#/$defs/BudgetMetric'
+        - type: 'null'
+        default: null
+      near_ratio:
+        default: 0.8
+        exclusiveMinimum: 0
+        maximum: 1
+        title: Near Ratio
+        type: number
+      posture:
+        $ref: '#/$defs/BudgetPosture'
+        default: observe
+      scope:
+        $ref: '#/$defs/BudgetScope'
+      source:
+        default: authored
+        enum:
+        - authored
+        - legacy
+        title: Source
+        type: string
+      threshold:
+        minimum: 0
+        title: Threshold
+        type: number
+      unit:
+        anyOf:
+        - maxLength: 64
+          minLength: 1
+          type: string
+        - type: 'null'
+        default: null
+        title: Unit
+    required:
+    - budget_id
+    - threshold
+    title: ResourceBudgetSpec
+    type: object
+  ResourceFinalization:
+    additionalProperties: false
+    description: How and when a terminal resource projection was produced.
+    properties:
+      finalized_at:
+        format: date-time
+        title: Finalized At
+        type: string
+      recovered:
+        default: false
+        title: Recovered
+        type: boolean
+      source_event_count:
+        default: 0
+        minimum: 0
+        title: Source Event Count
+        type: integer
+      state:
+        $ref: '#/$defs/FinalizationState'
+      terminal_error_type:
+        anyOf:
+        - maxLength: 256
+          type: string
+        - type: 'null'
+        default: null
+        title: Terminal Error Type
+      trigger:
+        enum:
+        - terminal
+        - resume
+        - status
+        - recovery
+        title: Trigger
+        type: string
+    required:
+    - finalized_at
+    - state
+    - trigger
+    title: ResourceFinalization
+    type: object
+  ResourceUsageArtifacts:
+    additionalProperties: false
+    description: Relative paths joining the human summary to its machine evidence.
+    properties:
+      events:
+        default: .logs/resource-events.jsonl
+        title: Events
+        type: string
+      resources:
+        default: resources.json
+        title: Resources
+        type: string
+      summary:
+        default: resource-usage-summary.md
+        title: Summary
+        type: string
+    title: ResourceUsageArtifacts
+    type: object
+$schema: https://json-schema.org/draft/2020-12/schema
+additionalProperties: false
+description: All machine-consumed values stored in summary frontmatter.
+properties:
+  artifacts:
+    $ref: '#/$defs/ResourceUsageArtifacts'
+  budgets:
+    items:
+      $ref: '#/$defs/BudgetEvaluation'
+    title: Budgets
+    type: array
+  coverage_gaps:
+    items:
+      $ref: '#/$defs/MeterKey'
+    title: Coverage Gaps
+    type: array
+  finalization:
+    $ref: '#/$defs/ResourceFinalization'
+  provider_meters:
+    items:
+      $ref: '#/$defs/MeterRollup'
+    title: Provider Meters
+    type: array
+  run_id:
+    title: Run Id
+    type: string
+  totals:
+    $ref: '#/$defs/Metrics'
+required:
+- finalization
+- run_id
+- totals
+title: ResourceUsageSummary
+type: object
+x-softschema:
+  contract: metaproc.resources:ResourceUsageSummary/v1
+  schema_sha256: 7bcc01c10e5aadaec72f8813fd7e448a113b352a2b0e0e19a59fe9677d1adef0

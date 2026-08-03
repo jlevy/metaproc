@@ -433,26 +433,26 @@ class TestResolvedStep:
 class TestPlan:
     def test_defaults(self):
         plan = Plan()
-        assert plan.schema_ == "metaproc:Plan/0.5"
+        assert plan.schema_ == "metaproc:Plan/0.6"
         assert plan.steps == []
         assert plan.lane_matrix is None
         assert plan.execution_lanes == []
 
     def test_schema_alias(self):
-        data = {"schema": "metaproc:Plan/0.5", "process": "test", "steps": []}
+        data = {"schema": "metaproc:Plan/0.6", "process": "test", "steps": []}
         plan = Plan.model_validate(data)
-        assert plan.schema_ == "metaproc:Plan/0.5"
+        assert plan.schema_ == "metaproc:Plan/0.6"
         assert plan.process == "test"
 
     def test_historical_schema_token_still_resolvable(self):
-        """Plans written under metaproc:Plan/0.4 (no lane_matrix /
-        execution_lanes fields) keep parsing against the current Plan model.
-        """
-        data = {"schema": "metaproc:Plan/0.4", "process": "legacy", "steps": []}
-        plan = Plan.model_validate(data)
-        assert plan.process == "legacy"
-        assert plan.lane_matrix is None
-        assert plan.execution_lanes == []
+        """Plans written under historical tokens keep parsing."""
+        for token in ("metaproc:Plan/0.4", "metaproc:Plan/0.5"):
+            data = {"schema": token, "process": "legacy", "steps": []}
+            plan = Plan.model_validate(data)
+            assert plan.process == "legacy"
+            assert plan.lane_matrix is None
+            assert plan.execution_lanes == []
+            assert plan.resource_budgets == []
 
 
 # ── Runtime models ──────────────────────────────────────────────

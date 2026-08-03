@@ -10,13 +10,17 @@ from pydantic import ValidationError
 
 from metaproc.models.resources import (
     SCHEMA_V1,
+    SCHEMA_V2,
     LogSummary,
     Metrics,
+    MetricsV1,
     Node,
     PrefixRollup,
     ResourcesDocument,
+    ResourcesDocumentV1,
     SourceLog,
     SourceRef,
+    read_resources_document_json,
 )
 
 
@@ -62,14 +66,30 @@ def _doc(**overrides: object) -> ResourcesDocument:
     return ResourcesDocument.model_validate(base)
 
 
+def _v1_node_payload(node: Node) -> dict[str, object]:
+    metric_fields = set(MetricsV1.model_fields)
+    return {
+        "node_type": node.node_type,
+        "node_id": node.node_id,
+        "label": node.label,
+        "parent_id": node.parent_id,
+        "children": [_v1_node_payload(child) for child in node.children],
+        "self_metrics": node.self_metrics.model_dump(include=metric_fields),
+        "total_metrics": node.total_metrics.model_dump(include=metric_fields),
+        "attribution": node.attribution,
+        "log_summary": node.log_summary.model_dump(),
+        "source_refs": [ref.model_dump() for ref in node.source_refs],
+    }
+
+
 def test_schema_field_persists_under_alias() -> None:
-    """Per §4.4.2 the persisted top-level field is literally ``schema``."""
+    """New writers persist the V2 schema token under the ``schema`` alias."""
     doc = _doc()
     dumped = doc.model_dump(mode="json", by_alias=True)
-    assert dumped["schema"] == SCHEMA_V1
+    assert dumped["schema"] == SCHEMA_V2
 
 
-def test_schema_field_pinned_to_v1() -> None:
+def test_current_schema_field_pinned_to_v2() -> None:
     with pytest.raises(ValidationError):
         ResourcesDocument.model_validate(
             {
@@ -80,6 +100,37 @@ def test_schema_field_pinned_to_v1() -> None:
                 "hierarchy_root": _root_with_one_step().model_dump(),
             }
         )
+
+
+def test_reader_dispatches_strict_v1_and_v2_contracts() -> None:
+    v1_raw = json.dumps(
+        {
+            "schema": SCHEMA_V1,
+            "run_id": "r",
+            "generated_at": _ts().isoformat(),
+            "source_events_path": ".logs/resource-events.jsonl",
+            "hierarchy_root": _v1_node_payload(_root_with_one_step()),
+        }
+    )
+    v2_raw = _doc().model_dump_json(by_alias=True)
+
+    assert isinstance(read_resources_document_json(v1_raw), ResourcesDocumentV1)
+    assert isinstance(read_resources_document_json(v2_raw), ResourcesDocument)
+
+
+def test_reader_rejects_unknown_schema_token() -> None:
+    raw = _doc().model_dump(mode="json", by_alias=True)
+    raw["schema"] = "metaproc.resources/v99"
+    with pytest.raises(ValueError, match="resources schema token"):
+        read_resources_document_json(json.dumps(raw))
+
+
+def test_reader_rejects_missing_schema_token() -> None:
+    raw = _doc().model_dump(mode="json", by_alias=True)
+    raw.pop("schema")
+
+    with pytest.raises(ValueError, match="missing resources schema token"):
+        read_resources_document_json(json.dumps(raw))
 
 
 def test_node_tree_is_recursive() -> None:

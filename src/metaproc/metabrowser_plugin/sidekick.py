@@ -240,8 +240,20 @@ def stats_handler(request: Request) -> JSONResponse:
 RESOURCES_FILENAME = "resources.json"
 
 
-def _resources_cache_stale(cache_path: Path, events_path: Path) -> bool:
-    """Return true when ``resource-events.jsonl`` is newer than the cache."""
+def _resources_cache_stale(run_dir: Path, cache_path: Path, events_path: Path) -> bool:
+    """Return true when snapshot-backed reports are incomplete or locally stale."""
+    from metaproc.engine.resource_finalization import (  # noqa: PLC0415 -- optional route
+        resource_artifacts_need_recovery,
+    )
+    from metaproc.engine.resource_snapshot import (  # noqa: PLC0415 -- optional route
+        read_resource_run_snapshot,
+    )
+
+    try:
+        if read_resource_run_snapshot(run_dir) is not None:
+            return resource_artifacts_need_recovery(run_dir)
+    except Exception:  # noqa: BLE001 - malformed snapshot should surface as stale, not break browse
+        return True
     if not events_path.exists() or not cache_path.exists():
         return False
     try:
@@ -268,52 +280,118 @@ def resources_handler(request: Request) -> JSONResponse:
 
     cache_path = resolve_path(str(target / RESOURCES_FILENAME))
     events_path = resolve_path(str(target / ".logs" / "resource-events.jsonl"))
-    if cache_path is None or events_path is None:
+    summary_path = resolve_path(str(target / "resource-usage-summary.md"))
+    summary_schema_path = resolve_path(
+        str(target / ".state" / "schemas" / "resource-usage-summary.v1.schema.yaml")
+    )
+    if (
+        cache_path is None
+        or events_path is None
+        or summary_path is None
+        or summary_schema_path is None
+    ):
         return JSONResponse(
             {"error": "resources paths resolve outside the served root"},
             status_code=400,
         )
     if refresh_flag or not cache_path.exists():
-        if not process_rel:
+        from metaproc.engine.resource_snapshot import (  # noqa: PLC0415 -- optional rebuild path
+            read_resource_run_snapshot,
+        )
+
+        try:
+            snapshot = read_resource_run_snapshot(target)
+        except Exception as exc:  # noqa: BLE001 - malformed run metadata is a request error
+            return JSONResponse({"error": f"invalid resource snapshot: {exc}"}, status_code=500)
+        if snapshot is not None:
+            from metaproc.io.orchestrator_lease import (  # noqa: PLC0415 -- optional rebuild path
+                is_orchestrator_alive,
+            )
+
+            if is_orchestrator_alive(target):
+                return JSONResponse(
+                    {"error": "resource recovery is unavailable while the run is active"},
+                    status_code=409,
+                )
+            from metaproc.engine.resource_finalization import (  # noqa: PLC0415 -- optional rebuild path
+                finalize_run_resources,
+            )
+            from metaproc.models.resource_budget import (  # noqa: PLC0415 -- optional rebuild path
+                FinalizationState,
+            )
+            from metaproc.models.resources import (  # noqa: PLC0415 -- optional rebuild path
+                ResourcesDocument,
+                read_resources_document_json,
+            )
+
+            outcome = FinalizationState.FAILED
+            snapshot_bundle = None
+            if process_rel:
+                process_path = resolve_path(process_rel)
+                if process_path is None:
+                    return JSONResponse({"error": "process outside root"}, status_code=400)
+                if not process_path.is_file():
+                    return JSONResponse(
+                        {"error": "process not found", "process": process_rel}, status_code=404
+                    )
+                snapshot_bundle = load_plan_bundle(process_path)
+            if cache_path.exists():
+                try:
+                    prior = read_resources_document_json(cache_path.read_text())
+                    if isinstance(prior, ResourcesDocument) and prior.finalization is not None:
+                        outcome = prior.finalization.state
+                except Exception:  # noqa: BLE001 - refresh intentionally repairs malformed cache
+                    pass
+            try:
+                document = finalize_run_resources(
+                    target,
+                    outcome=outcome,
+                    trigger="recovery",
+                    bundle=snapshot_bundle,
+                ).document
+            except Exception as exc:  # noqa: BLE001
+                return JSONResponse({"error": str(exc)}, status_code=500)
+        elif not process_rel:
             return JSONResponse(
                 {
                     "error": (
-                        "process query param is required to build resources.json "
-                        "(no cached copy found)."
+                        "process query param is required to build resources.json for a "
+                        "legacy run without an immutable resource snapshot."
                     )
                 },
                 status_code=400,
             )
-        process_path = resolve_path(process_rel)
-        if process_path is None:
-            return JSONResponse({"error": "process outside root"}, status_code=400)
-        if not process_path.is_file():
-            return JSONResponse(
-                {"error": "process not found", "process": process_rel}, status_code=404
+        else:
+            process_path = resolve_path(process_rel)
+            if process_path is None:
+                return JSONResponse({"error": "process outside root"}, status_code=400)
+            if not process_path.is_file():
+                return JSONResponse(
+                    {"error": "process not found", "process": process_rel}, status_code=404
+                )
+            from metaproc.engine.resource_rollup import (  # noqa: PLC0415 -- pre-existing local import; needs review
+                build_resource_artifacts,
             )
-        from metaproc.engine.resource_rollup import (  # noqa: PLC0415 -- pre-existing local import; needs review
-            build_resource_artifacts,
-        )
 
-        try:
-            bundle = load_plan_bundle(process_path)
-            result = build_resource_artifacts(
-                bundle=bundle,
-                run_dir=target,
-                run_id=target.name,
-                document_path=cache_path,
-                write=True,
-            )
-            document = result.document
-        except Exception as exc:  # noqa: BLE001
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            try:
+                bundle = load_plan_bundle(process_path)
+                result = build_resource_artifacts(
+                    bundle=bundle,
+                    run_dir=target,
+                    run_id=target.name,
+                    document_path=cache_path,
+                    write=True,
+                )
+                document = result.document
+            except Exception as exc:  # noqa: BLE001
+                return JSONResponse({"error": str(exc)}, status_code=500)
     else:
         from metaproc.models.resources import (  # noqa: PLC0415 -- pre-existing local import; needs review
-            ResourcesDocument,
+            read_resources_document_json,
         )
 
         try:
-            document = ResourcesDocument.model_validate_json(cache_path.read_text())
+            document = read_resources_document_json(cache_path.read_text())
         except Exception as exc:  # noqa: BLE001
             return JSONResponse(
                 {"error": f"cached resources.json is malformed: {exc!s}"},
@@ -321,7 +399,7 @@ def resources_handler(request: Request) -> JSONResponse:
             )
 
     payload = document.model_dump(mode="json", by_alias=True)
-    payload["stale"] = _resources_cache_stale(cache_path, events_path)
+    payload["stale"] = _resources_cache_stale(target, cache_path, events_path)
     return JSONResponse(payload)
 
 

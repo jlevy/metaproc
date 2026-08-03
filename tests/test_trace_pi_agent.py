@@ -193,8 +193,8 @@ def test_attempt_carries_model_from_agent_end(pi_run_dir: Path) -> None:
     assert attempt.attributes.get("adapter.model") == "zai-org/glm-5-maas"
 
 
-def test_attempt_self_reported_cost_zero_is_estimated_false(pi_run_dir: Path) -> None:
-    """When agent_end has cost.total, use as attempt.cost_usd with cost_is_estimated=False.
+def test_attempt_cli_reported_cost_zero_is_still_estimated(pi_run_dir: Path) -> None:
+    """Agent CLI cost values remain estimates even when the reported value is zero.
 
     The pi fixture has cost.total=0 on every message (glm-5 via vertex-maas
     does not charge), but the presence of the field means self-reported.
@@ -202,10 +202,10 @@ def test_attempt_self_reported_cost_zero_is_estimated_false(pi_run_dir: Path) ->
     extractor = PiAgentExtractor()
     spans = list(extractor.extract(pi_run_dir, trace_id="trace-1"))
     attempt = next(s for s in spans if s.kind == "attempt")
-    # cost.total is present (all 0.0), so cost_is_estimated=False
+    # cost.total is present (all 0.0), but it is not provider billing evidence.
     assert "attempt.cost_usd" in attempt.attributes
     assert attempt.attributes["attempt.cost_usd"] == 0.0
-    assert attempt.attributes["attempt.cost_is_estimated"] is False
+    assert attempt.attributes["attempt.cost_is_estimated"] is True
 
 
 # ── extract: agent_session span ──
@@ -409,7 +409,7 @@ def test_agent_end_sums_across_multiple_assistant_messages(tmp_path: Path) -> No
     assert attempt.attributes["attempt.tokens_cache_read"] == 150
     assert attempt.attributes["attempt.tokens_cache_write"] == 30
     assert attempt.attributes["attempt.cost_usd"] == 0.05
-    assert attempt.attributes["attempt.cost_is_estimated"] is False
+    assert attempt.attributes["attempt.cost_is_estimated"] is True
 
 
 # ── agent_end without self-reported cost ──

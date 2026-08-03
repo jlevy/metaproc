@@ -146,10 +146,12 @@ class TestResolveSchema:
     def test_resolve_plan(self) -> None:
 
         # Current default token.
-        cls = resolve_schema("metaproc:Plan/0.5")
+        cls = resolve_schema("metaproc:Plan/0.6")
         assert cls is Plan
         # Historical token still resolves to Plan via
         # historical_schema_tokens; documented in Plan's docstring.
+        cls = resolve_schema("metaproc:Plan/0.5")
+        assert cls is Plan
         cls = resolve_schema("metaproc:Plan/0.4")
         assert cls is Plan
 

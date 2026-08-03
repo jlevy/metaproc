@@ -14,6 +14,7 @@ from metaproc.engine.resource_rollup import (
 )
 from metaproc.logutil.parsing import LogEvent, LogFile
 from metaproc.logutil.resource_event_extract import extract_resource_events
+from metaproc.logutil.tool_failures import FailureKind
 from metaproc.models.resources import (
     HierarchyRef,
     ItemCompleteEvent,
@@ -92,6 +93,39 @@ def test_extract_resource_events_skips_malformed_process_item(tmp_path: Path) ->
     assert events == []
 
 
+@pytest.mark.parametrize(
+    ("kind", "expected"),
+    [
+        ("tool_call", FailureKind.ADAPTER_DROPPED_CALL),
+        ("tool_result", FailureKind.UNKNOWN),
+    ],
+)
+def test_orphan_tool_records_remain_explicit_in_resource_ledger(
+    tmp_path: Path,
+    kind: str,
+    expected: FailureKind,
+) -> None:
+    log_path = tmp_path / "orphan.jsonl"
+    events = extract_resource_events(
+        log_path=log_path,
+        log_file=LogFile(log_path, color_idx=0),
+        log_events=[
+            LogEvent(
+                kind=kind,
+                summary="[call:Bash]" if kind == "tool_call" else "[result:Bash]",
+                adapter="pi",
+                tool_name="Bash",
+            )
+        ],
+        hierarchy=HierarchyRef(run_id="run-1"),
+        source_kind="agent_log",
+        source_path="orphan.jsonl",
+    )
+
+    tool_event = next(event for event in events if isinstance(event, ToolCallEvent))
+    assert tool_event.failure_kind is expected
+
+
 def _write(tmp_path: Path, rel: str, content: str) -> Path:
     target = tmp_path / rel
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -149,6 +183,42 @@ def _make_pi_log_with_tool_call(path: Path) -> None:
     path.write_text("\n".join(lines) + "\n")
 
 
+def _make_gemini_log_with_residual_tool_count(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    records = [
+        {"type": "init", "session_id": "session-1", "model": "gemini-test"},
+        {
+            "type": "tool_use",
+            "tool_id": "tool-1",
+            "tool_name": "shell",
+            "parameters": {"command": "one"},
+        },
+        {"type": "tool_result", "tool_id": "tool-1", "status": "success", "output": "ok"},
+        {
+            "type": "tool_use",
+            "tool_id": "tool-2",
+            "tool_name": "shell",
+            "parameters": {"command": "two"},
+        },
+        {"type": "tool_result", "tool_id": "tool-2", "status": "success", "output": "ok"},
+        {
+            "type": "result",
+            "status": "success",
+            "stats": {
+                "tool_calls": 3,
+                "models": {
+                    "gemini-test": {
+                        "input_tokens": 10,
+                        "output_tokens": 2,
+                        "cached": 0,
+                    }
+                },
+            },
+        },
+    ]
+    path.write_text("".join(json.dumps(record) + "\n" for record in records))
+
+
 def test_build_resource_artifacts_returns_events_alongside_document(tmp_path: Path) -> None:
     parent = _write(tmp_path, "parent/test.process.md", _PARENT_PROCESS)
     bundle = load_plan_bundle(parent)
@@ -159,6 +229,20 @@ def test_build_resource_artifacts_returns_events_alongside_document(tmp_path: Pa
     assert isinstance(result, ResourceBuildResult)
     assert result.document.run_id == "run-1"
     assert len(result.events) >= 2  # at least tool_call + usage
+
+
+def test_repeated_extraction_has_stable_event_ids_without_source_timestamps(
+    tmp_path: Path,
+) -> None:
+    parent = _write(tmp_path, "parent/test.process.md", _PARENT_PROCESS)
+    bundle = load_plan_bundle(parent)
+    run_dir = tmp_path / "runs" / "2026-04-21"
+    _make_pi_log_with_tool_call(run_dir / "predict" / "AAPL" / ".logs" / "session.jsonl")
+
+    first = build_resource_artifacts(bundle=bundle, run_dir=run_dir, run_id="run-1")
+    second = build_resource_artifacts(bundle=bundle, run_dir=run_dir, run_id="run-1")
+
+    assert [event.event_id for event in first.events] == [event.event_id for event in second.events]
 
 
 def test_tool_execution_pair_emits_tool_call_event(tmp_path: Path) -> None:
@@ -185,12 +269,105 @@ def test_pi_agent_end_emits_usage_event(tmp_path: Path) -> None:
     _make_pi_log_with_tool_call(run_dir / "predict" / "AAPL" / ".logs" / "session.jsonl")
 
     result = build_resource_artifacts(bundle=bundle, run_dir=run_dir, run_id="run-1")
-    usages = [e for e in result.events if isinstance(e, UsageEvent)]
+    usages = [
+        event
+        for event in result.events
+        if isinstance(event, UsageEvent) and event.metrics.input_tokens is not None
+    ]
     assert len(usages) == 1
     u = usages[0]
     # Pi parser routes input/output token totals through UsageStats.
     assert u.metrics.input_tokens == 100
     assert u.metrics.output_tokens == 50
+    assert u.metrics.actual_cost_usd is None
+    assert u.metrics.list_cost_usd == pytest.approx(0.42)
+
+
+def test_terminal_tool_total_contributes_only_positive_residual(tmp_path: Path) -> None:
+    parent = _write(tmp_path, "parent/test.process.md", _PARENT_PROCESS)
+    bundle = load_plan_bundle(parent)
+    run_dir = tmp_path / "runs" / "2026-04-21"
+    _make_gemini_log_with_residual_tool_count(
+        run_dir / "predict" / "AAPL" / ".logs" / "session.jsonl"
+    )
+
+    result = build_resource_artifacts(bundle=bundle, run_dir=run_dir, run_id="run-1")
+    usage = next(event for event in result.events if isinstance(event, UsageEvent))
+
+    assert len([event for event in result.events if isinstance(event, ToolCallEvent)]) == 2
+    assert usage.metrics.tool_calls == 1
+    assert result.document.hierarchy_root.total_metrics.tool_calls == 3
+
+
+@pytest.mark.parametrize(("tool_stats", "expected"), [({"tool_calls": 0}, 0), ({}, None)])
+def test_terminal_tool_call_evidence_preserves_zero_vs_unknown(
+    tmp_path: Path,
+    tool_stats: dict[str, int],
+    expected: int | None,
+) -> None:
+    log_path = tmp_path / "gemini.jsonl"
+    log_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"type": "init", "session_id": "session-1", "model": "gemini-test"}),
+                json.dumps(
+                    {
+                        "type": "result",
+                        "status": "success",
+                        "stats": {
+                            **tool_stats,
+                            "models": {
+                                "gemini-test": {
+                                    "input_tokens": 1,
+                                    "output_tokens": 0,
+                                    "cached": 0,
+                                }
+                            },
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n"
+    )
+    log_file = LogFile(log_path, color_idx=0)
+    log_events = log_file.read_new_events()
+    if log_file.done:
+        log_events.extend(log_file.flush())
+
+    events = extract_resource_events(
+        log_path=log_path,
+        log_file=log_file,
+        log_events=log_events,
+        hierarchy=HierarchyRef(run_id="run-1"),
+        source_kind="agent_log",
+        source_path="gemini.jsonl",
+    )
+    usage = next(
+        event
+        for event in events
+        if isinstance(event, UsageEvent) and event.metrics.input_tokens is not None
+    )
+
+    assert usage.metrics.tool_calls == expected
+
+
+def test_agent_provider_meters_flow_through_ledger_and_coverage(tmp_path: Path) -> None:
+    parent = _write(tmp_path, "parent/test.process.md", _PARENT_PROCESS)
+    bundle = load_plan_bundle(parent)
+    run_dir = tmp_path / "runs" / "2026-04-21"
+    _make_pi_log_with_tool_call(run_dir / "predict" / "AAPL" / ".logs" / "session.jsonl")
+
+    result = build_resource_artifacts(bundle=bundle, run_dir=run_dir, run_id="run-1")
+    rollups = {rollup.key.meter: rollup for rollup in result.document.meter_rollups}
+
+    assert rollups["agent_invocations"].actual_quantity == 1
+    assert rollups["api_requests"].coverage.value == "unmeasured"
+    assert rollups["model_turns"].coverage.value == "unmeasured"
+    assert {key.meter for key in result.document.coverage_gaps} == {
+        "api_requests",
+        "model_turns",
+    }
 
 
 def test_event_carries_step_and_item_attribution(tmp_path: Path) -> None:

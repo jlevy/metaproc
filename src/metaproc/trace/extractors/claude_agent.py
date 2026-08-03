@@ -26,6 +26,7 @@ from typing import Any
 from metaproc.agent_errors import classify_agent_error
 from metaproc.io import iter_artifact_paths, iter_jsonl_objects
 from metaproc.io.gz_io import artifact_sidecar_path
+from metaproc.logutil.usage import sum_claude_usage
 from metaproc.trace.extractors.codex_agent import _is_codex_log
 from metaproc.trace.extractors.common import tool_usage_classification
 from metaproc.trace.extractors.gemini_agent import _is_gemini_log
@@ -85,7 +86,13 @@ class ClaudeAgentExtractor:
             # P1.6: canonical cost attrs (cost-by-step preset finds these).
             if "total_cost_usd" in result_event:
                 attempt_attrs["attempt.cost_usd"] = result_event["total_cost_usd"]
-                attempt_attrs["attempt.cost_is_estimated"] = False
+                attempt_attrs["attempt.cost_is_estimated"] = True
+            usage = sum_claude_usage(result_event)
+            if usage.has_token_usage:
+                attempt_attrs["attempt.tokens_input"] = usage.input_tokens
+                attempt_attrs["attempt.tokens_output"] = usage.output_tokens
+                attempt_attrs["attempt.tokens_cached"] = usage.cache_read_tokens
+                attempt_attrs["attempt.tokens_cache_write"] = usage.cache_write_tokens
 
         if invocation:
             for key in ("model", "effort", "tools", "permission_mode"):

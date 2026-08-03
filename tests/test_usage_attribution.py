@@ -5,7 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import cast
 
-from metaproc.logutil.log_path_owner import LogOwner, derive_owner
+from metaproc.logutil.log_path_owner import (
+    LogOwner,
+    derive_owner,
+    derive_owner_for_hierarchy,
+)
+from metaproc.models.resources import Node
 from metaproc.models.usage import (
     UsageBucket,
     UsageReport,
@@ -137,4 +142,60 @@ def test_derive_owner_treats_relative_log_path_as_run_dir_relative(tmp_path: Pat
     log.touch()
     owner = derive_owner(log, tmp_path)
     assert owner.step_node_id == "predict"
+    assert owner.item_key == "AAPL"
+
+
+def test_derive_owner_supports_modern_task_log_layout(tmp_path: Path) -> None:
+    log = tmp_path / ".logs" / "tasks" / "predict" / "AAPL" / "session.jsonl"
+    log.parent.mkdir(parents=True)
+    log.touch()
+
+    owner = derive_owner(log, tmp_path)
+
+    assert owner.step_node_id == "predict"
+    assert owner.item_key == "AAPL"
+
+
+def test_immutable_hierarchy_resolves_composite_task_log_without_spec(tmp_path: Path) -> None:
+    log = tmp_path / "research" / ".logs" / "tasks" / "analyze" / "AAPL" / "session.jsonl"
+    log.parent.mkdir(parents=True)
+    log.touch()
+    hierarchy = Node(
+        node_type="run",
+        node_id="run-1",
+        label="run-1",
+        children=[
+            Node(
+                node_type="process",
+                node_id="process:root",
+                label="root",
+                children=[
+                    Node(
+                        node_type="step",
+                        node_id="research",
+                        label="research",
+                        children=[
+                            Node(
+                                node_type="process",
+                                node_id="process:research",
+                                label="research",
+                                children=[
+                                    Node(
+                                        node_type="step",
+                                        node_id="research::analyze",
+                                        label="analyze",
+                                    )
+                                ],
+                            )
+                        ],
+                    )
+                ],
+            )
+        ],
+    )
+
+    owner = derive_owner_for_hierarchy(log, tmp_path, hierarchy)
+
+    assert owner.process_node_id == "process:research"
+    assert owner.step_node_id == "research::analyze"
     assert owner.item_key == "AAPL"

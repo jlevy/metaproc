@@ -15,6 +15,10 @@ from ruamel.yaml import YAMLError
 from metaproc.cli import app, get_output
 from metaproc.commands.gcp import run_remote_metaproc
 from metaproc.config.env_vars import MetaprocEnv
+from metaproc.engine.resource_finalization import (
+    finalize_run_resources,
+    resource_artifacts_need_recovery,
+)
 from metaproc.engine.run_status import (
     # fmt: skip -- re-export block
     RunStatus,
@@ -27,8 +31,11 @@ from metaproc.ids import is_typed_id
 from metaproc.io import read_yaml_file
 from metaproc.io.overrides import read_overrides
 from metaproc.models.plan import Plan
+from metaproc.models.resource_budget import FinalizationState
+from metaproc.models.resources import ResourcesDocument, read_resources_document
 from metaproc.models.runtime import StepState
 from metaproc.output import OutputFormat
+from metaproc.viz_loader import load_plan_bundle_from_run
 
 log = logging.getLogger(__name__)
 
@@ -113,6 +120,62 @@ def _looks_like_run_id(target: str) -> bool:
     if is_typed_id(target, "run"):
         return True
     return len(target) <= 63 and bool(_RUN_ID_RE.match(target))
+
+
+def _recover_resource_artifacts(run_dir: Path, status: RunStatus) -> None:
+    """Best-effort local recovery for an inactive run with resource evidence."""
+    if status.is_active:
+        return
+    evidence_exists = (run_dir / ".state" / "run-config.yaml").exists() or (
+        run_dir / ".logs" / "resource-events.jsonl"
+    ).exists()
+    if not evidence_exists:
+        return
+    try:
+        needs_recovery = resource_artifacts_need_recovery(run_dir)
+    except Exception:  # noqa: BLE001 - status must survive observability scan failures
+        log.exception("could not inspect resource artifact freshness for %s", run_dir)
+        return
+    if not needs_recovery:
+        return
+
+    outcome = _recovery_outcome(run_dir, status)
+    try:
+        finalize_run_resources(
+            run_dir,
+            outcome=outcome,
+            trigger="status",
+            bundle=load_plan_bundle_from_run(run_dir),
+        )
+    except Exception:  # noqa: BLE001 - status remains available if reporting recovery fails
+        log.exception("resource artifact recovery failed for inactive run %s", run_dir)
+
+
+def _recovery_outcome(run_dir: Path, status: RunStatus) -> FinalizationState:
+    """Preserve a prior causal state; otherwise use only terminal progress facts."""
+    resources_path = run_dir / "resources.json"
+    if resources_path.exists():
+        try:
+            document = read_resources_document(resources_path)
+            if isinstance(document, ResourcesDocument) and document.finalization is not None:
+                return document.finalization.state
+        except Exception:  # noqa: BLE001 - stale/malformed cache is intentionally ignored
+            pass
+    process_status_path = run_dir / ".state" / "process-status.yaml"
+    if process_status_path.exists():
+        try:
+            process_status = read_yaml_file(process_status_path)
+            if isinstance(process_status, dict):
+                if process_status.get("state") == "completed":
+                    return FinalizationState.COMPLETED
+                if process_status.get("state") == "failed":
+                    return FinalizationState.FAILED
+        except Exception:  # noqa: BLE001 - recovery remains best-effort
+            pass
+    totals = status.totals
+    if totals.total > 0 and totals.completed + totals.cached >= totals.total:
+        return FinalizationState.COMPLETED
+    return FinalizationState.FAILED
 
 
 def _format_text(status: RunStatus, *, steps_only: bool = False, stale_only: bool = False) -> str:
@@ -573,6 +636,7 @@ def status(
 
     plan = _load_plan_from_run(run_path)
     run_status = scan_run_status(run_path, variant=variant, include_system=not no_system, plan=plan)
+    _recover_resource_artifacts(run_path, run_status)
 
     # Determine output format (CLI --format overrides global)
     use_json = (format in _STATUS_FORMAT_JSON) or (out.format == OutputFormat.JSON)
