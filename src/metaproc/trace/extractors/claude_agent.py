@@ -19,7 +19,7 @@ the same ``attempt`` span.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +27,11 @@ from metaproc.agent_errors import classify_agent_error
 from metaproc.io import iter_artifact_paths, iter_jsonl_objects
 from metaproc.io.gz_io import artifact_sidecar_path
 from metaproc.trace.extractors.codex_agent import _is_codex_log
-from metaproc.trace.extractors.common import tool_usage_classification
+from metaproc.trace.extractors.common import (
+    attempt_cost_attrs,
+    auth_route_from_invocation,
+    tool_usage_classification,
+)
 from metaproc.trace.extractors.gemini_agent import _is_gemini_log
 from metaproc.trace.extractors.pi_agent import _is_pi_log
 from metaproc.trace.ids import compute_span_id
@@ -78,14 +82,30 @@ class ClaudeAgentExtractor:
             "attempt.jsonl_path": str(jsonl_path),
             "raw_log_ref": str(jsonl_path),
         }
+        auth_route = auth_route_from_invocation(invocation, adapter_type="claude-code-cli")
         if result_event is not None:
             for key in ("total_cost_usd", "num_turns", "duration_ms", "session_id"):
                 if key in result_event:
                     attempt_attrs[f"attempt.{key}"] = result_event[key]
-            # P1.6: canonical cost attrs (cost-by-step preset finds these).
-            if "total_cost_usd" in result_event:
-                attempt_attrs["attempt.cost_usd"] = result_event["total_cost_usd"]
-                attempt_attrs["attempt.cost_is_estimated"] = False
+            # P1.6: canonical cost + token attrs (cost-by-step preset finds these).
+            tokens = _attempt_token_totals(result_event)
+            attempt_attrs.update(
+                attempt_cost_attrs(
+                    model=None,  # multi-model attempt; per-model split is below
+                    provider="anthropic",
+                    input_tokens=tokens["input"],
+                    output_tokens=tokens["output"],
+                    cached_tokens=tokens["cache_read"],
+                    self_reported_cost=result_event.get("total_cost_usd"),
+                    auth_route=auth_route,
+                )
+            )
+            if tokens["cache_write"] is not None:
+                attempt_attrs["attempt.tokens_cache_write"] = tokens["cache_write"]
+            if tokens["models"]:
+                attempt_attrs["attempt.models"] = ",".join(tokens["models"])
+        elif auth_route:
+            attempt_attrs["attempt.auth_route"] = auth_route
 
         if invocation:
             for key in ("model", "effort", "tools", "permission_mode"):
@@ -197,6 +217,49 @@ class ClaudeAgentExtractor:
             step_id=step_id,
             item_key=item_key,
         )
+
+
+def _attempt_token_totals(result_event: Mapping[str, Any]) -> dict[str, Any]:
+    """Whole-attempt token totals from a Claude ``result`` event.
+
+    Prefers ``modelUsage``, which covers the full attempt tree **including
+    subagents**; the top-level ``usage`` block excludes subagent activity, so
+    using it would silently undercount any run that delegated work. Falls back
+    to ``usage`` when ``modelUsage`` is absent (older logs).
+
+    ``models`` lists the models seen, since one attempt routinely spans several
+    and no single ``adapter.model`` describes it.
+    """
+    totals: dict[str, Any] = {
+        "input": None,
+        "output": None,
+        "cache_read": None,
+        "cache_write": None,
+        "models": [],
+    }
+
+    model_usage = result_event.get("modelUsage")
+    if isinstance(model_usage, dict) and model_usage:
+        acc = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
+        for model_name, usage in model_usage.items():
+            if not isinstance(usage, dict):
+                continue
+            totals["models"].append(str(model_name))
+            acc["input"] += int(usage.get("inputTokens") or 0)
+            acc["output"] += int(usage.get("outputTokens") or 0)
+            acc["cache_read"] += int(usage.get("cacheReadInputTokens") or 0)
+            acc["cache_write"] += int(usage.get("cacheCreationInputTokens") or 0)
+        totals.update(acc)
+        totals["models"].sort()
+        return totals
+
+    usage = result_event.get("usage")
+    if isinstance(usage, dict):
+        totals["input"] = int(usage.get("input_tokens") or 0)
+        totals["output"] = int(usage.get("output_tokens") or 0)
+        totals["cache_read"] = int(usage.get("cache_read_input_tokens") or 0)
+        totals["cache_write"] = int(usage.get("cache_creation_input_tokens") or 0)
+    return totals
 
 
 def _parse_step_and_item_key(jsonl_path: Path, *, run_dir: Path) -> tuple[str, str]:

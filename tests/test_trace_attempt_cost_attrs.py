@@ -1,8 +1,9 @@
 """P1.6 — attempt_cost_attrs helper + per-extractor cost stamping.
 
 Tests that `attempt_cost_attrs` in common.py builds the canonical
-`attempt.cost_usd`, `attempt.cost_is_estimated`, and `attempt.tokens_*`
-attributes, and that each adapter extractor stamps them on attempt spans.
+`attempt.cost_usd`, `attempt.cost_provenance`, `attempt.cost_is_estimated`, and
+`attempt.tokens_*` attributes, and that each adapter extractor stamps them on
+attempt spans.
 """
 
 from __future__ import annotations
@@ -40,7 +41,7 @@ def _reset_pricing_cache():
 
 
 def test_self_reported_cost_preferred_over_pricing_table() -> None:
-    """When self_reported_cost is provided, use it with is_estimated=False."""
+    """A self-reported figure wins over the pricing table, as a client estimate."""
     result = attempt_cost_attrs(
         model="claude-opus-4-7",
         provider="anthropic",
@@ -50,14 +51,15 @@ def test_self_reported_cost_preferred_over_pricing_table() -> None:
         self_reported_cost=0.42,
     )
     assert result["attempt.cost_usd"] == 0.42
-    assert result["attempt.cost_is_estimated"] is False
+    assert result["attempt.cost_is_estimated"] is True
+    assert result["attempt.cost_provenance"] == "client_list_estimate"
     assert result["attempt.tokens_input"] == 1000
     assert result["attempt.tokens_output"] == 200
     assert result["attempt.tokens_cached"] == 50
 
 
-def test_zero_self_reported_cost_is_not_estimated() -> None:
-    """A cost of 0.0 from the adapter is still self-reported (not estimated)."""
+def test_zero_self_reported_cost_is_still_self_reported() -> None:
+    """A cost of 0.0 from the adapter is a real self-report, not a missing value."""
     result = attempt_cost_attrs(
         model="glm-5-maas",
         provider="vertex-maas",
@@ -67,7 +69,8 @@ def test_zero_self_reported_cost_is_not_estimated() -> None:
         self_reported_cost=0.0,
     )
     assert result["attempt.cost_usd"] == 0.0
-    assert result["attempt.cost_is_estimated"] is False
+    assert result["attempt.cost_is_estimated"] is True
+    assert result["attempt.cost_provenance"] == "client_list_estimate"
 
 
 def test_pricing_table_fallback_when_no_self_reported_cost() -> None:
@@ -124,7 +127,8 @@ def test_none_tokens_omitted() -> None:
         self_reported_cost=0.10,
     )
     assert result["attempt.cost_usd"] == 0.10
-    assert result["attempt.cost_is_estimated"] is False
+    assert result["attempt.cost_is_estimated"] is True
+    assert result["attempt.cost_provenance"] == "client_list_estimate"
     assert "attempt.tokens_input" not in result
     assert "attempt.tokens_output" not in result
     assert "attempt.tokens_cached" not in result
@@ -190,7 +194,11 @@ def _write_claude_log(
 
 
 def test_claude_attempt_carries_canonical_cost_attrs(tmp_path: Path) -> None:
-    """Claude's result.total_cost_usd maps to attempt.cost_usd + attempt.cost_is_estimated=False."""
+    """Claude's result.total_cost_usd maps to attempt.cost_usd as a client estimate.
+
+    Claude Code computes it locally from a bundled price table, so it is not a
+    provider-authoritative amount.
+    """
 
     run_dir = tmp_path / "run"
     _write_claude_log(run_dir, total_cost_usd=1.23)
@@ -201,7 +209,8 @@ def test_claude_attempt_carries_canonical_cost_attrs(tmp_path: Path) -> None:
     assert attempt.attributes["attempt.total_cost_usd"] == 1.23
     # Canonical keys
     assert attempt.attributes["attempt.cost_usd"] == 1.23
-    assert attempt.attributes["attempt.cost_is_estimated"] is False
+    assert attempt.attributes["attempt.cost_is_estimated"] is True
+    assert attempt.attributes["attempt.cost_provenance"] == "client_list_estimate"
 
 
 # ── Codex extractor: cost attrs on attempt span ──
@@ -214,6 +223,7 @@ def _write_codex_log(
     output_tokens: int = 200,
     cached_tokens: int = 50,
     model: str = "gpt-5.5",
+    auth_route: str = "api_key",
 ) -> Path:
     """Write a minimal codex JSONL with turn.completed usage."""
     path = run_dir / ".logs" / "tasks" / "step" / "item" / "log.jsonl"
@@ -238,19 +248,26 @@ def _write_codex_log(
         json.dumps(
             {
                 "argv": ["codex"],
-                "metadata": {"adapter_model": model, "adapter_provider": "openai"},
+                "metadata": {
+                    "adapter_model": model,
+                    "adapter_provider": "openai",
+                    "auth_route": auth_route,
+                },
             }
         )
     )
     return path
 
 
-def test_codex_attempt_carries_cost_from_pricing_table(tmp_path: Path) -> None:
-    """Codex has no self-reported cost; cost comes from pricing table as estimated."""
-
+def _codex_attempt(tmp_path: Path, *, auth_route: str):
     run_dir = tmp_path / "run"
     _write_codex_log(
-        run_dir, input_tokens=1_000_000, output_tokens=100_000, cached_tokens=0, model="gpt-5.5"
+        run_dir,
+        input_tokens=1_000_000,
+        output_tokens=100_000,
+        cached_tokens=0,
+        model="gpt-5.5",
+        auth_route=auth_route,
     )
     mock_pricing = {
         "gpt-5.5": {
@@ -259,15 +276,38 @@ def test_codex_attempt_carries_cost_from_pricing_table(tmp_path: Path) -> None:
         },
     }
     with _patch_pricing(mock_pricing):
-        extractor = CodexAgentExtractor()
-        spans = list(extractor.extract(run_dir, trace_id="t"))
-    attempt = next(s for s in spans if s.kind == "attempt")
+        spans = list(CodexAgentExtractor().extract(run_dir, trace_id="t"))
+    return next(s for s in spans if s.kind == "attempt")
+
+
+def test_codex_api_key_attempt_carries_cost_from_pricing_table(tmp_path: Path) -> None:
+    """Codex has no self-reported cost; cost comes from pricing table as estimated."""
+
+    attempt = _codex_attempt(tmp_path, auth_route="api_key")
     assert attempt.attributes["attempt.tokens_input"] == 1_000_000
     assert attempt.attributes["attempt.tokens_output"] == 100_000
     assert attempt.attributes["attempt.tokens_cached"] == 0
     # 5.0 + 3.0 = 8.0
     assert attempt.attributes["attempt.cost_usd"] == pytest.approx(8.0)
     assert attempt.attributes["attempt.cost_is_estimated"] is True
+
+
+def test_codex_chatgpt_plan_attempt_records_route_without_claiming_charge(
+    tmp_path: Path,
+) -> None:
+    """Same tokens on a ChatGPT-plan route: identical quantity, same estimate.
+
+    The route is recorded, but it does not move the dollars or assert anything
+    about what was charged — plan users can buy credits and continue past the
+    included allowance on the same authentication.
+    """
+    attempt = _codex_attempt(tmp_path, auth_route="chatgpt_plan")
+    assert attempt.attributes["attempt.tokens_input"] == 1_000_000
+    assert attempt.attributes["attempt.tokens_output"] == 100_000
+    assert attempt.attributes["attempt.cost_usd"] == pytest.approx(8.0)
+    assert attempt.attributes["attempt.cost_provenance"] == "pricing_table_estimate"
+    assert attempt.attributes["attempt.charge_status"] == "unknown"
+    assert attempt.attributes["attempt.auth_route"] == "chatgpt_plan"
 
 
 # ── Gemini extractor: cost attrs on attempt span ──
@@ -378,7 +418,8 @@ def test_pi_self_reported_cost_uses_canonical_keys(tmp_path: Path) -> None:
     spans = list(extractor.extract(run_dir, trace_id="t"))
     attempt = next(s for s in spans if s.kind == "attempt")
     assert attempt.attributes["attempt.cost_usd"] == 0.05
-    assert attempt.attributes["attempt.cost_is_estimated"] is False
+    assert attempt.attributes["attempt.cost_is_estimated"] is True
+    assert attempt.attributes["attempt.cost_provenance"] == "client_list_estimate"
 
 
 def test_pi_no_cost_falls_back_to_pricing_table(tmp_path: Path) -> None:

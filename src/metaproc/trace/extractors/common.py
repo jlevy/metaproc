@@ -6,6 +6,12 @@ import logging
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from metaproc.adapters.billing import (
+    default_cost_provenance,
+    is_authoritative,
+    resolve_auth_route,
+    resolve_charge_status,
+)
 from metaproc.logutil.usage import UsageStats, compute_cost
 from metaproc.logutil.usage import load_pricing as _load
 from metaproc.plugins.discovery import get_plugin_registry
@@ -256,6 +262,43 @@ def _get_pricing_table() -> dict[str, dict[str, Any]]:
     return _pricing_cache
 
 
+def auth_route_from_invocation(
+    invocation: Mapping[str, Any] | None,
+    *,
+    adapter_type: str | None = None,
+) -> str | None:
+    """Credential route for an attempt, from its invocation sidecar.
+
+    Prefers ``metadata.auth_route``, which the launcher stamps from the env it
+    actually spawned the adapter with. Falls back to re-deriving from the
+    sidecar's ``env_redacted`` snapshot for attempts recorded before the
+    launcher stamped it.
+
+    The sidecar's own ``metadata.adapter_type`` wins over the *adapter_type*
+    argument, because the extractor that reads a log is not always the adapter
+    that wrote it — ``ClaudeAgentExtractor`` deliberately handles legacy
+    Claude-shaped codex logs, and resolving those against Claude's credential
+    chain would be wrong.
+
+    Returns ``None`` when nothing identifies the adapter, so callers keep
+    un-classified behavior rather than guessing.
+    """
+    if not invocation:
+        return None
+    metadata = invocation.get("metadata")
+    if isinstance(metadata, dict):
+        stamped = metadata.get("auth_route")
+        if isinstance(stamped, str) and stamped:
+            return stamped
+        recorded = metadata.get("adapter_type")
+        if isinstance(recorded, str) and recorded:
+            adapter_type = recorded
+    if not adapter_type:
+        return None
+    env = invocation.get("env_redacted")
+    return resolve_auth_route(adapter_type, env if isinstance(env, dict) else None)
+
+
 def attempt_cost_attrs(
     *,
     model: str | None,
@@ -264,15 +307,29 @@ def attempt_cost_attrs(
     output_tokens: int | None,
     cached_tokens: int | None,
     self_reported_cost: float | None,
+    auth_route: str | None = None,
+    cost_provenance: str | None = None,
 ) -> dict[str, Any]:
     """Build canonical cost + token attributes for an ``attempt`` span.
 
-    Three-tier rule:
-    1. Self-reported cost (adapter tells us the cost) -> ``is_estimated=False``
-    2. Pricing-table estimate (model found in ``pricing.md``) -> ``is_estimated=True``
-    3. No cost available (unknown model, no self-report) -> cost keys omitted
+    Token attributes are always included when non-None; they are the quantity
+    that means the same thing on every credential route.
 
-    Token attributes are always included when non-None.
+    The dollar figure always lands in ``attempt.cost_usd``. What qualifies it is
+    ``attempt.cost_provenance`` (see :mod:`metaproc.adapters.billing`), because
+    the route an invocation authenticated with does not determine whether its
+    dollars are an invoice amount:
+
+    - ``provider_authoritative`` — the provider returned this amount.
+    - ``client_list_estimate`` — an agent CLI computed it locally from a bundled
+      price table. Not a bill.
+    - ``pricing_table_estimate`` — we computed it from ``pricing.md``.
+
+    ``attempt.charge_status`` records whether the amount is owed, and is always
+    ``unknown`` here: that requires reconciliation against provider billing.
+
+    ``attempt.cost_is_estimated`` is retained for existing consumers and is
+    false only for ``provider_authoritative``.
     """
     attrs: dict[str, Any] = {}
 
@@ -284,10 +341,16 @@ def attempt_cost_attrs(
     if cached_tokens is not None:
         attrs["attempt.tokens_cached"] = cached_tokens
 
+    if auth_route:
+        attrs["attempt.auth_route"] = auth_route
+
     # Cost: prefer self-reported
     if self_reported_cost is not None:
+        provenance = cost_provenance or default_cost_provenance(auth_route, self_reported=True)
         attrs["attempt.cost_usd"] = self_reported_cost
-        attrs["attempt.cost_is_estimated"] = False
+        attrs["attempt.cost_provenance"] = provenance
+        attrs["attempt.charge_status"] = resolve_charge_status(auth_route)
+        attrs["attempt.cost_is_estimated"] = not is_authoritative(provenance)
         return attrs
 
     # Cost: pricing-table fallback
@@ -303,6 +366,10 @@ def attempt_cost_attrs(
         estimated_cost = compute_cost(us, pricing)
         if estimated_cost > 0:
             attrs["attempt.cost_usd"] = estimated_cost
+            attrs["attempt.cost_provenance"] = cost_provenance or default_cost_provenance(
+                auth_route, self_reported=False
+            )
+            attrs["attempt.charge_status"] = resolve_charge_status(auth_route)
             attrs["attempt.cost_is_estimated"] = True
         else:
             log.debug("No pricing entry for model %r; cost not computed", model)

@@ -21,8 +21,9 @@ Pairing: ``tool_execution_start`` and ``tool_execution_end`` are paired by
 Token + cost extraction: ``agent_end.messages[]`` carries per-assistant-message
 usage with ``{input, output, cacheRead, cacheWrite}`` and optionally
 ``cost.total``. We sum across all assistant messages. If ``cost.total`` is
-present on any message, the sum is used as ``attempt.cost_usd`` with
-``attempt.cost_is_estimated=False``.
+present on any message, the sum is used as ``attempt.cost_usd``; pi reports it
+from its own provider accounting, so it is recorded as a client-side estimate
+unless a provider-authoritative figure is available.
 
 Path convention matches claude_agent.py:
 ``<run-dir>/.logs/tasks/<step>/<item>/<filename>.jsonl``.
@@ -35,10 +36,12 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from metaproc.adapters.billing import UNKNOWN
 from metaproc.io import iter_artifact_paths, iter_jsonl_objects
 from metaproc.io.gz_io import artifact_sidecar_path
 from metaproc.trace.extractors.common import (
     attempt_cost_attrs,
+    auth_route_from_invocation,
     tool_usage_classification,
 )
 from metaproc.trace.ids import compute_span_id
@@ -126,10 +129,19 @@ class PiAgentExtractor:
                         attempt_attrs[attr_key] = total
                 if usage_totals["has_cost"]:
                     attempt_attrs["attempt.cost_usd"] = usage_totals["cost_total"]
-                    attempt_attrs["attempt.cost_is_estimated"] = False
+                    attempt_attrs["attempt.cost_provenance"] = "client_list_estimate"
+                    attempt_attrs["attempt.charge_status"] = UNKNOWN
+                    attempt_attrs["attempt.cost_is_estimated"] = True
                 model_from_messages = usage_totals["model"]
 
         _apply_sidecar_attrs(invocation, attempt_attrs)
+
+        # pi delegates auth to whichever provider its config selects, so the
+        # route is only sometimes provable from the environment; unknown is a
+        # valid answer here.
+        auth_route = auth_route_from_invocation(invocation, adapter_type="pi-cli")
+        if auth_route:
+            attempt_attrs["attempt.auth_route"] = auth_route
 
         # adapter.model fallback: if sidecar didn't provide it, use model
         # from agent_end messages.
@@ -145,11 +157,20 @@ class PiAgentExtractor:
                 output_tokens=attempt_attrs.get("attempt.tokens_output"),
                 cached_tokens=attempt_attrs.get("attempt.tokens_cache_read"),
                 self_reported_cost=None,
+                auth_route=auth_route,
             )
-            # Only take cost keys; token keys are already set above.
+            # Only take cost keys; token keys are already set above. Every cost
+            # key must come across, or the attempt reaches the rollup with a
+            # dollar figure and no provenance.
             if "attempt.cost_usd" in cost_attrs:
-                attempt_attrs["attempt.cost_usd"] = cost_attrs["attempt.cost_usd"]
-                attempt_attrs["attempt.cost_is_estimated"] = cost_attrs["attempt.cost_is_estimated"]
+                for key in (
+                    "attempt.cost_usd",
+                    "attempt.cost_provenance",
+                    "attempt.charge_status",
+                    "attempt.cost_is_estimated",
+                ):
+                    if key in cost_attrs:
+                        attempt_attrs[key] = cost_attrs[key]
 
         status = _classify_attempt_status(events, agent_end)
         yield TraceEvent(

@@ -195,7 +195,13 @@ class TraceEvent(BaseModel):
     """Free-form key-value attributes. Convention: dotted namespaces like
     ``run.id``, ``step.id``, ``item.key``, ``tool.name``, ``cost.usd``.
     Selectively include payloads — large inputs/outputs become digests or
-    paths, not inline bytes."""
+    paths, not inline bytes.
+
+    A producer emitting ``cost.usd`` should also declare where the figure came
+    from, via ``cost.provenance`` (``provider_authoritative`` /
+    ``client_list_estimate`` / ``pricing_table_estimate``) or its own
+    ``cost.kind``. Amounts with neither are reported as unknown provenance
+    rather than assumed authoritative — see :mod:`metaproc.adapters.billing`."""
 
     events: list[dict[str, Any]] = Field(default_factory=list)
     """Sparse list of mid-span events: rate-limits, retries, internal markers."""

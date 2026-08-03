@@ -50,6 +50,7 @@ _POOL_FILL_POLL_INTERVAL_S = 5.0
 
 from metaproc import paths as paths_mod
 from metaproc.adapters.base import Adapter, AuthFailureClassification
+from metaproc.adapters.billing import resolve_auth_route
 from metaproc.adapters.registry import (
     ADAPTER_REGISTRY,
     adapter_provider,
@@ -1515,6 +1516,12 @@ def _build_prepare_launch(  # noqa: PLR0913
             "adapter_type": adapter_type,
             "adapter_provider": adapter_provider(adapter_type),
             "adapter_trace_source": adapter_trace_source(adapter_type),
+            # Credential route, resolved from the env this adapter is actually
+            # spawned with. Recorded at the spawn boundary because the env is
+            # knowable there and not reconstructable later; "unknown" is a valid
+            # and common answer. This is the auth route only — it does not claim
+            # anything about what was charged.
+            "auth_route": resolve_auth_route(adapter_type, env),
         }
         adapter_model = item_runtime_config.get("model")
         if isinstance(adapter_model, str) and adapter_model:
