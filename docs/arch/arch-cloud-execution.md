@@ -431,9 +431,11 @@ Confirm a live container’s effective limits with `gcp resources` (CLI) or by r
 ### 3.8 Monitoring Cloud Runs
 
 - **`gcp status <target>`**: auto-detects local run directory or run-id string.
-  Queries Batch API by job name (local) or the exact `metaproc-run-key` (run-id), then
-  falls back to unkeyed legacy jobs with the matching readable `metaproc-run-id`. Shows
-  orchestrator \+ worker jobs with role, state, step, worker_id.
+  Queries Batch API by job name (local) or both exact `metaproc-run-key` and readable
+  `metaproc-run-id` (run-id).
+  When exact jobs exist, it adds only unkeyed legacy jobs whose structured `RUN_ID`
+  verifies as the same run; fully legacy runs retain the readable-label fallback.
+  Shows orchestrator \+ worker jobs with role, state, step, worker_id.
 - **`gcp scale <target> --step <step>`**: updates desired worker topology for an active
   fan-out step by writing `scale-state.yaml` and, when possible, reconciling new worker
   jobs immediately.
@@ -716,8 +718,8 @@ Exact typed run identity:
 
 - Documented readable `metaproc-run-id` versus collision-resistant `metaproc-run-key`
   labels on worker and orchestrator jobs.
-- Updated monitoring to describe exact-first lookup, the unkeyed legacy fallback, and
-  exact identity recovery/grouping in `gcp runs`.
+- Updated monitoring to describe exact lookup, hash-verified mixed-generation jobs, the
+  fully legacy fallback, and exact identity recovery/grouping in `gcp runs`.
 - Added the shared run-identity helpers to the Batch utility inventory.
 
 ### rev5 (2026-05-23)

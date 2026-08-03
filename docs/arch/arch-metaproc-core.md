@@ -2452,9 +2452,11 @@ tracking). `MockBackend` is available for testing.
 ### 21.9 Monitoring Cloud Runs
 
 - **`gcp status <target>`**: auto-detects local run directory or run-id string.
-  Queries Batch API by job name (local) or exact `metaproc-run-key` (run-id), then falls
-  back to unkeyed legacy jobs with the matching readable `metaproc-run-id`. Shows
-  orchestrator + worker jobs with role, state, step, worker_id.
+  Queries Batch API by job name (local) or both exact `metaproc-run-key` and readable
+  `metaproc-run-id` (run-id).
+  When exact jobs exist, it adds only unkeyed legacy jobs whose structured `RUN_ID`
+  verifies as the same run; fully legacy runs retain the readable-label fallback.
+  Shows orchestrator + worker jobs with role, state, step, worker_id.
 - **`gcp scale <target> --step <step>`**: updates desired worker topology for an active
   fan-out step by writing `scale-state.yaml` and, when possible, reconciling new worker
   jobs immediately.
@@ -2633,8 +2635,8 @@ Typed run identity and cloud correlation:
 
 - Updated cloud monitoring and dispatch summaries for readable `metaproc-run-id` and
   exact `metaproc-run-key` labels.
-- Documented exact-first lookup, safe legacy fallback, and exact run-ID recovery in
-  `gcp runs`.
+- Documented exact lookup, hash-verified mixed-generation jobs, the safe fully legacy
+  fallback, and exact run-ID recovery in `gcp runs`.
 - Updated the cloud monitoring-layer summary and Batch utility inventory.
 
 ### rev2i (2026-04-20)

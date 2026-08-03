@@ -269,7 +269,7 @@ def _job_run_group(job: Any) -> tuple[str, str, bool] | None:
 
 
 def _query_jobs_by_run_id(run_id: str, project: str, region: str) -> list[Any]:
-    """Query the exact run key first, then safely fall back to legacy labels."""
+    """Query the exact run key and safely recover same-run legacy jobs."""
     from google.cloud import batch_v1  # noqa: PLC0415 -- optional [gcp-batch] dependency
 
     from metaproc.cloud.gcp.batch_backend import (  # noqa: PLC0415 -- optional [gcp-batch] dependency
@@ -281,17 +281,23 @@ def _query_jobs_by_run_id(run_id: str, project: str, region: str) -> list[Any]:
 
     client = batch_v1.BatchServiceClient()
     parent = f"projects/{project}/locations/{region}"
-    identity_filter = f'labels.{RUN_IDENTITY_LABEL}="{run_identity_label(run_id)}"'
+    identity_key = run_identity_label(run_id)
+    identity_filter = f'labels.{RUN_IDENTITY_LABEL}="{identity_key}"'
     request = batch_v1.ListJobsRequest(parent=parent, filter=identity_filter)
     exact_jobs = list(client.list_jobs(request=request))
-    if exact_jobs:
-        return exact_jobs
 
     sanitized_id = sanitize_label(run_id)
     filter_str = f'labels.{RUN_ID_LABEL}="{sanitized_id}"'
     request = batch_v1.ListJobsRequest(parent=parent, filter=filter_str)
     legacy_jobs = list(client.list_jobs(request=request))
-    return [job for job in legacy_jobs if not dict(job.labels).get(RUN_IDENTITY_LABEL)]
+    unkeyed_jobs = [job for job in legacy_jobs if not dict(job.labels).get(RUN_IDENTITY_LABEL)]
+    if not exact_jobs:
+        return unkeyed_jobs
+
+    verified_legacy_jobs = [
+        job for job in unkeyed_jobs if _run_id_from_job_metadata(job, identity_key) == run_id
+    ]
+    return [*exact_jobs, *verified_legacy_jobs]
 
 
 def _format_job_results(
@@ -378,7 +384,7 @@ def gcp_status(
     """Show Batch job status for a run.
 
     If <target> is an existing directory: read local runpool events, query jobs by name.
-    If <target> is a string: query Batch API by exact run key, then legacy run label.
+    If <target> is a string: query Batch API by exact run key plus safe legacy recovery.
     """
     _require_gcp_batch()
     from google.cloud import batch_v1  # noqa: PLC0415 -- optional [gcp-batch] dependency
@@ -1091,7 +1097,7 @@ def gcp_logs(
     """Stream logs from Cloud Logging for a run's GCP Batch jobs.
 
     Resolves Batch job IDs from run events (for local run directories) or
-    from the exact run key with a legacy-label fallback (for run-id strings), then
+    from the exact run key with safe legacy recovery (for run-id strings), then
     filters Cloud Logging on those jobs. By default only container stdout
     (``batch_task_logs``) is included; pass ``--include-agent-logs`` to
     include VM agent startup logs (useful for early bootstrap failures
@@ -1282,7 +1288,7 @@ def gcp_cancel(
     """Cancel all running/queued/scheduled Batch jobs for a run.
 
     If <target> is an existing directory: read local runpool events, extract job names.
-    If <target> is a string: query Batch API by exact run key, then legacy run label.
+    If <target> is a string: query Batch API by exact run key plus safe legacy recovery.
     Writes a kill sentinel if a local run directory exists.
     """
     _require_gcp_batch()

@@ -183,6 +183,17 @@ class TestResolveJobNamesAndProject:
 
 
 class TestRunIdentityLookup:
+    @staticmethod
+    def _legacy_job(run_id: str, job_id: str) -> MagicMock:
+        job = MagicMock()
+        job.name = f"projects/p/locations/r/jobs/{job_id}"
+        job.labels = {"metaproc-run-id": sanitize_label(run_id)}
+        environment = SimpleNamespace(variables={"METAPROC_VARS": json.dumps({"RUN_ID": run_id})})
+        runnable = SimpleNamespace(environment=environment)
+        task_spec = SimpleNamespace(runnables=[runnable])
+        job.task_groups = [SimpleNamespace(task_spec=task_spec)]
+        return job
+
     def test_colliding_readable_labels_use_distinct_exact_queries(self) -> None:
         assert sanitize_label("run_abc") == sanitize_label("run-abc")
         assert run_identity_label("run_abc") != run_identity_label("run-abc")
@@ -194,9 +205,12 @@ class TestRunIdentityLookup:
             jobs = _query_jobs_by_run_id("run_abc", "project", "region")
 
         assert jobs == [exact_job]
-        request = client.list_jobs.call_args.kwargs["request"]
-        assert run_identity_label("run_abc") in request.filter
-        assert "metaproc-run-key" in request.filter
+        assert client.list_jobs.call_count == 2
+        identity_request = client.list_jobs.call_args_list[0].kwargs["request"]
+        readable_request = client.list_jobs.call_args_list[1].kwargs["request"]
+        assert run_identity_label("run_abc") in identity_request.filter
+        assert "metaproc-run-key" in identity_request.filter
+        assert 'labels.metaproc-run-id="run-abc"' == readable_request.filter
 
     def test_legacy_fallback_excludes_modern_jobs_with_colliding_readable_label(self) -> None:
         legacy_job = MagicMock()
@@ -216,6 +230,28 @@ class TestRunIdentityLookup:
         assert client.list_jobs.call_count == 2
         fallback_request = client.list_jobs.call_args.kwargs["request"]
         assert 'labels.metaproc-run-id="run-abc"' == fallback_request.filter
+
+    def test_exact_lookup_includes_only_verified_legacy_jobs_from_same_run(self) -> None:
+        requested_run_id = "run_abc"
+        exact_job = MagicMock()
+        exact_job.labels = {"metaproc-run-key": run_identity_label(requested_run_id)}
+        same_run_legacy = self._legacy_job(requested_run_id, "same-run-worker")
+        colliding_legacy = self._legacy_job("run-abc", "other-run-worker")
+        unverifiable_legacy = MagicMock()
+        unverifiable_legacy.labels = {"metaproc-run-id": sanitize_label(requested_run_id)}
+        unverifiable_legacy.task_groups = []
+
+        client = MagicMock()
+        client.list_jobs.side_effect = [
+            [exact_job],
+            [exact_job, same_run_legacy, colliding_legacy, unverifiable_legacy],
+        ]
+
+        with patch("google.cloud.batch_v1.BatchServiceClient", return_value=client):
+            jobs = _query_jobs_by_run_id(requested_run_id, "project", "region")
+
+        assert jobs == [exact_job, same_run_legacy]
+        assert client.list_jobs.call_count == 2
 
 
 class TestGcpRunsIdentity:

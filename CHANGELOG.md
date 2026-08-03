@@ -23,9 +23,10 @@ development series.
   identities. Process and title remain metadata instead of identity components;
   `RUN_ID_TEMPLATE` remains available for explicitly configured legacy formats.
 - **Cloud run lookup**: `gcp status`, `gcp logs`, and `gcp cancel` query the exact
-  identity key first, then fall back to unkeyed legacy jobs with the matching readable
-  label. Exact typed run IDs are not constrained by the legacy 63-character label
-  heuristic.
+  identity key and recover mixed-generation, unkeyed jobs only when their structured
+  `RUN_ID` verifies as the same run.
+  Fully legacy runs retain the readable-label fallback.
+  Exact typed run IDs are not constrained by the legacy 63-character label heuristic.
 
 ## [0.2.0][] - 2026-07-31
 
