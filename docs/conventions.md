@@ -48,6 +48,50 @@ Use dot-separated suffixes such as `name.template.md`, not `name-template.md`.
 - **Dot-separated suffixes** compose with kebab-case: `retrieval-kb.generated.yaml`,
   `predict-item.runbook.md`, `prediction.template.md`.
 
+## Typed Identifiers
+
+Every self-identifying immutable ID is `prefix-payload`, modeled on AWS resource IDs
+(`i-0abc123def456`, `subnet-04ccf456919e69055`).
+
+```text
+id      := prefix "-" payload
+prefix  := [a-z][a-z0-9]{0,7}          # never contains a dash
+payload := readable, dash-separated
+```
+
+A prefix carries the type, so an ID is self-describing and a value of the wrong type is
+obvious on sight rather than at the point of failure.
+Allocate every ID through `metaproc.ids`; never build one with an f-string.
+
+| Form | Example | When |
+| --- | --- | --- |
+| Compact random | `run-a7x3mq9bk2f0wp` | default |
+| Timestamped | `run-20260408T003012Z.2555210000.foayjjhknb` | time-ordered allocation |
+| Derived | `rev-3f9a2kx7m1b0c4` | stable child or keyed identity |
+| Readable locator | `run-company-info-aapl-2026-07-31` | resumable, human-browsed runs |
+
+### Readable, not parsable
+
+Only the prefix is parsed, by splitting once through `parse_typed_id()`. Dashes inside a
+payload are cosmetic word separators, and **no consumer may split a payload on them**.
+Reverse-engineering fields out of an ID couples every reader to one producer's format;
+read the run's own metadata instead.
+
+Where structure genuinely is machine-parsed, the interior uses `.` so the intent is
+explicit and cannot be mistaken for a word separator. The timestamped form is the only
+current case, and `derive_timestamped_typed_child_id()` is its only reader.
+
+Readers accept a small set of historical identifier shapes so published partitions stay
+resolvable; `metaproc.ids` owns that entirely, and nothing else needs to know about it.
+Two identifiers are equal only when their strings are equal, so no lookup, comparison, or
+dedup path may rewrite a delimiter to make a match.
+
+### Randomness
+
+`RANDOM_TYPED_ID_BITS` and `TIMESTAMPED_TYPED_ID_RANDOM_BITS` are the defaults; both
+allocators take a `bits` parameter so a caller can widen or narrow a namespace without a
+new API.
+
 ## Process Structure
 
 - `process/` holds authored methodology and templates.
@@ -248,7 +292,7 @@ payload fields.
 ---
 usage:
   schema: "metaproc:UsageReport/0.2"
-  run_id: mine-tech-mix-100-2026-04-10
+  run_id: run-20260410T090000Z.1180400000.mq3xk7vb2p
   # ... payload fields ...
 ---
 ```

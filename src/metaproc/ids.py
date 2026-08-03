@@ -1,4 +1,17 @@
-"""Shared self-identifying immutable ID primitives."""
+"""Shared self-identifying immutable ID primitives.
+
+Identifiers are `prefix-payload`, modeled on AWS resource IDs (`i-0abc123def456`). A
+prefix never contains a dash, so the type is recovered by splitting exactly once.
+
+Payloads are readable but **not parsable**: dashes inside a payload are cosmetic word
+separators and no consumer may split on them. Where structure is genuinely machine-parsed,
+as in the timestamped form, the interior uses `.` so the intent is explicit and cannot be
+confused with a word separator.
+
+Readers here accept a small set of alternate shapes so that already-published partitions
+stay resolvable; callers never need to know which. Identity is string equality, and
+nothing in this module rewrites a delimiter to make two identifiers match.
+"""
 
 from __future__ import annotations
 
@@ -9,15 +22,31 @@ from collections.abc import Iterable
 
 from strif import new_timestamped_uid, new_uid
 
+TYPED_ID_DELIMITER = "-"
+"""The delimiter between a type prefix and its payload."""
+
+_ACCEPTED_DELIMITERS = "-_"
+"""Delimiters honored on read. Only `TYPED_ID_DELIMITER` is ever written."""
+
 _PREFIX_PATTERN = re.compile(r"^[a-z][a-z0-9]{0,7}$")
-_SUFFIX_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-_COMPACT_RANDOM_SUFFIX_PATTERN = re.compile(r"^[a-z0-9]{14}$")
-_COMPACT_TIMESTAMPED_SUFFIX_PATTERN = re.compile(r"^\d{8}T\d{6}Z-\d+-[a-z0-9]{10}$")
+_PAYLOAD_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_TYPED_ID_PATTERN = re.compile(
+    rf"^(?P<prefix>[a-z][a-z0-9]{{0,7}})[{_ACCEPTED_DELIMITERS}](?P<payload>[A-Za-z0-9][A-Za-z0-9._-]*)$"
+)
+_COMPACT_RANDOM_PAYLOAD_PATTERN = re.compile(r"^[a-z0-9]{14}$")
+_COMPACT_TIMESTAMPED_PAYLOAD_PATTERN = re.compile(r"^\d{8}T\d{6}Z\.\d+\.[a-z0-9]{10}$")
+_HISTORICAL_TIMESTAMPED_PAYLOAD_PATTERN = re.compile(r"^\d{8}T\d{6}Z-\d+-[a-z0-9]{10}$")
+_TIMESTAMPED_INTERIOR_DELIMITER = "."
+
 _BASE36_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz"
 _BASE36_RADIX = len(_BASE36_ALPHABET)
-_DERIVED_ID_LENGTH = 14
-_TIMESTAMPED_DERIVED_ID_LENGTH = 10
 _LEGACY_DERIVED_ID_DIGEST_BYTES = 20
+
+DERIVED_ID_LENGTH = 14
+"""Base36 characters in a derived non-temporal payload."""
+
+TIMESTAMPED_DERIVED_ID_LENGTH = 10
+"""Base36 characters in the derived component of a timestamped payload."""
 
 RANDOM_TYPED_ID_BITS = 72
 """Randomness requested for non-temporal typed identities."""
@@ -39,28 +68,63 @@ def register_typed_id_prefixes(prefixes: Iterable[str]) -> None:
         _registered_prefixes.add(prefix)
 
 
+def typed_id_pattern(prefix: str) -> str:
+    """Return the anchored regex for one prefix, for reuse in schema field constraints."""
+    return rf"^{re.escape(prefix)}[{_ACCEPTED_DELIMITERS}][A-Za-z0-9][A-Za-z0-9._-]*$"
+
+
+def parse_typed_id(value: str) -> tuple[str, str]:
+    """Split an identifier into its prefix and payload, exactly once.
+
+    The payload is returned verbatim. It is never split further, and its delimiter is
+    never rewritten, because that would change the identity.
+    """
+    match = _TYPED_ID_PATTERN.fullmatch(value)
+    if match is None:
+        raise ValueError(f"expected a typed ID, got {value!r}")
+    return match["prefix"], match["payload"]
+
+
+def is_typed_id(value: str, expected_prefix: str | None = None) -> bool:
+    """Report whether `value` is a well-formed identifier of a registered type."""
+    match = _TYPED_ID_PATTERN.fullmatch(value)
+    if match is None or match["prefix"] not in _registered_prefixes:
+        return False
+    return expected_prefix is None or match["prefix"] == expected_prefix
+
+
 def _require_registered_prefix(prefix: str) -> None:
     if prefix not in _registered_prefixes:
         raise ValueError(f"unregistered typed-ID prefix {prefix!r}")
 
 
-def new_typed_id(prefix: str, *, unique_suffix: str | None = None) -> str:
-    """Create a typed ID with a compact non-temporal suffix.
+def new_typed_id(
+    prefix: str,
+    *,
+    unique_suffix: str | None = None,
+    bits: int = RANDOM_TYPED_ID_BITS,
+) -> str:
+    """Create a typed ID with a compact non-temporal payload.
 
     `unique_suffix` is for a caller-owned stable namespace, such as a resumable run
     locator. The caller is responsible for uniqueness within that namespace.
     """
     _require_registered_prefix(prefix)
-    suffix = new_uid(bits=RANDOM_TYPED_ID_BITS) if unique_suffix is None else unique_suffix
-    if not _SUFFIX_PATTERN.fullmatch(suffix):
-        raise ValueError(f"invalid suffix for {prefix}_ ID: {suffix!r}")
-    return f"{prefix}_{suffix}"
+    payload = new_uid(bits=bits) if unique_suffix is None else unique_suffix
+    if not _PAYLOAD_PATTERN.fullmatch(payload):
+        raise ValueError(f"invalid payload for {prefix}{TYPED_ID_DELIMITER} ID: {payload!r}")
+    return f"{prefix}{TYPED_ID_DELIMITER}{payload}"
 
 
-def new_timestamped_typed_id(prefix: str) -> str:
+def new_timestamped_typed_id(
+    prefix: str,
+    *,
+    bits: int = TIMESTAMPED_TYPED_ID_RANDOM_BITS,
+) -> str:
     """Create a typed identity for an event whose allocation time is meaningful."""
     _require_registered_prefix(prefix)
-    return f"{prefix}_{new_timestamped_uid(bits=TIMESTAMPED_TYPED_ID_RANDOM_BITS)}"
+    payload = new_timestamped_uid(bits=bits).replace("-", _TIMESTAMPED_INTERIOR_DELIMITER)
+    return f"{prefix}{TYPED_ID_DELIMITER}{payload}"
 
 
 def _encode_base36(value: int, *, length: int) -> str:
@@ -71,26 +135,44 @@ def _encode_base36(value: int, *, length: int) -> str:
     return "".join(reversed(encoded or ["0"])).rjust(length, "0")
 
 
+def _timestamped_payload_parts(payload: str) -> tuple[str, str] | None:
+    """Split a timestamped payload into its timestamp and derived halves.
+
+    This is the one place structure is read out of a payload, which is why the current
+    form uses `.`. The historical dash form is still recognized so an existing parent can
+    seed a child.
+    """
+    if _COMPACT_TIMESTAMPED_PAYLOAD_PATTERN.fullmatch(payload):
+        timestamp, _, random_part = payload.rpartition(_TIMESTAMPED_INTERIOR_DELIMITER)
+        return timestamp, random_part
+    if _HISTORICAL_TIMESTAMPED_PAYLOAD_PATTERN.fullmatch(payload):
+        timestamp, _, random_part = payload.rpartition("-")
+        return timestamp.replace("-", _TIMESTAMPED_INTERIOR_DELIMITER), random_part
+    return None
+
+
 def _uses_compact_derivation(parent_id: str) -> bool:
-    suffix = parent_id.partition("_")[2]
+    _, payload = parse_typed_id(parent_id)
     return bool(
-        _COMPACT_RANDOM_SUFFIX_PATTERN.fullmatch(suffix)
-        or _COMPACT_TIMESTAMPED_SUFFIX_PATTERN.fullmatch(suffix)
+        _COMPACT_RANDOM_PAYLOAD_PATTERN.fullmatch(payload)
+        or _timestamped_payload_parts(payload) is not None
     )
 
 
-def derive_typed_id_from_key(prefix: str, stable_key: str) -> str:
+def derive_typed_id_from_key(
+    prefix: str,
+    stable_key: str,
+    *,
+    length: int = DERIVED_ID_LENGTH,
+) -> str:
     """Derive a compact non-temporal identity from a stable caller-owned key."""
     _require_registered_prefix(prefix)
     if not stable_key:
         raise ValueError("stable_key must be nonempty")
     digest = hashlib.sha256(stable_key.encode()).digest()
-    namespace_size = _BASE36_RADIX**_DERIVED_ID_LENGTH
-    suffix = _encode_base36(
-        int.from_bytes(digest, "big") % namespace_size,
-        length=_DERIVED_ID_LENGTH,
-    )
-    return f"{prefix}_{suffix}"
+    namespace_size = _BASE36_RADIX**length
+    payload = _encode_base36(int.from_bytes(digest, "big") % namespace_size, length=length)
+    return f"{prefix}{TYPED_ID_DELIMITER}{payload}"
 
 
 def derive_typed_child_id(prefix: str, parent_id: str, ordinal: int) -> str:
@@ -103,8 +185,8 @@ def derive_typed_child_id(prefix: str, parent_id: str, ordinal: int) -> str:
     if _uses_compact_derivation(parent_id):
         return derive_typed_id_from_key(prefix, identity)
     digest = hashlib.sha256(identity.encode()).digest()
-    suffix = base64.b32encode(digest[:_LEGACY_DERIVED_ID_DIGEST_BYTES]).decode().lower().rstrip("=")
-    return f"{prefix}_{suffix}"
+    payload = base64.b32encode(digest[:_LEGACY_DERIVED_ID_DIGEST_BYTES]).decode().lower().rstrip("=")
+    return f"{prefix}{TYPED_ID_DELIMITER}{payload}"
 
 
 def derive_timestamped_typed_child_id(
@@ -115,24 +197,24 @@ def derive_timestamped_typed_child_id(
     """Derive a replay-stable compact timestamped identity within a run namespace."""
     _require_registered_prefix(prefix)
     _require_any_typed_id(parent_id)
-    parent_suffix = parent_id.partition("_")[2]
-    if not _COMPACT_TIMESTAMPED_SUFFIX_PATTERN.fullmatch(parent_suffix):
+    _, parent_payload = parse_typed_id(parent_id)
+    parts = _timestamped_payload_parts(parent_payload)
+    if parts is None:
         raise ValueError(f"expected a compact timestamped parent ID, got {parent_id!r}")
     if not stable_key:
         raise ValueError("stable_key must be nonempty")
-    timestamp, _separator, _random = parent_suffix.rpartition("-")
+    timestamp, _random = parts
     digest = hashlib.sha256(f"{parent_id}\x1f{stable_key}".encode()).digest()
-    namespace_size = _BASE36_RADIX**_TIMESTAMPED_DERIVED_ID_LENGTH
+    namespace_size = _BASE36_RADIX**TIMESTAMPED_DERIVED_ID_LENGTH
     derived = _encode_base36(
         int.from_bytes(digest, "big") % namespace_size,
-        length=_TIMESTAMPED_DERIVED_ID_LENGTH,
+        length=TIMESTAMPED_DERIVED_ID_LENGTH,
     )
-    return f"{prefix}_{timestamp}-{derived}"
+    return f"{prefix}{TYPED_ID_DELIMITER}{timestamp}{_TIMESTAMPED_INTERIOR_DELIMITER}{derived}"
 
 
 def _require_any_typed_id(value: str) -> str:
-    prefix, separator, suffix = value.partition("_")
-    if not separator or prefix not in _registered_prefixes or not _SUFFIX_PATTERN.fullmatch(suffix):
+    if not is_typed_id(value):
         raise ValueError(f"expected a registered typed ID, got {value!r}")
     return value
 
@@ -140,17 +222,17 @@ def _require_any_typed_id(value: str) -> str:
 def require_typed_id(value: str, expected_prefix: str) -> str:
     """Return `value` when it is a valid ID of the expected type, else fail."""
     _require_registered_prefix(expected_prefix)
-    expected_start = f"{expected_prefix}_"
-    suffix = value.removeprefix(expected_start) if value.startswith(expected_start) else ""
-    if not suffix or not _SUFFIX_PATTERN.fullmatch(suffix):
-        raise ValueError(f"expected {expected_start} ID, got {value!r}")
+    if not is_typed_id(value, expected_prefix):
+        raise ValueError(f"expected {expected_prefix}{TYPED_ID_DELIMITER} ID, got {value!r}")
     return value
 
 
 def require_compact_timestamped_typed_id(value: str, expected_prefix: str) -> str:
     """Validate the current timestamped allocation form for a new run namespace."""
     require_typed_id(value, expected_prefix)
-    suffix = value.removeprefix(f"{expected_prefix}_")
-    if not _COMPACT_TIMESTAMPED_SUFFIX_PATTERN.fullmatch(suffix):
-        raise ValueError(f"expected a compact timestamped {expected_prefix}_ ID, got {value!r}")
+    _, payload = parse_typed_id(value)
+    if _timestamped_payload_parts(payload) is None:
+        raise ValueError(
+            f"expected a compact timestamped {expected_prefix}{TYPED_ID_DELIMITER} ID, got {value!r}"
+        )
     return value

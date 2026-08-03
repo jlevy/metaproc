@@ -240,7 +240,7 @@ def _now_iso() -> str:
 
 
 StepState = str  # "pending" | "running" | "completed" | "failed" | "skipped" | "blocked"
-_TYPED_PARTITION_DIR_PATTERN = re.compile(r"^(?:run|coh)_[A-Za-z0-9][A-Za-z0-9._-]*$")
+_TYPED_PARTITION_DIR_PATTERN = re.compile(r"^(?:run|coh)[-_][A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 def _write_process_status(

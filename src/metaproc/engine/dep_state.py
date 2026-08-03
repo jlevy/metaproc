@@ -23,7 +23,7 @@ from metaproc.paths import STATE_DIR, STATUS_FILE
 
 _PROCESS_STATUS_FILE = "process-status.yaml"
 _STALE_SUFFIX = ".yaml.stale"
-_TYPED_PARTITION_COMPONENT = re.compile(r"^(?:run|coh)_[A-Za-z0-9][A-Za-z0-9._-]*$")
+_TYPED_PARTITION_COMPONENT = re.compile(r"^(?:run|coh)[-_][A-Za-z0-9][A-Za-z0-9._-]*$")
 
 log = logging.getLogger(__name__)
 

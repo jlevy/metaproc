@@ -70,7 +70,7 @@ def _metric_budget(
 
 
 def test_budget_requires_typed_id_and_exactly_one_target() -> None:
-    with pytest.raises(ValidationError, match="bud_"):
+    with pytest.raises(ValidationError, match="bud-"):
         _metric_budget("f09a", metric="api_requests", threshold=10)
 
     with pytest.raises(ValidationError, match="exactly one"):
@@ -210,7 +210,7 @@ def test_legacy_step_budgets_project_without_changing_step_fields() -> None:
 
     assert len(budgets) == 2
     assert {budget.metric for budget in budgets} == {"total_tokens", "actual_cost_usd"}
-    assert all(re.fullmatch(r"bud_[a-z0-9]{14}", budget.budget_id) for budget in budgets)
+    assert all(re.fullmatch(r"bud-[a-z0-9]{14}", budget.budget_id) for budget in budgets)
     assert all(budget.scope.kind == "step" for budget in budgets)
     assert plan.steps[0].token_budget == 2_000
     assert plan.steps[0].max_budget_usd == 1.5

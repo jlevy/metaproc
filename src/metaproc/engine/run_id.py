@@ -1,6 +1,7 @@
 """Compact timestamped run-ID generation with a legacy template escape hatch.
 
-Default form: ``run_{timestamped_uid}``
+Default form: ``run-{timestamped_uid}``, with the timestamped interior dot-separated
+because it is the one payload the framework parses.
 
 Uses ``strif.new_timestamped_uid()`` for the timestamped component, which produces
 chronologically sortable, globally unique IDs. Process and title are run metadata, not
@@ -36,7 +37,7 @@ def generate_run_id(
         title: Optional human-readable title (e.g., "tech mix 500").
 
     Returns:
-        A run ID like ``run_20260408T003012Z-2555210000-foayjjh``.
+        A run ID like ``run-20260408T003012Z.2555210000.foayjjhknb``.
     """
     template = MetaprocEnv.RUN_ID_TEMPLATE.read_str(default=None)
     title_slug = slugify(title) if title else ""

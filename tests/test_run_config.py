@@ -247,29 +247,31 @@ class TestWriteRunConfig:
             )
 
     def test_resume_rejects_unrelated_local_runs_directory(self, tmp_path: Path) -> None:
-        run_dir = tmp_path / "run-5d" / "mine"
+        # The directory name is deliberately untyped: a `run-`/`coh-` name would be a
+        # relocatable typed partition, which is a different case covered above.
+        run_dir = tmp_path / "mine-5d" / "mine"
         run_dir.mkdir(parents=True)
 
         _write_run_config(
             run_dir,
             process_name="mine",
             process_path=Path("process/mine/mine.process.md"),
-            run_id="run-5d",
-            variables={"RUN_ID": "run-5d"},
+            run_id="mine-5d",
+            variables={"RUN_ID": "mine-5d"},
             backend="local",
             variant=None,
         )
 
         config_path = run_dir / STATE_DIR / RUN_CONFIG_FILE
         data = read_yaml_file(config_path)
-        data["run_dir"] = "/mnt/filestore/runs/run-5d/mine"
+        data["run_dir"] = "/mnt/filestore/runs/mine-5d/mine"
         config_path.write_text(to_yaml_string(data))
 
         with pytest.raises(CLIError, match="Resume mismatch.*run_dir"):
             _validate_run_config(
                 config_path,
                 process_name="mine",
-                run_dir=Path("/tmp/runs/run-5d/mine"),
+                run_dir=Path("/tmp/runs/mine-5d/mine"),
             )
 
     def test_includes_git_sha(self, tmp_path: Path) -> None:
