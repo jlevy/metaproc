@@ -50,6 +50,7 @@ _POOL_FILL_POLL_INTERVAL_S = 5.0
 
 from metaproc import paths as paths_mod
 from metaproc.adapters.base import Adapter, AuthFailureClassification
+from metaproc.adapters.billing import resolve_billing_class
 from metaproc.adapters.registry import (
     ADAPTER_REGISTRY,
     adapter_provider,
@@ -1515,6 +1516,10 @@ def _build_prepare_launch(  # noqa: PLR0913
             "adapter_type": adapter_type,
             "adapter_provider": adapter_provider(adapter_type),
             "adapter_trace_source": adapter_trace_source(adapter_type),
+            # Resolved from the env this adapter is actually spawned with, so a
+            # stray API key that flips a subscription run onto pay-per-token is
+            # recorded at the moment it happens rather than inferred later.
+            "billing_class": resolve_billing_class(adapter_type, env),
         }
         adapter_model = item_runtime_config.get("model")
         if isinstance(adapter_model, str) and adapter_model:

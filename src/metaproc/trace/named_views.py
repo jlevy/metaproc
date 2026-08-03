@@ -6,7 +6,9 @@ primitives that answers a single operational question:
 - ``--health`` surfaces failure-mode clusters (silent_failure, error,
   partial), grouped by source + status; the single command that would
   have caught the 2026-05-10 Perplexity outage in one query.
-- ``--cost`` reconciles cost across every trace source in one query.
+- ``--cost`` reconciles spend across every trace source in one query, split
+  into metered (money owed) and subscription (flat plan fee, reported in
+  tokens) so the two are never summed.
 - ``--quality runbook-completion`` / ``directive-compliance`` are V1
   agent-output validators (implemented in :mod:`metaproc.trace.quality`).
 """
@@ -15,6 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from metaproc.adapters.billing import is_subscription
 from metaproc.trace.aggregation import aggregate, format_rollup_table
 from metaproc.trace.schema import TraceEvent
 from metaproc.trace.views import Filter, apply_filter
@@ -44,6 +47,13 @@ SOURCE_TOOL_GROUP_KEYS: tuple[str, ...] = (
 _SOURCE_TOOL_KINDS: frozenset[str] = frozenset(
     {"tool_call", "subprocess", "provider_call", "llm_call"}
 )
+
+SUBSCRIPTION_EQUIV_COLUMN = "list_equiv_usd"
+"""Column name for a subscription row's dollar figure.
+
+Deliberately not ``cost``: under a flat plan fee this is what the tokens would
+have cost metered, not money owed. The name travels into ``--cost --json``, so
+downstream consumers cannot mistake it for spend either."""
 
 
 def health_rows(spans: list[TraceEvent]) -> list[dict[str, Any]]:
@@ -104,44 +114,84 @@ def _error_key(span: TraceEvent) -> tuple[str, str]:
     return (code, message[:_HEALTH_MESSAGE_PREFIX_LEN].rstrip())
 
 
-def cost_rows(spans: list[TraceEvent]) -> list[dict[str, Any]]:
-    """Return ``[{source, kind, cost, count}]`` rows for all spans that
-    carry a ``cost.usd`` attribute OR have a ``total_cost_usd`` claude
-    attribute on attempt spans.
-
-    Splits cost by source so independent provider and agent totals are visible
-    side-by-side.
-    """
-    spans_with_cost: list[TraceEvent] = []
-    for s in spans:
-        if s.attributes.get("cost.usd") is not None:
-            spans_with_cost.append(s)
-            continue
-        # Claude attempt spans carry attempt.total_cost_usd from the
-        # session's `result` event. Promote that to cost.usd for the
-        # rollup so the agent total joins cleanly with the rest.
-        total_cost = s.attributes.get("attempt.total_cost_usd")
-        if isinstance(total_cost, (int, float)):
-            promoted = TraceEvent(
-                trace_id=s.trace_id,
-                span_id=s.span_id,
-                parent_span_id=s.parent_span_id,
-                name=s.name,
-                kind=s.kind,
-                source=s.source,
-                ts_start=s.ts_start,
-                ts_end=s.ts_end,
-                duration_ms=s.duration_ms,
-                status=s.status,
-                attributes={**s.attributes, "cost.usd": float(total_cost)},
-            )
-            spans_with_cost.append(promoted)
-
-    return aggregate(
-        spans_with_cost,
-        group_keys=["source", "kind"],
-        metrics=["cost", "count"],
+def _with_cost_usd(span: TraceEvent, value: float) -> TraceEvent:
+    """Copy of *span* carrying ``cost.usd`` so the generic rollup can sum it."""
+    return TraceEvent(
+        trace_id=span.trace_id,
+        span_id=span.span_id,
+        parent_span_id=span.parent_span_id,
+        name=span.name,
+        kind=span.kind,
+        source=span.source,
+        ts_start=span.ts_start,
+        ts_end=span.ts_end,
+        duration_ms=span.duration_ms,
+        status=span.status,
+        attributes={**span.attributes, "cost.usd": float(value)},
     )
+
+
+def cost_rows(spans: list[TraceEvent]) -> dict[str, list[dict[str, Any]]]:
+    """Split spend into its two billing classes; never merge them.
+
+    Returns ``{"metered": rows, "subscription": rows}``.
+
+    - **metered** rows carry ``cost``: money owed, from ``cost.usd`` or a
+      metered attempt's ``attempt.cost_usd``. Summing these is meaningful.
+    - **subscription** rows carry ``tokens_in`` / ``tokens_out`` plus a
+      ``list_equiv`` column. The tokens are the real quantity consumed against
+      a flat plan fee; ``list_equiv`` is only what those tokens would have cost
+      metered. Summing ``list_equiv`` into a spend figure would be wrong, so
+      the two classes are returned separately and rendered separately.
+
+    A subscription attempt is identified by ``attempt.billing_class``; its
+    dollar figure lives in ``attempt.cost_list_equiv_usd``, never in
+    ``cost.usd``, so no caller can pick it up by accident.
+    """
+    metered: list[TraceEvent] = []
+    subscription: list[TraceEvent] = []
+
+    for s in spans:
+        attrs = s.attributes
+        if is_subscription(attrs.get("attempt.billing_class")):
+            equiv = attrs.get("attempt.cost_list_equiv_usd")
+            subscription.append(
+                _with_cost_usd(s, float(equiv)) if isinstance(equiv, (int, float)) else s
+            )
+            continue
+        if attrs.get("cost.usd") is not None:
+            metered.append(s)
+            continue
+        # Metered attempt spans keep their dollars in attempt.cost_usd (and
+        # Claude's raw result field in attempt.total_cost_usd). Promote to
+        # cost.usd so the agent total joins cleanly with provider spend.
+        for key in ("attempt.cost_usd", "attempt.total_cost_usd"):
+            value = attrs.get(key)
+            if isinstance(value, (int, float)):
+                metered.append(_with_cost_usd(s, float(value)))
+                break
+
+    subscription_rows = aggregate(
+        subscription,
+        group_keys=["source", "adapter.model"],
+        metrics=[
+            "sum:attempt.tokens_input",
+            "sum:attempt.tokens_output",
+            "cost",
+            "count",
+        ],
+    )
+    # Rename on the way out: a column headed "cost" in a subscription table is
+    # the exact ambiguity this split exists to remove.
+    for row in subscription_rows:
+        row["tokens_in"] = row.pop("sum:attempt.tokens_input")
+        row["tokens_out"] = row.pop("sum:attempt.tokens_output")
+        row[SUBSCRIPTION_EQUIV_COLUMN] = row.pop("cost")
+
+    return {
+        "metered": aggregate(metered, group_keys=["source", "kind"], metrics=["cost", "count"]),
+        "subscription": subscription_rows,
+    }
 
 
 def source_tool_rows(spans: list[TraceEvent]) -> list[dict[str, Any]]:
@@ -193,12 +243,47 @@ def format_health(rows: list[dict[str, Any]]) -> str:
     return format_rollup_table(rows, group_keys=group_keys, metrics=["count"])
 
 
-def format_cost(rows: list[dict[str, Any]]) -> str:
-    if not rows:
+def format_cost(rows: dict[str, list[dict[str, Any]]]) -> str:
+    """Render the two billing classes as two sections with two totals.
+
+    There is deliberately no combined total. Metered dollars are money;
+    subscription dollars are a list-price equivalent against a flat plan fee.
+    Adding them produces a number that overstates cash by whatever the
+    subscription agents did.
+    """
+    metered = rows.get("metered") or []
+    subscription = rows.get("subscription") or []
+    if not metered and not subscription:
         return "(no cost data in trace)\n"
-    total = sum(float(r.get("cost") or 0.0) for r in rows)
-    body = format_rollup_table(rows, group_keys=["source", "kind"], metrics=["cost", "count"])
-    return body + f"\ntotal cost across trace: ${total:.4f}\n"
+
+    out: list[str] = []
+    if metered:
+        out.append("Metered (pay-per-call — money owed):")
+        out.append(
+            format_rollup_table(metered, group_keys=["source", "kind"], metrics=["cost", "count"])
+        )
+        total = sum(float(r.get("cost") or 0.0) for r in metered)
+        out.append(f"total metered spend: ${total:.4f}\n")
+
+    if subscription:
+        out.append("Subscription (flat plan fee — tokens are the real quantity):")
+        out.append(
+            format_rollup_table(
+                subscription,
+                group_keys=["source", "adapter.model"],
+                metrics=["tokens_in", "tokens_out", SUBSCRIPTION_EQUIV_COLUMN, "count"],
+            )
+        )
+        tok_in = sum(float(r.get("tokens_in") or 0.0) for r in subscription)
+        tok_out = sum(float(r.get("tokens_out") or 0.0) for r in subscription)
+        equiv = sum(float(r.get(SUBSCRIPTION_EQUIV_COLUMN) or 0.0) for r in subscription)
+        out.append(
+            f"total subscription tokens: {tok_in:,.0f} in / {tok_out:,.0f} out\n"
+            f"  (list-price equivalent ${equiv:.4f} — NOT money owed; "
+            f"billed as a flat plan fee, do not add to metered spend)\n"
+        )
+
+    return "\n".join(out)
 
 
 def _severity_rank(status: str) -> int:

@@ -6,6 +6,7 @@ import logging
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from metaproc.adapters.billing import is_subscription, resolve_billing_class
 from metaproc.logutil.usage import UsageStats, compute_cost
 from metaproc.logutil.usage import load_pricing as _load
 from metaproc.plugins.discovery import get_plugin_registry
@@ -256,6 +257,39 @@ def _get_pricing_table() -> dict[str, dict[str, Any]]:
     return _pricing_cache
 
 
+def billing_class_from_invocation(
+    invocation: Mapping[str, Any] | None,
+    *,
+    adapter_type: str | None = None,
+) -> str | None:
+    """Billing class for an attempt, from its invocation sidecar.
+
+    Prefers ``metadata.billing_class``, which the launcher stamps from the env
+    it actually spawned the adapter with. Falls back to re-deriving from the
+    sidecar's ``env_redacted`` key set, which records *which* env vars were
+    present (values are redacted, names are not) — enough to see whether an API
+    key was in scope. The fallback covers attempts recorded before the launcher
+    stamped the field.
+
+    Returns ``None`` when neither the metadata nor an adapter type is available,
+    so callers keep today's un-classified behavior rather than guessing.
+    """
+    if not invocation:
+        return None
+    metadata = invocation.get("metadata")
+    if isinstance(metadata, dict):
+        stamped = metadata.get("billing_class")
+        if isinstance(stamped, str) and stamped:
+            return stamped
+        if adapter_type is None:
+            candidate = metadata.get("adapter_type")
+            adapter_type = candidate if isinstance(candidate, str) else None
+    if not adapter_type:
+        return None
+    env = invocation.get("env_redacted")
+    return resolve_billing_class(adapter_type, env if isinstance(env, dict) else None)
+
+
 def attempt_cost_attrs(
     *,
     model: str | None,
@@ -264,15 +298,27 @@ def attempt_cost_attrs(
     output_tokens: int | None,
     cached_tokens: int | None,
     self_reported_cost: float | None,
+    billing_class: str | None = None,
 ) -> dict[str, Any]:
     """Build canonical cost + token attributes for an ``attempt`` span.
 
-    Three-tier rule:
-    1. Self-reported cost (adapter tells us the cost) -> ``is_estimated=False``
-    2. Pricing-table estimate (model found in ``pricing.md``) -> ``is_estimated=True``
-    3. No cost available (unknown model, no self-report) -> cost keys omitted
+    Token attributes are always included when non-None. They are the only
+    figure that means the same thing under both billing vehicles, and the
+    *only* meaningful one under a subscription.
 
-    Token attributes are always included when non-None.
+    Where the dollar figure lands depends on ``billing_class``
+    (:mod:`metaproc.adapters.billing`):
+
+    - ``metered`` or unset: ``attempt.cost_usd`` — money owed.
+    - ``subscription``: ``attempt.cost_list_equiv_usd`` — what these tokens
+      *would* have cost through the metered vehicle. A flat plan fee was paid
+      instead, so this never appears as ``cost_usd`` and is never summed into a
+      spend total.
+
+    Within whichever key applies, the three-tier source rule holds:
+    1. Self-reported cost (adapter tells us) -> ``is_estimated=False``
+    2. Pricing-table estimate (model found in ``pricing.md``) -> ``is_estimated=True``
+    3. Neither available -> cost keys omitted
     """
     attrs: dict[str, Any] = {}
 
@@ -284,9 +330,15 @@ def attempt_cost_attrs(
     if cached_tokens is not None:
         attrs["attempt.tokens_cached"] = cached_tokens
 
+    if billing_class:
+        attrs["attempt.billing_class"] = billing_class
+    cost_key = (
+        "attempt.cost_list_equiv_usd" if is_subscription(billing_class) else "attempt.cost_usd"
+    )
+
     # Cost: prefer self-reported
     if self_reported_cost is not None:
-        attrs["attempt.cost_usd"] = self_reported_cost
+        attrs[cost_key] = self_reported_cost
         attrs["attempt.cost_is_estimated"] = False
         return attrs
 
@@ -302,7 +354,7 @@ def attempt_cost_attrs(
         )
         estimated_cost = compute_cost(us, pricing)
         if estimated_cost > 0:
-            attrs["attempt.cost_usd"] = estimated_cost
+            attrs[cost_key] = estimated_cost
             attrs["attempt.cost_is_estimated"] = True
         else:
             log.debug("No pricing entry for model %r; cost not computed", model)

@@ -23,11 +23,15 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from metaproc.adapters.billing import is_subscription
 from metaproc.agent_errors import classify_agent_error
 from metaproc.io import iter_artifact_paths, iter_jsonl_objects
 from metaproc.io.gz_io import artifact_sidecar_path
 from metaproc.trace.extractors.codex_agent import _is_codex_log
-from metaproc.trace.extractors.common import tool_usage_classification
+from metaproc.trace.extractors.common import (
+    billing_class_from_invocation,
+    tool_usage_classification,
+)
 from metaproc.trace.extractors.gemini_agent import _is_gemini_log
 from metaproc.trace.extractors.pi_agent import _is_pi_log
 from metaproc.trace.ids import compute_span_id
@@ -78,13 +82,24 @@ class ClaudeAgentExtractor:
             "attempt.jsonl_path": str(jsonl_path),
             "raw_log_ref": str(jsonl_path),
         }
+        billing_class = billing_class_from_invocation(invocation, adapter_type="claude-code-cli")
+        if billing_class:
+            attempt_attrs["attempt.billing_class"] = billing_class
         if result_event is not None:
             for key in ("total_cost_usd", "num_turns", "duration_ms", "session_id"):
                 if key in result_event:
                     attempt_attrs[f"attempt.{key}"] = result_event[key]
             # P1.6: canonical cost attrs (cost-by-step preset finds these).
+            # Claude Code computes total_cost_usd from tokens at API list price
+            # regardless of plan, so on a Personal Plan it is a list-price
+            # equivalent, not money owed. Route it accordingly.
             if "total_cost_usd" in result_event:
-                attempt_attrs["attempt.cost_usd"] = result_event["total_cost_usd"]
+                cost_key = (
+                    "attempt.cost_list_equiv_usd"
+                    if is_subscription(billing_class)
+                    else "attempt.cost_usd"
+                )
+                attempt_attrs[cost_key] = result_event["total_cost_usd"]
                 attempt_attrs["attempt.cost_is_estimated"] = False
 
         if invocation:

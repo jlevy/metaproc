@@ -39,6 +39,7 @@ from metaproc.io import iter_artifact_paths, iter_jsonl_objects
 from metaproc.io.gz_io import artifact_sidecar_path
 from metaproc.trace.extractors.common import (
     attempt_cost_attrs,
+    billing_class_from_invocation,
     tool_usage_classification,
 )
 from metaproc.trace.ids import compute_span_id
@@ -131,6 +132,13 @@ class PiAgentExtractor:
 
         _apply_sidecar_attrs(invocation, attempt_attrs)
 
+        # pi-cli authenticates with provider API keys for every provider it
+        # supports, so its cost is always metered. Stamp it so the class is
+        # explicit in the span rather than inferred from its absence.
+        billing_class = billing_class_from_invocation(invocation, adapter_type="pi-cli")
+        if billing_class:
+            attempt_attrs["attempt.billing_class"] = billing_class
+
         # adapter.model fallback: if sidecar didn't provide it, use model
         # from agent_end messages.
         if "adapter.model" not in attempt_attrs and model_from_messages:
@@ -145,6 +153,7 @@ class PiAgentExtractor:
                 output_tokens=attempt_attrs.get("attempt.tokens_output"),
                 cached_tokens=attempt_attrs.get("attempt.tokens_cache_read"),
                 self_reported_cost=None,
+                billing_class=billing_class,
             )
             # Only take cost keys; token keys are already set above.
             if "attempt.cost_usd" in cost_attrs:

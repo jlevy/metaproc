@@ -443,6 +443,32 @@ metaproc auth-check \
   --run-dir <PATH_TO_RUN_DIR>
 ```
 
+## How the vehicle shows up in cost reporting
+
+The vehicle you pick decides how spend is counted, so it is recorded per attempt rather
+than inferred later.
+`metaproc.adapters.billing.resolve_billing_class` reads the env each adapter is actually
+spawned with, using the same precedence the CLIs use, and the launcher stamps the result
+into the invocation sidecar as `billing_class`. Trace extractors copy it onto the
+attempt span as `attempt.billing_class`.
+
+The two classes are never combined:
+
+| Class | When | Dollar attribute | What the dollars mean |
+| --- | --- | --- | --- |
+| `metered` | An API key is in scope (Vehicle C for Claude, `OPENAI_API_KEY` for codex, any `pi-cli` run) | `attempt.cost_usd` | Money owed; summing is meaningful |
+| `subscription` | Vehicle A/B — a plan credential with no API key present | `attempt.cost_list_equiv_usd` | List-price equivalent only; a flat plan fee was paid instead |
+
+`metaproc trace --cost` renders them as two sections with two totals and no combined
+figure. Metered spend totals in dollars; subscription usage totals in **tokens**, with
+the list-price equivalent shown alongside and labeled as not-money.
+Token counts are recorded identically under both classes, which makes them the only
+quantity comparable across vehicles.
+
+This is also how a silent vehicle change becomes visible: a stray `ANTHROPIC_API_KEY` or
+`OPENAI_API_KEY` flips affected attempts to `metered`, and their cost starts appearing
+in the spend total.
+
 <!-- This document follows std-doc-guidelines.md.
 Review guidelines before editing.
 -->

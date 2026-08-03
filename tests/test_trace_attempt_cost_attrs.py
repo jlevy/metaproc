@@ -214,6 +214,7 @@ def _write_codex_log(
     output_tokens: int = 200,
     cached_tokens: int = 50,
     model: str = "gpt-5.5",
+    billing_class: str = "metered",
 ) -> Path:
     """Write a minimal codex JSONL with turn.completed usage."""
     path = run_dir / ".logs" / "tasks" / "step" / "item" / "log.jsonl"
@@ -238,19 +239,26 @@ def _write_codex_log(
         json.dumps(
             {
                 "argv": ["codex"],
-                "metadata": {"adapter_model": model, "adapter_provider": "openai"},
+                "metadata": {
+                    "adapter_model": model,
+                    "adapter_provider": "openai",
+                    "billing_class": billing_class,
+                },
             }
         )
     )
     return path
 
 
-def test_codex_attempt_carries_cost_from_pricing_table(tmp_path: Path) -> None:
-    """Codex has no self-reported cost; cost comes from pricing table as estimated."""
-
+def _codex_attempt(tmp_path: Path, *, billing_class: str):
     run_dir = tmp_path / "run"
     _write_codex_log(
-        run_dir, input_tokens=1_000_000, output_tokens=100_000, cached_tokens=0, model="gpt-5.5"
+        run_dir,
+        input_tokens=1_000_000,
+        output_tokens=100_000,
+        cached_tokens=0,
+        model="gpt-5.5",
+        billing_class=billing_class,
     )
     mock_pricing = {
         "gpt-5.5": {
@@ -259,15 +267,35 @@ def test_codex_attempt_carries_cost_from_pricing_table(tmp_path: Path) -> None:
         },
     }
     with _patch_pricing(mock_pricing):
-        extractor = CodexAgentExtractor()
-        spans = list(extractor.extract(run_dir, trace_id="t"))
-    attempt = next(s for s in spans if s.kind == "attempt")
+        spans = list(CodexAgentExtractor().extract(run_dir, trace_id="t"))
+    return next(s for s in spans if s.kind == "attempt")
+
+
+def test_codex_metered_attempt_carries_cost_from_pricing_table(tmp_path: Path) -> None:
+    """Codex has no self-reported cost; cost comes from pricing table as estimated."""
+
+    attempt = _codex_attempt(tmp_path, billing_class="metered")
     assert attempt.attributes["attempt.tokens_input"] == 1_000_000
     assert attempt.attributes["attempt.tokens_output"] == 100_000
     assert attempt.attributes["attempt.tokens_cached"] == 0
     # 5.0 + 3.0 = 8.0
     assert attempt.attributes["attempt.cost_usd"] == pytest.approx(8.0)
     assert attempt.attributes["attempt.cost_is_estimated"] is True
+
+
+def test_codex_subscription_attempt_reports_list_equivalent_not_cost(tmp_path: Path) -> None:
+    """Same tokens on a ChatGPT plan: identical quantity, no money owed.
+
+    The dollar figure moves to ``cost_list_equiv_usd`` so no rollup can sum it
+    into spend, while the token counts stay exactly as they are for a metered
+    attempt — tokens are the unit that means the same thing under both vehicles.
+    """
+    attempt = _codex_attempt(tmp_path, billing_class="subscription")
+    assert attempt.attributes["attempt.tokens_input"] == 1_000_000
+    assert attempt.attributes["attempt.tokens_output"] == 100_000
+    assert attempt.attributes["attempt.cost_list_equiv_usd"] == pytest.approx(8.0)
+    assert "attempt.cost_usd" not in attempt.attributes
+    assert attempt.attributes["attempt.billing_class"] == "subscription"
 
 
 # ── Gemini extractor: cost attrs on attempt span ──
