@@ -185,7 +185,9 @@ def derive_typed_child_id(prefix: str, parent_id: str, ordinal: int) -> str:
     if _uses_compact_derivation(parent_id):
         return derive_typed_id_from_key(prefix, identity)
     digest = hashlib.sha256(identity.encode()).digest()
-    payload = base64.b32encode(digest[:_LEGACY_DERIVED_ID_DIGEST_BYTES]).decode().lower().rstrip("=")
+    payload = (
+        base64.b32encode(digest[:_LEGACY_DERIVED_ID_DIGEST_BYTES]).decode().lower().rstrip("=")
+    )
     return f"{prefix}{TYPED_ID_DELIMITER}{payload}"
 
 
