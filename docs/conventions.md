@@ -79,8 +79,9 @@ read the run’s own metadata instead.
 
 Where structure genuinely is machine-parsed, the interior uses `.` so the intent is
 explicit and cannot be mistaken for a word separator.
-The timestamped form is the only current case, and `derive_timestamped_typed_child_id()`
-is its only reader.
+The timestamped form is the only current case.
+Only helpers in `metaproc.ids`, including `derive_timestamped_typed_child_id()` and
+`require_compact_timestamped_typed_id()`, may read that structure.
 
 Readers accept a small set of historical identifier shapes so published partitions stay
 resolvable; `metaproc.ids` owns that entirely, and nothing else needs to know about it.

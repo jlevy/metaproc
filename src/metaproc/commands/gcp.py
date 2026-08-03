@@ -212,8 +212,64 @@ def _is_run_dir(target: str) -> bool:
     return Path(target).is_dir()
 
 
+def _run_id_from_job_metadata(job: Any, identity_key: str) -> str | None:
+    """Return the exact run ID embedded in a job when it matches ``identity_key``.
+
+    Worker and orchestrator jobs already carry the structured ``METAPROC_VARS`` payload
+    needed by their entrypoints. Reading ``RUN_ID`` from that payload preserves the exact
+    identifier for inventory display without adding another GCP label encoding. The hash
+    check makes the readable metadata advisory: corrupt or unrelated payloads cannot
+    collapse jobs into the wrong identity group.
+    """
+    from metaproc.cloud.gcp.batch_backend import (  # noqa: PLC0415 -- optional GCP path
+        run_identity_label,
+    )
+
+    for task_group in getattr(job, "task_groups", ()):
+        task_spec = getattr(task_group, "task_spec", None)
+        for runnable in getattr(task_spec, "runnables", ()):
+            environment = getattr(runnable, "environment", None)
+            variables = getattr(environment, "variables", {})
+            raw_variables = variables.get(MetaprocEnv.METAPROC_VARS.name, "")
+            if not isinstance(raw_variables, str) or not raw_variables:
+                continue
+            try:
+                decoded = json.loads(raw_variables)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(decoded, dict):
+                continue
+            run_id = decoded.get("RUN_ID")
+            if isinstance(run_id, str) and run_id and run_identity_label(run_id) == identity_key:
+                return run_id
+    return None
+
+
+def _job_run_group(job: Any) -> tuple[str, str, bool] | None:
+    """Return ``(group_key, display_id, exact)`` for one inventory job."""
+    from metaproc.cloud.gcp.batch_backend import (  # noqa: PLC0415 -- optional GCP path
+        RUN_ID_LABEL,
+        RUN_IDENTITY_LABEL,
+    )
+
+    labels = dict(job.labels)
+    readable_id = labels.get(RUN_ID_LABEL, "")
+    identity_key = labels.get(RUN_IDENTITY_LABEL, "")
+    if not readable_id and not identity_key:
+        return None
+    if not identity_key:
+        return f"legacy:{readable_id}", readable_id, False
+
+    exact_id = _run_id_from_job_metadata(job, identity_key)
+    if exact_id is not None:
+        return f"identity:{identity_key}", exact_id, True
+
+    fallback = f"{readable_id} [{identity_key}]" if readable_id else identity_key
+    return f"identity:{identity_key}", fallback, False
+
+
 def _query_jobs_by_run_id(run_id: str, project: str, region: str) -> list[Any]:
-    """Query Batch API for jobs matching a run-id label."""
+    """Query the exact run key first, then safely fall back to legacy labels."""
     from google.cloud import batch_v1  # noqa: PLC0415 -- optional [gcp-batch] dependency
 
     from metaproc.cloud.gcp.batch_backend import (  # noqa: PLC0415 -- optional [gcp-batch] dependency
@@ -322,7 +378,7 @@ def gcp_status(
     """Show Batch job status for a run.
 
     If <target> is an existing directory: read local runpool events, query jobs by name.
-    If <target> is a string: query Batch API by metaproc-run-id label.
+    If <target> is a string: query Batch API by exact run key, then legacy run label.
     """
     _require_gcp_batch()
     from google.cloud import batch_v1  # noqa: PLC0415 -- optional [gcp-batch] dependency
@@ -352,9 +408,9 @@ def gcp_status(
             out.progress("No GCP Batch jobs could be fetched.")
             raise typer.Exit(code=0)
 
-        # Extract run_id from the first job's labels.
-        first_labels = dict(jobs[0].labels)
-        run_id = first_labels.get("metaproc-run-id", str(run_dir))
+        # The directory name is the exact immutable identity. GCP's readable label is
+        # intentionally sanitized and therefore cannot replace it for display or lookup.
+        run_id = run_dir.name
     else:
         # Run-id mode: query Batch API by label.
         run_id = target
@@ -1035,8 +1091,8 @@ def gcp_logs(
     """Stream logs from Cloud Logging for a run's GCP Batch jobs.
 
     Resolves Batch job IDs from run events (for local run directories) or
-    from the ``metaproc-run-id`` label (for run-id strings), then filters
-    Cloud Logging on those jobs. By default only container stdout
+    from the exact run key with a legacy-label fallback (for run-id strings), then
+    filters Cloud Logging on those jobs. By default only container stdout
     (``batch_task_logs``) is included; pass ``--include-agent-logs`` to
     include VM agent startup logs (useful for early bootstrap failures
     such as NFS mount errors).
@@ -1226,7 +1282,7 @@ def gcp_cancel(
     """Cancel all running/queued/scheduled Batch jobs for a run.
 
     If <target> is an existing directory: read local runpool events, extract job names.
-    If <target> is a string: query Batch API by metaproc-run-id label.
+    If <target> is a string: query Batch API by exact run key, then legacy run label.
     Writes a kill sentinel if a local run directory exists.
     """
     _require_gcp_batch()
@@ -1305,8 +1361,9 @@ def gcp_runs(
 ) -> None:
     """List all active metaproc runs across the project.
 
-    Queries Batch API for all jobs with a metaproc-run-id label and groups
-    them by run. This is the "what's happening now?" command.
+    Queries Batch API for metaproc jobs. Modern jobs group by exact identity and recover
+    the original run ID from hash-verified structured metadata; legacy jobs group by
+    their readable run label. This is the "what's happening now?" command.
     """
     _require_gcp_batch()
 
@@ -1333,20 +1390,25 @@ def gcp_runs(
     except Exception as exc:
         raise CLIError(f"Failed to list Batch jobs: {exc}") from exc
 
-    # Group by run-id.
+    # Modern jobs group by their collision-resistant identity key and recover the exact
+    # run ID from structured job metadata. Legacy jobs retain readable-label grouping.
     runs: dict[str, list[dict[str, str]]] = defaultdict(list)
+    display_ids: dict[str, str] = {}
     for job in all_jobs:
         labels = dict(job.labels)
-        run_id = labels.get("metaproc-run-id", "")
-        if not run_id:
+        run_group = _job_run_group(job)
+        if run_group is None:
             continue
+        group_key, display_id, exact = run_group
+        if group_key not in display_ids or exact:
+            display_ids[group_key] = display_id
 
         role = labels.get("metaproc-role", labels.get("metaproc-dispatch", "unknown"))
         state = JobStatus.State(job.status.state).name
         job_name = job.name
         job_id = job_name.split("/")[-1] if "/" in job_name else job_name
 
-        runs[run_id].append(
+        runs[group_key].append(
             {
                 "job_id": job_id,
                 "role": role,
@@ -1361,14 +1423,30 @@ def gcp_runs(
         out.progress("No metaproc runs found.")
         raise typer.Exit(code=0)
 
+    display_runs: dict[str, list[dict[str, str]]] = {}
+    ordered_groups = sorted(
+        runs,
+        key=lambda key: (
+            display_ids[key],
+            0 if key.startswith("identity:") else 1,
+            key,
+        ),
+    )
+    for group_key in ordered_groups:
+        display_id = display_ids[group_key]
+        if display_id in display_runs:
+            suffix = "legacy" if group_key.startswith("legacy:") else group_key.partition(":")[2]
+            display_id = f"{display_id} [{suffix}]"
+        display_runs[display_id] = runs[group_key]
+
     if as_json:
-        out.data(json.dumps(dict(runs), indent=2))
+        out.data(json.dumps(display_runs, indent=2))
         return
 
-    out.data(f"Active runs: {len(runs)}")
+    out.data(f"Active runs: {len(display_runs)}")
     out.data("")
 
-    for run_id, jobs_list in sorted(runs.items()):
+    for run_id, jobs_list in display_runs.items():
         orchestrators = [j for j in jobs_list if j["role"] == "orchestrator"]
         workers = [j for j in jobs_list if j["role"] != "orchestrator"]
 

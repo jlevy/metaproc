@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from unittest.mock import patch
 
 import pytest
 
@@ -16,6 +17,7 @@ from metaproc.ids import (
     new_timestamped_typed_id,
     new_typed_id,
     parse_typed_id,
+    register_typed_id_prefixes,
     require_compact_timestamped_typed_id,
     require_typed_id,
     typed_id_delimiter,
@@ -32,6 +34,33 @@ def test_new_timestamped_ids_keep_strif_run_ordering_with_compact_randomness() -
     identifiers = [new_timestamped_typed_id("run") for _ in range(128)]
     assert len(set(identifiers)) == len(identifiers)
     assert all(re.fullmatch(r"run-\d{8}T\d{6}Z\.\d+\.[a-z0-9]{10}", value) for value in identifiers)
+
+
+def test_timestamped_allocation_retries_strif_whole_second_shape() -> None:
+    with patch(
+        "metaproc.ids.new_timestamped_uid",
+        side_effect=(
+            "20260803T0102030000-abc123def4",
+            "20260803T010203Z-1234560000-abc123def4",
+        ),
+    ) as allocator:
+        value = new_timestamped_typed_id("run")
+
+    assert value == "run-20260803T010203Z.1234560000.abc123def4"
+    assert allocator.call_count == 2
+
+
+def test_timestamped_allocation_fails_loudly_after_bounded_invalid_outputs() -> None:
+    with (
+        patch(
+            "metaproc.ids.new_timestamped_uid",
+            return_value="20260803T0102030000-abc123def4",
+        ) as allocator,
+        pytest.raises(RuntimeError, match="unsupported timestamped UID shape after 3 attempts"),
+    ):
+        new_timestamped_typed_id("run")
+
+    assert allocator.call_count == 3
 
 
 def test_child_ids_are_deterministic_within_parent_ordinal_namespace() -> None:
@@ -110,6 +139,10 @@ def test_width_controls_reject_unsafe_or_ambiguous_values() -> None:
         derive_typed_id_from_key("rev", "key", length=0)
     with pytest.raises(TypeError, match="length must be an integer"):
         derive_typed_id_from_key("rev", "key", length=False)
+    with pytest.raises(TypeError, match="ordinal must be an integer"):
+        derive_typed_child_id("rev", "art_parent", True)
+    with pytest.raises(TypeError, match="ordinal must be an integer"):
+        derive_typed_child_id("rev", "art_parent", 1.5)  # pyright: ignore[reportArgumentType]
     with pytest.raises(ValueError, match="cannot change.*historical"):
         derive_typed_child_id("rev", "art_legacy-readable", 0, length=12)
     with pytest.raises(ValueError, match="historical timestamped"):
@@ -166,3 +199,15 @@ def test_historical_underscore_identifier_passes_validation() -> None:
     assert is_typed_id("run_legacy123abc45")
     assert is_typed_id("run_legacy123abc45", "run")
     assert require_typed_id("run_legacy123abc45", "run") == "run_legacy123abc45"
+
+
+def test_prefix_registration_validates_the_complete_batch_before_mutating() -> None:
+    with pytest.raises(ValueError, match="invalid typed-ID prefix"):
+        register_typed_id_prefixes(("xq", "invalid-prefix"))
+
+    assert is_typed_id("xq-payload") is False
+
+
+def test_prefix_registration_rejects_a_bare_string_iterable() -> None:
+    with pytest.raises(TypeError, match="prefixes must be an iterable of prefix strings"):
+        register_typed_id_prefixes("abc")

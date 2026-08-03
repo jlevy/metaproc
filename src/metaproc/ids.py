@@ -67,6 +67,12 @@ MIN_TIMESTAMPED_DERIVED_ID_LENGTH = 10
 MAX_DERIVED_ID_LENGTH = 50
 """Maximum useful base36 width for a SHA-256-derived identity."""
 
+_STRIF_TIMESTAMPED_UID_PATTERN = re.compile(
+    rf"^(?P<timestamp>\d{{8}}T\d{{6}}Z)-(?P<fraction>\d+)-"
+    rf"(?P<random>[a-z0-9]{{{MIN_TIMESTAMPED_DERIVED_ID_LENGTH},{MAX_DERIVED_ID_LENGTH}}})$"
+)
+_TIMESTAMPED_UID_GENERATION_ATTEMPTS = 3
+
 RANDOM_TYPED_ID_BITS = 72
 """Randomness requested for non-temporal typed identities."""
 
@@ -77,14 +83,20 @@ METAPROC_ID_PREFIXES = frozenset({"run", "art", "rev", "evt", "use", "bud", "rcp
 _registered_prefixes = set(METAPROC_ID_PREFIXES)
 
 
+def _require_valid_typed_id_prefix(prefix: object) -> str:
+    if not isinstance(prefix, str) or not _PREFIX_PATTERN.fullmatch(prefix):
+        raise ValueError(
+            f"invalid typed-ID prefix {prefix!r}; expected 1-8 lowercase alphanumeric characters"
+        )
+    return prefix
+
+
 def register_typed_id_prefixes(prefixes: Iterable[str]) -> None:
     """Register stable ID prefixes owned by an importing domain package."""
-    for prefix in prefixes:
-        if not _PREFIX_PATTERN.fullmatch(prefix):
-            raise ValueError(
-                f"invalid typed-ID prefix {prefix!r}; expected 1-8 lowercase alphanumeric characters"
-            )
-        _registered_prefixes.add(prefix)
+    if isinstance(prefixes, str):
+        raise TypeError("prefixes must be an iterable of prefix strings, not a bare string")
+    prefix_batch = tuple(_require_valid_typed_id_prefix(prefix) for prefix in prefixes)
+    _registered_prefixes.update(prefix_batch)
 
 
 def typed_id_pattern(prefix: str) -> str:
@@ -205,8 +217,19 @@ def new_timestamped_typed_id(
     """Create a typed identity for an event whose allocation time is meaningful."""
     _require_registered_prefix(prefix)
     _validate_bits(bits, minimum=MIN_TIMESTAMPED_TYPED_ID_RANDOM_BITS)
-    payload = new_timestamped_uid(bits=bits).replace("-", _TIMESTAMPED_INTERIOR_DELIMITER)
-    return f"{prefix}{TYPED_ID_DELIMITER}{payload}"
+    for _attempt in range(_TIMESTAMPED_UID_GENERATION_ATTEMPTS):
+        raw_uid = new_timestamped_uid(bits=bits)
+        match = _STRIF_TIMESTAMPED_UID_PATTERN.fullmatch(raw_uid)
+        if match is None:
+            continue
+        payload = _TIMESTAMPED_INTERIOR_DELIMITER.join(
+            (match["timestamp"], match["fraction"], match["random"])
+        )
+        return f"{prefix}{TYPED_ID_DELIMITER}{payload}"
+    raise RuntimeError(
+        "strif returned an unsupported timestamped UID shape after "
+        f"{_TIMESTAMPED_UID_GENERATION_ATTEMPTS} attempts"
+    )
 
 
 def _encode_base36(value: int, *, length: int) -> str:
@@ -308,7 +331,9 @@ def derive_typed_child_id(
 ) -> str:
     """Derive a stable child identity from an immutable parent and ordinal."""
     _require_registered_prefix(prefix)
-    if isinstance(ordinal, bool) or ordinal < 0:
+    if type(ordinal) is not int:
+        raise TypeError(f"ordinal must be an integer, got {ordinal!r}")
+    if ordinal < 0:
         raise ValueError(f"ordinal must be non-negative, got {ordinal!r}")
     _require_any_typed_id(parent_id)
     _validate_derived_length(length)

@@ -7,6 +7,26 @@ development series.
 
 ## [Unreleased][unreleased]
 
+### Added
+
+- **Self-identifying typed IDs**: `metaproc.ids` now provides registered
+  `prefix-payload` allocation, validation, deterministic derivation, timestamped child
+  derivation, and read compatibility for published underscore-form identities.
+- **Exact GCP run correlation**: orchestrator and worker jobs retain a readable run
+  label and a collision-resistant exact-identity key.
+  Cloud inventory recovers the exact run ID from structured job metadata and keeps
+  colliding readable labels separate.
+
+### Changed
+
+- **Default run IDs**: generated run IDs are compact, time-ordered `run-...` typed
+  identities. Process and title remain metadata instead of identity components;
+  `RUN_ID_TEMPLATE` remains available for explicitly configured legacy formats.
+- **Cloud run lookup**: `gcp status`, `gcp logs`, and `gcp cancel` query the exact
+  identity key first, then fall back to unkeyed legacy jobs with the matching readable
+  label. Exact typed run IDs are not constrained by the legacy 63-character label
+  heuristic.
+
 ## [0.2.0][] - 2026-07-31
 
 ### Added

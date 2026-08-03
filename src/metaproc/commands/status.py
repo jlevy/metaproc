@@ -102,17 +102,17 @@ def _looks_like_run_id(target: str) -> bool:
 
     Historical run-ids are lowercase alphanumeric, hyphen-separated, with at least
     three segments (e.g. ``mine-2026-04-09``, ``cloud-500-ds-2026-04-12``).
-    No path separators; max 63 chars per the GCP label constraint in
-    ``metaproc.cloud.gcp.batch_backend.sanitize_label``.
+    Their heuristic retains the old 63-character GCP-label bound. Exact typed IDs are
+    not label-limited because modern cloud lookup uses a fixed-width identity hash.
 
     Requiring multiple segments avoids false positives on short bare
     words like ``abc`` or ``cache`` that happen to live in cwd. Operators
     can still force remote mode with ``--remote`` when the heuristic
     rejects a legitimate run-id.
     """
-    if len(target) > 63:
-        return False
-    return is_typed_id(target, "run") or bool(_RUN_ID_RE.match(target))
+    if is_typed_id(target, "run"):
+        return True
+    return len(target) <= 63 and bool(_RUN_ID_RE.match(target))
 
 
 def _format_text(status: RunStatus, *, steps_only: bool = False, stale_only: bool = False) -> str:
