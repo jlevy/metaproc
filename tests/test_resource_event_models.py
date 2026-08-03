@@ -11,11 +11,15 @@ from pydantic import TypeAdapter, ValidationError
 from metaproc.logutil.tool_failures import FailureKind
 from metaproc.models.resources import (
     BillingEvent,
+    CoverageState,
     HierarchyRef,
     ItemCompleteEvent,
     ItemFailEvent,
     ItemStartEvent,
+    MeteredQuantity,
+    MeterKey,
     Metrics,
+    ProviderRef,
     ResourceEvent,
     SampleEvent,
     SourceRef,
@@ -52,6 +56,67 @@ def test_metrics_null_vs_zero() -> None:
 def test_metrics_rejects_unknown_fields() -> None:
     with pytest.raises(ValidationError):
         Metrics.model_validate({"unknown_metric": 1.0})
+
+
+def test_metered_quantity_preserves_measured_zero() -> None:
+    quantity = MeteredQuantity(
+        key=MeterKey(
+            provider="anthropic",
+            product="claude-code",
+            meter="agent_invocations",
+            unit="count",
+        ),
+        coverage=CoverageState.MEASURED,
+        actual_quantity=0,
+        lineage=["result:terminal"],
+    )
+    assert quantity.actual_quantity == 0
+    assert quantity.estimated_quantity is None
+
+
+@pytest.mark.parametrize(
+    ("coverage", "actual", "estimated"),
+    [
+        (CoverageState.MEASURED, None, None),
+        (CoverageState.MEASURED, 1, 1),
+        (CoverageState.ESTIMATED, 1, None),
+        (CoverageState.UNMEASURED, 1, None),
+    ],
+)
+def test_metered_quantity_rejects_overlapping_coverage(
+    coverage: CoverageState,
+    actual: float | None,
+    estimated: float | None,
+) -> None:
+    with pytest.raises(ValidationError):
+        MeteredQuantity(
+            key=MeterKey(
+                provider="openai",
+                product="codex",
+                meter="turns",
+                unit="count",
+            ),
+            coverage=coverage,
+            actual_quantity=actual,
+            estimated_quantity=estimated,
+        )
+
+
+def test_resource_event_rejects_duplicate_meter_keys() -> None:
+    key = MeterKey(provider="openai", product="codex", meter="turns", unit="count")
+    quantity = MeteredQuantity(
+        key=key,
+        coverage=CoverageState.MEASURED,
+        actual_quantity=1,
+    )
+    with pytest.raises(ValidationError):
+        UsageEvent(
+            ts=_ts(),
+            hierarchy=_hier(),
+            source=_src(),
+            provider=ProviderRef(provider="openai", product="codex"),
+            meters=[quantity, quantity],
+        )
 
 
 def test_hierarchy_requires_run_id() -> None:

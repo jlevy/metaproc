@@ -32,6 +32,7 @@ from typing import Any
 from metaproc.agent_errors import classify_agent_error
 from metaproc.io import iter_artifact_paths, iter_jsonl_objects
 from metaproc.io.gz_io import artifact_sidecar_path
+from metaproc.logutil.usage import UsageStats, extract_gemini_usage
 from metaproc.trace.extractors.common import (
     attempt_cost_attrs,
     tool_usage_classification,
@@ -117,27 +118,13 @@ class GeminiAgentExtractor:
                 duration = stats.get("duration_ms")
                 if isinstance(duration, (int, float)):
                     attempt_attrs["attempt.duration_ms"] = duration
-                # Aggregate token usage from models breakdown.
-                models = stats.get("models")
-                if isinstance(models, dict):
-                    total_input = 0
-                    total_output = 0
-                    total_cached = 0
-                    for model_stats in models.values():
-                        if not isinstance(model_stats, dict):
-                            continue
-                        inp = model_stats.get("input_tokens")
-                        if isinstance(inp, (int, float)):
-                            total_input += inp
-                        out = model_stats.get("output_tokens")
-                        if isinstance(out, (int, float)):
-                            total_output += out
-                        cached = model_stats.get("cached")
-                        if isinstance(cached, (int, float)):
-                            total_cached += cached
-                    attempt_attrs["attempt.tokens_input"] = total_input
-                    attempt_attrs["attempt.tokens_output"] = total_output
-                    attempt_attrs["attempt.tokens_cached"] = total_cached
+                aggregate = UsageStats()
+                for entry in extract_gemini_usage(stats):
+                    aggregate += entry
+                if aggregate.has_token_usage:
+                    attempt_attrs["attempt.tokens_input"] = aggregate.input_tokens
+                    attempt_attrs["attempt.tokens_output"] = aggregate.output_tokens
+                    attempt_attrs["attempt.tokens_cached"] = aggregate.cache_read_tokens
 
         _apply_sidecar_attrs(invocation, attempt_attrs)
 

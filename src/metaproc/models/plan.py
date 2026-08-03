@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from metaproc.models.authored import IOSpec, ParseConfig, RetryPolicy, ValueType
 from metaproc.models.lane import ExecutionLane, LaneMatrix
+from metaproc.models.resource_budget import ResourceBudgetSpec
 
 
 class ResolvedAdapter(BaseModel):
@@ -96,22 +97,26 @@ class Plan(BaseModel):
       ``execution_lanes`` fields. Still resolvable because the new
       fields are optional, but plans written under 0.4 cannot describe
       a multi-lane shape.
-    - ``metaproc:Plan/0.5`` (current): adds ``lane_matrix`` and
-      ``execution_lanes`` to the public surface (upstream change). Single-lane
-      and lane-less plans still validate against this version.
+    - ``metaproc:Plan/0.5``: adds ``lane_matrix`` and ``execution_lanes``.
+    - ``metaproc:Plan/0.6`` (current): adds reporting-only
+      ``resource_budgets``. Plans without budgets still validate.
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(populate_by_name=True)
 
-    historical_schema_tokens: ClassVar[tuple[str, ...]] = ("metaproc:Plan/0.4",)
+    historical_schema_tokens: ClassVar[tuple[str, ...]] = (
+        "metaproc:Plan/0.4",
+        "metaproc:Plan/0.5",
+    )
 
-    schema_: str = Field(default="metaproc:Plan/0.5", alias="schema")
+    schema_: str = Field(default="metaproc:Plan/0.6", alias="schema")
     generated_at: str = ""
     process: str = ""
     params: dict[str, str] = Field(default_factory=dict)
     execution_profile: str | None = None
     artifact_namespace: str | None = None
     deps: dict[str, ResolvedDep] = Field(default_factory=dict)
+    resource_budgets: list[ResourceBudgetSpec] = Field(default_factory=list)
     steps: list[ResolvedStep] = Field(default_factory=list)
     lane_matrix: LaneMatrix | None = None
     execution_lanes: list[ExecutionLane] = Field(default_factory=list)

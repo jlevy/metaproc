@@ -143,8 +143,16 @@ def test_artifact_tree_has_no_state_or_logs_siblings(smoke_run: Path) -> None:
 
 
 def test_run_dir_has_three_top_level_branches(smoke_run: Path) -> None:
-    """A run dir should expose exactly three concepts: .state/, .logs/, and the artifact tree."""
-    expected_top_level = {".state", ".logs", "artifacts", "items.md", "summary.md"}
+    """A run dir exposes engine branches, process artifacts, and terminal reports."""
+    expected_top_level = {
+        ".state",
+        ".logs",
+        "artifacts",
+        "items.md",
+        "summary.md",
+        "resources.json",
+        "resource-usage-summary.md",
+    }
     actual = {entry.name for entry in smoke_run.iterdir()}
     assert actual == expected_top_level, (
         f"unexpected top-level entries in {smoke_run}: "
@@ -258,6 +266,7 @@ def test_state_tree_snapshot_matches_expected_shape(smoke_run: Path) -> None:
         # Run-level
         "process-status.yaml",
         "run-config.yaml",
+        "schemas/resource-usage-summary.v1.schema.yaml",
         # Per-step (fan-out runner pool)
         "steps/write-artifact/runpool-status.yaml",
         "steps/write-artifact/scale-state.yaml",

@@ -160,8 +160,8 @@ def test_attempt_carries_token_usage(gemini_run_dir: Path) -> None:
     spans = list(extractor.extract(gemini_run_dir, trace_id="trace-1"))
     attempt = next(s for s in spans if s.kind == "attempt")
     # From the fixture: two models, summed.
-    assert attempt.attributes.get("attempt.tokens_input") == 1643732
-    assert attempt.attributes.get("attempt.tokens_output") == 11633
+    assert attempt.attributes.get("attempt.tokens_input") == 683719
+    assert attempt.attributes.get("attempt.tokens_output") == 30613
     assert attempt.attributes.get("attempt.tokens_cached") == 960013
 
 
@@ -559,7 +559,7 @@ def test_terminal_stats_token_aggregation(tmp_path: Path) -> None:
     extractor = GeminiAgentExtractor()
     spans = list(extractor.extract(tmp_path, trace_id="t"))
     attempt = next(s for s in spans if s.kind == "attempt")
-    assert attempt.attributes["attempt.tokens_input"] == 300
+    assert attempt.attributes["attempt.tokens_input"] == 290
     assert attempt.attributes["attempt.tokens_output"] == 125
     assert attempt.attributes["attempt.tokens_cached"] == 10
     assert attempt.duration_ms == 5000.0

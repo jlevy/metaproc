@@ -13,9 +13,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from metaproc.cloud.gcp.billing import billable_for_span
+from metaproc.logutil.agent_provider_meters import (
+    AgentProviderEvidence,
+    extract_agent_provider_evidence,
+)
 from metaproc.logutil.parsing import LogEvent, LogFile
 from metaproc.logutil.throttling import ThrottleSpan, attribute_throttling
+from metaproc.logutil.tool_failures import FailureKind
 from metaproc.logutil.tool_spans import ToolSpan, pair_tool_events
+from metaproc.logutil.usage import estimate_list_cost
 from metaproc.models.node_ids import ROOT_SUBGRAPH_KEY, process_node_id, step_node_id
 from metaproc.models.resources import (
     BillingEvent,
@@ -24,6 +30,7 @@ from metaproc.models.resources import (
     ItemFailEvent,
     ItemStartEvent,
     Metrics,
+    ProviderRef,
     ResourceEvent,
     SampleEvent,
     SourceKind,
@@ -33,6 +40,8 @@ from metaproc.models.resources import (
     UsageEvent,
     WaitEvent,
 )
+
+_UNKNOWN_EVIDENCE_TS = datetime(1970, 1, 1, tzinfo=UTC)
 
 
 def extract_resource_events(
@@ -59,8 +68,10 @@ def extract_resource_events(
         mtime_ns=source_mtime_ns,
     )
 
-    # Tool calls.
-    for tool_span in pair_tool_events(log_events):
+    # Tool calls. Pair exactly once so terminal aggregates can contribute only
+    # the positive residual beyond these canonical invocations.
+    tool_spans = pair_tool_events(log_events)
+    for tool_span in tool_spans:
         out.append(_tool_call_event(tool_span, hierarchy, base_source))
 
     # Throttling windows.
@@ -73,9 +84,34 @@ def extract_resource_events(
         out.append(_wait_event(throttle_span, hierarchy, base_source))
 
     # Session-level usage (one event per file when LogFile picked up usage_stats)
-    usage_event = _usage_event_for_file(log_file, hierarchy, base_source)
+    adapter = log_file.parser.adapter_name if log_file.parser is not None else "unknown"
+    stats_provider = log_file.usage_stats.provider if log_file.usage_stats is not None else None
+    provider_evidence = extract_agent_provider_evidence(
+        adapter=adapter,
+        model=log_file.model,
+        events=log_events,
+        provider=stats_provider,
+    )
+    evidence_ts = _terminal_timestamp(log_events)
+    usage_event = _usage_event_for_file(
+        log_file,
+        hierarchy,
+        base_source,
+        granular_tool_calls=len(tool_spans),
+        provider=provider_evidence.provider if provider_evidence is not None else None,
+        evidence_ts=evidence_ts,
+    )
     if usage_event is not None:
         out.append(usage_event)
+    if provider_evidence is not None:
+        out.append(
+            _provider_meter_event(
+                provider_evidence,
+                hierarchy,
+                base_source,
+                ts=evidence_ts,
+            )
+        )
 
     # Runpool process_exit → Sample (always) + Billing (when machine_type known)
     if source_kind == "runpool_events":
@@ -262,7 +298,7 @@ def _ts_from_event(ev: LogEvent) -> datetime:
             return datetime.fromisoformat(ev.timestamp)
         except ValueError:
             pass
-    return _now_utc()
+    return _UNKNOWN_EVIDENCE_TS
 
 
 def _float_or_none(value: object) -> float | None:
@@ -290,13 +326,24 @@ def _tool_call_event(span: ToolSpan, hierarchy: HierarchyRef, source: SourceRef)
     taxonomy = TaxonomyPaths(tool_path=list(span.tool_path))
     span_hierarchy = hierarchy.model_copy(update={"tool_name": span.tool_name})
     return ToolCallEvent(
-        ts=span.ended_at or span.started_at or _now_utc(),
+        ts=span.ended_at or span.started_at or _UNKNOWN_EVIDENCE_TS,
         span_id=_tool_span_id(span),
         hierarchy=span_hierarchy,
         metrics=metrics,
+        failure_kind=_tool_failure_kind(span),
         taxonomy=taxonomy,
         source=source,
     )
+
+
+def _tool_failure_kind(span: ToolSpan) -> FailureKind | None:
+    if span.failure_class == "unmatched_start":
+        return FailureKind.ADAPTER_DROPPED_CALL
+    if span.failure_class == "unmatched_result":
+        return FailureKind.UNKNOWN
+    if span.is_error:
+        return FailureKind.TOOL_ERROR
+    return None
 
 
 def _wait_event(span: ThrottleSpan, hierarchy: HierarchyRef, source: SourceRef) -> ResourceEvent:
@@ -315,7 +362,7 @@ def _wait_event(span: ThrottleSpan, hierarchy: HierarchyRef, source: SourceRef) 
         provider_path=["provider", span.provider] if span.provider else None,
     )
     return WaitEvent(
-        ts=span.ended_at or span.started_at or _now_utc(),
+        ts=span.ended_at or span.started_at or _UNKNOWN_EVIDENCE_TS,
         span_id=_throttle_span_id(span),
         hierarchy=hierarchy,
         metrics=metrics,
@@ -325,7 +372,13 @@ def _wait_event(span: ThrottleSpan, hierarchy: HierarchyRef, source: SourceRef) 
 
 
 def _usage_event_for_file(
-    log_file: LogFile, hierarchy: HierarchyRef, source: SourceRef
+    log_file: LogFile,
+    hierarchy: HierarchyRef,
+    source: SourceRef,
+    *,
+    granular_tool_calls: int,
+    provider: ProviderRef | None,
+    evidence_ts: datetime,
 ) -> ResourceEvent | None:
     """Emit a session-level UsageEvent when the file carries terminal usage stats."""
     stats = log_file.usage_stats
@@ -335,35 +388,36 @@ def _usage_event_for_file(
             return None
         metrics = Metrics(
             wall_time_s=log_file.duration_s,
-            actual_cost_usd=log_file.cost_usd,
+            list_cost_usd=log_file.cost_usd,
             input_tokens=log_file.input_tokens,
             output_tokens=log_file.output_tokens,
-            tool_calls=log_file.tool_calls,
+            tool_calls=_tool_call_residual(log_file.tool_calls, granular_tool_calls),
         )
         taxonomy = TaxonomyPaths(
             model_path=["model", log_file.model] if log_file.model else None,
         )
         return UsageEvent(
-            ts=_now_utc(),
+            ts=evidence_ts,
+            span_id="usage:terminal",
             hierarchy=hierarchy,
             metrics=metrics,
+            provider=provider,
             taxonomy=taxonomy,
             source=source,
         )
 
     metrics = Metrics(
         wall_time_s=stats.duration_s or None,
-        input_tokens=stats.input_tokens or None,
-        output_tokens=stats.output_tokens or None,
-        cache_read_tokens=stats.cache_read_tokens or None,
-        cache_write_tokens=stats.cache_write_tokens or None,
-        tool_calls=stats.tool_calls or None,
+        input_tokens=stats.input_tokens if stats.has_token_usage else None,
+        output_tokens=stats.output_tokens if stats.has_token_usage else None,
+        cache_read_tokens=stats.cache_read_tokens if stats.has_token_usage else None,
+        cache_write_tokens=stats.cache_write_tokens if stats.has_token_usage else None,
+        tool_calls=_tool_call_residual(
+            stats.tool_calls if stats.has_tool_calls else None,
+            granular_tool_calls,
+        ),
     )
-    if stats.cost_usd:
-        if stats.cost_is_estimated:
-            metrics.list_cost_usd = stats.cost_usd
-        else:
-            metrics.actual_cost_usd = stats.cost_usd
+    metrics.list_cost_usd = estimate_list_cost(stats)
 
     taxonomy = TaxonomyPaths(
         provider_path=["provider", stats.provider] if stats.provider else None,
@@ -375,17 +429,43 @@ def _usage_event_for_file(
     )
 
     return UsageEvent(
-        ts=_now_utc(),
+        ts=evidence_ts,
+        span_id="usage:terminal",
         hierarchy=hierarchy,
         metrics=metrics,
+        provider=provider,
         taxonomy=taxonomy,
         source=source,
     )
 
 
+def _provider_meter_event(
+    evidence: AgentProviderEvidence,
+    hierarchy: HierarchyRef,
+    source: SourceRef,
+    *,
+    ts: datetime,
+) -> ResourceEvent:
+    return UsageEvent(
+        ts=ts,
+        span_id=f"provider:{evidence.provider.provider}:{evidence.provider.product}",
+        hierarchy=hierarchy,
+        provider=evidence.provider,
+        meters=list(evidence.meters),
+        taxonomy=TaxonomyPaths(
+            provider_path=["provider", evidence.provider.provider],
+            model_path=(
+                ["model", evidence.provider.provider, evidence.provider.model]
+                if evidence.provider.model
+                else None
+            ),
+        ),
+        source=source,
+    )
+
+
 def _tool_span_id(span: ToolSpan) -> str:
-    started = span.started_at.isoformat() if span.started_at else "0"
-    return f"tool:{span.adapter}:{span.tool_name}:{started}"
+    return f"tool:{span.adapter}:{span.invocation_id}"
 
 
 def _throttle_span_id(span: ThrottleSpan) -> str:
@@ -393,5 +473,15 @@ def _throttle_span_id(span: ThrottleSpan) -> str:
     return f"throttle:{span.provider or 'unknown'}:{started}"
 
 
-def _now_utc() -> datetime:
-    return datetime.now(UTC)
+def _tool_call_residual(total: int | None, granular: int) -> int | None:
+    """Return the measured terminal residual beyond granular spans."""
+    if total is None:
+        return None
+    return max(total - granular, 0)
+
+
+def _terminal_timestamp(events: list[LogEvent]) -> datetime:
+    for event in reversed(events):
+        if event.is_done:
+            return _ts_from_event(event)
+    return _UNKNOWN_EVIDENCE_TS

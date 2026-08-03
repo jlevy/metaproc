@@ -11,6 +11,10 @@ from metaproc.io.frontmatter import ProgressSpec
 from metaproc.models.authored import ProcessSpec
 from metaproc.models.plan import Plan
 from metaproc.models.qa import QaReport, QaSummary
+from metaproc.models.resource_summary import (
+    RESOURCE_USAGE_SUMMARY_CONTRACT,
+    ResourceUsageSummary,
+)
 from metaproc.models.usage import UsageReport
 from metaproc.plugins.protocol import (
     AdapterConfigTransform,
@@ -102,10 +106,12 @@ class PluginRegistryImpl:
             ("metaproc:ProgressSpec/0.1", ProgressSpec, "progress"),
             ("metaproc:Plan/0.4", Plan, "plan"),
             ("metaproc:Plan/0.5", Plan, "plan"),
+            ("metaproc:Plan/0.6", Plan, "plan"),
             ("metaproc:QaReport/0.1", QaReport, "qa"),
             ("metaproc:QaReport/0.2", QaReport, "qa"),
             ("metaproc:QaSummary/0.1", QaSummary, "qa_summary"),
             ("metaproc:UsageReport/0.2", UsageReport, "usage"),
+            (RESOURCE_USAGE_SUMMARY_CONTRACT, ResourceUsageSummary, "resource_usage"),
             (STRUCTURE_REPORT_CONTRACT_ID, StructureReport, "structure_report"),
         ]:
             self.register_softschema(

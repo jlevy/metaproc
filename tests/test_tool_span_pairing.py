@@ -23,6 +23,8 @@ def _call(
         summary=f"[call:{tool}]",
         adapter=adapter,
         timestamp=ts,
+        tool_name=tool,
+        invocation_id=execution_id,
         raw=raw,
     )
 
@@ -46,6 +48,8 @@ def _result(
         adapter=adapter,
         timestamp=ts,
         is_error=is_error,
+        tool_name=tool,
+        invocation_id=execution_id,
         raw=raw,
     )
 
@@ -89,8 +93,54 @@ def test_execution_id_takes_precedence_over_fifo_within_name() -> None:
     assert len(spans) == 2
     # First span is the result for B (started @ 12:00:01, ended @ 12:00:03).
     assert spans[0].duration_s == 2.0
+    assert spans[0].invocation_id == "B"
     # Second span is the result for A (started @ 12:00:00, ended @ 12:00:05).
     assert spans[1].duration_s == 5.0
+    assert spans[1].invocation_id == "A"
+
+
+def test_normalized_invocation_id_takes_precedence_over_raw_fields() -> None:
+    events = [
+        LogEvent(
+            kind="tool_call",
+            summary="[call:Read]",
+            adapter="claude",
+            tool_name="Read",
+            invocation_id="toolu-normalized",
+            raw={"id": "raw-call-id"},
+        ),
+        LogEvent(
+            kind="tool_result",
+            summary="[result:Read]",
+            adapter="claude",
+            tool_name="Read",
+            invocation_id="toolu-normalized",
+            raw={"tool_use_id": "raw-result-id"},
+        ),
+    ]
+
+    span = pair_tool_events(events)[0]
+
+    assert span.invocation_id == "toolu-normalized"
+    assert span.failure_class is None
+
+
+def test_missing_ids_get_stable_source_local_ordinals_without_timestamps() -> None:
+    events = [
+        LogEvent(kind="tool_call", summary="[call:Read]", adapter="claude", tool_name="Read"),
+        LogEvent(kind="tool_result", summary="[result:Read]", adapter="claude", tool_name="Read"),
+        LogEvent(kind="tool_call", summary="[call:Read]", adapter="claude", tool_name="Read"),
+        LogEvent(kind="tool_result", summary="[result:Read]", adapter="claude", tool_name="Read"),
+    ]
+
+    first = pair_tool_events(events)
+    second = pair_tool_events(events)
+
+    assert [span.invocation_id for span in first] == [
+        "fallback:claude:Read:1",
+        "fallback:claude:Read:2",
+    ]
+    assert [span.invocation_id for span in second] == [span.invocation_id for span in first]
 
 
 def test_fifo_pairing_within_name_when_no_execution_id() -> None:

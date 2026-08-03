@@ -22,6 +22,7 @@ from metaproc.logutil.usage import (
     compute_cost,
     extract_gemini_usage,
     load_pricing,
+    sum_claude_usage,
     sum_codex_usage,
     sum_pi_usage,
     write_usage_report,
@@ -373,6 +374,71 @@ class TestSumPiUsage:
         assert abs(stats.cost_usd - 0.06057) < 0.001
         assert stats.model == "claude-opus-4-6"
         assert stats.provider == "anthropic"
+        assert stats.cost_is_estimated is True
+
+
+# ── Claude Code usage extraction ───────────────────────────────
+
+
+class TestSumClaudeUsage:
+    def test_model_usage_is_the_whole_attempt_including_nested_models(self) -> None:
+        result = {
+            "type": "result",
+            "total_cost_usd": 1.25,
+            "num_turns": 4,
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "cache_read_input_tokens": 30,
+                "cache_creation_input_tokens": 40,
+            },
+            "modelUsage": {
+                "claude-opus": {
+                    "inputTokens": 10,
+                    "outputTokens": 20,
+                    "cacheReadInputTokens": 30,
+                    "cacheCreationInputTokens": 40,
+                    "costUSD": 1.0,
+                },
+                "claude-haiku": {
+                    "inputTokens": 5,
+                    "outputTokens": 7,
+                    "cacheReadInputTokens": 11,
+                    "cacheCreationInputTokens": 13,
+                    "costUSD": 0.25,
+                },
+            },
+        }
+
+        stats = sum_claude_usage(result, fallback_model="claude-opus")
+
+        assert stats.input_tokens == 15
+        assert stats.output_tokens == 27
+        assert stats.cache_read_tokens == 41
+        assert stats.cache_write_tokens == 53
+        assert stats.cost_usd == pytest.approx(1.25)
+        assert stats.model == "claude-opus"
+        assert stats.provider == "anthropic"
+        assert stats.cost_is_estimated is True
+
+    def test_falls_back_to_top_level_usage_when_model_usage_is_absent(self) -> None:
+        stats = sum_claude_usage(
+            {
+                "type": "result",
+                "usage": {
+                    "input_tokens": 2,
+                    "output_tokens": 3,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                },
+            },
+            fallback_model="claude-sonnet",
+        )
+
+        assert stats.input_tokens == 2
+        assert stats.output_tokens == 3
+        assert stats.cache_read_tokens == 0
+        assert stats.model == "claude-sonnet"
 
     def test_empty_messages(self) -> None:
         stats = sum_pi_usage({"type": "agent_end", "messages": []})
@@ -413,8 +479,8 @@ class TestExtractGeminiUsage:
         result = extract_gemini_usage(stats_dict)
         assert len(result) == 2
         pro = next(r for r in result if r.model == "gemini-3.1-pro-preview-customtools")
-        assert pro.input_tokens == 1208999
-        assert pro.output_tokens == 18751
+        assert pro.input_tokens == 153268
+        assert pro.output_tokens == 29041
         assert pro.cache_read_tokens == 1055731
         assert pro.provider == "google"
 
@@ -427,7 +493,7 @@ class TestExtractGeminiUsage:
         }
         result = extract_gemini_usage(stats_dict)
         assert len(result) == 1
-        assert result[0].input_tokens == 5000
+        assert result[0].input_tokens == 4800
         assert result[0].cache_read_tokens == 200
         assert result[0].tool_calls == 5
 
@@ -448,7 +514,7 @@ class TestSumCodexUsage:
             },
         }
         stats = sum_codex_usage(event)
-        assert stats.input_tokens == 6740
+        assert stats.input_tokens == 5716
         assert stats.cache_read_tokens == 1024
         assert stats.output_tokens == 123
         assert stats.provider == "openai"
@@ -592,7 +658,7 @@ class TestLogFileUsageStats:
         lf.read_new_events()
 
         assert lf.usage_stats is not None
-        assert lf.usage_stats.input_tokens == 10000
+        assert lf.usage_stats.input_tokens == 2000
         assert lf.usage_stats.output_tokens == 500
         assert lf.usage_stats.cache_read_tokens == 8000
         assert lf.usage_stats.cost_is_estimated is True
@@ -701,8 +767,9 @@ class TestAggregateUsage:
 
         assert report.totals.input_tokens == 3000
         assert report.totals.output_tokens == 300
-        assert report.totals.cost.actual.cost_usd is not None
-        assert abs(report.totals.cost.actual.cost_usd - 0.15) < 0.001
+        assert report.totals.cost.actual.cost_usd is None
+        assert report.totals.cost.list.cost_usd is not None
+        assert abs(report.totals.cost.list.cost_usd - 0.15) < 0.001
         assert "pi-cli-opus" in report.by_variant
         assert "claude-opus-4-6" in report.by_model
         assert "anthropic" in report.by_provider
@@ -732,10 +799,12 @@ class TestAggregateUsage:
         )
 
         report = aggregate_usage([lf])
-        assert any("unknown-model-xyz" in w for w in report.warnings)
+        assert report.totals.cost.actual.cost_usd is None
+        assert report.totals.cost.list.cost_usd == 0
+        assert not report.warnings
 
-    def test_dual_pricing_actual_vs_list(self, tmp_path: Path) -> None:
-        """Aggregation returns both actual (Vertex) and list (vendor) costs for MaaS."""
+    def test_explicit_cli_zero_remains_list_estimate_zero(self, tmp_path: Path) -> None:
+        """A CLI-supplied zero is evidence and must not trigger price-table replacement."""
         lf = _make_pi_log(
             tmp_path,
             "pi-cli-deepseek",
@@ -761,13 +830,9 @@ class TestAggregateUsage:
 
         report = aggregate_usage([lf])
 
-        # Actual cost: Vertex's published pay-as-you-go pricing.
-        assert report.totals.cost.actual.cost_usd is not None
-        assert abs(report.totals.cost.actual.cost_usd - 0.728) < 0.001
-
-        # List cost: vendor API rates (V4-Flash post-2026-05-23 alias rollup).
-        assert report.totals.cost.list.cost_usd is not None
-        assert abs(report.totals.cost.list.cost_usd - 0.168) < 0.001
+        assert report.totals.cost.actual.cost_usd is None
+        assert report.totals.cost.list.cost_usd == 0
+        assert report.totals.cost.list.is_estimated is True
 
         # Data appears at every aggregation level.
         assert "pi-cli-deepseek" in report.by_variant
@@ -813,14 +878,14 @@ class TestWriteUsageReport:
         assert meta["phase"] == "predict"
         assert "totals" in meta
         assert meta["totals"]["input_tokens"] == 5000
-        assert meta["totals"]["cost"]["actual"]["cost_usd"] is not None
-        assert meta["totals"]["cost"]["list"] is not None
+        assert meta["totals"]["cost"].get("actual", {}).get("cost_usd") is None
+        assert meta["totals"]["cost"]["list"]["cost_usd"] == 0.12
         assert "# Usage Report" in content
         assert "Actual Cost" in content
         assert "List Cost" in content
 
-    def test_report_shows_dual_costs(self, tmp_path: Path) -> None:
-        """Report includes both actual and list cost columns for Vertex MaaS models."""
+    def test_report_keeps_actual_unmeasured_and_explicit_list_zero(self, tmp_path: Path) -> None:
+        """Human output distinguishes absent billing from an explicit CLI zero."""
         lf = _make_pi_log(
             tmp_path,
             "pi-cli-deepseek",
@@ -849,14 +914,12 @@ class TestWriteUsageReport:
 
         content, meta = fmf_read(out)
         assert meta is not None
-        # Actual cost ~$0.73, list cost ~$0.17 (post-2026-05-23 V4-Flash alias).
-        actual_cost = meta["totals"]["cost"]["actual"]["cost_usd"]
+        actual_cost = meta["totals"]["cost"].get("actual", {}).get("cost_usd")
         list_cost = meta["totals"]["cost"]["list"]["cost_usd"]
-        assert abs(actual_cost - 0.728) < 0.001
-        assert abs(list_cost - 0.168) < 0.001
-        # Prose summary shows both
-        assert "Total actual cost: **$0.73**" in content
-        assert "Total list cost: **$0.17**" in content
+        assert actual_cost is None
+        assert list_cost == 0
+        assert "Total actual cost: **unmeasured**" in content
+        assert "Total list cost: **$0.00**" in content
 
     def test_writes_profiles_from_registered_tool_event_source(self, tmp_path: Path) -> None:
         lf = _make_pi_log(

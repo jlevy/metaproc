@@ -40,6 +40,7 @@ from typing import Any
 from metaproc.agent_errors import classify_agent_error
 from metaproc.io import iter_artifact_paths, iter_jsonl_objects
 from metaproc.io.gz_io import artifact_sidecar_path
+from metaproc.logutil.usage import sum_codex_usage
 from metaproc.trace.extractors.common import (
     attempt_cost_attrs,
     bash_tool_usage_attrs,
@@ -118,16 +119,11 @@ class CodexAgentExtractor:
                 attempt_attrs["attempt.session_id"] = tid
 
         if isinstance(turn_completed, dict):
-            usage = turn_completed.get("usage")
-            if isinstance(usage, dict):
-                for raw_key, span_key in (
-                    ("input_tokens", "attempt.tokens_input"),
-                    ("output_tokens", "attempt.tokens_output"),
-                    ("cached_input_tokens", "attempt.tokens_cached"),
-                ):
-                    val = usage.get(raw_key)
-                    if isinstance(val, (int, float)):
-                        attempt_attrs[span_key] = val
+            usage = sum_codex_usage(turn_completed)
+            if usage.has_token_usage:
+                attempt_attrs["attempt.tokens_input"] = usage.input_tokens
+                attempt_attrs["attempt.tokens_output"] = usage.output_tokens
+                attempt_attrs["attempt.tokens_cached"] = usage.cache_read_tokens
 
         _apply_sidecar_attrs(invocation, attempt_attrs)
 

@@ -15,6 +15,11 @@ from ruamel.yaml import YAMLError
 from metaproc.cli import app, get_output
 from metaproc.commands.gcp import run_remote_metaproc
 from metaproc.config.env_vars import MetaprocEnv
+from metaproc.engine.resource_finalization import (
+    finalize_run_resources,
+    infer_recovery_outcome,
+    resource_artifacts_need_recovery,
+)
 from metaproc.engine.run_status import (
     # fmt: skip -- re-export block
     RunStatus,
@@ -29,6 +34,7 @@ from metaproc.io.overrides import read_overrides
 from metaproc.models.plan import Plan
 from metaproc.models.runtime import StepState
 from metaproc.output import OutputFormat
+from metaproc.viz_loader import load_plan_bundle_from_run
 
 log = logging.getLogger(__name__)
 
@@ -113,6 +119,35 @@ def _looks_like_run_id(target: str) -> bool:
     if is_typed_id(target, "run"):
         return True
     return len(target) <= 63 and bool(_RUN_ID_RE.match(target))
+
+
+def _recover_resource_artifacts(run_dir: Path, status: RunStatus) -> None:
+    """Best-effort local recovery for an inactive run with resource evidence."""
+    if status.is_active:
+        return
+    evidence_exists = (run_dir / ".state" / "run-config.yaml").exists() or (
+        run_dir / ".logs" / "resource-events.jsonl"
+    ).exists()
+    if not evidence_exists:
+        return
+    try:
+        needs_recovery = resource_artifacts_need_recovery(run_dir)
+    except Exception:  # noqa: BLE001 - status must survive observability scan failures
+        log.exception("could not inspect resource artifact freshness for %s", run_dir)
+        return
+    if not needs_recovery:
+        return
+
+    outcome = infer_recovery_outcome(run_dir, totals=status.totals)
+    try:
+        finalize_run_resources(
+            run_dir,
+            outcome=outcome,
+            trigger="status",
+            bundle=load_plan_bundle_from_run(run_dir),
+        )
+    except Exception:  # noqa: BLE001 - status remains available if reporting recovery fails
+        log.exception("resource artifact recovery failed for inactive run %s", run_dir)
 
 
 def _format_text(status: RunStatus, *, steps_only: bool = False, stale_only: bool = False) -> str:
@@ -573,6 +608,7 @@ def status(
 
     plan = _load_plan_from_run(run_path)
     run_status = scan_run_status(run_path, variant=variant, include_system=not no_system, plan=plan)
+    _recover_resource_artifacts(run_path, run_status)
 
     # Determine output format (CLI --format overrides global)
     use_json = (format in _STATUS_FORMAT_JSON) or (out.format == OutputFormat.JSON)

@@ -123,7 +123,7 @@ def test_attempt_carries_token_usage(codex_run_dir: Path) -> None:
     extractor = CodexAgentExtractor()
     spans = list(extractor.extract(codex_run_dir, trace_id="trace-1"))
     attempt = next(s for s in spans if s.kind == "attempt")
-    assert attempt.attributes.get("attempt.tokens_input") == 119548
+    assert attempt.attributes.get("attempt.tokens_input") == 47228
     assert attempt.attributes.get("attempt.tokens_output") == 4397
     assert attempt.attributes.get("attempt.tokens_cached") == 72320
 

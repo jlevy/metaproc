@@ -844,7 +844,7 @@ The resolved plan uses the `plan:` envelope convention with a `schema` token.
 
 ```yaml
 plan:
-  schema: metaproc:Plan/0.5
+  schema: metaproc:Plan/0.6
   generated_at: '2026-04-17T17:54:42'
   process: example_plugin/process/mine/mine.process.md
   params:
@@ -2042,8 +2042,10 @@ as the remaining open gap.
 
 ## 15. Usage and Cost Tracking
 
-A dual-view cost tracking system that computes both **actual cost** (self-reported by
-the adapter) and **list cost** (vendor API rates).
+A dual-view cost tracking system keeps **actual cost** from provider-authoritative
+external events separate from **list cost** estimates reported by agent CLIs or computed
+from vendor rates. Agent turns, step counts, and retries are never treated as provider
+request counts.
 
 ### 15.1 Data Model
 
@@ -2067,9 +2069,14 @@ for input, output, cache_read, cache_write.
 ### 15.3 Adapter-Specific Extraction
 
 - **Pi CLI**: extracts per-turn usage from `agent_end` events, summing across assistant
-  messages (`input`, `output`, `cacheRead`, `cacheWrite` tokens and `cost.total`).
+  messages (`input`, `output`, `cacheRead`, `cacheWrite` tokens and estimated
+  `cost.total`).
 - **Gemini CLI**: extracts per-model breakdown from `stats.models` or falls back to
-  aggregate stats.
+  aggregate stats, separating cached input from uncached input and including any
+  reasoning residual in billed output exactly once.
+- **Claude CLI**: treats nested `modelUsage` as the authoritative whole-attempt usage
+  when present.
+- **Codex CLI**: treats cached input as a subset of total input for pricing.
 
 ### 15.4 Aggregation and Output
 
@@ -2082,6 +2089,39 @@ prose summary with markdown tables for provider and model breakdowns.
 
 CLI: `metaproc write-usage <phase-dir>` scans all `.jsonl` files, parses, aggregates,
 and writes `usage.md`.
+
+### 15.5 Run Resource Ledger and Terminal Reports
+
+Run-level operational reporting uses one deterministic pipeline:
+
+```text
+local source logs + external ResourceEvents
+  -> normalized, reconciled resource-events.jsonl
+  -> resources.json + resource-usage-summary.md
+```
+
+`ResourceEvent` identities come from producer invocation IDs where possible and from
+stable evidence fields otherwise.
+Equivalent duplicates collapse; conflicting events with one identity fail.
+`resources.json` uses the strict `metaproc.resources/v2` contract and reports
+hierarchical metrics, exact `(provider, product, meter, unit)` quantities, coverage
+gaps, launch-time budget evaluations, and causal finalization state.
+Strict V1 documents remain readable.
+
+The first `run-process` launch freezes the recursive process/step topology and
+normalized budgets under `.state/run-config.yaml:resources`; resume never rewrites it.
+Budgets are observational and do not refuse or terminate work.
+The terminal finalizer runs before lease release on success, failure, propagated
+timeout, or cancellation.
+`metaproc status` may recover missing or stale reports only after the orchestrator is
+inactive, using local evidence and the frozen snapshot without provider calls or cached
+totals.
+
+`resource-usage-summary.md` stores all structured values in the `resource_usage`
+frontmatter envelope and carries the complete SoftSchema contract/schema/envelope/status
+description. Its Markdown body is explanatory only.
+`metaproc resource-report` and the Metabrowser resource view expose actual cost and list
+estimate separately, along with meters, coverage, budgets, and outcome.
 
 ## 16. Optional Workspace/State Surface (Future)
 
@@ -2594,8 +2634,9 @@ plaintext env without the Secret Manager ref fails dispatch up front.
 
 ### Open Questions
 
-- The Plan schema is now at `metaproc:Plan/0.5` (adds `lane_matrix` and
-  `ExecutionLane`). The lane execution model is not yet documented in this arch doc.
+- The Plan schema is now at `metaproc:Plan/0.6` (adds reporting-only `resource_budgets`;
+  0.5 added `lane_matrix` and `ExecutionLane`). The lane execution model is not yet
+  documented in this arch doc.
   [unverified] whether lane-based dispatch is fully integrated into `run-process` or
   still under development.
 - `overrides.yaml` (operator escape hatches via `metaproc override`) is referenced in
@@ -2630,6 +2671,17 @@ the original future-work backlog.
 * * *
 
 ## Revision History
+
+### rev2k (2026-08-03)
+
+Focused resource observability:
+
+- Documented the reconciled event ledger, exact provider meters, and explicit coverage.
+- Added immutable launch topology/budget snapshots and reporting-only evaluation.
+- Added causal terminal finalization, inactive local recovery, and the self-describing
+  resource usage summary.
+- Clarified that agent-CLI cost is a list estimate and provider-authoritative events are
+  the only actual-cost boundary.
 
 ### rev2j (2026-08-02)
 

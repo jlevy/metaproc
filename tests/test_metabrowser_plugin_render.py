@@ -160,6 +160,139 @@ def test_resource_report_actions_do_not_interpolate_inline_handlers() -> None:
     assert "&quot; onclick=&quot;globalThis.pwned=true" in html
 
 
+def test_resource_report_renders_v2_operational_visibility() -> None:
+    payload = {
+        "kind": "resource-report",
+        "path": "resources.json",
+        "ext": ".json",
+        "content": json.dumps(
+            {
+                "schema": "metaproc.resources/v2",
+                "run_id": "fixture",
+                "generated_at": "2026-08-03T00:00:00Z",
+                "hierarchy_root": {
+                    "node_id": "fixture",
+                    "node_type": "run",
+                    "label": "fixture",
+                    "self_metrics": {},
+                    "total_metrics": {"actual_cost_usd": 1.0, "list_cost_usd": 1.5},
+                    "source_refs": [],
+                    "log_summary": {},
+                    "children": [],
+                },
+                "finalization": {"state": "completed"},
+                "meter_rollups": [
+                    {
+                        "key": {
+                            "provider": "anthropic",
+                            "product": "claude-code",
+                            "meter": "turns",
+                            "unit": "count",
+                        },
+                        "coverage": "measured",
+                        "actual_quantity": 2,
+                    }
+                ],
+                "coverage_gaps": [],
+                "budget_evaluations": [
+                    {
+                        "budget": {
+                            "budget_id": "bud-turns",
+                            "scope": {"kind": "run"},
+                        },
+                        "status": "within",
+                        "coverage": "measured",
+                        "message": "turns=2; threshold=10",
+                    }
+                ],
+                "source_logs": [],
+                "taxonomy_rollups": {},
+            }
+        ),
+    }
+
+    html = _render("resource-report", "resources", payload)
+
+    assert "List estimate" in html
+    assert "Outcome" in html
+    assert "Provider meters" in html
+    assert "anthropic" in html
+    assert "Resource budgets" in html
+    assert "bud-turns" in html
+
+
+def test_resource_report_distinguishes_unmeasured_from_zero() -> None:
+    payload = {
+        "kind": "resource-report",
+        "path": "resources.json",
+        "ext": ".json",
+        "content": json.dumps(
+            {
+                "schema": "metaproc.resources/v2",
+                "run_id": "fixture",
+                "generated_at": "2026-08-03T00:00:00Z",
+                "hierarchy_root": {
+                    "node_id": "fixture",
+                    "node_type": "run",
+                    "label": "fixture",
+                    "self_metrics": {},
+                    "total_metrics": {"actual_cost_usd": None, "list_cost_usd": 0},
+                    "source_refs": [],
+                    "log_summary": {},
+                    "children": [],
+                },
+                "source_logs": [],
+                "taxonomy_rollups": {},
+            }
+        ),
+    }
+
+    html = _render("resource-report", "resources", payload)
+
+    assert "unmeasured" in html
+    assert "$0.00" in html
+
+
+def test_resource_report_does_not_present_partial_tokens_as_a_total() -> None:
+    payload = {
+        "kind": "resource-report",
+        "path": "resources.json",
+        "ext": ".json",
+        "content": json.dumps(
+            {
+                "schema": "metaproc.resources/v2",
+                "run_id": "fixture",
+                "generated_at": "2026-08-03T00:00:00Z",
+                "hierarchy_root": {
+                    "node_id": "fixture",
+                    "node_type": "run",
+                    "label": "fixture",
+                    "self_metrics": {},
+                    "total_metrics": {
+                        "input_tokens": 10,
+                        "output_tokens": 2,
+                        "cache_read_tokens": None,
+                        "cache_write_tokens": 0,
+                        "wall_time_s": 0,
+                        "actual_cost_usd": 0,
+                        "list_cost_usd": 0,
+                        "tool_calls": 0,
+                    },
+                    "source_refs": [],
+                    "log_summary": {},
+                    "children": [],
+                },
+                "source_logs": [],
+                "taxonomy_rollups": {},
+            }
+        ),
+    }
+
+    html = _render("resource-report", "resources", payload)
+
+    assert html.count("unmeasured") >= 2
+
+
 def test_structure_report_summary_renders_counts() -> None:
     payload = {
         "kind": "structure-report",

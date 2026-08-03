@@ -22,18 +22,23 @@ Field discipline:
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
-from typing import Annotated, Literal
+from enum import StrEnum
+from pathlib import Path
+from typing import Annotated, Literal, Self, cast
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from metaproc.ids import require_typed_id
 from metaproc.logutil.tool_failures import FailureKind
+from metaproc.models.resource_budget import BudgetEvaluation, ResourceFinalization
 
 # ── Common envelopes ───────────────────────────────────────────────
 
 
-class Metrics(BaseModel):
-    """Canonical normalised metric set.
+class MetricsV1(BaseModel):
+    """Strict metric set persisted by ``metaproc.resources/v1``.
 
     Every field is nullable. Use ``None`` when no evidence is available
     and ``0`` (or ``0.0``) when measured zero — they mean different things
@@ -65,6 +70,128 @@ class Metrics(BaseModel):
     wait_network_s: float | None = None
     tool_exec_s: float | None = None
     local_compute_s: float | None = None
+
+
+class Metrics(MetricsV1):
+    """Canonical V2 metrics, including provider-operation counters."""
+
+    api_requests: int | None = Field(default=None, ge=0)
+    api_failures: int | None = Field(default=None, ge=0)
+    retries: int | None = Field(default=None, ge=0)
+    cache_hits: int | None = Field(default=None, ge=0)
+    cache_misses: int | None = Field(default=None, ge=0)
+
+
+class CoverageState(StrEnum):
+    """Evidence quality for one provider-meter quantity."""
+
+    MEASURED = "measured"
+    ESTIMATED = "estimated"
+    UNMEASURED = "unmeasured"
+
+
+class MeterKey(BaseModel):
+    """Exact aggregation key for a provider-defined usage meter."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: str = Field(min_length=1, max_length=128)
+    product: str = Field(min_length=1, max_length=128)
+    meter: str = Field(min_length=1, max_length=128)
+    unit: str = Field(min_length=1, max_length=64)
+
+    @field_validator("provider", "product", "meter", "unit")
+    @classmethod
+    def _validate_component(cls, value: str) -> str:
+        if value != value.strip() or any(char.isspace() for char in value):
+            raise ValueError("meter-key components must be tokens without whitespace")
+        return value
+
+    def sort_key(self) -> tuple[str, str, str, str]:
+        return (self.provider, self.product, self.meter, self.unit)
+
+
+class MeteredQuantity(BaseModel):
+    """One event-level quantity with non-overlapping evidence fields."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: MeterKey
+    coverage: CoverageState
+    actual_quantity: float | None = Field(default=None, ge=0)
+    estimated_quantity: float | None = Field(default=None, ge=0)
+    lineage: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_coverage(self) -> Self:
+        if self.coverage is CoverageState.MEASURED:
+            valid = self.actual_quantity is not None and self.estimated_quantity is None
+        elif self.coverage is CoverageState.ESTIMATED:
+            valid = self.actual_quantity is None and self.estimated_quantity is not None
+        else:
+            valid = self.actual_quantity is None and self.estimated_quantity is None
+        if not valid:
+            raise ValueError(
+                "meter coverage must populate only its matching actual or estimated field"
+            )
+        if self.coverage is not CoverageState.MEASURED and not self.lineage:
+            raise ValueError("estimated and unmeasured meter quantities require lineage")
+        return self
+
+
+class MeterRollup(BaseModel):
+    """Reconciled quantities for one exact meter key."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: MeterKey
+    coverage: CoverageState
+    actual_quantity: float | None = Field(default=None, ge=0)
+    estimated_quantity: float | None = Field(default=None, ge=0)
+    unmeasured_event_count: int = Field(default=0, ge=0)
+    source_event_ids: list[str] = Field(min_length=1)
+    lineage: list[str] = Field(default_factory=list)
+
+    @field_validator("source_event_ids")
+    @classmethod
+    def _validate_source_event_ids(cls, values: list[str]) -> list[str]:
+        for value in values:
+            require_typed_id(value, "evt")
+        if values != sorted(set(values)):
+            raise ValueError("meter source event IDs must be sorted and unique")
+        return values
+
+    @model_validator(mode="after")
+    def _validate_coverage(self) -> Self:
+        measured_only = (
+            self.actual_quantity is not None
+            and self.estimated_quantity is None
+            and self.unmeasured_event_count == 0
+        )
+        has_complete_estimate = (
+            self.estimated_quantity is not None and self.unmeasured_event_count == 0
+        )
+        expected = (
+            CoverageState.MEASURED
+            if measured_only
+            else CoverageState.ESTIMATED
+            if has_complete_estimate
+            else CoverageState.UNMEASURED
+        )
+        if self.coverage is not expected:
+            raise ValueError(f"meter rollup coverage must be {expected.value}")
+        return self
+
+
+class ProviderRef(BaseModel):
+    """Credential-free provider and product identity."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str = Field(min_length=1, max_length=128)
+    product: str = Field(min_length=1, max_length=128)
+    model: str | None = Field(default=None, min_length=1, max_length=256)
+    request_id: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 class HierarchyRef(BaseModel):
@@ -146,13 +273,28 @@ class _ResourceEventBase(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    event_id: str | None = None
     ts: datetime
     span_id: str | None = None
     parent_span_id: str | None = None
     hierarchy: HierarchyRef
     metrics: Metrics = Field(default_factory=Metrics)
+    provider: ProviderRef | None = None
+    meters: list[MeteredQuantity] = Field(default_factory=list)
     taxonomy: TaxonomyPaths = Field(default_factory=TaxonomyPaths)
     source: SourceRef
+
+    @field_validator("event_id")
+    @classmethod
+    def _validate_event_id(cls, value: str | None) -> str | None:
+        return require_typed_id(value, "evt") if value is not None else None
+
+    @model_validator(mode="after")
+    def _validate_unique_meter_keys(self) -> Self:
+        keys = [quantity.key.sort_key() for quantity in self.meters]
+        if len(keys) != len(set(keys)):
+            raise ValueError("one resource event may contain only one quantity per meter key")
+        return self
 
 
 # ── ResourceEvent discriminated union ──────────────────────────────
@@ -299,20 +441,23 @@ class Node(BaseModel):
     children: list[Node] = Field(default_factory=list)
     self_metrics: Metrics = Field(default_factory=Metrics)
     total_metrics: Metrics = Field(default_factory=Metrics)
+    self_meters: list[MeterRollup] = Field(default_factory=list)
+    total_meters: list[MeterRollup] = Field(default_factory=list)
     attribution: Attribution = "measured"
     log_summary: LogSummary = Field(default_factory=LogSummary)
     source_refs: list[SourceRef] = Field(default_factory=list)
 
 
 SCHEMA_V1 = "metaproc.resources/v1"
+SCHEMA_V2 = "metaproc.resources/v2"
 
 
 class ResourcesDocument(BaseModel):
-    """Top-level `resources.json` document."""
+    """Current top-level ``resources.json`` document."""
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["metaproc.resources/v1"] = Field(default=SCHEMA_V1, alias="schema")
+    schema_version: Literal["metaproc.resources/v2"] = Field(default=SCHEMA_V2, alias="schema")
     run_id: str
     generated_at: datetime
     source_events_path: str
@@ -320,3 +465,73 @@ class ResourcesDocument(BaseModel):
     taxonomy_rollups: dict[str, list[PrefixRollup]] = Field(default_factory=dict)
     source_logs: list[SourceLog] = Field(default_factory=list)
     unattributed: Metrics = Field(default_factory=Metrics)
+    meter_rollups: list[MeterRollup] = Field(default_factory=list)
+    unattributed_meters: list[MeterRollup] = Field(default_factory=list)
+    coverage_gaps: list[MeterKey] = Field(default_factory=list)
+    budget_evaluations: list[BudgetEvaluation] = Field(default_factory=list)
+    finalization: ResourceFinalization | None = None
+    summary_path: str | None = None
+
+
+class PrefixRollupV1(BaseModel):
+    """Strict V1 taxonomy entry retained for historical readers."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: list[str]
+    canonical: str
+    metrics: MetricsV1
+
+
+class NodeV1(BaseModel):
+    """Strict recursive node persisted by ``metaproc.resources/v1``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    node_type: NodeType
+    node_id: str
+    label: str
+    parent_id: str | None = None
+    children: list[NodeV1] = Field(default_factory=list)
+    self_metrics: MetricsV1 = Field(default_factory=MetricsV1)
+    total_metrics: MetricsV1 = Field(default_factory=MetricsV1)
+    attribution: Attribution = "measured"
+    log_summary: LogSummary = Field(default_factory=LogSummary)
+    source_refs: list[SourceRef] = Field(default_factory=list)
+
+
+class ResourcesDocumentV1(BaseModel):
+    """Frozen strict reader for historical ``metaproc.resources/v1`` files."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["metaproc.resources/v1"] = Field(default=SCHEMA_V1, alias="schema")
+    run_id: str
+    generated_at: datetime
+    source_events_path: str
+    hierarchy_root: NodeV1
+    taxonomy_rollups: dict[str, list[PrefixRollupV1]] = Field(default_factory=dict)
+    source_logs: list[SourceLog] = Field(default_factory=list)
+    unattributed: MetricsV1 = Field(default_factory=MetricsV1)
+
+
+ReadableResourcesDocument = ResourcesDocumentV1 | ResourcesDocument
+
+
+def read_resources_document_json(raw: str) -> ReadableResourcesDocument:
+    """Parse a V1 or V2 document without relaxing either contract."""
+    payload = cast("object", json.loads(raw))
+    if not isinstance(payload, dict):
+        raise ValueError("resources document must be a JSON object")
+    data = cast("dict[str, object]", payload)
+    schema = data.get("schema")
+    if schema == SCHEMA_V1:
+        return ResourcesDocumentV1.model_validate(data)
+    if schema == SCHEMA_V2:
+        return ResourcesDocument.model_validate(data)
+    raise ValueError(f"unsupported or missing resources schema token: {schema!r}")
+
+
+def read_resources_document(path: Path) -> ReadableResourcesDocument:
+    """Read a strict V1 or V2 resource document from ``path``."""
+    return read_resources_document_json(path.read_text())

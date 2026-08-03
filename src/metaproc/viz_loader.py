@@ -8,6 +8,7 @@ resolved :class:`Plan`, extract the markdown body, and recurse into composites.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -15,9 +16,10 @@ from metaproc.commands.helpers import load_process_spec, resolve_process_path
 from metaproc.engine.build_plan import build_plan
 from metaproc.engine.process_scope import expand_process_vars
 from metaproc.engine.run_status import scan_step_progress
-from metaproc.io import fmf_read
+from metaproc.io import fmf_read, read_yaml_file
 from metaproc.models.node_ids import child_subgraph_key, step_node_id
 from metaproc.models.viz import NodeProgress, ProgressSnapshot
+from metaproc.paths import run_config_file
 from metaproc.viz.project import PlanBundle
 
 
@@ -40,6 +42,33 @@ def load_plan_bundle(
     """
     resolved_path = resolve_process_path(process_path)
     return _load_bundle(resolved_path, dict(params or {}), validate_spec=validate_spec)
+
+
+def load_plan_bundle_from_run(run_dir: Path) -> PlanBundle | None:
+    """Best-effort recursive bundle reload from an immutable run config."""
+    config_path = run_config_file(run_dir)
+    if not config_path.exists():
+        return None
+    try:
+        raw = read_yaml_file(config_path)
+        if not isinstance(raw, Mapping):
+            return None
+        process_spec = raw.get("process_spec")
+        if not isinstance(process_spec, str) or not process_spec:
+            return None
+        variables_raw = raw.get("variables")
+        variables = (
+            {
+                key: value
+                for key, value in variables_raw.items()
+                if isinstance(key, str) and isinstance(value, str)
+            }
+            if isinstance(variables_raw, Mapping)
+            else {}
+        )
+        return load_plan_bundle(Path(process_spec), params=variables, validate_spec=False)
+    except Exception:  # noqa: BLE001 - callers can fall back to a persisted ledger
+        return None
 
 
 def _load_bundle(

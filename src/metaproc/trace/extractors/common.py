@@ -268,7 +268,7 @@ def attempt_cost_attrs(
     """Build canonical cost + token attributes for an ``attempt`` span.
 
     Three-tier rule:
-    1. Self-reported cost (adapter tells us the cost) -> ``is_estimated=False``
+    1. Agent-CLI reported cost -> ``is_estimated=True``
     2. Pricing-table estimate (model found in ``pricing.md``) -> ``is_estimated=True``
     3. No cost available (unknown model, no self-report) -> cost keys omitted
 
@@ -287,7 +287,7 @@ def attempt_cost_attrs(
     # Cost: prefer self-reported
     if self_reported_cost is not None:
         attrs["attempt.cost_usd"] = self_reported_cost
-        attrs["attempt.cost_is_estimated"] = False
+        attrs["attempt.cost_is_estimated"] = True
         return attrs
 
     # Cost: pricing-table fallback

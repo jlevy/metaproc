@@ -72,7 +72,7 @@ def test_plan_model():
 
     plan = Plan.model_validate(
         {
-            "schema": "metaproc:Plan/0.5",
+            "schema": "metaproc:Plan/0.6",
             "generated_at": "2026-03-24T12:00:00",
             "process": "process/predict/predict.process.md",
             "params": {"DATE": "2026-03-24"},
@@ -85,7 +85,7 @@ def test_plan_model():
             ],
         }
     )
-    assert plan.schema_ == "metaproc:Plan/0.5"
+    assert plan.schema_ == "metaproc:Plan/0.6"
     assert plan.params["DATE"] == "2026-03-24"
     assert len(plan.steps) == 1
 
@@ -101,7 +101,7 @@ def test_plan_serializes_with_schema_alias():
     )
     dumped = plan.model_dump(by_alias=True)
     assert "schema" in dumped
-    assert dumped["schema"] == "metaproc:Plan/0.5"
+    assert dumped["schema"] == "metaproc:Plan/0.6"
 
 
 # ── build_plan tests ─────────────────────────────────────────────
