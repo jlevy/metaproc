@@ -3,9 +3,9 @@ type: is
 id: is-01kz2xyqqrkherk08h96kw58k9
 title: "Address review: PR #6 — resource accounting follow-ups"
 kind: task
-status: in_progress
+status: closed
 priority: 1
-version: 12
+version: 13
 labels:
   - pr-6
   - review
@@ -22,7 +22,9 @@ child_order_hints:
   - is-01kz2y3hxx4817s9sny6qr0629
   - is-01kz2y3jccrsgpfe375naa07dg
 created_at: 2026-08-03T04:26:18.232Z
-updated_at: 2026-08-03T04:34:51.878Z
+updated_at: 2026-08-03T08:34:18.622Z
+closed_at: 2026-08-03T08:34:18.622Z
+close_reason: "Superseded on 2026-08-03 by focused spec/epic mp-0sia after PR #9 landed. The three unresolved resource correctness beads were reparented; unrelated PR #6 scope is intentionally excluded."
 ---
 Track the unresolved review findings required to make Metaproc PR #6 safe to land before stacked PR #8. Scope is limited to PR #6 and its inherited review fixes; PR #2 is explicitly out of scope.
 
