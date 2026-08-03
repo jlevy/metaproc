@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from metaproc.adapters.billing import UNKNOWN
 from metaproc.trace.aggregation import aggregate, format_rollup_table
 from metaproc.trace.schema import TraceEvent
 from metaproc.trace.views import Filter, apply_filter
@@ -113,6 +114,51 @@ def _error_key(span: TraceEvent) -> tuple[str, str]:
     return (code, message[:_HEALTH_MESSAGE_PREFIX_LEN].rstrip())
 
 
+_PROVENANCE_ATTR = "attempt.cost_provenance"
+
+# Plugin-supplied cost-kind values mapped onto the provenance vocabulary.
+# Producers that emit a `cost.kind` alongside `cost.usd` (the fintool
+# ResourceEvent taxonomy does) get classified correctly without having to learn
+# a second field.
+_COST_KIND_TO_PROVENANCE: dict[str, str] = {
+    "actual": "provider_authoritative",
+    "provider_returned": "provider_authoritative",
+    "estimated": "pricing_table_estimate",
+    "computed_from_tokens_and_requests": "pricing_table_estimate",
+    "per_request_only": "pricing_table_estimate",
+}
+
+
+def _span_provenance(span: TraceEvent) -> str:
+    """Cost provenance for a span, from the most specific signal available.
+
+    Attempt spans carry it directly. Plugin-produced spans carry their dollars
+    in top-level ``cost.usd`` and may declare ``cost.provenance`` or a
+    ``cost.kind`` from their own taxonomy. A producer that declares neither is
+    reported as ``unknown`` rather than being assumed authoritative — an
+    unlabeled amount is exactly the case we must not overstate.
+    """
+    attrs = span.attributes
+    for key in (_PROVENANCE_ATTR, "cost.provenance"):
+        value = attrs.get(key)
+        if isinstance(value, str) and value:
+            return value
+    kind = attrs.get("cost.kind")
+    if isinstance(kind, str):
+        mapped = _COST_KIND_TO_PROVENANCE.get(kind)
+        if mapped:
+            return mapped
+    return UNKNOWN
+
+
+def _with_provenance(span: TraceEvent) -> TraceEvent:
+    """Copy of *span* with ``attempt.cost_provenance`` resolved and set."""
+    provenance = _span_provenance(span)
+    if span.attributes.get(_PROVENANCE_ATTR) == provenance:
+        return span
+    return span.model_copy(update={"attributes": {**span.attributes, _PROVENANCE_ATTR: provenance}})
+
+
 def _with_cost_usd(span: TraceEvent, value: float) -> TraceEvent:
     """Copy of *span* carrying ``cost.usd`` so the generic rollup can sum it."""
     return TraceEvent(
@@ -147,7 +193,7 @@ def cost_rows(spans: list[TraceEvent]) -> list[dict[str, Any]]:
     spans_with_cost: list[TraceEvent] = []
     for s in spans:
         if s.attributes.get("cost.usd") is not None:
-            spans_with_cost.append(s)
+            spans_with_cost.append(_with_provenance(s))
             continue
         # Attempt spans keep their dollars in attempt.cost_usd (and Claude's
         # raw result field in attempt.total_cost_usd). Promote to cost.usd so
@@ -155,16 +201,16 @@ def cost_rows(spans: list[TraceEvent]) -> list[dict[str, Any]]:
         for key in ("attempt.cost_usd", "attempt.total_cost_usd"):
             value = s.attributes.get(key)
             if isinstance(value, (int, float)):
-                spans_with_cost.append(_with_cost_usd(s, float(value)))
+                spans_with_cost.append(_with_provenance(_with_cost_usd(s, float(value))))
                 break
 
     rows = aggregate(
         spans_with_cost,
-        group_keys=["source", "kind", "attempt.cost_provenance"],
+        group_keys=["source", "kind", _PROVENANCE_ATTR],
         metrics=["cost", "count", "sum:attempt.tokens_input", "sum:attempt.tokens_output"],
     )
     for row in rows:
-        row[PROVENANCE_COLUMN] = row.pop("attempt.cost_provenance")
+        row[PROVENANCE_COLUMN] = row.pop(_PROVENANCE_ATTR)
         row["tokens_in"] = row.pop("sum:attempt.tokens_input")
         row["tokens_out"] = row.pop("sum:attempt.tokens_output")
     return rows
@@ -223,6 +269,7 @@ _PROVENANCE_SECTIONS: tuple[tuple[str, str], ...] = (
     ("provider_authoritative", "Provider-reported (the provider returned this amount)"),
     ("client_list_estimate", "Client-side estimate (agent CLI's own price table — not a bill)"),
     ("pricing_table_estimate", "Pricing-table estimate (computed here from token counts)"),
+    (UNKNOWN, "Unknown provenance (producer declared no cost.provenance or cost.kind)"),
 )
 
 

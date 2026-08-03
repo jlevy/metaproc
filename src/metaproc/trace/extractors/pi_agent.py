@@ -159,10 +159,18 @@ class PiAgentExtractor:
                 self_reported_cost=None,
                 auth_route=auth_route,
             )
-            # Only take cost keys; token keys are already set above.
+            # Only take cost keys; token keys are already set above. Every cost
+            # key must come across, or the attempt reaches the rollup with a
+            # dollar figure and no provenance.
             if "attempt.cost_usd" in cost_attrs:
-                attempt_attrs["attempt.cost_usd"] = cost_attrs["attempt.cost_usd"]
-                attempt_attrs["attempt.cost_is_estimated"] = cost_attrs["attempt.cost_is_estimated"]
+                for key in (
+                    "attempt.cost_usd",
+                    "attempt.cost_provenance",
+                    "attempt.charge_status",
+                    "attempt.cost_is_estimated",
+                ):
+                    if key in cost_attrs:
+                        attempt_attrs[key] = cost_attrs[key]
 
         status = _classify_attempt_status(events, agent_end)
         yield TraceEvent(

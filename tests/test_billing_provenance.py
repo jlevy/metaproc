@@ -13,7 +13,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
+import metaproc.trace.extractors.common as common_mod
 from metaproc.adapters.billing import (
     UNKNOWN,
     default_cost_provenance,
@@ -22,6 +24,7 @@ from metaproc.adapters.billing import (
 )
 from metaproc.trace.extractors.claude_agent import ClaudeAgentExtractor
 from metaproc.trace.extractors.common import attempt_cost_attrs, auth_route_from_invocation
+from metaproc.trace.extractors.pi_agent import PiAgentExtractor
 from metaproc.trace.named_views import cost_rows, format_cost
 from metaproc.trace.schema import SpanKind, TraceEvent
 
@@ -300,3 +303,78 @@ class TestCostView:
 
     def test_empty_trace(self) -> None:
         assert format_cost(cost_rows([])) == "(no cost data in trace)\n"
+
+
+class TestPluginSuppliedCostProvenance:
+    """Spans carrying top-level ``cost.usd`` come from plugins, not adapters."""
+
+    def test_cost_kind_maps_onto_provenance(self) -> None:
+        rows = cost_rows(
+            [
+                _span("fintool", {"cost.usd": 2.0, "cost.kind": "actual"}, kind="provider_call"),
+                _span("arena", {"cost.usd": 3.0, "cost.kind": "estimated"}, kind="provider_call"),
+            ]
+        )
+        by_source = {r["source"]: r["cost_provenance"] for r in rows}
+        assert by_source["fintool"] == "provider_authoritative"
+        assert by_source["arena"] == "pricing_table_estimate"
+
+    def test_explicit_cost_provenance_wins(self) -> None:
+        rows = cost_rows(
+            [
+                _span(
+                    "plugin",
+                    {"cost.usd": 1.0, "cost.provenance": "provider_authoritative"},
+                    kind="provider_call",
+                )
+            ]
+        )
+        assert rows[0]["cost_provenance"] == "provider_authoritative"
+
+    def test_undeclared_provenance_is_unknown_not_assumed_authoritative(self) -> None:
+        # The failure mode to avoid: an unlabeled amount silently counted as
+        # provider-reported spend.
+        rows = cost_rows([_span("legacy", {"cost.usd": 5.0}, kind="provider_call")])
+        assert rows[0]["cost_provenance"] == UNKNOWN
+
+    def test_unknown_group_is_rendered_with_a_real_heading(self) -> None:
+        out = format_cost(cost_rows([_span("legacy", {"cost.usd": 5.0}, kind="provider_call")]))
+        assert "Unknown provenance" in out
+        assert "(none)" not in out
+
+
+class TestPiFallbackKeepsProvenance:
+    def test_pricing_table_fallback_carries_every_cost_key(self, tmp_path: Path) -> None:
+        """pi's fallback must not drop provenance on the way out of the helper."""
+        path = tmp_path / ".logs" / "tasks" / "step" / "item" / "log.jsonl"
+        path.parent.mkdir(parents=True)
+        events = [
+            {"type": "session", "id": "s1"},
+            {
+                "type": "agent_end",
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "model": "test-model",
+                        "usage": {"input": 1_000_000, "output": 100_000},
+                    }
+                ],
+            },
+        ]
+        path.write_text("\n".join(json.dumps(e) for e in events) + "\n")
+
+        pricing = {
+            "test-model": {
+                "actual_price": {"input_per_1m": 5.0, "output_per_1m": 30.0},
+                "provider": "test",
+            }
+        }
+        common_mod._pricing_cache = None
+        with patch.object(common_mod, "load_pricing", return_value=pricing):
+            spans = list(PiAgentExtractor().extract(tmp_path, trace_id="t"))
+        common_mod._pricing_cache = None
+
+        attrs = next(s for s in spans if s.kind == "attempt").attributes
+        assert attrs["attempt.cost_usd"] > 0
+        assert attrs["attempt.cost_provenance"] == "pricing_table_estimate"
+        assert attrs["attempt.charge_status"] == UNKNOWN
