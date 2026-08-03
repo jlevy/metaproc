@@ -2454,6 +2454,8 @@ tracking). `MockBackend` is available for testing.
 - **`gcp status <target>`**: auto-detects local run directory or run-id string.
   Queries Batch API by job name (local) or both exact `metaproc-run-key` and readable
   `metaproc-run-id` (run-id).
+  Local display resolves the immutable ID from `run-config.yaml`, then hash-verified job
+  metadata, before a path fallback.
   When exact jobs exist, it adds only unkeyed legacy jobs whose structured `RUN_ID`
   verifies as the same run; fully legacy runs retain the readable-label fallback.
   Shows orchestrator + worker jobs with role, state, step, worker_id.
@@ -2637,6 +2639,8 @@ Typed run identity and cloud correlation:
   exact `metaproc-run-key` labels.
 - Documented exact lookup, hash-verified mixed-generation jobs, the safe fully legacy
   fallback, and exact run-ID recovery in `gcp runs`.
+- Documented canonical local status identity resolution for process-subdirectory
+  layouts.
 - Updated the cloud monitoring-layer summary and Batch utility inventory.
 
 ### rev2i (2026-04-20)

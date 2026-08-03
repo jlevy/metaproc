@@ -433,6 +433,8 @@ Confirm a live container’s effective limits with `gcp resources` (CLI) or by r
 - **`gcp status <target>`**: auto-detects local run directory or run-id string.
   Queries Batch API by job name (local) or both exact `metaproc-run-key` and readable
   `metaproc-run-id` (run-id).
+  Local display resolves the immutable ID from `run-config.yaml`, then hash-verified job
+  metadata, before a path fallback.
   When exact jobs exist, it adds only unkeyed legacy jobs whose structured `RUN_ID`
   verifies as the same run; fully legacy runs retain the readable-label fallback.
   Shows orchestrator \+ worker jobs with role, state, step, worker_id.
@@ -720,6 +722,8 @@ Exact typed run identity:
   labels on worker and orchestrator jobs.
 - Updated monitoring to describe exact lookup, hash-verified mixed-generation jobs, the
   fully legacy fallback, and exact identity recovery/grouping in `gcp runs`.
+- Documented canonical local status identity resolution for process-subdirectory
+  layouts.
 - Added the shared run-identity helpers to the Batch utility inventory.
 
 ### rev5 (2026-05-23)

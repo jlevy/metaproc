@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 import typer
+from ruamel.yaml import YAMLError
 from strif import atomic_output_file
 
 from metaproc.errors import CLIError
@@ -245,6 +246,39 @@ def _run_id_from_job_metadata(job: Any, identity_key: str) -> str | None:
     return None
 
 
+def _resolve_local_run_id(run_dir: Path, jobs: list[Any]) -> str:
+    """Resolve exact local identity from run config, job metadata, or path fallback."""
+    config_path = run_dir / STATE_DIR / RUN_CONFIG_FILE
+    try:
+        run_config = read_yaml_file(config_path)
+    except (OSError, YAMLError) as exc:
+        log.debug("could not read run identity from %s: %s", config_path, exc)
+    else:
+        if isinstance(run_config, dict):
+            configured_id = run_config.get("run_id")
+            if isinstance(configured_id, str) and configured_id:
+                return configured_id
+            variables = run_config.get("variables")
+            if isinstance(variables, dict):
+                variable_id = variables.get("RUN_ID")
+                if isinstance(variable_id, str) and variable_id:
+                    return variable_id
+
+    from metaproc.cloud.gcp.batch_backend import (  # noqa: PLC0415 -- optional GCP path
+        RUN_IDENTITY_LABEL,
+    )
+
+    for job in jobs:
+        identity_key = dict(job.labels).get(RUN_IDENTITY_LABEL, "")
+        if not identity_key:
+            continue
+        exact_id = _run_id_from_job_metadata(job, identity_key)
+        if exact_id is not None:
+            return exact_id
+
+    return run_dir.name
+
+
 def _job_run_group(job: Any) -> tuple[str, str, bool] | None:
     """Return ``(group_key, display_id, exact)`` for one inventory job."""
     from metaproc.cloud.gcp.batch_backend import (  # noqa: PLC0415 -- optional GCP path
@@ -414,9 +448,9 @@ def gcp_status(
             out.progress("No GCP Batch jobs could be fetched.")
             raise typer.Exit(code=0)
 
-        # The directory name is the exact immutable identity. GCP's readable label is
-        # intentionally sanitized and therefore cannot replace it for display or lookup.
-        run_id = run_dir.name
+        # Run config is the canonical local identity source. Hash-verified job metadata
+        # covers older layouts; the directory name remains a last-resort fallback.
+        run_id = _resolve_local_run_id(run_dir, jobs)
     else:
         # Run-id mode: query Batch API by label.
         run_id = target

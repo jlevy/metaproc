@@ -413,7 +413,7 @@ class TestGcpRunsIdentity:
                 }
             )
         )
-        job = self._job(run_id, "exact-run")
+        job = self._job(run_id, "exact-run", include_exact_metadata=False)
         client = MagicMock()
         client.get_job.return_value = job
 
@@ -426,6 +426,38 @@ class TestGcpRunsIdentity:
         assert result.exit_code == 0, result.output
         assert f"Run: {run_id}" in result.output
         assert f"Run: {sanitize_label(run_id)}" not in result.output
+
+    def test_local_status_reads_run_id_from_process_run_config(self, tmp_path: Path) -> None:
+        run_id = "run-20260803T010203Z.1234560000.abc123def4"
+        run_dir = tmp_path / "runs" / run_id / "mine"
+        events_file = runpool_events(run_dir)
+        events_file.parent.mkdir(parents=True)
+        events_file.write_text(
+            json.dumps(
+                {
+                    "event": "process_start",
+                    "external_id": "projects/p/locations/r/jobs/exact-run",
+                }
+            )
+        )
+        state_dir = run_dir / STATE_DIR
+        state_dir.mkdir(parents=True)
+        (state_dir / RUN_CONFIG_FILE).write_text(
+            f"run_id: {run_id}\nvariables:\n  RUN_ID: {run_id}\n"
+        )
+        job = self._job(run_id, "exact-run", include_exact_metadata=False)
+        client = MagicMock()
+        client.get_job.return_value = job
+
+        with (
+            patch("metaproc.commands.gcp._require_gcp_batch"),
+            patch("google.cloud.batch_v1.BatchServiceClient", return_value=client),
+        ):
+            result = CliRunner().invoke(app, ["gcp", "status", str(run_dir)])
+
+        assert result.exit_code == 0, result.output
+        assert f"Run: {run_id}" in result.output
+        assert "Run: mine" not in result.output
 
 
 class TestResolveScaleRunDir:

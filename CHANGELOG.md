@@ -26,6 +26,8 @@ development series.
   identity key and recover mixed-generation, unkeyed jobs only when their structured
   `RUN_ID` verifies as the same run.
   Fully legacy runs retain the readable-label fallback.
+  Local-directory status reads the immutable identity from run config rather than a
+  process-directory basename or sanitized job label.
   Exact typed run IDs are not constrained by the legacy 63-character label heuristic.
 
 ## [0.2.0][] - 2026-07-31
