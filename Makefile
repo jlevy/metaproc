@@ -53,8 +53,13 @@ lint-check:
 	npm run check:browser
 	$(FLOWMARK) --auto --check .
 
+# Shard across the host's cores. The suite is dominated by processes waiting
+# on each other rather than by CPU, so workers overlap almost perfectly.
+# Override with `make test PYTEST_ARGS=-n0` to debug a worker-ordering issue.
+PYTEST_ARGS ?= -n logical
+
 test:
-	$(UV_RUN) pytest
+	$(UV_RUN) pytest $(PYTEST_ARGS)
 
 audit:
 	npm audit --audit-level=moderate
