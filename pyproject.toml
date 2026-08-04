@@ -67,9 +67,6 @@ gcp-batch = [
     "google-cloud-secret-manager>=2.20",
 ]
 
-[tool.uv.sources]
-softschema = { workspace = true }
-
 [dependency-groups]
 build = [
     "hatchling==1.30.1",
