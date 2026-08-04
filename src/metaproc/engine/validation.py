@@ -275,7 +275,7 @@ def validate_item_outputs(
                 fpath,
                 contract_id=schema,
                 registry=softschema_registry,
-                frontmatter=frontmatter,
+                document=frontmatter,
             )
             if not result.ok:
                 errors.append(f"{fname}: {_format_artifact_validation_error(result)}")
