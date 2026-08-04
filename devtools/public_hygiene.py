@@ -57,6 +57,13 @@ BANNED_TOKEN_HASHES: dict[str, str] = {
 PRIVATE_ISSUE_PREFIX_HASHES = frozenset(
     {"0035e3bed3a10ebe81bc85bbf80cc092871ba344926efa491f195e36cc7e003b"}
 )
+# Security advisory identifiers are structured random strings, so their segments
+# collide with the banned patterns by chance: `GHSA-g6cj-pr64-35w5` contains
+# `pr64`, which reads as a pull-request reference. Mask advisory IDs to an
+# equal-length filler before scanning, so a documented waiver can name the ID it
+# waives. Equal length keeps the reported line numbers correct.
+ADVISORY_ID_PATTERN = re.compile(r"\bGHSA(?:-[0-9a-z]{4,})+\b", re.IGNORECASE)
+
 BANNED_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("private pull-request reference", re.compile(r"\bPR[- ]?#?\d+\b", re.IGNORECASE)),
     ("private home path", re.compile(r"/(?:Users|home)/[^/\s]+(?=/|\s|$)")),
@@ -112,7 +119,7 @@ def _token_findings(source: str, text: str) -> list[str]:
 def find_hygiene_findings(source: str, text: str) -> list[str]:
     """Return public-hygiene findings for a path, text file, or archive member."""
     findings = _token_findings(source, text)
-    combined = f"{source}\n{text}"
+    combined = ADVISORY_ID_PATTERN.sub(lambda m: "x" * len(m.group(0)), f"{source}\n{text}")
     for label, pattern in BANNED_PATTERNS:
         for match in pattern.finditer(combined):
             offset = max(0, match.start() - len(source) - 1)

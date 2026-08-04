@@ -25,6 +25,33 @@ def test_public_metaproc_issue_tracking_language_is_allowed() -> None:
     assert find_hygiene_findings("AGENTS.md", "Track this as metaproc-abcd.") == []
 
 
+def test_security_advisory_ids_are_not_pull_request_references() -> None:
+    """A documented waiver has to be able to name the advisory it waives.
+
+    GHSA identifiers are structured random strings, so a segment lands on the
+    pull-request pattern by chance: the third group of `GHSA-g6cj-pr64-35w5`
+    reads as a reference to a numbered pull request.
+    """
+    findings = find_hygiene_findings(
+        "SUPPLY-CHAIN-SECURITY.md",
+        "Waived: GHSA-g6cj-pr64-35w5 / CVE-2026-69247, unreachable from this closure.",
+    )
+
+    assert findings == []
+
+
+def test_real_pull_request_references_are_still_rejected() -> None:
+    """Masking advisory IDs must not blind the check to actual references."""
+    # Split so this file does not trip the very check it exercises, matching
+    # the convention above.
+    hash_form = "PR #" + "4210"
+    dash_form = "PR-" + "77"
+
+    findings = find_hygiene_findings("NOTES.md", f"Fixed in {hash_form} and {dash_form}.")
+
+    assert sum("private pull-request reference" in finding for finding in findings) == 2
+
+
 def test_private_names_issue_ids_paths_and_credentials_are_rejected() -> None:
     private_package = "earnings" + "_predictions"
     private_issue = "trad" + "ing-abcd"
