@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from metaproc.config.providers import providers_with_api_keys
+from metaproc.runpool.pool import RunPoolConfig
 
 # Provide a placeholder RUNS_DIR so CLI tests pass the
 # require_runtime_runs_dir guard added in
@@ -18,6 +19,56 @@ from metaproc.config.providers import providers_with_api_keys
 # set RUNS_DIR via .envrc; CI does not. resolve_run_path does not
 # require the directory to exist.
 os.environ.setdefault("RUNS_DIR", str(Path(__file__).parent / "_test-runs-placeholder"))
+
+
+def _collapse_runpool_poll_intervals() -> None:
+    """Collapse RunPool's wall-clock poll intervals for the test session.
+
+    The production defaults are right for supervising real, long-lived
+    subprocesses: RunPool wakes every ``monitor_interval_s`` (10s) to reap
+    exited processes, every ``pressure_check_interval_s`` (10s) to sample
+    host pressure, and every ``host_admission_poll_interval_s`` (1s) while
+    waiting for an admission slot. Each of those is a literal
+    ``asyncio.sleep``.
+
+    A test that submits a MockBackend process still waits a full monitor
+    cycle for the pool to notice the (already finished) process exited, so
+    it costs ~10s of pure sleeping regardless of how little work it does.
+    Suites that knew about this set the intervals by hand
+    (``test_runpool_pool.py``, ``test_runpool_integration.py``,
+    ``test_pool_composite_integration.py``); the ones that did not
+    (``test_runpool_lanes.py``, ``test_inline_retry_e2e.py``) paid 62s of
+    wall clock for 2.7s of CPU across 16 tests.
+
+    Lowering the *defaults* fixes both today's slow tests and every future
+    one, and cannot mask a regression: an explicit value on a
+    ``RunPoolConfig`` still wins, so tests that assert real timing
+    behavior are untouched. Production is unaffected — this only runs
+    under pytest.
+
+    Timing-sensitive tests should keep setting these explicitly rather
+    than relying on either the fast or the slow default.
+    """
+    fast_defaults = {
+        "monitor_interval_s": 0.05,
+        "pressure_check_interval_s": 0.05,
+        "host_admission_poll_interval_s": 0.05,
+    }
+    changed = False
+    for name, value in fast_defaults.items():
+        field = RunPoolConfig.model_fields.get(name)
+        if field is None:
+            # The field was renamed upstream; leave the rest alone rather
+            # than guessing, so the omission shows up as a slow suite and
+            # not as a silently skipped knob.
+            continue
+        field.default = value
+        changed = True
+    if changed:
+        RunPoolConfig.model_rebuild(force=True)
+
+
+_collapse_runpool_poll_intervals()
 
 
 def pytest_addoption(parser):
