@@ -6,4 +6,6 @@ flowmark-rs = "2026-07-16T00:00:00Z"
 frontmatter-format = "2026-08-01T01:27:00Z"
 kpress = "2026-07-16T00:00:00Z"
 metabrowser = "2026-07-18T00:00:00Z"
-softschema = "2026-08-01T03:01:00Z"
+# softschema 0.6.0 published 2026-08-04T22:38:02Z; this package now requires it for the
+# readers that produce a trusted pre-parsed document root.
+softschema = "2026-08-04T22:39:00Z"
