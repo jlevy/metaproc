@@ -220,6 +220,31 @@ def test_extract_emits_tool_call_spans(gemini_run_dir: Path) -> None:
     assert len(tool_calls) >= 7
 
 
+def test_tool_call_spans_carry_duration_from_their_timestamps(gemini_run_dir: Path) -> None:
+    """A tool_call that has both timestamps must report how long it took.
+
+    ``aggregation`` sums ``duration_ms or 0.0``, so a span that leaves the field
+    unset does not read as unknown -- it reads as instantaneous, and tool latency
+    rolls up as zero for the whole run.
+    """
+    extractor = GeminiAgentExtractor()
+    spans = list(extractor.extract(gemini_run_dir, trace_id="trace-1"))
+    timed = [s for s in spans if s.kind == "tool_call" and s.ts_start and s.ts_end]
+    assert timed, "fixture should contain tool calls with both timestamps"
+    for span in timed:
+        assert span.duration_ms is not None, f"{span.name} left duration_ms unset"
+        assert span.duration_ms >= 0.0
+
+
+def test_tool_call_without_a_result_reports_unknown_duration(gemini_run_dir: Path) -> None:
+    """No end timestamp means unknown, which stays None rather than becoming zero."""
+    extractor = GeminiAgentExtractor()
+    spans = list(extractor.extract(gemini_run_dir, trace_id="trace-1"))
+    for span in spans:
+        if span.kind == "tool_call" and not span.ts_end:
+            assert span.duration_ms is None
+
+
 def test_read_file_classified_as_file_read(gemini_run_dir: Path) -> None:
     extractor = GeminiAgentExtractor()
     spans = list(extractor.extract(gemini_run_dir, trace_id="trace-1"))

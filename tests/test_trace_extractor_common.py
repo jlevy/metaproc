@@ -14,6 +14,7 @@ import pytest
 
 from metaproc.trace.extractors.common import (
     collapse_consecutive_file_edits,
+    span_duration_ms,
     tool_usage_classification,
 )
 
@@ -144,3 +145,31 @@ def test_collapse_preserves_non_edit_passthrough() -> None:
 
 def test_collapse_handles_empty_input() -> None:
     assert collapse_consecutive_file_edits([], path_of=_path, is_file_edit=_is_edit) == []
+
+
+# -- span_duration_ms: unknown must never collapse into zero --
+
+
+def test_span_duration_ms_measures_the_gap_between_timestamps() -> None:
+    duration = span_duration_ms("2026-08-08T10:00:00+00:00", "2026-08-08T10:00:02.500+00:00")
+    assert duration == 2500.0
+
+
+@pytest.mark.parametrize(
+    "start,end",
+    [
+        (None, "2026-08-08T10:00:02+00:00"),
+        ("2026-08-08T10:00:00+00:00", None),
+        ("", ""),
+        ("not-a-timestamp", "2026-08-08T10:00:02+00:00"),
+    ],
+)
+def test_span_duration_ms_reports_unknown_as_none(start: str | None, end: str | None) -> None:
+    """None means unmeasured. The aggregator sums ``duration_ms or 0.0``, so
+    returning 0.0 here would publish a made-up measurement of instantaneous."""
+    assert span_duration_ms(start, end) is None
+
+
+def test_span_duration_ms_never_returns_a_negative_duration() -> None:
+    """Out-of-order timestamps clamp to zero rather than subtracting time."""
+    assert span_duration_ms("2026-08-08T10:00:05+00:00", "2026-08-08T10:00:00+00:00") == 0.0

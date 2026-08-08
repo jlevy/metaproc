@@ -28,7 +28,7 @@ from metaproc.io import iter_artifact_paths, iter_jsonl_objects
 from metaproc.io.gz_io import artifact_sidecar_path
 from metaproc.logutil.usage import sum_claude_usage
 from metaproc.trace.extractors.codex_agent import _is_codex_log
-from metaproc.trace.extractors.common import tool_usage_classification
+from metaproc.trace.extractors.common import span_duration_ms, tool_usage_classification
 from metaproc.trace.extractors.gemini_agent import _is_gemini_log
 from metaproc.trace.extractors.pi_agent import _is_pi_log
 from metaproc.trace.ids import compute_span_id
@@ -457,6 +457,7 @@ def _tool_call_span(
         source=source,
         ts_start=use_ts or result_ts or "",
         ts_end=result_ts,
+        duration_ms=span_duration_ms(use_ts, result_ts),
         status=status,
         status_derived=False,
         error=error,
