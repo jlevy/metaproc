@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Mapping
+from datetime import datetime
 from typing import Any
 
 from metaproc.logutil.usage import UsageStats, compute_cost
@@ -376,3 +377,22 @@ def collapse_consecutive_file_edits(
         )
         i = j
     return out
+
+
+def span_duration_ms(ts_start: str | None, ts_end: str | None) -> float | None:
+    """Milliseconds between two ISO timestamps, or None when either is missing.
+
+    Tool calls carry no duration of their own, so it comes from the pair of
+    timestamps that bracket them. None means unknown and has to stay None: the
+    trace aggregator sums ``duration_ms or 0.0``, so a missing duration would
+    otherwise read as instantaneous rather than unmeasured, and tool latency
+    would roll up as zero for a whole run.
+    """
+    if not ts_start or not ts_end:
+        return None
+    try:
+        start = datetime.fromisoformat(ts_start)
+        end = datetime.fromisoformat(ts_end)
+    except ValueError:
+        return None
+    return max(0.0, round((end - start).total_seconds() * 1000.0, 3))

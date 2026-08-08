@@ -35,6 +35,7 @@ from metaproc.io.gz_io import artifact_sidecar_path
 from metaproc.logutil.usage import UsageStats, extract_gemini_usage
 from metaproc.trace.extractors.common import (
     attempt_cost_attrs,
+    span_duration_ms,
     tool_usage_classification,
 )
 from metaproc.trace.ids import compute_span_id
@@ -386,6 +387,7 @@ def _make_tool_span(
         source=source,
         ts_start=use_ts or result_ts or "",
         ts_end=result_ts,
+        duration_ms=span_duration_ms(use_ts, result_ts),
         status=status,
         status_derived=False,
         error=error,
