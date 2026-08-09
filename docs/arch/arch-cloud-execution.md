@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: Cloud Execution
 
-**Date:** 2026-04-12 (last updated 2026-08-02) **Status:** Approved
+**Date:** 2026-04-12 (last updated 2026-08-09) **Status:** Approved
 
 > **Maintenance**: This is a maintained architecture doc.
 > Revise via `tbd shortcut revise-architecture-doc` (which prompts you to verify content
@@ -15,7 +15,7 @@ status: Approved
 > The full arch-doc index lives in
 > [development.md § Architecture docs](../development.md#architecture-docs).
 > 
-> Companion docs (in `metaproc/docs/`): [arch-metaproc-core](arch-metaproc-core.md),
+> Companion docs (in `docs/arch/`): [arch-metaproc-core](arch-metaproc-core.md),
 > [arch-runpool](arch-runpool.md), [arch-cloud-execution](arch-cloud-execution.md),
 > [arch-authentication](arch-authentication.md),
 > [arch-claude-code-harness](arch-claude-code-harness.md),
@@ -285,16 +285,22 @@ container-level volume mount point, not subject to host-level path restrictions.
 Shared by worker and orchestrator entrypoints via
 `bootstrap_container() -> BootstrapResult`:
 
-1. Configure git identity and credential helper (via `GH_TOKEN`).
-2. Use bundled `example_plugin/` from the image by default, or sparse-clone the
-   requested branch from `METAPROC_RUN_BRANCH` / `METAPROC_REPO_URL` when an override is
-   required.
-3. Install `example_plugin` editable so plugin entry points resolve inside the
-   container.
-4. Optionally bootstrap the private `arena` CLI when `METAPROC_ARENA_BOOTSTRAP=1`.
-5. Ensure `RUNS_DIR` exists.
-6. Write `~/.pi/agent/models.json` from `METAPROC_PI_MODELS_JSON` if set.
-7. Invoke each registered adapter’s `bootstrap(home)` hook.
+1. Read `GH_TOKEN` once, remove it from the environment, and expose it only through a
+   temporary askpass helper when a sparse clone needs authentication.
+2. Install a current-branch metaproc wheel from `METAPROC_WHEEL_GCS` when set with its
+   required `METAPROC_WHEEL_SHA256`, overriding any image-baked metaproc.
+3. Acquire the consumer workspace: a `METAPROC_WORKSPACE_GCS` tarball when set, verified
+   against its required `METAPROC_WORKSPACE_SHA256`; otherwise a sparse clone of
+   `METAPROC_RUN_BRANCH` and `METAPROC_REPO_URL`, falling back to the workspace bundled
+   into the image.
+4. Editable-install the workspace packages named in the repo-sync payload so consumer
+   plugin entry points resolve inside the container.
+5. Run each `metaproc.container_bootstrap` entry-point hook so downstream images can
+   bootstrap their own tooling.
+6. Ensure `RUNS_DIR` exists.
+7. Write `~/.pi/agent/models.json` from `METAPROC_PI_MODELS_JSON` if set.
+8. Back in the worker and orchestrator entrypoints, invoke each registered adapter’s
+   `bootstrap(home)` hook.
    The `ClaudeCodeCliAdapter` uses this to write `~/.claude/.credentials.json` (mode
    0600\) from `CLAUDE_CODE_CREDS_JSON` (see §3.10), then unsets the env var so the
    OAuth payload does not propagate to child processes.
@@ -669,8 +675,7 @@ This is the supported way to ship a current-branch `metaproc/` fix to workers wi
 agent-image rebuild.
 
 See [`cloud-dispatch.runbook.md`](../runbooks/cloud-dispatch.runbook.md) §4b for
-operator recipes and the [this architecture](../arch/arch-cloud-execution.md) for the
-full design.
+operator recipes and this document for the full design.
 
 ## 4. AWS Implementation
 
@@ -795,6 +800,6 @@ Claude Code CLI Personal-Plan auth on GCP Batch (the original design):
   orchestrator/worker model — pipeline, blocking semantics, and why it’s a separate
   primitive (no lease, no claims, no dispatch manifest).
 
-<!-- This document follows std-doc-guidelines.md.
-Review guidelines before editing.
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
 -->

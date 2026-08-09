@@ -621,6 +621,6 @@ Per-turn activity is tracked as a known open gap in the
 [tool-use-observability runbook](arch/arch-metaproc-core.md#147-tool-use-observability);
 closing it fully requires per-provider upstream changes outside metaproc scope.
 
-<!-- This document follows std-doc-guidelines.md.
-Review guidelines before editing.
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
 -->

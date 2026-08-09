@@ -185,6 +185,6 @@ gate. Hard-coding provider names at call sites turns every new provider into a
 multi-touchpoint diff with no enforcement that all sites were updated; the parity tests
 catch some omissions but not all, so the single-registry shape is the guardrail.
 
-<!-- This document follows std-doc-guidelines.md.
-Review guidelines before editing.
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
 -->

@@ -1,8 +1,7 @@
 """Curated public surface for metaproc file utilities.
 
-See ``metaproc/docs/arch/arch-file-io-utilities.md`` for the reference table and the
-non-obvious frontmatter_format gotchas (typ='safe' drops comments,
-to_yaml_string suppresses None/empty-dict, delimiter style rules).
+See ``docs/arch/arch-file-io-utilities.md`` in the source repository for the public
+surface and non-obvious ``frontmatter_format`` behavior.
 """
 
 from __future__ import annotations

@@ -1,14 +1,22 @@
 ---
 title: "Architecture: File I/O Utilities"
-description: The curated metaproc.io public surface — atomic writes, gzip-transparent reads, frontmatter helpers, and path utilities used by metaproc and downstream callers.
+description: The curated metaproc.io public surface for atomic writes, gzip-transparent reads, frontmatter helpers, templates, and artifact paths.
 author: metaproc team
 status: Approved
 ---
 # Architecture: File I/O Utilities (`metaproc.io`)
 
-`metaproc.io` is the curated public surface for file utilities used inside metaproc and
-by downstream callers.
-Every helper documented here is importable directly from `metaproc.io`:
+**Date:** 2026-07-26 (last updated 2026-08-09) **Status:** Approved
+
+> **Maintenance**: This is a maintained architecture document.
+> Revise it with `tbd shortcut revise-architecture-doc` and verify the public table
+> against `metaproc.io.__all__` and current dependency behavior.
+> Update the **last updated** date after non-trivial changes.
+> The architecture index lives in
+> [development.md § Architecture Docs](../development.md#architecture-docs).
+
+`metaproc.io` is the curated public import surface for downstream callers and shared
+internal use. Every helper documented here is importable directly from `metaproc.io`:
 
 ```python
 from metaproc.io import (
@@ -16,9 +24,9 @@ from metaproc.io import (
 )
 ```
 
-The surface re-exports existing helpers from `frontmatter_format` (ruamel.yaml under the
-hood), `strif`, and the local `metaproc.io.gz_io` and `metaproc.io.frontmatter` modules.
-There is no metaproc-named wrapper layer.
+The surface re-exports helpers from `frontmatter_format` and `strif` without changing
+their behavior. Metaproc’s gzip-aware artifact readers and strict template renderer are
+local implementations.
 
 ## Public Surface
 
@@ -46,11 +54,16 @@ There is no metaproc-named wrapper layer.
 | `fmf_read_frontmatter_artifact` | `metaproc.io.frontmatter` | gz-aware `fmf_read_frontmatter` |
 | `read_yaml_artifact` | `metaproc.io.frontmatter` | gz-aware `read_yaml_file` |
 | `atomic_output_file` | `strif` | Atomic write for arbitrary content |
+| `render_template` | `metaproc.io.templating` | Render strict `{{name}}` placeholders from an explicit mapping |
+| `strip_template_frontmatter` | `metaproc.io.templating` | Remove the template contract from a rendered document |
+| `TemplateRenderError` | `metaproc.io.templating` | Error raised for missing or unused strict template values |
 
 Typed envelope helpers (`load_frontmatter_typed`, `load_yaml_typed`) and state-file
 helpers in `metaproc.io.state_io`, `metaproc.io.dispatch_manifest`,
 `metaproc.io.claimed_items`, `metaproc.io.orchestrator_lease`, `metaproc.io.overrides`
-stay on their sub-modules — callers import them directly from there.
+stay on their submodules.
+Callers that need those specialized contracts import them directly from their owning
+module.
 
 ## Use This, Not That
 
@@ -67,21 +80,28 @@ stay on their sub-modules — callers import them directly from there.
 | Write JSON or text file (atomic) | `metaproc.io.atomic_output_file(path)` |
 | Iterate JSONL records as dicts (gz-aware) | `metaproc.io.iter_jsonl_objects(path)` |
 | Iterate JSONL with line numbers (gz-aware) | `metaproc.io.iter_jsonl_records(path)` |
+| Render a strict document template | `metaproc.io.render_template(text, values)` |
 | Append-only JSONL event log | `path.open("a")` + `json.dumps + "\n"` |
 
-Do **not** import `frontmatter_format`, `strif`, or `metaproc.io.gz_io` directly from
-production code — use `metaproc.io`. Direct imports are allowed inside `metaproc/io/`
-itself (the wrapper modules) and inside test files.
+Downstream packages should use `metaproc.io` for the helpers in this table.
+These re-exports form the documented compatibility surface.
+Metaproc implementation modules may import `frontmatter_format`, `strif`, or a
+specialized `metaproc.io` submodule directly when they need an internal symbol, avoid a
+circular import, or keep an implementation dependency explicit.
+Those internal import paths are not downstream compatibility guarantees.
 
-## Intentional Exceptions
+## YAML Parser Boundaries
 
-Two production sites keep direct stdlib or ruamel imports:
+Most modules parse YAML and frontmatter through `metaproc.io`. Modules may import
+`ruamel.yaml.YAMLError` directly to catch the dependency’s specific parse failures.
+One production path constructs a parser directly:
 
 - **`metaproc/engine/yaml_repair.py`** uses `ruamel.yaml.YAML(typ='safe').load(...)`
   directly because the LLM-output repair path needs the parser handle in strict mode,
   and the module does a manual `---\n` split before any parser touches the text.
-- **Test fixtures** (e.g., `test_salvage_run.py`) may use `yaml.safe_dump` for synthetic
-  input construction. Production code does not.
+
+Tests may use `yaml.safe_dump` to construct synthetic fixtures.
+That use does not define the production serialization contract.
 
 ## `frontmatter_format` Gotchas
 
@@ -99,7 +119,7 @@ these. The longer version:
 3. **Only `---`, `----`, `<!---`, `#---`, `//---`, `/*---` are valid frontmatter
    delimiters.** Five-dash openers (`-----`) are rejected by the parser.
 4. **Hash-style frontmatter (`#---`) allows `#`-prefixed lines (shebang, PEP 723
-   metadata) before the delimiter.** Other styles do not — any non-delimiter content
+   metadata) before the delimiter.** Other styles do not; any non-delimiter content
    before the opener is an error.
 5. **Mapping-based writes are alias-free by default.** Repeated acyclic lists and
    mappings are expanded, so equal values serialize identically regardless of Python
@@ -109,7 +129,33 @@ these. The longer version:
    case.
 
 If a specific call site relies on any of these behaviors in a non-obvious way, add a
-one-line `# XXX:` at the site.
+concise `# NOTE:` that explains why the behavior matters there.
+
+## Future Considerations
+
+### Open Questions
+
+- Should the typed envelope loaders join the top-level public surface, or should their
+  model and plugin dependencies remain explicit through `metaproc.io.frontmatter`?
+- Does the append-only JSONL contract need a dedicated single-writer helper, or are
+  direct append operations clearer at the event-log boundaries that own them?
+
+### Potential Improvements
+
+- Add a documentation contract check that compares the Public Surface table with
+  `metaproc.io.__all__` so new exports cannot land without a deliberate documentation
+  decision.
+- Add focused examples for template rendering and gzip-transparent artifact lookup if
+  downstream adoption shows that signatures alone are insufficient.
+
+## References
+
+- [`metaproc.io`](../../src/metaproc/io/__init__.py)
+- [`metaproc.io.frontmatter`](../../src/metaproc/io/frontmatter.py)
+- [`metaproc.io.gz_io`](../../src/metaproc/io/gz_io.py)
+- [`metaproc.io.templating`](../../src/metaproc/io/templating.py)
+- [`frontmatter-format`](https://github.com/jlevy/frontmatter-format)
+- [`strif`](https://github.com/jlevy/strif)
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

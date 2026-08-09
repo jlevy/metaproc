@@ -20,7 +20,8 @@ prompts, handlers, and policies to downstream packages.
 - Optional GCP Batch dispatch and Secret Manager integration
 - A packaged Metabrowser plugin for process specs, plans, traces, logs, and resource
   reports
-- A generated portable Agent Skill installed by the `metaproc skill` command
+- Self-documenting: bundled manuals via `metaproc help` and a generated portable Agent
+  Skill installed by `metaproc skill`
 
 ## Installation
 
@@ -45,35 +46,10 @@ Install the optional local browser integration with
 Metaproc currently supports Linux and macOS. Its process-control and resource-monitoring
 features require a POSIX operating system.
 
-See [installation](docs/installation.md) for source-checkout and upgrade instructions.
+See [installation](docs/installation.md) for source-checkout, upgrade, and Agent Skill
+instructions.
 
-## Entry Points
-
-| Document | Purpose |
-| --- | --- |
-| [docs/arch/arch-metaproc-core.md](docs/arch/arch-metaproc-core.md) | Current framework architecture and implementation reference |
-| [metaproc-operator-reference.md](src/metaproc/docs/metaproc-operator-reference.md) | Operator command map and current `.state` / `.logs` runtime artifact reference |
-| [docs/arch/arch-metaproc-core.md §14.7](docs/arch/arch-metaproc-core.md#147-tool-use-observability) | Tool-use observability — data-source triad, aggregation contract, failure taxonomy, cutoff-discipline and native web-search invariants |
-| [docs/arch/arch-cloud-execution.md](docs/arch/arch-cloud-execution.md) | GCP Batch dispatch shape (containers, `compute_resource`, service accounts, secrets) |
-| [docs/arch/arch-runpool.md](docs/arch/arch-runpool.md) | RunPool subsystem boundary, adaptive resource control, and module-local design docs |
-| [docs/metaproc-design-rev3-proposals.md](docs/metaproc-design-rev3-proposals.md) | Remaining design proposals not yet implemented on this branch |
-| [docs/conventions.md](docs/conventions.md) | Framework-level naming, structure, and file-format rules (see §File Format Policy) |
-| [docs/artifact-catalog.md](docs/artifact-catalog.md) | Every runtime artifact metaproc writes or reads — filename, format, schema, lifecycle, writer/readers |
-| [docs/runbooks/credential-setup.runbook.md](docs/runbooks/credential-setup.runbook.md) | Adapter credential configuration |
-| [docs/arch/arch-authentication.md](docs/arch/arch-authentication.md) | Credential pool design (labels, fallback policy, probes, rotation) |
-| [docs/runbooks/adding-a-new-llm-provider.runbook.md](docs/runbooks/adding-a-new-llm-provider.runbook.md) | Provider onboarding runbook (adapter wiring, auth registration, smoke tests) |
-| [docs/development.md](docs/development.md) | **Concise dev guide for hacking on metaproc itself** — code layout, conventions, testing |
-| [docs/performance-notes.md](docs/performance-notes.md) | Historical measurements and performance principles for the external browser integration |
-| [docs/runbooks/environment-bootstrap.runbook.md](docs/runbooks/environment-bootstrap.runbook.md) | End-to-end setup for running workflows (gcloud, agent CLIs, and preflight) |
-| [docs/metaproc-operator-reference.md § Domain Dispatch Pattern](src/metaproc/docs/metaproc-operator-reference.md#domain-dispatch-pattern) | How client workflows keep roster/tier/source-health policy outside metaproc while using the standard status, pool, trace, and kill commands |
-| [MetaBrowser architecture](https://github.com/jlevy/metabrowser/blob/main/docs/architecture.md) | Standalone browser architecture and package boundary |
-| [Metaproc MetaBrowser plugin](src/metaproc/metabrowser_plugin/README.md) | Metaproc-owned file kinds, visualizations, log adapters, data hooks, and plugin validation |
-| [docs/arch/arch-testing.md](docs/arch/arch-testing.md) | Smoke / unit / integration testing tiers and commands |
-| [src/metaproc/data/pricing.md](src/metaproc/data/pricing.md) | **Per-model token / cache pricing** for every provider + model the framework touches. Drives cost-per-record math; update whenever a provider publishes new rate cards or when a new model lands in `pi-models.default.json`. |
-| [CHANGELOG.md](CHANGELOG.md) | Release history and upgrade notes |
-| [TODO.md](TODO.md) | Current focus, active-spec status, and pointers to blocking beads |
-
-## Usage
+## Quickstart
 
 Run the deterministic source-checkout example without an agent CLI, network call, or
 cloud credential:
@@ -90,107 +66,119 @@ The process writes three outputs and its structured run state beneath
 `.runs/quickstart/`. Re-running it demonstrates completion caching; pass `--force` to
 execute every step again.
 
-Client process specs may require additional env vars before execution.
+Client process specs may require additional variables before execution.
 The most common one is `RUNS_DIR`: an absolute path used to template output locations
-via `{{run.parent_dir}}`. Workflow launchers are responsible for resolving `RUNS_DIR`
-from whatever domain-specific settings they own and passing the absolute value into
-`run-process` / `run-step` (either via `--var RUNS_DIR=...` or by setting it in the
-environment). Metaproc itself stays workflow-agnostic and does not synthesize `RUNS_DIR`
-from any domain-specific source.
-
+via `{{run.parent_dir}}`. Workflow launchers resolve `RUNS_DIR` from settings they own
+and pass the absolute value into `run-process` / `run-step`; Metaproc stays
+workflow-agnostic and does not synthesize it.
 The [offline example](examples/offline-smoke/offline-smoke.process.md) passes the value
 explicitly.
+Template variables are case-sensitive; see [conventions](docs/conventions.md)
+for the casing rules and the small set of framework built-ins.
 
-Template variables are case-sensitive.
-Framework built-ins are intentionally small: `run.parent_dir`, `run.id`,
-`run.execution_profile`, `run.artifact_namespace`, `run.variant`, `step.prompt_path`,
-and `step.outputs_list`. `run.variant` is a migration alias for
-`run.artifact_namespace`. Names like `RUN_ID` or `DATE` are ordinary process params
-unless the process spec says otherwise; fan-out fields preserve the exact
-authored/source key names.
-See [docs/conventions.md](docs/conventions.md) for the full casing rules.
+## Documentation
 
-## Key Commands
+Metaproc documents itself: the manuals below ship inside the package, and everything
+else lives in [`docs/`](docs/).
 
-| Command | Purpose |
+### Start Here
+
+| Document | Purpose |
 | --- | --- |
-| `run-process` | Walk a full process DAG — the primary user-facing command |
-| `run-step` | Execute one step directly or acknowledge a `mode:manual` gate |
-| `run-parallel` | Low-level fan-out plumbing (used internally by worker VMs) |
-| `plan` | Resolve and print the current execution plan |
-| `deps` | Show declared deps with inferred runtime state for a planned run |
-| `validate` | Check expected outputs for a specific completed step |
-| `softschema inspect` | Inspect a frontmatter artifact’s declared schema, binding, status, stage, and envelope |
-| `softschema validate --schema <id>` | Validate one artifact through the registered softschema binding |
-| `softschema compile --contract <id> [--check]` | Compile or drift-check a Pydantic model’s YAML schema sidecar |
-| `structure-report` | Generate a process boundary map with schema/status/stage/profile summaries |
-| `check-headers` | Walk the process tree and validate frontmatter |
-| `status` | Check run completion and progress |
-| `wait` | Block until a run reaches terminal state |
-| `tail` | Tail JSONL log files from `.logs/` directories |
-| `auth-check` | Operator preflight: verify credentials and API connectivity for the active dispatch |
-| `auth push` | Push a CLI adapter credential into the labeled pool (Secret Manager or local FS) |
-| `auth push --probe` | Push then run a real-API probe in one operator action |
-| `auth list` | List pool entries — labels + state, never the payload |
-| `auth probe` | Real-API probe of a pool credential; updates pool state with retry-tolerant CAS |
-| `auth status` | At-a-glance pool readiness — which labels work, which are throttled |
-| `auth enable` / `disable` / `rotate` / `prune` | Lifecycle operations on pool entries |
-| `run-process --auth-account / --auth-include-labels / --auth-exclude-labels / --auth-fallback-policy` | Wire fan-out steps to the credential pool with explicit label scoping |
-| `compact-logs` | Compact adapter JSONL logs for long-term storage/debugging |
-| `gzip-text` | Gzip large text artifacts and logs with byte-fidelity verification |
-| `override` | Mark a step as satisfied so downstream resumes when partial-fail blocks the DAG (audit trail in `.state/overrides.yaml`) |
-| `kill` | Terminate a running pool and its child processes |
-| `write-usage` | Roll up token and cost usage into `usage.md` |
-| `resource-report` | Inspect or locally refresh hierarchical metrics, provider meters, coverage, budgets, costs, and terminal outcome |
-| `stats` | Summarize throughput, timing, pool, API, and resource usage |
-| `gcp status` | Show GCP Batch job status for a run |
-| `gcp scale` | Update desired worker topology for an active cloud fan-out step |
-| `gcp logs` | Stream Cloud Logging for a run’s GCP Batch jobs |
-| `gcp cancel` | Cancel running/queued Batch jobs for a run |
-| `gcp runs` | List all active metaproc runs across the GCP project |
-| `gcp resources` | Snapshot metaproc-related GCP assets via Cloud Asset Inventory |
-| `gcp filestore` | Inspect Filestore instance status and utilization |
-| `gcp archive` | Sync completed runs to GCS for long-term retention |
-| `gcp remote` | Run a metaproc command on the remote gateway host via SSH/IAP |
-| `gcp remote-run` | Launch run-process in a tmux session on a remote host (survives disconnects) |
-| `gcp cleanup` | Delete old terminal-state GCP Batch jobs |
-| `pool status` | Inspect RunPool status snapshots |
-| `pool events` | Inspect RunPool event logs |
-| `pool events --summary` | One-line-per-event summary view of the pool event log |
-| `pool concurrency-timeline` | Show how the pool’s concurrency cap evolved over a run |
-| `pool rollup` | Roll up pool status across every sub-step pool in a run |
-| `pool rollup --auth-outcomes` | Roll up + per-label `auth_outcome` event stats (success / cooling / expired) |
-| `pool retry-missing` | Reset completed markers when cloud outputs are missing |
+| [installation](docs/installation.md) | Install paths: uvx, uv tool, source checkout, Agent Skill |
+| `metaproc help concepts` | The conceptual model: vocabulary, planes, step modes, optimization loops ([source](src/metaproc/docs/metaproc-concepts-and-principles.md)) |
+| `metaproc help operator` | Runtime reference: starting, monitoring, resuming, and stopping runs ([source](src/metaproc/docs/metaproc-operator-reference.md)) |
+| `metaproc help developer` | Extending metaproc and the “metaproc is the right wrapper” policy ([source](src/metaproc/docs/metaproc-developer-guide.md)) |
+
+Agents get the same routing automatically: `metaproc skill metaproc --install` writes a
+portable [Agent Skill](https://agentskills.io/specification) into
+`.agents/skills/metaproc/` and `.claude/skills/metaproc/` that delegates to these
+manuals.
+
+### Reference
+
+| Document | Purpose |
+| --- | --- |
+| [conventions](docs/conventions.md) | Framework-level naming, structure, and file-format rules (see §File Format Policy) |
+| [artifact-catalog](docs/artifact-catalog.md) | Every runtime artifact Metaproc writes or reads: filename, format, schema, lifecycle, writers, and readers |
+| [pricing](src/metaproc/data/pricing.md) | Per-model token and cache pricing for every provider the framework touches; drives cost-per-record math |
+| [CHANGELOG](CHANGELOG.md) | Release history and upgrade notes |
+
+### Runbooks
+
+Operational procedures live in [`docs/runbooks/`](docs/runbooks/):
+
+| Runbook | Purpose |
+| --- | --- |
+| [environment-bootstrap](docs/runbooks/environment-bootstrap.runbook.md) | End-to-end setup for running workflows: locks, offline smoke, adapters, GCP preflight |
+| [credential-setup](docs/runbooks/credential-setup.runbook.md) | Adapter credential configuration for Claude Code, Codex, Gemini, pi, and GCP |
+| [cloud-dispatch](docs/runbooks/cloud-dispatch.runbook.md) | Preparing, submitting, monitoring, and recovering GCP Batch workloads |
+| [adapter-compatibility](docs/runbooks/adapter-compatibility.runbook.md) | Provider-routing nuances: API paths, variants, tool-use attribution |
+| [adding-a-new-llm-provider](docs/runbooks/adding-a-new-llm-provider.runbook.md) | Provider onboarding: registry, catalog, pricing, secrets, smoke tests |
+| [softschema-validation](docs/runbooks/softschema-validation.runbook.md) | Validating softschema-tagged artifacts |
+| [browser-streaming-smoke](docs/runbooks/browser-streaming-smoke.runbook.md) | Manual Metabrowser UI verification checklist |
+| [claude-code-cli-remote-vm](docs/runbooks/claude-code-cli-remote-vm.runbook.md) | Superseded per-developer VM path for the Claude Code adapter |
+
+### Architecture
+
+Architecture docs live in [`docs/arch/`](docs/arch/); the maintained index with status
+and ownership is
+[development.md § Architecture Docs](docs/development.md#architecture-docs).
+[arch-metaproc-core](docs/arch/arch-metaproc-core.md) is the primary implementation
+reference; [metaproc-design-rev3-proposals](docs/metaproc-design-rev3-proposals.md)
+holds design proposals not yet implemented.
+The Metabrowser integration is split between the external
+[MetaBrowser architecture](https://github.com/jlevy/metabrowser/blob/main/docs/architecture.md)
+and the Metaproc-owned [plugin](src/metaproc/metabrowser_plugin/README.md).
+
+### Contributing and Policies
+
+| Document | Purpose |
+| --- | --- |
+| [development](docs/development.md) | Dev guide for hacking on metaproc itself: layout, conventions, testing, arch-doc index |
+| [AGENTS.md](AGENTS.md) | Instructions for coding agents working in this repository |
+| [SUPPLY-CHAIN-SECURITY](SUPPLY-CHAIN-SECURITY.md) | Dependency policy: cool-off, lockfiles, audited exceptions |
+| [SECURITY](SECURITY.md) | Vulnerability reporting and security boundaries |
+| [publishing](docs/publishing.md) | Release process with PyPI trusted publishing |
+| [performance-notes](docs/performance-notes.md) | Performance principles, tooling, and worked examples |
+| [TODO](TODO.md) | Roadmap: preview blockers, documentation, and post-preview work |
+
+Provenance records for the standalone extraction live in
+[`docs/project/`](docs/project/provenance/extraction.md).
+
+## Commands
+
+The CLI is organized into a few families; `metaproc --help` lists every command,
+`metaproc <command> --help` documents each one, and `metaproc help operator` maps
+monitoring questions to commands.
+
+| Family | Representative commands | Purpose |
+| --- | --- | --- |
+| Run | `run-process`, `run-step`, `plan`, `deps`, `validate`, `override`, `kill` | Plan and walk process DAGs, execute or acknowledge single steps, unblock or stop runs |
+| Monitor | `status`, `wait`, `tail`, `pulse`, `stats`, `trace`, `resource-report`, `write-usage` | Run completion, health, logs, timing, cost, and resource reporting |
+| Artifacts | `softschema`, `structure-report`, `check-headers`, `compact-logs`, `gzip-text` | Schema inspection and validation, frontmatter checks, log compaction |
+| Credentials | `auth-check`, `auth push/list/probe/status/enable/disable/rotate/prune` | Operator preflight and labeled credential-pool lifecycle |
+| Pools | `pool status/events/concurrency-timeline/rollup/retry-missing` | RunPool snapshots, event logs, concurrency history, rollups |
+| Cloud | `gcp status/scale/logs/cancel/runs/resources/archive/remote/cleanup` | GCP Batch dispatch monitoring and lifecycle (optional extras) |
+| Self-docs | `help`, `skill`, `env --template` | Bundled manuals, Agent Skill generation, environment template |
 
 ## Process Specs
 
 Process specs define multi-step DAGs that `run-process` walks automatically.
+The repository ships provider-agnostic and per-adapter self-test processes:
 
 | Process | Location | Purpose |
 | --- | --- | --- |
 | self-test/smoke-core | [process/self-test/smoke-core.process.md](process/self-test/smoke-core.process.md) | Provider-agnostic smoke: standalone lint, type, documentation, policy, and test gates |
-| self-test/smoke-adapter-claude | [process/self-test/smoke-adapter-claude.process.md](process/self-test/smoke-adapter-claude.process.md) | Claude adapter: binary + credential + live prompt |
-| self-test/smoke-adapter-codex | [process/self-test/smoke-adapter-codex.process.md](process/self-test/smoke-adapter-codex.process.md) | Codex adapter: binary + credential + live prompt |
-| self-test/smoke-adapter-gemini | [process/self-test/smoke-adapter-gemini.process.md](process/self-test/smoke-adapter-gemini.process.md) | Gemini adapter: binary + credential + live prompt |
-| self-test/smoke-adapter-pi | [process/self-test/smoke-adapter-pi.process.md](process/self-test/smoke-adapter-pi.process.md) | pi adapter: binary + credential + live prompt (Vertex MaaS) |
+| self-test/smoke-adapter-claude | [process/self-test/smoke-adapter-claude.process.md](process/self-test/smoke-adapter-claude.process.md) | Claude adapter: binary, credential, and live prompt |
+| self-test/smoke-adapter-codex | [process/self-test/smoke-adapter-codex.process.md](process/self-test/smoke-adapter-codex.process.md) | Codex adapter: binary, credential, and live prompt |
+| self-test/smoke-adapter-gemini | [process/self-test/smoke-adapter-gemini.process.md](process/self-test/smoke-adapter-gemini.process.md) | Gemini adapter: binary, credential, and live prompt |
+| self-test/smoke-adapter-pi | [process/self-test/smoke-adapter-pi.process.md](process/self-test/smoke-adapter-pi.process.md) | pi adapter: binary, credential, and live prompt (Vertex MaaS) |
 
 See [testing architecture](docs/arch/arch-testing.md) for when to use each tier and how
 to set up per-adapter credentials.
 Downstream packages own their domain process specs, schemas, handlers, fixtures, and
 runbooks.
-
-## Notes
-
-- For a fresh checkout, use `make install`; it installs the exact committed Python and
-  JavaScript locks.
-- [arch-metaproc-core.md](docs/arch/arch-metaproc-core.md) describes the current
-  implementation.
-- Remaining not-yet-implemented rev3 work lives in
-  [`docs/metaproc-design-rev3-proposals.md`](docs/metaproc-design-rev3-proposals.md); it
-  remains separate from the runtime contract.
-- Cloud images do not pick up local source edits automatically.
-  Publish or upload a wheel and set `METAPROC_WHEEL_GCS`, or rebuild the downstream
-  image.
 
 ## Development
 
@@ -205,7 +193,7 @@ make verify
 
 `make verify` checks both locks, formatting, Python and browser lint, types, tests,
 dependency audits, public hygiene, source and wheel contents, and an isolated installed
-wheel. See [agent instructions](AGENTS.md), [development](docs/development.md), and
+wheel. See [development](docs/development.md), [agent instructions](AGENTS.md), and
 [supply-chain security](SUPPLY-CHAIN-SECURITY.md).
 
 ## Compatibility
@@ -214,6 +202,10 @@ During the 0.x series, the command-line interface, process-spec format, document
 plugin entry points, and Pydantic models explicitly linked from the architecture docs
 are the supported integration surfaces.
 Other Python imports are implementation details and may change between minor releases.
+
+Cloud images do not pick up local source edits automatically; publish or upload a wheel
+and set `METAPROC_WHEEL_GCS`, or rebuild the downstream image.
+See [cloud-dispatch](docs/runbooks/cloud-dispatch.runbook.md).
 
 ## License
 

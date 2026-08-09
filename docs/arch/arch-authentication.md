@@ -16,7 +16,7 @@ notice below
 > The full arch-doc index lives in
 > [development.md § Architecture docs](../development.md#architecture-docs).
 > 
-> Companion docs (in `metaproc/docs/`): [arch-metaproc-core](arch-metaproc-core.md),
+> Companion docs (in `docs/arch/`): [arch-metaproc-core](arch-metaproc-core.md),
 > [arch-runpool](arch-runpool.md), [arch-cloud-execution](arch-cloud-execution.md),
 > [arch-claude-code-harness](arch-claude-code-harness.md),
 > [arch-testing](arch-testing.md).
@@ -1003,10 +1003,11 @@ local backend’s JSON file.
 
 ### §N.10 API-key extension (future)
 
-Provider API-key pooling (OpenAI/Anthropic/Gemini keys managed under the same inventory
-\+ rotation surface) is a separate future-phase spec —
-[plan-2026-04-24-auth-api-key-pool-extension.md](../arch/arch-authentication.md) —
-deliberately scoped outside this work so the OAuth pool can land and stabilize first.
+Provider API-key pooling (OpenAI, Anthropic, and Gemini keys managed under the same
+inventory and rotation surface) is a separate future-phase spec:
+`plan-2026-04-24-auth-api-key-pool-extension.md` (pre-extraction spec, absorbed into
+[§N.10](#n10-api-key-extension-future)). It is deliberately scoped outside this work so
+the OAuth pool can land and stabilize first.
 Pi (`pi-cli`) stays on API-key auth unchanged until that spec lands.
 
 ### §N.11 Stale-slot trap on Claude Code Personal Plan — observed pattern
@@ -1031,8 +1032,9 @@ for the OAuth refresh race in Claude Code 2.1.81 / 2.1.117 / 2.1.118; the incide
 local was 2.1.114; latest at writing is 2.1.119. The behavior should be retested
 whenever the pinned CLI version changes.
 
-[research-2026-04-27-claude-code-oauth-multi-account-failover.md](../arch/arch-authentication.md)
-§2.5 + §5.3 walks through the empirical reproduction.
+Sections 2.5 and 5.3 of the pre-extraction research note
+`research-2026-04-27-claude-code-oauth-multi-account-failover.md` walk through the
+empirical reproduction.
 
 **Mitigations in place** (Phase 10 of
 plan-2026-04-27-predict-dispatch-tuesday-2026-04-28.md), independent of whether the
@@ -1152,7 +1154,7 @@ single-dispatch recovery.
 ### §N.14 Vehicle A pool redesign (2026-04-28)
 
 (Added 2026-04-28 to track the design that landed across Phases 1-4, 6, 7, 10 of
-[`plan-2026-04-28-claude-code-auth-vehicle-a-pool-redesign.md`](../arch/arch-authentication.md).)
+`plan-2026-04-28-claude-code-auth-vehicle-a-pool-redesign.md`, a pre-extraction spec.)
 
 The 2026-04-27 senior engineering review surfaced two corrections that changed the right
 primary architecture:
@@ -1388,18 +1390,18 @@ fails at import-time, not silently at dispatch).
 Phase 11 closed the four follow-up beads applying the same pattern to other env-var
 cohorts that travel together.
 
-| Module | Cohort | Bead |
-| --- | --- | --- |
-| [`metaproc/dispatch/secret_refs.py`](../../src/metaproc/dispatch/secret_refs.py) | `SecretRef` + `SecretRefSet` for the `GCP_SECRET_REFS` cohort (plaintext env → SM ref env → human description). `SecretRefSet.all_known()` composes static refs (`GH_TOKEN`, `CLAUDE_CODE_CREDS_JSON`, `CODEX_CREDS_JSON`) with provider-derived refs from `gcp_secret_refs()`. `to_secret_variables()` produces the Batch API’s `secret_variables` mapping. `as_tuples()` preserves the legacy 3-tuple shape for back-compat. | [architecture details](../arch/arch-authentication.md) |
-| [`metaproc/dispatch/repo_sync_payload.py`](../../src/metaproc/dispatch/repo_sync_payload.py) | `RepoSyncPayload` for the four-field repo-sync cohort: `METAPROC_REPO_URL`, `METAPROC_RUN_BRANCH`, `METAPROC_WHEEL_GCS`, `METAPROC_WORKSPACE_GCS`. Used by `container_bootstrap`, `orchestrator_dispatch`, `worker_dispatch`. | [architecture details](../arch/arch-authentication.md) |
-| [`metaproc/dispatch/orchestrator_payload.py`](../../src/metaproc/dispatch/orchestrator_payload.py) | `OrchestratorDispatchPayload` for the 13-field operator-CLI → orchestrator cohort. Replaces ~50 lines of conditional `env_vars` manipulation with one constructor + `update`. Spot defaults to True (silent emission); `num_workers` always emits both `METAPROC_NUM_WORKERS` and `METAPROC_DEFAULT_NUM_WORKERS` (belt-and-suspenders for code-version drift). | [architecture details](../arch/arch-authentication.md) |
-| [`metaproc/dispatch/worker_payload.py`](../../src/metaproc/dispatch/worker_payload.py) | `WorkerDispatchPayload` for the 12-field orchestrator → worker cohort. Worker identity is load-bearing (always emitted); inline vs file item-contexts is mutually exclusive (file path wins when both populated). Call-site migration in `worker_dispatch` deferred — the existing inline construction is intricate (size-gated spill, NFS path resolution); the dataclass is ready for new sites. | [architecture details](../arch/arch-authentication.md) |
+| Module | Cohort |
+| --- | --- |
+| [`metaproc/dispatch/secret_refs.py`](../../src/metaproc/dispatch/secret_refs.py) | `SecretRef` and `SecretRefSet` for the `GCP_SECRET_REFS` cohort: plaintext environment variable, Secret Manager reference variable, and human description. `SecretRefSet.all_known()` composes static refs (`GH_TOKEN`, `CLAUDE_CODE_CREDS_JSON`, `CODEX_CREDS_JSON`) with provider-derived refs from `gcp_secret_refs()`. `to_secret_variables()` produces the Batch API’s `secret_variables` mapping. `as_tuples()` preserves the legacy 3-tuple shape for backward compatibility. |
+| [`metaproc/dispatch/repo_sync_payload.py`](../../src/metaproc/dispatch/repo_sync_payload.py) | `RepoSyncPayload` for the four-field repo-sync cohort: `METAPROC_REPO_URL`, `METAPROC_RUN_BRANCH`, `METAPROC_WHEEL_GCS`, `METAPROC_WORKSPACE_GCS`. Used by `container_bootstrap`, `orchestrator_dispatch`, `worker_dispatch`. |
+| [`metaproc/dispatch/orchestrator_payload.py`](../../src/metaproc/dispatch/orchestrator_payload.py) | `OrchestratorDispatchPayload` for the 13-field operator-CLI-to-orchestrator cohort. Replaces about 50 lines of conditional `env_vars` manipulation with one constructor and `update`. Spot defaults to true (silent emission); `num_workers` always emits both `METAPROC_NUM_WORKERS` and `METAPROC_DEFAULT_NUM_WORKERS` to tolerate code-version drift. |
+| [`metaproc/dispatch/worker_payload.py`](../../src/metaproc/dispatch/worker_payload.py) | `WorkerDispatchPayload` for the 12-field orchestrator-to-worker cohort. Worker identity is load-bearing and always emitted; inline and file item contexts are mutually exclusive, with the file path winning when both are populated. Call-site migration in `worker_dispatch` is deferred because the existing inline construction handles size-gated spill and NFS path resolution; the dataclass is ready for new sites. |
 
 The pattern is now well-trodden: any new env-var cohort that travels together gets a
 typed module mirroring this shape.
 The `setup_token_command` capability seam (Phase 7.3) follows the same principle at the
 Protocol level.
 
-<!-- This document follows std-doc-guidelines.md.
-Review guidelines before editing.
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
 -->

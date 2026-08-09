@@ -215,19 +215,19 @@ These two design constraints are load-bearing for the primitives once they exist
 
 ### Grounding example: example_plugin experiment process
 
-[example_plugin/process/experiment/](metaproc-design-rev3-proposals.md) is a working
-domain implementation of this pattern, manually orchestrated:
+A downstream `example_plugin/process/experiment/` tree is a working domain
+implementation of this pattern, manually orchestrated:
 
 - The **manifest** (`experiments/{name}/manifest.md`) is the experiment entity —
   hypothesis, arms, run IDs, dates, metrics, conclusion.
-  See [experiment.template.md](metaproc-design-rev3-proposals.md).
+  A downstream `experiment.template.md` defines the manifest shape.
 - **Arms** are sweep variants.
   Each arm has a `variant` metaparameter (model or prompt version) and a list of
   `run_ids` produced by separate `run-process` invocations.
 - **Tiers** (dev / validation / production) are sweep cohorts at different scales and
-  sample sizes — see [dev-set/process.md](metaproc-design-rev3-proposals.md).
-- **Measurement** comes from running the retro process against each run and folding
-  direction-accuracy and P&L numbers back into the manifest.
+  sample sizes, each defined by its own downstream process spec.
+- **Measurement** comes from running the domain’s evaluation process against each run
+  and folding its accuracy and cost metrics back into the manifest.
 
 What promoting this to a framework primitive would mean:
 
@@ -257,6 +257,6 @@ Why it remains future work:
 | P6. Declarative run source | authored, future | deferred | medium |
 | P7. Sweep / ensemble / experiment | authored, future | deferred | large |
 
-<!-- This document follows std-doc-guidelines.md.
-Review guidelines before editing.
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
 -->
