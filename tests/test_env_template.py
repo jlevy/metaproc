@@ -61,3 +61,15 @@ def test_template_comments_optional_members() -> None:
         assert f"# export {member.name}=" in rendered, (
             f"OPTIONAL {member.name} should be commented out in template"
         )
+
+
+def test_template_keeps_download_uris_with_required_digests() -> None:
+    rendered = render_env_template()
+
+    for name in (
+        "METAPROC_WHEEL_GCS",
+        "METAPROC_WHEEL_SHA256",
+        "METAPROC_WORKSPACE_GCS",
+        "METAPROC_WORKSPACE_SHA256",
+    ):
+        assert f"# export {name}=" in rendered

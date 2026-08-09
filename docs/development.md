@@ -146,18 +146,21 @@ When you do need GCP:
 
 `metaproc/` Python is baked into the agent image at build time; cloud runs do **not**
 pick up branch edits automatically.
-Ship code via `METAPROC_WHEEL_GCS` (fast) or rebuild the image (when an edit should
-become the default for every dispatch).
-See [cloud-dispatch.runbook.md](runbooks/cloud-dispatch.runbook.md) §shipping for
-detail.
+Ship code with the `METAPROC_WHEEL_GCS` and `METAPROC_WHEEL_SHA256` pair (fast), or
+rebuild the image when an edit should become the default for every dispatch.
+See
+[Required Configuration](runbooks/cloud-dispatch.runbook.md#2-required-configuration)
+for details.
 
 ## Architecture Docs
 
 All architecture docs live in `docs/arch/` and follow the `arch-*.md` naming convention.
 They carry frontmatter (title, description, author, status), a Date line with
 `(last updated ...)`, a Maintenance blockquote pointing at
-`tbd shortcut revise-architecture-doc`, and a Future Considerations section
-(`Open Questions` and `Potential Improvements`). To revise one:
+`tbd shortcut revise-architecture-doc`, and current implementation evidence.
+The revision workflow verifies the document against code and records applicable open
+questions and potential improvements.
+To revise one:
 
 ```bash
 tbd shortcut revise-architecture-doc

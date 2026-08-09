@@ -4,15 +4,18 @@ Both the worker entrypoint (``worker_entrypoint.py``) and orchestrator
 entrypoint (``orchestrator_entrypoint.py``) need the same setup:
 
 1. Process-scoped Git authentication with ambient helpers disabled
-2. Resolve a shipped, cloned, or image-bundled workspace
-3. Install explicitly configured workspace packages for plugin discovery
-4. Run installed consumer bootstrap hooks
-5. Ensure ``RUNS_DIR`` exists
-6. Write pi CLI models config if ``METAPROC_PI_MODELS_JSON`` is set
+2. Install a digest-verified Metaproc wheel override when configured
+3. Resolve a digest-verified, cloned, or image-bundled workspace
+4. Install explicitly configured workspace packages for plugin discovery
+5. Run installed consumer bootstrap hooks
+6. Ensure ``RUNS_DIR`` exists
+7. Write pi CLI models config if ``METAPROC_PI_MODELS_JSON`` is set
+8. Let the entrypoint caller run registered adapter bootstrap hooks
 
 This module provides a single ``bootstrap_container()`` function that
-performs all of the above and returns a ``BootstrapResult`` with the
-resolved work directory.
+performs the first seven steps and returns a ``BootstrapResult`` with the
+resolved work directory. Worker and orchestrator callers perform the final
+adapter step before execution.
 
 When ``METAPROC_WHEEL_GCS`` and/or ``METAPROC_WORKSPACE_GCS`` are present,
 the standard worker/orchestrator bootstrap can also consume the same shipped
@@ -21,7 +24,7 @@ artifacts used by ``metaproc gcp run``. This lets the normal
 without requiring an image rebuild.
 
 For the lighter-weight ``metaproc gcp run`` entrypoint, ``bootstrap_gcp_run``
-provides a minimal install-wheel + extract-workspace flow.
+provides verified wheel installation and workspace extraction.
 """
 
 from __future__ import annotations
@@ -169,9 +172,9 @@ def _log_metaproc_source(*, wheel_gcs: str, workspace_gcs: str) -> None:
 
     There are exactly two metaproc delivery paths:
 
-    - ``wheel_gcs`` — ``METAPROC_WHEEL_GCS`` was set and the wheel was
+    - ``wheel_gcs``: ``METAPROC_WHEEL_GCS`` was set and the wheel was
       force-reinstalled over the baked ``/opt/venv`` earlier in bootstrap.
-    - ``image`` — fall through: metaproc is whatever was baked into the
+    - ``image``: fall through; metaproc is whatever was baked into the
       agent image at build time.
 
     ``METAPROC_WORKSPACE_GCS`` is logged separately because a workspace may
@@ -409,18 +412,20 @@ _run = run_command
 def bootstrap_gcp_run(*, home: Path, env: Mapping[str, str]) -> str:
     """Bootstrap a single ``metaproc gcp run`` task container.
 
-    Two optional steps, each driven by an env var:
+    Two optional steps, each driven by a URI and required digest pair:
 
-    1. ``METAPROC_WHEEL_GCS`` — gs:// URI to the current-branch metaproc
+    1. ``METAPROC_WHEEL_GCS``: gs:// URI to the current-branch metaproc
        wheel. Downloaded via the ``google-cloud-storage`` Python client
        and force-reinstalled into the baked ``/opt/venv`` (which already
        has the ``[gcp-batch]`` extras pre-installed by the Dockerfile).
-       The freshly installed wheel takes
-       priority over any image-baked metaproc.
-    2. ``METAPROC_WORKSPACE_GCS`` — gs:// URI to a workspace tar.gz.
-       Downloaded and extracted into ``GCP_RUN_WORKSPACE_DIR``
-       (``/workspace``) so the user's command sees the current-branch
-       repo files.
+       ``METAPROC_WHEEL_SHA256`` authenticates the downloaded bytes before
+       installation. The freshly installed wheel takes priority over any
+       image-baked metaproc.
+    2. ``METAPROC_WORKSPACE_GCS``: gs:// URI to a workspace tar.gz.
+       ``METAPROC_WORKSPACE_SHA256`` authenticates the downloaded bytes
+       before they are safely extracted into ``GCP_RUN_WORKSPACE_DIR``
+       (``/workspace``), where the user's command sees the current-branch
+       repository files.
 
     Returns the path the user command should chdir into
     (``/workspace`` if a workspace was extracted, else ``/tmp``). The
@@ -463,8 +468,8 @@ def _install_wheel_from_gcs(wheel_gcs: str, expected_sha256: str) -> None:
     """Download a wheel from GCS and force-reinstall into the baked ``/opt/venv``.
 
     ``uv tool install`` creates an isolated per-tool venv that ignores the
-    ``[gcp-batch]`` extras the agent image pre-installs into ``/opt/venv``
-    — the resulting CLI crashes at import time on ``google.cloud.batch_v1``.
+    ``[gcp-batch]`` extras the agent image pre-installs into ``/opt/venv``.
+    The resulting CLI crashes at import time on ``google.cloud.batch_v1``.
     We reuse the baked venv instead and let the wheel's own deps satisfy
     everything else.
     """

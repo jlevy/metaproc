@@ -80,7 +80,7 @@ from metaproc.runpool.status import (
 
 gcp_app = typer.Typer(
     name="gcp",
-    help="GCP Batch job management (requires [gcp-batch] extra).",
+    help="GCP Batch job management (requires the gcp-batch optional extra).",
     no_args_is_help=True,
 )
 app.add_typer(gcp_app)

@@ -54,9 +54,13 @@ mode requires. Never commit `.env`.
 | `METAPROC_GCP_FILESTORE_*` | Optional shared run storage |
 | `METAPROC_REPO_URL` / `METAPROC_RUN_BRANCH` | Optional repository source for remote bootstrap |
 | `METAPROC_WHEEL_GCS` | Optional exact prebuilt Metaproc wheel |
+| `METAPROC_WHEEL_SHA256` | Required digest when `METAPROC_WHEEL_GCS` is set |
 | `METAPROC_WORKSPACE_GCS` | Optional exact consumer workspace archive |
+| `METAPROC_WORKSPACE_SHA256` | Required digest when `METAPROC_WORKSPACE_GCS` is set |
 
 Prefer immutable wheels/images and a pinned workspace artifact for repeatable runs.
+Every downloaded wheel or workspace archive must have its corresponding SHA-256 value;
+bootstrap fails closed when a URI lacks its digest or the bytes do not match.
 Branch checkout is useful during development but is mutable and must point at a pushed
 commit containing every required file.
 

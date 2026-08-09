@@ -353,7 +353,7 @@ def resources_handler(request: Request) -> JSONResponse:
                     trigger="recovery",
                     bundle=snapshot_bundle,
                 ).document
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 - HTTP boundary reports refresh failures
                 return JSONResponse({"error": str(exc)}, status_code=500)
         elif not process_rel:
             return JSONResponse(
@@ -387,7 +387,7 @@ def resources_handler(request: Request) -> JSONResponse:
                     write=True,
                 )
                 document = result.document
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 - HTTP boundary reports rebuild failures
                 return JSONResponse({"error": str(exc)}, status_code=500)
     else:
         from metaproc.models.resources import (  # noqa: PLC0415 -- pre-existing local import; needs review

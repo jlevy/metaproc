@@ -1,6 +1,6 @@
-"""metaproc resources — print the calling process's resource context.
+"""Print the calling process's resource context for ``metaproc resources``.
 
-Read of host CPU + RAM, container cgroup CPU + memory limits, OS rlimits,
+Read host CPU and RAM, container cgroup CPU and memory limits, OS rlimits,
 Python runtime, and METAPROC_*/BATCH_* env. Useful for:
 
 - Smoke-checking that a Batch dispatch actually right-sized
@@ -29,7 +29,7 @@ from metaproc.output import OutputFormat
 def resources(
     json_output: bool = typer.Option(False, "--json", help="Emit the snapshot as JSON."),
 ) -> None:
-    """Show the current process's host + cgroup + OS + runtime resource limits."""
+    """Show the current process's host, cgroup, OS, and runtime resource limits."""
     out = get_output()
     ctx = collect_resource_context()
 

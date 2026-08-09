@@ -7,6 +7,8 @@ development series.
 
 ## [Unreleased][unreleased]
 
+## [0.2.1][] - 2026-08-09
+
 ### Added
 
 - **Self-identifying typed IDs**: `metaproc.ids` now provides registered
@@ -16,6 +18,13 @@ development series.
   label and a collision-resistant exact-identity key.
   Cloud inventory recovers the exact run ID from structured job metadata and keeps
   colliding readable labels separate.
+- **Ledger-backed resource observability**: normalized runtime and agent evidence now
+  drives strict hierarchical reports, provider meters, coverage gaps, reporting-only
+  budgets, terminal finalization, inactive-run recovery, and CLI and Metabrowser views.
+- **Code-step telemetry**: handlers and child processes launched by `run-process`,
+  `run-step`, and `run-parallel` contribute CPU, memory, and lifecycle evidence to the
+  root run ledger.
+- **Installed version option**: `metaproc --version` reports the distribution version.
 
 ### Changed
 
@@ -29,6 +38,29 @@ development series.
   Local-directory status reads the immutable identity from run config rather than a
   process-directory basename or sanitized job label.
   Exact typed run IDs are not constrained by the legacy 63-character label heuristic.
+- **Resource document contract**: new `resources.json` files use the registered
+  `metaproc:ResourcesDocument/0.1` token.
+  Strict readers for historical `metaproc.resources/v1` and `metaproc.resources/v2`
+  artifacts remain available.
+- **SoftSchema dependency**: Metaproc now requires `softschema>=0.6.0,<0.7` and follows
+  its document terminology.
+  Consumer repositories control their own dependency-source resolution.
+- **Portable Agent Skill and documentation map**: generated agent-specific skill copies
+  are drift-checked against the packaged skill, and the public docs route users through
+  audience-oriented manuals and maintained architecture references.
+
+### Fixed
+
+- **Resource finalization and attribution**: inactive successful runs no longer recover
+  as failed, historical refreshes write the complete report set, code-mode sampling
+  excludes unrelated processes, and nested or fan-out work retains its owning node and
+  item identity.
+- **Tool latency**: paired Claude and Gemini tool spans derive a non-negative duration
+  from valid timestamps instead of rolling up as zero.
+- **Cloud source preflight**: vendored and submodule Metaproc paths are detected before
+  dispatch so current-branch source changes cannot silently use image-baked code.
+- **Cloud artifact contracts**: environment templates and operator docs include the
+  required SHA-256 value for each downloaded wheel and workspace URI.
 
 ## [0.2.0][] - 2026-07-31
 
@@ -80,5 +112,10 @@ development series.
   implicitly. Schemas consumed through Metaproc must be self-contained: use local `$defs`
   references or a registered Pydantic model instead of network-resolved references.
 
-[unreleased]: https://github.com/jlevy/metaproc/compare/v0.2.0...HEAD
+[unreleased]: https://github.com/jlevy/metaproc/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/jlevy/metaproc/releases/tag/v0.2.1
 [0.2.0]: https://github.com/jlevy/metaproc/releases/tag/v0.2.0
+
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
+-->

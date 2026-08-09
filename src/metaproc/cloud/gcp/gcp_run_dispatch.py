@@ -1,13 +1,14 @@
 """Dispatch a single-task GCP Batch job for the ``metaproc gcp run`` primitive.
 
 Analogous to ``worker_dispatch.py`` / ``orchestrator_dispatch.py`` but
-collapsed to one task. Composes the env (METAPROC_GCP_RUN_CMD,
-METAPROC_WHEEL_GCS, METAPROC_WORKSPACE_GCS, RUNS_DIR), resolves the
-``GCP_SECRET_REFS`` registry, builds the Job via
+collapsed to one task. Composes the env (``METAPROC_GCP_RUN_CMD``, the
+``METAPROC_WHEEL_GCS`` and ``METAPROC_WHEEL_SHA256`` pair, the
+``METAPROC_WORKSPACE_GCS`` and ``METAPROC_WORKSPACE_SHA256`` pair, and
+``RUNS_DIR``), resolves the ``GCP_SECRET_REFS`` registry, builds the Job via
 ``batch_backend.create_single_task_job``, and submits it via the Batch
 client.
 
-``build_gcp_run_job`` is the pure assembly half (no API calls) — used by
+``build_gcp_run_job`` is the pure assembly half (no API calls), used by
 ``--dry-run`` and unit tests. ``dispatch_gcp_run`` is the side-effecting
 wrapper that actually submits.
 """
@@ -36,7 +37,7 @@ log = logging.getLogger(__name__)
 ENTRYPOINT_MODULE = "metaproc.cloud.gcp.gcp_run_entrypoint"
 
 # Env-var names owned by the dispatcher/entrypoint. Callers must not smuggle
-# these in via ``--env`` / ``extra_env`` — a silent override would break the
+# these in via ``--env`` / ``extra_env``; a silent override would break the
 # entrypoint's wheel/workspace bootstrap or redirect RUNS_DIR off the
 # Filestore mount.
 RESERVED_ENV_KEYS: frozenset[str] = frozenset(

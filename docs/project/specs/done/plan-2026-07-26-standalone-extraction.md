@@ -1,6 +1,14 @@
+---
+title: Metaproc Standalone Extraction
+description: Completed plan for extracting, validating, and publishing Metaproc as an independent package.
+author: Joshua Levy (github.com/jlevy) with LLM assistance
+status: Complete
+---
 # Metaproc Standalone Extraction
 
-Date: 2026-07-26
+**Date:** 2026-07-26 (completed 2026-08-01)
+
+**Status:** Complete
 
 ## Goal
 
@@ -57,7 +65,7 @@ CI repeats lint and distribution checks once and runs tests on Python 3.12, 3.13
 3.14. The release workflow checks out the exact release tag and repeats the full gate
 before publishing through PyPI trusted publishing.
 
-## Current Status
+## Completion Status
 
 The sealed source tree has been copied and the framework boundary has been separated
 from its former consumer.
@@ -68,16 +76,18 @@ runbooks, and executable process specifications define the process without GitHu
 or pull request forms.
 
 The initial release-readiness review produced 101 tracked findings.
-One hundred findings are closed after implementation or an explicit design decision; the
-remaining publication-access check belongs to the first release operation.
-The current complete local gate passes: 3,793 tests pass, 8 live or
-environment-dependent tests skip, dependency audits are clean, and both built
-distributions pass installed-package smoke checks.
+Every release blocker was fixed or closed with an explicit design decision, and the one
+external access blocker was resolved when the repository became public.
 
-Every proposed merge head must pass the hosted Python matrix and be pinned downstream by
-exact commit. No `v0.1.0` tag or PyPI distribution was published.
-The `v0.2.0` publication bead remains open until the upgrade and release-preparation
-pull requests merge and trusted publishing is validated against the final tag.
+The first public release,
+[v0.2.0](https://github.com/jlevy/metaproc/releases/tag/v0.2.0), was published on
+2026-08-01 through PyPI trusted publishing after the exact tag passed the complete
+release gate. No `v0.1.0` tag or PyPI distribution was published.
+The downstream integration is pinned to an exact standalone commit, and the public
+repository can be cloned by hosted downstream CI without cross-repository credentials.
+
+The deferred timing-sleep cleanup in `mp-wgax` is a non-blocking test-quality ratchet.
+Per-test timeouts and the complete suite remain the governing flake backstops.
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

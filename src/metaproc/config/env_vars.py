@@ -101,20 +101,22 @@ class MetaprocEnv(EnvEnum):
         "Optional image-bundled repository root used when no runtime workspace is supplied."
     )
     METAPROC_WHEEL_GCS = optional(
-        "GCS path to a prebuilt metaproc wheel. When set, workers install from the "
-        "wheel instead of cloning.",
-        "gs://<your-gcs-bucket>/wheels/metaproc-0.2.0-py3-none-any.whl",
+        "GCS path to a prebuilt Metaproc wheel. When set, workers verify and install "
+        "this wheel over the image-baked version.",
+        "gs://<your-gcs-bucket>/wheels/metaproc-<version>-py3-none-any.whl",
     )
     METAPROC_WHEEL_SHA256 = optional(
-        "Required SHA-256 digest for METAPROC_WHEEL_GCS artifact verification."
+        "Required SHA-256 digest for METAPROC_WHEEL_GCS artifact verification.",
+        "<64-hex-character-sha256>",
     )
     METAPROC_WORKSPACE_GCS = optional(
-        "GCS path to a workspace tarball for the active workflow plugin. When set, "
-        "workers extract and install the plugin from the tarball instead of cloning.",
+        "GCS path to a consumer workspace tarball. When set, workers verify and "
+        "extract it instead of cloning the configured repository.",
         "gs://<your-gcs-bucket>/workspaces/<your-plugin>.tar.gz",
     )
     METAPROC_WORKSPACE_SHA256 = optional(
-        "Required SHA-256 digest for METAPROC_WORKSPACE_GCS artifact verification."
+        "Required SHA-256 digest for METAPROC_WORKSPACE_GCS artifact verification.",
+        "<64-hex-character-sha256>",
     )
 
     METAPROC_PI_MODELS_JSON = optional(
