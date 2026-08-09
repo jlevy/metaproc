@@ -14,7 +14,10 @@ from metaproc.paths import LOGS_DIR
 
 def test_code_mode_persists_item_resource_samples(tmp_path: Path) -> None:
     source_path = tmp_path / "items.md"
-    source_path.write_text("---\nprogress:\n  process: parallel-code\n  items: []\n---\n")
+    source_path.write_text(
+        "---\nprogress:\n  process: parallel-code\n  items:\n"
+        "    - ticker: AAPL\n      market: NASDAQ\n---\n"
+    )
     process_path = tmp_path / "parallel-code.process.md"
     process_path.write_text(
         f"""---
@@ -23,7 +26,7 @@ process:
   steps:
     - id: verify-item
       mode: code
-      command: /bin/sh -c 'test "{{{{ticker}}}}" = AAPL && sleep 0.2'
+      command: /bin/sh -c 'test "{{{{ticker}}}}-{{{{market}}}}" = AAPL-NASDAQ && sleep 0.2'
       inputs:
         tickers:
           path: "{source_path}"
@@ -32,8 +35,8 @@ process:
       for_each:
         over: tickers
         bind: ticker
-        bind_fields: [ticker]
-        key: "{{{{ticker}}}}"
+        bind_fields: [ticker, market]
+        key: "{{{{ticker}}}}-{{{{market}}}}"
 ---
 # Parallel code
 """
@@ -60,5 +63,5 @@ process:
     samples = [event for event in read_events(event_path) if isinstance(event, SampleEvent)]
     assert samples
     assert {(event.hierarchy.step_node_id, event.hierarchy.item_key) for event in samples} == {
-        ("verify-item", "AAPL")
+        ("verify-item", "AAPL-NASDAQ")
     }

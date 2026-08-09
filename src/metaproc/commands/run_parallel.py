@@ -938,6 +938,7 @@ def run_parallel(
                 item_vars = dict(variables)
                 item_vars.update(item_context)
                 state_dir = compute_task_state_dir(run_dir, step_def, item_vars)
+                canonical_item_key = state_dir.name
                 artifact_dir = compute_item_dir(effective_outputs, item_vars)
 
                 runtime_info: dict[str, object] = {
@@ -980,7 +981,7 @@ def run_parallel(
                                 run_dir=run_dir,
                                 run_id=run_id,
                                 step_node_id=step,
-                                item_key=item,
+                                item_key=canonical_item_key,
                             ):
                                 handler_fn(dict(item_vars), process_step)
                         else:
@@ -995,7 +996,7 @@ def run_parallel(
                                 run_dir=run_dir,
                                 run_id=run_id,
                                 step_node_id=step,
-                                item_key=item,
+                                item_key=canonical_item_key,
                             )
                         exit_code = 0
                     except subprocess.CalledProcessError as exc:

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from collections.abc import Generator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,6 +13,8 @@ from metaproc.logutil.resource_events import ResourceEventLogger
 from metaproc.models.resources import HierarchyRef, SourceRef
 from metaproc.osutils.psutil_sampler import PsutilSampler
 from metaproc.paths import LOGS_DIR, RESOURCE_EVENTS_FILE, run_config_file
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -65,15 +68,22 @@ def sample_step_resources(
         step_node_id=target.step_node_id,
         item_key=item_key,
     )
-    with (
-        ResourceEventLogger(event_path) as logger,
-        PsutilSampler(
-            hierarchy=hierarchy,
-            source=source,
-            logger=logger,
-            pid=pid,
-        ) as sampler,
-    ):
+    with ExitStack() as stack:
+        try:
+            logger = stack.enter_context(ResourceEventLogger(event_path))
+        except OSError:
+            logger = None
+            log.debug("Resource sampler could not open the event log", exc_info=True)
+
+        sampler = stack.enter_context(
+            PsutilSampler(
+                hierarchy=hierarchy,
+                source=source,
+                logger=logger,
+                pid=pid,
+                exclude_preexisting_children=pid is None,
+            )
+        )
         yield sampler
 
 

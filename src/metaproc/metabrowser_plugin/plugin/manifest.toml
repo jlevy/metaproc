@@ -41,6 +41,11 @@ priority = 100
 
 [[kind]]
 id = "resource-report"
+match = { ext = ".json", basename = "resources.json", json_has_key = "schema", json_value_prefix = "metaproc:ResourcesDocument/" }
+priority = 100
+
+[[kind]]
+id = "resource-report"
 match = { ext = ".json", basename = "resources.json", json_has_key = "schema", json_value_prefix = "metaproc.resources/" }
 priority = 100
 

@@ -151,7 +151,8 @@ while arbitrary provider meters remain representable.
 
 Nodes gain self and total meter rollups alongside V1-compatible scalar metrics.
 The document gains terminal outcome, budget evaluations, coverage gaps, and finalization
-metadata. New writers emit V2; readers continue to accept strict V1 documents.
+metadata. New writers emit `metaproc:ResourcesDocument/0.1`; readers continue to accept
+strict documents carrying the historical V1 and V2 tokens.
 
 ### Canonical tool invocations
 
@@ -350,7 +351,8 @@ clean before merge readiness is claimed.
 
 ## Rollout Plan
 
-New runs write V2 and the summary while existing V1 files remain readable.
+New runs write `metaproc:ResourcesDocument/0.1` and the summary while strict historical
+V1 and V2 files remain readable.
 Reporting commands label actual, estimated, and unmeasured values explicitly.
 Recovery is best-effort only for inactive runs and never changes execution state.
 Budget results are informational, so adoption does not introduce a new dispatch failure

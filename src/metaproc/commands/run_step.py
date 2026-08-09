@@ -319,6 +319,7 @@ def run_step(
         for_each_def = step_def.for_each
         each_var = for_each_def.bind if for_each_def else None
         each_label = variables.get(each_var, "default") if each_var else None
+        canonical_item_key = state_dir.name if for_each_def else None
         item_record = {each_var: each_label} if each_var and each_label else {"step": step}
 
         runtime_info: dict[str, object] = {"mode": "code", "variant": effective_variant}
@@ -354,7 +355,7 @@ def run_step(
                     run_dir=run_dir,
                     run_id=run_id,
                     step_node_id=step,
-                    item_key=each_label if each_var else None,
+                    item_key=canonical_item_key,
                 ):
                     handler_fn(dict(variables), process_step)
             else:
@@ -375,7 +376,7 @@ def run_step(
                     run_dir=run_dir,
                     run_id=run_id,
                     step_node_id=step,
-                    item_key=each_label if each_var else None,
+                    item_key=canonical_item_key,
                 )
                 if proc.stdout:
                     out.progress(proc.stdout.rstrip())
