@@ -200,7 +200,8 @@ on creation.
 Plan specs and evidence subdirs carry a `YYYY-MM-DD` stamp in the name:
 `plan-2026-04-20-<slug>.md`, `evidence/<slug>-2026-04-20/`. The date is the creation
 date, not the close-out date.
-It is stable across the spec’s lifetime and makes chronological listing trivial.
+It remains stable across the spec’s lifetime and supports chronological listing without
+a separate timestamp index.
 
 ### Evidence artifact format
 
