@@ -5,7 +5,8 @@ title: "Alpha stabilization: green CI, organized docs, agent-skill packaging"
 kind: epic
 status: in_progress
 priority: 1
-version: 8
+version: 10
+spec_path: docs/releases/v0.2.1.md
 labels: []
 dependencies: []
 child_order_hints:
@@ -13,8 +14,9 @@ child_order_hints:
   - is-01kyk166pgxn3tykf54yqf5e0d
   - is-01kyk166zph480tkmf44jmtnm3
   - is-01kzkwt9ddwj9sfvjwzt7ma027
+  - is-01kzkxx9rxha6mkaswemn192sb
 created_at: 2026-07-28T00:14:48.230Z
-updated_at: 2026-08-09T18:33:29.260Z
+updated_at: 2026-08-09T19:12:48.946Z
 ---
 Make the standalone repo alpha-level stable and usable by multiple downstream repos: fix the CI lint failure, systematically reorganize documentation entry points (README + contextual docs), and package Metaproc so it can install itself as an Agent Skill that delegates to its own docs.
 

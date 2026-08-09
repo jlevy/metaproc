@@ -3,9 +3,9 @@ type: is
 id: is-01kyx37mj1agq5zha1x5gn574f
 title: Upgrade to softschema 0.4 and release
 kind: epic
-status: open
+status: closed
 priority: 1
-version: 13
+version: 14
 labels: []
 dependencies: []
 child_order_hints:
@@ -18,7 +18,9 @@ child_order_hints:
   - is-01kyxw263bdz2f224czw8veymn
   - is-01kyxw2fe210dav32b5jwbr7gd
 created_at: 2026-07-31T22:03:06.176Z
-updated_at: 2026-08-01T06:28:18.912Z
+updated_at: 2026-08-09T18:52:40.324Z
+closed_at: 2026-08-09T18:52:40.323Z
+close_reason: Metaproc v0.2.0 was published on 2026-07-31; its PyPI and release verification completed before this v0.2.1 cycle.
 ---
 Metaproc now adopts the complete SoftSchema 0.2-0.4 compatibility boundary and frontmatter-format 0.4 behavior on PR #3. Implementation, review hardening, and delivery are tracked under mp-9u9s; this original epic remains open only for the post-merge Metaproc 0.2.0 release.
 

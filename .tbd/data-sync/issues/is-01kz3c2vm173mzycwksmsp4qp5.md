@@ -5,8 +5,8 @@ title: Define V2 resource contracts and deterministic ledger reconciliation
 kind: feature
 status: closed
 priority: 1
-version: 6
-spec_path: docs/project/specs/active/plan-2026-08-03-focused-resource-observability.md
+version: 8
+spec_path: docs/project/specs/done/plan-2026-08-03-focused-resource-observability.md
 labels:
   - resources
   - pr-10
@@ -19,7 +19,7 @@ dependencies:
     target: is-01kz2y3jccrsgpfe375naa07dg
 parent_id: is-01kz3c2j1me5ng0pkjym3k42rr
 created_at: 2026-08-03T08:33:13.344Z
-updated_at: 2026-08-03T10:07:21.502Z
+updated_at: 2026-08-09T18:56:50.762Z
 closed_at: 2026-08-03T10:07:21.502Z
 close_reason: "Implemented and reviewed in Metaproc commit 6dcb522: strict contracts, canonical evidence, usage/meters, ledger projection, immutable budgets, summary/operator views, causal finalization, and inactive local recovery."
 ---

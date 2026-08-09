@@ -3,9 +3,9 @@ type: is
 id: is-01kyxndt8jqeyf92cp0c2h3krq
 title: "Complete Metaproc PR #3 dependency and review hardening"
 kind: epic
-status: in_progress
+status: closed
 priority: 1
-version: 11
+version: 12
 labels:
   - pr-3
   - softschema
@@ -19,7 +19,9 @@ child_order_hints:
   - is-01kyxne92teback2pjnmsjhcw3
   - is-01kyxpharxskce7vawekfey3n9
 created_at: 2026-08-01T03:21:02.994Z
-updated_at: 2026-08-01T04:10:58.810Z
+updated_at: 2026-08-09T18:55:55.700Z
+closed_at: 2026-08-09T18:55:55.699Z
+close_reason: "PR #3 shipped at dfb4deb with green CI; its three remaining independent quality ratchets are now tracked under mp-7kwn."
 ---
 Deliver PR #3 end to end now that first-party softschema v0.4.0 and frontmatter-format updates are available: refresh project tooling and guidelines, adopt the released dependency contracts, resolve every review finding, validate the complete branch, publish the update, and confirm final CI.
 

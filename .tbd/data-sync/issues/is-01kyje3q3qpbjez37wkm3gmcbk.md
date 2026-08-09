@@ -5,13 +5,13 @@ title: "PR #1 review TST-04: Replace timing sleeps with condition polling"
 kind: bug
 status: deferred
 priority: 2
-version: 2
-spec_path: docs/project/specs/active/plan-2026-07-26-standalone-extraction.md
+version: 4
+spec_path: TODO.md
 labels: []
 dependencies: []
 parent_id: is-01kyje203wwq9b8jqxgwe7574v
 created_at: 2026-07-27T18:41:33.303Z
-updated_at: 2026-07-27T19:59:57.320Z
+updated_at: 2026-08-09T19:12:48.537Z
 ---
 PR #1 release-readiness review finding TST-04. Scope: Replace timing sleeps with condition polling. Record an explicit fixed, rebutted, or deferred disposition.
 

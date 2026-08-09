@@ -5,8 +5,8 @@ title: Validate focused resource observability end to end
 kind: task
 status: closed
 priority: 1
-version: 3
-spec_path: docs/project/specs/active/plan-2026-08-03-focused-resource-observability.md
+version: 5
+spec_path: docs/project/specs/done/plan-2026-08-03-focused-resource-observability.md
 labels:
   - resources
   - pr-10
@@ -16,7 +16,7 @@ dependencies:
     target: is-01kz3c4jwq9t8fe17nrm0xxxqy
 parent_id: is-01kz3c2j1me5ng0pkjym3k42rr
 created_at: 2026-08-03T08:34:05.591Z
-updated_at: 2026-08-03T10:10:24.027Z
+updated_at: 2026-08-09T18:56:52.395Z
 closed_at: 2026-08-03T10:10:24.027Z
 close_reason: "Fresh senior review and isolated make verify passed at commit 6dcb522: 3917 tests passed, 8 skipped; lint, type checking, docs, browser, audits, build, and installed-wheel smoke all green."
 ---

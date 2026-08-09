@@ -5,8 +5,8 @@ title: Finalize and recover resources from local ledger evidence
 kind: feature
 status: closed
 priority: 1
-version: 3
-spec_path: docs/project/specs/active/plan-2026-08-03-focused-resource-observability.md
+version: 5
+spec_path: docs/project/specs/done/plan-2026-08-03-focused-resource-observability.md
 labels:
   - resources
   - pr-10
@@ -15,7 +15,7 @@ dependencies:
     target: is-01kz3c4emrbq58fss2nths2dnd
 parent_id: is-01kz3c2j1me5ng0pkjym3k42rr
 created_at: 2026-08-03T08:33:59.632Z
-updated_at: 2026-08-03T10:07:21.562Z
+updated_at: 2026-08-09T18:56:52.084Z
 closed_at: 2026-08-03T10:07:21.562Z
 close_reason: "Implemented and reviewed in Metaproc commit 6dcb522: strict contracts, canonical evidence, usage/meters, ledger projection, immutable budgets, summary/operator views, causal finalization, and inactive local recovery."
 ---

@@ -5,7 +5,8 @@ title: "Review and reconcile PR #2 against current main"
 kind: task
 status: closed
 priority: 1
-version: 9
+version: 10
+spec_path: docs/releases/v0.2.1.md
 labels: []
 dependencies: []
 parent_id: is-01kyk15xd6m1m2vyzexds7xswy
@@ -17,7 +18,7 @@ child_order_hints:
   - is-01kzkx37fmkwhcvkah8h1vhp1h
   - is-01kzkx37yn634ddsqee2405jk9
 created_at: 2026-08-09T18:33:29.260Z
-updated_at: 2026-08-09T18:52:03.587Z
+updated_at: 2026-08-09T19:12:49.010Z
 closed_at: 2026-08-09T18:52:03.586Z
 close_reason: "All senior-review findings addressed in 83b894d; PR #2 merged as 92c0651 after fresh CI passed."
 ---

@@ -3,10 +3,10 @@ type: is
 id: is-01kygat035xcheze599f3yxqrb
 title: Complete standalone Metaproc extraction
 kind: epic
-status: open
+status: closed
 priority: 1
-version: 20
-spec_path: docs/project/specs/active/plan-2026-07-26-standalone-extraction.md
+version: 22
+spec_path: docs/project/specs/done/plan-2026-07-26-standalone-extraction.md
 labels: []
 dependencies: []
 child_order_hints:
@@ -24,7 +24,9 @@ child_order_hints:
   - is-01kyjjswdamtc9d94pwbfqn79r
   - is-01kyjmbrs0r2gf47zfdb1rr08c
 created_at: 2026-07-26T23:05:20.229Z
-updated_at: 2026-07-27T20:45:19.105Z
+updated_at: 2026-08-09T18:57:49.942Z
+closed_at: 2026-08-09T18:57:49.942Z
+close_reason: Standalone extraction, exact downstream pin, public repository access, and the v0.2.0 trusted-publishing release are complete; the governing spec moved to specs/done.
 ---
 Deliver the complete clean-history extraction, standalone package, validation, branch publication, and downstream submodule pin.
 
