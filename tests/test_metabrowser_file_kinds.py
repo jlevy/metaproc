@@ -205,13 +205,17 @@ def test_structure_report_sidekick_returns_process_projection(
 
 
 def test_resources_json_classified_as_resource_report(tmp_path: Path) -> None:
-    """resources.json with the v1 schema gets the resource-report kind via the
-    metaproc plugin's manifest classifier."""
+    """Current and historical resource contracts share the resource-report views."""
 
     fixture = tmp_path / "resources.json"
-    fixture.write_text('{"schema":"metaproc.resources/v1"}')
+    for schema in (
+        "metaproc:ResourcesDocument/0.1",
+        "metaproc.resources/v1",
+        "metaproc.resources/v2",
+    ):
+        fixture.write_text(json.dumps({"schema": schema}))
+        assert _classify_with_plugins(fixture, ".json") == "resource-report"
 
-    assert _classify_with_plugins(fixture, ".json") == "resource-report"
     # First view is the default Resources tab (declared in plugin manifest).
     assert _views_for_kind("resource-report")[0]["id"] == "resources"
 

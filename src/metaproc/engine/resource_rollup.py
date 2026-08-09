@@ -43,7 +43,7 @@ from metaproc.models.resource_budget import (
     evaluate_resource_budgets,
 )
 from metaproc.models.resources import (
-    SCHEMA_V2,
+    RESOURCES_DOCUMENT_CONTRACT,
     HierarchyRef,
     LogSummary,
     Metrics,
@@ -367,7 +367,7 @@ def project_resource_document(
     finalization: ResourceFinalization | None = None,
     summary_path: str | None = None,
 ) -> ResourcesDocument:
-    """Project one V2 document solely from the reconciled event ledger.
+    """Project one current document solely from the reconciled event ledger.
 
     Any metrics already present on ``hierarchy_root`` are discarded. This is
     intentional: terminal finalization and recovery must never reuse cached
@@ -402,7 +402,7 @@ def project_resource_document(
         rollup.key for rollup in meter_rollups if rollup.coverage.value == "unmeasured"
     ]
     document = ResourcesDocument(
-        schema=SCHEMA_V2,
+        schema=RESOURCES_DOCUMENT_CONTRACT,
         run_id=run_id,
         generated_at=generated_at or datetime.now(UTC),
         source_events_path=source_events_path,

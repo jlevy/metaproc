@@ -133,10 +133,10 @@ def _historical_tokens(model_cls: type[BaseModel]) -> tuple[str, ...]:
 def _build_schema_registry() -> dict[str, type[BaseModel]]:
     """Build a registry mapping schema token strings to inner model classes.
 
-    Walks all registered envelopes (framework + plugins) and extracts the
-    schema token default from each model that declares one. Models that
-    publish historical tokens via ``historical_schema_tokens`` keep
-    answering to those tokens after a version bump.
+    Walks registered envelopes and explicitly registered standalone models,
+    extracting the schema token default from each model that declares one.
+    Models that publish historical tokens via ``historical_schema_tokens``
+    keep answering to those tokens after a version bump.
     """
 
     registry: dict[str, type[BaseModel]] = {}
@@ -160,6 +160,12 @@ def _build_schema_registry() -> dict[str, type[BaseModel]]:
             if not hasattr(inner_type, "model_fields"):
                 continue
             _register(inner_type)  # pyright: ignore[reportArgumentType]
+
+    # Whole-document JSON artifacts do not belong in the frontmatter envelope
+    # map, but their canonical tokens must still resolve to their typed model.
+    from metaproc.models.resources import ResourcesDocument  # noqa: PLC0415
+
+    _register(ResourcesDocument)
     return registry
 
 

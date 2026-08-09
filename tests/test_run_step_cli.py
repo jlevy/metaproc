@@ -8,7 +8,10 @@ from typer.testing import CliRunner
 from metaproc.cli import app
 from metaproc.commands.helpers import enrich_single_item
 from metaproc.errors import CLIError
+from metaproc.logutil.resource_events import read_events
 from metaproc.models.authored import ForEach, IOSpec, ProcessStep
+from metaproc.models.resources import SampleEvent
+from metaproc.paths import LOGS_DIR
 
 RUNNER = CliRunner()
 
@@ -123,7 +126,7 @@ process:
   steps:
     - id: verify-env
       mode: code
-      command: /bin/sh -c 'test "$VALUE" = resolved'
+      command: /bin/sh -c 'test "$VALUE" = resolved && sleep 0.2'
       env:
         VALUE: "{{MESSAGE}}"
 ---
@@ -148,6 +151,70 @@ process:
 
     assert result.exit_code == 0, result.output
     assert "completed (code mode)" in result.output
+
+    events = read_events(tmp_path / "runs" / "test-run" / LOGS_DIR / "resource-events.jsonl")
+    samples = [event for event in events if isinstance(event, SampleEvent)]
+    assert samples
+    assert {event.hierarchy.step_node_id for event in samples} == {"verify-env"}
+
+
+def test_run_step_samples_use_resolved_for_each_key(tmp_path: Path) -> None:
+    source_path = tmp_path / "items.md"
+    _write(
+        source_path,
+        """---
+progress:
+  process: item-key
+  items:
+    - ticker: AAPL
+      market: NASDAQ
+---
+""",
+    )
+    process_path = tmp_path / "item-key.process.md"
+    _write(
+        process_path,
+        f"""---
+process:
+  name: item-key
+  steps:
+    - id: verify-item
+      mode: code
+      command: /bin/sh -c 'test "{{{{ticker}}}}-{{{{market}}}}" = AAPL-NASDAQ && sleep 0.2'
+      inputs:
+        tickers:
+          path: "{source_path}"
+          kind: file
+          format: frontmatter-md
+      for_each:
+        over: tickers
+        bind: ticker
+        bind_fields: [ticker, market]
+        key: "{{{{ticker}}}}-{{{{market}}}}"
+---
+""",
+    )
+
+    result = RUNNER.invoke(
+        app,
+        [
+            "run-step",
+            str(process_path),
+            "--step",
+            "verify-item",
+            "--item",
+            "AAPL",
+            "--var",
+            "RUN_ID=test-run",
+            *_runs_var(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    event_path = tmp_path / "runs" / "test-run" / LOGS_DIR / "resource-events.jsonl"
+    samples = [event for event in read_events(event_path) if isinstance(event, SampleEvent)]
+    assert samples
+    assert {event.hierarchy.item_key for event in samples} == {"AAPL-NASDAQ"}
 
 
 # ── for_each --item tests ────────────────────────────────────────

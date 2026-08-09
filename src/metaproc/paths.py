@@ -149,13 +149,11 @@ TRACE_FILE = "trace.jsonl"
 """Derived trace stream filename."""
 
 RESOURCE_EVENTS_FILE = "resource-events.jsonl"
-"""Per-tool ResourceEvent JSONL stream filename.
+"""Run resource-event JSONL stream filename.
 
-Tools (today: external tool) emit one typed `ResourceEvent` per line
-matching `metaproc.models.resources.ResourceEvent`; readers parse via
-`ResourceEvent.model_validate_json(line)`. Replaces the pre-cutover
-`invocations.jsonl` (no legacy fallback retained — see
-`feedback_no_legacy_shims_by_default`)."""
+Runtime samplers, process-log extraction, and external tools emit one typed
+`ResourceEvent` per line matching `metaproc.models.resources.ResourceEvent`.
+Readers validate each line through that discriminated union."""
 
 
 # ── Run-dir helper paths ─────────────────────────────────────────

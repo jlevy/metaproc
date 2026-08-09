@@ -9,7 +9,7 @@ import pytest
 
 from metaproc.engine.resource_rollup import build_resources_document
 from metaproc.io.state_io import write_status_at
-from metaproc.models.resources import ResourcesDocument
+from metaproc.models.resources import RESOURCES_DOCUMENT_CONTRACT, ResourcesDocument
 from metaproc.models.runtime import StatusRecord
 from metaproc.viz_loader import load_plan_bundle
 
@@ -103,7 +103,7 @@ def _make_claude_log(path: Path) -> None:
     path.write_text("\n".join(lines) + "\n")
 
 
-def test_document_has_root_run_node_and_v2_schema(tmp_path: Path) -> None:
+def test_document_has_root_run_node_and_current_schema(tmp_path: Path) -> None:
     parent = _write(tmp_path, "parent/test.process.md", _PARENT_PROCESS)
     _write(tmp_path, "parent/child/test.process.md", _CHILD_PROCESS)
     bundle = load_plan_bundle(parent, params={"CUTOFF_DATE": "2026-04-21"})
@@ -118,7 +118,7 @@ def test_document_has_root_run_node_and_v2_schema(tmp_path: Path) -> None:
     assert doc.hierarchy_root.node_id == "run-1"
     assert doc.source_logs == []  # no logs yet
     payload = doc.model_dump_json(by_alias=True)
-    assert json.loads(payload)["schema"] == "metaproc.resources/v2"
+    assert json.loads(payload)["schema"] == RESOURCES_DOCUMENT_CONTRACT
 
 
 def test_attributes_agent_log_to_owning_step(tmp_path: Path) -> None:

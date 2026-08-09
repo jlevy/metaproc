@@ -25,6 +25,9 @@ from metaproc.models.resources import (
     SourceRef,
     SpanEndEvent,
     SpanStartEvent,
+    StepCompleteEvent,
+    StepFailEvent,
+    StepStartEvent,
     TaxonomyPaths,
     ToolCallEvent,
     UsageEvent,
@@ -159,6 +162,9 @@ def test_event_discriminator_default_set_on_each_subtype() -> None:
     assert ItemStartEvent(ts=_ts(), hierarchy=_hier(), source=_src()).event == "item_start"
     assert ItemCompleteEvent(ts=_ts(), hierarchy=_hier(), source=_src()).event == "item_complete"
     assert ItemFailEvent(ts=_ts(), hierarchy=_hier(), source=_src()).event == "item_fail"
+    assert StepStartEvent(ts=_ts(), hierarchy=_hier(), source=_src()).event == "step_start"
+    assert StepCompleteEvent(ts=_ts(), hierarchy=_hier(), source=_src()).event == "step_complete"
+    assert StepFailEvent(ts=_ts(), hierarchy=_hier(), source=_src()).event == "step_fail"
 
 
 def test_item_fail_carries_error_and_failure_class() -> None:
@@ -171,6 +177,23 @@ def test_item_fail_carries_error_and_failure_class() -> None:
     )
     assert e.error == "boom"
     assert e.failure_class == "rate_limit"
+
+
+def test_step_fail_round_trips_through_resource_event_union() -> None:
+    adapter: TypeAdapter[ResourceEvent] = TypeAdapter(ResourceEvent)
+    original = StepFailEvent(
+        ts=_ts(),
+        hierarchy=_hier(step_node_id="s1"),
+        source=_src(kind="process_events", path=".logs/process-events.jsonl"),
+        metrics=Metrics(wall_time_s=2.5),
+        error="boom",
+    )
+
+    parsed = adapter.validate_json(adapter.dump_json(original))
+
+    assert isinstance(parsed, StepFailEvent)
+    assert parsed.metrics.wall_time_s == 2.5
+    assert parsed.error == "boom"
 
 
 def test_resource_event_union_discriminates_on_event_field() -> None:

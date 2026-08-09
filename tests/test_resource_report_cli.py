@@ -13,6 +13,7 @@ from metaproc.commands.run_process import _write_run_config
 from metaproc.engine.resource_finalization import resource_artifacts_need_recovery
 from metaproc.errors import CLIError
 from metaproc.models.resource_snapshot import ResourceRunSnapshot, ResourceTopologyNode
+from metaproc.models.resources import RESOURCES_DOCUMENT_CONTRACT
 
 runner = CliRunner()
 
@@ -85,7 +86,7 @@ def test_first_invocation_builds_and_persists_resources_json(tmp_path: Path) -> 
     cached = run_dir / "resources.json"
     assert cached.exists()
     payload = json.loads(cached.read_text())
-    assert payload["schema"] == "metaproc.resources/v2"
+    assert payload["schema"] == RESOURCES_DOCUMENT_CONTRACT
     assert "[run]" in result.output
 
 
@@ -161,6 +162,32 @@ def test_cached_v1_document_remains_readable(tmp_path: Path) -> None:
     assert json.loads(result.output)["schema"] == "metaproc.resources/v1"
 
 
+def test_cached_v2_document_retains_full_report_rendering(tmp_path: Path) -> None:
+    _spec_path, run_dir = _setup_run(tmp_path)
+    (run_dir / "resources.json").write_text(
+        json.dumps(
+            {
+                "schema": "metaproc.resources/v2",
+                "run_id": "historical",
+                "generated_at": "2026-04-21T00:00:00Z",
+                "source_events_path": ".logs/resource-events.jsonl",
+                "hierarchy_root": {
+                    "node_type": "run",
+                    "node_id": "historical",
+                    "label": "historical",
+                    "total_metrics": {"list_cost_usd": 1.25},
+                },
+            }
+        )
+    )
+
+    result = runner.invoke(app, ["resource-report", str(run_dir)])
+
+    assert result.exit_code == 0, result.output
+    assert "costs:" in result.output
+    assert "list_estimate_usd: 1.2500" in result.output
+
+
 def test_missing_spec_on_first_build_returns_clean_error(tmp_path: Path) -> None:
     _spec_path, run_dir = _setup_run(tmp_path)
     result = runner.invoke(app, ["resource-report", str(run_dir)])
@@ -186,7 +213,7 @@ def test_json_flag_emits_valid_resources_document(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["schema"] == "metaproc.resources/v2"
+    assert payload["schema"] == RESOURCES_DOCUMENT_CONTRACT
     assert payload["run_id"] == run_dir.name
     assert payload["hierarchy_root"]["node_type"] == "run"
 
@@ -210,7 +237,7 @@ def test_refresh_rebuilds_even_when_cache_present(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.output
     payload = json.loads(cached.read_text())
-    assert payload.get("schema") == "metaproc.resources/v2"
+    assert payload.get("schema") == RESOURCES_DOCUMENT_CONTRACT
 
 
 def test_does_not_shadow_existing_resources_command(tmp_path: Path) -> None:

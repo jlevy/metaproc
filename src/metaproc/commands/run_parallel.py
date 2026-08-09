@@ -84,6 +84,7 @@ from metaproc.engine.placeholders import (
 )
 from metaproc.engine.preflight import run_preflight
 from metaproc.engine.process_scope import expand_process_vars
+from metaproc.engine.resource_sampling import run_sampled_step_command, sample_step_resources
 from metaproc.engine.retry import (
     FailureClass,
     RetryVerdict,
@@ -937,6 +938,7 @@ def run_parallel(
                 item_vars = dict(variables)
                 item_vars.update(item_context)
                 state_dir = compute_task_state_dir(run_dir, step_def, item_vars)
+                canonical_item_key = state_dir.name
                 artifact_dir = compute_item_dir(effective_outputs, item_vars)
 
                 runtime_info: dict[str, object] = {
@@ -975,19 +977,26 @@ def run_parallel(
                     try:
                         if handler_fn is not None:
                             assert process_step is not None
-                            handler_fn(dict(item_vars), process_step)
+                            with sample_step_resources(
+                                run_dir=run_dir,
+                                run_id=run_id,
+                                step_node_id=step,
+                                item_key=canonical_item_key,
+                            ):
+                                handler_fn(dict(item_vars), process_step)
                         else:
                             assert command_ref is not None
                             resolved_cmd = resolve_templates(command_ref, item_vars)
                             env = dict(os.environ)
                             env.update(_resolve_env(target.env, item_vars))
-                            subprocess.run(
+                            run_sampled_step_command(
                                 shlex.split(resolved_cmd),
                                 env=env,
-                                cwd=str(process_dir),
-                                check=True,
-                                capture_output=True,
-                                text=True,
+                                cwd=process_dir,
+                                run_dir=run_dir,
+                                run_id=run_id,
+                                step_node_id=step,
+                                item_key=canonical_item_key,
                             )
                         exit_code = 0
                     except subprocess.CalledProcessError as exc:

@@ -43,8 +43,9 @@ invents provider requests or actual spend from agent turns or list-price estimat
   immutable snapshot, without provider calls or stale cached rollups.
 - Add a compact, self-describing `resource-usage-summary.md` whose structured values
   live in validated YAML frontmatter.
-- Retain strict read compatibility for `metaproc.resources/v1` while writing the new
-  `metaproc.resources/v2` contract.
+- Retain strict read compatibility for `metaproc.resources/v1` and
+  `metaproc.resources/v2` while writing the registered `metaproc:ResourcesDocument/0.1`
+  contract.
 
 ## Non-Goals
 
@@ -122,10 +123,12 @@ The reconciler applies these rules:
   never both.
 - Every document projection starts from reconciled events, including recovery.
 
-### V2 event and rollup contract
+### Resource event and rollup contract
 
-`metaproc.resources/v2` extends the current contract without weakening validation.
-Readers dispatch strictly on the schema token and retain a dedicated V1 model.
+`metaproc:ResourcesDocument/0.1` is the registered standalone contract for
+`resources.json` and preserves the V2 document shape without weakening validation.
+Readers dispatch strictly on the schema token and retain dedicated models for the
+historical V1 and V2 tokens.
 
 Each event may carry:
 
@@ -148,7 +151,8 @@ while arbitrary provider meters remain representable.
 
 Nodes gain self and total meter rollups alongside V1-compatible scalar metrics.
 The document gains terminal outcome, budget evaluations, coverage gaps, and finalization
-metadata. New writers emit V2; readers continue to accept strict V1 documents.
+metadata. New writers emit `metaproc:ResourcesDocument/0.1`; readers continue to accept
+strict documents carrying the historical V1 and V2 tokens.
 
 ### Canonical tool invocations
 
@@ -265,7 +269,8 @@ SoftSchema validation API.
 
 ### Public and file interfaces
 
-- `read_resources_document(path)` accepts strict V1 or V2 by schema token.
+- `read_resources_document(path)` accepts the current contract or strict historical V1
+  and V2 documents by schema token.
 - `reconcile_resource_events(...)` returns the canonical deduplicated ledger.
 - `project_resource_document(snapshot, events, outcome, budgets)` is the only totals
   builder used by terminal finalization and recovery.
@@ -286,6 +291,8 @@ SoftSchema validation API.
 - [x] Correct shared agent usage, token, and list-cost normalization.
 - [x] Make the reconciled ledger the sole source of hierarchical and taxonomy totals.
 - [x] Add provider meter extraction with explicit measured/estimated/unmeasured state.
+- [x] Extract process step and item lifecycle events so elapsed time reaches its owning
+  hierarchy node without an agent transcript.
 
 ### Phase 2: Durable operational reporting
 
@@ -344,7 +351,8 @@ clean before merge readiness is claimed.
 
 ## Rollout Plan
 
-New runs write V2 and the summary while existing V1 files remain readable.
+New runs write `metaproc:ResourcesDocument/0.1` and the summary while strict historical
+V1 and V2 files remain readable.
 Reporting commands label actual, estimated, and unmeasured values explicitly.
 Recovery is best-effort only for inactive runs and never changes execution state.
 Budget results are informational, so adoption does not introduce a new dispatch failure

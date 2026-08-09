@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from pydantic import BaseModel
-from softschema import Contract, Contracts, SchemaStatus
+from softschema import Contract, Contracts, SchemaProfile, SchemaStatus
 
 from metaproc.io.frontmatter import ProgressSpec
 from metaproc.models.authored import ProcessSpec
@@ -15,6 +15,7 @@ from metaproc.models.resource_summary import (
     RESOURCE_USAGE_SUMMARY_CONTRACT,
     ResourceUsageSummary,
 )
+from metaproc.models.resources import RESOURCES_DOCUMENT_CONTRACT, ResourcesDocument
 from metaproc.models.usage import UsageReport
 from metaproc.plugins.protocol import (
     AdapterConfigTransform,
@@ -100,6 +101,15 @@ class PluginRegistryImpl:
             self.quality_directives[step_id] = tuple(inputs)
 
     def _register_builtin_softschemas(self) -> None:
+
+        self.register_softschema(
+            Contract(
+                id=RESOURCES_DOCUMENT_CONTRACT,
+                model=ResourcesDocument,
+                profile=SchemaProfile.pure_yaml,
+                status=SchemaStatus.enforced,
+            )
+        )
 
         for contract_id, model, envelope_key in [
             ("metaproc:ProcessSpec/0.1", ProcessSpec, "process"),
