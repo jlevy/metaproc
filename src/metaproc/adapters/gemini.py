@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-import re
 import logging
+import re
 import shutil
 import tempfile
 import threading
@@ -76,9 +76,7 @@ def _gemini_version_drift() -> str | None:
         match = re.search(r"actual='([^']+)'", drift)
         found = match.group(1) if match else ""
         resolved = shutil.which("gemini")
-        if _version_tuple(found) and _version_tuple(found) < _version_tuple(
-            MIN_GEMINI_CLI_VERSION
-        ):
+        if _version_tuple(found) and _version_tuple(found) < _version_tuple(MIN_GEMINI_CLI_VERSION):
             raise GeminiCliVersionMismatch(
                 f"gemini-cli {found} at {resolved} is older than the minimum "
                 f"{MIN_GEMINI_CLI_VERSION} metaproc can drive: the adapter passes "
