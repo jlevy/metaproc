@@ -346,6 +346,25 @@ class BillingEvent(_ResourceEventBase):
     event: Literal["billing"] = "billing"
 
 
+class StepStartEvent(_ResourceEventBase):
+    """Process step lifecycle: started."""
+
+    event: Literal["step_start"] = "step_start"
+
+
+class StepCompleteEvent(_ResourceEventBase):
+    """Process step lifecycle: completed."""
+
+    event: Literal["step_complete"] = "step_complete"
+
+
+class StepFailEvent(_ResourceEventBase):
+    """Process step lifecycle: failed."""
+
+    event: Literal["step_fail"] = "step_fail"
+    error: str = ""
+
+
 class ItemStartEvent(_ResourceEventBase):
     """Per-item lifecycle: started."""
 
@@ -374,6 +393,9 @@ ResourceEvent = Annotated[
     | ToolCallEvent
     | SampleEvent
     | BillingEvent
+    | StepStartEvent
+    | StepCompleteEvent
+    | StepFailEvent
     | ItemStartEvent
     | ItemCompleteEvent
     | ItemFailEvent,
@@ -448,12 +470,37 @@ class Node(BaseModel):
     source_refs: list[SourceRef] = Field(default_factory=list)
 
 
+RESOURCES_DOCUMENT_CONTRACT = "metaproc:ResourcesDocument/0.1"
 SCHEMA_V1 = "metaproc.resources/v1"
 SCHEMA_V2 = "metaproc.resources/v2"
 
 
 class ResourcesDocument(BaseModel):
     """Current top-level ``resources.json`` document."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["metaproc:ResourcesDocument/0.1"] = Field(
+        default=RESOURCES_DOCUMENT_CONTRACT,
+        alias="schema",
+    )
+    run_id: str
+    generated_at: datetime
+    source_events_path: str
+    hierarchy_root: Node
+    taxonomy_rollups: dict[str, list[PrefixRollup]] = Field(default_factory=dict)
+    source_logs: list[SourceLog] = Field(default_factory=list)
+    unattributed: Metrics = Field(default_factory=Metrics)
+    meter_rollups: list[MeterRollup] = Field(default_factory=list)
+    unattributed_meters: list[MeterRollup] = Field(default_factory=list)
+    coverage_gaps: list[MeterKey] = Field(default_factory=list)
+    budget_evaluations: list[BudgetEvaluation] = Field(default_factory=list)
+    finalization: ResourceFinalization | None = None
+    summary_path: str | None = None
+
+
+class ResourcesDocumentV2(BaseModel):
+    """Frozen strict reader for historical ``metaproc.resources/v2`` files."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -515,11 +562,11 @@ class ResourcesDocumentV1(BaseModel):
     unattributed: MetricsV1 = Field(default_factory=MetricsV1)
 
 
-ReadableResourcesDocument = ResourcesDocumentV1 | ResourcesDocument
+ReadableResourcesDocument = ResourcesDocumentV1 | ResourcesDocumentV2 | ResourcesDocument
 
 
 def read_resources_document_json(raw: str) -> ReadableResourcesDocument:
-    """Parse a V1 or V2 document without relaxing either contract."""
+    """Parse the current contract or a strict historical V1/V2 document."""
     payload = cast("object", json.loads(raw))
     if not isinstance(payload, dict):
         raise ValueError("resources document must be a JSON object")
@@ -528,10 +575,12 @@ def read_resources_document_json(raw: str) -> ReadableResourcesDocument:
     if schema == SCHEMA_V1:
         return ResourcesDocumentV1.model_validate(data)
     if schema == SCHEMA_V2:
+        return ResourcesDocumentV2.model_validate(data)
+    if schema == RESOURCES_DOCUMENT_CONTRACT:
         return ResourcesDocument.model_validate(data)
     raise ValueError(f"unsupported or missing resources schema token: {schema!r}")
 
 
 def read_resources_document(path: Path) -> ReadableResourcesDocument:
-    """Read a strict V1 or V2 resource document from ``path``."""
+    """Read a current or strict historical resource document from ``path``."""
     return read_resources_document_json(path.read_text())

@@ -321,6 +321,7 @@ def resources_handler(request: Request) -> JSONResponse:
             )
             from metaproc.models.resources import (  # noqa: PLC0415 -- optional rebuild path
                 ResourcesDocument,
+                ResourcesDocumentV2,
                 read_resources_document_json,
             )
 
@@ -338,7 +339,10 @@ def resources_handler(request: Request) -> JSONResponse:
             if cache_path.exists():
                 try:
                     prior = read_resources_document_json(cache_path.read_text())
-                    if isinstance(prior, ResourcesDocument) and prior.finalization is not None:
+                    if (
+                        isinstance(prior, (ResourcesDocument, ResourcesDocumentV2))
+                        and prior.finalization is not None
+                    ):
                         outcome = prior.finalization.state
                 except Exception:  # noqa: BLE001 - refresh intentionally repairs malformed cache
                     pass

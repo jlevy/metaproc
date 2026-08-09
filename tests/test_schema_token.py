@@ -13,6 +13,7 @@ from metaproc.io.schema_token import (
     resolve_schema,
 )
 from metaproc.models.plan import Plan
+from metaproc.models.resources import RESOURCES_DOCUMENT_CONTRACT, ResourcesDocument
 from metaproc.models.usage import UsageReport
 
 
@@ -154,6 +155,10 @@ class TestResolveSchema:
         assert cls is Plan
         cls = resolve_schema("metaproc:Plan/0.4")
         assert cls is Plan
+
+    def test_resolve_standalone_resources_document(self) -> None:
+        cls = resolve_schema(RESOURCES_DOCUMENT_CONTRACT)
+        assert cls is ResourcesDocument
 
     def test_resolve_unknown_raises(self) -> None:
         with pytest.raises(KeyError, match="Unknown schema token"):

@@ -32,6 +32,7 @@ from metaproc.models.resources import (
     NodeV1,
     ReadableResourcesDocument,
     ResourcesDocument,
+    ResourcesDocumentV2,
     read_resources_document_json,
 )
 from metaproc.output import OutputFormat
@@ -196,7 +197,7 @@ def _render_tree(document: ReadableResourcesDocument) -> str:
     ]
     _render_node(lines, document.hierarchy_root, indent=0)
 
-    if isinstance(document, ResourcesDocument):
+    if isinstance(document, (ResourcesDocument, ResourcesDocumentV2)):
         totals = document.hierarchy_root.total_metrics
         lines.extend(
             [

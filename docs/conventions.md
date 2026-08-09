@@ -389,13 +389,14 @@ Utilities: `parse_schema_token` and `format_schema_token` in `metaproc.io.schema
 
 ### Schema registry
 
-The framework builds a schema registry automatically from `ENVELOPE_MAP` by extracting
-the `schema_` default from each registered inner model.
-Use `resolve_schema(token)` from `metaproc.io.schema_token` to look up the Pydantic
-model class for any token.
+The framework builds a schema registry from `ENVELOPE_MAP` and explicitly registered
+standalone artifact models by extracting each model’s field aliased to `schema`. Use
+`resolve_schema(token)` from `metaproc.io.schema_token` to look up the Pydantic model
+class for any token.
+Standalone artifacts such as `resources.json` resolve without a frontmatter envelope.
 
-Domain plugins can also register additional schemas via the plugin registry
-(`registry.register_schema()`).
+Domain plugins can also register additional contracts via the plugin registry
+(`registry.register_softschema()`).
 
 ## Versioning
 

@@ -18,6 +18,7 @@ from metabrowser import server as proc_browser
 from metaproc.commands.run_process import _write_run_config
 from metaproc.metabrowser_plugin import sidekick
 from metaproc.models.resource_snapshot import ResourceRunSnapshot, ResourceTopologyNode
+from metaproc.models.resources import RESOURCES_DOCUMENT_CONTRACT
 
 _PARENT_PROCESS = """\
 ---
@@ -130,7 +131,7 @@ def test_first_call_builds_when_no_cache(tmp_path: Path) -> None:
     process_rel, run_dir_rel = _setup(tmp_path)
     status, payload = _call(run_dir=run_dir_rel, process=process_rel)
     assert status == 200, payload
-    assert payload["schema"] == "metaproc.resources/v2"
+    assert payload["schema"] == RESOURCES_DOCUMENT_CONTRACT
     assert payload["hierarchy_root"]["node_type"] == "run"
     assert (tmp_path / run_dir_rel / "resources.json").exists()
 
@@ -141,7 +142,7 @@ def test_cached_call_does_not_require_process_param(tmp_path: Path) -> None:
 
     status, payload = _call(run_dir=run_dir_rel)
     assert status == 200
-    assert payload["schema"] == "metaproc.resources/v2"
+    assert payload["schema"] == RESOURCES_DOCUMENT_CONTRACT
 
 
 def test_missing_process_when_no_cache_returns_400(tmp_path: Path) -> None:
@@ -164,7 +165,7 @@ def test_refresh_param_overwrites_existing_cache(tmp_path: Path) -> None:
 
     status, _ = _call(run_dir=run_dir_rel, process=process_rel, refresh="1")
     assert status == 200
-    assert json.loads(cache.read_text())["schema"] == "metaproc.resources/v2"
+    assert json.loads(cache.read_text())["schema"] == RESOURCES_DOCUMENT_CONTRACT
 
 
 def test_cached_call_rejects_cache_symlink_outside_served_root(tmp_path: Path) -> None:
@@ -226,7 +227,7 @@ def test_stale_flag_set_when_events_log_newer_than_cache(tmp_path: Path) -> None
     status, payload = _call(run_dir=run_dir_rel)
     assert status == 200
     assert payload["stale"] is True
-    assert payload["schema"] == "metaproc.resources/v2"
+    assert payload["schema"] == RESOURCES_DOCUMENT_CONTRACT
 
 
 def test_stale_flag_false_when_events_log_older_than_cache(tmp_path: Path) -> None:

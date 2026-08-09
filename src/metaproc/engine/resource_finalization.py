@@ -33,6 +33,7 @@ from metaproc.models.resources import (
     Node,
     ResourceEvent,
     ResourcesDocument,
+    ResourcesDocumentV2,
     SourceLog,
     read_resources_document,
 )
@@ -52,7 +53,10 @@ def infer_recovery_outcome(
     if resources_path.exists():
         try:
             document = read_resources_document(resources_path)
-            if isinstance(document, ResourcesDocument) and document.finalization is not None:
+            if (
+                isinstance(document, (ResourcesDocument, ResourcesDocumentV2))
+                and document.finalization is not None
+            ):
                 return document.finalization.state
         except Exception:  # noqa: BLE001 - stale or malformed projections are rebuilt
             pass

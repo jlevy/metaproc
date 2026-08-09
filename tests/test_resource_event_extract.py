@@ -21,6 +21,9 @@ from metaproc.models.resources import (
     ItemFailEvent,
     ItemStartEvent,
     ResourcesDocument,
+    StepCompleteEvent,
+    StepFailEvent,
+    StepStartEvent,
     ToolCallEvent,
     UsageEvent,
     WaitEvent,
@@ -91,6 +94,83 @@ def test_extract_resource_events_skips_malformed_process_item(tmp_path: Path) ->
     )
 
     assert events == []
+
+
+def test_extract_resource_events_emits_process_step_lifecycle(tmp_path: Path) -> None:
+    log_path = tmp_path / "process-events.jsonl"
+    log_file = LogFile(log_path, color_idx=0)
+    log_events = [
+        LogEvent(
+            kind="step_start",
+            summary="started",
+            adapter="process",
+            timestamp="2026-07-27T12:00:00+00:00",
+            raw={
+                "event": "step_start",
+                "step_id": "analyze",
+                "step_node_id": "child::analyze",
+                "process_node_id": "process:child",
+                "mode": "code",
+            },
+        ),
+        LogEvent(
+            kind="step_complete",
+            summary="completed",
+            adapter="process",
+            timestamp="2026-07-27T12:00:02+00:00",
+            raw={
+                "event": "step_complete",
+                "step_id": "analyze",
+                "step_node_id": "child::analyze",
+                "process_node_id": "process:child",
+                "elapsed_s": 2.0,
+            },
+        ),
+        LogEvent(
+            kind="step_fail",
+            summary="failed",
+            adapter="process",
+            timestamp="2026-07-27T12:00:05+00:00",
+            raw={
+                "event": "step_fail",
+                "step_id": "cleanup",
+                "step_node_id": "child::cleanup",
+                "process_node_id": "process:child",
+                "elapsed_s": 3.0,
+                "error": "boom",
+            },
+        ),
+    ]
+
+    events = extract_resource_events(
+        log_path=log_path,
+        log_file=log_file,
+        log_events=log_events,
+        hierarchy=HierarchyRef(
+            run_id="run-1",
+            file_path=".logs/process-events.jsonl",
+        ),
+        source_kind="process_events",
+        source_path=str(log_path),
+    )
+
+    assert [type(event) for event in events] == [
+        StepStartEvent,
+        StepCompleteEvent,
+        StepFailEvent,
+    ]
+    assert events[0].metrics.wall_time_s is None
+    assert events[1].metrics.wall_time_s == 2.0
+    assert events[2].metrics.wall_time_s == 3.0
+    failure = events[2]
+    assert isinstance(failure, StepFailEvent)
+    assert failure.error == "boom"
+    assert [event.hierarchy.step_node_id for event in events] == [
+        "child::analyze",
+        "child::analyze",
+        "child::cleanup",
+    ]
+    assert all(event.hierarchy.file_path is None for event in events)
 
 
 @pytest.mark.parametrize(
@@ -444,6 +524,67 @@ def test_process_item_lifecycle_records_emit_resource_events(tmp_path: Path) -> 
     assert completes[0].metrics.wall_time_s == pytest.approx(3.0)
     assert failures[0].error == "exit code 1"
     assert failures[0].failure_class == "worker_exit"
+
+
+def test_step_lifecycle_wall_time_rolls_up_to_each_owning_step(tmp_path: Path) -> None:
+    process = _write(
+        tmp_path,
+        "parent/test.process.md",
+        """---
+process:
+  name: parent
+  steps:
+    - id: analyze
+      mode: code
+      handler: metaproc.code_steps.scaffold
+    - id: cleanup
+      mode: code
+      handler: metaproc.code_steps.scaffold
+---
+
+Parent body.
+""",
+    )
+    bundle = load_plan_bundle(process)
+    run_dir = tmp_path / "runs" / "2026-04-21"
+    process_events = run_dir / ".logs" / "process-events.jsonl"
+    process_events.parent.mkdir(parents=True)
+    process_events.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "event": "step_complete",
+                        "ts": "2026-04-24T12:00:02Z",
+                        "step_id": "analyze",
+                        "elapsed_s": 2.0,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "event": "step_fail",
+                        "ts": "2026-04-24T12:00:05Z",
+                        "step_id": "cleanup",
+                        "elapsed_s": 3.0,
+                        "error": "boom",
+                    }
+                ),
+            ]
+        )
+        + "\n"
+    )
+
+    result = build_resource_artifacts(bundle=bundle, run_dir=run_dir, run_id="run-1")
+
+    steps = {
+        node.node_id: node
+        for node in result.document.hierarchy_root.children[0].children
+        if node.node_type == "step"
+    }
+    assert steps["analyze"].self_metrics.wall_time_s == 2.0
+    assert steps["cleanup"].self_metrics.wall_time_s == 3.0
+    assert not any(child.node_type == "file" for child in steps["analyze"].children)
+    assert not any(child.node_type == "file" for child in steps["cleanup"].children)
 
 
 def test_no_events_when_log_is_silent(tmp_path: Path) -> None:

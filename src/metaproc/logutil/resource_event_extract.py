@@ -3,7 +3,7 @@
 The roll-up builder needs a per-line evidence trail, not just file-level
 usage totals. This module walks a parsed `LogFile` and its `LogEvent`
 stream, then emits one typed `ResourceEvent` per attributable atom such as
-tool calls, throttling windows, session usage, process item lifecycle,
+tool calls, throttling windows, session usage, process step/item lifecycle,
 local samples, and billing estimates.
 """
 
@@ -35,6 +35,9 @@ from metaproc.models.resources import (
     SampleEvent,
     SourceKind,
     SourceRef,
+    StepCompleteEvent,
+    StepFailEvent,
+    StepStartEvent,
     TaxonomyPaths,
     ToolCallEvent,
     UsageEvent,
@@ -118,8 +121,61 @@ def extract_resource_events(
         out.extend(_runpool_events_from_log(log_events, hierarchy, base_source))
 
     if source_kind == "process_events":
+        out.extend(_step_lifecycle_events_from_log(log_events, hierarchy, base_source))
         out.extend(_item_lifecycle_events_from_log(log_events, hierarchy, base_source))
 
+    return out
+
+
+def _step_lifecycle_events_from_log(
+    log_events: list[LogEvent],
+    hierarchy: HierarchyRef,
+    source: SourceRef,
+) -> list[ResourceEvent]:
+    out: list[ResourceEvent] = []
+    for ev in log_events:
+        if ev.adapter != "process" or not isinstance(ev.raw, dict):
+            continue
+        raw: dict[str, object] = ev.raw
+        event_type = raw.get("event")
+        if event_type not in ("step_start", "step_complete", "step_fail"):
+            continue
+        if not isinstance(raw.get("step_id"), str):
+            continue
+
+        step_hierarchy = _hierarchy_from_process_event(raw, hierarchy)
+        elapsed_s = _float_or_none(raw.get("elapsed_s"))
+        metrics = Metrics(wall_time_s=elapsed_s) if elapsed_s is not None else Metrics()
+        ts_value = _ts_from_event(ev)
+
+        if event_type == "step_start":
+            out.append(
+                StepStartEvent(
+                    ts=ts_value,
+                    hierarchy=step_hierarchy,
+                    source=source,
+                )
+            )
+        elif event_type == "step_complete":
+            out.append(
+                StepCompleteEvent(
+                    ts=ts_value,
+                    hierarchy=step_hierarchy,
+                    metrics=metrics,
+                    source=source,
+                )
+            )
+        else:
+            error = raw.get("error")
+            out.append(
+                StepFailEvent(
+                    ts=ts_value,
+                    hierarchy=step_hierarchy,
+                    metrics=metrics,
+                    source=source,
+                    error=error if isinstance(error, str) else "",
+                )
+            )
     return out
 
 
@@ -201,8 +257,8 @@ def _hierarchy_from_process_event(raw: dict[str, object], fallback: HierarchyRef
         step_node_id=qualified_step_id,
         item_key=_str_or_none(raw.get("item_key")) or fallback.item_key,
         worker_id=_str_or_none(raw.get("worker_id")) or fallback.worker_id,
-        file_path=fallback.file_path,
-        tool_name=fallback.tool_name,
+        execution_profile=fallback.execution_profile,
+        lane_id=fallback.lane_id,
     )
 
 

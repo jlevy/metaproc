@@ -9,7 +9,7 @@ from pathlib import Path
 from softschema import Contract, SchemaStatus, compile_model, validate_artifact
 
 from metaproc.commands.run_process import _write_run_config
-from metaproc.engine.resource_finalization import finalize_run_resources
+from metaproc.engine.resource_finalization import finalize_run_resources, infer_recovery_outcome
 from metaproc.io import fmf_read_frontmatter
 from metaproc.logutil.resource_events import ResourceEventLogger
 from metaproc.models.resource_budget import (
@@ -126,6 +126,33 @@ def test_finalization_replays_ledger_snapshot_and_budget(tmp_path: Path) -> None
     assert result.document.budget_evaluations[0].status is BudgetStatus.EXCEEDED
     assert (run_dir / "resources.json").is_file()
     assert (run_dir / "resource-usage-summary.md").is_file()
+
+
+def test_recovery_preserves_historical_v2_finalization_state(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    run_dir.mkdir()
+    (run_dir / "resources.json").write_text(
+        json.dumps(
+            {
+                "schema": "metaproc.resources/v2",
+                "run_id": "run-1",
+                "generated_at": "2026-08-03T00:00:00Z",
+                "source_events_path": ".logs/resource-events.jsonl",
+                "hierarchy_root": {
+                    "node_type": "run",
+                    "node_id": "run-1",
+                    "label": "run-1",
+                },
+                "finalization": {
+                    "state": "cancelled",
+                    "trigger": "terminal",
+                    "finalized_at": "2026-08-03T00:00:00Z",
+                },
+            }
+        )
+    )
+
+    assert infer_recovery_outcome(run_dir) is FinalizationState.CANCELLED
 
 
 def test_generated_summary_is_self_describing_and_softschema_valid(tmp_path: Path) -> None:

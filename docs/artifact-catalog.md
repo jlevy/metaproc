@@ -71,7 +71,7 @@ by the trace extractor as a fallback; new runs do not emit it.
 
 | Filename | Path | Schema (Pydantic) | Lifecycle | Writer | Primary readers |
 | --- | --- | --- | --- | --- | --- |
-| `resources.json` | `<run>/` | strict `ResourcesDocument` (`metaproc.resources/v2`; V1 readable) | atomic at terminal finalization or inactive recovery | `engine/resource_rollup.py:write_resource_artifacts` | metabrowser `/api/resources`, `metaproc resource-report` |
+| `resources.json` | `<run>/` | strict standalone `ResourcesDocument` (`metaproc:ResourcesDocument/0.1`; historical V1/V2 readable) | atomic at terminal finalization or inactive recovery | `engine/resource_rollup.py:write_resource_artifacts` | metabrowser `/api/resources`, `metaproc resource-report`, SoftSchema validators |
 | `*.invocation.json` (sidecar) | `<run>/.state/tasks/<step>/<item>/<attempt>/` | ad-hoc dict | atomic, once before spawn | `runpool/backend.py:write_invocation_sidecar` | trace claude_agent extractor, human debugging |
 | tool cache `*.json` | `<run>/.logs/tools/<tool-name>/cache/...` (typical) | ad-hoc (externally-owned upstream payload) | atomic, once per cache miss | consumer plugin | tool wrapper on re-run |
 

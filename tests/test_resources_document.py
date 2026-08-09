@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from softschema import SchemaProfile, validate_artifact
 
 from metaproc.models.resources import (
+    RESOURCES_DOCUMENT_CONTRACT,
     SCHEMA_V1,
     SCHEMA_V2,
     LogSummary,
@@ -18,10 +21,12 @@ from metaproc.models.resources import (
     PrefixRollup,
     ResourcesDocument,
     ResourcesDocumentV1,
+    ResourcesDocumentV2,
     SourceLog,
     SourceRef,
     read_resources_document_json,
 )
+from metaproc.plugins.registry import PluginRegistryImpl
 
 
 def _ts() -> datetime:
@@ -83,13 +88,13 @@ def _v1_node_payload(node: Node) -> dict[str, object]:
 
 
 def test_schema_field_persists_under_alias() -> None:
-    """New writers persist the V2 schema token under the ``schema`` alias."""
+    """New writers persist the registered contract token under the ``schema`` alias."""
     doc = _doc()
     dumped = doc.model_dump(mode="json", by_alias=True)
-    assert dumped["schema"] == SCHEMA_V2
+    assert dumped["schema"] == RESOURCES_DOCUMENT_CONTRACT
 
 
-def test_current_schema_field_pinned_to_v2() -> None:
+def test_current_schema_field_pinned_to_registered_contract() -> None:
     with pytest.raises(ValidationError):
         ResourcesDocument.model_validate(
             {
@@ -102,7 +107,7 @@ def test_current_schema_field_pinned_to_v2() -> None:
         )
 
 
-def test_reader_dispatches_strict_v1_and_v2_contracts() -> None:
+def test_reader_dispatches_current_and_strict_historical_contracts() -> None:
     v1_raw = json.dumps(
         {
             "schema": SCHEMA_V1,
@@ -112,10 +117,31 @@ def test_reader_dispatches_strict_v1_and_v2_contracts() -> None:
             "hierarchy_root": _v1_node_payload(_root_with_one_step()),
         }
     )
-    v2_raw = _doc().model_dump_json(by_alias=True)
+    current_payload = _doc().model_dump(mode="json", by_alias=True)
+    v2_payload = {**current_payload, "schema": SCHEMA_V2}
 
     assert isinstance(read_resources_document_json(v1_raw), ResourcesDocumentV1)
-    assert isinstance(read_resources_document_json(v2_raw), ResourcesDocument)
+    assert isinstance(read_resources_document_json(json.dumps(v2_payload)), ResourcesDocumentV2)
+    assert isinstance(read_resources_document_json(json.dumps(current_payload)), ResourcesDocument)
+
+
+def test_resources_document_is_registered_as_standalone_contract(tmp_path: Path) -> None:
+    path = tmp_path / "resources.json"
+    path.write_text(_doc().model_dump_json(by_alias=True))
+    registry = PluginRegistryImpl().softschemas
+
+    contract = registry.resolve(RESOURCES_DOCUMENT_CONTRACT)
+    assert contract is not None
+    assert contract.model is ResourcesDocument
+    assert contract.envelope_key is None
+    assert contract.profile is SchemaProfile.pure_yaml
+
+    validation = validate_artifact(
+        path,
+        contract_id=RESOURCES_DOCUMENT_CONTRACT,
+        registry=registry,
+    )
+    assert validation.ok
 
 
 def test_reader_rejects_unknown_schema_token() -> None:
@@ -212,7 +238,7 @@ def test_unknown_top_level_field_rejected() -> None:
     with pytest.raises(ValidationError):
         ResourcesDocument.model_validate(
             {
-                "schema": SCHEMA_V1,
+                "schema": RESOURCES_DOCUMENT_CONTRACT,
                 "run_id": "r",
                 "generated_at": _ts(),
                 "source_events_path": "x",

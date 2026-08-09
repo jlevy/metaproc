@@ -2103,10 +2103,13 @@ local source logs + external ResourceEvents
 `ResourceEvent` identities come from producer invocation IDs where possible and from
 stable evidence fields otherwise.
 Equivalent duplicates collapse; conflicting events with one identity fail.
-`resources.json` uses the strict `metaproc.resources/v2` contract and reports
-hierarchical metrics, exact `(provider, product, meter, unit)` quantities, coverage
-gaps, launch-time budget evaluations, and causal finalization state.
-Strict V1 documents remain readable.
+Process step and item lifecycle events attribute elapsed time directly to their owning
+hierarchy nodes; the shared process log remains an evidence source rather than a metric
+owner. `resources.json` uses the strict standalone `metaproc:ResourcesDocument/0.1`
+contract and reports hierarchical metrics, exact `(provider, product, meter, unit)`
+quantities, coverage gaps, launch-time budget evaluations, and causal finalization
+state. Strict documents carrying the historical `metaproc.resources/v1` or
+`metaproc.resources/v2` tokens remain readable.
 
 The first `run-process` launch freezes the recursive process/step topology and
 normalized budgets under `.state/run-config.yaml:resources`; resume never rewrites it.
