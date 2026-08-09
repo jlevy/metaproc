@@ -40,6 +40,7 @@ from metaproc.engine.placeholders import (
     validate_spec_placeholders,
 )
 from metaproc.engine.process_scope import expand_process_vars
+from metaproc.engine.resource_sampling import run_sampled_step_command, sample_step_resources
 from metaproc.engine.runtime import (
     launch_step,
     prepare_step,
@@ -349,7 +350,13 @@ def run_step(
                     deep=True,
                     update={"inputs": target.inputs, "outputs": target.outputs},
                 )
-                handler_fn(dict(variables), process_step)
+                with sample_step_resources(
+                    run_dir=run_dir,
+                    run_id=run_id,
+                    step_node_id=step,
+                    item_key=each_label if each_var else None,
+                ):
+                    handler_fn(dict(variables), process_step)
             else:
                 if command_ref is None:
                     raise CLIError(f"no command or handler configured for step '{step}'")
@@ -361,13 +368,14 @@ def run_step(
                         for key, value in (target.env or {}).items()
                     }
                 )
-                proc = subprocess.run(
+                proc = run_sampled_step_command(
                     shlex.split(resolved_cmd),
                     env=env,
-                    cwd=str(process_dir),
-                    check=True,
-                    capture_output=True,
-                    text=True,
+                    cwd=process_dir,
+                    run_dir=run_dir,
+                    run_id=run_id,
+                    step_node_id=step,
+                    item_key=each_label if each_var else None,
                 )
                 if proc.stdout:
                     out.progress(proc.stdout.rstrip())

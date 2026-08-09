@@ -32,8 +32,9 @@ from metaproc.dispatch.pool_dispatch import PoolDispatchConfig
 from metaproc.engine.dep_state import fingerprint_step
 from metaproc.errors import CLIError
 from metaproc.io.state_io import write_result_at
+from metaproc.logutil.resource_events import read_events
 from metaproc.models.resource_budget import FinalizationState
-from metaproc.models.resources import ResourcesDocument, read_resources_document
+from metaproc.models.resources import ResourcesDocument, SampleEvent, read_resources_document
 from metaproc.models.runtime import ResultRecord
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -1258,8 +1259,9 @@ class TestCompositeStepExecution:
 
 class TestCodeStepLogs:
     def test_command_stdout_lands_under_task_logs(self, tmp_path: Path) -> None:
-        step_def = ProcessStep(id="echo-output", mode="code", command="printf hello")
-        target = ResolvedStep(step_id="echo-output", mode="code", command="printf hello")
+        command = "/bin/sh -c 'printf hello; sleep 0.2'"
+        step_def = ProcessStep(id="echo-output", mode="code", command=command)
+        target = ResolvedStep(step_id="echo-output", mode="code", command=command)
         run_dir = tmp_path / "run"
 
         result = asyncio.run(
@@ -1280,6 +1282,12 @@ class TestCodeStepLogs:
         assert len(task_logs) == 1
         assert task_logs[0].read_text(encoding="utf-8") == "hello"
         assert not list((run_dir / LOGS_DIR).glob("echo-output_*.log"))
+
+        events = read_events(run_dir / LOGS_DIR / "resource-events.jsonl")
+        samples = [event for event in events if isinstance(event, SampleEvent)]
+        assert samples
+        assert {event.hierarchy.step_node_id for event in samples} == {"echo-output"}
+        assert all(event.metrics.rss_bytes_max is not None for event in samples)
 
 
 # ── CLI integration via typer.testing ────────────────────────────

@@ -98,8 +98,19 @@ class PsutilSampler:
 
     def __enter__(self) -> Self:
         self._stop_event.clear()
+        try:
+            root = psutil.Process(self._pid) if self._pid is not None else psutil.Process()
+            self._prime_process_tree(root)
+        except psutil.Error:
+            log.debug("PsutilSampler could not attach to process tree", exc_info=True)
+            return self
+
+        # Capture RSS synchronously so a short-lived child cannot exit before
+        # the daemon thread gets its first scheduling opportunity.
+        self._take_sample(root)
         self._thread = threading.Thread(
             target=self._sample_loop,
+            args=(root,),
             name="psutil-sampler",
             daemon=True,
         )
@@ -113,24 +124,17 @@ class PsutilSampler:
             thread.join(timeout=self._interval_s * 5)
             self._thread = None
 
-    def _sample_loop(self) -> None:
-        try:
-            root = psutil.Process(self._pid) if self._pid is not None else psutil.Process()
-        except psutil.Error:
-            log.debug("PsutilSampler could not attach to process tree", exc_info=True)
-            return
-
+    @staticmethod
+    def _prime_process_tree(root: psutil.Process) -> None:
         # Prime cpu_percent — psutil needs an initial call to seed the delta.
-        try:
-            root.cpu_percent(interval=None)
-            for child in root.children(recursive=True):
-                try:
-                    child.cpu_percent(interval=None)
-                except psutil.Error:
-                    continue
-        except psutil.Error:
-            return
+        root.cpu_percent(interval=None)
+        for child in root.children(recursive=True):
+            try:
+                child.cpu_percent(interval=None)
+            except psutil.Error:
+                continue
 
+    def _sample_loop(self, root: psutil.Process) -> None:
         while not self._stop_event.wait(self._interval_s):
             self._take_sample(root)
 

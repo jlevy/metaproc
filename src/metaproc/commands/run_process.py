@@ -90,6 +90,7 @@ from metaproc.engine.placeholders import (
 from metaproc.engine.preflight import run_preflight
 from metaproc.engine.process_scope import expand_process_vars
 from metaproc.engine.resource_finalization import finalize_run_resources
+from metaproc.engine.resource_sampling import run_sampled_step_command, sample_step_resources
 from metaproc.engine.resource_snapshot import build_resource_run_snapshot
 from metaproc.engine.runtime import prepare_step, resolve_batch_size, validate_step_inputs_exist
 from metaproc.engine.validation import validate_item_outputs
@@ -973,19 +974,24 @@ async def _execute_code_step(
                 deep=True,
                 update={"inputs": target.inputs, "outputs": target.outputs},
             )
-            handler_fn(dict(variables), process_step)
+            with sample_step_resources(
+                run_dir=run_dir,
+                run_id=run_id,
+                step_node_id=step_id,
+            ):
+                handler_fn(dict(variables), process_step)
         elif command_ref is not None:
             resolved_cmd = resolve_templates(command_ref, variables)
             env = dict(os.environ)
             if target.env:
                 env.update({k: resolve_templates(v, variables) for k, v in target.env.items()})
-            result = subprocess.run(
+            result = run_sampled_step_command(
                 shlex.split(resolved_cmd),
                 env=env,
-                cwd=str(process_dir),
-                check=True,
-                capture_output=True,
-                text=True,
+                cwd=process_dir,
+                run_dir=run_dir,
+                run_id=run_id,
+                step_node_id=step_id,
             )
             # Capture stdout/stderr to log file
             output = ""

@@ -8,7 +8,10 @@ from typer.testing import CliRunner
 from metaproc.cli import app
 from metaproc.commands.helpers import enrich_single_item
 from metaproc.errors import CLIError
+from metaproc.logutil.resource_events import read_events
 from metaproc.models.authored import ForEach, IOSpec, ProcessStep
+from metaproc.models.resources import SampleEvent
+from metaproc.paths import LOGS_DIR
 
 RUNNER = CliRunner()
 
@@ -123,7 +126,7 @@ process:
   steps:
     - id: verify-env
       mode: code
-      command: /bin/sh -c 'test "$VALUE" = resolved'
+      command: /bin/sh -c 'test "$VALUE" = resolved && sleep 0.2'
       env:
         VALUE: "{{MESSAGE}}"
 ---
@@ -148,6 +151,11 @@ process:
 
     assert result.exit_code == 0, result.output
     assert "completed (code mode)" in result.output
+
+    events = read_events(tmp_path / "runs" / "test-run" / LOGS_DIR / "resource-events.jsonl")
+    samples = [event for event in events if isinstance(event, SampleEvent)]
+    assert samples
+    assert {event.hierarchy.step_node_id for event in samples} == {"verify-env"}
 
 
 # ── for_each --item tests ────────────────────────────────────────
