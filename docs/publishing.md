@@ -39,7 +39,7 @@ retroactively.
 5. Write release notes following `tbd guidelines release-notes-guidelines`. Describe the
    aggregate user-visible delta, compatibility notes, and shipped Agent Skill or
    process-content changes.
-   The prepared `v0.2.0` notes are in [releases/v0.2.0.md](releases/v0.2.0.md).
+   The prepared `v0.2.1` notes are in [releases/v0.2.1.md](releases/v0.2.1.md).
    End with a concrete compare link.
 
 6. Create a GitHub release with a `vX.Y.Z` tag:
@@ -60,6 +60,7 @@ retroactively.
 
    ```shell
    uvx metaproc@X.Y.Z --help
+   uvx metaproc@X.Y.Z --version
    uvx metaproc@X.Y.Z skill metaproc
    uvx metaproc@X.Y.Z env --template
    ```

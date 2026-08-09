@@ -29,7 +29,7 @@ Metaproc requires Python 3.12 or newer and uses [uv](https://docs.astral.sh/uv/)
 exact release without a persistent installation:
 
 ```shell
-uvx metaproc@0.2.0 --help
+uvx metaproc@0.2.1 --help
 ```
 
 For a persistent tool installation:
@@ -141,10 +141,8 @@ and the Metaproc-owned [plugin](src/metaproc/metabrowser_plugin/README.md).
 | [SECURITY](SECURITY.md) | Vulnerability reporting and security boundaries |
 | [publishing](docs/publishing.md) | Release process with PyPI trusted publishing |
 | [performance-notes](docs/performance-notes.md) | Performance principles, tooling, and worked examples |
-| [TODO](TODO.md) | Roadmap: preview blockers, documentation, and post-preview work |
-
-Provenance records for the standalone extraction live in
-[`docs/project/`](docs/project/provenance/extraction.md).
+| [project records](docs/project/README.md) | Active and completed implementation plans plus extraction provenance |
+| [TODO](TODO.md) | Current release and deferred quality work |
 
 ## Commands
 
@@ -204,8 +202,8 @@ are the supported integration surfaces.
 Other Python imports are implementation details and may change between minor releases.
 
 Cloud images do not pick up local source edits automatically; publish or upload a wheel
-and set `METAPROC_WHEEL_GCS`, or rebuild the downstream image.
-See [cloud-dispatch](docs/runbooks/cloud-dispatch.runbook.md).
+and set both `METAPROC_WHEEL_GCS` and `METAPROC_WHEEL_SHA256`, or rebuild the downstream
+image. See [cloud-dispatch](docs/runbooks/cloud-dispatch.runbook.md).
 
 ## License
 

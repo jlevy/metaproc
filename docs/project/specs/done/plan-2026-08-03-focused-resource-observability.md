@@ -1,7 +1,8 @@
 ---
 title: Focused Resource Observability
-description: A narrow replacement for pull request 6's resource-accounting work
+description: Completed ledger-first resource observability and reporting contract that replaced the resource-accounting scope of pull request 6.
 author: Joshua Levy (github.com/jlevy) with LLM assistance
+status: Complete
 ---
 # Focused Resource Observability
 
@@ -9,7 +10,7 @@ author: Joshua Levy (github.com/jlevy) with LLM assistance
 
 **Author:** Joshua Levy (github.com/jlevy) with LLM assistance
 
-**Status:** Approved
+**Status:** Complete
 
 **Implementation:** Complete
 
@@ -31,7 +32,7 @@ invents provider requests or actual spend from agent turns or list-price estimat
 ## Goals
 
 - Report provider, product, meter, and unit quantities with explicit coverage state.
-- Preserve one canonical tool invocation identity so tool totals and budgets cannot
+- Preserve one stable tool invocation identity so tool totals and budgets cannot
   double-count aggregate and granular evidence.
 - Correct agent token and cost normalization, including cache semantics, nested Claude
   usage, Gemini disjoint token buckets, and estimated CLI costs.
@@ -98,13 +99,13 @@ evidence is absent.
 
 ### One normalization and projection pipeline
 
-The canonical data flow is:
+The data flow is:
 
 ```text
 source logs and external ResourceEvents
   -> normalized LogEvents
   -> reconciled ResourceEvent ledger
-  -> resources.json + resource-usage-summary.md + CLI/browser projections
+  -> resources.json, resource-usage-summary.md, and CLI/browser projections
 ```
 
 Shared facts are parsed once.
@@ -154,7 +155,7 @@ The document gains terminal outcome, budget evaluations, coverage gaps, and fina
 metadata. New writers emit `metaproc:ResourcesDocument/0.1`; readers continue to accept
 strict documents carrying the historical V1 and V2 tokens.
 
-### Canonical tool invocations
+### Stable tool invocations
 
 Normalized log events preserve `tool_name` and `invocation_id` from each adapter:
 
@@ -271,7 +272,7 @@ SoftSchema validation API.
 
 - `read_resources_document(path)` accepts the current contract or strict historical V1
   and V2 documents by schema token.
-- `reconcile_resource_events(...)` returns the canonical deduplicated ledger.
+- `reconcile_resource_events(...)` returns the deduplicated ledger.
 - `project_resource_document(snapshot, events, outcome, budgets)` is the only totals
   builder used by terminal finalization and recovery.
 - `finalize_run_resources(run_dir, outcome=..., trigger=...)` is local-only and
@@ -283,7 +284,7 @@ SoftSchema validation API.
 
 ## Implementation Plan
 
-### Phase 1: Canonical evidence and accounting contracts
+### Phase 1: Evidence and accounting contracts
 
 - [x] Add strict V1/V2 resource models, exact meters, stable event identities, terminal
   outcomes, and budget result models.
@@ -358,9 +359,11 @@ Recovery is best-effort only for inactive runs and never changes execution state
 Budget results are informational, so adoption does not introduce a new dispatch failure
 mode.
 
-The focused branch replaces pull request 6 with a new pull request.
-The old pull request will be closed only after the replacement is published with a
-disposition link.
+Pull request 10 replaced the resource-accounting scope of pull request 6. Pull request
+15 then corrected code-step CPU and RSS attribution and added lifecycle events without
+changing the persisted compatibility contract.
+Both replacements passed senior review, the complete verification gate, and the
+supported Python CI matrix before merge.
 
 ## Open Questions
 
@@ -371,8 +374,9 @@ after this contract has operational evidence.
 
 - [Metaproc pull request 6](https://github.com/jlevy/metaproc/pull/6)
 - [Metaproc pull request 9](https://github.com/jlevy/metaproc/pull/9)
-- `docs/project/specs/active/plan-2026-05-20-metaproc-resource-usage-and-file-format-policy.md`
-- `docs/project/specs/active/plan-2026-08-01-company-product-keyword-breakdowns.md`
+- [Metaproc pull request 10](https://github.com/jlevy/metaproc/pull/10)
+- [Metaproc pull request 15](https://github.com/jlevy/metaproc/pull/15)
+- [Standalone extraction provenance](../../provenance/extraction.md)
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

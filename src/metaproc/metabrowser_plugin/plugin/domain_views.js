@@ -1,12 +1,12 @@
-// Consumer-owned browser views for process, resource, chart, and stats artifacts.
+// Metaproc-owned browser views for process, resource, chart, and stats artifacts.
 //
 // This classic script loads after MetaBrowser's generic shell and before the plugin
 // entry point. It intentionally uses the shell's public browser helpers while keeping
-// consumer-domain rendering out of the standalone MetaBrowser package.
+// Metaproc-specific rendering out of the standalone MetaBrowser package.
 
 var mb = window.metabrowser;
 if (!mb) {
-  throw new Error("consumer domain views require the MetaBrowser plugin SDK");
+  throw new Error("Metaproc domain views require the MetaBrowser plugin SDK");
 }
 var _perf = mb.perf;
 var esc = mb.escapeHtml;

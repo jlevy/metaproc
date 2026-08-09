@@ -23,7 +23,7 @@ uv python install 3.12
 Run an exact version without a persistent installation:
 
 ```shell
-uvx metaproc@0.2.0 --help
+uvx metaproc@0.2.1 --help
 ```
 
 For a persistent global tool installation:
@@ -36,7 +36,7 @@ metaproc --help
 Upgrade deliberately by naming the reviewed release:
 
 ```shell
-uv tool install --upgrade metaproc==0.2.0
+uv tool install --upgrade metaproc==0.2.1
 ```
 
 Cloud commands require an optional extra:

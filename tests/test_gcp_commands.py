@@ -938,6 +938,12 @@ class TestScaleSpotInference:
 
 
 class TestGCPCLIHelp:
+    def test_group_help_names_required_extra(self) -> None:
+        result = CliRunner().invoke(app, ["gcp", "--help"])
+
+        assert result.exit_code == 0
+        assert "gcp-batch optional extra" in result.output
+
     def test_status_help(self):
 
         runner = CliRunner()

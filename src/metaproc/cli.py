@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import os
 import sys
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as distribution_version
 from pathlib import Path
 
 import typer
@@ -20,6 +22,7 @@ app = typer.Typer(
 
 # Global state set by callback, used by commands.
 _output: OutputManager | None = None
+_DISTRIBUTION_NAME = "metaproc"
 
 
 def get_output() -> OutputManager:
@@ -29,12 +32,30 @@ def get_output() -> OutputManager:
     return _output
 
 
+def _version_callback(value: bool) -> bool:
+    if not value:
+        return value
+    try:
+        current_version = distribution_version(_DISTRIBUTION_NAME)
+    except PackageNotFoundError:
+        current_version = "unknown"
+    typer.echo(current_version)
+    raise typer.Exit()
+
+
 @app.callback()
 def main_callback(
     format: OutputFormat | None = typer.Option(  # noqa: UP007
         None, "--format", help="Output format (text, yaml, or json)."
     ),
     no_progress: bool = typer.Option(False, "--no-progress", help="Disable progress output."),
+    show_version: bool = typer.Option(
+        False,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show the installed Metaproc version and exit.",
+    ),
 ) -> None:
     """Global options applied before any subcommand."""
     global _output  # noqa: PLW0603
@@ -57,7 +78,7 @@ def main_callback(
 def _load_dotenv() -> None:
     """Walk up from cwd to find the nearest .env file and inject KEY=VALUE lines.
 
-    Tolerates a leading ``export `` prefix on each line — the canonical
+    Tolerates a leading ``export `` prefix on each line. The generated
     ``.env.example`` template emits ``export VAR=value`` so a copy lands
     parseable by ``set -a; source .env`` in shell, and the loader must
     accept the same shape it generates.
@@ -128,7 +149,7 @@ import metaproc.commands.write_usage  # noqa: E402, F401
 
 
 def main() -> None:
-    """CLI entry point — wraps Typer with structured error handling."""
+    """Wrap the Typer CLI entry point with structured error handling."""
     try:
         app()
     except CLIError as exc:

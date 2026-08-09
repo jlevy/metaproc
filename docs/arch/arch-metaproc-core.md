@@ -21,7 +21,7 @@ status: Approved
 > [arch-claude-code-harness](arch-claude-code-harness.md),
 > [arch-testing](arch-testing.md).
 
-Revision: rev2j
+Revision: rev2l
 
 Implementation reference for Metaproc, covering how the conceptual model defined in
 [metaproc-concepts-and-principles.md](../../src/metaproc/docs/metaproc-concepts-and-principles.md)
@@ -36,6 +36,10 @@ Additional reference docs: [conventions.md](../conventions.md) (naming rules),
 file-utility surface and frontmatter_format gotchas),
 [metaproc-design-rev3-proposals.md](../metaproc-design-rev3-proposals.md) (remaining
 future work).
+
+Examples in this document use the fictitious `example_plugin` namespace to show where
+consumer-owned processes, schemas, handlers, and artifacts belong.
+Metaproc does not ship that package or its domain behavior.
 
 ## Scope and Imported Concepts
 
@@ -119,7 +123,7 @@ status / wait (run progress and orchestration)
 kill (pool termination)
 compact-logs
 auth-check
-auth setup / push / probe / status / list / enable / disable / check / rotate / prune / usage / doctor / quota / preflight / env  (labeled credential pool — see arch-authentication.md)
+auth setup / push / probe / status / list / enable / disable / check / rotate / prune / usage / doctor / quota / preflight / env  (labeled credential pool; see arch-authentication.md)
 claude-auth push / show / rotate  (single-secret pre-pool surface; use the `auth` group for new deployments)
 stats
 write-usage
@@ -141,7 +145,7 @@ yaml_repair (unquoted-colon auto-fix)
 discovery (resume-safe item filtering)
 usage (extraction, pricing, aggregation)
 process_events (structured DAG event logging)
-viz (pure projection of Plan -> VizModel; browser + static SVG/HTML renderers; see MetaBrowser architecture)
+viz (pure projection of Plan -> VizModel; browser and static SVG/HTML renderers; see MetaBrowser architecture)
 
 Cloud subsystems (cloud/gcp/)
 -----------------------------
@@ -150,14 +154,14 @@ worker_dispatch (multi-VM item partitioning and dispatch)
 worker_entrypoint (unified container entrypoint for workers)
 orchestrator_dispatch (submit orchestrator as GCP Batch job)
 orchestrator_entrypoint (orchestrator container entrypoint)
-container_bootstrap (bundled/sparse repo bootstrap + env setup)
+container_bootstrap (bundled/sparse repository bootstrap and environment setup)
 resolve_token (GCP access token via google.auth)
 gcp_credentials (service account credential management)
 
 Plugin layer
 ------------
-plugin protocol + registry
-entry-point discovery (standard + workspace fallback)
+plugin protocol and registry
+entry-point discovery (standard and workspace fallback)
 domain envelopes, schemas, terminal statuses
 compare-matrix defaults
 form conventions
@@ -595,7 +599,7 @@ fan-out dispatch.
 | `outputs` | all | declared output artifact contracts |
 | `output_root` | agent, code, manual | per-step output root override |
 | `adapter` | agent, code | override default adapter config |
-| `variant` | all | explicit variant override; decouples the artifact-namespace directory (`{{run.variant}}` in output paths) from the adapter/model that `--variant` selects for execution. Use to pin a summarizer/reviewer step to a specific artifact-namespace variant when the executor adapter would otherwise resolve `{{run.variant}}` to a different directory (e.g. a cross-variant overview that must read from the canonical `claude-cli` tree regardless of which adapter runs the step) |
+| `variant` | all | explicit variant override; decouples the artifact-namespace directory (`{{run.variant}}` in output paths) from the adapter/model that `--variant` selects for execution. Use to pin a summarizer/reviewer step to a specific artifact-namespace variant when the executor adapter would otherwise resolve `{{run.variant}}` to a different directory (e.g. a cross-variant overview that must read from the fixed `claude-cli` tree regardless of which adapter runs the step) |
 | `env` | agent, code | environment variables injected into the subprocess |
 | `max_budget_usd` | agent | per-step spending cap (passed to CLI as `--max-budget-usd`) |
 | `token_budget` | agent | per-step token budget (`.process.md` config field, no CLI flag equivalent) |
@@ -817,7 +821,7 @@ process frontmatter.
 
 ## 8. Resolved Plan Model
 
-The resolved plan is a first-class runtime artifact — a computed data model, not a
+The resolved plan is a first-class runtime artifact: a computed data model, not a
 markdown checkbox document.
 
 ## 8.1 Why the Plan Is Data
@@ -981,7 +985,7 @@ The emitted runtime model is explicit.
 
 The four artifact groups (run-level state, per-step state, per-task state, logs)
 populate the `.state/` and `.logs/` branches at every scope root.
-For the per-file reference — filename, format, schema, lifecycle, writer, and readers —
+For the per-file reference (filename, format, schema, lifecycle, writer, and readers),
 see [artifact-catalog.md](../artifact-catalog.md).
 Sections 9.2-9.6 below cover the engine’s contract on the load-bearing files
 (`status.yaml`, `attempt.yaml`, `result.yaml`, `.logs/*.jsonl`, `process-events.jsonl`)
@@ -1025,8 +1029,8 @@ runs/local/example-workflow/doc-sync-demo/
 The harness contract is the `.state/` and `.logs/` branches at the run-dir root.
 The artifact tree (here, `mine/pi-deepseek-v3.2/<item>/`) is whatever the spec’s output
 templates produce; the engine writes no bookkeeping into it.
-Per-task state is keyed by the explicit `for_each.key` template — not inferred from the
-output path — so two non-fan-out steps that share an output parent dir keep separate
+Per-task state is keyed by the explicit `for_each.key` template, not inferred from the
+output path, so two non-fan-out steps that share an output parent dir keep separate
 state. Here, task is a runtime term: one execution record for a step applied to an item.
 It is not a synonym for the item itself.
 
@@ -1156,7 +1160,7 @@ The framework provides six complementary monitoring layers:
 | Item-level | `status` | `.state/tasks/.../status.yaml` plus `process-status.yaml` | Run progress counts, timing, completion checks |
 | Process-level | `pool status` | `runpool-status.yaml` | Live process health (RSS, descendants, kills) |
 | DAG-level | `tail` | `process-events.jsonl` | Process orchestrator events (step lifecycle, levels) |
-| Cloud-level | `gcp status <run-id>` | GCP Batch API | Orchestrator + worker states by exact run key, with a legacy-label fallback |
+| Cloud-level | `gcp status <run-id>` | GCP Batch API | Orchestrator and worker states by exact run key, with a legacy-label fallback |
 | Visual | `metab` (external MetaBrowser CLI) | source logs, runpool events, process events, derived trace | Browser-based charts and log exploration |
 
 `tail` answers “what is this agent doing right now?”
@@ -1174,8 +1178,8 @@ For run pool design details, see [arch-runpool.md](arch-runpool.md).
 
 The external `metab` CLI (from the standalone MetaBrowser package) launches a local web
 server for browsing run artifacts, logs, and results.
-Full architecture — file-kind registry, view registry, charts, visualization plane,
-remote tunnel — lives in
+The complete architecture, including the file-kind registry, view registry, charts,
+visualization plane, and remote tunnel, lives in
 [MetaBrowser architecture](https://github.com/jlevy/metabrowser/blob/main/docs/architecture.md).
 
 The browser classifies files into a **file kind** taxonomy (`agent-log`, `runpool-log`,
@@ -1184,7 +1188,7 @@ and offers kind-appropriate **view tabs** (Charts, Log, Raw JSON, Rendered, Sour
 a data-driven view registry.
 
 The `process-log` kind detects `process-events.jsonl` files (DAG orchestrator events)
-via `ProcessLogParser` in `logutil/parsing.py` and offers Log + Raw JSON views.
+via `ProcessLogParser` in `logutil/parsing.py` and offers Log and Raw JSON views.
 The `logutil/parsing.py` module provides six adapter-specific parsers
 (`ClaudeLogParser`, `CodexLogParser`, `GeminiLogParser`, `PiLogParser`,
 `RunPoolLogParser`, `ProcessLogParser`) with auto-detection via `detect_adapter()`.
@@ -1293,8 +1297,8 @@ legacy completions and are not re-executed on resume.
 
 Recovery semantics are explicit:
 
-- `completed` + validated outputs + fingerprint matches -> skip
-- `completed` + fingerprint mismatch -> rerun this step and downstream
+- `completed` with validated outputs and a matching fingerprint -> skip
+- `completed` with a fingerprint mismatch -> rerun this step and downstream
 - `failed` -> retry (with retry policy if configured)
 - `cached` -> skip
 - `running` with live process -> do not reclaim
@@ -1323,7 +1327,7 @@ This makes resume a normal code path, not a special recovery mode.
 ## 11. Fan-Out and Items Files
 
 An **items file** is a list-typed dep that drives a fan-out step.
-Its parsed value is `list<map_item>` — a list of records (YAML maps), each with named
+Its parsed value is `list<map_item>`, a list of records (YAML maps), each with named
 fields, where each record drives one iteration of the step.
 The role is declared by a step’s `for_each.over: deps.<name>` reference, not by a
 spec-level `role:` tag (the `DepRole` enum was retired in the 2026-04-23 simplification;
@@ -1334,8 +1338,9 @@ needs the generic items-file contract.
 
 **Terminology note: items file vs roster.** *Items file* is the framework’s primary term
 for this concept. *Roster* is retained as domain-specific language inside the
-example_plugin profile (where step IDs, dep names, and module names like `setup-roster`,
-`mine/roster.py` use the older word) but is not part of the framework’s vocabulary.
+illustrative `example_plugin` profile, where step IDs, dependency names, and module
+names like `setup-roster` and `mine/roster.py` use the older word.
+It is not part of the framework’s vocabulary.
 The two terms refer to the same construct.
 
 **Fan-out and map.** Two framings of the same operation: *fan-out* names the operational
@@ -1346,13 +1351,13 @@ element of an items file).
 They describe the same thing from different angles, not two different things.
 Code keeps `fan-out`; design conversations may use either.
 
-## 11.1 Candidate Source, Not Canonical Completion State
+## 11.1 Candidate Source, Not Authoritative Completion State
 
-For the analysis profile:
+For the illustrative downstream profile:
 
 - `items.md` or `events.md` is the shared candidate items file at process scope
-- per-item `.state/tasks/{step_id}/{item_key}/status.yaml` is the canonical completion
-  record
+- per-item `.state/tasks/{step_id}/{item_key}/status.yaml` is the authoritative
+  completion record
 - the harness joins those two surfaces to compute actionable work
 
 This avoids concurrent writers mutating one shared frontmatter file and keeps the same
@@ -1399,7 +1404,7 @@ events:
 ---
 # Mine Events
 
-Fan-out source for mine. Canonical completion state still lives in per-task
+Fan-out source for mine. Authoritative completion state still lives in per-task
 `.state/tasks/{step_id}/{item_key}/status.yaml`.
 ```
 
@@ -1436,12 +1441,12 @@ fan-out runtime
 ## 11.5 Optional Preview Artifacts
 
 Preview artifacts such as `{step-id}.items.yaml` are derived from the source and status
-store. They are informational only — not canonical execution state.
+store. They are informational only, not authoritative execution state.
 
 ## 11.6 Historical Note: Packets
 
 Between mid-2025 and 2026-04-23, structured multi-form agent steps (predict, retro)
-declared their output contract through a **packet manifest** — a `v<N>/packet.yaml` file
+declared their output contract through a **packet manifest**, a `v<N>/packet.yaml` file
 alongside the templates.
 A `ProcessDep` with `role: packet` pointed the engine at the manifest; `PacketForm`
 entries carried `template:`, `output:`, `frontmatter_key:`, and optional `condition:`
@@ -1460,12 +1465,12 @@ carried was already primary elsewhere:
 | Template pointer per output | `step.outputs.<name>.template:` field |
 | Conditional output (e.g. leakage-check under backtest) | `step.outputs.<name>.condition:` field, evaluated via `metaproc.engine.condition.output_is_active` |
 | Per-form schema reference | Already on the output’s own frontmatter; existing schema registry resolves it |
-| “Latest on-disk version” default | Explicit `default: "vN"` on the `form_version` / `retro_version` `ProcessInput` — set the literal, override via CLI/env |
+| “Latest on-disk version” default | Explicit `default: "vN"` on the `form_version` / `retro_version` `ProcessInput`; set the literal and override via CLI/env |
 | Versioning convention (`process/<name>/vN/…`) | Unchanged on disk; `{{form_version}}` template variable still drives the path |
 
 The `DepRole` enum
 (`template | packet | process | roster | run-input | run-output | kb-index`) retired
-with the packet layer — all seven values were either redundant with other declarations
+with the packet layer; all seven values were either redundant with other declarations
 (composite `uses:` for `process`, `for_each.over:` for `roster`, `{{run.dir}}` prefix
 for `run-input`/`run-output`) or engine-opaque documentation tags.
 The viz side panel’s `role:` chip is replaced with a `usage:` list derived from step
@@ -1479,7 +1484,7 @@ historical artifacts; no loader code reads them.
 Reference implementation details such as exact CLI flags belong in adapter-specific
 documentation; the contract below is adapter-neutral.
 
-## 12.1 Canonical Adapter Shape
+## 12.1 Adapter Contract
 
 ```yaml
 adapter:
@@ -1491,7 +1496,7 @@ adapter:
     tools: [Read, Write, Edit, Bash, Grep, Glob, WebSearch, WebFetch]
 ```
 
-The canonical adapter contract describes:
+The adapter contract describes:
 
 - input artifacts
 - output artifacts
@@ -1523,7 +1528,7 @@ Registered adapters (in `ADAPTER_REGISTRY`):
 - `codex-cli` -- invokes
   `codex <top-level-flags> exec --json <exec-flags> <prompt_text>` (reads prompt file
   inline; no `@<file>` surrogate, mirrors gemini’s pattern).
-  Supports model (gpt-5.x + o-series via `CODEX_VALID_MODELS`), effort (via
+  Supports model (gpt-5.x and o-series via `CODEX_VALID_MODELS`), effort (via
   `-c model_reasoning_effort=`), sandbox (read-only / workspace-write /
   danger-full-access), approval_policy (untrusted / on-failure / on-request / never),
   permission_mode (bypassPermissions maps to
@@ -1570,7 +1575,7 @@ Registered adapters (in `ADAPTER_REGISTRY`):
   token injection). Event parsing extracts usage from `agent_end` events; log compaction
   strips streaming noise while preserving thinking chains.
 
-Canonical step success must still be defined by:
+Authoritative step success must still be defined by:
 
 - declared artifacts
 - emitted runtime records
@@ -1599,17 +1604,17 @@ Custom providers (defined in `~/.pi/agent/models.json`): any OpenAI-compatible e
 
 #### Vertex AI MaaS custom provider
 
-**Design rationale (canonical mechanism in
+**Design rationale (authoritative mechanism in
 [arch-cloud-execution.md §3.12](arch-cloud-execution.md) and
 [arch-authentication.md](arch-authentication.md), UC-5 / UC-6):** third-party models in
 Vertex AI Model Garden (GLM-5, Kimi K2) expose an OpenAI-compatible endpoint that Pi
 connects to via a custom `vertex-maas` provider in `~/.pi/agent/models.json`. The
-`apiKey` field is a placeholder — metaproc injects a fresh `google.auth` access token
-per batch (**not per item**) and Pi sends it as `Authorization: Bearer <token>`. This is
-why the framework treats `vertex`-prefixed providers specially in the adapter: it
-resolves the token once via `resolve_gcp_token()` and writes it into each item’s
+`apiKey` field is a placeholder; Metaproc injects a fresh `google.auth` access token per
+batch (**not per item**) and Pi sends it as `Authorization: Bearer <token>`. This is why
+the framework treats `vertex`-prefixed providers specially in the adapter: it resolves
+the token once via `resolve_gcp_token()` and writes it into each item’s
 `runtime_config`, instead of leaving the operator to refresh tokens manually.
-Failure raises — there is no degraded fallback path.
+Failure raises an exception; there is no degraded fallback path.
 
 This indirection is what makes the multi-model backtest work without per-model operator
 setup: the same process spec runs with different adapter config overrides at invocation
@@ -1618,26 +1623,24 @@ time.
 ## 13. QA and Validation
 
 QA is a **domain concern**, not a framework feature.
-Metaproc provides the execution substrate -- handler invocation, `.state/` recording,
-dependency ordering -- but has no opinion on check taxonomies, severity models, or
-report formats.
+Metaproc provides the execution substrate, including handler invocation, `.state/`
+recording, and dependency ordering, but has no opinion on check taxonomies, severity
+models, or report formats.
 
 Domains implement QA as ordinary `mode: code` step handlers.
-The analysis domain owns its QA end-to-end in `example_plugin.qa`: contracts, check
-rules (generic OP/OM/CO/RE + domain-specific), reporting, and a CLI handler.
-Process specs reference `example_plugin.qa.handler:check` as the `qa-check` step
-handler.
+A downstream package owns its QA end-to-end: contracts, check rules, reporting, and any
+CLI handler. For example, a package can expose `example_plugin.qa.handler:check` and
+reference it from a `qa-check` code step.
 
 This follows the three-layer model:
 
-1. **Metaproc** (layer 1) -- orchestration, contracts, state, resumability
-2. **Shared process libraries** (layer 2, future) -- reusable validation patterns,
-   extracted when a second domain proves the need
-3. **Domain code** (layer 3) -- specific checks, report formats, severity rules
+1. **Metaproc** (layer 1): orchestration, contracts, state, resumability
+2. **Shared process libraries** (layer 2): reusable validation patterns, extracted when
+   a second domain proves the need
+3. **Domain code** (layer 3): specific checks, report formats, severity rules
 
-Check taxonomies, severity models, and report formats are domain concerns and live in
-the domain layer, not the framework (see
-`plan-2026-04-09-qa-extraction-from-metaproc.md` for the boundary rationale).
+Check taxonomies, severity models, and report formats stay in the domain layer rather
+than the framework.
 
 ### 13.1 Plugin System
 
@@ -1678,13 +1681,13 @@ Two-phase plugin discovery:
 The workspace fallback ensures plugins work when running `uv run --project metaproc`
 without `--all-packages`.
 
-### 13.1.3 Analysis Plugin Registration
+### 13.1.3 Example Plugin Registration
 
-The analysis plugin (`example_plugin.metaproc_plugin`) registers:
+The fictitious downstream plugin (`example_plugin.metaproc_plugin`) registers:
 
-- Envelope types from `models_analysis.ANALYSIS_ENVELOPES`
-- Schema models from `models_analysis.SCHEMA_REGISTRY`
-- Schema-to-envelope mappings for the analysis document set
+- Envelope types from its document model registry
+- Schema models from its schema registry
+- Schema-to-envelope mappings for its document set
 - Terminal progress statuses
 - Compare-matrix defaults (direction, move_pct, position_type, allocation)
 
@@ -1692,7 +1695,7 @@ Entry point declaration in `pyproject.toml`:
 
 ```toml
 [project.entry-points."metaproc.plugins"]
-analysis = "example_plugin.metaproc_plugin:plugin"
+example = "example_plugin.metaproc_plugin:plugin"
 ```
 
 ## 14. Robustness Subsystems
@@ -1779,12 +1782,12 @@ This enriches the status error string, which feeds back into `classify_error`.
 The retry scheduler is orchestrator-owned in `run_parallel._run_agent_pool`. Three
 structures replace the original batch-level retry loop:
 
-1. **`not_started`** (deque) — first-pass items awaiting their initial submission.
-2. **`active`** (dict[Future, shared]) — items currently running in the pool.
-3. **`retry_heap`** (min-heap keyed by `ready_at`) — failed items awaiting backoff.
+1. **`not_started`** (deque): first-pass items awaiting their initial submission.
+2. **`active`** (dict[Future, shared]): items currently running in the pool.
+3. **`retry_heap`** (min-heap keyed by `ready_at`): failed items awaiting backoff.
 
 When a pool slot opens, `_fill_pool` prioritises retry-due items over untouched
-first-pass items — retries interleave with the first pass rather than waiting for an
+first-pass items; retries interleave with the first pass rather than waiting for an
 entire batch to complete.
 Each item tracks its own `attempt_number` in its `shared` dict; the retry index passed
 to `compute_backoff` is `attempt_number - 1` (first retry = index 1 =
@@ -1943,7 +1946,7 @@ how many provider rate-limit events blocked the workflow.
 Consumed by `write_usage_report` (§15) and by the scaling-validation final report.
 
 **Terminology.** *Native web search* is the provider-neutral term for a model invoking
-its built-in web-retrieval path outside the arena-wrapped tool surface — Vertex Gemini
+its built-in web-retrieval path outside the arena-wrapped tool surface: Vertex Gemini
 grounding, Anthropic `web_search_*`, OpenAI `web_search_preview`, etc.
 *Grounding* is Vertex’s name for its specific path (and the `groundingMetadata` response
 field); reserve it for Vertex-specific references.
@@ -1956,7 +1959,7 @@ Three independent sources feed the aggregation:
 
 1. **Tool wrapper invocation logs** (one file per item-event at
    `<phase_dir>/<variant>/<event>/.logs/tools/arena/invocations.jsonl`). Written by the
-   tool wrapper in example_plugin; metaproc only reads it.
+   downstream tool wrapper; Metaproc only reads it.
    Starts with a config-stub line (`type: config`, `mode`, `backtest_date`,
    `native_web_search`) and continues with one line per tool invocation: `tool_name`,
    `tier`, `exit_code`, `duration_s`, `error`.
@@ -1965,7 +1968,7 @@ Three independent sources feed the aggregation:
    The tool-use parser pulls `tool_execution_start` / `tool_execution_end` and
    `rate_limit_event` records.
 3. **The `native_web_search` flag on the arena config stub.** Partial-closure signal for
-   the native web-search activity visibility gap — see the partial-closure invariant
+   the native web-search activity visibility gap; see the partial-closure invariant
    below.
 
 Pi-cli and tool wrapper logs cover different layers: pi-cli sees every tool call the
@@ -1991,22 +1994,22 @@ aggregators can build up stats incrementally.
 
 `src/metaproc/logutil/tool_failures.py` defines `FailureKind`, a nine-member `StrEnum`:
 
-- `ok` — call succeeded.
-- `malformed_args` — adapter-side plumbing bug (bad JSON, invalid arg, unrecognized
+- `ok`: call succeeded.
+- `malformed_args`: adapter-side plumbing bug (bad JSON, invalid arg, unrecognized
   argument).
-- `tool_timeout` — tool deadline exceeded.
-- `tool_error` — tool-side failure (the generic bucket).
-- `help_invocation` — adapter hallucinated a deprecated or non-existent tool name and
-  the wrapper returned a help banner.
+- `tool_timeout`: tool deadline exceeded.
+- `tool_error`: tool-side failure (the generic bucket).
+- `help_invocation`: adapter hallucinated a deprecated or non-existent tool name and the
+  wrapper returned a help banner.
   Distinct from `tool_error` because the remediation is prompt-level, not tool-level.
-- `tool_rejected` — the wrapper refused the call before execution (tier policy or auth
+- `tool_rejected`: the wrapper refused the call before execution (tier policy or auth
   rejection).
-- `rate_limit_exhausted` — the tool call hit a provider rate-limit that didn’t clear
+- `rate_limit_exhausted`: the tool call hit a provider rate-limit that didn’t clear
   within the retry budget.
-- `adapter_dropped_call` — the adapter stripped a `tool_use` block from its response
+- `adapter_dropped_call`: the adapter stripped a `tool_use` block from its response
   stream so downstream never saw the invocation.
   Regression signal from Vertex migration history.
-- `unknown` — shape recognised but no classifier rule matched.
+- `unknown`: shape recognised but no classifier rule matched.
 
 Two dispatchers feed it: `classify_arena_tools_record` (arena invocation rows) and
 `classify_pi_tool_result` (pi-cli tool-use blocks).
@@ -2018,7 +2021,7 @@ Both fail hard on shape changes instead of silently bucketing as `unknown`.
 `total_configs > 0`, else `None`. Measures the share of per-item sessions that defaulted
 to `mode=live`, `backtest_date=null` instead of launching with a valid pinned
 `backtest_date`. Higher values are worse: a session running in live mode can pull
-information published after the analysis event it is supposed to predict — that is
+information published after the analysis event it is supposed to predict; that is
 future-knowledge leakage on the dataset.
 Reported per-variant on every usage report; no one-shot evidence backfill required.
 
@@ -2029,7 +2032,7 @@ Reported per-variant on every usage report; no one-shot evidence backfill requir
 for native web search at dispatch time, but does not capture per-turn activity (search
 queries, citations, grounding supports on Vertex).
 Per-turn visibility requires a per-provider activity sidecar.
-Vertex is today’s blocker — the vendored pi-mono adapter strips `groundingMetadata`
+Vertex is the current blocker: the vendored pi-mono adapter strips `groundingMetadata`
 before surfacing `AssistantMessage`, so metaproc cannot see it.
 Anthropic `web_search_*` and OpenAI `web_search_preview` would need their own parallel
 sidecars when those providers move into production.
@@ -2053,7 +2056,7 @@ request counts.
 `by_model`, `by_provider` -- each a `UsageBucket`. Cost is nested as
 `CostPair(actual: CostView, list: CostView)`. Tool-use telemetry rides alongside in
 `tool_profiles: dict[str, ToolRunProfile]` and
-`rate_limit_stats: list[ProviderRateLimitStats]` — see §14.7 Tool-use Observability for
+`rate_limit_stats: list[ProviderRateLimitStats]`; see §14.7 Tool-use Observability for
 the full contract.
 
 ### 15.2 Pricing Table
@@ -2091,9 +2094,9 @@ and writes `usage.md`.
 Run-level operational reporting uses one deterministic pipeline:
 
 ```text
-local source logs + external ResourceEvents
+local source logs and external ResourceEvents
   -> normalized, reconciled resource-events.jsonl
-  -> resources.json + resource-usage-summary.md
+  -> resources.json and resource-usage-summary.md
 ```
 
 `ResourceEvent` identities come from producer invocation IDs where possible and from
@@ -2142,13 +2145,13 @@ Needed for:
 - candidate/incumbent comparisons
 - autoresearch-style workflows
 
-## 17. Run Pool & Process Management
+## 17. Run Pool and Process Management
 
 The `run-parallel` command uses an adaptive, asyncio-based process pool
 (`metaproc.runpool`) that replaces the original fixed-batch-size polling loop.
 
-For the full run pool design — architecture, adaptive concurrency, per-process health
-monitoring, kill protocol, observability, and CLI commands — see
+For the full run pool design, including architecture, adaptive concurrency, per-process
+health monitoring, kill protocol, observability, and CLI commands, see
 [arch-runpool.md](arch-runpool.md).
 
 Key capabilities:
@@ -2168,15 +2171,15 @@ Key capabilities:
 The `status` and `wait` commands provide structured run monitoring and orchestration for
 multi-phase workflows.
 
-- **`metaproc status <run-dir>`** — reads `.state/process-status.yaml` and task status
+- **`metaproc status <run-dir>`**: reads `.state/process-status.yaml` and task status
   files under `.state/tasks/...`, aggregates `ProgressCounts` (completed, running,
   failed, pending, retrying), computes timing statistics and optionally system metrics
   (memory pressure, subprocess count).
   Supports text and JSON output.
-- **`metaproc status --check <condition>`** — programmatic check mode for agent
+- **`metaproc status --check <condition>`**: programmatic check mode for agent
   orchestration: asserts completion state via exit codes (0=passed, 1=failures,
   2=still-running), replacing ad-hoc `--dry-run | grep` patterns.
-- **`metaproc wait <run-dir>`** — blocks until a run reaches terminal state, then prints
+- **`metaproc wait <run-dir>`**: blocks until a run reaches terminal state, then prints
   final status. Eliminates polling loops in multi-phase playbooks.
 
 Architecture: core logic in `engine/run_status.py` as a Python API; CLI commands are
@@ -2276,12 +2279,12 @@ register alongside `gcp-worker` in the `run-process` dispatch logic.
 
 `--force` invalidates a step and all its downstream dependents by renaming the relevant
 on-disk `status.yaml` files to `.yaml.stale` (via `_invalidate_downstream()`). This
-covers both the canonical step directory and any output-derived item directories.
+covers both the standard step directory and any output-derived item directories.
 Without `--force`, completed steps are detected via task status files under
 `.state/tasks/...` and skipped automatically.
 Fan-out step completion is determined by `_is_fan_out_completed()`: all items must have
 `state == "completed"` in `.state/tasks/{step_id}/{item_key}/status.yaml`. Failed items
-do not make the step reusable — only `completed` counts.
+do not make the step reusable; only `completed` counts.
 
 `--from` and `--only` require that omitted ancestor steps have already completed
 (verified by `_verify_ancestors()`), unless `--force` is set.
@@ -2504,7 +2507,7 @@ tracking). `MockBackend` is available for testing.
   metadata, before a path fallback.
   When exact jobs exist, it adds only unkeyed legacy jobs whose structured `RUN_ID`
   verifies as the same run; fully legacy runs retain the readable-label fallback.
-  Shows orchestrator + worker jobs with role, state, step, worker_id.
+  Shows orchestrator and worker jobs with role, state, step, and worker_id.
 - **`gcp scale <target> --step <step>`**: updates desired worker topology for an active
   fan-out step by writing `scale-state.yaml` and, when possible, reconciling new worker
   jobs immediately.
@@ -2625,7 +2628,7 @@ restrictions.
 
 ### 21.14 Secret Manager Integration
 
-**Design rationale (canonical mechanism in
+**Design rationale (authoritative mechanism in
 [arch-cloud-execution.md §3.10](arch-cloud-execution.md) and
 [arch-authentication.md](arch-authentication.md), Secret Manager registry / UC-9 /
 UC-10):** any credential delivered to a Batch job is injected via Secret Manager rather
@@ -2633,7 +2636,7 @@ than as a plaintext env var, because `gcloud batch jobs describe` would otherwis
 the plaintext value as part of the job spec.
 The `GCP_SECRET_REFS` registry in `cloud/gcp/batch_backend.py` centralizes the
 `(plaintext_env, secret_env, description)` rows so adding a new credential is a one-row
-change. `resolve_gcp_secret_ref()` enforces the anti-leakage invariant — setting the
+change. `resolve_gcp_secret_ref()` enforces the anti-leakage invariant: setting the
 plaintext env without the Secret Manager ref fails dispatch up front.
 
 ## Future Considerations
@@ -2660,10 +2663,11 @@ plaintext env without the Secret Manager ref fails dispatch up front.
 
 - Extract the per-adapter reference (§12.2) into a separate adapter-catalog doc as the
   adapter count grows, keeping this doc focused on the contract and wire format.
-- The analysis reference profile (§7) could move to an application-profile doc, leaving
-  this doc strictly framework-scoped.
-- Add a “Reading Guide” section at the top to help readers navigate the 21+ sections by
-  use case (operator, process author, adapter implementer, framework contributor).
+- The illustrative downstream profile (§7) could move to an application-profile doc,
+  leaving this doc strictly framework-scoped.
+- Add a “Reading Guide” section at the top to help readers navigate the more than 21
+  sections by use case (operator, process author, adapter implementer, framework
+  contributor).
 - Consolidate the cloud execution summary (§21) further: much of its content is now
   covered in [arch-cloud-execution.md](arch-cloud-execution.md), and the duplication
   creates maintenance burden.
@@ -2677,6 +2681,16 @@ the original future-work backlog.
 * * *
 
 ## Revision History
+
+### rev2l (2026-08-09)
+
+Release-readiness synchronization:
+
+- Marked `example_plugin` as a fictitious downstream namespace and removed references
+  that implied its domain implementation ships with Metaproc.
+- Replaced the missing QA-plan reference with the current framework boundary.
+- Applied the common documentation punctuation, conjunction, and terminology rules
+  across the maintained reference.
 
 ### rev2k (2026-08-03)
 
@@ -2697,8 +2711,7 @@ Typed run identity and cloud correlation:
   exact `metaproc-run-key` labels.
 - Documented exact lookup, hash-verified mixed-generation jobs, the safe fully legacy
   fallback, and exact run-ID recovery in `gcp runs`.
-- Documented canonical local status identity resolution for process-subdirectory
-  layouts.
+- Documented exact local status identity resolution for process-subdirectory layouts.
 - Updated the cloud monitoring-layer summary and Batch utility inventory.
 
 ### rev2i (2026-04-20)
@@ -2706,7 +2719,7 @@ Typed run identity and cloud correlation:
 Tool-use operational observability (the original design):
 
 - **Section 14.7 (new)**: Tool-use Observability.
-  Documents the three-source triad (tool wrapper invocation logs + pi-cli JSONL logs +
+  Documents the three-source triad (tool wrapper invocation logs, pi-cli JSONL logs, and
   `native_web_search` config flag), the `ToolCallStats` / `ToolRunProfile` /
   `ProviderRateLimitStats` aggregation contract, the nine-member `FailureKind` taxonomy
   (`ok` / `malformed_args` / `tool_timeout` / `tool_error` / `help_invocation` /
@@ -2720,7 +2733,7 @@ Tool-use operational observability (the original design):
 - **Reading Guide**: new “Track tool-use telemetry or diagnose tool-call failures” row.
 
 Validated 2026-04-20 by the regenerated `_mine-tech-mix-100-2026-04-06-c` usage snapshot
-(`tool_profiles` frontmatter + `## Tool-use by Variant` table; see
+(`tool_profiles` frontmatter and `## Tool-use by Variant` table; see
 [§14.7 Tool-Use Observability](#147-tool-use-observability)).
 
 ### rev2h (2026-04-19)

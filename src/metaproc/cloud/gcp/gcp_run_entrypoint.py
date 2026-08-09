@@ -5,22 +5,26 @@ Runs inside a GCP Batch task launched by ``gcp_run_dispatch.py``. Unlike
 this entrypoint is one-shot: install the wheel, extract the workspace,
 exec the user command, propagate the exit code.
 
-Contract — all configuration via env vars (``gcp_run_dispatch`` sets these):
+Contract: all configuration uses env vars set by ``gcp_run_dispatch``:
 
-    METAPROC_WHEEL_GCS         (optional) gs:// URI to current-branch
+    METAPROC_WHEEL_GCS         (optional) gs:// URI to a current-branch
                                metaproc wheel; if set, downloaded and
-                               installed via ``uv tool install --force``
-                               before the user command runs.
+                               force-reinstalled into ``/opt/venv`` before
+                               the user command runs.
+    METAPROC_WHEEL_SHA256      required SHA-256 digest when
+                               ``METAPROC_WHEEL_GCS`` is set.
     METAPROC_WORKSPACE_GCS     (optional) gs:// URI to a workspace tar.gz;
                                if set, downloaded and extracted into
                                ``/workspace/`` before the user command.
+    METAPROC_WORKSPACE_SHA256  required SHA-256 digest when
+                               ``METAPROC_WORKSPACE_GCS`` is set.
     CLAUDE_CODE_CREDS_JSON     (optional) Personal-Plan OAuth blob; the
                                claude_code adapter's ``bootstrap()`` hook
                                materializes it to ``~/.claude/.credentials.json``.
     CODEX_CREDS_JSON           (optional) ChatGPT-OAuth blob (Vehicle B); the
                                codex adapter's ``bootstrap()`` hook
                                materializes it to ``~/.codex/auth.json``.
-    OPENAI_API_KEY             (optional) Codex Vehicle A + pi-cli openai
+    OPENAI_API_KEY             (optional) Codex Vehicle A and pi-cli openai
                                provider. Passed through to the user command
                                env as-is.
     METAPROC_GCP_RUN_CMD       JSON-encoded argv list for the user command.

@@ -14,21 +14,21 @@ Domain-specific rules belong in each client package’s own `conventions.md`.
 
 Any `*.process.md` file defines a process node; directories group a node with its
 sibling artifacts when there are any.
-Multiple `*.process.md` files may co-locate in one directory — each is an independent
+Multiple `*.process.md` files may co-locate in one directory; each is an independent
 node. A `main.process.md` is a common (not universal) practice for a package-root
 orchestrator spec when one exists, analogous to Python’s `main.py`. Test-only process
 specs use a `test-*.process.md` prefix (e.g. under `self-test/` or `tests/fixtures/`),
-mirroring the `tests/` + `test_*.py` pattern.
+mirroring the relationship between `tests/` and `test_*.py`.
 
 ## File Type Suffixes
 
 | Suffix | Meaning | Example |
 | --- | --- | --- |
-| `.process.md` | Canonical process-node definition (typed spec) | `mine.process.md` |
+| `.process.md` | Authoritative process-node definition (typed spec) | `mine.process.md` |
 | `.runbook.md` | Agent execution instructions for one step | `predict-item.runbook.md` |
-| `.template.md` | Template (`{{ }}` placeholders) filled to produce an artifact; rigor declared by `template.status` — see § Template files and format status | `prediction.template.md` |
+| `.template.md` | Template (`{{ }}` placeholders) filled to produce an artifact; rigor declared by `template.status`. See § Template files and format status. | `prediction.template.md` |
 | `.plan.yaml` | Resolved execution plan emitted by `metaproc plan` | `predict.plan.yaml` |
-| `.draft.md` | Non-canonical exploration or work in progress | `overview.draft.md` |
+| `.draft.md` | Exploration or work in progress | `overview.draft.md` |
 
 Use dot-separated suffixes such as `name.template.md`, not `name-template.md`.
 
@@ -40,9 +40,9 @@ Use dot-separated suffixes such as `name.template.md`, not `name-template.md`.
   `final-report.md`.
 - **Python modules and packages** use **snake_case** per PEP 8. Examples:
   `build_retrieval_kb.py`, `mine_kb_fetch.py`, `arena_helpers.py`.
-- **YAML keys and field names** (data *inside* files) use **snake_case** — see §YAML
+- **YAML keys and field names** (data *inside* files) use **snake_case**; see §YAML
   field names. Do not confuse these with filename casing.
-- **Front-door files** keep their canonical names (`README.md`, `conventions.md`,
+- **Front-door files** keep their established names (`README.md`, `conventions.md`,
   `changelog.md`, `TODO.md`). Only `README.md` and `TODO.md` are ALL-CAPS; every other
   doc follows kebab-case (see §ALL-CAPS filename rule).
 - **Dot-separated suffixes** compose with kebab-case: `retrieval-kb.generated.yaml`,
@@ -126,13 +126,13 @@ timestamp-child derivation.
 The harness, not agents, owns runtime state and logs.
 A run directory has exactly three top-level branches:
 
-- `<run_dir>/.state/` — durable engine bookkeeping (needed for resume).
+- `<run_dir>/.state/`: durable engine bookkeeping needed for resume.
   Files here are machine-internal records and do not use the frontmatter envelope
   convention. Agents must not hand-edit them.
-- `<run_dir>/.logs/` — operational source streams, workflow tool streams, captured
+- `<run_dir>/.logs/`: operational source streams, workflow tool streams, captured
   process output, and derived JSONL outputs.
   Logs are operational artifacts and are normally gitignored.
-- `<run_dir>/<artifact-tree>/` — whatever the spec’s output templates produce.
+- `<run_dir>/<artifact-tree>/`: whatever the spec’s output templates produce.
   No engine bookkeeping is written here.
 
 The `.state/` and `.logs/` branches further organize per-step and per-task files into
@@ -173,18 +173,20 @@ For the operator-facing view (what to look at while watching or reading a run), 
 ## Project-Level Docs
 
 Framework-owned `.state/` and `.logs/` artifacts are runtime; this section covers the
-human-authored operational documents that sit above runtime state — plan specs,
-evidence, phase reports, and status ledgers.
+human-authored operational documents that sit above runtime state: plan specs, evidence,
+phase reports, and status ledgers.
 
 | Location | Purpose | Examples |
 | --- | --- | --- |
-| `docs/project/specs/active/` | Active plan specs; promoted to `archived/` on close-out | `plan-YYYY-MM-DD-<slug>.md` |
+| `docs/project/specs/active/` | Active plan specs | `plan-YYYY-MM-DD-<slug>.md` |
+| `docs/project/specs/done/` | Completed plan specs retained as implementation history | `plan-YYYY-MM-DD-<slug>.md` |
+| `docs/project/specs/future/` | Deferred or future-only plan specs | `plan-YYYY-MM-DD-<slug>.md` |
 | `docs/project/specs/active/evidence/<slug>-YYYY-MM-DD/` | Dated evidence subdirs that back a plan spec | `README.md`, `usage-snapshot-*.md`, tabular `.txt` artifacts |
 | `docs/project/specs/active/evidence/<slug>/phase-<N>-*/` | Per-phase evidence subdirs under a long-running epic | `README.md`, dispatch logs, per-worker terminal output |
 | Phase reports | Prose report at the top of a phase’s evidence subdir, summarising what happened | `README.md` |
 | Final reports | Rolled-up report across phases for a whole epic | `final-report.md` (lowercase; see ALL-CAPS rule below) |
 | Status ledgers | Living tables of per-phase state that predate or accompany a final report | `status-ledger.md` (new convention; older dirs carry legacy `STATUS.md` pending migration) |
-| Evidence artifacts | `.md` with YAML frontmatter — frontmatter is the schema-defined source of truth; body renders the same data as markdown tables plus narrative context. See §Evidence artifact format. | `scoreboard.md`, `per-field-cand-win.md`, rubric scorecards |
+| Evidence artifacts | `.md` with YAML frontmatter. Frontmatter is the schema-defined source of truth; the body renders the same data as Markdown tables and narrative context. See §Evidence artifact format. | `scoreboard.md`, `per-field-cand-win.md`, rubric scorecards |
 
 ### ALL-CAPS filename rule
 
@@ -197,14 +199,15 @@ on creation.
 
 Plan specs and evidence subdirs carry a `YYYY-MM-DD` stamp in the name:
 `plan-2026-04-20-<slug>.md`, `evidence/<slug>-2026-04-20/`. The date is the creation
-date, not the close-out date — it is stable across the spec’s lifetime and makes
-chronological listing trivial.
+date, not the close-out date.
+It remains stable across the spec’s lifetime and supports chronological listing without
+a separate timestamp index.
 
 ### Evidence artifact format
 
-Evidence and reporting artifacts — scoreboards, per-field breakdowns, rubric scorecards,
-anything a plan spec publishes under `evidence/` — use `.md` files with a YAML
-frontmatter envelope.
+Evidence and reporting artifacts, including scoreboards, per-field breakdowns, rubric
+scorecards, and anything a plan spec publishes under `evidence/`, use `.md` files with a
+YAML frontmatter envelope.
 The frontmatter is the schema-defined source of truth; the markdown body renders the
 same data as one or more human-readable tables, with optional narrative context.
 
@@ -214,27 +217,26 @@ same data as one or more human-readable tables, with optional narrative context.
   that isn’t in the frontmatter.
   When the two could drift, regenerate the body from the frontmatter.
 - One artifact = one file.
-  Do not emit parallel `.txt` + `.yaml` pairs or `*_detail.yaml` siblings for the same
+  Do not emit parallel `.txt` and `.yaml` pairs or `*_detail.yaml` siblings for the same
   data.
-- Streaming / append-only logs (`*.jsonl`) and runtime `.state/*.yaml` are exempt — they
+- Streaming or append-only logs (`*.jsonl`) and runtime `.state/*.yaml` are exempt; they
   are machine-internal, not authored evidence.
 - `README.md` in an evidence directory stays prose-first.
   It may carry frontmatter for its own metadata (`title`, `status`, `parent_epic`) but
   the body is narrative; it is an index/takeaways doc, not a tabular artifact.
 
 Migration: existing `.txt` evidence artifacts and `*_detail.yaml` siblings are
-grandfathered.
-Migrate opportunistically — when rewriting the artifact, regenerating from
-a new dispatch, or closing out the parent phase.
-New emitters must follow this convention on creation.
+grandfathered. Migrate opportunistically.
+When rewriting the artifact, regenerating from a new dispatch, or closing out the parent
+phase. New emitters must follow this convention on creation.
 
 ## File Format Policy
 
 The choice between YAML, JSON, JSONL, and softschema markdown is driven by the
 artifact’s role and size, not by per-artifact preference.
 The rules below are normative; new artifacts must follow them.
-For the canonical list of every artifact metaproc emits and the format each one uses,
-see [`artifact-catalog.md`](artifact-catalog.md).
+For the complete list of artifacts Metaproc emits and the format each one uses, see
+[`artifact-catalog.md`](artifact-catalog.md).
 
 ### Selection rules
 
@@ -243,7 +245,7 @@ see [`artifact-catalog.md`](artifact-catalog.md).
 | Streams and many-record append-only files | **JSONL** (always) | Line-recoverable, streamable in chunks, typed via Pydantic discriminated unions. Gzipped (`.jsonl.gz`) when archived. |
 | Small to moderate machine-readable files | **YAML** (strongly recommended) | State, snapshots, configs. Readable from a terminal, comment-friendly, typed via Pydantic models. |
 | Large, deeply-nested, or complex machine-readable documents | **JSON** | YAML indentation becomes unreadable at depth and slower to parse; JSON wins for tree-shaped or perf-bound machine documents. |
-| Human-readable documents bundling structured and unstructured content | **Softschema MD** (YAML frontmatter + markdown body) | One file carries both representations; frontmatter is parsed by tooling, body is prose. See §Frontmatter Document Model. |
+| Human-readable documents bundling structured and unstructured content | **Softschema MD** (YAML frontmatter with a Markdown body) | One file carries both representations; frontmatter is parsed by tooling, and the body is prose. See §Frontmatter Document Model. |
 | Externally-owned payloads (cached upstream responses) | Whatever the upstream produced | Round-trip fidelity and parse speed. Typically JSON. |
 | Raw stream captures (stderr, plain dumps) | `.txt` / `.log` | No structure to enforce. |
 
@@ -258,8 +260,8 @@ see [`artifact-catalog.md`](artifact-catalog.md).
   A deeply-nested tree is JSON regardless of byte size.
 - **Streams are always JSONL.** Any append-only file that grows with records uses JSONL.
   Do not replace a stream with periodic JSON snapshots.
-- **One canonical file per artifact.** Do not emit `*.yaml` + `*.json` siblings for the
-  same data. Pick the format the role requires and stick to it.
+- **One file per artifact.** Do not emit `*.yaml` and `*.json` siblings for the same
+  data. Pick the format the role requires and stick to it.
 - **Sidecars are YAML by default.** The exception is when the sidecar is too large for
   readable YAML or holds an externally-owned payload, in which case JSON applies.
 
@@ -273,14 +275,14 @@ JSON wins only when depth or size make YAML harder to read than easier.
 
 ## Frontmatter Document Model
 
-### One file, structured + unstructured bundled
+### One file with structured and unstructured content
 
 Every artifact that mixes structured fields and human prose is a single Markdown file
 with YAML frontmatter.
 Structured data lives in frontmatter; prose lives in the body, beside the rationale.
 There is no separate `*.yaml` sidecar mirroring small structured fields from the same
-artifact — splitting them severs each value from its context and forces consumers to
-choose which is canonical.
+artifact. Splitting them severs each value from its context and forces consumers to
+choose which is authoritative.
 
 The boundary is **demand-driven**: a field belongs in frontmatter exactly when
 downstream code (or a softschema check) parses it.
@@ -321,7 +323,7 @@ Domain packages register additional keys (e.g. `prediction`, `retro`, `confidenc
 
 Runtime `.state/` files (`status.yaml`, `attempt.yaml`, `result.yaml`,
 `manual-ack.yaml`, `process-status.yaml`, `run-config.yaml`, and related harness-owned
-state) are machine-internal records, not authored documents — they do not use the
+state) are machine-internal records, not authored documents; they do not use the
 envelope convention.
 
 ### Pydantic model conventions
@@ -346,7 +348,7 @@ Rules:
   generic form templates).
 - Envelope models are registered in `ENVELOPE_MAP` (`metaproc.io.frontmatter`) for
   auto-detection by `load_frontmatter_typed`.
-- The `schema_` field (see §Schema tokens) lives on the **inner** model only — never on
+- The `schema_` field (see §Schema tokens) lives on the **inner** model only, never on
   the envelope. The inner class’s PascalCase name and the `<ClassName>` portion of its
   schema token are the same identifier; an envelope class with a `schema_` field is a
   bug (the token carries the inner name but the Pydantic class has an `Envelope` suffix,
@@ -361,8 +363,8 @@ Format: `<module>:<ClassName>/<version>`
 
 Every inner model must have a `schema_` field (aliased to `schema` in YAML) whose
 default is a valid schema token.
-The `schema` field is the single canonical version identifier — there is no separate
-`schema_version` field.
+The `schema` field is the sole version identifier; there is no separate `schema_version`
+field.
 
 Examples:
 
@@ -378,12 +380,13 @@ Components:
 | Part | Rule |
 | --- | --- |
 | `module` | Broad package name (`metaproc`, `example_plugin`), not a nested sub-module |
-| `ClassName` | PascalCase, matches the **inner** Pydantic model’s class name exactly (not the envelope — see §Pydantic model conventions) |
+| `ClassName` | PascalCase, matches the **inner** Pydantic model’s class name exactly. See §Pydantic model conventions; this is not the envelope class. |
 | `version` | Semver-ish, opaque to the framework (e.g. `0.1`, `0.2beta`) |
 
 The `schema` field carries the token.
 Domain-specific version fields like `form_version` or `retro_schema_version` describe
-content format versions, not the envelope contract — they are separate concerns.
+content format versions, not the envelope contract.
+They are separate concerns.
 
 Utilities: `parse_schema_token` and `format_schema_token` in `metaproc.io.schema_token`.
 
@@ -416,14 +419,14 @@ is three words, each scoped to one axis:
 
 | Field | Scope | Example values |
 | --- | --- | --- |
-| `mode` | `ProcessStep` — how does this step execute? | `agent`, `code`, `composite`, `manual` |
-| `kind` | Polymorphic discriminator on many classes — what subtype of *this* class is this? | `ValueType.kind`: `string \| path \| list \| map`. `IOSpec.kind`: `file \| directory \| stream`. `VizNode.kind`: `step \| dep \| process \| file`. `VizEdge.kind`: `needs \| produces \| consumes`. `EnvMeta.kind`: `REAL \| TUNABLE \| SECRET \| OPTIONAL`. `LogEvent.kind`: agent-log event types. |
+| `mode` | `ProcessStep`: how does this step execute? | `agent`, `code`, `composite`, `manual` |
+| `kind` | Polymorphic discriminator on many classes: what subtype of *this* class is this? | `ValueType.kind`: `string \| path \| list \| map`. `IOSpec.kind`: `file \| directory \| stream`. `VizNode.kind`: `step \| dep \| process \| file`. `VizEdge.kind`: `needs \| produces \| consumes`. `EnvMeta.kind`: `REAL \| TUNABLE \| SECRET \| OPTIONAL`. `LogEvent.kind`: agent-log event types. |
 | `format` | Wire format / schema for a file | `frontmatter-md`, `yaml`, `json`, `jsonl` |
 
-`kind` is always scoped by its owning class — the class context disambiguates values
-that might look similar.
-A reader should never need to guess which `kind` is meant once they know which object
-they’re inspecting. The values differ per class by design.
+`kind` is always scoped by its owning class; the class context disambiguates values that
+might look similar. A reader should never need to guess which `kind` is meant once they
+know which object they’re inspecting.
+The values differ per class by design.
 
 `ProcessDep` has no `role` axis.
 Format, lifecycle, and consumer are each answered by existing signals (filename suffix,
@@ -478,12 +481,11 @@ enter scope.
 ### Template files and format status
 
 A template is a document with `{{ }}` placeholders that is filled to produce an
-artifact.
-Every template file — strict or loose — uses the single `*.template.md` suffix;
+artifact. Every template file, strict or loose, uses the single `*.template.md` suffix;
 there is no separate strict suffix and no template engine such as Jinja.
 Template expressions reuse the placeholder syntax above (`{{var}}`, domain names bare
 lowercase, framework names under `run.*`/`step.*`), and document templates are rendered
-with that same `{{ }}` substitution — never Python `str.format` or hand-built strings.
+with that same `{{ }}` substitution, never Python `str.format` or hand-built strings.
 
 A template’s frontmatter declares how rigorously its variables are defined, via a
 `template.status` field.
@@ -492,9 +494,9 @@ without renaming the file:
 
 | status | Meaning | Filled by |
 | --- | --- | --- |
-| `unstructured` | No template variables — a blank form or scaffold with prose/blanks. | agent, during execution |
+| `unstructured` | No template variables; a blank form or scaffold with prose or blanks. | agent, during execution |
 | `loose` | Uses `{{ }}` variables, but not all are declared in frontmatter and they are not validated. | agent or code; partial fills allowed |
-| `validated` | Frontmatter declares every variable (`template.vars`), and that set exactly matches the `{{ }}` placeholders in the body. Safe for strict, deterministic code rendering — rendering errors on any missing or unknown variable. | code (a renderer); all variables required |
+| `validated` | Frontmatter declares every variable (`template.vars`), and that set exactly matches the `{{ }}` placeholders in the body. Safe for strict, deterministic code rendering; rendering errors on any missing or unknown variable. | code (a renderer); all variables required |
 
 ```yaml
 template:
@@ -545,14 +547,14 @@ When documenting CLI usage:
 
 ### Policy: every log path lives on persistent storage, never `/tmp/`
 
-**All logs — framework-owned, workflow-owned, AND operator-owned (wrapper logs,
-supervision pulse outputs, ad-hoc diagnostics) — must be written under the runs
+**All framework-owned, workflow-owned, and operator-owned logs (wrapper logs,
+supervision pulse outputs, and ad-hoc diagnostics) must be written under the runs
 directory tree.** `/tmp/`, `/var/folders/.../T/`, and any other system-managed temporary
 location are session-only on most platforms (macOS clears `/tmp` on reboot; Linux
 systemd-tmpfiles clears it on a schedule; some sandboxes wipe it on process exit) and
 defeat unattended-execution recovery.
 An overnight batch that survives a sleep, crash, or reboot must be able to reconstruct
-what happened — that requires the log to still exist.
+what happened, which requires the log to still exist.
 
 This rule applies to every log artifact, regardless of who writes it:
 
@@ -562,7 +564,7 @@ This rule applies to every log artifact, regardless of who writes it:
   `metaproc run-process` / `metabrowser` / etc.)
   and any other cross-run operator artifact: write under `<RUNS_DIR_ROOT>/.logs/` (the
   `.logs/` directory at the workflow’s runs-root level, alongside the per-run dirs).
-  Filename should encode the batch slug — e.g.
+  The filename should encode the batch slug, for example,
   `<RUNS_DIR_ROOT>/.logs/wrapper-<batch-slug>.log`. The `**/.logs/` gitignore pattern
   covers these so they persist on disk but aren’t accidentally committed.
 - **Supervision PULSE / status snapshot dumps** that an agent wants to read later: same
@@ -600,7 +602,7 @@ lives where the runs live, not in `/tmp/`.
 
 ## Observability
 
-Three canonical artifacts carry tool-use observability for every workflow run.
+Three artifacts carry tool-use observability for every workflow run.
 Full contract in [`arch-metaproc-core.md §14.7`](arch/arch-metaproc-core.md).
 
 | Artifact | Scope | Owner | Role |
@@ -613,11 +615,11 @@ The `tool_profiles` block is the single operator-facing rollup: everything else 
 three sources is raw event data the rollup consumes.
 
 Partial-closure signal for runbook gap A (native web-search activity) rides on the
-`native_web_search` config-stub flag — presence-only, aggregated into
-`ToolRunProfile.native_web_search_configs`. *Native web search* is the provider-neutral
-term (Vertex grounding, Anthropic `web_search_*`, OpenAI `web_search_preview`); reserve
-*grounding* for Vertex-specific references.
-Per-turn activity is tracked as a known open gap in the
+`native_web_search` config-stub flag.
+This presence-only signal is aggregated into `ToolRunProfile.native_web_search_configs`.
+*Native web search* is the provider-neutral term (Vertex grounding, Anthropic
+`web_search_*`, OpenAI `web_search_preview`); reserve *grounding* for Vertex-specific
+references. Per-turn activity is tracked as a known open gap in the
 [tool-use-observability runbook](arch/arch-metaproc-core.md#147-tool-use-observability);
 closing it fully requires per-provider upstream changes outside metaproc scope.
 

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as distribution_version
+
 import pytest
 from softschema import validate_artifact
 from typer.testing import CliRunner
@@ -24,9 +27,28 @@ class TestCLIBasic:
         assert result.exit_code in (0, 2)
         assert "Usage" in result.output
 
+    def test_version_matches_installed_distribution(self) -> None:
+        result = runner.invoke(app, ["--version"])
+
+        assert result.exit_code == 0
+        assert result.output.strip() == distribution_version("metaproc")
+
+    def test_version_reports_unknown_without_distribution_metadata(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def missing_distribution(_distribution_name: str) -> str:
+            raise PackageNotFoundError
+
+        monkeypatch.setattr("metaproc.cli.distribution_version", missing_distribution)
+
+        result = runner.invoke(app, ["--version"])
+
+        assert result.exit_code == 0
+        assert result.output.strip() == "unknown"
+
 
 class TestSubcommandRegistration:
-    """Verify all 10 subcommands are registered and show help."""
+    """Verify representative subcommands are registered and show help."""
 
     def test_plan_help(self):
         result = runner.invoke(app, ["plan", "--help"])

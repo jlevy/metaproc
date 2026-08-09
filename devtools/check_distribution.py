@@ -182,6 +182,19 @@ def _smoke_install(wheel: Path) -> None:
         "metaproc",
     ]
     subprocess.run([*cli_command, "--help"], cwd=ROOT, env=env, check=True)
+    version_result = subprocess.run(
+        [*cli_command, "--version"],
+        cwd=ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    if version_result.stdout.strip() != expected_version:
+        raise RuntimeError(
+            "installed-wheel CLI version does not match distribution metadata: "
+            f"{version_result.stdout.strip()!r} != {expected_version!r}"
+        )
     subprocess.run([*cli_command, "env", "--template"], cwd=ROOT, env=env, check=True)
     subprocess.run([*cli_command, "help"], cwd=ROOT, env=env, check=True)
     skill_result = subprocess.run(

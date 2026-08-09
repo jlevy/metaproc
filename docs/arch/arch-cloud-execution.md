@@ -31,12 +31,12 @@ subsystem, see [arch-runpool.md](arch-runpool.md).
 
 Local execution has inherent scaling limits: a single machine constrains concurrent
 agent invocations by CPU, memory, and network bandwidth.
-Running 500+ fan-out items locally takes hours even with aggressive concurrency, and
-memory pressure forces the adaptive pool to shed slots.
+Running more than 500 fan-out items locally takes hours even with aggressive
+concurrency, and memory pressure forces the adaptive pool to shed slots.
 
 Cloud execution solves this by distributing fan-out items across multiple VMs, each
 running its own run pool.
-The challenge is doing this without introducing a cloud-specific execution model — the
+The challenge is doing this without introducing a cloud-specific execution model: the
 same process spec and CLI commands must work identically whether run locally or in the
 cloud.
 
@@ -79,8 +79,8 @@ run-process --cloud
 ```
 
 The orchestrator uses a non-preemptible VM to avoid losing the DAG coordinator.
-Workers default to preemptible/spot VMs for cost efficiency — killed items are retryable
-on resume.
+Workers default to preemptible or Spot VMs for cost efficiency; killed items are
+retryable on resume.
 
 ### 2.2 Execution Chain by Topology
 
@@ -94,7 +94,7 @@ bottom of the stack are always the same.
 | Orchestrator | `run-process` on laptop | `run-process` on laptop | `run-process` on orchestrator VM |
 | Code steps | Run locally on laptop | Run locally on laptop | Run locally on orchestrator VM |
 | Fan-out dispatch | `run-parallel` on laptop | `dispatch_to_workers()` -> N worker VMs | `dispatch_to_workers()` -> N worker VMs |
-| Item execution | RunPool + LocalBackend on laptop | RunPool + LocalBackend on each worker VM | RunPool + LocalBackend on each worker VM |
+| Item execution | RunPool with LocalBackend on laptop | RunPool with LocalBackend on each worker VM | RunPool with LocalBackend on each worker VM |
 | Adapter subprocess | `pi`/`claude`/`gemini` on laptop | `pi`/`claude`/`gemini` on worker VM | `pi`/`claude`/`gemini` on worker VM |
 | Shared state | Local disk | NFS | NFS |
 
@@ -109,7 +109,7 @@ Fan-out steps in `run-process` dispatch through a backend selected via `--backen
 
 **Note on backend abstraction:** `local` is a registered `LaunchBackend` implementation
 (see section 2.5) in the backend registry (`runpool/registry.py`). Cloud worker backends
-are different — they are multi-VM dispatch modes handled directly in `run-process`, not
+are different: they are multi-VM dispatch modes handled directly in `run-process`, not
 `LaunchBackend` implementations.
 A cloud worker backend partitions items across N VMs, each of which runs
 `run-parallel --backend local` internally.
@@ -119,7 +119,7 @@ register alongside `gcp-worker` in the `run-process` dispatch logic.
 
 ### 2.4 Filesystem-First Resume Contract
 
-Authoritative run state lives only on the run filesystem — local disk for full-local
+Authoritative run state lives only on the run filesystem: local disk for full-local
 runs, shared NFS for all cloud-backed modes.
 Full per-artifact schemas and lifecycles live in
 [artifact-catalog.md](../artifact-catalog.md); this section covers the dispatch-relevant
@@ -127,8 +127,7 @@ subset.
 
 **`run-config.yaml`** (`{run_dir}/.state/run-config.yaml`): written at run creation time
 with immutable run identity (process name, run_id, backend, variant, git SHA, creation
-timestamp).
-On resume, validated against current launch parameters — process identity and
+timestamp). On resume, validated against current launch parameters; process identity and
 run directory must match.
 Cross-topology resume (e.g., hybrid to full cloud) is allowed because they share the
 same authoritative filesystem.
@@ -181,15 +180,15 @@ tracking). `MockBackend` is available for testing.
 
 The `LaunchBackend` protocol and the backend registry (entry-point group
 `metaproc.backends`) are fully provider-agnostic.
-Adding a new local backend means implementing the 5-method protocol and registering it —
-no changes to `engine/`, `runpool/`, or `models/` are required.
+Adding a new local backend means implementing the five-method protocol and registering
+it; no changes to `engine/`, `runpool/`, or `models/` are required.
 
 ### 2.6 Provider Naming and Extensibility
 
 The cloud layer uses provider-specific names rather than a generic `cloud` abstraction.
 
 **CLI subcommand:** `metaproc gcp` (not `metaproc cloud`). The commands under a provider
-subgroup are inherently provider-API-specific — they query provider batch APIs, stream
+subgroup are inherently provider-API-specific: they query provider batch APIs, stream
 from provider logging, manage provider storage, etc.
 A second cloud provider (e.g., AWS) would get its own subcommand (`metaproc aws`) with
 provider-appropriate commands, rather than a single `cloud` subcommand that papers over
@@ -214,7 +213,7 @@ The naming hierarchy:
 
 The framework does not depend on any specific deployment topology.
 Persistent infrastructure (VMs, NFS shares, container registries) is external to
-metaproc — the framework provides CLI commands that can be run anywhere.
+metaproc; the framework provides CLI commands that can be run anywhere.
 
 Design principles for infrastructure dependencies:
 
@@ -409,7 +408,7 @@ GCP Batch defaults an unset `TaskSpec.compute_resource` to **2000 cpu_milli / 20
 memory_mib** regardless of the underlying VM. On `n2-highmem-8` (8 vCPU / 64 GiB) that
 means the container’s cgroup gets ~3% of the host’s RAM, and long-running agent
 workloads get OOM-killed by the cgroup well before the host runs out of anything.
-The Phase 1c Qwen3 235B baseline hit this pattern explicitly — `metaproc.runpool`
+The Phase 1c Qwen3 235B baseline hit this pattern explicitly: `metaproc.runpool`
 correctly read `memory_ceiling=1` from the 2 GiB cgroup and cut concurrency, then
 SIGKILL fired anyway.
 
@@ -417,10 +416,10 @@ SIGKILL fired anyway.
 `infer_compute_resource(machine_type)`:
 
 - Parses `<family>-<class>-<N>` (e.g. `n2-highmem-8`) and `custom-CPU-MEM`.
-- Class ratios — `standard` 4 GiB/vCPU, `highmem` 8, `highcpu` 1, `megamem` 13,
-  `ultramem` 28 — match GCE published shapes.
+- Class ratios (`standard` 4 GiB/vCPU, `highmem` 8, `highcpu` 1, `megamem` 13, and
+  `ultramem` 28) match GCE published shapes.
 - Reserves `HOST_CPU_RESERVE_MILLI=500` and `HOST_MEMORY_RESERVE_MIB=1024` for the Batch
-  agent + Docker daemon + host OS; the rest goes to the container.
+  Batch agent, Docker daemon, and host OS; the rest goes to the container.
 - Operator overrides via `METAPROC_GCP_TASK_CPU_MILLI` and
   `METAPROC_GCP_TASK_MEMORY_MIB`.
 - Unparsable / unsupported machine types log a loud warning and fall back to the legacy
@@ -484,8 +483,8 @@ restrictions.
 ### 3.10 Secret Manager Integration
 
 Every credential delivered to a Batch job is injected via Secret Manager rather than as
-a plaintext env var — plaintext would persist in the job spec returned by
-`gcloud batch jobs describe`. The canonical registry is `SecretRefSet.all_known()` in
+a plaintext env var; plaintext would persist in the job spec returned by
+`gcloud batch jobs describe`. The complete registry is `SecretRefSet.all_known()` in
 `metaproc.dispatch.secret_refs`, composing static refs with dynamic provider refs
 aggregated from `metaproc.config.providers.gcp_secret_refs()`. The legacy
 `GCP_SECRET_REFS` tuple in `cloud/gcp/batch_backend.py` is a back-compat alias.
@@ -521,19 +520,19 @@ operator setup flow and
 
 All GCP infrastructure parameters are configurable via env vars:
 
-- `METAPROC_GCP_PROJECT` — GCP project ID
-- `METAPROC_GCP_FILESTORE_SERVER` — Filestore IP or hostname
-- `METAPROC_GCP_FILESTORE_SHARE` — Filestore share name
-- `METAPROC_GCP_FILESTORE_MOUNT_PATH` — NFS mount path (default `/mnt/filestore`)
-- `METAPROC_GATEWAY_HOST` — gateway host for `gcp remote`
-- `METAPROC_GCP_SECRET_GH_TOKEN` — Secret Manager resource name for GH_TOKEN
-- `METAPROC_GCP_SECRET_CLAUDE_CREDS` — Secret Manager resource name for the Claude Code
+- `METAPROC_GCP_PROJECT`: GCP project ID
+- `METAPROC_GCP_FILESTORE_SERVER`: Filestore IP or hostname
+- `METAPROC_GCP_FILESTORE_SHARE`: Filestore share name
+- `METAPROC_GCP_FILESTORE_MOUNT_PATH`: NFS mount path (default `/mnt/filestore`)
+- `METAPROC_GATEWAY_HOST`: gateway host for `gcp remote`
+- `METAPROC_GCP_SECRET_GH_TOKEN`: Secret Manager resource name for GH_TOKEN
+- `METAPROC_GCP_SECRET_CLAUDE_CREDS`: Secret Manager resource name for the Claude Code
   CLI Personal-Plan OAuth blob (required when dispatching `variant=claude-code-cli` on
   Batch with the subscription credential)
-- `METAPROC_GCP_SECRET_CODEX_CREDS` — Secret Manager resource name for the Codex CLI
+- `METAPROC_GCP_SECRET_CODEX_CREDS`: Secret Manager resource name for the Codex CLI
   ChatGPT-OAuth blob
-- `METAPROC_RUN_BRANCH` — git branch for container bootstrap
-- `METAPROC_REPO_URL` — repo URL for container bootstrap
+- `METAPROC_RUN_BRANCH`: git branch for container bootstrap
+- `METAPROC_REPO_URL`: repo URL for container bootstrap
 
 ### 3.12 Vertex AI MaaS Integration
 
@@ -597,15 +596,16 @@ token **once per batch** (not per item) via `google.auth` auto-refresh credentia
 
 `resolve_gcp_token()` delegates to `cloud.gcp.resolve_token.resolve_gcp_token()`, which
 uses `google.auth.default()` with automatic token refresh.
-Tokens auto-refresh before expiry — no TTL guessing, no subprocess shell-outs.
+Tokens auto-refresh before expiry, with no TTL guessing or subprocess shell-outs.
 The token is injected into the adapter’s `api_key` config field, which becomes part of
-each item’s `runtime_config`. Raises on failure — there is no degraded fallback path.
+each item’s `runtime_config`. Failure raises an exception; there is no degraded fallback
+path.
 
 ### 3.13 CLI Commands
 
 | Command | Purpose |
 | --- | --- |
-| `gcp status` | Show orchestrator + worker job states |
+| `gcp status` | Show orchestrator and worker job states |
 | `gcp scale` | Change desired worker topology for an active cloud fan-out step |
 | `gcp logs` | Stream logs from Cloud Logging |
 | `gcp cancel` | Cancel running/queued Batch jobs |
@@ -627,55 +627,57 @@ each item’s `runtime_config`. Raises on failure — there is no degraded fallb
 | `cloud/gcp/worker_entrypoint.py` | Unified container entrypoint for workers |
 | `cloud/gcp/orchestrator_dispatch.py` | Submit orchestrator as GCP Batch job |
 | `cloud/gcp/orchestrator_entrypoint.py` | Orchestrator container entrypoint |
-| `cloud/gcp/container_bootstrap.py` | Shared git clone + env setup |
+| `cloud/gcp/container_bootstrap.py` | Shared source resolution and environment setup |
 | `cloud/gcp/resolve_token.py` | GCP access token via google.auth |
 | `cloud/gcp/gcp_credentials.py` | Service account credential management |
-| `cloud/gcp/dispatch_artifacts.py` | Wheel build + workspace tarball + GCS upload helpers |
-| `cloud/gcp/gcp_run_dispatch.py` | `metaproc gcp run` Job builder + Batch submit |
-| `cloud/gcp/gcp_run_entrypoint.py` | `metaproc gcp run` task entrypoint (wheel install + execvp) |
-| `cloud/gcp/gcp_run_logs.py` | Blocking-mode log tail + exit-code propagation |
-| `cloud/gcp/billing.py` | Approximate billable hours from machine type + worker runtime spans |
-| `cloud/gcp/prefect_flow.py` | Prefect `@flow` wrapper for `run-process --backend gcp-worker` (requires `prefect` extra) |
+| `cloud/gcp/dispatch_artifacts.py` | Wheel build, workspace archive, and GCS upload helpers |
+| `cloud/gcp/gcp_run_dispatch.py` | `metaproc gcp run` job builder and Batch submission |
+| `cloud/gcp/gcp_run_entrypoint.py` | `metaproc gcp run` task entrypoint for wheel installation and command execution |
+| `cloud/gcp/gcp_run_logs.py` | Blocking log tail and exit-code propagation |
+| `cloud/gcp/billing.py` | Approximate billable hours from machine type and worker runtime spans |
 
-### 3.15 `metaproc gcp run` — Arbitrary Command Dispatch
+### 3.15 `metaproc gcp run`: Arbitrary Command Dispatch
 
 A complement to the orchestrator/worker model in §3.3-§3.6 for running **arbitrary
-one-off commands** on GCP Batch with the dispatcher’s current metaproc + repo state.
-Used for detached command fan-out and ad-hoc debug probes.
+one-off commands** on GCP Batch with the dispatcher’s current Metaproc and repository
+state. Used for detached command fan-out and ad-hoc debug probes.
 
 **Pipeline.** `commands/gcp_run.py` parses CLI flags, builds a `GCPBatchConfig`, ships
-artifacts (`build_wheel` + `package_workspace` under `dispatch_artifacts.py`, gated by
+artifacts (`build_wheel` and `package_workspace` under `dispatch_artifacts.py`, gated by
 `--no-wheel` / `--no-workspace`), and calls `gcp_run_dispatch.dispatch_gcp_run`, which
 assembles a single Batch task whose container entrypoint is
-`python -m metaproc.cloud.gcp.gcp_run_entrypoint`. The entrypoint `uv tool install`’s
-the staged wheel (if `METAPROC_WHEEL_GCS` is set), extracts the workspace tarball over
-the cloned repo (if `METAPROC_WORKSPACE_GCS` is set), runs adapter `bootstrap()` hooks
-per §2.8, and `execvp`’s the user command from `METAPROC_GCP_RUN_CMD` (JSON-encoded
-argv).
+`python -m metaproc.cloud.gcp.gcp_run_entrypoint`. The entrypoint verifies the staged
+wheel against `METAPROC_WHEEL_SHA256` and force-reinstalls it into `/opt/venv` with
+`uv pip install` when `METAPROC_WHEEL_GCS` is set.
+It verifies and safely extracts the workspace archive into `/workspace` when the
+corresponding URI and digest pair is set, runs adapter `bootstrap()` hooks per §2.8, and
+executes the JSON-encoded argv from `METAPROC_GCP_RUN_CMD` with `execvp`.
 
 **Blocking semantics.** Default mode tails Cloud Logging (filter `labels.job_uid=<uid>`)
 prefixed `[gcp-run]` until the job hits a terminal state, then exits with
 `SUCCEEDED → 0`, `CANCELLED` / `DELETION_IN_PROGRESS → 130`, otherwise `1`. `--detach`
-skips the tail entirely and prints job name + console URL.
+skips the tail entirely and prints the job name and console URL.
 
 **Why a separate primitive.** Worker dispatch (§3.3) is shaped around per-item
 partitioning and resume contracts; that machinery is overkill for “run `echo` once” or
 “run a package-specific analyzer against a fixed input file.”
 The two paths share `batch_backend.py`, `container_bootstrap.py`, the `GCP_SECRET_REFS`
-registry, and the Filestore mount script — but `metaproc gcp run` carries no
-orchestrator lease, no claim registry, no per-item dispatch manifest.
+registry, and the Filestore mount script, but `metaproc gcp run` carries no orchestrator
+lease, no claim registry, no per-item dispatch manifest.
 
-**Wheel / workspace overrides apply to both paths.** `METAPROC_WHEEL_GCS` and
-`METAPROC_WORKSPACE_GCS` are not specific to `metaproc gcp run`. Standard
-`run-process --cloud` dispatch forwards both env vars into the worker and orchestrator
-Batch envs, and `bootstrap_container()` honors them the same way `bootstrap_gcp_run()`
-does (wheel force-reinstalls into `/opt/venv`; workspace tarball extracts into
-`/workspace` and reinstalls `example_plugin/` from it, replacing the sparse clone).
+**Wheel and workspace overrides apply to both paths.** The URI variables and their
+required `METAPROC_WHEEL_SHA256` and `METAPROC_WORKSPACE_SHA256` digests are not
+specific to `metaproc gcp run`. Standard `run-process --cloud` dispatch forwards all
+four values into the worker and orchestrator Batch environments.
+`bootstrap_container()` verifies and installs the wheel into `/opt/venv`; a verified
+workspace archive replaces the repository clone, and the explicitly configured workspace
+packages are installed from that archive.
 This is the supported way to ship a current-branch `metaproc/` fix to workers without an
 agent-image rebuild.
 
-See [`cloud-dispatch.runbook.md`](../runbooks/cloud-dispatch.runbook.md) §4b for
-operator recipes and this document for the full design.
+See
+[Dispatch an Arbitrary Command](../runbooks/cloud-dispatch.runbook.md#5-dispatch-an-arbitrary-command)
+for operator recipes and this document for the full design.
 
 ## 4. AWS Implementation
 
@@ -693,12 +695,8 @@ operator recipes and this document for the full design.
 - Should `SecretRefSet` provider-ref aggregation be lazy (current) or eagerly validated
   at dispatch time? The current design silently skips unresolvable provider refs, which
   could mask a misconfigured credential until the adapter fails at runtime.
-- The Prefect flow (`prefect_flow.py`) is present in the codebase but not integrated
-  into the main dispatch path.
-  Its role relative to GCP Batch direct dispatch is [unverified]; clarify whether it is
-  a live alternative or a deprecated experiment.
-- `billing.py` approximates billable hours from machine type + runtime spans but cannot
-  reconcile against actual GCP invoices.
+- `billing.py` approximates billable hours from machine type and runtime spans but
+  cannot reconcile against actual GCP invoices.
   Is the approximation accurate enough for attribution, or should it be replaced with
   Billing API queries?
 
@@ -708,16 +706,24 @@ operator recipes and this document for the full design.
   `OrchestratorDispatchConfig`. A shared `AuthPoolFlags` payload (already used in
   `WorkerDispatchConfig`) could replace the individual fields in
   `OrchestratorDispatchConfig` for consistency.
-- The container bootstrap module docstring lists 6 steps but the code performs 7
-  (adapter `bootstrap(home)` hooks are invoked by the entrypoint callers, not by
-  `bootstrap_container()` itself).
-  Aligning the module docstring with the actual flow would reduce confusion.
 - `run_cloud_preflight()` validates env-var presence but does not probe GCP API
   reachability (e.g., can the Batch API be called?
   Is the Filestore server resolvable?). Adding a lightweight API probe could catch
   misconfigured networks before job submission.
 
 ## Revision History
+
+### rev7 (2026-08-09)
+
+Release-readiness synchronization:
+
+- Corrected the arbitrary-command path to describe digest verification, installation
+  into `/opt/venv`, and workspace extraction without a clone.
+- Documented URI and digest forwarding for both cloud execution paths and generic
+  workspace-package installation.
+- Removed the stale Prefect module inventory and open question after verifying that no
+  Prefect execution path exists in the package.
+- Synchronized the container bootstrap inventory with its current eight-step contract.
 
 ### rev6 (2026-08-02)
 
@@ -727,8 +733,7 @@ Exact typed run identity:
   labels on worker and orchestrator jobs.
 - Updated monitoring to describe exact lookup, hash-verified mixed-generation jobs, the
   fully legacy fallback, and exact identity recovery/grouping in `gcp runs`.
-- Documented canonical local status identity resolution for process-subdirectory
-  layouts.
+- Documented exact local status identity resolution for process-subdirectory layouts.
 - Added the shared run-identity helpers to the Batch utility inventory.
 
 ### rev5 (2026-05-23)
@@ -776,8 +781,8 @@ Runtime/doc sync refresh for the current branch:
 
 Claude Code CLI Personal-Plan auth on GCP Batch (the original design):
 
-- **§2.8 Container Bootstrap Contract**: added step 7 — adapter `bootstrap(home)` hook
-  for credential files not safe to keep as env vars for the job lifetime.
+- **§2.8 Container Bootstrap Contract**: added step 7, the adapter `bootstrap(home)`
+  hook for credential files not safe to keep as env vars for the job lifetime.
 - **§3.1 Infrastructure Components**: Secrets bullet now cites the Claude Code CLI
   Personal-Plan OAuth blob alongside `GH_TOKEN`.
 - **§3.2 Container Bootstrap**: documents the adapter-bootstrap invocation (Claude Code
@@ -797,7 +802,7 @@ Claude Code CLI Personal-Plan auth on GCP Batch (the original design):
 - **§3.14 Module Summary**: added `dispatch_artifacts.py`, `gcp_run_dispatch.py`,
   `gcp_run_entrypoint.py`, `gcp_run_logs.py`.
 - **§3.15 `metaproc gcp run`**: new section documenting the primitive alongside the
-  orchestrator/worker model — pipeline, blocking semantics, and why it’s a separate
+  orchestrator/worker model: pipeline, blocking semantics, and why it’s a separate
   primitive (no lease, no claims, no dispatch manifest).
 
 <!-- This document follows common-doc-guidelines.md.
