@@ -29,7 +29,7 @@ that state lives in the login Keychain, which pins execution to the dev laptop.
 When the laptop dispatches work directly to Filestore via SSHFS/FUSE-T, a single dropped
 SSH session can wedge the entire mount and cascade every worker into uninterruptible
 wait (`U` state), recoverable only by reboot.
-See [`docs/arch/arch-metaproc-core.md`](../arch/arch-cloud-execution.md) for the full
+See [`docs/arch/arch-cloud-execution.md`](../arch/arch-cloud-execution.md) for the full
 failure analysis.
 
 This runbook documents the verified alternative: ship the Keychain-held OAuth blob to a
@@ -203,13 +203,13 @@ comfortably handles concurrency 10.
 ## Related
 
 - Research brief (failure analysis + alternatives):
-  [`docs/arch/arch-metaproc-core.md`](../arch/arch-cloud-execution.md)
+  [`docs/arch/arch-cloud-execution.md`](../arch/arch-cloud-execution.md)
 - Original tactical fix (local APFS + rsync-after): commit `b787061dc`
 - Adapter source:
   [`src/metaproc/adapters/claude_code.py`](../../src/metaproc/adapters/claude_code.py)
 - Cloud mount and browsing guidance:
   [cloud execution architecture](../arch/arch-cloud-execution.md)
 
-<!-- This document follows std-doc-guidelines.md.
-Review guidelines before editing.
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
 -->

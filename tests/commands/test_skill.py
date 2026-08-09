@@ -171,3 +171,21 @@ def test_skill_install_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
     skill_file = tmp_path / ".claude" / "skills" / "metaproc" / "SKILL.md"
     assert skill_file.exists()
+
+
+def test_committed_skill_copies_match_composed_output() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    if not (repo_root / ".git").exists():
+        pytest.skip("committed skill copies are source-checkout artifacts")
+
+    installed = (
+        repo_root / ".agents" / "skills" / "metaproc" / "SKILL.md",
+        repo_root / ".claude" / "skills" / "metaproc" / "SKILL.md",
+    )
+
+    spec = get_skill("metaproc")
+    assert spec is not None
+    composed = compose_skill(spec)
+    for path in installed:
+        assert path.exists()
+        assert path.read_text(encoding="utf-8") == composed

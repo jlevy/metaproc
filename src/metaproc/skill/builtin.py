@@ -32,7 +32,7 @@ def _help_topic_catalog() -> str:
     for name in sorted(topic_names):
         desc = _HELP_TOPIC_DESCRIPTIONS.get(name, "")
         if desc:
-            lines.append(f"- **{name}** — {desc}")
+            lines.append(f"- **{name}:** {desc}")
         else:
             lines.append(f"- **{name}**")
 
@@ -48,14 +48,16 @@ def metaproc_skill_spec() -> SkillSpec:
     return SkillSpec(
         name="metaproc",
         description=(
-            "How to run, monitor, resume, and supervise any metaproc process. Use "
-            "whenever launching/resuming `metaproc run-process`, running a step in "
-            "isolation, or supervising a run. ALWAYS read the operator manual "
-            "(`metaproc help operator`) first; this skill routes you to metaproc's "
-            "built-in manuals (`metaproc help operator/developer/concepts`) and the "
-            "monitoring commands instead of improvising ad-hoc bash."
+            "Route Metaproc process launches, resumes, monitoring, and supervision "
+            "through its CLI and bundled manuals. Use when running `metaproc "
+            "run-process` or `metaproc run-step`, supervising a run, or deciding "
+            "whether orchestration belongs in Metaproc. Read `metaproc help operator` "
+            "before operating a run."
         ),
-        allowed_tools="Bash(metaproc:*), Bash(uv run metaproc:*), Read",
+        # Space-separated per the Agent Skills specification. `uv run metaproc`
+        # invocations are not pre-approved: entries with embedded spaces cannot be
+        # expressed in the space-separated form, so source checkouts prompt instead.
+        allowed_tools="Bash(metaproc:*) Read",
         baseline_package="metaproc.skill.baselines",
         baseline_name="metaproc",
         catalog_fn=_help_topic_catalog,

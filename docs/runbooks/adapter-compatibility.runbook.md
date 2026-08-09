@@ -46,12 +46,12 @@ BASE='https://aiplatform.googleapis.com/v1/projects/exampletool/locations/global
 curl -sS -X POST "$BASE/chat/completions" \
   -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
   -d '{"model":"google/gemini-3-flash-preview","messages":[
-    {"role":"user","content":"Look up AAPL fundamentals"},
+    {"role":"user","content":"Look up ACME data"},
     {"role":"assistant","content":null,"tool_calls":[
-       {"id":"c1","type":"function","function":{"name":"get_fund","arguments":"{\"item\":\"AAPL\"}"}}]},
+       {"id":"c1","type":"function","function":{"name":"get_data","arguments":"{\"item\":\"ACME\"}"}}]},
     {"role":"tool","tool_call_id":"c1","content":"{\"price\":237.59}"}],
    "max_tokens":80,
-   "tools":[{"type":"function","function":{"name":"get_fund",
+   "tools":[{"type":"function","function":{"name":"get_data",
       "parameters":{"type":"object","properties":{"item":{"type":"string"}},"required":["item"]}}}]}'
 ```
 
@@ -248,9 +248,10 @@ The wording is otherwise harness-agnostic.
   env, dispatch command shape.
 - [`credential-setup.runbook.md`](credential-setup.runbook.md) — per-adapter credential
   wiring.
-- [pi-mono source](https://github.com/mariozechner/pi) — vendored under `attic/pi-mono`
-  via the `checkout-third-party-repo` shortcut.
+- [pi-mono source](https://github.com/mariozechner/pi): check out the external
+  repository when adapter internals need review via the `checkout-third-party-repo`
+  shortcut.
 
-<!-- This document follows std-doc-guidelines.md.
-Review guidelines before editing.
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
 -->

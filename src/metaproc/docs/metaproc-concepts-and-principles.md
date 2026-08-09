@@ -104,7 +104,7 @@ It helps to think these as three axes:
   validated schemas for all data.
   Add structure as repeated patterns prove they deserve it; relax it when a step needs
   room to explore. The repo’s practical artifact guidance is
-  [softschema-guidelines.md](../../../docs/conventions.md#file-format-policy).
+  [conventions.md §File Format Policy](../../../docs/conventions.md#file-format-policy).
 
 ### 1.2 Gradual automation, exactness, and structure
 
@@ -977,12 +977,11 @@ These are not all solving the same problem:
 
 - [arch-metaproc-core.md](../../../docs/arch/arch-metaproc-core.md): implementation
   reference (spec format, runtime artifacts, CLI, adapters, cloud execution).
-- [research-2026-04-24-metaproc-step-evaluation-and-optimization.md](../../../docs/metaproc-design-rev3-proposals.md):
-  detailed terminology pass with explicit `Maps onto:` annotations.
-- [april-24-metaproc-improvement-loops-sharpened-notes.md](../../../docs/metaproc-design-rev3-proposals.md):
-  source notes for Type A/B/C optimization loops and the strategic operating principles.
-- [std-doc-guidelines.md](../../../AGENTS.md): documentation conventions used here.
+- [metaproc-design-rev3-proposals.md](../../../docs/metaproc-design-rev3-proposals.md):
+  design proposals not yet implemented, including sweep/ensemble/experiment primitives.
+- [common-doc-guidelines.md](https://github.com/jlevy/practical-prose): documentation
+  conventions used here (loaded via `tbd guidelines common-doc-guidelines`).
 
-<!-- This document follows std-doc-guidelines.md.
-Review guidelines before editing.
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
 -->

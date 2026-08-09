@@ -1,12 +1,12 @@
 ---
 title: "Architecture: Metaproc Core"
-description: Implementation reference for the metaproc framework core — spec format, runtime artifacts, CLI commands, adapter contract, plugin protocol, and robustness subsystems.
+description: Implementation reference for the Metaproc framework core, including the spec format, runtime artifacts, CLI commands, adapter contract, plugin protocol, and robustness subsystems.
 author: metaproc team
 status: Approved
 ---
 # Architecture: Metaproc Core
 
-**Date:** 2026-03-23 (last updated 2026-08-02) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-08-09) **Status:** Approved
 
 > **Maintenance**: This is a maintained architecture doc.
 > Revise via `tbd shortcut revise-architecture-doc` (which prompts you to verify content
@@ -15,7 +15,7 @@ status: Approved
 > The full arch-doc index lives in
 > [development.md § Architecture docs](../development.md#architecture-docs).
 > 
-> Companion docs (in `metaproc/docs/`): [arch-metaproc-core](arch-metaproc-core.md),
+> Companion docs (in `docs/arch/`): [arch-metaproc-core](arch-metaproc-core.md),
 > [arch-runpool](arch-runpool.md), [arch-cloud-execution](arch-cloud-execution.md),
 > [arch-authentication](arch-authentication.md),
 > [arch-claude-code-harness](arch-claude-code-harness.md),
@@ -42,6 +42,8 @@ future work).
 Terminology and principles live in
 [metaproc-concepts-and-principles.md](../../src/metaproc/docs/metaproc-concepts-and-principles.md);
 read it first for the definitions assumed below.
+Section numbers are stable identifiers carried across revisions; numbering starts at 5
+because earlier sections moved into the concepts doc and the companion arch docs.
 
 Imported invariants:
 
@@ -1176,8 +1178,6 @@ Full architecture — file-kind registry, view registry, charts, visualization p
 remote tunnel — lives in
 [MetaBrowser architecture](https://github.com/jlevy/metabrowser/blob/main/docs/architecture.md).
 
-See also the [process browser spec](../arch/arch-metaproc-core.md) for original scope.
-
 The browser classifies files into a **file kind** taxonomy (`agent-log`, `runpool-log`,
 `process-log`, `markdown`, `text`, etc.)
 and offers kind-appropriate **view tabs** (Charts, Log, Raw JSON, Rendered, Source) via
@@ -1199,8 +1199,6 @@ dashboards:
 
 Each chart tab includes a collapsible taxonomy-path tally tree summarizing event counts.
 Charts auto-refresh while the underlying file is actively being written to.
-
-See the [time-series charts spec](../arch/arch-metaproc-core.md) for details.
 
 ## 9.6 `process-events.jsonl`
 
@@ -1949,9 +1947,8 @@ its built-in web-retrieval path outside the arena-wrapped tool surface — Verte
 grounding, Anthropic `web_search_*`, OpenAI `web_search_preview`, etc.
 *Grounding* is Vertex’s name for its specific path (and the `groundingMetadata` response
 field); reserve it for Vertex-specific references.
-See the
-[tool-use-observability runbook §3](../arch/arch-metaproc-core.md#147-tool-use-observability)
-for the full terminology note.
+See the [§14.7 Tool-Use Observability](#147-tool-use-observability) for the full
+terminology note.
 
 #### Data-source triad
 
@@ -2036,9 +2033,8 @@ Vertex is today’s blocker — the vendored pi-mono adapter strips `groundingMe
 before surfacing `AssistantMessage`, so metaproc cannot see it.
 Anthropic `web_search_*` and OpenAI `web_search_preview` would need their own parallel
 sidecars when those providers move into production.
-Tracked in the
-[tool-use-observability runbook](../arch/arch-metaproc-core.md#147-tool-use-observability)
-as the remaining open gap.
+Tracked in the [§14.7 Tool-Use Observability](#147-tool-use-observability) as the
+remaining open gap.
 
 ## 15. Usage and Cost Tracking
 
@@ -2365,16 +2361,23 @@ coordinator. Workers default to Spot VMs for cost efficiency.
 Shared by worker and orchestrator entrypoints via
 `bootstrap_container() -> BootstrapResult`:
 
-1. Configure git identity and credential helper (via `GH_TOKEN`).
-2. Use bundled `example_plugin/` from the image by default, or sparse-clone the
-   requested branch from `METAPROC_RUN_BRANCH` / `METAPROC_REPO_URL` when needed.
-3. Install `example_plugin` editable so plugin entry points resolve inside the
-   container.
-4. Optionally bootstrap the private `arena` CLI when `METAPROC_ARENA_BOOTSTRAP=1`.
-5. Ensure `RUNS_DIR` exists.
-6. Write `~/.pi/agent/models.json` from `METAPROC_PI_MODELS_JSON` if set.
-7. Invoke each registered adapter’s `bootstrap(home)` hook so adapters can materialize
-   any credential files they need before the first invocation.
+1. Read `GH_TOKEN` once, remove it from the environment, and expose it only through a
+   temporary askpass helper when a sparse clone needs authentication.
+2. Install a current-branch metaproc wheel from `METAPROC_WHEEL_GCS` when set with its
+   required `METAPROC_WHEEL_SHA256`, overriding any image-baked metaproc.
+3. Acquire the consumer workspace: a `METAPROC_WORKSPACE_GCS` tarball when set, verified
+   against its required `METAPROC_WORKSPACE_SHA256`; otherwise a sparse clone of
+   `METAPROC_RUN_BRANCH` and `METAPROC_REPO_URL`, falling back to the workspace bundled
+   into the image.
+4. Editable-install the workspace packages named in the repo-sync payload so consumer
+   plugin entry points resolve inside the container.
+5. Run each `metaproc.container_bootstrap` entry-point hook so downstream images can
+   bootstrap their own tooling.
+6. Ensure `RUNS_DIR` exists.
+7. Write `~/.pi/agent/models.json` from `METAPROC_PI_MODELS_JSON` if set.
+8. Back in the worker and orchestrator entrypoints, invoke each registered adapter’s
+   `bootstrap(home)` hook so adapters can materialize any credential files they need
+   before the first invocation.
    The `ClaudeCodeCliAdapter` uses this to write `~/.claude/.credentials.json` from
    `CLAUDE_CODE_CREDS_JSON` (bound via Secret Manager; see §21.14), then unsets the env
    var so the OAuth payload does not leak to child processes.
@@ -2718,7 +2721,7 @@ Tool-use operational observability (the original design):
 
 Validated 2026-04-20 by the regenerated `_mine-tech-mix-100-2026-04-06-c` usage snapshot
 (`tool_profiles` frontmatter + `## Tool-use by Variant` table; see
-[docs/arch/arch-metaproc-core.md](../arch/arch-metaproc-core.md#147-tool-use-observability)).
+[§14.7 Tool-Use Observability](#147-tool-use-observability)).
 
 ### rev2h (2026-04-19)
 
@@ -2806,6 +2809,6 @@ Major revision to document capabilities built since rev2d:
   Two-tier architecture, container bootstrap, worker dispatch, worker/orchestrator
   entrypoints, GCPBatchConfig, LaunchBackend protocol, cloud monitoring.
 
-<!-- This document follows std-doc-guidelines.md.
-Review guidelines before editing.
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
 -->
