@@ -5,8 +5,8 @@ title: "Address review: PR #1 release readiness"
 kind: task
 status: closed
 priority: 1
-version: 106
-spec_path: docs/project/specs/active/plan-2026-07-26-standalone-extraction.md
+version: 108
+spec_path: docs/project/specs/done/plan-2026-07-26-standalone-extraction.md
 labels: []
 dependencies: []
 parent_id: is-01kygat035xcheze599f3yxqrb
@@ -113,7 +113,7 @@ child_order_hints:
   - is-01kyje44k3xg0cc9z9da7skgjw
   - is-01kyjkea45dqqqexhjm2njd66q
 created_at: 2026-07-27T18:40:36.987Z
-updated_at: 2026-07-27T20:19:40.688Z
+updated_at: 2026-08-09T18:57:02.380Z
 closed_at: 2026-07-27T20:19:40.688Z
 close_reason: "All 101 review findings are dispositioned: 89 fixed, 11 accepted by design with recorded rationale, and 1 explicitly deferred. Local and hosted gates pass, all review threads are resolved, and the exact final commit is pinned downstream."
 ---

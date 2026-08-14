@@ -5,15 +5,18 @@ title: "Alpha stabilization: green CI, organized docs, agent-skill packaging"
 kind: epic
 status: closed
 priority: 1
-version: 7
+version: 12
+spec_path: docs/releases/v0.2.1.md
 labels: []
 dependencies: []
 child_order_hints:
   - is-01kyk166a6dv2nhfepdnjjb57m
   - is-01kyk166pgxn3tykf54yqf5e0d
   - is-01kyk166zph480tkmf44jmtnm3
+  - is-01kzkwt9ddwj9sfvjwzt7ma027
+  - is-01kzkxx9rxha6mkaswemn192sb
 created_at: 2026-07-28T00:14:48.230Z
-updated_at: 2026-08-14T02:40:38.202Z
+updated_at: 2026-08-14T02:40:41.352Z
 closed_at: 2026-08-14T02:40:37.931Z
 close_reason: "PR #2 merged into main (92c0651) after an owner-side review cycle: branch was rebuilt as one clean commit (83b894d) on then-current main, keeping the docs reorganization, skill conformance + dogfooded drift test, and extraction-residue repairs; the interim email allowlist was superseded by main's narrower Git-metadata trailer normalization. CI green; v0.2.1 has since been released on top."
 ---
@@ -21,4 +24,4 @@ Make the standalone repo alpha-level stable and usable by multiple downstream re
 
 ## Notes
 
-PR #2 (https://github.com/jlevy/metaproc/pull/2) open from claude/docs-review-ci-fixes-7re7um to main: CI green on merged tip ef53cae (lint, 3.12/3.13/3.14 tests, distribution), mergeable_state clean, Cursor Bugbot review posted Low Risk with no findings. Branch includes origin/main through 9dfc34d. Children mp-2lzk/mp-mc9u/mp-h88t closed. Epic closes when PR merges.
+PR #2 is being reconciled against current main (03606cd after PR #15). The branch is stale/conflicting; preserve v0.2.0 release history, apply common-doc/Python/JavaScript guidelines, review intended changes, update safely, verify, and merge before v0.2.1.

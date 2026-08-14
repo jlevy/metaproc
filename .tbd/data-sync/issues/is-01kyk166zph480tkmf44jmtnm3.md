@@ -5,12 +5,13 @@ title: Package Metaproc as a self-installing Agent Skill
 kind: feature
 status: closed
 priority: 2
-version: 4
+version: 5
+spec_path: docs/releases/v0.2.1.md
 labels: []
 dependencies: []
 parent_id: is-01kyk15xd6m1m2vyzexds7xswy
 created_at: 2026-07-28T00:14:58.038Z
-updated_at: 2026-07-28T00:32:26.206Z
+updated_at: 2026-08-09T19:12:49.010Z
 closed_at: 2026-07-28T00:32:26.206Z
 close_reason: "Fixed and verified on claude/docs-review-ci-fixes-7re7um: hygiene allowlist for agent no-reply emails (CI lint unblocked); README/docs reorganized into an audience-based map with extraction-residue repairs across 25 files; skill allowed-tools conformance + dogfooded install with drift test. Full make verify green: 3786 passed, 8 skipped."
 ---
