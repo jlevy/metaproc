@@ -32,5 +32,5 @@ New captures must never be committed directly.
 Run the generator over the private working copy, review the resulting complete-file
 diff, run the public hygiene gate, and commit only the synthetic output.
 
-<!-- This document follows std-doc-guidelines.md.
+<!-- This document follows common-doc-guidelines.md.
 -->
