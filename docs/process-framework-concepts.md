@@ -4,22 +4,25 @@ The abstract execution model beneath any process framework: what such a system m
 decide, the vocabulary for talking about it precisely, and the design tests that follow.
 Nothing in the body is specific to one framework or one domain — the same model
 describes a build system, a data pipeline, a batch of agent jobs, or a render farm.
-A closing section maps the vocabulary onto Metaproc so the general model and the
-concrete implementation can be compared directly.
+A section near the end covers the loop layer that sits above single runs, and a closing
+section maps the vocabulary onto Metaproc so the general model and the concrete
+implementation can be compared directly.
 
-## The Four Questions
+## The Five Questions
 
 A process framework runs a big job made of many small pieces of work.
-Every such system, whatever its domain, has to answer four questions:
+Every such system, whatever its domain, has to answer five questions:
 
 1. **What work exists?** — planning
 2. **What order must it happen in?** — dependencies
 3. **How much may run at once?** — resources
 4. **What happens when something dies halfway?** — state and resume
+5. **Can you see what is happening, and why?** — visibility
 
 The whole model compresses into one sentence: *planning produces a set of tasks;
 dependencies decide when each task is ready; resources decide which ready tasks may
-actually start; durable state makes all of it survivable.*
+actually start; durable state makes all of it survivable; and every part of it must be
+observable while it runs and explainable after it fails.*
 
 Everything below defines the terms in that sentence, one at a time, and then examines
 the design choices inside each.
@@ -41,7 +44,8 @@ the work is.
 
 **Item.** One element of a collection the same step applies to: one document in a
 corpus, one file in a dataset, one record in a batch, one entity under analysis.
-The list of items a step maps over is its **roster**.
+Every item carries a stable identity — its **key** — and the list of items a step maps
+over is its **roster**.
 
 **Task.** One step applied to one item — the pair `(step, item)`. A step with no roster
 is a single task.
@@ -51,6 +55,40 @@ Frameworks that treat the *step* as the unit for those three things inherit ever
 problem described below.
 
 **Run.** One execution of a spec against concrete inputs, with its own durable state.
+
+## Contracts: Inputs, Outputs, and Keys
+
+A step’s inputs and outputs are not incidental — declaring them, typed, is what turns a
+script into a process.
+The declaration is a **contract**: which artifacts a step consumes, which it produces,
+what shape each has, and which fields of that shape the framework itself depends on.
+
+Most of an artifact’s content is **payload**: the framework never looks inside it, and
+should not — domain structure belongs to the domain.
+But a small set of fields are structural, and the framework must know them:
+
+- The **item key**: the stable identity that names a task, addresses its state, aligns
+  edges between steps, and deduplicates work across resume.
+  A key must be stable across reruns (derived from the data, never from execution order)
+  or every property built on it silently breaks.
+- **Dispatch fields**: the handful of item fields the framework binds into a task’s
+  invocation — the arguments the step actually varies on.
+- **Grouping and ordering keys**, where fan-in needs them: which key groups many task
+  outputs into one reduction, and what order the group is consumed in when the reduction
+  is order-sensitive.
+
+MapReduce is the classic demonstration that this is the heart of the matter: its entire
+programming model is key structure — map emits `(key, value)` pairs, the shuffle groups
+by key, and secondary sort orders values within a group.
+A general process framework needs far less than MapReduce’s fixed two-phase shape, but
+the lesson transfers whole: **the fields the framework must understand are exactly the
+keys that drive identity, alignment, grouping, and ordering; everything else is
+payload.** A framework that reaches deeper into the payload couples itself to one
+domain; one that knows less than this cannot schedule, align, or resume correctly.
+
+Contracts are also where validation lives: a step’s completion claim is checked against
+its declared outputs (the artifacts exist and parse as their declared shape), so a
+half-written file can never masquerade as success.
 
 ## Planning
 
@@ -87,6 +125,8 @@ tasks.
 **Fan-in** is the reverse: a step that consumes the results of many tasks and produces
 one artifact — a comparison, a merge, a selection.
 A fan-in point is also called a **barrier**, because work behind it waits.
+When a fan-in reduces groups rather than everything at once, the grouping key and any
+ordering key come from the contract (see § Contracts).
 
 Every barrier forces a policy decision that must be *declarable*, not hard-coded — the
 **join policy**: does the barrier fire when all upstream tasks **succeed**, or when all
@@ -168,16 +208,35 @@ A related diagnostic for whether resource control lives in the right layer: **is
 tuning knob a config field or a paragraph?** When operators maintain prose instructions
 for sizing concurrency by hand, the controller that should own that decision is missing.
 
-## Durable State and Resume
+## Idempotence, Durable State, and Resume
 
 The task is the unit of completion.
 Each task’s terminal state (completed, failed, and any per-task detail) is recorded
 durably — on disk, beside the artifacts — the moment it is known, never only in the
 memory of the running orchestrator.
 
-Then **resume is a rebuild, not a replay**: rerunning a run means recomputing the plan,
-reading the recorded task states, reconstructing the ready set, and continuing.
-Resume must be the normal operating mode, not a special recovery path:
+**Idempotence is the property that makes every recovery mechanism safe.** A task will
+sometimes execute more than once: a retry after a transient failure, a resume after a
+crash, an orchestrator that died mid-write and was replaced.
+Repeated execution must never corrupt anything.
+Concretely, an idempotent task:
+
+- writes only its own declared outputs, never shared state;
+- writes them atomically (write-then-rename, or create-only claims), so an interrupted
+  attempt leaves either nothing or a complete file, never a torn one;
+- treats external side effects as repeatable, or guards them behind a create-only claim
+  so the second attempt detects the first.
+
+Note what is *not* required: determinism.
+A step backed by a model or an external service may produce a different — equally valid
+— output on each attempt.
+What must be idempotent is **completion**: once a task’s outputs are recorded and
+validated against the contract, rerunning the run skips it; until then, a repeat attempt
+is safe.
+
+With idempotent tasks, **resume is a rebuild, not a replay**: rerunning a run means
+recomputing the plan, reading the recorded task states, reconstructing the ready set,
+and continuing. Resume must be the normal operating mode, not a special recovery path:
 
 - rerunning safely skips completed tasks;
 - failed tasks are retryable without manual cleanup;
@@ -192,6 +251,36 @@ Partial success is a first-class outcome, not an error state.
 A run in which some items failed still has a definite, inspectable result: which tasks
 completed, which failed, what the join policies did about it.
 
+## Visibility
+
+A system can be correct on the first four questions and still be unoperable, because
+operating a run is mostly asking three things: *what is it doing, why is that task stuck
+or failed, and what would make the whole thing faster?* Visibility is a top-level
+question, not a logging afterthought, and it decomposes into four views:
+
+- **Run state.** What is completed, running, failed, blocked, and retrying — per task,
+  answerable from durable state without grepping logs, and aggregable upward (per step,
+  per run, across runs).
+- **Failure explanation.** Every failed task carries its evidence: a classified failure
+  reason (rate-limited, timeout, crash, invalid output, …), the log tail, and the inputs
+  it saw. “Why did this fail” must be answerable from the task’s record alone; a failure
+  whose explanation requires re-running it is a visibility bug.
+- **Dependency visibility.** Both the declared graph and its *current* blocking
+  structure: which edges are gating which waiting tasks right now, and which running
+  tasks sit on the critical path — holding up the most downstream work.
+  Slowness is often graph shape, and without this view that cause is invisible.
+- **Resource attribution.** When a run is slow, which constraint binds: computation,
+  memory pressure, an external service (latency, rate limits), or the process’s own
+  shape (false edges and barriers serializing what could stream)?
+  These interact — a memory ceiling lowers concurrency, which stretches the critical
+  path — so the layers must be inspectable *together*, or operators will fix the wrong
+  one.
+
+One principle governs the implementation: **views are projections of the same durable
+state that drives execution.** A second bookkeeping system maintained for reporting will
+disagree with the first at exactly the moments it matters — mid-incident, after a crash,
+during a resume — and every tool built on the second system inherits the disagreement.
+
 ## The Execution Loop
 
 The whole model, assembled:
@@ -200,13 +289,53 @@ The whole model, assembled:
 > A task is **ready** when its edges — at their declared granularity — are satisfied.
 > One scheduler holds the ready set.
 > One admission layer starts ready tasks as its ceilings allow.
-> Each completion is durably recorded, may make dependent tasks ready, and may (via a
-> produced roster) create new tasks.
+> Each completion is durably and idempotently recorded, may make dependent tasks ready,
+> and may (via a produced roster) create new tasks.
+> Every state transition is observable as it happens.
 > The loop ends when no task is ready, running, or awaited.
 > Resume rebuilds the ready set from recorded state and re-enters the same loop.
 
 Every concept above is one clause of this loop; a framework is complete when every
 clause has an owner and minimal when nothing else does.
+
+## Loops: Processes That Repeat
+
+Everything so far describes one pass: plan, execute, finish.
+There is a further layer — **iterative processes**, where a whole run is the body of a
+loop that repeats until some condition holds.
+An automated research loop is one example: gather sources, synthesize, identify gaps,
+gather again — until coverage is sufficient.
+Benchmark-driven improvement is another: propose a candidate change to an algorithm or
+configuration, evaluate it against a fixed benchmark, accept or reject it, repeat —
+where the candidates are themselves durable artifacts being created, scored, and carried
+forward.
+
+A loop adds four elements on top of the single-run model:
+
+- **Carried state.** Durable artifacts that survive across iterations — the current best
+  solution, the accepted candidates, the accumulated evidence.
+  Carried state is data with a contract, exactly like any other artifact.
+- **A measurement step.** An evaluation producing comparable scores against a fixed
+  reference, so iterations can be ranked rather than merely counted.
+  The measurement’s own inputs and outputs are declared like any step’s; an unmeasured
+  loop is just repetition.
+- **An accept/reject gate.** The policy that decides whether an iteration’s output
+  enters the carried state — a threshold, a comparison against the incumbent, a review.
+- **A termination policy.** A fixed iteration count, a budget, convergence, or
+  no-improvement-in-k — declared, so the loop’s cost is bounded before it starts.
+
+The important structural fact: **the loop sits above the run, not inside it.** Each
+iteration is an ordinary run of a static-shaped process; the loop adds carried state,
+measurement, gating, and termination on top.
+Framed this way, loops preserve every property of the single-run model — each
+iteration’s plan is still static, resume still works per iteration, and the iteration
+history is itself durable, inspectable data (which iteration changed what, and why).
+A framework therefore does not need runtime-mutating specs to support iteration; it
+needs a home for carried state and a driver that reruns the process until the
+termination policy fires.
+Sweeps (same process, a grid of parameter values), ensembles (same process, many
+variants, merged), and experiments (controlled comparisons between variants) are the
+same layer: composition *over* runs, with runs unchanged beneath.
 
 ## Design Tests
 
@@ -232,6 +361,18 @@ Each traces to a section above.
    inspectable verdict?
 10. **Is the knob a config field or a paragraph?** Does any operational sizing decision
     live in prose instructions instead of the controller?
+11. **Are contracts and keys declared?** Do steps declare typed inputs and outputs, is
+    completion validated against them, and does every item carry a stable key the
+    framework uses for identity, alignment, grouping, and state addressing?
+12. **Is re-execution safe?** Can any task run twice — retry, resume, or race — without
+    corrupting outputs or double-applying side effects?
+13. **Can you see it?** Is run state per task, failure evidence per failed task, and the
+    current blocking structure of the dependency graph all inspectable from durable
+    state — and can slowness be attributed among compute, memory, external services, and
+    graph shape?
+14. **Can it loop?** Can an iterative improve-measure-repeat process be expressed as
+    repeated runs over durable carried state, with a declared measurement, gate, and
+    termination — without mutating the spec at runtime?
 
 A workflow forced to answer “no” by building its own coordinator on top of the framework
 is the signal that the framework, not the workflow, needs the change.
@@ -243,11 +384,13 @@ Concept by concept, with the authoritative doc for each.
 | Concept | Metaproc today | Where |
 | --- | --- | --- |
 | Process spec, steps, artifacts | Markdown specs with typed `deps`/`inputs`/`outputs`; four step modes | [arch-metaproc-core.md §6](arch/arch-metaproc-core.md) |
+| Contracts and keys | Declared `as:`/`parse:` shapes on deps; softschema-validated artifacts (`softschema inspect`/`validate`); `for_each` `bind`/`bind_fields` declare the dispatch fields; the item key addresses per-task state | [arch-metaproc-core.md §6.5-6.7, §13](arch/arch-metaproc-core.md) |
 | Static planning | spec → resolved `Plan` as data; `plan`, `--dry-run`, validation | [arch-metaproc-core.md §8](arch/arch-metaproc-core.md) |
 | Dynamic width | fan-out rosters re-discovered at execution time, so a mid-run step may write a later step’s roster | [run_process.py](../src/metaproc/commands/run_process.py) (execution-time `discover_items_from_source`) |
 | Fan-out | `for_each` over a declared items file; per-item retry with backoff | [arch-metaproc-core.md §6.7, §14.1](arch/arch-metaproc-core.md) |
-| Task state and resume | `.state/tasks/{step}/{item}/status.yaml`; stale-marker reconciliation; output validation; `--force` invalidation | [arch-metaproc-core.md §10, §19.5](arch/arch-metaproc-core.md) |
+| Idempotent completion, task state, resume | harness-owned atomic publication of completion state; completion = recorded state + validated outputs; `.state/tasks/{step}/{item}/status.yaml`; stale-marker reconciliation; `--force` invalidation with audit trail | [arch-metaproc-core.md §10, §19.5](arch/arch-metaproc-core.md) |
 | Admission | RunPool: adaptive memory ceiling, provider ceiling, operator cap, cross-run host admission, health, kill | [arch-runpool.md](arch/arch-runpool.md) |
+| Visibility | `status` (+ `--check`), `wait`, `tail`, `pulse`, `stats`, `deps`, `structure-report`, `pool status`/`events`/`health`/`concurrency-timeline`/`rollup`, `resource-report`, `trace`; classified `FailureClass` per item; Metabrowser plugin views | [arch-metaproc-core.md §9, §15](arch/arch-metaproc-core.md), [arch-runpool.md § Visibility Contract](arch/arch-runpool.md) |
 | Same loop, other machines | two-tier cloud dispatch running the identical CLI against shared state | [arch-cloud-execution.md](arch/arch-cloud-execution.md) |
 
 Known deviations from the model, current as of this writing — these are the active
@@ -262,11 +405,21 @@ design surface, not permanent properties:
   step launched singly bypasses admission entirely.
 - **Task-scoped operator surface (test 3, partially).** Force and resume selection are
   step-scoped (`--force`, `--from`, `--only`); there is no per-item force.
+- **Bottleneck attribution (test 13, partially).** Run, pool, and resource views are
+  rich, but the *current blocking structure* — which edges gate which waiting tasks, and
+  which running tasks sit on the critical path — is derivable from state rather than a
+  first-class view.
+- **Loops (test 14).** Iteration is not first-class.
+  The conceptual frame exists
+  ([metaproc-concepts-and-principles.md §5](../src/metaproc/docs/metaproc-concepts-and-principles.md):
+  the optimization loops), and sweep/ensemble/experiment composition is a named proposal
+  ([metaproc-design-rev3-proposals.md P7](metaproc-design-rev3-proposals.md)); today a
+  loop driver lives outside the framework.
 
-Design work addressing the first three — task-level ready-set scheduling with
+Design work addressing the scheduling items — task-level ready-set scheduling with
 item-aligned edges, declared join policies, and unified admission with layered ceilings
 — is under active consideration; see [TODO.md](../TODO.md) and
-[docs/metaproc-design-rev3-proposals.md](metaproc-design-rev3-proposals.md) for current
+[metaproc-design-rev3-proposals.md](metaproc-design-rev3-proposals.md) for current
 status.
 
 <!-- This document follows std-doc-guidelines.md.
