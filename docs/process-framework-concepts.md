@@ -77,14 +77,31 @@ But a small set of fields are structural, and the framework must know them:
   outputs into one reduction, and what order the group is consumed in when the reduction
   is order-sensitive.
 
-MapReduce is the classic demonstration that this is the heart of the matter: its entire
-programming model is key structure — map emits `(key, value)` pairs, the shuffle groups
-by key, and secondary sort orders values within a group.
+These structural fields exist to drive **dispatch**: the routing of work and data
+through the process — which task an item becomes, which invocation receives which
+arguments, which reduction a task’s output joins, which dependent a completion wakes,
+which worker a partition of the roster lands on.
+The ownership principle:
+
+> **The domain declares the fields that govern routing; the framework owns the routing
+> itself.** Dispatch logic — partitioning, grouping, aligning, distributing — is
+> framework machinery, driven entirely by declared keys, never hand-written inside
+> steps.
+
+MapReduce is the classic demonstration.
+Its entire programming model is dispatch by key structure: map emits `(key, value)`
+pairs, and the *shuffle* — the framework-owned dispatch step — routes every value to the
+reducer its key selects, groups values within each destination, and (with a secondary
+sort key) orders each group.
+Authors write map and reduce; nobody writes the shuffle.
 A general process framework needs far less than MapReduce’s fixed two-phase shape, but
 the lesson transfers whole: **the fields the framework must understand are exactly the
-keys that drive identity, alignment, grouping, and ordering; everything else is
-payload.** A framework that reaches deeper into the payload couples itself to one
-domain; one that knows less than this cannot schedule, align, or resume correctly.
+keys that drive dispatch — identity, alignment, grouping, ordering, placement — and
+everything else is payload.** A framework that reaches deeper into the payload couples
+itself to one domain; one that knows less than this cannot schedule, align, or resume
+correctly. And when domain code finds itself hand-routing items to workers or
+hand-collecting outputs into groups, it is rebuilding the dispatch layer the framework
+should own.
 
 Contracts are also where validation lives: a step’s completion claim is checked against
 its declared outputs (the artifacts exist and parse as their declared shape), so a
@@ -126,7 +143,8 @@ tasks.
 one artifact — a comparison, a merge, a selection.
 A fan-in point is also called a **barrier**, because work behind it waits.
 When a fan-in reduces groups rather than everything at once, the grouping key and any
-ordering key come from the contract (see § Contracts).
+ordering key come from the contract, and the routing of outputs into their groups is
+framework dispatch, not step code (see § Contracts).
 
 Every barrier forces a policy decision that must be *declarable*, not hard-coded — the
 **join policy**: does the barrier fire when all upstream tasks **succeed**, or when all
@@ -363,7 +381,8 @@ Each traces to a section above.
     live in prose instructions instead of the controller?
 11. **Are contracts and keys declared?** Do steps declare typed inputs and outputs, is
     completion validated against them, and does every item carry a stable key the
-    framework uses for identity, alignment, grouping, and state addressing?
+    framework uses for identity, alignment, grouping, and state addressing — with all
+    routing by those keys done by the framework, never hand-written inside steps?
 12. **Is re-execution safe?** Can any task run twice — retry, resume, or race — without
     corrupting outputs or double-applying side effects?
 13. **Can you see it?** Is run state per task, failure evidence per failed task, and the
