@@ -49,18 +49,23 @@ Six exact first-party releases are exempt from the ordinary cool-off for this re
   This first-party release was reviewed against `0.3.1`; its formatting output is
   unchanged, while its skill, publishing, and Markdown-parser configuration are more
   reliable;
-- `get-tbd==0.4.2`, used by the exact fallback in generated agent-integration hooks.
+- `get-tbd==0.6.5`, the issue-tracking and agent-integration CLI, adopted inside the
+  cool-off as a first-party release.
+  It migrated this repository’s tbd format from f06 to f07 through the supported
+  `tbd setup --auto` path, and its generated hooks now read one configured fallback
+  version instead of hardcoding it in each script.
 
 The exceptions are package-scoped in configuration and do not weaken the global gate.
 Changing any version requires a new review and an updated rationale.
 
-The generated agent-integration scripts name the exact `get-tbd@0.4.2` release, adopted
-through the supported `tbd setup --auto` migration.
+The generated agent-integration scripts read one exact release from
+`tbd_fallback_version` in `.tbd/config.yml` rather than repeating it per script.
 Hooks prefer an already-installed `tbd` binary and otherwise use that exact pinned npm
 release as a zero-install fallback.
 The session bootstrap also installs the pinned, checksum-verified `gh` 2.92.0 binary
 into a user-local bin directory when `gh` is missing.
-Refresh generated hooks and skill files deliberately with `tbd setup --auto`.
+Refresh the generated hooks, skill files, and that fallback version together with
+`tbd setup --auto`.
 
 `devtools/ensure-toolchain.sh` does the same for the Node and uv toolchain itself, so an
 agent session that starts from a bare container can run the Make targets.
