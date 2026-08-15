@@ -72,6 +72,8 @@ A newer Node major would carry an npm outside the `engines` range, which
 `engine-strict=true` turns into a failed `npm ci`. Bump a pin in its canonical file and
 in that script together; `check_supply_chain.py` fails when they disagree or when either
 agent stops running the bootstrap.
+[Agent toolchain bootstrap](docs/agent-toolchain-bootstrap.md) records the reusable
+shape of this pattern and when a provisioned image is the better answer.
 
 ## Audited Advisory Waivers
 

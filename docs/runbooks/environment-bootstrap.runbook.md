@@ -39,6 +39,8 @@ and Codex both run it automatically at session start, so agent sessions begin wi
 working toolchain. It installs the repository’s pins rather than the newest releases; a
 newer Node major would ship an npm outside the `engines` range that `engine-strict`
 enforces, so `npm ci` would then refuse to install.
+[Agent toolchain bootstrap](../agent-toolchain-bootstrap.md) explains the design and
+when to reuse it elsewhere.
 
 `make install` syncs the exact committed Python and JavaScript lockfiles and installs
 the repository’s Lefthook checks.
