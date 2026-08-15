@@ -62,6 +62,17 @@ The session bootstrap also installs the pinned, checksum-verified `gh` 2.92.0 bi
 into a user-local bin directory when `gh` is missing.
 Refresh generated hooks and skill files deliberately with `tbd setup --auto`.
 
+`devtools/ensure-toolchain.sh` does the same for the Node and uv toolchain itself, so an
+agent session that starts from a bare container can run the Make targets.
+Claude Code and Codex both invoke that one shared script at session start.
+It installs the repository’s own pins, never the newest release: it resolves Node from
+`.node-version` and uv from the `uv.toml` required-version floor, verifies each download
+against a checksum pinned in the script, and refuses a mismatch.
+A newer Node major would carry an npm outside the `engines` range, which
+`engine-strict=true` turns into a failed `npm ci`. Bump a pin in its canonical file and
+in that script together; `check_supply_chain.py` fails when they disagree or when either
+agent stops running the bootstrap.
+
 ## Audited Advisory Waivers
 
 An advisory is waived only when the vulnerable code path is unreachable from this
@@ -88,8 +99,9 @@ reachable.
 
 `devtools/check_supply_chain.py` checks only safeguards that span configuration files:
 npm safety settings, exact direct npm specifications, npm registry and integrity data,
-the uv cool-off, matching nvm and fnm versions, full-SHA action references, and trusted
-publishing controls.
+the uv cool-off, matching nvm and fnm versions, agreement between the toolchain
+bootstrap’s pins and their canonical files, both agents running that bootstrap, full-SHA
+action references, and trusted publishing controls.
 
 The configuration files own dependency versions, build behavior, lint and type ratchets,
 workflows, and documentation.

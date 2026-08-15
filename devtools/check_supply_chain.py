@@ -24,6 +24,8 @@ DOCKER_DIGEST = re.compile(r"^docker://[^@\s]+@sha256:[0-9a-fA-F]{64}$")
 NPM_REGISTRY_PREFIX = "https://registry.npmjs.org/"
 SHA512_PREFIX = "sha512-"
 UV_COOL_OFF = "14 days"
+TOOLCHAIN_SCRIPT = "devtools/ensure-toolchain.sh"
+AGENT_HOOK_CONFIGS = (".claude/settings.json", ".codex/hooks.json")
 
 
 def _read_json(path: Path) -> dict[str, object]:
@@ -94,6 +96,51 @@ def _check_uv(root: Path, errors: list[str]) -> None:
         errors.append(f"uv.toml must set exclude-newer to {UV_COOL_OFF}")
 
 
+def _check_toolchain_bootstrap(root: Path, errors: list[str]) -> None:
+    """Keep the session bootstrap pinned to the same toolchain as the repository.
+
+    The bootstrap carries its own version constants because it also carries the
+    matching download checksums. Asserting them against the canonical pins turns a
+    half-finished version bump into a failed gate instead of an agent session that
+    silently installs the wrong toolchain.
+    """
+    script = root / TOOLCHAIN_SCRIPT
+    if not script.is_file():
+        errors.append(f"{TOOLCHAIN_SCRIPT} must exist")
+        return
+    text = script.read_text(encoding="utf-8")
+
+    node_pin = (root / ".node-version").read_text(encoding="utf-8").strip()
+    declared_node = re.search(r'^NODE_VERSION="([^"]+)"', text, re.MULTILINE)
+    if declared_node is None:
+        errors.append(f"{TOOLCHAIN_SCRIPT} must declare NODE_VERSION")
+    elif declared_node.group(1) != node_pin:
+        errors.append(
+            f"{TOOLCHAIN_SCRIPT} NODE_VERSION {declared_node.group(1)} must match "
+            f".node-version {node_pin} (update the pinned checksums too)"
+        )
+
+    uv_config = tomllib.loads((root / "uv.toml").read_text(encoding="utf-8"))
+    uv_floor = str(uv_config.get("required-version", "")).lstrip("><=~^ ")
+    declared_uv = re.search(r'^UV_VERSION="([^"]+)"', text, re.MULTILINE)
+    if declared_uv is None:
+        errors.append(f"{TOOLCHAIN_SCRIPT} must declare UV_VERSION")
+    elif uv_floor and declared_uv.group(1) != uv_floor:
+        errors.append(
+            f"{TOOLCHAIN_SCRIPT} UV_VERSION {declared_uv.group(1)} must match the "
+            f"uv.toml required-version floor {uv_floor} (update the pinned checksums too)"
+        )
+
+    # Every supported agent must run the same bootstrap, or one agent's sessions
+    # start without a toolchain.
+    for config_path in AGENT_HOOK_CONFIGS:
+        path = root / config_path
+        if not path.is_file():
+            errors.append(f"{config_path} must exist")
+        elif TOOLCHAIN_SCRIPT not in path.read_text(encoding="utf-8"):
+            errors.append(f"{config_path} must run {TOOLCHAIN_SCRIPT} on SessionStart")
+
+
 def _check_workflows(root: Path, errors: list[str]) -> None:
     for path in sorted((root / ".github" / "workflows").glob("*.y*ml")):
         text = path.read_text(encoding="utf-8")
@@ -129,6 +176,7 @@ def verify_supply_chain(root: Path = ROOT) -> None:
     errors: list[str] = []
     _check_npm(root, errors)
     _check_uv(root, errors)
+    _check_toolchain_bootstrap(root, errors)
     _check_workflows(root, errors)
     if errors:
         raise RuntimeError("Supply-chain policy violations:\n- " + "\n- ".join(errors))

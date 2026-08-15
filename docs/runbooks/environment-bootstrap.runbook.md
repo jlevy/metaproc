@@ -25,6 +25,21 @@ make install
 make lint-check
 ```
 
+Every `make` target needs uv and the pinned Node on `PATH`. Install them directly, or
+run the repository’s bootstrap, which installs exactly the pinned versions after
+verifying each download against a pinned checksum:
+
+```bash
+bash devtools/ensure-toolchain.sh
+```
+
+The script is idempotent: it reports and exits when a satisfying toolchain is already
+installed, and otherwise installs into `~/.local`, which must be on `PATH`. Claude Code
+and Codex both run it automatically at session start, so agent sessions begin with a
+working toolchain. It installs the repository’s pins rather than the newest releases; a
+newer Node major would ship an npm outside the `engines` range that `engine-strict`
+enforces, so `npm ci` would then refuse to install.
+
 `make install` syncs the exact committed Python and JavaScript lockfiles and installs
 the repository’s Lefthook checks.
 Do not use an activated virtual environment or invoke `pip` directly.
