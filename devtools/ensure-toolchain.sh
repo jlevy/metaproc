@@ -165,6 +165,18 @@ ensure_node() {
     done
     rm -rf "$tmp"
     log "Installed Node v${want} to ${dest}"
+
+    # Without this, `npm install -g` would install into the unpacked tree's own
+    # bin directory, which is not on PATH, so a global tool would install
+    # successfully and then not resolve. Point global installs at ~/.local,
+    # whose bin directory is already the one this script links into. Only after
+    # installing our own Node: an existing satisfying toolchain keeps whatever
+    # prefix its owner configured.
+    if "${bindir}/npm" config set prefix "$HOME/.local" 2> /dev/null; then
+        log "Set the npm global prefix to ~/.local so global tools land on PATH."
+    else
+        log "NOTE: could not set the npm global prefix; 'npm install -g' may install off PATH."
+    fi
 }
 
 ensure_uv() {
