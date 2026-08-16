@@ -1,6 +1,6 @@
 tbd_format: f08
-tbd_version: 0.6.6-dev.53.8628a72
-tbd_fallback_version: 0.6.5
+tbd_version: 0.7.0
+tbd_fallback_version: 0.7.0
 # tbd_upgrades: tbd versions that have run `tbd setup` in this repo (oldest first);
 # tbd_version above is the most recent. Informational; updated automatically by setup.
 # tbd_fallback_version is the one exact registry fallback for format-incompatible launchers.
@@ -11,6 +11,8 @@ tbd_upgrades:
     at: 2026-08-01T03:20:06.936Z
   - version: 0.6.6-dev.53.8628a72
     at: 2026-08-16T07:54:38.973Z
+  - version: 0.7.0
+    at: 2026-08-16T22:48:31.212Z
 display:
   id_prefix: mp
 sync:
@@ -81,6 +83,7 @@ docs_cache:
     guidelines/common-doc-guidelines.md: internal:guidelines/common-doc-guidelines.md
     guidelines/convex-limits-best-practices.md: internal:guidelines/convex-limits-best-practices.md
     guidelines/convex-rules.md: internal:guidelines/convex-rules.md
+    guidelines/electrobun-app-development-patterns.md: internal:guidelines/electrobun-app-development-patterns.md
     guidelines/electron-app-development-patterns.md: internal:guidelines/electron-app-development-patterns.md
     guidelines/error-handling-rules.md: internal:guidelines/error-handling-rules.md
     guidelines/general-coding-rules.md: internal:guidelines/general-coding-rules.md
@@ -95,6 +98,7 @@ docs_cache:
     guidelines/python-rules.md: internal:guidelines/python-rules.md
     guidelines/release-notes-guidelines.md: internal:guidelines/release-notes-guidelines.md
     guidelines/supply-chain-hardening.md: internal:guidelines/supply-chain-hardening.md
+    guidelines/tauri-app-development-patterns.md: internal:guidelines/tauri-app-development-patterns.md
     guidelines/tbd-sync-troubleshooting.md: internal:guidelines/tbd-sync-troubleshooting.md
     guidelines/typescript-cli-tool-rules.md: internal:guidelines/typescript-cli-tool-rules.md
     guidelines/typescript-code-coverage.md: internal:guidelines/typescript-code-coverage.md
@@ -111,13 +115,13 @@ docs_cache:
     references/agent-skill-distribution.md: internal:references/agent-skill-distribution.md
     references/docmap-format.md: internal:references/docmap-format.md
     references/docref-format.md: internal:references/docref-format.md
+    references/linear-integration-design.md: internal:references/linear-integration-design.md
   lookup_path:
     - .tbd/docs/shortcuts/system
     - .tbd/docs/shortcuts/standard
 integrations:
-  on_tbd_sync: 'off'
+  on_tbd_sync: off
   linear:
-    enabled: true
     target:
       team_key: OS
       project: metaproc
@@ -128,6 +132,7 @@ integrations:
       create: tbd
     identity:
       user_map: {}
+    enabled: true
     policy:
       outbound:
         kinds:
