@@ -154,6 +154,16 @@ class ExpansionRecord:
     def is_closed(self) -> bool:
         return self.state is ExpansionState.CLOSED
 
+    @cached_property
+    def key_set(self) -> frozenset[str]:
+        """Membership index for the roster.
+
+        Clause evaluation asks "is this item in the roster" once per aligned edge per
+        scheduling pass, so a tuple scan here is an O(width) term inside an O(tasks)
+        loop, which is the quadratic the envelope guard exists to catch.
+        """
+        return frozenset(self.keys)
+
 
 @dataclass(frozen=True)
 class AttemptRecord:
@@ -230,7 +240,7 @@ class KernelState:
     #
     # Indexed rather than scanned. Linear scans here are not a micro-optimisation
     # question: the scheduler asks these per task per event, so an O(n) lookup makes a
-    # scheduling pass quadratic in roster width and the run unusable at cohort scale.
+    # scheduling pass quadratic in roster width and the run unusable at full width.
     # Measured before indexing, one pass over a 600-task graph took 0.25s and grew 4x
     # per doubling.
     #

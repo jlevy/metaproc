@@ -150,7 +150,7 @@ def related_keys(
     if clause.mapping is ClauseMapping.SAME_KEY:
         if downstream.item_key is None:
             return None
-        if downstream.item_key not in expansion.keys:
+        if downstream.item_key not in expansion.key_set:
             # This item has no counterpart in the closed upstream roster, so the clause
             # can never be satisfied. That is different from an empty roster, which is
             # vacuously satisfied.
@@ -468,21 +468,6 @@ def _apply_attempt_ended(state: KernelState, event: AttemptEnded) -> KernelState
             replace(record, outcome=Outcome.FAILED, outcome_generation=attempt.generation)
         )
     return state.with_task(replace(record, retry_at=state.now + retry_delay(tries)))
-
-
-def _descendant_steps(state: KernelState, step_id: str) -> tuple[str, ...]:
-    """Steps reachable downstream, for force cascade."""
-    found: set[str] = set()
-    frontier = [step_id]
-    while frontier:
-        current = frontier.pop()
-        for template in state.templates:
-            if template.step_id in found:
-                continue
-            if any(c.upstream_step == current for c in template.clauses):
-                found.add(template.step_id)
-                frontier.append(template.step_id)
-    return tuple(sorted(found))
 
 
 def _apply_force(state: KernelState, event: ForceIssued) -> KernelState:

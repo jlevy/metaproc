@@ -151,7 +151,7 @@ class TestBlockerVocabulary:
 
 class TestAggregates:
     def test_partial_is_a_step_outcome_never_a_task_outcome(self) -> None:
-        """A cohort with most items succeeded and a couple failed is a good result, and
+        """A run with most items succeeded and a couple failed is a good result, and
         the projection has to be able to say so."""
         state = close_roster(chained_state())
         state = run_task(state, TaskKey("measure", "a"), AttemptDisposition.PERMANENT)
