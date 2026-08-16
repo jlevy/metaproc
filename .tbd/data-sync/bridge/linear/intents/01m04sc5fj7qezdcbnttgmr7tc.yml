@@ -1,0 +1,261 @@
+created_at: 2026-08-16T08:00:26.100Z
+ops:
+  - bead_id: is-01kyje3q3qpbjez37wkm3gmcbk
+    client_id: 44b81877-046a-48e8-9407-ebc93f68cd97
+    kind: create_issue
+    patch:
+      description: "PR #1 release-readiness review finding TST-04. Scope: Replace timing
+        sleeps with condition polling. Record an explicit fixed, rebutted, or deferred
+        disposition."
+      priority: 2
+      status: deferred
+      title: "PR #1 review TST-04: Replace timing sleeps with condition polling"
+  - attachments:
+      - metadata:
+          assignee: null
+          bead_id: mp-wgax
+          children: 0
+          created_at: 2026-07-27T18:41:33.303Z
+          dependencies: []
+          internal_id: is-01kyje3q3qpbjez37wkm3gmcbk
+          kind: bug
+          labels: []
+          parent_id: is-01kyje203wwq9b8jqxgwe7574v
+          priority: 2
+          ready_children: 0
+          spec_path: TODO.md
+          status: deferred
+          updated_at: 2026-08-09T19:12:48.537Z
+        subtitle: deferred · P2
+        title: mp-wgax · bug
+        url: tbd://bead/mp-wgax
+      - subtitle: plan spec
+        title: TODO.md
+        url: https://github.com/jlevy/metaproc/blob/main/TODO.md
+    bead_id: is-01kyje3q3qpbjez37wkm3gmcbk
+    external_id: 44b81877-046a-48e8-9407-ebc93f68cd97
+    kind: upsert_attachments
+  - bead_id: is-01kyje3q3qpbjez37wkm3gmcbk
+    block: |-
+      ⟦tbd⟧
+      `mp-wgax` · bug · deferred · P2
+      Spec: [TODO.md](https://github.com/jlevy/metaproc/blob/main/TODO.md)
+      Children: 0 (0 ready)
+      Bead: `tbd show mp-wgax`
+
+      Mirrored by tbd. Edits inside this block are overwritten.
+      ⟦/tbd⟧
+    external_id: 44b81877-046a-48e8-9407-ebc93f68cd97
+    kind: splice_description
+  - bead_id: is-01kzky2kj5g9f2rxfq0wp15q5j
+    client_id: 183d3df7-4221-46b0-b2d1-a68e60b12612
+    kind: create_issue
+    patch:
+      description: "Track non-blocking quality and supply-chain ratchets that are explicitly
+        deferred from v0.2.1: PyPI attestations after the reviewed action clears
+        cool-off, checked-JavaScript promise-safety lint when its dependency graph is
+        safe, and the incremental noImplicitAny migration."
+      priority: 2
+      status: open
+      title: Post-release quality ratchets
+  - attachments:
+      - metadata:
+          assignee: null
+          bead_id: mp-7kwn
+          children: 3
+          created_at: 2026-08-09T18:55:30.372Z
+          dependencies: []
+          internal_id: is-01kzky2kj5g9f2rxfq0wp15q5j
+          kind: epic
+          labels: []
+          parent_id: null
+          priority: 2
+          ready_children: 3
+          spec_path: TODO.md
+          status: open
+          updated_at: 2026-08-09T19:12:48.075Z
+        subtitle: open · P2
+        title: mp-7kwn · epic
+        url: tbd://bead/mp-7kwn
+      - subtitle: plan spec
+        title: TODO.md
+        url: https://github.com/jlevy/metaproc/blob/main/TODO.md
+    bead_id: is-01kzky2kj5g9f2rxfq0wp15q5j
+    external_id: 183d3df7-4221-46b0-b2d1-a68e60b12612
+    kind: upsert_attachments
+  - bead_id: is-01kzky2kj5g9f2rxfq0wp15q5j
+    block: |-
+      ⟦tbd⟧
+      `mp-7kwn` · epic · open · P2
+      Spec: [TODO.md](https://github.com/jlevy/metaproc/blob/main/TODO.md)
+      Children: 3 (3 ready)
+      Bead: `tbd show mp-7kwn`
+
+      Mirrored by tbd. Edits inside this block are overwritten.
+      ⟦/tbd⟧
+    external_id: 183d3df7-4221-46b0-b2d1-a68e60b12612
+    kind: splice_description
+  - bead_id: is-01kyxp1b70xx37rdx6bw0xtyt7
+    client_id: d473ac32-9496-4221-adf3-50fafd06f528
+    kind: create_issue
+    patch:
+      description: Adopt the typescript-eslint promise-safety overlay required by the current
+        lint floor once a patched brace-expansion release clears the 14-day third-party
+        cool-off. Attempts with eligible ESLint 10 and ESLint 9 graphs both resolve a
+        high-severity GHSA-mh99-v99m-4gvg-affected brace-expansion; do not weaken the
+        global gate or carry that vulnerable graph.
+      parentId: 183d3df7-4221-46b0-b2d1-a68e60b12612
+      priority: 2
+      status: open
+      title: Add checked-JavaScript promise-safety lint overlay
+  - attachments:
+      - metadata:
+          assignee: null
+          bead_id: mp-608l
+          children: 0
+          created_at: 2026-08-01T03:31:42.944Z
+          dependencies: []
+          internal_id: is-01kyxp1b70xx37rdx6bw0xtyt7
+          kind: task
+          labels:
+            - linting
+          parent_id: is-01kzky2kj5g9f2rxfq0wp15q5j
+          priority: 2
+          ready_children: 0
+          spec_path: TODO.md
+          status: open
+          updated_at: 2026-08-09T19:12:46.704Z
+        subtitle: open · P2
+        title: mp-608l · task
+        url: tbd://bead/mp-608l
+      - subtitle: plan spec
+        title: TODO.md
+        url: https://github.com/jlevy/metaproc/blob/main/TODO.md
+    bead_id: is-01kyxp1b70xx37rdx6bw0xtyt7
+    external_id: d473ac32-9496-4221-adf3-50fafd06f528
+    kind: upsert_attachments
+  - bead_id: is-01kyxp1b70xx37rdx6bw0xtyt7
+    block: |-
+      ⟦tbd⟧
+      `mp-608l` · task · open · P2
+      Spec: [TODO.md](https://github.com/jlevy/metaproc/blob/main/TODO.md)
+      Children: 0 (0 ready)
+      Bead: `tbd show mp-608l`
+
+      Mirrored by tbd. Edits inside this block are overwritten.
+      ⟦/tbd⟧
+    external_id: d473ac32-9496-4221-adf3-50fafd06f528
+    kind: splice_description
+  - bead_id: is-01kyxpharxskce7vawekfey3n9
+    client_id: e09ffb34-9422-40e2-aa60-b0a52e8065c3
+    kind: create_issue
+    patch:
+      description: "Eliminate the legacy checked-JavaScript noImplicitAny=false escape hatch
+        across the Metabrowser plugin and DOM harness. The current strict-mode probe
+        reports roughly 454 diagnostics, so this is an explicit whole-project migration
+        rather than incidental churn in PR #3. Keep the tracker referenced beside the
+        tsconfig exception, add types incrementally, and turn the compiler option on
+        once the tree is clean."
+      parentId: 183d3df7-4221-46b0-b2d1-a68e60b12612
+      priority: 2
+      status: open
+      title: Migrate checked JavaScript to noImplicitAny
+  - attachments:
+      - metadata:
+          assignee: null
+          bead_id: mp-kptm
+          children: 0
+          created_at: 2026-08-01T03:40:26.780Z
+          dependencies: []
+          internal_id: is-01kyxpharxskce7vawekfey3n9
+          kind: task
+          labels:
+            - linting
+            - typescript
+          parent_id: is-01kzky2kj5g9f2rxfq0wp15q5j
+          priority: 2
+          ready_children: 0
+          spec_path: TODO.md
+          status: open
+          updated_at: 2026-08-09T19:12:47.538Z
+        subtitle: open · P2
+        title: mp-kptm · task
+        url: tbd://bead/mp-kptm
+      - subtitle: plan spec
+        title: TODO.md
+        url: https://github.com/jlevy/metaproc/blob/main/TODO.md
+    bead_id: is-01kyxpharxskce7vawekfey3n9
+    external_id: e09ffb34-9422-40e2-aa60-b0a52e8065c3
+    kind: upsert_attachments
+  - bead_id: is-01kyxpharxskce7vawekfey3n9
+    block: |-
+      ⟦tbd⟧
+      `mp-kptm` · task · open · P2
+      Spec: [TODO.md](https://github.com/jlevy/metaproc/blob/main/TODO.md)
+      Children: 0 (0 ready)
+      Bead: `tbd show mp-kptm`
+
+      Mirrored by tbd. Edits inside this block are overwritten.
+      ⟦/tbd⟧
+    external_id: e09ffb34-9422-40e2-aa60-b0a52e8065c3
+    kind: splice_description
+  - bead_id: is-01kyxw263bdz2f224czw8veymn
+    client_id: 8a8381cc-cad0-4dcf-b18b-2a34a5e5e475
+    kind: create_issue
+    patch:
+      description: "Metaproc 0.2.0 was published through OIDC trusted publishing, but uv
+        publish does not generate PEP 740 attestations, so PyPI exposes no provenance
+        objects for the wheel or sdist. Replace or augment the publish step with an
+        attestation-producing path and verify both Integrity API objects. PyPI
+        recommends pypa/gh-action-pypi-publish; the latest reviewed-safe older action
+        v1.14.0 pins pyasn1 0.6.1, which is rejected by this repo vulnerability policy,
+        while v1.14.2 was published 2026-07-29 and is still inside the 14-day cool-off.
+        Do not bypass policy: revisit after 2026-08-12T19:31:27Z, review and SHA-pin the
+        action (or a pypi-attestations alternative), then exercise it on the next
+        release."
+      parentId: 183d3df7-4221-46b0-b2d1-a68e60b12612
+      priority: 2
+      status: open
+      title: Add PyPI attestations to the Metaproc release workflow
+  - attachments:
+      - metadata:
+          assignee: null
+          bead_id: mp-s901
+          children: 0
+          created_at: 2026-08-01T05:17:01.930Z
+          dependencies: []
+          internal_id: is-01kyxw263bdz2f224czw8veymn
+          kind: task
+          labels:
+            - release
+            - supply-chain
+          parent_id: is-01kzky2kj5g9f2rxfq0wp15q5j
+          priority: 2
+          ready_children: 0
+          spec_path: TODO.md
+          status: open
+          updated_at: 2026-08-09T19:12:46.353Z
+        subtitle: open · P2
+        title: mp-s901 · task
+        url: tbd://bead/mp-s901
+      - subtitle: plan spec
+        title: TODO.md
+        url: https://github.com/jlevy/metaproc/blob/main/TODO.md
+    bead_id: is-01kyxw263bdz2f224czw8veymn
+    external_id: 8a8381cc-cad0-4dcf-b18b-2a34a5e5e475
+    kind: upsert_attachments
+  - bead_id: is-01kyxw263bdz2f224czw8veymn
+    block: |-
+      ⟦tbd⟧
+      `mp-s901` · task · open · P2
+      Spec: [TODO.md](https://github.com/jlevy/metaproc/blob/main/TODO.md)
+      Children: 0 (0 ready)
+      Bead: `tbd show mp-s901`
+
+      Mirrored by tbd. Edits inside this block are overwritten.
+      ⟦/tbd⟧
+    external_id: 8a8381cc-cad0-4dcf-b18b-2a34a5e5e475
+    kind: splice_description
+provider: linear
+run_id: 01m04sc5fj7qezdcbnttgmr7tc
+type: in
