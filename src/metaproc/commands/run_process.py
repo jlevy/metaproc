@@ -146,6 +146,7 @@ from metaproc.runpool.pool import (
 )
 from metaproc.runpool.process_events import ProcessEventLogger
 from metaproc.runpool.registry import get_backend
+from metaproc.runpool.scalar_admission import SCALAR_DEFAULT_HOST_LIMIT, admitted_launch
 from metaproc.viz_loader import load_plan_bundle
 
 log = logging.getLogger(__name__)
@@ -1118,6 +1119,7 @@ async def _execute_agent_step(
     run_id: str,
     variant_override: str | None = None,
     peer_allowed_targets: list[WriteTarget] | None = None,
+    backend_name: str = "local",
     out: Any,
 ) -> bool:
     """Execute a mode:agent step (no for_each). Returns True on success."""
@@ -1241,15 +1243,28 @@ async def _execute_agent_step(
     timeout_val = int(str(timeout_s)) if timeout_s is not None else None
 
     use_filter = adapter_type == "pi-cli"
+    # A step without for_each still launches a real agent process, so it takes a host
+    # slot like any pool-launched attempt. Without this, N orchestrators on one machine
+    # cannot see each other's scalar launches at all.
+    scalar_resource_config = target.resources or runtime_config
     try:
-        exit_code = await _run_agent_subprocess(
-            cmd,
-            env=env,
-            cwd=cwd,
-            log_path=log_path,
-            timeout_s=timeout_val,
-            use_filter=use_filter,
-        )
+        async with admitted_launch(
+            enabled=backend_name == "local",
+            limit=resolve_host_max_concurrency(
+                scalar_resource_config, default=SCALAR_DEFAULT_HOST_LIMIT
+            ),
+            label=f"{run_id}/{step_id}",
+            pool_id=f"run-process:{run_id}",
+            metadata={"backend": backend_name, "step_id": step_id, "mode": "agent"},
+        ):
+            exit_code = await _run_agent_subprocess(
+                cmd,
+                env=env,
+                cwd=cwd,
+                log_path=log_path,
+                timeout_s=timeout_val,
+                use_filter=use_filter,
+            )
     except subprocess.TimeoutExpired:
         mark_failed_at(
             state_dir, error=f"timeout after {timeout_s}s", running_record=running_record
@@ -2086,6 +2101,7 @@ async def _execute_step(
             run_id=run_id,
             variant_override=variant_override,
             peer_allowed_targets=peer_allowed_targets,
+            backend_name=backend_name,
             out=out,
         )
 
