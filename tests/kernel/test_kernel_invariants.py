@@ -15,6 +15,7 @@ from metaproc.kernel.model import (
     DependencyClause,
     ExpansionState,
     KernelState,
+    Outcome,
     Requirement,
     StepTemplate,
     TaskKey,
@@ -347,3 +348,159 @@ class TestReplayDeterminism:
         assert replayed.tasks == state.tasks
         assert replayed.commits == state.commits
         assert replayed.attempts == state.attempts
+
+
+class TestFencingCoversEveryDisposition:
+    """A superseded attempt may not touch the task record, whatever its disposition.
+
+    The commit path was fenced from the start; these pin the rest. Both were found by
+    review repro, not by the original suite, because the original tests only exercised
+    fencing through the SUCCEEDED path.
+    """
+
+    def test_a_stale_retryable_does_not_delay_the_new_generation(self) -> None:
+        """The old attempt's backoff must not put the forced re-run into retry_wait."""
+        state = close_roster(chained_state())
+        key = TaskKey("measure", "a")
+        state, _ = reduce(
+            state,
+            AttemptStarted(attempt_id="slow", task_key=key, generation=1, fence_epoch=0),
+            now=100.0,
+        )
+        state, _ = reduce(state, ForceIssued(task_key=key))
+
+        state, _ = reduce(
+            state,
+            AttemptEnded(attempt_id="slow", disposition=AttemptDisposition.RETRYABLE),
+            now=100.0,
+        )
+
+        record = state.task(key)
+        assert record is not None
+        assert record.retry_at is None
+        assert task_state(state, key) is TaskState.READY
+
+    def test_a_stale_permanent_does_not_mutate_the_record(self) -> None:
+        """History is append-only AND quarantined: the attempt is recorded, the task
+        record is untouched."""
+        state = close_roster(chained_state())
+        key = TaskKey("measure", "a")
+        state, _ = reduce(
+            state,
+            AttemptStarted(attempt_id="slow", task_key=key, generation=1, fence_epoch=0),
+        )
+        state, _ = reduce(state, ForceIssued(task_key=key))
+        state = run_task(
+            state,
+            key,
+            AttemptDisposition.SUCCEEDED,
+            attempt_id="fresh",
+            generation=2,
+            fence_epoch=1,
+        )
+
+        state, _ = reduce(
+            state, AttemptEnded(attempt_id="slow", disposition=AttemptDisposition.PERMANENT)
+        )
+
+        record = state.task(key)
+        assert record is not None
+        assert record.outcome is Outcome.SUCCEEDED
+        assert record.outcome_generation == 2
+        stale = state.attempt("slow")
+        assert stale is not None and stale.disposition is AttemptDisposition.PERMANENT
+
+    def test_a_stale_lost_does_not_schedule_anything(self) -> None:
+        state = close_roster(chained_state())
+        key = TaskKey("measure", "a")
+        state, _ = reduce(
+            state,
+            AttemptStarted(attempt_id="gone", task_key=key, generation=1, fence_epoch=0),
+        )
+        state, _ = reduce(state, ForceIssued(task_key=key))
+
+        state, commands = reduce(
+            state, AttemptEnded(attempt_id="gone", disposition=AttemptDisposition.LOST)
+        )
+
+        record = state.task(key)
+        assert record is not None and record.retry_at is None
+        assert not any(isinstance(c, ScheduleRetry) for c in commands)
+
+
+class TestForceIsTransitive:
+    def test_force_invalidates_grandchildren_along_the_mapping(self) -> None:
+        """Invariant 10 is about paths, not edges: summarize consumed interpret, which
+        consumed the forced task, so its commit is over a superseded world."""
+        state = close_roster(chained_state())
+        for k in ROSTER:
+            state = run_task(state, TaskKey("measure", k), AttemptDisposition.SUCCEEDED)
+            state = run_task(state, TaskKey("interpret", k), AttemptDisposition.SUCCEEDED)
+        state = run_task(state, TaskKey("summarize"), AttemptDisposition.SUCCEEDED)
+
+        state, _ = reduce(state, ForceIssued(task_key=TaskKey("measure", "a")))
+
+        assert task_state(state, TaskKey("measure", "a")) is TaskState.READY
+        assert task_state(state, TaskKey("interpret", "a")) is TaskState.WAITING_DEPENDENCIES
+        assert task_state(state, TaskKey("summarize")) is TaskState.WAITING_DEPENDENCIES
+
+    def test_force_still_leaves_unrelated_items_alone(self) -> None:
+        """Transitivity must not become blast radius: same-key narrowing holds per hop."""
+        state = close_roster(chained_state())
+        for k in ROSTER:
+            state = run_task(state, TaskKey("measure", k), AttemptDisposition.SUCCEEDED)
+            state = run_task(state, TaskKey("interpret", k), AttemptDisposition.SUCCEEDED)
+
+        state, _ = reduce(state, ForceIssued(task_key=TaskKey("measure", "a")))
+
+        assert task_state(state, TaskKey("measure", "b")) is TaskState.SUCCEEDED
+        assert task_state(state, TaskKey("interpret", "b")) is TaskState.SUCCEEDED
+        assert task_state(state, TaskKey("interpret", "c")) is TaskState.SUCCEEDED
+
+
+class TestBroadcastRequiresASingletonUpstream:
+    def test_broadcast_over_a_multi_key_expansion_is_deterministically_dead(self) -> None:
+        """There is no principled 'the one' item of a fan-out; silently picking the
+        first defines arbitrary semantics for everything checked against this model."""
+        state = KernelState(
+            templates=(
+                StepTemplate(step_id="wide", expands_over="roster"),
+                StepTemplate(
+                    step_id="consumer",
+                    clauses=(
+                        DependencyClause(
+                            upstream_step="wide",
+                            mapping=ClauseMapping.BROADCAST,
+                            requirement=Requirement.SUCCEEDED,
+                        ),
+                    ),
+                ),
+            )
+        )
+        state, _ = reduce(state, ExpansionClosed(step_id="wide", keys=("a", "b")))
+
+        consumer = state.template("consumer")
+        assert consumer is not None
+        assert clause_status(state, TaskKey("consumer"), consumer.clauses[0]) == "dead"
+        assert task_state(state, TaskKey("consumer")) is TaskState.SKIPPED
+
+    def test_broadcast_over_a_singleton_expansion_works(self) -> None:
+        state = KernelState(
+            templates=(
+                StepTemplate(step_id="one", expands_over="roster"),
+                StepTemplate(
+                    step_id="consumer",
+                    clauses=(
+                        DependencyClause(
+                            upstream_step="one",
+                            mapping=ClauseMapping.BROADCAST,
+                            requirement=Requirement.SUCCEEDED,
+                        ),
+                    ),
+                ),
+            )
+        )
+        state, _ = reduce(state, ExpansionClosed(step_id="one", keys=("only",)))
+        state = run_task(state, TaskKey("one", "only"), AttemptDisposition.SUCCEEDED)
+
+        assert task_state(state, TaskKey("consumer")) is TaskState.READY

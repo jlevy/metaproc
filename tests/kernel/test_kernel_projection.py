@@ -19,6 +19,7 @@ from metaproc.kernel.model import (
     StepTemplate,
     TaskKey,
     TaskRecord,
+    TaskState,
 )
 from metaproc.kernel.projection import (
     PROJECTION_CONTRACT,
@@ -26,7 +27,7 @@ from metaproc.kernel.projection import (
     blocker_for,
     project,
 )
-from metaproc.kernel.reducer import AttemptStarted, ExpansionClosed, reduce
+from metaproc.kernel.reducer import AttemptStarted, ExpansionClosed, ForceIssued, reduce
 from tests.kernel.test_kernel_invariants import ROSTER, chained_state, close_roster, run_task
 
 
@@ -209,3 +210,42 @@ class TestProjectionContract:
         waiting = status.blocked_by(BlockerKind.EXPANSION_NOT_CLOSED)
 
         assert {t.key for t in waiting} == {"summarize"}
+
+
+class TestSkipReasonSurvivesProjection:
+    def test_a_skipped_task_carries_its_reason_into_the_view(self) -> None:
+        """The durable record has the why; a view that drops it fails the module's own
+        bar, and the skipped case is the one operators hit after a partial failure."""
+        state = close_roster(chained_state())
+        state = run_task(state, TaskKey("measure", "a"), AttemptDisposition.PERMANENT)
+
+        status = project(state)
+        skipped = next(t for t in status.tasks if t.state is TaskState.SKIPPED)
+
+        assert skipped.skip_reason is not None
+        assert "measure" in skipped.skip_reason
+
+
+class TestRecomputationIsVisible:
+    def test_a_waiting_task_with_a_superseded_commit_reports_generation_changed(self) -> None:
+        """After a force, a dependent that already committed is recomputing; that is a
+        different answer from ordinary first-time waiting and the projection says so."""
+        state = close_roster(chained_state())
+        for k in ROSTER:
+            state = run_task(state, TaskKey("measure", k), AttemptDisposition.SUCCEEDED)
+            state = run_task(state, TaskKey("interpret", k), AttemptDisposition.SUCCEEDED)
+        state = run_task(state, TaskKey("summarize"), AttemptDisposition.SUCCEEDED)
+
+        state, _ = reduce(state, ForceIssued(task_key=TaskKey("measure", "a")))
+
+        blocker = blocker_for(state, TaskKey("summarize"))
+        assert blocker is not None
+        assert blocker.kind is BlockerKind.UPSTREAM_GENERATION_CHANGED
+
+    def test_a_first_time_waiting_task_still_reports_dependency_pending(self) -> None:
+        state = close_roster(chained_state())
+
+        blocker = blocker_for(state, TaskKey("interpret", "a"))
+
+        assert blocker is not None
+        assert blocker.kind is BlockerKind.DEPENDENCY_PENDING

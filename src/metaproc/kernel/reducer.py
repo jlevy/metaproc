@@ -115,19 +115,12 @@ class ScheduleRetry:
 
 
 @dataclass(frozen=True)
-class AcceptCommit:
-    task_key: TaskKey
-    generation: int
-    attempt_id: str
-
-
-@dataclass(frozen=True)
 class CancelAttempt:
     attempt_id: str
     reason: str
 
 
-CommandType = MaterializeExpansion | DispatchAttempt | ScheduleRetry | AcceptCommit | CancelAttempt
+CommandType = MaterializeExpansion | DispatchAttempt | ScheduleRetry | CancelAttempt
 
 
 # ------------------------------------------------------------------- clause evaluation
@@ -204,6 +197,19 @@ def clause_status(
     if not related:
         # Vacuous success for ALL, failure for ANY, per the RFC's empty-roster rule.
         return "satisfied" if clause.cardinality is Cardinality.ALL else "dead"
+
+    if clause.mapping is ClauseMapping.BROADCAST:
+        upstream = state.template(clause.upstream_step)
+        expansion = (
+            state.expansion_for(clause.upstream_step)
+            if upstream is not None and upstream.expands_over is not None
+            else None
+        )
+        if expansion is not None and len(expansion.keys) != 1:
+            # There is no principled "the one" item of a fan-out. Silently picking the
+            # first key would define arbitrary semantics; a deterministic dead clause
+            # surfaces the authoring error instead.
+            return "dead"
 
     records = [state.task(k) for k in related]
     if clause.cardinality is Cardinality.ALL:
@@ -365,14 +371,17 @@ def _apply_attempt_ended(state: KernelState, event: AttemptEnded) -> KernelState
 
     record = state.task(attempt.task_key) or TaskRecord(task_key=attempt.task_key)
 
+    if attempt.fence_epoch != record.fence_epoch or attempt.generation != record.desired_generation:
+        # The attempt is superseded. Its disposition is recorded above, because history
+        # is append-only, and that is ALL it gets: no commit, no outcome, no retry
+        # scheduling. Fencing that only guards the commit path lets a stale RETRYABLE
+        # put the forced new generation into retry_wait, and a stale PERMANENT clobber
+        # the record of a generation that already succeeded.
+        return state
+
     if event.disposition is AttemptDisposition.SUCCEEDED:
-        fenced = (
-            attempt.fence_epoch != record.fence_epoch
-            or attempt.generation != record.desired_generation
-        )
-        already = state.commit_for(attempt.task_key, attempt.generation) is not None
-        if fenced or already:
-            # A superseded or duplicate attempt exited zero. It does not get to publish.
+        if state.commit_for(attempt.task_key, attempt.generation) is not None:
+            # A duplicate completion (redelivery) does not get to publish twice.
             return state
         state = state.with_commit(
             CommitRecord(
@@ -392,8 +401,6 @@ def _apply_attempt_ended(state: KernelState, event: AttemptEnded) -> KernelState
         )
 
     if event.disposition is AttemptDisposition.CANCELLED:
-        if attempt.fence_epoch != record.fence_epoch:
-            return state
         return state.with_task(
             replace(record, outcome=Outcome.CANCELLED, outcome_generation=attempt.generation)
         )
@@ -428,51 +435,46 @@ def _descendant_steps(state: KernelState, step_id: str) -> tuple[str, ...]:
 
 
 def _apply_force(state: KernelState, event: ForceIssued) -> KernelState:
-    record = state.task(event.task_key) or TaskRecord(task_key=event.task_key)
-    state = state.with_task(
-        replace(
-            record,
-            desired_generation=record.desired_generation + 1,
-            fence_epoch=record.fence_epoch + 1,
-            outcome=None,
-            outcome_generation=None,
-            retry_at=None,
-        )
-    )
+    """Invalidate the forced task and everything the dependency mappings reach.
 
-    # Invalidate downstream only where the mapping actually reaches the forced task.
-    for step_id in _descendant_steps(state, event.task_key.step_id):
-        template = state.template(step_id)
-        if template is None:
+    The cascade is a breadth-first walk, treating each invalidated task as forced for
+    the purposes of its own dependents, with same-key narrowing applied per hop. A walk
+    over direct clauses only leaves grandchildren holding commits computed over a
+    superseded world: force measure[a], and a barrier that consumed interpret[a] keeps
+    reporting success while its input is being recomputed.
+    """
+    frontier: list[TaskKey] = [event.task_key]
+    seen: set[TaskKey] = set()
+    while frontier:
+        key = frontier.pop(0)
+        if key in seen:
             continue
-        for key in materialized_keys(state):
-            if key.step_id != step_id:
-                continue
-            reaches = False
-            for clause in template.clauses:
-                related = related_keys(state, key, clause)
-                if related is None:
-                    continue
-                if any(r.step_id == event.task_key.step_id for r in related) and (
-                    clause.mapping is not ClauseMapping.SAME_KEY
-                    or key.item_key == event.task_key.item_key
-                ):
-                    reaches = True
-            if not reaches:
-                continue
-            downstream = state.task(key)
-            if downstream is None:
-                continue
-            state = state.with_task(
-                replace(
-                    downstream,
-                    desired_generation=downstream.desired_generation + 1,
-                    fence_epoch=downstream.fence_epoch + 1,
-                    outcome=None,
-                    outcome_generation=None,
-                    retry_at=None,
-                )
+        seen.add(key)
+        record = state.task(key) or TaskRecord(task_key=key)
+        state = state.with_task(
+            replace(
+                record,
+                desired_generation=record.desired_generation + 1,
+                fence_epoch=record.fence_epoch + 1,
+                outcome=None,
+                outcome_generation=None,
+                retry_at=None,
             )
+        )
+        for template in state.templates:
+            for clause in template.clauses:
+                if clause.upstream_step != key.step_id:
+                    continue
+                for dkey in state.materialized:
+                    if dkey.step_id != template.step_id or dkey in seen:
+                        continue
+                    if clause.mapping is ClauseMapping.SAME_KEY and dkey.item_key != key.item_key:
+                        continue
+                    # A dependent with no record never consumed anything, and neither
+                    # did anything downstream of it; there is nothing to invalidate.
+                    if state.task(dkey) is None:
+                        continue
+                    frontier.append(dkey)
     return state
 
 

@@ -86,7 +86,6 @@ class TaskState(StrEnum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     SKIPPED = "skipped"
-    STALE = "stale"
 
 
 @dataclass(frozen=True, order=True)

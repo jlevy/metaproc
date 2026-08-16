@@ -60,6 +60,7 @@ class TaskView:
     generation: int
     attempts: int
     blocker: Blocker | None = None
+    skip_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -149,6 +150,25 @@ def blocker_for(state: KernelState, key: TaskKey) -> Blocker | None:
             detail=f"no scope instance for '{key.step_id}'",
         )
 
+    record = state.task(key)
+    if (
+        current is TaskState.WAITING_DEPENDENCIES
+        and record is not None
+        and any(
+            c.task_key == key and c.generation < record.desired_generation for c in state.commits
+        )
+    ):
+        # This task already committed once; a force upstream (or on it) superseded that
+        # generation. "Recomputing" is a different answer from first-time waiting, and
+        # conflating them makes every post-force status read like a stall.
+        return Blocker(
+            kind=BlockerKind.UPSTREAM_GENERATION_CHANGED,
+            detail=(
+                f"recomputing generation {record.desired_generation}; a commit from an "
+                "earlier generation was superseded"
+            ),
+        )
+
     if template is not None:
         # Unsatisfiable first: it is terminal, and no amount of waiting helps.
         for clause in template.clauses:
@@ -191,7 +211,6 @@ def blocker_for(state: KernelState, key: TaskKey) -> Blocker | None:
                 upstream=outstanding[:10],
             )
 
-    record = state.task(key)
     if current is TaskState.RETRY_WAIT and record is not None:
         return Blocker(
             kind=BlockerKind.RETRY_BACKOFF,
@@ -225,6 +244,7 @@ def project(state: KernelState, *, snapshot_generation: int = 0) -> ProcessStatu
                 generation=record.desired_generation if record else 1,
                 attempts=sum(1 for a in state.attempts if a.task_key == key),
                 blocker=blocker_for(state, key),
+                skip_reason=record.skip_reason if record else None,
             )
         )
         per_step.setdefault(key.step_id, []).append(current)

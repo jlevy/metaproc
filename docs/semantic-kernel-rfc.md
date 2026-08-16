@@ -129,8 +129,11 @@ DependencyClause = (upstream, mapping, requirement, cardinality, binding)
 
 The first implementation exposes `same_key`, `broadcast`, and `collect_all`, with `all`
 cardinality and `succeeded | finished` requirements.
-The internal model keeps all four axes separate regardless, because collapsing them is
-what forces the next migration.
+`broadcast` requires a non-expanding upstream, or an expansion that closed with exactly
+one key: there is no principled “the one” item of a fan-out, so a broadcast clause over
+a wider roster is deterministically unsatisfiable rather than silently bound to the
+first item. The internal model keeps all four axes separate regardless, because
+collapsing them is what forces the next migration.
 
 `all_completed` and `all_terminal` are rejected as names: “completed” reads as a
 terminal umbrella in some places and as success in others.
@@ -410,6 +413,29 @@ reservation granted or refused, a tick.
 Commands are what the runtime should do next: materialize an expansion, request
 admission, dispatch an attempt, schedule a retry at a time, accept a commit, cancel an
 attempt, release a reservation, finalize the run.
+
+Three contracts of this shape are easy to miss and are stated here so the engine
+integration cannot miss them:
+
+- **Commands are idempotent proposals, re-derived from state.** An un-acted command
+  (`MaterializeExpansion`, `DispatchAttempt`) is emitted again on every event until the
+  corresponding fact arrives.
+  The runtime deduplicates; the reducer never remembers what it already proposed,
+  because remembering is state and all state is in `state`.
+- **There is no accept-commit command.** A commit is applied as a fact when a current,
+  unfenced attempt ends successfully.
+  An engine that needs a distinct acceptance step (validation, quarantine) owns that
+  step in the runtime and reports its outcome as the attempt’s disposition.
+- **The reference model interprets only the new semantics.** `KernelState` defaults its
+  semantics version to the new contract; the legacy barrier interpretation of `needs`
+  lives in the production engine, not here, and the degenerate-equivalence suite in
+  Phase D is what ties the two together.
+
+The reference model recomputes projections and commands from whole state on every event,
+which is O(n) per event and quadratic over a full drain.
+That is the right trade for an executable specification and the wrong one for the
+engine: the production scheduler must maintain its ready set incrementally against these
+semantics, not copy this shape.
 
 This is the highest-leverage artifact in the project.
 It makes the semantics testable without timing-dependent integration, and every later

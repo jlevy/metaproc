@@ -34,7 +34,6 @@ from metaproc.kernel.projection import (
     project,
 )
 from metaproc.kernel.reducer import (
-    AcceptCommit,
     AttemptEnded,
     AttemptStarted,
     CancelAttempt,
@@ -52,7 +51,6 @@ from metaproc.kernel.reducer import (
 
 __all__ = [
     "PROJECTION_CONTRACT",
-    "AcceptCommit",
     "AttemptDisposition",
     "AttemptEnded",
     "AttemptRecord",
