@@ -7,6 +7,7 @@ timing. The production engine is checked against it; it does not replace the eng
 """
 
 from metaproc.kernel.model import (
+    DEFAULT_RETRY_POLICY,
     AttemptDisposition,
     AttemptRecord,
     Cardinality,
@@ -18,6 +19,7 @@ from metaproc.kernel.model import (
     KernelState,
     Outcome,
     Requirement,
+    RetryPolicy,
     StepTemplate,
     TaskKey,
     TaskRecord,
@@ -47,9 +49,11 @@ from metaproc.kernel.reducer import (
     ScheduleRetry,
     Tick,
     reduce,
+    retry_policy_for,
 )
 
 __all__ = [
+    "DEFAULT_RETRY_POLICY",
     "PROJECTION_CONTRACT",
     "AttemptDisposition",
     "AttemptEnded",
@@ -72,6 +76,7 @@ __all__ = [
     "MaterializeExpansion",
     "Outcome",
     "Requirement",
+    "RetryPolicy",
     "ScheduleRetry",
     "StepTemplate",
     "TaskKey",
@@ -86,4 +91,5 @@ __all__ = [
     "blocker_for",
     "project",
     "reduce",
+    "retry_policy_for",
 ]

@@ -17,6 +17,7 @@ from metaproc.kernel.model import (
     KernelState,
     Outcome,
     Requirement,
+    RetryPolicy,
     StepTemplate,
     TaskKey,
     TaskState,
@@ -33,7 +34,6 @@ from metaproc.kernel.reducer import (
     clause_status,
     reduce,
     related_keys,
-    retry_delay,
     task_state,
 )
 
@@ -256,9 +256,17 @@ class TestFailurePropagation:
 class TestRetry:
     def test_retry_backoff_is_deterministic_and_survives_replay(self) -> None:
         """Invariant 6: no jitter, no wall clock, so replay is exact."""
-        assert retry_delay(1) == 10.0
-        assert retry_delay(2) == 20.0
-        assert retry_delay(99) == 600.0
+        policy = RetryPolicy()
+        assert policy.delay_for(1) == 10.0
+        assert policy.delay_for(2) == 20.0
+        assert policy.delay_for(99) == 600.0
+
+    def test_a_step_can_carry_its_own_retry_policy(self) -> None:
+        """Policy is data, so a spec with different retry settings is replayable."""
+        patient = RetryPolicy(max_attempts=5, base_seconds=1.0, multiplier=3.0)
+        assert patient.delay_for(1) == 1.0
+        assert patient.delay_for(3) == 9.0
+        assert patient.max_attempts == 5
 
     def test_a_retryable_attempt_schedules_a_retry_rather_than_failing(self) -> None:
         state = close_roster(chained_state())

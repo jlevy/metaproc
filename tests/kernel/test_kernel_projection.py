@@ -187,7 +187,7 @@ class TestAggregates:
 
 class TestProjectionContract:
     def test_the_projection_declares_its_version(self) -> None:
-        assert project(close_roster(chained_state())).schema_version == PROJECTION_CONTRACT
+        assert project(close_roster(chained_state())).schema_ == PROJECTION_CONTRACT
 
     def test_the_projection_is_a_pure_function_of_state(self) -> None:
         """Rebuildable means rebuildable: same facts, same view."""

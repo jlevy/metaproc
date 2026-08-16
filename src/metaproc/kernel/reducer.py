@@ -17,6 +17,7 @@ from dataclasses import dataclass, replace
 from typing import Literal
 
 from metaproc.kernel.model import (
+    DEFAULT_RETRY_POLICY,
     AttemptDisposition,
     AttemptRecord,
     Cardinality,
@@ -28,16 +29,13 @@ from metaproc.kernel.model import (
     KernelState,
     Outcome,
     Requirement,
+    RetryPolicy,
     TaskKey,
     TaskRecord,
     TaskState,
 )
 
 ClauseStatus = Literal["satisfied", "pending", "dead"]
-
-RETRY_BASE_SECONDS = 10.0
-RETRY_MAX_SECONDS = 600.0
-MAX_ATTEMPTS = 3
 
 
 # --------------------------------------------------------------------------- events
@@ -312,10 +310,10 @@ def _attempt_count(state: KernelState, key: TaskKey, generation: int) -> int:
     return sum(1 for a in state.attempts if a.task_key == key and a.generation == generation)
 
 
-def retry_delay(attempt_number: int) -> float:
-    """Deterministic exponential backoff, capped. No jitter: replay must be exact."""
-    delay = RETRY_BASE_SECONDS * (2 ** max(0, attempt_number - 1))
-    return min(delay, RETRY_MAX_SECONDS)
+def retry_policy_for(state: KernelState, key: TaskKey) -> RetryPolicy:
+    """The policy governing this task, from its step template."""
+    template = state.template(key.step_id)
+    return template.retry if template is not None else DEFAULT_RETRY_POLICY
 
 
 # ------------------------------------------------------------------------- the reducer
@@ -324,7 +322,12 @@ def retry_delay(attempt_number: int) -> float:
 def reduce(
     state: KernelState, event: Event, now: float | None = None
 ) -> tuple[KernelState, tuple[CommandType, ...]]:
-    """Apply one durable fact and propose what the runtime should do next."""
+    """Apply one durable fact and propose what the runtime should do next.
+
+    ``now`` carries forward when omitted, which is right for a burst of facts observed
+    at one instant. It is excluded from state equality, so replay compares facts rather
+    than observation times.
+    """
     state = replace(state, now=state.now if now is None else now)
 
     if isinstance(event, ExpansionClosed):
@@ -462,12 +465,13 @@ def _apply_attempt_ended(state: KernelState, event: AttemptEnded) -> KernelState
         )
 
     # RETRYABLE or LOST
+    policy = retry_policy_for(state, attempt.task_key)
     tries = _attempt_count(state, attempt.task_key, attempt.generation)
-    if tries >= MAX_ATTEMPTS:
+    if tries >= policy.max_attempts:
         return state.with_task(
             replace(record, outcome=Outcome.FAILED, outcome_generation=attempt.generation)
         )
-    return state.with_task(replace(record, retry_at=state.now + retry_delay(tries)))
+    return state.with_task(replace(record, retry_at=state.now + policy.delay_for(tries)))
 
 
 def _apply_force(state: KernelState, event: ForceIssued) -> KernelState:

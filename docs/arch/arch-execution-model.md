@@ -60,10 +60,10 @@ Three contracts of this surface are easy to miss:
   unfenced attempt ends successfully.
   An engine that needs a distinct acceptance step (validation, quarantine) owns that
   step in the runtime and reports its outcome as the attempt’s disposition.
-- **The reference model interprets only the new semantics.** `KernelState` defaults its
-  semantics version to the new contract; the legacy barrier interpretation of `needs`
-  lives in the production engine, and the degenerate-equivalence suite planned for the
-  scheduler bring-up is what ties the two together.
+- **The reference model interprets only the new semantics.** The legacy barrier
+  interpretation of `needs` lives in the production engine, and the
+  degenerate-equivalence suite planned for the scheduler bring-up is what ties the two
+  together.
 
 ## Task States, as Implemented
 
@@ -134,6 +134,29 @@ semantics, not copy this shape.
 The durable side of the envelope is unmeasured: filesystem metadata load, per-task
 status writes, event-log volume, and resume time.
 
+## Relationship to the Engine’s Own Records
+
+The kernel’s records are a parallel vocabulary, not a replacement, and two of them meet
+engine types that Phase C has to reconcile.
+
+`kernel.model.AttemptRecord` and `metaproc.models.runtime.AttemptRecord` describe the
+same real-world fact, one execution try, with different fields: the kernel record
+carries the generation, fence epoch, and disposition the scheduler reasons about, while
+the runtime record is what `.state/attempt.yaml` persists.
+The names are kept deliberately, because the packages disambiguate at every import site
+and renaming a reference model to accommodate a future merge would be the wrong way
+round. What Phase C owes is the mapping, in particular from the kernel’s disposition
+(`succeeded`, `retryable`, `permanent`, `cancelled`, `lost`) onto the runtime record’s
+state and error fields, and from `failure_category` onto `FailureClass`.
+
+`ProcessStatus` declares `metaproc:ProcessStatus/0.1` and follows the repo’s
+schema-token field naming, but it is a frozen dataclass rather than a Pydantic model, so
+the schema registry cannot resolve the token yet.
+That is correct while the projection is in-memory only: the registry indexes artifacts
+that reach disk. Phase C, which makes the projection durable, is also what gives it a
+Pydantic model and a registry entry, and the token is chosen now so that step is a
+registration rather than a rename.
+
 ## Boundaries
 
 Not modeled in the reducer, deliberately: admission and budget reservation (the design
@@ -141,9 +164,11 @@ specifies claims and authorities; RunPool remains the local implementation),
 finalization and effects, `group_by` and threshold cardinality, and the legacy barrier
 semantics of `needs`.
 
-Known gaps in event-order handling are tracked as open issues against this package and
-are fixed before the production scheduler builds on it: duplicate same-generation
-attempts, redelivered attempt starts, and settlement of multi-hop skip cascades.
+Retry policy is data on `StepTemplate` rather than a scheduler constant, so a spec whose
+authored policy differs from the defaults is replayable against this model.
+The semantics version is not carried in scheduler state: it belongs to the resolved
+plan, and gating on it is the compiler’s job, so a field here would be plumbing without
+a mechanism.
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

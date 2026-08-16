@@ -106,7 +106,7 @@ class StepView:
 class ProcessStatus:
     """The whole projection. Versioned, rebuildable, never authoritative."""
 
-    schema_version: str = PROJECTION_CONTRACT
+    schema_: str = PROJECTION_CONTRACT
     snapshot_generation: int = 0
     tasks: tuple[TaskView, ...] = ()
     steps: tuple[StepView, ...] = ()

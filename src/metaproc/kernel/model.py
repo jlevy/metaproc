@@ -11,7 +11,7 @@ type below is that generations, attempts, commits, expansions, and cancellations
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from functools import cached_property
 
@@ -123,6 +123,29 @@ class DependencyClause:
 
 
 @dataclass(frozen=True)
+class RetryPolicy:
+    """How many tries a task gets and how long it waits between them.
+
+    Policy is data because the engine's policy is authored per step. Constants in the
+    reducer would mean the reference model could not replay any real spec containing a
+    transient failure, which is exactly what the equivalence suite needs to do.
+    """
+
+    max_attempts: int = 3
+    base_seconds: float = 10.0
+    max_seconds: float = 600.0
+    multiplier: float = 2.0
+
+    def delay_for(self, attempt_number: int) -> float:
+        """Deterministic backoff. No jitter: replay must be exact."""
+        delay = self.base_seconds * (self.multiplier ** max(0, attempt_number - 1))
+        return min(delay, self.max_seconds)
+
+
+DEFAULT_RETRY_POLICY = RetryPolicy()
+
+
+@dataclass(frozen=True)
 class StepTemplate:
     """Static shape of one step. Width comes from an expansion, not from here."""
 
@@ -130,6 +153,7 @@ class StepTemplate:
     clauses: tuple[DependencyClause, ...] = ()
     expands_over: str | None = None
     key_space: str | None = None
+    retry: RetryPolicy = DEFAULT_RETRY_POLICY
 
 
 @dataclass(frozen=True)
@@ -233,8 +257,11 @@ class KernelState:
     tasks: tuple[TaskRecord, ...] = ()
     attempts: tuple[AttemptRecord, ...] = ()
     commits: tuple[CommitRecord, ...] = ()
-    semantics_version: str = "metaproc/process/0.7"
-    now: float = 0.0
+
+    # Observation time, not a durable fact: two states holding the same facts are the
+    # same state whether or not the clock has moved, which is what lets the replay
+    # tests compare whole states.
+    now: float = field(default=0.0, compare=False)
 
     # -- lookups ---------------------------------------------------------------
     #
