@@ -7,7 +7,8 @@ pool: no slot accounting, no memory backpressure, nothing to stop N orchestrator
 starting N agents simultaneously.
 
 This closes that gap for the scalar path without pulling in the rest of RunPool. The
-enforceable rule is the one from the semantic-kernel RFC:
+enforceable rule is design test 7 of
+``docs/process-framework-concepts.md`` ("Is every launch admitted?"):
 
     Every independently scheduled task attempt is admitted through the applicable
     resource authorities, and its full process tree is charged to that attempt.
