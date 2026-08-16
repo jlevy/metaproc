@@ -1,6 +1,6 @@
 """Reference model for the semantic kernel.
 
-This package is the executable form of ``docs/semantic-kernel-rfc.md``: the durable
+This package is the executable form of ``docs/semantic-kernel-design.md``: the durable
 facts a run is made of, and a pure reducer over them. It deliberately performs no I/O
 and reads no clock, so scheduler semantics can be tested without processes, files, or
 timing. The production engine is checked against it; it does not replace the engine.

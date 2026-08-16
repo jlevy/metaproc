@@ -1,6 +1,6 @@
 """Invariants the semantic kernel must hold.
 
-Each test names the invariant it proves from ``docs/semantic-kernel-rfc.md`` §11. These
+Each test names the invariant it proves from the semantic kernel design and architecture docs. These
 are the semantics every later scheduler phase is checked against, so a failure here means
 a contract changed, not that a test needs updating.
 """

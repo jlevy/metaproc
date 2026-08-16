@@ -100,7 +100,7 @@ manuals.
 | Document | Purpose |
 | --- | --- |
 | [process-framework-concepts](docs/process-framework-concepts.md) | The general execution model beneath any process framework: planning, tasks, edge granularity, join policies, and admission, with design tests and the Metaproc mapping |
-| [semantic-kernel-rfc](docs/semantic-kernel-rfc.md) | Proposed: the durable contracts under task-level scheduling — semantics versioning, dependency clauses, expansion closure, attempt fencing, admission claims — with state tables and a reference reducer |
+| [semantic-kernel-design](docs/semantic-kernel-design.md) | The durable contracts under task-level scheduling — semantics versioning, dependency clauses, expansion closure, attempt fencing, admission claims — and what is deliberately left out |
 | [conventions](docs/conventions.md) | Framework-level naming, structure, and file-format rules (see §File Format Policy) |
 | [artifact-catalog](docs/artifact-catalog.md) | Every runtime artifact Metaproc writes or reads: filename, format, schema, lifecycle, writers, and readers |
 | [pricing](src/metaproc/data/pricing.md) | Per-model token and cache pricing for every provider the framework touches; drives cost-per-record math |

@@ -177,6 +177,7 @@ Keep this maintained index in sync with the files on disk.
 | [arch-claude-code-harness.md](arch/arch-claude-code-harness.md) | The non-interactive Claude Code CLI subprocess wrapper: environment scoping, settings hierarchy, permission mode and `ENV_SCRUB` hardening, and the version compatibility matrix. | Approved |
 | [arch-testing.md](arch/arch-testing.md) | Test tiers (smoke-core, smoke-adapter-*, smoke-adapters-all, self-test-local, self-test-cloud) and the process specs that implement them. | Approved |
 | [arch-file-io-utilities.md](arch/arch-file-io-utilities.md) | The `metaproc.io` public surface: atomic writes, gzip-transparent reads, frontmatter helpers, templates, and artifact paths. | Approved |
+| [arch-semantic-kernel.md](arch/arch-semantic-kernel.md) | Executable reference model for task-level scheduling: durable facts, the pure reducer, the status projection, invariant tests, and the scale envelope. Design rationale lives in [semantic-kernel-design.md](semantic-kernel-design.md). | Draft |
 
 Companion conceptual and reference docs that are not architecture but are commonly
 cross-linked from the arch docs:
