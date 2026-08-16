@@ -23,6 +23,16 @@ from metaproc.kernel.model import (
     TaskRecord,
     TaskState,
 )
+from metaproc.kernel.projection import (
+    PROJECTION_CONTRACT,
+    Blocker,
+    BlockerKind,
+    ProcessStatus,
+    StepView,
+    TaskView,
+    blocker_for,
+    project,
+)
 from metaproc.kernel.reducer import (
     AcceptCommit,
     AttemptEnded,
@@ -41,6 +51,7 @@ from metaproc.kernel.reducer import (
 )
 
 __all__ = [
+    "PROJECTION_CONTRACT",
     "AcceptCommit",
     "AttemptDisposition",
     "AttemptEnded",
@@ -69,5 +80,12 @@ __all__ = [
     "TaskRecord",
     "TaskState",
     "Tick",
+    "Blocker",
+    "BlockerKind",
+    "ProcessStatus",
+    "StepView",
+    "TaskView",
+    "blocker_for",
+    "project",
     "reduce",
 ]

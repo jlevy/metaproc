@@ -445,8 +445,26 @@ The reference implementation must prove, by property and model tests:
   Keyed only by execution profile is likely wrong in both directions: two profiles can
   share one account quota, one profile can span regional quotas.
 
-- **Projection schema.** The typed shape of `process-status`. Low reversal cost, so it
-  follows the reducer rather than preceding it.
+- **Projection schema: drafted.** `metaproc:ProcessStatus/0.1`, implemented in
+  `src/metaproc/kernel/projection.py` as a pure function of durable facts, so it is
+  rebuildable by construction and nothing can schedule from it.
+  Task views carry state, generation, attempt count, and one primary blocker; step views
+  carry counts, an aggregate outcome, and coverage.
+  Phase C makes it durable and versioned on disk; this settles the shape.
+
+  The blocker vocabulary is the part that earns its keep: `dependency_unsatisfiable`,
+  `dependency_pending`, `expansion_not_closed`, `scope_not_instantiated`,
+  `retry_backoff`, `admission_wait`, `budget_wait`, `waiting_external`,
+  `upstream_generation_changed`. Each names the specific upstream tasks or roster
+  generation involved, because “pending” is what operators have today and it explains
+  nothing. Precedence is deliberate: unsatisfiable outranks unclosed, which outranks a
+  retry timer, matching the order in which an operator can act.
+
+  Two honest gaps. `admission_wait` and `budget_wait` are defined but never returned,
+  because the reducer does not model admission yet; a ready task reports no blocker
+  rather than a fabricated one.
+  And `dependency_unsatisfiable` is only observable to a caller inspecting state
+  directly, since the reducer settles a blocked task to `skipped` in the same pass.
 
 - **Scale envelope, in memory: confirmed.** The reference reducer holds 10^3 to 10^4
   tasks per run, at roughly 0.03s per scheduling pass over 2,400 tasks, scaling linearly
