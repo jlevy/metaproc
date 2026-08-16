@@ -67,7 +67,7 @@ Before handoff: review the diff, run `make verify`, update and close the relevan
 issues, run `tbd sync`, commit, push, open or update the pull request, and watch CI to
 completion.
 
-<!-- BEGIN TBD INTEGRATION format=f06 surface=agents-md -->
+<!-- BEGIN TBD INTEGRATION format=f08 surface=agents-md -->
 ## tbd
 
 This repository uses **tbd** for git-native issue tracking (beads), spec-driven
