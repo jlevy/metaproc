@@ -114,3 +114,48 @@ docs_cache:
   lookup_path:
     - .tbd/docs/shortcuts/system
     - .tbd/docs/shortcuts/standard
+integrations:
+  on_tbd_sync: 'off'
+  linear:
+    enabled: true
+    target:
+      team_key: OS
+      project: metaproc
+    labels:
+      origin: true
+      repo: auto
+      mirror: none
+      create: tbd
+    identity:
+      user_map: {}
+    policy:
+      outbound:
+        kinds:
+          - epic
+          - feature
+          - task
+          - bug
+          - chore
+        statuses:
+          - open
+          - in_progress
+          - blocked
+          - deferred
+        labels: []
+        specs: any
+        linked: true
+        max_nesting: 2
+      inbound:
+        mode: report
+        labels: []
+        as_kind: task
+      field_sync:
+        fields:
+          title: merge
+          description: merge
+          status: merge
+          priority: merge
+          labels: local
+          assignee: local
+        comments: two_way
+        tie_break: newest
