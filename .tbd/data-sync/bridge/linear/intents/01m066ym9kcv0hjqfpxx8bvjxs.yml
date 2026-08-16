@@ -1,0 +1,10 @@
+created_at: 2026-08-16T21:16:57.013Z
+ops:
+  - bead_id: is-01kyxw263bdz2f224czw8veymn
+    external_id: 8a8381cc-cad0-4dcf-b18b-2a34a5e5e475
+    kind: update_issue
+    patch:
+      title: Add PyPI attestations to the Metaproc release workflow
+provider: linear
+run_id: 01m066ym9kcv0hjqfpxx8bvjxs
+type: in
