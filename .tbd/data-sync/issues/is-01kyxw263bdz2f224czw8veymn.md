@@ -19,15 +19,5 @@ extensions:
   linear:
     id: 8a8381cc-cad0-4dcf-b18b-2a34a5e5e475
     linked_at: 2026-08-16T08:00:49.127Z
-    comments:
-      - id: 7999ce9f-e7f7-4be0-9730-fe0a829d84fc
-        at: 2026-08-16T21:20:24.680Z
-        author: josh
-        body: "Human comment written in Linear: please also handle the sdist case. Does the agent see this?"
-      - local_id: 01m0676rbdkkpw6th0cqh39hv7
-        at: 2026-08-16T21:21:23.304Z
-        author: tbd
-        body: "Agent reply from tbd: acknowledged, sdist covered by the same attestation step."
-        id: 3b288029-53b9-4f9c-a7e7-100aa59c3fcb
 ---
 Metaproc 0.2.0 was published through OIDC trusted publishing, but uv publish does not generate PEP 740 attestations, so PyPI exposes no provenance objects for the wheel or sdist. Replace or augment the publish step with an attestation-producing path and verify both Integrity API objects. PyPI recommends pypa/gh-action-pypi-publish; the latest reviewed-safe older action v1.14.0 pins pyasn1 0.6.1, which is rejected by this repo vulnerability policy, while v1.14.2 was published 2026-07-29 and is still inside the 14-day cool-off. Do not bypass policy: revisit after 2026-08-12T19:31:27Z, review and SHA-pin the action (or a pypi-attestations alternative), then exercise it on the next release.
