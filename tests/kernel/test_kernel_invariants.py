@@ -32,6 +32,7 @@ from metaproc.kernel.reducer import (
     Tick,
     clause_status,
     reduce,
+    related_keys,
     retry_delay,
     task_state,
 )
@@ -504,3 +505,239 @@ class TestBroadcastRequiresASingletonUpstream:
         state = run_task(state, TaskKey("one", "only"), AttemptDisposition.SUCCEEDED)
 
         assert task_state(state, TaskKey("consumer")) is TaskState.READY
+
+
+class TestSameGenerationSettlementIsFenced:
+    """A duplicate attempt at the current generation must not rewrite a settled task.
+
+    Fencing by epoch and generation stops *superseded* attempts. A second attempt at the
+    same generation passes that check, so the guard has to be the settled record itself,
+    or the final outcome depends on which duplicate is reaped first.
+    """
+
+    def test_a_duplicate_cancelled_does_not_overwrite_a_commit(self) -> None:
+        state = close_roster(chained_state())
+        key = TaskKey("measure", "a")
+        state, _ = reduce(
+            state, AttemptStarted(attempt_id="a1", task_key=key, generation=1, fence_epoch=0)
+        )
+        state, _ = reduce(
+            state, AttemptStarted(attempt_id="a2", task_key=key, generation=1, fence_epoch=0)
+        )
+        state, _ = reduce(
+            state, AttemptEnded(attempt_id="a1", disposition=AttemptDisposition.SUCCEEDED)
+        )
+
+        state, _ = reduce(
+            state, AttemptEnded(attempt_id="a2", disposition=AttemptDisposition.CANCELLED)
+        )
+
+        record = state.task(key)
+        assert record is not None
+        assert record.outcome is Outcome.SUCCEEDED
+        assert task_state(state, key) is TaskState.SUCCEEDED
+
+    def test_a_duplicate_permanent_does_not_overwrite_a_commit(self) -> None:
+        state = close_roster(chained_state())
+        key = TaskKey("measure", "a")
+        state, _ = reduce(
+            state, AttemptStarted(attempt_id="b1", task_key=key, generation=1, fence_epoch=0)
+        )
+        state, _ = reduce(
+            state, AttemptStarted(attempt_id="b2", task_key=key, generation=1, fence_epoch=0)
+        )
+        state, _ = reduce(
+            state, AttemptEnded(attempt_id="b1", disposition=AttemptDisposition.SUCCEEDED)
+        )
+
+        state, _ = reduce(
+            state, AttemptEnded(attempt_id="b2", disposition=AttemptDisposition.PERMANENT)
+        )
+
+        record = state.task(key)
+        assert record is not None and record.outcome is Outcome.SUCCEEDED
+
+    def test_settlement_is_order_independent(self) -> None:
+        """Invariant 5 stated over duplicates: whichever arrives first, same end state."""
+
+        def drain(order: tuple[str, ...]) -> KernelState:
+            state = close_roster(chained_state())
+            key = TaskKey("measure", "a")
+            for attempt in ("x1", "x2"):
+                state, _ = reduce(
+                    state,
+                    AttemptStarted(attempt_id=attempt, task_key=key, generation=1, fence_epoch=0),
+                )
+            dispositions = {
+                "x1": AttemptDisposition.SUCCEEDED,
+                "x2": AttemptDisposition.PERMANENT,
+            }
+            for attempt in order:
+                state, _ = reduce(
+                    state, AttemptEnded(attempt_id=attempt, disposition=dispositions[attempt])
+                )
+            return state
+
+        assert drain(("x1", "x2")).tasks == drain(("x2", "x1")).tasks
+
+
+class TestAttemptStartedIsIdempotent:
+    def test_redelivering_a_start_does_not_resurrect_a_terminal_attempt(self) -> None:
+        """Redelivery is normal in a distributed system; the append-only contract says
+        a terminal attempt stays terminal."""
+        state = close_roster(chained_state())
+        key = TaskKey("measure", "a")
+        state = run_task(state, key, AttemptDisposition.RETRYABLE, attempt_id="once", now=100.0)
+
+        state, _ = reduce(
+            state,
+            AttemptStarted(attempt_id="once", task_key=key, generation=1, fence_epoch=0),
+            now=101.0,
+        )
+
+        attempt = state.attempt("once")
+        assert attempt is not None and attempt.disposition is AttemptDisposition.RETRYABLE
+        record = state.task(key)
+        assert record is not None and record.retry_at == 110.0
+        assert task_state(state, key) is TaskState.RETRY_WAIT
+
+    def test_a_fresh_attempt_id_still_starts_normally(self) -> None:
+        state = close_roster(chained_state())
+        key = TaskKey("measure", "a")
+        state = run_task(state, key, AttemptDisposition.RETRYABLE, attempt_id="first", now=100.0)
+
+        state, _ = reduce(
+            state,
+            AttemptStarted(attempt_id="second", task_key=key, generation=1, fence_epoch=0),
+            now=200.0,
+        )
+
+        assert task_state(state, key) is TaskState.RUNNING
+
+
+class TestMissingAndUnknownUpstreams:
+    def test_a_same_key_item_absent_from_the_upstream_roster_is_dead(self) -> None:
+        """Rosters can skew between steps; the item with no counterpart can never run."""
+        state = KernelState(
+            templates=(
+                StepTemplate(step_id="up", expands_over="roster"),
+                StepTemplate(
+                    step_id="down",
+                    expands_over="roster",
+                    clauses=(_same_key("up"),),
+                ),
+            )
+        )
+        state, _ = reduce(state, ExpansionClosed(step_id="up", keys=("a", "b")))
+        state, _ = reduce(state, ExpansionClosed(step_id="down", keys=("a", "b", "x")))
+
+        assert task_state(state, TaskKey("down", "x")) is TaskState.SKIPPED
+        assert task_state(state, TaskKey("down", "a")) is TaskState.WAITING_DEPENDENCIES
+
+    def test_a_clause_naming_an_unknown_step_is_dead(self) -> None:
+        state = KernelState(
+            templates=(
+                StepTemplate(
+                    step_id="consumer",
+                    clauses=(
+                        DependencyClause(
+                            upstream_step="typo",
+                            mapping=ClauseMapping.COLLECT_ALL,
+                            requirement=Requirement.SUCCEEDED,
+                        ),
+                    ),
+                ),
+            )
+        )
+        state, _ = reduce(state, Tick())
+
+        assert task_state(state, TaskKey("consumer")) is TaskState.SKIPPED
+
+
+class TestBlockedSettlementReachesFixpoint:
+    def test_a_multi_hop_cascade_settles_regardless_of_step_naming(self) -> None:
+        """Names sorted so each dependent precedes its upstream, the order that used to
+        leave the tail unsettled."""
+
+        def chain_state() -> KernelState:
+            return KernelState(
+                templates=(
+                    StepTemplate(step_id="c_root"),
+                    StepTemplate(
+                        step_id="b_mid",
+                        clauses=(_collect("c_root", Requirement.SUCCEEDED),),
+                    ),
+                    StepTemplate(
+                        step_id="a_leaf",
+                        clauses=(_collect("b_mid", Requirement.SUCCEEDED),),
+                    ),
+                )
+            )
+
+        state = chain_state()
+        state, _ = reduce(
+            state,
+            AttemptStarted(attempt_id="r", task_key=TaskKey("c_root"), generation=1, fence_epoch=0),
+        )
+        state, _ = reduce(
+            state, AttemptEnded(attempt_id="r", disposition=AttemptDisposition.PERMANENT)
+        )
+
+        assert task_state(state, TaskKey("b_mid")) is TaskState.SKIPPED
+        assert task_state(state, TaskKey("a_leaf")) is TaskState.SKIPPED
+
+
+class TestBroadcastArity:
+    def _broadcast_state(self, keys: tuple[str, ...]) -> KernelState:
+        state = KernelState(
+            templates=(
+                StepTemplate(step_id="wide", expands_over="roster"),
+                StepTemplate(
+                    step_id="consumer",
+                    clauses=(
+                        DependencyClause(
+                            upstream_step="wide",
+                            mapping=ClauseMapping.BROADCAST,
+                            requirement=Requirement.SUCCEEDED,
+                        ),
+                    ),
+                ),
+            )
+        )
+        state, _ = reduce(state, ExpansionClosed(step_id="wide", keys=keys))
+        return state
+
+    def test_broadcast_over_an_empty_closed_roster_is_dead(self) -> None:
+        """Zero items has no principled "the one" either, so it cannot be vacuous."""
+        assert task_state(self._broadcast_state(()), TaskKey("consumer")) is TaskState.SKIPPED
+
+    def test_related_keys_itself_refuses_a_wide_broadcast(self) -> None:
+        """The rule belongs in the mapping, so every consumer inherits it rather than
+        each caller re-implementing the width check."""
+        state = self._broadcast_state(("a", "b"))
+        template = state.template("consumer")
+        assert template is not None
+
+        assert related_keys(state, TaskKey("consumer"), template.clauses[0]) == ()
+
+    def test_a_singleton_broadcast_still_binds(self) -> None:
+        state = self._broadcast_state(("only",))
+        state = run_task(state, TaskKey("wide", "only"), AttemptDisposition.SUCCEEDED)
+
+        assert task_state(state, TaskKey("consumer")) is TaskState.READY
+
+
+class TestSupersededIsOnePredicate:
+    def test_a_stale_generation_live_attempt_is_cancelled(self) -> None:
+        """Fencing and cancellation must agree, or an attempt runs to completion holding
+        capacity and then has its result discarded."""
+        state = close_roster(chained_state())
+        key = TaskKey("measure", "a")
+        state, _ = reduce(
+            state,
+            AttemptStarted(attempt_id="odd", task_key=key, generation=5, fence_epoch=0),
+        )
+
+        _, commands = reduce(state, Tick())
+
+        assert any(isinstance(c, CancelAttempt) and c.attempt_id == "odd" for c in commands)

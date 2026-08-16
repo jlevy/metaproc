@@ -136,7 +136,10 @@ def related_keys(
     """
     upstream = state.template(clause.upstream_step)
     if upstream is None:
-        return ()
+        # An unresolvable upstream is an authoring error, not an empty roster. Returning
+        # () here would make the clause vacuously satisfied and dispatch the consumer
+        # with no data.
+        return None
     if upstream.expands_over is None:
         return (TaskKey(step_id=upstream.step_id, scope_path=downstream.scope_path),)
 
@@ -148,6 +151,9 @@ def related_keys(
         if downstream.item_key is None:
             return None
         if downstream.item_key not in expansion.keys:
+            # This item has no counterpart in the closed upstream roster, so the clause
+            # can never be satisfied. That is different from an empty roster, which is
+            # vacuously satisfied.
             return ()
         return (
             TaskKey(
@@ -158,14 +164,32 @@ def related_keys(
         )
 
     if clause.mapping is ClauseMapping.BROADCAST:
+        if len(expansion.keys) != 1:
+            # There is no principled "the one" item of a fan-out, at zero width or at
+            # many. Deciding it here means every consumer of the mapping inherits the
+            # rule instead of re-checking it.
+            return ()
         return tuple(
             TaskKey(step_id=upstream.step_id, item_key=k, scope_path=downstream.scope_path)
-            for k in expansion.keys[:1]
+            for k in expansion.keys
         )
 
     return tuple(
         TaskKey(step_id=upstream.step_id, item_key=k, scope_path=downstream.scope_path)
         for k in expansion.keys
+    )
+
+
+def superseded(attempt: AttemptRecord, record: TaskRecord) -> bool:
+    """True when this attempt no longer speaks for its task.
+
+    One definition, used both to quarantine a superseded ending and to cancel a
+    superseded live attempt. Two predicates drift: an attempt that is stale by one
+    measure but current by the other runs to completion holding capacity and then has
+    its result discarded, which is the worst of both.
+    """
+    return (
+        attempt.fence_epoch != record.fence_epoch or attempt.generation != record.desired_generation
     )
 
 
@@ -177,49 +201,59 @@ def _satisfies(record: TaskRecord | None, requirement: Requirement) -> bool:
     return True
 
 
-def _permanently_unsatisfiable(record: TaskRecord | None, requirement: Requirement) -> bool:
-    """True when this upstream can never satisfy the requirement."""
+def _permanently_unsatisfiable(
+    state: KernelState, key: TaskKey, record: TaskRecord | None, requirement: Requirement
+) -> bool:
+    """True when this upstream can never satisfy the requirement.
+
+    "Permanently" is the load-bearing word. A task that failed but still has a live
+    attempt at its desired generation can still commit, because a commit outranks a
+    sibling attempt's failure. Treating it as dead settles descendants to a terminal
+    skip that no later success can undo.
+    """
     if record is None or not record.is_terminal:
         return False
-    if requirement is Requirement.SUCCEEDED:
-        return record.outcome is not Outcome.SUCCEEDED
-    return False
+    if requirement is not Requirement.SUCCEEDED:
+        return False
+    if record.outcome is Outcome.SUCCEEDED:
+        return False
+    live = state.live_attempt(key)
+    return live is None or superseded(live, record)
 
 
 def clause_status(
     state: KernelState, downstream: TaskKey, clause: DependencyClause
 ) -> ClauseStatus:
     """Whether a clause is satisfied, still pending, or dead."""
+    if state.template(clause.upstream_step) is None:
+        # The clause names a step that does not exist. That is an authoring error, and
+        # it can never become satisfied, so it must not read as pending forever nor as
+        # vacuously satisfied.
+        return "dead"
     related = related_keys(state, downstream, clause)
     if related is None:
         return "pending"
 
     if not related:
-        # Vacuous success for ALL, failure for ANY, per the RFC's empty-roster rule.
-        return "satisfied" if clause.cardinality is Cardinality.ALL else "dead"
+        if clause.mapping is ClauseMapping.COLLECT_ALL:
+            # Nothing to collect over a closed empty roster: vacuously satisfied for
+            # ALL, unsatisfiable for ANY.
+            return "satisfied" if clause.cardinality is Cardinality.ALL else "dead"
+        # same_key with no counterpart, or broadcast without exactly one upstream item.
+        # The clause names something that does not exist, so it can never be satisfied.
+        return "dead"
 
-    if clause.mapping is ClauseMapping.BROADCAST:
-        upstream = state.template(clause.upstream_step)
-        expansion = (
-            state.expansion_for(clause.upstream_step)
-            if upstream is not None and upstream.expands_over is not None
-            else None
-        )
-        if expansion is not None and len(expansion.keys) != 1:
-            # There is no principled "the one" item of a fan-out. Silently picking the
-            # first key would define arbitrary semantics; a deterministic dead clause
-            # surfaces the authoring error instead.
-            return "dead"
-
-    records = [state.task(k) for k in related]
+    pairs = [(k, state.task(k)) for k in related]
     if clause.cardinality is Cardinality.ALL:
-        if any(_permanently_unsatisfiable(r, clause.requirement) for r in records):
+        if any(_permanently_unsatisfiable(state, k, r, clause.requirement) for k, r in pairs):
             return "dead"
-        return "satisfied" if all(_satisfies(r, clause.requirement) for r in records) else "pending"
+        return (
+            "satisfied" if all(_satisfies(r, clause.requirement) for _, r in pairs) else "pending"
+        )
 
-    if any(_satisfies(r, clause.requirement) for r in records):
+    if any(_satisfies(r, clause.requirement) for _, r in pairs):
         return "satisfied"
-    if all(_permanently_unsatisfiable(r, clause.requirement) for r in records):
+    if all(_permanently_unsatisfiable(state, k, r, clause.requirement) for k, r in pairs):
         return "dead"
     return "pending"
 
@@ -343,8 +377,16 @@ def _apply_expansion_closed(state: KernelState, event: ExpansionClosed) -> Kerne
 
 
 def _apply_attempt_started(state: KernelState, event: AttemptStarted) -> KernelState:
+    existing = state.attempt(event.attempt_id)
+    if existing is not None and existing.is_terminal:
+        # Redelivery. Attempt history is append-only, so a terminal attempt is never
+        # reopened; reopening one also wipes the retry timer and strands the task as
+        # RUNNING behind a worker that already exited.
+        return state
+
     record = state.task(event.task_key) or TaskRecord(task_key=event.task_key)
-    state = state.with_task(replace(record, retry_at=None))
+    if record.fence_epoch == event.fence_epoch:
+        state = state.with_task(replace(record, retry_at=None))
     return state.with_attempt(
         AttemptRecord(
             attempt_id=event.attempt_id,
@@ -371,18 +413,27 @@ def _apply_attempt_ended(state: KernelState, event: AttemptEnded) -> KernelState
 
     record = state.task(attempt.task_key) or TaskRecord(task_key=attempt.task_key)
 
-    if attempt.fence_epoch != record.fence_epoch or attempt.generation != record.desired_generation:
-        # The attempt is superseded. Its disposition is recorded above, because history
-        # is append-only, and that is ALL it gets: no commit, no outcome, no retry
-        # scheduling. Fencing that only guards the commit path lets a stale RETRYABLE
-        # put the forced new generation into retry_wait, and a stale PERMANENT clobber
-        # the record of a generation that already succeeded.
+    if superseded(attempt, record):
+        # Its disposition is recorded above, because history is append-only, and that is
+        # ALL it gets: no commit, no outcome, no retry scheduling.
+        return state
+
+    committed = state.commit_for(attempt.task_key, record.desired_generation) is not None
+
+    if event.disposition is not AttemptDisposition.SUCCEEDED and (committed or record.is_terminal):
+        # A duplicate attempt at the *current* generation passes the superseded check,
+        # so the settled record is its own guard. Without it, whichever duplicate the
+        # runtime reaps last decides the outcome.
         return state
 
     if event.disposition is AttemptDisposition.SUCCEEDED:
-        if state.commit_for(attempt.task_key, attempt.generation) is not None:
-            # A duplicate completion (redelivery) does not get to publish twice.
+        if committed:
+            # Redelivery, or a second attempt racing the first. One commit per
+            # generation, and the first one published is it.
             return state
+        # A commit outranks a sibling attempt's failure at the same generation: it is
+        # the durable published fact, and a redundant attempt dying does not unpublish
+        # it. This is what makes the outcome independent of reaping order.
         state = state.with_commit(
             CommitRecord(
                 task_key=attempt.task_key,
@@ -479,7 +530,20 @@ def _apply_force(state: KernelState, event: ForceIssued) -> KernelState:
 
 
 def _settle_blocked(state: KernelState) -> KernelState:
-    """Give tasks whose clauses died a terminal skipped outcome."""
+    """Give tasks whose clauses died a terminal skipped outcome, to a fixpoint.
+
+    Settling one task can kill a downstream clause, so a single pass leaves the tail of
+    a multi-hop cascade unsettled whenever a dependent happens to sort before its
+    upstream. Iterating removes the dependence on key order.
+    """
+    while True:
+        settled = _settle_blocked_once(state)
+        if settled is state:
+            return state
+        state = settled
+
+
+def _settle_blocked_once(state: KernelState) -> KernelState:
     for key in materialized_keys(state):
         if task_state(state, key) is not TaskState.BLOCKED:
             continue
@@ -498,6 +562,7 @@ def _settle_blocked(state: KernelState) -> KernelState:
                 skip_reason=f"upstream unsatisfiable: {', '.join(sorted(dead))}",
             )
         )
+        return state
     return state
 
 
@@ -529,7 +594,7 @@ def _commands(state: KernelState) -> tuple[CommandType, ...]:
         if attempt.is_terminal:
             continue
         record = state.task(attempt.task_key)
-        if record is not None and attempt.fence_epoch != record.fence_epoch:
+        if record is not None and superseded(attempt, record):
             commands.append(
                 CancelAttempt(attempt_id=attempt.attempt_id, reason="superseded generation")
             )

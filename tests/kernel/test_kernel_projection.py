@@ -249,3 +249,48 @@ class TestRecomputationIsVisible:
 
         assert blocker is not None
         assert blocker.kind is BlockerKind.DEPENDENCY_PENDING
+
+
+class TestBlameIsAccurate:
+    def test_only_the_unsatisfiable_upstreams_are_named(self) -> None:
+        """A succeeded task in the blame list sends the operator to the wrong place."""
+        state = KernelState(
+            templates=(
+                StepTemplate(step_id="alpha", expands_over="roster"),
+                StepTemplate(
+                    step_id="consumer",
+                    clauses=(
+                        DependencyClause(
+                            upstream_step="alpha",
+                            mapping=ClauseMapping.COLLECT_ALL,
+                            requirement=Requirement.SUCCEEDED,
+                        ),
+                    ),
+                ),
+            ),
+            expansions=(
+                ExpansionRecord(
+                    expansion_id="alpha#1",
+                    step_id="alpha",
+                    generation=1,
+                    state=ExpansionState.CLOSED,
+                    keys=("a", "b"),
+                ),
+            ),
+            tasks=(
+                TaskRecord(
+                    task_key=TaskKey("alpha", "a"), outcome=Outcome.FAILED, outcome_generation=1
+                ),
+                TaskRecord(
+                    task_key=TaskKey("alpha", "b"),
+                    outcome=Outcome.SUCCEEDED,
+                    outcome_generation=1,
+                ),
+            ),
+        )
+
+        blocker = blocker_for(state, TaskKey("consumer"))
+
+        assert blocker is not None
+        assert blocker.kind is BlockerKind.DEPENDENCY_UNSATISFIABLE
+        assert blocker.upstream == ("alpha[a]",)

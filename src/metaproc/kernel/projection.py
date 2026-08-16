@@ -22,7 +22,12 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from metaproc.kernel.model import KernelState, TaskKey, TaskState
-from metaproc.kernel.reducer import clause_status, related_keys, task_state
+from metaproc.kernel.reducer import (
+    _permanently_unsatisfiable,
+    clause_status,
+    related_keys,
+    task_state,
+)
 
 PROJECTION_CONTRACT = "metaproc:ProcessStatus/0.1"
 
@@ -174,10 +179,13 @@ def blocker_for(state: KernelState, key: TaskKey) -> Blocker | None:
         for clause in template.clauses:
             if clause_status(state, key, clause) == "dead":
                 related = related_keys(state, key, clause) or ()
+                # Only the tasks that actually make the clause unsatisfiable. Listing
+                # every terminal upstream puts succeeded tasks in the blame list, which
+                # sends an operator to the wrong place.
                 names = tuple(
                     str(r)
                     for r in related
-                    if (rec := state.task(r)) is not None and rec.is_terminal
+                    if _permanently_unsatisfiable(state, r, state.task(r), clause.requirement)
                 )
                 return Blocker(
                     kind=BlockerKind.DEPENDENCY_UNSATISFIABLE,
