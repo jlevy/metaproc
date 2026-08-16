@@ -1,11 +1,11 @@
 ---
 type: is
 id: is-01kyxw263bdz2f224czw8veymn
-title: Add PyPI attestations to the Metaproc release workflow [local edit probe]
+title: Add PyPI attestations to the Metaproc release workflow [edited in Linear]
 kind: task
 status: open
 priority: 2
-version: 6
+version: 7
 spec_path: TODO.md
 labels:
   - release
@@ -14,7 +14,7 @@ dependencies: []
 parent_id: is-01kzky2kj5g9f2rxfq0wp15q5j
 deferred_until: 2026-08-13T00:00:00Z
 created_at: 2026-08-01T05:17:01.930Z
-updated_at: 2026-08-16T21:15:24.101Z
+updated_at: 2026-08-16T21:15:48.628Z
 extensions:
   linear:
     id: 8a8381cc-cad0-4dcf-b18b-2a34a5e5e475
