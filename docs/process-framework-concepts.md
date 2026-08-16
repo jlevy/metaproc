@@ -619,6 +619,10 @@ is the signal that the framework, not the workflow, needs the change.
 ## How Metaproc Maps to This Model
 
 Concept by concept, with the authoritative doc for each.
+The contracts Metaproc commits to going forward — dependency clauses, expansion closure,
+attempt fencing, task generations — are decided in
+[execution-model-design.md](execution-model-design.md), which instantiates this general
+model; the rows below describe the implementation as it stands today.
 
 | Concept | Metaproc today | Where |
 | --- | --- | --- |

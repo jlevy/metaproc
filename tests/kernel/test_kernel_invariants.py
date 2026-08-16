@@ -1,6 +1,6 @@
-"""Invariants the semantic kernel must hold.
+"""Invariants the execution model must hold.
 
-Each test names the invariant it proves from the semantic kernel design and architecture docs. These
+Each test names the invariant it proves from the execution-model design and architecture docs. These
 are the semantics every later scheduler phase is checked against, so a failure here means
 a contract changed, not that a test needs updating.
 """

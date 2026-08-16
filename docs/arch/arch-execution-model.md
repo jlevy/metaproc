@@ -1,10 +1,10 @@
 ---
-title: "Architecture: Semantic Kernel"
-description: Executable reference model for task-level scheduling semantics
+title: "Architecture: Execution Model"
+description: Executable reference model for the task-level execution contracts
 author: metaproc team
 status: Draft
 ---
-# Semantic Kernel Reference Model
+# Execution Model Reference Implementation
 
 **Date:** 2026-08-16 (last updated 2026-08-16) **Status:** Draft
 
@@ -18,11 +18,11 @@ status: Draft
 > Companion docs (in `docs/arch/`): [arch-metaproc-core](arch-metaproc-core.md),
 > [arch-runpool](arch-runpool.md), [arch-cloud-execution](arch-cloud-execution.md),
 > [arch-testing](arch-testing.md).
-> Design rationale: [semantic-kernel-design.md](../semantic-kernel-design.md); general
+> Design rationale: [execution-model-design.md](../execution-model-design.md); general
 > model: [process-framework-concepts.md](../process-framework-concepts.md).
 
 `src/metaproc/kernel/` is the executable form of the
-[semantic kernel design](../semantic-kernel-design.md): the durable facts a run is made
+[execution model design](../execution-model-design.md): the durable facts a run is made
 of, and a pure reducer over them.
 It performs no I/O and reads no clock, so scheduler semantics are testable without
 processes, files, or timing.

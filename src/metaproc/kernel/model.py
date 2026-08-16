@@ -4,7 +4,7 @@ Frozen dataclasses rather than Pydantic models: this layer is a reference semant
 immutability plus structural equality are what make replay determinism testable. Nothing
 here validates external input, so Pydantic would buy nothing and would hide the purity.
 
-The vocabulary follows ``docs/semantic-kernel-design.md``. The distinction that drives every
+The vocabulary follows ``docs/execution-model-design.md``. The distinction that drives every
 type below is that generations, attempts, commits, expansions, and cancellations are
 *facts*, while readiness, blocking, and aggregate status are *projections* of them.
 """

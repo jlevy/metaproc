@@ -4,6 +4,9 @@ Remaining rev3 candidates on top of `arch-metaproc-core.md` (rev2i).
 
 This document intentionally omits proposals that are already implemented on the current
 branch and have been folded into the main design docs.
+The scheduling portions of P1 and P3 are superseded by
+[execution-model-design.md](execution-model-design.md), which owns the task-level
+scheduling contracts.
 That includes:
 
 - promotion of stable production subsystems into the main design

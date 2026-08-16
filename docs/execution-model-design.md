@@ -1,4 +1,4 @@
-# Semantic Kernel Design
+# Metaproc Execution Model
 
 The design decisions beneath task-level scheduling: what an edge means, when a roster is
 complete, which attempt owns a result, and what a status file is allowed to claim.
@@ -6,18 +6,20 @@ These are the contracts that are expensive to change once process specs depend o
 so they are settled here, deliberately, before the production scheduler grows into them.
 [Process Framework Concepts](process-framework-concepts.md) supplies the vocabulary and
 the design tests this instantiates;
-[arch-semantic-kernel.md](arch/arch-semantic-kernel.md) covers the executable reference
+[arch-execution-model.md](arch/arch-execution-model.md) covers the executable reference
 model that implements these decisions in `src/metaproc/kernel/`.
 
-## Why a kernel revision
+## Why an execution-model revision
 
 Metaproc executes a process by walking topological *levels* of the step graph: every
 step in level *k* finishes before level *k+1* starts.
 Within one fan-out step it does something better, running a streaming ready-set over
 items. The gap between those two schedulers is where every fan-out workaround lives, and
 closing it — making the task the scheduled unit — is not one change.
-It requires durable, unambiguous answers to four questions, because an event-driven
-scheduler loses the implicit guarantees the level walk provides today.
+(The 2026-08-15 engineering review called this a “semantic kernel revision” to contrast
+it with generalizing the scheduler loop; this document carries that work under its
+plainer name.) It requires durable, unambiguous answers to four questions, because an
+event-driven scheduler loses the implicit guarantees the level walk provides today.
 
 Eight decisions follow, each with its rationale.
 Everything here is engine-internal unless a section says “authored”.
@@ -231,7 +233,7 @@ durable facts, never stored as truth.
   Keyed only by execution profile is likely wrong in both directions: two profiles can
   share one account quota, one profile can span regional quotas.
 - **Scale envelope, durable side.** The in-memory envelope is confirmed and guarded (see
-  the [architecture doc](arch/arch-semantic-kernel.md)); filesystem metadata load,
+  the [architecture doc](arch/arch-execution-model.md)); filesystem metadata load,
   per-task status writes, event-log volume, and resume time at the same envelope are
   unmeasured.
 - **Threshold cardinality and `group_by`.** Modeled, not implemented, until a workload
@@ -239,7 +241,7 @@ durable facts, never stored as truth.
 
 ## What this design does not include
 
-Kept out on purpose, so the kernel stays small:
+Kept out on purpose, so the model stays small:
 
 - arbitrary runtime creation of step types or edges;
 - a general expression language for dependency predicates;
@@ -253,7 +255,7 @@ Kept out on purpose, so the kernel stays small:
 - mutable roster generations;
 - status projections treated as truth.
 
-The kernel is: templates, closed expansions, mapped dependency clauses, task
+The model is small: templates, closed expansions, mapped dependency clauses, task
 generations, attempts, commits, admission claims, and effects.
 Everything else is projection or policy.
 
