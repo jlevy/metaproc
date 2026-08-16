@@ -6,12 +6,12 @@ base:
     - supply-chain
   priority: 2
   status: open
-  title: "CONFLICT: title set locally"
+  title: Add PyPI attestations to the Metaproc release workflow
 bead_id: is-01kyxw263bdz2f224czw8veymn
 external_id: 8a8381cc-cad0-4dcf-b18b-2a34a5e5e475
 external_key: OS-256
-external_url: https://linear.app/finterm-ai/issue/OS-256/conflict-title-set-in-linear
-remote_updated_at: 2026-08-16T21:16:15.849Z
+external_url: https://linear.app/finterm-ai/issue/OS-256/conflict-title-set-locally
+remote_updated_at: 2026-08-16T21:16:57.830Z
 state: linked
-synced_at: 2026-08-16T21:16:16.245Z
+synced_at: 2026-08-16T21:16:58.034Z
 type: lk
