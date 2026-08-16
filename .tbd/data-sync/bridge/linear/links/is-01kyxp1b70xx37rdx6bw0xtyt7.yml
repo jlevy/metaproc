@@ -1,0 +1,16 @@
+base:
+  assignee: null
+  description_hash: sha256v7:4de8648b8ff89e29910ff380abaf9aaeae8a22978fe2c6e8887150a97c174d3f
+  labels:
+    - linting
+  priority: 2
+  status: open
+  title: Add checked-JavaScript promise-safety lint overlay
+bead_id: is-01kyxp1b70xx37rdx6bw0xtyt7
+external_id: d473ac32-9496-4221-adf3-50fafd06f528
+external_key: OS-254
+external_url: https://linear.app/finterm-ai/issue/OS-254/add-checked-javascript-promise-safety-lint-overlay
+remote_updated_at: 2026-08-16T08:00:42.653Z
+state: linked
+synced_at: 2026-08-16T08:00:43.516Z
+type: lk
