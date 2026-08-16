@@ -6,12 +6,12 @@ base:
     - supply-chain
   priority: 2
   status: open
-  title: Add PyPI attestations to the Metaproc release workflow
+  title: Add PyPI attestations to the Metaproc release workflow [local edit probe]
 bead_id: is-01kyxw263bdz2f224czw8veymn
 external_id: 8a8381cc-cad0-4dcf-b18b-2a34a5e5e475
 external_key: OS-256
 external_url: https://linear.app/finterm-ai/issue/OS-256/add-pypi-attestations-to-the-metaproc-release-workflow
-remote_updated_at: 2026-08-16T08:00:50.084Z
+remote_updated_at: 2026-08-16T21:15:26.354Z
 state: linked
-synced_at: 2026-08-16T08:00:50.414Z
+synced_at: 2026-08-16T21:15:26.543Z
 type: lk
