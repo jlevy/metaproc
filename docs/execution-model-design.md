@@ -9,24 +9,22 @@ the design tests this instantiates;
 [arch-execution-model.md](arch/arch-execution-model.md) covers the executable reference
 model that implements these decisions in `src/metaproc/kernel/`.
 
-## Why an execution-model revision
+## Why an Execution-Model Revision
 
 Metaproc executes a process by walking topological *levels* of the step graph: every
 step in level *k* finishes before level *k+1* starts.
 Within one fan-out step it does something better, running a streaming ready-set over
-items. The gap between those two schedulers is where every fan-out workaround lives, and
-closing it — making the task the scheduled unit — is not one change.
-(The 2026-08-15 engineering review called this a “semantic kernel revision” to contrast
-it with generalizing the scheduler loop; this document carries that work under its
-plainer name.) It requires durable, unambiguous answers to four questions, because an
-event-driven scheduler loses the implicit guarantees the level walk provides today.
+items. The gap between those two schedulers is where every fan-out workaround lives.
+Closing it means making the task the scheduled unit, and that is not one change: it
+requires durable, unambiguous answers to four questions, because an event-driven
+scheduler loses the implicit guarantees the level walk provides today.
 
 Eight decisions follow, each with its rationale.
 Everything here is engine-internal unless a section says “authored”.
 The authored surface grows by a handful of optional fields; the compiler lowers
 shorthand into explicit persisted records.
 
-## Process-semantics versioning
+## Process-Semantics Versioning
 
 A spec declares the semantics version its edges are written against:
 
@@ -48,7 +46,7 @@ An audit-then-flip migration was considered and rejected: it makes correctness d
 having audited every spec in every consuming repository, which is not a property the
 framework can check.
 
-## Task identity
+## Task Identity
 
 A task is addressed by:
 
@@ -75,7 +73,7 @@ This is the distinction that makes invalidation precise: retrying a task must no
 invalidate descendants that have not run yet, while forcing it must mark descendant
 commits stale along exactly the dependency mappings that reach the changed generation.
 
-## Dependency clauses
+## Dependency Clauses
 
 An edge is a **dependency clause** with four independent axes:
 
@@ -83,12 +81,12 @@ An edge is a **dependency clause** with four independent axes:
 DependencyClause = (upstream, mapping, requirement, cardinality, binding)
 ```
 
-1. **Mapping** — which upstream tasks relate to this downstream task: `same_key`,
+1. **Mapping:** which upstream tasks relate to this downstream task: `same_key`,
    `broadcast`, `collect_all`, `group_by`, or an explicit relation artifact.
-2. **Requirement** — which upstream outcomes satisfy the clause: `succeeded`, `finished`
+2. **Requirement:** which upstream outcomes satisfy the clause: `succeeded`, `finished`
    (terminal either way), `failed` for recovery paths, `always` for ordering-only edges.
-3. **Cardinality** — `all`, `any`, or a threshold.
-4. **Binding** — which committed outputs reach the consumer, and in what form: one
+3. **Cardinality:** `all`, `any`, or a threshold.
+4. **Binding:** which committed outputs reach the consumer, and in what form: one
    artifact per aligned task, a typed collection of references with outcome descriptors,
    or an ordered group.
 
@@ -99,9 +97,9 @@ what forces the next migration.
 `broadcast` requires a non-expanding upstream, or an expansion that closed with exactly
 one key: there is no principled “the one” item of a fan-out.
 
-`all_completed` and `all_terminal` are rejected as names: “completed” reads as a
-terminal umbrella in some places and as success in others.
-`succeeded` and `finished` say which is meant.
+The requirement names are `succeeded` and `finished` because each says exactly which
+condition it means; “completed” reads as a terminal umbrella in some contexts and as
+success in others, so it is avoided.
 `finished` includes cancelled and dependency-skipped tasks, and every expected task in a
 closed expansion contributes an outcome descriptor, so a consumer can tell a successful
 artifact from a failure, a cancellation, and a skip.
@@ -126,15 +124,15 @@ receives a typed collection, and never rediscovers upstream state by walking
 directories.
 
 Two stability rules complete the model.
-`same_key` may be inferred only from proven lineage — both steps expand from the same
+`same_key` may be inferred only from proven lineage: both steps expand from the same
 expansion generation, or one roster declares itself derived from the other in the same
-key space with subset membership validated; matching key strings across unrelated
-rosters is coincidence.
+key space with subset membership validated.
+Matching key strings across unrelated rosters is coincidence.
 And operator flags never alter clause satisfaction: `--continue-on-error` governs
 whether the scheduler abandons unrelated work and what verdict the run reports, never
 whether a dependency is satisfied.
 
-## Expansions and closure
+## Expansions and Closure
 
 A roster-backed fan-out materializes as an **expansion generation** whose closure is a
 durable fact: the generation identifier, the producing task’s commit, the roster
@@ -147,15 +145,15 @@ Without this, an event-driven scheduler has a live premature-barrier bug: at som
 instant every visible task is terminal, the clause looks satisfied, and a still-running
 producer then reveals more items.
 Level-synchronous execution hides this today, because the producing step provably
-finished before any consumer starts — closure is an existing implicit guarantee made
-explicit before the thing that provides it is removed.
+finished before any consumer starts.
+Closure makes that implicit guarantee explicit before the thing providing it is removed.
 
 The empty case follows from the same rule: an empty *closed* roster satisfies `all`
 vacuously and fails `any`; an absent or still-materializing roster satisfies neither.
 Re-running a roster producer creates a new generation, never a mutation; tasks from the
 old generation become historical.
 
-## Attempts, commits, and fencing
+## Attempts, Commits, and Fencing
 
 Three distinct durable records:
 
@@ -175,11 +173,12 @@ code, configuration, and as-of parameters in force.
 Fencing is required, not an optimization, because reclaiming a stale lease does not stop
 the previous holder: a worker that was merely slow or partitioned can finish afterwards
 and try to publish. A commit succeeds only if the attempt’s fence epoch is still current
-and no commit exists for the generation; a superseded attempt’s ending — *whatever its
-disposition* — is recorded as history and nothing more.
-On a filesystem this is a create-only commit record under a scheduler-owned claim, or an
-atomic rename plus epoch check; on an object store, a generation precondition.
-The storage primitive may vary; the semantic requirement does not.
+and no commit exists for the generation.
+A superseded attempt’s ending, *whatever its disposition*, is recorded as history and
+nothing more.
+On a filesystem this is a create-only commit record under a scheduler-owned
+claim, or an atomic rename plus epoch check; on an object store, a generation
+precondition. The storage primitive may vary; the semantic requirement does not.
 
 ## Admission
 
@@ -201,13 +200,13 @@ it. RunPool remains the local executor and host-admission implementation.
 
 A composite scope holds no slot: child tasks compile under the scope path and enter the
 same scheduler and authorities, and only executable child attempts consume capacity.
-The alternative — a parent task holding one slot while running a child scheduler —
+The alternative, a parent task holding one slot while running a child scheduler,
 deadlocks once the pool fills with parents.
 Fairness is deterministic: retries first, aging, fair rotation across scopes, optional
 per-step maxima; minimum-slot reservations are not offered until a workload demonstrates
 starvation.
 
-## The resolved plan
+## The Resolved Plan
 
 The compiler persists, and resume executes: the static template graph and every explicit
 dependency clause, including what each piece of shorthand resolved to and why; each
@@ -226,7 +225,7 @@ makes `partial` mean two different things at two altitudes.
 Operational labels such as `ready` and `admission_wait` are projections derived from
 durable facts, never stored as truth.
 
-## Deliberately left open
+## Deliberately Left Open
 
 - **Quota-namespace defaults.** How provider, account, and model or region compose into
   a default namespace key per adapter.
@@ -239,7 +238,7 @@ durable facts, never stored as truth.
 - **Threshold cardinality and `group_by`.** Modeled, not implemented, until a workload
   needs them.
 
-## What this design does not include
+## What This Design Does Not Include
 
 Kept out on purpose, so the model stays small:
 

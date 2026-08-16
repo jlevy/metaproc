@@ -29,7 +29,7 @@ processes, files, or timing.
 The production engine is checked against it; it does not replace the engine, and the
 engine must not copy its shape (see § Scale).
 
-## Package layout
+## Package Layout
 
 | Module | Owns |
 | --- | --- |
@@ -41,7 +41,7 @@ Facts versus projections is the load-bearing distinction: generations, attempts,
 commits, expansions, and cancellations are *facts*; readiness, blocking, and aggregate
 status are *projections* of them and are never stored as truth.
 
-## The reducer surface
+## The Reducer Surface
 
 Events are durable facts arriving: `ExpansionClosed`, `ExpansionFailed`,
 `AttemptStarted`, `AttemptEnded`, `ForceIssued`, `Tick`. Time enters as a parameter, so
@@ -65,7 +65,7 @@ Three contracts of this surface are easy to miss:
   lives in the production engine, and the degenerate-equivalence suite planned for the
   scheduler bring-up is what ties the two together.
 
-## Task states, as implemented
+## Task States, as Implemented
 
 | Derived state | Durable condition | Scheduler action |
 | --- | --- | --- |
@@ -81,8 +81,8 @@ Recomputation after a force is **not** a scheduler state: the task reads `ready`
 `waiting_dependencies` and is dispatched normally, and the projection reports the
 superseded commit as an `upstream_generation_changed` blocker so a post-force status
 does not read like a stall.
-States the design names but the reducer does not yet model — `budget_wait`,
-`admission_wait`, `dispatching`, `waiting_external` — are listed under § Boundaries.
+The states the design names but the reducer does not yet model (`budget_wait`,
+`admission_wait`, `dispatching`, `waiting_external`) are listed under § Boundaries.
 
 Clause evaluation is a small relational core: the mapping selects related upstream tasks
 over a *closed* expansion (an open roster answers “unknowable”, never “empty”);
@@ -90,7 +90,7 @@ over a *closed* expansion (an open roster answers “unknowable”, never “emp
 related set is vacuous success for `all` and failure for `any`; `broadcast` over a
 roster that closed with other than exactly one key is deterministically dead.
 
-## The projection
+## The Projection
 
 `project(state)` builds `metaproc:ProcessStatus/0.1` as a pure function of durable
 facts, so “rebuildable, never authoritative” holds by construction.
@@ -107,7 +107,7 @@ order in which an operator can act.
 `admission_wait` and `budget_wait` are defined but never returned, because the reducer
 does not model admission; a ready task reports no blocker rather than a fabricated one.
 
-## Invariants and tests
+## Invariants and Tests
 
 `tests/kernel/` proves the semantics by property tests, one class per invariant group:
 clause satisfaction, expansion closure (the premature-barrier case), commit
@@ -122,26 +122,28 @@ semantics.
 
 The in-memory envelope is confirmed at 10^3 to 10^4 tasks per run, roughly 0.03s per
 scheduling pass over 2,400 tasks, linear in roster width, guarded by
-`tests/kernel/test_kernel_scale.py`. It did not start that way: the first implementation
-scanned tuples per lookup and a pass was quadratic in width, which is why the envelope
-is benchmarked rather than assumed.
+`tests/kernel/test_kernel_scale.py`. Lookups are indexed rather than scanned, which is
+what keeps a pass linear; the guard exists because an accidental quadratic is invisible
+at test size and fatal at full roster width.
 
 The reference model recomputes projections and commands from whole state on every event,
 which is O(n) per event and quadratic over a full drain.
 That is the right trade for an executable specification and the wrong one for the
 engine: the production scheduler must maintain its ready set incrementally against these
 semantics, not copy this shape.
-The durable side of the envelope — filesystem metadata load, per-task status writes,
-event-log volume, resume time — is unmeasured.
+The durable side of the envelope is unmeasured: filesystem metadata load, per-task
+status writes, event-log volume, and resume time.
 
 ## Boundaries
 
 Not modeled in the reducer, deliberately: admission and budget reservation (the design
 specifies claims and authorities; RunPool remains the local implementation),
 finalization and effects, `group_by` and threshold cardinality, and the legacy barrier
-semantics of `needs`. Ten review findings from the 2026-08-16 multi-angle pass are
-tracked for fix before the scheduler builds on this package; the durable list lives with
-the PR record.
+semantics of `needs`.
+
+Known gaps in event-order handling are tracked as open issues against this package and
+are fixed before the production scheduler builds on it: duplicate same-generation
+attempts, redelivered attempt starts, and settlement of multi-hop skip cascades.
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.
