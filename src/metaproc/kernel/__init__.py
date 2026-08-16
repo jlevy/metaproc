@@ -1,0 +1,73 @@
+"""Reference model for the semantic kernel.
+
+This package is the executable form of ``docs/semantic-kernel-rfc.md``: the durable
+facts a run is made of, and a pure reducer over them. It deliberately performs no I/O
+and reads no clock, so scheduler semantics can be tested without processes, files, or
+timing. The production engine is checked against it; it does not replace the engine.
+"""
+
+from metaproc.kernel.model import (
+    AttemptDisposition,
+    AttemptRecord,
+    Cardinality,
+    ClauseMapping,
+    CommitRecord,
+    DependencyClause,
+    ExpansionRecord,
+    ExpansionState,
+    KernelState,
+    Outcome,
+    Requirement,
+    StepTemplate,
+    TaskKey,
+    TaskRecord,
+    TaskState,
+)
+from metaproc.kernel.reducer import (
+    AcceptCommit,
+    AttemptEnded,
+    AttemptStarted,
+    CancelAttempt,
+    CommandType,
+    DispatchAttempt,
+    Event,
+    ExpansionClosed,
+    ExpansionFailed,
+    ForceIssued,
+    MaterializeExpansion,
+    ScheduleRetry,
+    Tick,
+    reduce,
+)
+
+__all__ = [
+    "AcceptCommit",
+    "AttemptDisposition",
+    "AttemptEnded",
+    "AttemptRecord",
+    "AttemptStarted",
+    "CancelAttempt",
+    "Cardinality",
+    "ClauseMapping",
+    "CommandType",
+    "CommitRecord",
+    "DependencyClause",
+    "DispatchAttempt",
+    "Event",
+    "ExpansionClosed",
+    "ExpansionFailed",
+    "ExpansionRecord",
+    "ExpansionState",
+    "ForceIssued",
+    "KernelState",
+    "MaterializeExpansion",
+    "Outcome",
+    "Requirement",
+    "ScheduleRetry",
+    "StepTemplate",
+    "TaskKey",
+    "TaskRecord",
+    "TaskState",
+    "Tick",
+    "reduce",
+]

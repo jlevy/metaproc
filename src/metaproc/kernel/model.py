@@ -1,0 +1,310 @@
+"""Durable facts of a run, and the derived state a scheduler reads.
+
+Frozen dataclasses rather than Pydantic models: this layer is a reference semantics, and
+immutability plus structural equality are what make replay determinism testable. Nothing
+here validates external input, so Pydantic would buy nothing and would hide the purity.
+
+The vocabulary follows ``docs/semantic-kernel-rfc.md``. The distinction that drives every
+type below is that generations, attempts, commits, expansions, and cancellations are
+*facts*, while readiness, blocking, and aggregate status are *projections* of them.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+from enum import StrEnum
+
+
+class Outcome(StrEnum):
+    """Terminal outcome of one task generation."""
+
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    SKIPPED = "skipped"
+
+
+class AttemptDisposition(StrEnum):
+    """How one attempt ended, which decides what the engine does next.
+
+    Kept separate from the causal category of a failure (rate limit, timeout, invalid
+    output). One says what to do, the other says what happened, and collapsing them into
+    a single enum is what forces every consumer to re-derive the other axis.
+    """
+
+    SUCCEEDED = "succeeded"
+    RETRYABLE = "retryable"
+    PERMANENT = "permanent"
+    CANCELLED = "cancelled"
+    LOST = "lost"
+
+
+class ClauseMapping(StrEnum):
+    """Which upstream tasks relate to a downstream task."""
+
+    SAME_KEY = "same_key"
+    BROADCAST = "broadcast"
+    COLLECT_ALL = "collect_all"
+
+
+class Requirement(StrEnum):
+    """Which upstream outcomes satisfy a clause."""
+
+    SUCCEEDED = "succeeded"
+    FINISHED = "finished"
+
+
+class Cardinality(StrEnum):
+    """How many related upstream tasks are needed."""
+
+    ALL = "all"
+    ANY = "any"
+
+
+class ExpansionState(StrEnum):
+    """Lifecycle of one roster generation."""
+
+    UNMATERIALIZED = "unmaterialized"
+    MATERIALIZING = "materializing"
+    CLOSED = "closed"
+    FAILED = "failed"
+
+
+class TaskState(StrEnum):
+    """Projected scheduler state. Never stored; always derived from durable facts."""
+
+    UNMATERIALIZED = "unmaterialized"
+    WAITING_DEPENDENCIES = "waiting_dependencies"
+    BLOCKED = "blocked"
+    READY = "ready"
+    ADMISSION_WAIT = "admission_wait"
+    DISPATCHING = "dispatching"
+    RUNNING = "running"
+    RETRY_WAIT = "retry_wait"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    SKIPPED = "skipped"
+    STALE = "stale"
+
+
+@dataclass(frozen=True, order=True)
+class TaskKey:
+    """Address of one task.
+
+    ``scope_path`` is the chain of enclosing composite scopes, empty at top level. It is
+    what allows a composite to be a scope containing tasks rather than a task that holds
+    a resource slot while running a nested scheduler.
+    """
+
+    step_id: str
+    item_key: str | None = None
+    scope_path: tuple[str, ...] = ()
+
+    def __str__(self) -> str:
+        scope = "".join(f"{s}/" for s in self.scope_path)
+        item = f"[{self.item_key}]" if self.item_key is not None else ""
+        return f"{scope}{self.step_id}{item}"
+
+
+@dataclass(frozen=True)
+class DependencyClause:
+    """One edge, stated on all four independent axes.
+
+    Collapsing any axis into another works until one consumer has heterogeneous inputs,
+    which is exactly when it becomes a migration rather than a refactor.
+    """
+
+    upstream_step: str
+    mapping: ClauseMapping
+    requirement: Requirement
+    cardinality: Cardinality = Cardinality.ALL
+    key_space: str | None = None
+
+
+@dataclass(frozen=True)
+class StepTemplate:
+    """Static shape of one step. Width comes from an expansion, not from here."""
+
+    step_id: str
+    clauses: tuple[DependencyClause, ...] = ()
+    expands_over: str | None = None
+    key_space: str | None = None
+
+
+@dataclass(frozen=True)
+class ExpansionRecord:
+    """Durable materialization of one roster generation.
+
+    ``keys`` is meaningful only once ``state`` is CLOSED. A fan-in that fires over an
+    open expansion is the premature-barrier bug this record exists to prevent.
+    """
+
+    expansion_id: str
+    step_id: str
+    generation: int
+    state: ExpansionState
+    keys: tuple[str, ...] = ()
+    key_space: str | None = None
+    derived_from: str | None = None
+    producer_commit: str | None = None
+    failure_reason: str | None = None
+
+    @property
+    def is_closed(self) -> bool:
+        return self.state is ExpansionState.CLOSED
+
+
+@dataclass(frozen=True)
+class AttemptRecord:
+    """One execution try. Append-only; never rewritten once terminal."""
+
+    attempt_id: str
+    task_key: TaskKey
+    generation: int
+    fence_epoch: int
+    started_at: float
+    disposition: AttemptDisposition | None = None
+    ended_at: float | None = None
+    failure_category: str | None = None
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.disposition is not None
+
+
+@dataclass(frozen=True)
+class CommitRecord:
+    """The single durable fact that a task generation published validated outputs."""
+
+    task_key: TaskKey
+    generation: int
+    attempt_id: str
+    manifest: tuple[str, ...] = ()
+    upstream_commits: tuple[str, ...] = ()
+
+    @property
+    def commit_id(self) -> str:
+        return f"{self.task_key}@{self.generation}"
+
+
+@dataclass(frozen=True)
+class TaskRecord:
+    """Current desired generation and terminal outcome for one task.
+
+    A retry does not change ``desired_generation``; a force does. That split is what
+    makes invalidation precise instead of directory-shaped.
+    """
+
+    task_key: TaskKey
+    desired_generation: int = 1
+    outcome: Outcome | None = None
+    outcome_generation: int | None = None
+    retry_at: float | None = None
+    fence_epoch: int = 0
+    skip_reason: str | None = None
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.outcome is not None and self.outcome_generation == self.desired_generation
+
+
+@dataclass(frozen=True)
+class KernelState:
+    """Everything durable about a run, plus the templates it executes.
+
+    Held as sorted tuples rather than dicts so two states built by different event orders
+    compare equal when they represent the same facts, which is what invariant 5 (replay
+    determinism) actually asserts.
+    """
+
+    templates: tuple[StepTemplate, ...] = ()
+    expansions: tuple[ExpansionRecord, ...] = ()
+    tasks: tuple[TaskRecord, ...] = ()
+    attempts: tuple[AttemptRecord, ...] = ()
+    commits: tuple[CommitRecord, ...] = ()
+    semantics_version: str = "metaproc/process/0.7"
+    now: float = 0.0
+
+    # -- lookups ---------------------------------------------------------------
+
+    def template(self, step_id: str) -> StepTemplate | None:
+        for t in self.templates:
+            if t.step_id == step_id:
+                return t
+        return None
+
+    def expansion_for(self, step_id: str) -> ExpansionRecord | None:
+        """Latest expansion generation for a step."""
+        best: ExpansionRecord | None = None
+        for e in self.expansions:
+            if e.step_id == step_id and (best is None or e.generation > best.generation):
+                best = e
+        return best
+
+    def task(self, key: TaskKey) -> TaskRecord | None:
+        for t in self.tasks:
+            if t.task_key == key:
+                return t
+        return None
+
+    def commit_for(self, key: TaskKey, generation: int) -> CommitRecord | None:
+        for c in self.commits:
+            if c.task_key == key and c.generation == generation:
+                return c
+        return None
+
+    def attempt(self, attempt_id: str) -> AttemptRecord | None:
+        for a in self.attempts:
+            if a.attempt_id == attempt_id:
+                return a
+        return None
+
+    def live_attempt(self, key: TaskKey) -> AttemptRecord | None:
+        """The one non-terminal attempt for a task, if any."""
+        for a in self.attempts:
+            if a.task_key == key and not a.is_terminal:
+                return a
+        return None
+
+    # -- functional update -----------------------------------------------------
+
+    def with_task(self, record: TaskRecord) -> KernelState:
+        others = tuple(t for t in self.tasks if t.task_key != record.task_key)
+        return replace(self, tasks=_sorted_tasks(others + (record,)))
+
+    def with_attempt(self, record: AttemptRecord) -> KernelState:
+        others = tuple(a for a in self.attempts if a.attempt_id != record.attempt_id)
+        return replace(self, attempts=_sorted_attempts(others + (record,)))
+
+    def with_commit(self, record: CommitRecord) -> KernelState:
+        return replace(self, commits=_sorted_commits(self.commits + (record,)))
+
+    def with_expansion(self, record: ExpansionRecord) -> KernelState:
+        others = tuple(
+            e
+            for e in self.expansions
+            if not (e.step_id == record.step_id and e.generation == record.generation)
+        )
+        return replace(self, expansions=_sorted_expansions(others + (record,)))
+
+
+def _sorted_tasks(items: tuple[TaskRecord, ...]) -> tuple[TaskRecord, ...]:
+    return tuple(
+        sorted(
+            items,
+            key=lambda t: (t.task_key.scope_path, t.task_key.step_id, t.task_key.item_key or ""),
+        )
+    )
+
+
+def _sorted_attempts(items: tuple[AttemptRecord, ...]) -> tuple[AttemptRecord, ...]:
+    return tuple(sorted(items, key=lambda a: a.attempt_id))
+
+
+def _sorted_commits(items: tuple[CommitRecord, ...]) -> tuple[CommitRecord, ...]:
+    return tuple(sorted(items, key=lambda c: (str(c.task_key), c.generation)))
+
+
+def _sorted_expansions(items: tuple[ExpansionRecord, ...]) -> tuple[ExpansionRecord, ...]:
+    return tuple(sorted(items, key=lambda e: (e.step_id, e.generation)))
