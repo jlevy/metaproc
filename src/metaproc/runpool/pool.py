@@ -20,7 +20,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from types import TracebackType
+from typing import Any, Self
 
 from pydantic import BaseModel, Field
 
@@ -964,6 +965,29 @@ class RunPool:
         """Convenience: submit many and wait for all results."""
         futures = self.submit_many(configs)
         return [await f for f in asyncio.as_completed(futures)]
+
+    async def __aenter__(self) -> Self:
+        """Enter the pool as a context manager.
+
+        Nothing to set up: the pool is usable from construction. This exists so the
+        matching ``__aexit__`` can guarantee shutdown, which is the part callers
+        outside this package get wrong when they hand-roll a ``finally``.
+        """
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        """Shut down on the way out, including when the body raised.
+
+        Leaving a pool unshut leaks the monitor task, the event log handle, and any
+        host admission slots its processes hold, and a held slot is invisible capacity
+        loss for every other run on the machine.
+        """
+        await self.shutdown()
 
     async def shutdown(self, timeout_s: float = 30.0) -> None:
         """Graceful shutdown: wait for running processes, then kill stragglers."""
