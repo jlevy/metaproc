@@ -5,7 +5,7 @@ title: "Alpha stabilization: green CI, organized docs, agent-skill packaging"
 kind: epic
 status: closed
 priority: 1
-version: 11
+version: 12
 spec_path: docs/releases/v0.2.1.md
 labels: []
 dependencies: []
@@ -16,9 +16,9 @@ child_order_hints:
   - is-01kzkwt9ddwj9sfvjwzt7ma027
   - is-01kzkxx9rxha6mkaswemn192sb
 created_at: 2026-07-28T00:14:48.230Z
-updated_at: 2026-08-09T19:35:44.374Z
-closed_at: 2026-08-09T19:35:44.373Z
-close_reason: "Alpha stabilization completed: CI repaired, documentation and Agent Skill structure reconciled through PR #2, release preparation reviewed in PR #16, and v0.2.1 published and independently verified."
+updated_at: 2026-08-14T02:40:41.352Z
+closed_at: 2026-08-14T02:40:37.931Z
+close_reason: "PR #2 merged into main (92c0651) after an owner-side review cycle: branch was rebuilt as one clean commit (83b894d) on then-current main, keeping the docs reorganization, skill conformance + dogfooded drift test, and extraction-residue repairs; the interim email allowlist was superseded by main's narrower Git-metadata trailer normalization. CI green; v0.2.1 has since been released on top."
 ---
 Make the standalone repo alpha-level stable and usable by multiple downstream repos: fix the CI lint failure, systematically reorganize documentation entry points (README + contextual docs), and package Metaproc so it can install itself as an Agent Skill that delegates to its own docs.
 
