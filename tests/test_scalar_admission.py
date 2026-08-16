@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -17,7 +18,11 @@ from metaproc.runpool.host_admission import (
     HostAdmissionGate,
     list_host_admission_slots,
 )
-from metaproc.runpool.scalar_admission import admitted_launch
+from metaproc.runpool.scalar_admission import (
+    SCALAR_ACQUIRE_TIMEOUT_S,
+    SCALAR_DEFAULT_HOST_LIMIT,
+    admitted_launch,
+)
 
 
 def _held(root: Path, namespace: str) -> int:
@@ -179,3 +184,45 @@ class TestDegradesRatherThanFails:
                 assert lease is None
 
         asyncio.run(run())
+
+
+class TestScalarDefaults:
+    """The constants that decide whether best-effort admission is a safety valve or a
+    latency tax. Pinned so they cannot silently revert.
+
+    At limit 1 the scalar gate scans only slot-0 of the shared namespace, which a busy
+    fan-out pool holds indefinitely; combined with the gate's default 300s acquire
+    timeout, every scalar step on such a host waited five minutes and then launched
+    ungoverned anyway.
+    """
+
+    def test_the_scalar_acquire_timeout_is_a_valve_not_a_stall(self) -> None:
+        assert SCALAR_ACQUIRE_TIMEOUT_S <= 60.0
+
+    def test_the_scalar_default_limit_is_not_one(self) -> None:
+        """Limit 1 serializes unrelated scalar steps even on an idle host, and nothing
+        in the incident record motivates it: the failures were dozens of simultaneous
+        launches, not two."""
+        assert SCALAR_DEFAULT_HOST_LIMIT >= 2
+
+    def test_admitted_launch_uses_the_scalar_timeout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured: dict[str, Any] = {}
+        original = HostAdmissionGate.__init__
+
+        def spy(self: HostAdmissionGate, **kwargs: Any) -> None:
+            captured.update(kwargs)
+            original(self, **kwargs)
+
+        monkeypatch.setattr(HostAdmissionGate, "__init__", spy)
+
+        async def run() -> None:
+            async with admitted_launch(
+                enabled=True, limit=2, label="run/step", pool_id="p1", root_dir=tmp_path
+            ):
+                pass
+
+        asyncio.run(run())
+
+        assert captured.get("acquire_timeout_s") == SCALAR_ACQUIRE_TIMEOUT_S

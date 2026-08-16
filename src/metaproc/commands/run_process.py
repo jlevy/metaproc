@@ -146,7 +146,7 @@ from metaproc.runpool.pool import (
 )
 from metaproc.runpool.process_events import ProcessEventLogger
 from metaproc.runpool.registry import get_backend
-from metaproc.runpool.scalar_admission import admitted_launch
+from metaproc.runpool.scalar_admission import SCALAR_DEFAULT_HOST_LIMIT, admitted_launch
 from metaproc.viz_loader import load_plan_bundle
 
 log = logging.getLogger(__name__)
@@ -1250,7 +1250,9 @@ async def _execute_agent_step(
     try:
         async with admitted_launch(
             enabled=backend_name == "local",
-            limit=resolve_host_max_concurrency(scalar_resource_config, default=1),
+            limit=resolve_host_max_concurrency(
+                scalar_resource_config, default=SCALAR_DEFAULT_HOST_LIMIT
+            ),
             label=f"{run_id}/{step_id}",
             pool_id=f"run-process:{run_id}",
             metadata={"backend": backend_name, "step_id": step_id, "mode": "agent"},

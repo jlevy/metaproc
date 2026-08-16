@@ -33,6 +33,19 @@ from metaproc.runpool.host_admission import (
 
 logger = logging.getLogger(__name__)
 
+# The scalar gate shares one namespace with every fan-out pool on the host, and a gate
+# with limit N contends only for slots 0..N-1. Two consequences drive these constants.
+# A low limit means scalar launches contend for a prefix of the slots that busy pools
+# fill first, so the acquire timeout is the difference between a safety valve and a
+# stall: at the gate's default 300s, a saturated host added five minutes of dead wait
+# to every scalar step and then launched it ungoverned anyway. And a limit of 1 would
+# serialize unrelated scalar steps even on an idle machine, which nothing in the
+# incident record motivates — the recorded failures were dozens of simultaneous
+# launches, not two. METAPROC_HOST_MAX_LOCAL_AGENTS still overrides both ways when an
+# operator sets it.
+SCALAR_DEFAULT_HOST_LIMIT = 4
+SCALAR_ACQUIRE_TIMEOUT_S = 60.0
+
 
 @asynccontextmanager
 async def admitted_launch(
@@ -55,7 +68,12 @@ async def admitted_launch(
         yield None
         return
 
-    gate = HostAdmissionGate(root_dir=root_dir, namespace=namespace, limit=limit)
+    gate = HostAdmissionGate(
+        root_dir=root_dir,
+        namespace=namespace,
+        limit=limit,
+        acquire_timeout_s=SCALAR_ACQUIRE_TIMEOUT_S,
+    )
     lease: HostAdmissionLease | None = None
     try:
         lease = await gate.acquire(
