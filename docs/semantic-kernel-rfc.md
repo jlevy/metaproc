@@ -444,13 +444,27 @@ The reference implementation must prove, by property and model tests:
   a default namespace key per adapter.
   Keyed only by execution profile is likely wrong in both directions: two profiles can
   share one account quota, one profile can span regional quotas.
+
 - **Projection schema.** The typed shape of `process-status`. Low reversal cost, so it
   follows the reducer rather than preceding it.
-- **Scale envelope.** The working assumption is 10^3 to 10^4 tasks per run, to be
-  confirmed by benchmark before the production scheduler grows.
-  This gates more than it appears to, since fair admission across scopes and composite
-  scopes both assume filesystem-resident state at a few thousand task rows with per-task
-  status writes.
+
+- **Scale envelope, in memory: confirmed.** The reference reducer holds 10^3 to 10^4
+  tasks per run, at roughly 0.03s per scheduling pass over 2,400 tasks, scaling linearly
+  in roster width. `tests/kernel/test_kernel_scale.py` keeps it that way.
+
+  It did not start out that way, which is the reason to benchmark rather than assume.
+  The first implementation looked up tasks, commits, and materialized keys by scanning
+  tuples, so a scheduling pass was quadratic in roster width: 0.25s at 600 tasks and
+  growing fourfold per doubling, which extrapolates to seconds per pass at cohort scale
+  and hours to drain a run.
+  Indexing the lookups fixed it.
+  An accidental quadratic is invisible on a demo roster and fatal on a real one.
+
+  Still open is the *durable* side: this measures in-memory scheduling only.
+  Filesystem metadata load, per-task status writes, event-log volume, and resume time at
+  the same envelope are unmeasured, and fair admission across scopes and composite
+  scopes both assume they are affordable.
+
 - **Threshold cardinality and `group_by`.** Modeled, not implemented, until a workload
   needs them.
 

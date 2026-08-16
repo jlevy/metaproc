@@ -222,16 +222,12 @@ def clause_status(
 
 
 def materialized_keys(state: KernelState) -> tuple[TaskKey, ...]:
-    """Task keys that currently exist, given every closed expansion."""
-    keys: list[TaskKey] = []
-    for template in state.templates:
-        if template.expands_over is None:
-            keys.append(TaskKey(step_id=template.step_id))
-            continue
-        expansion = state.expansion_for(template.step_id)
-        if expansion is not None and expansion.is_closed:
-            keys.extend(TaskKey(step_id=template.step_id, item_key=k) for k in expansion.keys)
-    return tuple(keys)
+    """Task keys that currently exist, in a deterministic order.
+
+    Callers testing membership should use ``state.materialized`` instead; this exists
+    for the cases that genuinely need an ordering.
+    """
+    return tuple(sorted(state.materialized))
 
 
 def task_state(state: KernelState, key: TaskKey) -> TaskState:
@@ -239,7 +235,7 @@ def task_state(state: KernelState, key: TaskKey) -> TaskState:
     template = state.template(key.step_id)
     if template is None:
         return TaskState.UNMATERIALIZED
-    if key not in materialized_keys(state):
+    if key not in state.materialized:
         return TaskState.UNMATERIALIZED
 
     record = state.task(key) or TaskRecord(task_key=key)
