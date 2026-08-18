@@ -244,7 +244,7 @@ class TaskRecord:
 
 
 @dataclass(frozen=True)
-class KernelState:
+class RunState:
     """Everything durable about a run, plus the templates it executes.
 
     Held as sorted tuples rather than dicts so two states built by different event orders
@@ -339,18 +339,18 @@ class KernelState:
 
     # -- functional update -----------------------------------------------------
 
-    def with_task(self, record: TaskRecord) -> KernelState:
+    def with_task(self, record: TaskRecord) -> RunState:
         others = tuple(t for t in self.tasks if t.task_key != record.task_key)
         return replace(self, tasks=_sorted_tasks(others + (record,)))
 
-    def with_attempt(self, record: AttemptRecord) -> KernelState:
+    def with_attempt(self, record: AttemptRecord) -> RunState:
         others = tuple(a for a in self.attempts if a.attempt_id != record.attempt_id)
         return replace(self, attempts=_sorted_attempts(others + (record,)))
 
-    def with_commit(self, record: CommitRecord) -> KernelState:
+    def with_commit(self, record: CommitRecord) -> RunState:
         return replace(self, commits=_sorted_commits(self.commits + (record,)))
 
-    def with_expansion(self, record: ExpansionRecord) -> KernelState:
+    def with_expansion(self, record: ExpansionRecord) -> RunState:
         others = tuple(
             e
             for e in self.expansions

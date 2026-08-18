@@ -6,7 +6,7 @@ and reads no clock, so scheduler semantics can be tested without processes, file
 timing. The production engine is checked against it; it does not replace the engine.
 """
 
-from metaproc.kernel.model import (
+from metaproc.execution_model.model import (
     DEFAULT_RETRY_POLICY,
     AttemptDisposition,
     AttemptRecord,
@@ -16,16 +16,16 @@ from metaproc.kernel.model import (
     DependencyClause,
     ExpansionRecord,
     ExpansionState,
-    KernelState,
     Outcome,
     Requirement,
     RetryPolicy,
+    RunState,
     StepTemplate,
     TaskKey,
     TaskRecord,
     TaskState,
 )
-from metaproc.kernel.projection import (
+from metaproc.execution_model.projection import (
     PROJECTION_CONTRACT,
     Blocker,
     BlockerKind,
@@ -35,7 +35,7 @@ from metaproc.kernel.projection import (
     blocker_for,
     project,
 )
-from metaproc.kernel.reducer import (
+from metaproc.execution_model.reducer import (
     AttemptEnded,
     AttemptStarted,
     CancelAttempt,
@@ -72,7 +72,7 @@ __all__ = [
     "ExpansionRecord",
     "ExpansionState",
     "ForceIssued",
-    "KernelState",
+    "RunState",
     "MaterializeExpansion",
     "Outcome",
     "Requirement",

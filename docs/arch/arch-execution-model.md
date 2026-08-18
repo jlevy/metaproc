@@ -21,7 +21,7 @@ status: Draft
 > Design rationale: [execution-model-design.md](../execution-model-design.md); general
 > model: [process-framework-concepts.md](../process-framework-concepts.md).
 
-`src/metaproc/kernel/` is the executable form of the
+`src/metaproc/execution_model/` is the executable form of the
 [execution model design](../execution-model-design.md): the durable facts a run is made
 of, and a pure reducer over them.
 It performs no I/O and reads no clock, so scheduler semantics are testable without
@@ -33,7 +33,7 @@ engine must not copy its shape (see § Scale).
 
 | Module | Owns |
 | --- | --- |
-| `model.py` | Durable facts as frozen dataclasses (`TaskKey`, `TaskRecord`, `AttemptRecord`, `CommitRecord`, `ExpansionRecord`, `StepTemplate`, `DependencyClause`), their enums, and `KernelState` with indexed lookups |
+| `model.py` | Durable facts as frozen dataclasses (`TaskKey`, `TaskRecord`, `AttemptRecord`, `CommitRecord`, `ExpansionRecord`, `StepTemplate`, `DependencyClause`), their enums, and `RunState` with indexed lookups |
 | `reducer.py` | `reduce(state, event, now) -> (state, commands)`, clause evaluation, task-state projection, the force cascade, retry backoff |
 | `projection.py` | The typed status view: `ProcessStatus` / `StepView` / `TaskView`, and the per-task blocker vocabulary |
 
@@ -109,8 +109,8 @@ does not model admission; a ready task reports no blocker rather than a fabricat
 
 ## Invariants and Tests
 
-`tests/kernel/` proves the semantics by property tests, one class per invariant group:
-clause satisfaction, expansion closure (the premature-barrier case), commit
+`tests/execution_model/` proves the semantics by property tests, one class per invariant
+group: clause satisfaction, expansion closure (the premature-barrier case), commit
 linearization, fencing across every disposition, item-scoped failure propagation,
 deterministic retry backoff, transitive force with same-key narrowing, replay
 determinism, projection contract, and the scale envelope.
@@ -122,7 +122,7 @@ semantics.
 
 The in-memory envelope is confirmed at 10^3 to 10^4 tasks per run, roughly 0.03s per
 scheduling pass over 2,400 tasks, linear in roster width, guarded by
-`tests/kernel/test_kernel_scale.py`. Lookups are indexed rather than scanned, which is
+`tests/execution_model/test_scale.py`. Lookups are indexed rather than scanned, which is
 what keeps a pass linear; the guard exists because an accidental quadratic is invisible
 at test size and fatal at full roster width.
 

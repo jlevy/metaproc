@@ -20,17 +20,17 @@ import time
 
 import pytest
 
-from metaproc.kernel.model import (
+from metaproc.execution_model.model import (
     AttemptDisposition,
     ClauseMapping,
     DependencyClause,
-    KernelState,
     Requirement,
+    RunState,
     StepTemplate,
     TaskKey,
 )
-from metaproc.kernel.projection import project
-from metaproc.kernel.reducer import (
+from metaproc.execution_model.projection import project
+from metaproc.execution_model.reducer import (
     AttemptEnded,
     AttemptStarted,
     ExpansionClosed,
@@ -41,7 +41,7 @@ from metaproc.kernel.reducer import (
 )
 
 
-def _time_tick(state: KernelState) -> float:
+def _time_tick(state: RunState) -> float:
     started = time.perf_counter()
     reduce(state, Tick())
     return time.perf_counter() - started
@@ -53,7 +53,7 @@ def _best_tick(width: int, rounds: int = 3) -> float:
     return min(_time_tick(state) for _ in range(rounds))
 
 
-def _chain(width: int, stages: int) -> tuple[KernelState, tuple[str, ...]]:
+def _chain(width: int, stages: int) -> tuple[RunState, tuple[str, ...]]:
     """A `stages`-deep item-aligned chain over `width` items, plus a final barrier."""
     templates: list[StepTemplate] = []
     for i in range(stages):
@@ -82,7 +82,7 @@ def _chain(width: int, stages: int) -> tuple[KernelState, tuple[str, ...]]:
         )
     )
     keys = tuple(f"item{i:05d}" for i in range(width))
-    state = KernelState(templates=tuple(templates))
+    state = RunState(templates=tuple(templates))
     for i in range(stages):
         state, _ = reduce(state, ExpansionClosed(step_id=f"stage{i}", keys=keys))
     return state, keys

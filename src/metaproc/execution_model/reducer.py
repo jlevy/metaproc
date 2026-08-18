@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Literal
 
-from metaproc.kernel.model import (
+from metaproc.execution_model.model import (
     DEFAULT_RETRY_POLICY,
     AttemptDisposition,
     AttemptRecord,
@@ -26,10 +26,10 @@ from metaproc.kernel.model import (
     DependencyClause,
     ExpansionRecord,
     ExpansionState,
-    KernelState,
     Outcome,
     Requirement,
     RetryPolicy,
+    RunState,
     TaskKey,
     TaskRecord,
     TaskState,
@@ -125,7 +125,7 @@ CommandType = MaterializeExpansion | DispatchAttempt | ScheduleRetry | CancelAtt
 
 
 def related_keys(
-    state: KernelState, downstream: TaskKey, clause: DependencyClause
+    state: RunState, downstream: TaskKey, clause: DependencyClause
 ) -> tuple[TaskKey, ...] | None:
     """Upstream tasks this clause relates to, or None if the roster is not closed yet.
 
@@ -200,7 +200,7 @@ def _satisfies(record: TaskRecord | None, requirement: Requirement) -> bool:
 
 
 def _permanently_unsatisfiable(
-    state: KernelState, key: TaskKey, record: TaskRecord | None, requirement: Requirement
+    state: RunState, key: TaskKey, record: TaskRecord | None, requirement: Requirement
 ) -> bool:
     """True when this upstream can never satisfy the requirement.
 
@@ -219,9 +219,7 @@ def _permanently_unsatisfiable(
     return live is None or superseded(live, record)
 
 
-def clause_status(
-    state: KernelState, downstream: TaskKey, clause: DependencyClause
-) -> ClauseStatus:
+def clause_status(state: RunState, downstream: TaskKey, clause: DependencyClause) -> ClauseStatus:
     """Whether a clause is satisfied, still pending, or dead."""
     if state.template(clause.upstream_step) is None:
         # The clause names a step that does not exist. That is an authoring error, and
@@ -259,7 +257,7 @@ def clause_status(
 # ----------------------------------------------------------------- task materialization
 
 
-def materialized_keys(state: KernelState) -> tuple[TaskKey, ...]:
+def materialized_keys(state: RunState) -> tuple[TaskKey, ...]:
     """Task keys that currently exist, in a deterministic order.
 
     Callers testing membership should use ``state.materialized`` instead; this exists
@@ -268,7 +266,7 @@ def materialized_keys(state: KernelState) -> tuple[TaskKey, ...]:
     return tuple(sorted(state.materialized))
 
 
-def task_state(state: KernelState, key: TaskKey) -> TaskState:
+def task_state(state: RunState, key: TaskKey) -> TaskState:
     """Project one task's scheduler state from durable facts."""
     template = state.template(key.step_id)
     if template is None:
@@ -306,11 +304,11 @@ def task_state(state: KernelState, key: TaskKey) -> TaskState:
     return TaskState.READY
 
 
-def _attempt_count(state: KernelState, key: TaskKey, generation: int) -> int:
+def _attempt_count(state: RunState, key: TaskKey, generation: int) -> int:
     return sum(1 for a in state.attempts if a.task_key == key and a.generation == generation)
 
 
-def retry_policy_for(state: KernelState, key: TaskKey) -> RetryPolicy:
+def retry_policy_for(state: RunState, key: TaskKey) -> RetryPolicy:
     """The policy governing this task, from its step template."""
     template = state.template(key.step_id)
     return template.retry if template is not None else DEFAULT_RETRY_POLICY
@@ -320,8 +318,8 @@ def retry_policy_for(state: KernelState, key: TaskKey) -> RetryPolicy:
 
 
 def reduce(
-    state: KernelState, event: Event, now: float | None = None
-) -> tuple[KernelState, tuple[CommandType, ...]]:
+    state: RunState, event: Event, now: float | None = None
+) -> tuple[RunState, tuple[CommandType, ...]]:
     """Apply one durable fact and propose what the runtime should do next.
 
     ``now`` carries forward when omitted, which is right for a burst of facts observed
@@ -353,7 +351,7 @@ def reduce(
     return state, _commands(state)
 
 
-def _apply_expansion_closed(state: KernelState, event: ExpansionClosed) -> KernelState:
+def _apply_expansion_closed(state: RunState, event: ExpansionClosed) -> RunState:
     if len(set(event.keys)) != len(event.keys):
         duplicates = sorted({k for k in event.keys if event.keys.count(k) > 1})
         return state.with_expansion(
@@ -379,7 +377,7 @@ def _apply_expansion_closed(state: KernelState, event: ExpansionClosed) -> Kerne
     )
 
 
-def _apply_attempt_started(state: KernelState, event: AttemptStarted) -> KernelState:
+def _apply_attempt_started(state: RunState, event: AttemptStarted) -> RunState:
     existing = state.attempt(event.attempt_id)
     if existing is not None and existing.is_terminal:
         # Redelivery. Attempt history is append-only, so a terminal attempt is never
@@ -401,7 +399,7 @@ def _apply_attempt_started(state: KernelState, event: AttemptStarted) -> KernelS
     )
 
 
-def _apply_attempt_ended(state: KernelState, event: AttemptEnded) -> KernelState:
+def _apply_attempt_ended(state: RunState, event: AttemptEnded) -> RunState:
     attempt = state.attempt(event.attempt_id)
     if attempt is None or attempt.is_terminal:
         return state
@@ -474,7 +472,7 @@ def _apply_attempt_ended(state: KernelState, event: AttemptEnded) -> KernelState
     return state.with_task(replace(record, retry_at=state.now + policy.delay_for(tries)))
 
 
-def _apply_force(state: KernelState, event: ForceIssued) -> KernelState:
+def _apply_force(state: RunState, event: ForceIssued) -> RunState:
     """Invalidate the forced task and everything the dependency mappings reach.
 
     The cascade is a breadth-first walk, treating each invalidated task as forced for
@@ -518,7 +516,7 @@ def _apply_force(state: KernelState, event: ForceIssued) -> KernelState:
     return state
 
 
-def _settle_blocked(state: KernelState) -> KernelState:
+def _settle_blocked(state: RunState) -> RunState:
     """Give tasks whose clauses died a terminal skipped outcome, to a fixpoint.
 
     Settling one task can kill a downstream clause, so a single pass leaves the tail of
@@ -532,7 +530,7 @@ def _settle_blocked(state: KernelState) -> KernelState:
         state = settled
 
 
-def _settle_blocked_once(state: KernelState) -> KernelState:
+def _settle_blocked_once(state: RunState) -> RunState:
     for key in materialized_keys(state):
         if task_state(state, key) is not TaskState.BLOCKED:
             continue
@@ -555,7 +553,7 @@ def _settle_blocked_once(state: KernelState) -> KernelState:
     return state
 
 
-def _commands(state: KernelState) -> tuple[CommandType, ...]:
+def _commands(state: RunState) -> tuple[CommandType, ...]:
     commands: list[CommandType] = []
 
     for template in state.templates:

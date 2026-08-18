@@ -7,7 +7,7 @@ so they are settled here, deliberately, before the production scheduler grows in
 [Process Framework Concepts](process-framework-concepts.md) supplies the vocabulary and
 the design tests this instantiates;
 [arch-execution-model.md](arch/arch-execution-model.md) covers the executable reference
-model that implements these decisions in `src/metaproc/kernel/`.
+model that implements these decisions in `src/metaproc/execution_model/`.
 
 ## Why an Execution-Model Revision
 

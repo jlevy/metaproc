@@ -21,8 +21,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from metaproc.kernel.model import KernelState, TaskKey, TaskState
-from metaproc.kernel.reducer import (
+from metaproc.execution_model.model import RunState, TaskKey, TaskState
+from metaproc.execution_model.reducer import (
     _permanently_unsatisfiable,
     clause_status,
     related_keys,
@@ -128,7 +128,7 @@ class ProcessStatus:
         return tuple(t for t in self.tasks if t.blocker is not None and t.blocker.kind is kind)
 
 
-def blocker_for(state: KernelState, key: TaskKey) -> Blocker | None:
+def blocker_for(state: RunState, key: TaskKey) -> Blocker | None:
     """The one primary reason this task is not running, or None if it is not blocked."""
     current = task_state(state, key)
     if current in {
@@ -235,7 +235,7 @@ def blocker_for(state: KernelState, key: TaskKey) -> Blocker | None:
     return None
 
 
-def project(state: KernelState, *, snapshot_generation: int = 0) -> ProcessStatus:
+def project(state: RunState, *, snapshot_generation: int = 0) -> ProcessStatus:
     """Build the whole projection from durable facts."""
     tasks: list[TaskView] = []
     per_step: dict[str, list[TaskState]] = {}

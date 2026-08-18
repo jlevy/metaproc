@@ -7,28 +7,28 @@ waiting task is the status quo and helps nobody.
 
 from __future__ import annotations
 
-from metaproc.kernel.model import (
+from metaproc.execution_model.model import (
     AttemptDisposition,
     ClauseMapping,
     DependencyClause,
     ExpansionRecord,
     ExpansionState,
-    KernelState,
     Outcome,
     Requirement,
+    RunState,
     StepTemplate,
     TaskKey,
     TaskRecord,
     TaskState,
 )
-from metaproc.kernel.projection import (
+from metaproc.execution_model.projection import (
     PROJECTION_CONTRACT,
     BlockerKind,
     blocker_for,
     project,
 )
-from metaproc.kernel.reducer import AttemptStarted, ExpansionClosed, ForceIssued, reduce
-from tests.kernel.test_kernel_invariants import ROSTER, chained_state, close_roster, run_task
+from metaproc.execution_model.reducer import AttemptStarted, ExpansionClosed, ForceIssued, reduce
+from tests.execution_model.test_invariants import ROSTER, chained_state, close_roster, run_task
 
 
 class TestBlockerVocabulary:
@@ -48,7 +48,7 @@ class TestBlockerVocabulary:
         blocked task to ``skipped`` in the same pass, so this precedence is only
         observable to a caller inspecting state before that happens.
         """
-        state = KernelState(
+        state = RunState(
             templates=(
                 StepTemplate(step_id="alpha", expands_over="roster"),
                 StepTemplate(step_id="beta", expands_over="roster"),
@@ -254,7 +254,7 @@ class TestRecomputationIsVisible:
 class TestBlameIsAccurate:
     def test_only_the_unsatisfiable_upstreams_are_named(self) -> None:
         """A succeeded task in the blame list sends the operator to the wrong place."""
-        state = KernelState(
+        state = RunState(
             templates=(
                 StepTemplate(step_id="alpha", expands_over="roster"),
                 StepTemplate(

@@ -9,20 +9,20 @@ from __future__ import annotations
 
 import pytest
 
-from metaproc.kernel.model import (
+from metaproc.execution_model.model import (
     AttemptDisposition,
     ClauseMapping,
     DependencyClause,
     ExpansionState,
-    KernelState,
     Outcome,
     Requirement,
     RetryPolicy,
+    RunState,
     StepTemplate,
     TaskKey,
     TaskState,
 )
-from metaproc.kernel.reducer import (
+from metaproc.execution_model.reducer import (
     AttemptEnded,
     AttemptStarted,
     CancelAttempt,
@@ -52,9 +52,9 @@ def _collect(upstream: str, requirement: Requirement) -> DependencyClause:
     )
 
 
-def chained_state() -> KernelState:
+def chained_state() -> RunState:
     """measure[k] -> interpret[k], both over one roster, plus a collect-all barrier."""
-    return KernelState(
+    return RunState(
         templates=(
             StepTemplate(step_id="measure", expands_over="roster", key_space="k/v1"),
             StepTemplate(
@@ -71,14 +71,14 @@ def chained_state() -> KernelState:
     )
 
 
-def close_roster(state: KernelState, keys: tuple[str, ...] = ROSTER) -> KernelState:
+def close_roster(state: RunState, keys: tuple[str, ...] = ROSTER) -> RunState:
     for step in ("measure", "interpret"):
         state, _ = reduce(state, ExpansionClosed(step_id=step, keys=keys, key_space="k/v1"))
     return state
 
 
 def run_task(
-    state: KernelState,
+    state: RunState,
     key: TaskKey,
     disposition: AttemptDisposition,
     *,
@@ -86,7 +86,7 @@ def run_task(
     generation: int = 1,
     fence_epoch: int = 0,
     now: float = 0.0,
-) -> KernelState:
+) -> RunState:
     aid = attempt_id or f"att-{key}-{generation}"
     state, _ = reduce(
         state,
@@ -127,7 +127,7 @@ class TestExpansionClosure:
         barrier must not fire. Treating "no visible incomplete work" as completion is
         exactly what an event-driven scheduler gets wrong.
         """
-        state = KernelState(
+        state = RunState(
             templates=(
                 StepTemplate(step_id="measure", expands_over="roster"),
                 StepTemplate(
@@ -471,7 +471,7 @@ class TestBroadcastRequiresASingletonUpstream:
     def test_broadcast_over_a_multi_key_expansion_is_deterministically_dead(self) -> None:
         """There is no principled 'the one' item of a fan-out; silently picking the
         first defines arbitrary semantics for everything checked against this model."""
-        state = KernelState(
+        state = RunState(
             templates=(
                 StepTemplate(step_id="wide", expands_over="roster"),
                 StepTemplate(
@@ -494,7 +494,7 @@ class TestBroadcastRequiresASingletonUpstream:
         assert task_state(state, TaskKey("consumer")) is TaskState.SKIPPED
 
     def test_broadcast_over_a_singleton_expansion_works(self) -> None:
-        state = KernelState(
+        state = RunState(
             templates=(
                 StepTemplate(step_id="one", expands_over="roster"),
                 StepTemplate(
@@ -568,7 +568,7 @@ class TestSameGenerationSettlementIsFenced:
     def test_settlement_is_order_independent(self) -> None:
         """Invariant 5 stated over duplicates: whichever arrives first, same end state."""
 
-        def drain(order: tuple[str, ...]) -> KernelState:
+        def drain(order: tuple[str, ...]) -> RunState:
             state = close_roster(chained_state())
             key = TaskKey("measure", "a")
             for attempt in ("x1", "x2"):
@@ -626,7 +626,7 @@ class TestAttemptStartedIsIdempotent:
 class TestMissingAndUnknownUpstreams:
     def test_a_same_key_item_absent_from_the_upstream_roster_is_dead(self) -> None:
         """Rosters can skew between steps; the item with no counterpart can never run."""
-        state = KernelState(
+        state = RunState(
             templates=(
                 StepTemplate(step_id="up", expands_over="roster"),
                 StepTemplate(
@@ -643,7 +643,7 @@ class TestMissingAndUnknownUpstreams:
         assert task_state(state, TaskKey("down", "a")) is TaskState.WAITING_DEPENDENCIES
 
     def test_a_clause_naming_an_unknown_step_is_dead(self) -> None:
-        state = KernelState(
+        state = RunState(
             templates=(
                 StepTemplate(
                     step_id="consumer",
@@ -667,8 +667,8 @@ class TestBlockedSettlementReachesFixpoint:
         """Names sorted so each dependent precedes its upstream, the order that used to
         leave the tail unsettled."""
 
-        def chain_state() -> KernelState:
-            return KernelState(
+        def chain_state() -> RunState:
+            return RunState(
                 templates=(
                     StepTemplate(step_id="c_root"),
                     StepTemplate(
@@ -696,8 +696,8 @@ class TestBlockedSettlementReachesFixpoint:
 
 
 class TestBroadcastArity:
-    def _broadcast_state(self, keys: tuple[str, ...]) -> KernelState:
-        state = KernelState(
+    def _broadcast_state(self, keys: tuple[str, ...]) -> RunState:
+        state = RunState(
             templates=(
                 StepTemplate(step_id="wide", expands_over="roster"),
                 StepTemplate(
