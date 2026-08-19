@@ -118,6 +118,15 @@ The suite is verified by mutation, not trusted for passing: defeating the fence 
 treating an unclosed expansion as empty each fails exactly the test that owns that
 semantics.
 
+Those tests check the model against itself, which proves internal consistency and
+nothing about whether the model describes Metaproc.
+`test_engine_equivalence.py` closes that gap for the degenerate case: it resolves every
+spec under `examples/` through the engine’s own `build_plan`, translates the resulting
+steps into model templates, and asserts the model’s ready-set waves equal `topo_sort`’s
+levels and that a failed step settles exactly the set `graph.downstream` blocks.
+Step-scoped edges are the point of the comparison, because before item-aligned semantics
+can replace the level walk, the model has to reproduce it.
+
 ## Scale
 
 The in-memory envelope is confirmed at 10^3 to 10^4 tasks per run, roughly 0.03s per
