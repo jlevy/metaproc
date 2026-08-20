@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import tempfile
 import threading
@@ -41,13 +42,67 @@ _GEMINI_VERSION_SPEC = CliVersionSpec(
 )
 
 
+# The oldest gemini-cli metaproc can drive at all. The adapter passes --skip-trust,
+# which 0.40 introduced; an older CLI rejects the flag with "Unknown arguments" and
+# every agent step dies mid-run with no hint of the cause. Below this line the run is
+# guaranteed to fail, so failing fast with the remedy beats a warning nobody reads --
+# an operator lost a run to a stale 0.34.0 shadowing the pinned binary on PATH.
+MIN_GEMINI_CLI_VERSION = "0.40.0"
+
+
+def _version_tuple(version: str) -> tuple[int, ...]:
+    parts: list[int] = []
+    for piece in version.split("."):
+        digits = "".join(ch for ch in piece if ch.isdigit())
+        if not digits:
+            break
+        parts.append(int(digits))
+    return tuple(parts)
+
+
+def _below_minimum(found: str, minimum: str) -> bool:
+    """Whether ``found`` is older than ``minimum``, comparing component-wise.
+
+    Both sides are zero-padded to the same width first, because a bare tuple compare
+    reads ``0.40`` as older than ``0.40.0``. This gate stops runs, so a version that is
+    actually new enough must never trip it; an unreadable version is not "below".
+    """
+    found_parts = _version_tuple(found)
+    if not found_parts:
+        return False
+    minimum_parts = _version_tuple(minimum)
+    width = max(len(found_parts), len(minimum_parts))
+    padded_found = found_parts + (0,) * (width - len(found_parts))
+    padded_minimum = minimum_parts + (0,) * (width - len(minimum_parts))
+    return padded_found < padded_minimum
+
+
 def _gemini_version_drift() -> str | None:
     """Return a drift message if the on-PATH ``gemini`` mismatches the pin, else
-    None. Non-blocking: version drift is surfaced as a prominent warning, not a
-    hard error. Set ``METAPROC_SKIP_GEMINI_VERSION_CHECK=1`` to bypass entirely.
+    None. Non-blocking for drift *at or above the minimum*: that is surfaced as a
+    prominent warning, not a hard error. A CLI **below the minimum** raises
+    ``GeminiCliVersionMismatch`` instead, because the run cannot succeed -- the
+    adapter's required flags do not exist there. Set
+    ``METAPROC_SKIP_GEMINI_VERSION_CHECK=1`` to bypass entirely.
     """
     skip = MetaprocEnv.METAPROC_SKIP_GEMINI_VERSION_CHECK.read_str(default="").lower()
-    return check_cli_version(_GEMINI_VERSION_SPEC, skip=skip in ("1", "true", "yes"))
+    if skip in ("1", "true", "yes"):
+        return None
+    drift = check_cli_version(_GEMINI_VERSION_SPEC)
+    if drift is not None:
+        match = re.search(r"actual='([^']+)'", drift)
+        found = match.group(1) if match else ""
+        resolved = shutil.which("gemini")
+        if _below_minimum(found, MIN_GEMINI_CLI_VERSION):
+            raise GeminiCliVersionMismatch(
+                f"gemini-cli {found} at {resolved} is older than the minimum "
+                f"{MIN_GEMINI_CLI_VERSION} metaproc can drive: the adapter passes "
+                "--skip-trust, which that CLI rejects, so every agent step would fail "
+                f"mid-run. Fix PATH to a gemini >= {MIN_GEMINI_CLI_VERSION} (pinned: "
+                f"{PINNED_GEMINI_CLI_VERSION}) or upgrade: "
+                "npm install -g @google/gemini-cli"
+            )
+    return drift
 
 
 _GEMINI_ALLOWED_KEYS = frozenset(
