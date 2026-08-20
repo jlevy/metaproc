@@ -60,6 +60,23 @@ def _version_tuple(version: str) -> tuple[int, ...]:
     return tuple(parts)
 
 
+def _below_minimum(found: str, minimum: str) -> bool:
+    """Whether ``found`` is older than ``minimum``, comparing component-wise.
+
+    Both sides are zero-padded to the same width first, because a bare tuple compare
+    reads ``0.40`` as older than ``0.40.0``. This gate stops runs, so a version that is
+    actually new enough must never trip it; an unreadable version is not "below".
+    """
+    found_parts = _version_tuple(found)
+    if not found_parts:
+        return False
+    minimum_parts = _version_tuple(minimum)
+    width = max(len(found_parts), len(minimum_parts))
+    padded_found = found_parts + (0,) * (width - len(found_parts))
+    padded_minimum = minimum_parts + (0,) * (width - len(minimum_parts))
+    return padded_found < padded_minimum
+
+
 def _gemini_version_drift() -> str | None:
     """Return a drift message if the on-PATH ``gemini`` mismatches the pin, else
     None. Non-blocking for drift *at or above the minimum*: that is surfaced as a
@@ -76,7 +93,7 @@ def _gemini_version_drift() -> str | None:
         match = re.search(r"actual='([^']+)'", drift)
         found = match.group(1) if match else ""
         resolved = shutil.which("gemini")
-        if _version_tuple(found) and _version_tuple(found) < _version_tuple(MIN_GEMINI_CLI_VERSION):
+        if _below_minimum(found, MIN_GEMINI_CLI_VERSION):
             raise GeminiCliVersionMismatch(
                 f"gemini-cli {found} at {resolved} is older than the minimum "
                 f"{MIN_GEMINI_CLI_VERSION} metaproc can drive: the adapter passes "
