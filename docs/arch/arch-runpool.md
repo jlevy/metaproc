@@ -247,6 +247,29 @@ version, model, and active-count (see § “Per-adapter RSS benchmarks”), so a
 the wrong knob: keep the operator cap as a floor (≥20 for local large workflow-class
 workloads) and treat `--cap N` with `N < 20` as a documented incident-time exception.
 
+### What Survives a Resume
+
+`scale-state.yaml` carries the governor's state between runs, and the two ceilings in it
+are treated differently on purpose.
+
+`provider_ceiling` is restored. Provider pressure is a property of the run and the
+account, so a resume that reopens at full width against an API that was rate-limiting a
+minute ago has learned nothing. It is discarded only when the saved state shows the
+pressure is stale: no recent rate limits, no pending retries, and a prior operator cap
+below the current `max_concurrency`.
+
+`memory_ceiling` is never restored. It describes the host, and the host is free to have
+changed completely since the state was written. A ceiling of 79 earned on a quiet machine
+says nothing about a machine that now has headroom for three processes, and restoring it
+is the burst-on-resume shape behind the crash history in the consuming project's cohort
+runbook: measured on a 34 GB host, a saved ceiling of 79 against a fresh estimate of 3 is
+118 GB of intent on 34 GB of RAM. The pool enforces whatever ceiling it holds, faithfully
+and immediately, so nothing downstream catches an over-large one.
+
+Every run therefore opens at the fresh estimate and re-earns its ceiling by ramping. That
+costs a ramp, which is fast, and it composes correctly with a resume: processes still in
+flight are consuming memory that the fresh reading has by definition already counted.
+
 ## Host Coordination
 
 Per-pool `max_concurrency` is not enough when an operator starts several local Metaproc

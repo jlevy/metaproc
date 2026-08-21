@@ -653,15 +653,24 @@ class RunPool:
 
         # Restore governor state from a previous run if available.
         #
-        # Floor the restored `memory_ceiling` at the fresh `starting` estimate
-        # so a prior low-cap run doesn't pin a high-cap relaunch. Without
-        # this floor, a run launched at `--max-concurrency 3` that converges
-        # to `memory_ceiling=2`, then is killed and relaunched at
-        # `--max-concurrency 30`, would inherit `memory_ceiling=2` and stay
-        # there — the operator-increased cap is silently ignored. With the
-        # floor, the relaunch starts at the fresh estimate (e.g. 12) and the
-        # adaptive scaler ratchets down if real memory pressure binds.
-        # 2026-05-13: caught during production rerun.
+        # `memory_ceiling` is deliberately not restored. It describes the host,
+        # not the run, and the host is free to have changed completely since the
+        # saved state was written: a ceiling of 79 earned on a quiet machine says
+        # nothing about a machine now holding 3 processes' worth of headroom.
+        # Restoring it verbatim reproduces the burst-on-resume that took a 34 GB
+        # host from a fresh estimate of 3 to a restored ceiling of 79, which at
+        # 1.5 GB per process is 118 GB of intent on 34 GB of RAM.
+        #
+        # Starting from the fresh estimate costs a ramp, and the ramp is fast.
+        # It also composes correctly with a resume, where processes already in
+        # flight are consuming memory that the fresh reading has by definition
+        # already accounted for.
+        #
+        # This subsumes the older floor-up rule, which raised a restored ceiling
+        # to the fresh estimate when it was lower and left it alone when it was
+        # higher. That protected an operator raising `--max-concurrency` from
+        # inheriting a low ceiling, and did nothing about the direction that
+        # crashes hosts. Both directions now resolve to the fresh estimate.
         #
         # `provider_ceiling` is sticky only while the saved controller state
         # still carries live provider pressure. A prior low-cap launch can
@@ -669,28 +678,26 @@ class RunPool:
         # operator has raised the profile/run cap. When the old cap was lower,
         # the restored provider ceiling is below the fresh estimate, and there
         # are no recent rate limits or pending retries, treat it as stale and
-        # floor it to the fresh estimate just like memory_ceiling.
+        # floor it to the fresh estimate. Unlike memory, provider pressure is a
+        # property of the run and the account rather than the host, so it is
+        # worth carrying across a resume when it is still live.
         if self._scale_state_path is not None and self._scale_state_path.exists():
             try:
                 prev = read_scale_state(self._scale_state_path)
                 controller = prev.controller
-                restored_memory = max(
-                    self._config.min_concurrency,
-                    min(controller.memory_ceiling, self._config.max_concurrency),
-                )
+                if controller.memory_ceiling > starting:
+                    log.info(
+                        "Discarded restored memory_ceiling=%d in favour of the fresh "
+                        "estimate %d: the saved ceiling describes a host reading that "
+                        "no longer holds",
+                        controller.memory_ceiling,
+                        starting,
+                    )
+                restored_memory = starting
                 restored_provider = max(
                     self._config.min_concurrency,
                     min(controller.provider_ceiling, self._config.max_concurrency),
                 )
-                if restored_memory < starting:
-                    log.info(
-                        "Floored restored memory_ceiling=%d to fresh estimate %d "
-                        "(max_concurrency=%d); prior run likely had a lower cap",
-                        restored_memory,
-                        starting,
-                        self._config.max_concurrency,
-                    )
-                    restored_memory = starting
                 if (
                     restored_provider < starting
                     and controller.operator_cap < self._config.max_concurrency
