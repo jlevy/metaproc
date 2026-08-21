@@ -85,7 +85,7 @@ class TestCollectItemOutcomes:
                             "invariant": "required",
                             "location": "$.ticker",
                             "message": "missing required field",
-                            "contract": "trading:Thing/v1",
+                            "contract": "example:Thing/v1",
                         }
                     ],
                 }
@@ -96,7 +96,7 @@ class TestCollectItemOutcomes:
         failure = outcome["output_failures"][0]
         assert failure["kind"] == "semantic"
         assert failure["invariant"] == "required"
-        assert failure["contract"] == "trading:Thing/v1"
+        assert failure["contract"] == "example:Thing/v1"
 
     def test_an_absent_item_reports_where_and_why_it_stopped(self, tmp_path: Path) -> None:
         """A bare absence is the least useful true thing a collection could report."""

@@ -432,6 +432,49 @@ Finally, keep three vocabularies apart, because they answer different questions:
   Partial coverage with explicit failure records is a normal, useful product state, not
   an error state, and it is an aggregate; no individual task is ever “partial”.
 
+## Failure, by Layer
+
+Every failure belongs to one of three layers, and the layer decides who acts on it:
+
+- **Operational:** the attempt could not do its work.
+  The environment or a provider refused: a rate limit, a quota window, a server error, a
+  timeout, a crash, a revoked credential.
+  The work itself may be fine; the world it ran in was not.
+- **Contract:** the attempt finished and its output was refused by a declared contract:
+  absent, empty, unreadable, structurally wrong, or semantically wrong.
+- **Domain:** the artifact is valid, and what its content *means* is a judgment the
+  domain owns: a verdict, not a malfunction, and not something the framework may act on.
+
+The operational layer's load-bearing split is retriability, and it is three-way rather
+than two:
+
+- **Known retriable** (a rate limit, a transient server error, a timeout): the framework
+  absorbs these. Retry within the declared budget; pause and resume where the provider
+  names a reset time. They belong in history, not in the operator's attention.
+- **Known non-retriable** (a refused credential, memory exhausted at the current
+  placement): surfaced prominently and immediately.
+  Retrying one is waste plus delay, and burying it in per-item state converts a
+  configuration problem into a mystery that costs a diagnosis.
+- **Unknown:** treated as non-retriable and surfaced.
+  Silently retrying an unrecognized failure is how a new failure mode stays invisible
+  until it has cost a whole run; an unknown failure is a naming task, and once diagnosed
+  it joins the known list.
+
+Contract-layer retriability is different in kind: it is a fact about the producer rather
+than the environment.
+A stochastic producer whose output was refused may pass on another attempt; a
+deterministic one given the same inputs will be refused the same way, so retrying it is
+waste. The default follows the producer's nature, and the output's own declaration
+overrides it.
+
+One principle ties the layers to visibility: **a failure is not explained until it is
+placed.** Every failed attempt records its layer and class, and the answer is available
+in real time, per attempt as it happens, and in aggregate, a run's failures bucketed by
+layer and class.
+Ten failures meaning "the provider is rate limiting" and ten meaning "a contract refuses
+every item" demand different responses from different people, and a count that cannot
+tell them apart summons the wrong person.
+
 ## Effects and Finalization
 
 Most task outputs are artifacts inside the run.
@@ -613,6 +656,12 @@ Each traces to a section above.
     contract, persisted in the resolved plan, so a framework upgrade cannot silently
     change what an existing spec means?
 
+17. **Is every failure placed?** Does every failed attempt record its layer, operational
+    or contract or domain-verdict, and its class within the layer; are known-retriable
+    operational failures absorbed by declared policy while non-retriable and unknown
+    ones surface prominently; and can an operator see the layer distribution both in
+    real time and in aggregate?
+
 A workflow forced to answer “no” by building its own coordinator on top of the framework
 is the signal that the framework, not the workflow, needs the change.
 
@@ -700,6 +749,11 @@ original unit of execution and state, and one local orchestrator was the only wr
   named proposal in
   [metaproc-design-rev3-proposals.md P7](metaproc-design-rev3-proposals.md); today a
   loop driver lives outside the framework.
+
+- **Failure placement, aggregate half (test 17).** Per-item records carry a classified
+  failure reason and pool events carry it in real time, but no aggregate view buckets a
+  run's failures by layer or class: run status and `--check` are binary, so "what kind
+  of failing is this run doing" still requires reading per-item records.
 
 Design work addressing the scheduling and state items, meaning task-level ready-set
 scheduling over dependency clauses, expansion closure, attempt fencing with single

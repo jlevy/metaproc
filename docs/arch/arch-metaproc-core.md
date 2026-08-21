@@ -1766,6 +1766,34 @@ framework can perform them.
 Severity, ownership, and taxonomy are the domain’s, and the framework should be unable
 to read them even when it stores them on the domain’s behalf.
 
+### Failure Layers as Implemented
+
+The concepts doc's failure layers (operational, contract, domain) map onto two
+classifiers and one enum:
+
+- **`FailureClass`** is the per-item class: `rate_limited`, `quota_exhausted`,
+  `server_error`, `timeout`, and `crash` are the operational layer; `invalid_output` is
+  the contract layer's single entry, subdivided by `OutputFailureKind` (missing, empty,
+  unreadable, structural, semantic); `unknown` is the unrecognized remainder.
+- **`classify_error`** decides operational retriability from the rendered error string:
+  a permanent blocklist first, a transient list second, bare `exit code N` retries, and
+  wholly unrecognized text fails. It survives for records written before structured
+  failures existed; contract failures should route through
+  `classify_output_failures`, which reads what refused the output instead of the
+  sentence describing it.
+- Unknown operational failures default to non-retriable, which is the deliberate
+  reading of the concepts doc's rule: silently retrying an unrecognized failure hides a
+  new failure mode.
+
+Handling follows the class: retriable classes retry per `RetryPolicy` on the pool path,
+and `quota_exhausted` pauses submissions until the provider's named reset time rather
+than burning attempts against a closed window.
+
+Two known gaps, both against design test 17: the `run-process` inline execution paths
+neither classify nor retry (the pool path owns that machinery today), and no aggregate
+view buckets failures by layer or class, so the real-time half of placement exists and
+the aggregate half does not.
+
 ### 13.1 Plugin System
 
 The plugin system separates generic framework concerns from domain-specific logic.
