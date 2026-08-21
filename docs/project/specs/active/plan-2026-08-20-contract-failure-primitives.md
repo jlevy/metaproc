@@ -182,13 +182,19 @@ Only `fail_run` is new, and the concepts doc already contemplates it: an option
 governing whether a run aborts on failure may change the run’s verdict, provided it
 never changes whether a dependency counts as satisfied.
 
+The field is `on_invalid`, not `on_failure`, because a step already has an `on_failure`
+and it answers a different question: whether *this* step runs when an *upstream* step
+failed. That is the consumer’s side of an edge.
+This is what a step’s own output failing its contract costs.
+Two policies, two owners, two names.
+
 Declared per output, keyed by kind, contract, or invariant, matched most-specific-first:
 
 ```yaml
 outputs:
   segment_summary:
     schema: "example:SegmentSummary/v1"
-    on_failure:
+    on_invalid:
       missing: retry              # the agent died before writing; another attempt may work
       structural: fail_run        # a representation defect recurs across every item
 ```
@@ -198,7 +204,7 @@ registry, receiving the `OutputFailure` and returning an action plus an optional
 the framework stores and never reads.
 That label is where a domain’s taxonomy lives, on the domain’s side of §13’s boundary.
 
-Omitting `on_failure` preserves rule 4’s current behaviour, expressed over `kind`
+Omitting `on_invalid` preserves rule 4’s current behaviour, expressed over `kind`
 instead of substrings, which also repairs the filename sensitivity shown above.
 
 ### What This Deliberately Does Not Add
@@ -209,8 +215,13 @@ behalf. Whether a failed upstream task blocks a downstream one is the **requirem
 axis of a dependency clause, and the concepts doc is explicit that requiring success and
 requiring completion are different, legitimate statements that belong to the edge.
 Putting it on the producing output forces one answer for every consumer of that output.
-Fan-in requirement is a known deviation, design test 5, and this is properly part of
-fixing it.
+
+Metaproc already has a coarse form of that axis.
+A step’s `on_failure: continue` runs that step even when an upstream one failed, and
+`propagate_failure` honours it by excluding it from the blocked set.
+What is missing is per-edge granularity, cardinality, and outcome descriptors for the
+consumer, which is design test 5. Adding `continue` to the producer would duplicate an
+existing mechanism at the wrong grain instead of fixing its grain.
 
 **No handling for domain verdicts.** An artifact whose own data contradicts a claim it
 makes is not a contract failure to be stepped over.
@@ -281,7 +292,7 @@ mode. Neither needs a primitive.
 
 ### Phase 2: Let a Process Declare What a Failure Costs
 
-- [ ] Add `on_failure` to `IOSpec` in `src/metaproc/models/authored.py`, keyed by
+- [ ] Add `on_invalid` to `IOSpec` in `src/metaproc/models/authored.py`, keyed by
   `kind`, contract id, or invariant name, defaulting to rule 4’s behaviour.
 - [ ] Honour it where output validation is checked, including `fail_run`.
 - [ ] Allow a plugin to register a classifier receiving an `OutputFailure` and returning
@@ -298,7 +309,7 @@ After Phase 1 the 8 pass, the other 4 keep failing with `kind` and `invariant`
 populated, and the missing-output retry verdict no longer depends on the filename.
 After Phase 2 a process can mark the structural class `fail_run` and see the run stop.
 
-A process declaring no `on_failure` must produce byte-identical state to today, except
+A process declaring no `on_invalid` must produce byte-identical state to today, except
 for the two retry verdicts that rule 4 was already getting wrong.
 That is the regression that matters most, because every existing process is that case.
 
