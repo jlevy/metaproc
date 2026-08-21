@@ -599,8 +599,10 @@ Each traces to a section above.
     at most one fenced commit per task generation, and can a late stale attempt never
     publish?
 13. **Can you see why not?** For every non-running task, is one primary blocker reason
-    inspectable from durable state, and can slowness be attributed among compute,
-    memory, external services, and graph shape?
+    inspectable from durable state; does every failed task carry classified evidence
+    rather than prose, so nothing downstream has to parse a sentence to learn what
+    refused it; and can slowness be attributed among compute, memory, external services,
+    and graph shape?
 14. **Can it loop?** Can an iterative improve-measure-repeat process be expressed as
     repeated runs over durable carried state, with a declared measurement, gate, and
     termination, without mutating the spec at runtime?
@@ -664,10 +666,11 @@ original unit of execution and state, and one local orchestrator was the only wr
   resolved plan is not persisted as the authority that resume executes.
 - **Effects and finalization (test 15).** No finalization or receipted-effect protocol
   exists; delivering a run’s results is an out-of-band operator action.
-- **Bottleneck attribution (test 13, partially).** Run, pool, and resource views are
-  rich, but per-task blocker reasons and the current blocking structure are derivable
-  from state rather than a first-class view.
-- **Failure evidence (test 13).** A failed task records its reason as one string.
+- **Blocker and bottleneck attribution (test 13, partially).** Run, pool, and resource
+  views are rich, but per-task blocker reasons and the current blocking structure are
+  derivable from state rather than a first-class view.
+- **Failure evidence (test 13).** The other half of the same test.
+  A failed task records its reason as one string.
   Output validation produces structured records naming the failing field, the validator
   that refused it, and the value it saw, and those are formatted into a sentence before
   storage. The engine then recovers its own retry decision by substring-matching that
