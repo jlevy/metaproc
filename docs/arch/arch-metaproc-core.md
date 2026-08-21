@@ -1418,6 +1418,28 @@ against the roster distinguishes succeeded, failed, and never-reached. The manif
 derived from durable per-item state on every read and never stored as truth, so it cannot
 drift from the state it describes.
 
+### Declared Retry on the Code Path
+
+A `mode: code` step honors the same contract-layer declarations the pool path honors.
+`for_each.retry` supplies the budget and `outputs.<name>.on_invalid` supplies the verdict,
+resolved by `classify_output_failures` from the invariant that refused the output rather
+than the sentence describing it. Nothing in the executor interprets a failure: the
+producing output declares what its own contract failure costs, and the loop honors it.
+
+The budget is resolved per step, not once per caller. A chain runs several steps and the
+budget is declared on the step with a reason to retry, so applying the first step's policy
+to the whole walk would give a stage a budget nobody declared for it and withhold one that
+was declared.
+
+A failure with no structured record is not a contract failure and is left alone, since the
+operational classifier owns those. A step declaring no policy is invoked once, which is the
+behavior of every spec that declares nothing.
+
+Every failed attempt records its `failure_class` on the durable per-item record:
+`invalid_output` for a contract failure, and `classify_failure`'s verdict for an operational
+one. Placement (design test 17) therefore holds on the code path, not only where pool events
+are emitted.
+
 ### Per-Step Concurrency
 
 `for_each.max_concurrency` bounds one step's items in flight, independent of any other

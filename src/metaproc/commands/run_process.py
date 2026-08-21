@@ -19,7 +19,7 @@ import shlex
 import subprocess
 import time
 import traceback
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -81,7 +81,12 @@ from metaproc.engine.graph import (
     topo_sort,
 )
 from metaproc.engine.input_validation import validate_process_inputs, validate_process_outputs
-from metaproc.engine.item_runner import run_aligned_chain, run_fan_out
+from metaproc.engine.item_runner import (
+    StepInvoker,
+    run_aligned_chain,
+    run_fan_out,
+    with_retry,
+)
 from metaproc.engine.pathing import (
     compute_logs_dir,
     compute_run_dir,
@@ -99,6 +104,13 @@ from metaproc.engine.process_scope import expand_process_vars
 from metaproc.engine.resource_finalization import finalize_run_resources
 from metaproc.engine.resource_sampling import run_sampled_step_command, sample_step_resources
 from metaproc.engine.resource_snapshot import build_resource_run_snapshot
+from metaproc.engine.retry import (
+    FailureClass,
+    RetryVerdict,
+    classify_failure,
+    classify_output_failures,
+    compute_backoff,
+)
 from metaproc.engine.runtime import prepare_step, resolve_batch_size, validate_step_inputs_exist
 from metaproc.engine.validation import validate_item_outputs, validate_item_outputs_detailed
 from metaproc.engine.write_boundary import (
@@ -1023,18 +1035,24 @@ async def _execute_code_step(
         if output:
             with atomic_output_file(log_file) as tmp_path:
                 tmp_path.write_text(output)
+        command_error = f"command exit code {exc.returncode}"
         mark_failed_at(
-            state_dir, error=f"command exit code {exc.returncode}", running_record=running_record
+            state_dir,
+            error=command_error,
+            running_record=running_record,
+            failure_class=str(classify_failure(command_error)),
         )
         return False
     except Exception as exc:
         tb = traceback.format_exc()
         with atomic_output_file(log_file) as tmp_path:
             tmp_path.write_text(tb)
+        handler_error = f"{type(exc).__name__}: {exc} (traceback in {log_file.name})"
         mark_failed_at(
             state_dir,
-            error=f"{type(exc).__name__}: {exc} (traceback in {log_file.name})",
+            error=handler_error,
             running_record=running_record,
+            failure_class=str(classify_failure(handler_error)),
         )
         return False
 
@@ -1049,6 +1067,7 @@ async def _execute_code_step(
                 error=f"output validation failed: {'; '.join(output_errors)}",
                 running_record=running_record,
                 output_failures=output_failures,
+                failure_class=str(FailureClass.INVALID_OUTPUT),
             )
             return False
 
@@ -1066,6 +1085,68 @@ async def _execute_code_step(
         ),
     )
     return True
+
+
+def _contract_retry_decision(
+    *,
+    step_map: dict[str, ResolvedStep],
+    step_def_map: dict[str, ProcessStep],
+    run_dir: Path,
+) -> Callable[[str, dict[str, str]], bool]:
+    """Decide retryability from what refused the output, per the output's declaration.
+
+    Nothing here interprets a failure. The producing output declares what its contract
+    failure costs through ``on_invalid``, and ``classify_output_failures`` resolves that
+    by reading the refusing invariant rather than the sentence describing it. Keeping the
+    decision on the contract is what stops every consumer from re-deciding it.
+
+    A failure with no structured record is not a contract failure, so it is left alone:
+    the operational path owns those.
+    """
+
+    def _should_retry(step_id: str, item_vars: dict[str, str]) -> bool:
+        state_dir = compute_task_state_dir(run_dir, step_def_map[step_id], item_vars)
+        try:
+            status = read_status_at(state_dir)
+        except (ValueError, TypeError, ValidationError):
+            return False
+        failures = getattr(status, "output_failures", None) or []
+        if not failures:
+            return False
+        return classify_output_failures(failures, step_map[step_id].outputs) == RetryVerdict.RETRY
+
+    return _should_retry
+
+
+def _with_declared_retry(
+    invoke: StepInvoker,
+    *,
+    step_map: dict[str, ResolvedStep],
+    step_def_map: dict[str, ProcessStep],
+    run_dir: Path,
+) -> StepInvoker:
+    """Apply each step's own declared retry budget.
+
+    Resolved per step rather than once for the caller, because a chain runs several
+    steps and the budget is declared on the step that has a reason to retry. Applying
+    the first step's policy to the whole walk would give a stage a budget nobody
+    declared for it, and silently withhold one that was.
+    """
+
+    def _budget(step_id: str) -> tuple[int, Callable[[int], float]] | None:
+        fan_out = step_map[step_id].fan_out
+        policy = fan_out.retry if fan_out else None
+        if policy is None:
+            return None
+        return (policy.max_retries + 1, lambda attempt: compute_backoff(attempt, policy))
+
+    return with_retry(
+        invoke,
+        should_retry=_contract_retry_decision(
+            step_map=step_map, step_def_map=step_def_map, run_dir=run_dir
+        ),
+        budget_for=_budget,
+    )
 
 
 def _discover_chain_items(
@@ -1140,7 +1221,12 @@ async def _execute_code_fan_out_step(
     succeeded, total = await run_fan_out(
         item_contexts=item_contexts,
         variables=variables,
-        invoke=_invoke,
+        invoke=_with_declared_retry(
+            _invoke,
+            step_map={step_id: target},
+            step_def_map={step_id: step_def},
+            run_dir=run_dir,
+        ),
         step_id=step_id,
         max_concurrency=max_concurrency,
         step_concurrency=target.fan_out.max_concurrency,
@@ -1202,7 +1288,12 @@ async def _execute_item_aligned_chain(
         chain=chain,
         item_contexts=item_contexts,
         variables=variables,
-        invoke=_invoke,
+        invoke=_with_declared_retry(
+            _invoke,
+            step_map=step_map,
+            step_def_map=step_def_map,
+            run_dir=run_dir,
+        ),
         is_done=_is_done,
         max_concurrency=max_concurrency,
         step_concurrency=_step_concurrency,

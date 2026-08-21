@@ -24,6 +24,52 @@ StepInvoker = Callable[[str, dict[str, str]], Awaitable[bool]]
 StepCompletionCheck = Callable[[str, dict[str, str]], bool]
 
 
+# (step_id, item variables) -> another attempt could plausibly succeed. The caller
+# answers from whatever it recorded about the failure; this module does not inspect it.
+RetryDecision = Callable[[str, dict[str, str]], bool]
+
+
+# (step_id) -> how many attempts that step gets, and the delay before attempt n+1.
+# Resolved per step because a chain runs several, each with its own declared budget;
+# one budget for the whole walk would apply the first step's policy to all of them.
+RetryBudget = Callable[[str], tuple[int, Callable[[int], float]] | None]
+
+
+def with_retry(
+    invoke: StepInvoker,
+    *,
+    should_retry: RetryDecision,
+    budget_for: RetryBudget,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> StepInvoker:
+    """Wrap an invoker so a failure the caller calls retryable is attempted again.
+
+    Retry composes around invocation rather than living inside the item loop, so what
+    decides retryability stays with whoever recorded the failure, and this module keeps
+    knowing only how many attempts a step gets and how long to wait between them.
+
+    A step with no declared budget is invoked once, which is the behavior of every spec
+    that declares nothing.
+
+    ``sleep`` is injectable so a schedule can be asserted without waiting for it.
+    """
+
+    async def _invoke(step_id: str, variables: dict[str, str]) -> bool:
+        budget = budget_for(step_id)
+        if budget is None:
+            return await invoke(step_id, variables)
+        max_attempts, delay_for = budget
+        for attempt in range(1, max_attempts + 1):
+            if await invoke(step_id, variables):
+                return True
+            if attempt == max_attempts or not should_retry(step_id, variables):
+                return False
+            await sleep(delay_for(attempt))
+        return False
+
+    return _invoke
+
+
 def effective_concurrency(run_limit: int | None, step_limit: int | None, item_count: int) -> int:
     """Resolve how many of a step's items may run at once.
 

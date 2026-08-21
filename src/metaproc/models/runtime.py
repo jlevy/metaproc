@@ -108,6 +108,15 @@ class StatusRecord(BaseModel):
     completed_at: str | None = None
     last_heartbeat_at: str | None = None
     error: str | None = None
+    failure_class: str | None = None
+    """Operational class of the failure, when there is one.
+
+    A contract failure is placed by ``output_failures``; an operational one has no
+    structured record, so without this the durable record can only offer the message.
+    Design test 17 asks that every failed attempt name its layer and class, and this is
+    the half of that answer the per-item record owes.
+    """
+
     output_failures: list[OutputFailure] = Field(default_factory=list)
     """Structured form of a contract failure, when ``error`` describes one.
 

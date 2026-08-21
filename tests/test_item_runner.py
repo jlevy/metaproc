@@ -13,6 +13,7 @@ from metaproc.engine.item_runner import (
     effective_concurrency,
     run_aligned_chain,
     run_fan_out,
+    with_retry,
 )
 
 ITEMS = [{"k": "a"}, {"k": "b"}, {"k": "c"}]
@@ -232,3 +233,88 @@ class TestRunAlignedChain:
         )
         assert tallies == {"one": (0, 0), "two": (0, 0)}
         assert calls == []
+
+
+class TestWithRetry:
+    """Retry composes around invocation; the budget is per step."""
+
+    @staticmethod
+    def _counting(fails_before_success: int) -> tuple[list[str], StepInvoker]:
+        seen: list[str] = []
+
+        async def invoke(step_id: str, variables: dict[str, str]) -> bool:
+            seen.append(step_id)
+            return len([s for s in seen if s == step_id]) > fails_before_success
+
+        return seen, invoke
+
+    @staticmethod
+    def _budget(attempts: int):
+        return lambda step_id: (attempts, lambda _attempt: 0.0)
+
+    def test_a_step_with_no_budget_is_invoked_once(self) -> None:
+        """The behavior of every spec that declares nothing."""
+        seen, invoke = self._counting(fails_before_success=99)
+        wrapped = with_retry(invoke, should_retry=lambda *_: True, budget_for=lambda _s: None)
+        assert asyncio.run(wrapped("s", {})) is False
+        assert seen == ["s"]
+
+    def test_a_retryable_failure_is_attempted_again(self) -> None:
+        seen, invoke = self._counting(fails_before_success=2)
+        wrapped = with_retry(
+            invoke, should_retry=lambda *_: True, budget_for=self._budget(3), sleep=_no_sleep
+        )
+        assert asyncio.run(wrapped("s", {})) is True
+        assert len(seen) == 3
+
+    def test_a_non_retryable_failure_stops_immediately(self) -> None:
+        """The declaration decides, not the budget: a fail verdict spends one attempt."""
+        seen, invoke = self._counting(fails_before_success=99)
+        wrapped = with_retry(
+            invoke, should_retry=lambda *_: False, budget_for=self._budget(5), sleep=_no_sleep
+        )
+        assert asyncio.run(wrapped("s", {})) is False
+        assert len(seen) == 1
+
+    def test_the_budget_bounds_a_persistently_failing_step(self) -> None:
+        seen, invoke = self._counting(fails_before_success=99)
+        wrapped = with_retry(
+            invoke, should_retry=lambda *_: True, budget_for=self._budget(3), sleep=_no_sleep
+        )
+        assert asyncio.run(wrapped("s", {})) is False
+        assert len(seen) == 3
+
+    def test_each_step_gets_its_own_budget(self) -> None:
+        """A chain runs several steps; one step's policy must not govern another."""
+        seen, invoke = self._counting(fails_before_success=99)
+        budgets = {"generous": (4, lambda _a: 0.0), "strict": (1, lambda _a: 0.0)}
+        wrapped = with_retry(
+            invoke,
+            should_retry=lambda *_: True,
+            budget_for=budgets.get,
+            sleep=_no_sleep,
+        )
+        asyncio.run(wrapped("generous", {}))
+        asyncio.run(wrapped("strict", {}))
+        assert seen.count("generous") == 4
+        assert seen.count("strict") == 1
+
+    def test_the_delay_schedule_is_consulted_per_attempt(self) -> None:
+        slept: list[float] = []
+
+        async def sleep(seconds: float) -> None:
+            slept.append(seconds)
+
+        _seen, invoke = self._counting(fails_before_success=99)
+        wrapped = with_retry(
+            invoke,
+            should_retry=lambda *_: True,
+            budget_for=lambda _s: (4, lambda attempt: float(attempt) * 2),
+            sleep=sleep,
+        )
+        asyncio.run(wrapped("s", {}))
+        assert slept == [2.0, 4.0, 6.0]
+
+
+async def _no_sleep(_seconds: float) -> None:
+    return None
