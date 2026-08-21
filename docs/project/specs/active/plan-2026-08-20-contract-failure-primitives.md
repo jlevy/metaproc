@@ -2,13 +2,13 @@
 title: Contract Failure Primitives
 description: Stop flattening what output validation already knows, and let a process declare what a validation failure costs, without the framework learning any domain's vocabulary.
 date: 2026-08-20
-status: Draft
+status: Phase 1 complete, Phase 2 partial
 ---
 # Feature: Contract Failure Primitives
 
 **Date:** 2026-08-20
 
-**Status:** Draft
+**Status:** Phase 1 complete, Phase 2 partial
 
 ## Overview
 
@@ -274,32 +274,52 @@ mode. Neither needs a primitive.
 
 ### Phase 1: Preserve the Failure, and Fix the Representation Bug
 
-- [ ] Add `OutputFailure` to `src/metaproc/models/runtime.py` and an
+- [x] Add `OutputFailure` to `src/metaproc/models/runtime.py` and an
   `output_failures: list[OutputFailure]` field on `StatusRecord`, defaulting to empty.
-- [ ] Change `validate_item_outputs` in `src/metaproc/engine/validation.py` to return
+- [x] Change `validate_item_outputs` in `src/metaproc/engine/validation.py` to return
   `list[OutputFailure]`, with a thin adapter preserving the current `list[str]` for
   existing callers. Keep every error, not `errors[0]`.
-- [ ] Collapse the two copies of `_format_artifact_validation_error` into the adapter.
-- [ ] Normalize `date`, `datetime`, `time`, `Decimal`, and `UUID` in the parsed document
+- [x] Collapse the two copies of `_format_artifact_validation_error` into the adapter.
+  `check_artifact_contract` is the single check now, so `metaproc validate` and the step
+  boundary cannot disagree about an artifact.
+- [x] Normalize `date`, `datetime`, `time`, `Decimal`, and `UUID` in the parsed document
   before the structural pass.
-- [ ] Carry the structured failures through both `mark_failed_at` call sites in
-  `src/metaproc/commands/run_process.py`.
-- [ ] Re-express retry rule 4 over `kind` rather than substrings, preserving its
+- [x] Carry the structured failures through every `mark_failed_at` call site that
+  records an output validation failure: `run_process.py`, `run_step.py`, and both paths
+  in `run_parallel.py`, including the agent pool that fan-out agent steps run on.
+- [x] Re-express retry rule 4 over `kind` rather than substrings, preserving its
   documented intent, and test that a missing output retries whatever its filename
   contains.
-- [ ] Test that a quoted and an unquoted date both validate, and that a genuine type
+- [x] Test that a quoted and an unquoted date both validate, and that a genuine type
   error still fails.
 
 ### Phase 2: Let a Process Declare What a Failure Costs
 
-- [ ] Add `on_invalid` to `IOSpec` in `src/metaproc/models/authored.py`, keyed by
+- [x] Add `on_invalid` to `IOSpec` in `src/metaproc/models/authored.py`, keyed by
   `kind`, contract id, or invariant name, defaulting to rule 4’s behaviour.
-- [ ] Honour it where output validation is checked, including `fail_run`.
+- [x] Honour it where output validation is checked.
+  A clause is read from the output that failed, so a sibling’s declaration never governs
+  it.
+- [ ] Make `fail_run` stop the run.
+  It currently fails the item permanently, exactly as `fail` does; `requires_run_abort`
+  reports the declaration and is the seam a coordinator-level abort attaches to.
 - [ ] Allow a plugin to register a classifier receiving an `OutputFailure` and returning
   an action and an optional label; store the label on the record.
 - [ ] Subdivide `invalid_output` in `FailureCounts` by `kind`, and group by label where
   one is present.
-- [ ] Test each action, and that a process declaring nothing behaves exactly as before.
+- [x] Test each action, and that a process declaring nothing behaves exactly as before.
+
+### Compatibility Notes
+
+Routing every format through `validate_artifact` changed how a non-frontmatter output is
+read.
+It used to be loaded straight into the contract’s model, so the document root *was*
+the model, and the enveloped reading would have refused every artifact written that way.
+A root that does not already carry the contract’s envelope key is wrapped, so both
+spellings validate.
+
+What does change: a contract id that resolves to nothing now fails the output instead of
+passing silently, on every format rather than only `frontmatter-md`.
 
 ## Testing Strategy
 
@@ -307,16 +327,20 @@ A consumer’s corpus is the reference set: 504 real artifacts, 12 failures acro
 invariants, 8 of them the date defect.
 After Phase 1 the 8 pass, the other 4 keep failing with `kind` and `invariant`
 populated, and the missing-output retry verdict no longer depends on the filename.
-After Phase 2 a process can mark the structural class `fail_run` and see the run stop.
 
-A process declaring no `on_invalid` must produce byte-identical state to today, except
-for the two retry verdicts that rule 4 was already getting wrong.
-That is the regression that matters most, because every existing process is that case.
+A process declaring no `on_invalid` produces the same state as before, with three
+exceptions: the retry verdicts rule 4 was already getting wrong, a failed task now
+carrying `output_failures` beside its unchanged `error`, and the contract-resolution
+change in Compatibility Notes above.
+That regression is the one that matters most, because every existing process is that
+case.
 
 ## Open Questions
 
 - Is `fail_run` reachable cleanly from inside per-item validation, or does it need to
   surface through the coordinator?
+  Per-item validation can *detect* it, and does; performing the abort needs the
+  coordinator, which is why the declaration is currently readable and inert.
 - Should the normalization list be fixed or extensible?
   Fixed is simpler and covers the observed defect; extensible invites a domain to
   normalize its way out of a real disagreement.

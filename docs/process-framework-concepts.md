@@ -669,16 +669,14 @@ original unit of execution and state, and one local orchestrator was the only wr
 - **Blocker and bottleneck attribution (test 13, partially).** Run, pool, and resource
   views are rich, but per-task blocker reasons and the current blocking structure are
   derivable from state rather than a first-class view.
-- **Failure evidence (test 13).** The other half of the same test.
-  A failed task records its reason as one string.
-  Output validation produces structured records naming the failing field, the validator
-  that refused it, and the value it saw, and those are formatted into a sentence before
-  storage. The engine then recovers its own retry decision by substring-matching that
-  sentence, which makes the decision sensitive to the artifact’s filename.
-  A consumer wanting to know which invariant refused which output has the same substring
-  matching as its only option, and one has written it.
-  See
-  [plan-2026-08-20-contract-failure-primitives.md](project/specs/active/plan-2026-08-20-contract-failure-primitives.md).
+- **Failure evidence (test 13, partially).** The other half of the same test.
+  A task that fails its output contract now records classified evidence beside the human
+  sentence: which output failed, against which contract, which invariant refused it, and
+  where in the document.
+  The retry decision reads that record rather than the sentence describing it.
+  Failures arriving from anywhere else, an exit code, a timeout, a killed process, are
+  still a single string, so evidence is classified where the framework does the refusing
+  and prose everywhere else.
 - **Loops (test 14).** Iteration is not first-class.
   The conceptual frame exists in
   [metaproc-concepts-and-principles.md §5](../src/metaproc/docs/metaproc-concepts-and-principles.md),

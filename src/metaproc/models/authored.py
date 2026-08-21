@@ -210,7 +210,7 @@ class ProcessOutput(_ProcessIOBase):
 
 
 class IOSpec(BaseModel):
-    """Artifact reference with optional kind, format, and schema.
+    """Artifact reference with optional kind, format, and contract.
 
     Optional ``template:`` names a scaffold file (may contain ``{{vars}}``) the agent
     fills in. Optional ``condition:`` is a predicate against resolved variables (e.g.
@@ -237,11 +237,13 @@ class IOSpec(BaseModel):
     """
 
     on_invalid: dict[str, Literal["fail", "retry", "fail_run"]] | None = None
-    """What it costs when this output fails its contract, keyed most-specific-first.
+    """What it costs when *this* output fails its contract, keyed most-specific-first.
 
     A key is an invariant name, a contract id, or an
-    :class:`~metaproc.models.runtime.OutputFailureKind`. Omitted, a failure costs
-    what it has always cost.
+    :class:`~metaproc.models.runtime.OutputFailureKind`, tried in that order.
+    Omitted, a failure costs what it has always cost. A clause governs the output
+    that declares it and no other, so two outputs of one step can answer
+    differently for the same kind of failure.
 
     Distinct from a step's ``on_failure``, which says whether *this* step runs
     when an *upstream* one failed. That is the consumer's side of an edge; this
@@ -253,8 +255,15 @@ class IOSpec(BaseModel):
         on_invalid:
           semantic: retry
 
-    ``fail_run`` stops the whole run, for a defect that will recur on every item
-    rather than be specific to this one.
+    ``retry`` is honoured wherever per-item retry exists, which is fan-out
+    execution; a single-shot step has no attempt to schedule, so there a failure
+    is terminal whatever it declares.
+
+    ``fail_run`` is for a defect that will recur on every item rather than be
+    specific to this one. It currently fails the item permanently, exactly as
+    ``fail`` does — no execution path aborts a run on it yet. It is readable
+    through :func:`~metaproc.engine.retry.requires_run_abort`, which is the seam
+    that abort would attach to.
     """
 
     optional: bool = False
