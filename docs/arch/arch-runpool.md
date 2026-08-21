@@ -88,7 +88,8 @@ levels in both event and health logs:
 
 | Component | Current source | Use |
 | --- | --- | --- |
-| macOS memory | `sysctl hw.memsize`, `kern.memorystatus_level` | Required memory headroom signal |
+| macOS memory | `vm_stat` free/inactive/purgeable, `sysctl hw.memsize` | Required memory headroom budget |
+| macOS memory alarm | `sysctl kern.memorystatus_level` | Alarm only; counts active pages, so never a budget |
 | macOS swap | `sysctl vm.swapusage` | Absolute swap visibility and swap-growth deltas |
 | Linux memory | `/proc/meminfo` `MemTotal` and `MemAvailable` | Required memory headroom signal |
 | Linux swap | `/proc/meminfo` `SwapTotal` and `SwapFree` | Absolute swap visibility and swap-growth deltas |
@@ -107,8 +108,19 @@ rate, wired memory, and file cache.
 That matches the design rule here: current memory pressure and active swap growth matter
 more than absolute swap already allocated.
 
-RunPool currently reads `kern.memorystatus_level` as a local CLI-friendly pressure proxy
-and `vm.swapusage` for swap.
+RunPool budgets from `vm_stat` reclaimable pages, free plus inactive plus purgeable,
+scaled by the page size that `vm_stat` reports rather than an assumed one.
+`kern.memorystatus_level` is read alongside it and carried on the reading as
+`alarm_pct`, but it never sizes anything.
+
+That split is deliberate and the distinction is easy to lose. The gauge is defined in
+XNU as `AVAILABLE_NON_COMPRESSED_MEMORY`, which is active plus inactive plus free plus
+speculative, so it counts every other process's live working set as though it were
+available. On a 34 GB host it read 48% while reclaimable memory stood at 22.6%, a factor
+of 2.1, and it stays high until the compressor has already grown. Sized from the gauge,
+that host reads NORMAL and keeps ramping; sized from reclaimable pages it reads ELEVATED
+and holds. It remains a serviceable alarm and is a dangerous budget.
+
 The app-level Apple API also exposes normal, warning, and critical memory-pressure
 events through Dispatch memory-pressure sources; if `kern.memorystatus_level` stops
 being reliable on supported macOS versions, the replacement should preserve the same
@@ -382,7 +394,7 @@ RunPool tests should be deterministic by default:
 - use `MockBackend` or short local subprocesses
 - avoid historical `runs/local` artifacts in CI
 - validate historical-artifact compatibility with small synthetic fixtures
-- mock macOS `sysctl`, Linux `/proc/meminfo`, and Linux PSI inputs
+- mock macOS `sysctl` and `vm_stat`, Linux `/proc/meminfo`, and Linux PSI inputs
 - gate live historical smoke tests behind explicit environment variables
 
 End-to-end analysis-arb tests should include a RunPool status check that verifies
