@@ -296,7 +296,7 @@ def validate_item_outputs_detailed(
             continue
         rendered = resolve_templates(path_template, variables) if variables else path_template
         fname = Path(rendered).name
-        schema = io_spec.schema_ or ""
+        schema = io_spec.contract or ""
 
         def fail(
             kind: OutputFailureKind,

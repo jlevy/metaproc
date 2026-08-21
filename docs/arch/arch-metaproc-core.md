@@ -415,6 +415,26 @@ Core declaration fields:
 | `parse` | Optional parse config when the file content is materialized into a value. |
 | `role` | Closed semantic tag such as `process`, `template`, `packet`, `roster`, or `run-input`. |
 | `produced_by` | Explicit producer ref when the file is written by a step in the same graph. |
+| `contract` | Contract ID the artifact must validate against, as `namespace:Name/vN`. Checked at the step boundary when the output is `format: frontmatter-md`. Spelled `schema` in older specs, which still parse. |
+
+**A contract ID is not a schema path.** The two are easy to conflate because both are
+called schemas in casual use, and keeping them apart is what makes the boundary check
+work:
+
+- A **contract ID** is an identity, such as `example:Record/v1`. It resolves through the
+  plugin registry to a Pydantic model, and that model is what validates the document.
+  This is what an output declares and what a document’s `softschema.contract` names.
+- A **schema document** is a generated JSON Schema file.
+  It is compiled *from* the model with `softschema compile`, committed for portability
+  and inspection, and kept honest by a drift check.
+  A document may point at one through `softschema.schema`, and nothing about validation
+  depends on that pointer: an artifact validates identically whether the path is right,
+  wrong, or absent, because the contract ID is what does the resolving.
+
+So the Pydantic model is the authority, the contract ID is how it is named, and the
+schema document is a derived artifact.
+Writing a new contract means writing a model and registering it, not authoring a schema
+file by hand.
 
 Closed value types:
 

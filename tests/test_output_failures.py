@@ -41,7 +41,7 @@ def dated_registry() -> Contracts:
 
 
 def dated_outputs() -> dict[str, IOSpec]:
-    return {"main": IOSpec(path="output.md", format="frontmatter-md", schema="example:Dated/v1")}
+    return {"main": IOSpec(path="output.md", format="frontmatter-md", contract="example:Dated/v1")}
 
 
 class TestRepresentationNormalization:
@@ -145,7 +145,7 @@ class TestStructuredFailures:
         )
         (tmp_path / "output.md").write_text("---\nstrict: {}\n---\nBody\n")
         outputs = {
-            "main": IOSpec(path="output.md", format="frontmatter-md", schema="example:Strict/v1")
+            "main": IOSpec(path="output.md", format="frontmatter-md", contract="example:Strict/v1")
         }
 
         failures = validate_item_outputs_detailed(tmp_path, outputs, softschema_registry=registry)

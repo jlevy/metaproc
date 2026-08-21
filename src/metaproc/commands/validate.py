@@ -119,7 +119,7 @@ def validate(
         output_name = Path(io_spec.path).name
         if output_name:
             expected_files.append(output_name)
-            schema = io_spec.schema_
+            schema = io_spec.contract
             fmt = io_spec.format or ""
             if schema:
                 output_schemas[output_name] = schema

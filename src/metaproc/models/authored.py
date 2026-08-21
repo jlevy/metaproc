@@ -10,7 +10,7 @@ import re
 from collections.abc import Callable
 from typing import ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from metaproc.models.lane import LaneMatrix
 from metaproc.models.resource_budget import ResourceBudgetSpec
@@ -222,7 +222,20 @@ class IOSpec(BaseModel):
     type: str | None = None
     kind: Literal["file", "directory", "stream"] | None = None
     format: str | None = None
-    schema_: str | None = Field(default=None, alias="schema")
+    contract: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("contract", "schema"),
+        serialization_alias="contract",
+    )
+    """Contract id this output must validate against, as ``namespace:Name/vN``.
+
+    A contract id, not a path to a schema document. softschema draws that line
+    in its own document metadata, where ``contract`` names the identity and
+    ``schema`` optionally points at a generated JSON Schema file; the identity is
+    what resolves to a model and does the validating. ``schema:`` is accepted as
+    an alias so existing process specs keep working.
+    """
+
     optional: bool = False
     template: str | None = None
     condition: str | None = None
