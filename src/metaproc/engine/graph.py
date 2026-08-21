@@ -161,3 +161,71 @@ def topo_sort(
         remaining -= set(level)
 
     return levels
+
+
+def item_aligned_chains(steps: Sequence[ResolvedStep]) -> list[list[str]]:
+    """Return maximal chains of steps whose edges are item-scoped.
+
+    A pair ``(a, b)`` is item-aligned when *b* declares ``for_each.align:
+    same_key``, *b* needs *a* and nothing else, and both fan out over the same
+    resolved source. Alignment is inferable only where identity is provable, so
+    a shared source is required: matching key strings across unrelated rosters
+    is coincidence, not identity, and aligning on it would silently join
+    unrelated work.
+
+    A step needing anything outside the chain does not extend it. That edge is
+    genuinely step-scoped, and the level walk still has to honor it, so the
+    chain ends rather than absorbing a barrier it cannot express.
+
+    Chains are maximal and disjoint: every step appears in at most one, and a
+    returned chain always has at least two steps, since a single step has no
+    edge to align.
+    """
+    by_id = {s.step_id: s for s in steps}
+
+    def _aligned_to(step: ResolvedStep) -> str | None:
+        """Return the predecessor this step is item-aligned with, if any."""
+        fan_out = step.fan_out
+        if fan_out is None or fan_out.align != "same_key":
+            return None
+        if len(step.needs) != 1:
+            # Two upstreams mean at least one edge this alignment does not
+            # describe; treat the whole step as step-scoped rather than guess.
+            return None
+        upstream = by_id.get(step.needs[0])
+        if upstream is None or upstream.fan_out is None:
+            return None
+        if upstream.fan_out.source != fan_out.source:
+            return None
+        return upstream.step_id
+
+    # Collect every claimed edge first, so a fork is visible before any chain is
+    # built. Resolving it by first-wins would make the result depend on step order
+    # in the spec, which is not something an author states or can see.
+    claims: dict[str, list[str]] = defaultdict(list)
+    for step in steps:
+        up = _aligned_to(step)
+        if up is not None:
+            claims[up].append(step.step_id)
+
+    successor: dict[str, str] = {}
+    predecessor: dict[str, str] = {}
+    for up, claimants in claims.items():
+        if len(claimants) != 1:
+            # Two steps align to one upstream. Item-scoped forks are meaningful,
+            # but a linear chain cannot express one, so both edges stay
+            # step-scoped rather than silently keeping one branch.
+            continue
+        successor[up] = claimants[0]
+        predecessor[claimants[0]] = up
+
+    chains: list[list[str]] = []
+    for step in steps:
+        head = step.step_id
+        if head in predecessor or head not in successor:
+            continue
+        chain = [head]
+        while chain[-1] in successor:
+            chain.append(successor[chain[-1]])
+        chains.append(chain)
+    return chains

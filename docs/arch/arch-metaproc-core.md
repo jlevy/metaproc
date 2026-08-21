@@ -1381,6 +1381,31 @@ Every field named in `bind_fields` must be present and non-empty on every item. 
 optional dispatch field, so a roster where a field applies to only some items carries an
 explicit sentinel value rather than omitting it.
 
+### Item-Aligned Chains
+
+`for_each.align: same_key` declares a step's `needs` edge item-scoped rather than
+step-scoped: this step's task for item *k* waits only on the upstream task for item *k*.
+Consecutive code steps carrying it form a chain that executes once per item instead of once
+per step, so an item advances as soon as its own predecessor commits rather than waiting for
+the slowest sibling.
+
+`graph.item_aligned_chains` decides where this applies, and refuses more than it accepts.
+Alignment requires that the upstream also fan out over the *same resolved source*, because
+matching key strings across unrelated rosters is coincidence rather than identity. A step
+needing anything outside the chain ends it, since that edge is genuinely step-scoped. Two
+steps aligning to one upstream leave both edges step-scoped: item-scoped forks are
+meaningful but a linear chain cannot express one, and resolving it by first-wins would make
+the result depend on step order in the spec.
+
+Failure follows the same granularity. An item failing partway through a chain skips its own
+remaining steps and touches no sibling, so the chain finishes with partial coverage instead
+of blocking the graph. Measured on a four-item cohort where one item fails at the second of
+three stages: under the level walk no item completes the third stage, because the step
+failure blocks it wholesale; under an aligned chain three of four complete.
+
+Absent `align`, nothing changes. The edge stays step-scoped and the level walk executes it
+exactly as before, which is the compatibility floor for every existing spec.
+
 **Terminology note: items file vs roster.** *Items file* is the framework’s primary term
 for this concept. *Roster* is retained as domain-specific language inside the
 illustrative `example_plugin` profile, where step IDs, dependency names, and module

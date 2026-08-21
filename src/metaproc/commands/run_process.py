@@ -73,7 +73,12 @@ from metaproc.engine.dep_state import (
     recorded_step_hash,
 )
 from metaproc.engine.discovery import discover_items_from_source
-from metaproc.engine.graph import downstream, propagate_failure, topo_sort
+from metaproc.engine.graph import (
+    downstream,
+    item_aligned_chains,
+    propagate_failure,
+    topo_sort,
+)
 from metaproc.engine.input_validation import validate_process_inputs, validate_process_outputs
 from metaproc.engine.pathing import (
     compute_logs_dir,
@@ -1153,6 +1158,119 @@ async def _execute_code_fan_out_step(
     if failed:
         out.progress(f"  Step '{step_id}': {failed} of {len(results)} items failed")
     return failed == 0
+
+
+async def _execute_item_aligned_chain(
+    *,
+    spec: ProcessSpec,
+    chain: list[str],
+    step_map: dict[str, ResolvedStep],
+    step_def_map: dict[str, ProcessStep],
+    variables: dict[str, str],
+    process_dir: Path,
+    run_dir: Path,
+    run_id: str,
+    max_concurrency: int | None,
+    external_semaphore: asyncio.Semaphore | None,
+    out: Any,
+) -> dict[str, bool]:
+    """Run an item-aligned chain once per item instead of once per step.
+
+    The level walk finishes every task of a step before the next step starts, which is
+    a step-scoped reading of the edge. Where the author declared the edge item-scoped,
+    item *k* of the second step depends only on item *k* of the first, so the correct
+    execution is a pipeline per item: each item walks the whole chain on its own, and a
+    fast item is never held behind a slow stranger.
+
+    Failure is item-scoped for the same reason. An item failing at one step skips its
+    own remaining steps and touches no sibling, so the chain finishes with partial
+    coverage rather than blocking the graph. That falls out of the structure here; it is
+    not a policy added on top.
+
+    Returns success per step id, where a step succeeded when every item that reached it
+    succeeded.
+    """
+    head = step_map[chain[0]]
+    assert head.fan_out is not None
+
+    source_path = Path(head.fan_out.source)
+    if not source_path.exists():
+        raise CLIError(f"source file not found: {source_path}")
+
+    try:
+        discovery = discover_items_from_source(
+            source_path,
+            step_def_map[chain[0]],
+            output_paths=head.outputs or None,
+            params=variables,
+            reuse_policy=head.reuse_policy,
+            run_dir=run_dir,
+        )
+    except ValueError as exc:
+        raise CLIError(str(exc)) from exc
+
+    item_contexts = discovery.actionable_contexts
+    if not item_contexts:
+        out.progress(f"  Chain '{' -> '.join(chain)}': no actionable items")
+        return dict.fromkeys(chain, True)
+
+    out.progress(f"  Chain '{' -> '.join(chain)}': {len(item_contexts)} items, item-aligned")
+
+    limit = max_concurrency if max_concurrency and max_concurrency > 0 else len(item_contexts)
+    gate = asyncio.Semaphore(max(1, limit))
+    # Per step, the items that reached it and succeeded, so a step's verdict counts
+    # only what actually ran rather than treating a skipped item as a failure.
+    reached: dict[str, int] = dict.fromkeys(chain, 0)
+    succeeded: dict[str, int] = dict.fromkeys(chain, 0)
+    lock = asyncio.Lock()
+
+    async def _run_item_through_chain(item_context: dict[str, str]) -> None:
+        item_vars = dict(variables)
+        item_vars.update(item_context)
+        for step_id in chain:
+            async with lock:
+                reached[step_id] += 1
+            async with gate:
+                if external_semaphore is not None:
+                    async with external_semaphore:
+                        ok = await _execute_code_step(
+                            spec=spec,
+                            step_def=step_def_map[step_id],
+                            target=step_map[step_id],
+                            variables=item_vars,
+                            process_dir=process_dir,
+                            run_dir=run_dir,
+                            run_id=run_id,
+                            out=out,
+                        )
+                else:
+                    ok = await _execute_code_step(
+                        spec=spec,
+                        step_def=step_def_map[step_id],
+                        target=step_map[step_id],
+                        variables=item_vars,
+                        process_dir=process_dir,
+                        run_dir=run_dir,
+                        run_id=run_id,
+                        out=out,
+                    )
+            if not ok:
+                # This item stops here. Its siblings are unaffected.
+                return
+            async with lock:
+                succeeded[step_id] += 1
+
+    await asyncio.gather(*(_run_item_through_chain(ctx) for ctx in item_contexts))
+
+    results: dict[str, bool] = {}
+    for step_id in chain:
+        results[step_id] = reached[step_id] > 0 and succeeded[step_id] == reached[step_id]
+        if not results[step_id]:
+            out.progress(
+                f"  Step '{step_id}': {reached[step_id] - succeeded[step_id]} "
+                f"of {reached[step_id]} items failed"
+            )
+    return results
 
 
 async def _run_agent_subprocess(
@@ -2266,6 +2384,18 @@ async def _orchestrate(
     step_def_map = {s.id: s for s in spec.steps}
     levels = topo_sort(plan.steps)
 
+    # Item-aligned chains run per item under their head, so the level walk must not
+    # also run the absorbed members: their edges are item-scoped and the barrier
+    # between them is exactly what alignment removes. Chains of code steps only, since
+    # the agent path carries dispatch machinery this executor does not reproduce.
+    _chains = [
+        chain
+        for chain in item_aligned_chains(plan.steps)
+        if all(step_map[sid].mode == "code" for sid in chain)
+    ]
+    _chain_head_of: dict[str, list[str]] = {chain[0]: chain for chain in _chains}
+    _absorbed: set[str] = {sid for chain in _chains for sid in chain[1:]}
+
     events.process_start(spec.name, run_id, backend_name, len(step_map))
 
     # Shared semaphore for global fan-out concurrency cap (RF-4).
@@ -2320,6 +2450,41 @@ async def _orchestrate(
         events.step_start(step_id, target.mode)
 
         step_def = step_def_map[step_id]
+
+        chain = _chain_head_of.get(step_id)
+        if chain is not None:
+            chain_results = await _execute_item_aligned_chain(
+                spec=spec,
+                chain=chain,
+                step_map=step_map,
+                step_def_map=step_def_map,
+                variables=variables,
+                process_dir=process_dir,
+                run_dir=run_dir,
+                run_id=run_id,
+                max_concurrency=max_concurrency,
+                external_semaphore=global_semaphore,
+                out=out,
+            )
+            chain_elapsed = time.monotonic() - step_start
+            for member_id, member_ok in chain_results.items():
+                step_states[member_id] = (
+                    {"state": "completed", "completed_at": _now_iso()}
+                    if member_ok
+                    else {"state": "failed", "completed_at": _now_iso()}
+                )
+                if member_id != step_id:
+                    events.step_start(member_id, step_map[member_id].mode)
+                if member_ok:
+                    events.step_complete(member_id, chain_elapsed)
+                else:
+                    events.step_fail(member_id, chain_elapsed)
+            _write_process_status(run_dir, spec.name, step_states, started_at)
+            failed_members = [m for m, ok in chain_results.items() if not ok]
+            for member_id in failed_members:
+                out.progress(f"  Step '{member_id}': FAILED")
+            return step_id, not failed_members
+
         success = await _execute_step(
             spec=spec,
             step_def=step_def,
@@ -2385,6 +2550,9 @@ async def _orchestrate(
         # Filter steps: skip blocked, user-skipped, override-satisfied, and already-completed.
         runnable: list[str] = []
         for step_id in level:
+            if step_id in _absorbed:
+                # Run by the head of its item-aligned chain, at the head's level.
+                continue
             if step_id in blocked_steps:
                 step_states[step_id] = {"state": "blocked"}
                 events.step_blocked(step_id)

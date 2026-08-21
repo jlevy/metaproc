@@ -860,6 +860,7 @@ def build_plan(
                 items=items,
                 filtered_count=filtered_count,
                 retry=step.for_each.retry or spec.defaults.retry,
+                align=step.for_each.align,
             )
 
         resolved_env: dict[str, str] = {}

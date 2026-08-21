@@ -352,6 +352,18 @@ class ForEach(BaseModel):
     batch_size: int = 10
     retry: RetryPolicy | None = None
 
+    align: Literal["same_key"] | None = Field(
+        default=None,
+        description=(
+            "Declares this step's `needs` edge item-scoped rather than step-scoped: "
+            "this step's task for item k waits only on the upstream task for item k, "
+            "so items flow through the chain independently instead of barriering at "
+            "the step boundary. Valid only where the upstream also fans out over the "
+            "same source, because alignment on unrelated rosters would join unrelated "
+            "work. Absent, the edge stays step-scoped and execution is unchanged."
+        ),
+    )
+
     key: str | None = Field(
         default=None,
         description=(

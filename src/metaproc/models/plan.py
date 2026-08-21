@@ -40,6 +40,7 @@ class FanOut(BaseModel):
     items: list[dict[str, str]] = Field(default_factory=list)
     filtered_count: int = 0
     retry: RetryPolicy | None = None
+    align: Literal["same_key"] | None = None
 
 
 class ResolvedStep(BaseModel):
