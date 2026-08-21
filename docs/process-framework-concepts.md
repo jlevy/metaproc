@@ -309,7 +309,7 @@ lives at the scope of the truth it tracks**:
 | --- | --- | --- |
 | Memory and machine load | the host | per host, shared by all steps and all concurrent runs on that host |
 | Provider concurrency and rate | an external service’s quota | per quota namespace: provider, account, and model or region as applicable, often shared across hosts and runs |
-| Politeness caps | a human choice ("no more than 5 at once") | per step or per declared resource, optional |
+| Politeness caps | a human choice (“no more than 5 at once”) | per step or per declared resource, optional |
 | Run budget | a hard spend or call ceiling | per run, as a durable reservation ledger |
 | Operator cap | an incident intervention | global or scoped, temporary and observable |
 
@@ -651,8 +651,12 @@ original unit of execution and state, and one local orchestrator was the only wr
   attempt-privately, there is no single commit record covering a multi-output task, and
   nothing fences a late stale attempt.
   Sufficient for one local writer; not for distributed retry.
-- **Universal admission (test 7).** RunPool governs only the fan-out execution path, so
-  a step launched singly bypasses admission entirely.
+- **Universal admission (test 7, partially).** Scalar steps, meaning those with no
+  `for_each`, now take a slot in the same host-wide namespace the fan-out pools use, so
+  independent orchestrators on one machine no longer launch over each other unseen.
+  The gate is a slot count on the `local` backend only, without the memory backpressure
+  or process-tree charging the test asks for, and it is deliberately best-effort: an
+  unreachable gate lets the launch proceed rather than failing the run.
 - **Task-scoped operator surface (test 3, partially).** Force and resume selection are
   step-scoped (`--force`, `--from`, `--only`); there is no per-item force, and
   invalidation is directory-shaped rather than causal.
