@@ -1381,6 +1381,32 @@ Every field named in `bind_fields` must be present and non-empty on every item. 
 optional dispatch field, so a roster where a field applies to only some items carries an
 explicit sentinel value rather than omitting it.
 
+### Fan-In Collections
+
+An input declaring `collect: <step>` receives that fan-out step's per-item outcomes as one
+manifest (`metaproc:FanInOutcomes/0.1`) instead of rediscovering upstream state by walking
+directories. Each record carries the item key, its terminal state, whether it succeeded, and
+its error where there is one.
+
+`require:` states which outcomes satisfy the edge. `succeeded` needs every item to have
+succeeded. `finished` accepts any terminal outcome, so a partially failed upstream still
+satisfies the edge and the consumer decides what a failure means. The two are named for the
+condition each states, because "completed" reads as terminal in some contexts and as success
+in others.
+
+`require: finished` also governs blocking: a consumer declaring it is not blocked when the
+failure lies at the collected step or anywhere feeding it, since an item dying two stages
+back is exactly why the collection has partial coverage. Failures outside that subtree reach
+the consumer through a different edge, which said nothing about accepting terminal outcomes,
+and still block.
+
+The manifest reports against the collected step's **expected roster**, not against the task
+directories on disk. An item that died upstream never creates a directory there, so a
+collection over what arrived would report three of four items as full coverage; reporting
+against the roster distinguishes succeeded, failed, and never-reached. The manifest is
+derived from durable per-item state on every read and never stored as truth, so it cannot
+drift from the state it describes.
+
 ### Item-Aligned Chains
 
 `for_each.align: same_key` declares a step's `needs` edge item-scoped rather than

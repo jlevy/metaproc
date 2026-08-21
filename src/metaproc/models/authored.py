@@ -270,6 +270,22 @@ class IOSpec(BaseModel):
     template: str | None = None
     condition: str | None = None
 
+    # Fan-in binding. `collect` names an upstream fan-out step whose per-item outcomes
+    # this input receives as one manifest, so a consumer reads a typed collection
+    # instead of rediscovering upstream state by walking directories.
+    collect: str | None = None
+    require: Literal["succeeded", "finished"] | None = Field(
+        default=None,
+        description=(
+            "Which upstream outcomes satisfy this input. `succeeded` (the default when "
+            "collecting) needs every item to have succeeded. `finished` accepts any "
+            "terminal outcome, so a partially failed upstream still satisfies the edge "
+            "and the consumer decides what a failure means. The two are named for the "
+            "condition each states, because 'completed' reads as terminal in some "
+            "contexts and as success in others."
+        ),
+    )
+
     model_config: ClassVar[ConfigDict] = ConfigDict(populate_by_name=True)
 
     @model_validator(mode="after")

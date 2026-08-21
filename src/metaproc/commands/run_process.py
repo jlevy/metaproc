@@ -73,6 +73,7 @@ from metaproc.engine.dep_state import (
     recorded_step_hash,
 )
 from metaproc.engine.discovery import discover_items_from_source
+from metaproc.engine.fan_in import write_outcome_manifest
 from metaproc.engine.graph import (
     downstream,
     item_aligned_chains,
@@ -2218,6 +2219,7 @@ async def _execute_manual_step(
 async def _execute_step(
     *,
     spec: ProcessSpec,
+    step_map: dict[str, ResolvedStep] | None = None,
     step_def: ProcessStep,
     target: ResolvedStep,
     variables: dict[str, str],
@@ -2244,6 +2246,34 @@ async def _execute_step(
 ) -> bool:
     """Dispatch a step to the correct execution path. Returns True on success."""
     step_id = target.step_id
+
+    # Fan-in bindings are materialized from durable per-item state just before the
+    # consumer runs, so the collection describes what actually happened rather than
+    # what was true when the plan was built.
+    for input_name, io_spec in target.inputs.items():
+        if not io_spec.collect or not io_spec.path:
+            continue
+        # The expected roster comes from the collected step's own resolved fan-out, so
+        # an item that died before reaching it is still reported rather than absent.
+        collected_step = (step_map or {}).get(io_spec.collect)
+        expected_keys = None
+        if collected_step is not None and collected_step.fan_out is not None:
+            bind = collected_step.fan_out.bind
+            expected_keys = [
+                str(item[bind]) for item in collected_step.fan_out.items if bind in item
+            ]
+        manifest = write_outcome_manifest(
+            run_dir,
+            io_spec.collect,
+            Path(resolve_templates(io_spec.path, variables)),
+            expected_keys,
+        )
+        counts = manifest["fan_in_outcomes"]
+        out.progress(
+            f"  Collected '{input_name}' from '{io_spec.collect}': "
+            f"{counts['succeeded']} succeeded, {counts['failed']} failed "
+            f"of {counts['total']}"
+        )
 
     if target.mode == "composite":
         return await _execute_composite_step(
@@ -2487,6 +2517,7 @@ async def _orchestrate(
 
         success = await _execute_step(
             spec=spec,
+            step_map=step_map,
             step_def=step_def,
             target=target,
             variables=variables,

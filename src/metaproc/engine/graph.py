@@ -124,8 +124,37 @@ def propagate_failure(
         dep = by_id.get(dep_id)
         if dep is not None and dep.on_failure == "continue":
             continue
+        if dep is not None and _requires_only_finished(dep, failed_step_id, steps):
+            # The consumer asked for terminal outcomes, not successful ones, so a
+            # partially failed upstream satisfies its edge. Blocking it here would let
+            # an operator-facing failure decide an edge's meaning, which is the one
+            # thing edge semantics must not depend on.
+            continue
         blocked.append(dep_id)
     return blocked
+
+
+def _requires_only_finished(
+    step: ResolvedStep, failed_step_id: str, steps: Sequence[ResolvedStep]
+) -> bool:
+    """Whether *step* tolerates *failed_step_id* failing, per a collected edge.
+
+    The consumer declares `require: finished` against the step it collects, but the
+    failure can land anywhere upstream of that step: an item dying at stage two is why
+    stage three has partial coverage, and the consumer asked for exactly that. So the
+    edge tolerates a failure at the collected step itself or anywhere feeding it.
+
+    It does not tolerate failures outside that subtree. Those reach the consumer through
+    a different edge, which said nothing about accepting terminal outcomes.
+    """
+    for spec in step.inputs.values():
+        if spec.require != "finished" or not spec.collect:
+            continue
+        if spec.collect == failed_step_id:
+            return True
+        if spec.collect in downstream(steps, failed_step_id):
+            return True
+    return False
 
 
 def topo_sort(
