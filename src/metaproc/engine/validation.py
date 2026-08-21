@@ -386,10 +386,17 @@ def _artifact_failures(
     used to be discarded: which pass refused the document, which validator, and
     where.
     """
-    entries: list[tuple[OutputFailureKind, dict[str, object]]] = [
-        *((OutputFailureKind.structural, e) for e in result.structural.errors),
-        *((OutputFailureKind.semantic, e) for e in result.semantic.errors),
-    ]
+    # Both passes read the same document, so a structurally invalid one draws
+    # complaints from each about the same fields. Report the pass that refused
+    # it first: once the shape is wrong the semantic verdict describes the same
+    # defect a second time, and a consumer counting failures would count it
+    # twice and could route the two copies to different owners.
+    if result.structural.errors:
+        entries: list[tuple[OutputFailureKind, dict[str, object]]] = [
+            (OutputFailureKind.structural, e) for e in result.structural.errors
+        ]
+    else:
+        entries = [(OutputFailureKind.semantic, e) for e in result.semantic.errors]
     if not entries:
         return [
             OutputFailure(
