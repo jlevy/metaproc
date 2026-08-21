@@ -1198,21 +1198,25 @@ async def _execute_item_aligned_chain(
     if not source_path.exists():
         raise CLIError(f"source file not found: {source_path}")
 
+    # Discover against the whole chain, not the head. An item that finished the head
+    # but not a later step is still actionable, and filtering on the head's completion
+    # would drop it from the chain entirely, so a resumed run would silently do nothing
+    # for it. Reuse is applied per step per item below instead.
     try:
         discovery = discover_items_from_source(
             source_path,
             step_def_map[chain[0]],
-            output_paths=head.outputs or None,
+            output_paths=None,
             params=variables,
-            reuse_policy=head.reuse_policy,
+            reuse_policy="trust_state",
             run_dir=run_dir,
         )
     except ValueError as exc:
         raise CLIError(str(exc)) from exc
 
-    item_contexts = discovery.actionable_contexts
+    item_contexts = discovery.actionable_contexts + list(discovery.filtered_items)
     if not item_contexts:
-        out.progress(f"  Chain '{' -> '.join(chain)}': no actionable items")
+        out.progress(f"  Chain '{' -> '.join(chain)}': no items")
         return dict.fromkeys(chain, True)
 
     out.progress(f"  Chain '{' -> '.join(chain)}': {len(item_contexts)} items, item-aligned")
@@ -1229,6 +1233,15 @@ async def _execute_item_aligned_chain(
         item_vars = dict(variables)
         item_vars.update(item_context)
         for step_id in chain:
+            # Resume at this item's own position: a step already completed for this
+            # item is not redone, and the item continues from where it stopped.
+            item_state_dir = compute_task_state_dir(run_dir, step_def_map[step_id], item_vars)
+            prior = read_status_at(item_state_dir)
+            if prior is not None and prior.state in ("completed", "cached"):
+                async with lock:
+                    reached[step_id] += 1
+                    succeeded[step_id] += 1
+                continue
             async with lock:
                 reached[step_id] += 1
             async with gate:

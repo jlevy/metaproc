@@ -1429,6 +1429,12 @@ of blocking the graph. Measured on a four-item cohort where one item fails at th
 three stages: under the level walk no item completes the third stage, because the step
 failure blocks it wholesale; under an aligned chain three of four complete.
 
+Resume is per item and per step. An item that finished the head but not a later step is
+still actionable, so the chain discovers against the whole chain rather than the head and
+skips only the steps already completed for that item. Filtering on the head's completion
+would drop such an item from the chain entirely and a resumed run would silently do nothing
+for it. Work that was in flight when a run died restarts, since it never committed.
+
 Absent `align`, nothing changes. The edge stays step-scoped and the level walk executes it
 exactly as before, which is the compatibility floor for every existing spec.
 
