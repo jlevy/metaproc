@@ -980,7 +980,10 @@ async def _execute_code_step(
                 run_id=run_id,
                 step_node_id=step_id,
             ):
-                handler_fn(dict(variables), process_step)
+                # Off the event loop: a code handler is synchronous, and calling it
+                # inline pins the loop for its whole duration, which serializes every
+                # sibling item of a fan-out no matter how the dispatcher gathers them.
+                await asyncio.to_thread(handler_fn, dict(variables), process_step)
         elif command_ref is not None:
             resolved_cmd = resolve_templates(command_ref, variables)
             env = dict(os.environ)
@@ -1056,6 +1059,100 @@ async def _execute_code_step(
         ),
     )
     return True
+
+
+async def _execute_code_fan_out_step(
+    *,
+    spec: ProcessSpec,
+    step_def: ProcessStep,
+    target: ResolvedStep,
+    variables: dict[str, str],
+    process_dir: Path,
+    run_dir: Path,
+    run_id: str,
+    max_concurrency: int | None,
+    external_semaphore: asyncio.Semaphore | None,
+    out: Any,
+) -> bool:
+    """Execute a mode:code step with for_each, one handler invocation per item.
+
+    The agent path owns adapters, variants, and auth pools, none of which a code handler
+    has; what the two share is item discovery and per-item state, so only that is reused
+    here. Each item gets its own ``variables``, which is what makes
+    ``compute_task_state_dir`` and ``compute_item_dir`` address per-item state and
+    artifacts rather than collapsing onto the step.
+
+    One item failing does not cancel its siblings: every item is awaited and the step
+    reports success only if all of them succeeded. That leaves the per-item records
+    intact for a consumer to read, which is what a partial-success workload needs.
+    """
+    step_id = target.step_id
+    assert target.fan_out is not None
+
+    resolved_source = target.fan_out.source
+    if not resolved_source:
+        raise CLIError(f"step '{step_id}' has for_each but no resolved source")
+    source_path = Path(resolved_source)
+    if not source_path.exists():
+        raise CLIError(f"source file not found: {source_path}")
+
+    try:
+        discovery = discover_items_from_source(
+            source_path,
+            step_def,
+            output_paths=target.outputs or None,
+            params=variables,
+            reuse_policy=target.reuse_policy,
+            run_dir=run_dir,
+        )
+    except ValueError as exc:
+        raise CLIError(str(exc)) from exc
+
+    item_contexts = discovery.actionable_contexts
+    if not item_contexts:
+        out.progress(f"  Step '{step_id}': no actionable items (all completed)")
+        return True
+
+    out.progress(
+        f"  Step '{step_id}': {len(item_contexts)} actionable items "
+        f"({len(discovery.filtered_items)} filtered)"
+    )
+
+    limit = max_concurrency if max_concurrency and max_concurrency > 0 else len(item_contexts)
+    gate = asyncio.Semaphore(max(1, limit))
+
+    async def _run_item(item_context: dict[str, str]) -> bool:
+        item_vars = dict(variables)
+        item_vars.update(item_context)
+        async with gate:
+            if external_semaphore is not None:
+                async with external_semaphore:
+                    return await _execute_code_step(
+                        spec=spec,
+                        step_def=step_def,
+                        target=target,
+                        variables=item_vars,
+                        process_dir=process_dir,
+                        run_dir=run_dir,
+                        run_id=run_id,
+                        out=out,
+                    )
+            return await _execute_code_step(
+                spec=spec,
+                step_def=step_def,
+                target=target,
+                variables=item_vars,
+                process_dir=process_dir,
+                run_dir=run_dir,
+                run_id=run_id,
+                out=out,
+            )
+
+    results = await asyncio.gather(*(_run_item(ctx) for ctx in item_contexts))
+    failed = sum(1 for ok in results if not ok)
+    if failed:
+        out.progress(f"  Step '{step_id}': {failed} of {len(results)} items failed")
+    return failed == 0
 
 
 async def _run_agent_subprocess(
@@ -2066,6 +2163,19 @@ async def _execute_step(
         )
 
     if target.mode == "code":
+        if target.fan_out is not None:
+            return await _execute_code_fan_out_step(
+                spec=spec,
+                step_def=step_def,
+                target=target,
+                variables=variables,
+                process_dir=process_dir,
+                run_dir=run_dir,
+                run_id=run_id,
+                max_concurrency=max_concurrency,
+                external_semaphore=external_semaphore,
+                out=out,
+            )
         return await _execute_code_step(
             spec=spec,
             step_def=step_def,
