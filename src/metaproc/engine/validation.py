@@ -355,34 +355,89 @@ def validate_item_outputs_detailed(
                     fail(OutputFailureKind.unreadable, str(e))
             continue
 
-        # One contract check for every format. Only reading the document differs:
-        # a frontmatter artifact validates its frontmatter, anything else its
-        # document root. Sending both through validate_artifact is what makes a
-        # declaration mean the same thing wherever it is written, including that
-        # an unresolvable contract fails rather than passing silently.
-        try:
-            document = (
-                fmf_read_frontmatter_artifact(fpath)
-                if fmt == "frontmatter-md"
-                else read_yaml_file(fpath)
+        failures.extend(
+            check_artifact_contract(
+                fpath,
+                contract_id=schema,
+                fmt=fmt,
+                registry=softschema_registry,
+                output=output_name,
+                path=rendered,
             )
-        except (FmFormatError, OSError, ValueError, YAMLError) as e:
-            # A document that will not parse is an unreadable output, not a crash.
-            # YAMLError is not a ValueError, so it needs naming: without it a
-            # malformed artifact raises out of validation and takes the run with it
-            # instead of failing its own step.
-            fail(OutputFailureKind.unreadable, str(e))
-            continue
-
-        result = validate_artifact(
-            fpath,
-            contract_id=schema,
-            registry=softschema_registry,
-            document=normalize_for_structural_pass(document),
         )
-        if not result.ok:
-            failures.extend(_artifact_failures(result, output_name, rendered, schema))
     return failures
+
+
+def check_artifact_contract(
+    fpath: Path,
+    *,
+    contract_id: str,
+    fmt: str,
+    registry: Contracts,
+    output: str = "",
+    path: str = "",
+) -> list[OutputFailure]:
+    """Validate one existing artifact against a contract id.
+
+    The single place a contract is checked, so the step boundary and
+    ``metaproc validate`` cannot answer the same question differently. Before
+    this was shared they did: one normalized representation and the other did
+    not, so an unquoted YAML date passed a run and failed the checker.
+
+    One contract check for every format. Only reading the document differs: a
+    frontmatter artifact validates its frontmatter, anything else its document
+    root. Sending both through ``validate_artifact`` is what makes a declaration
+    mean the same thing wherever it is written, including that an unresolvable
+    contract fails rather than passing silently.
+    """
+    rendered = path or fpath.name
+    try:
+        if fmt == "frontmatter-md":
+            document: object = fmf_read_frontmatter_artifact(fpath)
+        else:
+            document = _as_enveloped(read_yaml_file(fpath), contract_id, registry)
+    except (FmFormatError, OSError, ValueError, YAMLError) as e:
+        # A document that will not parse is an unreadable output, not a crash.
+        # YAMLError is not a ValueError, so it needs naming: without it a
+        # malformed artifact raises out of validation and takes the run with it
+        # instead of failing its own step.
+        return [
+            OutputFailure(
+                output=output,
+                path=rendered,
+                contract=contract_id or None,
+                kind=OutputFailureKind.unreadable,
+                message=str(e),
+            )
+        ]
+
+    result = validate_artifact(
+        fpath,
+        contract_id=contract_id,
+        registry=registry,
+        document=normalize_for_structural_pass(document),
+    )
+    if result.ok:
+        return []
+    return _artifact_failures(result, output, rendered, contract_id)
+
+
+def _as_enveloped(document: object, contract_id: str, registry: Contracts) -> object:
+    """Accept a bare root for a contract that keeps its payload under an envelope key.
+
+    A non-frontmatter output used to be validated by loading the file straight
+    into the contract's model, so the document root *was* the model. Routing
+    every format through ``validate_artifact`` means the envelope is looked for
+    instead, which would refuse every artifact written under the older reading.
+    Wrapping a root that does not already carry the key accepts both spellings,
+    while an unresolvable contract or an envelope that is present and wrong still
+    fails.
+    """
+    binding = registry.resolve(contract_id) if contract_id else None
+    envelope_key = binding.envelope_key if binding else None
+    if not envelope_key or not isinstance(document, Mapping) or envelope_key in document:
+        return document
+    return {envelope_key: document}
 
 
 def _artifact_failures(
