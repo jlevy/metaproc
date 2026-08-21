@@ -184,6 +184,12 @@ cross-linked from the arch docs:
 - [metaproc-concepts-and-principles.md](../src/metaproc/docs/metaproc-concepts-and-principles.md):
   the conceptual model (vocabulary, architectural planes, optimization loops, design
   principles). The arch docs operationalize these concepts.
+- [process-framework-concepts.md](process-framework-concepts.md): the general execution
+  model beneath any process framework (planning, tasks, edge granularity, join policies,
+  admission), with design tests and a closing map onto Metaproc.
+  Framework-agnostic by design; its mapping section cites the arch doc that owns each
+  concept, and its known-deviations list is where the gaps between model and
+  implementation are tracked.
 - [conventions.md](conventions.md): naming, structure, and file-format rules.
 - [artifact-catalog.md](artifact-catalog.md): every file Metaproc writes and reads.
 - [performance-notes.md](performance-notes.md): performance principles and worked
