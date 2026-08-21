@@ -64,6 +64,44 @@ class TestCollectItemOutcomes:
     def test_an_absent_step_collects_to_nothing(self, tmp_path: Path) -> None:
         assert collect_item_outcomes(tmp_path, "never-ran") == []
 
+    def test_a_contract_failure_is_carried_through_structured(self, tmp_path: Path) -> None:
+        """A consumer routing by owner needs the invariant, not the sentence."""
+        d = tmp_path / ".state" / "tasks" / "s" / "A"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "status.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "run_id": "r",
+                    "step_id": "s",
+                    "item": {"step": "s"},
+                    "state": "failed",
+                    "attempt": 1,
+                    "error": "out.md: missing required field",
+                    "output_failures": [
+                        {
+                            "output": "out",
+                            "path": "/tmp/out.md",
+                            "kind": "semantic",
+                            "invariant": "required",
+                            "location": "$.ticker",
+                            "message": "missing required field",
+                            "contract": "trading:Thing/v1",
+                        }
+                    ],
+                }
+            )
+        )
+        outcome = collect_item_outcomes(tmp_path, "s")[0]
+        assert outcome["succeeded"] is False
+        failure = outcome["output_failures"][0]
+        assert failure["kind"] == "semantic"
+        assert failure["invariant"] == "required"
+        assert failure["contract"] == "trading:Thing/v1"
+
+    def test_a_failure_without_structured_detail_omits_the_field(self, tmp_path: Path) -> None:
+        _task(tmp_path, "s", "A", "failed", error="boom")
+        assert "output_failures" not in collect_item_outcomes(tmp_path, "s")[0]
+
     def test_an_unreadable_status_does_not_destroy_the_collection(self, tmp_path: Path) -> None:
         """One malformed record must not cost the consumer every other item's outcome."""
         _task(tmp_path, "s", "A", "completed")

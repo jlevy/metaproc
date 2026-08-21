@@ -1400,6 +1400,12 @@ back is exactly why the collection has partial coverage. Failures outside that s
 the consumer through a different edge, which said nothing about accepting terminal outcomes,
 and still block.
 
+Where an item failed a contract, its record carries the structured failure alongside the
+message: the failing `invariant`, its `location` in the document, the `contract` the output
+declared, and the `kind` of refusal. A consumer routing work by owner needs that
+distinction, because a missing output and a refused invariant are different people's
+problems and the rendered sentence cannot express the difference.
+
 The manifest reports against the collected step's **expected roster**, not against the task
 directories on disk. An item that died upstream never creates a directory there, so a
 collection over what arrived would report three of four items as full coverage; reporting

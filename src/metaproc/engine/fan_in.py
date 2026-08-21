@@ -73,6 +73,25 @@ def collect_item_outcomes(
         error = getattr(status, "error", None)
         if error:
             record["error"] = str(error)
+        # Pass softschema's vocabulary through unchanged rather than flattening it to
+        # the sentence. A consumer routing work by owner needs to tell a missing output
+        # from a refused invariant, and the string form cannot express that difference.
+        failures = getattr(status, "output_failures", None) or []
+        if failures:
+            record["output_failures"] = [
+                {
+                    key: value
+                    for key, value in (
+                        ("output", failure.output),
+                        ("kind", str(failure.kind)),
+                        ("contract", failure.contract),
+                        ("invariant", failure.invariant),
+                        ("location", failure.location),
+                    )
+                    if value is not None
+                }
+                for failure in failures
+            ]
         outcomes.append(record)
     return outcomes
 
