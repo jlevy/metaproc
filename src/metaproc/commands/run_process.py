@@ -1143,6 +1143,7 @@ async def _execute_code_fan_out_step(
         invoke=_invoke,
         step_id=step_id,
         max_concurrency=max_concurrency,
+        step_concurrency=target.fan_out.max_concurrency,
         external_semaphore=external_semaphore,
     )
     if succeeded != total:
@@ -1193,6 +1194,10 @@ async def _execute_item_aligned_chain(
         prior = read_status_at(compute_task_state_dir(run_dir, step_def_map[step_id], item_vars))
         return prior is not None and prior.state in ("completed", "cached")
 
+    def _step_concurrency(step_id: str) -> int | None:
+        fan_out = step_map[step_id].fan_out
+        return fan_out.max_concurrency if fan_out else None
+
     tallies = await run_aligned_chain(
         chain=chain,
         item_contexts=item_contexts,
@@ -1200,6 +1205,7 @@ async def _execute_item_aligned_chain(
         invoke=_invoke,
         is_done=_is_done,
         max_concurrency=max_concurrency,
+        step_concurrency=_step_concurrency,
         external_semaphore=external_semaphore,
     )
 

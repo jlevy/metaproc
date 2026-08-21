@@ -41,6 +41,7 @@ class FanOut(BaseModel):
     filtered_count: int = 0
     retry: RetryPolicy | None = None
     align: Literal["same_key"] | None = None
+    max_concurrency: int | None = None
 
 
 class ResolvedStep(BaseModel):

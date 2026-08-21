@@ -24,10 +24,22 @@ StepInvoker = Callable[[str, dict[str, str]], Awaitable[bool]]
 StepCompletionCheck = Callable[[str, dict[str, str]], bool]
 
 
-def _gate(max_concurrency: int | None, item_count: int) -> asyncio.Semaphore:
-    """Bound in-flight items, defaulting to no bound beyond the roster itself."""
-    limit = max_concurrency if max_concurrency and max_concurrency > 0 else item_count
-    return asyncio.Semaphore(max(1, limit))
+def effective_concurrency(run_limit: int | None, step_limit: int | None, item_count: int) -> int:
+    """Resolve how many of a step's items may run at once.
+
+    The two limits answer different questions and both bind: the run-wide cap is the
+    whole run's budget and a step ceiling is what this step can tolerate, so the answer
+    is the smaller. A step ceiling above the run cap cannot mean "exceed the budget",
+    and one below it is a real constraint the run cap must not override.
+
+    With neither set the roster itself is the only bound.
+    """
+    limits = [limit for limit in (run_limit, step_limit) if limit and limit > 0]
+    return max(1, min(limits)) if limits else max(1, item_count)
+
+
+def _gate(run_limit: int | None, step_limit: int | None, item_count: int) -> asyncio.Semaphore:
+    return asyncio.Semaphore(effective_concurrency(run_limit, step_limit, item_count))
 
 
 async def run_fan_out(
@@ -37,6 +49,7 @@ async def run_fan_out(
     invoke: StepInvoker,
     step_id: str,
     max_concurrency: int | None = None,
+    step_concurrency: int | None = None,
     external_semaphore: asyncio.Semaphore | None = None,
 ) -> tuple[int, int]:
     """Run one step once per item. Returns (succeeded, total).
@@ -48,7 +61,7 @@ async def run_fan_out(
     if not item_contexts:
         return (0, 0)
 
-    gate = _gate(max_concurrency, len(item_contexts))
+    gate = _gate(max_concurrency, step_concurrency, len(item_contexts))
 
     async def _one(item_context: dict[str, str]) -> bool:
         item_vars = {**variables, **item_context}
@@ -70,6 +83,7 @@ async def run_aligned_chain(
     invoke: StepInvoker,
     is_done: StepCompletionCheck | None = None,
     max_concurrency: int | None = None,
+    step_concurrency: Callable[[str], int | None] | None = None,
     external_semaphore: asyncio.Semaphore | None = None,
 ) -> dict[str, tuple[int, int]]:
     """Run a chain of steps once per item. Returns (succeeded, reached) per step.
@@ -89,7 +103,17 @@ async def run_aligned_chain(
     if not item_contexts:
         return {step_id: (0, 0) for step_id in chain}
 
-    gate = _gate(max_concurrency, len(item_contexts))
+    # A chain runs several steps, each with its own ceiling, so the gate is per step
+    # rather than one shared across the walk: a tight ceiling on one stage must not
+    # throttle the others an item passes through.
+    gates = {
+        step_id: _gate(
+            max_concurrency,
+            step_concurrency(step_id) if step_concurrency else None,
+            len(item_contexts),
+        )
+        for step_id in chain
+    }
     tally = asyncio.Lock()
 
     async def _walk(item_context: dict[str, str]) -> None:
@@ -102,7 +126,7 @@ async def run_aligned_chain(
                 continue
             async with tally:
                 reached[step_id] += 1
-            async with gate:
+            async with gates[step_id]:
                 if external_semaphore is not None:
                     async with external_semaphore:
                         ok = await invoke(step_id, item_vars)

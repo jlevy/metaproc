@@ -1418,6 +1418,20 @@ against the roster distinguishes succeeded, failed, and never-reached. The manif
 derived from durable per-item state on every read and never stored as truth, so it cannot
 drift from the state it describes.
 
+### Per-Step Concurrency
+
+`for_each.max_concurrency` bounds one step's items in flight, independent of any other
+step's. A run-wide cap and an execution profile both answer different questions, the first
+being the whole run's budget and the second which adapter and model, so expressing a
+per-step ceiling through either conflates it with something else and leaves the limit
+invisible in the spec that describes the work.
+
+Both limits bind and the smaller wins: a step ceiling above the run cap cannot mean exceed
+the budget, and one below it is a real constraint the run cap must not override. In a chain
+the gate is per step rather than shared across the walk, so a tight ceiling on one stage
+does not throttle the others an item passes through. Omitted, the step is bounded only by
+the run-wide cap.
+
 ### Item-Aligned Chains
 
 `for_each.align: same_key` declares a step's `needs` edge item-scoped rather than

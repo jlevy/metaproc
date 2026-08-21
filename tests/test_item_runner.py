@@ -8,7 +8,12 @@ from __future__ import annotations
 
 import asyncio
 
-from metaproc.engine.item_runner import StepInvoker, run_aligned_chain, run_fan_out
+from metaproc.engine.item_runner import (
+    StepInvoker,
+    effective_concurrency,
+    run_aligned_chain,
+    run_fan_out,
+)
 
 ITEMS = [{"k": "a"}, {"k": "b"}, {"k": "c"}]
 
@@ -22,6 +27,24 @@ def _recording_invoke() -> tuple[list[tuple[str, str]], StepInvoker]:
         return True
 
     return calls, invoke
+
+
+class TestEffectiveConcurrency:
+    def test_the_smaller_limit_binds(self) -> None:
+        """Both answer different questions, so neither may override the other."""
+        assert effective_concurrency(10, 3, 100) == 3
+        assert effective_concurrency(3, 10, 100) == 3
+
+    def test_either_limit_alone_binds(self) -> None:
+        assert effective_concurrency(4, None, 100) == 4
+        assert effective_concurrency(None, 4, 100) == 4
+
+    def test_with_no_limit_the_roster_is_the_bound(self) -> None:
+        assert effective_concurrency(None, None, 7) == 7
+
+    def test_never_resolves_below_one(self) -> None:
+        """An empty roster must not produce a semaphore that blocks forever."""
+        assert effective_concurrency(None, None, 0) == 1
 
 
 class TestRunFanOut:
@@ -66,6 +89,30 @@ class TestRunFanOut:
                 invoke=invoke,
                 step_id="s",
                 max_concurrency=1,
+            )
+        )
+        assert peak == 1
+
+    def test_a_step_ceiling_bounds_below_the_run_cap(self) -> None:
+        in_flight = 0
+        peak = 0
+
+        async def invoke(step_id: str, variables: dict[str, str]) -> bool:
+            nonlocal in_flight, peak
+            in_flight += 1
+            peak = max(peak, in_flight)
+            await asyncio.sleep(0.01)
+            in_flight -= 1
+            return True
+
+        asyncio.run(
+            run_fan_out(
+                item_contexts=ITEMS,
+                variables={},
+                invoke=invoke,
+                step_id="s",
+                max_concurrency=10,
+                step_concurrency=1,
             )
         )
         assert peak == 1
@@ -148,6 +195,35 @@ class TestRunAlignedChain:
             )
         )
         assert overlapped
+
+    def test_each_step_gets_its_own_ceiling(self) -> None:
+        """A tight ceiling on one stage must not throttle the others.
+
+        Step two dwells far longer than step one, so items released one at a time by
+        step one's ceiling still accumulate in step two. With a uniform dwell they
+        would not, and the test would pass on arithmetic rather than on the gate.
+        """
+        peaks: dict[str, int] = {"one": 0, "two": 0}
+        active: dict[str, int] = {"one": 0, "two": 0}
+
+        async def invoke(step_id: str, variables: dict[str, str]) -> bool:
+            active[step_id] += 1
+            peaks[step_id] = max(peaks[step_id], active[step_id])
+            await asyncio.sleep(0.01 if step_id == "one" else 0.08)
+            active[step_id] -= 1
+            return True
+
+        asyncio.run(
+            run_aligned_chain(
+                chain=["one", "two"],
+                item_contexts=ITEMS,
+                variables={},
+                invoke=invoke,
+                step_concurrency=lambda step_id: 1 if step_id == "one" else None,
+            )
+        )
+        assert peaks["one"] == 1
+        assert peaks["two"] > 1
 
     def test_an_empty_roster_reports_every_step_as_untouched(self) -> None:
         calls, invoke = _recording_invoke()

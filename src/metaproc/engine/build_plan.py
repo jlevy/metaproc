@@ -861,6 +861,7 @@ def build_plan(
                 filtered_count=filtered_count,
                 retry=step.for_each.retry or spec.defaults.retry,
                 align=step.for_each.align,
+                max_concurrency=step.for_each.max_concurrency,
             )
 
         resolved_env: dict[str, str] = {}
