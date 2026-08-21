@@ -630,7 +630,7 @@ model; the rows below describe the implementation as it stands today.
 | Contracts and keys | Declared `as:` and `parse:` shapes on deps; softschema-validated artifacts (`softschema inspect`, `softschema validate`); `for_each` `bind` and `bind_fields` declare the dispatch fields; the item key addresses per-task state | [arch-metaproc-core.md §6.5-6.7, §13](arch/arch-metaproc-core.md) |
 | Static planning | Spec resolved into a `Plan` as data; `plan`, `--dry-run`, validation | [arch-metaproc-core.md §8](arch/arch-metaproc-core.md) |
 | Dynamic width | Fan-out rosters re-discovered at execution time, so a mid-run step may write a later step’s roster | [run_process.py](../src/metaproc/commands/run_process.py) (execution-time `discover_items_from_source`) |
-| Fan-out | `for_each` over a declared items file; per-item retry with backoff | [arch-metaproc-core.md §6.7, §14.1](arch/arch-metaproc-core.md) |
+| Fan-out | `for_each` over a declared items file, on agent and code steps; per-item retry with backoff on the agent path | [arch-metaproc-core.md §6.7, §11, §14.1](arch/arch-metaproc-core.md) |
 | Task state and resume | Per-item `status.yaml`, `attempt.yaml`, `result.yaml`; stale-marker reconciliation; `--force` invalidation with audit trail | [arch-metaproc-core.md §9-10, §19.5](arch/arch-metaproc-core.md), [artifact-catalog.md](artifact-catalog.md) |
 | Admission | RunPool: adaptive memory ceiling, provider ceiling, operator cap, cross-run host admission, health, kill | [arch-runpool.md](arch/arch-runpool.md) |
 | Visibility | `status` (with `--check`), `wait`, `tail`, `pulse`, `stats`, `deps`, `structure-report`, `pool status`, `pool events`, `pool health`, `pool concurrency-timeline`, `pool rollup`, `resource-report`, `trace`; classified `FailureClass` per item; Metabrowser plugin views | [arch-metaproc-core.md §9, §15](arch/arch-metaproc-core.md), [arch-runpool.md § Visibility Contract](arch/arch-runpool.md) |
@@ -645,6 +645,18 @@ original unit of execution and state, and one local orchestrator was the only wr
   executor is coarser still: it walks the step graph in topological *levels*, finishing
   each level before the next.
   Item-scoped edges do not exist, so chained fan-outs barrier at every step boundary.
+  Measured on a four-item cohort whose stages take 2, 5, 2 and 8 seconds: the fastest item
+  finishes stage one at 2.0s and cannot start stage two until 8.2s, because the slowest
+  item runs to 8.1s. The idle time is the spread of the roster, so it grows with width and
+  with how uneven the items are.
+- **Mode decides more than invocation (no test; a structural deviation).** The model's
+  pivot is the task, but the runtime forks on step *mode* and each branch owns its own
+  execution path. Mapping and governance therefore attach to modes rather than to tasks:
+  fan-out was implemented for agent steps and, until recently, existed nowhere else, and
+  `mode: composite` still cannot fan out, which forces a consumer wanting a child spec
+  mapped over a roster to express it as a code handler launching one child run per item.
+  Neither gap is a policy about what those modes mean.
+  See [P8](metaproc-design-rev3-proposals.md) for the proposed decomposition.
 - **Dependency clauses (test 5).** Fan-in is implicitly “all items must succeed”;
   mapping, requirement, and cardinality are not separately declarable, and fan-in
   consumers receive no outcome descriptors.

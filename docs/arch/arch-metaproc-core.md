@@ -374,6 +374,19 @@ handler writes outputs directly; the engine records `.state/` completion markers
 If the handler raises, the step fails with the same state recording as a failed agent
 step.
 
+`mode: code` supports `for_each`. Each item is one invocation with its own resolved
+context, so per-item state, logs, and artifacts address the item rather than the step, and
+one item failing does not cancel its siblings: every item is awaited and the step succeeds
+only if all of them did. Item discovery is the same execution-time roster read the agent
+path uses; nothing else is shared, because adapters, variants, and auth pools have no
+meaning for a handler.
+
+Handlers run off the event loop. A handler is a synchronous callable, and calling it inline
+would pin the loop for its whole duration, which serializes every sibling item of a fan-out
+no matter how the dispatcher gathers them. Handlers therefore need not be thread-safe
+against themselves, but a fan-out runs several concurrently, so a handler sharing mutable
+process state across items must guard it.
+
 Dry-run mode prints the handler path (or command) and resolved inputs instead of
 executing.
 
@@ -1356,6 +1369,17 @@ see “Historical note: packets” below).
 The framework parses items files generically by extracting the envelope payload’s
 `items` list. Domain packages supply typed envelope models; the orchestration layer only
 needs the generic items-file contract.
+
+Fan-out applies to `mode: agent` and `mode: code`. The two share item discovery and
+per-item addressing and diverge in everything else: the agent path carries adapters,
+variants, execution profiles, and auth-pool dispatch, while the code path invokes a handler
+or command. `mode: composite` does not fan out, which is why a consumer wanting a child
+spec mapped over a roster expresses it as a code handler that launches one child run per
+item; the shape and its cost are the subject of proposal P8.
+
+Every field named in `bind_fields` must be present and non-empty on every item. There is no
+optional dispatch field, so a roster where a field applies to only some items carries an
+explicit sentinel value rather than omitting it.
 
 **Terminology note: items file vs roster.** *Items file* is the framework’s primary term
 for this concept. *Roster* is retained as domain-specific language inside the
