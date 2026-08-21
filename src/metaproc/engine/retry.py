@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
 
 from metaproc.io import iter_text_lines, resolve_existing_artifact
 from metaproc.models.authored import RetryPolicy
+from metaproc.models.runtime import OutputFailure, OutputFailureKind
 
 log = logging.getLogger(__name__)
 
@@ -172,11 +174,43 @@ def classify_error(error: str) -> RetryVerdict:
     # Output validation failures: retry missing-file cases (transient — the
     # model may have been killed before writing), but treat schema/envelope
     # mismatches as permanent (retrying won't fix a structural mismatch).
+    #
+    # This substring test reads the artifact's filename along with everything
+    # else, so an output named for a schema is judged permanent whatever
+    # actually went wrong with it. Prefer ``classify_output_failures``, which
+    # answers the same question from the structured record; this path remains
+    # for a status record written before those were kept.
     if "output validation failed" in lower:
         if "schema" in lower or "envelope" in lower or "mismatch" in lower:
             return RetryVerdict.FAIL
         return RetryVerdict.RETRY
 
+    return RetryVerdict.FAIL
+
+
+# Which output failures another attempt could plausibly fix. A file that is not
+# there may simply not have been written yet; a document the schema refuses will
+# be refused again in exactly the same way.
+_RETRYABLE_OUTPUT_FAILURES: frozenset[OutputFailureKind] = frozenset(
+    {OutputFailureKind.missing, OutputFailureKind.empty, OutputFailureKind.unreadable}
+)
+
+
+def classify_output_failures(failures: Sequence[OutputFailure]) -> RetryVerdict:
+    """Decide whether re-running could fix these output failures.
+
+    The structured form of rule 4 above, and the reason to prefer it: this reads
+    what refused the output rather than the sentence describing it, so two
+    identical failures cannot receive opposite verdicts because of how their
+    artifacts are named.
+
+    Any failure another attempt cannot fix makes the whole set permanent, since
+    the step has to produce all of its outputs.
+    """
+    if not failures:
+        return RetryVerdict.FAIL
+    if all(f.kind in _RETRYABLE_OUTPUT_FAILURES for f in failures):
+        return RetryVerdict.RETRY
     return RetryVerdict.FAIL
 
 

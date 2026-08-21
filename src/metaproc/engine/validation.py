@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import datetime
+import decimal
+import uuid
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -24,6 +27,7 @@ from metaproc.engine.process_scope import is_dep_ref
 from metaproc.io import FmFormatError, artifact_exists, resolve_existing_artifact
 from metaproc.io.frontmatter import fmf_read_frontmatter_artifact, load_yaml_typed
 from metaproc.models.authored import IOSpec, ProcessSpec
+from metaproc.models.runtime import OutputFailure, OutputFailureKind
 from metaproc.plugins.discovery import get_plugin_registry
 
 _RESERVED_SCOPE_NAMES: dict[str, str] = {
@@ -197,6 +201,33 @@ def _directory_has_content(fpath: Path) -> bool:
     return False
 
 
+def normalize_for_structural_pass(value: object) -> object:
+    """Convert values to the serialized form the schema describes.
+
+    A JSON Schema compiled from a pydantic model describes the *serialized*
+    document, where a ``date`` field is ``type: string``. YAML hands back a
+    ``datetime.date`` for an unquoted ``2026-08-21``, so the same value fails
+    unquoted and passes quoted, which no author can be expected to get right and
+    YAML does not enforce.
+
+    Only types with an unambiguous serialized form are converted. Anything else
+    is passed through untouched, so a genuine type disagreement still fails.
+    """
+    match value:
+        case datetime.datetime() | datetime.date() | datetime.time():
+            return value.isoformat()
+        case decimal.Decimal() | uuid.UUID():
+            return str(value)
+        case dict():
+            return {k: normalize_for_structural_pass(v) for k, v in value.items()}
+        case list():
+            return [normalize_for_structural_pass(v) for v in value]
+        case tuple():
+            return [normalize_for_structural_pass(v) for v in value]
+        case _:
+            return value
+
+
 def _resolve_output_fpath(rendered_path: str, item_dir: Path) -> Path:
     """Resolve a rendered output path against ``item_dir``.
 
@@ -220,6 +251,28 @@ def validate_item_outputs(
 ) -> list[str]:
     """Validate declared outputs exist in the item directory.
 
+    Returns a list of error strings (empty = all valid). This is the string view
+    of :func:`validate_item_outputs_detailed`; callers that need to know which
+    invariant refused which output should use that instead of parsing these.
+    """
+    failures = validate_item_outputs_detailed(
+        item_dir,
+        outputs,
+        variables=variables,
+        softschema_registry=softschema_registry,
+    )
+    return [f.summary() for f in failures]
+
+
+def validate_item_outputs_detailed(
+    item_dir: Path,
+    outputs: dict[str, IOSpec],
+    *,
+    variables: Mapping[str, object] | None = None,
+    softschema_registry: Contracts | None = None,
+) -> list[OutputFailure]:
+    """Validate declared outputs, keeping what refused each one.
+
     ``variables`` is used to render any per-item templates (e.g. ``{{item}}``)
     in output paths before checking existence. Without it, a for_each step
     whose output path contains a bind var will fail validation because
@@ -231,18 +284,42 @@ def validate_item_outputs(
     nothing under the item directory). ``.state/``, ``.logs/``, ``__pycache__``,
     and ``.DS_Store`` are ignored when counting content.
 
-    Returns a list of error strings (empty = all valid).
+    Every failing invariant is reported, not just the first.
     """
     if softschema_registry is None:
         softschema_registry = get_plugin_registry().softschemas
-    errors: list[str] = []
+    failures: list[OutputFailure] = []
 
-    for io_spec in outputs.values():
+    for output_name, io_spec in outputs.items():
         path_template = io_spec.path
         if not path_template:
             continue
         rendered = resolve_templates(path_template, variables) if variables else path_template
         fname = Path(rendered).name
+        schema = io_spec.schema_ or ""
+
+        def fail(
+            kind: OutputFailureKind,
+            message: str,
+            *,
+            invariant: str | None = None,
+            location: str | None = None,
+            _name: str = output_name,
+            _rendered: str = rendered,
+            _schema: str = schema,
+        ) -> None:
+            failures.append(
+                OutputFailure(
+                    output=_name,
+                    path=_rendered,
+                    contract=_schema or None,
+                    kind=kind,
+                    invariant=invariant,
+                    location=location,
+                    message=message,
+                )
+            )
+
         if io_spec.kind == "directory":
             fpath = _resolve_output_fpath(rendered, item_dir)
             # Preserve the fan-out convenience where a directory output's
@@ -252,38 +329,39 @@ def validate_item_outputs(
             if not fpath.exists() and item_dir.name == fname:
                 fpath = item_dir
             if not fpath.exists() or not fpath.is_dir():
-                errors.append(f"{fname}: directory not found")
+                fail(OutputFailureKind.missing, "directory not found")
                 continue
             if not _directory_has_content(fpath):
-                errors.append(f"{fname}: directory is empty (no output files produced)")
+                fail(OutputFailureKind.empty, "directory is empty (no output files produced)")
             continue
+
         fpath = _resolve_output_fpath(rendered, item_dir)
         if not fpath.exists() and not artifact_exists(fpath):
-            errors.append(f"{fname}: file not found")
+            fail(OutputFailureKind.missing, "file not found")
             continue
         if artifact_exists(fpath):
             fpath = resolve_existing_artifact(fpath)
         fmt = io_spec.format or ""
-        schema = io_spec.schema_ or ""
+
         if fmt == "frontmatter-md" and schema:
             try:
                 frontmatter = fmf_read_frontmatter_artifact(fpath)
             except FmFormatError as e:
-                errors.append(f"{fname}: {e}")
+                fail(OutputFailureKind.unreadable, str(e))
                 continue
             result = validate_artifact(
                 fpath,
                 contract_id=schema,
                 registry=softschema_registry,
-                document=frontmatter,
+                document=normalize_for_structural_pass(frontmatter),
             )
             if not result.ok:
-                errors.append(f"{fname}: {_format_artifact_validation_error(result)}")
+                failures.extend(_artifact_failures(result, output_name, rendered, schema))
         elif fmt == "frontmatter-md":
             try:
                 fmf_read_frontmatter_artifact(fpath)
             except FmFormatError as e:
-                errors.append(f"{fname}: {e}")
+                fail(OutputFailureKind.unreadable, str(e))
         elif schema:
             binding = softschema_registry.resolve(schema)
             model_cls = binding.model if binding else None
@@ -291,18 +369,90 @@ def validate_item_outputs(
                 try:
                     load_yaml_typed(fpath, model_cls)
                 except (ValidationError, ValueError) as e:
-                    errors.append(f"{fname}: {e}")
-    return errors
+                    fail(OutputFailureKind.semantic, str(e))
+    return failures
 
 
-def _format_artifact_validation_error(result: ArtifactValidationResult) -> str:
-    errors = result.structural.errors or result.semantic.errors
-    if not errors:
-        return f"{result.contract_id}: validation failed"
-    first = errors[0]
-    kind = first.get("kind") or first.get("type") or "validation_error"
-    message = first.get("message") or first.get("msg") or str(first)
-    return f"{result.contract_id}: {kind}: {message}"
+def _artifact_failures(
+    result: ArtifactValidationResult,
+    output_name: str,
+    rendered: str,
+    schema: str,
+) -> list[OutputFailure]:
+    """Turn a softschema result into one failure per refusing invariant.
+
+    ``message`` reproduces the string this has always produced, so
+    ``StatusRecord.error`` is unchanged. Everything beside it is the detail that
+    used to be discarded: which pass refused the document, which validator, and
+    where.
+    """
+    entries: list[tuple[OutputFailureKind, dict[str, object]]] = [
+        *((OutputFailureKind.structural, e) for e in result.structural.errors),
+        *((OutputFailureKind.semantic, e) for e in result.semantic.errors),
+    ]
+    if not entries:
+        return [
+            OutputFailure(
+                output=output_name,
+                path=rendered,
+                contract=schema,
+                kind=OutputFailureKind.structural,
+                message=f"{result.contract_id}: validation failed",
+            )
+        ]
+
+    failures: list[OutputFailure] = []
+    for kind, entry in entries:
+        detail = entry.get("kind") or entry.get("type") or "validation_error"
+        message = entry.get("message") or entry.get("msg") or str(entry)
+        # Structural errors report the refusing JSON Schema keyword; semantic
+        # errors are pydantic's, where the error type is the closest thing to
+        # a named invariant.
+        invariant = entry.get("validator") or (
+            entry.get("type") if kind is OutputFailureKind.semantic else None
+        )
+        failures.append(
+            OutputFailure(
+                output=output_name,
+                path=rendered,
+                contract=schema,
+                kind=_input_error_kind(result, kind, str(detail)),
+                invariant=str(invariant) if invariant else None,
+                location=_error_location(entry),
+                message=f"{result.contract_id}: {detail}: {message}",
+            )
+        )
+    return failures
+
+
+_INPUT_ERROR_CODES: frozenset[str] = frozenset({"artifact_unreadable", "artifact_invalid_utf8"})
+
+
+def _input_error_kind(
+    result: ArtifactValidationResult, kind: OutputFailureKind, detail: str
+) -> OutputFailureKind:
+    """Report an undecodable artifact as ``unreadable`` rather than ``structural``.
+
+    softschema reports these as ``outcome: "input_error"``; the distinction is
+    the difference between a document that says the wrong thing and one that
+    could not be read at all.
+    """
+    if result.outcome == "input_error" and detail in _INPUT_ERROR_CODES:
+        return OutputFailureKind.unreadable
+    return kind
+
+
+def _error_location(entry: Mapping[str, object]) -> str | None:
+    """Render the document path an error points at, in either pass's vocabulary."""
+    loc = entry.get("path")
+    if loc is None:
+        loc = entry.get("loc")
+    if loc is None:
+        return None
+    if isinstance(loc, (list, tuple)):
+        return ".".join(str(part) for part in loc) or None
+    text = str(loc)
+    return text or None
 
 
 def _check_envelope_schema_match(

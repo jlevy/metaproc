@@ -90,6 +90,7 @@ from metaproc.engine.retry import (
     RetryVerdict,
     classify_error,
     classify_failure,
+    classify_output_failures,
     compute_backoff,
     extract_log_error,
     max_retries_for,
@@ -100,7 +101,7 @@ from metaproc.engine.runtime import (
     resolve_batch_size,
     validate_step_inputs_exist,
 )
-from metaproc.engine.validation import validate_item_outputs
+from metaproc.engine.validation import validate_item_outputs, validate_item_outputs_detailed
 from metaproc.engine.yaml_repair import repair_frontmatter_file
 from metaproc.errors import CLIError, ValidationError
 from metaproc.io.claimed_items import claim_item
@@ -1033,12 +1034,13 @@ def run_parallel(
                                 out_file = artifact_dir / Path(io_spec.path).name
                                 if out_file.exists() and repair_frontmatter_file(out_file):
                                     out.progress(f"  Repaired YAML in {out_file.name} for {item}")
-                        output_errors = validate_item_outputs(
+                        output_failures = validate_item_outputs_detailed(
                             artifact_dir, effective_outputs, variables=item_vars
                         )
-                        if output_errors:
+                        if output_failures:
+                            output_errors = [f.summary() for f in output_failures]
                             error_str = f"output validation failed: {'; '.join(output_errors)}"
-                            verdict = classify_error(error_str)
+                            verdict = classify_output_failures(output_failures)
                             cap = max_retries_for(
                                 FailureClass.INVALID_OUTPUT, retry_policy.max_retries
                             )
@@ -1051,7 +1053,9 @@ def run_parallel(
                                 time.sleep(backoff)
                                 attempt += 1
                                 continue
-                            mark_failed_at(state_dir, error=error_str)
+                            mark_failed_at(
+                                state_dir, error=error_str, output_failures=output_failures
+                            )
                             exit_code = 1
                         else:
                             mark_completed_at(state_dir)
