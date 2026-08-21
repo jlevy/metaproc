@@ -12,7 +12,14 @@ import pytest
 from pydantic import BaseModel
 from softschema import Contract, Contracts, SchemaStatus
 
-from metaproc.engine.retry import RetryVerdict, classify_error, classify_output_failures
+from metaproc.engine.retry import (
+    RetryVerdict,
+    classify_error,
+    classify_output_failures,
+    merge_on_invalid,
+    requires_run_abort,
+    resolve_output_failure_action,
+)
 from metaproc.engine.validation import (
     normalize_for_structural_pass,
     validate_item_outputs,
@@ -218,3 +225,90 @@ class TestRetryVerdictIgnoresFilenames:
 
     def test_no_failures_is_not_a_retry(self):
         assert classify_output_failures([]) is RetryVerdict.FAIL
+
+
+class TestOnInvalidDeclarations:
+    """A process says what its own output failing its contract costs."""
+
+    def _failure(
+        self, kind: OutputFailureKind, *, invariant: str | None = None, contract: str | None = None
+    ) -> OutputFailure:
+        return OutputFailure(
+            output="o",
+            path="artifact.md",
+            contract=contract,
+            kind=kind,
+            invariant=invariant,
+            message="refused",
+        )
+
+    def test_a_stochastic_producer_can_ask_for_another_attempt(self):
+        """The case that blocks declaring contracts on agent steps.
+
+        A model that mis-extracted once may extract correctly on a retry, which
+        the framework cannot know and the process can say.
+        """
+        failure = self._failure(OutputFailureKind.semantic, invariant="value_error")
+
+        assert classify_output_failures([failure]) is RetryVerdict.FAIL
+        assert classify_output_failures([failure], {"semantic": "retry"}) is RetryVerdict.RETRY
+
+    def test_the_most_specific_key_wins(self):
+        failure = self._failure(
+            OutputFailureKind.semantic, invariant="value_error", contract="example:Thing/v1"
+        )
+
+        # invariant beats contract beats kind
+        assert (
+            resolve_output_failure_action(
+                failure,
+                {"value_error": "retry", "example:Thing/v1": "fail", "semantic": "fail_run"},
+            )
+            == "retry"
+        )
+        assert (
+            resolve_output_failure_action(
+                failure, {"example:Thing/v1": "fail", "semantic": "fail_run"}
+            )
+            == "fail"
+        )
+        assert resolve_output_failure_action(failure, {"semantic": "fail_run"}) == "fail_run"
+
+    def test_saying_nothing_leaves_the_default_in_force(self):
+        for kind in OutputFailureKind:
+            failure = self._failure(kind)
+            assert resolve_output_failure_action(failure, None) is None
+            assert resolve_output_failure_action(failure, {}) is None
+
+    def test_a_declaration_can_make_a_retryable_failure_permanent(self):
+        missing = self._failure(OutputFailureKind.missing)
+
+        assert classify_output_failures([missing]) is RetryVerdict.RETRY
+        assert classify_output_failures([missing], {"missing": "fail"}) is RetryVerdict.FAIL
+
+    def test_fail_run_is_reported_separately_from_the_retry_verdict(self):
+        failure = self._failure(OutputFailureKind.structural, invariant="type")
+
+        assert not requires_run_abort([failure])
+        assert requires_run_abort([failure], {"type": "fail_run"})
+        assert classify_output_failures([failure], {"type": "fail_run"}) is RetryVerdict.FAIL
+
+    def test_one_undeclared_permanent_failure_still_sinks_the_set(self):
+        retryable = self._failure(OutputFailureKind.semantic, invariant="value_error")
+        permanent = self._failure(OutputFailureKind.structural, invariant="type")
+
+        assert (
+            classify_output_failures([retryable, permanent], {"value_error": "retry"})
+            is RetryVerdict.FAIL
+        )
+
+    def test_outputs_merge_to_the_more_severe_action(self):
+        outputs = {
+            "a": IOSpec(path="a.md", on_invalid={"semantic": "retry"}),
+            "b": IOSpec(path="b.md", on_invalid={"semantic": "fail_run"}),
+        }
+
+        assert merge_on_invalid(outputs) == {"semantic": "fail_run"}
+
+    def test_a_step_declaring_nothing_merges_to_nothing(self):
+        assert merge_on_invalid({"a": IOSpec(path="a.md")}) == {}

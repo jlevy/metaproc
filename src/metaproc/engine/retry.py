@@ -12,12 +12,13 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from pathlib import Path
+from typing import Literal
 
 from metaproc.io import iter_text_lines, resolve_existing_artifact
-from metaproc.models.authored import RetryPolicy
+from metaproc.models.authored import IOSpec, RetryPolicy
 from metaproc.models.runtime import OutputFailure, OutputFailureKind
 
 log = logging.getLogger(__name__)
@@ -196,7 +197,43 @@ _RETRYABLE_OUTPUT_FAILURES: frozenset[OutputFailureKind] = frozenset(
 )
 
 
-def classify_output_failures(failures: Sequence[OutputFailure]) -> RetryVerdict:
+# Actions a process may ask for when one of its outputs fails its contract. Each
+# is something only the framework can do, which is why the set is closed: a
+# consumer's own vocabulary for what a failure *means* stays on its own side.
+OutputFailureAction = Literal["fail", "retry", "fail_run"]
+
+
+def resolve_output_failure_action(
+    failure: OutputFailure,
+    on_invalid: Mapping[str, str] | None,
+) -> OutputFailureAction | None:
+    """Look up what a process said this failure costs, most-specific-first.
+
+    Keys are tried in order of how precisely they name the failure: the refusing
+    invariant, then the contract, then the kind. Returns ``None`` when the
+    process said nothing, which leaves the default in force.
+    """
+    if not on_invalid:
+        return None
+    for key in (failure.invariant, failure.contract, failure.kind.value):
+        if key is None:
+            continue
+        match on_invalid.get(key):
+            case "fail":
+                return "fail"
+            case "retry":
+                return "retry"
+            case "fail_run":
+                return "fail_run"
+            case _:
+                continue
+    return None
+
+
+def classify_output_failures(
+    failures: Sequence[OutputFailure],
+    on_invalid: Mapping[str, str] | None = None,
+) -> RetryVerdict:
     """Decide whether re-running could fix these output failures.
 
     The structured form of rule 4 above, and the reason to prefer it: this reads
@@ -209,9 +246,33 @@ def classify_output_failures(failures: Sequence[OutputFailure]) -> RetryVerdict:
     """
     if not failures:
         return RetryVerdict.FAIL
-    if all(f.kind in _RETRYABLE_OUTPUT_FAILURES for f in failures):
+
+    actions: list[OutputFailureAction | None] = [
+        resolve_output_failure_action(f, on_invalid) for f in failures
+    ]
+    if any(a == "fail_run" for a in actions):
+        return RetryVerdict.FAIL
+    if any(a == "fail" for a in actions):
+        return RetryVerdict.FAIL
+
+    # A failure the process asked to retry counts as retryable; one it said
+    # nothing about falls back to whether another attempt could plausibly fix it.
+    def retryable(failure: OutputFailure, action: OutputFailureAction | None) -> bool:
+        if action is not None:
+            return action == "retry"
+        return failure.kind in _RETRYABLE_OUTPUT_FAILURES
+
+    if all(retryable(f, a) for f, a in zip(failures, actions, strict=True)):
         return RetryVerdict.RETRY
     return RetryVerdict.FAIL
+
+
+def requires_run_abort(
+    failures: Sequence[OutputFailure],
+    on_invalid: Mapping[str, str] | None = None,
+) -> bool:
+    """Whether any of these failures is one the process said should stop the run."""
+    return any(resolve_output_failure_action(f, on_invalid) == "fail_run" for f in failures)
 
 
 def classify_failure(error: str) -> FailureClass:
@@ -355,3 +416,21 @@ def compute_backoff(attempt: int, policy: RetryPolicy) -> float:
     """
     delay = policy.initial_backoff_s * (policy.backoff_multiplier ** (attempt - 1))
     return min(delay, policy.max_backoff_s)
+
+
+def merge_on_invalid(outputs: Mapping[str, IOSpec]) -> dict[str, str]:
+    """Collect the ``on_invalid`` declarations of a step's outputs into one mapping.
+
+    A step fails or retries as a whole, so its outputs' policies are consulted
+    together. Declaring the same key on two outputs with different actions is a
+    process-authoring mistake; the more severe action wins so a declaration can
+    never be softened by a sibling.
+    """
+    severity = {"retry": 0, "fail": 1, "fail_run": 2}
+    merged: dict[str, str] = {}
+    for io_spec in outputs.values():
+        for key, action in (io_spec.on_invalid or {}).items():
+            current = merged.get(key)
+            if current is None or severity[action] > severity[current]:
+                merged[key] = action
+    return merged

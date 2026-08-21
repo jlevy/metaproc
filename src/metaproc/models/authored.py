@@ -236,6 +236,27 @@ class IOSpec(BaseModel):
     an alias so existing process specs keep working.
     """
 
+    on_invalid: dict[str, Literal["fail", "retry", "fail_run"]] | None = None
+    """What it costs when this output fails its contract, keyed most-specific-first.
+
+    A key is an invariant name, a contract id, or an
+    :class:`~metaproc.models.runtime.OutputFailureKind`. Omitted, a failure costs
+    what it has always cost.
+
+    Distinct from a step's ``on_failure``, which says whether *this* step runs
+    when an *upstream* one failed. That is the consumer's side of an edge; this
+    is the producer's own output.
+
+    The common case is a stochastic producer, where a second attempt genuinely
+    may succeed where the first did not::
+
+        on_invalid:
+          semantic: retry
+
+    ``fail_run`` stops the whole run, for a defect that will recur on every item
+    rather than be specific to this one.
+    """
+
     optional: bool = False
     template: str | None = None
     condition: str | None = None

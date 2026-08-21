@@ -94,6 +94,7 @@ from metaproc.engine.retry import (
     compute_backoff,
     extract_log_error,
     max_retries_for,
+    merge_on_invalid,
 )
 from metaproc.engine.run_id import generate_run_id
 from metaproc.engine.runtime import (
@@ -1040,7 +1041,8 @@ def run_parallel(
                         if output_failures:
                             output_errors = [f.summary() for f in output_failures]
                             error_str = f"output validation failed: {'; '.join(output_errors)}"
-                            verdict = classify_output_failures(output_failures)
+                            on_invalid = merge_on_invalid(effective_outputs)
+                            verdict = classify_output_failures(output_failures, on_invalid)
                             cap = max_retries_for(
                                 FailureClass.INVALID_OUTPUT, retry_policy.max_retries
                             )
