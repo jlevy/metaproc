@@ -1642,6 +1642,17 @@ This follows the three-layer model:
 Check taxonomies, severity models, and report formats stay in the domain layer rather
 than the framework.
 
+Failure handling splits along the same seam, and the dividing line is worth stating
+because both halves are easy to put in the wrong layer:
+
+> **The framework owns what a failure does to execution.
+> The domain owns what a failure means.**
+
+Retrying, failing a step, and aborting a run are framework business because only the
+framework can perform them.
+Severity, ownership, and taxonomy are the domain’s, and the framework should be unable
+to read them even when it stores them on the domain’s behalf.
+
 ### 13.1 Plugin System
 
 The plugin system separates generic framework concerns from domain-specific logic.
@@ -1725,6 +1736,22 @@ priority chain:
 3. **Bare “exit code N”** -- default to `RETRY` (most are transient API errors).
 4. **”output validation failed”** -- classified as `RETRY` unless
    schema/envelope/mismatch (then `FAIL`).
+
+The intent of rule 4 is that a missing output is transient, because the agent may have
+been killed before writing it, while a structural mismatch is permanent.
+The implementation cannot honour that intent, because the structured facts that separate
+the two cases are flattened into the error string before `classify_error` sees it, and
+the substring test then reads the artifact’s filename along with everything else.
+Two declared outputs of one process, each missing for the same transient reason:
+
+```text
+output validation failed: company-research-schema-manifest.md: file not found   -> FAIL
+output validation failed: source-snapshot.md: file not found                    -> RETRY
+```
+
+Identical failures, opposite verdicts, because one filename contains `schema`.
+[plan-2026-08-20-contract-failure-primitives.md](../project/specs/active/plan-2026-08-20-contract-failure-primitives.md)
+proposes re-expressing the rule over the structured failure record.
 5. **Default** -- `FAIL`.
 
 #### Failure Classification (Failure Reason)
