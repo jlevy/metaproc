@@ -51,7 +51,7 @@ checks.
 | [`src/metaproc/stats/`](../src/metaproc/stats/) | Run-stats engine consumed by `metaproc stats` and the browser. |
 | [`examples/`](../examples/) | Deterministic source-checkout examples, including the offline execution smoke. |
 | [`tests/`](../tests/) | Unit, integration, cloud, golden, package, and browser-plugin tests. |
-| [`devtools/`](../devtools/) | Lint, hygiene, supply-chain, and distribution checks; not packaged. |
+| [`devtools/`](../devtools/) | Lint, hygiene, supply-chain, and distribution checks plus the pinned-toolchain session bootstrap; not packaged. |
 
 The browser is a standalone package with its own
 [public architecture](https://github.com/jlevy/metabrowser/blob/main/docs/architecture.md).
