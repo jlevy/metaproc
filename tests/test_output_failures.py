@@ -1,7 +1,7 @@
 """Contract failure primitives: structured records, representation, retry verdicts.
 
-The behaviour these pin is described in
-``docs/project/specs/active/plan-2026-08-20-contract-failure-primitives.md``.
+What a contract failure records and what it costs, per ``arch-metaproc-core.md``
+§6 (the `contract` and `on_invalid` declarations) and §14.1 (the retry chain).
 """
 
 from __future__ import annotations
@@ -12,20 +12,23 @@ import pytest
 from pydantic import BaseModel
 from softschema import Contract, Contracts, SchemaProfile, SchemaStatus
 
+from metaproc.commands.run_parallel import _handle_success
+from metaproc.engine.build_plan import _resolve_step_inputs
 from metaproc.engine.retry import (
     RetryVerdict,
     classify_error,
     classify_output_failures,
-    merge_on_invalid,
     requires_run_abort,
     resolve_output_failure_action,
 )
 from metaproc.engine.validation import (
+    check_artifact_contract,
     normalize_for_structural_pass,
     validate_item_outputs,
     validate_item_outputs_detailed,
 )
-from metaproc.models.authored import IOSpec
+from metaproc.io.state_io import mark_running_at, read_status_at
+from metaproc.models.authored import IOSpec, ProcessStep
 from metaproc.models.runtime import OutputFailure, OutputFailureKind
 
 
@@ -242,6 +245,10 @@ class TestOnInvalidDeclarations:
             message="refused",
         )
 
+    def _outputs(self, on_invalid: dict[str, str] | None) -> dict[str, IOSpec]:
+        """The declaring output, named to match ``_failure``'s ``output``."""
+        return {"o": IOSpec(path="artifact.md", on_invalid=on_invalid)}  # pyright: ignore[reportArgumentType]
+
     def test_a_stochastic_producer_can_ask_for_another_attempt(self):
         """The case that blocks declaring contracts on agent steps.
 
@@ -251,7 +258,10 @@ class TestOnInvalidDeclarations:
         failure = self._failure(OutputFailureKind.semantic, invariant="value_error")
 
         assert classify_output_failures([failure]) is RetryVerdict.FAIL
-        assert classify_output_failures([failure], {"semantic": "retry"}) is RetryVerdict.RETRY
+        assert (
+            classify_output_failures([failure], self._outputs({"semantic": "retry"}))
+            is RetryVerdict.RETRY
+        )
 
     def test_the_most_specific_key_wins(self):
         failure = self._failure(
@@ -284,34 +294,56 @@ class TestOnInvalidDeclarations:
         missing = self._failure(OutputFailureKind.missing)
 
         assert classify_output_failures([missing]) is RetryVerdict.RETRY
-        assert classify_output_failures([missing], {"missing": "fail"}) is RetryVerdict.FAIL
+        assert (
+            classify_output_failures([missing], self._outputs({"missing": "fail"}))
+            is RetryVerdict.FAIL
+        )
 
     def test_fail_run_is_reported_separately_from_the_retry_verdict(self):
         failure = self._failure(OutputFailureKind.structural, invariant="type")
+        outputs = self._outputs({"type": "fail_run"})
 
         assert not requires_run_abort([failure])
-        assert requires_run_abort([failure], {"type": "fail_run"})
-        assert classify_output_failures([failure], {"type": "fail_run"}) is RetryVerdict.FAIL
+        assert requires_run_abort([failure], outputs)
+        assert classify_output_failures([failure], outputs) is RetryVerdict.FAIL
 
     def test_one_undeclared_permanent_failure_still_sinks_the_set(self):
         retryable = self._failure(OutputFailureKind.semantic, invariant="value_error")
         permanent = self._failure(OutputFailureKind.structural, invariant="type")
 
         assert (
-            classify_output_failures([retryable, permanent], {"value_error": "retry"})
+            classify_output_failures(
+                [retryable, permanent], self._outputs({"value_error": "retry"})
+            )
             is RetryVerdict.FAIL
         )
 
-    def test_outputs_merge_to_the_more_severe_action(self):
+    def test_a_declaration_governs_only_the_output_that_made_it(self):
+        """Two outputs of one step have two contracts and two reasons to fail."""
         outputs = {
-            "a": IOSpec(path="a.md", on_invalid={"semantic": "retry"}),
-            "b": IOSpec(path="b.md", on_invalid={"semantic": "fail_run"}),
+            "lenient": IOSpec(path="a.md", on_invalid={"semantic": "retry"}),
+            "strict": IOSpec(path="b.md"),
         }
+        strict_failure = OutputFailure(
+            output="strict", path="b.md", kind=OutputFailureKind.semantic, message="refused"
+        )
+        lenient_failure = OutputFailure(
+            output="lenient", path="a.md", kind=OutputFailureKind.semantic, message="refused"
+        )
 
-        assert merge_on_invalid(outputs) == {"semantic": "fail_run"}
+        assert classify_output_failures([lenient_failure], outputs) is RetryVerdict.RETRY
+        assert classify_output_failures([strict_failure], outputs) is RetryVerdict.FAIL
 
-    def test_a_step_declaring_nothing_merges_to_nothing(self):
-        assert merge_on_invalid({"a": IOSpec(path="a.md")}) == {}
+    def test_a_failure_from_an_undeclared_output_falls_back_to_the_default(self):
+        outputs = {"declared": IOSpec(path="a.md", on_invalid={"missing": "fail"})}
+        stray = OutputFailure(
+            output="not_in_the_spec",
+            path="z.md",
+            kind=OutputFailureKind.missing,
+            message="file not found",
+        )
+
+        assert classify_output_failures([stray], outputs) is RetryVerdict.RETRY
 
 
 class TestAContractMeansTheSameOnEveryFormat:
@@ -387,3 +419,153 @@ class TestAContractMeansTheSameOnEveryFormat:
             )
             == []
         )
+
+
+class TestTheRecordSurvivesTheAgentPool:
+    """The pool is the path the filename-sensitive verdict was observed on.
+
+    ``run_parallel`` reaches output validation twice: once inline for
+    ``mode: code``, and once through the agent pool, which is where a ``for_each``
+    agent step ends up. A structured record that only the first path produces
+    leaves the second reading the sentence, so these pin the pool seam.
+    """
+
+    def _pool_call(self, tmp_path, output_path: str):
+        state_dir = tmp_path / ".state"
+        state_dir.mkdir()
+        running = mark_running_at(state_dir, run_id="r1", step_id="s1", item={"co": "ACME"})
+        item_dir = tmp_path / "item"
+        item_dir.mkdir()
+
+        class _Out:
+            def progress(self, _message: str) -> None: ...
+
+        class _Result:
+            elapsed_s = 1.0
+
+        outputs = {"report": IOSpec(path=output_path)}
+        batch_failed: list[tuple[dict[str, object], str, list[OutputFailure]]] = []
+        _handle_success(
+            "co",
+            "ACME",
+            item_dir,
+            state_dir,
+            {"co": "ACME"},
+            None,
+            running,
+            outputs,
+            {},
+            "r1",
+            "s1",
+            _Result(),
+            _Out(),
+            [],
+            batch_failed,
+            {"attempt_number": 1},
+        )
+        return batch_failed, read_status_at(state_dir), outputs
+
+    def test_a_failed_pool_item_keeps_its_structured_record(self, tmp_path):
+        batch_failed, status, _ = self._pool_call(tmp_path, "report.md")
+
+        assert status is not None
+        assert status.state == "failed"
+        assert [f.kind for f in status.output_failures] == [OutputFailureKind.missing]
+        assert status.output_failures[0].output == "report"
+        assert status.error == "output validation failed: report.md: file not found"
+
+        (_, _, failures) = batch_failed[0]
+        assert [f.kind for f in failures] == [OutputFailureKind.missing]
+
+    def test_the_pool_verdict_no_longer_reads_the_filename(self, tmp_path):
+        """The end-to-end form of the defect: same miss, name containing 'schema'."""
+        batch_failed, _, outputs = self._pool_call(tmp_path, "company-research-schema-manifest.md")
+        (_, error_str, failures) = batch_failed[0]
+
+        assert classify_error(error_str) is RetryVerdict.FAIL, "the sentence still misreads it"
+        assert classify_output_failures(failures, outputs) is RetryVerdict.RETRY
+
+
+class TestRefResolvedInputsKeepTheirContract:
+    def test_an_input_bound_by_ref_inherits_the_producer_contract(self):
+        producer_outputs = {
+            "generate": {
+                "record": IOSpec(path="record.md", format="frontmatter-md", contract="ex:Rec/v1")
+            }
+        }
+        consumer = ProcessStep(
+            id="consume",
+            mode="code",
+            command="true",
+            inputs={"source": IOSpec(ref="generate.record")},
+        )
+
+        resolved, _ = _resolve_step_inputs(
+            consumer, step_outputs=producer_outputs, params={}, resolved_deps={}
+        )
+
+        assert resolved["source"].contract == "ex:Rec/v1"
+        assert resolved["source"].model_dump(by_alias=True)["contract"] == "ex:Rec/v1"
+
+
+class TestAnEnvelopedContractStillAcceptsABareRoot:
+    """A YAML output used to be loaded straight into its model, so its root *was* the model."""
+
+    class Score(BaseModel):
+        ticker: str
+        value: int
+
+    def _registry(self) -> Contracts:
+        registry = Contracts()
+        registry.register(
+            Contract(
+                id="example:Enveloped/v1",
+                model=self.Score,
+                envelope_key="score",
+                status=SchemaStatus.enforced,
+            )
+        )
+        return registry
+
+    def _check(self, tmp_path, body: str) -> list[OutputFailure]:
+        (tmp_path / "score.yaml").write_text(body)
+        return validate_item_outputs_detailed(
+            tmp_path,
+            {"score": IOSpec(path="score.yaml", kind="file", contract="example:Enveloped/v1")},
+            softschema_registry=self._registry(),
+        )
+
+    def test_a_bare_root_written_under_the_older_reading_still_validates(self, tmp_path):
+        assert self._check(tmp_path, "ticker: AAPL\nvalue: 3\n") == []
+
+    def test_an_enveloped_document_validates_too(self, tmp_path):
+        assert self._check(tmp_path, "score:\n  ticker: AAPL\n  value: 3\n") == []
+
+    def test_a_wrong_value_is_still_refused_either_way(self, tmp_path):
+        assert self._check(tmp_path, "ticker: AAPL\nvalue: nope\n")
+        assert self._check(tmp_path, "score:\n  ticker: AAPL\n  value: nope\n")
+
+
+class TestValidateCommandAgreesWithTheStepBoundary:
+    """One binary must not answer 'is this artifact valid?' two ways."""
+
+    def test_both_read_the_same_check(self, tmp_path):
+        registry = dated_registry()
+        artifact = tmp_path / "output.md"
+        # An unquoted YAML date: the representation defect the engine normalizes.
+        artifact.write_text("---\ndated:\n  as_of_date: 2026-08-21\n  name: x\n---\nBody\n")
+
+        engine_failures = validate_item_outputs_detailed(
+            tmp_path, dated_outputs(), softschema_registry=registry
+        )
+        command_failures = check_artifact_contract(
+            artifact,
+            contract_id="example:Dated/v1",
+            fmt="frontmatter-md",
+            registry=registry,
+            output="main",
+            path="output.md",
+        )
+
+        assert engine_failures == []
+        assert command_failures == []

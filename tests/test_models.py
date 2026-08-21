@@ -61,10 +61,13 @@ class TestIOSpec:
     def test_contract_accepts_either_spelling(self):
         """The field holds a contract id; ``schema:`` stays valid for existing specs."""
         canonical = IOSpec(path="out.md", contract="earnings:Prediction/v1")
-        legacy = IOSpec(path="out.md", contract="earnings:Prediction/v1")
+        # The alias is the whole backward-compatibility guarantee of the rename,
+        # so it is spelled the way an existing process spec spells it.
+        legacy = IOSpec.model_validate({"path": "out.md", "schema": "earnings:Prediction/v1"})
 
         assert canonical.contract == "earnings:Prediction/v1"
         assert legacy.contract == "earnings:Prediction/v1"
+        assert legacy == canonical
 
     def test_contract_serializes_under_its_own_name(self):
         spec = IOSpec(path="out.md", contract="earnings:Prediction/v1")
