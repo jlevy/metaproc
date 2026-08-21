@@ -98,6 +98,55 @@ class TestCollectItemOutcomes:
         assert failure["invariant"] == "required"
         assert failure["contract"] == "trading:Thing/v1"
 
+    def test_an_absent_item_reports_where_and_why_it_stopped(self, tmp_path: Path) -> None:
+        """A bare absence is the least useful true thing a collection could report."""
+        _task(tmp_path, "one", "A", "completed")
+        _task(tmp_path, "one", "B", "failed", error="raised")
+        _task(tmp_path, "two", "A", "completed")
+        outcomes = collect_item_outcomes(
+            tmp_path, "two", expected_keys=["A", "B"], upstream_chain=["one", "two"]
+        )
+        absent = next(o for o in outcomes if o["key"] == "B")
+        assert absent["state"] == "not_reached"
+        assert absent["stopped_at"] == "one"
+        assert absent["stopped_state"] == "failed"
+        assert absent["error"] == "raised"
+
+    def test_an_absent_item_carries_its_contract_failure(self, tmp_path: Path) -> None:
+        """The routing distinction has to survive the item never arriving."""
+        d = tmp_path / ".state" / "tasks" / "one" / "B"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "status.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "run_id": "r",
+                    "step_id": "one",
+                    "item": {"step": "one"},
+                    "state": "failed",
+                    "attempt": 1,
+                    "error": "out.json: file not found",
+                    "output_failures": [
+                        {
+                            "output": "out",
+                            "path": "/tmp/out.json",
+                            "kind": "missing",
+                            "message": "file not found",
+                        }
+                    ],
+                }
+            )
+        )
+        outcomes = collect_item_outcomes(
+            tmp_path, "two", expected_keys=["B"], upstream_chain=["one", "two"]
+        )
+        assert outcomes[0]["output_failures"][0]["kind"] == "missing"
+
+    def test_without_a_chain_an_absent_item_is_just_absent(self, tmp_path: Path) -> None:
+        _task(tmp_path, "one", "B", "failed", error="raised")
+        outcomes = collect_item_outcomes(tmp_path, "two", expected_keys=["B"])
+        assert outcomes[0]["state"] == "not_reached"
+        assert "stopped_at" not in outcomes[0]
+
     def test_a_failure_without_structured_detail_omits_the_field(self, tmp_path: Path) -> None:
         _task(tmp_path, "s", "A", "failed", error="boom")
         assert "output_failures" not in collect_item_outcomes(tmp_path, "s")[0]

@@ -1406,6 +1406,11 @@ declared, and the `kind` of refusal. A consumer routing work by owner needs that
 distinction, because a missing output and a refused invariant are different people's
 problems and the rendered sentence cannot express the difference.
 
+An item that never reached the collected step is reported with where it stopped and that
+step's failure detail, rather than as a bare absence. A ticker that raised and a ticker that
+silently produced nothing are different problems with different owners, and the collection
+is where a consumer learns which it has.
+
 The manifest reports against the collected step's **expected roster**, not against the task
 directories on disk. An item that died upstream never creates a directory there, so a
 collection over what arrived would report three of four items as full coverage; reporting

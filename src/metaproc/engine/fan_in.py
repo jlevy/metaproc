@@ -29,7 +29,10 @@ _SUCCESS_STATES = frozenset({"completed", "cached"})
 
 
 def collect_item_outcomes(
-    run_dir: Path, upstream_step_id: str, expected_keys: Sequence[str] | None = None
+    run_dir: Path,
+    upstream_step_id: str,
+    expected_keys: Sequence[str] | None = None,
+    upstream_chain: Sequence[str] = (),
 ) -> list[dict[str, Any]]:
     """Read every item's terminal state for one fan-out step.
 
@@ -39,6 +42,12 @@ def collect_item_outcomes(
     collection over what arrived would call three of four items full coverage. The
     consumer needs to distinguish "succeeded", "failed", and "never got here", and only
     the expected set can express the third.
+
+    ``upstream_chain`` is the ordered steps feeding this one. An item that never
+    arrived died somewhere in them, and a consumer needs to know where and why: a
+    ticker that raised and a ticker that silently produced nothing are different
+    problems with different owners. Without it the collection can only say the item is
+    absent, which is the least useful true thing it could report.
 
     Sorted by key so the manifest is stable across runs and diffable.
     """
@@ -50,8 +59,7 @@ def collect_item_outcomes(
     for key in keys:
         item_dir = tasks_dir / key
         if not item_dir.is_dir():
-            # Expected by the roster and never started: the item died upstream.
-            outcomes.append({"key": key, "state": "not_reached", "succeeded": False})
+            outcomes.append(_absent_item_outcome(run_dir, key, upstream_chain))
             continue
         try:
             status = read_status_at(item_dir)
@@ -76,24 +84,64 @@ def collect_item_outcomes(
         # Pass softschema's vocabulary through unchanged rather than flattening it to
         # the sentence. A consumer routing work by owner needs to tell a missing output
         # from a refused invariant, and the string form cannot express that difference.
-        failures = getattr(status, "output_failures", None) or []
+        failures = _structured_failures(status)
         if failures:
-            record["output_failures"] = [
-                {
-                    key: value
-                    for key, value in (
-                        ("output", failure.output),
-                        ("kind", str(failure.kind)),
-                        ("contract", failure.contract),
-                        ("invariant", failure.invariant),
-                        ("location", failure.location),
-                    )
-                    if value is not None
-                }
-                for failure in failures
-            ]
+            record["output_failures"] = failures
         outcomes.append(record)
     return outcomes
+
+
+def _structured_failures(status: object) -> list[dict[str, Any]]:
+    """Softschema's vocabulary, passed through rather than flattened to a sentence.
+
+    A consumer routing work by owner needs to tell a missing output from a refused
+    invariant, and the rendered message cannot express that difference.
+    """
+    failures = getattr(status, "output_failures", None) or []
+    return [
+        {
+            name: value
+            for name, value in (
+                ("output", failure.output),
+                ("kind", str(failure.kind)),
+                ("contract", failure.contract),
+                ("invariant", failure.invariant),
+                ("location", failure.location),
+            )
+            if value is not None
+        }
+        for failure in failures
+    ]
+
+
+def _absent_item_outcome(run_dir: Path, key: str, upstream_chain: Sequence[str]) -> dict[str, Any]:
+    """Describe an item that never reached the collected step.
+
+    Walks the chain backwards to the last step that recorded anything for this item,
+    so the record names where the item stopped and carries that step's failure detail
+    rather than reporting a bare absence.
+    """
+    record: dict[str, Any] = {"key": key, "state": "not_reached", "succeeded": False}
+    for step_id in reversed(list(upstream_chain)):
+        state_dir = run_dir / ".state" / "tasks" / step_id / key
+        if not state_dir.is_dir():
+            continue
+        try:
+            status = read_status_at(state_dir)
+        except (ValueError, TypeError, ValidationError):
+            continue
+        if status is None:
+            continue
+        record["stopped_at"] = step_id
+        record["stopped_state"] = str(status.state)
+        error = getattr(status, "error", None)
+        if error:
+            record["error"] = str(error)
+        failures = _structured_failures(status)
+        if failures:
+            record["output_failures"] = failures
+        break
+    return record
 
 
 def write_outcome_manifest(
@@ -101,9 +149,10 @@ def write_outcome_manifest(
     upstream_step_id: str,
     destination: Path,
     expected_keys: Sequence[str] | None = None,
+    upstream_chain: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Build and write the fan-in manifest for one upstream step."""
-    outcomes = collect_item_outcomes(run_dir, upstream_step_id, expected_keys)
+    outcomes = collect_item_outcomes(run_dir, upstream_step_id, expected_keys, upstream_chain)
     succeeded = sum(1 for o in outcomes if o["succeeded"])
     payload = {
         "fan_in_outcomes": {

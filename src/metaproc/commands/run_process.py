@@ -2157,6 +2157,7 @@ async def _execute_step(
     *,
     spec: ProcessSpec,
     step_map: dict[str, ResolvedStep] | None = None,
+    chains_by_member: dict[str, list[str]] | None = None,
     step_def: ProcessStep,
     target: ResolvedStep,
     variables: dict[str, str],
@@ -2199,11 +2200,19 @@ async def _execute_step(
             expected_keys = [
                 str(item[bind]) for item in collected_step.fan_out.items if bind in item
             ]
+        # The chain feeding the collected step, so an item that never arrived can be
+        # reported with where it stopped rather than as a bare absence.
+        upstream_chain: list[str] = []
+        for candidate in (chains_by_member or {}).get(io_spec.collect, []):
+            upstream_chain.append(candidate)
+            if candidate == io_spec.collect:
+                break
         manifest = write_outcome_manifest(
             run_dir,
             io_spec.collect,
             Path(resolve_templates(io_spec.path, variables)),
             expected_keys,
+            upstream_chain,
         )
         counts = manifest["fan_in_outcomes"]
         out.progress(
@@ -2361,6 +2370,9 @@ async def _orchestrate(
         if all(step_map[sid].mode == "code" for sid in chain)
     ]
     _chain_head_of: dict[str, list[str]] = {chain[0]: chain for chain in _chains}
+    _chains_by_member: dict[str, list[str]] = {
+        member: chain for chain in _chains for member in chain
+    }
     _absorbed: set[str] = {sid for chain in _chains for sid in chain[1:]}
 
     events.process_start(spec.name, run_id, backend_name, len(step_map))
@@ -2455,6 +2467,7 @@ async def _orchestrate(
         success = await _execute_step(
             spec=spec,
             step_map=step_map,
+            chains_by_member=_chains_by_member,
             step_def=step_def,
             target=target,
             variables=variables,
