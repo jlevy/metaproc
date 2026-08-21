@@ -81,6 +81,7 @@ from metaproc.engine.graph import (
     topo_sort,
 )
 from metaproc.engine.input_validation import validate_process_inputs, validate_process_outputs
+from metaproc.engine.item_runner import run_aligned_chain, run_fan_out
 from metaproc.engine.pathing import (
     compute_logs_dir,
     compute_run_dir,
@@ -1067,6 +1068,37 @@ async def _execute_code_step(
     return True
 
 
+def _discover_chain_items(
+    *,
+    target: ResolvedStep,
+    step_def: ProcessStep,
+    variables: dict[str, str],
+    run_dir: Path,
+) -> list[dict[str, str]]:
+    """Every item of a fan-out source, whether or not it has already run.
+
+    Reuse is decided per item per step by the caller rather than here, because an item
+    that finished one step of a chain but not a later one is still actionable and
+    filtering it out at discovery would drop it from the chain entirely.
+    """
+    assert target.fan_out is not None
+    source_path = Path(target.fan_out.source)
+    if not source_path.exists():
+        raise CLIError(f"source file not found: {source_path}")
+    try:
+        discovery = discover_items_from_source(
+            source_path,
+            step_def,
+            output_paths=None,
+            params=variables,
+            reuse_policy="trust_state",
+            run_dir=run_dir,
+        )
+    except ValueError as exc:
+        raise CLIError(str(exc)) from exc
+    return [*discovery.actionable_contexts, *discovery.filtered_items]
+
+
 async def _execute_code_fan_out_step(
     *,
     spec: ProcessSpec,
@@ -1080,85 +1112,42 @@ async def _execute_code_fan_out_step(
     external_semaphore: asyncio.Semaphore | None,
     out: Any,
 ) -> bool:
-    """Execute a mode:code step with for_each, one handler invocation per item.
-
-    The agent path owns adapters, variants, and auth pools, none of which a code handler
-    has; what the two share is item discovery and per-item state, so only that is reused
-    here. Each item gets its own ``variables``, which is what makes
-    ``compute_task_state_dir`` and ``compute_item_dir`` address per-item state and
-    artifacts rather than collapsing onto the step.
-
-    One item failing does not cancel its siblings: every item is awaited and the step
-    reports success only if all of them succeeded. That leaves the per-item records
-    intact for a consumer to read, which is what a partial-success workload needs.
-    """
+    """Execute a mode:code step with for_each, one handler invocation per item."""
     step_id = target.step_id
     assert target.fan_out is not None
 
-    resolved_source = target.fan_out.source
-    if not resolved_source:
-        raise CLIError(f"step '{step_id}' has for_each but no resolved source")
-    source_path = Path(resolved_source)
-    if not source_path.exists():
-        raise CLIError(f"source file not found: {source_path}")
-
-    try:
-        discovery = discover_items_from_source(
-            source_path,
-            step_def,
-            output_paths=target.outputs or None,
-            params=variables,
-            reuse_policy=target.reuse_policy,
-            run_dir=run_dir,
-        )
-    except ValueError as exc:
-        raise CLIError(str(exc)) from exc
-
-    item_contexts = discovery.actionable_contexts
+    item_contexts = _discover_chain_items(
+        target=target, step_def=step_def, variables=variables, run_dir=run_dir
+    )
     if not item_contexts:
         out.progress(f"  Step '{step_id}': no actionable items (all completed)")
         return True
 
-    out.progress(
-        f"  Step '{step_id}': {len(item_contexts)} actionable items "
-        f"({len(discovery.filtered_items)} filtered)"
+    out.progress(f"  Step '{step_id}': {len(item_contexts)} actionable items")
+
+    async def _invoke(_step_id: str, item_vars: dict[str, str]) -> bool:
+        return await _execute_code_step(
+            spec=spec,
+            step_def=step_def,
+            target=target,
+            variables=item_vars,
+            process_dir=process_dir,
+            run_dir=run_dir,
+            run_id=run_id,
+            out=out,
+        )
+
+    succeeded, total = await run_fan_out(
+        item_contexts=item_contexts,
+        variables=variables,
+        invoke=_invoke,
+        step_id=step_id,
+        max_concurrency=max_concurrency,
+        external_semaphore=external_semaphore,
     )
-
-    limit = max_concurrency if max_concurrency and max_concurrency > 0 else len(item_contexts)
-    gate = asyncio.Semaphore(max(1, limit))
-
-    async def _run_item(item_context: dict[str, str]) -> bool:
-        item_vars = dict(variables)
-        item_vars.update(item_context)
-        async with gate:
-            if external_semaphore is not None:
-                async with external_semaphore:
-                    return await _execute_code_step(
-                        spec=spec,
-                        step_def=step_def,
-                        target=target,
-                        variables=item_vars,
-                        process_dir=process_dir,
-                        run_dir=run_dir,
-                        run_id=run_id,
-                        out=out,
-                    )
-            return await _execute_code_step(
-                spec=spec,
-                step_def=step_def,
-                target=target,
-                variables=item_vars,
-                process_dir=process_dir,
-                run_dir=run_dir,
-                run_id=run_id,
-                out=out,
-            )
-
-    results = await asyncio.gather(*(_run_item(ctx) for ctx in item_contexts))
-    failed = sum(1 for ok in results if not ok)
-    if failed:
-        out.progress(f"  Step '{step_id}': {failed} of {len(results)} items failed")
-    return failed == 0
+    if succeeded != total:
+        out.progress(f"  Step '{step_id}': {total - succeeded} of {total} items failed")
+    return succeeded == total
 
 
 async def _execute_item_aligned_chain(
@@ -1175,115 +1164,50 @@ async def _execute_item_aligned_chain(
     external_semaphore: asyncio.Semaphore | None,
     out: Any,
 ) -> dict[str, bool]:
-    """Run an item-aligned chain once per item instead of once per step.
-
-    The level walk finishes every task of a step before the next step starts, which is
-    a step-scoped reading of the edge. Where the author declared the edge item-scoped,
-    item *k* of the second step depends only on item *k* of the first, so the correct
-    execution is a pipeline per item: each item walks the whole chain on its own, and a
-    fast item is never held behind a slow stranger.
-
-    Failure is item-scoped for the same reason. An item failing at one step skips its
-    own remaining steps and touches no sibling, so the chain finishes with partial
-    coverage rather than blocking the graph. That falls out of the structure here; it is
-    not a policy added on top.
-
-    Returns success per step id, where a step succeeded when every item that reached it
-    succeeded.
-    """
+    """Run an item-aligned chain once per item, and report success per step."""
     head = step_map[chain[0]]
     assert head.fan_out is not None
 
-    source_path = Path(head.fan_out.source)
-    if not source_path.exists():
-        raise CLIError(f"source file not found: {source_path}")
-
-    # Discover against the whole chain, not the head. An item that finished the head
-    # but not a later step is still actionable, and filtering on the head's completion
-    # would drop it from the chain entirely, so a resumed run would silently do nothing
-    # for it. Reuse is applied per step per item below instead.
-    try:
-        discovery = discover_items_from_source(
-            source_path,
-            step_def_map[chain[0]],
-            output_paths=None,
-            params=variables,
-            reuse_policy="trust_state",
-            run_dir=run_dir,
-        )
-    except ValueError as exc:
-        raise CLIError(str(exc)) from exc
-
-    item_contexts = discovery.actionable_contexts + list(discovery.filtered_items)
+    item_contexts = _discover_chain_items(
+        target=head, step_def=step_def_map[chain[0]], variables=variables, run_dir=run_dir
+    )
     if not item_contexts:
         out.progress(f"  Chain '{' -> '.join(chain)}': no items")
         return dict.fromkeys(chain, True)
 
     out.progress(f"  Chain '{' -> '.join(chain)}': {len(item_contexts)} items, item-aligned")
 
-    limit = max_concurrency if max_concurrency and max_concurrency > 0 else len(item_contexts)
-    gate = asyncio.Semaphore(max(1, limit))
-    # Per step, the items that reached it and succeeded, so a step's verdict counts
-    # only what actually ran rather than treating a skipped item as a failure.
-    reached: dict[str, int] = dict.fromkeys(chain, 0)
-    succeeded: dict[str, int] = dict.fromkeys(chain, 0)
-    lock = asyncio.Lock()
+    async def _invoke(step_id: str, item_vars: dict[str, str]) -> bool:
+        return await _execute_code_step(
+            spec=spec,
+            step_def=step_def_map[step_id],
+            target=step_map[step_id],
+            variables=item_vars,
+            process_dir=process_dir,
+            run_dir=run_dir,
+            run_id=run_id,
+            out=out,
+        )
 
-    async def _run_item_through_chain(item_context: dict[str, str]) -> None:
-        item_vars = dict(variables)
-        item_vars.update(item_context)
-        for step_id in chain:
-            # Resume at this item's own position: a step already completed for this
-            # item is not redone, and the item continues from where it stopped.
-            item_state_dir = compute_task_state_dir(run_dir, step_def_map[step_id], item_vars)
-            prior = read_status_at(item_state_dir)
-            if prior is not None and prior.state in ("completed", "cached"):
-                async with lock:
-                    reached[step_id] += 1
-                    succeeded[step_id] += 1
-                continue
-            async with lock:
-                reached[step_id] += 1
-            async with gate:
-                if external_semaphore is not None:
-                    async with external_semaphore:
-                        ok = await _execute_code_step(
-                            spec=spec,
-                            step_def=step_def_map[step_id],
-                            target=step_map[step_id],
-                            variables=item_vars,
-                            process_dir=process_dir,
-                            run_dir=run_dir,
-                            run_id=run_id,
-                            out=out,
-                        )
-                else:
-                    ok = await _execute_code_step(
-                        spec=spec,
-                        step_def=step_def_map[step_id],
-                        target=step_map[step_id],
-                        variables=item_vars,
-                        process_dir=process_dir,
-                        run_dir=run_dir,
-                        run_id=run_id,
-                        out=out,
-                    )
-            if not ok:
-                # This item stops here. Its siblings are unaffected.
-                return
-            async with lock:
-                succeeded[step_id] += 1
+    def _is_done(step_id: str, item_vars: dict[str, str]) -> bool:
+        prior = read_status_at(compute_task_state_dir(run_dir, step_def_map[step_id], item_vars))
+        return prior is not None and prior.state in ("completed", "cached")
 
-    await asyncio.gather(*(_run_item_through_chain(ctx) for ctx in item_contexts))
+    tallies = await run_aligned_chain(
+        chain=chain,
+        item_contexts=item_contexts,
+        variables=variables,
+        invoke=_invoke,
+        is_done=_is_done,
+        max_concurrency=max_concurrency,
+        external_semaphore=external_semaphore,
+    )
 
     results: dict[str, bool] = {}
-    for step_id in chain:
-        results[step_id] = reached[step_id] > 0 and succeeded[step_id] == reached[step_id]
+    for step_id, (succeeded, reached) in tallies.items():
+        results[step_id] = reached > 0 and succeeded == reached
         if not results[step_id]:
-            out.progress(
-                f"  Step '{step_id}': {reached[step_id] - succeeded[step_id]} "
-                f"of {reached[step_id]} items failed"
-            )
+            out.progress(f"  Step '{step_id}': {reached - succeeded} of {reached} items failed")
     return results
 
 

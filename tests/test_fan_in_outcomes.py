@@ -1,8 +1,8 @@
 """Fan-in collections: what a consumer of a fan-out is told.
 
-The property under test is that a consumer can distinguish three things — an item that
-succeeded, one that failed, and one that never arrived — because collapsing the third
-into absence is what makes a dropped item read as full coverage.
+The property under test is that a consumer can distinguish three things: an item that
+succeeded, one that failed, and one that never arrived. Collapsing the third into absence
+is what makes a dropped item read as full coverage.
 """
 
 from __future__ import annotations
