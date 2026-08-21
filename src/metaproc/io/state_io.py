@@ -55,7 +55,12 @@ def _write_record_at(state_dir: Path, filename: str, data: dict[str, object]) ->
 
 
 def write_status_at(state_dir: Path, record: StatusRecord) -> Path:
-    return _write_record_at(state_dir, STATUS_FILE, record.model_dump())
+    # ``mode="json"`` because the destination is a YAML document, not Python.
+    # ``OutputFailure.kind`` is a StrEnum, and a Python-mode dump hands the
+    # enum member itself to the YAML writer, which cannot represent it — the
+    # first output failure carrying a structured record would raise instead of
+    # being recorded. Every other field serializes identically either way.
+    return _write_record_at(state_dir, STATUS_FILE, record.model_dump(mode="json"))
 
 
 def write_attempt_at(state_dir: Path, record: AttemptRecord) -> Path:
