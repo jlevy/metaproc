@@ -415,6 +415,27 @@ Core declaration fields:
 | `parse` | Optional parse config when the file content is materialized into a value. |
 | `role` | Closed semantic tag such as `process`, `template`, `packet`, `roster`, or `run-input`. |
 | `produced_by` | Explicit producer ref when the file is written by a step in the same graph. |
+| `contract` | Contract ID the artifact must validate against, as `namespace:Name/vN`. Checked at the step boundary whatever the format: a `frontmatter-md` output validates its frontmatter, any other its document root. Spelled `schema` in older specs, which still parse. |
+| `on_invalid` | What it costs when this output fails its contract, keyed by invariant, contract ID, or failure kind, most-specific-first: `fail`, `retry`, or `fail_run`. Governs the output that declares it and no other. |
+
+**A contract ID is not a schema path.** The two are easy to conflate because both are
+called schemas in casual use, and keeping them apart is what makes the boundary check
+work:
+
+- A **contract ID** is an identity, such as `example:Record/v1`. It resolves through the
+  plugin registry to a Pydantic model, and that model is what validates the document.
+  This is what an output declares and what a document’s `softschema.contract` names.
+- A **schema document** is a generated JSON Schema file.
+  It is compiled *from* the model with `softschema compile`, committed for portability
+  and inspection, and kept honest by a drift check.
+  A document may point at one through `softschema.schema`, and nothing about validation
+  depends on that pointer: an artifact validates identically whether the path is right,
+  wrong, or absent, because the contract ID is what does the resolving.
+
+So the Pydantic model is the authority, the contract ID is how it is named, and the
+schema document is a derived artifact.
+Writing a new contract means writing a model and registering it, not authoring a schema
+file by hand.
 
 Closed value types:
 
@@ -1642,6 +1663,17 @@ This follows the three-layer model:
 Check taxonomies, severity models, and report formats stay in the domain layer rather
 than the framework.
 
+Failure handling splits along the same seam, and the dividing line is worth stating
+because both halves are easy to put in the wrong layer:
+
+> **The framework owns what a failure does to execution.
+> The domain owns what a failure means.**
+
+Retrying, failing a step, and aborting a run are framework business because only the
+framework can perform them.
+Severity, ownership, and taxonomy are the domain’s, and the framework should be unable
+to read them even when it stores them on the domain’s behalf.
+
 ### 13.1 Plugin System
 
 The plugin system separates generic framework concerns from domain-specific logic.
@@ -1711,10 +1743,12 @@ The retry system classifies subprocess failures as **retryable (transient)** or
 
 #### Error Classification (Retry Verdict)
 
-The subprocess is treated as opaque (exit code is always 1 for failures), so the error
-string from `status.yaml` is the only signal.
-`classify_error()` determines retryability (`RetryVerdict`: `RETRY` or `FAIL`) via a
-priority chain:
+A subprocess is opaque -- its exit code is always 1 for failures -- so for anything it
+reports, the error string from `status.yaml` is the only signal there is.
+`classify_error()` reads it, and owns rules 1-3 and 5 below.
+Rule 4 is the exception: an output failing its contract is refused by the framework
+itself, which therefore holds a structured record and does not have to read its own
+prose back. `classify_output_failures()` owns that one.
 
 1. **Permanent patterns** (checked first): `enospc`, `enomem`, `quota`,
    `permission denied`, `billing`, `credits`, exit code 137/143, `cancelled` -- always
@@ -1723,9 +1757,26 @@ priority chain:
    `gcloud auth`, `unavailable`, `503`/`502`, `econnrefused`/`econnreset`, `connection`,
    `log_runaway` -- produce `RETRY`.
 3. **Bare “exit code N”** -- default to `RETRY` (most are transient API errors).
-4. **”output validation failed”** -- classified as `RETRY` unless
-   schema/envelope/mismatch (then `FAIL`).
+4. **Output validation failure** -- decided from the structured failure record, not from
+   the error string. `missing`, `empty`, and `unreadable` are `RETRY`, because another
+   attempt may produce what this one did not; `structural` and `semantic` are `FAIL`,
+   because a document the contract refuses will be refused again identically.
+   An output’s `on_invalid` overrides its own failures.
 5. **Default** -- `FAIL`.
+
+Rule 4 was previously a substring test over the formatted error, looking for `schema`,
+`envelope`, or `mismatch`. Because the sentence contains the artifact’s filename, the
+test read the filename too, and two outputs missing for the same transient reason drew
+opposite verdicts:
+
+```text
+output validation failed: company-research-schema-manifest.md: file not found   -> FAIL
+output validation failed: source-snapshot.md: file not found                    -> RETRY
+```
+
+The rule now reads `OutputFailureKind`, which validation already knew and used to
+discard. `classify_error` keeps the substring path for status records written before
+structured failures were stored; nothing new should reach for it.
 
 #### Failure Classification (Failure Reason)
 

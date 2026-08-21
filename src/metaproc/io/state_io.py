@@ -7,6 +7,7 @@ ResultRecord. All writes are atomic (write to temp, then rename).
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -16,7 +17,13 @@ from strif import atomic_output_file
 
 from metaproc.engine.placeholders import resolve_templates
 from metaproc.models.authored import IOSpec
-from metaproc.models.runtime import AttemptRecord, ManualAckRecord, ResultRecord, StatusRecord
+from metaproc.models.runtime import (
+    AttemptRecord,
+    ManualAckRecord,
+    OutputFailure,
+    ResultRecord,
+    StatusRecord,
+)
 from metaproc.paths import (
     ATTEMPT_FILE,
     MANUAL_ACK_FILE,
@@ -48,7 +55,12 @@ def _write_record_at(state_dir: Path, filename: str, data: dict[str, object]) ->
 
 
 def write_status_at(state_dir: Path, record: StatusRecord) -> Path:
-    return _write_record_at(state_dir, STATUS_FILE, record.model_dump())
+    # ``mode="json"`` because the destination is a YAML document, not Python.
+    # ``OutputFailure.kind`` is a StrEnum, and a Python-mode dump hands the
+    # enum member itself to the YAML writer, which cannot represent it — the
+    # first output failure carrying a structured record would raise instead of
+    # being recorded. Every other field serializes identically either way.
+    return _write_record_at(state_dir, STATUS_FILE, record.model_dump(mode="json"))
 
 
 def write_attempt_at(state_dir: Path, record: AttemptRecord) -> Path:
@@ -159,8 +171,13 @@ def mark_failed_at(
     *,
     error: str,
     running_record: StatusRecord | None = None,
+    output_failures: Sequence[OutputFailure] | None = None,
 ) -> StatusRecord:
-    """Transition ``state_dir/status.yaml`` from running to failed."""
+    """Transition ``state_dir/status.yaml`` from running to failed.
+
+    ``output_failures`` records which invariant refused which declared output,
+    so a reader does not have to recover that from ``error``.
+    """
     current = _read_or_use_at(state_dir, running_record)
     record = StatusRecord(
         run_id=current.run_id,
@@ -171,6 +188,7 @@ def mark_failed_at(
         started_at=current.started_at,
         completed_at=_now_iso(),
         error=error,
+        output_failures=list(output_failures or []),
     )
     write_status_at(state_dir, record)
     return record

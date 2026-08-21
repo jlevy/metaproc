@@ -5,9 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import typer
-from pydantic import ValidationError
 from ruamel.yaml import YAMLError
-from softschema import ArtifactValidationResult, validate_artifact
 
 from metaproc.cli import app, get_output
 from metaproc.commands.helpers import (
@@ -20,9 +18,10 @@ from metaproc.engine.condition import output_is_active
 from metaproc.engine.pathing import compute_run_dir, find_item_dir, glob_resolve_path
 from metaproc.engine.placeholders import resolve_templates
 from metaproc.engine.process_scope import expand_process_vars
+from metaproc.engine.validation import check_artifact_contract
 from metaproc.errors import CLIError
 from metaproc.io import FmFormatError, artifact_exists, resolve_existing_artifact
-from metaproc.io.frontmatter import fmf_read_frontmatter_artifact, load_yaml_typed
+from metaproc.io.frontmatter import fmf_read_frontmatter_artifact
 from metaproc.plugins.discovery import get_plugin_registry
 
 
@@ -119,7 +118,7 @@ def validate(
         output_name = Path(io_spec.path).name
         if output_name:
             expected_files.append(output_name)
-            schema = io_spec.schema_
+            schema = io_spec.contract
             fmt = io_spec.format or ""
             if schema:
                 output_schemas[output_name] = schema
@@ -166,26 +165,19 @@ def validate(
                 # Cloud mode: skip schema validation, just check existence
                 pass
             elif fname in output_schemas:
-                contract_id = output_schemas[fname]
-                fmt = output_formats.get(fname, "")
-                try:
-                    if fmt == "frontmatter-md":
-                        result = validate_artifact(
-                            fpath,
-                            contract_id=contract_id,
-                            registry=softschema_registry,
-                        )
-                        if not result.ok:
-                            raise ValueError(_format_artifact_validation_error(result))
-                    else:
-                        binding = softschema_registry.resolve(contract_id)
-                        model_cls = binding.model if binding else None
-                        if model_cls:
-                            load_yaml_typed(fpath, model_cls)
-                        else:
-                            fmf_read_frontmatter_artifact(fpath)
-                except (ValidationError, YAMLError, FmFormatError, ValueError, TypeError) as e:
-                    missing.append(f"{fname} (invalid: {e})")
+                # Same check the step boundary runs, so a run and this command
+                # cannot disagree about whether an artifact honours its contract.
+                missing.extend(
+                    f"{fname} (invalid: {failure.message})"
+                    for failure in check_artifact_contract(
+                        fpath,
+                        contract_id=output_schemas[fname],
+                        fmt=output_formats.get(fname, ""),
+                        registry=softschema_registry,
+                        output=fname,
+                        path=fname,
+                    )
+                )
             elif output_formats.get(fname) == "frontmatter-md":
                 try:
                     fmf_read_frontmatter_artifact(fpath)
@@ -212,13 +204,3 @@ def validate(
 
     if failed:
         raise typer.Exit(code=1)
-
-
-def _format_artifact_validation_error(result: ArtifactValidationResult) -> str:
-    errors = result.structural.errors or result.semantic.errors
-    if not errors:
-        return f"{result.contract_id}: validation failed"
-    first = errors[0]
-    kind = first.get("kind") or first.get("type") or "validation_error"
-    message = first.get("message") or first.get("msg") or str(first)
-    return f"{result.contract_id}: {kind}: {message}"

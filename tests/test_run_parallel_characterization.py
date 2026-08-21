@@ -25,8 +25,10 @@ from metaproc.commands.run_parallel import (
     _run_agent_pool,
 )
 from metaproc.engine.placeholders import resolve_runtime_config
-from metaproc.engine.retry import RetryVerdict
+from metaproc.engine.retry import RetryVerdict, classify_output_failures
+from metaproc.engine.validation import validate_item_outputs_detailed
 from metaproc.models.authored import IOSpec, RetryPolicy
+from metaproc.models.runtime import OutputFailure, OutputFailureKind
 from metaproc.runpool.pool import RunPoolConfig
 
 # ---------------------------------------------------------------------------
@@ -87,47 +89,30 @@ class TestCodeModeOutputValidationRetry:
     and retries when the verdict is RETRY. This test pins that behavior.
     """
 
-    @patch("metaproc.commands.run_parallel.validate_item_outputs")
-    @patch("metaproc.commands.run_parallel.classify_error")
-    @patch("metaproc.commands.run_parallel.mark_failed_at")
-    @patch("metaproc.commands.run_parallel.mark_completed_at")
-    @patch("metaproc.commands.run_parallel.repair_frontmatter_file", return_value=False)
-    def test_code_mode_output_validation_failure_calls_classify_error(
+    def test_code_mode_output_validation_failure_is_classified_from_the_record(
         self,
-        mock_repair: MagicMock,
-        mock_mark_completed: MagicMock,
-        mock_mark_failed: MagicMock,
-        mock_classify: MagicMock,
-        mock_validate: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Code-mode: output validation failure calls classify_error for retry decision.
+        """Code-mode: the retry decision reads the failure record, not the sentence.
 
-        This pins the fix where classify_error IS called. If this
-        test breaks, the code-mode retry path has regressed.
+        This pins that an output validation failure is still classified rather
+        than silently dropped, and that the classifier it reaches is the one
+        over ``OutputFailureKind``. If this breaks, the code-mode retry path has
+        regressed to substring-matching its own error text.
         """
-
-        mock_validate.return_value = ["missing file: output.yaml"]
-        mock_classify.return_value = RetryVerdict.FAIL
-
-        # Simulate the code-mode validation block (lines 412-436).
-        # We call the validation + classify logic directly since the full
-        # run_parallel command requires too much setup.
         item_dir = tmp_path / "AAPL"
         item_dir.mkdir()
         effective_outputs = {"report": IOSpec(path="output.yaml")}
 
-        output_errors = mock_validate(item_dir, effective_outputs)
-        assert output_errors  # validation failed
+        output_failures = validate_item_outputs_detailed(item_dir, effective_outputs)
+        assert output_failures  # validation failed: the file was never written
 
-        error_str = f"output validation failed: {'; '.join(output_errors)}"
-        verdict = mock_classify(error_str)
+        assert classify_output_failures(output_failures, effective_outputs) is RetryVerdict.RETRY
+        # A declaration on the failing output overrides that default.
+        declared = {"report": IOSpec(path="output.yaml", on_invalid={"missing": "fail"})}
+        assert classify_output_failures(output_failures, declared) is RetryVerdict.FAIL
 
-        # Current behavior: classify_error IS called (not bypassed)
-        mock_classify.assert_called_with(error_str)
-        assert verdict == RetryVerdict.FAIL
-
-    @patch("metaproc.commands.run_parallel.validate_item_outputs")
+    @patch("metaproc.commands.run_parallel.validate_item_outputs_detailed")
     @patch("metaproc.commands.run_parallel.classify_error")
     def test_handle_success_pool_path_routes_validation_failure_to_batch_failed(
         self,
@@ -138,17 +123,25 @@ class TestCodeModeOutputValidationRetry:
         """Pool path (_handle_success): validation failures go to batch_failed for retry.
 
         In _handle_success, output validation failures are appended to
-        batch_failed (line 1173), and classify_error is called in the OUTER
-        retry loop (line 1132). This test pins that the pool path adds
-        validation failures to batch_failed rather than silently dropping them.
+        batch_failed, and the outer retry loop classifies them. This test pins
+        that the pool path adds validation failures to batch_failed rather than
+        silently dropping them, and that it carries the structured record along
+        so the verdict is not taken from the sentence.
         """
-        mock_validate.return_value = ["missing file: output.yaml"]
+        mock_validate.return_value = [
+            OutputFailure(
+                output="report",
+                path="output.yaml",
+                kind=OutputFailureKind.missing,
+                message="file not found",
+            )
+        ]
 
         item_dir = tmp_path / "AAPL"
         item_dir.mkdir()
 
         all_results: list[tuple[str, int]] = []
-        batch_failed: list[tuple[dict[str, Any], str]] = []
+        batch_failed: list[tuple[dict[str, Any], str, list[OutputFailure]]] = []
         shared = _make_shared("AAPL", tmp_path)
         result = MagicMock()
         result.elapsed_s = 1.0
@@ -184,12 +177,13 @@ class TestCodeModeOutputValidationRetry:
         # Current behavior: validation failure is routed to batch_failed
         assert len(batch_failed) == 1
         assert "output validation failed" in batch_failed[0][1]
+        assert [f.kind for f in batch_failed[0][2]] == [OutputFailureKind.missing]
         # NOT added to all_results (retry loop handles that)
         assert len(all_results) == 0
 
     @patch("metaproc.commands.run_parallel.write_result_at")
     @patch("metaproc.commands.run_parallel.mark_completed_at")
-    @patch("metaproc.commands.run_parallel.validate_item_outputs")
+    @patch("metaproc.commands.run_parallel.validate_item_outputs_detailed")
     @patch("metaproc.commands.run_parallel.repair_frontmatter_file", return_value=False)
     def test_handle_success_writes_completed_result_with_step_hash(
         self,
@@ -207,7 +201,7 @@ class TestCodeModeOutputValidationRetry:
         (item_dir / "output.yaml").write_text("ok: true\n")
 
         all_results: list[tuple[str, int]] = []
-        batch_failed: list[tuple[dict[str, Any], str]] = []
+        batch_failed: list[tuple[dict[str, Any], str, list[OutputFailure]]] = []
         shared = _make_shared("AAPL", tmp_path)
         result = MagicMock()
         result.elapsed_s = 1.0

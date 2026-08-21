@@ -599,8 +599,10 @@ Each traces to a section above.
     at most one fenced commit per task generation, and can a late stale attempt never
     publish?
 13. **Can you see why not?** For every non-running task, is one primary blocker reason
-    inspectable from durable state, and can slowness be attributed among compute,
-    memory, external services, and graph shape?
+    inspectable from durable state; does every failed task carry classified evidence
+    rather than prose, so nothing downstream has to parse a sentence to learn what
+    refused it; and can slowness be attributed among compute, memory, external services,
+    and graph shape?
 14. **Can it loop?** Can an iterative improve-measure-repeat process be expressed as
     repeated runs over durable carried state, with a declared measurement, gate, and
     termination, without mutating the spec at runtime?
@@ -664,9 +666,17 @@ original unit of execution and state, and one local orchestrator was the only wr
   resolved plan is not persisted as the authority that resume executes.
 - **Effects and finalization (test 15).** No finalization or receipted-effect protocol
   exists; delivering a run’s results is an out-of-band operator action.
-- **Bottleneck attribution (test 13, partially).** Run, pool, and resource views are
-  rich, but per-task blocker reasons and the current blocking structure are derivable
-  from state rather than a first-class view.
+- **Blocker and bottleneck attribution (test 13, partially).** Run, pool, and resource
+  views are rich, but per-task blocker reasons and the current blocking structure are
+  derivable from state rather than a first-class view.
+- **Failure evidence (test 13, partially).** The other half of the same test.
+  A task that fails its output contract now records classified evidence beside the human
+  sentence: which output failed, against which contract, which invariant refused it, and
+  where in the document.
+  The retry decision reads that record rather than the sentence describing it.
+  Failures arriving from anywhere else, an exit code, a timeout, a killed process, are
+  still a single string, so evidence is classified where the framework does the refusing
+  and prose everywhere else.
 - **Loops (test 14).** Iteration is not first-class.
   The conceptual frame exists in
   [metaproc-concepts-and-principles.md §5](../src/metaproc/docs/metaproc-concepts-and-principles.md),

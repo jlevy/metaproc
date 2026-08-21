@@ -10,7 +10,7 @@ import re
 from collections.abc import Callable
 from typing import ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from metaproc.models.lane import LaneMatrix
 from metaproc.models.resource_budget import ResourceBudgetSpec
@@ -210,7 +210,7 @@ class ProcessOutput(_ProcessIOBase):
 
 
 class IOSpec(BaseModel):
-    """Artifact reference with optional kind, format, and schema.
+    """Artifact reference with optional kind, format, and contract.
 
     Optional ``template:`` names a scaffold file (may contain ``{{vars}}``) the agent
     fills in. Optional ``condition:`` is a predicate against resolved variables (e.g.
@@ -222,7 +222,50 @@ class IOSpec(BaseModel):
     type: str | None = None
     kind: Literal["file", "directory", "stream"] | None = None
     format: str | None = None
-    schema_: str | None = Field(default=None, alias="schema")
+    contract: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("contract", "schema"),
+        serialization_alias="contract",
+    )
+    """Contract id this output must validate against, as ``namespace:Name/vN``.
+
+    A contract id, not a path to a schema document. softschema draws that line
+    in its own document metadata, where ``contract`` names the identity and
+    ``schema`` optionally points at a generated JSON Schema file; the identity is
+    what resolves to a model and does the validating. ``schema:`` is accepted as
+    an alias so existing process specs keep working.
+    """
+
+    on_invalid: dict[str, Literal["fail", "retry", "fail_run"]] | None = None
+    """What it costs when *this* output fails its contract, keyed most-specific-first.
+
+    A key is an invariant name, a contract id, or an
+    :class:`~metaproc.models.runtime.OutputFailureKind`, tried in that order.
+    Omitted, a failure costs what it has always cost. A clause governs the output
+    that declares it and no other, so two outputs of one step can answer
+    differently for the same kind of failure.
+
+    Distinct from a step's ``on_failure``, which says whether *this* step runs
+    when an *upstream* one failed. That is the consumer's side of an edge; this
+    is the producer's own output.
+
+    The common case is a stochastic producer, where a second attempt genuinely
+    may succeed where the first did not::
+
+        on_invalid:
+          semantic: retry
+
+    ``retry`` is honoured wherever per-item retry exists, which is fan-out
+    execution; a single-shot step has no attempt to schedule, so there a failure
+    is terminal whatever it declares.
+
+    ``fail_run`` is for a defect that will recur on every item rather than be
+    specific to this one. It currently fails the item permanently, exactly as
+    ``fail`` does — no execution path aborts a run on it yet. It is readable
+    through :func:`~metaproc.engine.retry.requires_run_abort`, which is the seam
+    that abort would attach to.
+    """
+
     optional: bool = False
     template: str | None = None
     condition: str | None = None

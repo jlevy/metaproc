@@ -93,7 +93,7 @@ from metaproc.engine.resource_finalization import finalize_run_resources
 from metaproc.engine.resource_sampling import run_sampled_step_command, sample_step_resources
 from metaproc.engine.resource_snapshot import build_resource_run_snapshot
 from metaproc.engine.runtime import prepare_step, resolve_batch_size, validate_step_inputs_exist
-from metaproc.engine.validation import validate_item_outputs
+from metaproc.engine.validation import validate_item_outputs, validate_item_outputs_detailed
 from metaproc.engine.write_boundary import (
     WriteTarget,
     capture_repo_snapshot,
@@ -1029,12 +1029,16 @@ async def _execute_code_step(
         return False
 
     if effective_outputs and artifact_dir is not None:
-        output_errors = validate_item_outputs(artifact_dir, effective_outputs, variables=variables)
-        if output_errors:
+        output_failures = validate_item_outputs_detailed(
+            artifact_dir, effective_outputs, variables=variables
+        )
+        if output_failures:
+            output_errors = [f.summary() for f in output_failures]
             mark_failed_at(
                 state_dir,
                 error=f"output validation failed: {'; '.join(output_errors)}",
                 running_record=running_record,
+                output_failures=output_failures,
             )
             return False
 
@@ -1303,12 +1307,16 @@ async def _execute_agent_step(
         # even when the agent wrote the artifact at the correct path. Hit by
         # A production smoke exposed this when artifacts existed on disk but the
         # unresolved placeholder made the step transition to FAILED.
-        output_errors = validate_item_outputs(artifact_dir, effective_outputs, variables=step_vars)
-        if output_errors:
+        output_failures = validate_item_outputs_detailed(
+            artifact_dir, effective_outputs, variables=step_vars
+        )
+        if output_failures:
+            output_errors = [f.summary() for f in output_failures]
             mark_failed_at(
                 state_dir,
                 error=f"output validation failed: {'; '.join(output_errors)}",
                 running_record=running_record,
+                output_failures=output_failures,
             )
             return False
 
@@ -1955,12 +1963,16 @@ async def _execute_manual_step(
             ack_record = read_manual_ack_at(state_dir)
 
     if target.outputs and artifact_dir is not None:
-        output_errors = validate_item_outputs(artifact_dir, target.outputs, variables=variables)
-        if output_errors:
+        output_failures = validate_item_outputs_detailed(
+            artifact_dir, target.outputs, variables=variables
+        )
+        if output_failures:
+            output_errors = [f.summary() for f in output_failures]
             mark_failed_at(
                 state_dir,
                 error=f"output validation failed: {'; '.join(output_errors)}",
                 running_record=running_record,
+                output_failures=output_failures,
             )
             return False
 
