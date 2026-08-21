@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -94,7 +94,6 @@ from metaproc.engine.retry import (
     compute_backoff,
     extract_log_error,
     max_retries_for,
-    merge_on_invalid,
 )
 from metaproc.engine.run_id import generate_run_id
 from metaproc.engine.runtime import (
@@ -119,7 +118,7 @@ from metaproc.io.state_io import (
 )
 from metaproc.logutil.compaction import try_compact_log
 from metaproc.models.authored import IOSpec, ProcessDefaults, ProcessSpec, ProcessStep, RetryPolicy
-from metaproc.models.runtime import AttemptRecord, ResultRecord
+from metaproc.models.runtime import AttemptRecord, OutputFailure, ResultRecord
 from metaproc.runpool.backend import LaunchBackend, PreparedLaunch
 from metaproc.runpool.pool import (
     ProcessConfig,
@@ -1041,8 +1040,7 @@ def run_parallel(
                         if output_failures:
                             output_errors = [f.summary() for f in output_failures]
                             error_str = f"output validation failed: {'; '.join(output_errors)}"
-                            on_invalid = merge_on_invalid(effective_outputs)
-                            verdict = classify_output_failures(output_failures, on_invalid)
+                            verdict = classify_output_failures(output_failures, effective_outputs)
                             cap = max_retries_for(
                                 FailureClass.INVALID_OUTPUT, retry_policy.max_retries
                             )
@@ -1779,8 +1777,19 @@ async def _run_agent_pool(  # noqa: PLR0913
             error_str=error_str,
         )
 
-    def _classify_and_maybe_retry(shared: dict[str, Any], error_str: str) -> None:
+    def _classify_and_maybe_retry(
+        shared: dict[str, Any],
+        error_str: str,
+        output_failures: Sequence[OutputFailure] | None = None,
+    ) -> None:
         """Classify failure and either schedule retry or record permanent failure.
+
+        ``output_failures`` is passed when the failure is a declared output failing
+        its contract. It carries what refused the output, so the verdict comes from
+        that rather than from substring-matching the sentence describing it — which
+        reads the artifact's filename along with everything else, and is why an
+        output named for a schema used to classify permanent whatever had actually
+        gone wrong with it.
 
         Plan §Phase 5: the pool adapter's severity verdict takes
         precedence over the generic retry classifier. When the auth
@@ -1810,7 +1819,11 @@ async def _run_agent_pool(  # noqa: PLR0913
             parse_quota_reset_at(error_str) if fc == FailureClass.QUOTA_EXHAUSTED else None
         )
         pool.record_failure_class(fc, quota_reset_at=quota_reset_at)
-        verdict = classify_error(error_str)
+        verdict = (
+            classify_output_failures(output_failures, effective_outputs)
+            if output_failures
+            else classify_error(error_str)
+        )
         # Tear down pool slot (if any) BEFORE we schedule the retry —
         # the retry's prepare_launch will lease a fresh slot against
         # the failed attempt's excluded label set (P2.6).
@@ -1946,7 +1959,7 @@ async def _run_agent_pool(  # noqa: PLR0913
         elif result.exit_code == 0:
             # _handle_success may call _classify_and_maybe_retry via batch_failed
             # for output validation failures. We pass a local list for it.
-            success_failed: list[tuple[dict[str, Any], str]] = []
+            success_failed: list[tuple[dict[str, Any], str, list[OutputFailure]]] = []
             _handle_success(
                 each,
                 item,
@@ -1969,8 +1982,10 @@ async def _run_agent_pool(  # noqa: PLR0913
             )
             # Handle output validation failures from _handle_success.
             if success_failed:
-                for failed_shared, failed_error in success_failed:
-                    _classify_and_maybe_retry(failed_shared, failed_error)
+                for failed_shared, failed_error, failed_outputs in success_failed:
+                    _classify_and_maybe_retry(
+                        failed_shared, failed_error, output_failures=failed_outputs
+                    )
             else:
                 # Pure-success path: tear down the pool slot with
                 # ok semantics so adapter.flush_refreshed_credential
@@ -2110,7 +2125,7 @@ def _handle_success(  # noqa: PLR0913
     result: Any,
     out: Any,
     all_results: list[tuple[str, int]],
-    batch_failed: list[tuple[dict[str, Any], str]],
+    batch_failed: list[tuple[dict[str, Any], str, list[OutputFailure]]],
     shared: dict[str, Any],
     step_hash: str | None = None,
     cloud_runs_dir: str = "",
@@ -2128,22 +2143,30 @@ def _handle_success(  # noqa: PLR0913
                 out_file = check_dir / Path(io_spec.path).name
                 if out_file.exists() and repair_frontmatter_file(out_file):
                     out.progress(f"  Repaired YAML in {out_file.name} for {item}")
-        output_errors = validate_item_outputs(check_dir, effective_outputs, variables=item_vars)
-        validated = not bool(output_errors)
-        if output_errors:
+        output_failures = validate_item_outputs_detailed(
+            check_dir, effective_outputs, variables=item_vars
+        )
+        validated = not bool(output_failures)
+        if output_failures:
+            output_errors = [f.summary() for f in output_failures]
             error_str = f"output validation failed: {'; '.join(output_errors)}"
             if log_path is not None:
                 log_error = extract_log_error(log_path)
                 if log_error:
                     error_str = f"{error_str} (log: {log_error})"
-            mark_failed_at(state_dir, error=error_str, running_record=running_record)
+            mark_failed_at(
+                state_dir,
+                error=error_str,
+                running_record=running_record,
+                output_failures=output_failures,
+            )
             out.progress(
                 f"  Done step={step} {each}={item} "
                 f"attempt={shared.get('attempt_number', 1)} "
                 f"status=invalid_outputs "
                 f"({fmt_timedelta(result.elapsed_s)})"
             )
-            batch_failed.append((shared, error_str))
+            batch_failed.append((shared, error_str, output_failures))
             if log_path is not None:
                 try_compact_log(log_path)
             return

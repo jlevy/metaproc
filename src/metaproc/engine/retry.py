@@ -230,9 +230,30 @@ def resolve_output_failure_action(
     return None
 
 
+def declared_action_for(
+    failure: OutputFailure,
+    outputs: Mapping[str, IOSpec] | None,
+) -> OutputFailureAction | None:
+    """Resolve a failure against the ``on_invalid`` of the output that failed.
+
+    An ``on_invalid`` clause is declared on one output and governs that output
+    only. Reading it from ``failure.output`` rather than from a mapping merged
+    across the step is what keeps a sibling's declaration from deciding this
+    output's fate: two outputs of one step routinely have different contracts
+    and different reasons to fail, and a step-wide merge would silently apply
+    one's policy to the other.
+    """
+    if not outputs:
+        return None
+    io_spec = outputs.get(failure.output)
+    if io_spec is None:
+        return None
+    return resolve_output_failure_action(failure, io_spec.on_invalid)
+
+
 def classify_output_failures(
     failures: Sequence[OutputFailure],
-    on_invalid: Mapping[str, str] | None = None,
+    outputs: Mapping[str, IOSpec] | None = None,
 ) -> RetryVerdict:
     """Decide whether re-running could fix these output failures.
 
@@ -241,18 +262,20 @@ def classify_output_failures(
     identical failures cannot receive opposite verdicts because of how their
     artifacts are named.
 
+    ``outputs`` is the step's declared outputs, so each failure is judged against
+    the ``on_invalid`` of the output that produced it.
+
     Any failure another attempt cannot fix makes the whole set permanent, since
     the step has to produce all of its outputs.
     """
     if not failures:
         return RetryVerdict.FAIL
 
-    actions: list[OutputFailureAction | None] = [
-        resolve_output_failure_action(f, on_invalid) for f in failures
-    ]
-    if any(a == "fail_run" for a in actions):
-        return RetryVerdict.FAIL
-    if any(a == "fail" for a in actions):
+    actions: list[OutputFailureAction | None] = [declared_action_for(f, outputs) for f in failures]
+    # ``fail_run`` is a permanent failure here as well; what distinguishes it is
+    # that a coordinator can also ask whether the run should stop, which is what
+    # ``requires_run_abort`` reports.
+    if any(a in {"fail", "fail_run"} for a in actions):
         return RetryVerdict.FAIL
 
     # A failure the process asked to retry counts as retryable; one it said
@@ -269,10 +292,16 @@ def classify_output_failures(
 
 def requires_run_abort(
     failures: Sequence[OutputFailure],
-    on_invalid: Mapping[str, str] | None = None,
+    outputs: Mapping[str, IOSpec] | None = None,
 ) -> bool:
-    """Whether any of these failures is one the process said should stop the run."""
-    return any(resolve_output_failure_action(f, on_invalid) == "fail_run" for f in failures)
+    """Whether any of these failures is one the process declared should stop the run.
+
+    Reports the declaration; it does not perform the abort. No execution path
+    stops a run on this yet, so a ``fail_run`` output currently fails its item
+    permanently and the run continues. This is the seam a coordinator-level
+    abort would attach to.
+    """
+    return any(declared_action_for(f, outputs) == "fail_run" for f in failures)
 
 
 def classify_failure(error: str) -> FailureClass:
@@ -416,21 +445,3 @@ def compute_backoff(attempt: int, policy: RetryPolicy) -> float:
     """
     delay = policy.initial_backoff_s * (policy.backoff_multiplier ** (attempt - 1))
     return min(delay, policy.max_backoff_s)
-
-
-def merge_on_invalid(outputs: Mapping[str, IOSpec]) -> dict[str, str]:
-    """Collect the ``on_invalid`` declarations of a step's outputs into one mapping.
-
-    A step fails or retries as a whole, so its outputs' policies are consulted
-    together. Declaring the same key on two outputs with different actions is a
-    process-authoring mistake; the more severe action wins so a declaration can
-    never be softened by a sibling.
-    """
-    severity = {"retry": 0, "fail": 1, "fail_run": 2}
-    merged: dict[str, str] = {}
-    for io_spec in outputs.values():
-        for key, action in (io_spec.on_invalid or {}).items():
-            current = merged.get(key)
-            if current is None or severity[action] > severity[current]:
-                merged[key] = action
-    return merged

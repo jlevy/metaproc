@@ -1963,12 +1963,16 @@ async def _execute_manual_step(
             ack_record = read_manual_ack_at(state_dir)
 
     if target.outputs and artifact_dir is not None:
-        output_errors = validate_item_outputs(artifact_dir, target.outputs, variables=variables)
-        if output_errors:
+        output_failures = validate_item_outputs_detailed(
+            artifact_dir, target.outputs, variables=variables
+        )
+        if output_failures:
+            output_errors = [f.summary() for f in output_failures]
             mark_failed_at(
                 state_dir,
                 error=f"output validation failed: {'; '.join(output_errors)}",
                 running_record=running_record,
+                output_failures=output_failures,
             )
             return False
 
