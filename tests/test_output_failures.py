@@ -10,7 +10,7 @@ import datetime
 
 import pytest
 from pydantic import BaseModel
-from softschema import Contract, Contracts, SchemaStatus
+from softschema import Contract, Contracts, SchemaProfile, SchemaStatus
 
 from metaproc.engine.retry import (
     RetryVerdict,
@@ -312,3 +312,78 @@ class TestOnInvalidDeclarations:
 
     def test_a_step_declaring_nothing_merges_to_nothing(self):
         assert merge_on_invalid({"a": IOSpec(path="a.md")}) == {}
+
+
+class TestAContractMeansTheSameOnEveryFormat:
+    """A declaration that silently checks nothing is worse than no declaration."""
+
+    class Score(BaseModel):
+        ticker: str
+        value: int
+
+    def _registry(self) -> Contracts:
+        registry = Contracts()
+        registry.register(
+            Contract(
+                id="example:Score/v1",
+                model=self.Score,
+                status=SchemaStatus.enforced,
+                profile=SchemaProfile.pure_yaml,
+            )
+        )
+        return registry
+
+    def _yaml(self, tmp_path, body: str, contract: str) -> list[OutputFailure]:
+        (tmp_path / "score.yaml").write_text(body)
+        return validate_item_outputs_detailed(
+            tmp_path,
+            {"score": IOSpec(path="score.yaml", kind="file", contract=contract)},
+            softschema_registry=self._registry(),
+        )
+
+    def test_a_yaml_output_is_checked_against_its_contract(self, tmp_path):
+        failures = self._yaml(tmp_path, "ticker: AAPL\nvalue: nope\n", "example:Score/v1")
+
+        assert failures
+        assert failures[0].contract == "example:Score/v1"
+
+    def test_a_valid_yaml_output_passes(self, tmp_path):
+        assert self._yaml(tmp_path, "ticker: AAPL\nvalue: 3\n", "example:Score/v1") == []
+
+    def test_an_unresolvable_contract_fails_rather_than_passing_silently(self, tmp_path):
+        """The defect this replaces: only frontmatter-md caught this."""
+        failures = self._yaml(tmp_path, "ticker: AAPL\nvalue: 3\n", "example:Nope/v1")
+
+        assert failures, "a declaration naming a contract nothing registers must fail"
+
+    def test_an_unparsable_yaml_output_reports_unreadable(self, tmp_path):
+        failures = self._yaml(tmp_path, "ticker: [unclosed\n", "example:Score/v1")
+
+        assert failures
+        assert failures[0].kind is OutputFailureKind.unreadable
+
+    def test_a_yaml_date_normalizes_like_a_frontmatter_one(self, tmp_path):
+        """The representation fix reaches every format, not just frontmatter."""
+
+        class Dated(BaseModel):
+            as_of_date: datetime.date
+
+        registry = Contracts()
+        registry.register(
+            Contract(
+                id="example:YDated/v1",
+                model=Dated,
+                status=SchemaStatus.enforced,
+                profile=SchemaProfile.pure_yaml,
+            )
+        )
+        (tmp_path / "d.yaml").write_text("as_of_date: 2026-08-21\n")
+
+        assert (
+            validate_item_outputs_detailed(
+                tmp_path,
+                {"d": IOSpec(path="d.yaml", kind="file", contract="example:YDated/v1")},
+                softschema_registry=registry,
+            )
+            == []
+        )

@@ -8,7 +8,9 @@ import uuid
 from collections.abc import Mapping
 from pathlib import Path
 
-from pydantic import BaseModel, ValidationError
+from frontmatter_format import read_yaml_file
+from pydantic import BaseModel
+from ruamel.yaml import YAMLError
 from softschema import (
     ArtifactValidationResult,
     Contracts,
@@ -25,7 +27,7 @@ from metaproc.engine.placeholders import (
 )
 from metaproc.engine.process_scope import is_dep_ref
 from metaproc.io import FmFormatError, artifact_exists, resolve_existing_artifact
-from metaproc.io.frontmatter import fmf_read_frontmatter_artifact, load_yaml_typed
+from metaproc.io.frontmatter import fmf_read_frontmatter_artifact
 from metaproc.models.authored import IOSpec, ProcessSpec
 from metaproc.models.runtime import OutputFailure, OutputFailureKind
 from metaproc.plugins.discovery import get_plugin_registry
@@ -343,33 +345,43 @@ def validate_item_outputs_detailed(
             fpath = resolve_existing_artifact(fpath)
         fmt = io_spec.format or ""
 
-        if fmt == "frontmatter-md" and schema:
-            try:
-                frontmatter = fmf_read_frontmatter_artifact(fpath)
-            except FmFormatError as e:
-                fail(OutputFailureKind.unreadable, str(e))
-                continue
-            result = validate_artifact(
-                fpath,
-                contract_id=schema,
-                registry=softschema_registry,
-                document=normalize_for_structural_pass(frontmatter),
-            )
-            if not result.ok:
-                failures.extend(_artifact_failures(result, output_name, rendered, schema))
-        elif fmt == "frontmatter-md":
-            try:
-                fmf_read_frontmatter_artifact(fpath)
-            except FmFormatError as e:
-                fail(OutputFailureKind.unreadable, str(e))
-        elif schema:
-            binding = softschema_registry.resolve(schema)
-            model_cls = binding.model if binding else None
-            if model_cls:
+        if not schema:
+            # No contract to check against. A frontmatter document is still parsed,
+            # because a file that does not parse is not an output.
+            if fmt == "frontmatter-md":
                 try:
-                    load_yaml_typed(fpath, model_cls)
-                except (ValidationError, ValueError) as e:
-                    fail(OutputFailureKind.semantic, str(e))
+                    fmf_read_frontmatter_artifact(fpath)
+                except FmFormatError as e:
+                    fail(OutputFailureKind.unreadable, str(e))
+            continue
+
+        # One contract check for every format. Only reading the document differs:
+        # a frontmatter artifact validates its frontmatter, anything else its
+        # document root. Sending both through validate_artifact is what makes a
+        # declaration mean the same thing wherever it is written, including that
+        # an unresolvable contract fails rather than passing silently.
+        try:
+            document = (
+                fmf_read_frontmatter_artifact(fpath)
+                if fmt == "frontmatter-md"
+                else read_yaml_file(fpath)
+            )
+        except (FmFormatError, OSError, ValueError, YAMLError) as e:
+            # A document that will not parse is an unreadable output, not a crash.
+            # YAMLError is not a ValueError, so it needs naming: without it a
+            # malformed artifact raises out of validation and takes the run with it
+            # instead of failing its own step.
+            fail(OutputFailureKind.unreadable, str(e))
+            continue
+
+        result = validate_artifact(
+            fpath,
+            contract_id=schema,
+            registry=softschema_registry,
+            document=normalize_for_structural_pass(document),
+        )
+        if not result.ok:
+            failures.extend(_artifact_failures(result, output_name, rendered, schema))
     return failures
 
 
