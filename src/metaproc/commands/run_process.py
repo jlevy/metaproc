@@ -115,7 +115,7 @@ from metaproc.engine.retry import (
     max_retries_for,
 )
 from metaproc.engine.runtime import prepare_step, resolve_batch_size, validate_step_inputs_exist
-from metaproc.engine.schema_conform import conform_outputs_to_contracts
+from metaproc.engine.schema_conform import conform_declared_outputs
 from metaproc.engine.validation import (
     repair_declared_outputs,
     validate_item_outputs,
@@ -1626,10 +1626,10 @@ async def _execute_agent_step(
             # each scalar say the type its contract asks for? An agent writing YAML
             # by hand has no serializer in the path, so a name like `1850` arrives
             # as an integer.
-            for conformed in conform_outputs_to_contracts(
+            for conformed in conform_declared_outputs(
                 artifact_dir, effective_outputs, variables=step_vars
             ):
-                out.progress(f"  Step '{step_id}': conformed scalars in {conformed}")
+                out.progress(f"  Step '{step_id}': conformed scalars in {conformed.name}")
             # step_vars (not variables): only step_vars has VARIANT bound to
             # effective_variant. Without it, output paths containing {{run.variant}}
             # render with the literal placeholder and fpath.exists() reports false

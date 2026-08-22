@@ -94,11 +94,18 @@ Those internal import paths are not downstream compatibility guarantees.
 
 Most modules parse YAML and frontmatter through `metaproc.io`. Modules may import
 `ruamel.yaml.YAMLError` directly to catch the dependency’s specific parse failures.
-One production path constructs a parser directly:
+Two production paths hold a parser handle of their own:
 
 - **`metaproc/engine/yaml_repair.py`** uses `ruamel.yaml.YAML(typ='safe').load(...)`
   directly because the LLM-output repair path needs the parser handle in strict mode,
   and the module does a manual `---\n` split before any parser touches the text.
+- **`metaproc/engine/schema_conform.py`** builds its serializer through the curated
+  `new_yaml`, but in **round-trip** mode (`typ="rt"`) rather than the default `safe`,
+  and reconfigures it: `allow_aliases=True` so an author’s anchor is not expanded into a
+  duplicated mapping, `suppress_vals` disabled so an explicit null is never dropped, an
+  explicit `null` representer so a null’s spelling does not depend on emit order, and
+  `preserve_quotes` plus the artifact templates’ indentation so a one-scalar fix is a
+  one-line diff. It imports `ruamel.yaml.YAML` for the return annotation only.
 
 Tests may use `yaml.safe_dump` to construct synthetic fixtures.
 That use does not define the production serialization contract.
