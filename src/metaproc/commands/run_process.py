@@ -92,6 +92,13 @@ from metaproc.engine.process_scope import expand_process_vars
 from metaproc.engine.resource_finalization import finalize_run_resources
 from metaproc.engine.resource_sampling import run_sampled_step_command, sample_step_resources
 from metaproc.engine.resource_snapshot import build_resource_run_snapshot
+from metaproc.engine.retry import (
+    FailureClass,
+    RetryVerdict,
+    classify_output_failures,
+    compute_backoff,
+    max_retries_for,
+)
 from metaproc.engine.runtime import prepare_step, resolve_batch_size, validate_step_inputs_exist
 from metaproc.engine.validation import validate_item_outputs, validate_item_outputs_detailed
 from metaproc.engine.write_boundary import (
@@ -101,6 +108,7 @@ from metaproc.engine.write_boundary import (
     filter_boundary_violations,
     repo_changes_since,
 )
+from metaproc.engine.yaml_repair import repair_frontmatter_file
 from metaproc.errors import CLIError, ValidationError
 from metaproc.io import read_yaml_file, to_yaml_string
 from metaproc.io.orchestrator_lease import LeaseHeartbeat, acquire_lease, release_lease
@@ -1207,118 +1215,160 @@ async def _execute_agent_step(
     state_dir.mkdir(parents=True, exist_ok=True)
 
     item_record = {"step": step_id}
-    running_record = mark_running_at(state_dir, run_id=run_id, step_id=step_id, item=item_record)
-
-    # Write the prompt before asking the adapter to build its command. Adapters that
-    # inline prompt contents (notably codex-cli) must receive a real, readable path;
-    # a synthetic placeholder makes the run fail before dispatch.
-    ts = datetime.now(tz=UTC).strftime("%H%M%S")
-    prompt_file = logs_dir / f"prompt-{step_id}-{ts}.txt"
-    with atomic_output_file(prompt_file) as tmp_path:
-        Path(tmp_path).write_text(resolved_prompt)
-
-    cmd = adapter_obj.build_command(prompt_file, runtime_config, step_vars)
-    write_attempt_at(
-        state_dir,
-        AttemptRecord(
-            run_id=run_id,
-            step_id=step_id,
-            item=item_record,
-            params=dict(step_vars),
-            outputs=resolve_record_output_paths(effective_outputs, step_vars),
-            runtime={
-                "adapter_type": adapter_type,
-                "execution_profile": effective_execution_profile,
-                "artifact_namespace": effective_variant,
-                "variant": effective_variant,
-                "command": cmd,
-            },
-            step_hash=step_hash,
-        ),
+    from metaproc.commands.run_parallel import (  # noqa: PLC0415 -- circular-import guard
+        _resolve_retry_policy,
     )
 
-    boundary_before = capture_repo_snapshot(process_dir, observation_zone=[run_dir])
+    # An output that fails its contract is not always terminal: a stochastic producer
+    # may get it right on a second pass. The ``on_invalid`` clause on the output says
+    # which failures are worth another call, and the content-failure cap bounds how
+    # many. Timeout, exit code, and boundary violations stay terminal here.
+    retry_policy = _resolve_retry_policy(step_def, spec.defaults)
+    content_retry_cap = max_retries_for(FailureClass.INVALID_OUTPUT, retry_policy.max_retries)
+    attempt = 1
 
-    env = adapter_obj.prepare_env(dict(os.environ), runtime_config)
-    if target.env:
-        env.update({k: resolve_templates(v, step_vars) for k, v in target.env.items()})
-    cwd = adapter_obj.working_directory(runtime_config)
-    timeout_s = runtime_config.get("timeout_s")
-    timeout_val = int(str(timeout_s)) if timeout_s is not None else None
+    while True:
+        running_record = mark_running_at(
+            state_dir, run_id=run_id, step_id=step_id, item=item_record, attempt=attempt
+        )
+        # Each retry keeps its own log, so the attempt that failed its contract stays
+        # readable beside the one that replaced it.
+        attempt_log_path = (
+            log_path
+            if attempt == 1
+            else log_path.with_name(f"{log_path.stem}-attempt{attempt}{log_path.suffix}")
+        )
 
-    use_filter = adapter_type == "pi-cli"
-    # A step without for_each still launches a real agent process, so it takes a host
-    # slot like any pool-launched attempt. Without this, N orchestrators on one machine
-    # cannot see each other's scalar launches at all.
-    scalar_resource_config = target.resources or runtime_config
-    try:
-        async with admitted_launch(
-            enabled=backend_name == "local",
-            limit=resolve_host_max_concurrency(
-                scalar_resource_config, default=SCALAR_DEFAULT_HOST_LIMIT
+        # Write the prompt before asking the adapter to build its command. Adapters that
+        # inline prompt contents (notably codex-cli) must receive a real, readable path;
+        # a synthetic placeholder makes the run fail before dispatch.
+        ts = datetime.now(tz=UTC).strftime("%H%M%S")
+        prompt_file = logs_dir / f"prompt-{step_id}-{ts}.txt"
+        with atomic_output_file(prompt_file) as tmp_path:
+            Path(tmp_path).write_text(resolved_prompt)
+
+        cmd = adapter_obj.build_command(prompt_file, runtime_config, step_vars)
+        write_attempt_at(
+            state_dir,
+            AttemptRecord(
+                run_id=run_id,
+                step_id=step_id,
+                item=item_record,
+                params=dict(step_vars),
+                outputs=resolve_record_output_paths(effective_outputs, step_vars),
+                runtime={
+                    "adapter_type": adapter_type,
+                    "execution_profile": effective_execution_profile,
+                    "artifact_namespace": effective_variant,
+                    "variant": effective_variant,
+                    "command": cmd,
+                },
+                step_hash=step_hash,
             ),
-            label=f"{run_id}/{step_id}",
-            pool_id=f"run-process:{run_id}",
-            metadata={"backend": backend_name, "step_id": step_id, "mode": "agent"},
-        ):
-            exit_code = await _run_agent_subprocess(
-                cmd,
-                env=env,
-                cwd=cwd,
-                log_path=log_path,
-                timeout_s=timeout_val,
-                use_filter=use_filter,
-            )
-    except subprocess.TimeoutExpired:
-        mark_failed_at(
-            state_dir, error=f"timeout after {timeout_s}s", running_record=running_record
         )
-        return False
 
-    try_compact_log(log_path)
+        boundary_before = capture_repo_snapshot(process_dir, observation_zone=[run_dir])
 
-    if exit_code != 0:
-        mark_failed_at(state_dir, error=f"exit code {exit_code}", running_record=running_record)
-        return False
+        env = adapter_obj.prepare_env(dict(os.environ), runtime_config)
+        if target.env:
+            env.update({k: resolve_templates(v, step_vars) for k, v in target.env.items()})
+        cwd = adapter_obj.working_directory(runtime_config)
+        timeout_s = runtime_config.get("timeout_s")
+        timeout_val = int(str(timeout_s)) if timeout_s is not None else None
 
-    if boundary_before is not None and allowed_targets:
-        boundary_after = capture_repo_snapshot(process_dir, observation_zone=[run_dir])
-        violations = filter_boundary_violations(
-            repo_changes_since(boundary_before, boundary_after),
-            allowed=allowed_targets,
-            ignored=ignored_targets,
-            base_dir=boundary_after.repo_root if boundary_after else None,
-        )
-        if violations:
-            mark_failed_at(
-                state_dir,
-                error=(
-                    "write boundary violated: "
-                    f"{_format_boundary_paths(violations, base_dir=boundary_after.repo_root if boundary_after else None)}"
+        use_filter = adapter_type == "pi-cli"
+        # A step without for_each still launches a real agent process, so it takes a host
+        # slot like any pool-launched attempt. Without this, N orchestrators on one machine
+        # cannot see each other's scalar launches at all.
+        scalar_resource_config = target.resources or runtime_config
+        try:
+            async with admitted_launch(
+                enabled=backend_name == "local",
+                limit=resolve_host_max_concurrency(
+                    scalar_resource_config, default=SCALAR_DEFAULT_HOST_LIMIT
                 ),
-                running_record=running_record,
+                label=f"{run_id}/{step_id}",
+                pool_id=f"run-process:{run_id}",
+                metadata={"backend": backend_name, "step_id": step_id, "mode": "agent"},
+            ):
+                exit_code = await _run_agent_subprocess(
+                    cmd,
+                    env=env,
+                    cwd=cwd,
+                    log_path=attempt_log_path,
+                    timeout_s=timeout_val,
+                    use_filter=use_filter,
+                )
+        except subprocess.TimeoutExpired:
+            mark_failed_at(
+                state_dir, error=f"timeout after {timeout_s}s", running_record=running_record
             )
             return False
 
-    if effective_outputs and artifact_dir is not None:
-        # step_vars (not variables): only step_vars has VARIANT bound to
-        # effective_variant. Without it, output paths containing {{run.variant}}
-        # render with the literal placeholder and fpath.exists() reports false
-        # even when the agent wrote the artifact at the correct path. Hit by
-        # A production smoke exposed this when artifacts existed on disk but the
-        # unresolved placeholder made the step transition to FAILED.
-        output_failures = validate_item_outputs_detailed(
-            artifact_dir, effective_outputs, variables=step_vars
-        )
-        if output_failures:
-            output_errors = [f.summary() for f in output_failures]
-            mark_failed_at(
-                state_dir,
-                error=f"output validation failed: {'; '.join(output_errors)}",
-                running_record=running_record,
-                output_failures=output_failures,
-            )
+        try_compact_log(attempt_log_path)
+
+        if exit_code != 0:
+            mark_failed_at(state_dir, error=f"exit code {exit_code}", running_record=running_record)
             return False
+
+        if boundary_before is not None and allowed_targets:
+            boundary_after = capture_repo_snapshot(process_dir, observation_zone=[run_dir])
+            violations = filter_boundary_violations(
+                repo_changes_since(boundary_before, boundary_after),
+                allowed=allowed_targets,
+                ignored=ignored_targets,
+                base_dir=boundary_after.repo_root if boundary_after else None,
+            )
+            if violations:
+                mark_failed_at(
+                    state_dir,
+                    error=(
+                        "write boundary violated: "
+                        f"{_format_boundary_paths(violations, base_dir=boundary_after.repo_root if boundary_after else None)}"
+                    ),
+                    running_record=running_record,
+                )
+                return False
+
+        if effective_outputs and artifact_dir is not None:
+            # A freshly-emitted LLM artifact is the one input yaml_repair is scoped to:
+            # a single unquoted colon in a note should not cost the whole step.
+            for io_spec in effective_outputs.values():
+                if io_spec.path:
+                    out_file = artifact_dir / Path(io_spec.path).name
+                    if out_file.exists() and repair_frontmatter_file(out_file):
+                        out.progress(f"  Step '{step_id}': repaired YAML in {out_file.name}")
+            # step_vars (not variables): only step_vars has VARIANT bound to
+            # effective_variant. Without it, output paths containing {{run.variant}}
+            # render with the literal placeholder and fpath.exists() reports false
+            # even when the agent wrote the artifact at the correct path. Hit by
+            # A production smoke exposed this when artifacts existed on disk but the
+            # unresolved placeholder made the step transition to FAILED.
+            output_failures = validate_item_outputs_detailed(
+                artifact_dir, effective_outputs, variables=step_vars
+            )
+            if output_failures:
+                output_errors = [f.summary() for f in output_failures]
+                error_str = f"output validation failed: {'; '.join(output_errors)}"
+                verdict = classify_output_failures(output_failures, effective_outputs)
+                if verdict == RetryVerdict.RETRY and attempt <= content_retry_cap:
+                    backoff = compute_backoff(attempt, retry_policy)
+                    out.progress(
+                        f"  Step '{step_id}': retryable ({error_str}), "
+                        f"retry in {backoff:.0f}s (attempt {attempt}/{content_retry_cap + 1})"
+                    )
+                    await asyncio.sleep(backoff)
+                    attempt += 1
+                    continue
+                mark_failed_at(
+                    state_dir,
+                    error=error_str,
+                    running_record=running_record,
+                    output_failures=output_failures,
+                )
+                return False
+
+        break
 
     mark_completed_at(state_dir, running_record=running_record)
     write_result_at(
