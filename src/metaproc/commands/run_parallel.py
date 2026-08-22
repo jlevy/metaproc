@@ -107,7 +107,6 @@ from metaproc.engine.validation import (
     validate_item_outputs,
     validate_item_outputs_detailed,
 )
-from metaproc.engine.yaml_repair import repair_frontmatter_file
 from metaproc.errors import CLIError, ValidationError
 from metaproc.io.claimed_items import claim_item
 from metaproc.io.state_io import (
@@ -1033,12 +1032,13 @@ def run_parallel(
                         break
 
                     if artifact_dir is not None and effective_outputs:
-                        # Attempt YAML repair before validation
-                        for io_spec in effective_outputs.values():
-                            if io_spec.path:
-                                out_file = artifact_dir / Path(io_spec.path).name
-                                if out_file.exists() and repair_frontmatter_file(out_file):
-                                    out.progress(f"  Repaired YAML in {out_file.name} for {item}")
+                        # No repair pass here, deliberately. This is the `mode: code`
+                        # branch: a handler builds its artifact from typed values through
+                        # a real writer, so a document that will not parse is a bug in the
+                        # handler, wrong for every item rather than for this one. Repairing
+                        # it would launder a serializer defect into a clean run. The agent
+                        # branches repair because an agent hand-writes the document with no
+                        # serializer in the path at all.
                         output_failures = validate_item_outputs_detailed(
                             artifact_dir, effective_outputs, variables=item_vars
                         )

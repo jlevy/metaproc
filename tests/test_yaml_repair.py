@@ -141,3 +141,42 @@ class TestRepairFrontmatterFile:
             "PyYAML's yaml.safe_load should not appear in repair_frontmatter_file — "
             "parser mismatch with downstream validator caused 2026-05-21 incident."
         )
+
+
+class TestWhichExecutorsRepair:
+    """Repair is scoped to agent-authored output, and the scoping is testable.
+
+    The pass exists because an agent hand-writes YAML with no serializer in the path,
+    so one unquoted colon costs a document. A code handler builds its artifact from
+    typed values through a real writer: a document that will not parse there is a bug
+    in the handler, wrong for every item rather than for this one, and repairing it
+    would launder a serializer defect into a clean run.
+
+    Asserted against the source rather than by executing a run, because the thing worth
+    protecting is which call sites exist. A future edit that adds a repair call to a
+    code branch should fail here and be made to argue for itself.
+    """
+
+    @staticmethod
+    def _source(module: str) -> str:
+        return (Path(__file__).parents[1] / "src" / "metaproc" / module).read_text()
+
+    def test_no_executor_calls_the_repair_primitive_directly(self) -> None:
+        """The helper is the only way in, and it is wired on agent paths only.
+
+        Stronger than checking the code branches: a direct call anywhere in either
+        executor is what a code-path repair would look like, since the agent paths go
+        through ``repair_declared_outputs``.
+        """
+        for module in ("commands/run_parallel.py", "commands/run_process.py"):
+            assert "repair_frontmatter_file" not in self._source(module), (
+                f"{module} calls repair_frontmatter_file directly; repair belongs on the "
+                "agent path, through repair_declared_outputs"
+            )
+
+    def test_the_agent_executors_repair_through_the_shared_helper(self) -> None:
+        """Both agent paths resolve output paths the way validation does."""
+        for module in ("commands/run_parallel.py", "commands/run_process.py"):
+            assert "repair_declared_outputs(" in self._source(module), (
+                f"{module} no longer repairs agent output at all"
+            )
