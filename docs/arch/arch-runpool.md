@@ -440,6 +440,21 @@ at 10s sample intervals.
 This includes all `psutil.children(recursive=True)` per
 [backend.py](../../src/metaproc/runpool/backend.py) lines 350-358.
 
+**These are RSS figures, and RSS is the wrong metric on this platform.** It errs in both
+directions at once: it excludes compressed pages, so it understates each process, and it
+counts shared binary and library text once per process, so summing it across a fan-out
+overstates. The two errors are independent, so a correction factor does not exist.
+A live process measured while writing
+[memory-accounting-reference.md](../memory-accounting-reference.md) read 58.4 MB RSS
+against a 91 MB `phys_footprint`, and its peak footprint was 361 MB against a 91 MB
+steady state.
+
+Treat the recommended values below as a floor rather than a measurement.
+They are almost certainly low for the compression reason, and by an amount that grows
+with how much the host is compressing, which is exactly when the number matters.
+Re-measure against `phys_footprint` before trusting any of them for sizing; that work is
+tracked with the per-process cost row in the reference.
+
 | Adapter | Old `estimated_process_rss_mb` | Observed P50 | Observed P95 | Recommended | Sample size |
 | --- | ---: | ---: | ---: | ---: | --- |
 | `claude-opus` | 1536 | 384 MB | 748 MB | **500** | 5,714 samples, 1-8 concurrent, 3 days |
