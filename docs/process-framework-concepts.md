@@ -445,12 +445,12 @@ Every failure belongs to one of three layers, and the layer decides who acts on 
 - **Domain:** the artifact is valid, and what its content *means* is a judgment the
   domain owns: a verdict, not a malfunction, and not something the framework may act on.
 
-The operational layer's load-bearing split is retriability, and it is three-way rather
+The operational layer’s load-bearing split is retriability, and it is three-way rather
 than two:
 
 - **Known retriable** (a rate limit, a transient server error, a timeout): the framework
   absorbs these. Retry within the declared budget; pause and resume where the provider
-  names a reset time. They belong in history, not in the operator's attention.
+  names a reset time. They belong in history, not in the operator’s attention.
 - **Known non-retriable** (a refused credential, memory exhausted at the current
   placement): surfaced prominently and immediately.
   Retrying one is waste plus delay, and burying it in per-item state converts a
@@ -464,16 +464,15 @@ Contract-layer retriability is different in kind: it is a fact about the produce
 than the environment.
 A stochastic producer whose output was refused may pass on another attempt; a
 deterministic one given the same inputs will be refused the same way, so retrying it is
-waste. The default follows the producer's nature, and the output's own declaration
+waste. The default follows the producer’s nature, and the output’s own declaration
 overrides it.
 
 One principle ties the layers to visibility: **a failure is not explained until it is
 placed.** Every failed attempt records its layer and class, and the answer is available
-in real time, per attempt as it happens, and in aggregate, a run's failures bucketed by
-layer and class.
-Ten failures meaning "the provider is rate limiting" and ten meaning "a contract refuses
-every item" demand different responses from different people, and a count that cannot
-tell them apart summons the wrong person.
+in real time, per attempt as it happens, and in aggregate, a run’s failures bucketed by
+layer and class. Ten failures meaning “the provider is rate limiting” and ten meaning “a
+contract refuses every item” demand different responses from different people, and a
+count that cannot tell them apart summons the wrong person.
 
 ## Effects and Finalization
 
@@ -613,45 +612,60 @@ Each traces to a section above.
 1. **Is the plan data?** Can the template graph be validated, printed, and diffed
    without executing, and are materialized widths durable records rather than re-read
    mutable files?
+
 2. **Is the shape static and the width dynamic, with closure?** Can a mid-run artifact
    serve as a later step’s roster, does the roster close explicitly, and does a barrier
    refuse to fire over an unclosed roster?
+
 3. **Is the task the unit** of scheduling, failure, and resume, or does the step leak
    into any of those roles?
+
 4. **Do edges carry their true granularity?** Can an item-scoped chain stream, or does
    the executor introduce false edges at step or level boundaries?
+
 5. **Are dependency clauses expressive and explicit?** Can mapping, requirement,
    cardinality, and binding vary per input, is alignment inferred only from proven
    lineage, and does the resolved plan record what shorthand meant?
+
 6. **Is admission separate from readiness**, with each ceiling scoped to the truth it
    tracks, and is the machine ceiling adaptive rather than a hand-set number?
+
 7. **Is every launch admitted?** Is every independently scheduled task attempt admitted
    through the applicable authorities, with its full process tree charged to it?
+
 8. **Is resume a rebuild?** Does rerunning skip committed tasks, retry failed ones, and
    reclaim stale markers, without manual cleanup?
+
 9. **Is partial success first-class?** Does a run with failed items produce a definite,
    inspectable verdict, and do fan-in consumers receive outcome descriptors rather than
    only the survivors?
+
 10. **Is the knob a config field or a paragraph?** Does any operational sizing decision
     live in prose instructions instead of the controller?
+
 11. **Are contracts and keys declared?** Do steps declare typed inputs and outputs, is
     completion validated against them, and does every item carry a stable key in a
     declared key space, with all routing by those keys done by the framework rather than
     hand-written inside steps?
+
 12. **Are attempt, commit, and task distinct?** Is attempt history append-only, is there
     at most one fenced commit per task generation, and can a late stale attempt never
     publish?
+
 13. **Can you see why not?** For every non-running task, is one primary blocker reason
     inspectable from durable state; does every failed task carry classified evidence
     rather than prose, so nothing downstream has to parse a sentence to learn what
     refused it; and can slowness be attributed among compute, memory, external services,
     and graph shape?
+
 14. **Can it loop?** Can an iterative improve-measure-repeat process be expressed as
     repeated runs over durable carried state, with a declared measurement, gate, and
     termination, without mutating the spec at runtime?
+
 15. **Are effects receipted and finalization frozen?** Do external effects carry
     idempotency keys and receipts, and are results delivered only from a quiesced
     snapshot generation?
+
 16. **Is causal meaning versioned?** Are edge semantics part of a versioned spec
     contract, persisted in the resolved plan, so a framework upgrade cannot silently
     change what an existing spec means?
@@ -694,11 +708,12 @@ original unit of execution and state, and one local orchestrator was the only wr
   executor is coarser still: it walks the step graph in topological *levels*, finishing
   each level before the next.
   Item-scoped edges do not exist, so chained fan-outs barrier at every step boundary.
-  Measured on a four-item cohort whose stages take 2, 5, 2 and 8 seconds: the fastest item
-  finishes stage one at 2.0s and cannot start stage two until 8.2s, because the slowest
-  item runs to 8.1s. The idle time is the spread of the roster, so it grows with width and
-  with how uneven the items are.
-- **Mode decides more than invocation (no test; a structural deviation).** The model's
+  Measured on a four-item cohort whose stages take 2, 5, 2 and 8 seconds: the fastest
+  item finishes stage one at 2.0s and cannot start stage two until 8.2s, because the
+  slowest item runs to 8.1s. The idle time is the spread of the roster, so it grows with
+  width and with how uneven the items are.
+
+- **Mode decides more than invocation (no test; a structural deviation).** The model’s
   pivot is the task, but the runtime forks on step *mode* and each branch owns its own
   execution path. Mapping and governance therefore attach to modes rather than to tasks:
   fan-out was implemented for agent steps and, until recently, existed nowhere else, and
@@ -706,34 +721,43 @@ original unit of execution and state, and one local orchestrator was the only wr
   mapped over a roster to express it as a code handler launching one child run per item.
   Neither gap is a policy about what those modes mean.
   See [P8](metaproc-design-rev3-proposals.md) for the proposed decomposition.
+
 - **Dependency clauses (test 5).** Fan-in is implicitly “all items must succeed”;
   mapping, requirement, and cardinality are not separately declarable, and fan-in
   consumers receive no outcome descriptors.
+
 - **Closure (test 2).** Roster re-reading works today because the level walk guarantees
   the producing step finished before the consumer starts, so closure is implicit in the
   step boundary. An event-driven scheduler removes that implicit guarantee; explicit
   expansion generations and closure must come first.
+
 - **Attempt, commit, and fencing (test 12).** Per-task state exists, but attempt history
   is a single fixed path rather than append-only records, outputs are not staged
   attempt-privately, there is no single commit record covering a multi-output task, and
   nothing fences a late stale attempt.
   Sufficient for one local writer; not for distributed retry.
+
 - **Universal admission (test 7, partially).** Scalar steps, meaning those with no
   `for_each`, now take a slot in the same host-wide namespace the fan-out pools use, so
   independent orchestrators on one machine no longer launch over each other unseen.
   The gate is a slot count on the `local` backend only, without the memory backpressure
   or process-tree charging the test asks for, and it is deliberately best-effort: an
   unreachable gate lets the launch proceed rather than failing the run.
+
 - **Task-scoped operator surface (test 3, partially).** Force and resume selection are
   step-scoped (`--force`, `--from`, `--only`); there is no per-item force, and
   invalidation is directory-shaped rather than causal.
+
 - **Semantics versioning (test 16).** Process specs carry no semantics version, and the
   resolved plan is not persisted as the authority that resume executes.
+
 - **Effects and finalization (test 15).** No finalization or receipted-effect protocol
   exists; delivering a run’s results is an out-of-band operator action.
+
 - **Blocker and bottleneck attribution (test 13, partially).** Run, pool, and resource
   views are rich, but per-task blocker reasons and the current blocking structure are
   derivable from state rather than a first-class view.
+
 - **Failure evidence (test 13, partially).** The other half of the same test.
   A task that fails its output contract now records classified evidence beside the human
   sentence: which output failed, against which contract, which invariant refused it, and
@@ -742,6 +766,7 @@ original unit of execution and state, and one local orchestrator was the only wr
   Failures arriving from anywhere else, an exit code, a timeout, a killed process, are
   still a single string, so evidence is classified where the framework does the refusing
   and prose everywhere else.
+
 - **Loops (test 14).** Iteration is not first-class.
   The conceptual frame exists in
   [metaproc-concepts-and-principles.md §5](../src/metaproc/docs/metaproc-concepts-and-principles.md),
@@ -752,8 +777,8 @@ original unit of execution and state, and one local orchestrator was the only wr
 
 - **Failure placement, aggregate half (test 17).** Per-item records carry a classified
   failure reason and pool events carry it in real time, but no aggregate view buckets a
-  run's failures by layer or class: run status and `--check` are binary, so "what kind
-  of failing is this run doing" still requires reading per-item records.
+  run’s failures by layer or class: run status and `--check` are binary, so “what kind
+  of failing is this run doing” still requires reading per-item records.
 
 Design work addressing the scheduling and state items, meaning task-level ready-set
 scheduling over dependency clauses, expansion closure, attempt fencing with single

@@ -113,13 +113,15 @@ scaled by the page size that `vm_stat` reports rather than an assumed one.
 `kern.memorystatus_level` is read alongside it and carried on the reading as
 `alarm_pct`, but it never sizes anything.
 
-That split is deliberate and the distinction is easy to lose. The gauge is defined in
-XNU as `AVAILABLE_NON_COMPRESSED_MEMORY`, which is active plus inactive plus free plus
-speculative, so it counts every other process's live working set as though it were
-available. On a 34 GB host it read 48% while reclaimable memory stood at 22.6%, a factor
-of 2.1, and it stays high until the compressor has already grown. Sized from the gauge,
-that host reads NORMAL and keeps ramping; sized from reclaimable pages it reads ELEVATED
-and holds. It remains a serviceable alarm and is a dangerous budget.
+That split is deliberate and the distinction is easy to lose.
+The gauge is defined in XNU as `AVAILABLE_NON_COMPRESSED_MEMORY`, which is active plus
+inactive plus free plus speculative, so it counts every other process’s live working set
+as though it were available.
+On a 34 GB host it read 48% while reclaimable memory stood at 22.6%, a factor of 2.1,
+and it stays high until the compressor has already grown.
+Sized from the gauge, that host reads NORMAL and keeps ramping; sized from reclaimable
+pages it reads ELEVATED and holds.
+It remains a serviceable alarm and is a dangerous budget.
 
 The app-level Apple API also exposes normal, warning, and critical memory-pressure
 events through Dispatch memory-pressure sources; if `kern.memorystatus_level` stops
@@ -249,26 +251,29 @@ workloads) and treat `--cap N` with `N < 20` as a documented incident-time excep
 
 ### What Survives a Resume
 
-`scale-state.yaml` carries the governor's state between runs, and the two ceilings in it
+`scale-state.yaml` carries the governor’s state between runs, and the two ceilings in it
 are treated differently on purpose.
 
-`provider_ceiling` is restored. Provider pressure is a property of the run and the
-account, so a resume that reopens at full width against an API that was rate-limiting a
-minute ago has learned nothing. It is discarded only when the saved state shows the
-pressure is stale: no recent rate limits, no pending retries, and a prior operator cap
-below the current `max_concurrency`.
+`provider_ceiling` is restored.
+Provider pressure is a property of the run and the account, so a resume that reopens at
+full width against an API that was rate-limiting a minute ago has learned nothing.
+It is discarded only when the saved state shows the pressure is stale: no recent rate
+limits, no pending retries, and a prior operator cap below the current
+`max_concurrency`.
 
-`memory_ceiling` is never restored. It describes the host, and the host is free to have
-changed completely since the state was written. A ceiling of 79 earned on a quiet machine
-says nothing about a machine that now has headroom for three processes, and restoring it
-is the burst-on-resume shape behind the crash history in the consuming project's cohort
-runbook: measured on a 34 GB host, a saved ceiling of 79 against a fresh estimate of 3 is
-118 GB of intent on 34 GB of RAM. The pool enforces whatever ceiling it holds, faithfully
-and immediately, so nothing downstream catches an over-large one.
+`memory_ceiling` is never restored.
+It describes the host, and the host is free to have changed completely since the state
+was written. A ceiling of 79 earned on a quiet machine says nothing about a machine that
+now has headroom for three processes, and restoring it is the burst-on-resume shape
+behind the crash history in the consuming project’s cohort runbook: measured on a 34 GB
+host, a saved ceiling of 79 against a fresh estimate of 3 is 118 GB of intent on 34 GB
+of RAM. The pool enforces whatever ceiling it holds, faithfully and immediately, so
+nothing downstream catches an over-large one.
 
-Every run therefore opens at the fresh estimate and re-earns its ceiling by ramping. That
-costs a ramp, which is fast, and it composes correctly with a resume: processes still in
-flight are consuming memory that the fresh reading has by definition already counted.
+Every run therefore opens at the fresh estimate and re-earns its ceiling by ramping.
+That costs a ramp, which is fast, and it composes correctly with a resume: processes
+still in flight are consuming memory that the fresh reading has by definition already
+counted.
 
 ## Host Coordination
 
