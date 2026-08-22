@@ -101,6 +101,7 @@ from metaproc.engine.runtime import (
     resolve_batch_size,
     validate_step_inputs_exist,
 )
+from metaproc.engine.schema_conform import conform_outputs_to_contracts
 from metaproc.engine.validation import (
     repair_declared_outputs,
     validate_item_outputs,
@@ -1038,6 +1039,10 @@ def run_parallel(
                                 out_file = artifact_dir / Path(io_spec.path).name
                                 if out_file.exists() and repair_frontmatter_file(out_file):
                                     out.progress(f"  Repaired YAML in {out_file.name} for {item}")
+                        for conformed in conform_outputs_to_contracts(
+                            artifact_dir, effective_outputs
+                        ):
+                            out.progress(f"  Conformed scalars in {conformed} for {item}")
                         output_failures = validate_item_outputs_detailed(
                             artifact_dir, effective_outputs, variables=item_vars
                         )
@@ -2144,6 +2149,13 @@ def _handle_success(  # noqa: PLR0913
         item_vars = {**variables, **item_context}
         for repaired in repair_declared_outputs(check_dir, effective_outputs, variables=item_vars):
             out.progress(f"  Repaired YAML in {repaired.name} for {item}")
+        # Then the question repair cannot ask, because it has no schema: does each
+        # scalar say the type its contract asks for? An agent writing YAML by hand has
+        # no serializer in the path, so a name like `1850` arrives as an integer.
+        for conformed in conform_outputs_to_contracts(
+            check_dir, effective_outputs, variables=item_vars
+        ):
+            out.progress(f"  Conformed scalars in {conformed} for {item}")
         output_failures = validate_item_outputs_detailed(
             check_dir, effective_outputs, variables=item_vars
         )

@@ -231,7 +231,7 @@ def normalize_for_structural_pass(value: object) -> object:
             return value
 
 
-def _resolve_output_fpath(rendered_path: str, item_dir: Path) -> Path:
+def resolve_output_fpath(rendered_path: str, item_dir: Path) -> Path:
     """Resolve a rendered output path against ``item_dir``.
 
     Absolute paths and multi-component relative paths (e.g.
@@ -267,7 +267,7 @@ def repair_declared_outputs(
         if not io_spec.path or io_spec.kind == "directory":
             continue
         rendered = resolve_templates(io_spec.path, variables) if variables else io_spec.path
-        fpath = _resolve_output_fpath(rendered, item_dir)
+        fpath = resolve_output_fpath(rendered, item_dir)
         if fpath.is_file() and repair_frontmatter_file(fpath):
             repaired.append(fpath)
     return repaired
@@ -352,7 +352,7 @@ def validate_item_outputs_detailed(
             )
 
         if io_spec.kind == "directory":
-            fpath = _resolve_output_fpath(rendered, item_dir)
+            fpath = resolve_output_fpath(rendered, item_dir)
             # Preserve the fan-out convenience where a directory output's
             # rendered basename equals item_dir.name (e.g. output path
             # ``{{run.dir}}/.../{{item}}/`` against item_dir
@@ -366,7 +366,7 @@ def validate_item_outputs_detailed(
                 fail(OutputFailureKind.empty, "directory is empty (no output files produced)")
             continue
 
-        fpath = _resolve_output_fpath(rendered, item_dir)
+        fpath = resolve_output_fpath(rendered, item_dir)
         if not fpath.exists() and not artifact_exists(fpath):
             fail(OutputFailureKind.missing, "file not found")
             continue
