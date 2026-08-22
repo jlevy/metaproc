@@ -203,6 +203,11 @@ skip = "tests/fixtures/trace_agents/*.jsonl,tests/fixtures/trace_agents/*.json"
 
 [tool.basedpyright]
 include = ["src", "tests", "devtools", "examples"]
+# Check against the oldest supported interpreter, not whichever one happens to be
+# active. Without this, basedpyright follows the local venv and a contributor on 3.14
+# passes a check that CI fails on 3.13, which is exactly how seven asyncio.run typing
+# errors reached main unnoticed.
+pythonVersion = "3.12"
 reportIgnoreCommentWithoutRule = false
 reportUnnecessaryTypeIgnoreComment = false
 reportMissingTypeStubs = false

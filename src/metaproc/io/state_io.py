@@ -172,6 +172,7 @@ def mark_failed_at(
     error: str,
     running_record: StatusRecord | None = None,
     output_failures: Sequence[OutputFailure] | None = None,
+    failure_class: str | None = None,
 ) -> StatusRecord:
     """Transition ``state_dir/status.yaml`` from running to failed.
 
@@ -188,6 +189,7 @@ def mark_failed_at(
         started_at=current.started_at,
         completed_at=_now_iso(),
         error=error,
+        failure_class=failure_class,
         output_failures=list(output_failures or []),
     )
     write_status_at(state_dir, record)
