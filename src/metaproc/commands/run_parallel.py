@@ -1032,13 +1032,10 @@ def run_parallel(
                         break
 
                     if artifact_dir is not None and effective_outputs:
-                        # No repair pass here, deliberately. This is the `mode: code`
-                        # branch: a handler builds its artifact from typed values through
-                        # a real writer, so a document that will not parse is a bug in the
-                        # handler, wrong for every item rather than for this one. Repairing
-                        # it would launder a serializer defect into a clean run. The agent
-                        # branches repair because an agent hand-writes the document with no
-                        # serializer in the path at all.
+                        # Neither rewriting pass runs here. This is the mode:code
+                        # branch, and repair and conform are both scoped to
+                        # agent-authored output: `arch-metaproc-core.md` §14.6 for
+                        # why, `TestWhichExecutorsRewriteAgentOutput` for the guard.
                         output_failures = validate_item_outputs_detailed(
                             artifact_dir, effective_outputs, variables=item_vars
                         )

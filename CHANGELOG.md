@@ -7,6 +7,17 @@ development series.
 
 ## [Unreleased][unreleased]
 
+### Changed
+
+- **Code-step outputs are no longer YAML-repaired**: `run-parallel`’s `mode: code`
+  fan-out ran the frontmatter auto-repair pass over each item’s declared outputs before
+  validating them, which `run-process`’s code path never did.
+  Both code paths now leave the document alone, so a handler that emits unparsable
+  frontmatter fails its item instead of being silently rewritten.
+  Repair and conform stay scoped to agent-authored output.
+  A process whose code handler was relying on the repair pass will start reporting
+  `invalid_outputs`; fix the handler’s serializer rather than the artifact.
+
 ## [0.2.1][] - 2026-08-09
 
 ### Added

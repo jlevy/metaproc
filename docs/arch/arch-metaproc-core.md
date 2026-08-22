@@ -1997,9 +1997,12 @@ A code handler builds its artifact from typed values through a real writer, so a
 document that will not parse there is a bug in the handler, wrong for every item rather
 than for this one, and repairing it would launder a serializer defect into a clean run.
 
-The scoping is asserted rather than described: `TestWhichExecutorsRepair` fails if
-either executor calls `repair_frontmatter_file` directly, since the agent paths reach it
-only through `repair_declared_outputs`.
+The scoping is asserted rather than described, by `TestWhichExecutorsRewriteAgentOutput`
+in `tests/test_yaml_repair.py`, from three angles: a `mode: code` fan-out run whose
+handler emits unparsable frontmatter must leave the document byte-identical and fail the
+item; neither executor’s code branch may call either pass, read positionally off the
+parse tree so the helper spelling does not matter; and neither executor may stop calling
+the two helpers on its agent path, or reach past them to `repair_frontmatter_file`.
 
 Both resolve a declared output path through the shared
 `validation.resolve_output_fpath`, so every pass over an output names the same file.
@@ -2016,7 +2019,10 @@ mappings.
 `repair_frontmatter_file(path)`:
 
 1. Extract frontmatter between `---` markers.
-2. Try `yaml.safe_load`. If it succeeds, return (no repair needed).
+2. Try `_ruamel_safe_load`. If it succeeds, return (no repair needed).
+   The pre-check deliberately uses the downstream validator’s parser: a document that
+   passes PyYAML can still fail `ruamel.yaml`, and when the two disagreed the operator
+   saw “Repaired YAML” followed by `invalid_outputs`.
 3. Scan each line for `key: value` patterns where the value contains unquoted `: `.
 4. Wrap problematic values in double quotes (escaping internal quotes).
 5. Verify the repaired YAML actually parses.
