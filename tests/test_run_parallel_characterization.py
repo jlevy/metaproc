@@ -152,27 +152,24 @@ class TestCodeModeOutputValidationRetry:
         with patch("metaproc.commands.run_parallel.mark_failed_at"):
             with patch("metaproc.commands.run_parallel.try_compact_log"):
                 with patch("metaproc.commands.run_parallel.extract_log_error", return_value=None):
-                    with patch(
-                        "metaproc.commands.run_parallel.repair_frontmatter_file", return_value=False
-                    ):
-                        _handle_success(
-                            each="ticker",
-                            item="AAPL",
-                            item_dir=item_dir,
-                            state_dir=item_dir,
-                            item_context={"ticker": "AAPL"},
-                            log_path=None,
-                            running_record=None,
-                            effective_outputs=effective_outputs,
-                            variables={"ticker": "AAPL"},
-                            run_id="test/run",
-                            step="predict",
-                            result=result,
-                            out=out,
-                            all_results=all_results,
-                            batch_failed=batch_failed,
-                            shared=shared,
-                        )
+                    _handle_success(
+                        each="ticker",
+                        item="AAPL",
+                        item_dir=item_dir,
+                        state_dir=item_dir,
+                        item_context={"ticker": "AAPL"},
+                        log_path=None,
+                        running_record=None,
+                        effective_outputs=effective_outputs,
+                        variables={"ticker": "AAPL"},
+                        run_id="test/run",
+                        step="predict",
+                        result=result,
+                        out=out,
+                        all_results=all_results,
+                        batch_failed=batch_failed,
+                        shared=shared,
+                    )
 
         # Current behavior: validation failure is routed to batch_failed
         assert len(batch_failed) == 1
@@ -184,10 +181,8 @@ class TestCodeModeOutputValidationRetry:
     @patch("metaproc.commands.run_parallel.write_result_at")
     @patch("metaproc.commands.run_parallel.mark_completed_at")
     @patch("metaproc.commands.run_parallel.validate_item_outputs_detailed")
-    @patch("metaproc.commands.run_parallel.repair_frontmatter_file", return_value=False)
     def test_handle_success_writes_completed_result_with_step_hash(
         self,
-        mock_repair: MagicMock,
         mock_validate: MagicMock,
         mock_mark_completed: MagicMock,
         mock_write_result: MagicMock,
