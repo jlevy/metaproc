@@ -7,6 +7,7 @@ which is why the logic lives apart from what performs a step.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable
 
 from metaproc.engine.item_runner import (
     StepInvoker,
@@ -17,6 +18,20 @@ from metaproc.engine.item_runner import (
 )
 
 ITEMS = [{"k": "a"}, {"k": "b"}, {"k": "c"}]
+
+
+def _run(awaitable: Awaitable[bool]) -> bool:
+    """Drive a `StepInvoker` result to completion.
+
+    `asyncio.run` wants a coroutine. `StepInvoker` returns the wider `Awaitable`, which
+    is the right contract for an interface any awaitable may satisfy, so the bridge
+    belongs here rather than in a narrowed production type.
+    """
+
+    async def _main() -> bool:
+        return await awaitable
+
+    return asyncio.run(_main())
 
 
 def _recording_invoke() -> tuple[list[tuple[str, str]], StepInvoker]:
@@ -256,7 +271,7 @@ class TestWithRetry:
         """The behavior of every spec that declares nothing."""
         seen, invoke = self._counting(fails_before_success=99)
         wrapped = with_retry(invoke, should_retry=lambda *_: True, budget_for=lambda _s: None)
-        assert asyncio.run(wrapped("s", {})) is False
+        assert _run(wrapped("s", {})) is False
         assert seen == ["s"]
 
     def test_a_retryable_failure_is_attempted_again(self) -> None:
@@ -264,7 +279,7 @@ class TestWithRetry:
         wrapped = with_retry(
             invoke, should_retry=lambda *_: True, budget_for=self._budget(3), sleep=_no_sleep
         )
-        assert asyncio.run(wrapped("s", {})) is True
+        assert _run(wrapped("s", {})) is True
         assert len(seen) == 3
 
     def test_a_non_retryable_failure_stops_immediately(self) -> None:
@@ -273,7 +288,7 @@ class TestWithRetry:
         wrapped = with_retry(
             invoke, should_retry=lambda *_: False, budget_for=self._budget(5), sleep=_no_sleep
         )
-        assert asyncio.run(wrapped("s", {})) is False
+        assert _run(wrapped("s", {})) is False
         assert len(seen) == 1
 
     def test_the_budget_bounds_a_persistently_failing_step(self) -> None:
@@ -281,7 +296,7 @@ class TestWithRetry:
         wrapped = with_retry(
             invoke, should_retry=lambda *_: True, budget_for=self._budget(3), sleep=_no_sleep
         )
-        assert asyncio.run(wrapped("s", {})) is False
+        assert _run(wrapped("s", {})) is False
         assert len(seen) == 3
 
     def test_each_step_gets_its_own_budget(self) -> None:
@@ -294,8 +309,8 @@ class TestWithRetry:
             budget_for=budgets.get,
             sleep=_no_sleep,
         )
-        asyncio.run(wrapped("generous", {}))
-        asyncio.run(wrapped("strict", {}))
+        _run(wrapped("generous", {}))
+        _run(wrapped("strict", {}))
         assert seen.count("generous") == 4
         assert seen.count("strict") == 1
 
@@ -312,7 +327,7 @@ class TestWithRetry:
             budget_for=lambda _s: (4, lambda attempt: float(attempt) * 2),
             sleep=sleep,
         )
-        asyncio.run(wrapped("s", {}))
+        _run(wrapped("s", {}))
         assert slept == [2.0, 4.0, 6.0]
 
 
