@@ -8,7 +8,6 @@ import uuid
 from collections.abc import Mapping
 from pathlib import Path
 
-from frontmatter_format import read_yaml_file
 from pydantic import BaseModel
 from ruamel.yaml import YAMLError
 from softschema import (
@@ -27,7 +26,7 @@ from metaproc.engine.placeholders import (
 )
 from metaproc.engine.process_scope import is_dep_ref
 from metaproc.engine.yaml_repair import repair_frontmatter_file
-from metaproc.io import FmFormatError, artifact_exists, resolve_existing_artifact
+from metaproc.io import FmFormatError, artifact_exists, read_yaml_file, resolve_existing_artifact
 from metaproc.io.frontmatter import fmf_read_frontmatter_artifact
 from metaproc.models.authored import IOSpec, ProcessSpec
 from metaproc.models.runtime import OutputFailure, OutputFailureKind
@@ -231,13 +230,19 @@ def normalize_for_structural_pass(value: object) -> object:
             return value
 
 
-def _resolve_output_fpath(rendered_path: str, item_dir: Path) -> Path:
+def resolve_output_fpath(rendered_path: str, item_dir: Path) -> Path:
     """Resolve a rendered output path against ``item_dir``.
 
     Absolute paths and multi-component relative paths (e.g.
     ``artifacts/index.yaml``) resolve as-is — repo-relative paths fall
     through to the process's cwd. Single-component names (e.g.
     ``prediction.md`` from a fan-out step) resolve under ``item_dir``.
+
+    Public because more than one module now depends on this resolution being
+    *identical* rather than merely similar: validation, the YAML repair pass and
+    the schema conform pass must all name the same file for a declared output,
+    or a pass silently fixes a file the next one does not read. ``TestOutputResolution``
+    in ``tests/test_output_failures.py`` pins the cases that made them diverge before.
     """
     p = Path(rendered_path)
     if p.is_absolute() or len(p.parts) > 1:
@@ -267,7 +272,7 @@ def repair_declared_outputs(
         if not io_spec.path or io_spec.kind == "directory":
             continue
         rendered = resolve_templates(io_spec.path, variables) if variables else io_spec.path
-        fpath = _resolve_output_fpath(rendered, item_dir)
+        fpath = resolve_output_fpath(rendered, item_dir)
         if fpath.is_file() and repair_frontmatter_file(fpath):
             repaired.append(fpath)
     return repaired
@@ -352,7 +357,7 @@ def validate_item_outputs_detailed(
             )
 
         if io_spec.kind == "directory":
-            fpath = _resolve_output_fpath(rendered, item_dir)
+            fpath = resolve_output_fpath(rendered, item_dir)
             # Preserve the fan-out convenience where a directory output's
             # rendered basename equals item_dir.name (e.g. output path
             # ``{{run.dir}}/.../{{item}}/`` against item_dir
@@ -366,7 +371,7 @@ def validate_item_outputs_detailed(
                 fail(OutputFailureKind.empty, "directory is empty (no output files produced)")
             continue
 
-        fpath = _resolve_output_fpath(rendered, item_dir)
+        fpath = resolve_output_fpath(rendered, item_dir)
         if not fpath.exists() and not artifact_exists(fpath):
             fail(OutputFailureKind.missing, "file not found")
             continue

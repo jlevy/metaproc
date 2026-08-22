@@ -101,6 +101,7 @@ from metaproc.engine.runtime import (
     resolve_batch_size,
     validate_step_inputs_exist,
 )
+from metaproc.engine.schema_conform import conform_declared_outputs
 from metaproc.engine.validation import (
     repair_declared_outputs,
     validate_item_outputs,
@@ -2144,6 +2145,10 @@ def _handle_success(  # noqa: PLR0913
         item_vars = {**variables, **item_context}
         for repaired in repair_declared_outputs(check_dir, effective_outputs, variables=item_vars):
             out.progress(f"  Repaired YAML in {repaired.name} for {item}")
+        for conformed in conform_declared_outputs(
+            check_dir, effective_outputs, variables=item_vars
+        ):
+            out.progress(f"  Conformed scalars in {conformed.name} for {item}")
         output_failures = validate_item_outputs_detailed(
             check_dir, effective_outputs, variables=item_vars
         )

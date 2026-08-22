@@ -22,10 +22,12 @@ from metaproc.engine.retry import (
     requires_run_abort,
     resolve_output_failure_action,
 )
+from metaproc.engine.schema_conform import conform_declared_outputs
 from metaproc.engine.validation import (
     check_artifact_contract,
     normalize_for_structural_pass,
     repair_declared_outputs,
+    resolve_output_fpath,
     validate_item_outputs,
     validate_item_outputs_detailed,
 )
@@ -612,3 +614,74 @@ class TestRepairDeclaredOutputs:
         }
 
         assert repair_declared_outputs(tmp_path, outputs, variables={}) == []
+
+
+class TestOutputResolution:
+    """The one resolution every pass over a declared output has to share.
+
+    Validation, YAML repair and schema conform each turn a declared output path
+    into a file on disk. They must name the same file: a pass that resolves
+    differently either fixes a document the next pass does not read, or reports
+    a failure about a file nobody wrote. The helper is public for that reason,
+    and these are the cases that made an inlined copy of it diverge.
+    """
+
+    def test_a_bare_basename_resolves_under_the_item_dir(self, tmp_path: Path) -> None:
+        assert resolve_output_fpath("prediction.md", tmp_path) == tmp_path / "prediction.md"
+
+    def test_a_multi_part_relative_path_is_taken_as_is(self, tmp_path: Path) -> None:
+        """Repo-relative, not item-relative: it falls through to the cwd."""
+        assert resolve_output_fpath("artifacts/index.yaml", tmp_path) == Path(
+            "artifacts/index.yaml"
+        )
+
+    def test_an_absolute_path_is_taken_as_is(self, tmp_path: Path) -> None:
+        outside = tmp_path.parent / "elsewhere" / "report.md"
+        assert resolve_output_fpath(str(outside), tmp_path) == outside
+
+    def test_every_pass_over_a_declared_output_names_the_same_file(self, tmp_path: Path) -> None:
+        """The property itself, end to end: a templated basename that only a
+        rendered path can find is repaired, conformed and validated as one file.
+        """
+        item_dir = tmp_path / "acme"
+        item_dir.mkdir()
+        target = item_dir / "acme-profile.md"
+        target.write_text(
+            "---\nprofile:\n  detail: Strong beat (Note: actually Q1 not Q2)\n"
+            "  name: 1850\n---\nbody\n"
+        )
+        outputs = {
+            "profile": IOSpec(
+                path="{{item}}-profile.md",
+                contract="x:Profile/v1",
+                format="frontmatter-md",
+                kind="file",
+            )
+        }
+        variables = {"item": "acme"}
+
+        class Profile(BaseModel):
+            detail: str
+            name: str
+
+        registry = Contracts()
+        registry.register(
+            Contract(
+                id="x:Profile/v1",
+                model=Profile,
+                envelope_key="profile",
+                status=SchemaStatus.enforced,
+                profile=SchemaProfile.frontmatter_md,
+            )
+        )
+
+        assert repair_declared_outputs(item_dir, outputs, variables=variables) == [target]
+        assert conform_declared_outputs(
+            item_dir, outputs, variables=variables, registry=registry
+        ) == [target]
+        assert (
+            validate_item_outputs_detailed(
+                item_dir, outputs, variables=variables, softschema_registry=registry
+            )
+            == []
+        )

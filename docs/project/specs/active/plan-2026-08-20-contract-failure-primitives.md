@@ -241,6 +241,31 @@ One place, every contract, no configuration.
 This is correctness, not an extension point.
 A document and the schema describing it should not disagree about what a date is.
 
+### The Same Bug on the Write Side
+
+Read-time normalization makes a *run* fair: validation judges the document the schema
+describes. It does nothing for the artifact on disk, which is published and read by
+consumers that do not run metaproc’s normalizer.
+
+A YAML plain scalar carries no type marker, so an agent hand-writing frontmatter has no
+serializer in the path to quote a brand genuinely named `1850`, and it arrives as an
+integer.
+The counterpart pass, `engine/schema_conform.py`, validates the payload with the
+contract’s own model, acts only on pydantic’s `string_type` verdict, and replaces those
+scalars with their own source text through the round-trip serializer.
+Borrowing the model rather than reading the generated JSON Schema is what keeps the two
+from drifting: there is no second opinion about types kept in the pass.
+
+One direction only, and scoped to agent-authored outputs for the same reason the YAML
+repair pass is: a code handler emitting the wrong type has a real bug that conforming
+would hide.
+
+The two layers overlap on dates by design.
+They answer different questions -- “is this run fair?”
+and “is this artifact right?”
+-- and only the second outlives the run.
+See `arch-metaproc-core.md` §14.6 for the pipeline and the scoping rule.
+
 ### What Falls Out
 
 Aggregation already exists and gains resolution: `FailureCounts` can subdivide
@@ -257,6 +282,8 @@ mode. Neither needs a primitive.
 - A process can declare that some contract failures stop a run, without the framework
   knowing why.
 - A document and the schema describing it agree about representation.
+- A published artifact says the types its contract asks for, for readers who never see
+  the run.
 - A process that declares nothing is unaffected.
 
 ## Non-Goals

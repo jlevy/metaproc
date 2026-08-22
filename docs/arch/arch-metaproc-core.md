@@ -142,6 +142,7 @@ log_compaction (adapter-aware stripping, thinking preservation)
 memory_pressure (cross-platform measurement, pressure levels)
 preflight (disk space, gcloud auth checks)
 yaml_repair (unquoted-colon auto-fix)
+schema_conform (contract-directed scalar quoting for agent-written YAML)
 discovery (resume-safe item filtering)
 usage (extraction, pricing, aggregation)
 process_events (structured DAG event logging)
@@ -1857,10 +1858,10 @@ items in backoff are never lost even when `active` is temporarily empty.
 from the earliest retry_heap entry to wake up promptly for due retries.
 
 Non-fan-out agent steps run the same content-failure loop inline in
-`run_process._execute_agent_step`: declared outputs are repaired and validated after
-each attempt, `classify_output_failures` reads the structured failure record against the
-output’s `on_invalid`, and retryable verdicts re-run the step under the `INVALID_OUTPUT`
-cap, recording `attempt: N` in the step’s status.
+`run_process._execute_agent_step`: declared outputs are repaired, conformed and
+validated after each attempt (§14.6), `classify_output_failures` reads the structured
+failure record against the output’s `on_invalid`, and retryable verdicts re-run the step
+under the `INVALID_OUTPUT` cap, recording `attempt: N` in the step’s status.
 Nonzero exits are classified exactly as fan-out failures are -- transient ones draw the
 full `max_retries` budget, with the log tail folded into the recorded error -- while
 step timeouts and write-boundary violations stay terminal on this path.
@@ -1981,13 +1982,29 @@ When a runaway is detected during the poll loop in `run_parallel`:
 3. Compact the log immediately.
 4. The retry classifier treats `log_runaway` as transient, so it retries.
 
-### 14.6 YAML Frontmatter Auto-Repair
+### 14.6 Agent-Artifact Repair Passes
+
+Two passes run over a freshly emitted agent artifact, in order, before its declared
+outputs are validated.
+They answer different questions and are deliberately kept apart: repair asks whether the
+document is YAML at all, conform asks whether it says the types its contract names.
+
+Both are scoped to **agent-authored outputs only** -- `run_parallel`’s fan-out path and
+`run_process._execute_agent_step`. Neither runs on `_execute_code_step`: a code handler
+builds its artifact from typed values through a real writer, so a wrong type there is a
+genuine bug and repairing it would hide one.
+
+Both resolve a declared output path through the shared
+`validation.resolve_output_fpath`, so every pass over an output names the same file.
+Path resolution is shared; existence probing is not.
+Both rewriting passes read and write plain text, so neither follows validation’s `.gz`
+sibling, and a compressed artifact is validated without being repaired or conformed.
+
+#### Pass 1: YAML frontmatter auto-repair
 
 Addresses a specific LLM output failure mode: unquoted colons in YAML values (e.g.,
 `detail: Strong beat (Note: actually Q1 not Q2)`) that YAML parsers interpret as nested
 mappings.
-
-#### Mechanism
 
 `repair_frontmatter_file(path)`:
 
@@ -1999,11 +2016,44 @@ mappings.
    If not, skip (no write).
 6. Write back the repaired content.
 
-#### Integration
+#### Pass 2: contract-directed scalar conform
 
-Called on every output file after agent completion but **before validation** in
-`run_parallel`. This salvages outputs that would otherwise fail validation due to YAML
-parse errors. Applied in both code mode and agent mode paths.
+Addresses the failure mode a parseable document still has: a YAML plain scalar carries
+no type marker, so a brand genuinely named `1850` arrives as an integer and fails a
+`type: string` contract.
+An agent writing frontmatter by hand has no serializer in the path to quote it.
+
+`conform_declared_outputs(item_dir, outputs, variables=..., registry=...)`, in
+`engine/schema_conform.py`, borrows both halves rather than reimplementing either:
+
+1. **The contract’s own model says what is wrong.** The payload is validated with the
+   same pydantic model that will judge it seconds later, and the only errors acted on
+   are `string_type` -- pydantic’s way of saying a string belongs here and something
+   else arrived. Unions that already accept the value, explicit nulls, missing fields,
+   shape mismatches and genuinely wrong values are reported under other error types and
+   pass through untouched.
+   No second opinion about the schema is kept here to drift from the first, and shapes a
+   hand-rolled schema walker would miss -- `dict[str, X]`, tuples, optional unions --
+   come free.
+2. **The document’s own serializer says how to write it.** The frontmatter is loaded
+   round-trip, each offending scalar is replaced by its own source text as a string, and
+   the document is written back through the same `new_yaml` serializer everything else
+   writes with. The emitter decides quoting; handing it `"1850"` is what makes it write
+   `'1850'`.
+
+One direction only: a scalar becomes a string where the contract asks for one, and
+nothing else changes.
+Round-trip mode preserves comments, key order, quoting style, anchors, line endings and
+the notation of every scalar the pass does not touch, so a one-scalar correction is a
+one-line diff on a published artifact.
+Two notations are not recoverable from the round-trip value and are recorded as tests: a
+boolean’s spelling and an integer’s leading `+`.
+
+A related normalization runs at *read* time rather than write time:
+`validation.normalize_for_structural_pass` converts dates, decimals and UUIDs to their
+serialized form so validation judges the document the schema describes.
+That makes a run fair; the conform pass writes the correction to disk so the published
+artifact is right for readers who do not run metaproc’s normalizer.
 
 ### 14.7 Tool-use Observability
 
