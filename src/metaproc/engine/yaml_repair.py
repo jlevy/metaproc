@@ -14,9 +14,10 @@ permanent-failure → step-FAILED → tier-aborted blast radius.
 **Do NOT use this for human-authored or programmatically-generated YAML.**
 If your code or a fixture is producing invalid YAML, fix it at the source —
 calling ``repair_frontmatter_file`` masks the bug. The correct call sites are
-exclusively the agent output-validation path (see
-``metaproc/src/metaproc/commands/run_parallel.py`` around the agent-output
-validate block) where the input is a freshly-emitted LLM artifact.
+exclusively the agent output-validation paths — ``repair_declared_outputs``
+in ``engine.validation``, run just before declared-output validation in
+``run_parallel`` and ``run_process`` — where the input is a freshly-emitted
+LLM artifact.
 
 **Upstream question:** should workflows generate YAML from language models at all
 (JSON is more constrained, schema-aware generation could avoid the problem,

@@ -26,6 +26,7 @@ from metaproc.engine.placeholders import (
     validate_framework_placeholder,
 )
 from metaproc.engine.process_scope import is_dep_ref
+from metaproc.engine.yaml_repair import repair_frontmatter_file
 from metaproc.io import FmFormatError, artifact_exists, resolve_existing_artifact
 from metaproc.io.frontmatter import fmf_read_frontmatter_artifact
 from metaproc.models.authored import IOSpec, ProcessSpec
@@ -242,6 +243,34 @@ def _resolve_output_fpath(rendered_path: str, item_dir: Path) -> Path:
     if p.is_absolute() or len(p.parts) > 1:
         return p
     return item_dir / p
+
+
+def repair_declared_outputs(
+    item_dir: Path,
+    outputs: dict[str, IOSpec],
+    *,
+    variables: Mapping[str, object] | None = None,
+) -> list[Path]:
+    """Repair YAML frontmatter in declared file outputs before validating them.
+
+    Resolves each output path exactly as :func:`validate_item_outputs_detailed`
+    does — templates rendered, absolute and multi-part paths taken as-is — so
+    the file the repair probes is the file validation is about to read.
+    Directory outputs and files that do not exist are skipped. Repair is scoped
+    to freshly-emitted LLM artifacts; see the ``engine.yaml_repair`` module
+    docstring before adding a call site.
+
+    Returns the paths actually repaired, for progress reporting.
+    """
+    repaired: list[Path] = []
+    for io_spec in outputs.values():
+        if not io_spec.path or io_spec.kind == "directory":
+            continue
+        rendered = resolve_templates(io_spec.path, variables) if variables else io_spec.path
+        fpath = _resolve_output_fpath(rendered, item_dir)
+        if fpath.is_file() and repair_frontmatter_file(fpath):
+            repaired.append(fpath)
+    return repaired
 
 
 def validate_item_outputs(

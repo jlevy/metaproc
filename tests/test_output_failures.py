@@ -7,6 +7,7 @@ What a contract failure records and what it costs, per ``arch-metaproc-core.md``
 from __future__ import annotations
 
 import datetime
+from pathlib import Path
 
 import pytest
 from pydantic import BaseModel
@@ -24,6 +25,7 @@ from metaproc.engine.retry import (
 from metaproc.engine.validation import (
     check_artifact_contract,
     normalize_for_structural_pass,
+    repair_declared_outputs,
     validate_item_outputs,
     validate_item_outputs_detailed,
 )
@@ -569,3 +571,44 @@ class TestValidateCommandAgreesWithTheStepBoundary:
 
         assert engine_failures == []
         assert command_failures == []
+
+
+class TestRepairDeclaredOutputs:
+    """Repair probes the same file validation is about to read.
+
+    The pre-validation repair pass resolves output paths with the validator's
+    own rules — templates rendered, absolute and multi-part paths taken as-is —
+    so a basename carrying a runtime var, or an output living outside the first
+    output's parent directory, is still repaired, and a directory output is
+    never handed to the frontmatter reader.
+    """
+
+    _BROKEN = "---\nrecord:\n  detail: Strong beat (Note: actually Q1 not Q2)\n---\nbody\n"
+
+    def test_renders_runtime_vars_and_reaches_outputs_in_other_dirs(self, tmp_path: Path) -> None:
+        first = tmp_path / "notes" / "first.md"
+        first.parent.mkdir()
+        first.write_text(self._BROKEN)
+        second = tmp_path / "reports" / "summary-claude.md"
+        second.parent.mkdir()
+        second.write_text(self._BROKEN)
+        outputs = {
+            "first": IOSpec(path=str(first), kind="file"),
+            "second": IOSpec(
+                path=str(tmp_path / "reports" / "summary-{{VARIANT}}.md"), kind="file"
+            ),
+        }
+
+        repaired = repair_declared_outputs(first.parent, outputs, variables={"VARIANT": "claude"})
+
+        assert sorted(p.name for p in repaired) == ["first.md", "summary-claude.md"]
+        assert '"Strong beat (Note: actually Q1 not Q2)"' in second.read_text()
+
+    def test_directory_outputs_and_missing_files_are_skipped(self, tmp_path: Path) -> None:
+        (tmp_path / "out-dir").mkdir()
+        outputs = {
+            "d": IOSpec(path=str(tmp_path / "out-dir"), kind="directory"),
+            "gone": IOSpec(path=str(tmp_path / "never-written.md"), kind="file"),
+        }
+
+        assert repair_declared_outputs(tmp_path, outputs, variables={}) == []

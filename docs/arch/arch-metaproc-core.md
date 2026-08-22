@@ -1800,17 +1800,19 @@ This surfaces in `pool status` and in NFS error detail extraction for cloud work
 
 #### Retry Policy
 
-`RetryPolicy` is a Pydantic model with four fields:
+`RetryPolicy` is a Pydantic model with four fields, retrying by default:
 
 | Field | Default | Purpose |
 | --- | --- | --- |
-| `max_retries` | 0 (off) | Maximum retry attempts per item |
+| `max_retries` | 12 | Maximum retry attempts per item |
 | `initial_backoff_s` | 5.0 | First retry delay |
-| `backoff_multiplier` | 2.0 | Exponential multiplier |
-| `max_backoff_s` | 120.0 | Backoff cap |
+| `backoff_multiplier` | 1.5 | Exponential multiplier |
+| `max_backoff_s` | 600.0 | Backoff cap |
 
 Backoff: `initial_backoff_s * (backoff_multiplier ^ (attempt - 1))`, capped at
-`max_backoff_s`.
+`max_backoff_s`. Content failures (`INVALID_OUTPUT`) re-run the same prompt against the
+same inputs, so their budget is capped separately at
+`MAX_CONTENT_FAILURE_RETRIES_DEFAULT` (3) however large `max_retries` is.
 
 #### Policy Resolution
 
@@ -1820,7 +1822,12 @@ The retry policy resolves through a priority chain:
 2. `--max-retries` CLI override
 3. step-level `for_each.retry`
 4. process-level `defaults.retry`
-5. `RetryPolicy()` (off by default)
+5. `RetryPolicy()` (framework default: on, `max_retries=12`)
+
+A spec that declares no `retry:` block therefore still retries.
+A step that must fail fast opts out per output
+(`on_invalid: {missing: fail, empty: fail, unreadable: fail}`) or per policy
+(`retry: {max_retries: 0}` under `defaults`).
 
 #### Log Error Extraction
 
@@ -1848,6 +1855,15 @@ The loop condition `while not_started or active or retry_heap` guarantees livene
 items in backoff are never lost even when `active` is temporarily empty.
 `asyncio.wait(FIRST_COMPLETED)` drives completion-order processing, with timeout derived
 from the earliest retry_heap entry to wake up promptly for due retries.
+
+Non-fan-out agent steps run the same content-failure loop inline in
+`run_process._execute_agent_step`: declared outputs are repaired and validated after
+each attempt, `classify_output_failures` reads the structured failure record against the
+output’s `on_invalid`, and retryable verdicts re-run the step under the `INVALID_OUTPUT`
+cap, recording `attempt: N` in the step’s status.
+Nonzero exits are classified exactly as fan-out failures are -- transient ones draw the
+full `max_retries` budget, with the log tail folded into the recorded error -- while
+step timeouts and write-boundary violations stay terminal on this path.
 
 The pool exposes `record_retry_scheduled` / `record_retry_consumed` methods that
 maintain a `pending_retries` counter in `runpool-status.yaml`. Observability consumers
