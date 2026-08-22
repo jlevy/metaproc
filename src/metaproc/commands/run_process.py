@@ -103,6 +103,7 @@ from metaproc.engine.retry import (
     max_retries_for,
 )
 from metaproc.engine.runtime import prepare_step, resolve_batch_size, validate_step_inputs_exist
+from metaproc.engine.schema_conform import conform_outputs_to_contracts
 from metaproc.engine.validation import validate_item_outputs, validate_item_outputs_detailed
 from metaproc.engine.write_boundary import (
     WriteTarget,
@@ -1367,6 +1368,12 @@ async def _execute_agent_step(
                     out_file = artifact_dir / Path(io_spec.path).name
                     if out_file.exists() and repair_frontmatter_file(out_file):
                         out.progress(f"  Step '{step_id}': repaired YAML in {out_file.name}")
+            # Then the question repair cannot ask, because it has no schema: does
+            # each scalar say the type its contract asks for? An agent writing YAML
+            # by hand has no serializer in the path, so a name like `1850` arrives
+            # as an integer.
+            for conformed in conform_outputs_to_contracts(artifact_dir, effective_outputs):
+                out.progress(f"  Step '{step_id}': conformed scalars in {conformed}")
             # step_vars (not variables): only step_vars has VARIANT bound to
             # effective_variant. Without it, output paths containing {{run.variant}}
             # render with the literal placeholder and fpath.exists() reports false

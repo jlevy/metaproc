@@ -101,6 +101,7 @@ from metaproc.engine.runtime import (
     resolve_batch_size,
     validate_step_inputs_exist,
 )
+from metaproc.engine.schema_conform import conform_outputs_to_contracts
 from metaproc.engine.validation import validate_item_outputs, validate_item_outputs_detailed
 from metaproc.engine.yaml_repair import repair_frontmatter_file
 from metaproc.errors import CLIError, ValidationError
@@ -1034,6 +1035,10 @@ def run_parallel(
                                 out_file = artifact_dir / Path(io_spec.path).name
                                 if out_file.exists() and repair_frontmatter_file(out_file):
                                     out.progress(f"  Repaired YAML in {out_file.name} for {item}")
+                        for conformed in conform_outputs_to_contracts(
+                            artifact_dir, effective_outputs
+                        ):
+                            out.progress(f"  Conformed scalars in {conformed} for {item}")
                         output_failures = validate_item_outputs_detailed(
                             artifact_dir, effective_outputs, variables=item_vars
                         )
@@ -2143,6 +2148,8 @@ def _handle_success(  # noqa: PLR0913
                 out_file = check_dir / Path(io_spec.path).name
                 if out_file.exists() and repair_frontmatter_file(out_file):
                     out.progress(f"  Repaired YAML in {out_file.name} for {item}")
+        for conformed in conform_outputs_to_contracts(check_dir, effective_outputs):
+            out.progress(f"  Conformed scalars in {conformed} for {item}")
         output_failures = validate_item_outputs_detailed(
             check_dir, effective_outputs, variables=item_vars
         )
