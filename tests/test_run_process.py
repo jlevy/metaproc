@@ -2621,3 +2621,371 @@ class TestCompositePoolDispatchPropagation:
             "this is this regression: child run_parallel calls "
             "will see pool_dispatch=None and bypass the auth pool."
         )
+
+
+class TestNonFanOutContentRetry:
+    """A non-fan-out agent step recovers from a content failure the way a fan-out item does.
+
+    ``on_invalid`` is declared on the output, so it has to be honored wherever the
+    output is produced. Reading it on only one execution path makes the same
+    declaration mean different things depending on whether the step happens to fan
+    out, which is what these tests pin down.
+    """
+
+    @staticmethod
+    def _write_process(
+        process_dir: Path,
+        on_invalid: str,
+        *,
+        max_retries: int = 3,
+        output_extra: str = "",
+    ) -> Path:
+        """Write the spec. ``on_invalid`` and ``output_extra`` are YAML nested under
+        the output, or empty."""
+        body = textwrap.dedent("""\
+            ---
+            process:
+              name: flaky
+              defaults:
+                default_adapter: flaky-test
+                adapters:
+                  flaky-test:
+                    type: flaky-test
+                retry:
+                  max_retries: 3
+                  initial_backoff_s: 0
+              inputs:
+                target_path: { param: TARGET_PATH, as: path }
+              steps:
+                - id: write-thing
+                  mode: agent
+                  prompt_prefix: write the thing
+                  outputs:
+                    main:
+                      path: "{{TARGET_PATH}}"
+                      kind: file
+            ---
+            """)
+        assert "max_retries: 3" in body
+        body = body.replace("max_retries: 3", f"max_retries: {max_retries}")
+        extra = "\n".join(part for part in (output_extra, on_invalid) if part)
+        if extra:
+            # Sit beside `path:`/`kind:` under the output, at the dedented indent.
+            anchor = " " * 10 + "kind: file\n"
+            assert anchor in body
+            clause = textwrap.indent(textwrap.dedent(extra).strip("\n"), " " * 10)
+            body = body.replace(anchor, f"{anchor}{clause}\n")
+        spec = process_dir / "test.process.md"
+        spec.write_text(body)
+        return spec
+
+    @staticmethod
+    def _register_adapter(
+        monkeypatch: pytest.MonkeyPatch,
+        counter: Path,
+        *,
+        succeed_after: int = 1,
+        invalid_content: str | None = None,
+    ) -> None:
+        """An adapter whose first ``succeed_after`` calls write ``invalid_content``
+        (or nothing when ``None``), and whose later calls write a valid artifact."""
+
+        class FlakyAdapter:
+            adapter_type = "flaky-test"
+            short_name = "flaky-test"
+            default_model = None
+
+            def build_command(self, prompt_file, merged_config, variables):  # noqa: ANN001, ARG002
+                target_path = variables["TARGET_PATH"]
+                bad_write = (
+                    f"target.write_text({invalid_content!r})"
+                    if invalid_content is not None
+                    else "None"
+                )
+                script = (
+                    "from pathlib import Path; "
+                    f"counter = Path({str(counter)!r}); "
+                    "n = len(counter.read_text()) if counter.exists() else 0; "
+                    "counter.write_text('x' * (n + 1)); "
+                    f"target = Path({target_path!r}); "
+                    "target.parent.mkdir(parents=True, exist_ok=True); "
+                    "target.write_text('---\\nstatus: ok\\n---\\n') "
+                    f"if n >= {succeed_after} else {bad_write}"
+                )
+                return [sys.executable, "-c", script]
+
+            def prepare_env(self, env, merged_config):  # noqa: ANN001, ARG002
+                return env
+
+            def working_directory(self, merged_config):  # noqa: ANN001, ARG002
+                return None
+
+            def parse_result_event(self, line):  # noqa: ANN001, ARG002
+                return None
+
+            def check_auth(self):
+                raise NotImplementedError
+
+            def auth_info(self):
+                return ""
+
+        monkeypatch.setitem(ADAPTER_REGISTRY, "flaky-test", FlakyAdapter())
+
+    def _run(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        on_invalid: str,
+        run_id: str,
+        *,
+        max_retries: int = 3,
+        output_extra: str = "",
+        succeed_after: int = 1,
+        invalid_content: str | None = None,
+    ):
+        """Run the spec once. ``run_id`` also keys the scalar-admission pool, so two
+        tests sharing one would contend for the same host slots."""
+        repo_dir = tmp_path / "flaky-repo"
+        process_dir = repo_dir / "flaky-process"
+        process_dir.mkdir(parents=True)
+        subprocess.run(["git", "init"], cwd=repo_dir, check=True, capture_output=True, text=True)
+
+        target = repo_dir / "runs" / run_id / "thing.md"
+        counter = repo_dir / "counter.txt"
+        spec = self._write_process(
+            process_dir, on_invalid, max_retries=max_retries, output_extra=output_extra
+        )
+        self._register_adapter(
+            monkeypatch, counter, succeed_after=succeed_after, invalid_content=invalid_content
+        )
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "run-process",
+                str(spec),
+                "--var",
+                f"RUNS_DIR={repo_dir / 'runs'}",
+                "--var",
+                f"RUN_ID={run_id}",
+                "--var",
+                f"TARGET_PATH={target}",
+            ],
+        )
+        status = read_status_at(_task_state_dir_for(repo_dir / "runs" / run_id, "write-thing"))
+        calls = len(counter.read_text()) if counter.exists() else 0
+        return result, status, calls, target
+
+    def test_missing_output_is_retried_and_the_second_attempt_succeeds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result, status, calls, target = self._run(
+            tmp_path, monkeypatch, on_invalid="", run_id="retry-run"
+        )
+
+        assert result.exit_code == 0, result.stdout
+        assert calls == 2, f"the adapter ran {calls}x; a missing output should be retried once"
+        assert target.exists()
+        assert status is not None
+        assert status.state == "completed"
+        assert status.attempt == 2, "the recovering attempt should be recorded, not hidden"
+
+    def test_on_invalid_fail_makes_the_same_failure_terminal(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result, status, calls, _ = self._run(
+            tmp_path,
+            monkeypatch,
+            on_invalid="on_invalid:\n  missing: fail",
+            run_id="no-retry-run",
+        )
+
+        assert result.exit_code != 0
+        assert calls == 1, f"the adapter ran {calls}x; `missing: fail` must not retry"
+        assert status is not None
+        assert status.state == "failed"
+        assert status.attempt == 1
+
+    def test_retries_stop_at_the_content_cap(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result, status, calls, target = self._run(
+            tmp_path,
+            monkeypatch,
+            on_invalid="",
+            run_id="exhaust-run",
+            max_retries=1,
+            succeed_after=99,
+        )
+
+        assert result.exit_code != 0
+        assert calls == 2, f"the adapter ran {calls}x; max_retries=1 allows exactly one retry"
+        assert not target.exists()
+        assert status is not None
+        assert status.state == "failed"
+        assert status.attempt == 2, "the exhausted attempt should be the one recorded"
+
+    def test_repair_saves_the_attempt_instead_of_burning_a_retry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A repairable frontmatter defect is fixed in place, with no second call.
+
+        The adapter here never produces a clean artifact on its own, so this passes
+        only if the repair pass actually ran before validation on the scalar path.
+        """
+        broken = "---\nrecord:\n  detail: Strong beat (Note: actually Q1 not Q2)\n---\nbody\n"
+        result, status, calls, target = self._run(
+            tmp_path,
+            monkeypatch,
+            on_invalid="",
+            run_id="repair-run",
+            output_extra="format: frontmatter-md",
+            succeed_after=99,
+            invalid_content=broken,
+        )
+
+        assert result.exit_code == 0, result.stdout
+        assert calls == 1, f"the adapter ran {calls}x; repair should save the first attempt"
+        assert '"Strong beat (Note: actually Q1 not Q2)"' in target.read_text()
+        assert status is not None
+        assert status.state == "completed"
+        assert status.attempt == 1
+
+
+class TestNonFanOutTransientRetry:
+    """A non-fan-out agent step survives a transient failure the way a fan-out item does.
+
+    The week-35 cohorts lost five names to `UND_ERR_BODY_TIMEOUT`: undici gave up
+    waiting for the response body, the CLI exited 1 having produced nothing, and
+    the scalar path recorded `attempt: 1` and moved on. `run_parallel` retries
+    exactly this. These tests pin both halves of the behavior, because a retry
+    that cannot tell a body timeout from an exhausted quota is worse than none.
+    """
+
+    @staticmethod
+    def _write_process(process_dir: Path) -> Path:
+        body = textwrap.dedent("""\
+            ---
+            process:
+              name: flaky-exit
+              defaults:
+                default_adapter: exit-test
+                adapters:
+                  exit-test:
+                    type: exit-test
+                retry:
+                  max_retries: 3
+                  initial_backoff_s: 0
+              inputs:
+                target_path: { param: TARGET_PATH, as: path }
+              steps:
+                - id: write-thing
+                  mode: agent
+                  prompt_prefix: write the thing
+                  outputs:
+                    main:
+                      path: "{{TARGET_PATH}}"
+                      kind: file
+            ---
+            """)
+        spec = process_dir / "test.process.md"
+        spec.write_text(body)
+        return spec
+
+    @staticmethod
+    def _register_adapter(monkeypatch: pytest.MonkeyPatch, counter: Path, message: str) -> None:
+        """An adapter that dies with *message* the first time and succeeds the second."""
+
+        class ExitAdapter:
+            adapter_type = "exit-test"
+            short_name = "exit-test"
+            default_model = None
+
+            def build_command(self, prompt_file, merged_config, variables):  # noqa: ANN001, ARG002
+                target_path = variables["TARGET_PATH"]
+                script = (
+                    "import sys; from pathlib import Path; "
+                    f"counter = Path({str(counter)!r}); "
+                    "n = len(counter.read_text()) if counter.exists() else 0; "
+                    "counter.write_text('x' * (n + 1)); "
+                    f"print({message!r}) or sys.exit(1) if n < 1 else None; "
+                    f"target = Path({target_path!r}); "
+                    "target.parent.mkdir(parents=True, exist_ok=True); "
+                    "target.write_text('---\\nstatus: ok\\n---\\n')"
+                )
+                return [sys.executable, "-c", script]
+
+            def prepare_env(self, env, merged_config):  # noqa: ANN001, ARG002
+                return env
+
+            def working_directory(self, merged_config):  # noqa: ANN001, ARG002
+                return None
+
+            def parse_result_event(self, line):  # noqa: ANN001, ARG002
+                return None
+
+            def check_auth(self):
+                raise NotImplementedError
+
+            def auth_info(self):
+                return ""
+
+        monkeypatch.setitem(ADAPTER_REGISTRY, "exit-test", ExitAdapter())
+
+    def _run(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, message: str, run_id: str):
+        repo_dir = tmp_path / "exit-repo"
+        process_dir = repo_dir / "exit-process"
+        process_dir.mkdir(parents=True)
+        subprocess.run(["git", "init"], cwd=repo_dir, check=True, capture_output=True, text=True)
+
+        target = repo_dir / "runs" / run_id / "thing.md"
+        counter = repo_dir / "counter.txt"
+        spec = self._write_process(process_dir)
+        self._register_adapter(monkeypatch, counter, message)
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "run-process",
+                str(spec),
+                "--var",
+                f"RUNS_DIR={repo_dir / 'runs'}",
+                "--var",
+                f"RUN_ID={run_id}",
+                "--var",
+                f"TARGET_PATH={target}",
+            ],
+        )
+        status = read_status_at(_task_state_dir_for(repo_dir / "runs" / run_id, "write-thing"))
+        calls = len(counter.read_text()) if counter.exists() else 0
+        return result, status, calls, target
+
+    def test_a_body_timeout_is_retried_and_the_second_attempt_succeeds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result, status, calls, target = self._run(
+            tmp_path, monkeypatch, message="UND_ERR_BODY_TIMEOUT", run_id="transient-run"
+        )
+
+        assert result.exit_code == 0, result.stdout
+        assert calls == 2, f"the adapter ran {calls}x; a body timeout should be retried once"
+        assert target.exists()
+        assert status is not None
+        assert status.state == "completed"
+        assert status.attempt == 2
+
+    def test_an_exhausted_quota_is_not_retried(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result, status, calls, _ = self._run(
+            tmp_path, monkeypatch, message="quota exceeded for this project", run_id="quota-run"
+        )
+
+        assert result.exit_code != 0
+        assert calls == 1, f"the adapter ran {calls}x; an exhausted quota must not be retried"
+        assert status is not None
+        assert status.state == "failed"
+        assert status.attempt == 1
+        # The recorded error carries the log line, not a bare exit code: diagnosing
+        # week 35 cost hours precisely because `exit code 1` said nothing.
+        assert "quota" in (status.error or "")

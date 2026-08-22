@@ -1,8 +1,11 @@
-"""Error classification and retry logic for run-parallel.
+"""Error classification and retry logic for the step executors.
 
-Classifies subprocess errors as retryable (transient) or permanent based on
-pattern matching on the error string from status.yaml. The subprocess is opaque
-— exit code is always 1 — so the error string is the only signal.
+Used by run-parallel for fan-out items and by run-process for non-fan-out
+agent steps, so a declared ``on_invalid`` means the same thing wherever an
+output is produced. Classifies subprocess errors as retryable (transient) or
+permanent based on pattern matching on the error string from status.yaml. The
+subprocess is opaque — exit code is always 1 — so the error string is the
+only signal.
 
 Modeled after an external tool's errorCategorization.ts but adapted for
 metaproc's simpler subprocess context.

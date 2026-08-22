@@ -17,6 +17,11 @@ arch-execution-model.md, § Adoption Path):
 - A status record keeps only the final attempt count and the final failure, so
   intermediate attempts are replayed as retryable with the final failure class attached.
   Terminal dispositions are exact; per-attempt history is an approximation.
+- A step without ``for_each`` translates to a single attempt. The non-fan-out agent
+  executor honors a content-retry budget of its own, resolved from step defaults rather
+  than the plan, so replaying a run that retried such a step approximates its budget;
+  terminal states still agree because a success outranks the earlier retryable
+  attempts.
 
 Kept out of the package's ``__init__`` on purpose: the model surface is pure, and this
 module imports the engine's plan and state readers.

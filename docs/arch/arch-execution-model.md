@@ -154,11 +154,13 @@ schedules them.
 **What is live today.** Item-scoped semantics from this design already run in the
 engine, grafted onto the level walk rather than through a task-level scheduler:
 item-aligned chains (`graph.item_aligned_chains` plus `engine/item_runner.py`), fan-in
-collections with `require: finished`, per-step ceilings, and declared retry on the code
-path. Each is unit-tested and none is checked against this model.
-The engine and the model are therefore two implementations of the item-scoped semantics
-with no bridge between them, and the equivalence test covers only the degenerate
-step-scoped case.
+collections with `require: finished`, per-step ceilings, declared retry on the code
+path, and a content-failure retry loop on the non-fan-out agent path.
+Each is unit-tested.
+The chain, fan-in, and declared-retry semantics are also replay-checked against this
+model by `test_replay_equivalence`; per-step ceilings are a concurrency width the
+replayed state does not observe, and the agent loop’s budget is resolved from step
+defaults the trace translation does not yet read.
 
 **Step one, durability: the engine’s durable facts adopt the model’s vocabulary.**
 Append-only attempt records carrying identity, generation, disposition, and fence epoch;
@@ -167,14 +169,17 @@ for existing runs.
 This step exists on its own operational merits, because the corruption
 class it removes is already observed on a single host: a step recording a timeout over
 an attempt that later succeeded, and completed-but-invalid outputs reused forever by
-resume. Once the facts are durable in this vocabulary, replay equivalence stops being a
-translation problem: the reducer consumes six events (`ExpansionClosed`,
-`ExpansionFailed`, `AttemptStarted`, `AttemptEnded`, `ForceIssued`, `Tick`), and a
-recorded run’s facts map onto them directly, so a harness can replay a real run through
-the reducer and diff terminal dispositions and blockers against what the engine
-recorded. That harness is what retires the “checked only against itself” caveat for the
-semantics that are live.
-Durable `ProcessStatus` rides the same step.
+resume. The replay harness already exists in walking-skeleton form:
+`execution_model/trace.py` reads a completed run’s status records back as the reducer’s
+six events (`ExpansionClosed`, `ExpansionFailed`, `AttemptStarted`, `AttemptEnded`,
+`ForceIssued`, `Tick`) and `test_replay_equivalence` asserts terminal-state agreement on
+a real engine run in CI, which is what retired the “checked only against itself” caveat
+for the live semantics.
+What durability buys the harness is fidelity: per-attempt history replayed from real
+attempt records instead of approximated from the final status (the skeleton’s first
+catch is that the code path durably records `attempt: 1` for a task it retried three
+times), and rosters read from durable expansion records instead of reconstructed from
+task directories. Durable `ProcessStatus` rides the same step.
 Tracked as `mp-2ltw`, `mp-wfpo`, and `mp-5mkn`.
 
 **Step two, the task-level scheduler: demand-driven, never speculative.** The remaining
