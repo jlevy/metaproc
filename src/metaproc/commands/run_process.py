@@ -95,8 +95,11 @@ from metaproc.engine.resource_snapshot import build_resource_run_snapshot
 from metaproc.engine.retry import (
     FailureClass,
     RetryVerdict,
+    classify_error,
+    classify_failure,
     classify_output_failures,
     compute_backoff,
+    extract_log_error,
     max_retries_for,
 )
 from metaproc.engine.runtime import prepare_step, resolve_batch_size, validate_step_inputs_exist
@@ -1305,10 +1308,36 @@ async def _execute_agent_step(
             )
             return False
 
+        # Read the log before compacting it: the exit code alone says nothing about
+        # why the agent died, and the answer is in the last few lines. A bare
+        # "exit code 1" also classifies as a crash, so without this the transient
+        # failures below are indistinguishable from a prompt that always fails.
+        exit_error: str | None = None
+        if exit_code != 0:
+            exit_error = f"exit code {exit_code}"
+            log_error = extract_log_error(attempt_log_path)
+            if log_error:
+                exit_error = f"{exit_error} (log: {log_error})"
+
         try_compact_log(attempt_log_path)
 
-        if exit_code != 0:
-            mark_failed_at(state_dir, error=f"exit code {exit_code}", running_record=running_record)
+        if exit_error is not None:
+            # A response-body timeout returns no tokens at all and is the most
+            # retryable failure an agent produces. classify_error checks the
+            # permanent patterns first, so quota, OOM, and permission failures
+            # still fail on the first attempt.
+            verdict = classify_error(exit_error)
+            cap = max_retries_for(classify_failure(exit_error), retry_policy.max_retries)
+            if verdict == RetryVerdict.RETRY and attempt <= cap:
+                backoff = compute_backoff(attempt, retry_policy)
+                out.progress(
+                    f"  Step '{step_id}': retryable ({exit_error}), "
+                    f"retry in {backoff:.0f}s (attempt {attempt}/{cap + 1})"
+                )
+                await asyncio.sleep(backoff)
+                attempt += 1
+                continue
+            mark_failed_at(state_dir, error=exit_error, running_record=running_record)
             return False
 
         if boundary_before is not None and allowed_targets:
