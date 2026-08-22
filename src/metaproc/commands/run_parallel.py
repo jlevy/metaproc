@@ -101,7 +101,11 @@ from metaproc.engine.runtime import (
     resolve_batch_size,
     validate_step_inputs_exist,
 )
-from metaproc.engine.validation import validate_item_outputs, validate_item_outputs_detailed
+from metaproc.engine.validation import (
+    repair_declared_outputs,
+    validate_item_outputs,
+    validate_item_outputs_detailed,
+)
 from metaproc.engine.yaml_repair import repair_frontmatter_file
 from metaproc.errors import CLIError, ValidationError
 from metaproc.io.claimed_items import claim_item
@@ -2138,11 +2142,8 @@ def _handle_success(  # noqa: PLR0913
             check_dir = item_dir
 
         item_vars = {**variables, **item_context}
-        for io_spec in effective_outputs.values():
-            if hasattr(io_spec, "path") and io_spec.path:
-                out_file = check_dir / Path(io_spec.path).name
-                if out_file.exists() and repair_frontmatter_file(out_file):
-                    out.progress(f"  Repaired YAML in {out_file.name} for {item}")
+        for repaired in repair_declared_outputs(check_dir, effective_outputs, variables=item_vars):
+            out.progress(f"  Repaired YAML in {repaired.name} for {item}")
         output_failures = validate_item_outputs_detailed(
             check_dir, effective_outputs, variables=item_vars
         )

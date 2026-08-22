@@ -2629,12 +2629,19 @@ class TestNonFanOutContentRetry:
     ``on_invalid`` is declared on the output, so it has to be honored wherever the
     output is produced. Reading it on only one execution path makes the same
     declaration mean different things depending on whether the step happens to fan
-    out, which is exactly what these two tests pin down.
+    out, which is what these tests pin down.
     """
 
     @staticmethod
-    def _write_process(process_dir: Path, on_invalid: str) -> Path:
-        """Write the spec. ``on_invalid`` is YAML nested under the output, or empty."""
+    def _write_process(
+        process_dir: Path,
+        on_invalid: str,
+        *,
+        max_retries: int = 3,
+        output_extra: str = "",
+    ) -> Path:
+        """Write the spec. ``on_invalid`` and ``output_extra`` are YAML nested under
+        the output, or empty."""
         body = textwrap.dedent("""\
             ---
             process:
@@ -2659,19 +2666,29 @@ class TestNonFanOutContentRetry:
                       kind: file
             ---
             """)
-        if on_invalid:
+        assert "max_retries: 3" in body
+        body = body.replace("max_retries: 3", f"max_retries: {max_retries}")
+        extra = "\n".join(part for part in (output_extra, on_invalid) if part)
+        if extra:
             # Sit beside `path:`/`kind:` under the output, at the dedented indent.
             anchor = " " * 10 + "kind: file\n"
             assert anchor in body
-            clause = textwrap.indent(textwrap.dedent(on_invalid).strip("\n"), " " * 10)
+            clause = textwrap.indent(textwrap.dedent(extra).strip("\n"), " " * 10)
             body = body.replace(anchor, f"{anchor}{clause}\n")
         spec = process_dir / "test.process.md"
         spec.write_text(body)
         return spec
 
     @staticmethod
-    def _register_adapter(monkeypatch: pytest.MonkeyPatch, counter: Path) -> None:
-        """An adapter that writes nothing the first time and the artifact the second."""
+    def _register_adapter(
+        monkeypatch: pytest.MonkeyPatch,
+        counter: Path,
+        *,
+        succeed_after: int = 1,
+        invalid_content: str | None = None,
+    ) -> None:
+        """An adapter whose first ``succeed_after`` calls write ``invalid_content``
+        (or nothing when ``None``), and whose later calls write a valid artifact."""
 
         class FlakyAdapter:
             adapter_type = "flaky-test"
@@ -2680,6 +2697,11 @@ class TestNonFanOutContentRetry:
 
             def build_command(self, prompt_file, merged_config, variables):  # noqa: ANN001, ARG002
                 target_path = variables["TARGET_PATH"]
+                bad_write = (
+                    f"target.write_text({invalid_content!r})"
+                    if invalid_content is not None
+                    else "None"
+                )
                 script = (
                     "from pathlib import Path; "
                     f"counter = Path({str(counter)!r}); "
@@ -2687,7 +2709,8 @@ class TestNonFanOutContentRetry:
                     "counter.write_text('x' * (n + 1)); "
                     f"target = Path({target_path!r}); "
                     "target.parent.mkdir(parents=True, exist_ok=True); "
-                    "target.write_text('---\\nstatus: ok\\n---\\n') if n >= 1 else None"
+                    "target.write_text('---\\nstatus: ok\\n---\\n') "
+                    f"if n >= {succeed_after} else {bad_write}"
                 )
                 return [sys.executable, "-c", script]
 
@@ -2708,7 +2731,18 @@ class TestNonFanOutContentRetry:
 
         monkeypatch.setitem(ADAPTER_REGISTRY, "flaky-test", FlakyAdapter())
 
-    def _run(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, on_invalid: str, run_id: str):
+    def _run(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        on_invalid: str,
+        run_id: str,
+        *,
+        max_retries: int = 3,
+        output_extra: str = "",
+        succeed_after: int = 1,
+        invalid_content: str | None = None,
+    ):
         """Run the spec once. ``run_id`` also keys the scalar-admission pool, so two
         tests sharing one would contend for the same host slots."""
         repo_dir = tmp_path / "flaky-repo"
@@ -2718,8 +2752,12 @@ class TestNonFanOutContentRetry:
 
         target = repo_dir / "runs" / run_id / "thing.md"
         counter = repo_dir / "counter.txt"
-        spec = self._write_process(process_dir, on_invalid)
-        self._register_adapter(monkeypatch, counter)
+        spec = self._write_process(
+            process_dir, on_invalid, max_retries=max_retries, output_extra=output_extra
+        )
+        self._register_adapter(
+            monkeypatch, counter, succeed_after=succeed_after, invalid_content=invalid_content
+        )
 
         result = CliRunner().invoke(
             app,
@@ -2766,6 +2804,51 @@ class TestNonFanOutContentRetry:
         assert calls == 1, f"the adapter ran {calls}x; `missing: fail` must not retry"
         assert status is not None
         assert status.state == "failed"
+        assert status.attempt == 1
+
+    def test_retries_stop_at_the_content_cap(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result, status, calls, target = self._run(
+            tmp_path,
+            monkeypatch,
+            on_invalid="",
+            run_id="exhaust-run",
+            max_retries=1,
+            succeed_after=99,
+        )
+
+        assert result.exit_code != 0
+        assert calls == 2, f"the adapter ran {calls}x; max_retries=1 allows exactly one retry"
+        assert not target.exists()
+        assert status is not None
+        assert status.state == "failed"
+        assert status.attempt == 2, "the exhausted attempt should be the one recorded"
+
+    def test_repair_saves_the_attempt_instead_of_burning_a_retry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A repairable frontmatter defect is fixed in place, with no second call.
+
+        The adapter here never produces a clean artifact on its own, so this passes
+        only if the repair pass actually ran before validation on the scalar path.
+        """
+        broken = "---\nrecord:\n  detail: Strong beat (Note: actually Q1 not Q2)\n---\nbody\n"
+        result, status, calls, target = self._run(
+            tmp_path,
+            monkeypatch,
+            on_invalid="",
+            run_id="repair-run",
+            output_extra="format: frontmatter-md",
+            succeed_after=99,
+            invalid_content=broken,
+        )
+
+        assert result.exit_code == 0, result.stdout
+        assert calls == 1, f"the adapter ran {calls}x; repair should save the first attempt"
+        assert '"Strong beat (Note: actually Q1 not Q2)"' in target.read_text()
+        assert status is not None
+        assert status.state == "completed"
         assert status.attempt == 1
 
 

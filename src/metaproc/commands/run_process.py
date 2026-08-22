@@ -103,7 +103,11 @@ from metaproc.engine.retry import (
     max_retries_for,
 )
 from metaproc.engine.runtime import prepare_step, resolve_batch_size, validate_step_inputs_exist
-from metaproc.engine.validation import validate_item_outputs, validate_item_outputs_detailed
+from metaproc.engine.validation import (
+    repair_declared_outputs,
+    validate_item_outputs,
+    validate_item_outputs_detailed,
+)
 from metaproc.engine.write_boundary import (
     WriteTarget,
     capture_repo_snapshot,
@@ -111,7 +115,6 @@ from metaproc.engine.write_boundary import (
     filter_boundary_violations,
     repo_changes_since,
 )
-from metaproc.engine.yaml_repair import repair_frontmatter_file
 from metaproc.errors import CLIError, ValidationError
 from metaproc.io import read_yaml_file, to_yaml_string
 from metaproc.io.orchestrator_lease import LeaseHeartbeat, acquire_lease, release_lease
@@ -1225,7 +1228,8 @@ async def _execute_agent_step(
     # An output that fails its contract is not always terminal: a stochastic producer
     # may get it right on a second pass. The ``on_invalid`` clause on the output says
     # which failures are worth another call, and the content-failure cap bounds how
-    # many. Timeout, exit code, and boundary violations stay terminal here.
+    # many. Transient exit-code failures are classified below and draw the full
+    # retry budget; step timeouts and boundary violations stay terminal here.
     retry_policy = _resolve_retry_policy(step_def, spec.defaults)
     content_retry_cap = max_retries_for(FailureClass.INVALID_OUTPUT, retry_policy.max_retries)
     attempt = 1
@@ -1362,16 +1366,15 @@ async def _execute_agent_step(
         if effective_outputs and artifact_dir is not None:
             # A freshly-emitted LLM artifact is the one input yaml_repair is scoped to:
             # a single unquoted colon in a note should not cost the whole step.
-            for io_spec in effective_outputs.values():
-                if io_spec.path:
-                    out_file = artifact_dir / Path(io_spec.path).name
-                    if out_file.exists() and repair_frontmatter_file(out_file):
-                        out.progress(f"  Step '{step_id}': repaired YAML in {out_file.name}")
+            for repaired in repair_declared_outputs(
+                artifact_dir, effective_outputs, variables=step_vars
+            ):
+                out.progress(f"  Step '{step_id}': repaired YAML in {repaired.name}")
             # step_vars (not variables): only step_vars has VARIANT bound to
             # effective_variant. Without it, output paths containing {{run.variant}}
             # render with the literal placeholder and fpath.exists() reports false
-            # even when the agent wrote the artifact at the correct path. Hit by
-            # A production smoke exposed this when artifacts existed on disk but the
+            # even when the agent wrote the artifact at the correct path. A
+            # production smoke exposed this: artifacts existed on disk, but the
             # unresolved placeholder made the step transition to FAILED.
             output_failures = validate_item_outputs_detailed(
                 artifact_dir, effective_outputs, variables=step_vars
