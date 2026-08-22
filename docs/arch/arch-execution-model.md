@@ -143,28 +143,81 @@ semantics, not copy this shape.
 The durable side of the envelope is unmeasured: filesystem metadata load, per-task
 status writes, event-log volume, and resume time.
 
+## Adoption Path
+
+The model is an oracle, not a future implementation, and its value is realized in two
+steps that this repository owns.
+Consumers may schedule them inside larger plans under their own phase names; the
+framework states here what they are, so the steps mean the same thing regardless of who
+schedules them.
+
+**What is live today.** Item-scoped semantics from this design already run in the
+engine, grafted onto the level walk rather than through a task-level scheduler:
+item-aligned chains (`graph.item_aligned_chains` plus `engine/item_runner.py`), fan-in
+collections with `require: finished`, per-step ceilings, and declared retry on the code
+path. Each is unit-tested and none is checked against this model.
+The engine and the model are therefore two implementations of the item-scoped semantics
+with no bridge between them, and the equivalence test covers only the degenerate
+step-scoped case.
+
+**Step one, durability: the engine’s durable facts adopt the model’s vocabulary.**
+Append-only attempt records carrying identity, generation, disposition, and fence epoch;
+attempt-scoped staging; one commit manifest per task generation; compatibility readers
+for existing runs.
+This step exists on its own operational merits, because the corruption
+class it removes is already observed on a single host: a step recording a timeout over
+an attempt that later succeeded, and completed-but-invalid outputs reused forever by
+resume. Once the facts are durable in this vocabulary, replay equivalence stops being a
+translation problem: the reducer consumes six events (`ExpansionClosed`,
+`ExpansionFailed`, `AttemptStarted`, `AttemptEnded`, `ForceIssued`, `Tick`), and a
+recorded run’s facts map onto them directly, so a harness can replay a real run through
+the reducer and diff terminal dispositions and blockers against what the engine
+recorded. That harness is what retires the “checked only against itself” caveat for the
+semantics that are live.
+Durable `ProcessStatus` rides the same step.
+Tracked as `mp-2ltw`, `mp-wfpo`, and `mp-5mkn`.
+
+**Step two, the task-level scheduler: demand-driven, never speculative.** The remaining
+gap between the graft and the model is exactly the semantics the level walk cannot
+express, and each names its own trigger:
+
+| Model semantics absent from the engine | Trigger that justifies building it |
+| --- | --- |
+| Item streaming across forks (aligned chains are linear, single-consumer) | two consumers need the same producer’s items without a barrier |
+| Closed dynamic expansions and re-expansion generations | a roster grows mid-run, e.g. promotion-to-depth producing items while consumers run |
+| Derived-subset lineage | a promoted subset must stay item-aligned to its parent roster instead of re-barriering |
+| Per-item causal force with mapped invalidation | an operator needs to re-run one item through a chain without invalidating siblings |
+| Deterministic fair admission across step scopes | starvation is observed between concurrently expanding steps |
+
+Each increment, when triggered, lands against the replay harness from step one, so the
+model checks it on arrival.
+Building the scheduler before a trigger fires would be speculative; the design is done,
+the price of waiting is low, and the price of building unused machinery is the
+machinery.
+
 ## Relationship to the Engine’s Own Records
 
-The kernel’s records are a parallel vocabulary, not a replacement, and two of them meet
-engine types that Phase C has to reconcile.
+The model’s records are a parallel vocabulary, not a replacement, and two of them meet
+engine types that the durability step below has to reconcile.
 
-`kernel.model.AttemptRecord` and `metaproc.models.runtime.AttemptRecord` describe the
-same real-world fact, one execution try, with different fields: the kernel record
-carries the generation, fence epoch, and disposition the scheduler reasons about, while
-the runtime record is what `.state/attempt.yaml` persists.
+`execution_model.model.AttemptRecord` and `metaproc.models.runtime.AttemptRecord`
+describe the same real-world fact, one execution try, with different fields: the model
+record carries the generation, fence epoch, and disposition the scheduler reasons about,
+while the runtime record is what `.state/attempt.yaml` persists.
 The names are kept deliberately, because the packages disambiguate at every import site
 and renaming a reference model to accommodate a future merge would be the wrong way
-round. What Phase C owes is the mapping, in particular from the kernel’s disposition
-(`succeeded`, `retryable`, `permanent`, `cancelled`, `lost`) onto the runtime record’s
-state and error fields, and from `failure_category` onto `FailureClass`.
+round. What the durability step owes is the mapping, in particular from the model’s
+disposition (`succeeded`, `retryable`, `permanent`, `cancelled`, `lost`) onto the
+runtime record’s state and error fields, and from `failure_category` onto
+`FailureClass`.
 
 `ProcessStatus` declares `metaproc:ProcessStatus/0.1` and follows the repo’s
 schema-token field naming, but it is a frozen dataclass rather than a Pydantic model, so
 the schema registry cannot resolve the token yet.
 That is correct while the projection is in-memory only: the registry indexes artifacts
-that reach disk. Phase C, which makes the projection durable, is also what gives it a
-Pydantic model and a registry entry, and the token is chosen now so that step is a
-registration rather than a rename.
+that reach disk. The durability step, which makes the projection durable, is also what
+gives it a Pydantic model and a registry entry, and the token is chosen now so that step
+is a registration rather than a rename.
 
 ## Boundaries
 
