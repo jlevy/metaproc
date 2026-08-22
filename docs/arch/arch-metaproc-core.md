@@ -2075,26 +2075,44 @@ Provides a normalized `MemoryPressure` reading used to gate batch launches.
 
 | Level | Available Memory | Concurrency Action |
 | --- | --- | --- |
-| `NORMAL` | >40% | safe to increase |
-| `ELEVATED` | 20-40% | hold current |
-| `HIGH` | 10-20% | reduce |
-| `CRITICAL` | <10% | do not launch new work |
+| `NORMAL` | >25% | ramp concurrency up |
+| `ELEVATED` | 15-25% | hold current concurrency |
+| `HIGH` | 8-15% | reduce |
+| `CRITICAL` | <8% | do not launch new work |
+
+The thresholds sit lower than intuition suggests, deliberately.
+A workstation running a browser and an editor idles around 30-50% available, and
+treating that as cause for caution would hold concurrency down during normal operation.
+`_classify_available` in `osutils/memory_pressure.py` is the source of truth.
 
 #### Platform Backends
 
-- **macOS**: reads `kern.memorystatus_level` via `sysctl` for free memory percentage;
-  reads swap usage from `vm.swapusage`.
+- **macOS**: budgets from `vm_stat` reclaimable pages, free plus inactive plus
+  purgeable, over `hw.memsize`, using the page size `vm_stat` reports.
+  `kern.memorystatus_level` is read alongside it and carried as `alarm_pct`, never as
+  the budget: it counts active pages, so it runs roughly 2x the reclaimable figure.
+  Swap comes from `vm.swapusage`. See
+  [memory-accounting-reference.md](../memory-accounting-reference.md).
 - **Linux**: computes `MemAvailable / MemTotal` from `/proc/meminfo`. Optionally refines
   using PSI (Pressure Stall Information) from `/proc/pressure/memory` -- if
   `psi_some_avg10 > 5`, the PSI-derived percentage replaces the meminfo estimate when
   lower.
-- **Fallback**: unsupported platforms get 30% (ELEVATED).
+- **Unsupported platforms**: `measure()` raises `UnsupportedTelemetryPlatformError`. A
+  pool that cannot read memory is not a pool that should guess at a safe-looking number
+  and launch anyway.
 
 #### Integration
 
-Memory pressure is checked **before each batch launch** in `run_parallel`. If CRITICAL,
-the system pauses 30 seconds and re-checks.
-Pressure readings are logged alongside each batch start for observability.
+Memory pressure is consumed in one place: `RunPool._monitor_loop`, which samples on
+every tick and passes the resulting level to `_adjust_concurrency`. There is no
+per-batch check in `run_parallel` and no pause on CRITICAL; CRITICAL reduces the memory
+ceiling by 50% on each tick, and the reduction is non-preemptive, so processes already
+running are left alone and the narrower ceiling applies to what launches next.
+
+The level is the only thing that crosses that boundary.
+`_adjust_concurrency` never sees a byte count, which is why a starting estimate made
+from a wrong budget is not corrected by later sampling.
+See [arch-runpool.md](arch-runpool.md) for the policy table and the ramp factors.
 
 ### 14.4 Pre-Flight Checks
 

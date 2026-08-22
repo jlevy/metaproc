@@ -143,6 +143,7 @@ and the Metaproc-owned [plugin](src/metaproc/metabrowser_plugin/README.md).
 | [SECURITY](SECURITY.md) | Vulnerability reporting and security boundaries |
 | [publishing](docs/publishing.md) | Release process with PyPI trusted publishing |
 | [performance-notes](docs/performance-notes.md) | Performance principles, tooling, and worked examples |
+| [memory-accounting-reference](docs/memory-accounting-reference.md) | Which memory counters mean what on macOS and Linux, with kernel citations; the background behind how RunPool sizes concurrency |
 | [project records](docs/project/README.md) | Active and completed implementation plans plus extraction provenance |
 | [TODO](TODO.md) | Current release and deferred quality work |
 

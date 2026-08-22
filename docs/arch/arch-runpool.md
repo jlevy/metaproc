@@ -108,6 +108,9 @@ rate, wired memory, and file cache.
 That matches the design rule here: current memory pressure and active swap growth matter
 more than absolute swap already allocated.
 
+The counters behind this section, with kernel citations and reproduction commands, are
+in [memory-accounting-reference.md](../memory-accounting-reference.md).
+
 RunPool budgets from `vm_stat` reclaimable pages, free plus inactive plus purgeable,
 scaled by the page size that `vm_stat` reports rather than an assumed one.
 `kern.memorystatus_level` is read alongside it and carried on the reading as
