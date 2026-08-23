@@ -3,13 +3,17 @@ type: is
 id: is-01m0pja45q14ptp2trx6fh5ds6
 title: De-duplicate or drift-check the three copied agent hook scripts
 kind: task
-status: open
+status: closed
 priority: 3
-version: 1
+version: 2
 labels: []
 dependencies: []
 created_at: 2026-08-23T05:43:18.967Z
-updated_at: 2026-08-23T05:43:18.967Z
+updated_at: 2026-08-23T16:23:19.280Z
+closed_at: 2026-08-23T16:23:19.279Z
+close_reason: "Done in PR #19 (commit c0a3daa) via the bead's option 2. check_supply_chain.py now fails when either agent's copy of a tbd-generated hook script stops matching its twin, covering all three pairs (ensure-gh-cli.sh, tbd-session.sh, tbd-closing-reminder.sh). Option 1 (one shared path) was deliberately not taken: these three are tbd's output and `tbd setup --auto` would rewrite the copies back, so de-duplicating them is a change to tbd's generator, not a local one -- still worth doing upstream in jlevy/tbd. Negative-tested: a stray line appended to one copy is rejected by name, a deleted copy is reported missing. The error message directs to regeneration rather than hand-copying."
+resolution: null
+duplicate_of: null
 ---
 `.claude/scripts/` and `.codex/` carry three byte-identical pairs of hook scripts
 (`ensure-gh-cli.sh`, `tbd-session.sh`, `tbd-closing-reminder.sh`) with nothing testing
