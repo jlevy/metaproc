@@ -105,7 +105,7 @@ def package_workspace(
     repo_root: Path,
     extra_paths: list[str] | None = None,
     sync_only: list[str] | None = None,
-    exclude_prefixes: tuple[str, ...] = ("metaproc/",),
+    exclude_prefixes: tuple[str, ...] = ("metaproc/", "vendor/metaproc/"),
     out_path: Path | None = None,
 ) -> Path:
     """Tar+gzip a subset of the repo working tree for shipment to a Batch task.
@@ -113,8 +113,8 @@ def package_workspace(
     Default path-set: tracked files (``git ls-files``) unioned with
     untracked-but-not-gitignored files (``git ls-files --others
     --exclude-standard``), minus anything under ``exclude_prefixes``
-    (default: ``metaproc/``, since the wheel ships that separately), plus
-    any caller-supplied ``extra_paths``.
+    (default: ``metaproc/`` and ``vendor/metaproc/``, since the wheel ships
+    that source separately), plus any caller-supplied ``extra_paths``.
 
     Including untracked-non-ignored files matters because iterating on a
     new spec or dataset file that hasn't been committed yet would

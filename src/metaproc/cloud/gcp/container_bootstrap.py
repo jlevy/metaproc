@@ -24,7 +24,8 @@ artifacts used by ``metaproc gcp run``. This lets the normal
 without requiring an image rebuild.
 
 For the lighter-weight ``metaproc gcp run`` entrypoint, ``bootstrap_gcp_run``
-provides verified wheel installation and workspace extraction.
+provides verified wheel installation, workspace extraction, and optional
+workspace-package installation.
 """
 
 from __future__ import annotations
@@ -437,7 +438,11 @@ def bootstrap_gcp_run(*, home: Path, env: Mapping[str, str]) -> str:
     wheel_sha256 = env.get("METAPROC_WHEEL_SHA256", "").strip()
     workspace_gcs = env.get("METAPROC_WORKSPACE_GCS", "").strip()
     workspace_sha256 = env.get("METAPROC_WORKSPACE_SHA256", "").strip()
+    workspace_packages = _parse_relative_paths(env.get("METAPROC_WORKSPACE_PACKAGES", ""))
     _ = home
+
+    if workspace_packages and not workspace_gcs:
+        raise RuntimeError("METAPROC_WORKSPACE_PACKAGES requires METAPROC_WORKSPACE_GCS")
 
     if wheel_gcs:
         _install_wheel_from_gcs(wheel_gcs, wheel_sha256)
@@ -445,6 +450,13 @@ def bootstrap_gcp_run(*, home: Path, env: Mapping[str, str]) -> str:
     work_dir = "/tmp"
     if workspace_gcs:
         work_dir = _extract_workspace_from_gcs(workspace_gcs, workspace_sha256)
+        if workspace_packages:
+            _install_workspace_packages(work_dir, workspace_packages, "workspace tarball")
+            # Keep nested `uv run` calls on the image environment containing
+            # the just-installed packages instead of re-resolving the shipped
+            # repository and looking for paths absent from a partial archive.
+            os.environ.setdefault("UV_PROJECT_ENVIRONMENT", "/opt/venv")
+            os.environ.setdefault("UV_NO_SYNC", "1")
 
     return work_dir
 

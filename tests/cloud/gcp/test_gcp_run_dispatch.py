@@ -73,6 +73,7 @@ class TestBuildGcpRunJob:
             wheel_sha256="1" * 64,
             workspace_gcs_uri="gs://b/gcp-run/jobid/workspace.tar.gz",
             workspace_sha256="2" * 64,
+            workspace_packages=("packages/example", "workflow"),
         )
         _, job = build_gcp_run_job(["echo", "x"], opts)
         env = dict(job.task_groups[0].task_spec.runnables[0].environment.variables)
@@ -80,6 +81,15 @@ class TestBuildGcpRunJob:
         assert env["METAPROC_WHEEL_SHA256"] == opts.wheel_sha256
         assert env["METAPROC_WORKSPACE_GCS"] == opts.workspace_gcs_uri
         assert env["METAPROC_WORKSPACE_SHA256"] == opts.workspace_sha256
+        assert env["METAPROC_WORKSPACE_PACKAGES"] == "packages/example,workflow"
+
+    def test_workspace_packages_require_workspace_artifact(self):
+        opts = DispatchGcpRunOptions(
+            config=_config(),
+            workspace_packages=("packages/example",),
+        )
+        with pytest.raises(ValueError, match="workspace_packages requires"):
+            build_gcp_run_job(["echo", "x"], opts)
 
     @pytest.mark.parametrize(
         "options",
@@ -138,6 +148,14 @@ class TestBuildGcpRunJob:
         opts = DispatchGcpRunOptions(
             config=cfg,
             extra_env={"FOO": "bar", "RUNS_DIR": "/override"},
+        )
+        with pytest.raises(ValueError, match="dispatcher-owned keys"):
+            build_gcp_run_job(["echo", "x"], opts)
+
+    def test_extra_env_cannot_override_workspace_packages(self):
+        opts = DispatchGcpRunOptions(
+            config=_config(),
+            extra_env={"METAPROC_WORKSPACE_PACKAGES": "packages/override"},
         )
         with pytest.raises(ValueError, match="dispatcher-owned keys"):
             build_gcp_run_job(["echo", "x"], opts)
@@ -469,6 +487,10 @@ class TestGcpRunCli:
                     "FOO=bar",
                     "--secret",
                     "MY=projects/p/secrets/x/versions/1",
+                    "--workspace-package",
+                    "packages/example",
+                    "--workspace-package",
+                    "workflow",
                     "echo",
                     "hi",
                 ],
@@ -483,6 +505,7 @@ class TestGcpRunCli:
         assert opts.wheel_sha256
         assert opts.workspace_gcs_uri == "gs://b/ws.tgz"
         assert opts.workspace_sha256
+        assert opts.workspace_packages == ("packages/example", "workflow")
         assert opts.extra_env == {"FOO": "bar"}
         assert opts.extra_secrets == {"MY": "projects/p/secrets/x/versions/1"}
         # Blocking mode: tail was invoked with the resource name + project.
@@ -490,6 +513,30 @@ class TestGcpRunCli:
         kwargs = tail_mock.call_args.kwargs
         assert kwargs["job_resource_name"] == "projects/p/locations/us-central1/jobs/fake"
         assert kwargs["project"] == "p"
+
+    def test_workspace_package_rejects_no_workspace(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("METAPROC_GCP_PROJECT", "p")
+        monkeypatch.setenv("METAPROC_GCP_CONTAINER_IMAGE", "example.invalid/agent:latest")
+        monkeypatch.delenv("METAPROC_GCP_FILESTORE_SERVER", raising=False)
+        app = typer.Typer()
+        app.command("run")(cmd_gcp_run.run_command)
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "--no-filestore",
+                "--no-workspace",
+                "--workspace-package",
+                "packages/example",
+                "--dry-run",
+                "echo",
+                "hi",
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "--workspace-package requires" in result.output
+        assert "workspace shipping" in result.output
 
     def test_detach_skips_tail_and_prints_log_url(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("METAPROC_GCP_PROJECT", "p")

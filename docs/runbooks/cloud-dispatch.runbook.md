@@ -110,6 +110,11 @@ metaproc gcp run --dry-run -- python -m metaproc --help
 # Submit and stream logs.
 metaproc gcp run -- python -m my_consumer.batch_task --shard shard-a
 
+# Install a shipped workspace package before running nested uv commands.
+metaproc gcp run \
+  --workspace-package packages/my-consumer \
+  -- uv run --frozen --project packages/my-consumer my-consumer-task
+
 # Submit without waiting.
 metaproc gcp run --detach -- python -m my_consumer.batch_task --shard shard-b
 ```
@@ -119,6 +124,9 @@ Useful controls:
 - `--no-wheel` uses the image-baked Metaproc.
 - `--no-workspace` skips repository transport.
 - `--sync PATH` and `--sync-only PATH` narrow workspace transport.
+- `--workspace-package PATH` installs a shipped Python package editable into the baked
+  environment. Repeat it for multiple packages; it cannot be combined with
+  `--no-workspace`.
 - `--env K=V` adds non-secret configuration.
 - `--secret K=REF` binds a Secret Manager version.
 - `--timeout <seconds>` sets the task deadline.

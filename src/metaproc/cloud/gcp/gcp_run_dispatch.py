@@ -4,7 +4,8 @@ Analogous to ``worker_dispatch.py`` / ``orchestrator_dispatch.py`` but
 collapsed to one task. Composes the env (``METAPROC_GCP_RUN_CMD``, the
 ``METAPROC_WHEEL_GCS`` and ``METAPROC_WHEEL_SHA256`` pair, the
 ``METAPROC_WORKSPACE_GCS`` and ``METAPROC_WORKSPACE_SHA256`` pair, and
-``RUNS_DIR``), resolves the ``GCP_SECRET_REFS`` registry, builds the Job via
+optional ``METAPROC_WORKSPACE_PACKAGES``, and ``RUNS_DIR``), resolves the
+``GCP_SECRET_REFS`` registry, builds the Job via
 ``batch_backend.create_single_task_job``, and submits it via the Batch
 client.
 
@@ -47,6 +48,7 @@ RESERVED_ENV_KEYS: frozenset[str] = frozenset(
         "METAPROC_WHEEL_SHA256",
         "METAPROC_WORKSPACE_GCS",
         "METAPROC_WORKSPACE_SHA256",
+        "METAPROC_WORKSPACE_PACKAGES",
         "RUNS_DIR",
     }
 )
@@ -67,6 +69,7 @@ class DispatchGcpRunOptions:
     wheel_sha256: str = ""
     workspace_gcs_uri: str = ""
     workspace_sha256: str = ""
+    workspace_packages: tuple[str, ...] = ()
     extra_env: Mapping[str, str] = field(default_factory=dict)
     extra_secrets: Mapping[str, str] = field(default_factory=dict)
     job_name: str = ""
@@ -108,6 +111,8 @@ def build_gcp_run_job(
         raise ValueError("wheel_gcs_uri and wheel_sha256 must be provided together")
     if bool(options.workspace_gcs_uri) != bool(options.workspace_sha256):
         raise ValueError("workspace_gcs_uri and workspace_sha256 must be provided together")
+    if options.workspace_packages and not options.workspace_gcs_uri:
+        raise ValueError("workspace_packages requires a shipped workspace artifact")
     if options.wheel_sha256 and SHA256_PATTERN.fullmatch(options.wheel_sha256) is None:
         raise ValueError("wheel_sha256 must be exactly 64 hexadecimal characters")
     if options.workspace_sha256 and SHA256_PATTERN.fullmatch(options.workspace_sha256) is None:
@@ -120,6 +125,8 @@ def build_gcp_run_job(
     if options.workspace_gcs_uri:
         env_vars["METAPROC_WORKSPACE_GCS"] = options.workspace_gcs_uri
         env_vars["METAPROC_WORKSPACE_SHA256"] = options.workspace_sha256
+    if options.workspace_packages:
+        env_vars["METAPROC_WORKSPACE_PACKAGES"] = ",".join(options.workspace_packages)
     container_runs_dir = get_container_runs_dir(options.config)
     if container_runs_dir:
         env_vars["RUNS_DIR"] = container_runs_dir

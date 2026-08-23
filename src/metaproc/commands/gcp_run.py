@@ -210,6 +210,14 @@ def run_command(
         "--sync-only",
         help="Ship ONLY these paths instead of the default full-tree-minus-metaproc set.",
     ),
+    workspace_package: list[str] = typer.Option(  # noqa: B008
+        None,
+        "--workspace-package",
+        help=(
+            "Repo-relative Python package to install editable from the shipped workspace. "
+            "Repeatable; keeps nested uv commands on the image environment."
+        ),
+    ),
     machine_type: str = typer.Option(
         DEFAULT_MACHINE_TYPE, "--machine-type", help="GCE machine type for the task VM."
     ),
@@ -287,6 +295,12 @@ def run_command(
         key: _expand_secret_ref(val, config.project) for key, val in raw_secrets.items()
     }
 
+    if no_workspace and workspace_package:
+        raise typer.BadParameter(
+            "--workspace-package requires workspace shipping",
+            param_hint="--workspace-package",
+        )
+
     if not dry_run and (not no_wheel or not no_workspace) and not bucket:
         raise typer.BadParameter(
             "--dispatch-bucket or METAPROC_GCS_BUCKET is required when shipping artifacts",
@@ -325,6 +339,7 @@ def run_command(
         wheel_sha256=wheel_sha256,
         workspace_gcs_uri=workspace_uri,
         workspace_sha256=workspace_sha256,
+        workspace_packages=tuple(workspace_package or ()),
         extra_env=extra_env,
         extra_secrets=extra_secrets,
         job_name=job_id,

@@ -120,6 +120,37 @@ class TestPackageWorkspace:
         assert "docs/readme.md" in names
         assert not any(n.startswith("metaproc/") for n in names)
 
+    def test_default_excludes_vendored_metaproc_gitlink(self, tmp_path: Path):
+        repo = tmp_path / "repo"
+        _git_init_with_files(repo, {"src/keep.py": "pass"})
+        nested = repo / "vendor" / "metaproc"
+        _git_init_with_files(nested, {"src/metaproc/__init__.py": "pass"})
+        nested_sha = subprocess.run(
+            ["git", "-C", str(nested), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo),
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                f"160000,{nested_sha},vendor/metaproc",
+            ],
+            check=True,
+        )
+
+        out = package_workspace(repo_root=repo, out_path=tmp_path / "ws.tar.gz")
+
+        with tarfile.open(out) as tar:
+            names = set(tar.getnames())
+        assert "src/keep.py" in names
+        assert not any(n.startswith("vendor/metaproc") for n in names)
+
     def test_excludes_gitignored_files(self, tmp_path: Path):
         repo = tmp_path / "repo"
         _git_init_with_files(
