@@ -88,6 +88,7 @@ from metaproc.engine.resource_sampling import run_sampled_step_command, sample_s
 from metaproc.engine.retry import (
     FailureClass,
     RetryVerdict,
+    append_output_failure_feedback,
     classify_error,
     classify_failure,
     classify_output_failures,
@@ -1341,6 +1342,10 @@ def _build_prepare_launch(  # noqa: PLR0913
             context=f"step '{step}' prompt for {each}={shared['item']}",
             allowed=allowed_runtime,
         )
+        output_failure_feedback = cast(
+            "Sequence[OutputFailure]", shared.get("output_failure_feedback", ())
+        )
+        resolved_prompt = append_output_failure_feedback(resolved_prompt, output_failure_feedback)
         shared["log_path"] = Path(log_path)
 
         # Clean stale output files before retry so the agent starts fresh.
@@ -1884,6 +1889,8 @@ async def _run_agent_pool(  # noqa: PLR0913
             and verdict == RetryVerdict.RETRY
             and shared["attempt_number"] <= max_retries_for(fc, retry_policy.max_retries)
         ):
+            if output_failures:
+                shared["output_failure_feedback"] = tuple(output_failures)
             shared["attempt_number"] += 1
             retry_index = shared["attempt_number"] - 1
             delay = compute_backoff(retry_index, retry_policy)
@@ -2055,6 +2062,7 @@ async def _run_agent_pool(  # noqa: PLR0913
                     "running_record": None,
                     "log_path": None,
                     "attempt_number": 1,
+                    "output_failure_feedback": (),
                     "lane_id": pool_config.execution_profile,
                 }
                 current_status = read_status_at(state_dir)
