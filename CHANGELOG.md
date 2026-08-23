@@ -7,6 +7,14 @@ development series.
 
 ## [Unreleased][unreleased]
 
+### Fixed
+
+- **Resuming item-aligned chains**: a normal resume now enters a chain even when its
+  head is complete, reruns incomplete tasks, and reuses completed tasks.
+  Previously, the whole chain was silently skipped.
+  `--force` remains the explicit operation for invalidating a step and its downstream
+  work.
+
 ### Changed
 
 - **Code-step outputs are no longer YAML-repaired**: `run-parallel`’s `mode: code`

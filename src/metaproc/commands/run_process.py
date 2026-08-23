@@ -2749,13 +2749,20 @@ async def _orchestrate(
                 out.progress(f"  Step '{step_id}': satisfied via override — skipping")
                 continue
             target = step_map[step_id]
-            if not force and _is_step_completed(
-                run_dir,
-                step_id,
-                outputs=target.outputs,
-                variables=variables,
-                is_fan_out=target.fan_out is not None,
-                step=target,
+            # The level walk reaches an item-aligned chain only through its head. Even
+            # when the head is complete, the chain may contain incomplete tasks; the
+            # chain executor's per-task checks decide what resume reuses.
+            if (
+                not force
+                and step_id not in _chain_head_of
+                and _is_step_completed(
+                    run_dir,
+                    step_id,
+                    outputs=target.outputs,
+                    variables=variables,
+                    is_fan_out=target.fan_out is not None,
+                    step=target,
+                )
             ):
                 completed_entry: dict[str, Any] = {
                     "state": "completed",
