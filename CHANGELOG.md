@@ -9,18 +9,11 @@ development series.
 
 ### Fixed
 
-- **A completed chain head no longer skips its whole item-aligned chain**: chain
-  execution hangs off the head in `run-process`’s step loop, and the completed-step skip
-  returned before reaching it, so once the head was complete no member behind it could
-  re-run whatever its own state.
-  The failure was silent: the run reported success, and the item that needed re-running
-  was never mentioned.
-  A chain head is now never skipped on its own account, and the chain’s own per-item,
-  per-step reuse decides what runs, which is the rule `_discover_chain_items` already
-  applied one level down.
-  An operator who reached for `--force` to make a single item actionable no longer needs
-  to; `--force` invalidates downstream wholesale, which was never the right tool for
-  repairing one member.
+- **Resuming item-aligned chains**: a normal resume now enters a chain even when its
+  head is complete, reruns incomplete tasks, and reuses completed tasks.
+  Previously, the whole chain was silently skipped.
+  `--force` remains the explicit operation for invalidating a step and its downstream
+  work.
 
 ### Changed
 

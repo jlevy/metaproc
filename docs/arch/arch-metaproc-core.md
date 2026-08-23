@@ -1502,6 +1502,8 @@ completed for that item.
 Filtering on the head’s completion would drop such an item from the chain entirely and a
 resumed run would silently do nothing for it.
 Work that was in flight when a run died restarts, since it never committed.
+The current level-walk integration and its two completion views are described in
+[arch-execution-model.md § How Item-Aligned Resume Works Today](arch-execution-model.md#how-item-aligned-resume-works-today).
 
 Absent `align`, nothing changes.
 The edge stays step-scoped and the level walk executes it exactly as before, which is

@@ -2749,12 +2749,9 @@ async def _orchestrate(
                 out.progress(f"  Step '{step_id}': satisfied via override — skipping")
                 continue
             target = step_map[step_id]
-            # A chain head is never skipped on its own account. Chain execution hangs
-            # off the head further down this loop, so skipping it here skips every
-            # member with it, whatever their own state -- and a resume repairing one
-            # item of one member would exit clean having done nothing. The chain's own
-            # per-item, per-step reuse decides what actually runs, which is the same
-            # reasoning `_discover_chain_items` already applies one level down.
+            # The level walk reaches an item-aligned chain only through its head. Even
+            # when the head is complete, the chain may contain incomplete tasks; the
+            # chain executor's per-task checks decide what resume reuses.
             if (
                 not force
                 and step_id not in _chain_head_of
