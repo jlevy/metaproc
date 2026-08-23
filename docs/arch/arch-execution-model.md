@@ -6,7 +6,7 @@ status: Draft
 ---
 # Execution Model Reference Implementation
 
-**Date:** 2026-08-16 (last updated 2026-08-16) **Status:** Draft
+**Date:** 2026-08-16 (last updated 2026-08-23) **Status:** Draft
 
 > **Maintenance**: This is a maintained architecture doc.
 > Revise via `tbd shortcut revise-architecture-doc` (which prompts you to verify content
@@ -161,6 +161,19 @@ The chain, fan-in, and declared-retry semantics are also replay-checked against 
 model by `test_replay_equivalence`; per-step ceilings are a concurrency width the
 replayed state does not observe, and the agent loop’s budget is resolved from step
 defaults the trace translation does not yet read.
+
+**What the graft costs, and the one invariant that pays for it.** Grafting item-scoped
+semantics onto a level walk means two completion questions coexist: the walk asks
+whether a *step* is complete, and the chain asks, per item and per step, whether that
+item’s work is complete.
+Where they meet, the item-scoped answer has to win, because a step-scoped skip cannot
+express “this item finished member four and not member six”.
+That is why a chain head is never step-skipped: chain execution hangs off the head, so
+skipping the head skips every member behind it, and a resume repairing one item exits
+clean having done nothing.
+Anything that replaces the level walk with a real task-level scheduler removes the need
+for the exemption; until then it is load-bearing, and `test_item_aligned_chains` pins
+it.
 
 **Step one, durability: the engine’s durable facts adopt the model’s vocabulary.**
 Append-only attempt records carrying identity, generation, disposition, and fence epoch;

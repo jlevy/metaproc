@@ -7,6 +7,21 @@ development series.
 
 ## [Unreleased][unreleased]
 
+### Fixed
+
+- **A completed chain head no longer skips its whole item-aligned chain**: chain
+  execution hangs off the head in `run-process`’s step loop, and the completed-step skip
+  returned before reaching it, so once the head was complete no member behind it could
+  re-run whatever its own state.
+  The failure was silent: the run reported success, and the item that needed re-running
+  was never mentioned.
+  A chain head is now never skipped on its own account, and the chain’s own per-item,
+  per-step reuse decides what runs, which is the rule `_discover_chain_items` already
+  applied one level down.
+  An operator who reached for `--force` to make a single item actionable no longer needs
+  to; `--force` invalidates downstream wholesale, which was never the right tool for
+  repairing one member.
+
 ### Changed
 
 - **Code-step outputs are no longer YAML-repaired**: `run-parallel`’s `mode: code`
