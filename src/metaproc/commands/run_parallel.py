@@ -107,7 +107,6 @@ from metaproc.engine.validation import (
     validate_item_outputs,
     validate_item_outputs_detailed,
 )
-from metaproc.engine.yaml_repair import repair_frontmatter_file
 from metaproc.errors import CLIError, ValidationError
 from metaproc.io.claimed_items import claim_item
 from metaproc.io.state_io import (
@@ -1033,12 +1032,10 @@ def run_parallel(
                         break
 
                     if artifact_dir is not None and effective_outputs:
-                        # Attempt YAML repair before validation
-                        for io_spec in effective_outputs.values():
-                            if io_spec.path:
-                                out_file = artifact_dir / Path(io_spec.path).name
-                                if out_file.exists() and repair_frontmatter_file(out_file):
-                                    out.progress(f"  Repaired YAML in {out_file.name} for {item}")
+                        # Neither rewriting pass runs here. This is the mode:code
+                        # branch, and repair and conform are both scoped to
+                        # agent-authored output: `arch-metaproc-core.md` §14.6 for
+                        # why, `TestWhichExecutorsRewriteAgentOutput` for the guard.
                         output_failures = validate_item_outputs_detailed(
                             artifact_dir, effective_outputs, variables=item_vars
                         )
