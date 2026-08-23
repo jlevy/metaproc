@@ -3,25 +3,21 @@
 The reducer consumes six events; a finished run's state tree carries the facts they
 describe. This module maps one onto the other, which is what lets the reference model
 check the engine's live item-scoped semantics instead of only itself: translate the
-resolved plan into templates, read the per-task status records back as attempt events,
-fold them through ``reduce``, and diff the model's terminal states against what the
-engine recorded.
+resolved plan into templates, read the per-task attempt facts, fold them through
+``reduce``, and diff the model's terminal states against what the engine recorded.
 
-Two stated limitations, both retired by durable attempt records (the durability step in
-arch-execution-model.md, § Adoption Path):
+New runs persist exact attempt identities, generations, fence epochs, dispositions, and
+failure classes. Historical runs without those facts fall back to reconstructing
+attempts from their final status record.
+
+Two limitations remain until the rest of the durability increment lands:
 
 - Rosters are reconstructed from task state directories, so an expansion item that never
   produced a task directory is invisible. For an item-aligned chain the head step's
   directories stand in for the roster, which is faithful today because the head runs
   every item.
-- A status record keeps only the final attempt count and the final failure, so
-  intermediate attempts are replayed as retryable with the final failure class attached.
-  Terminal dispositions are exact; per-attempt history is an approximation.
-- A step without ``for_each`` translates to a single attempt. The non-fan-out agent
-  executor honors a content-retry budget of its own, resolved from step defaults rather
-  than the plan, so replaying a run that retried such a step approximates its budget;
-  terminal states still agree because a success outranks the earlier retryable
-  attempts.
+- Historical status-only runs retain the old approximation: intermediate attempts are
+  reconstructed as retryable with the final failure class attached.
 
 Kept out of the package's ``__init__`` on purpose: the model surface is pure, and this
 module imports the engine's plan and state readers.
@@ -52,9 +48,9 @@ from metaproc.execution_model.reducer import (
     ExpansionClosed,
     reduce,
 )
-from metaproc.io.state_io import read_status_at
+from metaproc.io.state_io import read_attempt_history_at, read_status_at
 from metaproc.models.plan import ResolvedStep
-from metaproc.models.runtime import StatusRecord
+from metaproc.models.runtime import StatusRecord, TaskAttemptRecord
 from metaproc.paths import STATE_DIR, TASKS_SUBDIR, task_state_dir
 
 _SUCCEEDED_STATES = frozenset({"completed", "cached"})
@@ -231,6 +227,87 @@ def _attempt_events(
     return events
 
 
+def _durable_attempt_events(
+    run_id: str,
+    step_id: str,
+    item_key: str | None,
+    records: Sequence[TaskAttemptRecord],
+) -> list[Event]:
+    """Translate exact production attempt facts without reconstructing retries."""
+    key = TaskKey(step_id, item_key)
+    events: list[Event] = []
+    for record in records:
+        if record.run_id != run_id or record.step_id != step_id or record.item_key != item_key:
+            raise ValueError(
+                f"attempt {record.attempt_id!r} identifies run={record.run_id!r}, "
+                f"task={record.step_id}[{record.item_key}] but its status identifies "
+                f"run={run_id!r}, task={key}"
+            )
+        events.append(
+            AttemptStarted(
+                attempt_id=record.attempt_id,
+                task_key=key,
+                generation=record.generation,
+                fence_epoch=record.fence_epoch,
+            )
+        )
+        if record.disposition is not None:
+            events.append(
+                AttemptEnded(
+                    attempt_id=record.attempt_id,
+                    disposition=AttemptDisposition(record.disposition.value),
+                    failure_category=record.failure_class,
+                )
+            )
+    return events
+
+
+def _events_for_task(
+    state_dir: Path,
+    step_id: str,
+    item_key: str | None,
+    record: StatusRecord,
+    policy: RetryPolicy,
+) -> list[Event]:
+    history = _history_named_by_status(state_dir, record)
+    if history:
+        return _durable_attempt_events(record.run_id, step_id, item_key, history)
+    return _attempt_events(step_id, item_key, record, policy)
+
+
+def _history_named_by_status(
+    state_dir: Path, record: StatusRecord
+) -> tuple[TaskAttemptRecord, ...]:
+    history = read_attempt_history_at(state_dir)
+    if not history:
+        return history
+    latest = history[-1]
+    if record.attempt_id is None:
+        raise ValueError(f"{state_dir}: status does not name latest attempt {latest.attempt_id!r}")
+    current = next(
+        (attempt for attempt in history if attempt.attempt_id == record.attempt_id),
+        None,
+    )
+    if current is None:
+        raise ValueError(f"{state_dir}: status names missing attempt {record.attempt_id!r}")
+    if current.attempt_number != record.attempt:
+        raise ValueError(
+            f"{state_dir}: status attempt number {record.attempt} disagrees with "
+            f"{record.attempt_id!r} number {current.attempt_number}"
+        )
+    if current.attempt_id != latest.attempt_id:
+        raise ValueError(
+            f"{state_dir}: status names {current.attempt_id!r}, not latest attempt "
+            f"{latest.attempt_id!r}"
+        )
+    return history
+
+
+def _attempt_count(state_dir: Path, record: StatusRecord) -> int:
+    history = _history_named_by_status(state_dir, record)
+    return len(history) if history else max(1, record.attempt)
+
+
 def events_from_run(run_dir: Path, steps: Sequence[ResolvedStep]) -> tuple[Event, ...]:
     """Read a completed run tree back as the reducer's event sequence."""
     heads = _chain_heads(steps)
@@ -250,14 +327,16 @@ def events_from_run(run_dir: Path, steps: Sequence[ResolvedStep]) -> tuple[Event
     for step in steps:
         policy = _retry_policy(step)
         if step.fan_out is None:
-            record = read_status_at(run_dir / STATE_DIR / TASKS_SUBDIR / step.step_id)
+            state_dir = run_dir / STATE_DIR / TASKS_SUBDIR / step.step_id
+            record = read_status_at(state_dir)
             if record is not None:
-                events.extend(_attempt_events(step.step_id, None, record, policy))
+                events.extend(_events_for_task(state_dir, step.step_id, None, record, policy))
             continue
         for item_key in rosters[step.step_id]:
-            record = read_status_at(task_state_dir(run_dir, step.step_id, item_key))
+            state_dir = task_state_dir(run_dir, step.step_id, item_key)
+            record = read_status_at(state_dir)
             if record is not None:
-                events.extend(_attempt_events(step.step_id, item_key, record, policy))
+                events.extend(_events_for_task(state_dir, step.step_id, item_key, record, policy))
     return tuple(events)
 
 
@@ -270,15 +349,19 @@ def engine_task_facts(
     facts: dict[TaskKey, EngineTaskFact] = {}
     for step in steps:
         if step.fan_out is None:
-            record = read_status_at(run_dir / STATE_DIR / TASKS_SUBDIR / step.step_id)
+            state_dir = run_dir / STATE_DIR / TASKS_SUBDIR / step.step_id
+            record = read_status_at(state_dir)
             if record is not None:
-                facts[TaskKey(step.step_id)] = EngineTaskFact(record.state, record.attempt)
+                facts[TaskKey(step.step_id)] = EngineTaskFact(
+                    record.state, _attempt_count(state_dir, record)
+                )
             continue
         for item_key in rosters[step.step_id]:
-            record = read_status_at(task_state_dir(run_dir, step.step_id, item_key))
+            state_dir = task_state_dir(run_dir, step.step_id, item_key)
+            record = read_status_at(state_dir)
             if record is not None:
                 facts[TaskKey(step.step_id, item_key)] = EngineTaskFact(
-                    record.state, record.attempt
+                    record.state, _attempt_count(state_dir, record)
                 )
     return facts
 

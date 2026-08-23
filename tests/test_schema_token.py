@@ -14,6 +14,7 @@ from metaproc.io.schema_token import (
 )
 from metaproc.models.plan import Plan
 from metaproc.models.resources import RESOURCES_DOCUMENT_CONTRACT, ResourcesDocument
+from metaproc.models.runtime import StatusRecord, TaskAttemptRecord
 from metaproc.models.usage import UsageReport
 
 
@@ -159,6 +160,47 @@ class TestResolveSchema:
     def test_resolve_standalone_resources_document(self) -> None:
         cls = resolve_schema(RESOURCES_DOCUMENT_CONTRACT)
         assert cls is ResourcesDocument
+
+    def test_resolve_standalone_task_attempt_record(self) -> None:
+        cls = resolve_schema("metaproc:TaskAttemptRecord/0.1")
+        assert cls is TaskAttemptRecord
+
+    def test_task_attempt_contract_rejects_untyped_identity(self) -> None:
+        with pytest.raises(ValueError, match="attempt_id"):
+            TaskAttemptRecord(
+                attempt_id="plain-id",
+                run_id="run",
+                step_id="step",
+                attempt_number=1,
+                started_at="2026-08-23T00:00:00",
+            )
+
+    def test_task_attempt_contract_rejects_failure_on_live_attempt(self) -> None:
+        with pytest.raises(ValueError, match="live attempt cannot carry terminal failure fields"):
+            TaskAttemptRecord(
+                attempt_id="att-valid",
+                run_id="run",
+                step_id="step",
+                attempt_number=1,
+                started_at="2026-08-23T00:00:00",
+                error="failed before it ended",
+            )
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [("generation", 0), ("fence_epoch", -1)],
+    )
+    def test_status_rejects_invalid_attempt_coordinates(self, field: str, value: int) -> None:
+        payload = {
+            "run_id": "run",
+            "step_id": "step",
+            "item": {},
+            "state": "running",
+            field: value,
+        }
+
+        with pytest.raises(ValueError, match=field):
+            StatusRecord.model_validate(payload)
 
     def test_resolve_unknown_raises(self) -> None:
         with pytest.raises(KeyError, match="Unknown schema token"):

@@ -79,7 +79,7 @@ RANDOM_TYPED_ID_BITS = 72
 TIMESTAMPED_TYPED_ID_RANDOM_BITS = 48
 """Randomness requested in addition to a timestamp for time-bound identities."""
 
-METAPROC_ID_PREFIXES = frozenset({"run", "art", "rev", "evt", "use", "bud", "rcpt"})
+METAPROC_ID_PREFIXES = frozenset({"run", "art", "rev", "evt", "use", "bud", "rcpt", "att"})
 _registered_prefixes = set(METAPROC_ID_PREFIXES)
 
 

@@ -11,6 +11,7 @@ it deliberately never ran.
 
 from __future__ import annotations
 
+import shutil
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -22,7 +23,11 @@ from metaproc.cli import app
 from metaproc.execution_model.model import RunState, TaskKey, TaskState
 from metaproc.execution_model.reducer import task_state
 from metaproc.execution_model.trace import engine_task_facts, replay_run
+from metaproc.io import read_yaml_file, to_yaml_string
+from metaproc.io.state_io import read_attempt_history_at, read_status_at, start_attempt_at
 from metaproc.models.plan import ResolvedStep
+from metaproc.models.runtime import AttemptDisposition
+from metaproc.paths import ATTEMPT_FILE, attempt_state_dir, task_state_dir
 
 _FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "replay_smoke"
 _ROSTER = ("alfa", "brvo", "chrl", "dlta", "echo")
@@ -105,24 +110,74 @@ class TestReplayMatchesEngine:
                 f"{key}: engine recorded {fact.attempts} attempts, replay holds {modeled}"
             )
 
-    def test_the_durable_record_undercounts_the_retries_it_made(
+    def test_durable_attempt_history_records_every_retry(
         self, smoke: tuple[Path, list[ResolvedStep]], replayed: RunState
     ) -> None:
-        """The silent item was invoked three times; the durable record says once.
-
-        The handler's invocation log is durable proof the declared budget was spent,
-        and the status record's attempt field stays at 1 because nothing on the code
-        path threads the attempt number into the writer. This is the concrete case for
-        durable attempt records (mp-2ltw): replay fidelity here is to the record, so
-        the replay holds one attempt too, and the terminal state still agrees. When
-        attempt accounting becomes truthful, this test is the one that notices.
-        """
+        """The silent item was launched three times and every attempt is replayable."""
         run_dir, steps = smoke
         invocations = (run_dir / "items" / "echo" / "invocations.log").read_text()
         assert invocations.count("stage-b") == 3
         key = TaskKey("stage-b", "echo")
-        assert engine_task_facts(run_dir, steps)[key].attempts == 1
+        assert engine_task_facts(run_dir, steps)[key].attempts == 3
+        assert sum(1 for attempt in replayed.attempts if attempt.task_key == key) == 3
+        history = read_attempt_history_at(task_state_dir(run_dir, "stage-b", "echo"))
+        assert [record.disposition for record in history] == [
+            AttemptDisposition.retryable,
+            AttemptDisposition.retryable,
+            AttemptDisposition.retryable,
+        ]
         assert task_state(replayed, key) is TaskState.FAILED
+
+    def test_replay_rejects_attempt_from_a_different_run(
+        self, smoke: tuple[Path, list[ResolvedStep]], tmp_path: Path
+    ) -> None:
+        run_dir, steps = smoke
+        copied_run = tmp_path / run_dir.name
+        shutil.copytree(run_dir, copied_run)
+        state_dir = task_state_dir(copied_run, "stage-b", "echo")
+        attempt = read_attempt_history_at(state_dir)[0]
+        attempt_path = attempt_state_dir(state_dir, attempt.attempt_id) / ATTEMPT_FILE
+        payload = read_yaml_file(attempt_path)
+        payload["run_id"] = "different-run"
+        attempt_path.write_text(to_yaml_string(payload))
+
+        with pytest.raises(ValueError, match="different-run"):
+            replay_run(copied_run, steps)
+
+    def test_replay_rejects_status_whose_current_attempt_is_missing(
+        self, smoke: tuple[Path, list[ResolvedStep]], tmp_path: Path
+    ) -> None:
+        run_dir, steps = smoke
+        copied_run = tmp_path / run_dir.name
+        shutil.copytree(run_dir, copied_run)
+        state_dir = task_state_dir(copied_run, "stage-b", "echo")
+        status = read_status_at(state_dir)
+        assert status is not None
+        assert status.attempt_id is not None
+        (attempt_state_dir(state_dir, status.attempt_id) / ATTEMPT_FILE).unlink()
+
+        with pytest.raises(ValueError, match="missing attempt"):
+            replay_run(copied_run, steps)
+
+    def test_replay_rejects_status_that_does_not_name_latest_attempt(
+        self, smoke: tuple[Path, list[ResolvedStep]], tmp_path: Path
+    ) -> None:
+        run_dir, steps = smoke
+        copied_run = tmp_path / run_dir.name
+        shutil.copytree(run_dir, copied_run)
+        state_dir = task_state_dir(copied_run, "stage-b", "echo")
+        status = read_status_at(state_dir)
+        assert status is not None
+        orphan = start_attempt_at(
+            state_dir,
+            run_id=status.run_id,
+            step_id=status.step_id,
+            item=status.item,
+            item_key="echo",
+        )
+
+        with pytest.raises(ValueError, match=f"latest attempt {orphan.attempt_id!r}"):
+            replay_run(copied_run, steps)
 
     def test_the_operational_failure_stopped_at_one_attempt(
         self, smoke: tuple[Path, list[ResolvedStep]], replayed: RunState
