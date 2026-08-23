@@ -5,7 +5,9 @@
 # `uv` command, and `npm ci` fails until someone installs the toolchain by hand.
 # One shared copy serves every agent; Claude Code registers it in
 # .claude/settings.json and Codex in .codex/hooks.json. Both invoke it by this
-# path, so the script is never duplicated per agent.
+# path, so the script is never duplicated per agent, and both run it FIRST:
+# tbd's session hook needs the npx installed here, so the order is a dependency
+# rather than a preference. check_supply_chain.py enforces both facts.
 #
 # Supply-chain policy (see SUPPLY-CHAIN-SECURITY.md): versions are PINNED to the
 # repository's own toolchain pins and every download is verified against a pinned
