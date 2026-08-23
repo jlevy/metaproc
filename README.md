@@ -139,7 +139,7 @@ and the Metaproc-owned [plugin](src/metaproc/metabrowser_plugin/README.md).
 | --- | --- |
 | [development](docs/development.md) | Dev guide for hacking on metaproc itself: layout, conventions, testing, arch-doc index |
 | [AGENTS.md](AGENTS.md) | Instructions for coding agents working in this repository |
-| [agent-toolchain-bootstrap](docs/agent-toolchain-bootstrap.md) | Why agent sessions install the pinned toolchain themselves, and when to reuse the pattern |
+| [agent-toolchain-bootstrap](docs/agent-toolchain-bootstrap.md) | Which toolchain pins agent sessions install for themselves, where that is wired, and how it is guarded |
 | [SUPPLY-CHAIN-SECURITY](SUPPLY-CHAIN-SECURITY.md) | Dependency policy: cool-off, lockfiles, audited exceptions |
 | [SECURITY](SECURITY.md) | Vulnerability reporting and security boundaries |
 | [publishing](docs/publishing.md) | Release process with PyPI trusted publishing |

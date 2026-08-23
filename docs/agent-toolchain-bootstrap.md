@@ -7,83 +7,62 @@ has neither. Until the toolchain is installed, every Make target, `uv` command, 
 session start, and it installs the pinned toolchain when what is present does not
 satisfy the pins.
 
-This document records the pattern rather than the script, because it generalizes to any
-repository with a pinned toolchain and agent contributors.
-For the Metaproc-specific setup path, see
+The general pattern — when it fits, when a provisioned image or an existing version
+manager is the better answer, the install rules, and the traps that make a bootstrap
+fail silently — is `tbd guidelines agent-session-bootstrap`. This document records only
+what is specific to this repository.
+For the setup path a human follows, see
 [environment-bootstrap](runbooks/environment-bootstrap.runbook.md); for the policy the
-pattern serves, see [supply-chain security](../SUPPLY-CHAIN-SECURITY.md).
+bootstrap serves, see [supply-chain security](../SUPPLY-CHAIN-SECURITY.md).
 
-## When the Pattern Fits
+## What It Installs
 
-Reach for a session bootstrap when all of these hold:
+| Tool | Pin | Canonical source |
+| --- | --- | --- |
+| Node | 24.18.0 | `.node-version`, paired with `.nvmrc` |
+| uv | 0.11.26 | the `required-version` floor in `uv.toml` |
+| `gh` | 2.92.0 | the generated `ensure-gh-cli.sh`, which tbd owns |
 
-- **The toolchain is pinned and enforced.** Reproducibility already depends on exact
-  versions, so installing “whatever is newest” is a defect rather than a convenience.
-- **You do not control the base image.** Hosted agent sandboxes and cloud development
-  environments hand you a container you did not build.
-- **The failure mode is total.** A missing interpreter or package manager blocks every
-  command, so the cost of a cold-start download is smaller than the cost of a blocked
-  session.
+The script reads each version from the file that already owns it, so it adds no second
+copy to keep in step.
+It carries the matching per-platform SHA-256 checksums, because those have nowhere else
+to live: a mismatch deletes the file and exits nonzero, while an unreachable network
+warns for that one tool and lets the session open.
 
-## When Something Else Is Better
+Node is pinned rather than tracked, and the reason is specific here: a newer Node major
+ships npm 12, outside the `>=11.10.0 <12` range in `package.json`, which
+`engine-strict=true` turns into a hard `npm ci` failure.
+The pinned Node carries npm 11.16.0, inside the range.
 
-| Situation | Prefer |
-| --- | --- |
-| You build the image | Bake the toolchain into the Dockerfile or devcontainer; a session hook then finds it and exits immediately |
-| The platform runs a setup step | Use the native lifecycle hook (`postCreateCommand` and equivalents) rather than duplicating it per agent |
-| The team already uses a version manager | Have the hook invoke `mise`, `asdf`, or Nix instead of downloading, so one source of truth stays authoritative |
-| The repository does not pin versions | Pin first. A bootstrap that installs an unpinned toolchain makes drift automatic instead of visible |
+## Where It Is Wired
 
-A session bootstrap is a repair mechanism for environments you cannot provision.
-It is not a substitute for an image that ships the right tools.
+One agent-neutral script at `devtools/ensure-toolchain.sh`, invoked by path from both
+`.claude/settings.json` and `.codex/hooks.json` rather than copied per agent.
 
-## The Portable Parts
+It runs **first** in each agent’s `SessionStart` list, ahead of tbd’s own hook, which
+needs the `npx` the bootstrap installs.
+`tbd setup --auto` merges session hooks rather than replacing them, appending its
+entries after those already configured, so a regeneration preserves that order.
 
-Seven properties carry across repositories and tools; the specific tools do not.
+## How It Is Guarded
 
-1. **One script, registered per agent.** Keep the logic in a single agent-neutral path
-   and let each agent’s configuration only point at it.
-   Per-agent copies drift, and the drift is silent until one agent’s sessions break.
-2. **Read pins from their canonical files.** Resolve versions from the files that
-   already own them, so the bootstrap adds no new copy to keep in step.
-3. **Verify every download against a pinned checksum.** A bootstrap runs unattended and
-   installs executables, so it is a supply-chain surface.
-   Refuse a mismatch and delete the file.
-4. **Separate tamper from unreachable.** A checksum mismatch is an attack signature and
-   should stop hard; an unreachable network is an offline sandbox and should warn, then
-   let the session open.
-   Scope that warning to the one tool: an unreachable download should leave the tools
-   after it still installed, or a single blocked host costs the session its whole
-   toolchain.
-5. **Install user-local, and make the tools resolvable.** A hook runs in its own shell,
-   so later commands see the result only through a directory that is already on `PATH`.
-   Point the package manager’s global prefix there too, or globally installed tools
-   install successfully and then fail to resolve.
-6. **Guard the pins in CI.** Assert that the bootstrap’s versions match their canonical
-   files and that every supported agent still runs it, first.
-   Without this, a version bump half-lands and a session installs the wrong toolchain,
-   or a regenerated agent configuration seats another hook ahead of the bootstrap and
-   that hook runs before the tools it needs exist.
-7. **Stay idempotent and quiet.** Most sessions start with a satisfying toolchain; those
-   should report one line and exit.
+`devtools/check_supply_chain.py` fails `make verify` when:
 
-## Adapting It
+- `NODE_VERSION` or `UV_VERSION` in the script disagrees with `.node-version` or the
+  `uv.toml` floor, so a pin bump that misses the script’s checksums cannot half-land;
+- either agent’s configuration stops running the bootstrap, or stops running it first.
+
+To bump a pin: change the canonical file, then update the version and the four
+per-platform checksums in the script together.
+Checksums come from `https://nodejs.org/dist/v<VERSION>/SHASUMS256.txt` and the uv
+release’s `.sha256` asset.
+
+## Extending It
 
 The script is a list of `ensure_<tool>` functions sharing one checksum-verified download
-path, so extending it to another tool means adding a function and its pinned checksums.
-The same shape works for Go, Rust, Terraform, or a CLI like `gh`, which this repository
-bootstraps the same way.
-
-The costs are worth stating plainly.
-A cold container pays a download on first start.
-Each pin bump has to update the matching checksums, which is why the CI guard exists.
-And the pattern assumes a user-local bin directory is on `PATH`, which is conventional
-but not universal.
-
-This pattern has since graduated into a shared guideline:
-`tbd guidelines agent-session-bootstrap` states it tool-agnostically, alongside its
-neighbor `tbd guidelines supply-chain-hardening`. This document is the Metaproc-specific
-record of the same pattern.
+path, so adding a tool means adding a function and its pinned checksums.
+Each tool’s failure is its own: an unreachable download warns and returns rather than
+skipping the tools after it.
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.
