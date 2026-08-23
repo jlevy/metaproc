@@ -33,6 +33,29 @@ the installed wheel.
 Run `make hooks-install` once per checkout to install the same pre-commit and pre-push
 checks.
 
+### Public Hygiene
+
+[`devtools/public_hygiene.py`](../devtools/public_hygiene.py) scans repository files,
+built archives, and reachable Git metadata for material that should not appear in a
+public repository: private names and paths, copied issue identifiers, personal email
+addresses, and credentials.
+It owns the exact patterns; two deliberate allowances are worth knowing before you read
+them, because both look like rule violations and are not.
+
+Git metadata is held to a looser rule than repository content.
+A merge commit naming a numbered pull request, and a branch named after one, are
+ordinary public convention rather than references to a private tracker, so pull-request
+numbers are accepted in commit text and ref names alike.
+The same number written into a document is still rejected, because there it can name a
+tracker nobody outside the project can read — which is why this paragraph describes the
+two examples instead of spelling them.
+Ref names carry a second reason: the scan reads every local branch, so a stricter rule
+would fail the gate on one contributor’s checkout over a name that was never pushed.
+
+Commit attribution is normalized before scanning, so a `Co-authored-by` trailer does not
+read as a personal email address.
+An address in a commit *body* still does.
+
 ## Code Layout
 
 | Path | Owns |
