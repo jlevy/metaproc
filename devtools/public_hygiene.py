@@ -133,7 +133,12 @@ def find_hygiene_findings(source: str, text: str) -> list[str]:
 
 
 def find_git_metadata_findings(source: str, text: str) -> list[str]:
-    """Scan Git metadata while preserving normal public-repository conventions."""
+    """Scan Git metadata while preserving normal public-repository conventions.
+
+    Applies to both ref names and commit text: pull-request numbers are ordinary in
+    each, so the private-pull-request rule stays for repository content, where a
+    number really can name a private tracker.
+    """
     normalized = GIT_ATTRIBUTION_EMAIL_PATTERN.sub(
         r"\g<prefix>agent@users.noreply.github.com\g<suffix>", text
     )
@@ -316,11 +321,11 @@ def scan_git_history(root: Path = ROOT) -> list[str]:
         if result.returncode != 0:
             findings.append(f"git-{label}: unable to scan reachable Git metadata")
             continue
-        source = f"git-{label}"
-        if label == "commits":
-            findings.extend(find_git_metadata_findings(source, result.stdout))
-        else:
-            findings.extend(find_hygiene_findings(source, result.stdout))
+        # Ref names carry the same convention commit subjects do: a branch named
+        # `fix/pr-12` is the counterpart of "Merge pull request #12", and refs also
+        # include every local branch, so scanning them strictly would fail the gate
+        # on one developer's checkout for a name that was never published.
+        findings.extend(find_git_metadata_findings(f"git-{label}", result.stdout))
     return findings
 
 
