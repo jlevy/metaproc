@@ -115,7 +115,8 @@ reachable.
 npm safety settings, exact direct npm specifications, npm registry and integrity data,
 the uv cool-off, matching nvm and fnm versions, agreement between the toolchain
 bootstrap’s pins and their canonical files, both agents running that bootstrap first,
-full-SHA action references, and trusted publishing controls.
+each agent’s copy of a generated hook script matching its twin, full-SHA action
+references, and trusted publishing controls.
 
 The configuration files own dependency versions, build behavior, lint and type ratchets,
 workflows, and documentation.

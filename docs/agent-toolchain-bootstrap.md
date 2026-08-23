@@ -50,7 +50,12 @@ entries after those already configured, so a regeneration preserves that order.
 
 - `NODE_VERSION` or `UV_VERSION` in the script disagrees with `.node-version` or the
   `uv.toml` floor, so a pin bump that misses the script’s checksums cannot half-land;
-- either agent’s configuration stops running the bootstrap, or stops running it first.
+- either agent’s configuration stops running the bootstrap, or stops running it first;
+- either agent’s copy of a tbd-generated hook script stops matching its twin.
+  Those three pairs (`ensure-gh-cli.sh`, `tbd-session.sh`, `tbd-closing-reminder.sh`)
+  are written per agent rather than shared by path, so the check is what keeps a hand
+  edit to one copy from drifting.
+  Regenerate both with `tbd setup --auto`.
 
 To bump a pin: change the canonical file, then update the version and the four
 per-platform checksums in the script together.

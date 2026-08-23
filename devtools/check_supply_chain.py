@@ -26,6 +26,13 @@ SHA512_PREFIX = "sha512-"
 UV_COOL_OFF = "14 days"
 TOOLCHAIN_SCRIPT = "devtools/ensure-toolchain.sh"
 AGENT_HOOK_CONFIGS = (".claude/settings.json", ".codex/hooks.json")
+# tbd generates each of these hook scripts once per agent, writing byte-identical
+# copies. Nothing but this check keeps a hand edit to one copy from drifting.
+AGENT_SCRIPT_PAIRS = (
+    (".claude/scripts/ensure-gh-cli.sh", ".codex/ensure-gh-cli.sh"),
+    (".claude/scripts/tbd-session.sh", ".codex/tbd-session.sh"),
+    (".claude/hooks/tbd-closing-reminder.sh", ".codex/tbd-closing-reminder.sh"),
+)
 
 
 def _read_json(path: Path) -> dict[str, object]:
@@ -150,6 +157,28 @@ def _check_toolchain_bootstrap(root: Path, errors: list[str]) -> None:
             )
 
 
+def _check_agent_script_copies(root: Path, errors: list[str]) -> None:
+    """Keep each agent's copy of a generated hook script identical to its twin.
+
+    `tbd setup --auto` regenerates both copies together, so they agree as generated.
+    A hand edit to one is the case this catches: it would leave the two agents running
+    different code from files that are supposed to be the same, and nothing else in the
+    repository compares them. The fix for a real difference is to re-run
+    `tbd setup --auto` rather than to copy one file over the other by hand.
+    """
+    for left, right in AGENT_SCRIPT_PAIRS:
+        left_path, right_path = root / left, root / right
+        missing = [name for name, p in ((left, left_path), (right, right_path)) if not p.is_file()]
+        if missing:
+            errors.extend(f"{name} must exist" for name in missing)
+            continue
+        if left_path.read_bytes() != right_path.read_bytes():
+            errors.append(
+                f"{left} and {right} must be byte-identical; regenerate both with "
+                f"`tbd setup --auto` instead of editing one copy"
+            )
+
+
 def _session_start_commands(path: Path) -> list[str]:
     """The SessionStart hook commands of an agent config, in the order they run."""
     matchers = _read_json(path).get("hooks", {})
@@ -201,6 +230,7 @@ def verify_supply_chain(root: Path = ROOT) -> None:
     _check_npm(root, errors)
     _check_uv(root, errors)
     _check_toolchain_bootstrap(root, errors)
+    _check_agent_script_copies(root, errors)
     _check_workflows(root, errors)
     if errors:
         raise RuntimeError("Supply-chain policy violations:\n- " + "\n- ".join(errors))
