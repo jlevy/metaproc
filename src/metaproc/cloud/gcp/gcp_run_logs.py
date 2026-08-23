@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
@@ -80,6 +81,20 @@ def _format_entry(entry: Any) -> str:
     message = payload.get("message") or str(payload) if isinstance(payload, dict) else str(payload)
     timestamp = getattr(entry, "timestamp", "")
     return f"{timestamp} {message}".strip()
+
+
+def _rfc3339_watermark(timestamp: object) -> str:
+    """Normalize a Cloud Logging entry timestamp for the next query.
+
+    ``google-cloud-logging`` returns ``datetime`` objects for real entries, while
+    older tests and a few fakes use strings. ``str(datetime)`` emits a space between
+    the date and time, which the Logging filter parser rejects. Preserve strings and
+    serialize real datetimes as RFC3339 instead.
+    """
+    if isinstance(timestamp, datetime):
+        normalized = timestamp if timestamp.tzinfo is not None else timestamp.replace(tzinfo=UTC)
+        return normalized.isoformat().replace("+00:00", "Z")
+    return str(timestamp or "")
 
 
 def _fetch_log_entries(
@@ -197,7 +212,7 @@ def tail_gcp_run_logs(
                 continue
             if insert_id:
                 seen_insert_ids.add(insert_id)
-            ts = str(getattr(entry, "timestamp", "") or "")
+            ts = _rfc3339_watermark(getattr(entry, "timestamp", ""))
             if ts and ts > watermark:
                 watermark = ts
             out(f"{LOG_PREFIX} {_format_entry(entry)}")

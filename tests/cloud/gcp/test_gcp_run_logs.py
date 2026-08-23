@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -22,7 +23,9 @@ def _job(state: str, uid: str = "uid-123") -> Any:
 
 
 def _log_entry(
-    message: str, insert_id: str = "id-1", timestamp: str = "2026-04-19T00:00:00Z"
+    message: str,
+    insert_id: str = "id-1",
+    timestamp: object = "2026-04-19T00:00:00Z",
 ) -> Any:
     entry = MagicMock()
     entry.payload = message
@@ -199,6 +202,41 @@ class TestTailGcpRunLogs:
         assert observed_since[0] == ""
         assert observed_since[1] == first_ts
         assert observed_since[2] == first_ts
+
+    def test_normalizes_datetime_watermark_to_rfc3339(self, monkeypatch: pytest.MonkeyPatch):
+        states = iter(["RUNNING", "SUCCEEDED"])
+        client = MagicMock()
+        client.get_job.side_effect = lambda req: _job(next(states))
+        fake_batch_v1 = MagicMock()
+        fake_batch_v1.BatchServiceClient.return_value = client
+        fake_batch_v1.GetJobRequest = MagicMock(side_effect=lambda **kw: kw)
+        monkeypatch.setattr(gcp_run_logs, "_get_batch_v1", lambda: fake_batch_v1)
+
+        first_ts = datetime(2026, 8, 23, 23, 9, 49, 310208, tzinfo=UTC)
+        log_calls = iter(
+            [
+                [_log_entry("first", insert_id="i1", timestamp=first_ts)],
+                [],
+            ]
+        )
+        observed_since: list[str] = []
+
+        def fake_fetch(**kw):
+            observed_since.append(kw.get("since", ""))
+            return next(log_calls)
+
+        monkeypatch.setattr(gcp_run_logs, "_fetch_log_entries", fake_fetch)
+
+        rc = gcp_run_logs.tail_gcp_run_logs(
+            job_resource_name="projects/p/locations/r/jobs/j",
+            project="p",
+            poll_interval_s=0.0,
+            out=lambda _s: None,
+            sleep=lambda _s: None,
+        )
+
+        assert rc == 0
+        assert observed_since == ["", "2026-08-23T23:09:49.310208Z"]
 
     def test_bounded_retry_on_persistent_get_job_failures(self, monkeypatch: pytest.MonkeyPatch):
         client = MagicMock()
