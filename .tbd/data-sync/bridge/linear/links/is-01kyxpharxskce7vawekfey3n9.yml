@@ -1,0 +1,17 @@
+base:
+  assignee: null
+  description_hash: sha256v7:813e435667fba9521a04847762d8b092040be2ab401b1f9fc9bd2bfb31d50143
+  labels:
+    - linting
+    - typescript
+  priority: 2
+  status: open
+  title: Migrate checked JavaScript to noImplicitAny
+bead_id: is-01kyxpharxskce7vawekfey3n9
+external_id: e09ffb34-9422-40e2-aa60-b0a52e8065c3
+external_key: OS-255
+external_url: https://linear.app/finterm-ai/issue/OS-255/migrate-checked-javascript-to-noimplicitany
+remote_updated_at: 2026-08-16T08:00:46.925Z
+state: linked
+synced_at: 2026-08-16T08:00:47.344Z
+type: lk
