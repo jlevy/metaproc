@@ -14,6 +14,8 @@ from metaproc.osutils.memory_pressure import (
     UnsupportedTelemetryPlatformError,
     _classify,
     _measure_linux,
+    _measure_macos,
+    _parse_macos_reclaimable_bytes,
     _parse_macos_swap_used_gb,
     adapt_batch_size,
     classify_swap_rate,
@@ -50,6 +52,128 @@ class TestClassify:
     def test_macos_swap_parser(self) -> None:
         text = "total = 41984.00M  used = 40829.19M  free = 1154.81M  (encrypted)"
         assert _parse_macos_swap_used_gb(text) == pytest.approx(39.87, abs=0.01)
+
+
+# Real `vm_stat` output, 16 KiB pages. Active is deliberately large: it is the
+# bucket that must NOT reach the budget.
+VM_STAT_16K = """Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                4115.
+Pages active:                            493792.
+Pages inactive:                          465749.
+Pages speculative:                        26981.
+Pages throttled:                              0.
+Pages wired down:                        328108.
+Pages purgeable:                           4097.
+"Translation faults":                 987654321.
+Pages copy-on-write:                   12345678.
+Pages zero filled:                    123456789.
+Pages reactivated:                      1234567.
+Pages purged:                            123456.
+File-backed pages:                       234567.
+Anonymous pages:                         345678.
+Pages stored in compressor:             1234567.
+Pages occupied by compressor:            737026.
+"""
+
+
+class TestMacosReclaimable:
+    def test_sums_free_inactive_and_purgeable(self) -> None:
+        expected = (4115 + 465749 + 4097) * 16384
+        assert _parse_macos_reclaimable_bytes(VM_STAT_16K) == expected
+
+    def test_excludes_active_pages(self) -> None:
+        """Active pages are other processes' working sets.
+
+        Counting them is precisely what makes kern.memorystatus_level unusable as a
+        budget: on the host this fixture came from it reported roughly twice the
+        reclaimable figure. A regression here is a 2x over-grant, so it is asserted
+        directly rather than implied by the sum above.
+        """
+        reclaimable = _parse_macos_reclaimable_bytes(VM_STAT_16K)
+        with_active = reclaimable + 493792 * 16384
+        assert reclaimable < with_active / 1.9
+
+    def test_honours_the_reported_page_size(self) -> None:
+        """Intel hosts report 4096; the page size is parsed, never assumed."""
+        text = VM_STAT_16K.replace("page size of 16384 bytes", "page size of 4096 bytes")
+        assert _parse_macos_reclaimable_bytes(text) == (4115 + 465749 + 4097) * 4096
+
+    def test_missing_page_size_is_an_error(self) -> None:
+        text = VM_STAT_16K.replace("(page size of 16384 bytes)", "")
+        with pytest.raises(UnsupportedTelemetryPlatformError, match="page size"):
+            _parse_macos_reclaimable_bytes(text)
+
+    def test_missing_bucket_is_an_error(self) -> None:
+        """A silently absent bucket would understate the budget, not overstate it,
+        but it still means the host is not the platform this code was written for."""
+        text = "\n".join(
+            line for line in VM_STAT_16K.splitlines() if not line.startswith("Pages inactive")
+        )
+        with pytest.raises(UnsupportedTelemetryPlatformError, match="Pages inactive"):
+            _parse_macos_reclaimable_bytes(text)
+
+    def test_non_positive_page_size_is_an_error(self) -> None:
+        text = VM_STAT_16K.replace("page size of 16384 bytes", "page size of 0 bytes")
+        with pytest.raises(UnsupportedTelemetryPlatformError, match="page size"):
+            _parse_macos_reclaimable_bytes(text)
+
+
+class TestMeasureMacos:
+    """The gauge and the budget must not be the same number.
+
+    kern.memorystatus_level is retained for its alarm value, but reading it as
+    headroom over-grants by roughly 2x, which is what these fixtures encode: the
+    VM_STAT_16K buckets are the snapshot that produced a 48.0 gauge reading, against
+    a 22.6% reclaimable budget on the same host at the same moment.
+    """
+
+    @staticmethod
+    def _stub(args: list[str]) -> str:
+        if args[0] == "vm_stat":
+            return VM_STAT_16K
+        if args[-1] == "hw.memsize":
+            return str(34_359_738_368)
+        if args[-1] == "kern.memorystatus_level":
+            return "48.0"
+        if args[-1] == "vm.swapusage":
+            return "total = 2048.00M  used = 1024.00M  free = 1024.00M  (encrypted)"
+        raise AssertionError(f"unexpected telemetry call: {args}")
+
+    def test_available_pct_is_the_reclaimable_budget(self) -> None:
+        with patch("metaproc.osutils.memory_pressure._read_command_stdout", side_effect=self._stub):
+            pressure = _measure_macos()
+        expected = (4115 + 465749 + 4097) * 16384 / 34_359_738_368 * 100
+        assert pressure.available_pct == pytest.approx(expected, abs=0.01)
+        assert pressure.available_pct == pytest.approx(22.60, abs=0.05)
+
+    def test_the_gauge_is_reported_separately_as_an_alarm(self) -> None:
+        with patch("metaproc.osutils.memory_pressure._read_command_stdout", side_effect=self._stub):
+            pressure = _measure_macos()
+        assert pressure.alarm_pct is not None
+        assert pressure.alarm_pct == 48.0
+        assert pressure.available_pct < pressure.alarm_pct / 1.9
+        assert pressure.source == "macos-vm-stat"
+
+    def test_level_derives_from_the_budget_not_the_gauge(self) -> None:
+        """At 22.6% reclaimable this host is already ELEVATED; the gauge's 48% would
+        read NORMAL and keep ramping, which is the failure this guards."""
+        with patch("metaproc.osutils.memory_pressure._read_command_stdout", side_effect=self._stub):
+            pressure = _measure_macos()
+        assert pressure.level == PressureLevel.ELEVATED
+        assert pressure.alarm_pct is not None
+        assert _classify(pressure.alarm_pct, total_memory_gb=32.0) == PressureLevel.NORMAL
+
+    def test_an_out_of_range_gauge_still_fails_loudly(self) -> None:
+        def stub(args: list[str]) -> str:
+            if args[-1] == "kern.memorystatus_level":
+                return "127.0"
+            return self._stub(args)
+
+        with (
+            patch("metaproc.osutils.memory_pressure._read_command_stdout", side_effect=stub),
+            pytest.raises(UnsupportedTelemetryPlatformError, match="out of range"),
+        ):
+            _measure_macos()
 
 
 class TestMemoryPressureStr:

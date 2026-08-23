@@ -361,7 +361,7 @@ def _resolve_step_inputs(
                     "kind": io_spec.kind or producer_output.kind,
                     "type": io_spec.type or producer_output.type,
                     "format": io_spec.format or producer_output.format,
-                    "schema_": io_spec.schema_ or producer_output.schema_,
+                    "contract": io_spec.contract or producer_output.contract,
                 }
             )
             ref_needs.append(producer_step_id)
@@ -860,6 +860,8 @@ def build_plan(
                 items=items,
                 filtered_count=filtered_count,
                 retry=step.for_each.retry or spec.defaults.retry,
+                align=step.for_each.align,
+                max_concurrency=step.for_each.max_concurrency,
             )
 
         resolved_env: dict[str, str] = {}

@@ -1028,7 +1028,13 @@ class TestRunPool:
         assert pool._provider_ceiling == 13  # 12 + 10% = 13
 
     def test_scale_state_restored_on_init(self, tmp_path: Path):
-        """Governor state is restored from scale-state.yaml on pool init."""
+        """Provider state is restored from scale-state.yaml; memory state is not.
+
+        The provider ceiling describes the run and the account, so it survives a
+        resume. The memory ceiling describes the host, which is free to have changed,
+        so it always comes from the fresh estimate — here the configured
+        ``initial_concurrency`` of 20 rather than the saved 25.
+        """
 
         state_dir = tmp_path / "state"
         state_dir.mkdir(parents=True)
@@ -1059,10 +1065,49 @@ class TestRunPool:
             )
         )
 
-        # Governor state should be restored from the file.
-        assert pool._memory_ceiling == 25
+        assert pool._memory_ceiling == 20
         assert pool._provider_ceiling == 15
         assert pool.current_max_concurrency == 15
+
+    def test_saved_memory_ceiling_cannot_burst_a_resume(self, tmp_path: Path):
+        """A ceiling earned on a quiet host must not be handed to a busy one.
+
+        This is the burst-on-resume shape that the operating runbook attributes two
+        host crashes to, reproduced at its smallest: a prior run ramps to 79, the
+        machine is now good for 4, and the resume must open at 4. Restoring the saved
+        figure would put 79 launches' worth of intent onto a host that cannot hold
+        them, and the pool enforces its ceiling faithfully, so nothing downstream
+        would catch it.
+        """
+        state_dir = tmp_path / "state"
+        state_dir.mkdir(parents=True)
+        write_scale_state(
+            state_dir / "scale-state.yaml",
+            ScaleState(
+                updated_at="2026-04-16T00:00:00Z",
+                controller=ControllerStatus(
+                    operator_cap=100,
+                    effective_target=79,
+                    memory_ceiling=79,
+                    provider_ceiling=79,
+                    bottleneck="none",
+                ),
+            ),
+        )
+
+        pool = RunPool(
+            RunPoolConfig(
+                max_concurrency=100,
+                initial_concurrency=4,
+                min_concurrency=1,
+                pressure_check_interval_s=60.0,
+                state_dir=state_dir,
+                logs_dir=tmp_path / "logs",
+            )
+        )
+
+        assert pool._memory_ceiling == 4
+        assert pool.current_max_concurrency == 4
 
     def test_elevated_holds_not_reduces(self, tmp_path: Path):
         """Regression for sustained elevated pressure:

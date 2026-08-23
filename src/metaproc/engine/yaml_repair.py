@@ -11,12 +11,20 @@ tab/space mixing. This repair function attempts a narrow fix (quote unsafe
 plain scalar values) so a single LLM mistake does not cascade into a
 permanent-failure → step-FAILED → tier-aborted blast radius.
 
+**Sibling pass:** ``engine.schema_conform`` runs immediately after this one over
+the same artifacts, under the same agent-only scoping rule, and answers the
+next question: given a document that parses, does each scalar say the type its
+contract asks for? Repair has no schema and cannot ask that; conform assumes a
+parseable document and does not fix one. Read both module docstrings before
+adding a call site to either.
+
 **Do NOT use this for human-authored or programmatically-generated YAML.**
 If your code or a fixture is producing invalid YAML, fix it at the source —
 calling ``repair_frontmatter_file`` masks the bug. The correct call sites are
-exclusively the agent output-validation path (see
-``metaproc/src/metaproc/commands/run_parallel.py`` around the agent-output
-validate block) where the input is a freshly-emitted LLM artifact.
+exclusively the agent output-validation paths — ``repair_declared_outputs``
+in ``engine.validation``, run just before declared-output validation in
+``run_parallel`` and ``run_process`` — where the input is a freshly-emitted
+LLM artifact.
 
 **Upstream question:** should workflows generate YAML from language models at all
 (JSON is more constrained, schema-aware generation could avoid the problem,

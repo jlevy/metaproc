@@ -177,6 +177,7 @@ Keep this maintained index in sync with the files on disk.
 | [arch-claude-code-harness.md](arch/arch-claude-code-harness.md) | The non-interactive Claude Code CLI subprocess wrapper: environment scoping, settings hierarchy, permission mode and `ENV_SCRUB` hardening, and the version compatibility matrix. | Approved |
 | [arch-testing.md](arch/arch-testing.md) | Test tiers (smoke-core, smoke-adapter-*, smoke-adapters-all, self-test-local, self-test-cloud) and the process specs that implement them. | Approved |
 | [arch-file-io-utilities.md](arch/arch-file-io-utilities.md) | The `metaproc.io` public surface: atomic writes, gzip-transparent reads, frontmatter helpers, templates, and artifact paths. | Approved |
+| [arch-execution-model.md](arch/arch-execution-model.md) | Executable reference model for task-level scheduling: durable facts, the pure reducer, the status projection, invariant tests, and the scale envelope. Design rationale lives in [execution-model-design.md](execution-model-design.md). | Draft |
 
 Companion conceptual and reference docs that are not architecture but are commonly
 cross-linked from the arch docs:
@@ -184,6 +185,16 @@ cross-linked from the arch docs:
 - [metaproc-concepts-and-principles.md](../src/metaproc/docs/metaproc-concepts-and-principles.md):
   the conceptual model (vocabulary, architectural planes, optimization loops, design
   principles). The arch docs operationalize these concepts.
+- [process-framework-concepts.md](process-framework-concepts.md): the general execution
+  model beneath any process framework (planning, tasks, edge granularity, join policies,
+  admission), with design tests and a closing map onto Metaproc.
+  Framework-agnostic by design; its mapping section cites the arch doc that owns each
+  concept, and its known-deviations list is where the gaps between model and
+  implementation are tracked.
+- [execution-model-design.md](execution-model-design.md): the durable execution
+  contracts (clauses, closure, fencing, generations) and their rationale; the general
+  model it instantiates is
+  [process-framework-concepts.md](process-framework-concepts.md).
 - [conventions.md](conventions.md): naming, structure, and file-format rules.
 - [artifact-catalog.md](artifact-catalog.md): every file Metaproc writes and reads.
 - [performance-notes.md](performance-notes.md): performance principles and worked

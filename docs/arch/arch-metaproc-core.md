@@ -142,6 +142,7 @@ log_compaction (adapter-aware stripping, thinking preservation)
 memory_pressure (cross-platform measurement, pressure levels)
 preflight (disk space, gcloud auth checks)
 yaml_repair (unquoted-colon auto-fix)
+schema_conform (contract-directed scalar quoting for agent-written YAML)
 discovery (resume-safe item filtering)
 usage (extraction, pricing, aggregation)
 process_events (structured DAG event logging)
@@ -374,6 +375,21 @@ handler writes outputs directly; the engine records `.state/` completion markers
 If the handler raises, the step fails with the same state recording as a failed agent
 step.
 
+`mode: code` supports `for_each`. Each item is one invocation with its own resolved
+context, so per-item state, logs, and artifacts address the item rather than the step,
+and one item failing does not cancel its siblings: every item is awaited and the step
+succeeds only if all of them did.
+Item discovery is the same execution-time roster read the agent path uses; nothing else
+is shared, because adapters, variants, and auth pools have no meaning for a handler.
+
+Handlers run off the event loop.
+A handler is a synchronous callable, and calling it inline would pin the loop for its
+whole duration, which serializes every sibling item of a fan-out no matter how the
+dispatcher gathers them.
+Handlers therefore need not be thread-safe against themselves, but a fan-out runs
+several concurrently, so a handler sharing mutable process state across items must guard
+it.
+
 Dry-run mode prints the handler path (or command) and resolved inputs instead of
 executing.
 
@@ -415,6 +431,27 @@ Core declaration fields:
 | `parse` | Optional parse config when the file content is materialized into a value. |
 | `role` | Closed semantic tag such as `process`, `template`, `packet`, `roster`, or `run-input`. |
 | `produced_by` | Explicit producer ref when the file is written by a step in the same graph. |
+| `contract` | Contract ID the artifact must validate against, as `namespace:Name/vN`. Checked at the step boundary whatever the format: a `frontmatter-md` output validates its frontmatter, any other its document root. Spelled `schema` in older specs, which still parse. |
+| `on_invalid` | What it costs when this output fails its contract, keyed by invariant, contract ID, or failure kind, most-specific-first: `fail`, `retry`, or `fail_run`. Governs the output that declares it and no other. |
+
+**A contract ID is not a schema path.** The two are easy to conflate because both are
+called schemas in casual use, and keeping them apart is what makes the boundary check
+work:
+
+- A **contract ID** is an identity, such as `example:Record/v1`. It resolves through the
+  plugin registry to a Pydantic model, and that model is what validates the document.
+  This is what an output declares and what a document’s `softschema.contract` names.
+- A **schema document** is a generated JSON Schema file.
+  It is compiled *from* the model with `softschema compile`, committed for portability
+  and inspection, and kept honest by a drift check.
+  A document may point at one through `softschema.schema`, and nothing about validation
+  depends on that pointer: an artifact validates identically whether the path is right,
+  wrong, or absent, because the contract ID is what does the resolving.
+
+So the Pydantic model is the authority, the contract ID is how it is named, and the
+schema document is a derived artifact.
+Writing a new contract means writing a model and registering it, not authoring a schema
+file by hand.
 
 Closed value types:
 
@@ -1336,6 +1373,140 @@ The framework parses items files generically by extracting the envelope payload�
 `items` list. Domain packages supply typed envelope models; the orchestration layer only
 needs the generic items-file contract.
 
+Fan-out applies to `mode: agent` and `mode: code`. The two share item discovery and
+per-item addressing and diverge in everything else: the agent path carries adapters,
+variants, execution profiles, and auth-pool dispatch, while the code path invokes a
+handler or command.
+`mode: composite` does not fan out, which is why a consumer wanting a
+child spec mapped over a roster expresses it as a code handler that launches one child
+run per item; the shape and its cost are the subject of proposal P8.
+
+Every field named in `bind_fields` must be present and non-empty on every item.
+There is no optional dispatch field, so a roster where a field applies to only some
+items carries an explicit sentinel value rather than omitting it.
+
+### Fan-In Collections
+
+An input declaring `collect: <step>` receives that fan-out step’s per-item outcomes as
+one manifest (`metaproc:FanInOutcomes/0.1`) instead of rediscovering upstream state by
+walking directories.
+Each record carries the item key, its terminal state, whether it succeeded, and its
+error where there is one.
+
+`require:` states which outcomes satisfy the edge.
+`succeeded` needs every item to have succeeded.
+`finished` accepts any terminal outcome, so a partially failed upstream still satisfies
+the edge and the consumer decides what a failure means.
+The two are named for the condition each states, because “completed” reads as terminal
+in some contexts and as success in others.
+
+`require: finished` also governs blocking: a consumer declaring it is not blocked when
+the failure lies at the collected step or anywhere feeding it, since an item dying two
+stages back is exactly why the collection has partial coverage.
+Failures outside that subtree reach the consumer through a different edge, which said
+nothing about accepting terminal outcomes, and still block.
+
+Where an item failed a contract, its record carries the structured failure alongside the
+message: the failing `invariant`, its `location` in the document, the `contract` the
+output declared, and the `kind` of refusal.
+A consumer routing work by owner needs that distinction, because a missing output and a
+refused invariant are different people’s problems and the rendered sentence cannot
+express the difference.
+
+An item that never reached the collected step is reported with where it stopped and that
+step’s failure detail, rather than as a bare absence.
+A ticker that raised and a ticker that silently produced nothing are different problems
+with different owners, and the collection is where a consumer learns which it has.
+
+The manifest reports against the collected step’s **expected roster**, not against the
+task directories on disk.
+An item that died upstream never creates a directory there, so a collection over what
+arrived would report three of four items as full coverage; reporting against the roster
+distinguishes succeeded, failed, and never-reached.
+The manifest is derived from durable per-item state on every read and never stored as
+truth, so it cannot drift from the state it describes.
+
+### Declared Retry on the Code Path
+
+A `mode: code` step honors the same contract-layer declarations the pool path honors.
+`for_each.retry` supplies the budget and `outputs.<name>.on_invalid` supplies the
+verdict, resolved by `classify_output_failures` from the invariant that refused the
+output rather than the sentence describing it.
+Nothing in the executor interprets a failure: the producing output declares what its own
+contract failure costs, and the loop honors it.
+
+The budget is resolved per step, not once per caller.
+A chain runs several steps and the budget is declared on the step with a reason to
+retry, so applying the first step’s policy to the whole walk would give a stage a budget
+nobody declared for it and withhold one that was declared.
+
+A failure with no structured record is not a contract failure and is left alone, since
+the operational classifier owns those.
+A step declaring no policy is invoked once, which is the behavior of every spec that
+declares nothing.
+
+Unlike the non-fan-out agent loop, which records `attempt: N` in the step’s status, this
+path does not thread the attempt number into the status writer: every invocation writes
+`attempt: 1`, so the durable record undercounts a retried task.
+The replay harness pins this
+(`test_the_durable_record_undercounts_the_retries_it_made`), and durable attempt records
+are what remove it.
+
+Every failed attempt records its `failure_class` on the durable per-item record:
+`invalid_output` for a contract failure, and `classify_failure`’s verdict for an
+operational one. Placement (design test 17) therefore holds on the code path, not only
+where pool events are emitted.
+
+### Per-Step Concurrency
+
+`for_each.max_concurrency` bounds one step’s items in flight, independent of any other
+step’s. A run-wide cap and an execution profile both answer different questions, the
+first being the whole run’s budget and the second which adapter and model, so expressing
+a per-step ceiling through either conflates it with something else and leaves the limit
+invisible in the spec that describes the work.
+
+Both limits bind and the smaller wins: a step ceiling above the run cap cannot mean
+exceed the budget, and one below it is a real constraint the run cap must not override.
+In a chain the gate is per step rather than shared across the walk, so a tight ceiling
+on one stage does not throttle the others an item passes through.
+Omitted, the step is bounded only by the run-wide cap.
+
+### Item-Aligned Chains
+
+`for_each.align: same_key` declares a step’s `needs` edge item-scoped rather than
+step-scoped: this step’s task for item *k* waits only on the upstream task for item *k*.
+Consecutive code steps carrying it form a chain that executes once per item instead of
+once per step, so an item advances as soon as its own predecessor commits rather than
+waiting for the slowest sibling.
+
+`graph.item_aligned_chains` decides where this applies, and refuses more than it
+accepts. Alignment requires that the upstream also fan out over the *same resolved
+source*, because matching key strings across unrelated rosters is coincidence rather
+than identity. A step needing anything outside the chain ends it, since that edge is
+genuinely step-scoped.
+Two steps aligning to one upstream leave both edges step-scoped: item-scoped forks are
+meaningful but a linear chain cannot express one, and resolving it by first-wins would
+make the result depend on step order in the spec.
+
+Failure follows the same granularity.
+An item failing partway through a chain skips its own remaining steps and touches no
+sibling, so the chain finishes with partial coverage instead of blocking the graph.
+Measured on a four-item cohort where one item fails at the second of three stages: under
+the level walk no item completes the third stage, because the step failure blocks it
+wholesale; under an aligned chain three of four complete.
+
+Resume is per item and per step.
+An item that finished the head but not a later step is still actionable, so the chain
+discovers against the whole chain rather than the head and skips only the steps already
+completed for that item.
+Filtering on the head’s completion would drop such an item from the chain entirely and a
+resumed run would silently do nothing for it.
+Work that was in flight when a run died restarts, since it never committed.
+
+Absent `align`, nothing changes.
+The edge stays step-scoped and the level walk executes it exactly as before, which is
+the compatibility floor for every existing spec.
+
 **Terminology note: items file vs roster.** *Items file* is the framework’s primary term
 for this concept. *Roster* is retained as domain-specific language inside the
 illustrative `example_plugin` profile, where step IDs, dependency names, and module
@@ -1642,6 +1813,45 @@ This follows the three-layer model:
 Check taxonomies, severity models, and report formats stay in the domain layer rather
 than the framework.
 
+Failure handling splits along the same seam, and the dividing line is worth stating
+because both halves are easy to put in the wrong layer:
+
+> **The framework owns what a failure does to execution.
+> The domain owns what a failure means.**
+
+Retrying, failing a step, and aborting a run are framework business because only the
+framework can perform them.
+Severity, ownership, and taxonomy are the domain’s, and the framework should be unable
+to read them even when it stores them on the domain’s behalf.
+
+### Failure Layers as Implemented
+
+The concepts doc’s failure layers (operational, contract, domain) map onto two
+classifiers and one enum:
+
+- **`FailureClass`** is the per-item class: `rate_limited`, `quota_exhausted`,
+  `server_error`, `timeout`, and `crash` are the operational layer; `invalid_output` is
+  the contract layer’s single entry, subdivided by `OutputFailureKind` (missing, empty,
+  unreadable, structural, semantic); `unknown` is the unrecognized remainder.
+- **`classify_error`** decides operational retriability from the rendered error string:
+  a permanent blocklist first, a transient list second, bare `exit code N` retries, and
+  wholly unrecognized text fails.
+  It survives for records written before structured failures existed; contract failures
+  should route through `classify_output_failures`, which reads what refused the output
+  instead of the sentence describing it.
+- Unknown operational failures default to non-retriable, which is the deliberate reading
+  of the concepts doc’s rule: silently retrying an unrecognized failure hides a new
+  failure mode.
+
+Handling follows the class: retriable classes retry per `RetryPolicy` on the pool path,
+and `quota_exhausted` pauses submissions until the provider’s named reset time rather
+than burning attempts against a closed window.
+
+Two known gaps, both against design test 17: the `run-process` inline execution paths
+neither classify nor retry (the pool path owns that machinery today), and no aggregate
+view buckets failures by layer or class, so the real-time half of placement exists and
+the aggregate half does not.
+
 ### 13.1 Plugin System
 
 The plugin system separates generic framework concerns from domain-specific logic.
@@ -1711,10 +1921,12 @@ The retry system classifies subprocess failures as **retryable (transient)** or
 
 #### Error Classification (Retry Verdict)
 
-The subprocess is treated as opaque (exit code is always 1 for failures), so the error
-string from `status.yaml` is the only signal.
-`classify_error()` determines retryability (`RetryVerdict`: `RETRY` or `FAIL`) via a
-priority chain:
+A subprocess is opaque -- its exit code is always 1 for failures -- so for anything it
+reports, the error string from `status.yaml` is the only signal there is.
+`classify_error()` reads it, and owns rules 1-3 and 5 below.
+Rule 4 is the exception: an output failing its contract is refused by the framework
+itself, which therefore holds a structured record and does not have to read its own
+prose back. `classify_output_failures()` owns that one.
 
 1. **Permanent patterns** (checked first): `enospc`, `enomem`, `quota`,
    `permission denied`, `billing`, `credits`, exit code 137/143, `cancelled` -- always
@@ -1723,9 +1935,26 @@ priority chain:
    `gcloud auth`, `unavailable`, `503`/`502`, `econnrefused`/`econnreset`, `connection`,
    `log_runaway` -- produce `RETRY`.
 3. **Bare “exit code N”** -- default to `RETRY` (most are transient API errors).
-4. **”output validation failed”** -- classified as `RETRY` unless
-   schema/envelope/mismatch (then `FAIL`).
+4. **Output validation failure** -- decided from the structured failure record, not from
+   the error string. `missing`, `empty`, and `unreadable` are `RETRY`, because another
+   attempt may produce what this one did not; `structural` and `semantic` are `FAIL`,
+   because a document the contract refuses will be refused again identically.
+   An output’s `on_invalid` overrides its own failures.
 5. **Default** -- `FAIL`.
+
+Rule 4 was previously a substring test over the formatted error, looking for `schema`,
+`envelope`, or `mismatch`. Because the sentence contains the artifact’s filename, the
+test read the filename too, and two outputs missing for the same transient reason drew
+opposite verdicts:
+
+```text
+output validation failed: company-research-schema-manifest.md: file not found   -> FAIL
+output validation failed: source-snapshot.md: file not found                    -> RETRY
+```
+
+The rule now reads `OutputFailureKind`, which validation already knew and used to
+discard. `classify_error` keeps the substring path for status records written before
+structured failures were stored; nothing new should reach for it.
 
 #### Failure Classification (Failure Reason)
 
@@ -1749,17 +1978,19 @@ This surfaces in `pool status` and in NFS error detail extraction for cloud work
 
 #### Retry Policy
 
-`RetryPolicy` is a Pydantic model with four fields:
+`RetryPolicy` is a Pydantic model with four fields, retrying by default:
 
 | Field | Default | Purpose |
 | --- | --- | --- |
-| `max_retries` | 0 (off) | Maximum retry attempts per item |
+| `max_retries` | 12 | Maximum retry attempts per item |
 | `initial_backoff_s` | 5.0 | First retry delay |
-| `backoff_multiplier` | 2.0 | Exponential multiplier |
-| `max_backoff_s` | 120.0 | Backoff cap |
+| `backoff_multiplier` | 1.5 | Exponential multiplier |
+| `max_backoff_s` | 600.0 | Backoff cap |
 
 Backoff: `initial_backoff_s * (backoff_multiplier ^ (attempt - 1))`, capped at
-`max_backoff_s`.
+`max_backoff_s`. Content failures (`INVALID_OUTPUT`) re-run the same prompt against the
+same inputs, so their budget is capped separately at
+`MAX_CONTENT_FAILURE_RETRIES_DEFAULT` (3) however large `max_retries` is.
 
 #### Policy Resolution
 
@@ -1769,7 +2000,12 @@ The retry policy resolves through a priority chain:
 2. `--max-retries` CLI override
 3. step-level `for_each.retry`
 4. process-level `defaults.retry`
-5. `RetryPolicy()` (off by default)
+5. `RetryPolicy()` (framework default: on, `max_retries=12`)
+
+A spec that declares no `retry:` block therefore still retries.
+A step that must fail fast opts out per output
+(`on_invalid: {missing: fail, empty: fail, unreadable: fail}`) or per policy
+(`retry: {max_retries: 0}` under `defaults`).
 
 #### Log Error Extraction
 
@@ -1797,6 +2033,15 @@ The loop condition `while not_started or active or retry_heap` guarantees livene
 items in backoff are never lost even when `active` is temporarily empty.
 `asyncio.wait(FIRST_COMPLETED)` drives completion-order processing, with timeout derived
 from the earliest retry_heap entry to wake up promptly for due retries.
+
+Non-fan-out agent steps run the same content-failure loop inline in
+`run_process._execute_agent_step`: declared outputs are repaired, conformed and
+validated after each attempt (§14.6), `classify_output_failures` reads the structured
+failure record against the output’s `on_invalid`, and retryable verdicts re-run the step
+under the `INVALID_OUTPUT` cap, recording `attempt: N` in the step’s status.
+Nonzero exits are classified exactly as fan-out failures are -- transient ones draw the
+full `max_retries` budget, with the log tail folded into the recorded error -- while
+step timeouts and write-boundary violations stay terminal on this path.
 
 The pool exposes `record_retry_scheduled` / `record_retry_consumed` methods that
 maintain a `pending_retries` counter in `runpool-status.yaml`. Observability consumers
@@ -1854,26 +2099,44 @@ Provides a normalized `MemoryPressure` reading used to gate batch launches.
 
 | Level | Available Memory | Concurrency Action |
 | --- | --- | --- |
-| `NORMAL` | >40% | safe to increase |
-| `ELEVATED` | 20-40% | hold current |
-| `HIGH` | 10-20% | reduce |
-| `CRITICAL` | <10% | do not launch new work |
+| `NORMAL` | >25% | ramp concurrency up |
+| `ELEVATED` | 15-25% | hold current concurrency |
+| `HIGH` | 8-15% | reduce |
+| `CRITICAL` | <8% | do not launch new work |
+
+The thresholds sit lower than intuition suggests, deliberately.
+A workstation running a browser and an editor idles around 30-50% available, and
+treating that as cause for caution would hold concurrency down during normal operation.
+`_classify_available` in `osutils/memory_pressure.py` is the source of truth.
 
 #### Platform Backends
 
-- **macOS**: reads `kern.memorystatus_level` via `sysctl` for free memory percentage;
-  reads swap usage from `vm.swapusage`.
+- **macOS**: budgets from `vm_stat` reclaimable pages, free plus inactive plus
+  purgeable, over `hw.memsize`, using the page size `vm_stat` reports.
+  `kern.memorystatus_level` is read alongside it and carried as `alarm_pct`, never as
+  the budget: it counts active pages, so it runs roughly 2x the reclaimable figure.
+  Swap comes from `vm.swapusage`. See
+  [memory-accounting-reference.md](../memory-accounting-reference.md).
 - **Linux**: computes `MemAvailable / MemTotal` from `/proc/meminfo`. Optionally refines
   using PSI (Pressure Stall Information) from `/proc/pressure/memory` -- if
   `psi_some_avg10 > 5`, the PSI-derived percentage replaces the meminfo estimate when
   lower.
-- **Fallback**: unsupported platforms get 30% (ELEVATED).
+- **Unsupported platforms**: `measure()` raises `UnsupportedTelemetryPlatformError`. A
+  pool that cannot read memory is not a pool that should guess at a safe-looking number
+  and launch anyway.
 
 #### Integration
 
-Memory pressure is checked **before each batch launch** in `run_parallel`. If CRITICAL,
-the system pauses 30 seconds and re-checks.
-Pressure readings are logged alongside each batch start for observability.
+Memory pressure is consumed in one place: `RunPool._monitor_loop`, which samples on
+every tick and passes the resulting level to `_adjust_concurrency`. There is no
+per-batch check in `run_parallel` and no pause on CRITICAL; CRITICAL reduces the memory
+ceiling by 50% on each tick, and the reduction is non-preemptive, so processes already
+running are left alone and the narrower ceiling applies to what launches next.
+
+The level is the only thing that crosses that boundary.
+`_adjust_concurrency` never sees a byte count, which is why a starting estimate made
+from a wrong budget is not corrected by later sampling.
+See [arch-runpool.md](arch-runpool.md) for the policy table and the ramp factors.
 
 ### 14.4 Pre-Flight Checks
 
@@ -1914,29 +2177,91 @@ When a runaway is detected during the poll loop in `run_parallel`:
 3. Compact the log immediately.
 4. The retry classifier treats `log_runaway` as transient, so it retries.
 
-### 14.6 YAML Frontmatter Auto-Repair
+### 14.6 Agent-Artifact Repair Passes
+
+Two passes run over a freshly emitted agent artifact, in order, before its declared
+outputs are validated.
+They answer different questions and are deliberately kept apart: repair asks whether the
+document is YAML at all, conform asks whether it says the types its contract names.
+
+Both are scoped to **agent-authored outputs only**, which is two call sites and no
+others: `run_parallel._handle_success`, where the agent fan-out lands a successful item,
+and `run_process._execute_agent_step`. Neither runs on a code branch -- not
+`run_process._execute_code_step`, and not `run_parallel`’s own `mode: code` batch loop.
+A code handler builds its artifact from typed values through a real writer, so a
+document that will not parse there is a bug in the handler, wrong for every item rather
+than for this one, and repairing it would launder a serializer defect into a clean run.
+
+The scoping is asserted rather than described, by `TestWhichExecutorsRewriteAgentOutput`
+in `tests/test_yaml_repair.py`, from three angles: a `mode: code` fan-out run whose
+handler emits unparsable frontmatter must leave the document byte-identical and fail the
+item; neither executor’s code branch may call either pass, read positionally off the
+parse tree so the helper spelling does not matter; and neither executor may stop calling
+the two helpers on its agent path, or reach past them to `repair_frontmatter_file`.
+
+Both resolve a declared output path through the shared
+`validation.resolve_output_fpath`, so every pass over an output names the same file.
+Path resolution is shared; existence probing is not.
+Both rewriting passes read and write plain text, so neither follows validation’s `.gz`
+sibling, and a compressed artifact is validated without being repaired or conformed.
+
+#### Pass 1: YAML frontmatter auto-repair
 
 Addresses a specific LLM output failure mode: unquoted colons in YAML values (e.g.,
 `detail: Strong beat (Note: actually Q1 not Q2)`) that YAML parsers interpret as nested
 mappings.
 
-#### Mechanism
-
 `repair_frontmatter_file(path)`:
 
 1. Extract frontmatter between `---` markers.
-2. Try `yaml.safe_load`. If it succeeds, return (no repair needed).
+2. Try `_ruamel_safe_load`. If it succeeds, return (no repair needed).
+   The pre-check deliberately uses the downstream validator’s parser: a document that
+   passes PyYAML can still fail `ruamel.yaml`, and when the two disagreed the operator
+   saw “Repaired YAML” followed by `invalid_outputs`.
 3. Scan each line for `key: value` patterns where the value contains unquoted `: `.
 4. Wrap problematic values in double quotes (escaping internal quotes).
 5. Verify the repaired YAML actually parses.
    If not, skip (no write).
 6. Write back the repaired content.
 
-#### Integration
+#### Pass 2: contract-directed scalar conform
 
-Called on every output file after agent completion but **before validation** in
-`run_parallel`. This salvages outputs that would otherwise fail validation due to YAML
-parse errors. Applied in both code mode and agent mode paths.
+Addresses the failure mode a parseable document still has: a YAML plain scalar carries
+no type marker, so a brand genuinely named `1850` arrives as an integer and fails a
+`type: string` contract.
+An agent writing frontmatter by hand has no serializer in the path to quote it.
+
+`conform_declared_outputs(item_dir, outputs, variables=..., registry=...)`, in
+`engine/schema_conform.py`, borrows both halves rather than reimplementing either:
+
+1. **The contract’s own model says what is wrong.** The payload is validated with the
+   same pydantic model that will judge it seconds later, and the only errors acted on
+   are `string_type` -- pydantic’s way of saying a string belongs here and something
+   else arrived. Unions that already accept the value, explicit nulls, missing fields,
+   shape mismatches and genuinely wrong values are reported under other error types and
+   pass through untouched.
+   No second opinion about the schema is kept here to drift from the first, and shapes a
+   hand-rolled schema walker would miss -- `dict[str, X]`, tuples, optional unions --
+   come free.
+2. **The document’s own serializer says how to write it.** The frontmatter is loaded
+   round-trip, each offending scalar is replaced by its own source text as a string, and
+   the document is written back through the same `new_yaml` serializer everything else
+   writes with. The emitter decides quoting; handing it `"1850"` is what makes it write
+   `'1850'`.
+
+One direction only: a scalar becomes a string where the contract asks for one, and
+nothing else changes.
+Round-trip mode preserves comments, key order, quoting style, anchors, line endings and
+the notation of every scalar the pass does not touch, so a one-scalar correction is a
+one-line diff on a published artifact.
+Two notations are not recoverable from the round-trip value and are recorded as tests: a
+boolean’s spelling and an integer’s leading `+`.
+
+A related normalization runs at *read* time rather than write time:
+`validation.normalize_for_structural_pass` converts dates, decimals and UUIDs to their
+serialized form so validation judges the document the schema describes.
+That makes a run fair; the conform pass writes the correction to disk so the published
+artifact is right for readers who do not run metaproc’s normalizer.
 
 ### 14.7 Tool-use Observability
 

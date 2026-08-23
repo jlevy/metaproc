@@ -4,6 +4,9 @@ Remaining rev3 candidates on top of `arch-metaproc-core.md` (rev2i).
 
 This document intentionally omits proposals that are already implemented on the current
 branch and have been folded into the main design docs.
+The scheduling portions of P1 and P3 are superseded by
+[execution-model-design.md](execution-model-design.md), which owns the task-level
+scheduling contracts.
 That includes:
 
 - promotion of stable production subsystems into the main design
@@ -245,6 +248,74 @@ Why it remains future work:
   (codification follows experiment).
 - The Type A and Type C optimization loops are blocked on this proposal landing.
 
+## P8. Mode Selects an Invoker, Not an Execution Path
+
+**Category:** execution, future **Relates to:** section 6.3 (step modes), section 11
+(`for_each`), [process-framework-concepts.md](process-framework-concepts.md) § Core
+Objects
+
+`_execute_step` forks on all four modes and each branch owns its own execution path, so
+a capability exists wherever someone implemented it rather than wherever it applies.
+Fan-out was written for `mode: agent` and, until recently, existed nowhere else; a
+`mode: code` step with `for_each` planned as a fan-out and then executed once with no
+item bound. Admission still reaches only some paths.
+`mode: composite` cannot fan out at all.
+
+None of these gaps is a policy.
+`for_each` states a step’s relationship to a roster, and nothing in that statement is
+agent-specific.
+
+The concepts doc already names the pivot the runtime does not honor:
+
+> **Task:** one step applied to one item … the task is the pivotal object in this model,
+> because it is the correct unit of scheduling, of failure, and of resume.
+
+Three independent concerns are fused into `mode`:
+
+1. **Mapping**, step to tasks: one task, or one per roster item.
+   A property of the step’s relationship to data.
+2. **Invocation**, how one task is performed: agent CLI, handler, command, human, child
+   spec.
+3. **Governance**, when and where a task may run: admission, concurrency ceiling, retry,
+   placement.
+
+Only the second varies by mode.
+
+Proposal:
+
+- Define `Invoker.run(task) -> disposition`, one implementation per mode.
+  `mode` selects an invoker and decides nothing else.
+- Expand mapping into tasks before an invoker is chosen, so fan-out is mode-independent.
+- Attach admission, concurrency, and retry to tasks, so governance is mode-independent.
+- Make blocking an invoker contract: either every invoker is awaitable, or the single
+  call site wraps synchronous ones off the loop, rather than each branch deciding.
+
+What it closes without separate implementation:
+
+- `mode: composite` gains fan-out, and the consumer workaround of a code handler
+  launching one child run per item stops being necessary.
+- Every mode gains admission, retiring the remainder of design test 7.
+- A per-step concurrency ceiling, currently absent, becomes one governance property
+  rather than four parallel implementations.
+
+The authored surface does not change.
+A spec still says `mode: code` and `for_each` and means what an author already expects;
+the runtime stops treating those two words as one decision.
+
+Why it remains future work:
+
+- The four paths differ in real ways beyond invocation, particularly the agent path’s
+  adapters, variants, execution profiles, and auth pools.
+  Collapsing them is not mechanical.
+- The two sharpest gaps have been closed pointwise (code fan-out, off-loop handlers),
+  which lowers the pressure without removing the cause.
+- It overlaps the execution-model work, where the task is already the scheduled unit;
+  doing both at once risks two half-migrations.
+
+What the evidence supports firmly is narrower than the full refactor: mapping and
+governance do not belong to `mode`, and every place they are attached to it has produced
+either a missing capability or a consumer routing around one.
+
 ## Summary Matrix
 
 | Proposal | Category | Status | Effort |
@@ -256,6 +327,7 @@ Why it remains future work:
 | P5. Subagent adapter | execution, future | deferred | medium |
 | P6. Declarative run source | authored, future | deferred | medium |
 | P7. Sweep / ensemble / experiment | authored, future | deferred | large |
+| P8. Mode selects an invoker | execution, future | deferred | large |
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

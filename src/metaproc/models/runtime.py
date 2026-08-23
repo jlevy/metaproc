@@ -8,6 +8,7 @@ manual-step acknowledgments (ManualAckRecord).
 from __future__ import annotations
 
 from enum import StrEnum
+from pathlib import Path
 from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -39,6 +40,62 @@ class StepState(StrEnum):
     in_flight = "in_flight"
 
 
+class OutputFailureKind(StrEnum):
+    """What went wrong with a declared output, from facts validation already has.
+
+    This is the only judgement the framework makes about a contract failure.
+    It carries no severity and no ownership: whether a ``structural`` failure is
+    worth retrying, or whose fault it is, is the domain's to say (see
+    ``arch-metaproc-core.md`` §13).
+
+    Subdivides ``FailureClass.INVALID_OUTPUT``, which aggregates all of these
+    into one bucket for operator-facing counts.
+    """
+
+    missing = "missing"
+    """The declared file or directory is not there."""
+
+    empty = "empty"
+    """A directory output exists with no content — the silent-success case."""
+
+    unreadable = "unreadable"
+    """Present but undecodable: bad frontmatter, invalid UTF-8."""
+
+    structural = "structural"
+    """The JSON Schema pass refused it."""
+
+    semantic = "semantic"
+    """A model validator refused it — the shape parsed, the rules did not hold."""
+
+
+class OutputFailure(BaseModel):
+    """One declared output that failed validation, with what refused it.
+
+    Carries softschema's own vocabulary through unchanged rather than renaming
+    it: ``invariant`` is the failing validator, ``location`` is the path within
+    the document, and ``message`` is the text softschema produced.
+    """
+
+    output: str
+    """The declared output name from the process spec."""
+
+    path: str
+    """Rendered artifact path."""
+
+    contract: str | None = None
+    """Contract id, when the output declared one."""
+
+    kind: OutputFailureKind
+    invariant: str | None = None
+    location: str | None = None
+    message: str
+    """Human text, exactly as it has always appeared after the filename."""
+
+    def summary(self) -> str:
+        """Render the one-line form that ``StatusRecord.error`` has always held."""
+        return f"{Path(self.path).name}: {self.message}"
+
+
 class StatusRecord(BaseModel):
     """Per-item harness-owned status — written to .state/status.yaml."""
 
@@ -51,6 +108,21 @@ class StatusRecord(BaseModel):
     completed_at: str | None = None
     last_heartbeat_at: str | None = None
     error: str | None = None
+    failure_class: str | None = None
+    """Operational class of the failure, when there is one.
+
+    A contract failure is placed by ``output_failures``; an operational one has no
+    structured record, so without this the durable record can only offer the message.
+    Design test 17 asks that every failed attempt name its layer and class, and this is
+    the half of that answer the per-item record owes.
+    """
+
+    output_failures: list[OutputFailure] = Field(default_factory=list)
+    """Structured form of a contract failure, when ``error`` describes one.
+
+    ``error`` stays as written so existing readers keep working; this is what
+    lets a reader ask which invariant refused which output without parsing it.
+    """
 
 
 class AttemptRecord(BaseModel):

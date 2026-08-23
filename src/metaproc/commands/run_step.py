@@ -47,7 +47,7 @@ from metaproc.engine.runtime import (
     start_log_filter_thread,
     validate_step_inputs_exist,
 )
-from metaproc.engine.validation import validate_item_outputs
+from metaproc.engine.validation import validate_item_outputs_detailed
 from metaproc.errors import CLIError, ValidationError
 from metaproc.io.state_io import (
     compute_item_dir,
@@ -231,14 +231,16 @@ def run_step(
         )
 
         if effective_outputs:
-            output_errors = validate_item_outputs(
+            output_failures = validate_item_outputs_detailed(
                 artifact_dir, effective_outputs, variables=variables
             )
-            if output_errors:
+            if output_failures:
+                output_errors = [f.summary() for f in output_failures]
                 mark_failed_at(
                     state_dir,
                     error=f"output validation failed: {'; '.join(output_errors)}",
                     running_record=running_record,
+                    output_failures=output_failures,
                 )
                 raise CLIError(
                     f"step '{step}' output validation failed: {'; '.join(output_errors)}"
@@ -389,12 +391,15 @@ def run_step(
 
         exit_code = 0
         if effective_outputs and artifact_dir is not None:
-            output_errors = validate_item_outputs(
+            output_failures = validate_item_outputs_detailed(
                 artifact_dir, effective_outputs, variables=variables
             )
-            if output_errors:
+            if output_failures:
+                output_errors = [f.summary() for f in output_failures]
                 mark_failed_at(
-                    state_dir, error=f"output validation failed: {'; '.join(output_errors)}"
+                    state_dir,
+                    error=f"output validation failed: {'; '.join(output_errors)}",
+                    output_failures=output_failures,
                 )
                 exit_code = 1
             else:
@@ -552,16 +557,18 @@ def run_step(
         exit_code = fg_proc.returncode
         if fg_proc.returncode == 0:
             if effective_outputs and artifact_dir is not None:
-                output_errors = validate_item_outputs(
+                output_failures = validate_item_outputs_detailed(
                     artifact_dir, effective_outputs, variables=variables
                 )
             else:
-                output_errors = []
-            if output_errors:
+                output_failures = []
+            if output_failures:
+                output_errors = [f.summary() for f in output_failures]
                 mark_failed_at(
                     state_dir,
                     error=f"output validation failed: {'; '.join(output_errors)}",
                     running_record=running_record,
+                    output_failures=output_failures,
                 )
                 exit_code = 1
             else:

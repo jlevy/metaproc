@@ -175,7 +175,7 @@ def _collect_artifacts(
                     ref=output.ref,
                     kind="file",
                     format=output.format,
-                    schema=getattr(output, "schema_", None),
+                    contract=getattr(output, "contract", None),
                 ),
                 registry=registry,
                 producer_step=None,
@@ -194,7 +194,7 @@ def _artifact_from_io(
     consumers: list[str],
 ) -> StructureReportArtifact:
     fmt = io_spec.format
-    contract_id = io_spec.schema_
+    contract_id = io_spec.contract
     binding = registry.resolve(contract_id) if contract_id else None
     warnings: list[SchemaWarning] = []
     # When a contract_id is declared but no binding is registered, fall back

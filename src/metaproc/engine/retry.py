@@ -1,8 +1,11 @@
-"""Error classification and retry logic for run-parallel.
+"""Error classification and retry logic for the step executors.
 
-Classifies subprocess errors as retryable (transient) or permanent based on
-pattern matching on the error string from status.yaml. The subprocess is opaque
-— exit code is always 1 — so the error string is the only signal.
+Used by run-parallel for fan-out items and by run-process for non-fan-out
+agent steps, so a declared ``on_invalid`` means the same thing wherever an
+output is produced. Classifies subprocess errors as retryable (transient) or
+permanent based on pattern matching on the error string from status.yaml. The
+subprocess is opaque — exit code is always 1 — so the error string is the
+only signal.
 
 Modeled after an external tool's errorCategorization.ts but adapted for
 metaproc's simpler subprocess context.
@@ -12,11 +15,14 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from pathlib import Path
+from typing import Literal
 
 from metaproc.io import iter_text_lines, resolve_existing_artifact
-from metaproc.models.authored import RetryPolicy
+from metaproc.models.authored import IOSpec, RetryPolicy
+from metaproc.models.runtime import OutputFailure, OutputFailureKind
 
 log = logging.getLogger(__name__)
 
@@ -172,12 +178,133 @@ def classify_error(error: str) -> RetryVerdict:
     # Output validation failures: retry missing-file cases (transient — the
     # model may have been killed before writing), but treat schema/envelope
     # mismatches as permanent (retrying won't fix a structural mismatch).
+    #
+    # This substring test reads the artifact's filename along with everything
+    # else, so an output named for a schema is judged permanent whatever
+    # actually went wrong with it. Prefer ``classify_output_failures``, which
+    # answers the same question from the structured record; this path remains
+    # for a status record written before those were kept.
     if "output validation failed" in lower:
         if "schema" in lower or "envelope" in lower or "mismatch" in lower:
             return RetryVerdict.FAIL
         return RetryVerdict.RETRY
 
     return RetryVerdict.FAIL
+
+
+# Which output failures another attempt could plausibly fix. A file that is not
+# there may simply not have been written yet; a document the schema refuses will
+# be refused again in exactly the same way.
+_RETRYABLE_OUTPUT_FAILURES: frozenset[OutputFailureKind] = frozenset(
+    {OutputFailureKind.missing, OutputFailureKind.empty, OutputFailureKind.unreadable}
+)
+
+
+# Actions a process may ask for when one of its outputs fails its contract. Each
+# is something only the framework can do, which is why the set is closed: a
+# consumer's own vocabulary for what a failure *means* stays on its own side.
+OutputFailureAction = Literal["fail", "retry", "fail_run"]
+
+
+def resolve_output_failure_action(
+    failure: OutputFailure,
+    on_invalid: Mapping[str, str] | None,
+) -> OutputFailureAction | None:
+    """Look up what a process said this failure costs, most-specific-first.
+
+    Keys are tried in order of how precisely they name the failure: the refusing
+    invariant, then the contract, then the kind. Returns ``None`` when the
+    process said nothing, which leaves the default in force.
+    """
+    if not on_invalid:
+        return None
+    for key in (failure.invariant, failure.contract, failure.kind.value):
+        if key is None:
+            continue
+        match on_invalid.get(key):
+            case "fail":
+                return "fail"
+            case "retry":
+                return "retry"
+            case "fail_run":
+                return "fail_run"
+            case _:
+                continue
+    return None
+
+
+def declared_action_for(
+    failure: OutputFailure,
+    outputs: Mapping[str, IOSpec] | None,
+) -> OutputFailureAction | None:
+    """Resolve a failure against the ``on_invalid`` of the output that failed.
+
+    An ``on_invalid`` clause is declared on one output and governs that output
+    only. Reading it from ``failure.output`` rather than from a mapping merged
+    across the step is what keeps a sibling's declaration from deciding this
+    output's fate: two outputs of one step routinely have different contracts
+    and different reasons to fail, and a step-wide merge would silently apply
+    one's policy to the other.
+    """
+    if not outputs:
+        return None
+    io_spec = outputs.get(failure.output)
+    if io_spec is None:
+        return None
+    return resolve_output_failure_action(failure, io_spec.on_invalid)
+
+
+def classify_output_failures(
+    failures: Sequence[OutputFailure],
+    outputs: Mapping[str, IOSpec] | None = None,
+) -> RetryVerdict:
+    """Decide whether re-running could fix these output failures.
+
+    The structured form of rule 4 above, and the reason to prefer it: this reads
+    what refused the output rather than the sentence describing it, so two
+    identical failures cannot receive opposite verdicts because of how their
+    artifacts are named.
+
+    ``outputs`` is the step's declared outputs, so each failure is judged against
+    the ``on_invalid`` of the output that produced it.
+
+    Any failure another attempt cannot fix makes the whole set permanent, since
+    the step has to produce all of its outputs.
+    """
+    if not failures:
+        return RetryVerdict.FAIL
+
+    actions: list[OutputFailureAction | None] = [declared_action_for(f, outputs) for f in failures]
+    # ``fail_run`` is a permanent failure here as well; what distinguishes it is
+    # that a coordinator can also ask whether the run should stop, which is what
+    # ``requires_run_abort`` reports.
+    if any(a in {"fail", "fail_run"} for a in actions):
+        return RetryVerdict.FAIL
+
+    # A failure the process asked to retry counts as retryable; one it said
+    # nothing about falls back to whether another attempt could plausibly fix it.
+    def retryable(failure: OutputFailure, action: OutputFailureAction | None) -> bool:
+        if action is not None:
+            return action == "retry"
+        return failure.kind in _RETRYABLE_OUTPUT_FAILURES
+
+    if all(retryable(f, a) for f, a in zip(failures, actions, strict=True)):
+        return RetryVerdict.RETRY
+    return RetryVerdict.FAIL
+
+
+def requires_run_abort(
+    failures: Sequence[OutputFailure],
+    outputs: Mapping[str, IOSpec] | None = None,
+) -> bool:
+    """Whether any of these failures is one the process declared should stop the run.
+
+    Reports the declaration; it does not perform the abort. No execution path
+    stops a run on this yet, so a ``fail_run`` output currently fails its item
+    permanently and the run continues. This is the seam a coordinator-level
+    abort would attach to.
+    """
+    return any(declared_action_for(f, outputs) == "fail_run" for f in failures)
 
 
 def classify_failure(error: str) -> FailureClass:

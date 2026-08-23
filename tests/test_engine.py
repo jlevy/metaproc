@@ -877,7 +877,7 @@ class TestValidateItemOutputs:
         f = tmp_path / "output.md"
         f.write_text("---\nsample:\n  ticker: AAPL\n  score: 3\n---\nBody\n")
         outputs = {
-            "main": IOSpec(path="output.md", format="frontmatter-md", schema="sample:Sample/v1")
+            "main": IOSpec(path="output.md", format="frontmatter-md", contract="sample:Sample/v1")
         }
 
         errors = validate_item_outputs(tmp_path, outputs, softschema_registry=registry)
@@ -904,7 +904,7 @@ class TestValidateItemOutputs:
             dst.write(src.read())
         f.unlink()
         outputs = {
-            "main": IOSpec(path="output.md", format="frontmatter-md", schema="sample:Sample/v1")
+            "main": IOSpec(path="output.md", format="frontmatter-md", contract="sample:Sample/v1")
         }
 
         errors = validate_item_outputs(tmp_path, outputs, softschema_registry=registry)
@@ -920,7 +920,7 @@ class TestValidateItemOutputs:
         f = tmp_path / "output.md"
         f.write_text("---\nwrong:\n  ticker: AAPL\n---\nBody\n")
         outputs = {
-            "main": IOSpec(path="output.md", format="frontmatter-md", schema="sample:Sample/v1")
+            "main": IOSpec(path="output.md", format="frontmatter-md", contract="sample:Sample/v1")
         }
 
         errors = validate_item_outputs(tmp_path, outputs, softschema_registry=registry)
