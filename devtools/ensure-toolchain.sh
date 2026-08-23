@@ -25,6 +25,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Remember the PATH we were called with. This script prepends its own install
+# directory below, so the closing advisory has to test what the caller had, not
+# what we just built.
+INHERITED_PATH="${PATH}"
 export PATH="$HOME/.local/bin:$PATH"
 
 # Pinned versions these checksums describe. check_supply_chain.py asserts each
@@ -57,11 +61,12 @@ log() { echo "[toolchain] $*"; }
 
 # A missing toolchain is worth fixing but must not stop the session from
 # starting: an offline or egress-restricted sandbox should still open, with the
-# manual command in view. Checksum mismatches are the exception and stop hard.
-warn_and_continue() {
+# manual command in view. Callers return after this rather than exiting, so an
+# unreachable Node still leaves uv installed and vice versa. Checksum mismatches
+# are the exception and stop hard.
+warn_skip() {
     log "WARNING: $*"
     log "Install it manually before running make targets; see docs/runbooks/environment-bootstrap.runbook.md."
-    exit 0
 }
 
 sha256_of() {
@@ -138,7 +143,8 @@ ensure_node() {
     platform="$(detect_platform)"
     expected="$(node_checksum_for "$platform")"
     if [ -z "$expected" ] || [ "$want" != "$NODE_VERSION" ]; then
-        warn_and_continue "no pinned Node checksum for ${platform} at v${want}"
+        warn_skip "no pinned Node checksum for ${platform} at v${want}"
+        return 0
     fi
 
     local asset url tmp dest
@@ -148,7 +154,8 @@ ensure_node() {
     log "Downloading ${url}"
     if ! curl -fsSL --connect-timeout 20 -o "${tmp}/${asset}" "$url"; then
         rm -rf "$tmp"
-        warn_and_continue "could not download Node v${want}"
+        warn_skip "could not download Node v${want}"
+        return 0
     fi
     verify_or_die "${tmp}/${asset}" "$expected"
     log "Checksum verified for ${asset}"
@@ -209,7 +216,8 @@ ensure_uv() {
     local expected
     expected="$(uv_checksum_for "$target")"
     if [ -z "$expected" ]; then
-        warn_and_continue "no pinned uv checksum for ${target}"
+        warn_skip "no pinned uv checksum for ${target}"
+        return 0
     fi
 
     local asset url tmp
@@ -219,7 +227,8 @@ ensure_uv() {
     log "Downloading ${url}"
     if ! curl -fsSL --connect-timeout 20 -o "${tmp}/${asset}" "$url"; then
         rm -rf "$tmp"
-        warn_and_continue "could not download uv v${UV_VERSION}"
+        warn_skip "could not download uv v${UV_VERSION}"
+        return 0
     fi
     verify_or_die "${tmp}/${asset}" "$expected"
     log "Checksum verified for ${asset}"
@@ -237,7 +246,7 @@ ensure_uv
 
 # Later tool calls run in their own shells, so they only see these binaries if
 # ~/.local/bin is on PATH there.
-case ":${PATH}:" in
+case ":${INHERITED_PATH}:" in
     *":$HOME/.local/bin:"*) ;;
     *) log "NOTE: add ~/.local/bin to PATH so these binaries resolve in later commands." ;;
 esac

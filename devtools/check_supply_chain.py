@@ -131,14 +131,38 @@ def _check_toolchain_bootstrap(root: Path, errors: list[str]) -> None:
             f"uv.toml required-version floor {uv_floor} (update the pinned checksums too)"
         )
 
-    # Every supported agent must run the same bootstrap, or one agent's sessions
-    # start without a toolchain.
+    # Every supported agent must run the same bootstrap first, or one agent's
+    # sessions start without a toolchain. Order is part of the contract: the tbd
+    # hook that follows needs the npx this bootstrap installs, so a regeneration
+    # that reinstalls the agent hooks ahead of it has to fail the gate.
     for config_path in AGENT_HOOK_CONFIGS:
         path = root / config_path
         if not path.is_file():
             errors.append(f"{config_path} must exist")
-        elif TOOLCHAIN_SCRIPT not in path.read_text(encoding="utf-8"):
+            continue
+        commands = _session_start_commands(path)
+        if not any(TOOLCHAIN_SCRIPT in command for command in commands):
             errors.append(f"{config_path} must run {TOOLCHAIN_SCRIPT} on SessionStart")
+        elif TOOLCHAIN_SCRIPT not in commands[0]:
+            errors.append(
+                f"{config_path} must run {TOOLCHAIN_SCRIPT} as its first SessionStart "
+                f"hook; the hooks that follow need the toolchain it installs"
+            )
+
+
+def _session_start_commands(path: Path) -> list[str]:
+    """The SessionStart hook commands of an agent config, in the order they run."""
+    matchers = _read_json(path).get("hooks", {})
+    if not isinstance(matchers, dict):
+        return []
+    commands: list[str] = []
+    for matcher in matchers.get("SessionStart", []) or []:
+        if not isinstance(matcher, dict):
+            continue
+        for hook in matcher.get("hooks", []) or []:
+            if isinstance(hook, dict) and isinstance(hook.get("command"), str):
+                commands.append(hook["command"])
+    return commands
 
 
 def _check_workflows(root: Path, errors: list[str]) -> None:

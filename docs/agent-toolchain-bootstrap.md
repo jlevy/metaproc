@@ -52,13 +52,18 @@ Seven properties carry across repositories and tools; the specific tools do not.
 4. **Separate tamper from unreachable.** A checksum mismatch is an attack signature and
    should stop hard; an unreachable network is an offline sandbox and should warn, then
    let the session open.
+   Scope that warning to the one tool: an unreachable download should leave the tools
+   after it still installed, or a single blocked host costs the session its whole
+   toolchain.
 5. **Install user-local, and make the tools resolvable.** A hook runs in its own shell,
    so later commands see the result only through a directory that is already on `PATH`.
    Point the package manager’s global prefix there too, or globally installed tools
    install successfully and then fail to resolve.
 6. **Guard the pins in CI.** Assert that the bootstrap’s versions match their canonical
-   files and that every supported agent still runs it.
-   Without this, a version bump half-lands and a session installs the wrong toolchain.
+   files and that every supported agent still runs it, first.
+   Without this, a version bump half-lands and a session installs the wrong toolchain,
+   or a regenerated agent configuration seats another hook ahead of the bootstrap and
+   that hook runs before the tools it needs exist.
 7. **Stay idempotent and quiet.** Most sessions start with a satisfying toolchain; those
    should report one line and exit.
 
