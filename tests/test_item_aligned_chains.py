@@ -7,6 +7,7 @@ most of these tests are about what it refuses.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 
 from metaproc.engine.graph import item_aligned_chains
@@ -91,3 +92,42 @@ class TestChainDetection:
     def test_a_single_aligned_step_is_not_a_chain(self) -> None:
         """A chain needs an edge; one step has none."""
         assert item_aligned_chains([_step("a", align="same_key")]) == []
+
+
+class TestAChainHeadDoesNotSkipItsChain:
+    """A complete head must not short-circuit the members behind it.
+
+    Chain execution hangs off the head in `run_process`'s step loop, so the
+    completed-step skip and the chain dispatch are two branches on the same step. If the
+    skip wins, every member is skipped with the head whatever its own state, and a resume
+    repairing one item of one member exits clean having done nothing -- silently, because
+    nothing errors and the run reports success.
+
+    Asserted against the source rather than by executing a resume: what protects the
+    behaviour is that the guard exists next to the skip, and a source assertion says so
+    without standing up a nine-step run tree. The behaviour itself was verified by hand on
+    a real cohort, where deleting one ticker's record for the sixth member changed nothing
+    before the fix and re-ran exactly that item after it.
+    """
+
+    @staticmethod
+    def _source() -> str:
+        return (
+            Path(__file__).parents[1] / "src" / "metaproc" / "commands" / "run_process.py"
+        ).read_text()
+
+    def test_the_completed_step_skip_excludes_chain_heads(self) -> None:
+        source = self._source()
+        marker = "and step_id not in _chain_head_of"
+        assert marker in source, (
+            "the completed-step skip no longer excludes chain heads; a complete head "
+            "will skip its whole chain and resume cannot re-run a failed member"
+        )
+        skip_at = source.index("already completed — skipping")
+        guard_at = source.index(marker)
+        assert guard_at < skip_at, "the guard must sit on the branch that emits the skip"
+
+    def test_the_chain_dispatch_still_keys_on_the_head(self) -> None:
+        """The guard is only needed because dispatch hangs off the head; if that ever
+        changes, this test should fail and the guard be reconsidered rather than kept."""
+        assert "_chain_head_of.get(step_id)" in self._source()

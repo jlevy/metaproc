@@ -2749,13 +2749,23 @@ async def _orchestrate(
                 out.progress(f"  Step '{step_id}': satisfied via override — skipping")
                 continue
             target = step_map[step_id]
-            if not force and _is_step_completed(
-                run_dir,
-                step_id,
-                outputs=target.outputs,
-                variables=variables,
-                is_fan_out=target.fan_out is not None,
-                step=target,
+            # A chain head is never skipped on its own account. Chain execution hangs
+            # off the head further down this loop, so skipping it here skips every
+            # member with it, whatever their own state -- and a resume repairing one
+            # item of one member would exit clean having done nothing. The chain's own
+            # per-item, per-step reuse decides what actually runs, which is the same
+            # reasoning `_discover_chain_items` already applies one level down.
+            if (
+                not force
+                and step_id not in _chain_head_of
+                and _is_step_completed(
+                    run_dir,
+                    step_id,
+                    outputs=target.outputs,
+                    variables=variables,
+                    is_fan_out=target.fan_out is not None,
+                    step=target,
+                )
             ):
                 completed_entry: dict[str, Any] = {
                     "state": "completed",
