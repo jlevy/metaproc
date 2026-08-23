@@ -162,6 +162,23 @@ model by `test_replay_equivalence`; per-step ceilings are a concurrency width th
 replayed state does not observe, and the agent loop’s budget is resolved from step
 defaults the trace translation does not yet read.
 
+**How the graft is wired, since the shape is not obvious from either side.** A chain is
+detected by `graph.item_aligned_chains` and then executed by two complementary moves in
+`run_process`’s step loop, and the asymmetry between them is what makes the whole thing
+work:
+
+- **Members 2..n are absorbed.** They appear in `_absorbed` and the level walk
+  `continue`s past them without output, because they do not run there.
+- **The head is a portal.** `_chain_head_of` maps it to its chain, and reaching the head
+  in the level walk is the only path by which any member executes.
+
+Two consequences follow that are easy to miss.
+Members produce no level-walk output at all, so a chain that does not run is a chain
+that says nothing rather than one that reports being skipped.
+And chains are restricted to `mode: code` throughout, since the agent path carries
+dispatch machinery the chain executor does not reproduce; an agent-mode step declaring
+`align: same_key` is planned as an ordinary step-scoped edge.
+
 **What the graft costs, and the one invariant that pays for it.** Grafting item-scoped
 semantics onto a level walk means two completion questions coexist: the walk asks
 whether a *step* is complete, and the chain asks, per item and per step, whether that
