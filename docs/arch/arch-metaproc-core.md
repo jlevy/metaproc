@@ -1990,9 +1990,20 @@ This surfaces in `pool status` and in NFS error detail extraction for cloud work
 | `max_backoff_s` | 600.0 | Backoff cap |
 
 Backoff: `initial_backoff_s * (backoff_multiplier ^ (attempt - 1))`, capped at
-`max_backoff_s`. Content failures (`INVALID_OUTPUT`) re-run the same prompt against the
-same inputs, so their budget is capped separately at
-`MAX_CONTENT_FAILURE_RETRIES_DEFAULT` (3) however large `max_retries` is.
+`max_backoff_s`. Content failures (`INVALID_OUTPUT`) re-run the authored prompt against
+the same inputs with the latest structured validation facts appended.
+The original prompt remains an exact prefix; output, kind, path, contract, invariant,
+location, and message are JSON-quoted in a framework-authored correction section.
+The section bounds individual values, total size, and failure count so a pathological
+validator result cannot consume the next attempt’s context window; it records how many
+failures were omitted.
+JSON-escaped values have their own rendered-size ceiling, so control-heavy text cannot
+crowd every actionable coordinate out of the section.
+Subprocess and transport failures never create or replace this section because they
+produced no validation facts; a later retry retains any still-pending feedback from an
+earlier content failure.
+The content-failure budget is capped separately at `MAX_CONTENT_FAILURE_RETRIES_DEFAULT`
+(3) however large `max_retries` is.
 
 #### Policy Resolution
 
@@ -2029,7 +2040,13 @@ first-pass items; retries interleave with the first pass rather than waiting for
 entire batch to complete.
 Each item tracks its own `attempt_number` in its `shared` dict; the retry index passed
 to `compute_backoff` is `attempt_number - 1` (first retry = index 1 =
-`initial_backoff_s`).
+`initial_backoff_s`). An item also carries its latest `output_failure_feedback`. The
+scheduler replaces that field only after a retryable validation failure, and
+`_build_prepare_launch` appends it to the next attempt’s resolved prompt.
+A transient retry before any content failure therefore receives the original prompt
+unchanged.
+Attempt-numbered prompt snapshots preserve what each launch received even when
+zero-backoff retries start within the same second.
 
 The loop condition `while not_started or active or retry_heap` guarantees liveness:
 items in backoff are never lost even when `active` is temporarily empty.
@@ -2040,7 +2057,8 @@ Non-fan-out agent steps run the same content-failure loop inline in
 `run_process._execute_agent_step`: declared outputs are repaired, conformed and
 validated after each attempt (§14.6), `classify_output_failures` reads the structured
 failure record against the output’s `on_invalid`, and retryable verdicts re-run the step
-under the `INVALID_OUTPUT` cap, recording `attempt: N` in the step’s status.
+under the `INVALID_OUTPUT` cap with the same correction section used by fan-out retries,
+recording `attempt: N` in the step’s status.
 Nonzero exits are classified exactly as fan-out failures are -- transient ones draw the
 full `max_retries` budget, with the log tail folded into the recorded error -- while
 step timeouts and write-boundary violations stay terminal on this path.

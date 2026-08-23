@@ -14,6 +14,11 @@ development series.
   Previously, the whole chain was silently skipped.
   `--force` remains the explicit operation for invalidating a step and its downstream
   work.
+- **Actionable invalid-output retries**: agent steps now append the latest structured
+  validation failures to the next retry prompt, including output, failure kind, path,
+  contract, invariant, location, and message.
+  Fan-out and non-fan-out execution use the same feedback; transport failures never
+  create or replace it.
 
 ### Changed
 

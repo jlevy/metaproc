@@ -19,7 +19,7 @@ consistency. The companion programmatic registry is
 | JSONL | ~9 | `<run>/.logs/` |
 | JSON | 3 writers | `<run>/.state/` sidecars, `<run>/resources.json`, arena cache |
 | Softschema MD | 5 | `<run>/` and `<run>/<artifact-tree>/` (post-run human reports) |
-| Plain text | 2 | `<run>/.logs/` (raw subprocess captures) |
+| Plain text | ~5 | `<run>/.logs/` (subprocess captures and prompt snapshots) |
 
 ## State artifacts (YAML)
 
@@ -105,6 +105,9 @@ The `usage.md` envelope is registered in `metaproc.io.frontmatter.ENVELOPE_MAP`;
 | --- | --- | --- | --- |
 | `process_<ts>.log` | `<run>/.logs/tasks/<step>/` or `<run>/.logs/tasks/<step>/<item>/` | `runpool/backend.py` | Captured subprocess stdout and stderr; gzip on close |
 | `probe.stderr` | `<run>/.state/steps/<step>/...` | `dispatch/pool_dispatch.py` | Captured stderr from a failed preflight probe |
+| `prompt-<step>-attempt<N>-<HHMMSS>.txt` | `<run>/.logs/tasks/<step>/` | `commands/run_process.py:_execute_agent_step` | Resolved prompt for one scalar agent attempt; atomic, once before launch |
+| `<step>_<context>_<ts>-attempt<N>.prompt.md` | `<run>/.logs/tasks/<step>/<item>/` | `commands/run_parallel.py:_build_prepare_launch` | Resolved prompt for one fan-out agent attempt; atomic, once before launch |
+| `prompt-<step>-<context>-<HHMMSS>.txt` | `<run>/.logs/tasks/<step>/` or `<run>/.logs/tasks/<step>/<item>/` | `commands/run_step.py` or `engine/runtime.py:launch_step` | Resolved prompt for a direct `run-step` launch |
 
 ## Pending renames
 
