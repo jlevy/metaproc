@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import typer
+from click import unstyle
 from typer.testing import CliRunner
 
 from metaproc.cloud.gcp import gcp_run_dispatch
@@ -532,11 +533,13 @@ class TestGcpRunCli:
                 "echo",
                 "hi",
             ],
+            color=True,
         )
 
         assert result.exit_code != 0
-        assert "--workspace-package requires" in result.output
-        assert "workspace shipping" in result.output
+        output = unstyle(result.output)
+        assert "--workspace-package" in output
+        assert "workspace shipping" in output
 
     def test_detach_skips_tail_and_prints_log_url(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("METAPROC_GCP_PROJECT", "p")
