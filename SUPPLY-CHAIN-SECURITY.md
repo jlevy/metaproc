@@ -49,11 +49,17 @@ Six exact first-party releases are exempt from the ordinary cool-off for this re
   This first-party release was reviewed against `0.3.1`; its formatting output is
   unchanged, while its skill, publishing, and Markdown-parser configuration are more
   reliable;
-- `get-tbd==0.6.5`, the issue-tracking and agent-integration CLI, adopted inside the
+- `get-tbd==0.8.0`, the issue-tracking and agent-integration CLI, adopted inside the
   cool-off as a first-party release.
-  It migrated this repository’s tbd format from f06 to f07 through the supported
-  `tbd setup --auto` path, and its generated hooks now read one configured fallback
-  version instead of hardcoding it in each script.
+  Reviewed against the `0.6.5` this repository ran previously: same MIT license and
+  `jlevy/tbd` source repository, same twelve direct dependencies, and no lockfile
+  effect, since the CLI is installed globally or run through `npx` rather than declared
+  in `package.json`. It migrated this repository’s tbd format from f07 to f08 through
+  the supported `tbd setup --auto` path, regenerating the hooks, skill files, and
+  `AGENTS.md` block together, and it is the first release to ship the
+  `agent-session-bootstrap` guideline that generalizes this repository’s own toolchain
+  bootstrap. The generated hooks read one configured fallback version rather than
+  hardcoding it in each script.
 
 The exceptions are package-scoped in configuration and do not weaken the global gate.
 Changing any version requires a new review and an updated rationale.

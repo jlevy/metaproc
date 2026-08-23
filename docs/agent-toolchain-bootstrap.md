@@ -80,8 +80,10 @@ Each pin bump has to update the matching checksums, which is why the CI guard ex
 And the pattern assumes a user-local bin directory is on `PATH`, which is conventional
 but not universal.
 
-This is a candidate to graduate into a shared guideline rather than living in one
-repository; `tbd guidelines supply-chain-hardening` is its natural neighbor.
+This pattern has since graduated into a shared guideline:
+`tbd guidelines agent-session-bootstrap` states it tool-agnostically, alongside its
+neighbor `tbd guidelines supply-chain-hardening`. This document is the Metaproc-specific
+record of the same pattern.
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.
