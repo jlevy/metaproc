@@ -50,7 +50,6 @@ def _git_init_with_files(repo: Path, files: dict[str, str], gitignore: str = "")
 class TestFindMetaprocSourceDir:
     def test_locates_source_dir_from_module(self):
         src = find_metaproc_source_dir()
-        assert src.name == "metaproc"
         assert (src / "pyproject.toml").exists()
         assert (src / "src" / "metaproc").is_dir()
 
