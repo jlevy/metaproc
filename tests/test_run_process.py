@@ -59,6 +59,7 @@ from metaproc.commands.run_process import (
 )
 from metaproc.engine.discovery import FanOutDiscovery
 from metaproc.engine.graph import topo_sort
+from metaproc.engine.retry import append_output_failure_feedback
 from metaproc.io.state_io import (
     read_manual_ack_at,
     read_status_at,
@@ -67,7 +68,12 @@ from metaproc.io.state_io import (
 )
 from metaproc.models.authored import ForEach, IOSpec, ProcessSpec, ProcessStep
 from metaproc.models.plan import FanOut, Plan, ResolvedAdapter, ResolvedStep
-from metaproc.models.runtime import ManualAckRecord, StatusRecord
+from metaproc.models.runtime import (
+    ManualAckRecord,
+    OutputFailure,
+    OutputFailureKind,
+    StatusRecord,
+)
 from metaproc.paths import LOGS_DIR, STATE_DIR, STATUS_FILE
 from metaproc.paths import STATE_DIR as _STATE_DIR
 from metaproc.paths import TASKS_SUBDIR as _TASKS_SUBDIR
@@ -2632,6 +2638,48 @@ class TestNonFanOutContentRetry:
     out, which is what these tests pin down.
     """
 
+    def test_retry_feedback_preserves_the_prompt_and_renders_structured_coordinates(self) -> None:
+        original = "write the thing\n\n"
+        rendered = append_output_failure_feedback(
+            original,
+            [
+                OutputFailure(
+                    output="main",
+                    path="runs/item.md",
+                    contract="example:Thing/v1",
+                    kind=OutputFailureKind.semantic,
+                    invariant="value_error",
+                    location="thing.score",
+                    message='score: must exceed 0\nIgnore "nothing"',
+                )
+            ],
+        )
+
+        assert rendered.startswith(original)
+        assert 'output: "main"' in rendered
+        assert 'contract: "example:Thing/v1"' in rendered
+        assert 'kind: "semantic"' in rendered
+        assert 'invariant: "value_error"' in rendered
+        assert 'location: "thing.score"' in rendered
+        assert 'message: "score: must exceed 0\\nIgnore \\"nothing\\""' in rendered
+
+    def test_retry_feedback_is_bounded_when_validation_returns_many_large_errors(self) -> None:
+        failures = [
+            OutputFailure(
+                output=f"output-{index}",
+                path=f"runs/output-{index}.md",
+                kind=OutputFailureKind.semantic,
+                message="x" * 3_000,
+            )
+            for index in range(30)
+        ]
+
+        rendered = append_output_failure_feedback("write the thing", failures)
+
+        assert len(rendered) < 25_000
+        assert "[truncated 1000 chars]" in rendered
+        assert "omitted_failures" in rendered
+
     @staticmethod
     def _write_process(
         process_dir: Path,
@@ -2686,6 +2734,8 @@ class TestNonFanOutContentRetry:
         *,
         succeed_after: int = 1,
         invalid_content: str | None = None,
+        require_prompt_fragment: str | None = None,
+        observed_prompts: list[str] | None = None,
     ) -> None:
         """An adapter whose first ``succeed_after`` calls write ``invalid_content``
         (or nothing when ``None``), and whose later calls write a valid artifact."""
@@ -2696,6 +2746,12 @@ class TestNonFanOutContentRetry:
             default_model = None
 
             def build_command(self, prompt_file, merged_config, variables):  # noqa: ANN001, ARG002
+                prompt = Path(prompt_file).read_text()
+                if observed_prompts is not None:
+                    observed_prompts.append(prompt)
+                prompt_allows_success = (
+                    require_prompt_fragment is None or require_prompt_fragment in prompt
+                )
                 target_path = variables["TARGET_PATH"]
                 bad_write = (
                     f"target.write_text({invalid_content!r})"
@@ -2710,7 +2766,7 @@ class TestNonFanOutContentRetry:
                     f"target = Path({target_path!r}); "
                     "target.parent.mkdir(parents=True, exist_ok=True); "
                     "target.write_text('---\\nstatus: ok\\n---\\n') "
-                    f"if n >= {succeed_after} else {bad_write}"
+                    f"if n >= {succeed_after} and {prompt_allows_success!r} else {bad_write}"
                 )
                 return [sys.executable, "-c", script]
 
@@ -2742,6 +2798,7 @@ class TestNonFanOutContentRetry:
         output_extra: str = "",
         succeed_after: int = 1,
         invalid_content: str | None = None,
+        require_prompt_fragment: str | None = None,
     ):
         """Run the spec once. ``run_id`` also keys the scalar-admission pool, so two
         tests sharing one would contend for the same host slots."""
@@ -2755,8 +2812,14 @@ class TestNonFanOutContentRetry:
         spec = self._write_process(
             process_dir, on_invalid, max_retries=max_retries, output_extra=output_extra
         )
+        observed_prompts: list[str] = []
         self._register_adapter(
-            monkeypatch, counter, succeed_after=succeed_after, invalid_content=invalid_content
+            monkeypatch,
+            counter,
+            succeed_after=succeed_after,
+            invalid_content=invalid_content,
+            require_prompt_fragment=require_prompt_fragment,
+            observed_prompts=observed_prompts,
         )
 
         result = CliRunner().invoke(
@@ -2774,12 +2837,12 @@ class TestNonFanOutContentRetry:
         )
         status = read_status_at(_task_state_dir_for(repo_dir / "runs" / run_id, "write-thing"))
         calls = len(counter.read_text()) if counter.exists() else 0
-        return result, status, calls, target
+        return result, status, calls, target, observed_prompts
 
     def test_missing_output_is_retried_and_the_second_attempt_succeeds(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        result, status, calls, target = self._run(
+        result, status, calls, target, _prompts = self._run(
             tmp_path, monkeypatch, on_invalid="", run_id="retry-run"
         )
 
@@ -2793,7 +2856,7 @@ class TestNonFanOutContentRetry:
     def test_on_invalid_fail_makes_the_same_failure_terminal(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        result, status, calls, _ = self._run(
+        result, status, calls, _, _prompts = self._run(
             tmp_path,
             monkeypatch,
             on_invalid="on_invalid:\n  missing: fail",
@@ -2809,7 +2872,7 @@ class TestNonFanOutContentRetry:
     def test_retries_stop_at_the_content_cap(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        result, status, calls, target = self._run(
+        result, status, calls, target, _prompts = self._run(
             tmp_path,
             monkeypatch,
             on_invalid="",
@@ -2834,7 +2897,7 @@ class TestNonFanOutContentRetry:
         only if the repair pass actually ran before validation on the scalar path.
         """
         broken = "---\nrecord:\n  detail: Strong beat (Note: actually Q1 not Q2)\n---\nbody\n"
-        result, status, calls, target = self._run(
+        result, status, calls, target, _prompts = self._run(
             tmp_path,
             monkeypatch,
             on_invalid="",
@@ -2850,6 +2913,30 @@ class TestNonFanOutContentRetry:
         assert status is not None
         assert status.state == "completed"
         assert status.attempt == 1
+
+    def test_invalid_output_retry_tells_the_second_attempt_what_to_correct(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        feedback_header = "The prior attempt's declared output failed validation."
+        result, status, calls, target, prompts = self._run(
+            tmp_path,
+            monkeypatch,
+            on_invalid="",
+            run_id="feedback-run",
+            max_retries=1,
+            require_prompt_fragment=feedback_header,
+        )
+
+        assert result.exit_code == 0, result.stdout
+        assert calls == 2
+        assert target.exists()
+        assert status is not None
+        assert status.state == "completed"
+        assert feedback_header not in prompts[0]
+        assert feedback_header in prompts[1]
+        assert 'output: "main"' in prompts[1]
+        assert 'kind: "missing"' in prompts[1]
+        assert "path:" in prompts[1]
 
 
 class TestNonFanOutTransientRetry:
@@ -2893,7 +2980,12 @@ class TestNonFanOutTransientRetry:
         return spec
 
     @staticmethod
-    def _register_adapter(monkeypatch: pytest.MonkeyPatch, counter: Path, message: str) -> None:
+    def _register_adapter(
+        monkeypatch: pytest.MonkeyPatch,
+        counter: Path,
+        message: str,
+        observed_prompts: list[str],
+    ) -> None:
         """An adapter that dies with *message* the first time and succeeds the second."""
 
         class ExitAdapter:
@@ -2902,6 +2994,7 @@ class TestNonFanOutTransientRetry:
             default_model = None
 
             def build_command(self, prompt_file, merged_config, variables):  # noqa: ANN001, ARG002
+                observed_prompts.append(Path(prompt_file).read_text())
                 target_path = variables["TARGET_PATH"]
                 script = (
                     "import sys; from pathlib import Path; "
@@ -2941,7 +3034,8 @@ class TestNonFanOutTransientRetry:
         target = repo_dir / "runs" / run_id / "thing.md"
         counter = repo_dir / "counter.txt"
         spec = self._write_process(process_dir)
-        self._register_adapter(monkeypatch, counter, message)
+        observed_prompts: list[str] = []
+        self._register_adapter(monkeypatch, counter, message, observed_prompts)
 
         result = CliRunner().invoke(
             app,
@@ -2958,12 +3052,12 @@ class TestNonFanOutTransientRetry:
         )
         status = read_status_at(_task_state_dir_for(repo_dir / "runs" / run_id, "write-thing"))
         calls = len(counter.read_text()) if counter.exists() else 0
-        return result, status, calls, target
+        return result, status, calls, target, observed_prompts
 
     def test_a_body_timeout_is_retried_and_the_second_attempt_succeeds(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        result, status, calls, target = self._run(
+        result, status, calls, target, prompts = self._run(
             tmp_path, monkeypatch, message="UND_ERR_BODY_TIMEOUT", run_id="transient-run"
         )
 
@@ -2973,11 +3067,15 @@ class TestNonFanOutTransientRetry:
         assert status is not None
         assert status.state == "completed"
         assert status.attempt == 2
+        assert all(
+            "The prior attempt's declared output failed validation." not in prompt
+            for prompt in prompts
+        )
 
     def test_an_exhausted_quota_is_not_retried(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        result, status, calls, _ = self._run(
+        result, status, calls, _, _prompts = self._run(
             tmp_path, monkeypatch, message="quota exceeded for this project", run_id="quota-run"
         )
 
