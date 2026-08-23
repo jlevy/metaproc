@@ -375,6 +375,21 @@ handler writes outputs directly; the engine records `.state/` completion markers
 If the handler raises, the step fails with the same state recording as a failed agent
 step.
 
+`mode: code` supports `for_each`. Each item is one invocation with its own resolved
+context, so per-item state, logs, and artifacts address the item rather than the step,
+and one item failing does not cancel its siblings: every item is awaited and the step
+succeeds only if all of them did.
+Item discovery is the same execution-time roster read the agent path uses; nothing else
+is shared, because adapters, variants, and auth pools have no meaning for a handler.
+
+Handlers run off the event loop.
+A handler is a synchronous callable, and calling it inline would pin the loop for its
+whole duration, which serializes every sibling item of a fan-out no matter how the
+dispatcher gathers them.
+Handlers therefore need not be thread-safe against themselves, but a fan-out runs
+several concurrently, so a handler sharing mutable process state across items must guard
+it.
+
 Dry-run mode prints the handler path (or command) and resolved inputs instead of
 executing.
 
@@ -1358,6 +1373,140 @@ The framework parses items files generically by extracting the envelope payload�
 `items` list. Domain packages supply typed envelope models; the orchestration layer only
 needs the generic items-file contract.
 
+Fan-out applies to `mode: agent` and `mode: code`. The two share item discovery and
+per-item addressing and diverge in everything else: the agent path carries adapters,
+variants, execution profiles, and auth-pool dispatch, while the code path invokes a
+handler or command.
+`mode: composite` does not fan out, which is why a consumer wanting a
+child spec mapped over a roster expresses it as a code handler that launches one child
+run per item; the shape and its cost are the subject of proposal P8.
+
+Every field named in `bind_fields` must be present and non-empty on every item.
+There is no optional dispatch field, so a roster where a field applies to only some
+items carries an explicit sentinel value rather than omitting it.
+
+### Fan-In Collections
+
+An input declaring `collect: <step>` receives that fan-out step’s per-item outcomes as
+one manifest (`metaproc:FanInOutcomes/0.1`) instead of rediscovering upstream state by
+walking directories.
+Each record carries the item key, its terminal state, whether it succeeded, and its
+error where there is one.
+
+`require:` states which outcomes satisfy the edge.
+`succeeded` needs every item to have succeeded.
+`finished` accepts any terminal outcome, so a partially failed upstream still satisfies
+the edge and the consumer decides what a failure means.
+The two are named for the condition each states, because “completed” reads as terminal
+in some contexts and as success in others.
+
+`require: finished` also governs blocking: a consumer declaring it is not blocked when
+the failure lies at the collected step or anywhere feeding it, since an item dying two
+stages back is exactly why the collection has partial coverage.
+Failures outside that subtree reach the consumer through a different edge, which said
+nothing about accepting terminal outcomes, and still block.
+
+Where an item failed a contract, its record carries the structured failure alongside the
+message: the failing `invariant`, its `location` in the document, the `contract` the
+output declared, and the `kind` of refusal.
+A consumer routing work by owner needs that distinction, because a missing output and a
+refused invariant are different people’s problems and the rendered sentence cannot
+express the difference.
+
+An item that never reached the collected step is reported with where it stopped and that
+step’s failure detail, rather than as a bare absence.
+A ticker that raised and a ticker that silently produced nothing are different problems
+with different owners, and the collection is where a consumer learns which it has.
+
+The manifest reports against the collected step’s **expected roster**, not against the
+task directories on disk.
+An item that died upstream never creates a directory there, so a collection over what
+arrived would report three of four items as full coverage; reporting against the roster
+distinguishes succeeded, failed, and never-reached.
+The manifest is derived from durable per-item state on every read and never stored as
+truth, so it cannot drift from the state it describes.
+
+### Declared Retry on the Code Path
+
+A `mode: code` step honors the same contract-layer declarations the pool path honors.
+`for_each.retry` supplies the budget and `outputs.<name>.on_invalid` supplies the
+verdict, resolved by `classify_output_failures` from the invariant that refused the
+output rather than the sentence describing it.
+Nothing in the executor interprets a failure: the producing output declares what its own
+contract failure costs, and the loop honors it.
+
+The budget is resolved per step, not once per caller.
+A chain runs several steps and the budget is declared on the step with a reason to
+retry, so applying the first step’s policy to the whole walk would give a stage a budget
+nobody declared for it and withhold one that was declared.
+
+A failure with no structured record is not a contract failure and is left alone, since
+the operational classifier owns those.
+A step declaring no policy is invoked once, which is the behavior of every spec that
+declares nothing.
+
+Unlike the non-fan-out agent loop, which records `attempt: N` in the step’s status, this
+path does not thread the attempt number into the status writer: every invocation writes
+`attempt: 1`, so the durable record undercounts a retried task.
+The replay harness pins this
+(`test_the_durable_record_undercounts_the_retries_it_made`), and durable attempt records
+are what remove it.
+
+Every failed attempt records its `failure_class` on the durable per-item record:
+`invalid_output` for a contract failure, and `classify_failure`’s verdict for an
+operational one. Placement (design test 17) therefore holds on the code path, not only
+where pool events are emitted.
+
+### Per-Step Concurrency
+
+`for_each.max_concurrency` bounds one step’s items in flight, independent of any other
+step’s. A run-wide cap and an execution profile both answer different questions, the
+first being the whole run’s budget and the second which adapter and model, so expressing
+a per-step ceiling through either conflates it with something else and leaves the limit
+invisible in the spec that describes the work.
+
+Both limits bind and the smaller wins: a step ceiling above the run cap cannot mean
+exceed the budget, and one below it is a real constraint the run cap must not override.
+In a chain the gate is per step rather than shared across the walk, so a tight ceiling
+on one stage does not throttle the others an item passes through.
+Omitted, the step is bounded only by the run-wide cap.
+
+### Item-Aligned Chains
+
+`for_each.align: same_key` declares a step’s `needs` edge item-scoped rather than
+step-scoped: this step’s task for item *k* waits only on the upstream task for item *k*.
+Consecutive code steps carrying it form a chain that executes once per item instead of
+once per step, so an item advances as soon as its own predecessor commits rather than
+waiting for the slowest sibling.
+
+`graph.item_aligned_chains` decides where this applies, and refuses more than it
+accepts. Alignment requires that the upstream also fan out over the *same resolved
+source*, because matching key strings across unrelated rosters is coincidence rather
+than identity. A step needing anything outside the chain ends it, since that edge is
+genuinely step-scoped.
+Two steps aligning to one upstream leave both edges step-scoped: item-scoped forks are
+meaningful but a linear chain cannot express one, and resolving it by first-wins would
+make the result depend on step order in the spec.
+
+Failure follows the same granularity.
+An item failing partway through a chain skips its own remaining steps and touches no
+sibling, so the chain finishes with partial coverage instead of blocking the graph.
+Measured on a four-item cohort where one item fails at the second of three stages: under
+the level walk no item completes the third stage, because the step failure blocks it
+wholesale; under an aligned chain three of four complete.
+
+Resume is per item and per step.
+An item that finished the head but not a later step is still actionable, so the chain
+discovers against the whole chain rather than the head and skips only the steps already
+completed for that item.
+Filtering on the head’s completion would drop such an item from the chain entirely and a
+resumed run would silently do nothing for it.
+Work that was in flight when a run died restarts, since it never committed.
+
+Absent `align`, nothing changes.
+The edge stays step-scoped and the level walk executes it exactly as before, which is
+the compatibility floor for every existing spec.
+
 **Terminology note: items file vs roster.** *Items file* is the framework’s primary term
 for this concept. *Roster* is retained as domain-specific language inside the
 illustrative `example_plugin` profile, where step IDs, dependency names, and module
@@ -1675,6 +1824,34 @@ framework can perform them.
 Severity, ownership, and taxonomy are the domain’s, and the framework should be unable
 to read them even when it stores them on the domain’s behalf.
 
+### Failure Layers as Implemented
+
+The concepts doc’s failure layers (operational, contract, domain) map onto two
+classifiers and one enum:
+
+- **`FailureClass`** is the per-item class: `rate_limited`, `quota_exhausted`,
+  `server_error`, `timeout`, and `crash` are the operational layer; `invalid_output` is
+  the contract layer’s single entry, subdivided by `OutputFailureKind` (missing, empty,
+  unreadable, structural, semantic); `unknown` is the unrecognized remainder.
+- **`classify_error`** decides operational retriability from the rendered error string:
+  a permanent blocklist first, a transient list second, bare `exit code N` retries, and
+  wholly unrecognized text fails.
+  It survives for records written before structured failures existed; contract failures
+  should route through `classify_output_failures`, which reads what refused the output
+  instead of the sentence describing it.
+- Unknown operational failures default to non-retriable, which is the deliberate reading
+  of the concepts doc’s rule: silently retrying an unrecognized failure hides a new
+  failure mode.
+
+Handling follows the class: retriable classes retry per `RetryPolicy` on the pool path,
+and `quota_exhausted` pauses submissions until the provider’s named reset time rather
+than burning attempts against a closed window.
+
+Two known gaps, both against design test 17: the `run-process` inline execution paths
+neither classify nor retry (the pool path owns that machinery today), and no aggregate
+view buckets failures by layer or class, so the real-time half of placement exists and
+the aggregate half does not.
+
 ### 13.1 Plugin System
 
 The plugin system separates generic framework concerns from domain-specific logic.
@@ -1922,26 +2099,44 @@ Provides a normalized `MemoryPressure` reading used to gate batch launches.
 
 | Level | Available Memory | Concurrency Action |
 | --- | --- | --- |
-| `NORMAL` | >40% | safe to increase |
-| `ELEVATED` | 20-40% | hold current |
-| `HIGH` | 10-20% | reduce |
-| `CRITICAL` | <10% | do not launch new work |
+| `NORMAL` | >25% | ramp concurrency up |
+| `ELEVATED` | 15-25% | hold current concurrency |
+| `HIGH` | 8-15% | reduce |
+| `CRITICAL` | <8% | do not launch new work |
+
+The thresholds sit lower than intuition suggests, deliberately.
+A workstation running a browser and an editor idles around 30-50% available, and
+treating that as cause for caution would hold concurrency down during normal operation.
+`_classify_available` in `osutils/memory_pressure.py` is the source of truth.
 
 #### Platform Backends
 
-- **macOS**: reads `kern.memorystatus_level` via `sysctl` for free memory percentage;
-  reads swap usage from `vm.swapusage`.
+- **macOS**: budgets from `vm_stat` reclaimable pages, free plus inactive plus
+  purgeable, over `hw.memsize`, using the page size `vm_stat` reports.
+  `kern.memorystatus_level` is read alongside it and carried as `alarm_pct`, never as
+  the budget: it counts active pages, so it runs roughly 2x the reclaimable figure.
+  Swap comes from `vm.swapusage`. See
+  [memory-accounting-reference.md](../memory-accounting-reference.md).
 - **Linux**: computes `MemAvailable / MemTotal` from `/proc/meminfo`. Optionally refines
   using PSI (Pressure Stall Information) from `/proc/pressure/memory` -- if
   `psi_some_avg10 > 5`, the PSI-derived percentage replaces the meminfo estimate when
   lower.
-- **Fallback**: unsupported platforms get 30% (ELEVATED).
+- **Unsupported platforms**: `measure()` raises `UnsupportedTelemetryPlatformError`. A
+  pool that cannot read memory is not a pool that should guess at a safe-looking number
+  and launch anyway.
 
 #### Integration
 
-Memory pressure is checked **before each batch launch** in `run_parallel`. If CRITICAL,
-the system pauses 30 seconds and re-checks.
-Pressure readings are logged alongside each batch start for observability.
+Memory pressure is consumed in one place: `RunPool._monitor_loop`, which samples on
+every tick and passes the resulting level to `_adjust_concurrency`. There is no
+per-batch check in `run_parallel` and no pause on CRITICAL; CRITICAL reduces the memory
+ceiling by 50% on each tick, and the reduction is non-preemptive, so processes already
+running are left alone and the narrower ceiling applies to what launches next.
+
+The level is the only thing that crosses that boundary.
+`_adjust_concurrency` never sees a byte count, which is why a starting estimate made
+from a wrong budget is not corrected by later sampling.
+See [arch-runpool.md](arch-runpool.md) for the policy table and the ramp factors.
 
 ### 14.4 Pre-Flight Checks
 

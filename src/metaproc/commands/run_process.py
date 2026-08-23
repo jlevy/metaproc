@@ -19,7 +19,7 @@ import shlex
 import subprocess
 import time
 import traceback
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -73,8 +73,20 @@ from metaproc.engine.dep_state import (
     recorded_step_hash,
 )
 from metaproc.engine.discovery import discover_items_from_source
-from metaproc.engine.graph import downstream, propagate_failure, topo_sort
+from metaproc.engine.fan_in import write_outcome_manifest
+from metaproc.engine.graph import (
+    downstream,
+    item_aligned_chains,
+    propagate_failure,
+    topo_sort,
+)
 from metaproc.engine.input_validation import validate_process_inputs, validate_process_outputs
+from metaproc.engine.item_runner import (
+    StepInvoker,
+    run_aligned_chain,
+    run_fan_out,
+    with_retry,
+)
 from metaproc.engine.pathing import (
     compute_logs_dir,
     compute_run_dir,
@@ -995,7 +1007,10 @@ async def _execute_code_step(
                 run_id=run_id,
                 step_node_id=step_id,
             ):
-                handler_fn(dict(variables), process_step)
+                # Off the event loop: a code handler is synchronous, and calling it
+                # inline pins the loop for its whole duration, which serializes every
+                # sibling item of a fan-out no matter how the dispatcher gathers them.
+                await asyncio.to_thread(handler_fn, dict(variables), process_step)
         elif command_ref is not None:
             resolved_cmd = resolve_templates(command_ref, variables)
             env = dict(os.environ)
@@ -1028,18 +1043,24 @@ async def _execute_code_step(
         if output:
             with atomic_output_file(log_file) as tmp_path:
                 tmp_path.write_text(output)
+        command_error = f"command exit code {exc.returncode}"
         mark_failed_at(
-            state_dir, error=f"command exit code {exc.returncode}", running_record=running_record
+            state_dir,
+            error=command_error,
+            running_record=running_record,
+            failure_class=str(classify_failure(command_error)),
         )
         return False
     except Exception as exc:
         tb = traceback.format_exc()
         with atomic_output_file(log_file) as tmp_path:
             tmp_path.write_text(tb)
+        handler_error = f"{type(exc).__name__}: {exc} (traceback in {log_file.name})"
         mark_failed_at(
             state_dir,
-            error=f"{type(exc).__name__}: {exc} (traceback in {log_file.name})",
+            error=handler_error,
             running_record=running_record,
+            failure_class=str(classify_failure(handler_error)),
         )
         return False
 
@@ -1054,6 +1075,7 @@ async def _execute_code_step(
                 error=f"output validation failed: {'; '.join(output_errors)}",
                 running_record=running_record,
                 output_failures=output_failures,
+                failure_class=str(FailureClass.INVALID_OUTPUT),
             )
             return False
 
@@ -1071,6 +1093,227 @@ async def _execute_code_step(
         ),
     )
     return True
+
+
+def _contract_retry_decision(
+    *,
+    step_map: dict[str, ResolvedStep],
+    step_def_map: dict[str, ProcessStep],
+    run_dir: Path,
+) -> Callable[[str, dict[str, str]], bool]:
+    """Decide retryability from what refused the output, per the output's declaration.
+
+    Nothing here interprets a failure. The producing output declares what its contract
+    failure costs through ``on_invalid``, and ``classify_output_failures`` resolves that
+    by reading the refusing invariant rather than the sentence describing it. Keeping the
+    decision on the contract is what stops every consumer from re-deciding it.
+
+    A failure with no structured record is not a contract failure, so it is left alone:
+    the operational path owns those.
+    """
+
+    def _should_retry(step_id: str, item_vars: dict[str, str]) -> bool:
+        state_dir = compute_task_state_dir(run_dir, step_def_map[step_id], item_vars)
+        try:
+            status = read_status_at(state_dir)
+        except (ValueError, TypeError, ValidationError):
+            return False
+        failures = getattr(status, "output_failures", None) or []
+        if not failures:
+            return False
+        return classify_output_failures(failures, step_map[step_id].outputs) == RetryVerdict.RETRY
+
+    return _should_retry
+
+
+def _with_declared_retry(
+    invoke: StepInvoker,
+    *,
+    step_map: dict[str, ResolvedStep],
+    step_def_map: dict[str, ProcessStep],
+    run_dir: Path,
+) -> StepInvoker:
+    """Apply each step's own declared retry budget.
+
+    Resolved per step rather than once for the caller, because a chain runs several
+    steps and the budget is declared on the step that has a reason to retry. Applying
+    the first step's policy to the whole walk would give a stage a budget nobody
+    declared for it, and silently withhold one that was.
+    """
+
+    def _budget(step_id: str) -> tuple[int, Callable[[int], float]] | None:
+        fan_out = step_map[step_id].fan_out
+        policy = fan_out.retry if fan_out else None
+        if policy is None:
+            return None
+        return (policy.max_retries + 1, lambda attempt: compute_backoff(attempt, policy))
+
+    return with_retry(
+        invoke,
+        should_retry=_contract_retry_decision(
+            step_map=step_map, step_def_map=step_def_map, run_dir=run_dir
+        ),
+        budget_for=_budget,
+    )
+
+
+def _discover_chain_items(
+    *,
+    target: ResolvedStep,
+    step_def: ProcessStep,
+    variables: dict[str, str],
+    run_dir: Path,
+) -> list[dict[str, str]]:
+    """Every item of a fan-out source, whether or not it has already run.
+
+    Reuse is decided per item per step by the caller rather than here, because an item
+    that finished one step of a chain but not a later one is still actionable and
+    filtering it out at discovery would drop it from the chain entirely.
+    """
+    assert target.fan_out is not None
+    source_path = Path(target.fan_out.source)
+    if not source_path.exists():
+        raise CLIError(f"source file not found: {source_path}")
+    try:
+        discovery = discover_items_from_source(
+            source_path,
+            step_def,
+            output_paths=None,
+            params=variables,
+            reuse_policy="trust_state",
+            run_dir=run_dir,
+        )
+    except ValueError as exc:
+        raise CLIError(str(exc)) from exc
+    return [*discovery.actionable_contexts, *discovery.filtered_items]
+
+
+async def _execute_code_fan_out_step(
+    *,
+    spec: ProcessSpec,
+    step_def: ProcessStep,
+    target: ResolvedStep,
+    variables: dict[str, str],
+    process_dir: Path,
+    run_dir: Path,
+    run_id: str,
+    max_concurrency: int | None,
+    external_semaphore: asyncio.Semaphore | None,
+    out: Any,
+) -> bool:
+    """Execute a mode:code step with for_each, one handler invocation per item."""
+    step_id = target.step_id
+    assert target.fan_out is not None
+
+    item_contexts = _discover_chain_items(
+        target=target, step_def=step_def, variables=variables, run_dir=run_dir
+    )
+    if not item_contexts:
+        out.progress(f"  Step '{step_id}': no actionable items (all completed)")
+        return True
+
+    out.progress(f"  Step '{step_id}': {len(item_contexts)} actionable items")
+
+    async def _invoke(_step_id: str, item_vars: dict[str, str]) -> bool:
+        return await _execute_code_step(
+            spec=spec,
+            step_def=step_def,
+            target=target,
+            variables=item_vars,
+            process_dir=process_dir,
+            run_dir=run_dir,
+            run_id=run_id,
+            out=out,
+        )
+
+    succeeded, total = await run_fan_out(
+        item_contexts=item_contexts,
+        variables=variables,
+        invoke=_with_declared_retry(
+            _invoke,
+            step_map={step_id: target},
+            step_def_map={step_id: step_def},
+            run_dir=run_dir,
+        ),
+        step_id=step_id,
+        max_concurrency=max_concurrency,
+        step_concurrency=target.fan_out.max_concurrency,
+        external_semaphore=external_semaphore,
+    )
+    if succeeded != total:
+        out.progress(f"  Step '{step_id}': {total - succeeded} of {total} items failed")
+    return succeeded == total
+
+
+async def _execute_item_aligned_chain(
+    *,
+    spec: ProcessSpec,
+    chain: list[str],
+    step_map: dict[str, ResolvedStep],
+    step_def_map: dict[str, ProcessStep],
+    variables: dict[str, str],
+    process_dir: Path,
+    run_dir: Path,
+    run_id: str,
+    max_concurrency: int | None,
+    external_semaphore: asyncio.Semaphore | None,
+    out: Any,
+) -> dict[str, bool]:
+    """Run an item-aligned chain once per item, and report success per step."""
+    head = step_map[chain[0]]
+    assert head.fan_out is not None
+
+    item_contexts = _discover_chain_items(
+        target=head, step_def=step_def_map[chain[0]], variables=variables, run_dir=run_dir
+    )
+    if not item_contexts:
+        out.progress(f"  Chain '{' -> '.join(chain)}': no items")
+        return dict.fromkeys(chain, True)
+
+    out.progress(f"  Chain '{' -> '.join(chain)}': {len(item_contexts)} items, item-aligned")
+
+    async def _invoke(step_id: str, item_vars: dict[str, str]) -> bool:
+        return await _execute_code_step(
+            spec=spec,
+            step_def=step_def_map[step_id],
+            target=step_map[step_id],
+            variables=item_vars,
+            process_dir=process_dir,
+            run_dir=run_dir,
+            run_id=run_id,
+            out=out,
+        )
+
+    def _is_done(step_id: str, item_vars: dict[str, str]) -> bool:
+        prior = read_status_at(compute_task_state_dir(run_dir, step_def_map[step_id], item_vars))
+        return prior is not None and prior.state in ("completed", "cached")
+
+    def _step_concurrency(step_id: str) -> int | None:
+        fan_out = step_map[step_id].fan_out
+        return fan_out.max_concurrency if fan_out else None
+
+    tallies = await run_aligned_chain(
+        chain=chain,
+        item_contexts=item_contexts,
+        variables=variables,
+        invoke=_with_declared_retry(
+            _invoke,
+            step_map=step_map,
+            step_def_map=step_def_map,
+            run_dir=run_dir,
+        ),
+        is_done=_is_done,
+        max_concurrency=max_concurrency,
+        step_concurrency=_step_concurrency,
+        external_semaphore=external_semaphore,
+    )
+
+    results: dict[str, bool] = {}
+    for step_id, (succeeded, reached) in tallies.items():
+        results[step_id] = reached > 0 and succeeded == reached
+        if not results[step_id]:
+            out.progress(f"  Step '{step_id}': {reached - succeeded} of {reached} items failed")
+    return results
 
 
 async def _run_agent_subprocess(
@@ -1309,7 +1552,10 @@ async def _execute_agent_step(
                 )
         except subprocess.TimeoutExpired:
             mark_failed_at(
-                state_dir, error=f"timeout after {timeout_s}s", running_record=running_record
+                state_dir,
+                error=f"timeout after {timeout_s}s",
+                running_record=running_record,
+                failure_class=str(FailureClass.TIMEOUT),
             )
             return False
 
@@ -1342,7 +1588,12 @@ async def _execute_agent_step(
                 await asyncio.sleep(backoff)
                 attempt += 1
                 continue
-            mark_failed_at(state_dir, error=exit_error, running_record=running_record)
+            mark_failed_at(
+                state_dir,
+                error=exit_error,
+                running_record=running_record,
+                failure_class=str(classify_failure(exit_error)),
+            )
             return False
 
         if boundary_before is not None and allowed_targets:
@@ -1406,6 +1657,7 @@ async def _execute_agent_step(
                     error=error_str,
                     running_record=running_record,
                     output_failures=output_failures,
+                    failure_class=str(FailureClass.INVALID_OUTPUT),
                 )
                 return False
 
@@ -2094,6 +2346,8 @@ async def _execute_manual_step(
 async def _execute_step(
     *,
     spec: ProcessSpec,
+    step_map: dict[str, ResolvedStep] | None = None,
+    chains_by_member: dict[str, list[str]] | None = None,
     step_def: ProcessStep,
     target: ResolvedStep,
     variables: dict[str, str],
@@ -2120,6 +2374,42 @@ async def _execute_step(
 ) -> bool:
     """Dispatch a step to the correct execution path. Returns True on success."""
     step_id = target.step_id
+
+    # Fan-in bindings are materialized from durable per-item state just before the
+    # consumer runs, so the collection describes what actually happened rather than
+    # what was true when the plan was built.
+    for input_name, io_spec in target.inputs.items():
+        if not io_spec.collect or not io_spec.path:
+            continue
+        # The expected roster comes from the collected step's own resolved fan-out, so
+        # an item that died before reaching it is still reported rather than absent.
+        collected_step = (step_map or {}).get(io_spec.collect)
+        expected_keys = None
+        if collected_step is not None and collected_step.fan_out is not None:
+            bind = collected_step.fan_out.bind
+            expected_keys = [
+                str(item[bind]) for item in collected_step.fan_out.items if bind in item
+            ]
+        # The chain feeding the collected step, so an item that never arrived can be
+        # reported with where it stopped rather than as a bare absence.
+        upstream_chain: list[str] = []
+        for candidate in (chains_by_member or {}).get(io_spec.collect, []):
+            upstream_chain.append(candidate)
+            if candidate == io_spec.collect:
+                break
+        manifest = write_outcome_manifest(
+            run_dir,
+            io_spec.collect,
+            Path(resolve_templates(io_spec.path, variables)),
+            expected_keys,
+            upstream_chain,
+        )
+        counts = manifest["fan_in_outcomes"]
+        out.progress(
+            f"  Collected '{input_name}' from '{io_spec.collect}': "
+            f"{counts['succeeded']} succeeded, {counts['failed']} failed "
+            f"of {counts['total']}"
+        )
 
     if target.mode == "composite":
         return await _execute_composite_step(
@@ -2157,6 +2447,19 @@ async def _execute_step(
         )
 
     if target.mode == "code":
+        if target.fan_out is not None:
+            return await _execute_code_fan_out_step(
+                spec=spec,
+                step_def=step_def,
+                target=target,
+                variables=variables,
+                process_dir=process_dir,
+                run_dir=run_dir,
+                run_id=run_id,
+                max_concurrency=max_concurrency,
+                external_semaphore=external_semaphore,
+                out=out,
+            )
         return await _execute_code_step(
             spec=spec,
             step_def=step_def,
@@ -2247,6 +2550,21 @@ async def _orchestrate(
     step_def_map = {s.id: s for s in spec.steps}
     levels = topo_sort(plan.steps)
 
+    # Item-aligned chains run per item under their head, so the level walk must not
+    # also run the absorbed members: their edges are item-scoped and the barrier
+    # between them is exactly what alignment removes. Chains of code steps only, since
+    # the agent path carries dispatch machinery this executor does not reproduce.
+    _chains = [
+        chain
+        for chain in item_aligned_chains(plan.steps)
+        if all(step_map[sid].mode == "code" for sid in chain)
+    ]
+    _chain_head_of: dict[str, list[str]] = {chain[0]: chain for chain in _chains}
+    _chains_by_member: dict[str, list[str]] = {
+        member: chain for chain in _chains for member in chain
+    }
+    _absorbed: set[str] = {sid for chain in _chains for sid in chain[1:]}
+
     events.process_start(spec.name, run_id, backend_name, len(step_map))
 
     # Shared semaphore for global fan-out concurrency cap (RF-4).
@@ -2301,8 +2619,45 @@ async def _orchestrate(
         events.step_start(step_id, target.mode)
 
         step_def = step_def_map[step_id]
+
+        chain = _chain_head_of.get(step_id)
+        if chain is not None:
+            chain_results = await _execute_item_aligned_chain(
+                spec=spec,
+                chain=chain,
+                step_map=step_map,
+                step_def_map=step_def_map,
+                variables=variables,
+                process_dir=process_dir,
+                run_dir=run_dir,
+                run_id=run_id,
+                max_concurrency=max_concurrency,
+                external_semaphore=global_semaphore,
+                out=out,
+            )
+            chain_elapsed = time.monotonic() - step_start
+            for member_id, member_ok in chain_results.items():
+                step_states[member_id] = (
+                    {"state": "completed", "completed_at": _now_iso()}
+                    if member_ok
+                    else {"state": "failed", "completed_at": _now_iso()}
+                )
+                if member_id != step_id:
+                    events.step_start(member_id, step_map[member_id].mode)
+                if member_ok:
+                    events.step_complete(member_id, chain_elapsed)
+                else:
+                    events.step_fail(member_id, chain_elapsed)
+            _write_process_status(run_dir, spec.name, step_states, started_at)
+            failed_members = [m for m, ok in chain_results.items() if not ok]
+            for member_id in failed_members:
+                out.progress(f"  Step '{member_id}': FAILED")
+            return step_id, not failed_members
+
         success = await _execute_step(
             spec=spec,
+            step_map=step_map,
+            chains_by_member=_chains_by_member,
             step_def=step_def,
             target=target,
             variables=variables,
@@ -2366,6 +2721,9 @@ async def _orchestrate(
         # Filter steps: skip blocked, user-skipped, override-satisfied, and already-completed.
         runnable: list[str] = []
         for step_id in level:
+            if step_id in _absorbed:
+                # Run by the head of its item-aligned chain, at the head's level.
+                continue
             if step_id in blocked_steps:
                 step_states[step_id] = {"state": "blocked"}
                 events.step_blocked(step_id)

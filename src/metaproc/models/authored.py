@@ -270,6 +270,22 @@ class IOSpec(BaseModel):
     template: str | None = None
     condition: str | None = None
 
+    # Fan-in binding. `collect` names an upstream fan-out step whose per-item outcomes
+    # this input receives as one manifest, so a consumer reads a typed collection
+    # instead of rediscovering upstream state by walking directories.
+    collect: str | None = None
+    require: Literal["succeeded", "finished"] | None = Field(
+        default=None,
+        description=(
+            "Which upstream outcomes satisfy this input. `succeeded` (the default when "
+            "collecting) needs every item to have succeeded. `finished` accepts any "
+            "terminal outcome, so a partially failed upstream still satisfies the edge "
+            "and the consumer decides what a failure means. The two are named for the "
+            "condition each states, because 'completed' reads as terminal in some "
+            "contexts and as success in others."
+        ),
+    )
+
     model_config: ClassVar[ConfigDict] = ConfigDict(populate_by_name=True)
 
     @model_validator(mode="after")
@@ -351,6 +367,31 @@ class ForEach(BaseModel):
     bind_fields: list[str] = Field(default_factory=list)
     batch_size: int = 10
     retry: RetryPolicy | None = None
+
+    max_concurrency: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Ceiling on this step's items in flight, independent of any other step's. "
+            "A run-wide cap and an execution profile both answer a different question: "
+            "the first is the whole run's budget and the second is which adapter and "
+            "model, so expressing a per-step ceiling through either conflates it with "
+            "something else and leaves the limit invisible in the spec that describes "
+            "the work. Omitted, the step is bounded only by the run-wide cap."
+        ),
+    )
+
+    align: Literal["same_key"] | None = Field(
+        default=None,
+        description=(
+            "Declares this step's `needs` edge item-scoped rather than step-scoped: "
+            "this step's task for item k waits only on the upstream task for item k, "
+            "so items flow through the chain independently instead of barriering at "
+            "the step boundary. Valid only where the upstream also fans out over the "
+            "same source, because alignment on unrelated rosters would join unrelated "
+            "work. Absent, the edge stays step-scoped and execution is unchanged."
+        ),
+    )
 
     key: str | None = Field(
         default=None,
