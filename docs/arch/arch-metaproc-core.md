@@ -1997,6 +1997,8 @@ location, and message are JSON-quoted in a framework-authored correction section
 The section bounds individual values, total size, and failure count so a pathological
 validator result cannot consume the next attempt’s context window; it records how many
 failures were omitted.
+JSON-escaped values have their own rendered-size ceiling, so control-heavy text cannot
+crowd every actionable coordinate out of the section.
 Subprocess and transport failures never create or replace this section because they
 produced no validation facts; a later retry retains any still-pending feedback from an
 earlier content failure.
@@ -2043,6 +2045,8 @@ scheduler replaces that field only after a retryable validation failure, and
 `_build_prepare_launch` appends it to the next attempt’s resolved prompt.
 A transient retry before any content failure therefore receives the original prompt
 unchanged.
+Attempt-numbered prompt snapshots preserve what each launch received even when
+zero-backoff retries start within the same second.
 
 The loop condition `while not_started or active or retry_heap` guarantees liveness:
 items in backoff are never lost even when `active` is temporarily empty.

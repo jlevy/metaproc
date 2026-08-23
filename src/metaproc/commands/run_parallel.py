@@ -1419,7 +1419,8 @@ def _build_prepare_launch(  # noqa: PLR0913
         )
 
         adapter = get_adapter(adapter_type)
-        prompt_file = Path(log_path).with_suffix(".prompt.md")
+        log_path_obj = Path(log_path)
+        prompt_file = log_path_obj.with_name(f"{log_path_obj.stem}-attempt{attempt}.prompt.md")
         with atomic_output_file(prompt_file) as tmp_path:
             Path(tmp_path).write_text(resolved_prompt)
         cmd = adapter.build_command(

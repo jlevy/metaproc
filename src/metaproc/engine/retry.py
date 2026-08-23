@@ -58,13 +58,36 @@ MAX_OUTPUT_FAILURE_FEEDBACK_ITEMS = 20
 MAX_OUTPUT_FAILURE_FEEDBACK_VALUE_CHARS = 2_000
 """Maximum raw characters retained from any one validation field."""
 
+MAX_OUTPUT_FAILURE_FEEDBACK_QUOTED_VALUE_CHARS = 3_000
+"""Maximum characters in one JSON-quoted validation field."""
+
 
 def _quoted_feedback_value(value: str) -> str:
     """JSON-quote one bounded, potentially untrusted validation value."""
-    if len(value) > MAX_OUTPUT_FAILURE_FEEDBACK_VALUE_CHARS:
-        omitted = len(value) - MAX_OUTPUT_FAILURE_FEEDBACK_VALUE_CHARS
-        value = f"{value[:MAX_OUTPUT_FAILURE_FEEDBACK_VALUE_CHARS]}... [truncated {omitted} chars]"
-    return json.dumps(value)
+    value_length = len(value)
+
+    def _render(retained: int) -> str:
+        omitted = value_length - retained
+        suffix = f"... [truncated {omitted} chars]" if omitted else ""
+        return json.dumps(f"{value[:retained]}{suffix}")
+
+    retained = min(value_length, MAX_OUTPUT_FAILURE_FEEDBACK_VALUE_CHARS)
+    quoted = _render(retained)
+    if len(quoted) <= MAX_OUTPUT_FAILURE_FEEDBACK_QUOTED_VALUE_CHARS:
+        return quoted
+
+    # JSON escaping can expand one source character into several rendered
+    # characters. Find the longest source prefix that still keeps the quoted
+    # value inside its prompt budget.
+    low = 0
+    high = retained
+    while low < high:
+        midpoint = (low + high + 1) // 2
+        if len(_render(midpoint)) <= MAX_OUTPUT_FAILURE_FEEDBACK_QUOTED_VALUE_CHARS:
+            low = midpoint
+        else:
+            high = midpoint - 1
+    return _render(low)
 
 
 def _output_failure_feedback_lines(failure: OutputFailure) -> list[str]:
@@ -94,6 +117,7 @@ def append_output_failure_feedback(original_prompt: str, failures: Sequence[Outp
     if not failures:
         return original_prompt
 
+    separator = "" if original_prompt.endswith("\n") else "\n"
     lines = [
         "",
         INVALID_OUTPUT_RETRY_HEADER,
@@ -104,11 +128,13 @@ def append_output_failure_feedback(original_prompt: str, failures: Sequence[Outp
         ),
     ]
     included = 0
+    omission_reserve = len(f"\n- omitted_failures: {len(failures)}")
     for failure in failures[:MAX_OUTPUT_FAILURE_FEEDBACK_ITEMS]:
         failure_lines = _output_failure_feedback_lines(failure)
         candidate = "\n".join([*lines, *failure_lines])
-        if len(candidate) > MAX_OUTPUT_FAILURE_FEEDBACK_CHARS - 64:
-            break
+        candidate_length = len(separator) + len(candidate) + omission_reserve + 1
+        if candidate_length > MAX_OUTPUT_FAILURE_FEEDBACK_CHARS:
+            continue
         lines.extend(failure_lines)
         included += 1
 
@@ -116,7 +142,6 @@ def append_output_failure_feedback(original_prompt: str, failures: Sequence[Outp
     if omitted:
         lines.append(f"- omitted_failures: {omitted}")
 
-    separator = "" if original_prompt.endswith("\n") else "\n"
     feedback = "\n".join(lines)
     return f"{original_prompt}{separator}{feedback}\n"
 

@@ -387,7 +387,7 @@ class TestPoolPrepareEnv:
     @patch("metaproc.commands.run_parallel.enforce_no_unresolved_placeholders")
     @patch("metaproc.commands.run_parallel.mark_running_at")
     @patch("metaproc.commands.run_parallel.write_attempt_at")
-    def test_build_prepare_launch_adds_structured_feedback_after_output_failure(
+    def test_build_prepare_launch_preserves_attempt_prompts_with_structured_feedback(
         self,
         mock_write_attempt: MagicMock,
         mock_mark_running: MagicMock,
@@ -400,8 +400,10 @@ class TestPoolPrepareEnv:
         del mock_write_attempt, mock_mark_running
         mock_adapter = MagicMock()
         observed_prompts: list[str] = []
+        observed_prompt_paths: list[Path] = []
 
         def _capture_prompt(prompt_file: Path, *_args: Any) -> list[str]:
+            observed_prompt_paths.append(Path(prompt_file))
             observed_prompts.append(Path(prompt_file).read_text())
             return ["echo", "hello"]
 
@@ -416,17 +418,40 @@ class TestPoolPrepareEnv:
         mock_prepare_step.return_value = ("write the report", str(logs_dir), log_path)
 
         shared = _make_shared("AAPL", tmp_path)
-        shared["attempt_number"] = 2
-        shared["output_failure_feedback"] = (
-            OutputFailure(
-                output="report",
-                path="output.yaml",
-                kind=OutputFailureKind.missing,
-                message="file not found; literal {{VALIDATOR_DATA}}",
-            ),
+        failure = OutputFailure(
+            output="report",
+            path="output.yaml",
+            kind=OutputFailureKind.missing,
+            message="file not found; literal {{VALIDATOR_DATA}}",
         )
+        shared["attempt_number"] = 1
+        shared["output_failure_feedback"] = ()
 
-        prepare_fn = _build_prepare_launch(
+        first_prepare = _build_prepare_launch(
+            shared=shared,
+            item_vars={"ticker": "AAPL", "VARIANT": "v1"},
+            item_context={"ticker": "AAPL"},
+            attempt=1,
+            spec=_make_spec(),
+            step_def=_make_step_def(),
+            step="predict",
+            each="ticker",
+            process_dir=tmp_path,
+            merged_config={"model": "claude-3", "timeout_s": 300},
+            effective_outputs=None,
+            effective_variant="v1",
+            allowed_runtime=set(),
+            adapter_type="claude-code-cli",
+            target_env=None,
+            run_id="test/run",
+            refresh_token_fn=None,
+            pool_status_path=None,
+        )
+        first_prepare()
+
+        shared["attempt_number"] = 2
+        shared["output_failure_feedback"] = (failure,)
+        second_prepare = _build_prepare_launch(
             shared=shared,
             item_vars={"ticker": "AAPL", "VARIANT": "v1"},
             item_context={"ticker": "AAPL"},
@@ -446,19 +471,17 @@ class TestPoolPrepareEnv:
             refresh_token_fn=None,
             pool_status_path=None,
         )
+        second_prepare()
 
-        prepare_fn()
-
-        assert len(observed_prompts) == 1
-        assert observed_prompts[0].startswith("write the report")
-        assert "The prior attempt's declared output failed validation." in observed_prompts[0]
-        assert 'output: "report"' in observed_prompts[0]
-        assert 'kind: "missing"' in observed_prompts[0]
-        mock_enforce.assert_called_once_with(
-            "write the report",
-            context="step 'predict' prompt for ticker=AAPL",
-            allowed=set(),
-        )
+        assert len(observed_prompts) == 2
+        assert observed_prompts[0] == "write the report"
+        assert observed_prompts[1].startswith("write the report")
+        assert "The prior attempt's declared output failed validation." in observed_prompts[1]
+        assert 'output: "report"' in observed_prompts[1]
+        assert 'kind: "missing"' in observed_prompts[1]
+        assert len(set(observed_prompt_paths)) == 2
+        assert all(path.exists() for path in observed_prompt_paths)
+        assert mock_enforce.call_count == 2
 
 
 # ===========================================================================
@@ -582,21 +605,29 @@ class TestPoolSubmitAndShutdown:
 
         asyncio.run(_run())
 
-    def test_output_retry_carries_failures_into_the_next_prepare(self, tmp_path: Path) -> None:
-        """The scheduler stores only content-failure facts for the next launch."""
+    def test_output_feedback_survives_a_transport_retry(self, tmp_path: Path) -> None:
+        """Transport failures retain the latest content-failure facts."""
 
         async def _run() -> None:
             class FakePool:
                 _status_path = None
+
+                def __init__(self) -> None:
+                    self.submission_count = 0
 
                 @property
                 def snapshot(self) -> Any:
                     return SimpleNamespace(current_concurrency=1, active_count=0, pending_count=0)
 
                 def submit(self, _config: Any) -> asyncio.Future[Any]:
+                    self.submission_count += 1
                     future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
                     future.set_result(
-                        SimpleNamespace(exit_code=0, kill_reason=None, elapsed_s=0.01)
+                        SimpleNamespace(
+                            exit_code=1 if self.submission_count == 2 else 0,
+                            kill_reason=None,
+                            elapsed_s=0.01,
+                        )
                     )
                     return future
 
@@ -668,6 +699,7 @@ class TestPoolSubmitAndShutdown:
                     "metaproc.commands.run_parallel._handle_success",
                     side_effect=_fake_handle_success,
                 ),
+                patch("metaproc.commands.run_parallel.mark_failed_at"),
             ):
                 results = await _run_agent_pool(
                     spec=_make_spec(),
@@ -683,7 +715,7 @@ class TestPoolSubmitAndShutdown:
                     },
                     effective_variant="v1",
                     allowed_runtime=set(),
-                    retry_policy=RetryPolicy(max_retries=1, initial_backoff_s=0),
+                    retry_policy=RetryPolicy(max_retries=2, initial_backoff_s=0),
                     process_dir=tmp_path,
                     target_env=None,
                     refresh_token_fn=None,
@@ -693,7 +725,7 @@ class TestPoolSubmitAndShutdown:
                 )
 
             assert results == [("AAPL", 0)]
-            assert prepared_feedback == [(), (failure,)]
+            assert prepared_feedback == [(), (failure,), (failure,)]
 
         asyncio.run(_run())
 

@@ -1496,7 +1496,7 @@ async def _execute_agent_step(
         # inline prompt contents (notably codex-cli) must receive a real, readable path;
         # a synthetic placeholder makes the run fail before dispatch.
         ts = datetime.now(tz=UTC).strftime("%H%M%S")
-        prompt_file = logs_dir / f"prompt-{step_id}-{ts}.txt"
+        prompt_file = logs_dir / f"prompt-{step_id}-attempt{attempt}-{ts}.txt"
         attempt_prompt = append_output_failure_feedback(resolved_prompt, output_failure_feedback)
         with atomic_output_file(prompt_file) as tmp_path:
             Path(tmp_path).write_text(attempt_prompt)

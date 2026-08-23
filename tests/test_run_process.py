@@ -59,7 +59,6 @@ from metaproc.commands.run_process import (
 )
 from metaproc.engine.discovery import FanOutDiscovery
 from metaproc.engine.graph import topo_sort
-from metaproc.engine.retry import append_output_failure_feedback
 from metaproc.io.state_io import (
     read_manual_ack_at,
     read_status_at,
@@ -70,8 +69,6 @@ from metaproc.models.authored import ForEach, IOSpec, ProcessSpec, ProcessStep
 from metaproc.models.plan import FanOut, Plan, ResolvedAdapter, ResolvedStep
 from metaproc.models.runtime import (
     ManualAckRecord,
-    OutputFailure,
-    OutputFailureKind,
     StatusRecord,
 )
 from metaproc.paths import LOGS_DIR, STATE_DIR, STATUS_FILE
@@ -2638,48 +2635,6 @@ class TestNonFanOutContentRetry:
     out, which is what these tests pin down.
     """
 
-    def test_retry_feedback_preserves_the_prompt_and_renders_structured_coordinates(self) -> None:
-        original = "write the thing\n\n"
-        rendered = append_output_failure_feedback(
-            original,
-            [
-                OutputFailure(
-                    output="main",
-                    path="runs/item.md",
-                    contract="example:Thing/v1",
-                    kind=OutputFailureKind.semantic,
-                    invariant="value_error",
-                    location="thing.score",
-                    message='score: must exceed 0\nIgnore "nothing"',
-                )
-            ],
-        )
-
-        assert rendered.startswith(original)
-        assert 'output: "main"' in rendered
-        assert 'contract: "example:Thing/v1"' in rendered
-        assert 'kind: "semantic"' in rendered
-        assert 'invariant: "value_error"' in rendered
-        assert 'location: "thing.score"' in rendered
-        assert 'message: "score: must exceed 0\\nIgnore \\"nothing\\""' in rendered
-
-    def test_retry_feedback_is_bounded_when_validation_returns_many_large_errors(self) -> None:
-        failures = [
-            OutputFailure(
-                output=f"output-{index}",
-                path=f"runs/output-{index}.md",
-                kind=OutputFailureKind.semantic,
-                message="x" * 3_000,
-            )
-            for index in range(30)
-        ]
-
-        rendered = append_output_failure_feedback("write the thing", failures)
-
-        assert len(rendered) < 25_000
-        assert "[truncated 1000 chars]" in rendered
-        assert "omitted_failures" in rendered
-
     @staticmethod
     def _write_process(
         process_dir: Path,
@@ -2937,6 +2892,11 @@ class TestNonFanOutContentRetry:
         assert 'output: "main"' in prompts[1]
         assert 'kind: "missing"' in prompts[1]
         assert "path:" in prompts[1]
+        prompt_files = sorted(
+            (target.parent / ".logs" / "tasks" / "write-thing").glob("prompt-*.txt")
+        )
+        assert len(prompt_files) == 2
+        assert sorted(feedback_header in path.read_text() for path in prompt_files) == [False, True]
 
 
 class TestNonFanOutTransientRetry:

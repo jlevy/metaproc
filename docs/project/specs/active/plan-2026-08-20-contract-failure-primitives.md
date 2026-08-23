@@ -327,9 +327,12 @@ mode. Neither needs a primitive.
 - [x] Honour it where output validation is checked.
   A clause is read from the output that failed, so a sibling’s declaration never governs
   it.
-- [x] Feed the latest structured failures into the next agent prompt when `on_invalid`
-  selects a retry. Fan-out and non-fan-out paths use the same correction section;
-  transport failures never synthesize or replace validation feedback.
+- [x] Feed the latest structured failures into the next agent prompt when the default
+  kind policy or an `on_invalid` override selects a retry.
+  Fan-out and non-fan-out paths use the same correction section; transport failures
+  never synthesize or replace validation feedback.
+  Attempt-numbered prompt snapshots preserve the exact correction section sent to each
+  launch.
 - [ ] Make `fail_run` stop the run.
   It currently fails the item permanently, exactly as `fail` does; `requires_run_abort`
   reports the declaration and is the seam a coordinator-level abort attaches to.
