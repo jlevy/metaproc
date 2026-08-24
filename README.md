@@ -182,6 +182,18 @@ to set up per-adapter credentials.
 Downstream packages own their domain process specs, schemas, handlers, fixtures, and
 runbooks.
 
+## Working with a Coding Agent
+
+This repository includes [`AGENTS.md`](AGENTS.md), with the build, test, dependency,
+layout, and release conventions a coding agent needs for routine work.
+`CLAUDE.md` imports the same instructions for Claude Code.
+
+For an ordinary change, tell your agent: “Read `AGENTS.md`, implement this change, and
+run the required checks.”
+For toolchain or template maintenance, ask it to use the
+[simple-modern-uv skill](https://github.com/jlevy/simple-modern-uv/tree/main/skills/simple-modern-uv),
+which distinguishes selective feature adoption from a full Copier update.
+
 ## Development
 
 The repository follows the `simple-modern-uv` structure and uses uv, Ruff, BasedPyright,

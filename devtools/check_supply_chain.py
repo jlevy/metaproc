@@ -103,6 +103,46 @@ def _check_uv(root: Path, errors: list[str]) -> None:
         errors.append(f"uv.toml must set exclude-newer to {UV_COOL_OFF}")
 
 
+def _version_key(version: str) -> tuple[int, ...]:
+    """Numeric release tuple for comparison, ignoring any pre-release suffix."""
+    release = re.match(r"[0-9]+(?:\.[0-9]+)*", version.strip())
+    return tuple(int(part) for part in release.group(0).split(".")) if release else ()
+
+
+def _satisfies(version: str, specifier: str) -> bool:
+    """Check a concrete version against a comma-separated specifier set.
+
+    The pin is deliberately allowed to sit anywhere inside the declared range rather
+    than being forced to equal its floor: the range says which uv line the lockfile is
+    valid for, while the pin selects the newest release in that line that has cleared
+    the cool-off. Supports the operators uv.toml actually uses.
+    """
+    got = _version_key(version)
+    for clause in (part.strip() for part in specifier.split(",")):
+        if not clause:
+            continue
+        op_match = re.match(r"(>=|<=|==|!=|>|<)\s*(.+)", clause)
+        if op_match is None:
+            return False
+        op, want_text = op_match.group(1), op_match.group(2)
+        want = _version_key(want_text)
+        # Compare on equal length so "0.12.3" < "0.13" rather than the reverse.
+        width = max(len(got), len(want))
+        left = got + (0,) * (width - len(got))
+        right = want + (0,) * (width - len(want))
+        ok = {
+            ">=": left >= right,
+            "<=": left <= right,
+            "==": left == right,
+            "!=": left != right,
+            ">": left > right,
+            "<": left < right,
+        }[op]
+        if not ok:
+            return False
+    return True
+
+
 def _check_toolchain_bootstrap(root: Path, errors: list[str]) -> None:
     """Keep the session bootstrap pinned to the same toolchain as the repository.
 
@@ -128,14 +168,14 @@ def _check_toolchain_bootstrap(root: Path, errors: list[str]) -> None:
         )
 
     uv_config = tomllib.loads((root / "uv.toml").read_text(encoding="utf-8"))
-    uv_floor = str(uv_config.get("required-version", "")).lstrip("><=~^ ")
+    uv_required = str(uv_config.get("required-version", "")).strip()
     declared_uv = re.search(r'^UV_VERSION="([^"]+)"', text, re.MULTILINE)
     if declared_uv is None:
         errors.append(f"{TOOLCHAIN_SCRIPT} must declare UV_VERSION")
-    elif uv_floor and declared_uv.group(1) != uv_floor:
+    elif uv_required and not _satisfies(declared_uv.group(1), uv_required):
         errors.append(
-            f"{TOOLCHAIN_SCRIPT} UV_VERSION {declared_uv.group(1)} must match the "
-            f"uv.toml required-version floor {uv_floor} (update the pinned checksums too)"
+            f"{TOOLCHAIN_SCRIPT} UV_VERSION {declared_uv.group(1)} must satisfy the "
+            f"uv.toml required-version {uv_required} (update the pinned checksums too)"
         )
 
     # Every supported agent must run the same bootstrap first, or one agent's

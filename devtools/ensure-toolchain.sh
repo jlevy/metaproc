@@ -33,28 +33,28 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INHERITED_PATH="${PATH}"
 export PATH="$HOME/.local/bin:$PATH"
 
-# Pinned versions these checksums describe. check_supply_chain.py asserts each
-# matches its canonical source (.node-version / uv.toml), so a bump that misses
-# this file fails `make verify` instead of drifting.
-NODE_VERSION="24.18.0"
-UV_VERSION="0.11.26"
+# Pinned versions these checksums describe. check_supply_chain.py asserts NODE_VERSION
+# against .node-version and UV_VERSION against the uv.toml required-version range, so a
+# bump that misses this file fails `make verify` instead of drifting.
+NODE_VERSION="24.19.0"
+UV_VERSION="0.12.3"
 
 node_checksum_for() {
     case "$1" in
-        linux-x64) echo "783130984963db7ba9cbd01089eaf2c2efb055c7c1693c943174b967b3050cb8" ;;
-        linux-arm64) echo "6b4484c2190274175df9aa8f28e2d758a819cb1c1fe6ab481e2f95b463ab8508" ;;
-        darwin-x64) echo "dfd0dbd3e721503434df7b7205e719f61b3a3a31b2bcf9729b8b91fea240f080" ;;
-        darwin-arm64) echo "e1a97e14c99c803e96c7339403282ea05a499c32f8d83defe9ef5ec66f979ed1" ;;
+        linux-x64) echo "f625d97cd707df4ff96254916fbc5ff014f09c09effe5a1e0ca8f6d41a8789d4" ;;
+        linux-arm64) echo "d28c8a5bf0a808f0ed434a1dce8c54ae98f0371c0bd86ac58abc613f73e6643f" ;;
+        darwin-x64) echo "d1b5e999db158c62fe8f7267a4476b035d8bd93b1a605bac24a3f0dd166e3316" ;;
+        darwin-arm64) echo "8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d" ;;
         *) echo "" ;;
     esac
 }
 
 uv_checksum_for() {
     case "$1" in
-        x86_64-unknown-linux-gnu) echo "6426a73c3837e6e2483ee344cbc00f36394d179afcba6183cb77437e67db4af0" ;;
-        aarch64-unknown-linux-gnu) echo "befa1a59c91e96eb601b0fd9a97c03dd666f17baba644b2b4db9c59a767e387e" ;;
-        x86_64-apple-darwin) echo "922b460202707dd5f4ccacbadbe7f6a546cc46e82a99bf50ca99a7977a78eddd" ;;
-        aarch64-apple-darwin) echo "8f7fbf1708399b921857bce71e1d60f0d3ccf52a30caebc1c1a2f175dce13ab6" ;;
+        x86_64-unknown-linux-gnu) echo "600cf9a742aca00d292673b16b5acffaa7b8c269a364ad0c2e79498dcb1fe101" ;;
+        aarch64-unknown-linux-gnu) echo "bb66cb52e7b1823aed1183630d8d8e5c958840d584a4c55ec10a4cfc168dcca2" ;;
+        x86_64-apple-darwin) echo "4c9f52262a14da336e4a42ed24992d12d0c956acde87619e4611d321dffa602b" ;;
+        aarch64-apple-darwin) echo "546f7f8a6c70ff13a3a9d2bc958db3427298cebf3e0cb756f9177133b7068843" ;;
         *) echo "" ;;
     esac
 }
@@ -103,9 +103,11 @@ read_pin() {
     echo "$pin"
 }
 
-# uv.toml carries a range (">=0.11.26"); the bare version is the floor to accept.
+# uv.toml carries a specifier set (">=0.12.0,<0.13"); take the >= clause as the floor
+# to accept. The pinned UV_VERSION above sits inside that range rather than on its
+# floor, so read the floor here instead of assuming the two are the same.
 uv_required_floor() {
-    sed -n 's/^required-version[[:space:]]*=[[:space:]]*"[^0-9]*\([0-9.]*\)".*/\1/p' \
+    sed -n 's/^required-version[[:space:]]*=[[:space:]]*"[^0-9]*\([0-9][0-9.]*\).*/\1/p' \
         "$ROOT/uv.toml" | head -n1
 }
 

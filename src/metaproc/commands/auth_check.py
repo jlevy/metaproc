@@ -399,8 +399,10 @@ def _run_live_check(
                 results.append(
                     (
                         False,
-                        f"{label}: live check failed [{category}] ({elapsed:.1f}s) — "
-                        f"{jsonl_error[:240]}",
+                        (
+                            f"{label}: live check failed [{category}] ({elapsed:.1f}s) — "
+                            f"{jsonl_error[:240]}"
+                        ),
                     )
                 )
             else:

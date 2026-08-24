@@ -37,7 +37,7 @@ Confirm:
 
 ## Audited First-Party Exceptions
 
-Six exact first-party releases are exempt from the ordinary cool-off for this release:
+Seven exact first-party releases are exempt from the ordinary cool-off for this release:
 
 - `softschema==0.4.0`, required for portable date- and timestamp-shaped YAML scalars;
 - `frontmatter-format==0.4.0`, required by SoftSchema 0.4.0 and used directly for
@@ -59,7 +59,17 @@ Six exact first-party releases are exempt from the ordinary cool-off for this re
   `AGENTS.md` block together, and it is the first release to ship the
   `agent-session-bootstrap` guideline that generalizes this repository’s own toolchain
   bootstrap. The generated hooks read one configured fallback version rather than
-  hardcoding it in each script.
+  hardcoding it in each script;
+- `simple-modern-uv==v0.5.0`, the Copier template this repository is generated from,
+  applied inside the cool-off as a first-party release.
+  Reviewed against the `v0.4.0` recorded previously in `.copier-answers.yml`: same MIT
+  license and `jlevy/simple-modern-uv` source repository.
+  It has no lockfile effect of its own — it is a template applied with `copier update`,
+  not a declared dependency — and the update was run under the ordinary gate
+  (`uvx --exclude-newer "14 days" copier@9.17.0`). Its rendered changes to this
+  repository are reviewed in the diff rather than taken on trust: the project-owned
+  `uv.toml` and `UV_CONFIG_FILE` selection, the pinned action and toolchain bumps below,
+  and the dev-dependency floors it raises.
 
 The exceptions are package-scoped in configuration and do not weaken the global gate.
 Changing any version requires a new review and an updated rationale.
@@ -77,8 +87,11 @@ Refresh the generated hooks, skill files, and that fallback version together wit
 agent session that starts from a bare container can run the Make targets.
 Claude Code and Codex both invoke that one shared script at session start.
 It installs the repository’s own pins, never the newest release: it resolves Node from
-`.node-version` and uv from the `uv.toml` required-version floor, verifies each download
-against a checksum pinned in the script, and refuses a mismatch.
+`.node-version` and uv from the `uv.toml` `required-version` range, verifies each
+download against a checksum pinned in the script, and refuses a mismatch.
+The pinned uv sits inside that range rather than on its floor: the range states which uv
+line the committed lockfile is valid for, while the pin selects the newest release in
+that line that has cleared the cool-off.
 A newer Node major would carry an npm outside the `engines` range, which
 `engine-strict=true` turns into a failed `npm ci`. Bump a pin in its canonical file and
 in that script together; `check_supply_chain.py` fails when they disagree, or when

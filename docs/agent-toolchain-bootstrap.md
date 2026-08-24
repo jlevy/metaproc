@@ -19,8 +19,8 @@ bootstrap serves, see [supply-chain security](../SUPPLY-CHAIN-SECURITY.md).
 
 | Tool | Pin | Canonical source |
 | --- | --- | --- |
-| Node | 24.18.0 | `.node-version`, paired with `.nvmrc` |
-| uv | 0.11.26 | the `required-version` floor in `uv.toml` |
+| Node | 24.19.0 | `.node-version`, paired with `.nvmrc` |
+| uv | 0.12.3 | inside the `required-version` range in `uv.toml` |
 | `gh` | 2.92.0 | the generated `ensure-gh-cli.sh`, which tbd owns |
 
 The script reads each version from the file that already owns it, so it adds no second
@@ -48,8 +48,9 @@ entries after those already configured, so a regeneration preserves that order.
 
 `devtools/check_supply_chain.py` fails `make verify` when:
 
-- `NODE_VERSION` or `UV_VERSION` in the script disagrees with `.node-version` or the
-  `uv.toml` floor, so a pin bump that misses the script’s checksums cannot half-land;
+- `NODE_VERSION` in the script disagrees with `.node-version`, or `UV_VERSION` falls
+  outside the `uv.toml` `required-version` range, so a pin bump that misses the script’s
+  checksums cannot half-land;
 - either agent’s configuration stops running the bootstrap, or stops running it first;
 - either agent’s copy of a tbd-generated hook script stops matching its twin.
   Those three pairs (`ensure-gh-cli.sh`, `tbd-session.sh`, `tbd-closing-reminder.sh`)

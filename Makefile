@@ -4,6 +4,14 @@
 .DEFAULT_GOAL := default
 .NOTPARALLEL:
 
+# Use only the checked-in project configuration. Otherwise uv merges user- and
+# system-level settings into uv.lock, which can make it fail on another machine.
+# Exported so uv subprocesses that this Makefile does not invoke directly still
+# resolve against it; $(UV)/$(UVX) below also pass it explicitly.
+UV_CONFIG_FILE := $(CURDIR)/uv.toml
+export UV_CONFIG_FILE
+
+# Safe default for every dependency resolution invoked through this Makefile.
 UV_EXCLUDE_NEWER ?= 14 days
 export UV_EXCLUDE_NEWER
 UV := uv --config-file $(CURDIR)/uv.toml
