@@ -5,7 +5,7 @@ title: Senior engineering review of the GTIA v3 PR stack (#32-#39)
 kind: epic
 status: open
 priority: 1
-version: 9
+version: 10
 labels:
   - pr-review
   - architecture
@@ -22,10 +22,10 @@ child_order_hints:
   - is-01m0t5d44v9sfzcegwcth6e1b4
   - is-01m0t5d4f3vpf2e815ryxxqkp7
 created_at: 2026-08-24T15:14:42.436Z
-updated_at: 2026-08-24T22:32:05.372Z
+updated_at: 2026-08-24T23:01:03.726Z
 ---
 Track senior reviews of the open stacked PRs: #32 (mapped-composite plan, review posted, updated since), #33 (shared run context), #34 (scalar auth pooling), #35 (lifecycle/cancellation), #36 (retry-later transport, draft). Includes an overall stack-structure review (ordering, bases, revertibility) and follow-up on whether posted findings are addressed before merge.
 
 ## Notes
 
-ROUND 2 complete 2026-08-24. Comments posted on all 8 open PRs (#19/#32/#33/#34/#35/#37/#38/#39); #36 closed as superseded. Round-1 blockers all genuinely fixed and verified first-hand. Remaining must-fix: #37 B1 (mapped items share parent run.dir — cross-item contamination), #37 B2/B3 (sibling abandonment + unbounded scope concurrency), #38 status false-pass, #35 N1/N2/F2 (lease leak on pool kill, unbounded shutdown, _active finally), #33 N1 (undocumented executor ceiling), #34 B1/Finding-3-retry-case, #39 two-sided assertion. Cross-cutting: remediation commits keep introducing hazards at the seam being fixed; #38 vs #37 needs an intent decision.
+Round 2 + holistic complete 2026-08-24. Holistic doc on #37: https://github.com/jlevy/metaproc/pull/37#issuecomment-5402647775 (issue ledger, root causes, landing plan 8 PRs → 1 draft). #38 verified fixed at 809fccc. Remaining merge blockers: #33 executor ceiling; #34 containment-abort + retry-case; #35 lease leak/shutdown deadline/finally pop (+3 injected-failure tests); #37 ScopeIdentity/siblings/item-key + graph.py split; #39 two-sided assert + memoization backstop. Follow landing order per doc.
