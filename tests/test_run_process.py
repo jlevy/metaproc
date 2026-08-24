@@ -84,7 +84,7 @@ from metaproc.models.runtime import (
     ManualAckRecord,
     StatusRecord,
 )
-from metaproc.paths import LOGS_DIR, STATE_DIR, STATUS_FILE
+from metaproc.paths import LOGS_DIR, ORCHESTRATOR_LEASE_FILE, STATE_DIR, STATUS_FILE
 from metaproc.paths import STATE_DIR as _STATE_DIR
 from metaproc.paths import TASKS_SUBDIR as _TASKS_SUBDIR
 from metaproc.runpool.process_events import ProcessEventLogger
@@ -1600,6 +1600,202 @@ class TestCompositeStepExecution:
                     out=FakeOut(),
                 )
             )
+
+    def test_composite_validates_declared_child_process_outputs(self, tmp_path: Path) -> None:
+        """A composite succeeds only after its child's declared output ports validate."""
+
+        child_spec_path = tmp_path / "child.process.md"
+        child_spec_path.write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: child
+                  outputs:
+                    report:
+                      path: "{{run.dir}}/missing.md"
+                      as: path
+                  steps:
+                    - id: noop
+                      mode: code
+                      command: "true"
+                ---
+                Child process with an intentionally missing declared output.
+                """
+            ),
+            encoding="utf-8",
+        )
+        step_def = ProcessStep(id="child", mode="composite", uses="deps.child")
+        target = ResolvedStep(
+            step_id="child",
+            mode="composite",
+            uses_path=str(child_spec_path),
+        )
+        out = FakeOut()
+
+        with _test_execution_context() as execution_context:
+            result = asyncio.run(
+                _execute_composite_step(
+                    step_def=step_def,
+                    target=target,
+                    variables={"RUNS_DIR": str(tmp_path), "RUN_ID": "run"},
+                    process_dir=tmp_path,
+                    run_dir=tmp_path / "run",
+                    run_id="run",
+                    scope_path=(),
+                    execution_context=execution_context,
+                    out=out,
+                )
+            )
+
+        assert result is False
+        assert any("child process output validation failed" in message for message in out.messages)
+
+    def test_mapped_composite_isolates_failure_and_resumes_only_failed_item(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """One parent run maps child scopes; resume retains successful siblings."""
+
+        process_dir = tmp_path / "process"
+        process_dir.mkdir()
+        roster_path = process_dir / "roster.md"
+        roster_path.write_text(
+            textwrap.dedent(
+                """\
+                ---
+                progress:
+                  schema: metaproc:ProgressSpec/0.1
+                  process: mapped-composite-smoke
+                  items:
+                    - ticker: alfa
+                      should_fail: false
+                    - ticker: brvo
+                      should_fail: true
+                    - ticker: chrl
+                      should_fail: false
+                ---
+                Three synthetic items.
+                """
+            ),
+            encoding="utf-8",
+        )
+        fail_marker = tmp_path / "fail-brvo"
+        fail_marker.touch()
+        (process_dir / "child.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: ticker-child
+                  inputs:
+                    ticker: { param: TICKER, as: string }
+                    should_fail: { param: SHOULD_FAIL, as: string }
+                    fail_marker: { param: FAIL_MARKER, as: path }
+                  outputs:
+                    report:
+                      path: "{{run.dir}}/artifacts/{{TICKER}}.txt"
+                      as: path
+                  steps:
+                    - id: write-report
+                      mode: code
+                      command: >-
+                        /bin/sh -c 'if [ "{{SHOULD_FAIL}}" = "true" ] && [ -f "{{FAIL_MARKER}}" ]; then exit 7; fi;
+                        mkdir -p "{{run.dir}}/artifacts";
+                        printf "%s\\n" "{{TICKER}}" > "{{run.dir}}/artifacts/{{TICKER}}.txt"'
+                ---
+                One deterministic child scope per item.
+                """
+            ),
+            encoding="utf-8",
+        )
+        (process_dir / "parent.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: mapped-composite-smoke
+                  inputs:
+                    fail_marker: { param: FAIL_MARKER, as: path }
+                  deps:
+                    roster:
+                      path: ./roster.md
+                      as: path
+                    child:
+                      path: ./child.process.md
+                      as: path
+                  steps:
+                    - id: ticker-flow
+                      mode: composite
+                      uses: deps.child
+                      for_each:
+                        over: deps.roster
+                        bind: ticker
+                        bind_fields: [ticker, should_fail]
+                        key: "{{ticker}}"
+                        max_concurrency: 3
+                      with:
+                        TICKER: "{{ticker}}"
+                        SHOULD_FAIL: "{{should_fail}}"
+                        FAIL_MARKER: "{{FAIL_MARKER}}"
+                      outputs:
+                        report:
+                          path: "{{run.dir}}/artifacts/{{ticker}}.txt"
+                          kind: file
+                ---
+                Minimal mapped-composite parent.
+                """
+            ),
+            encoding="utf-8",
+        )
+
+        runs_dir = tmp_path / "runs"
+        args = [
+            "run-process",
+            str(process_dir / "parent.process.md"),
+            "--var",
+            f"RUNS_DIR={runs_dir}",
+            "--var",
+            "RUN_ID=gtia-v30pre-2026-08-24-m0",
+            "--var",
+            f"FAIL_MARKER={fail_marker}",
+            "--max-concurrency",
+            "2",
+        ]
+        runner = CliRunner()
+
+        first = runner.invoke(app, args)
+        assert first.exit_code != 0
+        run_dir = runs_dir / "gtia-v30pre-2026-08-24-m0"
+        state_root = run_dir / STATE_DIR / "tasks" / "ticker-flow"
+        alfa_status = read_status_at(state_root / "alfa")
+        brvo_status = read_status_at(state_root / "brvo")
+        chrl_status = read_status_at(state_root / "chrl")
+        assert alfa_status is not None and alfa_status.state == "completed"
+        assert brvo_status is not None and brvo_status.state == "failed"
+        assert chrl_status is not None and chrl_status.state == "completed"
+        assert (run_dir / "ticker-flow" / "alfa" / STATE_DIR / "process-status.yaml").exists()
+        assert (run_dir / "ticker-flow" / "brvo" / STATE_DIR / "process-status.yaml").exists()
+        assert (run_dir / "ticker-flow" / "chrl" / STATE_DIR / "process-status.yaml").exists()
+        assert not list((run_dir / "ticker-flow").rglob(ORCHESTRATOR_LEASE_FILE))
+
+        fail_marker.unlink()
+        second = runner.invoke(app, args)
+        assert second.exit_code == 0, second.output
+        assert [record.disposition for record in read_attempt_history_at(state_root / "alfa")] == [
+            AttemptDisposition.succeeded
+        ]
+        assert [record.disposition for record in read_attempt_history_at(state_root / "brvo")] == [
+            AttemptDisposition.permanent,
+            AttemptDisposition.succeeded,
+        ]
+        assert [record.disposition for record in read_attempt_history_at(state_root / "chrl")] == [
+            AttemptDisposition.succeeded
+        ]
+        assert {
+            path.name: path.read_text(encoding="utf-8").strip()
+            for path in (run_dir / "artifacts").glob("*.txt")
+        } == {"alfa.txt": "alfa", "brvo.txt": "brvo", "chrl.txt": "chrl"}
 
 
 class TestCodeStepLogs:
@@ -3136,6 +3332,7 @@ class TestCompositePoolDispatchPropagation:
         step_def = MagicMock()
         step_def.id = "analysis-research"
         step_def.with_ = None
+        step_def.for_each = None
 
         target = MagicMock()
         target.uses_path = str(child_spec_path)

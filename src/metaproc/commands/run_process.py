@@ -111,6 +111,7 @@ from metaproc.engine.pathing import (
     compute_run_dir,
     compute_task_logs_dir,
     compute_task_state_dir,
+    resolve_item_key,
 )
 from metaproc.engine.placeholders import (
     collect_step_runtime_placeholders,
@@ -2276,11 +2277,21 @@ async def _execute_composite_step(
         profile_files=execution_context.profile_files,
     )
 
-    # Scope child run dir under parent: {parent_run_dir}/{step_id}/
+    item_key = (
+        resolve_item_key(step_def.for_each, variables, step_id)
+        if step_def.for_each is not None
+        else None
+    )
+
+    # A scalar composite owns one child scope. A mapped composite owns one child
+    # scope per item, while every child still shares the parent's execution context.
     child_run_dir = run_dir / step_id
+    if item_key is not None:
+        child_run_dir /= item_key
     child_run_dir.mkdir(parents=True, exist_ok=True)
 
-    child_run_id = f"{run_id}/{step_id}"
+    child_scope = (step_id,) if item_key is None else (step_id, item_key)
+    child_run_id = "/".join((run_id, *child_scope))
 
     try:
         with ProcessEventLogger(paths_mod.process_events_log(child_run_dir)) as events:
@@ -2292,7 +2303,7 @@ async def _execute_composite_step(
                 process_dir=child_process_dir,
                 run_dir=child_run_dir,
                 run_id=child_run_id,
-                scope_path=(*scope_path, step_id),
+                scope_path=(*scope_path, *child_scope),
                 execution_context=execution_context,
                 out=out,
                 events=events,
@@ -2305,7 +2316,182 @@ async def _execute_composite_step(
         out.progress(f"  Step '{step_id}': inner CLIError — {exc}")
         return False
 
+    output_errors = validate_process_outputs(
+        child_spec,
+        child_vars,
+        child_process_dir,
+        plan=child_plan,
+    )
+    if output_errors:
+        out.progress(
+            f"  Step '{step_id}': child process output validation failed:\n  "
+            + "\n  ".join(output_errors)
+        )
+        return False
+
     return True
+
+
+async def _execute_composite_fan_out_step(
+    *,
+    step_def: ProcessStep,
+    target: ResolvedStep,
+    variables: dict[str, str],
+    process_dir: Path,
+    run_dir: Path,
+    run_id: str,
+    scope_path: tuple[str, ...],
+    execution_context: RunExecutionContext,
+    out: Any,
+) -> bool:
+    """Map one child process scope per item without launching child orchestrators."""
+    step_id = step_def.id
+    assert target.fan_out is not None
+    for_each = step_def.for_each
+    assert for_each is not None
+    if execution_context.backend_name == "gcp-worker":
+        raise CLIError(
+            f"mapped composite step '{step_id}' does not yet support gcp-worker; "
+            "run the orchestrator on one host or use agent/code fan-out for partitioned work"
+        )
+
+    source_path = Path(target.fan_out.source)
+    if not source_path.exists():
+        raise CLIError(f"source file not found: {source_path}")
+    try:
+        discovery = discover_items_from_source(
+            source_path,
+            step_def,
+            output_paths=target.outputs or None,
+            params=variables,
+            reuse_policy=target.reuse_policy,
+            run_dir=run_dir,
+            expected_run_id=run_id,
+        )
+    except (TypeError, ValueError) as exc:
+        raise CLIError(str(exc)) from exc
+
+    item_contexts = discovery.actionable_contexts
+    if not item_contexts:
+        out.progress(f"  Step '{step_id}': no actionable items (all completed)")
+        return True
+
+    try:
+        for item_context in item_contexts:
+            item_vars = {**variables, **item_context}
+            validate_step_inputs_exist(
+                target.inputs,
+                item_vars,
+                context=f"step '{step_id}' for {target.fan_out.bind}={item_context[target.fan_out.bind]}",
+            )
+    except ValueError as exc:
+        raise CLIError(str(exc)) from exc
+
+    out.progress(
+        f"  Step '{step_id}': {len(item_contexts)} actionable item scopes "
+        f"({len(discovery.filtered_items)} retained)"
+    )
+    step_hash = fingerprint_step(target)
+
+    async def _invoke(_step_id: str, item_vars: dict[str, str]) -> bool:
+        state_dir = compute_task_state_dir(run_dir, step_def, item_vars)
+        state_dir.mkdir(parents=True, exist_ok=True)
+        item_record = {
+            field: item_vars[field] for field in for_each.bind_fields if field in item_vars
+        }
+        running_record = mark_running_at(
+            state_dir,
+            run_id=run_id,
+            step_id=step_id,
+            item=item_record,
+            item_key=state_dir.name,
+            scope_path=(*scope_path, step_id, state_dir.name),
+        )
+        try:
+            succeeded = await _execute_composite_step(
+                step_def=step_def,
+                target=target,
+                variables=item_vars,
+                process_dir=process_dir,
+                run_dir=run_dir,
+                run_id=run_id,
+                scope_path=scope_path,
+                execution_context=execution_context,
+                out=out,
+            )
+        except asyncio.CancelledError:
+            raise
+        except CLIError as exc:
+            error = f"child process raised {type(exc).__name__}: {exc}"
+            out.progress(f"  Step '{step_id}' item '{state_dir.name}': {error}")
+            mark_failed_at(
+                state_dir,
+                error=error,
+                running_record=running_record,
+                failure_class=str(classify_failure(error)),
+            )
+            return False
+
+        if not succeeded:
+            error = "child process failed"
+            mark_failed_at(
+                state_dir,
+                error=error,
+                running_record=running_record,
+                failure_class=str(classify_failure(error)),
+            )
+            return False
+
+        artifact_dir = compute_item_dir(target.outputs, item_vars)
+        if target.outputs and artifact_dir is not None:
+            output_failures = validate_item_outputs_detailed(
+                artifact_dir,
+                target.outputs,
+                variables=item_vars,
+            )
+            if output_failures:
+                mark_failed_at(
+                    state_dir,
+                    error=(
+                        "output validation failed: "
+                        + "; ".join(failure.summary() for failure in output_failures)
+                    ),
+                    running_record=running_record,
+                    output_failures=output_failures,
+                    failure_class=str(FailureClass.INVALID_OUTPUT),
+                )
+                return False
+
+        completed = mark_completed_at(state_dir, running_record=running_record)
+        write_result_at(
+            state_dir,
+            ResultRecord(
+                run_id=run_id,
+                step_id=step_id,
+                state="completed",
+                validated=True,
+                outputs=resolve_record_output_paths(target.outputs, item_vars),
+                published_at=completed.completed_at or _now_iso(),
+                step_hash=step_hash,
+            ),
+        )
+        return True
+
+    succeeded, total = await run_fan_out(
+        item_contexts=item_contexts,
+        variables=variables,
+        invoke=_invoke,
+        step_id=step_id,
+        # A mapped composite is a cheap structural scope. Executable leaves inside
+        # every scope acquire the run-owned admission authority themselves; making
+        # the scope acquire that capacity would strand a slot while it waits between
+        # child stages and can deadlock at a run limit of one.
+        max_concurrency=None,
+        step_concurrency=target.fan_out.max_concurrency,
+    )
+    if succeeded != total:
+        out.progress(f"  Step '{step_id}': {total - succeeded} of {total} item scopes failed")
+    return succeeded == total
 
 
 def _current_worker_id() -> str | None:
@@ -3007,6 +3193,18 @@ async def _execute_step(
         )
 
     if target.mode == "composite":
+        if target.fan_out is not None:
+            return await _execute_composite_fan_out_step(
+                step_def=step_def,
+                target=target,
+                variables=variables,
+                process_dir=process_dir,
+                run_dir=run_dir,
+                run_id=run_id,
+                scope_path=scope_path,
+                execution_context=execution_context,
+                out=out,
+            )
         return await _execute_composite_step(
             step_def=step_def,
             target=target,

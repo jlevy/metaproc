@@ -15,6 +15,7 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import psutil
@@ -24,6 +25,7 @@ from metaproc.commands.run_process import (
     RunExecutionContext,
     _execute_agent_step,
     _execute_code_step,
+    _execute_composite_fan_out_step,
     _execute_composite_step,
     _leaf_slot,
     _orchestrate,
@@ -32,8 +34,8 @@ from metaproc.commands.run_process import (
 )
 from metaproc.errors import CLIError
 from metaproc.io import read_yaml_file
-from metaproc.models.authored import ProcessSpec, ProcessStep, StepContext
-from metaproc.models.plan import Plan, ResolvedAdapter, ResolvedStep
+from metaproc.models.authored import ForEach, ProcessSpec, ProcessStep, StepContext
+from metaproc.models.plan import FanOut, Plan, ResolvedAdapter, ResolvedStep
 
 
 class _Out:
@@ -81,6 +83,129 @@ def test_composite_reuses_parent_execution_context(tmp_path: Path) -> None:
             context.close()
 
     assert asyncio.run(exercise()) is True
+
+
+def test_mapped_composite_scopes_share_run_context_and_leaf_ceiling(tmp_path: Path) -> None:
+    roster_path = tmp_path / "roster.md"
+    roster_path.write_text(
+        "---\nprogress:\n  items:\n    - item: alfa\n    - item: brvo\n    - item: chrl\n---\n",
+        encoding="utf-8",
+    )
+    child_spec_path = tmp_path / "child.process.md"
+    child_spec_path.write_text(
+        "---\nprocess:\n  name: child\n  steps: []\n---\n",
+        encoding="utf-8",
+    )
+    step_def = ProcessStep(
+        id="mapped-child",
+        mode="composite",
+        uses="deps.child",
+        for_each=ForEach(
+            over="deps.roster",
+            bind="item",
+            bind_fields=["item"],
+            key="{{item}}",
+        ),
+    )
+    target = ResolvedStep(
+        step_id="mapped-child",
+        mode="composite",
+        uses_path=str(child_spec_path),
+        fan_out=FanOut(
+            over="deps.roster",
+            bind="item",
+            source=str(roster_path),
+            bind_fields=["item"],
+        ),
+    )
+    captured: list[RunExecutionContext] = []
+    all_scopes_started = asyncio.Event()
+    active_leaves = 0
+    peak_leaves = 0
+
+    async def fake_execute_composite_step(**kwargs: object) -> bool:
+        nonlocal active_leaves, peak_leaves
+        context = cast(RunExecutionContext, kwargs["execution_context"])
+        captured.append(context)
+        if len(captured) == 3:
+            all_scopes_started.set()
+        await asyncio.wait_for(all_scopes_started.wait(), timeout=0.5)
+        async with _leaf_slot(context):
+            active_leaves += 1
+            peak_leaves = max(peak_leaves, active_leaves)
+            await asyncio.sleep(0.01)
+            active_leaves -= 1
+        return True
+
+    async def exercise() -> bool:
+        context = RunExecutionContext.create(max_concurrency=1)
+        try:
+            with patch(
+                "metaproc.commands.run_process._execute_composite_step",
+                fake_execute_composite_step,
+            ):
+                result = await _execute_composite_fan_out_step(
+                    step_def=step_def,
+                    target=target,
+                    variables={},
+                    process_dir=tmp_path,
+                    run_dir=tmp_path / "run",
+                    run_id="test/run-1",
+                    scope_path=(),
+                    execution_context=context,
+                    out=_Out(),
+                )
+            assert captured == [context, context, context]
+            assert peak_leaves == 1
+            return result
+        finally:
+            context.close()
+
+    assert asyncio.run(exercise()) is True
+
+
+def test_mapped_composite_rejects_gcp_worker_partitioning(tmp_path: Path) -> None:
+    step_def = ProcessStep(
+        id="mapped-child",
+        mode="composite",
+        uses="deps.child",
+        for_each=ForEach(
+            over="deps.roster",
+            bind="item",
+            bind_fields=["item"],
+            key="{{item}}",
+        ),
+    )
+    target = ResolvedStep(
+        step_id="mapped-child",
+        mode="composite",
+        fan_out=FanOut(
+            over="deps.roster",
+            bind="item",
+            source=str(tmp_path / "roster.md"),
+            bind_fields=["item"],
+        ),
+    )
+
+    async def exercise() -> None:
+        context = RunExecutionContext.create(backend_name="gcp-worker", max_concurrency=None)
+        try:
+            with pytest.raises(CLIError, match="does not yet support gcp-worker"):
+                await _execute_composite_fan_out_step(
+                    step_def=step_def,
+                    target=target,
+                    variables={},
+                    process_dir=tmp_path,
+                    run_dir=tmp_path / "run",
+                    run_id="test/run-1",
+                    scope_path=(),
+                    execution_context=context,
+                    out=_Out(),
+                )
+        finally:
+            context.close()
+
+    asyncio.run(exercise())
 
 
 def test_recursive_evaluator_accepts_only_scope_local_arguments() -> None:

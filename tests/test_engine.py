@@ -456,27 +456,74 @@ class TestBuildPlan:
         with pytest.raises(ValueError, match="missing required input: tag"):
             build_plan(spec, {}, process_path=Path("test.md"))
 
-    def test_composite_with_for_each_is_rejected(self, tmp_path: Path):
+    def test_composite_with_for_each_resolves_child_and_items(self, tmp_path: Path):
         child_path = tmp_path / "child.process.md"
         child_path.write_text(
             "---\nprocess:\n  name: child\n  steps: []\n---\nchild\n",
         )
+        roster_path = tmp_path / "roster.md"
+        roster_path.write_text(
+            "---\nprogress:\n  items:\n    - ticker: AAPL\n    - ticker: MSFT\n---\nroster\n",
+        )
 
         spec = ProcessSpec(
             name="test",
-            deps={"child": ProcessDep.model_validate({"path": str(child_path), "as": "path"})},
+            deps={
+                "child": ProcessDep.model_validate({"path": str(child_path), "as": "path"}),
+                "roster": ProcessDep.model_validate({"path": str(roster_path), "as": "path"}),
+            },
             steps=[
                 ProcessStep(
                     id="parent",
                     mode="composite",
                     uses="deps.child",
                     for_each=ForEach.model_validate(
-                        {"over": "deps.child", "bind": "ticker", "bind_fields": ["ticker"]}
+                        {
+                            "over": "deps.roster",
+                            "bind": "ticker",
+                            "bind_fields": ["ticker"],
+                            "key": "{{ticker}}",
+                        }
                     ),
                 )
             ],
         )
-        with pytest.raises(ValueError, match="composite mode does not support for_each"):
+        plan = build_plan(spec, {}, process_path=tmp_path / "test.process.md")
+
+        assert plan.steps[0].uses_path == str(child_path)
+        assert plan.steps[0].fan_out is not None
+        assert plan.steps[0].fan_out.items == [{"ticker": "AAPL"}, {"ticker": "MSFT"}]
+        assert plan.steps[0].fan_out.retry is None
+
+    def test_composite_with_for_each_rejects_whole_scope_retry(self, tmp_path: Path):
+        child_path = tmp_path / "child.process.md"
+        child_path.write_text("---\nprocess:\n  name: child\n  steps: []\n---\n")
+        roster_path = tmp_path / "roster.md"
+        roster_path.write_text("---\nprogress:\n  items: []\n---\n")
+        spec = ProcessSpec(
+            name="test",
+            deps={
+                "child": ProcessDep.model_validate({"path": str(child_path), "as": "path"}),
+                "roster": ProcessDep.model_validate({"path": str(roster_path), "as": "path"}),
+            },
+            steps=[
+                ProcessStep(
+                    id="parent",
+                    mode="composite",
+                    uses="deps.child",
+                    for_each=ForEach.model_validate(
+                        {
+                            "over": "deps.roster",
+                            "bind": "ticker",
+                            "bind_fields": ["ticker"],
+                            "retry": {"max_retries": 1},
+                        }
+                    ),
+                )
+            ],
+        )
+
+        with pytest.raises(ValueError, match="does not support for_each.retry"):
             build_plan(spec, {}, process_path=tmp_path / "test.process.md")
 
 
