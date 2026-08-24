@@ -9,6 +9,11 @@ development series.
 
 ### Fixed
 
+- **Cloud authentication policy propagation**: `run-process --cloud` now carries the
+  complete authentication-pool configuration as one typed value through orchestrator
+  dispatch. Selection policy and future fields can no longer be silently dropped while
+  neighboring authentication flags continue to reach the cloud job.
+
 - **Filesystem status fails closed**: `status` and `pool status` reject a nonexistent
   local run directory instead of projecting an empty tree as complete or healthy.
 

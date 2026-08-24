@@ -769,6 +769,11 @@ Those options and their duplicate parser were removed.
 The real defect it exposed—cloud dispatch dropping `auth_policy`—is retained by carrying
 the complete existing `AuthPoolFlags` value and is folded into pull request 34. Pull
 request 36 is superseded rather than preserved as an artificial stack layer.
+Before folding, the focused authentication-boundary suite passed 140 tests and the full
+suite passed 4,341 tests with 8 skipped, together with lint, types, documentation,
+public-hygiene, browser, supply-chain, dependency-audit, distribution, and
+installed-wheel checks.
+The consolidated pull request 34 is revalidated after restack.
 
 The first mapped-scope slice is implemented in draft
 [pull request 37](https://github.com/jlevy/metaproc/pull/37). Its network-free

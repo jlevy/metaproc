@@ -3829,12 +3829,17 @@ def run_process_command(
             continue_on_error=continue_on_error,
             orchestrator_machine_type=orchestrator_machine_type,
             max_duration_s=_parse_duration(max_duration),
-            auth_account=auth_account,
-            auth_backend=auth_backend,
-            auth_fallback_policy=auth_fallback_policy,
-            auth_include_labels=tuple(auth_include_labels),
-            auth_exclude_labels=tuple(auth_exclude_labels),
-            auth_cross_quota_group=auth_cross_quota_group,
+            auth_flags=AuthPoolFlags(
+                auth_account=auth_account or "",
+                auth_backend=auth_backend or "",
+                auth_fallback_policy=(
+                    auth_fallback_policy if auth_fallback_policy != "none" else ""
+                ),
+                auth_policy=auth_policy or "",
+                auth_include_labels=tuple(auth_include_labels),
+                auth_exclude_labels=tuple(auth_exclude_labels),
+                auth_cross_quota_group=auth_cross_quota_group,
+            ),
         )
 
         out.progress("run-process --cloud: submitting orchestrator to GCP Batch")
@@ -3997,7 +4002,7 @@ def run_process_command(
             exclude=excluded_pairs,
             cross_quota_group=auth_cross_quota_group,
         )
-        # Worker-leg shape: the same five fields encoded for inner
+        # Worker-leg shape: the same authentication cohort encoded for inner
         # `run-parallel --auth-*` reconstruction. ``resolved_auth_backend``
         # carries the worker-default plug-in so a cloud worker that the
         # operator did not explicitly point at gcp-secret-manager still

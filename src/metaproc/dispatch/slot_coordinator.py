@@ -336,8 +336,8 @@ class SlotCoordinator:
         wants skipped — typically labels that already failed on this
         item's earlier attempts.
 
-        Returns ``None`` when nothing is eligible; the caller's
-        :class:`RetryLaterPolicy` decides wait / fail-fast.
+        Returns ``None`` when nothing is eligible; the caller decides
+        whether to fail or reschedule the item.
         """
         holder = build_holder_id(run_id=run_id, step=step, item=item, attempt=attempt)
         attempted: set[tuple[str, str]] = set(exclude)

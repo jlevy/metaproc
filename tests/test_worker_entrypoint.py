@@ -52,7 +52,7 @@ def _auth(
     """Build an AuthPoolFlags from the CSV/string shape the tests use.
 
     Mirrors how worker_entrypoint constructs flags from env vars: CSV
-    strings split into tuples. Tests originally wrote the five fields
+    strings split into tuples. Tests originally wrote the fields
     as strings; this helper preserves that ergonomics on top of the
     new typed shape.
     """

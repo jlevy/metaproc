@@ -960,31 +960,25 @@ coordinator’s walk when a label’s lease fails on the first attempt:
 At most one retry per step across policies (same-provider + cross-provider are not
 additive).
 
-### §N.5 Retry-later policy
+### §N.5 Deferred recovery primitives
 
-`--auth-retry-later {fail-fast,wait,signal}` runs after fallback exhausts:
+Metaproc contains an enum, coordinator wait helper, checkpoint format, and resume daemon
+from an earlier recovery proposal.
+`run-process` and `run-parallel` do not expose that proposal as CLI policy, and no
+current scheduler path writes its checkpoints or calls its wait helper.
 
-- `fail-fast` — raise the classifier’s error up to the dispatch.
-  Default for non-deadline runs.
-- `wait` — `SlotCoordinator.wait_for_pool_recovery` sleeps to
-  `min(cooling_until_ts, now+poll_interval)` plus 30-120s jitter, re-probes on wake.
-  Bounded by `--auth-retry-max-wait` (default 6h).
-- `signal` — write a `retry_later.yaml` checkpoint, exit 78. The
-  `metaproc resume-daemon` (§N.6) picks it up.
-
-Cloud Batch dispatches with walltime caps should use `signal`; long-lived laptop
-dispatches can use `wait`.
-
-Implementation status: the enum, coordinator wait primitive, checkpoint format, and
-`resume-daemon` exist, but `run-process` and `run-parallel` do not yet expose this
-policy or write retry-later checkpoints.
 Current fan-out code performs an internal cooling-aware reschedule; scalar exhaustion
-uses the documented `fail-fast` default.
-Bead `mp-tibt` tracks the missing typed policy and the convergence of both paths.
+fails immediately.
+These paths are intentionally not being unified for GTIA v3 before the
+successive smoke cohorts demonstrate a concrete recovery requirement.
+Bead `mp-tibt` owns the decision to remove the dormant machinery or introduce the
+smallest proved replacement.
 
 ### §N.6 Resume daemon
 
-`metaproc resume-daemon --runs-dir <dir> [--poll-interval-s 60] [--once]`
+`metaproc resume-daemon --runs-dir <dir> [--poll-interval-s 60] [--once]` is installed,
+but current dispatch paths do not produce the checkpoint it consumes.
+It is not a live recovery path for new runs.
 
 Long-lived polling loop.
 Scans `<runs_dir>/*/*/.state/retry_later.yaml`, re-dispatches
@@ -1004,8 +998,8 @@ Sums each adapter’s eligible-label `query_quota_usage` against
 
 - `off` — no check.
 - `warn` — logs a `quota_warn` event on near-empty, always returns `go`.
-- `refuse` — returns `refuse` when projected > 80% of pool remaining; caller consults
-  `RetryLaterPolicy` (exit 64 fail-fast, wait, or exit 78 signal).
+- `refuse` — returns `refuse` when projected > 80% of pool remaining; the caller stops
+  before launching work.
 
 Defaults to `warn`; deadline-run playbooks set `refuse`.
 
@@ -1292,14 +1286,16 @@ The Phase 6 work closed the gap: cloud workers now construct the same
 The chain is
 `run-process --cloud --auth-* → OrchestratorDispatchConfig → orchestrator entrypoint → inner run-process --backend gcp-worker --auth-* → worker_dispatch propagates METAPROC_AUTH_* → worker entrypoint → inner run-parallel --backend local --auth-*`.
 Each layer calls `AuthPoolFlags.from_env()` / `to_cli_flags()` / `to_env_vars()` so the
-five env-var names and CSV encoding are sourced from a single typed dataclass.
+authentication env-var names and encodings are sourced from a single typed dataclass.
+Both worker and orchestrator dispatch carry that dataclass directly.
 
 #### AuthPoolFlags — single source of truth (Phase 10)
 
 `src/metaproc/dispatch/auth_pool_flags.py` defines the `AuthPoolFlags` frozen dataclass
-with the five fields and ClassVar env- var names sourced from
-`MetaprocEnv.<member>.name`. Every dispatch-layer site that previously hardcoded
-`"METAPROC_AUTH_*"` strings now goes through this dataclass:
+for the account, backend, fallback and selection policies, label filters, and
+cross-quota-group posture.
+Its `ClassVar` env-var names come from `MetaprocEnv.<member>.name`. Every dispatch-layer
+site that previously hardcoded `"METAPROC_AUTH_*"` strings goes through this dataclass:
 
 ```
 AuthPoolFlags(...).to_env_vars()   # for Batch job env_vars dicts

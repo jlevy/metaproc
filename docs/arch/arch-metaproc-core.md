@@ -2847,10 +2847,11 @@ Unified container entrypoint for worker containers:
   and exact `metaproc-run-key=v1-<sha256_prefix>`.
 - Polls in a while-True loop until terminal state.
 
-`OrchestratorDispatchConfig` (frozen dataclass): `gcp`, `process_dir_rel`, `variables`,
-`num_workers`, `worker_machine_type`, `max_concurrency`, `spot_workers`, `variant`,
-`adapter_config`, `skip_steps`, `from_step`, `only_step`, `force`, `continue_on_error`,
-`orchestrator_machine_type`, `max_duration_s` (default 8h), `poll_interval`.
+`OrchestratorDispatchConfig` (frozen dataclass): `gcp`, `process_spec_rel`, `variables`,
+`num_workers`, `worker_machine_type`, `max_concurrency`, `initial_concurrency`,
+`spot_workers`, `variant`, `adapter_config`, `skip_steps`, `from_step`, `only_step`,
+`force`, `continue_on_error`, `orchestrator_machine_type`, `max_duration_s` (default
+8h), `poll_interval`, and the `auth_flags` (`AuthPoolFlags`) transport cohort.
 
 ### 21.6 Orchestrator Entrypoint (`orchestrator_entrypoint.py`)
 

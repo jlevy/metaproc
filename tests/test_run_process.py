@@ -30,6 +30,7 @@ from typer.testing import CliRunner
 from metaproc.adapters.registry import ADAPTER_REGISTRY
 from metaproc.cli import app
 from metaproc.commands.run_process import run_process_command
+from metaproc.dispatch.auth_pool_flags import AuthPoolFlags
 from metaproc.dispatch.pool_dispatch import PoolDispatchConfig
 from metaproc.engine.dep_state import fingerprint_step
 from metaproc.errors import CLIError
@@ -1690,6 +1691,70 @@ class TestCLIDryRun:
         assert result.exit_code != 0
         assert result.exception is not None
         assert "not found" in str(result.exception)
+
+
+class TestCloudAuthDispatch:
+    def test_cli_carries_complete_auth_cohort_to_orchestrator(self) -> None:
+        dispatch_result = MagicMock(job_id="test-job", state="SUCCEEDED", exit_code=0)
+        dispatch_orchestrator = AsyncMock(return_value=dispatch_result)
+
+        with (
+            patch(
+                "metaproc.engine.preflight.run_cloud_preflight_warnings",
+                return_value=[],
+            ),
+            patch("metaproc.engine.preflight.run_cloud_preflight", return_value=[]),
+            patch(
+                "metaproc.cloud.gcp.worker_dispatch.build_gcp_config_from_env",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "metaproc.cloud.gcp.orchestrator_dispatch.dispatch_orchestrator",
+                dispatch_orchestrator,
+            ),
+        ):
+            result = CliRunner().invoke(
+                app,
+                [
+                    "run-process",
+                    _SYNTHETIC_PROCESS,
+                    "--var",
+                    "RUNS_DIR=/tmp/metaproc-test-runs",
+                    "--var",
+                    "RUN_ID=test-cloud-auth",
+                    "--backend",
+                    "gcp-worker",
+                    "--cloud",
+                    "--auth-account",
+                    "claude-code-cli",
+                    "--auth-backend",
+                    "gcp-secret-manager",
+                    "--auth-fallback-policy",
+                    "same-provider",
+                    "--auth-policy",
+                    "least-active",
+                    "--auth-include-labels",
+                    "primary",
+                    "--auth-include-labels",
+                    "alternate",
+                    "--no-auth-cross-quota-group",
+                    "--auth-preflight-quota-guard",
+                    "off",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        await_args = dispatch_orchestrator.await_args
+        assert await_args is not None
+        dispatch_config = await_args.args[0]
+        assert dispatch_config.auth_flags == AuthPoolFlags(
+            auth_account="claude-code-cli",
+            auth_backend="gcp-secret-manager",
+            auth_fallback_policy="same-provider",
+            auth_policy="least-active",
+            auth_include_labels=("primary", "alternate"),
+            auth_cross_quota_group=False,
+        )
 
 
 class TestCLIStaleMetaprocWarning:
