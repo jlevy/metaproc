@@ -1,12 +1,12 @@
 ---
 type: is
 id: is-01m0r92q2y1pe7dmhrcj6nst7q
-title: Production task scheduler and mapped composite scopes
+title: Native mapped composite scopes and shared leaf admission
 kind: epic
 status: in_progress
 priority: 1
-version: 10
-spec_path: docs/execution-model-design.md
+version: 13
+spec_path: docs/project/specs/active/plan-2026-08-23-native-mapped-composite-scopes.md
 labels:
   - execution-model
 dependencies: []
@@ -19,7 +19,9 @@ child_order_hints:
   - is-01m0r93kk96jbzs27d9fmx762k
   - is-01m0r93m6cz6dytw4c1m2bbyaj
   - is-01m0r93mr72xw9k0p8tn94a07d
+  - is-01m0rm18400gvqf9d61s4138mg
+  - is-01m0rm18kbm24khxjemevb1ybv
 created_at: 2026-08-23T21:40:27.869Z
-updated_at: 2026-08-23T21:41:27.913Z
+updated_at: 2026-08-24T00:51:54.602Z
 ---
-Adopt the executable reference model in the production engine so a wide downstream workflow can compile mapped multi-step scopes into one task graph. Own durable task facts, closed expansions, dependency clauses, ready-task dispatch, resource-neutral composites, universal admission, and browsable artifact provenance. Opaque nested child schedulers are explicitly out of scope.
+Deliver the smallest Metaproc-native composition needed by cohort workflows: map existing composite processes over a roster in-process, expose their declared process ports, carry one execution context through recursion, share adaptive leaf admission, and project mapped scopes through existing views. Keep the general ready-task scheduler and full distributed commit model as evidence-triggered follow-ons.
