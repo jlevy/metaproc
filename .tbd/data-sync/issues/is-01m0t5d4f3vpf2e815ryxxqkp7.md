@@ -5,12 +5,23 @@ title: "Review PR #36: transport retry-later policy"
 kind: task
 status: closed
 priority: 1
-version: 5
+version: 15
 labels:
   - pr-review
 dependencies: []
+parent_id: is-01m0t5d345y4pdjcjpepb9h4q6
+child_order_hints:
+  - is-01m0t804b6wkqyjrzk3nwpwnv3
+  - is-01m0t8055d9ryetyv8axef8cqn
+  - is-01m0t8068yxh3je3xnfrq8f70k
+  - is-01m0t8070qf1kded17fc1tjya3
+  - is-01m0t807ptgkcbemssgq9qzx38
+  - is-01m0t808bang7nryyzzhtg6phy
+  - is-01m0t808zq4fjshwjtvhs7zn34
+  - is-01m0t809p8h99cy79t3hwd3j1f
+  - is-01m0tjefebxck534azhjgd5ew9
 created_at: 2026-08-24T15:14:43.810Z
-updated_at: 2026-08-24T22:31:55.136Z
+updated_at: 2026-08-24T22:32:05.677Z
 closed_at: 2026-08-24T22:31:55.135Z
 close_reason: "PR #36 closed as superseded; findings verified as resolved-by-deletion; behavior work tracked under mp-tibt"
 resolution: null

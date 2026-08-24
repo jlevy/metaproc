@@ -1,11 +1,11 @@
 ---
 type: is
 id: is-01m0s0r624c0eszrgnq4qgjjbe
-title: Wire the documented auth retry-later policy into dispatch
+title: Audit dormant retry-later recovery before v3.0-pre adoption
 kind: bug
 status: in_progress
 priority: 1
-version: 11
+version: 15
 spec_path: docs/project/specs/active/plan-2026-08-23-native-mapped-composite-scopes.md
 delegate: codex
 labels:
@@ -22,11 +22,14 @@ child_order_hints:
   - is-01m0s7cxknep5425wm4z90bcqj
   - is-01m0s7cy280m06mznmrggw55ka
   - is-01m0s7nnvzzas4frtb9y5vcexj
+  - is-01m0t8070qf1kded17fc1tjya3
+  - is-01m0t808bang7nryyzzhtg6phy
+  - is-01m0tjefebxck534azhjgd5ew9
 created_at: 2026-08-24T04:34:08.579Z
-updated_at: 2026-08-24T07:23:16.174Z
+updated_at: 2026-08-24T19:04:19.750Z
 ---
-The authentication architecture documents --auth-retry-later={fail-fast,wait,signal}, bounded max-wait behavior, and retry_later.yaml checkpoints, but run-process/run-parallel expose no such CLI option and no dispatch caller writes the checkpoint consumed by resume-daemon. Fan-out currently performs an unconditional internal cooling retry while scalar pool exhaustion uses fail-fast. Define one typed run policy, wire it through RunExecutionContext and both scalar/fan-out dispatch, preserve the invariant that pool waiting is not an execution attempt, and add deterministic wait/signal/fail-fast tests. Update docs to distinguish shipped behavior until this lands.
+Metaproc contains older wait, checkpoint, deferred-state, resume-daemon, and hard-coded fan-out cooling paths, but no current v3.0-pre scheduler consumes a public retry-later policy. Do not implement the former PR #36 proposal speculatively. Use released-consumer evidence and successive v3.0-pre smoke runs to decide whether each existing primitive should be removed, retained as-is, or connected through the smallest shared policy. Any retained behavior must avoid holding execution or host capacity while idle and must reuse the existing scheduler and checkpoint machinery.
 
 ## Notes
 
-Reconciliation completed against the closed Phase 2c beads trading-tfy7/trading-rhlm/trading-b2bd/trading-0s98 and the current Metaproc source. RetryLaterPolicy, SlotCoordinator.wait_for_pool_recovery, checkpoint read/write, deferred vocabulary, and resume-daemon already exist. This parent does not authorize replacement machinery: it only connects and hardens those primitives across current scalar, fan-out, preflight, process-state, and GCP boundaries. Transport is implemented in draft PR #36; behavior remains release-gated.
+PR #36 retry transport was deleted after review and is being closed as superseded. Its independent cloud auth_policy transport fix moved to PR #34 at 3d11a64. Follow-on implementation beads are paused until this audit produces evidence; tracking them does not authorize implementation.

@@ -5,12 +5,23 @@ title: "Review PR #34: pool scalar agent credentials"
 kind: task
 status: in_progress
 priority: 1
-version: 4
+version: 14
 labels:
   - pr-review
 dependencies: []
+parent_id: is-01m0t5d345y4pdjcjpepb9h4q6
+child_order_hints:
+  - is-01m0t7zv0pz098m6rxm8d0sefg
+  - is-01m0t7zvfvthf3bt667kdrwfgh
+  - is-01m0t7zvyse3djcyn421pxn8mv
+  - is-01m0t7zwe05cby0cp08dwf6z5q
+  - is-01m0t7zwwvhe9a6mgykq8h2f5x
+  - is-01m0t7zxcaed845hbkanka3ktz
+  - is-01m0t7zxtshnt62pacpq2w0dkz
+  - is-01m0t7zy9mrzsejcmpb2fhxdg4
+  - is-01m0t7zyt479vkhz8fedxgesca
 created_at: 2026-08-24T15:14:43.076Z
-updated_at: 2026-08-24T22:31:53.714Z
+updated_at: 2026-08-24T22:32:05.522Z
 ---
 Senior review of #34 (codex/gtia-v3-scalar-auth-policy). Addresses finding F4: scalar agent steps bypassing the credential pool. Verify: _execute_agent_step receives pool dispatch/auth flags via context, run_parallel duplication reduced not copied, tests assert pool-label usage. Post review comment; follow up before merge.
 
