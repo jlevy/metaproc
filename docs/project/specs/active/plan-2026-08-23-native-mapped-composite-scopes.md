@@ -671,12 +671,12 @@ hygiene, supply-chain checks, and browser checks pass.
 The local full suite reports 4,221 passed and 8 skipped; its only failure is an existing
 test that asserts the checkout directory is literally named `metaproc`, while this
 review worktree has a different basename.
-Pull request CI must confirm the suite in the canonical checkout layout.
+Pull request CI passes lint, distribution, and the full suite on Python 3.12, 3.13, and
+3.14 in the canonical checkout layout.
 
 No runtime implementation or production-scale result is claimed.
-The architecture-review bead remains in progress until this revision is pushed,
-validated, and dispositioned on the pull request.
-Runtime implementation remains open.
+The first F1–F8 architecture-review disposition is complete.
+The proposal remains a draft for review, and runtime implementation remains open.
 
 ## Rollout Plan
 
