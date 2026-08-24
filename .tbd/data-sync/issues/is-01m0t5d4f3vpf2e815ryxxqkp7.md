@@ -5,12 +5,22 @@ title: "Review PR #36: transport retry-later policy"
 kind: task
 status: in_progress
 priority: 1
-version: 3
+version: 12
 labels:
   - pr-review
 dependencies: []
+parent_id: is-01m0t5d345y4pdjcjpepb9h4q6
+child_order_hints:
+  - is-01m0t804b6wkqyjrzk3nwpwnv3
+  - is-01m0t8055d9ryetyv8axef8cqn
+  - is-01m0t8068yxh3je3xnfrq8f70k
+  - is-01m0t8070qf1kded17fc1tjya3
+  - is-01m0t807ptgkcbemssgq9qzx38
+  - is-01m0t808bang7nryyzzhtg6phy
+  - is-01m0t808zq4fjshwjtvhs7zn34
+  - is-01m0t809p8h99cy79t3hwd3j1f
 created_at: 2026-08-24T15:14:43.810Z
-updated_at: 2026-08-24T15:38:50.439Z
+updated_at: 2026-08-24T16:00:08.902Z
 ---
 Senior review of #36 (codex/gtia-v3-retry-later, draft). Retry-later policy across cloud dispatch, entrypoints, env vars, auth-pool flags. Verify env-var plumbing, flag compatibility, cloud entrypoint behavior. Post review comment; follow up before merge.
 

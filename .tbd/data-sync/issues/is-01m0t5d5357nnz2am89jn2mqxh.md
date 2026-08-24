@@ -5,12 +5,13 @@ title: "Follow up on PR #32 architecture review findings"
 kind: task
 status: in_progress
 priority: 1
-version: 3
+version: 4
 labels:
   - pr-review
 dependencies: []
+parent_id: is-01m0t5d345y4pdjcjpepb9h4q6
 created_at: 2026-08-24T15:14:44.452Z
-updated_at: 2026-08-24T15:38:51.252Z
+updated_at: 2026-08-24T15:58:12.420Z
 ---
 The #32 review (F1-F8) was posted at plan revision 7f2b022; the plan has since been updated to 4dcc683. Verify which findings the revision addresses, note remaining open items, and track disposition of blockers F3 (resource model) and F6 (cross-scope recovery) before mapped-scope implementation lands.
 
