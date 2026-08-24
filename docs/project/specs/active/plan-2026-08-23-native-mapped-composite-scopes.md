@@ -814,11 +814,23 @@ existing run ID, reports only field names, and normalizes only the known equival
 Filestore `RUNS_DIR` aliases.
 It does not add another manifest, metadata service, or scheduler policy.
 
-The focused run-config/resume integration set passes 40 tests, and the exact stack-wide
-review-fix candidate passes 4,351 tests with 8 skipped.
+The first GTIA `v3.0-pre` consumer run exposed two additional generic defects.
+A tolerant `require: finished` collector could erase a separate success-required edge in
+a dependency diamond; pull request 37 now evaluates every affected direct edge and
+preserves tolerant collection only on the edge that declared it.
+The resulting clean three-item run completed, but status reconstruction then included
+runtime-discovered roster items in the mapped-step definition hash and immediately
+reported all mapped parents as stale.
+Definition fingerprints now exclude only discovered `items` and `filtered_count` while
+retaining every authored fan-out field.
+
+The focused fingerprint, dependency-state, status, mapped-scope, and recursive-context
+set passes 177 tests.
+The exact stack-wide candidate passes 4,354 tests with 8 skipped.
 Formatting, Ruff, BasedPyright, Markdown links, public hygiene, browser and supply-chain
 checks, dependency audits, distribution build, and installed-wheel smoke are also green.
-GitHub CI remains the final gate before the consumer pins this revision.
+A fresh consumer run, failed-item-only resume drill, and exact-head GitHub CI remain the
+final gates before this revision is merge-eligible.
 
 Per-item force, richer evidence/fan-in projection, scoped child variables, shared byte
 admission, live harnesses, and production-scale results remain open.
