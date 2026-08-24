@@ -99,6 +99,13 @@ development series.
 
 ### Changed
 
+- **One execution context across recursive scopes**: local `run-process` execution now
+  shares one executable-leaf ceiling across fan-out pools, scalar steps, code work, and
+  composite descendants.
+  Synchronous code and scalar-process supervision use the run-owned executor instead of
+  blocking the event loop, and `--force` reaches composite descendants while root step
+  selectors remain root-scoped.
+
 - **Code-step outputs are no longer YAML-repaired**: `run-parallel`’s `mode: code`
   fan-out ran the frontmatter auto-repair pass over each item’s declared outputs before
   validating them, which `run-process`’s code path never did.
