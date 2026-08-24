@@ -3,13 +3,17 @@ type: is
 id: is-01m0qry2rxx43yd8xsmej9vzy6
 title: "Scale ratio test flakes on CI: min taken per side, not per ratio"
 kind: bug
-status: open
+status: closed
 priority: 2
-version: 1
+version: 2
 labels: []
 dependencies: []
 created_at: 2026-08-23T16:58:18.781Z
-updated_at: 2026-08-23T16:58:18.781Z
+updated_at: 2026-08-24T22:18:31.033Z
+closed_at: 2026-08-24T22:18:31.033Z
+close_reason: "Duplicate of mp-npza, which is closed and fixed by PR #39 (deterministic aligned-membership work guard, head 8d37591). Same test, same wall-clock ratio assertion in tests/execution_model/test_scale.py. Keeping mp-npza as the record since it carries the fix verification."
+resolution: null
+duplicate_of: null
 ---
 `tests/execution_model/test_scale.py::TestEnvelope::test_readiness_does_not_degrade_quadratically_with_width`
 fails intermittently on CI. Twice in one PR's history, on commits that cannot affect it
