@@ -196,7 +196,12 @@ MANUAL_ACK_HEARTBEAT_S = 15 * 60
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class RunExecutionContext:
-    """Run-owned policy and execution references shared by every scope."""
+    """Run-owned policy and execution references shared by every scope.
+
+    `cancellation_event` reflects cooperative asyncio cancellation. The process-level
+    signal reaper remains the owner of direct OS signals until that path can preserve
+    cleanup ownership rather than terminating the interpreter immediately.
+    """
 
     backend_name: str
     max_concurrency: int | None
@@ -239,7 +244,7 @@ class RunExecutionContext:
     ) -> RunExecutionContext:
         """Create the references that must remain identical through recursion."""
         if max_concurrency is not None and max_concurrency < 1:
-            raise ValueError("max_concurrency must be at least 1")
+            raise CLIError("max_concurrency must be at least 1")
         return cls(
             backend_name=backend_name,
             max_concurrency=max_concurrency,
@@ -261,14 +266,13 @@ class RunExecutionContext:
             ),
             cancellation_event=asyncio.Event(),
             sync_executor=ThreadPoolExecutor(
-                max_workers=max_concurrency,
                 thread_name_prefix="metaproc-run",
             ),
         )
 
     def close(self) -> None:
-        """Release the run-owned executor after all scopes have stopped."""
-        self.sync_executor.shutdown(wait=True, cancel_futures=True)
+        """Stop accepting run-owned synchronous work without blocking the event loop."""
+        self.sync_executor.shutdown(wait=False, cancel_futures=True)
 
 
 async def _run_sync[SyncResult](
@@ -2121,7 +2125,6 @@ async def _execute_fan_out_step(
     machine_type: str,
     spot: bool,
     variant_override: str | None,
-    profile_files: Sequence[Path] = (),
     execution_context: RunExecutionContext | None = None,
     peer_allowed_targets: list[WriteTarget] | None = None,
     events: ProcessEventLogger | None = None,
@@ -2759,7 +2762,6 @@ async def _execute_step(
                 machine_type=execution_context.machine_type,
                 spot=execution_context.spot,
                 variant_override=execution_context.variant_override,
-                profile_files=execution_context.profile_files,
                 execution_context=execution_context,
                 peer_allowed_targets=peer_allowed_targets,
                 events=events,

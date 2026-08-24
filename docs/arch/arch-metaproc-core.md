@@ -388,7 +388,10 @@ whole duration, which serializes every sibling item of a fan-out no matter how t
 dispatcher gathers them.
 Handlers therefore need not be thread-safe against themselves, but a fan-out runs
 several concurrently, so a handler sharing mutable process state across items must guard
-it.
+it. Command-backed code steps use the same run-owned executor and concurrency gates.
+Their subprocesses share the process directory, so an authored command that mutates
+shared repository state, lockfiles, or undeclared files must provide its own
+synchronization or write only to per-item paths.
 
 Dry-run mode prints the handler path (or command) and resolved inputs instead of
 executing.
