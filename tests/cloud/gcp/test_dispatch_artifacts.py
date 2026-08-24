@@ -267,6 +267,98 @@ class TestPackageWorkspace:
         assert "src/missing.py" not in names
         assert any("missing.py" in r.message for r in caplog.records)
 
+    def test_materializes_tracked_in_repo_symlink_as_regular_file(self, tmp_path: Path):
+        repo = tmp_path / "repo"
+        _git_init_with_files(repo, {"data/source.yaml": "answer: 42\n"})
+        link = repo / "config" / "current.yaml"
+        link.parent.mkdir()
+        link.symlink_to("../data/source.yaml")
+        subprocess.run(["git", "-C", str(repo), "add", "config/current.yaml"], check=True)
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-q", "-m", "add link"],
+            check=True,
+        )
+
+        out = package_workspace(repo_root=repo, out_path=tmp_path / "ws.tar.gz")
+
+        with tarfile.open(out) as tar:
+            member = tar.getmember("config/current.yaml")
+            extracted = tar.extractfile(member)
+            assert member.isfile()
+            assert extracted is not None
+            assert extracted.read() == b"answer: 42\n"
+
+    def test_sync_only_preserves_materialized_symlink_path(self, tmp_path: Path):
+        repo = tmp_path / "repo"
+        _git_init_with_files(repo, {"data/source.yaml": "answer: 42\n"})
+        link = repo / "config" / "current.yaml"
+        link.parent.mkdir()
+        link.symlink_to("../data/source.yaml")
+
+        out = package_workspace(
+            repo_root=repo,
+            sync_only=["config/current.yaml"],
+            out_path=tmp_path / "ws.tar.gz",
+        )
+
+        with tarfile.open(out) as tar:
+            assert tar.getnames() == ["config/current.yaml"]
+            assert tar.getmember("config/current.yaml").isfile()
+
+    def test_materializes_nested_in_repo_symlink_from_extra_directory(self, tmp_path: Path):
+        repo = tmp_path / "repo"
+        _git_init_with_files(
+            repo,
+            {"data/source.yaml": "answer: 42\n"},
+            gitignore="scratch/\n",
+        )
+        scratch = repo / "scratch"
+        scratch.mkdir()
+        (scratch / "current.yaml").symlink_to("../data/source.yaml")
+
+        out = package_workspace(
+            repo_root=repo,
+            extra_paths=["scratch"],
+            out_path=tmp_path / "ws.tar.gz",
+        )
+
+        with tarfile.open(out) as tar:
+            member = tar.getmember("scratch/current.yaml")
+            extracted = tar.extractfile(member)
+            assert member.isfile()
+            assert extracted is not None
+            assert extracted.read() == b"answer: 42\n"
+
+    def test_rejects_tracked_symlink_that_resolves_outside_repo(self, tmp_path: Path):
+        repo = tmp_path / "repo"
+        _git_init_with_files(repo, {"src/a.py": "a"})
+        outside = tmp_path / "secret.txt"
+        outside.write_text("secret")
+        leak = repo / "src" / "leak.txt"
+        leak.symlink_to(outside)
+        subprocess.run(["git", "-C", str(repo), "add", "src/leak.txt"], check=True)
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-q", "-m", "add link"],
+            check=True,
+        )
+
+        with pytest.raises(ValueError, match="outside repo root"):
+            package_workspace(repo_root=repo, out_path=tmp_path / "ws.tar.gz")
+
+    def test_rejects_directory_symlink_cycle(self, tmp_path: Path):
+        repo = tmp_path / "repo"
+        _git_init_with_files(repo, {"assets/source.yaml": "answer: 42\n"})
+        loop = repo / "assets" / "loop"
+        loop.symlink_to(".", target_is_directory=True)
+        subprocess.run(["git", "-C", str(repo), "add", "assets/loop"], check=True)
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-q", "-m", "add loop"],
+            check=True,
+        )
+
+        with pytest.raises(ValueError, match="directory link cycle"):
+            package_workspace(repo_root=repo, out_path=tmp_path / "ws.tar.gz")
+
 
 # ── upload helpers ───────────────────────────────────────────
 

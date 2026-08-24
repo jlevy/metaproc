@@ -21,6 +21,7 @@ implementation.
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import tarfile
 import tempfile
@@ -94,10 +95,56 @@ def _contain_in_repo(repo: Path, rel: str) -> str:
     """
     if Path(rel).is_absolute():
         raise ValueError(f"Path must be repo-relative, got absolute: {rel!r}")
+    normalized = Path(os.path.normpath(rel))
+    if ".." in normalized.parts:
+        raise ValueError(f"Path escapes repo root ({repo}): {rel!r}")
     full = (repo / rel).resolve()
     if not full.is_relative_to(repo):
         raise ValueError(f"Path escapes repo root ({repo}): {rel!r}")
-    return str(full.relative_to(repo))
+    return normalized.as_posix()
+
+
+def _add_workspace_path(
+    archive: tarfile.TarFile,
+    *,
+    repo: Path,
+    source: Path,
+    arcname: str,
+    emitted: set[str],
+    active_directories: set[Path],
+) -> None:
+    """Add one workspace path while materializing only safe in-repo links."""
+    resolved = source.resolve(strict=True)
+    if not resolved.is_relative_to(repo):
+        raise ValueError(f"Workspace path resolves outside repo root ({repo}): {source}")
+    if arcname in emitted:
+        return
+
+    if resolved.is_file():
+        archive.add(str(resolved), arcname=arcname, recursive=False)
+        emitted.add(arcname)
+        return
+    if not resolved.is_dir():
+        raise ValueError(f"Workspace path is not a regular file or directory: {source}")
+    if resolved in active_directories:
+        raise ValueError(f"Workspace directory link cycle detected at: {source}")
+
+    archive.add(str(resolved), arcname=arcname, recursive=False)
+    emitted.add(arcname)
+    active_directories.add(resolved)
+    try:
+        for child in sorted(resolved.iterdir(), key=lambda path: path.name):
+            child_arcname = f"{arcname.rstrip('/')}/{child.name}"
+            _add_workspace_path(
+                archive,
+                repo=repo,
+                source=child,
+                arcname=child_arcname,
+                emitted=emitted,
+                active_directories=active_directories,
+            )
+    finally:
+        active_directories.remove(resolved)
 
 
 def package_workspace(
@@ -119,6 +166,11 @@ def package_workspace(
     Including untracked-non-ignored files matters because iterating on a
     new spec or dataset file that hasn't been committed yet would
     otherwise silently ship stale data to the Batch task.
+
+    Symlinks that resolve within the repository are materialized as regular
+    files or directories so the receiving side can keep rejecting archive
+    links. Links that escape the repository and directory-link cycles fail
+    packaging before upload.
 
     ``sync_only`` overrides the default entirely; only the listed paths
     are packaged.
@@ -165,13 +217,21 @@ def package_workspace(
         out_path = Path(tempfile.mkdtemp(prefix="metaproc-workspace-")) / WORKSPACE_TARBALL_NAME
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with tarfile.open(out_path, "w:gz") as tar:
+    emitted: set[str] = set()
+    with tarfile.open(out_path, "w:gz", dereference=True) as tar:
         for rel in paths:
             full = repo / rel
             if not full.exists():
                 log.warning("Skipping %s — not present in working tree", rel)
                 continue
-            tar.add(str(full), arcname=rel, recursive=True)
+            _add_workspace_path(
+                tar,
+                repo=repo,
+                source=full,
+                arcname=rel,
+                emitted=emitted,
+                active_directories=set(),
+            )
     log.info("Packaged %d entries into %s", len(paths), out_path)
     return out_path
 
