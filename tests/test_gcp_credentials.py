@@ -175,6 +175,27 @@ class TestBootstrapSkipsInGCPBatch:
             # Should NOT have set GOOGLE_APPLICATION_CREDENTIALS
             assert "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ
 
+    def test_skips_base64_when_filestore_mount_proves_attached_identity(
+        self, tmp_path: Path
+    ) -> None:
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "GCP_CREDENTIALS_BASE64": "dGVzdA==",
+                    "METAPROC_GCP_FILESTORE_SERVER": "10.0.0.1",
+                    "METAPROC_GCP_FILESTORE_MOUNT_PATH": "/mnt/filestore",
+                },
+                clear=True,
+            ),
+            patch("pathlib.Path.is_mount", return_value=True),
+            patch("tempfile.gettempdir", return_value=str(tmp_path)),
+        ):
+            _bootstrap_credentials_from_base64()
+
+            assert "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ
+            assert list(tmp_path.iterdir()) == []
+
     def test_uses_base64_locally(self, tmp_path):
         fake_key = json.dumps({"type": "service_account", "project_id": "test"})
         b64 = base64.b64encode(fake_key.encode()).decode()

@@ -386,6 +386,11 @@ def status(
         raise CLIError(f"--format must be one of: human, json (got {format!r})")
 
     run_path = Path(run_dir)
+    if not run_path.is_dir():
+        raise CLIError(
+            f"status: locally visible run directory not found: {run_path}. "
+            "For a cloud run, use `metaproc gcp status <run-id>` or hydrate the run tree first."
+        )
     plan = _load_plan_from_run(run_path)
     run_status = scan_run_status(run_path, variant=variant, include_system=not no_system, plan=plan)
     _recover_resource_artifacts(run_path, run_status)

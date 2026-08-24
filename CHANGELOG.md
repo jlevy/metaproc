@@ -34,6 +34,14 @@ development series.
   exception records the affected attempt as lost before propagating the operational
   error.
 
+- **Filesystem status fails closed**: `status` and `pool status` reject a nonexistent
+  local run directory instead of projecting an empty tree as complete or healthy.
+
+- **Cloud identity and orchestrator admission remain explicit**: a mounted Filestore
+  preserves attached-identity ADC precedence on persistent GCP hosts, and full-cloud
+  dispatch now supplies its own `METAPROC_GCP_ORCHESTRATOR` admission marker instead of
+  depending only on `BATCH_TASK_INDEX`.
+
 - **Resume validates task identity before reuse**: scalar, mapped, chained, and manual
   paths reject status or attempt history addressed to another run, step, or item rather
   than accepting a misplaced completion.
@@ -71,9 +79,10 @@ development series.
 ### Removed
 
 - **Persistent GCP gateway compatibility**: removed `gcp remote`, `gcp remote-run`,
-  `gcp self-install`, remote status routing, and workstation Filestore path aliases.
-  Batch-native status and logs remain available, and filesystem-oriented commands now
-  require an explicit locally visible run directory.
+  `gcp self-install`, remote status routing, workstation Filestore path aliases, and the
+  `METAPROC_GATEWAY_HOST` and `METAPROC_GCP_FILESTORE_REMOTE_RUNS_DIR` environment
+  variables. Batch-native status and logs remain available, and filesystem-oriented
+  commands now require an explicit locally visible run directory.
 - **Framework-owned run archiving**: removed `gcp archive`; consumers own durable run
   publication and retention.
 - **Split-tree cloud compatibility**: removed `status --cloud-runs-dir`,

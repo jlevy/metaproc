@@ -198,12 +198,14 @@ class TestWriteRunConfig:
         data["run_dir"] = "/mnt/filestore/runs/run-5c/mine"
         config_path.write_text(to_yaml_string(data))
 
-        with pytest.raises(CLIError, match="Resume mismatch.*run_dir"):
+        with pytest.raises(CLIError, match="Resume mismatch.*run_dir") as exc_info:
             _validate_run_config(
                 config_path,
                 process_name="mine",
                 run_dir=Path("/workspace/user/mnt/filestore/runs/run-5c/mine"),
             )
+        assert "Workstation-mounted Filestore aliases are not supported" in str(exc_info.value)
+        assert "canonical cloud mount" in str(exc_info.value)
 
     def test_resume_rejects_unrelated_local_runs_directory(self, tmp_path: Path) -> None:
         run_dir = tmp_path / "run-5d" / "mine"

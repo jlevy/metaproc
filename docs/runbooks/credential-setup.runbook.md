@@ -379,8 +379,10 @@ A workstation-mounted Filestore is not a supported cloud-orchestration path.
 On Batch worker and orchestrator VMs, auth uses ADC — the VM’s attached service account
 provides credentials via the GCE metadata server.
 **Do not set `GCP_CREDENTIALS_BASE64` on cloud VMs.** The credential bootstrap detects
-the Batch environment via `BATCH_TASK_INDEX` and skips the base64 decode path, ensuring
-ADC is always used.
+the Batch environment via `BATCH_TASK_INDEX`. It also recognizes a configured Filestore
+path only when that path is an actual mount, covering persistent GCP hosts without
+letting configuration alone override local credential precedence.
+In either case, it skips base64 decoding and uses ADC.
 
 For local and CI runs, ADC resolution order:
 1. `GOOGLE_APPLICATION_CREDENTIALS` (SA key file path)

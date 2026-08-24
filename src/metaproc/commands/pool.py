@@ -14,6 +14,7 @@ from prettyfmt import fmt_timedelta
 
 from metaproc import paths as paths_mod
 from metaproc.cli import app, get_output
+from metaproc.errors import CLIError
 from metaproc.io import (
     artifact_exists,
     iter_artifact_paths,
@@ -108,6 +109,11 @@ def pool_status(
     pool anywhere under the composite run".
     """
     out = get_output()
+    if not run_dir.is_dir():
+        raise CLIError(
+            f"pool status: locally visible run directory not found: {run_dir}. "
+            "Hydrate the run tree or execute the command where its files are mounted."
+        )
 
     entries = _composite_pool_status_files(run_dir)
 

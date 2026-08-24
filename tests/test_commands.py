@@ -16,6 +16,7 @@ from metaproc.commands.helpers import (
     parse_adapter_config,
     parse_var_args,
     relpath,
+    resolve_gcp_worker_runs_dir,
     resolve_record_output_paths,
     seed_runtime_vars,
 )
@@ -72,6 +73,16 @@ class TestSeedRuntimeVars:
     def test_resolves_relative_runs_dir(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         monkeypatch.chdir(tmp_path)
         assert seed_runtime_vars({"RUNS_DIR": "runs"}) == {"RUNS_DIR": str(tmp_path / "runs")}
+
+
+class TestResolveGCPWorkerRunsDir:
+    def test_only_gcp_worker_uses_filestore_mount(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("METAPROC_GCP_FILESTORE_SERVER", "10.0.0.1")
+        monkeypatch.setenv("METAPROC_GCP_FILESTORE_MOUNT_PATH", "/mnt/shared")
+
+        assert resolve_gcp_worker_runs_dir("local") == ""
+        assert resolve_gcp_worker_runs_dir("plugin-backend") == ""
+        assert resolve_gcp_worker_runs_dir("gcp-worker") == "/mnt/shared/runs"
 
 
 # ── find_step_def ────────────────────────────────────────────────

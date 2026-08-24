@@ -46,6 +46,7 @@ from metaproc.commands.helpers import (
     parse_step_variant_args,
     parse_var_args,
     require_runtime_runs_dir,
+    resolve_gcp_worker_runs_dir,
     resolve_process_path,
     resolve_record_output_paths,
     seed_runtime_vars,
@@ -610,7 +611,9 @@ def _validate_run_config(
         raise CLIError(
             f"Resume mismatch: run-config.yaml has run_dir={saved_run_dir!r} "
             f"but current run_dir={str(run_dir)!r}. "
-            f"Use the same RUNS_DIR or RUN_ID that created this run."
+            "Use the same locally visible RUNS_DIR and RUN_ID that created this run. "
+            "Workstation-mounted Filestore aliases are not supported resume identities; "
+            "resume on the canonical cloud mount or start a new local run."
         )
 
     log.info("Resume validated against run-config.yaml (%s)", config_path)
@@ -2166,16 +2169,8 @@ async def _execute_fan_out_step(
     if failures:
         raise CLIError(f"Pre-flight check failed: {'; '.join(failures)}")
 
-    # Cloud runs dir
-    # RUNS_DIR = <mount_path>/runs (runs/ subdirectory, not share root).
-    cloud_runs_dir = ""
-    if backend_name != "local":
-        _fs_server = MetaprocEnv.METAPROC_GCP_FILESTORE_SERVER.read_str(default="")
-        if _fs_server:
-            _fs_mount = MetaprocEnv.METAPROC_GCP_FILESTORE_MOUNT_PATH.read_str(
-                default="/mnt/filestore"
-            )
-            cloud_runs_dir = _fs_mount + "/runs"
+    # GCP worker RUNS_DIR = <mount_path>/runs (runs/ subdirectory, not share root).
+    cloud_runs_dir = resolve_gcp_worker_runs_dir(backend_name)
 
     allowed_runtime = collect_step_runtime_placeholders(step_def)
     optional_unset = {name for name in spec.optional_input_names if name not in step_vars}
@@ -3495,6 +3490,7 @@ def run_process_command(
         backend,
         cloud=cloud,
         batch_task_index=MetaprocEnv.BATCH_TASK_INDEX.read_str(default=None),
+        orchestrator_marker=MetaprocEnv.METAPROC_GCP_ORCHESTRATOR.read_str(default=None),
     )
 
     # ── Cloud dispatch path ──────────────────────────────────────────

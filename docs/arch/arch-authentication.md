@@ -207,11 +207,14 @@ Resolution order (standard `google.auth.default()` chain, with one metaproc pre-
 3. GCE metadata server — used automatically on GCP VMs.
 4. User ADC from `gcloud auth application-default login` — final fallback.
 
-**Batch-runtime suppression**
-([gcp_credentials.py:46](../../src/metaproc/cloud/gcp/gcp_credentials.py#L46)
-`_is_in_gcp_batch`): when `BATCH_TASK_INDEX` is non-empty, the base64 decode path is
-skipped and ADC via the attached service account is used.
-This prevents a stale or incorrect base64 blob from leaking into the image.
+**Attached-identity suppression**
+([gcp_credentials.py](../../src/metaproc/cloud/gcp/gcp_credentials.py)
+`_should_prefer_attached_gcp_identity`): the base64 decode path is skipped when either a
+non-empty `BATCH_TASK_INDEX` proves GCP Batch execution or a configured Filestore path
+is an actual mounted filesystem.
+A configured Filestore server alone is insufficient.
+This preserves the attached service account on Batch and persistent GCP hosts instead of
+silently replacing it with a stale base64 credential.
 
 **Token refresh**
 ([gcp_credentials.py:109](../../src/metaproc/cloud/gcp/gcp_credentials.py#L109)
@@ -648,9 +651,9 @@ Adding a secret is one line.
 
 ### Decision 3: GCP ADC on cloud VMs, base64 blob on laptops
 
-**Chosen approach:** `_is_in_gcp_batch()` skips `GCP_CREDENTIALS_BASE64` decoding when
-the non-empty `BATCH_TASK_INDEX` runtime marker proves that the process is inside GCP
-Batch.
+**Chosen approach:** `_should_prefer_attached_gcp_identity()` skips
+`GCP_CREDENTIALS_BASE64` decoding when a non-empty `BATCH_TASK_INDEX` proves GCP Batch
+execution or when a configured Filestore path is an actual mounted filesystem.
 
 **Alternatives considered:**
 - Ship the base64 blob to cloud VMs via Secret Manager — rejected: the attached SA
@@ -658,8 +661,10 @@ Batch.
 - Require operators to unset `GCP_CREDENTIALS_BASE64` on cloud VMs — rejected: fragile
   across orchestrator/worker env inheritance.
 
-**Rationale:** Batch workers should use ADC from their own service account; an ordinary
-Filestore mount does not establish a trusted cloud runtime identity.
+**Rationale:** Batch workers and persistent GCP hosts should keep ADC from their
+attached service account.
+Requiring an actual mount, rather than Filestore configuration alone, prevents a local
+`.env` file from claiming cloud-runtime precedence.
 
 ### Decision 4: Adapter `bootstrap(home)` for credential materialization
 

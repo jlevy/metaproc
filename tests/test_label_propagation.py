@@ -405,6 +405,7 @@ class TestOrchestratorDispatchLabelPropagation:
         assert env_vars["METAPROC_GCP_PROJECT"] == "test-project"
         assert env_vars["METAPROC_GCP_REGION"] == "us-central1"
         assert env_vars["METAPROC_GCP_CONTAINER_IMAGE"] == "gcr.io/test/agent:latest"
+        assert env_vars["METAPROC_GCP_ORCHESTRATOR"] == "1"
         assert env_vars["METAPROC_GCP_SERVICE_ACCOUNT"] == ("user@example.invalid")
         assert env_vars["METAPROC_GCP_NETWORK"] == (
             "projects/test-project/global/networks/test-net"

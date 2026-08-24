@@ -27,6 +27,7 @@ Configuration via environment variables (set by ``orchestrator_dispatch.py``):
     METAPROC_AUTH_FALLBACK_POLICY -- --auth-fallback-policy value
     METAPROC_AUTH_INCLUDE_LABELS -- CSV → repeated --auth-include-labels
     METAPROC_AUTH_EXCLUDE_LABELS -- CSV → repeated --auth-exclude-labels
+    METAPROC_GCP_ORCHESTRATOR -- Dispatcher-owned admission marker ("1")
     METAPROC_RUN_BRANCH       -- Git branch to clone
     METAPROC_REPO_URL         -- Repository URL
     RUNS_DIR                  -- Base path for run artifacts (Filestore NFS mount)
@@ -43,6 +44,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -215,7 +217,7 @@ def main() -> int:
     log.info("Running metaproc run-process for orchestrator")
     log.info("Command: %s", " ".join(cmd))
 
-    exit_code = _run(cmd, cwd=work_dir)
+    exit_code = _run(cmd, cwd=work_dir, env=dict(os.environ))
     log.info("metaproc run-process exited with code %d", exit_code)
     return exit_code
 

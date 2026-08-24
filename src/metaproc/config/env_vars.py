@@ -120,6 +120,9 @@ class MetaprocEnv(EnvEnum):
     )
 
     # ── Worker / orchestrator entrypoint vars (set by dispatcher) ──
+    METAPROC_GCP_ORCHESTRATOR = optional(
+        "Dispatcher-owned admission marker for the inner full-cloud orchestrator process."
+    )
     METAPROC_WORKER_ITEMS = optional("Serialized JSON list of items this worker should process.")
     METAPROC_WORKER_ID = optional("Identifier of the current worker instance (runtime-injected).")
     METAPROC_PROCESS_SPEC = optional(

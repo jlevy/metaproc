@@ -176,7 +176,10 @@ are different: they are multi-VM dispatch modes handled directly in `run-process
 A cloud worker backend partitions items across N VMs, each of which runs
 `run-parallel --backend local` internally.
 The bare `--backend gcp-worker` form is reserved for the inner Batch orchestrator leg
-and is rejected outside a Batch task.
+only. `orchestrator_dispatch.py` sets `METAPROC_GCP_ORCHESTRATOR=1`; the inner process
+also accepts the GCP-provided `BATCH_TASK_INDEX` as a fallback runtime signal.
+The explicit dispatcher marker is the primary admission contract, so a missing provider
+variable cannot reject a correctly dispatched orchestrator.
 
 If a second cloud provider were added, a new worker dispatch implementation would
 register alongside `gcp-worker` in the `run-process` dispatch logic.
@@ -447,8 +450,10 @@ Unified container entrypoint for worker containers:
    steps.
 4. Build and run:
    `python -m metaproc run-process <process_dir> --backend gcp-worker [all forwarded flags]`.
-5. Does **not** pass `--cloud` to avoid infinite recursion.
-6. Exit with `run-process`’s exit code.
+5. Forward the dispatcher-owned `METAPROC_GCP_ORCHESTRATOR=1` admission marker to the
+   inner process.
+6. Does **not** pass `--cloud` to avoid infinite recursion.
+7. Exit with `run-process`’s exit code.
 
 ### 3.7 GCP Batch Shared Utilities (`batch_backend.py`)
 

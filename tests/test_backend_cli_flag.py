@@ -91,6 +91,13 @@ class TestBackendCLIFlag:
             batch_task_index=None,
         )
 
+    def test_gcp_worker_allows_dispatcher_owned_orchestrator_marker(self) -> None:
+        validate_gcp_worker_topology(
+            "gcp-worker",
+            batch_task_index=None,
+            orchestrator_marker="1",
+        )
+
     def test_gcp_worker_rejects_non_dry_operator_host_execution(
         self,
         tmp_path: Path,
@@ -112,4 +119,5 @@ class TestBackendCLIFlag:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, CLIError)
-        assert "without --cloud" in str(result.exception)
+        assert "run-parallel --backend gcp-worker is only supported inside" in str(result.exception)
+        assert "run-process <spec> --backend gcp-worker --cloud" in str(result.exception)

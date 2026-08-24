@@ -64,6 +64,16 @@ def _is_in_gcp_batch() -> bool:
     return bool(task_index and task_index.strip())
 
 
+def _should_prefer_attached_gcp_identity() -> bool:
+    """Return whether runtime evidence supports using the attached GCP identity."""
+    if _is_in_gcp_batch():
+        return True
+    if not MetaprocEnv.METAPROC_GCP_FILESTORE_SERVER.read_str(default=None):
+        return False
+    mount_path = MetaprocEnv.METAPROC_GCP_FILESTORE_MOUNT_PATH.read_str(default="/mnt/filestore")
+    return Path(mount_path).is_mount()
+
+
 def _bootstrap_credentials_from_base64() -> None:
     """Decode ``GCP_CREDENTIALS_BASE64`` to a temp file and set ``GOOGLE_APPLICATION_CREDENTIALS``.
 
@@ -76,8 +86,8 @@ def _bootstrap_credentials_from_base64() -> None:
     """
     if MetaprocEnv.GOOGLE_APPLICATION_CREDENTIALS.read_str(default=None):
         return  # already set — nothing to do
-    if _is_in_gcp_batch():
-        log.debug("Running in GCP Batch — skipping GCP_CREDENTIALS_BASE64, using ADC")
+    if _should_prefer_attached_gcp_identity():
+        log.debug("Attached GCP identity detected; skipping GCP_CREDENTIALS_BASE64 and using ADC")
         return
     b64 = MetaprocEnv.GCP_CREDENTIALS_BASE64.read_str(default="")
     if not b64:
