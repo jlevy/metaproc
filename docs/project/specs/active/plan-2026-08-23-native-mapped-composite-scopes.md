@@ -6,7 +6,7 @@ description: >-
   scheduler.
 author: Joshua Levy (github.com/jlevy) with LLM assistance
 date: 2026-08-23
-last_updated: 2026-08-23
+last_updated: 2026-08-24
 status: Draft — Architecture Review
 category: plan
 ---
@@ -539,6 +539,9 @@ scalar launch.
   admission posture consistently through recursive scopes.
 - [x] Pass auth-pool flags and dispatch configuration to scalar agent steps; assert the
   actual credential-pool label used by a child invocation.
+- [x] Define one typed retry-later configuration, persist it in `run-config.yaml`, and
+  transport it without field-by-field drift through local, orchestrator, and worker
+  dispatch. Keep that stack layer in draft until the scheduler paths consume it.
 - [ ] Converge scalar and fan-out pool exhaustion on the existing typed
   `fail-fast|wait|signal` retry-later policy and checkpoint machinery.
 - [x] Run synchronous handlers and command-backed code steps off the event loop through
@@ -702,8 +705,20 @@ agents; and retains agent/code process-group ownership through completion, timeo
 cancellation, including a leader-exit race and a child that ignores `SIGTERM`. Review
 findings `mp-nnxl` and `mp-xnk9` are closed.
 
-Unified retry-later dispatch, the mapped-scope fixture, mapped execution, shared byte
-admission, and production-scale results remain open.
+The retry-later configuration-transport slice in
+[pull request 36](https://github.com/jlevy/metaproc/pull/36) is stacked on pull request
+35 and has completed precommit review and verification: the full suite passes 4,295
+tests with 8 skipped, and lint, type, documentation, public-hygiene, supply-chain, and
+browser checks are green.
+It replaces the duplicated auth fields on `OrchestratorDispatchConfig` with the existing
+`AuthPoolFlags` payload, fixing the cloud `auth_policy` loss while adding retry policy
+and wait-bound transport.
+It remains a draft release gate: scalar and fan-out admission semantics, deferred state
+and events, typed checkpoints, resume persistence, preflight routing, and GCP signal
+preservation remain open under the child beads of `mp-tibt`.
+
+The mapped-scope fixture, mapped execution, shared byte admission, and production-scale
+results also remain open.
 The first F1–F8 architecture-review disposition is complete.
 The proposal remains a draft for review while implementation proceeds as independently
 reviewable stacked slices.
@@ -713,11 +728,14 @@ reviewable stacked slices.
 1. Merge pull request 31.
 2. Merge this plan through pull request 32.
 3. Merge the `RunExecutionContext` and nonblocking-execution slice through pull request
-   33, which is based on pull request 32.
+   33, which is based on pull request 32. Pull requests 33 through 36 form the runtime
+   stack beneath this reviewed design.
 4. Merge scalar credential propagation through pull request 34, which is based on pull
    request 33.
-5. Merge cancellation-safe ownership as the next stack, then unified retry-later policy
-   as a separate reviewable slice.
+5. Merge cancellation-safe ownership through pull request 35, then review retry-later
+   configuration transport through pull request 36 and scheduler behavior as explicit
+   stacked slices. Do not land the transport layer alone while its public policy options
+   are inert.
 6. Land Phase 2 mapped scopes, ports, parent state/evidence, and per-item recovery.
 7. Land Phase 3 shared host byte authority before a mapped workflow is production-ready.
 8. Integrate the existing views and complete the M0-M4 framework ladder.
@@ -742,7 +760,9 @@ nonblocking execution.
 Its first-slice beads are `mp-htd8` (characterization), `mp-vf21` (shared context and
 leaf ceiling), `mp-d12o` (run-owned executor), and `mp-bvjd` (scalar-auth policy), all
 complete. `mp-l6b5` owns the completed cancellation-safety slice in pull request 35.
-`mp-tibt` (unified retry-later dispatch) remains open.
+`mp-tibt` owns unified retry-later dispatch; its `mp-w1so` configuration-transport slice
+is implemented and verified in pull request 36, while the scheduler, checkpoint, state,
+preflight, and cloud child beads remain open.
 `mp-npza` tracks the non-blocking stabilization of the noisy execution-model scale
 timing gate observed during pull requests 32 and 34. `mp-0ukj` owns mapped scopes,
 ports, parent evidence, and within-scope per-item recovery; `mp-0cyw` owns the common
