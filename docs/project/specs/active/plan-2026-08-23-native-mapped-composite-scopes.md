@@ -681,9 +681,13 @@ semantics. [Pull request 34](https://github.com/jlevy/metaproc/pull/34) is stack
 pull request 33 and completes scalar credential-pool propagation, including scoped child
 evidence, fallback-label retry, shared fan-out/scalar completion primitives, and
 classification-before-compaction ordering.
-Its local and pre-push verification passes formatting, Ruff, BasedPyright, Markdown
-links, public hygiene, supply-chain and browser checks, dependency audits, distribution
-build and smoke tests, plus 4,275 tests with 8 skipped.
+Its local, pre-push, and five-job CI verification passes formatting, Ruff, BasedPyright,
+Markdown links, public hygiene, supply-chain and browser checks, dependency audits,
+distribution build and smoke tests, plus 4,275 tests with 8 skipped.
+The first Python 3.14 CI sample tripped the existing readiness-scale timing ratio at
+6.4× against its 6.0× bound; the full 3.12/3.13/3.14 rerun passed.
+`mp-npza` tracks a statistically stable replacement that preserves the complexity
+regression gate instead of weakening it by threshold alone.
 
 End-to-end cancellation proof, unified retry-later dispatch, the mapped-scope fixture,
 mapped execution, shared byte admission, and production-scale results remain open.
@@ -725,9 +729,10 @@ Its first-slice beads are `mp-htd8` (characterization), `mp-vf21` (shared contex
 leaf ceiling), `mp-d12o` (run-owned executor), and `mp-bvjd` (scalar-auth policy), all
 complete, plus `mp-l6b5` (remaining cancellation proof) and `mp-tibt` (unified
 retry-later dispatch), both open.
-`mp-0ukj` owns mapped scopes, ports, parent evidence, and within-scope per-item
-recovery; `mp-0cyw` owns the common host byte authority; `mp-1af0` owns views; and
-`mp-rrfn` owns the production proof.
+`mp-npza` tracks the non-blocking stabilization of the noisy execution-model scale
+timing gate observed during pull requests 32 and 34. `mp-0ukj` owns mapped scopes,
+ports, parent evidence, and within-scope per-item recovery; `mp-0cyw` owns the common
+host byte authority; `mp-1af0` owns views; and `mp-rrfn` owns the production proof.
 
 The general ready scheduler, persisted dynamic expansions, complete fenced publication,
 cross-scope causal force, budgets, and a standalone runtime artifact index remain
