@@ -151,6 +151,15 @@ laptop-mounted Filestore, and path-identity aliases are not transports.
 Later per-step worker profiles can override the run-wide default in the resolved
 topology without changing the two public placement axes.
 
+SSH remains a valid control transport for a future persistent-host placement, but it is
+not a pipeline state transport.
+The open-source MetaBrowser project owns the maintained
+[SSH command, IAP, tunnel, and disconnect-watchdog utilities](https://github.com/jlevy/metabrowser/blob/main/src/metabrowser/cli/ssh_utils.py)
+and their
+[remote-command integration](https://github.com/jlevy/metabrowser/blob/main/src/metabrowser/cli/remote.py).
+If Metaproc gains an SSH-backed placement with a real consumer, reuse or extract that
+implementation rather than restoring an unused Metaproc copy.
+
 ### 2.3 Fan-Out Backend Dispatch
 
 Fan-out steps in `run-process` dispatch through a backend selected via `--backend`:
