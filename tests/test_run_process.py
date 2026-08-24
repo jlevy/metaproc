@@ -20,7 +20,7 @@ import textwrap
 import threading
 from pathlib import Path
 from typing import Literal, cast
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from typer.testing import CliRunner
@@ -48,9 +48,11 @@ from metaproc.commands.run_process import (
     _execute_fan_out_step,
     _execute_gcp_worker_dispatch,
     _execute_manual_step,
+    _finish_deferred_fan_out_attempts,
     _invalidate_downstream,
     _is_step_completed,
     _maybe_cascade_for_fingerprint,
+    _orchestrate,
     _read_recorded_step_hash,
     _read_step_status,
     _run_agent_subprocess,
@@ -59,7 +61,12 @@ from metaproc.commands.run_process import (
 )
 from metaproc.engine.discovery import FanOutDiscovery
 from metaproc.engine.graph import topo_sort
+from metaproc.engine.pathing import compute_task_state_dir
+from metaproc.engine.write_boundary import RepoSnapshot, WriteTarget
 from metaproc.io.state_io import (
+    mark_completed_at,
+    mark_running_at,
+    read_attempt_history_at,
     read_manual_ack_at,
     read_status_at,
     write_manual_ack_at,
@@ -67,7 +74,11 @@ from metaproc.io.state_io import (
 )
 from metaproc.models.authored import ForEach, IOSpec, ProcessSpec, ProcessStep
 from metaproc.models.plan import FanOut, Plan, ResolvedAdapter, ResolvedStep
-from metaproc.models.runtime import ManualAckRecord, StatusRecord
+from metaproc.models.runtime import (
+    AttemptDisposition,
+    ManualAckRecord,
+    StatusRecord,
+)
 from metaproc.paths import LOGS_DIR, STATE_DIR, STATUS_FILE
 from metaproc.paths import STATE_DIR as _STATE_DIR
 from metaproc.paths import TASKS_SUBDIR as _TASKS_SUBDIR
@@ -330,6 +341,11 @@ class TestCompletionDetection:
     def test_completed_step(self, tmp_path: Path) -> None:
         _write_completed_status(tmp_path, "step-a")
         assert _is_step_completed(tmp_path, "step-a")
+
+    def test_completed_step_from_another_run_is_rejected(self, tmp_path: Path) -> None:
+        _write_completed_status(tmp_path, "step-a")
+        with pytest.raises(ValueError, match="run_id"):
+            _is_step_completed(tmp_path, "step-a", expected_run_id="test/run2")
 
     def test_failed_step_not_complete(self, tmp_path: Path) -> None:
         _write_failed_status(tmp_path, "step-a")
@@ -869,6 +885,44 @@ class TestAncestorVerification:
 
 
 class TestProcessStatusFile:
+    def test_orchestrator_reconciles_tasks_before_topology_walk(self, tmp_path: Path) -> None:
+        out = FakeOut()
+        reconcile = MagicMock(return_value=2)
+
+        with (
+            patch("metaproc.commands.run_process.reconcile_stale_running", reconcile),
+            patch(
+                "metaproc.commands.run_process.topo_sort",
+                side_effect=RuntimeError("stop after reconciliation"),
+            ),
+            pytest.raises(RuntimeError, match="stop after reconciliation"),
+        ):
+            asyncio.run(
+                _orchestrate(
+                    spec=ProcessSpec(name="test"),
+                    plan=_make_plan(),
+                    variables={},
+                    process_path=tmp_path / "test.process.md",
+                    process_dir=tmp_path,
+                    run_dir=tmp_path / "run",
+                    run_id="test/run",
+                    backend_name="local",
+                    max_concurrency=None,
+                    num_workers=1,
+                    machine_type="e2-standard-4",
+                    spot=False,
+                    variant_override=None,
+                    skip_steps=set(),
+                    force=False,
+                    continue_on_error=True,
+                    out=out,
+                    events=MagicMock(),
+                )
+            )
+
+        reconcile.assert_called_once_with(tmp_path / "run")
+        assert out.messages == ["Reconciled 2 orphaned task(s)"]
+
     def test_write_running_status(self, tmp_path: Path) -> None:
         step_states = {
             "step-a": {"state": "completed"},
@@ -904,6 +958,102 @@ class TestProcessStatusFile:
 
 
 class TestFanOutExecution:
+    def test_write_boundary_still_runs_when_another_item_failed(self, tmp_path: Path) -> None:
+        source_path = tmp_path / "tickers.md"
+        source_path.write_text("---\nitems: []\n---\n")
+        run_dir = tmp_path / "run"
+        step_def = ProcessStep(
+            id="predict",
+            mode="agent",
+            for_each=ForEach(
+                over="deps.tickers",
+                bind="ticker",
+                bind_fields=["ticker"],
+                key="{{ticker}}",
+            ),
+        )
+        target = ResolvedStep(
+            step_id="predict",
+            mode="agent",
+            adapter=ResolvedAdapter(type="claude-code-cli", config={}),
+            outputs={"report": IOSpec(path=str(run_dir / "reports" / "{{ticker}}.md"))},
+            fan_out=FanOut(
+                over="deps.tickers",
+                bind="ticker",
+                source=str(source_path),
+                bind_fields=["ticker"],
+            ),
+        )
+        item_contexts = [{"ticker": "AAPL"}, {"ticker": "MSFT"}]
+        discovery = FanOutDiscovery(
+            source_path=source_path,
+            item_key="ticker",
+            item_fields=["ticker"],
+            actionable_contexts=item_contexts,
+        )
+        snapshot = RepoSnapshot(repo_root=tmp_path, statuses={}, dirty_stats={})
+        pool_results = [("AAPL", 1), ("MSFT", 0)]
+        finalize = MagicMock(return_value=pool_results)
+
+        with (
+            patch("metaproc.commands.run_process.derive_variant", return_value="test"),
+            patch(
+                "metaproc.commands.run_process.discover_items_from_source",
+                return_value=discovery,
+            ),
+            patch("metaproc.commands.run_process.reconcile_stale_running", return_value=0),
+            patch("metaproc.commands.run_process.run_preflight", return_value=[]),
+            patch("metaproc.commands.run_process.get_backend", return_value=MagicMock()),
+            patch(
+                "metaproc.commands.run_process.collect_write_targets",
+                return_value=[WriteTarget(run_dir / "reports", "tree")],
+            ),
+            patch(
+                "metaproc.commands.run_process.capture_repo_snapshot",
+                side_effect=[snapshot, snapshot],
+            ),
+            patch(
+                "metaproc.commands.run_process.repo_changes_since",
+                return_value=[tmp_path / "stray.md"],
+            ),
+            patch(
+                "metaproc.commands.run_process.filter_boundary_violations",
+                return_value=[tmp_path / "stray.md"],
+            ),
+            patch(
+                "metaproc.commands.run_parallel._run_agent_pool",
+                new=AsyncMock(return_value=pool_results),
+            ),
+            patch(
+                "metaproc.commands.run_process._finish_deferred_fan_out_attempts",
+                finalize,
+            ),
+        ):
+            result = asyncio.run(
+                _execute_fan_out_step(
+                    spec=ProcessSpec(name="test"),
+                    step_def=step_def,
+                    target=target,
+                    variables={},
+                    process_path=tmp_path / "test.process.md",
+                    process_dir=tmp_path,
+                    run_dir=run_dir,
+                    run_id="test/run",
+                    backend_name="local",
+                    max_concurrency=None,
+                    num_workers=1,
+                    machine_type="e2-standard-4",
+                    spot=False,
+                    variant_override=None,
+                    out=FakeOut(),
+                )
+            )
+
+        assert result is False
+        boundary_error = finalize.call_args.kwargs["boundary_error"]
+        assert boundary_error is not None
+        assert "stray.md" in boundary_error
+
     def test_uses_resolved_fan_out_source(self, tmp_path: Path) -> None:
         source_path = tmp_path / "tickers.md"
         source_path.write_text("---\nitems: []\n---\n")
@@ -1679,6 +1829,110 @@ class TestGCPWorkerBackendFlags:
 
 
 class TestProcessContractValidation:
+    def test_deferred_fan_out_keeps_already_accepted_resume_item(self, tmp_path: Path) -> None:
+        step = ProcessStep(
+            id="predict",
+            mode="agent",
+            for_each=ForEach(
+                over="deps.tickers",
+                bind="ticker",
+                bind_fields=["ticker"],
+                key="{{ticker}}",
+            ),
+        )
+        item_context = {"ticker": "AAPL"}
+        state_dir = compute_task_state_dir(tmp_path, step, item_context)
+        running = mark_running_at(
+            state_dir,
+            run_id="process/run",
+            step_id="predict",
+            item=item_context,
+            item_key="AAPL",
+        )
+        mark_completed_at(state_dir, running_record=running)
+
+        results = _finish_deferred_fan_out_attempts(
+            results=[("AAPL", 0)],
+            item_contexts=[item_context],
+            each="ticker",
+            variables={},
+            step_def=step,
+            step_id="predict",
+            run_dir=tmp_path,
+            run_id="process/run",
+            outputs={},
+            boundary_error="write boundary violated: current-attempt-stray.md",
+            step_hash=None,
+        )
+
+        assert results == [("AAPL", 0)]
+        status = read_status_at(state_dir)
+        assert status is not None
+        assert status.state == "completed"
+        history = read_attempt_history_at(state_dir)
+        assert [record.disposition for record in history] == [AttemptDisposition.succeeded]
+
+    @pytest.mark.parametrize(
+        ("boundary_error", "expected_state", "expected_disposition", "expected_code"),
+        [
+            (None, "completed", AttemptDisposition.succeeded, 0),
+            (
+                "write boundary violated: stray.md",
+                "failed",
+                AttemptDisposition.permanent,
+                1,
+            ),
+        ],
+    )
+    def test_deferred_fan_out_attempt_finishes_after_boundary_validation(
+        self,
+        tmp_path: Path,
+        boundary_error: str | None,
+        expected_state: str,
+        expected_disposition: AttemptDisposition,
+        expected_code: int,
+    ) -> None:
+        step = ProcessStep(
+            id="predict",
+            mode="agent",
+            for_each=ForEach(
+                over="deps.tickers",
+                bind="ticker",
+                bind_fields=["ticker"],
+                key="{{ticker}}",
+            ),
+        )
+        item_context = {"ticker": "AAPL"}
+        state_dir = compute_task_state_dir(tmp_path, step, item_context)
+        mark_running_at(
+            state_dir,
+            run_id="process/run",
+            step_id="predict",
+            item=item_context,
+            item_key="AAPL",
+        )
+
+        results = _finish_deferred_fan_out_attempts(
+            results=[("AAPL", 0)],
+            item_contexts=[item_context],
+            each="ticker",
+            variables={},
+            step_def=step,
+            step_id="predict",
+            run_dir=tmp_path,
+            run_id="process/run",
+            outputs={},
+            boundary_error=boundary_error,
+            step_hash=None,
+        )
+
+        assert results == [("AAPL", expected_code)]
+        status = read_status_at(state_dir)
+        assert status is not None
+        assert status.state == expected_state
+        history = read_attempt_history_at(state_dir)
+        assert [record.disposition for record in history] == [expected_disposition]
+
     def test_process_output_ref_reexport_resolves_step_output(self, tmp_path: Path) -> None:
 
         process_dir = tmp_path / "output-ref-contract"
@@ -2686,6 +2940,8 @@ class TestNonFanOutContentRetry:
         *,
         succeed_after: int = 1,
         invalid_content: str | None = None,
+        require_prompt_fragment: str | None = None,
+        observed_prompts: list[str] | None = None,
     ) -> None:
         """An adapter whose first ``succeed_after`` calls write ``invalid_content``
         (or nothing when ``None``), and whose later calls write a valid artifact."""
@@ -2696,6 +2952,12 @@ class TestNonFanOutContentRetry:
             default_model = None
 
             def build_command(self, prompt_file, merged_config, variables):  # noqa: ANN001, ARG002
+                prompt = Path(prompt_file).read_text()
+                if observed_prompts is not None:
+                    observed_prompts.append(prompt)
+                prompt_allows_success = (
+                    require_prompt_fragment is None or require_prompt_fragment in prompt
+                )
                 target_path = variables["TARGET_PATH"]
                 bad_write = (
                     f"target.write_text({invalid_content!r})"
@@ -2710,7 +2972,7 @@ class TestNonFanOutContentRetry:
                     f"target = Path({target_path!r}); "
                     "target.parent.mkdir(parents=True, exist_ok=True); "
                     "target.write_text('---\\nstatus: ok\\n---\\n') "
-                    f"if n >= {succeed_after} else {bad_write}"
+                    f"if n >= {succeed_after} and {prompt_allows_success!r} else {bad_write}"
                 )
                 return [sys.executable, "-c", script]
 
@@ -2742,6 +3004,7 @@ class TestNonFanOutContentRetry:
         output_extra: str = "",
         succeed_after: int = 1,
         invalid_content: str | None = None,
+        require_prompt_fragment: str | None = None,
     ):
         """Run the spec once. ``run_id`` also keys the scalar-admission pool, so two
         tests sharing one would contend for the same host slots."""
@@ -2755,8 +3018,14 @@ class TestNonFanOutContentRetry:
         spec = self._write_process(
             process_dir, on_invalid, max_retries=max_retries, output_extra=output_extra
         )
+        observed_prompts: list[str] = []
         self._register_adapter(
-            monkeypatch, counter, succeed_after=succeed_after, invalid_content=invalid_content
+            monkeypatch,
+            counter,
+            succeed_after=succeed_after,
+            invalid_content=invalid_content,
+            require_prompt_fragment=require_prompt_fragment,
+            observed_prompts=observed_prompts,
         )
 
         result = CliRunner().invoke(
@@ -2774,12 +3043,12 @@ class TestNonFanOutContentRetry:
         )
         status = read_status_at(_task_state_dir_for(repo_dir / "runs" / run_id, "write-thing"))
         calls = len(counter.read_text()) if counter.exists() else 0
-        return result, status, calls, target
+        return result, status, calls, target, observed_prompts
 
     def test_missing_output_is_retried_and_the_second_attempt_succeeds(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        result, status, calls, target = self._run(
+        result, status, calls, target, _prompts = self._run(
             tmp_path, monkeypatch, on_invalid="", run_id="retry-run"
         )
 
@@ -2789,11 +3058,16 @@ class TestNonFanOutContentRetry:
         assert status is not None
         assert status.state == "completed"
         assert status.attempt == 2, "the recovering attempt should be recorded, not hidden"
+        history = read_attempt_history_at(_task_state_dir_for(target.parent, "write-thing"))
+        assert [record.disposition for record in history] == [
+            AttemptDisposition.retryable,
+            AttemptDisposition.succeeded,
+        ]
 
     def test_on_invalid_fail_makes_the_same_failure_terminal(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        result, status, calls, _ = self._run(
+        result, status, calls, _, _prompts = self._run(
             tmp_path,
             monkeypatch,
             on_invalid="on_invalid:\n  missing: fail",
@@ -2809,7 +3083,7 @@ class TestNonFanOutContentRetry:
     def test_retries_stop_at_the_content_cap(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        result, status, calls, target = self._run(
+        result, status, calls, target, _prompts = self._run(
             tmp_path,
             monkeypatch,
             on_invalid="",
@@ -2824,6 +3098,11 @@ class TestNonFanOutContentRetry:
         assert status is not None
         assert status.state == "failed"
         assert status.attempt == 2, "the exhausted attempt should be the one recorded"
+        history = read_attempt_history_at(_task_state_dir_for(target.parent, "write-thing"))
+        assert [record.disposition for record in history] == [
+            AttemptDisposition.retryable,
+            AttemptDisposition.retryable,
+        ]
 
     def test_repair_saves_the_attempt_instead_of_burning_a_retry(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2834,7 +3113,7 @@ class TestNonFanOutContentRetry:
         only if the repair pass actually ran before validation on the scalar path.
         """
         broken = "---\nrecord:\n  detail: Strong beat (Note: actually Q1 not Q2)\n---\nbody\n"
-        result, status, calls, target = self._run(
+        result, status, calls, target, _prompts = self._run(
             tmp_path,
             monkeypatch,
             on_invalid="",
@@ -2850,6 +3129,35 @@ class TestNonFanOutContentRetry:
         assert status is not None
         assert status.state == "completed"
         assert status.attempt == 1
+
+    def test_invalid_output_retry_tells_the_second_attempt_what_to_correct(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        feedback_header = "The prior attempt's declared output failed validation."
+        result, status, calls, target, prompts = self._run(
+            tmp_path,
+            monkeypatch,
+            on_invalid="",
+            run_id="feedback-run",
+            max_retries=1,
+            require_prompt_fragment=feedback_header,
+        )
+
+        assert result.exit_code == 0, result.stdout
+        assert calls == 2
+        assert target.exists()
+        assert status is not None
+        assert status.state == "completed"
+        assert feedback_header not in prompts[0]
+        assert feedback_header in prompts[1]
+        assert 'output: "main"' in prompts[1]
+        assert 'kind: "missing"' in prompts[1]
+        assert "path:" in prompts[1]
+        prompt_files = sorted(
+            (target.parent / ".logs" / "tasks" / "write-thing").glob("prompt-*.txt")
+        )
+        assert len(prompt_files) == 2
+        assert sorted(feedback_header in path.read_text() for path in prompt_files) == [False, True]
 
 
 class TestNonFanOutTransientRetry:
@@ -2893,7 +3201,12 @@ class TestNonFanOutTransientRetry:
         return spec
 
     @staticmethod
-    def _register_adapter(monkeypatch: pytest.MonkeyPatch, counter: Path, message: str) -> None:
+    def _register_adapter(
+        monkeypatch: pytest.MonkeyPatch,
+        counter: Path,
+        message: str,
+        observed_prompts: list[str],
+    ) -> None:
         """An adapter that dies with *message* the first time and succeeds the second."""
 
         class ExitAdapter:
@@ -2902,6 +3215,7 @@ class TestNonFanOutTransientRetry:
             default_model = None
 
             def build_command(self, prompt_file, merged_config, variables):  # noqa: ANN001, ARG002
+                observed_prompts.append(Path(prompt_file).read_text())
                 target_path = variables["TARGET_PATH"]
                 script = (
                     "import sys; from pathlib import Path; "
@@ -2941,7 +3255,8 @@ class TestNonFanOutTransientRetry:
         target = repo_dir / "runs" / run_id / "thing.md"
         counter = repo_dir / "counter.txt"
         spec = self._write_process(process_dir)
-        self._register_adapter(monkeypatch, counter, message)
+        observed_prompts: list[str] = []
+        self._register_adapter(monkeypatch, counter, message, observed_prompts)
 
         result = CliRunner().invoke(
             app,
@@ -2958,12 +3273,12 @@ class TestNonFanOutTransientRetry:
         )
         status = read_status_at(_task_state_dir_for(repo_dir / "runs" / run_id, "write-thing"))
         calls = len(counter.read_text()) if counter.exists() else 0
-        return result, status, calls, target
+        return result, status, calls, target, observed_prompts
 
     def test_a_body_timeout_is_retried_and_the_second_attempt_succeeds(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        result, status, calls, target = self._run(
+        result, status, calls, target, prompts = self._run(
             tmp_path, monkeypatch, message="UND_ERR_BODY_TIMEOUT", run_id="transient-run"
         )
 
@@ -2973,11 +3288,20 @@ class TestNonFanOutTransientRetry:
         assert status is not None
         assert status.state == "completed"
         assert status.attempt == 2
+        history = read_attempt_history_at(_task_state_dir_for(target.parent, "write-thing"))
+        assert [record.disposition for record in history] == [
+            AttemptDisposition.retryable,
+            AttemptDisposition.succeeded,
+        ]
+        assert all(
+            "The prior attempt's declared output failed validation." not in prompt
+            for prompt in prompts
+        )
 
     def test_an_exhausted_quota_is_not_retried(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        result, status, calls, _ = self._run(
+        result, status, calls, _, _prompts = self._run(
             tmp_path, monkeypatch, message="quota exceeded for this project", run_id="quota-run"
         )
 

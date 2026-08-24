@@ -45,7 +45,8 @@ All engine state lives under ``<run_dir>/.state/`` with stable sub-namespaces:
 - ``<run_dir>/.state/workers/<worker_id>/`` — per-worker pool state
   (runpool-status.yaml).
 - ``<run_dir>/.state/tasks/<step_id>/<item_key>/`` — per-task state
-  (status.yaml, attempt.yaml, result.yaml, manual-ack.yaml).
+  (status.yaml, the legacy attempt.yaml snapshot, attempts/, result.yaml,
+  manual-ack.yaml).
 """
 
 LOGS_DIR = ".logs"
@@ -68,6 +69,9 @@ STEPS_SUBDIR = "steps"
 
 TASKS_SUBDIR = "tasks"
 """Sub-namespace inside ``.state/`` and ``.logs/`` for per-task files keyed by step+item."""
+
+ATTEMPTS_SUBDIR = "attempts"
+"""Append-only attempt-history namespace inside one task state directory."""
 
 WORKERS_SUBDIR = "workers"
 """Sub-namespace for per-worker runpool files."""
@@ -305,6 +309,11 @@ def task_state_dir(run_dir: Path, step_id: str, item_key: str) -> Path:
 def task_logs_dir(run_dir: Path, step_id: str, item_key: str) -> Path:
     """Return per-task logs dir: ``<run_dir>/.logs/tasks/<step_id>/<item_key>/``."""
     return task_logs_parent_dir(run_dir, step_id) / item_key
+
+
+def attempt_state_dir(task_dir: Path, attempt_id: str) -> Path:
+    """Return ``<task_dir>/attempts/<attempt_id>/`` for one durable attempt."""
+    return task_dir / ATTEMPTS_SUBDIR / attempt_id
 
 
 def derived_logs_dir(run_dir: Path) -> Path:

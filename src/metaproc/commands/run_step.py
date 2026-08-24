@@ -55,6 +55,7 @@ from metaproc.io.state_io import (
     mark_failed_at,
     mark_running_at,
     read_status_at,
+    validate_task_status_identity_at,
     write_attempt_at,
     write_manual_ack_at,
     write_result_at,
@@ -209,7 +210,16 @@ def run_step(
         run_context = variables.get("RUN_ID", variables.get("DATE", variables.get("SCOPE", "")))
         run_id = f"{spec.name}/{run_context}"
         item_record = {"step": step}
+        item_key = state_dir.name if step_def.for_each is not None else None
         current_status = read_status_at(state_dir)
+        if current_status is not None:
+            validate_task_status_identity_at(
+                state_dir,
+                current_status,
+                run_id=run_id,
+                step_id=step,
+                item_key=item_key,
+            )
         running_record = (
             current_status if current_status and current_status.state == "running" else None
         )
@@ -217,7 +227,11 @@ def run_step(
             current_status is None or current_status.state != "completed"
         ):
             running_record = mark_running_at(
-                state_dir, run_id=run_id, step_id=step, item=item_record
+                state_dir,
+                run_id=run_id,
+                step_id=step,
+                item=item_record,
+                item_key=item_key,
             )
 
         write_manual_ack_at(
@@ -343,7 +357,13 @@ def run_step(
                 step_hash=step_hash,
             ),
         )
-        mark_running_at(state_dir, run_id=run_id, step_id=step, item=item_record)
+        mark_running_at(
+            state_dir,
+            run_id=run_id,
+            step_id=step,
+            item=item_record,
+            item_key=canonical_item_key,
+        )
 
         try:
             if handler_ref:
@@ -509,6 +529,7 @@ def run_step(
             run_id=run_id,
             step_id=step,
             item={each: context_label} if each else {},
+            item_key=state_dir.name if for_each is not None else None,
         )
 
         env = adapter_obj.prepare_env(dict(os.environ), runtime_config)

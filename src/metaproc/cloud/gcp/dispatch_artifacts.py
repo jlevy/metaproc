@@ -21,6 +21,7 @@ implementation.
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import tarfile
 import tempfile
@@ -94,10 +95,61 @@ def _contain_in_repo(repo: Path, rel: str) -> str:
     """
     if Path(rel).is_absolute():
         raise ValueError(f"Path must be repo-relative, got absolute: {rel!r}")
+    normalized = Path(os.path.normpath(rel))
+    if ".." in normalized.parts:
+        raise ValueError(f"Path escapes repo root ({repo}): {rel!r}")
     full = (repo / rel).resolve()
     if not full.is_relative_to(repo):
         raise ValueError(f"Path escapes repo root ({repo}): {rel!r}")
-    return str(full.relative_to(repo))
+    return normalized.as_posix()
+
+
+def _add_workspace_path(
+    archive: tarfile.TarFile,
+    *,
+    repo: Path,
+    source: Path,
+    arcname: str,
+    emitted: set[str],
+    active_directories: set[Path],
+    required: bool,
+) -> None:
+    """Add one workspace path while materializing only safe in-repo links."""
+    resolved = source.resolve(strict=True)
+    if not resolved.is_relative_to(repo):
+        raise ValueError(f"Workspace path resolves outside repo root ({repo}): {source}")
+    if arcname in emitted:
+        return
+
+    if resolved.is_file():
+        archive.add(str(resolved), arcname=arcname, recursive=False)
+        emitted.add(arcname)
+        return
+    if not resolved.is_dir():
+        if required:
+            raise ValueError(f"Workspace path is not a regular file or directory: {source}")
+        log.warning("Skipping %s — not a regular file or directory", source)
+        return
+    if resolved in active_directories:
+        raise ValueError(f"Workspace directory link cycle detected at: {source}")
+
+    archive.add(str(resolved), arcname=arcname, recursive=False)
+    emitted.add(arcname)
+    active_directories.add(resolved)
+    try:
+        for child in sorted(resolved.iterdir(), key=lambda path: path.name):
+            child_arcname = f"{arcname.rstrip('/')}/{child.name}"
+            _add_workspace_path(
+                archive,
+                repo=repo,
+                source=child,
+                arcname=child_arcname,
+                emitted=emitted,
+                active_directories=active_directories,
+                required=required,
+            )
+    finally:
+        active_directories.remove(resolved)
 
 
 def package_workspace(
@@ -105,7 +157,7 @@ def package_workspace(
     repo_root: Path,
     extra_paths: list[str] | None = None,
     sync_only: list[str] | None = None,
-    exclude_prefixes: tuple[str, ...] = ("metaproc/",),
+    exclude_prefixes: tuple[str, ...] = ("metaproc/", "vendor/metaproc/"),
     out_path: Path | None = None,
 ) -> Path:
     """Tar+gzip a subset of the repo working tree for shipment to a Batch task.
@@ -113,12 +165,17 @@ def package_workspace(
     Default path-set: tracked files (``git ls-files``) unioned with
     untracked-but-not-gitignored files (``git ls-files --others
     --exclude-standard``), minus anything under ``exclude_prefixes``
-    (default: ``metaproc/``, since the wheel ships that separately), plus
-    any caller-supplied ``extra_paths``.
+    (default: ``metaproc/`` and ``vendor/metaproc/``, since the wheel ships
+    that source separately), plus any caller-supplied ``extra_paths``.
 
     Including untracked-non-ignored files matters because iterating on a
     new spec or dataset file that hasn't been committed yet would
     otherwise silently ship stale data to the Batch task.
+
+    Symlinks that resolve within the repository are materialized as regular
+    files or directories so the receiving side can keep rejecting archive
+    links. Links that escape the repository and directory-link cycles fail
+    packaging before upload.
 
     ``sync_only`` overrides the default entirely; only the listed paths
     are packaged.
@@ -126,12 +183,15 @@ def package_workspace(
     All ``extra_paths`` and ``sync_only`` entries must resolve inside
     ``repo_root``; absolute paths or ``..`` escapes raise ``ValueError``.
 
-    Missing paths log a warning and are skipped. Returns the path to the
-    created tarball.
+    Missing paths log a warning and are skipped. Non-regular entries found by
+    the default Git scan also log and skip; explicitly requested paths fail.
+    Returns the path to the created tarball.
     """
     repo = repo_root.resolve()
+    required_paths: set[str] = set()
     if sync_only is not None:
         paths = [_contain_in_repo(repo, p) for p in sync_only]
+        required_paths.update(paths)
     else:
         tracked = subprocess.run(
             ["git", "ls-files"],
@@ -159,19 +219,30 @@ def package_workspace(
             if not any(p == pref.rstrip("/") or p.startswith(pref) for pref in exclude_prefixes)
         ]
         if extra_paths:
-            paths.extend(_contain_in_repo(repo, p) for p in extra_paths)
+            normalized_extra_paths = [_contain_in_repo(repo, p) for p in extra_paths]
+            paths.extend(normalized_extra_paths)
+            required_paths.update(normalized_extra_paths)
 
     if out_path is None:
         out_path = Path(tempfile.mkdtemp(prefix="metaproc-workspace-")) / WORKSPACE_TARBALL_NAME
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with tarfile.open(out_path, "w:gz") as tar:
+    emitted: set[str] = set()
+    with tarfile.open(out_path, "w:gz", dereference=True) as tar:
         for rel in paths:
             full = repo / rel
             if not full.exists():
                 log.warning("Skipping %s — not present in working tree", rel)
                 continue
-            tar.add(str(full), arcname=rel, recursive=True)
+            _add_workspace_path(
+                tar,
+                repo=repo,
+                source=full,
+                arcname=rel,
+                emitted=emitted,
+                active_directories=set(),
+                required=rel in required_paths,
+            )
     log.info("Packaged %d entries into %s", len(paths), out_path)
     return out_path
 

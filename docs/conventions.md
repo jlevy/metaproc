@@ -147,12 +147,15 @@ Runtime terminology:
 - **Item:** workflow data record or scalar supplied to a step, often from an items file
 - **Task:** harness-owned execution record for one step applied to one item; scalar
   steps have one task for the step
-- **Attempt:** one launch or retry within a task
+- **Attempt:** one launch or retry within a task, retained under
+  `attempts/<attempt-id>/attempt.yaml`
 - **Step runner:** harness control plane that executes a step, especially a fan-out pool
 
 Do not use `task` as a synonym for item.
-The `tasks/` path segment names the runtime record that holds status, attempts, results,
-and per-attempt logs.
+The `tasks/` path segment names the runtime record that holds status, attempt history,
+results, and per-attempt logs.
+The direct `attempt.yaml` is a compatibility snapshot; the `attempts/` subtree is the
+durable history.
 
 Non-fan-out steps write per-task state directly under `<run>/.state/tasks/<step_id>/`
 (no `<item_key>` sub-level, since there is exactly one task).

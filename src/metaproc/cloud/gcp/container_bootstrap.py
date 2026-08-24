@@ -24,7 +24,8 @@ artifacts used by ``metaproc gcp run``. This lets the normal
 without requiring an image rebuild.
 
 For the lighter-weight ``metaproc gcp run`` entrypoint, ``bootstrap_gcp_run``
-provides verified wheel installation and workspace extraction.
+provides verified wheel installation, workspace extraction, and optional
+workspace-package installation.
 """
 
 from __future__ import annotations
@@ -268,7 +269,18 @@ def _install_workspace_packages(
             raise RuntimeError(f"configured workspace package is missing: {relative}")
         _strip_uv_sources(os.path.join(package_dir, "pyproject.toml"))
         log.info("Installing workspace package %s from %s", relative, source)
-        rc = _run(["uv", "pip", "install", "--no-deps", "-e", package_dir])
+        rc = _run(
+            [
+                "uv",
+                "pip",
+                "install",
+                "--python",
+                "/opt/venv/bin/python",
+                "--no-deps",
+                "-e",
+                package_dir,
+            ]
+        )
         if rc != 0:
             raise RuntimeError(
                 f"failed to install workspace package {relative!r} from {source} (rc={rc})"
@@ -416,8 +428,9 @@ def bootstrap_gcp_run(*, home: Path, env: Mapping[str, str]) -> str:
 
     1. ``METAPROC_WHEEL_GCS``: gs:// URI to the current-branch metaproc
        wheel. Downloaded via the ``google-cloud-storage`` Python client
-       and force-reinstalled into the baked ``/opt/venv`` (which already
-       has the ``[gcp-batch]`` extras pre-installed by the Dockerfile).
+       and force-reinstalled without dependency resolution into the baked
+       ``/opt/venv`` (which already has the ``[gcp-batch]`` extras and audited
+       dependency closure pre-installed by the Dockerfile).
        ``METAPROC_WHEEL_SHA256`` authenticates the downloaded bytes before
        installation. The freshly installed wheel takes priority over any
        image-baked metaproc.
@@ -437,7 +450,11 @@ def bootstrap_gcp_run(*, home: Path, env: Mapping[str, str]) -> str:
     wheel_sha256 = env.get("METAPROC_WHEEL_SHA256", "").strip()
     workspace_gcs = env.get("METAPROC_WORKSPACE_GCS", "").strip()
     workspace_sha256 = env.get("METAPROC_WORKSPACE_SHA256", "").strip()
+    workspace_packages = _parse_relative_paths(env.get("METAPROC_WORKSPACE_PACKAGES", ""))
     _ = home
+
+    if workspace_packages and not workspace_gcs:
+        raise RuntimeError("METAPROC_WORKSPACE_PACKAGES requires METAPROC_WORKSPACE_GCS")
 
     if wheel_gcs:
         _install_wheel_from_gcs(wheel_gcs, wheel_sha256)
@@ -445,6 +462,13 @@ def bootstrap_gcp_run(*, home: Path, env: Mapping[str, str]) -> str:
     work_dir = "/tmp"
     if workspace_gcs:
         work_dir = _extract_workspace_from_gcs(workspace_gcs, workspace_sha256)
+        if workspace_packages:
+            _install_workspace_packages(work_dir, workspace_packages, "workspace tarball")
+            # Keep nested `uv run` calls on the image environment containing
+            # the just-installed packages instead of re-resolving the shipped
+            # repository and looking for paths absent from a partial archive.
+            os.environ.setdefault("UV_PROJECT_ENVIRONMENT", "/opt/venv")
+            os.environ.setdefault("UV_NO_SYNC", "1")
 
     return work_dir
 
@@ -469,9 +493,9 @@ def _install_wheel_from_gcs(wheel_gcs: str, expected_sha256: str) -> None:
 
     ``uv tool install`` creates an isolated per-tool venv that ignores the
     ``[gcp-batch]`` extras the agent image pre-installs into ``/opt/venv``.
-    The resulting CLI crashes at import time on ``google.cloud.batch_v1``.
-    We reuse the baked venv instead and let the wheel's own deps satisfy
-    everything else.
+    The resulting CLI crashes at import time on ``google.cloud.batch_v1``. Reuse
+    the baked venv and replace only Metaproc; resolving dependencies again would
+    bypass the image's audited dependency set and per-package cutoff exceptions.
     """
     if not wheel_gcs.startswith("gs://"):
         raise RuntimeError(f"METAPROC_WHEEL_GCS must be a gs:// URI, got {wheel_gcs!r}")
@@ -499,12 +523,13 @@ def _install_wheel_from_gcs(wheel_gcs: str, expected_sha256: str) -> None:
                 "--python",
                 "/opt/venv/bin/python",
                 "--force-reinstall",
-                f"{local}[gcp-batch]",
+                "--no-deps",
+                local,
             ]
         )
         if rc != 0:
             raise RuntimeError(
-                f"uv pip install --force-reinstall {local}[gcp-batch] failed (exit code {rc})"
+                f"uv pip install --force-reinstall --no-deps {local} failed (exit code {rc})"
             )
     finally:
         local_path.unlink(missing_ok=True)

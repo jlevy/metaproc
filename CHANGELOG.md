@@ -7,6 +7,49 @@ development series.
 
 ## [Unreleased][unreleased]
 
+### Added
+
+- **Durable per-attempt history**: scalar and fan-out work managed by `run-process`,
+  `run-parallel`, or waited `run-step` now writes a typed
+  `metaproc:TaskAttemptRecord/0.1` before execution and finalizes it once with its
+  disposition and failure class.
+  Replay consumes the exact history when present and retains status-based compatibility
+  for historical run trees.
+  Attempt success waits for every attempt-owned validator, including the fan-out
+  write-boundary check, and outputless tasks now reach a durable terminal state.
+
+- **Crash-safe task reconciliation**: process startup reconciles both attempt history
+  and mutable task status.
+  It closes attempts orphaned before status projection and rebuilds a missing terminal
+  projection without disturbing work owned by a live step-scoped pool.
+
+### Fixed
+
+- **Valid-output recovery cannot rewrite terminal attempt history**: outputs produced
+  before a nonzero or killed process exit are validated while the originating attempt is
+  still live. A later valid file cannot silently turn an already-terminal durable attempt
+  into success; that requires the forthcoming commit/adoption fact.
+
+- **Attempt finalization survives auth-pool teardown failure**: a credential teardown
+  exception records the affected attempt as lost before propagating the operational
+  error.
+
+- **Resume validates task identity before reuse**: scalar, mapped, chained, and manual
+  paths reject status or attempt history addressed to another run, step, or item rather
+  than accepting a misplaced completion.
+
+- **Resuming item-aligned chains**: a normal resume now enters a chain even when its
+  head is complete, reruns incomplete tasks, and reuses completed tasks.
+  Previously, the whole chain was silently skipped.
+  `--force` remains the explicit operation for invalidating a step and its downstream
+  work.
+
+- **Actionable invalid-output retries**: agent steps now append the latest structured
+  validation failures to the next retry prompt, including output, failure kind, path,
+  contract, invariant, location, and message.
+  Fan-out and non-fan-out execution use the same feedback; transport failures never
+  create or replace it.
+
 ### Changed
 
 - **Code-step outputs are no longer YAML-repaired**: `run-parallel`’s `mode: code`

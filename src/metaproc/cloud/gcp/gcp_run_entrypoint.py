@@ -18,6 +18,9 @@ Contract: all configuration uses env vars set by ``gcp_run_dispatch``:
                                ``/workspace/`` before the user command.
     METAPROC_WORKSPACE_SHA256  required SHA-256 digest when
                                ``METAPROC_WORKSPACE_GCS`` is set.
+    METAPROC_WORKSPACE_PACKAGES optional comma-separated repository-relative
+                               Python package paths installed editable after
+                               workspace extraction.
     CLAUDE_CODE_CREDS_JSON     (optional) Personal-Plan OAuth blob; the
                                claude_code adapter's ``bootstrap()`` hook
                                materializes it to ``~/.claude/.credentials.json``.

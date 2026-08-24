@@ -107,6 +107,7 @@ from metaproc.engine.resource_snapshot import build_resource_run_snapshot
 from metaproc.engine.retry import (
     FailureClass,
     RetryVerdict,
+    append_output_failure_feedback,
     classify_error,
     classify_failure,
     classify_output_failures,
@@ -140,12 +141,14 @@ from metaproc.io.overrides import (
 )
 from metaproc.io.state_io import (
     compute_item_dir,
+    end_status_attempt_at,
     mark_completed_at,
     mark_failed_at,
     mark_running_at,
     read_manual_ack_at,
     read_status_at,
     reconcile_stale_running,
+    validate_task_status_identity_at,
     write_attempt_at,
     write_result_at,
 )
@@ -154,7 +157,13 @@ from metaproc.models.authored import IOSpec, ProcessSpec, ProcessStep
 from metaproc.models.plan import Plan, ResolvedStep
 from metaproc.models.resource_budget import FinalizationState
 from metaproc.models.resource_snapshot import ResourceRunSnapshot
-from metaproc.models.runtime import AttemptRecord, ResultRecord, StatusRecord
+from metaproc.models.runtime import (
+    AttemptDisposition,
+    AttemptRecord,
+    OutputFailure,
+    ResultRecord,
+    StatusRecord,
+)
 from metaproc.paths import (
     LOGS_DIR,
     MANUAL_ACK_FILE,
@@ -721,6 +730,7 @@ def _is_step_completed(
     *,
     is_fan_out: bool = False,
     step: ResolvedStep | None = None,
+    expected_run_id: str | None = None,
 ) -> bool:
     """Check if a step has completed.
 
@@ -753,6 +763,14 @@ def _is_step_completed(
 
     # Check canonical per-task state dir at <run>/.state/tasks/<step_id>/.
     record = _read_step_status(run_dir, step_id)
+    if record is not None and expected_run_id is not None:
+        validate_task_status_identity_at(
+            _step_item_dir(run_dir, step_id),
+            record,
+            run_id=expected_run_id,
+            step_id=step_id,
+            item_key=None,
+        )
     if record is not None and record.state == "completed":
         decision = "step status.yaml"
 
@@ -900,6 +918,8 @@ def _verify_ancestors(
     active_step_ids: set[str],
     spec: ProcessSpec,
     variables: dict[str, str],
+    *,
+    expected_run_id: str | None = None,
 ) -> list[str]:
     """Verify omitted ancestors of active steps have completed.
 
@@ -931,6 +951,7 @@ def _verify_ancestors(
                     variables=variables,
                     is_fan_out=dep_is_fan_out,
                     step=dep_target,
+                    expected_run_id=expected_run_id,
                 ):
                     # Check override before recording the error
                     if overrides_doc is not None and is_step_overridden(
@@ -984,7 +1005,13 @@ async def _execute_code_step(
 
     state_dir.mkdir(parents=True, exist_ok=True)
     item_record = {"step": step_id}
-    running_record = mark_running_at(state_dir, run_id=run_id, step_id=step_id, item=item_record)
+    running_record = mark_running_at(
+        state_dir,
+        run_id=run_id,
+        step_id=step_id,
+        item=item_record,
+        item_key=state_dir.name if step_def.for_each is not None else None,
+    )
 
     handler_fn = None
     if handler_ref:
@@ -1070,12 +1097,21 @@ async def _execute_code_step(
         )
         if output_failures:
             output_errors = [f.summary() for f in output_failures]
+            retry_is_owned = target.fan_out is not None and target.fan_out.retry is not None
+            disposition = (
+                AttemptDisposition.retryable
+                if classify_output_failures(output_failures, effective_outputs)
+                is RetryVerdict.RETRY
+                and retry_is_owned
+                else AttemptDisposition.permanent
+            )
             mark_failed_at(
                 state_dir,
                 error=f"output validation failed: {'; '.join(output_errors)}",
                 running_record=running_record,
                 output_failures=output_failures,
                 failure_class=str(FailureClass.INVALID_OUTPUT),
+                attempt_disposition=disposition,
             )
             return False
 
@@ -1163,6 +1199,7 @@ def _discover_chain_items(
     step_def: ProcessStep,
     variables: dict[str, str],
     run_dir: Path,
+    run_id: str,
 ) -> list[dict[str, str]]:
     """Every item of a fan-out source, whether or not it has already run.
 
@@ -1182,6 +1219,7 @@ def _discover_chain_items(
             params=variables,
             reuse_policy="trust_state",
             run_dir=run_dir,
+            expected_run_id=run_id,
         )
     except ValueError as exc:
         raise CLIError(str(exc)) from exc
@@ -1206,7 +1244,11 @@ async def _execute_code_fan_out_step(
     assert target.fan_out is not None
 
     item_contexts = _discover_chain_items(
-        target=target, step_def=step_def, variables=variables, run_dir=run_dir
+        target=target,
+        step_def=step_def,
+        variables=variables,
+        run_dir=run_dir,
+        run_id=run_id,
     )
     if not item_contexts:
         out.progress(f"  Step '{step_id}': no actionable items (all completed)")
@@ -1264,7 +1306,11 @@ async def _execute_item_aligned_chain(
     assert head.fan_out is not None
 
     item_contexts = _discover_chain_items(
-        target=head, step_def=step_def_map[chain[0]], variables=variables, run_dir=run_dir
+        target=head,
+        step_def=step_def_map[chain[0]],
+        variables=variables,
+        run_dir=run_dir,
+        run_id=run_id,
     )
     if not item_contexts:
         out.progress(f"  Chain '{' -> '.join(chain)}': no items")
@@ -1285,8 +1331,24 @@ async def _execute_item_aligned_chain(
         )
 
     def _is_done(step_id: str, item_vars: dict[str, str]) -> bool:
-        prior = read_status_at(compute_task_state_dir(run_dir, step_def_map[step_id], item_vars))
-        return prior is not None and prior.state in ("completed", "cached")
+        state_dir = compute_task_state_dir(run_dir, step_def_map[step_id], item_vars)
+        prior = read_status_at(state_dir)
+        if prior is None or prior.state not in ("completed", "cached"):
+            return False
+        validate_task_status_identity_at(
+            state_dir,
+            prior,
+            run_id=run_id,
+            step_id=step_id,
+            item_key=state_dir.name,
+        )
+        outputs = step_map[step_id].outputs
+        artifact_dir = compute_item_dir(outputs, item_vars)
+        if outputs and artifact_dir is not None:
+            output_errors = validate_item_outputs(artifact_dir, outputs, variables=item_vars)
+            if output_errors:
+                return False
+        return True
 
     def _step_concurrency(step_id: str) -> int | None:
         fan_out = step_map[step_id].fan_out
@@ -1477,6 +1539,7 @@ async def _execute_agent_step(
     retry_policy = _resolve_retry_policy(step_def, spec.defaults)
     content_retry_cap = max_retries_for(FailureClass.INVALID_OUTPUT, retry_policy.max_retries)
     attempt = 1
+    output_failure_feedback: Sequence[OutputFailure] = ()
 
     while True:
         running_record = mark_running_at(
@@ -1494,9 +1557,10 @@ async def _execute_agent_step(
         # inline prompt contents (notably codex-cli) must receive a real, readable path;
         # a synthetic placeholder makes the run fail before dispatch.
         ts = datetime.now(tz=UTC).strftime("%H%M%S")
-        prompt_file = logs_dir / f"prompt-{step_id}-{ts}.txt"
+        prompt_file = logs_dir / f"prompt-{step_id}-attempt{attempt}-{ts}.txt"
+        attempt_prompt = append_output_failure_feedback(resolved_prompt, output_failure_feedback)
         with atomic_output_file(prompt_file) as tmp_path:
-            Path(tmp_path).write_text(resolved_prompt)
+            Path(tmp_path).write_text(attempt_prompt)
 
         cmd = adapter_obj.build_command(prompt_file, runtime_config, step_vars)
         write_attempt_at(
@@ -1580,6 +1644,13 @@ async def _execute_agent_step(
             verdict = classify_error(exit_error)
             cap = max_retries_for(classify_failure(exit_error), retry_policy.max_retries)
             if verdict == RetryVerdict.RETRY and attempt <= cap:
+                end_status_attempt_at(
+                    state_dir,
+                    running_record,
+                    disposition=AttemptDisposition.retryable,
+                    failure_class=str(classify_failure(exit_error)),
+                    error=exit_error,
+                )
                 backoff = compute_backoff(attempt, retry_policy)
                 out.progress(
                     f"  Step '{step_id}': retryable ({exit_error}), "
@@ -1593,6 +1664,11 @@ async def _execute_agent_step(
                 error=exit_error,
                 running_record=running_record,
                 failure_class=str(classify_failure(exit_error)),
+                attempt_disposition=(
+                    AttemptDisposition.retryable
+                    if verdict is RetryVerdict.RETRY
+                    else AttemptDisposition.permanent
+                ),
             )
             return False
 
@@ -1644,6 +1720,15 @@ async def _execute_agent_step(
                 error_str = f"output validation failed: {'; '.join(output_errors)}"
                 verdict = classify_output_failures(output_failures, effective_outputs)
                 if verdict == RetryVerdict.RETRY and attempt <= content_retry_cap:
+                    end_status_attempt_at(
+                        state_dir,
+                        running_record,
+                        disposition=AttemptDisposition.retryable,
+                        failure_class=str(FailureClass.INVALID_OUTPUT),
+                        error=error_str,
+                        output_failures=output_failures,
+                    )
+                    output_failure_feedback = output_failures
                     backoff = compute_backoff(attempt, retry_policy)
                     out.progress(
                         f"  Step '{step_id}': retryable ({error_str}), "
@@ -1658,6 +1743,11 @@ async def _execute_agent_step(
                     running_record=running_record,
                     output_failures=output_failures,
                     failure_class=str(FailureClass.INVALID_OUTPUT),
+                    attempt_disposition=(
+                        AttemptDisposition.retryable
+                        if verdict is RetryVerdict.RETRY
+                        else AttemptDisposition.permanent
+                    ),
                 )
                 return False
 
@@ -1839,6 +1929,81 @@ def _emit_fan_out_item_results(
             )
 
 
+def _finish_deferred_fan_out_attempts(
+    *,
+    results: list[tuple[str, int]],
+    item_contexts: list[dict[str, str]],
+    each: str,
+    variables: dict[str, str],
+    step_def: ProcessStep,
+    step_id: str,
+    run_dir: Path,
+    run_id: str,
+    outputs: dict[str, IOSpec],
+    boundary_error: str | None,
+    step_hash: str | None,
+) -> list[tuple[str, int]]:
+    """Finalize successful pool attempts after step-wide boundary validation."""
+    contexts = {context[each]: context for context in item_contexts}
+    if len(contexts) != len(item_contexts):
+        raise ValueError(f"step {step_id!r} has duplicate {each!r} values")
+
+    finalized: list[tuple[str, int]] = []
+    for item, exit_code in results:
+        if exit_code != 0:
+            finalized.append((item, exit_code))
+            continue
+        item_context = contexts.get(item)
+        if item_context is None:
+            raise ValueError(f"step {step_id!r} returned unknown {each}={item!r}")
+        item_vars = {**variables, **item_context}
+        state_dir = compute_task_state_dir(run_dir, step_def, item_vars)
+        status = read_status_at(state_dir)
+        if status is not None and status.state == "completed":
+            validate_task_status_identity_at(
+                state_dir,
+                status,
+                run_id=run_id,
+                step_id=step_id,
+                item_key=state_dir.name,
+            )
+            # Reuse and pre-spawn recovery can return an already-accepted task in the
+            # pool result set. The boundary snapshot starts after reused output existed,
+            # so this validator must neither re-finalize nor downgrade that attempt.
+            finalized.append((item, 0))
+            continue
+        if status is None or status.state != "running":
+            state = "missing" if status is None else status.state
+            raise ValueError(
+                f"step {step_id!r} cannot finalize {each}={item!r} from state {state!r}"
+            )
+        if boundary_error is not None:
+            mark_failed_at(
+                state_dir,
+                error=boundary_error,
+                running_record=status,
+                failure_class=str(classify_failure(boundary_error)),
+            )
+            finalized.append((item, 1))
+            continue
+
+        completed = mark_completed_at(state_dir, running_record=status)
+        write_result_at(
+            state_dir,
+            ResultRecord(
+                run_id=run_id,
+                step_id=step_id,
+                state="completed",
+                validated=True,
+                outputs=resolve_record_output_paths(outputs, item_vars),
+                published_at=completed.completed_at or _now_iso(),
+                step_hash=step_hash,
+            ),
+        )
+        finalized.append((item, 0))
+    return finalized
+
+
 async def _execute_fan_out_step(
     *,
     spec: ProcessSpec,
@@ -1868,6 +2033,7 @@ async def _execute_fan_out_step(
     """Execute a mode:agent step with for_each (fan-out). Returns True on success."""
 
     step_id = target.step_id
+    step_hash = fingerprint_step(target)
     merged = merge_defaults(step_def, spec.defaults)
     assert target.fan_out is not None
     each = target.fan_out.bind
@@ -1900,11 +2066,6 @@ async def _execute_fan_out_step(
     effective_outputs = target.outputs
     effective_batch_size = resolve_batch_size(step_def)
 
-    # Reconcile stale running items
-    stale_count = reconcile_stale_running(run_dir)
-    if stale_count:
-        out.progress(f"  Reconciled {stale_count} stale running item(s)")
-
     # Fan-out source is resolved at plan-build time from for_each.over.
     resolved_source = target.fan_out.source
     if not resolved_source:
@@ -1921,6 +2082,7 @@ async def _execute_fan_out_step(
         params=step_vars,
         reuse_policy=target.reuse_policy,
         run_dir=run_dir,
+        expected_run_id=run_id,
     )
     item_contexts = discovery.actionable_contexts
     if not item_contexts:
@@ -2042,6 +2204,7 @@ async def _execute_fan_out_step(
             WriteTarget(run_dir / LOGS_DIR, "tree"),
         ]
     )
+    defer_success_transition = boundary_before is not None and bool(allowed_targets)
     # Per-variant concurrency cap: adapters can declare max_concurrency in
     # their config (e.g. pi-glm-5.config.max_concurrency: 15) to set a
     # model-specific ceiling.  Takes the min of global and variant limits.
@@ -2113,14 +2276,12 @@ async def _execute_fan_out_step(
         cloud_runs_dir=cloud_runs_dir,
         pool_dispatch=pool_dispatch,
         preflight_quota_guard=preflight_quota_guard,
+        step_hash=step_hash,
+        defer_success_transition=defer_success_transition,
     )
 
-    if events is not None:
-        _emit_fan_out_item_results(events, step_id=step_id, results=all_results)
-
-    failed_count = sum(1 for _, rc in all_results if rc != 0)
-    succeeded = sum(1 for _, rc in all_results if rc == 0)
-    if failed_count == 0 and boundary_before is not None and allowed_targets:
+    boundary_error: str | None = None
+    if defer_success_transition:
         boundary_after = capture_repo_snapshot(process_dir, observation_zone=[run_dir])
         violations = filter_boundary_violations(
             repo_changes_since(boundary_before, boundary_after),
@@ -2129,19 +2290,33 @@ async def _execute_fan_out_step(
             base_dir=boundary_after.repo_root if boundary_after else None,
         )
         if violations:
-            error = (
+            boundary_error = (
                 "write boundary violated: "
                 f"{_format_boundary_paths(violations, base_dir=boundary_after.repo_root if boundary_after else None)}"
             )
-            for item_context in item_contexts:
-                item_vars = dict(step_vars)
-                item_vars.update(item_context)
-                item_state_dir = compute_task_state_dir(run_dir, step_def, item_vars)
-                if read_status_at(item_state_dir) is None:
-                    continue
-                mark_failed_at(item_state_dir, error=error)
-            out.progress(f"  Step '{step_id}': {error}")
-            return False
+    if defer_success_transition:
+        all_results = _finish_deferred_fan_out_attempts(
+            results=all_results,
+            item_contexts=item_contexts,
+            each=each,
+            variables=step_vars,
+            step_def=step_def,
+            step_id=step_id,
+            run_dir=run_dir,
+            run_id=run_id,
+            outputs=effective_outputs,
+            boundary_error=boundary_error,
+            step_hash=step_hash,
+        )
+
+    if events is not None:
+        _emit_fan_out_item_results(events, step_id=step_id, results=all_results)
+
+    failed_count = sum(1 for _, rc in all_results if rc != 0)
+    succeeded = sum(1 for _, rc in all_results if rc == 0)
+    if boundary_error is not None:
+        out.progress(f"  Step '{step_id}': {boundary_error}")
+        return False
     out.progress(f"  Step '{step_id}': {succeeded} succeeded, {failed_count} failed")
     return failed_count == 0
 
@@ -2266,14 +2441,27 @@ async def _execute_manual_step(
     artifact_dir = compute_item_dir(target.outputs, variables)
     state_dir.mkdir(parents=True, exist_ok=True)
     item_record = {"step": step_id}
+    item_key = state_dir.name if step_def.for_each is not None else None
 
     current_status = read_status_at(state_dir)
+    if current_status is not None:
+        validate_task_status_identity_at(
+            state_dir,
+            current_status,
+            run_id=run_id,
+            step_id=step_id,
+            item_key=item_key,
+        )
     running_record = (
         current_status if current_status and current_status.state == "running" else None
     )
     if running_record is None and (current_status is None or current_status.state != "completed"):
         running_record = mark_running_at(
-            state_dir, run_id=run_id, step_id=step_id, item=item_record
+            state_dir,
+            run_id=run_id,
+            step_id=step_id,
+            item=item_record,
+            item_key=item_key,
         )
 
     ack_record = read_manual_ack_at(state_dir)
@@ -2545,6 +2733,10 @@ async def _orchestrate(
     profile_files: Sequence[Path] = (),
 ) -> None:
     """Walk the DAG, executing independent steps in parallel via asyncio.gather()."""
+    stale_count = reconcile_stale_running(run_dir)
+    if stale_count:
+        out.progress(f"Reconciled {stale_count} orphaned task(s)")
+
     started_at = _now_iso()
     step_map = {s.step_id: s for s in plan.steps}
     step_def_map = {s.id: s for s in spec.steps}
@@ -2749,13 +2941,21 @@ async def _orchestrate(
                 out.progress(f"  Step '{step_id}': satisfied via override — skipping")
                 continue
             target = step_map[step_id]
-            if not force and _is_step_completed(
-                run_dir,
-                step_id,
-                outputs=target.outputs,
-                variables=variables,
-                is_fan_out=target.fan_out is not None,
-                step=target,
+            # The level walk reaches an item-aligned chain only through its head. Even
+            # when the head is complete, the chain may contain incomplete tasks; the
+            # chain executor's per-task checks decide what resume reuses.
+            if (
+                not force
+                and step_id not in _chain_head_of
+                and _is_step_completed(
+                    run_dir,
+                    step_id,
+                    outputs=target.outputs,
+                    variables=variables,
+                    is_fan_out=target.fan_out is not None,
+                    step=target,
+                    expected_run_id=run_id,
+                )
             ):
                 completed_entry: dict[str, Any] = {
                     "state": "completed",
@@ -3596,7 +3796,14 @@ def run_process_command(
     # so operator typos in --auth-account / --auth-include-labels surface
     # before "ancestor not completed" noise).
     if (from_step or only_step) and not force:
-        errors = _verify_ancestors(run_dir, plan, active_step_ids, spec, variables)
+        errors = _verify_ancestors(
+            run_dir,
+            plan,
+            active_step_ids,
+            spec,
+            variables,
+            expected_run_id=run_id,
+        )
         if errors:
             raise CLIError(
                 f"Unsatisfied ancestors for --{'from' if from_step else 'only'} "

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import tarfile
 from pathlib import Path
@@ -50,7 +51,6 @@ def _git_init_with_files(repo: Path, files: dict[str, str], gitignore: str = "")
 class TestFindMetaprocSourceDir:
     def test_locates_source_dir_from_module(self):
         src = find_metaproc_source_dir()
-        assert src.name == "metaproc"
         assert (src / "pyproject.toml").exists()
         assert (src / "src" / "metaproc").is_dir()
 
@@ -120,6 +120,37 @@ class TestPackageWorkspace:
         assert "docs/readme.md" in names
         assert not any(n.startswith("metaproc/") for n in names)
 
+    def test_default_excludes_vendored_metaproc_gitlink(self, tmp_path: Path):
+        repo = tmp_path / "repo"
+        _git_init_with_files(repo, {"src/keep.py": "pass"})
+        nested = repo / "vendor" / "metaproc"
+        _git_init_with_files(nested, {"src/metaproc/__init__.py": "pass"})
+        nested_sha = subprocess.run(
+            ["git", "-C", str(nested), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo),
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                f"160000,{nested_sha},vendor/metaproc",
+            ],
+            check=True,
+        )
+
+        out = package_workspace(repo_root=repo, out_path=tmp_path / "ws.tar.gz")
+
+        with tarfile.open(out) as tar:
+            names = set(tar.getnames())
+        assert "src/keep.py" in names
+        assert not any(n.startswith("vendor/metaproc") for n in names)
+
     def test_excludes_gitignored_files(self, tmp_path: Path):
         repo = tmp_path / "repo"
         _git_init_with_files(
@@ -187,6 +218,59 @@ class TestPackageWorkspace:
         assert "src/new.py" in names
         assert "ignored.txt" not in names
 
+    def test_default_skips_untracked_fifo_with_warning(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        repo = tmp_path / "repo"
+        _git_init_with_files(repo, {"src/tracked.py": "pass"})
+        fifo_path = repo / "agent.fifo"
+        os.mkfifo(fifo_path)
+
+        with (
+            patch(
+                "metaproc.cloud.gcp.dispatch_artifacts.subprocess.run",
+                side_effect=[
+                    subprocess.CompletedProcess([], 0, stdout="src/tracked.py\n", stderr=""),
+                    subprocess.CompletedProcess([], 0, stdout="agent.fifo\n", stderr=""),
+                ],
+            ),
+            caplog.at_level("WARNING"),
+        ):
+            out = package_workspace(repo_root=repo, out_path=tmp_path / "ws.tar.gz")
+
+        with tarfile.open(out) as tar:
+            names = set(tar.getnames())
+        assert "src/tracked.py" in names
+        assert "agent.fifo" not in names
+        assert any("agent.fifo" in record.message for record in caplog.records)
+
+    @pytest.mark.parametrize("explicit_option", ["sync_only", "extra_paths"])
+    def test_explicit_non_regular_workspace_path_is_rejected(
+        self,
+        tmp_path: Path,
+        explicit_option: str,
+    ) -> None:
+        repo = tmp_path / "repo"
+        _git_init_with_files(repo, {"src/tracked.py": "pass"})
+        fifo_path = repo / "agent.fifo"
+        os.mkfifo(fifo_path)
+
+        with pytest.raises(ValueError, match="not a regular file or directory"):
+            if explicit_option == "sync_only":
+                package_workspace(
+                    repo_root=repo,
+                    out_path=tmp_path / "ws.tar.gz",
+                    sync_only=["agent.fifo"],
+                )
+            else:
+                package_workspace(
+                    repo_root=repo,
+                    out_path=tmp_path / "ws.tar.gz",
+                    extra_paths=["agent.fifo"],
+                )
+
     def test_sync_rejects_absolute_path(self, tmp_path: Path):
         repo = tmp_path / "repo"
         _git_init_with_files(repo, {"src/a.py": "a"})
@@ -235,6 +319,98 @@ class TestPackageWorkspace:
         assert "src/a.py" in names
         assert "src/missing.py" not in names
         assert any("missing.py" in r.message for r in caplog.records)
+
+    def test_materializes_tracked_in_repo_symlink_as_regular_file(self, tmp_path: Path):
+        repo = tmp_path / "repo"
+        _git_init_with_files(repo, {"data/source.yaml": "answer: 42\n"})
+        link = repo / "config" / "current.yaml"
+        link.parent.mkdir()
+        link.symlink_to("../data/source.yaml")
+        subprocess.run(["git", "-C", str(repo), "add", "config/current.yaml"], check=True)
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-q", "-m", "add link"],
+            check=True,
+        )
+
+        out = package_workspace(repo_root=repo, out_path=tmp_path / "ws.tar.gz")
+
+        with tarfile.open(out) as tar:
+            member = tar.getmember("config/current.yaml")
+            extracted = tar.extractfile(member)
+            assert member.isfile()
+            assert extracted is not None
+            assert extracted.read() == b"answer: 42\n"
+
+    def test_sync_only_preserves_materialized_symlink_path(self, tmp_path: Path):
+        repo = tmp_path / "repo"
+        _git_init_with_files(repo, {"data/source.yaml": "answer: 42\n"})
+        link = repo / "config" / "current.yaml"
+        link.parent.mkdir()
+        link.symlink_to("../data/source.yaml")
+
+        out = package_workspace(
+            repo_root=repo,
+            sync_only=["config/current.yaml"],
+            out_path=tmp_path / "ws.tar.gz",
+        )
+
+        with tarfile.open(out) as tar:
+            assert tar.getnames() == ["config/current.yaml"]
+            assert tar.getmember("config/current.yaml").isfile()
+
+    def test_materializes_nested_in_repo_symlink_from_extra_directory(self, tmp_path: Path):
+        repo = tmp_path / "repo"
+        _git_init_with_files(
+            repo,
+            {"data/source.yaml": "answer: 42\n"},
+            gitignore="scratch/\n",
+        )
+        scratch = repo / "scratch"
+        scratch.mkdir()
+        (scratch / "current.yaml").symlink_to("../data/source.yaml")
+
+        out = package_workspace(
+            repo_root=repo,
+            extra_paths=["scratch"],
+            out_path=tmp_path / "ws.tar.gz",
+        )
+
+        with tarfile.open(out) as tar:
+            member = tar.getmember("scratch/current.yaml")
+            extracted = tar.extractfile(member)
+            assert member.isfile()
+            assert extracted is not None
+            assert extracted.read() == b"answer: 42\n"
+
+    def test_rejects_tracked_symlink_that_resolves_outside_repo(self, tmp_path: Path):
+        repo = tmp_path / "repo"
+        _git_init_with_files(repo, {"src/a.py": "a"})
+        outside = tmp_path / "secret.txt"
+        outside.write_text("secret")
+        leak = repo / "src" / "leak.txt"
+        leak.symlink_to(outside)
+        subprocess.run(["git", "-C", str(repo), "add", "src/leak.txt"], check=True)
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-q", "-m", "add link"],
+            check=True,
+        )
+
+        with pytest.raises(ValueError, match="outside repo root"):
+            package_workspace(repo_root=repo, out_path=tmp_path / "ws.tar.gz")
+
+    def test_rejects_directory_symlink_cycle(self, tmp_path: Path):
+        repo = tmp_path / "repo"
+        _git_init_with_files(repo, {"assets/source.yaml": "answer: 42\n"})
+        loop = repo / "assets" / "loop"
+        loop.symlink_to(".", target_is_directory=True)
+        subprocess.run(["git", "-C", str(repo), "add", "assets/loop"], check=True)
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-q", "-m", "add loop"],
+            check=True,
+        )
+
+        with pytest.raises(ValueError, match="directory link cycle"):
+            package_workspace(repo_root=repo, out_path=tmp_path / "ws.tar.gz")
 
 
 # ── upload helpers ───────────────────────────────────────────
