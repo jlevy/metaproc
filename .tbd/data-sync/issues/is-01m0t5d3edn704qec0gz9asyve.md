@@ -3,9 +3,9 @@ type: is
 id: is-01m0t5d3edn704qec0gz9asyve
 title: "Review PR #33: share recursive run context"
 kind: task
-status: in_progress
+status: closed
 priority: 1
-version: 16
+version: 17
 labels:
   - pr-review
 dependencies: []
@@ -24,7 +24,11 @@ child_order_hints:
   - is-01m0t7zt2kfff1eg1x9w8d6hq3
   - is-01m0t7zthnzm9zcqnt2bffh0rd
 created_at: 2026-08-24T15:14:42.764Z
-updated_at: 2026-08-24T15:59:53.396Z
+updated_at: 2026-08-24T19:03:47.278Z
+closed_at: 2026-08-24T19:03:47.276Z
+close_reason: "All PR #33 review findings now have explicit dispositions: R1/R3/R4/R5/R7/R8/C3 fixed, R2 fixed in the lifecycle rung, C1 rebutted, and R6/R9/C2 deferred under mp-0cyw/mp-zssw/mp-0ukj. Exact integration head c061cad passed local/pre-push verification and GitHub CI run 32765621039."
+resolution: null
+duplicate_of: null
 ---
 Senior review of #33 (codex/gtia-v3-execution-context, base: plan branch). Implements the RunExecutionContext consolidation (finding F1 of the #32 architecture review). Verify: semaphore unification across sibling scopes (dead external_semaphore fixed), force/skip/continue_on_error propagation handled as deliberate behavior decisions with characterization tests, no policy arg left outside the context. Post review comment; follow up on findings before merge.
 
