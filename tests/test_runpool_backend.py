@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
+import time
 from pathlib import Path
+from typing import Any, cast
+from unittest.mock import MagicMock
 
 import pytest
 
+import metaproc.runpool.backend as backend_mod
 from metaproc.runpool.backend import (
     HealthMetrics,
     LaunchHandle,
@@ -77,6 +82,32 @@ class TestLocalBackend:
                 await asyncio.sleep(0.1)
 
         asyncio.run(_run())
+
+    def test_explicit_env_is_the_complete_child_environment(
+        self,
+        backend: LocalBackend,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("METAPROC_TEST_SCRUB_ME", "ambient-secret")
+
+        async def _run() -> None:
+            log_path = tmp_path / "env.log"
+            prepared = PreparedLaunch(
+                command=(
+                    sys.executable,
+                    "-c",
+                    "import os; assert 'METAPROC_TEST_SCRUB_ME' not in os.environ; "
+                    "print(os.environ['METAPROC_TEST_KEEP'])",
+                ),
+                env={"METAPROC_TEST_KEEP": "pooled"},
+                log_path=log_path,
+            )
+            assert await launch_and_supervise(backend, prepared, timeout_s=2) == 0
+            assert log_path.read_text() == "pooled\n"
+
+        asyncio.run(_run())
+        assert os.environ["METAPROC_TEST_SCRUB_ME"] == "ambient-secret"
 
     def test_launch_with_cwd(self, backend, tmp_path: Path):
         async def _run():
@@ -199,6 +230,109 @@ class TestLocalBackend:
             with pytest.raises(asyncio.CancelledError):
                 await task
             assert delayed.killed is True
+
+        asyncio.run(_run())
+
+    def test_exited_handle_does_not_signal_a_recycled_process_group(
+        self,
+        backend: LocalBackend,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        process = MagicMock(returncode=0)
+        handle = LaunchHandle(
+            pid=1234,
+            backend_name="local",
+            _process=cast("Any", process),
+            _leader_create_time=10.0,
+            _observed_descendants={1235: 11.0},
+        )
+        monkeypatch.setattr(backend_mod, "_process_create_time", lambda _pid: 99.0)
+        killpg = MagicMock()
+        monkeypatch.setattr(os, "killpg", killpg)
+
+        asyncio.run(backend.kill(handle))
+
+        killpg.assert_not_called()
+
+    def test_cleanup_failure_preserves_the_original_timeout(self) -> None:
+        class FailingCleanupBackend:
+            name = "failing-cleanup"
+
+            async def launch(
+                self,
+                prepared: PreparedLaunch,
+                label: str = "",
+            ) -> LaunchHandle:
+                del prepared, label
+                return LaunchHandle(external_id="launch", backend_name=self.name)
+
+            async def poll(self, handle: LaunchHandle) -> int | None:
+                del handle
+                return None
+
+            async def kill(self, handle: LaunchHandle, sig: int | None = None) -> None:
+                del handle, sig
+                raise RuntimeError("cleanup failed")
+
+            async def health(self, handle: LaunchHandle) -> HealthMetrics | None:
+                del handle
+                return None
+
+            async def read_log_tail(self, handle: LaunchHandle, lines: int = 50) -> str:
+                del handle, lines
+                return ""
+
+        async def _run() -> None:
+            with pytest.raises(TimeoutError):
+                await launch_and_supervise(
+                    FailingCleanupBackend(),
+                    PreparedLaunch(command=("unused",)),
+                    timeout_s=0,
+                )
+
+        asyncio.run(_run())
+
+    def test_cleanup_polling_has_a_deadline(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        class NeverTerminalBackend:
+            name = "never-terminal"
+
+            async def launch(
+                self,
+                prepared: PreparedLaunch,
+                label: str = "",
+            ) -> LaunchHandle:
+                del prepared, label
+                return LaunchHandle(external_id="launch", backend_name=self.name)
+
+            async def poll(self, handle: LaunchHandle) -> int | None:
+                del handle
+                return None
+
+            async def kill(self, handle: LaunchHandle, sig: int | None = None) -> None:
+                del handle, sig
+
+            async def health(self, handle: LaunchHandle) -> HealthMetrics | None:
+                del handle
+                return None
+
+            async def read_log_tail(self, handle: LaunchHandle, lines: int = 50) -> str:
+                del handle, lines
+                return ""
+
+        monkeypatch.setattr(backend_mod, "_PROCESS_CANCEL_WAIT_S", 0.01)
+
+        async def _run() -> None:
+            started = time.monotonic()
+            with pytest.raises(TimeoutError):
+                await launch_and_supervise(
+                    NeverTerminalBackend(),
+                    PreparedLaunch(command=("unused",)),
+                    timeout_s=0,
+                )
+            assert time.monotonic() - started < 1
 
         asyncio.run(_run())
 

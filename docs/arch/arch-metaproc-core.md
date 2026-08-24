@@ -369,9 +369,11 @@ Required execution reference (exactly one):
   when process directories are moved or shared across codebases.
 - `command` -- a shell command string, executed as a subprocess.
 
-Handler signature: `def handler(context: dict, step_config: StepConfig) -> None`. The
-context dict contains resolved input variables (same resolution as `mode: agent`). The
-handler writes outputs directly; the engine records `.state/` completion markers.
+Handler signature: `def handler(context: StepContext, step_config: StepConfig) -> None`.
+`StepContext` is a `dict[str, str]` subclass containing resolved input variables (the
+same resolution as `mode: agent`). Long-running handlers should call
+`context.cancel_requested()` at safe checkpoints and return when it becomes true.
+The handler writes outputs directly; the engine records `.state/` completion markers.
 If the handler raises, the step fails with the same state recording as a failed agent
 step.
 
@@ -2609,9 +2611,14 @@ Cancellation during launch drains any late handle.
 Completion, cancellation, and timeout all close the full process group, escalate
 stubborn descendants to `SIGKILL`, and flush a log-filter thread before returning.
 Shell-backed code steps apply the same process-group ownership rule inside their sampled
-command runner. These paths do not add a second pool or adaptive controller: the run
-context supplies the leaf ceiling, host admission supplies cross-run capacity, and
-RunPool remains the adaptive manager for mapped local fan-out.
+command runner.
+A code command owns its descendants only for the duration of the step; it
+must not daemonize intentional background work because any remaining group member is
+terminated when the command leader exits.
+Cleanup failure is logged and does not replace an already-observed exit-zero result.
+These paths do not add a second pool or adaptive controller: the run context supplies
+the leaf ceiling, host admission supplies cross-run capacity, and RunPool remains the
+adaptive manager for mapped local fan-out.
 
 **Note on backend abstraction:** `local` is a registered `LaunchBackend` implementation
 (section 21.8) in the backend registry (`runpool/registry.py`). `gcp-worker` is

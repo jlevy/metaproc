@@ -156,17 +156,26 @@ def run_sampled_step_command(
 
 
 def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
-    """Terminate a command's isolated process group, escalating when needed."""
+    """Best-effort terminate a command's isolated process group.
+
+    Cleanup failure is logged; it never changes an already-observed command result.
+    """
     if sys.platform == "win32":
-        if process.poll() is not None:
-            return
-        process.terminate()
         try:
-            process.wait(timeout=_PROCESS_TERMINATION_GRACE_S)
+            if process.poll() is not None:
+                return
+            process.terminate()
+            try:
+                process.wait(timeout=_PROCESS_TERMINATION_GRACE_S)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                try:
+                    process.wait(timeout=_PROCESS_KILL_WAIT_S)
+                except subprocess.TimeoutExpired:
+                    log.error("Command process %d survived termination", process.pid)
             return
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=_PROCESS_KILL_WAIT_S)
+        except OSError:
+            log.exception("Could not terminate command process %d", process.pid)
             return
 
     # start_new_session=True makes the leader PID the stable process-group ID.
@@ -175,6 +184,9 @@ def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
         os.killpg(pgid, signal.SIGTERM)
     except ProcessLookupError:
         process.wait()
+        return
+    except PermissionError:
+        log.error("Permission denied signalling command process group %d", pgid)
         return
     if _wait_for_process_group_exit(
         process,
@@ -188,13 +200,15 @@ def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
     except ProcessLookupError:
         process.wait()
         return
+    except PermissionError:
+        log.error("Permission denied sending SIGKILL to command process group %d", pgid)
+        return
     if not _wait_for_process_group_exit(
         process,
         pgid,
         timeout_s=_PROCESS_KILL_WAIT_S,
     ):
-        msg = f"Command process group {pgid} still has live members after SIGKILL"
-        raise RuntimeError(msg)
+        log.error("Command process group %d still has live members after SIGKILL", pgid)
 
 
 def _wait_for_process_group_exit(
@@ -211,6 +225,8 @@ def _wait_for_process_group_exit(
             os.killpg(pgid, 0)
         except ProcessLookupError:
             return True
+        except PermissionError:
+            pass
         remaining_s = deadline - time.monotonic()
         if remaining_s <= 0:
             return False

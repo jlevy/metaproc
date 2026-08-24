@@ -5,14 +5,17 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import MagicMock
 
+import psutil
 import pytest
 import yaml
 
 from metaproc.osutils.memory_pressure import MemoryPressure, PressureLevel
-from metaproc.runpool.backend import PreparedLaunch
+from metaproc.runpool.backend import HealthMetrics, LaunchHandle, PreparedLaunch
 from metaproc.runpool.events import EventLogger
 from metaproc.runpool.pool import (
     ProcessConfig,
@@ -26,6 +29,7 @@ from metaproc.runpool.pool import (
 )
 from metaproc.runpool.status import (
     ControllerStatus,
+    RunPoolStatus,
     ScaleOverride,
     ScaleState,
     write_scale_override,
@@ -142,6 +146,337 @@ class TestRunPool:
             await pool.shutdown()
 
         asyncio.run(_run())
+
+    def test_filter_thread_join_does_not_block_the_event_loop(self, tmp_path: Path) -> None:
+        ordering: list[str] = []
+        filter_thread = MagicMock()
+
+        def blocking_join(timeout: float) -> None:
+            del timeout
+            time.sleep(0.1)
+            ordering.append("join-finished")
+
+        filter_thread.join.side_effect = blocking_join
+        filter_thread.is_alive.return_value = False
+
+        class ExitBackend:
+            name = "exit"
+
+            async def launch(
+                self,
+                prepared: PreparedLaunch,
+                label: str = "",
+            ) -> LaunchHandle:
+                del prepared, label
+                return LaunchHandle(
+                    external_id="exit",
+                    backend_name=self.name,
+                    _filter_thread=filter_thread,
+                )
+
+            async def poll(self, handle: LaunchHandle) -> int | None:
+                del handle
+                return 0
+
+            async def kill(self, handle: LaunchHandle, sig: int | None = None) -> None:
+                del handle, sig
+
+            async def health(self, handle: LaunchHandle) -> HealthMetrics | None:
+                del handle
+                return None
+
+            async def read_log_tail(self, handle: LaunchHandle, lines: int = 50) -> str:
+                del handle, lines
+                return ""
+
+        async def _run() -> None:
+            pool = RunPool(
+                RunPoolConfig(
+                    max_concurrency=1,
+                    initial_concurrency=1,
+                    pressure_check_interval_s=60,
+                    state_dir=tmp_path / "state",
+                    logs_dir=tmp_path / "logs",
+                    host_admission_enabled=False,
+                ),
+                backend=ExitBackend(),
+            )
+
+            async def tick() -> None:
+                await asyncio.sleep(0.01)
+                ordering.append("event-loop-tick")
+
+            await asyncio.gather(
+                pool.submit(
+                    ProcessConfig(
+                        launch=PreparedLaunch(command=("unused",)),
+                        label="filtered",
+                    )
+                ),
+                tick(),
+            )
+            await pool.shutdown()
+
+        asyncio.run(_run())
+        assert ordering == ["event-loop-tick", "join-finished"]
+
+    def test_backend_poll_failure_releases_lane_accounting(self, tmp_path: Path) -> None:
+        class PollFailureBackend:
+            name = "poll-failure"
+
+            def __init__(self) -> None:
+                self.kill_calls = 0
+
+            async def launch(
+                self,
+                prepared: PreparedLaunch,
+                label: str = "",
+            ) -> LaunchHandle:
+                del prepared, label
+                return LaunchHandle(external_id="failed", backend_name=self.name)
+
+            async def poll(self, handle: LaunchHandle) -> int | None:
+                del handle
+                raise RuntimeError("poll failed")
+
+            async def kill(self, handle: LaunchHandle, sig: int | None = None) -> None:
+                del handle, sig
+                self.kill_calls += 1
+
+            async def health(self, handle: LaunchHandle) -> HealthMetrics | None:
+                del handle
+                return None
+
+            async def read_log_tail(self, handle: LaunchHandle, lines: int = 50) -> str:
+                del handle, lines
+                return ""
+
+        async def _run() -> tuple[RunPoolStatus, int]:
+            backend = PollFailureBackend()
+            pool = RunPool(
+                RunPoolConfig(
+                    max_concurrency=1,
+                    initial_concurrency=1,
+                    execution_profile="lane",
+                    pressure_check_interval_s=60,
+                    state_dir=tmp_path / "state",
+                    logs_dir=tmp_path / "logs",
+                    host_admission_enabled=False,
+                ),
+                backend=backend,
+            )
+            with pytest.raises(RuntimeError, match="poll failed"):
+                await pool.submit(
+                    ProcessConfig(
+                        launch=PreparedLaunch(command=("unused",)),
+                        label="broken",
+                        lane_id="lane",
+                    )
+                )
+            snapshot = pool.snapshot
+            await pool.shutdown()
+            return snapshot, backend.kill_calls
+
+        snapshot, kill_calls = asyncio.run(_run())
+        lane = next(row for row in snapshot.lanes if row.lane_id == "lane")
+        assert lane.active_count == 0
+        assert lane.killed_count == 1
+        assert kill_calls == 1
+
+    def test_shutdown_collects_and_kills_a_late_backend_launch(self, tmp_path: Path) -> None:
+        class LateLaunchBackend:
+            name = "late-launch"
+
+            def __init__(self) -> None:
+                self.launch_started = asyncio.Event()
+                self.allow_launch = asyncio.Event()
+                self.kill_calls = 0
+
+            async def launch(
+                self,
+                prepared: PreparedLaunch,
+                label: str = "",
+            ) -> LaunchHandle:
+                del prepared, label
+                self.launch_started.set()
+                await self.allow_launch.wait()
+                return LaunchHandle(external_id="late", backend_name=self.name)
+
+            async def poll(self, handle: LaunchHandle) -> int | None:
+                del handle
+                return None
+
+            async def kill(self, handle: LaunchHandle, sig: int | None = None) -> None:
+                del handle, sig
+                self.kill_calls += 1
+
+            async def health(self, handle: LaunchHandle) -> HealthMetrics | None:
+                del handle
+                return None
+
+            async def read_log_tail(self, handle: LaunchHandle, lines: int = 50) -> str:
+                del handle, lines
+                return ""
+
+        async def _run() -> tuple[int, bool, int]:
+            backend = LateLaunchBackend()
+            pool = RunPool(
+                RunPoolConfig(
+                    max_concurrency=1,
+                    initial_concurrency=1,
+                    min_concurrency=1,
+                    pressure_check_interval_s=60,
+                    state_dir=tmp_path / "state",
+                    logs_dir=tmp_path / "logs",
+                    host_admission_enabled=False,
+                ),
+                backend=backend,
+            )
+            result = pool.submit(
+                ProcessConfig(
+                    launch=PreparedLaunch(command=("unused",)),
+                    label="late",
+                )
+            )
+            await backend.launch_started.wait()
+            shutdown = asyncio.create_task(pool.shutdown(timeout_s=0))
+            await asyncio.sleep(0)
+            assert not shutdown.done()
+            backend.allow_launch.set()
+            await asyncio.wait_for(shutdown, timeout=2)
+            return backend.kill_calls, result.cancelled(), pool.snapshot.pending_count
+
+        kill_calls, result_cancelled, pending_count = asyncio.run(_run())
+        assert kill_calls == 1
+        assert result_cancelled
+        assert pending_count == 0
+
+    def test_shutdown_continues_after_one_backend_kill_error(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        class PartlyFailingBackend:
+            name = "partly-failing"
+
+            def __init__(self) -> None:
+                self.launched = asyncio.Event()
+                self.labels: dict[str, str] = {}
+                self.killed: set[str] = set()
+                self.kill_calls: list[str] = []
+
+            async def launch(
+                self,
+                prepared: PreparedLaunch,
+                label: str = "",
+            ) -> LaunchHandle:
+                del prepared
+                external_id = f"handle-{label}"
+                self.labels[external_id] = label
+                if len(self.labels) == 2:
+                    self.launched.set()
+                return LaunchHandle(external_id=external_id, backend_name=self.name)
+
+            async def poll(self, handle: LaunchHandle) -> int | None:
+                label = self.labels[handle.external_id or ""]
+                return 137 if label in self.killed else None
+
+            async def kill(self, handle: LaunchHandle, sig: int | None = None) -> None:
+                del sig
+                label = self.labels[handle.external_id or ""]
+                self.kill_calls.append(label)
+                self.killed.add(label)
+                if label == "first":
+                    raise RuntimeError("reported after signalling")
+
+            async def health(self, handle: LaunchHandle) -> HealthMetrics | None:
+                del handle
+                return None
+
+            async def read_log_tail(self, handle: LaunchHandle, lines: int = 50) -> str:
+                del handle, lines
+                return ""
+
+        async def _run() -> tuple[list[str], int]:
+            backend = PartlyFailingBackend()
+            pool = RunPool(
+                RunPoolConfig(
+                    max_concurrency=2,
+                    initial_concurrency=2,
+                    monitor_interval_s=0.01,
+                    pressure_check_interval_s=60,
+                    state_dir=tmp_path / "state",
+                    logs_dir=tmp_path / "logs",
+                    host_admission_enabled=False,
+                ),
+                backend=backend,
+            )
+            pool.submit(ProcessConfig(launch=PreparedLaunch(command=("unused",)), label="first"))
+            pool.submit(ProcessConfig(launch=PreparedLaunch(command=("unused",)), label="second"))
+            await backend.launched.wait()
+            await pool.shutdown(timeout_s=0)
+            return backend.kill_calls, pool.snapshot.active_count
+
+        kill_calls, active_count = asyncio.run(_run())
+        assert sorted(kill_calls) == ["first", "second"]
+        assert active_count == 0
+
+    def test_cancelling_pool_scope_cleans_running_and_queued_siblings(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        pid_paths = [tmp_path / "first.pid", tmp_path / "second.pid"]
+        script = (
+            "import os, sys, time; from pathlib import Path; "
+            "Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(60)"
+        )
+        pool = RunPool(
+            RunPoolConfig(
+                max_concurrency=1,
+                initial_concurrency=1,
+                min_concurrency=1,
+                monitor_interval_s=0.01,
+                pressure_check_interval_s=60,
+                state_dir=tmp_path / "state",
+                logs_dir=tmp_path / "logs",
+                host_admission_enabled=False,
+            )
+        )
+
+        async def _run() -> None:
+            async def run_scope() -> None:
+                try:
+                    await asyncio.gather(
+                        *[
+                            pool.submit(
+                                ProcessConfig(
+                                    launch=PreparedLaunch(
+                                        command=(sys.executable, "-c", script, str(pid_path)),
+                                    ),
+                                    label=pid_path.stem,
+                                )
+                            )
+                            for pid_path in pid_paths
+                        ]
+                    )
+                finally:
+                    await pool.shutdown()
+
+            task = asyncio.create_task(run_scope())
+            deadline = time.monotonic() + 5
+            while not pid_paths[0].exists():
+                assert time.monotonic() < deadline
+                await asyncio.sleep(0.01)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=5)
+
+        asyncio.run(_run())
+        assert pool.snapshot.active_count == 0
+        assert pool.snapshot.pending_count == 0
+        pid = int(pid_paths[0].read_text())
+        with pytest.raises(psutil.NoSuchProcess):
+            psutil.Process(pid).status()
+        assert not pid_paths[1].exists()
 
     def test_timeout_kill(self, pool_config):
         async def _run():

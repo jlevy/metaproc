@@ -131,7 +131,14 @@ from metaproc.io.state_io import (
     write_result_at,
 )
 from metaproc.logutil.compaction import try_compact_log
-from metaproc.models.authored import IOSpec, ProcessDefaults, ProcessSpec, ProcessStep, RetryPolicy
+from metaproc.models.authored import (
+    IOSpec,
+    ProcessDefaults,
+    ProcessSpec,
+    ProcessStep,
+    RetryPolicy,
+    StepContext,
+)
 from metaproc.models.runtime import (
     AttemptDisposition,
     AttemptRecord,
@@ -932,7 +939,7 @@ def run_parallel(
                                 step_node_id=step,
                                 item_key=canonical_item_key,
                             ):
-                                handler_fn(dict(item_vars), process_step)
+                                handler_fn(StepContext(dict(item_vars)), process_step)
                         else:
                             assert command_ref is not None
                             resolved_cmd = resolve_templates(command_ref, item_vars)

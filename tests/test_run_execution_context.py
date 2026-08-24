@@ -6,7 +6,9 @@ import asyncio
 import contextlib
 import inspect
 import json
+import os
 import shlex
+import signal
 import subprocess
 import sys
 import threading
@@ -29,7 +31,8 @@ from metaproc.commands.run_process import (
     _run_sync,
 )
 from metaproc.errors import CLIError
-from metaproc.models.authored import ProcessSpec, ProcessStep
+from metaproc.io import read_yaml_file
+from metaproc.models.authored import ProcessSpec, ProcessStep, StepContext
 from metaproc.models.plan import Plan, ResolvedAdapter, ResolvedStep
 
 
@@ -438,7 +441,10 @@ def _write_blocking_process_tree_script(
             Path(sys.argv[1]).write_text(
                 json.dumps({{"parent": os.getpid(), "child": child.pid}})
             )
-            raise SystemExit(0) if {leader_exits!r} else time.sleep(60)
+            if {leader_exits!r}:
+                time.sleep(0.2)
+                raise SystemExit(0)
+            time.sleep(60)
             """
         )
         + "\n",
@@ -676,6 +682,117 @@ def test_cancelling_code_command_kills_tree_before_releasing_leaf(
     finally:
         _kill_processes(pids)
         context.close()
+
+
+def test_code_handler_can_observe_cooperative_cancellation(tmp_path: Path) -> None:
+    context = RunExecutionContext.create(max_concurrency=1)
+    handler_started = threading.Event()
+    handler_observed_cancel = threading.Event()
+    step = ProcessStep(id="blocking-handler", mode="code", handler="unused:handler")
+    target = ResolvedStep(
+        step_id=step.id,
+        mode="code",
+        handler=step.handler,
+    )
+
+    def handler(handler_context: StepContext, _step: ProcessStep) -> None:
+        handler_started.set()
+        while not handler_context.cancel_requested():
+            time.sleep(0.01)
+        handler_observed_cancel.set()
+
+    async def exercise() -> None:
+        with patch("metaproc.commands.run_process.resolve_code_handler", return_value=handler):
+            task = asyncio.create_task(
+                _execute_code_step(
+                    spec=ProcessSpec(name="test"),
+                    step_def=step,
+                    target=target,
+                    variables={},
+                    process_dir=tmp_path,
+                    run_dir=tmp_path / "run",
+                    run_id="test/run-1",
+                    execution_context=context,
+                    out=_Out(),
+                )
+            )
+            assert await asyncio.to_thread(handler_started.wait, 2)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=2)
+
+    try:
+        asyncio.run(exercise())
+        assert handler_observed_cancel.is_set()
+        assert context.cancellation_event.is_set()
+    finally:
+        context.close()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signal contract")
+def test_real_sigint_cancels_run_and_cleans_command_tree(tmp_path: Path) -> None:
+    script = _write_blocking_process_tree_script(tmp_path, child_ignores_sigterm=True)
+    pids_path = tmp_path / "sigint-pids.json"
+    runs_dir = tmp_path / "runs"
+    run_id = "sigint-run"
+    command = shlex.join([sys.executable, str(script), str(pids_path)])
+    process_path = tmp_path / "sigint.process.md"
+    process_path.write_text(
+        "---\n"
+        "process:\n"
+        "  name: sigint-smoke\n"
+        "  steps:\n"
+        "    - id: hold\n"
+        "      mode: code\n"
+        f"      command: {json.dumps(command)}\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "metaproc",
+            "run-process",
+            str(process_path),
+            "--var",
+            f"RUNS_DIR={runs_dir}",
+            "--var",
+            f"RUN_ID={run_id}",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        env=dict(os.environ),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+    )
+    pids: dict[str, int] = {}
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            try:
+                pids = {key: int(value) for key, value in json.loads(pids_path.read_text()).items()}
+                break
+            except (FileNotFoundError, json.JSONDecodeError):
+                time.sleep(0.02)
+        assert pids, "run-process did not launch its command tree"
+
+        os.kill(process.pid, signal.SIGINT)
+        output, _ = process.communicate(timeout=10)
+
+        assert process.returncode != 0, output
+        assert _live_processes(pids) == set()
+        run_dir = runs_dir / run_id
+        status = read_yaml_file(run_dir / ".state" / "process-status.yaml")
+        assert status["state"] == "cancelled"
+        assert status["steps"]["hold"]["state"] == "cancelled"
+        assert not (run_dir / ".state" / "orchestrator-lease.yaml").exists()
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        _kill_processes(pids)
 
 
 def test_code_command_cleans_tree_after_leader_exits(

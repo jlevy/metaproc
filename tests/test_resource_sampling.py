@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Self
+from typing import Self, cast
+from unittest.mock import MagicMock
 
 import psutil
 import pytest
@@ -116,3 +119,19 @@ def test_sampling_continues_when_event_log_cannot_open(
 
     assert body_executed
     assert sampler.stats.sample_count >= 1
+
+
+def test_windows_cleanup_error_does_not_replace_command_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = MagicMock(pid=1234)
+    process.poll.return_value = None
+    process.wait.side_effect = subprocess.TimeoutExpired("command", 1)
+    process.kill.side_effect = PermissionError("access denied")
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    resource_sampling_module._terminate_process_tree(
+        cast("subprocess.Popen[str]", process),
+    )
+
+    process.kill.assert_called_once_with()

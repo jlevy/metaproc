@@ -632,6 +632,7 @@ class RunPool:
         self._started = False
         self._shutdown_event = asyncio.Event()
         self._monitor_task: asyncio.Task[None] | None = None
+        self._submission_tasks: set[asyncio.Task[None]] = set()
 
         # Pressure tracking for hysteresis.
         self._consecutive_normal = 0
@@ -957,11 +958,15 @@ class RunPool:
 
     def submit(self, config: ProcessConfig) -> asyncio.Future[ProcessResult]:
         """Queue one process and return a future that resolves on completion."""
+        if self._shutdown_event.is_set():
+            raise RuntimeError("cannot submit work after RunPool shutdown has started")
         self._start()
         loop = asyncio.get_running_loop()
         future: asyncio.Future[ProcessResult] = loop.create_future()
         self._pending_count += 1
-        asyncio.create_task(self._run_process(config, future))
+        task = asyncio.create_task(self._run_process(config, future))
+        self._submission_tasks.add(task)
+        task.add_done_callback(self._submission_tasks.discard)
         return future
 
     def submit_many(self, configs: list[ProcessConfig]) -> list[asyncio.Future[ProcessResult]]:
@@ -994,30 +999,33 @@ class RunPool:
         host admission slots its processes hold, and a held slot is invisible capacity
         loss for every other run on the machine.
         """
-        await self.shutdown()
+        await self.shutdown(timeout_s=0.0 if exc_type is not None else 30.0)
 
-    async def shutdown(self, timeout_s: float = 30.0) -> None:
-        """Graceful shutdown: wait for running processes, then kill stragglers."""
+    async def shutdown(self, timeout_s: float | None = None) -> None:
+        """Graceful shutdown, or immediate shutdown during task cancellation."""
+        if timeout_s is None:
+            current_task = asyncio.current_task()
+            timeout_s = 0.0 if current_task is not None and current_task.cancelling() else 30.0
         self._shutdown_event.set()
 
-        # Wait for all active processes to finish.
-        if self._active:
+        # Wait for every submitted task, including work queued behind quota or host
+        # admission. A pool owns submissions from enqueue through terminal cleanup.
+        if self._submission_tasks:
             deadline = time.monotonic() + timeout_s
-            while self._active and time.monotonic() < deadline:
-                await asyncio.sleep(0.5)
+            while self._submission_tasks and time.monotonic() < deadline:
+                await asyncio.sleep(0.1)
 
-        # Kill any remaining processes.
-        for _key, active in list(self._active.items()):
-            log.warning("Killing process %s on shutdown", active.config.label)
+        for active in self._active.values():
             active.killed = True
             active.kill_reason = "shutdown"
-            await self._backend.kill(active.handle)
 
-        # Give run_process tasks time to notice exits and clean up.
-        if self._active:
-            kill_deadline = time.monotonic() + 5.0
-            while self._active and time.monotonic() < kill_deadline:
-                await asyncio.sleep(0.1)
+        # Cancellation unwinds queued admission and drives active launches through the
+        # same kill-and-record path as any other cancelled submission.
+        remaining_tasks = tuple(self._submission_tasks)
+        for task in remaining_tasks:
+            task.cancel()
+        if remaining_tasks:
+            await asyncio.gather(*remaining_tasks, return_exceptions=True)
 
         # Stop the monitor task.
         if self._monitor_task is not None:
@@ -1050,34 +1058,41 @@ class RunPool:
     ) -> None:
         """Acquire semaphore(s), launch, monitor, and report result."""
         ext_sem = self._config.external_semaphore
-        if ext_sem is not None:
-            await ext_sem.acquire()
-        await self._await_quota_pause()
-        await self._semaphore.acquire()
+        ext_sem_acquired = False
+        pool_sem_acquired = False
         host_lease: HostAdmissionLease | None = None
         pending_removed = False
         try:
+            if ext_sem is not None:
+                await ext_sem.acquire()
+                ext_sem_acquired = True
+            await self._await_quota_pause()
+            await self._semaphore.acquire()
+            pool_sem_acquired = True
+            if self._shutdown_event.is_set():
+                raise asyncio.CancelledError
             host_lease = await self._acquire_host_slot(config)
+            if self._shutdown_event.is_set():
+                raise asyncio.CancelledError
             self._pending_count -= 1
             pending_removed = True
-            try:
-                result = await self._launch_and_monitor(config, host_lease=host_lease)
-            finally:
-                self._release_host_slot(host_lease)
-                host_lease = None
+            result = await self._launch_and_monitor(config, host_lease=host_lease)
+        except asyncio.CancelledError:
+            if not future.done():
+                future.cancel()
+            raise
         except Exception as exc:
-            if not pending_removed:
-                self._pending_count = max(0, self._pending_count - 1)
-            self._release_host_slot(host_lease)
-            self._semaphore.release()
-            if ext_sem is not None:
-                ext_sem.release()
             if not future.done():
                 future.set_exception(exc)
             return
-        self._semaphore.release()
-        if ext_sem is not None:
-            ext_sem.release()
+        finally:
+            if not pending_removed:
+                self._pending_count = max(0, self._pending_count - 1)
+            self._release_host_slot(host_lease)
+            if pool_sem_acquired:
+                self._semaphore.release()
+            if ext_sem is not None and ext_sem_acquired:
+                ext_sem.release()
         if not future.done():
             future.set_result(result)
 
@@ -1089,7 +1104,28 @@ class RunPool:
     ) -> ProcessResult:
         """Launch one process and monitor it until exit or kill."""
         prepared = config.resolve_launch()
-        handle = await self._backend.launch(prepared, label=config.label)
+        launch_task = asyncio.create_task(self._backend.launch(prepared, label=config.label))
+        try:
+            handle = await asyncio.shield(launch_task)
+        except asyncio.CancelledError as cancelled:
+            try:
+                while not launch_task.done():
+                    try:
+                        await asyncio.shield(launch_task)
+                    except asyncio.CancelledError:
+                        continue
+                handle = launch_task.result()
+            except BaseException as launch_exc:
+                log.exception("Backend launch failed while cancellation was draining")
+                raise cancelled from launch_exc
+            try:
+                await self._backend.kill(handle)
+            except Exception:
+                log.exception(
+                    "Backend failed to kill late process %s during cancellation",
+                    config.label,
+                )
+            raise cancelled
         if self._host_admission is not None and host_lease is not None:
             self._host_admission.record_child(
                 host_lease,
@@ -1120,11 +1156,62 @@ class RunPool:
         # Poll until exit, checking health on each interval.
         try:
             result = await self._poll_until_exit(active)
-        finally:
+        except asyncio.CancelledError:
+            if not active.killed:
+                active.killed = True
+                active.kill_reason = "cancelled"
+            try:
+                await self._backend.kill(handle)
+            except Exception:
+                log.exception(
+                    "Backend failed to kill process %s during cancellation",
+                    config.label,
+                )
+            result = ProcessResult(
+                config=config,
+                pid=handle.pid,
+                external_id=handle.external_id,
+                backend=handle.backend_name,
+                exit_code=None,
+                kill_reason=active.kill_reason or "cancelled",
+                elapsed_s=round(time.monotonic() - active.start_time, 1),
+                peak_rss_bytes=active.peak_rss_bytes or None,
+                peak_descendants=active.peak_descendants or None,
+                log_size_bytes=active.current_log_bytes or None,
+            )
             self._active.pop(key, None)
+            self._record_completion(result)
+            raise
+        except Exception as exc:
+            # A backend lifecycle failure is still a terminal accounting event. Keep
+            # lane capacity and status projections honest, make a best-effort cleanup
+            # attempt, then propagate the original backend error to the submitter.
+            try:
+                await self._backend.kill(handle)
+            except Exception:
+                log.exception(
+                    "Backend failed to kill process %s after lifecycle error",
+                    config.label,
+                )
+            result = ProcessResult(
+                config=config,
+                pid=handle.pid,
+                external_id=handle.external_id,
+                backend=handle.backend_name,
+                exit_code=None,
+                kill_reason=f"backend_error:{type(exc).__name__}",
+                elapsed_s=round(time.monotonic() - active.start_time, 1),
+                peak_rss_bytes=active.peak_rss_bytes or None,
+                peak_descendants=active.peak_descendants or None,
+                log_size_bytes=active.current_log_bytes or None,
+            )
+            self._active.pop(key, None)
+            self._record_completion(result)
+            raise
+        else:
+            self._active.pop(key, None)
+            self._record_completion(result)
 
-        # Record completion.
-        self._record_completion(result)
         return result
 
     async def _acquire_host_slot(self, config: ProcessConfig) -> HostAdmissionLease | None:
@@ -1171,7 +1258,8 @@ class RunPool:
             exit_code = await self._backend.poll(handle)
             if exit_code is not None:
                 # Wait for the log filter thread (if any) to flush remaining lines.
-                handle.join_filter_thread(timeout=5.0)
+                if handle._filter_thread is not None:  # noqa: SLF001 - lifecycle owned here
+                    await asyncio.to_thread(handle.join_filter_thread, 5.0)
                 elapsed = time.monotonic() - active.start_time
                 return ProcessResult(
                     config=config,
@@ -1193,7 +1281,8 @@ class RunPool:
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(self._wait_for_exit(active), timeout=10)
                 # Wait for the log filter thread (if any) to flush remaining lines.
-                handle.join_filter_thread(timeout=5.0)
+                if handle._filter_thread is not None:  # noqa: SLF001 - lifecycle owned here
+                    await asyncio.to_thread(handle.join_filter_thread, 5.0)
                 elapsed = time.monotonic() - active.start_time
                 return ProcessResult(
                     config=config,

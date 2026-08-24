@@ -32,6 +32,17 @@ development series.
   terminated, stubborn descendants are killed, and log filters are flushed before run
   slots or host admission are released.
   Late credential leases are likewise torn down before credential capacity is released.
+  The local backend now treats an explicit `PreparedLaunch.env` as the complete child
+  environment, so credential variables scrubbed by an adapter cannot leak back in from
+  the Metaproc process.
+  Cleanup after an exited leader is fenced by process identity, cleanup failures are
+  reported without replacing the command result or cancelling the remaining shutdown
+  work. Ctrl-C follows cooperative asyncio cancellation; SIGTERM retains the hard
+  descendant reaper for externally terminated orchestrators.
+  Forced RunPool shutdown also drains queued and late-launching submissions, preventing
+  work from starting after the pool has closed.
+  Long-running Python handlers can observe that request through
+  `StepContext.cancel_requested()`.
 
 ### Changed
 

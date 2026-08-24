@@ -34,10 +34,16 @@ from metaproc.dispatch.credential_pool import (
     fingerprint_blob,
 )
 from metaproc.dispatch.pool_dispatch import (
+    AuthOutcome,
     PoolAuthOverrideError,
     PoolDispatchConfig,
     PoolSlotUnavailableError,
+)
+from metaproc.dispatch.pool_dispatch import (
     acquire_slot as acquire_pool_slot,
+)
+from metaproc.dispatch.pool_dispatch import (
+    complete_slot as complete_pool_slot,
 )
 from metaproc.dispatch.slot_coordinator import (
     SlotCoordinator,
@@ -51,6 +57,7 @@ from metaproc.io.state_io import read_attempt_history_at, read_status_at
 from metaproc.models.authored import ProcessDefaults, ProcessSpec, ProcessStep, RetryPolicy
 from metaproc.models.plan import Plan, ResolvedAdapter, ResolvedStep
 from metaproc.models.runtime import AttemptDisposition
+from metaproc.runpool.events import EventLogger
 
 
 class _Out:
@@ -996,6 +1003,18 @@ def test_cancellation_during_scalar_credential_acquisition_releases_ownership(
     acquisition_finished = threading.Event()
     host_admission_released = asyncio.Event()
     acquired_lease: list[SlotLease] = []
+    active_counts_at_event: list[int] = []
+
+    original_auth_lease_acquired = EventLogger.auth_lease_acquired
+
+    def record_auth_lease_acquired(
+        event_logger: EventLogger,
+        payload: dict[str, object],
+    ) -> None:
+        active_counts_at_event.append(sum(coordinator.active_counter.snapshot().values()))
+        original_auth_lease_acquired(event_logger, payload)
+
+    monkeypatch.setattr(EventLogger, "auth_lease_acquired", record_auth_lease_acquired)
 
     def delayed_acquire(
         config: PoolDispatchConfig,
@@ -1066,10 +1085,25 @@ def test_cancellation_during_scalar_credential_acquisition_releases_ownership(
         asyncio.run(exercise())
         assert acquisition_finished.wait(timeout=2)
         assert not any(coordinator.active_counter.snapshot().values())
+        assert active_counts_at_event == [0]
         assert not vehicle_b_label_lock_path(adapter.adapter_type, "login").exists()
         assert not list((runs_dir / run_id / ".state" / "auth").rglob("credential.txt"))
         assert context.leaf_semaphore is not None
         assert context.leaf_semaphore._value == 1  # noqa: SLF001 - ownership invariant
+        events = [
+            json.loads(line)
+            for line in paths_mod.runpool_step_events(
+                runs_dir / run_id,
+                step_def.id,
+            )
+            .read_text()
+            .splitlines()
+        ]
+        assert [event["event"] for event in events] == [
+            "auth_lease_acquired",
+            "auth_outcome",
+        ]
+        assert events[1]["classification"] == "unknown"
     finally:
         allow_acquisition.set()
         acquisition_finished.wait(timeout=2)
@@ -1081,4 +1115,122 @@ def test_cancellation_during_scalar_credential_acquisition_releases_ownership(
                     reason="test-cleanup",
                 ),
             )
+        context.close()
+
+
+def test_cancellation_during_scalar_credential_completion_retains_ownership(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = _ScalarAuthAdapter()
+    monkeypatch.setitem(ADAPTER_REGISTRY, adapter.adapter_type, adapter)
+    monkeypatch.delenv("TEST_AMBIENT_AUTH", raising=False)
+    backend = LocalFilesystemBackend(path=tmp_path / "pool" / "credentials.json")
+    backend.upsert_entry(
+        adapter.adapter_type,
+        "alt2",
+        blob="alt2",
+        state=EntryState(
+            status="active",
+            fp=fingerprint_blob("alt2"),
+            vehicle=Vehicle.OAUTH_TOKEN,
+        ),
+    )
+    coordinator = SlotCoordinator(backend, adapter_registry={adapter.adapter_type: adapter})
+    runs_dir = tmp_path / "runs"
+    run_id = "cancel-complete"
+    run_dir = runs_dir / run_id
+    observed_label = tmp_path / "observed-label.txt"
+    step_def = ProcessStep(id="scalar-agent", mode="agent", prompt_prefix="test")
+    spec = ProcessSpec(name="scalar-auth", steps=[step_def])
+    target = ResolvedStep(
+        step_id=step_def.id,
+        mode="agent",
+        adapter=ResolvedAdapter(type=adapter.adapter_type),
+        prompt_prefix="test",
+    )
+    context = RunExecutionContext.create(
+        max_concurrency=1,
+        pool_dispatch_template=PoolDispatchConfig(
+            coordinator=coordinator,
+            adapter=adapter.adapter_type,
+            runs_dir=runs_dir,
+            run_id=run_id,
+            step="",
+        ),
+        preflight_quota_guard="off",
+    )
+    completion_started = threading.Event()
+    allow_completion = threading.Event()
+    completion_finished = threading.Event()
+
+    def delayed_complete(
+        config: PoolDispatchConfig,
+        lease: SlotLease,
+        *,
+        error_str: str | None,
+        session_log_path: Path | None,
+        retry_count: int,
+        retry_exclude: list[tuple[str, str]],
+    ) -> tuple[AuthFailureClassification | None, AuthOutcome]:
+        completion_started.set()
+        assert allow_completion.wait(timeout=2)
+        try:
+            return complete_pool_slot(
+                config,
+                lease,
+                error_str=error_str,
+                session_log_path=session_log_path,
+                retry_count=retry_count,
+                retry_exclude=retry_exclude,
+            )
+        finally:
+            completion_finished.set()
+
+    async def exercise() -> None:
+        with (
+            monkeypatch.context() as scoped,
+            pytest.raises(asyncio.CancelledError),
+        ):
+            scoped.setattr("metaproc.commands.run_process.complete_slot", delayed_complete)
+            task = asyncio.create_task(
+                _execute_agent_step(
+                    spec=spec,
+                    step_def=step_def,
+                    target=target,
+                    variables={
+                        "RUNS_DIR": str(runs_dir),
+                        "RUN_ID": run_id,
+                        "OBSERVED_LABEL": str(observed_label),
+                    },
+                    process_dir=tmp_path,
+                    run_dir=run_dir,
+                    run_id=run_id,
+                    execution_context=context,
+                    out=_Out(),
+                )
+            )
+            assert await asyncio.to_thread(completion_started.wait, 2)
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+            assert sum(coordinator.active_counter.snapshot().values()) == 1
+            allow_completion.set()
+            await task
+
+    try:
+        asyncio.run(exercise())
+        assert completion_finished.wait(timeout=2)
+        assert not any(coordinator.active_counter.snapshot().values())
+        events = [
+            json.loads(line)
+            for line in paths_mod.runpool_step_events(run_dir, step_def.id).read_text().splitlines()
+        ]
+        assert [event["event"] for event in events] == [
+            "auth_lease_acquired",
+            "auth_outcome",
+        ]
+        assert events[1]["classification"] == "ok"
+    finally:
+        allow_completion.set()
+        completion_finished.wait(timeout=2)
         context.close()
