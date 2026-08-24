@@ -7,7 +7,7 @@ description: >-
 author: Joshua Levy (github.com/jlevy) with LLM assistance
 date: 2026-08-23
 last_updated: 2026-08-24
-status: Draft — Architecture Review
+status: Draft — Implementation Validation
 category: plan
 ---
 # Feature: Native Mapped Composite Scopes
@@ -56,8 +56,9 @@ Implement the smallest safe stack in dependency order:
    credential-pool policy to scalar agents, and move blocking command work off the
    shared event loop;
 3. permit `for_each` on composites by calling the neutral `run_fan_out` runner with a
-   composite invoker, then add the required parent state, named-port, evidence, output
-   validation, and per-item recovery semantics;
+   composite invoker; first reuse existing process and step output declarations for
+   boundary validation, then add only the parent evidence, projection, and recovery
+   semantics demonstrated by consumer smokes;
 4. make one mutex-protected host byte authority govern both RunPool and scalar launches,
    including cold ramp and warm-state restoration; and
 5. extend existing plan, status, trace, and Metabrowser projections to show mapped
@@ -115,7 +116,7 @@ The relevant current behavior is:
 | Process composition | `mode: composite` loads a child spec and calls `_orchestrate()` in-process beneath the parent run | Reuse the evaluator per item, but remove its independent semaphore and incomplete policy propagation first |
 | Mapping | Neutral discovery, key validation, `run_fan_out`, item paths, retry wrappers, and basic fan-in outcomes exist | Make mapped composites a caller of `run_fan_out`, not a third gather loop |
 | Source visualization | `PlanBundle` and the viz projector recurse through composite children with qualified node IDs | Add the mapping declaration and runtime item instances |
-| Artifact ports | Process input/output declarations and output re-exports exist | Add scoped composite bindings, child-boundary validation, output projection, and dependency-clause lowering |
+| Artifact ports | Process input/output declarations, step outputs, and output re-exports exist | Validate existing child and mapped-step declarations first; add automatic child-port projection only if consumer use shows the duplicated path declaration is unsafe |
 | Execution policy | Some backend, profile, variant, auth, and cloud arguments propagate into composites | Carry all run policy in one context; characterize force, skip, continue, cancellation, and auth behavior |
 | Command execution | Synchronous handlers are moved to a thread | Move command-backed code steps off the event loop too and give the run-owned executor an explicit ceiling |
 | Fan-out resources | Each RunPool owns adaptive subprocess concurrency and takes count-only host slots | Keep RunPool execution, but make every actual launch claim bytes from one shared host authority and constrain ramp/restore with it |
@@ -175,7 +176,7 @@ required the following corrections before implementation:
 | Finding | Disposition in this revision |
 | --- | --- |
 | F1: sequencing and recursive policy | Pull request 31 is first. `RunExecutionContext`, one run semaphore, and characterized force/skip/continue/cancel propagation are Phase 1 prerequisites. |
-| F2: state, ports, and evidence are new work | Phase 2 now includes mapped-parent task state/results, child-boundary validation, scoped namespaces, richer outcomes, and lower-layer spec loading. |
+| F2: state, ports, and evidence are new work | Phase 2 starts with mapped-parent task state/results and child-boundary validation through existing declarations. Scoped namespaces, richer outcomes, and automatic port projection remain evidence-gated follow-ups. |
 | F3: split memory authority and blocked event loop | Command work moves off-loop in Phase 1. Phase 3 uses one byte authority for pool and scalar launches and governs ramp and warm restore. |
 | F4: scalar credential-pool bypass | Auth and pool dispatch become run-context policy, with pool-label assertions in M1. |
 | F5: third fan-out path and ambiguous IDs | Mapped composites call `run_fan_out`; ports lower to dependency clauses; `/` identifies an item while `::` retains composite descent. |
@@ -240,8 +241,9 @@ the starting point. This proposal does not invent a competing scheduler model.
 
 ### Authored surface
 
-The authored fields already exist, but applying `for_each` to a composite and projecting
-the child’s declared ports are new compiler/runtime semantics:
+The authored mapping and output fields already exist.
+Applying `for_each` to a composite is the only new authored combination in the first
+slice:
 
 ```yaml
 steps:
@@ -266,6 +268,10 @@ steps:
       item: "{{item}}"
       label: "{{label}}"
       input_artifact_path: "{{input_artifact_path}}"
+    outputs:
+      report:
+        path: "{{run.dir}}/mapped-work/{{item}}/report.md"
+        kind: file
 
   - id: reduce
     mode: code
@@ -344,34 +350,28 @@ state, child `process-status.yaml`, and child task state.
 A crash between writes must recover to one explainable result, and a forced or resumed
 item must not be considered complete until all three views and declared outputs agree.
 
-### Named process ports
+### Declared process outputs
 
-Use process contracts as the authored vocabulary instead of adding a second composite
-I/O language. The compiler and runtime work needed to make them true composite ports is
-part of this feature:
+Use existing process and step output contracts before adding composite-specific syntax.
+In M0, the child process declares its public output and the mapped parent step declares
+the same resolved path as its output.
+The child boundary validates the process output; the mapped parent validates and
+persists the step output.
+Ordinary downstream `ref: <composite-step>.<output-name>` and `collect:` behavior
+therefore continue to use released primitives.
 
-- item fields and `with:` bind scalar child process inputs;
-- a composite step’s declared `inputs` bind same-named child process inputs after normal
-  `ref:` resolution;
-- the child process’s declared `outputs` are the composite step’s public outputs; and
-- consumers use the ordinary `ref: <composite-step>.<output-name>` syntax.
+This first slice intentionally leaves the path declaration visible on both sides of the
+boundary.
+The GTIA vertical slice must show whether that duplication is a practical drift
+risk. Only then should the planner load child specs and project same-named child outputs
+automatically. Aliases, output renaming, a second composite I/O language, and a new
+expression-binding surface remain deferred.
 
-Generic process-spec loading moves below `commands/` so the planner can load child specs
-without reversing the engine/command dependency.
-The planner verifies every binding, resolves public output paths beneath the item scope,
-and rejects missing, ambiguous, or incompatible ports.
-Each resolved port becomes an ordinary dependency clause plus a persisted binding, the
-same intermediate form a future ready-task scheduler can consume.
-
-Child variables contain scope-local framework built-ins, child defaults/dependencies,
-mapped item fields, and explicitly declared bindings only.
-The current `dict(parent_variables)` namespace leak is removed.
-The runtime validates child process outputs at the child boundary before publishing the
-parent result and again before accepting resume reuse.
-
-Aliases and output renaming are deferred.
-If a real collision appears, add one small alias surface backed by the same process
-ports; do not introduce generic expression bindings in advance.
+The runtime still validates child process outputs at the child boundary and mapped-step
+outputs before accepting resume reuse.
+Restricting child variables to scope-local built-ins and declared bindings is a separate
+hardening task; M0 retains the compatible parent namespace while tests prove that
+explicit `with:` bindings drive child inputs.
 
 ### Shared execution context
 
@@ -554,27 +554,32 @@ scalar launch.
 - [x] Remove the dead composite `external_semaphore` parameter and prove the run-wide
   executable-leaf ceiling across recursive siblings.
 
-### Phase 2: Mapped scopes, ports, state, and recovery
+### Phase 2: Mapped scopes, outputs, state, and recovery
 
-- [ ] Move generic child-spec loading below `commands/`, then resolve named composite
-  ports into ordinary dependency clauses and persisted bindings.
-- [ ] Remove the planner rejection for `mode: composite` plus `for_each` after adding
-  mode-specific port, topology, and retry validation.
-- [ ] Call neutral `run_fan_out` with a composite invoker; do not add another gather
+- [ ] Move generic child-spec loading below `commands/` and add automatic child-output
+  projection only if a consumer smoke demonstrates that existing declarations are
+  insufficient.
+- [x] Remove the planner rejection for `mode: composite` plus `for_each`; reject
+  whole-scope `for_each.retry` and unsupported multi-host topology explicitly.
+- [x] Call neutral `run_fan_out` with a composite invoker; do not add another gather
   loop or duplicate discovery/key/retry machinery.
-- [ ] Execute each child under `<run>/<step>/<item-key>/` with scoped variables and the
-  Phase 1 context.
-- [ ] Persist mapped-parent running/completed/failed state and a result containing
-  resolved outputs and a child-evidence pointer.
-- [ ] Validate child outputs at the boundary and before resume reuse; enrich fan-in
-  outcomes without requiring path reconstruction.
+- [x] Execute each child under `<run>/<step>/<item-key>/` with explicit item bindings
+  and the shared Phase 1 context.
+- [ ] Restrict the child variable namespace to built-ins and declared bindings after the
+  GTIA fixture characterizes compatibility requirements.
+- [x] Persist mapped-parent running/completed/failed state and a result containing
+  resolved outputs.
+- [x] Validate existing child process and mapped-step outputs at execution and before
+  resume reuse.
+- [ ] Add child-evidence pointers and richer fan-in outcomes only when the existing
+  state and result paths cannot answer the GTIA comparison questions.
 - [ ] Adopt `/` item segments and retain `::` composite descent across plan, status,
   resource, trace, and visualization IDs.
 - [ ] Support qualified per-item and child-step force, propagate it through the child
   walk, and test consistency across parent task, child process, and child task views.
 - [ ] Add cancellation, mixed-success, duplicate-key, invalid-port, namespace-isolation,
   path-containment, crash-window, and resume tests.
-- [ ] Reject `gcp-worker` mapped-composite partitioning until a multi-host slice exists.
+- [x] Reject `gcp-worker` mapped-composite partitioning until a multi-host slice exists.
 
 ### Phase 3: One host byte authority
 
@@ -621,9 +626,9 @@ scalar launch.
 
 ### Deterministic tests
 
-- Planner golden tests for mapped composite shape, named ports, qualified IDs, and
-  invalid bindings, including a regression that item `/` and composite `::` segments do
-  not collide.
+- Planner tests for mapped composite shape, existing output declarations, qualified IDs,
+  explicit whole-scope retry rejection, and invalid bindings, including a regression
+  that item `/` and composite `::` segments do not collide.
 - Runtime fixture tests for three items with success, contract failure, child exception,
   cancellation, per-item force, child-step force, output deletion, and resume.
 - Exact assertions that no child CLI is started, no child orchestrator lease exists, and
@@ -656,7 +661,7 @@ Run an ordered cohort ladder rather than jumping directly to a report-day run:
 
 | Rung | Workload | Required evidence |
 | --- | --- | --- |
-| M0 | Network-free three-item nested fixture | Exact graph, ports, parent/child state, outcomes, force, retry, resume, and artifact trace |
+| M0 | Network-free three-item nested fixture | In-process mapping, declared outputs, parent/child state, mixed outcomes, failed-item-only resume, shared context, and no nested lease; force, richer outcome links, and artifact trace remain follow-ups |
 | M1 | One real harness, one item | Child stages run in-process with inherited policy, asserted credential-pool label, and no domain launcher |
 | M2 | One harness, three items | Mixed outcome isolation, closed fan-in, output revalidation, and one-item repair |
 | M3 | Pi, Claude, and Gemini, ten items | Profile/auth propagation, measured per-harness process-tree RSS fed back into profiles, provider behavior, and responsive event loop |
@@ -671,7 +676,7 @@ A completed run alone does not prove adaptive capacity.
 
 ## Current Validation Status
 
-As of 2026-08-23, this proposal has been checked against the document and pull request
+As of 2026-08-24, this proposal has been checked against the document and pull request
 stack listed above, the production composite evaluator, fan-out paths, execution-profile
 models, host admission, RunPool, and recursive visualization code.
 The pull request 32 deep review independently verified the load-bearing runtime claims,
@@ -718,8 +723,20 @@ It remains a draft release gate: scalar and fan-out admission semantics, deferre
 and events, typed checkpoints, resume persistence, preflight routing, and GCP signal
 preservation remain open under the child beads of `mp-tibt`.
 
-The mapped-scope fixture, mapped execution, shared byte admission, and production-scale
-results also remain open.
+The first mapped-scope slice is implemented on the rebased private integration branch.
+Its network-free three-item CLI test proves one parent run, per-item child roots, shared
+execution-context identity, scope evaluators that do not consume the run-wide executable
+leaf ceiling, no nested orchestrator lease, declared child-output validation, sibling
+failure isolation, and failed-item-only resume.
+It also rejects whole-scope retries and `gcp-worker` topology rather than silently
+inventing semantics.
+The focused planner/process/context/status/resume/lease set passes 284 tests; the full
+suite passes 4,320 tests with 8 skipped, and repository lint plus BasedPyright pass with
+zero errors or warnings.
+
+Per-item force, richer evidence/fan-in projection, scoped child variables, shared byte
+admission, live harnesses, and production-scale results remain open.
+They will be added only when the successive GTIA smoke rungs require them.
 The first F1–F8 architecture-review disposition is complete.
 The proposal remains a draft for review while implementation proceeds as independently
 reviewable stacked slices.
