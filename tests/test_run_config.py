@@ -384,6 +384,28 @@ class TestValidateRunConfig:
                 variables={"COUNT": "3"},
             )
 
+    def test_rejects_explicit_null_variables(self, tmp_path: Path) -> None:
+        config_path = tmp_path / STATE_DIR / RUN_CONFIG_FILE
+        config_path.parent.mkdir(parents=True)
+        config_path.write_text(
+            to_yaml_string(
+                {
+                    "process": "mine",
+                    "run_dir": str(tmp_path),
+                    "run_id": "run-1",
+                }
+            )
+            + "variables: null\n"
+        )
+
+        with pytest.raises(CLIError, match="variables must be a string-to-string mapping"):
+            _validate_run_config(
+                config_path,
+                process_name="mine",
+                run_dir=tmp_path,
+                variables={},
+            )
+
 
 # ── Phase 3: auth + concurrency persistence ──
 

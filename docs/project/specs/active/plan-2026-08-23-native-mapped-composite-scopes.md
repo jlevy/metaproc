@@ -814,8 +814,8 @@ existing run ID, reports only field names, and normalizes only the known equival
 Filestore `RUNS_DIR` aliases.
 It does not add another manifest, metadata service, or scheduler policy.
 
-The focused run-config/resume integration set passes 39 tests, and the exact stack-wide
-review-fix candidate passes 4,350 tests with 8 skipped.
+The focused run-config/resume integration set passes 40 tests, and the exact stack-wide
+review-fix candidate passes 4,351 tests with 8 skipped.
 Formatting, Ruff, BasedPyright, Markdown links, public hygiene, browser and supply-chain
 checks, dependency audits, distribution build, and installed-wheel smoke are also green.
 GitHub CI remains the final gate before the consumer pins this revision.

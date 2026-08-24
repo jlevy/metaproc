@@ -805,11 +805,12 @@ def _validate_run_config(
             "resume on the canonical cloud mount or start a new local run."
         )
 
-    # The YAML serializer omits empty mappings, so an absent/null field is the
+    # The YAML serializer omits empty mappings, so an absent field is the
     # persisted representation of no resolved variables in existing run trees.
-    saved_variables = raw.get("variables")
-    if saved_variables is None:
+    if "variables" not in raw:
         saved_variables = {}
+    else:
+        saved_variables = raw["variables"]
     if not isinstance(saved_variables, dict) or not all(
         isinstance(key, str) and isinstance(value, str) for key, value in saved_variables.items()
     ):
