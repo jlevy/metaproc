@@ -894,11 +894,24 @@ operator-chosen (`laptop`, `home`, `work`, …) and must match `[a-z0-9-]{1,40}`
 
 ### §N.3 Per-slot credential isolation
 
-Pool dispatch materializes each in-flight step’s credential into a **per-item slot**:
+Pool dispatch materializes each in-flight agent attempt’s credential into a private
+slot:
 
 ```
-<RUNS_DIR>/<run_id>/.auth/<step>/<item>/a<attempt>/
+<RUNS_DIR>/<run_id>/.state/auth/<step>/<item>/a<attempt>/
 ```
+
+Fan-out uses the mapped item key for `<item>`; a scalar agent uses its step key.
+Nested processes bind `<run_id>` to the child scope rather than reusing the root
+identity, so same-named steps in sibling scopes cannot collide.
+Both paths use `PoolDispatchConfig`, `SlotCoordinator`, the adapter’s credential scope
+and scrub rules, and the shared completion primitive in `pool_dispatch.py`.
+
+Scalar acquisition and teardown use the run-owned executor because local or GCP-backed
+credential storage may block.
+A scalar leaf first receives run and host admission, then acquires its credential, and
+only then writes durable attempt state.
+It cannot hold a Vehicle B label lock while queued behind the run semaphore.
 
 and scopes the CLI to that slot via its native config env var:
 
@@ -956,6 +969,13 @@ additive).
 
 Cloud Batch dispatches with walltime caps should use `signal`; long-lived laptop
 dispatches can use `wait`.
+
+Implementation status: the enum, coordinator wait primitive, checkpoint format, and
+`resume-daemon` exist, but `run-process` and `run-parallel` do not yet expose this
+policy or write retry-later checkpoints.
+Current fan-out code performs an internal cooling-aware reschedule; scalar exhaustion
+uses the documented `fail-fast` default.
+Bead `mp-tibt` tracks the missing typed policy and the convergence of both paths.
 
 ### §N.6 Resume daemon
 

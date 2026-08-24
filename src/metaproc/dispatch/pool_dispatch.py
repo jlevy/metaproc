@@ -1,16 +1,14 @@
-"""Pool dispatch integration for run_parallel.
+"""Credential-pool dispatch integration for executable agent leaves.
 
 Thin integration layer that wires :mod:`metaproc.dispatch.slot_coordinator`
-into :mod:`metaproc.commands.run_parallel` via a single opt-in
-config object. Non-pool runs pass ``pool_dispatch=None`` and see
-zero behavior change; pool runs pass a populated
-:class:`PoolDispatchConfig` and ``_build_prepare_launch`` leases a
-slot per item, ``_process_completion`` tears down.
+into agent execution via a single opt-in config object. Non-pool runs pass
+``pool_dispatch=None`` and see zero behavior change; pool runs pass a populated
+:class:`PoolDispatchConfig`, lease one slot per attempt, and complete that lease
+through :func:`complete_slot`.
 
-Kept as a distinct module (rather than inline in run_parallel)
-because the pool wiring is orthogonal to the rest of the pool-free
-dispatch — a future extraction of run_parallel's scheduler would
-not touch this file, and the test surface stays clean.
+Kept as a distinct module because credential lifecycle is orthogonal to the
+fan-out and scalar schedulers. Both execution paths use these primitives rather
+than reimplementing credential health, fallback exclusion, or teardown.
 """
 
 from __future__ import annotations
@@ -24,7 +22,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from metaproc.adapters.base import AuthFailureClassification
+from metaproc.adapters.base import AuthFailureClassification, FailureSeverity
 from metaproc.adapters.claude_code import parse_claude_api_signals
 from metaproc.adapters.registry import get_auth_capable
 from metaproc.dispatch.credential_pool import (
@@ -45,7 +43,6 @@ from metaproc.dispatch.slot_coordinator import (
 )
 
 if TYPE_CHECKING:
-    from metaproc.adapters.base import AuthFailureClassification
     from metaproc.adapters.claude_code import ClaudeApiSignals
 
 log = logging.getLogger(__name__)
@@ -252,6 +249,13 @@ def compose_slot_env(
     )
 
 
+def auth_forces_abort(classification: AuthFailureClassification | None) -> bool:
+    """Return whether an auth verdict makes another attempt unsafe or useless."""
+    return bool(
+        classification is not None and classification.effective_severity() == FailureSeverity.ABORT
+    )
+
+
 @dataclass
 class AuthOutcome:
     """Per-item outcome event recorded alongside the step result.
@@ -411,6 +415,95 @@ def build_auth_lease_acquired(
         "policy": policy,
         "active_lease_count": dict(active_lease_count or {}),
     }
+
+
+def expand_pool_exclude_by_quota_group(
+    *,
+    pool_dispatch: Any,
+    lease: SlotLease,
+    exclude_list: list[tuple[str, str]],
+) -> None:
+    """Exclude sibling labels that share a known quota group with a cooled label.
+
+    Unknown groups stay label-local because the framework has no evidence that another
+    credential shares quota. Backend lookup failures are best-effort and never prevent
+    teardown of the lease that produced the classification.
+    """
+    try:
+        backend = pool_dispatch.coordinator.backend
+        failing_entry = backend.get_entry(lease.adapter, lease.label)
+    except (KeyError, AttributeError):
+        return
+    failing_group = failing_entry.state.quota_group
+    if failing_group.kind == "unknown":
+        return
+    try:
+        all_entries = backend.list_entries(adapter=lease.adapter)
+    except Exception:  # noqa: BLE001 -- teardown must survive backend observability failures
+        return
+    already_excluded = set(exclude_list)
+    for entry in all_entries:
+        key = (entry.adapter, entry.label)
+        if key not in already_excluded and entry.state.quota_group == failing_group:
+            exclude_list.append(key)
+            already_excluded.add(key)
+
+
+def complete_slot(
+    config: PoolDispatchConfig,
+    lease: SlotLease,
+    *,
+    error_str: str | None,
+    session_log_path: Path | None,
+    retry_count: int,
+    retry_exclude: list[tuple[str, str]],
+) -> tuple[AuthFailureClassification | None, AuthOutcome]:
+    """Classify, record retry exclusions, and tear down one leased attempt.
+
+    The caller owns event transport and writes the returned outcome to its normal
+    per-step event stream. Keeping transport outside this function lets RunPool and
+    scalar execution share one credential lifecycle without coupling either scheduler
+    to the other's logger.
+    """
+    classification: AuthFailureClassification | None = None
+    try:
+        if error_str is not None:
+            classification = classify_failure_for_slot(
+                lease,
+                error_str=error_str,
+                session_log_path=session_log_path,
+            )
+            if classification.status in ("cooling", "expired"):
+                retry_exclude.append((lease.adapter, lease.label))
+            if classification.status == "cooling" and config.cross_quota_group:
+                expand_pool_exclude_by_quota_group(
+                    pool_dispatch=config,
+                    lease=lease,
+                    exclude_list=retry_exclude,
+                )
+    except BaseException:
+        # Classification is observability and policy, not ownership. Even a classifier
+        # defect must release slot files, active counters, and Vehicle B's label lock.
+        config.coordinator.teardown(
+            lease,
+            failure=AuthFailureClassification(
+                status="unknown",
+                reason="failure-classification-error",
+            ),
+        )
+        raise
+
+    if session_log_path is not None:
+        config.coordinator.preserve_diagnostics(lease, session_log_path)
+    flushed_blob = config.coordinator.teardown(lease, failure=classification)
+    outcome = build_auth_outcome(
+        lease,
+        classification=classification,
+        flushed_blob=flushed_blob,
+        retry_count=retry_count,
+        fallback_policy=config.fallback_policy,
+    )
+    return classification, outcome
 
 
 @dataclass(frozen=True)
@@ -732,11 +825,14 @@ __all__ = [
     "PoolDispatchConfig",
     "PoolSlotUnavailableError",
     "acquire_slot",
+    "auth_forces_abort",
     "auth_override_refusal_keys",
     "build_auth_lease_acquired",
     "build_auth_outcome",
     "classify_failure_for_slot",
+    "complete_slot",
     "compose_slot_env",
+    "expand_pool_exclude_by_quota_group",
     "pre_fan_out_probe",
     "probe_credential",
 ]

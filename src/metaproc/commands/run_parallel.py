@@ -22,7 +22,6 @@ import typer
 from prettyfmt import fmt_timedelta
 from strif import atomic_output_file
 
-from metaproc.adapters.base import FailureSeverity
 from metaproc.cloud.gcp.resolve_token import resolve_gcp_token
 from metaproc.dispatch.credential_pool import (
     FallbackPolicy,
@@ -31,7 +30,11 @@ from metaproc.dispatch.credential_pool import (
     gcp_backend,
     local_backend,
 )
-from metaproc.dispatch.pool_dispatch import PoolDispatchConfig
+from metaproc.dispatch.pool_dispatch import (
+    PoolDispatchConfig,
+    auth_forces_abort,
+    complete_slot,
+)
 from metaproc.dispatch.preflight import validate_guard_posture
 from metaproc.dispatch.slot_coordinator import SlotCoordinator
 from metaproc.runpool.pool import resolve_min_concurrency
@@ -145,23 +148,6 @@ from metaproc.runpool.registry import get_backend
 from metaproc.settings import POOL_STALL_TIMEOUT_MINUTES
 
 
-def _auth_forces_abort(classification: AuthFailureClassification | None) -> bool:
-    """Return True when a pool auth classification demands skipping retry.
-
-    Plan §Phase 5: the pool adapter's ``effective_severity()`` takes
-    precedence over the generic retry classifier. ABORT means retrying
-    won't help — dead refresh token, expired credential, matched known
-    bug — so the dispatch must fail fast instead of burning attempts.
-
-    ``None`` (non-pool dispatch or success teardown) returns ``False``
-    so the generic retry path is untouched.
-    """
-
-    if classification is None:
-        return False
-    return classification.effective_severity() == FailureSeverity.ABORT
-
-
 def _compute_pool_cooling_delay(
     pool_dispatch: Any | None,
     *,
@@ -225,56 +211,6 @@ def _compute_pool_cooling_delay(
         return ceiling_s
 
 
-def _expand_pool_exclude_by_quota_group(
-    *,
-    pool_dispatch: Any,
-    lease: Any,
-    exclude_list: list[tuple[str, str]],
-) -> None:
-    """Add every sibling label sharing the failing label's quota_group to
-    *exclude_list*.
-
-    Phase 4: on a 429 cooling classification, the next
-    retry should skip the entire quota group, not just the failing
-    label. Otherwise a same-org alt label gets a wasted 429 in lockstep.
-
-    Treats unknown-quota-group labels conservatively — if the failing
-    label's group is ``unknown``, we don't expand (we don't know what
-    else shares quota). Operators can resolve this by setting
-    ``--quota-group org:<uuid>`` or ``account:<hex>`` on push.
-
-    Logging is intentionally minimal — at-debug-level only — because
-    quota-group expansion can fire many times per cohort. Operators
-    inspect the audit trail via the auth_outcome event's
-    ``quota_group_*`` fields, not via dispatch logs.
-    """
-    try:
-        backend = pool_dispatch.coordinator.backend
-        failing_entry = backend.get_entry(lease.adapter, lease.label)
-    except (KeyError, AttributeError):
-        # Backend doesn't have this entry (rare race) or coordinator is
-        # an older API shape — fall back to single-label exclude
-        # (existing behavior).
-        return
-    failing_group = failing_entry.state.quota_group
-    if failing_group.kind == "unknown":
-        return
-    # Sibling lookup: list all entries for this adapter, exclude the
-    # ones not in the same group, and add (adapter, label) pairs to
-    # the exclude list. The failing label is already there.
-    try:
-        all_entries = backend.list_entries(adapter=lease.adapter)
-    except Exception:  # noqa: BLE001 — defensive: a backend hiccup must not block teardown
-        return
-    already_excluded = set(exclude_list)
-    for entry in all_entries:
-        if (entry.adapter, entry.label) in already_excluded:
-            continue
-        if entry.state.quota_group == failing_group:
-            exclude_list.append((entry.adapter, entry.label))
-            already_excluded.add((entry.adapter, entry.label))
-
-
 def _teardown_pool_slot(
     *,
     pool_dispatch: Any | None,
@@ -297,7 +233,7 @@ def _teardown_pool_slot(
     ``None`` returned when no slot was leased (non-pool dispatch or a
     prior teardown already released it). Otherwise returns the
     :class:`AuthFailureClassification` the coordinator received so the
-    caller can consult :func:`_auth_forces_abort` for retry decisions.
+    caller can consult :func:`auth_forces_abort` for retry decisions.
     """
     if pool_dispatch is None:
         return None
@@ -305,72 +241,16 @@ def _teardown_pool_slot(
     if lease is None:
         return None
 
-    # Deferred so tests can monkeypatch
-    # metaproc.dispatch.pool_dispatch.{classify_failure_for_slot,build_auth_outcome}
-    # at module attribute level; a top-level binding would capture the
-    # pre-patch function and bypass the monkeypatch.
-    from metaproc.dispatch.pool_dispatch import (  # noqa: PLC0415 -- test monkeypatch boundary
-        build_auth_outcome,
-        classify_failure_for_slot,
-    )
-
-    classification: AuthFailureClassification | None = None
     session_log: Path | None = None
     if isinstance(shared.get("log_path"), Path):
         session_log = shared["log_path"]
-    if error_str is not None:
-        classification = classify_failure_for_slot(
-            lease,
-            error_str=error_str,
-            session_log_path=session_log,
-        )
-        # Only accumulate the failed label for retry's fallback walk when the
-        # classification indicates a *label-level* problem (``cooling`` =
-        # rate-limited, ``expired`` = credential expired). Content-level
-        # failures (``invalid_outputs``, malformed YAML, runbook crashes)
-        # classify as ``unknown`` because they are not a credential issue
-        # (see ``claude_code.py:classify_failure`` ``status="unknown"`` path).
-        # Excluding the label on ``unknown`` is wrong: the label is healthy,
-        # the *output* was bad. Two consecutive ``unknown`` failures used to
-        # exhaust the per-item label set permanently, sending the worker
-        # into a "pool exhausted — waiting 60s for slot recovery" loop with
-        # no escape.
-        exclude_list = shared.setdefault("pool_exclude", [])
-        if classification.status in ("cooling", "expired"):
-            exclude_list.append((lease.adapter, lease.label))
-        # ── Phase 4: quota-group walk on 429 cooling ──
-        # When the failure is rate-limit cooling AND the failing label
-        # has a known quota_group (org or account), exclude every
-        # sibling label in the same group from this retry. Anthropic
-        # rate-limits at account level (and per organizationUuid in
-        # some configurations — claude-code#41886), so failing over
-        # from alt1 (org=ABC) to alt2 (also org=ABC) just hits 429
-        # again on the next call. Walking past the whole group
-        # collapses N×429 retries down to one.
-        if classification.status == "cooling" and getattr(pool_dispatch, "cross_quota_group", True):
-            _expand_pool_exclude_by_quota_group(
-                pool_dispatch=pool_dispatch,
-                lease=lease,
-                exclude_list=exclude_list,
-            )
-    # Preserve adapter-declared diagnostic logs (claude-code-debug.log,
-    # …) next to the session log under the run's standard ``.logs/``
-    # tree before teardown rmtree's the slot. Always — both success
-    # and failure runs benefit from having API-level debug output
-    # available next to the captured stream-json for correlation.
-    if session_log is not None:
-        pool_dispatch.coordinator.preserve_diagnostics(lease, session_log)
-    flushed_blob = pool_dispatch.coordinator.teardown(lease, failure=classification)
-
-    # attempt_number is 1-indexed, so the retries *already burned*
-    # before this attempt ran is attempt_number - 1.
-    retry_count = max(0, int(shared.get("attempt_number", 1)) - 1)
-    outcome = build_auth_outcome(
+    classification, outcome = complete_slot(
+        pool_dispatch,
         lease,
-        classification=classification,
-        flushed_blob=flushed_blob,
-        retry_count=retry_count,
-        fallback_policy=pool_dispatch.fallback_policy,
+        error_str=error_str,
+        session_log_path=session_log,
+        retry_count=max(0, int(shared.get("attempt_number", 1)) - 1),
+        retry_exclude=shared.setdefault("pool_exclude", []),
     )
     pool.record_auth_outcome(asdict(outcome))
     return classification
@@ -1970,7 +1850,7 @@ async def _run_agent_pool(  # noqa: PLR0913
             except Exception:
                 log.exception("Could not finalize attempt after pool teardown failed")
             raise
-        force_abort = _auth_forces_abort(auth_classification)
+        force_abort = auth_forces_abort(auth_classification)
         # When the item itself hit quota exhaustion with a parsed reset
         # clock, schedule a retry-after-reset rather than burning a normal
         # backoff attempt or permanent-failing. Mirrors the pool-cooling
