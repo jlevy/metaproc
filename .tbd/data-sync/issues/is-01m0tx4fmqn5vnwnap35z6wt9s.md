@@ -3,15 +3,15 @@ type: is
 id: is-01m0tx4fmqn5vnwnap35z6wt9s
 title: make install gives an inscrutable TOML error on uv versions older than required-version
 kind: bug
-status: open
+status: in_progress
 priority: 1
-version: 1
+version: 2
 labels:
   - tooling,dx
 dependencies: []
 parent_id: is-01m0tx34t3n8g39jjbhzdrrpwf
 created_at: 2026-08-24T22:09:26.167Z
-updated_at: 2026-08-24T22:09:26.167Z
+updated_at: 2026-08-24T23:38:41.006Z
 ---
 ## Symptom
 
@@ -48,3 +48,11 @@ Any contributor or agent arriving with an older uv is sent chasing a date-parsin
 ## Related
 
 mp-bnx0 (rolling cool-off vs locked verification) and mp-usjd (reproducibility across uv versions) are adjacent but distinct; this one is specifically about the misleading failure mode.
+
+## Notes
+
+Addressed by the PR #19 refresh on 2026-08-24, from both directions.
+
+The uv floor moved to a bounded range (required-version = ">=0.12.0,<0.13"), and devtools/ensure-toolchain.sh installs a checksum-verified uv 0.12.3 at session start, so an agent arriving with an old uv gets a working toolchain instead of the misleading '14 days could not be parsed as a valid date' TOML error.
+
+Note the underlying uv behaviour is unchanged: required-version is still evaluated after config deserialization, so a sufficiently old uv reading this uv.toml directly still fails on the relative exclude-newer before the version gate fires. The bootstrap is what stops anyone hitting it. Leave this bead open if the repo wants an explicit preflight message as well.
