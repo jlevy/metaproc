@@ -522,8 +522,10 @@ scalar launch.
   leaf, declared process inputs/outputs, three roster items, and one controlled failure.
 - [x] Characterize recursive argument and semaphore ownership, force, root skip,
   continue policies, and synchronous command behavior before changing them.
-- [ ] Characterize cancellation, scalar auth, output validation, result/state, resume,
-  and fan-in behavior before changing those boundaries.
+- [ ] Complete the remaining cancellation, output-validation, result/state, resume, and
+  fan-in characterization.
+  Pull request 34 covers scalar credential behavior with a real subprocess and
+  selected-label fallback.
 - [x] Complete the first deep architecture review and incorporate every finding in the
   proposal and beads. Keep the proposal in draft until the amended sequencing is
   reviewed.
@@ -535,8 +537,10 @@ scalar launch.
   recursive evaluator reuse one run semaphore, cancellation signal, and policy bundle.
 - [x] Propagate force, root-scoped skip, both continue policies, backend, profiles, and
   admission posture consistently through recursive scopes.
-- [ ] Pass auth-pool flags and dispatch configuration to scalar agent steps; assert the
+- [x] Pass auth-pool flags and dispatch configuration to scalar agent steps; assert the
   actual credential-pool label used by a child invocation.
+- [ ] Converge scalar and fan-out pool exhaustion on the existing typed
+  `fail-fast|wait|signal` retry-later policy and checkpoint machinery.
 - [x] Run synchronous handlers and command-backed code steps off the event loop through
   a run-owned executor sized to the operator ceiling when one is configured.
 - [ ] Prove a slow command does not block sibling work, RunPool supervision,
@@ -630,6 +634,8 @@ scalar launch.
   outcomes, resolved output paths, and child-evidence pointers.
 - Credential-pool tests that assert scalar child agents use the requested pool label,
   not ambient credentials.
+- Retry-later tests for scalar and fan-out exhaustion under fail-fast, bounded wait, and
+  signal/checkpoint policy, with admission waits excluded from attempt history.
 - Compatibility tests proving all existing composite, agent fan-out, code fan-out,
   aligned-code-chain, and old-run readers behave unchanged.
 - Admission tests with concurrent pool and scalar claim races, fake headroom and
@@ -668,14 +674,18 @@ resource, and recovery corrections recorded above.
 
 Pull request 31 is merged, and
 [pull request 33](https://github.com/jlevy/metaproc/pull/33) publishes the first runtime
-slice from its merge commit.
-That slice introduces one recursive execution context, shared local leaf admission,
-off-loop synchronous execution, and explicit root-versus-child force, skip, and continue
-semantics. Its local verification passes formatting, Ruff, BasedPyright, Markdown links,
-public hygiene, supply-chain and browser checks, dependency audits, distribution build
-and smoke tests, plus 4,273 tests with 8 skipped.
+slice above this design.
+It introduces one recursive execution context, shared local leaf admission, off-loop
+synchronous execution, and explicit root-versus-child force, skip, and continue
+semantics. [Pull request 34](https://github.com/jlevy/metaproc/pull/34) is stacked on
+pull request 33 and completes scalar credential-pool propagation, including scoped child
+evidence, fallback-label retry, shared fan-out/scalar completion primitives, and
+classification-before-compaction ordering.
+Its local and pre-push verification passes formatting, Ruff, BasedPyright, Markdown
+links, public hygiene, supply-chain and browser checks, dependency audits, distribution
+build and smoke tests, plus 4,275 tests with 8 skipped.
 
-Scalar credential leasing, end-to-end cancellation proof, the mapped-scope fixture,
+End-to-end cancellation proof, unified retry-later dispatch, the mapped-scope fixture,
 mapped execution, shared byte admission, and production-scale results remain open.
 The first F1–F8 architecture-review disposition is complete.
 The proposal remains a draft for review while implementation proceeds as independently
@@ -684,15 +694,18 @@ reviewable stacked slices.
 ## Rollout Plan
 
 1. Merge pull request 31.
-2. Rebase and merge this plan as the draft architecture proposal.
-3. Land the Phase 0 fixture and Phase 1 `RunExecutionContext`/nonblocking-execution
-   slice.
-4. Land Phase 2 mapped scopes, ports, parent state/evidence, and per-item recovery.
-5. Land Phase 3 shared host byte authority before a mapped workflow is production-ready.
-6. Integrate the existing views and complete the M0-M4 framework ladder.
-7. Run the downstream workflow only as a shadow consumer until its comparison ladder
+2. Merge this plan through pull request 32.
+3. Merge the `RunExecutionContext` and nonblocking-execution slice through pull request
+   33, which is based on pull request 32.
+4. Merge scalar credential propagation through pull request 34, which is based on pull
+   request 33; then finish cancellation-safe ownership and unified retry-later policy as
+   separately reviewable stacks.
+5. Land Phase 2 mapped scopes, ports, parent state/evidence, and per-item recovery.
+6. Land Phase 3 shared host byte authority before a mapped workflow is production-ready.
+7. Integrate the existing views and complete the M0-M4 framework ladder.
+8. Run the downstream workflow only as a shadow consumer until its comparison ladder
    passes.
-8. Keep the full scheduler beads deferred unless an escalation trigger is recorded.
+9. Keep the full scheduler beads deferred unless an escalation trigger is recorded.
 
 Every runtime pull request must be independently revertible.
 Existing specs continue to use their released paths throughout rollout.
@@ -709,8 +722,9 @@ Existing specs continue to use their released paths throughout rollout.
 `mp-p0sn` is the pull request 31 merge gate; `mp-zssw` owns shared recursive policy and
 nonblocking execution.
 Its first-slice beads are `mp-htd8` (characterization), `mp-vf21` (shared context and
-leaf ceiling), `mp-d12o` (run-owned executor), `mp-bvjd` (remaining operator and
-scalar-auth policy), and `mp-l6b5` (remaining cancellation proof).
+leaf ceiling), `mp-d12o` (run-owned executor), and `mp-bvjd` (scalar-auth policy), all
+complete, plus `mp-l6b5` (remaining cancellation proof) and `mp-tibt` (unified
+retry-later dispatch), both open.
 `mp-0ukj` owns mapped scopes, ports, parent evidence, and within-scope per-item
 recovery; `mp-0cyw` owns the common host byte authority; `mp-1af0` owns views; and
 `mp-rrfn` owns the production proof.
@@ -739,6 +753,9 @@ evidence-triggered follow-ons rather than cohort prerequisites.
 - [Metaproc pull request 21](https://github.com/jlevy/metaproc/pull/21)
 - [Metaproc pull request 29](https://github.com/jlevy/metaproc/pull/29)
 - [Metaproc pull request 31](https://github.com/jlevy/metaproc/pull/31)
+- [Metaproc pull request 32](https://github.com/jlevy/metaproc/pull/32)
+- [Metaproc pull request 33](https://github.com/jlevy/metaproc/pull/33)
+- [Metaproc pull request 34](https://github.com/jlevy/metaproc/pull/34)
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.
