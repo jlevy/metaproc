@@ -1,7 +1,7 @@
 """Log tail + exit-code propagation for ``metaproc gcp run`` blocking mode.
 
 Polls a GCP Batch job's state via :func:`BatchServiceClient.get_job` at a
-fixed interval, streams matching Cloud Logging entries
+fixed interval, reports state transitions, and streams matching Cloud Logging entries
 (``labels.job_uid=<uid>``) with a ``[gcp-run]`` prefix, and returns a
 unix exit code derived from the job's terminal state:
 
@@ -103,6 +103,7 @@ def _fetch_log_entries(
     job_uid: str,
     job_id: str,
     since: str = "",
+    client: Any | None = None,
 ) -> list[Any]:
     """List Cloud Logging entries scoped to a single Batch job.
 
@@ -114,7 +115,7 @@ def _fetch_log_entries(
     re-asks for the oldest 500 entries and long-running jobs lose the tail
     once total log volume exceeds 500.
     """
-    client = _get_logging_client(project)
+    effective_client: Any = client if client is not None else _get_logging_client(project)
     filter_parts = [
         'resource.type="batch.googleapis.com/Job"',
         f'labels."job_uid"="{job_uid}"'
@@ -125,7 +126,7 @@ def _fetch_log_entries(
         filter_parts.append(f'timestamp >= "{since}"')
     filter_str = " AND ".join(filter_parts)
     return list(
-        client.list_entries(
+        effective_client.list_entries(
             filter_=filter_str,
             order_by="timestamp asc",
             max_results=500,
@@ -143,81 +144,96 @@ def tail_gcp_run_logs(
 ) -> int:
     """Tail Cloud Logging for ``job_resource_name`` until terminal; return exit code.
 
-    Polls the Batch job's state every ``poll_interval_s`` seconds. Each
-    poll also pulls log entries scoped by the job's UID (or job id, as
-    a fallback before UID is available) and prints any not-yet-seen
-    entries to ``out`` with a ``[gcp-run]`` prefix.
+    Polls the Batch job's state every ``poll_interval_s`` seconds. State
+    transitions and not-yet-seen log entries scoped by the job's UID (or job id,
+    as a fallback before UID is available) are printed to ``out`` with a
+    ``[gcp-run]`` prefix. One Cloud Logging client is reused and then closed.
 
     Returns the exit code derived from the terminal state.
     """
     batch_v1 = _get_batch_v1()
     client = batch_v1.BatchServiceClient()
+    logging_client: Any | None = None
     job_id = _job_id_from_resource_name(job_resource_name)
     job_uid = ""
     seen_insert_ids: set[str] = set()
     watermark = ""
     state = ""
+    previous_state = ""
     consecutive_errors = 0
 
-    while state not in TERMINAL_STATES:
-        sleep(poll_interval_s)
-        request = batch_v1.GetJobRequest(name=job_resource_name)
-        try:
-            job = client.get_job(request)
-        except Exception as exc:  # noqa: BLE001
-            consecutive_errors += 1
-            log.warning(
-                "get_job(%s) failed (%d/%d): %s",
-                job_resource_name,
-                consecutive_errors,
-                MAX_CONSECUTIVE_ERRORS,
-                exc,
-            )
-            if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
-                log.error(
-                    "Giving up after %d consecutive get_job failures; exiting 1",
+    try:
+        while state not in TERMINAL_STATES:
+            sleep(poll_interval_s)
+            request = batch_v1.GetJobRequest(name=job_resource_name)
+            try:
+                job = client.get_job(request)
+            except Exception as exc:  # noqa: BLE001
+                consecutive_errors += 1
+                log.warning(
+                    "get_job(%s) failed (%d/%d): %s",
+                    job_resource_name,
                     consecutive_errors,
+                    MAX_CONSECUTIVE_ERRORS,
+                    exc,
                 )
-                return 1
-            continue
-
-        state = _job_state_name(job)
-        if not job_uid:
-            job_uid = str(getattr(job, "uid", "") or "")
-
-        try:
-            entries = _fetch_log_entries(
-                project=project, job_uid=job_uid, job_id=job_id, since=watermark
-            )
-            consecutive_errors = 0
-        except Exception as exc:  # noqa: BLE001
-            consecutive_errors += 1
-            log.warning(
-                "Cloud Logging fetch failed (%d/%d): %s",
-                consecutive_errors,
-                MAX_CONSECUTIVE_ERRORS,
-                exc,
-            )
-            if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
-                log.error(
-                    "Giving up after %d consecutive log-fetch failures; exiting 1",
-                    consecutive_errors,
-                )
-                return 1
-            entries = []
-
-        for entry in entries:
-            insert_id = getattr(entry, "insert_id", "")
-            if insert_id and insert_id in seen_insert_ids:
+                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                    log.error(
+                        "Giving up after %d consecutive get_job failures; exiting 1",
+                        consecutive_errors,
+                    )
+                    return 1
                 continue
-            if insert_id:
-                seen_insert_ids.add(insert_id)
-            ts = _rfc3339_watermark(getattr(entry, "timestamp", ""))
-            if ts and ts > watermark:
-                watermark = ts
-            out(f"{LOG_PREFIX} {_format_entry(entry)}")
 
-    return _state_to_exit_code(state)
+            state = _job_state_name(job)
+            if state != previous_state:
+                out(f"{LOG_PREFIX} state={state}")
+                previous_state = state
+            if not job_uid:
+                job_uid = str(getattr(job, "uid", "") or "")
+
+            try:
+                if logging_client is None:
+                    logging_client = _get_logging_client(project)
+                entries = _fetch_log_entries(
+                    project=project,
+                    job_uid=job_uid,
+                    job_id=job_id,
+                    since=watermark,
+                    client=logging_client,
+                )
+                consecutive_errors = 0
+            except Exception as exc:  # noqa: BLE001
+                consecutive_errors += 1
+                log.warning(
+                    "Cloud Logging fetch failed (%d/%d): %s",
+                    consecutive_errors,
+                    MAX_CONSECUTIVE_ERRORS,
+                    exc,
+                )
+                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                    log.error(
+                        "Giving up after %d consecutive log-fetch failures; exiting 1",
+                        consecutive_errors,
+                    )
+                    return 1
+                entries = []
+
+            for entry in entries:
+                insert_id = getattr(entry, "insert_id", "")
+                if insert_id and insert_id in seen_insert_ids:
+                    continue
+                if insert_id:
+                    seen_insert_ids.add(insert_id)
+                ts = _rfc3339_watermark(getattr(entry, "timestamp", ""))
+                if ts and ts > watermark:
+                    watermark = ts
+                out(f"{LOG_PREFIX} {_format_entry(entry)}")
+
+        return _state_to_exit_code(state)
+    finally:
+        if logging_client is not None:
+            logging_client.close()
 
 
 def build_log_url(job_resource_name: str) -> str:

@@ -59,6 +59,12 @@ class TestStateToExitCode:
 
 
 class TestTailGcpRunLogs:
+    @pytest.fixture(autouse=True)
+    def _logging_client(self, monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+        client = MagicMock()
+        monkeypatch.setattr(gcp_run_logs, "_get_logging_client", lambda _project: client)
+        return client
+
     def test_returns_zero_on_succeeded_and_prints_log_lines(self, monkeypatch: pytest.MonkeyPatch):
         # Job goes RUNNING → SUCCEEDED.
         states = iter(["RUNNING", "SUCCEEDED"])
@@ -85,6 +91,44 @@ class TestTailGcpRunLogs:
         assert rc == 0
         assert any("hello world" in line for line in printed)
         assert all(line.startswith("[gcp-run] ") for line in printed)
+        assert "[gcp-run] state=RUNNING" in printed
+        assert "[gcp-run] state=SUCCEEDED" in printed
+
+    def test_reuses_and_closes_one_logging_client(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        states = iter(["SCHEDULED", "RUNNING", "SUCCEEDED"])
+        batch_client = MagicMock()
+        batch_client.get_job.side_effect = lambda req: _job(next(states))
+        fake_batch_v1 = MagicMock()
+        fake_batch_v1.BatchServiceClient.return_value = batch_client
+        fake_batch_v1.GetJobRequest = MagicMock(side_effect=lambda **kw: kw)
+        monkeypatch.setattr(gcp_run_logs, "_get_batch_v1", lambda: fake_batch_v1)
+
+        logging_client = MagicMock()
+        get_logging_client = MagicMock(return_value=logging_client)
+        monkeypatch.setattr(gcp_run_logs, "_get_logging_client", get_logging_client)
+        observed_clients: list[Any] = []
+
+        def fake_fetch(**kwargs: Any) -> list[Any]:
+            observed_clients.append(kwargs["client"])
+            return []
+
+        monkeypatch.setattr(gcp_run_logs, "_fetch_log_entries", fake_fetch)
+
+        rc = gcp_run_logs.tail_gcp_run_logs(
+            job_resource_name="projects/p/locations/r/jobs/j",
+            project="p",
+            poll_interval_s=0.0,
+            out=lambda _s: None,
+            sleep=lambda _s: None,
+        )
+
+        assert rc == 0
+        get_logging_client.assert_called_once_with("p")
+        assert observed_clients == [logging_client, logging_client, logging_client]
+        logging_client.close.assert_called_once_with()
 
     def test_returns_one_on_failed(self, monkeypatch: pytest.MonkeyPatch):
         client = MagicMock()
