@@ -331,13 +331,14 @@ Before an item is skipped as complete, the runtime revalidates its projected chi
 outputs. The planner rejects a composite-specific `for_each.retry` until whole-scope
 retry semantics are separately specified.
 
-The operator may force one mapped item without touching siblings.
-Qualified task selectors use `<step>/<item-key>` for the whole item and
-`<step>/<item-key>::<child-step>` for a child step.
-The existing global `--force` behavior remains available.
-The exact CLI option for qualified selectors must preserve backward compatibility, but
-manual state edits and out-of-band child `run-process` commands are not supported
-recovery paths.
+The first slice adds no qualified force selector.
+Normal resume already re-enters a failed mapped item without rerunning its completed
+siblings, while the existing run-wide `--force` and root-step skip controls propagate
+through the shared execution context.
+Add per-item or child-step force only after an operator case shows that ordinary resume
+and run-wide force are insufficient; preserve backward compatibility when that selector
+is designed. Manual state edits and out-of-band child `run-process` commands are not
+supported recovery paths.
 
 ### Scope identity and run layout
 
@@ -617,8 +618,8 @@ scalar launch.
   state and result paths cannot answer the GTIA comparison questions.
 - [ ] Adopt `/` item segments and retain `::` composite descent across plan, status,
   resource, trace, and visualization IDs.
-- [ ] Support qualified per-item and child-step force, propagate it through the child
-  walk, and test consistency across parent task, child process, and child task views.
+- [x] Use normal failed-item resume and existing run-wide force propagation; add no
+  qualified item or child-step selector without operator evidence.
 - [x] Reject duplicate resolved item keys before task or child-scope state writes.
   This work is implemented in draft pull request 37 after senior review.
 - [ ] Add the remaining cancellation, mixed-success, invalid-port, namespace-isolation,
@@ -676,7 +677,7 @@ scalar launch.
   explicit whole-scope retry rejection, and invalid bindings, including a regression
   that item `/` and composite `::` segments do not collide.
 - Runtime fixture tests for three items with success, contract failure, child exception,
-  cancellation, per-item force, child-step force, output deletion, and resume.
+  cancellation, run-wide force, root-step skip, output deletion, and failed-item resume.
 - Exact assertions that no child CLI is started, no child orchestrator lease exists, and
   a scope holds no host slot while waiting on its children.
 - Characterization tests for recursive semaphore, force, skip, continue, cancellation,
