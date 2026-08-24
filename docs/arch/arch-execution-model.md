@@ -222,25 +222,41 @@ Aligned execution remains limited to linear `mode: code` chains.
 Agent-mode alignment, item-scoped forks, and general mapped dependencies require the
 task-level scheduler described below.
 
-**Step one, durability: the engine’s durable facts adopt the model’s vocabulary.**
-Append-only attempt records carrying identity, generation, disposition, and fence epoch;
-attempt-scoped staging; one commit manifest per task generation; compatibility readers
-for existing runs.
-This step exists on its own operational merits, because the corruption
-class it removes is already observed on a single host: a step recording a timeout over
-an attempt that later succeeded, and completed-but-invalid outputs reused forever by
-resume. The replay harness already exists in walking-skeleton form:
-`execution_model/trace.py` reads a completed run’s status records back as the reducer’s
-six events (`ExpansionClosed`, `ExpansionFailed`, `AttemptStarted`, `AttemptEnded`,
-`ForceIssued`, `Tick`) and `test_replay_equivalence` asserts terminal-state agreement on
-a real engine run in CI, which is what retired the “checked only against itself” caveat
-for the live semantics.
-What durability buys the harness is fidelity: per-attempt history replayed from real
-attempt records instead of approximated from the final status (the skeleton’s first
-catch is that the code path durably records `attempt: 1` for a task it retried three
-times), and rosters read from durable expansion records instead of reconstructed from
-task directories. Durable `ProcessStatus` rides the same step.
-Tracked as `mp-2ltw`, `mp-wfpo`, and `mp-5mkn`.
+**Step one, durability: the engine’s durable facts adopt the model’s vocabulary.** This
+is landing as independent reviewable slices.
+The first slice is live on orchestrated and waited task paths: each launch creates a
+typed `TaskAttemptRecord` under the task’s `attempts/` subtree before execution and
+finalizes it once with the disposition and failure class.
+`status.yaml` points to the current attempt, replay prefers the exact history, and
+historical runs fall back to the legacy status and latest-launch records.
+Success is terminal only after the validators owned by that execution path have run.
+In particular, a local fan-out keeps successful attempts live until its step-wide write
+boundary check finishes; outputless tasks still receive a completed result.
+If valid output is discovered after a durable attempt has already ended as failed, the
+framework refuses to rewrite history.
+A later commit/adoption fact must explain why that artifact is accepted.
+
+The remaining slices add task-generation state and fenced commit manifests,
+attempt-private staging and publication, and explicit mixed-generation compatibility
+tests. The direct per-task `attempt.yaml` remains a compatibility snapshot while those
+readers exist; it is not attempt history.
+Admission waits and class-specific resource retry budgets still need to become first-
+class scheduler facts; until then, credential-capacity waits remain a known production-
+to-reference-model gap tracked with the admission work.
+This step exists on its own operational merits, because the corruption class it removes
+is already observed on a single host: a step recording a timeout over an attempt that
+later succeeded, and completed-but-invalid outputs reused forever by resume.
+The replay harness already exists in walking-skeleton form: `execution_model/trace.py`
+reads a completed run’s attempt facts, with a historical status fallback, as the
+reducer’s six events (`ExpansionClosed`, `ExpansionFailed`, `AttemptStarted`,
+`AttemptEnded`, `ForceIssued`, `Tick`) and `test_replay_equivalence` asserts
+terminal-state agreement on a real engine run in CI, which is what retired the “checked
+only against itself” caveat for the live semantics.
+The first slice retires the replay skeleton’s concrete undercount: a task launched three
+times now persists and replays three records with their actual dispositions.
+Durable expansion records still have to replace roster reconstruction from task
+directories; durable `ProcessStatus` rides the same broader increment.
+Tracked as `mp-f07i`, `mp-rfnm`, `mp-2wtc`, and `mp-g315` under `mp-82ls`.
 
 **Step two, the task-level scheduler: demand-driven, never speculative.** The remaining
 gap between the graft and the model is exactly the semantics the level walk cannot
@@ -265,16 +281,13 @@ machinery.
 The model’s records are a parallel vocabulary, not a replacement, and two of them meet
 engine types that the durability step below has to reconcile.
 
-`execution_model.model.AttemptRecord` and `metaproc.models.runtime.AttemptRecord`
-describe the same real-world fact, one execution try, with different fields: the model
-record carries the generation, fence epoch, and disposition the scheduler reasons about,
-while the runtime record is what `.state/attempt.yaml` persists.
-The names are kept deliberately, because the packages disambiguate at every import site
-and renaming a reference model to accommodate a future merge would be the wrong way
-round. What the durability step owes is the mapping, in particular from the model’s
-disposition (`succeeded`, `retryable`, `permanent`, `cancelled`, `lost`) onto the
-runtime record’s state and error fields, and from `failure_category` onto
-`FailureClass`.
+`execution_model.model.AttemptRecord` and `metaproc.models.runtime.TaskAttemptRecord`
+describe the same real-world fact: one execution try with an identity, generation, fence
+epoch, and disposition.
+Trace maps the runtime disposition by value and maps its `failure_class` to the model’s
+`failure_category`. `metaproc.models.runtime.AttemptRecord` is the older
+`.state/attempt.yaml` launch snapshot; it lacks terminal history and is no longer the
+source replay prefers.
 
 `ProcessStatus` declares `metaproc:ProcessStatus/0.1` and follows the repo’s
 schema-token field naming, but it is a frozen dataclass rather than a Pydantic model, so

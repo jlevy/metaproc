@@ -27,8 +27,16 @@ from metaproc.commands.run_parallel import (
 from metaproc.engine.placeholders import resolve_runtime_config
 from metaproc.engine.retry import RetryVerdict, classify_output_failures
 from metaproc.engine.validation import validate_item_outputs_detailed
+from metaproc.io.state_io import (
+    mark_completed_at,
+    mark_failed_at,
+    mark_running_at,
+    read_attempt_history_at,
+    read_result_at,
+    read_status_at,
+)
 from metaproc.models.authored import IOSpec, RetryPolicy
-from metaproc.models.runtime import OutputFailure, OutputFailureKind
+from metaproc.models.runtime import AttemptDisposition, OutputFailure, OutputFailureKind
 from metaproc.runpool.pool import RunPoolConfig
 
 # ---------------------------------------------------------------------------
@@ -539,7 +547,7 @@ class TestPoolSubmitAndShutdown:
     pins that behavior.
     """
 
-    def test_run_agent_pool_handles_submit_failure(self) -> None:
+    def test_run_agent_pool_handles_submit_failure(self, tmp_path: Path) -> None:
         """_run_agent_pool catches exceptions from pool.submit().
 
         Current behavior: submit() failures are caught (line 1055-1063),
@@ -574,7 +582,12 @@ class TestPoolSubmitAndShutdown:
                     "metaproc.commands.run_parallel._build_prepare_launch", return_value=MagicMock()
                 ),
                 patch("metaproc.commands.run_parallel.compute_item_dir", return_value=None),
-                patch("metaproc.commands.run_parallel.mark_failed_at"),
+                patch(
+                    "metaproc.commands.run_parallel.compute_task_state_dir",
+                    side_effect=lambda _run_dir, _step, item_vars: (
+                        tmp_path / "state" / item_vars["ticker"]
+                    ),
+                ),
                 patch("metaproc.commands.run_parallel._handle_success"),
             ):
                 results = await _run_agent_pool(
@@ -602,6 +615,74 @@ class TestPoolSubmitAndShutdown:
             # The first item (AAPL) fails with submit error, second (GOOGL) succeeds
             failed = [item for item, code in results if code != 0]
             assert "AAPL" in failed
+            history = read_attempt_history_at(tmp_path / "state" / "AAPL")
+            assert len(history) == 1
+            assert history[0].item_key == "AAPL"
+            assert history[0].disposition is AttemptDisposition.permanent
+            status = read_status_at(tmp_path / "state" / "AAPL")
+            assert status is not None
+            assert status.failure_class == history[0].failure_class
+            assert status.error == history[0].error
+
+        asyncio.run(_run())
+
+    def test_completed_item_from_another_run_is_not_reused(self, tmp_path: Path) -> None:
+        async def _run() -> None:
+            class FakePool:
+                _status_path = None
+
+                @property
+                def snapshot(self) -> Any:
+                    return SimpleNamespace(current_concurrency=1, active_count=0, pending_count=0)
+
+                def submit(self, _config: Any) -> asyncio.Future[Any]:
+                    raise AssertionError("misaddressed completion must not launch or satisfy task")
+
+                async def shutdown(self) -> None:
+                    pass
+
+            state_dir = tmp_path / "AAPL"
+            running = mark_running_at(
+                state_dir,
+                run_id="test-process/another-run",
+                step_id="predict",
+                item={"ticker": "AAPL"},
+                item_key="AAPL",
+            )
+            mark_completed_at(state_dir, running_record=running)
+
+            with (
+                patch("metaproc.commands.run_parallel.RunPool", return_value=FakePool()),
+                patch(
+                    "metaproc.commands.run_parallel.compute_task_state_dir",
+                    return_value=state_dir,
+                ),
+                patch(
+                    "metaproc.commands.run_parallel.compute_run_dir",
+                    return_value=tmp_path / "run",
+                ),
+            ):
+                with pytest.raises(ValueError, match="run_id"):
+                    await _run_agent_pool(
+                        spec=_make_spec(),
+                        step_def=_make_step_def(),
+                        step="predict",
+                        each="ticker",
+                        variables={"RUN_ID": "current-run", "VARIANT": "v1"},
+                        item_contexts=[{"ticker": "AAPL"}],
+                        adapter_type="claude-code-cli",
+                        merged_config={"model": "claude-3"},
+                        effective_outputs=None,
+                        effective_variant="v1",
+                        allowed_runtime=set(),
+                        retry_policy=RetryPolicy(max_retries=0),
+                        process_dir=tmp_path,
+                        target_env=None,
+                        refresh_token_fn=None,
+                        pool_config=RunPoolConfig(),
+                        backend=MagicMock(),
+                        out=MagicMock(),
+                    )
 
         asyncio.run(_run())
 
@@ -729,6 +810,408 @@ class TestPoolSubmitAndShutdown:
 
         asyncio.run(_run())
 
+    @pytest.mark.parametrize(
+        ("exit_code", "defer_success_transition"),
+        [(1, False), (0, True)],
+    )
+    def test_pool_teardown_failure_does_not_leave_attempt_live(
+        self,
+        tmp_path: Path,
+        exit_code: int,
+        defer_success_transition: bool,
+    ) -> None:
+        async def _run() -> None:
+            class FakePool:
+                _status_path = None
+
+                @property
+                def snapshot(self) -> Any:
+                    return SimpleNamespace(current_concurrency=1, active_count=0, pending_count=0)
+
+                def submit(self, config: Any) -> asyncio.Future[Any]:
+                    config.resolve_launch()
+                    future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+                    future.set_result(
+                        SimpleNamespace(exit_code=exit_code, kill_reason=None, elapsed_s=0.01)
+                    )
+                    return future
+
+                async def shutdown(self) -> None:
+                    pass
+
+                def record_failure_class(self, *_args: Any, **_kwargs: Any) -> None:
+                    pass
+
+            state_dir = tmp_path / "state"
+
+            def _prepare(*, shared: dict[str, Any], **_kwargs: Any) -> Any:
+                def _mark_running() -> MagicMock:
+                    shared["running_record"] = mark_running_at(
+                        state_dir,
+                        run_id="test-process/test-run",
+                        step_id="predict",
+                        item={"ticker": "AAPL"},
+                        item_key="AAPL",
+                    )
+                    return MagicMock()
+
+                return _mark_running
+
+            with (
+                patch("metaproc.commands.run_parallel.RunPool", return_value=FakePool()),
+                patch(
+                    "metaproc.commands.run_parallel._build_prepare_launch",
+                    side_effect=_prepare,
+                ),
+                patch("metaproc.commands.run_parallel.compute_item_dir", return_value=None),
+                patch(
+                    "metaproc.commands.run_parallel.compute_task_state_dir",
+                    return_value=state_dir,
+                ),
+                patch(
+                    "metaproc.commands.run_parallel._teardown_pool_slot",
+                    side_effect=RuntimeError("teardown failed"),
+                ),
+            ):
+                with pytest.raises(RuntimeError, match="teardown failed"):
+                    await _run_agent_pool(
+                        spec=_make_spec(),
+                        step_def=_make_step_def(),
+                        step="predict",
+                        each="ticker",
+                        variables={"RUN_ID": "test-run", "VARIANT": "v1"},
+                        item_contexts=[{"ticker": "AAPL"}],
+                        adapter_type="claude-code-cli",
+                        merged_config={"model": "claude-3"},
+                        effective_outputs=None,
+                        effective_variant="v1",
+                        allowed_runtime=set(),
+                        retry_policy=RetryPolicy(max_retries=0),
+                        process_dir=tmp_path,
+                        target_env=None,
+                        refresh_token_fn=None,
+                        pool_config=RunPoolConfig(),
+                        backend=MagicMock(),
+                        out=MagicMock(),
+                        pool_dispatch=MagicMock(adapter="claude-code-cli"),
+                        preflight_quota_guard="off",
+                        defer_success_transition=defer_success_transition,
+                    )
+
+            history = read_attempt_history_at(state_dir)
+            assert len(history) == 1
+            assert history[0].disposition is AttemptDisposition.lost
+
+        asyncio.run(_run())
+
+    def test_outputless_success_finalizes_status_attempt_and_result(self, tmp_path: Path) -> None:
+        state_dir = tmp_path / "state"
+        running = mark_running_at(
+            state_dir,
+            run_id="test-process/test-run",
+            step_id="notify",
+            item={"ticker": "AAPL"},
+            item_key="AAPL",
+        )
+        results: list[tuple[str, int]] = []
+        failures: list[tuple[dict[str, Any], str, list[OutputFailure]]] = []
+
+        _handle_success(
+            "ticker",
+            "AAPL",
+            None,
+            state_dir,
+            {"ticker": "AAPL"},
+            None,
+            running,
+            None,
+            {},
+            "test-process/test-run",
+            "notify",
+            SimpleNamespace(elapsed_s=0.01),
+            MagicMock(),
+            results,
+            failures,
+            {"attempt_number": 1},
+        )
+
+        assert results == [("AAPL", 0)]
+        assert failures == []
+        status = read_status_at(state_dir)
+        assert status is not None
+        assert status.state == "completed"
+        assert read_result_at(state_dir) is not None
+        history = read_attempt_history_at(state_dir)
+        assert [record.disposition for record in history] == [AttemptDisposition.succeeded]
+
+    @pytest.mark.parametrize(
+        ("exit_code", "kill_reason"),
+        [(1, None), (None, "timeout")],
+    )
+    def test_failed_process_with_valid_outputs_completes_original_attempt(
+        self, tmp_path: Path, exit_code: int | None, kill_reason: str | None
+    ) -> None:
+        async def _run() -> None:
+            class FakePool:
+                _status_path = None
+
+                @property
+                def snapshot(self) -> Any:
+                    return SimpleNamespace(current_concurrency=1, active_count=0, pending_count=0)
+
+                def submit(self, config: Any) -> asyncio.Future[Any]:
+                    config.resolve_launch()
+                    future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+                    future.set_result(
+                        SimpleNamespace(
+                            exit_code=exit_code,
+                            kill_reason=kill_reason,
+                            elapsed_s=0.01,
+                        )
+                    )
+                    return future
+
+                async def shutdown(self) -> None:
+                    pass
+
+                def record_failure_class(self, *_args: Any, **_kwargs: Any) -> None:
+                    pass
+
+            state_dir = tmp_path / "AAPL"
+            output_path = tmp_path / "outputs" / "report.md"
+
+            def _prepare(*, shared: dict[str, Any], **_kwargs: Any) -> Any:
+                def _produce_valid_output() -> MagicMock:
+                    shared["running_record"] = mark_running_at(
+                        state_dir,
+                        run_id="test-process/test-run",
+                        step_id="predict",
+                        item={"ticker": "AAPL"},
+                        item_key="AAPL",
+                    )
+                    output_path.parent.mkdir(parents=True)
+                    output_path.write_text("valid\n")
+                    return MagicMock()
+
+                return _produce_valid_output
+
+            with (
+                patch("metaproc.commands.run_parallel.RunPool", return_value=FakePool()),
+                patch(
+                    "metaproc.commands.run_parallel._build_prepare_launch",
+                    side_effect=_prepare,
+                ),
+                patch(
+                    "metaproc.commands.run_parallel.compute_task_state_dir",
+                    return_value=state_dir,
+                ),
+                patch(
+                    "metaproc.commands.run_parallel.compute_run_dir",
+                    return_value=tmp_path / "run",
+                ),
+            ):
+                results = await _run_agent_pool(
+                    spec=_make_spec(),
+                    step_def=_make_step_def(),
+                    step="predict",
+                    each="ticker",
+                    variables={"RUN_ID": "test-run", "VARIANT": "v1"},
+                    item_contexts=[{"ticker": "AAPL"}],
+                    adapter_type="claude-code-cli",
+                    merged_config={"model": "claude-3"},
+                    effective_outputs={"report": IOSpec(path=str(output_path))},
+                    effective_variant="v1",
+                    allowed_runtime=set(),
+                    retry_policy=RetryPolicy(max_retries=0),
+                    process_dir=tmp_path,
+                    target_env=None,
+                    refresh_token_fn=None,
+                    pool_config=RunPoolConfig(),
+                    backend=MagicMock(),
+                    out=MagicMock(),
+                )
+
+            assert results == [("AAPL", 0)]
+            history = read_attempt_history_at(state_dir)
+            assert [record.disposition for record in history] == [AttemptDisposition.succeeded]
+
+        asyncio.run(_run())
+
+    def test_valid_outputs_do_not_rewrite_terminal_durable_attempt(self, tmp_path: Path) -> None:
+        async def _run() -> None:
+            class FakePool:
+                _status_path = None
+
+                @property
+                def snapshot(self) -> Any:
+                    return SimpleNamespace(current_concurrency=1, active_count=0, pending_count=0)
+
+                def submit(self, _config: Any) -> asyncio.Future[Any]:
+                    raise AssertionError("terminal durable output must not be implicitly adopted")
+
+                async def shutdown(self) -> None:
+                    pass
+
+            state_dir = tmp_path / "AAPL"
+            output_path = tmp_path / "outputs" / "report.md"
+            output_path.parent.mkdir(parents=True)
+            output_path.write_text("valid\n")
+            running = mark_running_at(
+                state_dir,
+                run_id="test-process/test-run",
+                step_id="predict",
+                item={"ticker": "AAPL"},
+                item_key="AAPL",
+            )
+            mark_failed_at(state_dir, error="permanent failure", running_record=running)
+
+            with (
+                patch("metaproc.commands.run_parallel.RunPool", return_value=FakePool()),
+                patch(
+                    "metaproc.commands.run_parallel.compute_task_state_dir",
+                    return_value=state_dir,
+                ),
+                patch(
+                    "metaproc.commands.run_parallel.compute_run_dir",
+                    return_value=tmp_path / "run",
+                ),
+            ):
+                results = await _run_agent_pool(
+                    spec=_make_spec(),
+                    step_def=_make_step_def(),
+                    step="predict",
+                    each="ticker",
+                    variables={"RUN_ID": "test-run", "VARIANT": "v1"},
+                    item_contexts=[{"ticker": "AAPL"}],
+                    adapter_type="claude-code-cli",
+                    merged_config={"model": "claude-3"},
+                    effective_outputs={"report": IOSpec(path=str(output_path))},
+                    effective_variant="v1",
+                    allowed_runtime=set(),
+                    retry_policy=RetryPolicy(max_retries=0),
+                    process_dir=tmp_path,
+                    target_env=None,
+                    refresh_token_fn=None,
+                    pool_config=RunPoolConfig(),
+                    backend=MagicMock(),
+                    out=MagicMock(),
+                )
+
+            assert results == [("AAPL", 1)]
+            history = read_attempt_history_at(state_dir)
+            assert [record.disposition for record in history] == [AttemptDisposition.permanent]
+
+        asyncio.run(_run())
+
+    @pytest.mark.parametrize(
+        "prior_disposition",
+        [None, AttemptDisposition.lost],
+    )
+    def test_unaccepted_valid_outputs_are_recomputed(
+        self,
+        tmp_path: Path,
+        prior_disposition: AttemptDisposition | None,
+    ) -> None:
+        async def _run() -> None:
+            class FakePool:
+                _status_path = None
+
+                @property
+                def snapshot(self) -> Any:
+                    return SimpleNamespace(current_concurrency=1, active_count=0, pending_count=0)
+
+                def submit(self, config: Any) -> asyncio.Future[Any]:
+                    config.resolve_launch()
+                    future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+                    future.set_result(
+                        SimpleNamespace(exit_code=0, kill_reason=None, elapsed_s=0.01)
+                    )
+                    return future
+
+                async def shutdown(self) -> None:
+                    pass
+
+            state_dir = tmp_path / "AAPL"
+            output_path = tmp_path / "outputs" / "report.md"
+            output_path.parent.mkdir(parents=True)
+            output_path.write_text("uncommitted\n")
+            if prior_disposition is not None:
+                running = mark_running_at(
+                    state_dir,
+                    run_id="test-process/test-run",
+                    step_id="predict",
+                    item={"ticker": "AAPL"},
+                    item_key="AAPL",
+                )
+                mark_failed_at(
+                    state_dir,
+                    error="orchestrator was lost",
+                    running_record=running,
+                    attempt_disposition=prior_disposition,
+                )
+
+            def _prepare(*, shared: dict[str, Any], **_kwargs: Any) -> Any:
+                def _mark_recomputed_attempt() -> MagicMock:
+                    shared["running_record"] = mark_running_at(
+                        state_dir,
+                        run_id="test-process/test-run",
+                        step_id="predict",
+                        item={"ticker": "AAPL"},
+                        item_key="AAPL",
+                    )
+                    output_path.write_text("recomputed\n")
+                    return MagicMock()
+
+                return _mark_recomputed_attempt
+
+            with (
+                patch("metaproc.commands.run_parallel.RunPool", return_value=FakePool()),
+                patch(
+                    "metaproc.commands.run_parallel._build_prepare_launch",
+                    side_effect=_prepare,
+                ),
+                patch(
+                    "metaproc.commands.run_parallel.compute_task_state_dir",
+                    return_value=state_dir,
+                ),
+                patch(
+                    "metaproc.commands.run_parallel.compute_run_dir",
+                    return_value=tmp_path / "run",
+                ),
+            ):
+                results = await _run_agent_pool(
+                    spec=_make_spec(),
+                    step_def=_make_step_def(),
+                    step="predict",
+                    each="ticker",
+                    variables={"RUN_ID": "test-run", "VARIANT": "v1"},
+                    item_contexts=[{"ticker": "AAPL"}],
+                    adapter_type="claude-code-cli",
+                    merged_config={"model": "claude-3"},
+                    effective_outputs={"report": IOSpec(path=str(output_path))},
+                    effective_variant="v1",
+                    allowed_runtime=set(),
+                    retry_policy=RetryPolicy(max_retries=0),
+                    process_dir=tmp_path,
+                    target_env=None,
+                    refresh_token_fn=None,
+                    pool_config=RunPoolConfig(),
+                    backend=MagicMock(),
+                    out=MagicMock(),
+                )
+
+            assert results == [("AAPL", 0)]
+            assert output_path.read_text() == "recomputed\n"
+            history = read_attempt_history_at(state_dir)
+            expected = (
+                [AttemptDisposition.succeeded]
+                if prior_disposition is None
+                else [prior_disposition, AttemptDisposition.succeeded]
+            )
+            assert [record.disposition for record in history] == expected
+
+        asyncio.run(_run())
+
     def test_run_agent_pool_refills_after_adaptive_concurrency_increase(self) -> None:
         """The orchestrator periodically fills capacity while active items run."""
 
@@ -783,6 +1266,27 @@ class TestPoolSubmitAndShutdown:
 
             fake_pool = FakePool()
 
+            def _record_success(
+                _each: str,
+                item: str,
+                _item_dir: Path | None,
+                _state_dir: Path,
+                _item_context: dict[str, str],
+                _log_path: Path | None,
+                _running_record: Any,
+                _effective_outputs: dict[str, IOSpec] | None,
+                _variables: dict[str, str],
+                _run_id: str,
+                _step: str,
+                _result: Any,
+                _out: Any,
+                all_results: list[tuple[str, int]],
+                _batch_failed: list[tuple[dict[str, Any], str, list[OutputFailure]]],
+                _shared: dict[str, Any],
+                **_kwargs: Any,
+            ) -> None:
+                all_results.append((item, 0))
+
             with (
                 patch("metaproc.commands.run_parallel.RunPool", return_value=fake_pool),
                 patch("metaproc.commands.run_parallel._POOL_FILL_POLL_INTERVAL_S", 0.01),
@@ -790,6 +1294,10 @@ class TestPoolSubmitAndShutdown:
                     "metaproc.commands.run_parallel._build_prepare_launch", return_value=MagicMock()
                 ),
                 patch("metaproc.commands.run_parallel.compute_item_dir", return_value=None),
+                patch(
+                    "metaproc.commands.run_parallel._handle_success",
+                    side_effect=_record_success,
+                ),
             ):
                 results = await asyncio.wait_for(
                     _run_agent_pool(

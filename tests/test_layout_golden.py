@@ -19,6 +19,7 @@ artifact tree at ``<run>/<step_id>/.state/`` or
 
 from __future__ import annotations
 
+import re
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -259,7 +260,13 @@ def test_state_tree_snapshot_matches_expected_shape(smoke_run: Path) -> None:
     """Snapshot of every state file under <run>/.state/ — locks the layout in place."""
     state_root = smoke_run / STATE_DIR
     state_files = sorted(
-        str(p.relative_to(state_root)) for p in state_root.rglob("*") if p.is_file()
+        re.sub(
+            r"/attempts/att-[^/]+/attempt\.yaml$",
+            "/attempts/<attempt-id>/attempt.yaml",
+            str(path.relative_to(state_root)),
+        )
+        for path in state_root.rglob("*")
+        if path.is_file()
     )
 
     expected = {
@@ -272,17 +279,21 @@ def test_state_tree_snapshot_matches_expected_shape(smoke_run: Path) -> None:
         "steps/write-artifact/scale-state.yaml",
         # Per-task — fan-out items each get their own subdir
         "tasks/write-artifact/AAA/attempt.yaml",
+        "tasks/write-artifact/AAA/attempts/<attempt-id>/attempt.yaml",
         "tasks/write-artifact/AAA/result.yaml",
         "tasks/write-artifact/AAA/status.yaml",
         "tasks/write-artifact/BBB/attempt.yaml",
+        "tasks/write-artifact/BBB/attempts/<attempt-id>/attempt.yaml",
         "tasks/write-artifact/BBB/result.yaml",
         "tasks/write-artifact/BBB/status.yaml",
         # Per-task — non-fan-out steps write status.yaml directly under
         # tasks/<step_id>/
         "tasks/scaffold/result.yaml",
         "tasks/scaffold/status.yaml",
+        "tasks/scaffold/attempts/<attempt-id>/attempt.yaml",
         "tasks/summarize/result.yaml",
         "tasks/summarize/status.yaml",
+        "tasks/summarize/attempts/<attempt-id>/attempt.yaml",
     }
 
     actual = set(state_files)

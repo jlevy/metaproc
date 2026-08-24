@@ -65,6 +65,7 @@ def discover_items_from_source(
     params: dict[str, str] | None = None,
     reuse_policy: str | None = "validated_outputs",
     run_dir: Path | None = None,
+    expected_run_id: str | None = None,
 ) -> FanOutDiscovery:
     """Extract actionable item contexts from a fan-out source file.
 
@@ -116,7 +117,7 @@ def discover_items_from_source(
             for f in item_fields
         }
 
-        if output_paths is not None and run_dir is not None:
+        if run_dir is not None:
             item_vars = dict(params or {})
             item_vars.update(context)
             from metaproc.engine.pathing import (  # noqa: PLC0415 -- pre-existing local import; needs review
@@ -124,12 +125,21 @@ def discover_items_from_source(
             )
             from metaproc.io.state_io import (  # noqa: PLC0415 -- pre-existing local import; needs review
                 read_status_at,
+                validate_task_status_identity_at,
             )
 
             state_dir = compute_task_state_dir(run_dir, step_def, item_vars)
-            artifact_dir = compute_item_dir(output_paths, item_vars)
+            artifact_dir = compute_item_dir(output_paths or {}, item_vars)
             status_record = read_status_at(state_dir)
             if status_record is not None:
+                if expected_run_id is not None:
+                    validate_task_status_identity_at(
+                        state_dir,
+                        status_record,
+                        run_id=expected_run_id,
+                        step_id=step_def.id,
+                        item_key=state_dir.name,
+                    )
                 if status_record.step_id != step_def.id:
                     actionable_contexts.append(context)
                     continue
