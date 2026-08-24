@@ -3,9 +3,9 @@ type: is
 id: is-01m0sbeq4f6ac3ayz46z7kc03h
 title: "Address review: PR #30 — GCP dispatch hardening"
 kind: task
-status: in_progress
+status: closed
 priority: 1
-version: 13
+version: 14
 labels:
   - pr-review
 dependencies: []
@@ -22,6 +22,10 @@ child_order_hints:
   - is-01m0sbfscjjzeaq2gxh78rfdz3
   - is-01m0sc4gk4e2bbv3wacdj4xegn
 created_at: 2026-08-24T07:41:12.718Z
-updated_at: 2026-08-24T07:53:06.907Z
+updated_at: 2026-08-24T08:12:53.754Z
+closed_at: 2026-08-24T08:12:53.753Z
+close_reason: "Review addressed in 1cbe8e8 with an explicit disposition map on PR #30; R1-R6 and S1-S4 are fixed, while deferred cleanup S5 remains open as mp-xcgj."
+resolution: null
+duplicate_of: null
 ---
 Parent for the senior engineering review published at https://github.com/jlevy/metaproc/pull/30#issuecomment-5392026692. Every R1-R6 finding and S1-S4 suggestion receives an explicit fixed, rebutted, or deferred disposition.
