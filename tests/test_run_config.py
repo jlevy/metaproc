@@ -103,6 +103,65 @@ class TestWriteRunConfig:
 
         assert first_data["created_at"] == second_data["created_at"]
 
+    def test_resume_rejects_changed_immutable_variables(self, tmp_path: Path) -> None:
+        run_dir = tmp_path / "run-variable-change" / "mine"
+        run_dir.mkdir(parents=True)
+
+        _write_run_config(
+            run_dir,
+            process_name="mine",
+            process_path=Path("process/mine/mine.process.md"),
+            run_id="run-variable-change",
+            variables={"RUN_ID": "run-variable-change", "DATASET": "original-dataset"},
+            backend="local",
+            variant=None,
+        )
+
+        with pytest.raises(CLIError, match=r"immutable variables.*DATASET") as exc_info:
+            _write_run_config(
+                run_dir,
+                process_name="mine",
+                process_path=Path("process/mine/mine.process.md"),
+                run_id="run-variable-change",
+                variables={"RUN_ID": "run-variable-change", "DATASET": "replacement-dataset"},
+                backend="local",
+                variant=None,
+            )
+
+        message = str(exc_info.value)
+        assert "original-dataset" not in message
+        assert "replacement-dataset" not in message
+
+    def test_resume_accepts_equivalent_runs_dir_mount_alias(self, tmp_path: Path) -> None:
+        run_dir = tmp_path / "run-mount-alias" / "mine"
+        run_dir.mkdir(parents=True)
+
+        _write_run_config(
+            run_dir,
+            process_name="mine",
+            process_path=Path("process/mine/mine.process.md"),
+            run_id="run-mount-alias",
+            variables={
+                "RUN_ID": "run-mount-alias",
+                "RUNS_DIR": "/mnt/disks/filestore/runs",
+            },
+            backend="gcp-orchestrator",
+            variant=None,
+        )
+
+        _write_run_config(
+            run_dir,
+            process_name="mine",
+            process_path=Path("process/mine/mine.process.md"),
+            run_id="run-mount-alias",
+            variables={
+                "RUN_ID": "run-mount-alias",
+                "RUNS_DIR": "/mnt/filestore/runs",
+            },
+            backend="local",
+            variant=None,
+        )
+
     def test_resume_rejects_different_process(self, tmp_path: Path) -> None:
         run_dir = tmp_path / "run-4" / "mine"
         run_dir.mkdir(parents=True)
@@ -150,6 +209,7 @@ class TestWriteRunConfig:
                 config_path,
                 process_name="mine",
                 run_dir=different_dir,
+                variables={"RUN_ID": "run-5"},
             )
 
     def test_resume_accepts_legacy_filestore_mount_alias(self, tmp_path: Path) -> None:
@@ -175,6 +235,7 @@ class TestWriteRunConfig:
             config_path,
             process_name="mine",
             run_dir=Path("/mnt/filestore/runs/run-5b/mine"),
+            variables={"RUN_ID": "run-5b"},
         )
 
     def test_resume_rejects_workstation_path_containing_filestore_alias(
@@ -203,6 +264,7 @@ class TestWriteRunConfig:
                 config_path,
                 process_name="mine",
                 run_dir=Path("/workspace/user/mnt/filestore/runs/run-5c/mine"),
+                variables={"RUN_ID": "run-5c"},
             )
         assert "Workstation-mounted Filestore aliases are not supported" in str(exc_info.value)
         assert "canonical cloud mount" in str(exc_info.value)
@@ -231,6 +293,7 @@ class TestWriteRunConfig:
                 config_path,
                 process_name="mine",
                 run_dir=Path("/tmp/runs/run-5d/mine"),
+                variables={"RUN_ID": "run-5d"},
             )
 
     def test_includes_git_sha(self, tmp_path: Path) -> None:
@@ -273,7 +336,12 @@ class TestValidateRunConfig:
         config_path.write_text("not valid yaml: [")
 
         with pytest.raises(Exception):  # noqa: B017
-            _validate_run_config(config_path, process_name="mine", run_dir=tmp_path)
+            _validate_run_config(
+                config_path,
+                process_name="mine",
+                run_dir=tmp_path,
+                variables={},
+            )
 
     def test_passes_on_matching_config(self, tmp_path: Path) -> None:
         """No error when config matches."""
@@ -284,12 +352,37 @@ class TestValidateRunConfig:
             "process": "mine",
             "run_dir": str(tmp_path),
             "run_id": "run-1",
+            "variables": {},
         }
         with atomic_output_file(config_path) as tmp:
             Path(tmp).write_text(to_yaml_string(data))
 
         # Should not raise.
-        _validate_run_config(config_path, process_name="mine", run_dir=tmp_path)
+        _validate_run_config(
+            config_path,
+            process_name="mine",
+            run_dir=tmp_path,
+            variables={},
+        )
+
+    def test_rejects_non_string_variable_mapping(self, tmp_path: Path) -> None:
+        config_path = tmp_path / STATE_DIR / RUN_CONFIG_FILE
+        config_path.parent.mkdir(parents=True)
+        data = {
+            "process": "mine",
+            "run_dir": str(tmp_path),
+            "run_id": "run-1",
+            "variables": {"COUNT": 3},
+        }
+        config_path.write_text(to_yaml_string(data))
+
+        with pytest.raises(CLIError, match="variables must be a string-to-string mapping"):
+            _validate_run_config(
+                config_path,
+                process_name="mine",
+                run_dir=tmp_path,
+                variables={"COUNT": "3"},
+            )
 
 
 # ── Phase 3: auth + concurrency persistence ──

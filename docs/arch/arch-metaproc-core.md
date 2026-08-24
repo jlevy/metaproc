@@ -3051,11 +3051,14 @@ Authoritative live and restart state lives only on the run filesystem -- local d
 full-local runs and Filestore NFS for full-cloud runs.
 
 **`run-config.yaml`** (`{run_dir}/.state/run-config.yaml`): written at run creation time
-with immutable run identity (process name, run_id, backend, variant, git SHA, creation
-timestamp). On resume, validated against current launch parameters -- process identity
-and run directory must match.
-Resume requires the same authoritative run directory.
-Backend metadata does not replace that filesystem identity.
+with the process name, run ID, resolved variables, creation-time backend and variant,
+git SHA, and timestamp.
+On resume, the process identity, run directory, and resolved variables must match.
+The two canonical cloud Filestore mount roots normalize to one identity; workstation
+paths do not. No other variable changes are accepted.
+Cross-topology resume (for example, hybrid to full cloud) remains allowed because the
+backend is not part of resume identity and both topologies share the authoritative
+filesystem. Authentication and concurrency changes remain explicit timeline events.
 
 **`orchestrator-lease.yaml`** (`{run_dir}/.state/orchestrator-lease.yaml`): records the
 current orchestrator owner and heartbeat so a second orchestrator will refuse to start

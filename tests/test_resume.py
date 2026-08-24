@@ -316,7 +316,12 @@ class TestBackendAgnosticResumeState:
 
         # Validate with different backend — should NOT raise.
         config_path = run_dir / STATE_DIR / RUN_CONFIG_FILE
-        _validate_run_config(config_path, process_name="mine", run_dir=run_dir)
+        _validate_run_config(
+            config_path,
+            process_name="mine",
+            run_dir=run_dir,
+            variables={"RUN_ID": "test-run", "DATASET": "test-data"},
+        )
 
     def test_run_config_allows_different_variant(self, tmp_path: Path) -> None:
         """Variant is not part of the resume identity check."""
@@ -327,7 +332,12 @@ class TestBackendAgnosticResumeState:
 
         # Validate — variant is not checked.
         config_path = run_dir / STATE_DIR / RUN_CONFIG_FILE
-        _validate_run_config(config_path, process_name="mine", run_dir=run_dir)
+        _validate_run_config(
+            config_path,
+            process_name="mine",
+            run_dir=run_dir,
+            variables={"RUN_ID": "test-run", "DATASET": "test-data"},
+        )
 
     def test_run_config_rejects_different_process(self, tmp_path: Path) -> None:
         """Cross-topology resume must still match the process identity."""
@@ -338,7 +348,12 @@ class TestBackendAgnosticResumeState:
 
         config_path = run_dir / STATE_DIR / RUN_CONFIG_FILE
         with pytest.raises(CLIError, match="Resume mismatch.*process"):
-            _validate_run_config(config_path, process_name="retro", run_dir=run_dir)
+            _validate_run_config(
+                config_path,
+                process_name="retro",
+                run_dir=run_dir,
+                variables={"RUN_ID": "test-run", "DATASET": "test-data"},
+            )
 
     def test_step_state_shared_across_topologies(self, tmp_path: Path) -> None:
         """Step completion state is topology-agnostic (just filesystem).
@@ -377,7 +392,12 @@ class TestBackendAgnosticResumeState:
         # Phase 2: Resume from a replacement orchestrator.
         # Validate run identity.
         config_path = run_dir / STATE_DIR / RUN_CONFIG_FILE
-        _validate_run_config(config_path, process_name="mine", run_dir=run_dir)
+        _validate_run_config(
+            config_path,
+            process_name="mine",
+            run_dir=run_dir,
+            variables={"RUN_ID": "test-run", "DATASET": "test-data"},
+        )
 
         # Take over stale lease.
         lease_path = acquire_lease(run_dir, command_summary="resume attempt")

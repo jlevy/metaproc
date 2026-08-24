@@ -39,6 +39,11 @@ development series.
   A separate success-requiring path from the same failure still blocks the consumer,
   while an unaffected required dependency does not erase the tolerant collection.
 
+- **Resume rejects changed resolved inputs**: an existing run now compares the persisted
+  resolved-variable mapping with the new launch before reusing task state.
+  Only known equivalent Filestore aliases for `RUNS_DIR` normalize across local and
+  cloud topology; mismatch errors list field names without exposing their values.
+
 - **Duplicate fan-out keys fail before execution**: item discovery now rejects two
   source rows that resolve to the same `for_each.key` before either can write the shared
   task, log, output, or child-scope namespace.

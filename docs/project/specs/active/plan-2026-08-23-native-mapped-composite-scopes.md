@@ -807,8 +807,15 @@ A second review finding about omitting the primary binding was rebutted because
 The shipped architecture, concepts, proposal, operator, and changelog documentation now
 describe the M0 behavior and its limits.
 
-The focused planner/process/context/status/resume/lease set passes, and the exact
-stack-wide review-fix candidate passes 4,347 tests with 8 skipped.
+The same M0 pull request now closes a resume-identity hole found while preparing its
+first consumer. `run-config.yaml` already persisted resolved variables, but resume did
+not compare them. The narrow fix rejects additions, removals, or changed values under an
+existing run ID, reports only field names, and normalizes only the known equivalent
+Filestore `RUNS_DIR` aliases.
+It does not add another manifest, metadata service, or scheduler policy.
+
+The focused run-config/resume integration set passes 39 tests, and the exact stack-wide
+review-fix candidate passes 4,350 tests with 8 skipped.
 Formatting, Ruff, BasedPyright, Markdown links, public hygiene, browser and supply-chain
 checks, dependency audits, distribution build, and installed-wheel smoke are also green.
 GitHub CI remains the final gate before the consumer pins this revision.
@@ -862,8 +869,9 @@ complete. `mp-l6b5` owns the completed cancellation-safety slice in pull request
 retry-later machinery; no public retry surface is added for `v3.0-pre` without runtime
 evidence. `mp-npza` is complete through pull request 39’s deterministic execution-model
 scale guard. `mp-0ukj` owns mapped scopes, ports, parent evidence, and within-scope
-per-item recovery; `mp-0cyw` owns the common host byte authority; `mp-1af0` owns views;
-and `mp-rrfn` owns the production proof.
+per-item recovery; its child `mp-0pjp` owns immutable resolved-variable validation on
+resume. `mp-0cyw` owns the common host byte authority; `mp-1af0` owns views; and
+`mp-rrfn` owns the production proof.
 
 The general ready scheduler, persisted dynamic expansions, complete fenced publication,
 cross-scope causal force, budgets, and a standalone runtime artifact index remain

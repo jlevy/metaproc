@@ -19,7 +19,7 @@ import shlex
 import subprocess
 import time
 import traceback
-from collections.abc import AsyncGenerator, Callable, Sequence
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -544,14 +544,19 @@ def _write_run_config(  # noqa: PLR0913
     ``.logs/dispatch-config-changes.jsonl`` rather than mutating the
     original config — preserves the audit trail per spec.
 
-    Returns the path to the config file. Resume calls validate
-    process / run_dir identity (raises CLIError on mismatch) but
-    accept changes to auth / concurrency as recorded events.
+    Returns the path to the config file. Resume calls validate the process,
+    run directory, and resolved immutable variables (raises CLIError on
+    mismatch) but accept changes to auth / concurrency as recorded events.
     """
     config_path = paths_mod.run_config_file(run_dir)
     logs_dir = paths_mod.run_logs_dir(run_dir)
     if config_path.exists():
-        _validate_run_config(config_path, process_name=process_name, run_dir=run_dir)
+        _validate_run_config(
+            config_path,
+            process_name=process_name,
+            run_dir=run_dir,
+            variables=variables,
+        )
         # Compute and record any auth/concurrency diff so the
         # aggregator can render the resume timeline.
         _record_resume_config_change(
@@ -768,10 +773,13 @@ def _validate_run_config(
     *,
     process_name: str,
     run_dir: Path,
+    variables: Mapping[str, str],
 ) -> None:
-    """Validate existing run-config.yaml matches current launch parameters.
+    """Validate existing run-config.yaml matches immutable launch parameters.
 
-    Raises CLIError on incompatible resume attempts.
+    Backend topology, authentication, and concurrency may change on resume.
+    Process identity, run directory, and resolved variables may not. Raises
+    CLIError on incompatible resume attempts.
     """
     raw = read_yaml_file(config_path)
     if not isinstance(raw, dict):
@@ -797,6 +805,32 @@ def _validate_run_config(
             "resume on the canonical cloud mount or start a new local run."
         )
 
+    # The YAML serializer omits empty mappings, so an absent/null field is the
+    # persisted representation of no resolved variables in existing run trees.
+    saved_variables = raw.get("variables")
+    if saved_variables is None:
+        saved_variables = {}
+    if not isinstance(saved_variables, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in saved_variables.items()
+    ):
+        raise CLIError(
+            f"Corrupt run-config.yaml: {config_path}: variables must be a string-to-string mapping"
+        )
+
+    saved_identity = _resume_variable_identity(cast(dict[str, str], saved_variables))
+    current_identity = _resume_variable_identity(variables)
+    changed_variables = sorted(
+        key
+        for key in set(saved_identity) | set(current_identity)
+        if saved_identity.get(key) != current_identity.get(key)
+    )
+    if changed_variables:
+        changed_names = ", ".join(changed_variables)
+        raise CLIError(
+            "Resume mismatch: run-config.yaml immutable variables changed: "
+            f"{changed_names}. Use the original --var values or a new RUN_ID."
+        )
+
     log.info("Resume validated against run-config.yaml (%s)", config_path)
 
 
@@ -808,16 +842,30 @@ def _resume_run_dir_identity(run_dir: str) -> str:
     paths keep their full normalized form so workstation directories that happen
     to contain ``mnt/filestore`` cannot impersonate the cloud run tree.
     """
-    normalized = os.path.normpath(run_dir)
-    filestore_markers = (
-        f"{os.sep}mnt{os.sep}disks{os.sep}filestore{os.sep}runs{os.sep}",
-        f"{os.sep}mnt{os.sep}filestore{os.sep}runs{os.sep}",
+    return _normalize_filestore_runs_path(run_dir)
+
+
+def _resume_variable_identity(variables: Mapping[str, str]) -> dict[str, str]:
+    """Return immutable variables with known topology aliases normalized."""
+    identity = dict(variables)
+    if runs_dir := identity.get("RUNS_DIR"):
+        identity["RUNS_DIR"] = _normalize_filestore_runs_path(runs_dir)
+    return identity
+
+
+def _normalize_filestore_runs_path(path: str) -> str:
+    """Normalize known Filestore run-root aliases while preserving descendants."""
+    normalized = os.path.normpath(path)
+    canonical_root = f"{os.sep}mnt{os.sep}filestore{os.sep}runs"
+    aliases = (
+        f"{os.sep}mnt{os.sep}disks{os.sep}filestore{os.sep}runs",
+        canonical_root,
     )
-    for marker in filestore_markers:
-        if normalized.startswith(marker):
-            return (
-                f"{os.sep}mnt{os.sep}filestore{os.sep}runs{os.sep}" + normalized.split(marker, 1)[1]
-            )
+    for alias in aliases:
+        if normalized == alias:
+            return canonical_root
+        if normalized.startswith(alias + os.sep):
+            return canonical_root + normalized[len(alias) :]
     return normalized
 
 
