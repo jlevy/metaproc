@@ -22,7 +22,6 @@ import metaproc.dispatch.pool_dispatch as pd
 from metaproc.adapters.base import AuthFailureClassification, FailureSeverity
 from metaproc.adapters.claude_code import ClaudeApiSignals, ClaudeCodeCliAdapter
 from metaproc.commands.run_parallel import (
-    _auth_forces_abort,
     _build_prepare_launch,
     _compute_pool_cooling_delay,
     _run_agent_pool,
@@ -52,6 +51,9 @@ from metaproc.dispatch.pool_dispatch import (
     compose_slot_env,
     pre_fan_out_probe,
     probe_credential,
+)
+from metaproc.dispatch.pool_dispatch import (
+    auth_forces_abort as _auth_forces_abort,
 )
 from metaproc.dispatch.slot_coordinator import (
     SLOT_ACTIVE_ENV_VAR,
