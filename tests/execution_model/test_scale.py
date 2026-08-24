@@ -4,19 +4,16 @@ The design declares a working envelope of 10^3 to 10^4 tasks per run and says it
 confirmed before the production scheduler grows. This is that confirmation, and it is
 deliberately a test rather than a script so the envelope cannot quietly stop holding.
 
-The thresholds are generous. They exist to catch an accidental quadratic, not to police
-milliseconds, because the failure this guards against is a scheduler that is fine on a
-small roster and unusable on a full one.
-
-Two things a scale guard has to get right about itself. It must measure above the knee,
-where an added quadratic term dominates rather than hiding under constant factors. And
-its own bound must sit inside the suite's global per-test timeout, or a regression
-arrives as an opaque hang instead of the assertion that would have explained it.
+The wall-clock thresholds are generous. They exist to catch an unusable implementation,
+not to police milliseconds. The known quadratic hazard has a deterministic guard: count
+the equality work performed by aligned roster membership at production width. That
+distinguishes an index from a scan without making correctness depend on CI load.
 """
 
 from __future__ import annotations
 
 import time
+from typing import ClassVar, override
 
 import pytest
 
@@ -34,23 +31,54 @@ from metaproc.execution_model.reducer import (
     AttemptEnded,
     AttemptStarted,
     ExpansionClosed,
-    Tick,
     materialized_keys,
     reduce,
+    related_keys,
     task_state,
 )
 
+# Large enough that a scan's quadratic work cannot hide behind constant factors.
+_ALIGNED_ROSTER_WIDTH = 3_200
 
-def _time_tick(state: RunState) -> float:
-    started = time.perf_counter()
-    reduce(state, Tick())
-    return time.perf_counter() - started
+# Successful hash lookups normally compare once; allow a few collisions per item.
+_MAX_EQUALITY_COMPARISONS_PER_LOOKUP = 4
 
 
-def _best_tick(width: int, rounds: int = 3) -> float:
-    """Fastest of several passes, so one scheduling hiccup cannot fail the build."""
-    state, _ = _chain(width, 3)
-    return min(_time_tick(state) for _ in range(rounds))
+class _ComparisonCountingKey(str):
+    """String key that exposes the amount of equality work a lookup performs."""
+
+    comparisons: ClassVar[int] = 0
+    __hash__ = str.__hash__
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        _ComparisonCountingKey.comparisons += 1
+        return str.__eq__(self, other)
+
+
+def _aligned_membership_comparisons(width: int) -> int:
+    """Equality comparisons needed to resolve one aligned lookup per roster item."""
+    template = StepTemplate(step_id="upstream", expands_over="roster")
+    clause = DependencyClause(
+        upstream_step="upstream",
+        mapping=ClauseMapping.SAME_KEY,
+        requirement=Requirement.SUCCEEDED,
+    )
+    keys = tuple(_ComparisonCountingKey(f"item{i:05d}") for i in range(width))
+    state, _ = reduce(
+        RunState(templates=(template,)),
+        ExpansionClosed(step_id="upstream", keys=keys),
+    )
+    expansion = state.expansion_for("upstream")
+    assert expansion is not None
+    _ = expansion.key_set  # Build the index before measuring lookup work.
+
+    _ComparisonCountingKey.comparisons = 0
+    for key in keys:
+        probe = _ComparisonCountingKey(key)
+        related = related_keys(state, TaskKey("downstream", probe), clause)
+        assert related is not None and len(related) == 1
+    return _ComparisonCountingKey.comparisons
 
 
 def _chain(width: int, stages: int) -> tuple[RunState, tuple[str, ...]]:
@@ -130,24 +158,17 @@ class TestEnvelope:
         assert task_state(state, TaskKey("barrier")).value == "ready"
         assert elapsed < 120.0, f"draining {width * stages} tasks took {elapsed:.1f}s"
 
-    @pytest.mark.timeout(120)
-    def test_readiness_does_not_degrade_quadratically_with_width(self) -> None:
-        """Quadrupling the roster must not cost far more than four times the work.
+    def test_aligned_roster_membership_stays_linear(self) -> None:
+        """One aligned lookup per item must perform O(width) equality work in total."""
+        width = _ALIGNED_ROSTER_WIDTH
+        comparisons = _aligned_membership_comparisons(width)
+        comparison_ceiling = width * _MAX_EQUALITY_COMPARISONS_PER_LOOKUP
 
-        Both the width and the span are chosen from measurement rather than taste. A
-        2x span could not tell an indexed lookup from a linear scan at these sizes
-        (2.6x versus 2.9x, inside the noise of each other), because the quadratic term
-        is still small next to the constants. Across 4x the work the two separate
-        cleanly: roughly 4x when membership is indexed, roughly 8x when it degrades to
-        a scan.
-        """
-        small = _best_tick(800)
-        large = _best_tick(3200)
-        ratio = large / small
-
-        assert ratio < 6.0, (
-            f"one scheduling pass: {small:.4f}s at width 800, {large:.4f}s at width 3200 "
-            f"({ratio:.1f}x for 4x the work; linear is 4x, a scan measures about 8x)"
+        # A hash index normally performs one equality check per successful lookup. The
+        # allowance covers collisions; a tuple scan performs about width**2 / 2.
+        assert comparisons <= comparison_ceiling, (
+            f"{comparisons:,} equality comparisons for {width:,} aligned lookups; "
+            f"expected no more than {comparison_ceiling:,}"
         )
 
     @pytest.mark.timeout(120)

@@ -131,10 +131,14 @@ can replace the level walk, the model has to reproduce it.
 ## Scale
 
 The in-memory envelope is confirmed at 10^3 to 10^4 tasks per run, roughly 0.03s per
-scheduling pass over 2,400 tasks, linear in roster width, guarded by
+scheduling pass over 2,400 tasks, and is guarded by
 `tests/execution_model/test_scale.py`. Lookups are indexed rather than scanned, which is
-what keeps a pass linear; the guard exists because an accidental quadratic is invisible
-at test size and fatal at full roster width.
+what keeps a pass linear.
+The aligned-roster guard counts equality work at production width instead of relying on
+a timing ratio, so it detects the known quadratic failure without making correctness
+depend on CI-machine load.
+Generous absolute-time guards still catch implementations that are unusable inside the
+declared envelope.
 
 The reference model recomputes projections and commands from whole state on every event,
 which is O(n) per event and quadratic over a full drain.
