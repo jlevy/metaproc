@@ -19,8 +19,11 @@ import shlex
 import subprocess
 import time
 import traceback
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncGenerator, Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -189,6 +192,114 @@ log = logging.getLogger(__name__)
 
 MANUAL_ACK_TIMEOUT_S = 24 * 3600
 MANUAL_ACK_HEARTBEAT_S = 15 * 60
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class RunExecutionContext:
+    """Run-owned policy and execution references shared by every scope."""
+
+    backend_name: str
+    max_concurrency: int | None
+    initial_concurrency: int | None
+    num_workers: int
+    machine_type: str
+    spot: bool
+    variant_override: str | None
+    profile_files: tuple[Path, ...]
+    skip_steps: frozenset[str]
+    force: bool
+    continue_on_error: bool
+    continue_on_step_failure: bool
+    pool_dispatch_template: PoolDispatchConfig | None
+    auth_flags: AuthPoolFlags
+    preflight_quota_guard: str
+    leaf_semaphore: asyncio.Semaphore | None
+    cancellation_event: asyncio.Event
+    sync_executor: ThreadPoolExecutor
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        backend_name: str = "local",
+        max_concurrency: int | None,
+        initial_concurrency: int | None = None,
+        num_workers: int = 1,
+        machine_type: str = "",
+        spot: bool = False,
+        variant_override: str | None = None,
+        profile_files: Sequence[Path] = (),
+        skip_steps: set[str] | frozenset[str] = frozenset(),
+        force: bool = False,
+        continue_on_error: bool = True,
+        continue_on_step_failure: bool = False,
+        pool_dispatch_template: PoolDispatchConfig | None = None,
+        auth_flags: AuthPoolFlags = AuthPoolFlags(),
+        preflight_quota_guard: str = "warn",
+    ) -> RunExecutionContext:
+        """Create the references that must remain identical through recursion."""
+        if max_concurrency is not None and max_concurrency < 1:
+            raise ValueError("max_concurrency must be at least 1")
+        return cls(
+            backend_name=backend_name,
+            max_concurrency=max_concurrency,
+            initial_concurrency=initial_concurrency,
+            num_workers=num_workers,
+            machine_type=machine_type,
+            spot=spot,
+            variant_override=variant_override,
+            profile_files=tuple(profile_files),
+            skip_steps=frozenset(skip_steps),
+            force=force,
+            continue_on_error=continue_on_error,
+            continue_on_step_failure=continue_on_step_failure,
+            pool_dispatch_template=pool_dispatch_template,
+            auth_flags=auth_flags,
+            preflight_quota_guard=preflight_quota_guard,
+            leaf_semaphore=(
+                asyncio.Semaphore(max_concurrency) if max_concurrency is not None else None
+            ),
+            cancellation_event=asyncio.Event(),
+            sync_executor=ThreadPoolExecutor(
+                max_workers=max_concurrency,
+                thread_name_prefix="metaproc-run",
+            ),
+        )
+
+    def close(self) -> None:
+        """Release the run-owned executor after all scopes have stopped."""
+        self.sync_executor.shutdown(wait=True, cancel_futures=True)
+
+
+async def _run_sync[SyncResult](
+    execution_context: RunExecutionContext | None,
+    function: Callable[[], SyncResult],
+) -> SyncResult:
+    """Run synchronous work without pinning the orchestration event loop."""
+    if execution_context is None:
+        return await asyncio.to_thread(function)
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(execution_context.sync_executor, function)
+
+
+@asynccontextmanager
+async def _leaf_slot(
+    execution_context: RunExecutionContext | None,
+) -> AsyncGenerator[None]:
+    """Admit one executable leaf through the run-wide concurrency ceiling."""
+    if execution_context is None:
+        yield
+        return
+    if execution_context.cancellation_event.is_set():
+        raise asyncio.CancelledError
+    semaphore = execution_context.leaf_semaphore
+    if semaphore is None:
+        yield
+        return
+    async with semaphore:
+        if execution_context.cancellation_event.is_set():
+            raise asyncio.CancelledError
+        yield
 
 
 # ── Helpers ──────────────────────────────────────────────────────
@@ -984,6 +1095,7 @@ async def _execute_code_step(
     process_dir: Path,
     run_dir: Path,
     run_id: str,
+    execution_context: RunExecutionContext | None = None,
     out: Any,
 ) -> bool:
     """Execute a mode:code step. Returns True on success."""
@@ -1029,27 +1141,32 @@ async def _execute_code_step(
                 deep=True,
                 update={"inputs": target.inputs, "outputs": target.outputs},
             )
-            with sample_step_resources(
-                run_dir=run_dir,
-                run_id=run_id,
-                step_node_id=step_id,
-            ):
-                # Off the event loop: a code handler is synchronous, and calling it
-                # inline pins the loop for its whole duration, which serializes every
-                # sibling item of a fan-out no matter how the dispatcher gathers them.
-                await asyncio.to_thread(handler_fn, dict(variables), process_step)
+
+            def _run_handler() -> None:
+                with sample_step_resources(
+                    run_dir=run_dir,
+                    run_id=run_id,
+                    step_node_id=step_id,
+                ):
+                    handler_fn(dict(variables), process_step)
+
+            await _run_sync(execution_context, _run_handler)
         elif command_ref is not None:
             resolved_cmd = resolve_templates(command_ref, variables)
             env = dict(os.environ)
             if target.env:
                 env.update({k: resolve_templates(v, variables) for k, v in target.env.items()})
-            result = run_sampled_step_command(
-                shlex.split(resolved_cmd),
-                env=env,
-                cwd=process_dir,
-                run_dir=run_dir,
-                run_id=run_id,
-                step_node_id=step_id,
+            result = await _run_sync(
+                execution_context,
+                partial(
+                    run_sampled_step_command,
+                    shlex.split(resolved_cmd),
+                    env=env,
+                    cwd=process_dir,
+                    run_dir=run_dir,
+                    run_id=run_id,
+                    step_node_id=step_id,
+                ),
             )
             # Capture stdout/stderr to log file
             output = ""
@@ -1236,7 +1353,7 @@ async def _execute_code_fan_out_step(
     run_dir: Path,
     run_id: str,
     max_concurrency: int | None,
-    external_semaphore: asyncio.Semaphore | None,
+    execution_context: RunExecutionContext | None = None,
     out: Any,
 ) -> bool:
     """Execute a mode:code step with for_each, one handler invocation per item."""
@@ -1265,6 +1382,7 @@ async def _execute_code_fan_out_step(
             process_dir=process_dir,
             run_dir=run_dir,
             run_id=run_id,
+            execution_context=execution_context,
             out=out,
         )
 
@@ -1280,7 +1398,9 @@ async def _execute_code_fan_out_step(
         step_id=step_id,
         max_concurrency=max_concurrency,
         step_concurrency=target.fan_out.max_concurrency,
-        external_semaphore=external_semaphore,
+        external_semaphore=(
+            execution_context.leaf_semaphore if execution_context is not None else None
+        ),
     )
     if succeeded != total:
         out.progress(f"  Step '{step_id}': {total - succeeded} of {total} items failed")
@@ -1298,7 +1418,7 @@ async def _execute_item_aligned_chain(
     run_dir: Path,
     run_id: str,
     max_concurrency: int | None,
-    external_semaphore: asyncio.Semaphore | None,
+    execution_context: RunExecutionContext,
     out: Any,
 ) -> dict[str, bool]:
     """Run an item-aligned chain once per item, and report success per step."""
@@ -1327,6 +1447,7 @@ async def _execute_item_aligned_chain(
             process_dir=process_dir,
             run_dir=run_dir,
             run_id=run_id,
+            execution_context=execution_context,
             out=out,
         )
 
@@ -1367,7 +1488,7 @@ async def _execute_item_aligned_chain(
         is_done=_is_done,
         max_concurrency=max_concurrency,
         step_concurrency=_step_concurrency,
-        external_semaphore=external_semaphore,
+        external_semaphore=execution_context.leaf_semaphore,
     )
 
     results: dict[str, bool] = {}
@@ -1386,6 +1507,7 @@ async def _run_agent_subprocess(
     log_path: Path,
     timeout_s: int | None,
     use_filter: bool,
+    execution_context: RunExecutionContext | None = None,
 ) -> int:
     """Run one blocking adapter subprocess without blocking the DAG event loop."""
 
@@ -1429,7 +1551,7 @@ async def _run_agent_subprocess(
             )
         return completed.returncode
 
-    return await asyncio.to_thread(_run)
+    return await _run_sync(execution_context, _run)
 
 
 async def _execute_agent_step(
@@ -1444,6 +1566,7 @@ async def _execute_agent_step(
     variant_override: str | None = None,
     peer_allowed_targets: list[WriteTarget] | None = None,
     backend_name: str = "local",
+    execution_context: RunExecutionContext | None = None,
     out: Any,
 ) -> bool:
     """Execute a mode:agent step (no for_each). Returns True on success."""
@@ -1597,23 +1720,25 @@ async def _execute_agent_step(
         # cannot see each other's scalar launches at all.
         scalar_resource_config = target.resources or runtime_config
         try:
-            async with admitted_launch(
-                enabled=backend_name == "local",
-                limit=resolve_host_max_concurrency(
-                    scalar_resource_config, default=SCALAR_DEFAULT_HOST_LIMIT
-                ),
-                label=f"{run_id}/{step_id}",
-                pool_id=f"run-process:{run_id}",
-                metadata={"backend": backend_name, "step_id": step_id, "mode": "agent"},
-            ):
-                exit_code = await _run_agent_subprocess(
-                    cmd,
-                    env=env,
-                    cwd=cwd,
-                    log_path=attempt_log_path,
-                    timeout_s=timeout_val,
-                    use_filter=use_filter,
-                )
+            async with _leaf_slot(execution_context):
+                async with admitted_launch(
+                    enabled=backend_name == "local",
+                    limit=resolve_host_max_concurrency(
+                        scalar_resource_config, default=SCALAR_DEFAULT_HOST_LIMIT
+                    ),
+                    label=f"{run_id}/{step_id}",
+                    pool_id=f"run-process:{run_id}",
+                    metadata={"backend": backend_name, "step_id": step_id, "mode": "agent"},
+                ):
+                    exit_code = await _run_agent_subprocess(
+                        cmd,
+                        env=env,
+                        cwd=cwd,
+                        log_path=attempt_log_path,
+                        timeout_s=timeout_val,
+                        use_filter=use_filter,
+                        execution_context=execution_context,
+                    )
         except subprocess.TimeoutExpired:
             mark_failed_at(
                 state_dir,
@@ -1777,25 +1902,13 @@ async def _execute_composite_step(
     process_dir: Path,
     run_dir: Path,
     run_id: str,
-    backend_name: str,
-    max_concurrency: int | None,
-    initial_concurrency: int | None = None,
-    num_workers: int,
-    machine_type: str,
-    spot: bool,
-    variant_override: str | None,
-    profile_files: Sequence[Path] = (),
-    external_semaphore: asyncio.Semaphore | None = None,
+    scope_path: tuple[str, ...],
+    execution_context: RunExecutionContext,
     out: Any,
-    pool_dispatch_template: PoolDispatchConfig | None = None,
-    auth_flags: AuthPoolFlags = AuthPoolFlags(),
-    preflight_quota_guard: str = "warn",
-    continue_on_step_failure: bool = False,
 ) -> bool:
     """Execute a mode:composite step by loading and running a child process spec.
 
-    Auth-pool config (`pool_dispatch_template`, `auth_flags`,
-    `preflight_quota_guard`) propagates from parent to child. Without this,
+    Auth-pool policy propagates through `execution_context`. Without this,
     the child's `run_parallel` invocations get `pool_dispatch=None` and bypass
     the pool entirely — Claude calls fall back to ambient `~/.claude` creds
     (the operator's interactive-login session) instead of the pool labels.
@@ -1840,9 +1953,9 @@ async def _execute_composite_step(
         child_spec,
         child_vars,
         process_path=child_spec_path,
-        adapter_override=variant_override,
+        adapter_override=execution_context.variant_override,
         artifact_namespace=target.artifact_namespace,
-        profile_files=profile_files,
+        profile_files=execution_context.profile_files,
     )
 
     # Scope child run dir under parent: {parent_run_dir}/{step_id}/
@@ -1861,23 +1974,10 @@ async def _execute_composite_step(
                 process_dir=child_process_dir,
                 run_dir=child_run_dir,
                 run_id=child_run_id,
-                backend_name=backend_name,
-                max_concurrency=max_concurrency,
-                initial_concurrency=initial_concurrency,
-                num_workers=num_workers,
-                machine_type=machine_type,
-                spot=spot,
-                variant_override=variant_override,
-                profile_files=profile_files,
-                skip_steps=set(),
-                force=False,
-                continue_on_error=continue_on_step_failure,
+                scope_path=(*scope_path, step_id),
+                execution_context=execution_context,
                 out=out,
                 events=events,
-                pool_dispatch_template=pool_dispatch_template,
-                auth_flags=auth_flags,
-                preflight_quota_guard=preflight_quota_guard,
-                continue_on_step_failure=continue_on_step_failure,
             )
     except CLIError as exc:
         # Surface the inner failure message — without this the operator
@@ -2022,7 +2122,7 @@ async def _execute_fan_out_step(
     spot: bool,
     variant_override: str | None,
     profile_files: Sequence[Path] = (),
-    external_semaphore: asyncio.Semaphore | None = None,
+    execution_context: RunExecutionContext | None = None,
     peer_allowed_targets: list[WriteTarget] | None = None,
     events: ProcessEventLogger | None = None,
     out: Any,
@@ -2230,7 +2330,9 @@ async def _execute_fan_out_step(
         initial_memory_budget_fraction=resolve_initial_memory_budget_fraction(resource_config),
         state_dir=step_state_dir_path,
         logs_dir=step_logs_dir_path,
-        external_semaphore=external_semaphore,
+        external_semaphore=(
+            execution_context.leaf_semaphore if execution_context is not None else None
+        ),
         host_admission_enabled=backend_name == "local",
         host_admission_limit=resolve_host_max_concurrency(resource_config, default=effective_max),
         execution_profile=effective_execution_profile,
@@ -2543,22 +2645,11 @@ async def _execute_step(
     process_dir: Path,
     run_dir: Path,
     run_id: str,
-    backend_name: str,
-    max_concurrency: int | None,
-    initial_concurrency: int | None = None,
-    num_workers: int,
-    machine_type: str,
-    spot: bool,
-    variant_override: str | None,
-    profile_files: Sequence[Path] = (),
-    external_semaphore: asyncio.Semaphore | None = None,
+    scope_path: tuple[str, ...],
+    execution_context: RunExecutionContext,
     peer_allowed_targets: list[WriteTarget] | None = None,
     events: ProcessEventLogger | None = None,
     out: Any,
-    pool_dispatch_template: PoolDispatchConfig | None = None,
-    auth_flags: AuthPoolFlags = AuthPoolFlags(),
-    preflight_quota_guard: str = "warn",
-    continue_on_step_failure: bool = False,
 ) -> bool:
     """Dispatch a step to the correct execution path. Returns True on success."""
     step_id = target.step_id
@@ -2607,20 +2698,9 @@ async def _execute_step(
             process_dir=process_dir,
             run_dir=run_dir,
             run_id=run_id,
-            backend_name=backend_name,
-            max_concurrency=max_concurrency,
-            initial_concurrency=initial_concurrency,
-            num_workers=num_workers,
-            machine_type=machine_type,
-            spot=spot,
-            variant_override=variant_override,
-            profile_files=profile_files,
-            external_semaphore=external_semaphore,
+            scope_path=scope_path,
+            execution_context=execution_context,
             out=out,
-            pool_dispatch_template=pool_dispatch_template,
-            auth_flags=auth_flags,
-            preflight_quota_guard=preflight_quota_guard,
-            continue_on_step_failure=continue_on_step_failure,
         )
 
     if target.mode == "manual":
@@ -2644,20 +2724,22 @@ async def _execute_step(
                 process_dir=process_dir,
                 run_dir=run_dir,
                 run_id=run_id,
-                max_concurrency=max_concurrency,
-                external_semaphore=external_semaphore,
+                max_concurrency=execution_context.max_concurrency,
+                execution_context=execution_context,
                 out=out,
             )
-        return await _execute_code_step(
-            spec=spec,
-            step_def=step_def,
-            target=target,
-            variables=variables,
-            process_dir=process_dir,
-            run_dir=run_dir,
-            run_id=run_id,
-            out=out,
-        )
+        async with _leaf_slot(execution_context):
+            return await _execute_code_step(
+                spec=spec,
+                step_def=step_def,
+                target=target,
+                variables=variables,
+                process_dir=process_dir,
+                run_dir=run_dir,
+                run_id=run_id,
+                execution_context=execution_context,
+                out=out,
+            )
 
     if target.mode == "agent":
         if target.fan_out is not None:
@@ -2670,20 +2752,21 @@ async def _execute_step(
                 process_dir=process_dir,
                 run_dir=run_dir,
                 run_id=run_id,
-                backend_name=backend_name,
-                max_concurrency=max_concurrency,
-                initial_concurrency=initial_concurrency,
-                num_workers=num_workers,
-                machine_type=machine_type,
-                spot=spot,
-                variant_override=variant_override,
-                external_semaphore=external_semaphore,
+                backend_name=execution_context.backend_name,
+                max_concurrency=execution_context.max_concurrency,
+                initial_concurrency=execution_context.initial_concurrency,
+                num_workers=execution_context.num_workers,
+                machine_type=execution_context.machine_type,
+                spot=execution_context.spot,
+                variant_override=execution_context.variant_override,
+                profile_files=execution_context.profile_files,
+                execution_context=execution_context,
                 peer_allowed_targets=peer_allowed_targets,
                 events=events,
                 out=out,
-                pool_dispatch_template=pool_dispatch_template,
-                auth_flags=auth_flags,
-                preflight_quota_guard=preflight_quota_guard,
+                pool_dispatch_template=execution_context.pool_dispatch_template,
+                auth_flags=execution_context.auth_flags,
+                preflight_quota_guard=execution_context.preflight_quota_guard,
             )
         return await _execute_agent_step(
             spec=spec,
@@ -2693,9 +2776,10 @@ async def _execute_step(
             process_dir=process_dir,
             run_dir=run_dir,
             run_id=run_id,
-            variant_override=variant_override,
+            variant_override=execution_context.variant_override,
             peer_allowed_targets=peer_allowed_targets,
-            backend_name=backend_name,
+            backend_name=execution_context.backend_name,
+            execution_context=execution_context,
             out=out,
         )
 
@@ -2714,25 +2798,21 @@ async def _orchestrate(
     process_dir: Path,
     run_dir: Path,
     run_id: str,
-    backend_name: str,
-    max_concurrency: int | None,
-    initial_concurrency: int | None = None,
-    num_workers: int,
-    machine_type: str,
-    spot: bool,
-    variant_override: str | None,
-    skip_steps: set[str],
-    force: bool,
-    continue_on_error: bool,
-    continue_on_step_failure: bool = False,
+    scope_path: tuple[str, ...] = (),
+    execution_context: RunExecutionContext,
     out: Any,
     events: ProcessEventLogger,
-    pool_dispatch_template: PoolDispatchConfig | None = None,
-    auth_flags: AuthPoolFlags = AuthPoolFlags(),
-    preflight_quota_guard: str = "warn",
-    profile_files: Sequence[Path] = (),
 ) -> None:
     """Walk the DAG, executing independent steps in parallel via asyncio.gather()."""
+    backend_name = execution_context.backend_name
+    max_concurrency = execution_context.max_concurrency
+    skip_steps = execution_context.skip_steps if not scope_path else frozenset()
+    force = execution_context.force
+    continue_on_error = (
+        execution_context.continue_on_error
+        if not scope_path
+        else execution_context.continue_on_step_failure
+    )
     stale_count = reconcile_stale_running(run_dir)
     if stale_count:
         out.progress(f"Reconciled {stale_count} orphaned task(s)")
@@ -2758,13 +2838,6 @@ async def _orchestrate(
     _absorbed: set[str] = {sid for chain in _chains for sid in chain[1:]}
 
     events.process_start(spec.name, run_id, backend_name, len(step_map))
-
-    # Shared semaphore for global fan-out concurrency cap (RF-4).
-    # When max_concurrency is set, it bounds the total concurrent items
-    # across all parallel fan-out steps at the same topological level.
-    global_semaphore: asyncio.Semaphore | None = None
-    if max_concurrency is not None:
-        global_semaphore = asyncio.Semaphore(max_concurrency)
 
     # Initialize step states for process-status.yaml. For partial resumes
     # (``--from``/``--only``), preserve any prior completion records from a
@@ -2824,7 +2897,7 @@ async def _orchestrate(
                 run_dir=run_dir,
                 run_id=run_id,
                 max_concurrency=max_concurrency,
-                external_semaphore=global_semaphore,
+                execution_context=execution_context,
                 out=out,
             )
             chain_elapsed = time.monotonic() - step_start
@@ -2857,22 +2930,11 @@ async def _orchestrate(
             process_dir=process_dir,
             run_dir=run_dir,
             run_id=run_id,
-            backend_name=backend_name,
-            max_concurrency=max_concurrency,
-            initial_concurrency=initial_concurrency,
-            num_workers=num_workers,
-            machine_type=machine_type,
-            spot=spot,
-            variant_override=variant_override,
-            profile_files=profile_files,
-            external_semaphore=global_semaphore,
+            scope_path=scope_path,
+            execution_context=execution_context,
             peer_allowed_targets=peer_allowed_targets,
             events=events,
             out=out,
-            pool_dispatch_template=pool_dispatch_template,
-            auth_flags=auth_flags,
-            preflight_quota_guard=preflight_quota_guard,
-            continue_on_step_failure=continue_on_step_failure,
         )
 
         elapsed = time.monotonic() - step_start
@@ -3093,7 +3155,9 @@ def run_process_command(
         None,
         "--max-concurrency",
         help=(
-            "Per-pool concurrency limit for fan-out steps. "
+            "Local run-wide executable-leaf limit across fan-out pools, scalar "
+            "steps, and composite scopes; for gcp-worker, each worker applies the "
+            "limit independently. "
             "Falls back to METAPROC_DEFAULT_MAX_CONCURRENCY env var when unset "
             "(then to no cap). Primary quota-safety knob — change when quotas change."
         ),
@@ -3844,15 +3908,9 @@ def run_process_command(
             LeaseHeartbeat(run_dir),
             ProcessEventLogger(paths_mod.process_events_log(run_dir)) as events,
         ):
-            asyncio.run(
-                _orchestrate(
-                    spec=spec,
-                    plan=active_plan,
-                    variables=variables,
-                    process_path=process_path,
-                    process_dir=process_dir,
-                    run_dir=run_dir,
-                    run_id=run_id,
+
+            async def _run_local_process() -> None:
+                execution_context = RunExecutionContext.create(
                     backend_name=backend,
                     max_concurrency=max_concurrency,
                     initial_concurrency=initial_concurrency,
@@ -3865,13 +3923,30 @@ def run_process_command(
                     force=force,
                     continue_on_error=continue_on_error,
                     continue_on_step_failure=continue_on_step_failure,
-                    out=out,
-                    events=events,
                     pool_dispatch_template=pool_dispatch_template,
                     auth_flags=auth_flags_resolved,
                     preflight_quota_guard=auth_preflight_quota_guard,
                 )
-            )
+                try:
+                    await _orchestrate(
+                        spec=spec,
+                        plan=active_plan,
+                        variables=variables,
+                        process_path=process_path,
+                        process_dir=process_dir,
+                        run_dir=run_dir,
+                        run_id=run_id,
+                        execution_context=execution_context,
+                        out=out,
+                        events=events,
+                    )
+                except asyncio.CancelledError:
+                    execution_context.cancellation_event.set()
+                    raise
+                finally:
+                    execution_context.close()
+
+            asyncio.run(_run_local_process())
 
         output_errors = validate_process_outputs(spec, variables, process_dir, plan=plan)
         if output_errors:

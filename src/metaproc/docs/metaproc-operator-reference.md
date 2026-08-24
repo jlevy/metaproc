@@ -146,6 +146,9 @@ rules [`conventions.md`](../../../docs/conventions.md).
 7. Hold the operator cap high; let the runpool govern down.
    `--max-concurrency` at launch and `pool override --cap N` mid-run set the *operator
    cap*, which is a hand-set ceiling, not the safety governor.
+   For a local `run-process`, the launch cap is shared by executable leaves across
+   fan-out pools, scalar steps, and composite scopes.
+   A `gcp-worker` launch applies it independently inside each worker.
    The adaptive memory and provider ceilings are what actively govern under pressure.
    For local agent-pool dispatches (claude, codex, gemini, pi-cli), keep the operator
    cap at ≥20 so the adaptive controller has room to ratchet down; setting it tighter
@@ -186,8 +189,11 @@ Useful dispatch selectors:
 - `--from <step>` starts at a step and lets downstream dependencies run
 - `--only <step>` runs only the named step
 - `--skip <step>` marks a step skipped for this invocation
-- `--force` bypasses reuse checks and reruns eligible work
+- `--force` bypasses reuse checks throughout the run, including composite descendants
 - `--dry-run` prints the plan without launching work
+
+`--skip`, `--from`, and `--only` currently name root-process steps.
+They are not matched against same-named steps inside a composite child.
 
 For the common “I edited one step, rerun and reuse the rest” loop, you usually do
 **not** pass any of these flags; rerun with the same `RUN_ID` and let the fingerprint

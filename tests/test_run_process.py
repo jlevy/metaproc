@@ -18,6 +18,8 @@ import subprocess
 import sys
 import textwrap
 import threading
+from collections.abc import Generator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -43,6 +45,7 @@ _SYNTHETIC_PROCESS = str(
 )
 
 from metaproc.commands.run_process import (
+    RunExecutionContext,
     _execute_code_step,
     _execute_composite_step,
     _execute_fan_out_step,
@@ -93,6 +96,26 @@ class FakeOut:
 
     def progress(self, msg: str) -> None:
         self.messages.append(msg)
+
+
+@contextmanager
+def _test_execution_context(
+    *,
+    max_concurrency: int | None = None,
+    variant_override: str | None = None,
+    profile_files: Sequence[Path] = (),
+    pool_dispatch_template: PoolDispatchConfig | None = None,
+) -> Generator[RunExecutionContext, None, None]:
+    context = RunExecutionContext.create(
+        max_concurrency=max_concurrency,
+        variant_override=variant_override,
+        profile_files=profile_files,
+        pool_dispatch_template=pool_dispatch_template,
+    )
+    try:
+        yield context
+    finally:
+        context.close()
 
 
 @pytest.mark.parametrize(
@@ -890,6 +913,7 @@ class TestProcessStatusFile:
         reconcile = MagicMock(return_value=2)
 
         with (
+            _test_execution_context() as execution_context,
             patch("metaproc.commands.run_process.reconcile_stale_running", reconcile),
             patch(
                 "metaproc.commands.run_process.topo_sort",
@@ -906,15 +930,7 @@ class TestProcessStatusFile:
                     process_dir=tmp_path,
                     run_dir=tmp_path / "run",
                     run_id="test/run",
-                    backend_name="local",
-                    max_concurrency=None,
-                    num_workers=1,
-                    machine_type="e2-standard-4",
-                    spot=False,
-                    variant_override=None,
-                    skip_steps=set(),
-                    force=False,
-                    continue_on_error=True,
+                    execution_context=execution_context,
                     out=out,
                     events=MagicMock(),
                 )
@@ -1146,23 +1162,20 @@ class TestCompositeStepExecution:
             uses_path=str(child_dir / "test.process.md"),
         )
 
-        result = asyncio.run(
-            _execute_composite_step(
-                step_def=step_def,
-                target=target,
-                variables={"RUN_ID": "test-run"},
-                process_dir=tmp_path,
-                run_dir=tmp_path / "run",
-                run_id="test/run",
-                backend_name="local",
-                max_concurrency=None,
-                num_workers=1,
-                machine_type="e2-standard-4",
-                spot=False,
-                variant_override=None,
-                out=FakeOut(),
+        with _test_execution_context() as execution_context:
+            result = asyncio.run(
+                _execute_composite_step(
+                    step_def=step_def,
+                    target=target,
+                    variables={"RUN_ID": "test-run"},
+                    process_dir=tmp_path,
+                    run_dir=tmp_path / "run",
+                    run_id="test/run",
+                    scope_path=(),
+                    execution_context=execution_context,
+                    out=FakeOut(),
+                )
             )
-        )
         assert result is True
 
         # Child run dir should be scoped under parent
@@ -1223,7 +1236,10 @@ class TestCompositeStepExecution:
         async def fake_orchestrate(**kwargs: object) -> None:
             captured["plan"] = cast(Plan, kwargs["plan"])
 
-        with patch("metaproc.commands.run_process._orchestrate", fake_orchestrate):
+        with (
+            _test_execution_context(variant_override="codex-cli") as execution_context,
+            patch("metaproc.commands.run_process._orchestrate", fake_orchestrate),
+        ):
             result = asyncio.run(
                 _execute_composite_step(
                     step_def=step_def,
@@ -1232,12 +1248,8 @@ class TestCompositeStepExecution:
                     process_dir=tmp_path,
                     run_dir=tmp_path / "run",
                     run_id="test/run",
-                    backend_name="local",
-                    max_concurrency=None,
-                    num_workers=1,
-                    machine_type="e2-standard-4",
-                    spot=False,
-                    variant_override="codex-cli",
+                    scope_path=(),
+                    execution_context=execution_context,
                     out=FakeOut(),
                 )
             )
@@ -1306,7 +1318,13 @@ class TestCompositeStepExecution:
         async def fake_orchestrate(**kwargs: object) -> None:
             captured["plan"] = cast(Plan, kwargs["plan"])
 
-        with patch("metaproc.commands.run_process._orchestrate", fake_orchestrate):
+        with (
+            _test_execution_context(
+                variant_override="local-codex",
+                profile_files=[profile_file],
+            ) as execution_context,
+            patch("metaproc.commands.run_process._orchestrate", fake_orchestrate),
+        ):
             result = asyncio.run(
                 _execute_composite_step(
                     step_def=step_def,
@@ -1315,13 +1333,8 @@ class TestCompositeStepExecution:
                     process_dir=tmp_path,
                     run_dir=tmp_path / "run",
                     run_id="test/run",
-                    backend_name="local",
-                    max_concurrency=None,
-                    num_workers=1,
-                    machine_type="e2-standard-4",
-                    spot=False,
-                    variant_override="local-codex",
-                    profile_files=[profile_file],
+                    scope_path=(),
+                    execution_context=execution_context,
                     out=FakeOut(),
                 )
             )
@@ -1358,7 +1371,10 @@ class TestCompositeStepExecution:
             events = cast(ProcessEventLogger, kwargs["events"])
             events.process_start("child-test", "test/run/preflight", "local", 1)
 
-        with patch("metaproc.commands.run_process._orchestrate", fake_orchestrate):
+        with (
+            _test_execution_context() as execution_context,
+            patch("metaproc.commands.run_process._orchestrate", fake_orchestrate),
+        ):
             result = asyncio.run(
                 _execute_composite_step(
                     step_def=step_def,
@@ -1367,12 +1383,8 @@ class TestCompositeStepExecution:
                     process_dir=tmp_path,
                     run_dir=tmp_path / "run",
                     run_id="test/run",
-                    backend_name="local",
-                    max_concurrency=None,
-                    num_workers=1,
-                    machine_type="e2-standard-4",
-                    spot=False,
-                    variant_override=None,
+                    scope_path=(),
+                    execution_context=execution_context,
                     out=FakeOut(),
                 )
             )
@@ -1387,7 +1399,10 @@ class TestCompositeStepExecution:
         step_def = ProcessStep(id="bad", mode="composite", uses="deps.child_process")
         target = ResolvedStep(step_id="bad", mode="composite")
 
-        with pytest.raises(CLIError, match="requires a resolved child process"):
+        with (
+            _test_execution_context() as execution_context,
+            pytest.raises(CLIError, match="requires a resolved child process"),
+        ):
             asyncio.run(
                 _execute_composite_step(
                     step_def=step_def,
@@ -1396,12 +1411,8 @@ class TestCompositeStepExecution:
                     process_dir=tmp_path,
                     run_dir=tmp_path / "run",
                     run_id="test/run",
-                    backend_name="local",
-                    max_concurrency=None,
-                    num_workers=1,
-                    machine_type="e2-standard-4",
-                    spot=False,
-                    variant_override=None,
+                    scope_path=(),
+                    execution_context=execution_context,
                     out=FakeOut(),
                 )
             )
@@ -2766,34 +2777,28 @@ class TestGCPWorkerResumeAdoption:
 
 
 class TestCompositePoolDispatchPropagation:
-    """Regression test for the fix — pool_dispatch_template must propagate
-    from parent _orchestrate → _execute_composite_step → child _orchestrate.
+    """Regression tests for recursive auth-pool policy propagation.
 
-    Without this, every composite-child fan-out step
-    gets pool_dispatch=None and bypasses the auth pool — Claude calls fall back
-    to ambient ~/.claude creds, defeating the pool's load-balancing intent.
+    The parent and child must use the same execution context. Otherwise, a
+    composite-child fan-out can lose its pool dispatch policy and fall back to ambient
+    credentials instead of the pool's load-balancing policy.
 
     The failure mode discovered 2026-05-21: tier1 ran 3 hours of Claude work but
     `metaproc auth usage <tier1>` reported 0 invocations on alt1/alt2.
     """
 
-    def test_execute_composite_step_signature_accepts_pool_dispatch_template(self):
-        """The function MUST accept the three auth-pool kwargs so the dispatcher
-        can pass them; without these the call site is invalid Python."""
+    def test_execute_composite_step_accepts_one_execution_context(self) -> None:
+        """Recursive auth policy travels through the shared run context."""
 
         sig = inspect.signature(_execute_composite_step)
         params = sig.parameters
-        assert "pool_dispatch_template" in params, (
-            "_execute_composite_step must accept pool_dispatch_template — "
-            "without it the parent dispatcher cannot propagate auth-pool config "
-            "to composite children. See the fix."
-        )
-        assert "auth_flags" in params
-        assert "preflight_quota_guard" in params
+        assert "execution_context" in params
+        assert "pool_dispatch_template" not in params
+        assert "auth_flags" not in params
+        assert "preflight_quota_guard" not in params
 
     def test_execute_composite_step_passes_pool_dispatch_to_child_orchestrate(self, tmp_path: Path):
-        """When pool_dispatch_template is provided to _execute_composite_step,
-        it must appear in the kwargs passed to the child _orchestrate call."""
+        """The child orchestrator receives the parent's pool dispatch policy."""
 
         # Build a minimal composite step definition + target
         # The function early-returns if child_spec_path doesn't exist.
@@ -2814,15 +2819,14 @@ class TestCompositePoolDispatchPropagation:
 
         captured: dict[str, object] = {}
 
-        async def fake_orchestrate(
-            *, pool_dispatch_template=None, auth_flags=None, preflight_quota_guard=None, **kwargs
-        ):
-            captured["pool_dispatch_template"] = pool_dispatch_template
-            captured["auth_flags"] = auth_flags
-            captured["preflight_quota_guard"] = preflight_quota_guard
-            return
+        async def fake_orchestrate(**kwargs: object) -> None:
+            captured["execution_context"] = kwargs["execution_context"]
 
         with (
+            _test_execution_context(
+                max_concurrency=4,
+                pool_dispatch_template=sentinel_pool,
+            ) as execution_context,
             patch(
                 "metaproc.commands.run_process.load_process_spec",
                 return_value=MagicMock(steps=[]),
@@ -2857,20 +2861,14 @@ class TestCompositePoolDispatchPropagation:
                     process_dir=tmp_path,
                     run_dir=tmp_path,
                     run_id="test-run",
-                    backend_name="local",
-                    max_concurrency=4,
-                    initial_concurrency=None,
-                    num_workers=1,
-                    machine_type="n2-standard-4",
-                    spot=False,
-                    variant_override=None,
+                    scope_path=(),
+                    execution_context=execution_context,
                     out=out,
-                    pool_dispatch_template=sentinel_pool,
                 )
             )
 
-        # The sentinel pool config must have been threaded through to the child.
-        assert captured["pool_dispatch_template"] is sentinel_pool, (
+        child_context = cast(RunExecutionContext, captured["execution_context"])
+        assert child_context.pool_dispatch_template is sentinel_pool, (
             "pool_dispatch_template was DROPPED at the composite-child boundary — "
             "this is this regression: child run_parallel calls "
             "will see pool_dispatch=None and bypass the auth pool."

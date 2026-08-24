@@ -2588,7 +2588,8 @@ Fan-out steps dispatch through one of three backends:
 | `gcp-worker` | `--backend gcp-worker` | Partition items across N worker VMs via GCP Batch (section 21) |
 
 The local backend uses the RunPool (section 17) with step-scoped `.state/` and `.logs/`
-directories and an optional external semaphore for cross-step concurrency control.
+directories. One run execution context owns the optional semaphore shared by fan-out
+pools, scalar agent launches, and code work across composite scopes.
 
 **Note on backend abstraction:** `local` is a registered `LaunchBackend` implementation
 (section 21.8) in the backend registry (`runpool/registry.py`). `gcp-worker` is
@@ -2614,7 +2615,7 @@ register alongside `gcp-worker` in the `run-process` dispatch logic.
 | `--num-workers` | Number of worker VMs for `gcp-worker` backend |
 | `--machine-type` | GCP machine type for workers |
 | `--spot / --no-spot` | Use Spot VMs for workers (default: spot) |
-| `--max-concurrency` | Per-pool concurrency limit for fan-out steps |
+| `--max-concurrency` | Local run-wide executable-leaf limit across fan-out pools, scalar steps, and composite scopes; per-worker ceiling for `gcp-worker` |
 | `--variant` | Override adapter variant |
 | `--adapter-config KEY=VALUE` | Adapter config overrides (repeatable) |
 | `--orchestrator-machine-type` | GCP machine type for orchestrator VM (with `--cloud`) |
@@ -2625,6 +2626,9 @@ register alongside `gcp-worker` in the `run-process` dispatch logic.
 `--force` invalidates a step and all its downstream dependents by renaming the relevant
 on-disk `status.yaml` files to `.yaml.stale` (via `_invalidate_downstream()`). This
 covers both the standard step directory and any output-derived item directories.
+The run-wide force policy descends into composite scopes, so their child tasks are
+invalidated rather than immediately reused.
+Root `--skip` selectors are not matched against child step IDs.
 Without `--force`, completed steps are detected via task status files under
 `.state/tasks/...` and skipped automatically.
 Fan-out step completion is determined by `_is_fan_out_completed()`: all items must have
