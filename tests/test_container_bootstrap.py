@@ -413,7 +413,16 @@ def test_bootstrap_clone_failure_falls_back_to_bundled_repo(tmp_path: Path) -> N
 
     assert result.work_dir == str(bundled_repo_dir)
     commands = [call.args[0] for call in mock_run.call_args_list]
-    assert ["uv", "pip", "install", "--no-deps", "-e", str(bundled_package_dir)] in commands
+    assert [
+        "uv",
+        "pip",
+        "install",
+        "--python",
+        "/opt/venv/bin/python",
+        "--no-deps",
+        "-e",
+        str(bundled_package_dir),
+    ] in commands
     assert "[tool.uv.sources]" not in (bundled_package_dir / "pyproject.toml").read_text()
 
 

@@ -650,8 +650,16 @@ assembles a single Batch task whose container entrypoint is
 wheel against `METAPROC_WHEEL_SHA256` and force-reinstalls it into `/opt/venv` with
 `uv pip install` when `METAPROC_WHEEL_GCS` is set.
 It verifies and safely extracts the workspace archive into `/workspace` when the
-corresponding URI and digest pair is set, runs adapter `bootstrap()` hooks per §2.8, and
-executes the JSON-encoded argv from `METAPROC_GCP_RUN_CMD` with `execvp`.
+corresponding URI and digest pair is set.
+Each repeated `--workspace-package` path is then installed editable from that archive,
+and nested `uv` commands stay on the baked `/opt/venv` without re-resolving the shipped
+workspace. The entrypoint runs adapter `bootstrap()` hooks per §2.8 and executes the
+JSON-encoded argv from `METAPROC_GCP_RUN_CMD` with `execvp`.
+
+The default workspace archive excludes both the historical top-level `metaproc/` source
+layout and a `vendor/metaproc` gitlink.
+The wheel is the sole Metaproc source shipped by this path, so an initialized vendored
+checkout cannot be recursively copied into the consumer archive.
 
 **Blocking semantics.** Default mode tails Cloud Logging (filter `labels.job_uid=<uid>`)
 prefixed `[gcp-run]` until the job hits a terminal state, then exits with

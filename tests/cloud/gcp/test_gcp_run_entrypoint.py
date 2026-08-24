@@ -54,8 +54,8 @@ class TestBootstrapGcpRun:
         local_wheel = str(wheel_dir / "metaproc-1.0-py3-none-any.whl")
         assert not Path(local_wheel).exists()
         cmds = [call.args[0] for call in run_mock.call_args_list]
-        # Must install into the baked /opt/venv (which has [gcp-batch] extras)
-        # with the extra explicitly re-requested so force-reinstall keeps them.
+        # Replace only Metaproc itself. The image already contains the audited
+        # dependency/extras closure, which may use per-package cutoff exceptions.
         assert [
             "uv",
             "pip",
@@ -63,7 +63,8 @@ class TestBootstrapGcpRun:
             "--python",
             "/opt/venv/bin/python",
             "--force-reinstall",
-            f"{local_wheel}[gcp-batch]",
+            "--no-deps",
+            local_wheel,
         ] in cmds
 
     def test_wheel_install_rejects_non_gs_uri(self, tmp_path: Path):
@@ -157,6 +158,69 @@ class TestBootstrapGcpRun:
         assert (workspace_dir / "file.py").read_text() == "hello"
         # Downloaded tarball is staged outside the destination and removed.
         assert not (wheel_dir / "workspace.tar.gz").exists()
+
+    def test_workspace_packages_install_into_baked_environment(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        src_dir = tmp_path / "src"
+        package_dir = src_dir / "packages" / "example"
+        package_dir.mkdir(parents=True)
+        (package_dir / "pyproject.toml").write_text(
+            "[project]\nname = 'example'\nversion = '0.1.0'\n"
+        )
+        tar_src = tmp_path / "ws.tar.gz"
+        with tarfile.open(tar_src, "w:gz") as tar:
+            tar.add(package_dir, arcname="packages/example")
+
+        workspace_dir = tmp_path / "workspace"
+        archive_dir = tmp_path / "archive"
+        monkeypatch.setattr(container_bootstrap, "GCP_RUN_WORKSPACE_DIR", str(workspace_dir))
+        monkeypatch.setattr(container_bootstrap, "GCP_RUN_WORKSPACE_ARCHIVE_DIR", str(archive_dir))
+        monkeypatch.delenv("UV_PROJECT_ENVIRONMENT", raising=False)
+        monkeypatch.delenv("UV_NO_SYNC", raising=False)
+
+        def fake_download(_uri: str, dst: str) -> None:
+            Path(dst).write_bytes(tar_src.read_bytes())
+
+        run_mock = MagicMock(return_value=0)
+        monkeypatch.setattr(container_bootstrap, "_download_from_gcs", fake_download)
+        monkeypatch.setattr(container_bootstrap, "_run", run_mock)
+
+        with patch.dict(os.environ):
+            work_dir = container_bootstrap.bootstrap_gcp_run(
+                home=tmp_path,
+                env={
+                    "METAPROC_WORKSPACE_GCS": "gs://b/gcp-run/job/workspace.tar.gz",
+                    "METAPROC_WORKSPACE_SHA256": hashlib.sha256(tar_src.read_bytes()).hexdigest(),
+                    "METAPROC_WORKSPACE_PACKAGES": "packages/example",
+                },
+            )
+
+            assert work_dir == str(workspace_dir)
+            run_mock.assert_called_once_with(
+                [
+                    "uv",
+                    "pip",
+                    "install",
+                    "--python",
+                    "/opt/venv/bin/python",
+                    "--no-deps",
+                    "-e",
+                    str(workspace_dir / "packages" / "example"),
+                ]
+            )
+            assert os.environ["UV_PROJECT_ENVIRONMENT"] == "/opt/venv"
+            assert os.environ["UV_NO_SYNC"] == "1"
+
+        assert "UV_PROJECT_ENVIRONMENT" not in os.environ
+        assert "UV_NO_SYNC" not in os.environ
+
+    def test_workspace_packages_require_shipped_workspace(self, tmp_path: Path) -> None:
+        with pytest.raises(RuntimeError, match="requires METAPROC_WORKSPACE_GCS"):
+            container_bootstrap.bootstrap_gcp_run(
+                home=tmp_path,
+                env={"METAPROC_WORKSPACE_PACKAGES": "packages/example"},
+            )
 
     def test_workspace_rejects_unsafe_archive_member(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

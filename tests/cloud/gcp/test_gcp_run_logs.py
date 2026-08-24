@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -22,13 +23,42 @@ def _job(state: str, uid: str = "uid-123") -> Any:
 
 
 def _log_entry(
-    message: str, insert_id: str = "id-1", timestamp: str = "2026-04-19T00:00:00Z"
+    message: str,
+    insert_id: str = "id-1",
+    timestamp: object = "2026-04-19T00:00:00Z",
 ) -> Any:
     entry = MagicMock()
     entry.payload = message
     entry.insert_id = insert_id
     entry.timestamp = timestamp
     return entry
+
+
+class TestLogFetch:
+    def test_datetime_watermark_is_fixed_precision_utc(self) -> None:
+        assert gcp_run_logs._rfc3339_watermark(datetime(2026, 8, 23, 23, 9, 49)) == (
+            "2026-08-23T23:09:49.000000Z"
+        )
+        pacific = timezone(-timedelta(hours=7))
+        assert (
+            gcp_run_logs._rfc3339_watermark(
+                datetime(2026, 8, 23, 16, 9, 49, 310208, tzinfo=pacific)
+            )
+            == "2026-08-23T23:09:49.310208Z"
+        )
+
+    def test_fetch_uses_required_shared_client(self) -> None:
+        client = MagicMock()
+        client.list_entries.return_value = ["entry"]
+
+        entries = gcp_run_logs._fetch_log_entries(
+            client=client,
+            job_uid="uid-1",
+            job_id="job-1",
+        )
+
+        assert entries == ["entry"]
+        client.list_entries.assert_called_once()
 
 
 # ── _state_to_exit_code ───────────────────────────────────────
@@ -56,6 +86,12 @@ class TestStateToExitCode:
 
 
 class TestTailGcpRunLogs:
+    @pytest.fixture(autouse=True)
+    def _logging_client(self, monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+        client = MagicMock()
+        monkeypatch.setattr(gcp_run_logs, "_get_logging_client", lambda _project: client)
+        return client
+
     def test_returns_zero_on_succeeded_and_prints_log_lines(self, monkeypatch: pytest.MonkeyPatch):
         # Job goes RUNNING → SUCCEEDED.
         states = iter(["RUNNING", "SUCCEEDED"])
@@ -82,6 +118,45 @@ class TestTailGcpRunLogs:
         assert rc == 0
         assert any("hello world" in line for line in printed)
         assert all(line.startswith("[gcp-run] ") for line in printed)
+        assert "[gcp-run] state=RUNNING" in printed
+        assert "[gcp-run] state=SUCCEEDED" in printed
+
+    def test_reuses_and_closes_one_logging_client(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        states = iter(["SCHEDULED", "RUNNING", "SUCCEEDED"])
+        batch_client = MagicMock()
+        batch_client.get_job.side_effect = lambda req: _job(next(states))
+        fake_batch_v1 = MagicMock()
+        fake_batch_v1.BatchServiceClient.return_value = batch_client
+        fake_batch_v1.GetJobRequest = MagicMock(side_effect=lambda **kw: kw)
+        monkeypatch.setattr(gcp_run_logs, "_get_batch_v1", lambda: fake_batch_v1)
+
+        logging_client = MagicMock()
+        get_logging_client = MagicMock(return_value=logging_client)
+        monkeypatch.setattr(gcp_run_logs, "_get_logging_client", get_logging_client)
+        observed_clients: list[Any] = []
+
+        def fake_fetch(**kwargs: Any) -> list[Any]:
+            observed_clients.append(kwargs["client"])
+            return []
+
+        monkeypatch.setattr(gcp_run_logs, "_fetch_log_entries", fake_fetch)
+
+        rc = gcp_run_logs.tail_gcp_run_logs(
+            job_resource_name="projects/p/locations/r/jobs/j",
+            project="p",
+            poll_interval_s=0.0,
+            out=lambda _s: None,
+            sleep=lambda _s: None,
+        )
+
+        assert rc == 0
+        get_logging_client.assert_called_once_with("p")
+        assert observed_clients == [logging_client, logging_client, logging_client]
+        logging_client.close.assert_called_once_with()
+        batch_client.close.assert_called_once_with()
 
     def test_returns_one_on_failed(self, monkeypatch: pytest.MonkeyPatch):
         client = MagicMock()
@@ -199,6 +274,41 @@ class TestTailGcpRunLogs:
         assert observed_since[0] == ""
         assert observed_since[1] == first_ts
         assert observed_since[2] == first_ts
+
+    def test_normalizes_datetime_watermark_to_rfc3339(self, monkeypatch: pytest.MonkeyPatch):
+        states = iter(["RUNNING", "SUCCEEDED"])
+        client = MagicMock()
+        client.get_job.side_effect = lambda req: _job(next(states))
+        fake_batch_v1 = MagicMock()
+        fake_batch_v1.BatchServiceClient.return_value = client
+        fake_batch_v1.GetJobRequest = MagicMock(side_effect=lambda **kw: kw)
+        monkeypatch.setattr(gcp_run_logs, "_get_batch_v1", lambda: fake_batch_v1)
+
+        first_ts = datetime(2026, 8, 23, 23, 9, 49, 310208, tzinfo=UTC)
+        log_calls = iter(
+            [
+                [_log_entry("first", insert_id="i1", timestamp=first_ts)],
+                [],
+            ]
+        )
+        observed_since: list[str] = []
+
+        def fake_fetch(**kw):
+            observed_since.append(kw.get("since", ""))
+            return next(log_calls)
+
+        monkeypatch.setattr(gcp_run_logs, "_fetch_log_entries", fake_fetch)
+
+        rc = gcp_run_logs.tail_gcp_run_logs(
+            job_resource_name="projects/p/locations/r/jobs/j",
+            project="p",
+            poll_interval_s=0.0,
+            out=lambda _s: None,
+            sleep=lambda _s: None,
+        )
+
+        assert rc == 0
+        assert observed_since == ["", "2026-08-23T23:09:49.310208Z"]
 
     def test_bounded_retry_on_persistent_get_job_failures(self, monkeypatch: pytest.MonkeyPatch):
         client = MagicMock()
