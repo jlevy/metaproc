@@ -522,6 +522,7 @@ scalar launch.
   leaf, declared process inputs/outputs, three roster items, and one controlled failure.
 - [x] Characterize recursive argument and semaphore ownership, force, root skip,
   continue policies, and synchronous command behavior before changing them.
+  This work is implemented in unmerged pull request 33.
 - [ ] Complete the remaining output-validation, result/state, resume, and fan-in
   characterization. Pull request 34 covers scalar credential behavior with a real
   subprocess and selected-label fallback; the cancellation-safety slice covers
@@ -535,24 +536,31 @@ scalar launch.
 
 - [x] Introduce `RunExecutionContext` without changing authored specs and make every
   recursive evaluator reuse one run semaphore, cancellation signal, and policy bundle.
+  This work is implemented in unmerged pull request 33.
 - [x] Propagate force, root-scoped skip, both continue policies, backend, profiles, and
   admission posture consistently through recursive scopes.
+  This work is implemented in unmerged pull request 33.
 - [x] Pass auth-pool flags and dispatch configuration to scalar agent steps; assert the
   actual credential-pool label used by a child invocation.
+  This work is implemented in unmerged pull request 34.
 - [x] Define one typed retry-later configuration, persist it in `run-config.yaml`, and
   transport it without field-by-field drift through local, orchestrator, and worker
-  dispatch. Keep that stack layer in draft until the scheduler paths consume it.
+  dispatch. This work is implemented in draft pull request 36, which remains unmerged
+  until scheduler paths consume and validate the policy.
 - [ ] Converge scalar and fan-out pool exhaustion on the existing typed
   `fail-fast|wait|signal` retry-later policy and checkpoint machinery.
 - [x] Run synchronous handlers and command-backed code steps off the event loop through
   a run-owned executor sized to the operator ceiling when one is configured.
+  This work is implemented in unmerged pull request 33.
 - [x] Prove scalar agent processes and command-backed code work do not block sibling
   work, and that cancellation retains leaf, host, executor, process-tree, and credential
   ownership through cleanup.
+  This work is implemented in unmerged pull request 35.
 - [ ] Extend the nested fixture with explicit RunPool-supervision and heartbeat
   responsiveness assertions.
 - [x] Remove the dead composite `external_semaphore` parameter and prove the run-wide
   executable-leaf ceiling across recursive siblings.
+  This work is implemented in unmerged pull request 33.
 
 ### Phase 2: Mapped scopes, outputs, state, and recovery
 
@@ -561,16 +569,19 @@ scalar launch.
   insufficient.
 - [x] Remove the planner rejection for `mode: composite` plus `for_each`; reject
   whole-scope `for_each.retry` and unsupported multi-host topology explicitly.
+  This work is implemented in draft pull request 37.
 - [x] Call neutral `run_fan_out` with a composite invoker; do not add another gather
   loop or duplicate discovery/key/retry machinery.
+  This work is implemented in draft pull request 37.
 - [x] Execute each child under `<run>/<step>/<item-key>/` with explicit item bindings
   and the shared Phase 1 context.
+  This work is implemented in draft pull request 37.
 - [ ] Restrict the child variable namespace to built-ins and declared bindings after the
   GTIA fixture characterizes compatibility requirements.
 - [x] Persist mapped-parent running/completed/failed state and a result containing
-  resolved outputs.
+  resolved outputs. This work is implemented in draft pull request 37.
 - [x] Validate existing child process and mapped-step outputs at execution and before
-  resume reuse.
+  resume reuse. This work is implemented in draft pull request 37.
 - [ ] Add child-evidence pointers and richer fan-in outcomes only when the existing
   state and result paths cannot answer the GTIA comparison questions.
 - [ ] Adopt `/` item segments and retain `::` composite descent across plan, status,
@@ -580,6 +591,7 @@ scalar launch.
 - [ ] Add cancellation, mixed-success, duplicate-key, invalid-port, namespace-isolation,
   path-containment, crash-window, and resume tests.
 - [x] Reject `gcp-worker` mapped-composite partitioning until a multi-host slice exists.
+  This work is implemented in draft pull request 37.
 
 ### Phase 3: One host byte authority
 
