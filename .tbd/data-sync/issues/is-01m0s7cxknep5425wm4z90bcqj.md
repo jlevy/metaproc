@@ -5,15 +5,16 @@ title: Type and catalog retry-later checkpoint artifacts
 kind: task
 status: open
 priority: 1
-version: 2
+version: 3
 spec_path: docs/project/specs/active/plan-2026-08-23-native-mapped-composite-scopes.md
 labels:
   - authentication
   - execution-model
 dependencies: []
 parent_id: is-01m0s0r624c0eszrgnq4qgjjbe
+hold: paused
 created_at: 2026-08-24T06:30:19.509Z
-updated_at: 2026-08-24T07:23:24.666Z
+updated_at: 2026-08-24T19:04:22.142Z
 ---
 retry_later.yaml is JSON emitted under a YAML suffix, is absent from metaproc.paths and the artifact catalog, and uses unvalidated dataclasses at a durable boundary. Align it with the repository YAML/Pydantic/schema-token conventions while retaining compatibility with existing version-1 checkpoints.
 
