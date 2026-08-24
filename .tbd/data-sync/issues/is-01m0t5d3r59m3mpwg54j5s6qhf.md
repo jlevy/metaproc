@@ -5,15 +5,15 @@ title: "Review PR #34: pool scalar agent credentials"
 kind: task
 status: in_progress
 priority: 1
-version: 3
+version: 4
 labels:
   - pr-review
 dependencies: []
 created_at: 2026-08-24T15:14:43.076Z
-updated_at: 2026-08-24T15:38:48.988Z
+updated_at: 2026-08-24T22:31:53.714Z
 ---
 Senior review of #34 (codex/gtia-v3-scalar-auth-policy). Addresses finding F4: scalar agent steps bypassing the credential pool. Verify: _execute_agent_step receives pool dispatch/auth flags via context, run_parallel duplication reduced not copied, tests assert pool-label usage. Post review comment; follow up before merge.
 
 ## Notes
 
-Review posted 2026-08-24: https://github.com/jlevy/metaproc/pull/34#issuecomment-5397585053 — verdict: changes requested. Must-fix: (1) HIGH run_id rebind (run_process.py:2507, :1581) uses logical spec-name/run-context id, relocating credential slot dirs outside the run tree incl. production fan-out path — bind path-relative id + slot-dir-under-run_dir test; (2) silent adapter-mismatch ambient fallback needs warning/auth_skipped event; (3) top-level scalar pool exhaustion aborts run with step stuck 'running'. Also: completion-side lease-leak window on cancel (confirm #35 covers), PoolAuthOverrideError unwrapped, scalar bypasses quota preflight, ambient-scrub test asserts parent not child. FOLLOW UP: verify fixes land before merge.
+ROUND 2 (2026-08-24, head 3d11a64): https://github.com/jlevy/metaproc/pull/34#issuecomment-5402358604 — Finding 1 FIXED WELL (scope_id = run_dir.relative_to(runs_dir); scalar+fanout share _bind_pool_dispatch; falsifiable tests). Findings 5/6/7/8/9/10 FIXED. Cloud-auth absorbed from closed #36 WITHOUT retry-later transport (verified) — #36 hazards absent. Finding 2 PARTIAL: warning is stderr-only, no event/log, worker leg + gcp-worker still silent. Finding 3 PARTIAL: only attempt 1; on retry >=2 status.yaml stays running (likely case — retry_exclude cools both labels). NEW: B1 containment CLIError raises inside un-guarded gather, can abort runs that previously completed; B2 scalar preflight NFS rglob per step with verdict discarded at warn posture, on the shared sync_executor. F1: worker leg does not enforce the invariant the docs now assert globally.

@@ -5,16 +5,16 @@ title: "Overall stack-structure review of #32-#36"
 kind: task
 status: in_progress
 priority: 1
-version: 3
+version: 4
 labels:
   - pr-review
   - architecture
 dependencies: []
 created_at: 2026-08-24T15:14:44.119Z
-updated_at: 2026-08-24T15:38:50.804Z
+updated_at: 2026-08-24T22:31:54.566Z
 ---
 Review the stacking itself: bases and merge order (implementation PRs based on the draft plan branch), diff hygiene between rungs, alignment with the accepted review sequencing (#31 first, context before mapped scopes), scope coherence per rung, what remains unstacked (mapped scopes, admission, per-item force). Post as comment on the stack root #32. Note #19 as open but independent.
 
 ## Notes
 
-Stack review posted 2026-08-24 on #32: https://github.com/jlevy/metaproc/pull/32#issuecomment-5397585780 — verdict: stack structure sound (true linear commit stack, one commit per rung, plan-branch gating, declared boundaries, sequencing matches accepted review order). Cross-cutting theme: serious defects sit at the exact seams being fixed (identity binding #34, env composition #35, cancellation reachability #33/#35, test falsifiability #33) — 'seam characterization tests land with the seam' is the rule for the mapped-scope slice. Merge order: #32 (with checkbox-annotation nit) → #33 → #34 → #35 after respective must-fixes; #36 stays draft until mp-tibt convergence. #19 independent, decide separately. FOLLOW UP: confirm merge lands in this order with fixes.
+ROUND 2 (2026-08-24): stack now main → #39 → #32 → #33 → #34 → #35 → #37 (clean 6-deep linear chain). #36 CLOSED as superseded. #38 independent and SEMANTICALLY CONFLICTS with #37: 6 merge-tree conflicts, opposite decisions on _normalize_filestore_runs_path, same test body edited both ways — needs intent decision. #39 is the stack base so its weakened complexity guard is inherited by every rung. Recommended order: #39 → #38 → rebase stack → #33 → #34 → #35 → #37. #19 independent, mergeable today. PATTERN across both rounds: remediation commits carry ~as many new lifecycle hazards as the slices they repair; tests written against the fix, not the failure. Filed: per-invariant injected-failure tests for Phase 2/3.
