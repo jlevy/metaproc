@@ -328,7 +328,10 @@ process:
 ```
 
 Composite recursion is ordinary dispatch, not a separate execution system.
-The child process receives only the bindings explicitly passed by `with`.
+For compatibility, the child currently inherits the parent variable namespace and `with`
+overlays the bindings that form the authored child interface.
+New processes should treat `with` as the public boundary; narrowing the inherited
+namespace remains a separate compatibility change.
 Operator-supplied scalars are omitted in the example above for brevity.
 
 ## 6.3 Step Modes
@@ -347,6 +350,22 @@ Optional fields:
 
 - `with`
 - `needs`
+- `for_each`
+
+With `for_each`, Metaproc maps one in-process child scope per item under
+`<run>/<step>/<item-key>/`. The mapped parent task remains in
+`<run>/.state/tasks/<step>/<item-key>/`; it completes only after the child process and
+the mapped stepâ€™s declared outputs validate.
+In this first implementation, the child process and parent step each declare the same
+public output path. Automatic child-port projection is not yet implemented.
+
+Mapped scopes share the root `RunExecutionContext`; they do not launch `run-process`,
+acquire child orchestrator leases, or hold an executable-leaf permit while waiting
+between child stages.
+`for_each.max_concurrency` limits active structural scope evaluators, not executable
+leaves. Child leaf retry policies remain available, while a whole-scope `for_each.retry`
+is rejected. Mapped composites are single-host and reject the `gcp-worker` backend until
+a multi-host mapping contract exists.
 
 ### `mode: agent`
 
@@ -1379,13 +1398,21 @@ The framework parses items files generically by extracting the envelope payloadâ
 `items` list. Domain packages supply typed envelope models; the orchestration layer only
 needs the generic items-file contract.
 
-Fan-out applies to `mode: agent` and `mode: code`. The two share item discovery and
-per-item addressing and diverge in everything else: the agent path carries adapters,
-variants, execution profiles, and auth-pool dispatch, while the code path invokes a
-handler or command.
-`mode: composite` does not fan out, which is why a consumer wanting a
-child spec mapped over a roster expresses it as a code handler that launches one child
-run per item; the shape and its cost are the subject of proposal P8.
+Fan-out applies to `mode: agent`, `mode: code`, and `mode: composite`. All three share
+neutral item discovery, resolved-key validation, per-item addressing, and the
+`run_fan_out` runner.
+Their invocation paths remain distinct: agent work carries adapters, execution profiles,
+and auth-pool dispatch; code work invokes a handler or command; composite work
+recursively evaluates a child spec in-process.
+This closes the need for a consumer code handler that launches a child Metaproc CLI,
+without adding the larger invoker abstraction described in proposal P8.
+
+Duplicate resolved item keys are rejected before execution because they would address
+the same task, log, artifact, and child-scope namespace.
+A mapped composite is local to one orchestration host, writes its child scope under
+`<run>/<step>/<item-key>/`, and shares the root execution context.
+Its optional `max_concurrency` limits active scope evaluators; executable child leaves
+remain governed by the run-level admission authorities.
 
 Every field named in `bind_fields` must be present and non-empty on every item.
 There is no optional dispatch field, so a roster where a field applies to only some

@@ -7,12 +7,41 @@ development series.
 
 ## [Unreleased][unreleased]
 
+### Added
+
+- **Mapped composite scopes**: a `mode: composite` step may now declare `for_each` and
+  run one child process scope per item in-process under `<run>/<step>/<item-key>/`. All
+  scopes share the parent run execution context and executable-leaf ceiling; each parent
+  item records durable status, attempt history, validated outputs, and a result.
+  Declared child process outputs now validate at the composite boundary for scalar and
+  mapped composites. The first implementation is single-host: `gcp-worker` partitioning
+  and whole-scope `for_each.retry` are rejected, while retries remain available on child
+  leaves.
+
+- **Durable per-attempt history**: scalar and fan-out work managed by `run-process`,
+  `run-parallel`, or waited `run-step` now writes a typed
+  `metaproc:TaskAttemptRecord/0.1` before execution and finalizes it once with its
+  disposition and failure class.
+  Replay consumes the exact history when present and retains status-based compatibility
+  for historical run trees.
+  Attempt success waits for every attempt-owned validator, including the fan-out
+  write-boundary check, and outputless tasks now reach a durable terminal state.
+
+- **Crash-safe task reconciliation**: process startup reconciles both attempt history
+  and mutable task status.
+  It closes attempts orphaned before status projection and rebuilds a missing terminal
+  projection without disturbing work owned by a live step-scoped pool.
+
 ### Fixed
 
 - **Fan-in failure propagation across dependency diamonds**: `require: finished` now
   tolerates failure only for affected direct dependencies collected with that policy.
   A separate success-requiring path from the same failure still blocks the consumer,
   while an unaffected required dependency does not erase the tolerant collection.
+
+- **Duplicate fan-out keys fail before execution**: item discovery now rejects two
+  source rows that resolve to the same `for_each.key` before either can write the shared
+  task, log, output, or child-scope namespace.
 
 - **Cloud authentication policy propagation**: `run-process --cloud` now carries the
   complete authentication-pool configuration as one typed value through orchestrator

@@ -187,6 +187,25 @@ rules [`conventions.md`](../../../docs/conventions.md).
 Use **item** for workflow data and **task** for the harness-owned execution record.
 The `tasks/` path segment is about execution state, not the input data by itself.
 
+### Mapped composite scopes
+
+A composite step may declare `for_each` to run one child process per roster item.
+The child evaluator runs in the parent process; it does not start a child Metaproc
+command or acquire another orchestrator lease.
+For item `AAPL` on step `research`, the child scope is `<run>/research/AAPL/` and the
+parent task state is `<run>/.state/tasks/research/AAPL/`.
+
+The child process and mapped parent step must each declare the same public output paths
+until automatic child-port projection exists.
+Metaproc validates both declarations and revalidates mapped-step outputs before reusing
+a completed parent item.
+Duplicate resolved item keys fail before execution.
+
+`for_each.max_concurrency` is an optional ceiling on active structural scope evaluators.
+It is not a memory estimate or a replacement for executable-leaf and host admission.
+Retries belong to child leaves; a whole-scope `for_each.retry` is rejected.
+Mapped composites currently run on one host and are rejected with `gcp-worker`.
+
 ## Starting Runs
 
 Run the full DAG with `run-process`. Most workflow-specific inputs are process

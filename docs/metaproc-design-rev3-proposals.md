@@ -250,16 +250,17 @@ Why it remains future work:
 
 ## P8. Mode Selects an Invoker, Not an Execution Path
 
-**Category:** execution, future **Relates to:** section 6.3 (step modes), section 11
-(`for_each`), [process-framework-concepts.md](process-framework-concepts.md) § Core
-Objects
+**Category:** execution, partially implemented **Relates to:** section 6.3 (step modes),
+section 11 (`for_each`), [process-framework-concepts.md](process-framework-concepts.md)
+§ Core Objects
 
 `_execute_step` forks on all four modes and each branch owns its own execution path, so
 a capability exists wherever someone implemented it rather than wherever it applies.
-Fan-out was written for `mode: agent` and, until recently, existed nowhere else; a
-`mode: code` step with `for_each` planned as a fan-out and then executed once with no
-item bound. Admission still reaches only some paths.
-`mode: composite` cannot fan out at all.
+Fan-out began as an agent-only path.
+Code and composite steps now use the same neutral item discovery and mapping runner, and
+mapped composites call the child evaluator in-process.
+Admission and lifecycle policy still reach the mode-specific invokers through different
+paths, so the structural problem is reduced rather than eliminated.
 
 None of these gaps is a policy.
 `for_each` states a step’s relationship to a roster, and nothing in that statement is
@@ -290,13 +291,16 @@ Proposal:
 - Make blocking an invoker contract: either every invoker is awaitable, or the single
   call site wraps synchronous ones off the loop, rather than each branch deciding.
 
-What it closes without separate implementation:
+The released point fixes close two immediate gaps without the full abstraction:
 
-- `mode: composite` gains fan-out, and the consumer workaround of a code handler
-  launching one child run per item stops being necessary.
-- Every mode gains admission, retiring the remainder of design test 7.
-- A per-step concurrency ceiling, currently absent, becomes one governance property
-  rather than four parallel implementations.
+- `mode: composite` can fan out without a code handler launching child commands.
+- code and composite mapping reuse the neutral runner instead of adding schedulers.
+- mapped child leaves reuse the root execution context and leaf admission authority.
+
+The general invoker abstraction, one byte-based host authority, manual mapping, and
+multi-host mapped scopes remain unimplemented.
+They should advance only from consumer evidence, not to complete the symmetry of this
+proposal.
 
 The authored surface does not change.
 A spec still says `mode: code` and `for_each` and means what an author already expects;
@@ -307,8 +311,8 @@ Why it remains future work:
 - The four paths differ in real ways beyond invocation, particularly the agent path’s
   adapters, variants, execution profiles, and auth pools.
   Collapsing them is not mechanical.
-- The two sharpest gaps have been closed pointwise (code fan-out, off-loop handlers),
-  which lowers the pressure without removing the cause.
+- The sharpest gaps have been closed pointwise (code fan-out, off-loop handlers, and
+  in-process mapped composites), which lowers the pressure without removing the cause.
 - It overlaps the execution-model work, where the task is already the scheduled unit;
   doing both at once risks two half-migrations.
 
@@ -327,7 +331,7 @@ either a missing capability or a consumer routing around one.
 | P5. Subagent adapter | execution, future | deferred | medium |
 | P6. Declarative run source | authored, future | deferred | medium |
 | P7. Sweep / ensemble / experiment | authored, future | deferred | large |
-| P8. Mode selects an invoker | execution, future | deferred | large |
+| P8. Mode selects an invoker | execution | partially implemented; full abstraction deferred | large |
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

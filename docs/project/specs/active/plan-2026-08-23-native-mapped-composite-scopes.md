@@ -619,8 +619,11 @@ scalar launch.
   resource, trace, and visualization IDs.
 - [ ] Support qualified per-item and child-step force, propagate it through the child
   walk, and test consistency across parent task, child process, and child task views.
-- [ ] Add cancellation, mixed-success, duplicate-key, invalid-port, namespace-isolation,
-  path-containment, crash-window, and resume tests.
+- [x] Reject duplicate resolved item keys before task or child-scope state writes.
+  This work is implemented in draft pull request 37 after senior review.
+- [ ] Add the remaining cancellation, mixed-success, invalid-port, namespace-isolation,
+  path-containment, crash-window, and resume tests as the consumer ladder exercises
+  those paths.
 - [x] Reject `gcp-worker` mapped-composite partitioning until a multi-host slice exists.
   This work is implemented in draft pull request 37.
 
@@ -796,9 +799,19 @@ leaf ceiling, no nested orchestrator lease, declared child-output validation, si
 failure isolation, and failed-item-only resume.
 It also rejects whole-scope retries and `gcp-worker` topology rather than silently
 inventing semantics.
-The focused planner/process/context/status/resume/lease set passes 284 tests; the full
-suite passes 4,320 tests with 8 skipped, and repository lint plus BasedPyright pass with
-zero errors or warnings.
+Senior review found that duplicate resolved item keys could address the same state and
+child-scope namespace; the review-fix candidate rejects the collision before state
+writes and covers it with a regression test.
+A second review finding about omitting the primary binding was rebutted because
+`ProcessStep` validation already rejects that configuration before runtime.
+The shipped architecture, concepts, proposal, operator, and changelog documentation now
+describe the M0 behavior and its limits.
+
+The focused planner/process/context/status/resume/lease set passes, and the exact
+stack-wide review-fix candidate passes 4,347 tests with 8 skipped.
+Formatting, Ruff, BasedPyright, Markdown links, public hygiene, browser and supply-chain
+checks, dependency audits, distribution build, and installed-wheel smoke are also green.
+GitHub CI remains the final gate before the consumer pins this revision.
 
 Per-item force, richer evidence/fan-in projection, scoped child variables, shared byte
 admission, live harnesses, and production-scale results remain open.

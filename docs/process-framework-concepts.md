@@ -716,13 +716,14 @@ original unit of execution and state, and one local orchestrator was the only wr
   chains, still acquire a step boundary that their data may not require.
 
 - **Mode decides more than invocation (no test; a structural deviation).** The model’s
-  pivot is the task, but the runtime forks on step *mode* and each branch owns its own
-  execution path. Mapping and governance therefore attach to modes rather than to tasks:
-  fan-out was implemented for agent steps and, until recently, existed nowhere else, and
-  `mode: composite` still cannot fan out, which forces a consumer wanting a child spec
-  mapped over a roster to express it as a code handler launching one child run per item.
-  Neither gap is a policy about what those modes mean.
-  See [P8](metaproc-design-rev3-proposals.md) for the proposed decomposition.
+  pivot is the task, but the runtime still forks on step *mode* and each branch owns
+  substantial execution policy.
+  Agent, code, and composite steps now share neutral item discovery and `run_fan_out`; a
+  mapped composite invokes each child scope in-process, so consumers no longer need a
+  code handler that launches child Metaproc commands.
+  Admission, retry, lifecycle, and placement are not yet one mode-neutral invoker
+  contract, and manual steps remain scalar.
+  See [P8](metaproc-design-rev3-proposals.md) for the remaining decomposition.
 
 - **Dependency clauses (test 5, partially).** Eligible code chains expose `same_key`
   mapping. Collected inputs expose `collect_all` with `succeeded` or `finished`
