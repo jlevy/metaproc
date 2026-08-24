@@ -5,7 +5,7 @@ title: "Review PR #36: transport retry-later policy"
 kind: task
 status: closed
 priority: 1
-version: 14
+version: 15
 labels:
   - pr-review
 dependencies: []
@@ -21,9 +21,9 @@ child_order_hints:
   - is-01m0t809p8h99cy79t3hwd3j1f
   - is-01m0tjefebxck534azhjgd5ew9
 created_at: 2026-08-24T15:14:43.810Z
-updated_at: 2026-08-24T19:04:22.597Z
-closed_at: 2026-08-24T19:04:22.597Z
-close_reason: "Every PR #36 review finding has an explicit disposition. Findings 1, 2, 3A, D3, D5, and C1 were fixed by deleting unearned retry transport or proving the retained auth transport. 3B and D4 plus design seams D1/D2 are deferred under the smoke-driven mp-tibt audit; all speculative implementation children are paused. Retained auth code is folded into PR #34 and exact integration head c061cad passed GitHub CI run 32765621039."
+updated_at: 2026-08-24T22:32:05.677Z
+closed_at: 2026-08-24T22:31:55.135Z
+close_reason: "PR #36 closed as superseded; findings verified as resolved-by-deletion; behavior work tracked under mp-tibt"
 resolution: null
 duplicate_of: null
 ---
@@ -31,4 +31,4 @@ Senior review of #36 (codex/gtia-v3-retry-later, draft). Retry-later policy acro
 
 ## Notes
 
-Review posted 2026-08-24: https://github.com/jlevy/metaproc/pull/36#issuecomment-5397585537 — verdict: needs work before undraft (draft gate itself correct). Before undraft: (1) defaults transported instead of omitted → spurious dispatch_config_change on every resume of old runs + worker-image CLI skew; make CLI defaults '' and map ''→canonical in from_strings + no-emission test; (2) false statements: arch-authentication.md:973-975 'do not yet expose', pool_dispatch.py:88 'is consulted' (policy inert: acquire_slot raises unconditionally, wait_for_pool_recovery zero callers), preflight.py:311 recommends no-op remedy; missing CHANGELOG; (3) validate options unconditionally + add cancellation predicate to wait_for_pool_recovery now. Design seams for convergence slices: rival hardcoded fan-out cooling loop (run_parallel.py:1913-1932, string-matched, unbounded), capacity-held-across-wait, dual policy representations in context, no max_wait bound vs Batch walltime, duplicate duration parsers. FOLLOW UP: track convergence slices under mp-tibt.
+PR #36 CLOSED 2026-08-24 as superseded ('retry transport; cloud auth moved to #34'). Verified: the speculative retry-later public surface was deleted (not merged), and #34 carries only the cloud-auth fix — no env vars, CLI flags, or worker-image surface changed, so the spurious-resume-diff and image-skew hazards from the #36 review are absent. Remaining retry-later behavior work tracked under mp-tibt.
