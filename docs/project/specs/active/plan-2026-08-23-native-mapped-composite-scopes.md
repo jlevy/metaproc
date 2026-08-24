@@ -710,9 +710,10 @@ The retry-later configuration-transport slice in
 35 and has completed precommit review and verification: the full suite passes 4,295
 tests with 8 skipped, and lint, type, documentation, public-hygiene, supply-chain, and
 browser checks are green.
-It replaces the duplicated auth fields on `OrchestratorDispatchConfig` with the existing
-`AuthPoolFlags` payload, fixing the cloud `auth_policy` loss while adding retry policy
-and wait-bound transport.
+Canonical GitHub lint, distribution, and Python 3.12/3.13/3.14 jobs also pass for the
+exact head. It replaces the duplicated auth fields on `OrchestratorDispatchConfig` with
+the existing `AuthPoolFlags` payload, fixing the cloud `auth_policy` loss while adding
+retry policy and wait-bound transport.
 It remains a draft release gate: scalar and fan-out admission semantics, deferred state
 and events, typed checkpoints, resume persistence, preflight routing, and GCP signal
 preservation remain open under the child beads of `mp-tibt`.
@@ -760,9 +761,9 @@ nonblocking execution.
 Its first-slice beads are `mp-htd8` (characterization), `mp-vf21` (shared context and
 leaf ceiling), `mp-d12o` (run-owned executor), and `mp-bvjd` (scalar-auth policy), all
 complete. `mp-l6b5` owns the completed cancellation-safety slice in pull request 35.
-`mp-tibt` owns unified retry-later dispatch; its `mp-w1so` configuration-transport slice
-is implemented and verified in pull request 36, while the scheduler, checkpoint, state,
-preflight, and cloud child beads remain open.
+`mp-tibt` owns unified retry-later dispatch; its closed `mp-w1so`
+configuration-transport slice is implemented and verified in pull request 36, while the
+scheduler, checkpoint, state, preflight, and cloud child beads remain open.
 `mp-npza` tracks the non-blocking stabilization of the noisy execution-model scale
 timing gate observed during pull requests 32 and 34. `mp-0ukj` owns mapped scopes,
 ports, parent evidence, and within-scope per-item recovery; `mp-0cyw` owns the common
