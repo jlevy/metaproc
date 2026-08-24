@@ -58,6 +58,7 @@ from metaproc.commands.run_process import (
     _is_step_completed,
     _maybe_cascade_for_fingerprint,
     _orchestrate,
+    _preflight_plan_adapters,
     _read_recorded_step_hash,
     _read_step_status,
     _run_agent_subprocess,
@@ -102,6 +103,49 @@ class FakeOut:
 
     def warning(self, msg: str) -> None:
         self.warnings.append(msg)
+
+
+def test_adapter_preflight_skips_active_steps_without_agent_leaves() -> None:
+    adapter = MagicMock()
+    adapter.preflight.return_value = "unexpected drift warning"
+    plan = Plan(
+        process="adapterless",
+        steps=[
+            ResolvedStep(step_id="prepare", mode="code"),
+            ResolvedStep(step_id="scope", mode="composite"),
+        ],
+    )
+
+    with patch("metaproc.commands.run_process.get_adapter", return_value=adapter):
+        messages = _preflight_plan_adapters(
+            plan,
+            active_step_ids={"prepare", "scope"},
+        )
+
+    assert messages == []
+    adapter.preflight.assert_not_called()
+
+
+def test_adapter_preflight_checks_each_active_agent_adapter_once() -> None:
+    adapter = MagicMock()
+    adapter.preflight.return_value = "agent drift warning"
+    plan = Plan(
+        process="agents",
+        steps=[
+            ResolvedStep(step_id="first", mode="agent"),
+            ResolvedStep(step_id="second", mode="agent"),
+            ResolvedStep(step_id="inactive", mode="agent"),
+        ],
+    )
+
+    with patch("metaproc.commands.run_process.get_adapter", return_value=adapter):
+        messages = _preflight_plan_adapters(
+            plan,
+            active_step_ids={"first", "second"},
+        )
+
+    assert messages == ["agent drift warning"]
+    adapter.preflight.assert_called_once_with()
 
 
 @contextmanager

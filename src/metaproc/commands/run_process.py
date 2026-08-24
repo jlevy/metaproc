@@ -650,7 +650,9 @@ def _preflight_plan_adapters(plan: Plan, *, active_step_ids: set[str]) -> list[s
     """
     messages: list[str] = []
     for adapter_type in dict.fromkeys(
-        step.adapter.type for step in plan.steps if step.step_id in active_step_ids
+        step.adapter.type
+        for step in plan.steps
+        if step.step_id in active_step_ids and step.mode == "agent"
     ):
         preflight = getattr(get_adapter(adapter_type), "preflight", None)
         if preflight is None:

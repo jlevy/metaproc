@@ -824,13 +824,26 @@ reported all mapped parents as stale.
 Definition fingerprints now exclude only discovered `items` and `filtered_count` while
 retaining every authored fan-out field.
 
-The focused fingerprint, dependency-state, status, mapped-scope, and recursive-context
-set passes 177 tests.
-The exact stack-wide candidate passes 4,354 tests with 8 skipped.
+The fresh consumer run pinned Metaproc commit `981295f` and completed with all seven
+parent steps current, three analytical scopes, three breadth scopes, two depth scopes,
+and 23 trace spans. An injected BRVO failure blocked every downstream stage; the next
+invocation retained ALFA and CHRL, reran only BRVO, and completed with every step
+current. Changing the promotion quota under the same run ID was rejected as an
+immutable-input mismatch before execution.
+
+That consumer also exposed an adapterless-plan side effect.
+Every resolved step carries a default adapter, so launch preflight invoked
+`claude --version` and emitted drift warnings for a process containing only composite
+and code steps. Preflight now selects active `mode: agent` steps only; actual agent
+leaves retain the existing once-per-adapter check.
+
+The focused fingerprint, dependency-state, status, mapped-scope, recursive-context, and
+adapter-preflight sets pass.
+The exact stack-wide candidate passes 4,356 tests with 8 skipped.
 Formatting, Ruff, BasedPyright, Markdown links, public hygiene, browser and supply-chain
 checks, dependency audits, distribution build, and installed-wheel smoke are also green.
-A fresh consumer run, failed-item-only resume drill, and exact-head GitHub CI remain the
-final gates before this revision is merge-eligible.
+The checked-in downstream L0 gate and exact-head GitHub CI remain before this revision
+is merge-eligible.
 
 Per-item force, richer evidence/fan-in projection, scoped child variables, shared byte
 admission, live harnesses, and production-scale results remain open.
