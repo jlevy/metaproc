@@ -6,7 +6,7 @@ status: Approved
 ---
 # RunPool Design
 
-**Date:** 2026-04-06 (last updated 2026-05-23) **Status:** Approved
+**Date:** 2026-04-06 (last updated 2026-08-23) **Status:** Approved
 
 > **Maintenance**: This is a maintained architecture doc.
 > Revise via `tbd shortcut revise-architecture-doc` (which prompts you to verify content
@@ -80,6 +80,16 @@ Metaproc orchestration owns:
 The interface should stay narrow: orchestration prepares `ProcessConfig` values, RunPool
 returns `ProcessResult` values, and operator commands read structured status and event
 streams.
+
+The local launch backend is also the lifecycle primitive for a scalar agent process.
+`run-process` uses `launch_and_supervise` rather than constructing another pool or
+subprocess supervisor.
+This helper does not provide adaptive concurrency, scheduling, or host admission; those
+remain with the run context and the existing RunPool and host-slot layers.
+It only preserves one launch ownership invariant: completion, cancellation, or timeout
+does not return until any late launch has been collected, its process group has exited
+(with `SIGKILL` escalation for stubborn descendants), and its log-filter thread has
+flushed.
 
 ## Current Telemetry
 

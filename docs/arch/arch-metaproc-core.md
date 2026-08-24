@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: Metaproc Core
 
-**Date:** 2026-03-23 (last updated 2026-08-09) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-08-23) **Status:** Approved
 
 > **Maintenance**: This is a maintained architecture doc.
 > Revise via `tbd shortcut revise-architecture-doc` (which prompts you to verify content
@@ -21,7 +21,7 @@ status: Approved
 > [arch-claude-code-harness](arch-claude-code-harness.md),
 > [arch-testing](arch-testing.md).
 
-Revision: rev2l
+Revision: rev2m
 
 Implementation reference for Metaproc, covering how the conceptual model defined in
 [metaproc-concepts-and-principles.md](../../src/metaproc/docs/metaproc-concepts-and-principles.md)
@@ -2593,6 +2593,20 @@ Fan-out steps dispatch through one of three backends:
 The local backend uses the RunPool (section 17) with step-scoped `.state/` and `.logs/`
 directories. One run execution context owns the optional semaphore shared by fan-out
 pools, scalar agent launches, and code work across composite scopes.
+That context also owns the executor used by synchronous handlers, code commands, and
+blocking credential operations.
+A cancelled executor call is drained before its leaf slot is released; if credential
+acquisition returns a late lease, teardown completes first.
+
+Scalar agent launches reuse `LocalBackend` process-group lifecycle through the small
+`launch_and_supervise` helper.
+Cancellation during launch drains any late handle.
+Completion, cancellation, and timeout all close the full process group, escalate
+stubborn descendants to `SIGKILL`, and flush a log-filter thread before returning.
+Shell-backed code steps apply the same process-group ownership rule inside their sampled
+command runner. These paths do not add a second pool or adaptive controller: the run
+context supplies the leaf ceiling, host admission supplies cross-run capacity, and
+RunPool remains the adaptive manager for mapped local fan-out.
 
 **Note on backend abstraction:** `local` is a registered `LaunchBackend` implementation
 (section 21.8) in the backend registry (`runpool/registry.py`). `gcp-worker` is
@@ -3033,6 +3047,13 @@ the original future-work backlog.
 * * *
 
 ## Revision History
+
+### rev2m (2026-08-23)
+
+- Documented cancellation-safe ownership for executor work, scalar credentials, local
+  scalar agent process groups, and sampled code commands.
+- Clarified that scalar supervision reuses the launch backend lifecycle without creating
+  another pool or adaptive controller.
 
 ### rev2l (2026-08-09)
 

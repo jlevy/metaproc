@@ -17,6 +17,7 @@ import signal
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -24,6 +25,15 @@ from typing import Any, Protocol
 import psutil
 
 log = logging.getLogger(__name__)
+
+# How long supervised launches get to exit gracefully before escalation.
+_PROCESS_TERMINATION_GRACE_S = 5.0
+# How long Metaproc waits for the process group after an uncatchable kill signal.
+_PROCESS_KILL_WAIT_S = 5.0
+# Default cadence for scalar launch supervision.
+_PROCESS_POLL_INTERVAL_S = 0.1
+# Poll cadence while waiting for a signalled process group to disappear.
+_PROCESS_GROUP_EXIT_POLL_INTERVAL_S = 0.05
 
 
 # Substrings that mark an env-var name as carrying credential material. When
@@ -247,6 +257,7 @@ class LocalBackend:
         try:
             proc = await asyncio.create_subprocess_exec(
                 *prepared.command,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=stdout_target,
                 stderr=stderr_target,
                 cwd=str(prepared.cwd) if prepared.cwd else None,
@@ -288,14 +299,19 @@ class LocalBackend:
         if proc is None:
             return -1
         if proc.returncode is not None:
-            return proc.returncode
+            exit_code = proc.returncode
+            await self.kill(handle)
+            return exit_code
         # returncode is only set after wait() completes; use a zero-timeout
         # wait to check without blocking.
         try:
             await asyncio.wait_for(proc.wait(), timeout=0.01)
         except TimeoutError:
             return None
-        return proc.returncode
+        exit_code = proc.returncode
+        if exit_code is not None:
+            await self.kill(handle)
+        return exit_code
 
     async def kill(self, handle: LaunchHandle, sig: int | None = None) -> None:
         """Kill the process group: SIGTERM → wait(5s) → SIGKILL."""
@@ -304,37 +320,45 @@ class LocalBackend:
         if proc is None or pid is None:
             return
 
-        # Already exited?
-        if proc.returncode is not None:
-            return
-
         effective_sig = sig or signal.SIGTERM
-        try:
-            pgid = os.getpgid(pid)
-            os.killpg(pgid, effective_sig)
-        except (ProcessLookupError, PermissionError):
-            return
-
-        if effective_sig == signal.SIGKILL:
-            # No need to wait for graceful shutdown on SIGKILL.
+        if sys.platform == "win32":
+            if proc.returncode is not None:
+                return
+            if effective_sig == signal.SIGKILL:
+                proc.kill()
+            else:
+                proc.terminate()
             with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(proc.wait(), timeout=5)
+                await asyncio.wait_for(proc.wait(), timeout=_PROCESS_KILL_WAIT_S)
             return
 
-        # Wait for graceful shutdown, escalate to SIGKILL if needed.
+        # LocalBackend launches a new session, so the leader PID is also the stable
+        # process-group ID. Keep that ID after the leader exits: a descendant may
+        # ignore SIGTERM and remain in the group after its parent has been reaped.
+        pgid = pid
         try:
-            await asyncio.wait_for(proc.wait(), timeout=5)
-        except TimeoutError:
-            log.warning("Process %d did not exit after SIGTERM; sending SIGKILL", pid)
-            try:
-                pgid = os.getpgid(pid)
+            os.killpg(pgid, effective_sig)
+        except ProcessLookupError:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(proc.wait(), timeout=_PROCESS_KILL_WAIT_S)
+            return
+
+        if effective_sig != signal.SIGKILL and not await _wait_for_process_group_exit(
+            pgid,
+            proc,
+            timeout_s=_PROCESS_TERMINATION_GRACE_S,
+        ):
+            log.warning("Process group %d survived SIGTERM; sending SIGKILL", pgid)
+            with contextlib.suppress(ProcessLookupError):
                 os.killpg(pgid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=5)
-            except TimeoutError:
-                log.error("Process %d did not exit after SIGKILL", pid)
+
+        if not await _wait_for_process_group_exit(
+            pgid,
+            proc,
+            timeout_s=_PROCESS_KILL_WAIT_S,
+        ):
+            msg = f"Process group {pgid} still has live members after SIGKILL"
+            raise RuntimeError(msg)
 
     async def health(self, handle: LaunchHandle) -> HealthMetrics | None:
         """Collect RSS (tree total), descendant count, and log file size."""
@@ -373,6 +397,112 @@ class LocalBackend:
         # The log path is not stored on the handle — the caller (monitor)
         # should read it from ProcessConfig.log_path directly.
         return ""
+
+
+def _process_group_exists(pgid: int) -> bool:
+    """Return whether a POSIX process group still has members."""
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+async def _wait_for_process_group_exit(
+    pgid: int,
+    process: asyncio.subprocess.Process,
+    *,
+    timeout_s: float,
+) -> bool:
+    """Reap the leader while waiting for every process-group member to exit."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        if process.returncode is None:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(process.wait(), timeout=0.01)
+        if not _process_group_exists(pgid):
+            return True
+        remaining_s = deadline - time.monotonic()
+        if remaining_s <= 0:
+            return False
+        await asyncio.sleep(min(_PROCESS_GROUP_EXIT_POLL_INTERVAL_S, remaining_s))
+
+
+async def _await_task_completion[Result](task: asyncio.Task[Result]) -> Result:
+    """Drain an ownership cleanup task even if cancellation is requested again."""
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            continue
+    return task.result()
+
+
+async def cancel_launch(backend: LaunchBackend, handle: LaunchHandle) -> None:
+    """Kill one launch and wait until backend cleanup has finished."""
+
+    async def _kill_and_wait() -> None:
+        await backend.kill(handle)
+        while await backend.poll(handle) is None:
+            await asyncio.sleep(_PROCESS_GROUP_EXIT_POLL_INTERVAL_S)
+
+    kill_task = asyncio.create_task(_kill_and_wait())
+    await _await_task_completion(kill_task)
+
+
+async def launch_and_supervise(
+    backend: LaunchBackend,
+    prepared: PreparedLaunch,
+    *,
+    timeout_s: float | None,
+    poll_interval_s: float = _PROCESS_POLL_INTERVAL_S,
+    on_cancel: Callable[[], None] | None = None,
+) -> int:
+    """Launch one process and retain ownership through exit, timeout, or cancellation.
+
+    This is the small scalar counterpart to RunPool supervision. It deliberately uses
+    the same backend lifecycle instead of introducing another subprocess wrapper.
+    """
+    if poll_interval_s <= 0:
+        raise ValueError("poll_interval_s must be greater than zero")
+
+    launch_task = asyncio.create_task(backend.launch(prepared))
+    try:
+        handle = await asyncio.shield(launch_task)
+    except asyncio.CancelledError as cancelled:
+        if on_cancel is not None:
+            on_cancel()
+        try:
+            handle = await _await_task_completion(launch_task)
+        except BaseException:
+            raise cancelled from None
+        await cancel_launch(backend, handle)
+        raise cancelled
+
+    deadline = None if timeout_s is None else time.monotonic() + timeout_s
+    try:
+        while True:
+            exit_code = await backend.poll(handle)
+            if exit_code is not None:
+                return exit_code
+            if deadline is not None:
+                remaining_s = deadline - time.monotonic()
+                if remaining_s <= 0:
+                    raise TimeoutError
+                await asyncio.sleep(min(poll_interval_s, remaining_s))
+            else:
+                await asyncio.sleep(poll_interval_s)
+    except BaseException as exc:
+        if isinstance(exc, asyncio.CancelledError) and on_cancel is not None:
+            on_cancel()
+        await cancel_launch(backend, handle)
+        raise
+    finally:
+        if handle._filter_thread is not None:  # noqa: SLF001 - lifecycle owned here
+            join_task = asyncio.create_task(asyncio.to_thread(handle.join_filter_thread, 5.0))
+            await _await_task_completion(join_task)
+            if handle._filter_thread.is_alive():  # noqa: SLF001 - lifecycle owned here
+                log.warning("Log filter thread did not exit after supervised launch ended")
 
 
 # ── Utilities ───────────────────────────────────────────────────

@@ -34,6 +34,13 @@ development series.
   exception records the affected attempt as lost before propagating the operational
   error.
 
+- **Terminal paths retain owned capacity until cleanup finishes**: local scalar agent
+  launches now reuse the local launch backend and drain late launches before returning.
+  On completion, timeout, or cancellation, agent and code-command process groups are
+  terminated, stubborn descendants are killed, and log filters are flushed before run
+  slots or host admission are released.
+  Late credential leases are likewise torn down before credential capacity is released.
+
 - **Resume validates task identity before reuse**: scalar, mapped, chained, and manual
   paths reject status or attempt history addressed to another run, step, or item rather
   than accepting a misplaced completion.
@@ -65,9 +72,9 @@ development series.
 - **One execution context across recursive scopes**: local `run-process` execution now
   shares one executable-leaf ceiling across fan-out pools, scalar steps, code work, and
   composite descendants.
-  Synchronous code and scalar-process supervision use the run-owned executor instead of
-  blocking the event loop, and `--force` reaches composite descendants while root step
-  selectors remain root-scoped.
+  Synchronous handlers and code commands use the run-owned executor, while scalar agent
+  processes reuse the local launch backend without blocking the event loop.
+  `--force` reaches composite descendants while root step selectors remain root-scoped.
   Command-backed code fan-outs that were previously serialized as a side effect of
   blocking the event loop may now run concurrently, bounded by the run and step
   ceilings. Commands share the process directory, so authored steps that mutate shared

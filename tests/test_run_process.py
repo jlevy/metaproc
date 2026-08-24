@@ -17,7 +17,6 @@ import inspect
 import subprocess
 import sys
 import textwrap
-import threading
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -210,38 +209,46 @@ def test_run_process_preserves_original_failure_and_releases_lease_when_finalize
     assert released == [tmp_path / "runs" / "run-1"]
 
 
-def test_agent_subprocesses_do_not_block_the_dag_event_loop(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_agent_subprocesses_do_not_block_the_dag_event_loop(tmp_path: Path) -> None:
     """Independent non-fan-out agent steps can occupy the same DAG level."""
-    barrier = threading.Barrier(2)
+    barrier_script = tmp_path / "barrier.py"
+    barrier_script.write_text(
+        textwrap.dedent(
+            """
+            import sys
+            import time
+            from pathlib import Path
 
-    def fake_run(
-        *_args: object,
-        **_kwargs: object,
-    ) -> subprocess.CompletedProcess[bytes]:
-        barrier.wait(timeout=1.0)
-        return subprocess.CompletedProcess(args=[], returncode=0)
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
+            mine = Path(sys.argv[1])
+            other = Path(sys.argv[2])
+            mine.write_text("ready")
+            deadline = time.monotonic() + 1
+            while not other.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            raise SystemExit(0 if other.exists() else 1)
+            """
+        ).lstrip(),
+        encoding="utf-8",
+    )
+    one_ready = tmp_path / "one.ready"
+    two_ready = tmp_path / "two.ready"
 
     async def run_both() -> tuple[int, int]:
         return await asyncio.gather(
             _run_agent_subprocess(
-                ["adapter", "one"],
+                [sys.executable, str(barrier_script), str(one_ready), str(two_ready)],
                 env={},
                 cwd=tmp_path,
                 log_path=tmp_path / "one.log",
-                timeout_s=1,
+                timeout_s=2,
                 use_filter=False,
             ),
             _run_agent_subprocess(
-                ["adapter", "two"],
+                [sys.executable, str(barrier_script), str(two_ready), str(one_ready)],
                 env={},
                 cwd=tmp_path,
                 log_path=tmp_path / "two.log",
-                timeout_s=1,
+                timeout_s=2,
                 use_filter=False,
             ),
         )

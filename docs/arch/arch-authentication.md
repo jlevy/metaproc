@@ -6,7 +6,7 @@ status: Draft — partial currency notice below
 ---
 # Architecture: Authentication and Credentials
 
-**Date:** 2026-04-21 (last updated 2026-05-23) **Status:** Draft — partial currency
+**Date:** 2026-04-21 (last updated 2026-08-23) **Status:** Draft — partial currency
 notice below
 
 > **Maintenance**: This is a maintained architecture doc.
@@ -1429,6 +1429,22 @@ The pattern is now well-trodden: any new env-var cohort that travels together ge
 typed module mirroring this shape.
 The `setup_token_command` capability seam (Phase 7.3) follows the same principle at the
 Protocol level.
+
+### §N.17 Cancellation-safe scalar lease handoff
+
+Scalar credential acquisition runs in the run-owned executor because local and GCP
+credential backends can block.
+Cancellation cannot stop a worker thread that is already inside
+`SlotCoordinator.acquire_slot`, so the orchestration task retains its host and run
+admission while it drains that worker.
+If acquisition returns a lease after cancellation, the same executor calls
+`SlotCoordinator.teardown` before the task releases either admission boundary.
+A cancelled-before-launch teardown is recorded with an `unknown` classification because
+no adapter process ran and there is no transport outcome to classify.
+
+This is an ownership handoff, not a second credential-pool protocol.
+Fan-out and scalar paths continue to use the same `SlotCoordinator`, `SlotLease`,
+materialization, and teardown primitives.
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

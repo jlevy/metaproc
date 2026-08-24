@@ -3,20 +3,29 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
+import json
+import shlex
 import subprocess
+import sys
 import threading
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import psutil
 import pytest
 
 from metaproc.commands.run_process import (
     RunExecutionContext,
     _execute_agent_step,
+    _execute_code_step,
     _execute_composite_step,
+    _leaf_slot,
     _orchestrate,
+    _run_agent_subprocess,
     _run_sync,
 )
 from metaproc.errors import CLIError
@@ -337,3 +346,326 @@ def test_scalar_agent_steps_share_one_executable_leaf_ceiling(tmp_path: Path) ->
 
     assert asyncio.run(exercise()) == [True, True]
     assert peak == 1
+
+
+def _write_blocking_process_tree_script(
+    tmp_path: Path,
+    *,
+    child_ignores_sigterm: bool = False,
+    leader_exits: bool = False,
+) -> Path:
+    script = tmp_path / "blocking-process-tree.py"
+    child_program = "import time; print('ready', flush=True); time.sleep(60)"
+    if child_ignores_sigterm:
+        child_program = (
+            "import signal, time; "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "print('ready', flush=True); time.sleep(60)"
+        )
+    script.write_text(
+        inspect.cleandoc(
+            f"""
+            import json
+            import os
+            import subprocess
+            import sys
+            import time
+            from pathlib import Path
+
+            child = subprocess.Popen(
+                [sys.executable, "-c", {child_program!r}],
+                stdout=subprocess.PIPE,
+                text=True,
+            )
+            assert child.stdout is not None
+            assert child.stdout.readline().strip() == "ready"
+            Path(sys.argv[1]).write_text(
+                json.dumps({{"parent": os.getpid(), "child": child.pid}})
+            )
+            raise SystemExit(0) if {leader_exits!r} else time.sleep(60)
+            """
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return script
+
+
+async def _wait_for_process_tree(path: Path) -> dict[str, int]:
+    for _ in range(200):
+        try:
+            return {key: int(value) for key, value in json.loads(path.read_text()).items()}
+        except (FileNotFoundError, json.JSONDecodeError):
+            await asyncio.sleep(0.01)
+    raise AssertionError(f"process tree did not publish its pids at {path}")
+
+
+def _live_processes(pids: dict[str, int]) -> set[int]:
+    live: set[int] = set()
+    for pid in pids.values():
+        try:
+            process = psutil.Process(pid)
+            if process.is_running() and process.status() != psutil.STATUS_ZOMBIE:
+                live.add(pid)
+        except psutil.NoSuchProcess:
+            continue
+    return live
+
+
+def _kill_processes(pids: dict[str, int]) -> None:
+    processes: list[psutil.Process] = []
+    for pid in pids.values():
+        try:
+            process = psutil.Process(pid)
+            processes.extend(process.children(recursive=True))
+            processes.append(process)
+        except psutil.NoSuchProcess:
+            continue
+    for process in reversed(processes):
+        with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
+            process.kill()
+    if processes:
+        psutil.wait_procs(processes, timeout=2)
+
+
+def test_cancelling_agent_subprocess_kills_tree_before_releasing_admission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = _write_blocking_process_tree_script(tmp_path, child_ignores_sigterm=True)
+    monkeypatch.setattr("metaproc.runpool.backend._PROCESS_TERMINATION_GRACE_S", 0.05)
+    pids_path = tmp_path / "agent-pids.json"
+    context = RunExecutionContext.create(max_concurrency=1)
+    pids: dict[str, int] = {}
+    release_observations: list[set[int]] = []
+
+    @asynccontextmanager
+    async def tracked_host_admission():
+        try:
+            yield
+        finally:
+            release_observations.append(_live_processes(pids))
+
+    async def exercise() -> None:
+        nonlocal pids
+
+        async def run_leaf() -> int:
+            async with _leaf_slot(context):
+                async with tracked_host_admission():
+                    return await _run_agent_subprocess(
+                        [sys.executable, str(script), str(pids_path)],
+                        env={},
+                        cwd=tmp_path,
+                        log_path=tmp_path / "agent.log",
+                        timeout_s=None,
+                        use_filter=False,
+                        execution_context=context,
+                    )
+
+        task = asyncio.create_task(run_leaf())
+        pids = await _wait_for_process_tree(pids_path)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=2)
+
+    try:
+        asyncio.run(exercise())
+        assert release_observations == [set()]
+        assert _live_processes(pids) == set()
+        assert context.cancellation_event.is_set()
+        assert context.leaf_semaphore is not None
+        assert context.leaf_semaphore._value == 1  # noqa: SLF001 - ownership invariant
+    finally:
+        _kill_processes(pids)
+        context.close()
+
+
+def test_agent_subprocess_timeout_kills_its_process_tree(tmp_path: Path) -> None:
+    script = _write_blocking_process_tree_script(tmp_path)
+    pids_path = tmp_path / "timeout-pids.json"
+    pids: dict[str, int] = {}
+
+    async def exercise() -> None:
+        nonlocal pids
+        task = asyncio.create_task(
+            _run_agent_subprocess(
+                [sys.executable, str(script), str(pids_path)],
+                env={},
+                cwd=tmp_path,
+                log_path=tmp_path / "timeout.log",
+                timeout_s=0.2,
+                use_filter=False,
+            )
+        )
+        pids = await _wait_for_process_tree(pids_path)
+        with pytest.raises(subprocess.TimeoutExpired):
+            await task
+
+    try:
+        asyncio.run(exercise())
+        assert _live_processes(pids) == set()
+    finally:
+        _kill_processes(pids)
+
+
+def test_agent_subprocess_cleans_tree_after_leader_exits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = _write_blocking_process_tree_script(
+        tmp_path,
+        child_ignores_sigterm=True,
+        leader_exits=True,
+    )
+    monkeypatch.setattr("metaproc.runpool.backend._PROCESS_TERMINATION_GRACE_S", 0.05)
+    pids_path = tmp_path / "exited-agent-pids.json"
+    pids: dict[str, int] = {}
+
+    async def exercise() -> int:
+        nonlocal pids
+        task = asyncio.create_task(
+            _run_agent_subprocess(
+                [sys.executable, str(script), str(pids_path)],
+                env={},
+                cwd=tmp_path,
+                log_path=tmp_path / "exited-agent.log",
+                timeout_s=2,
+                use_filter=False,
+            )
+        )
+        pids = await _wait_for_process_tree(pids_path)
+        return await task
+
+    try:
+        assert asyncio.run(exercise()) == 0
+        assert _live_processes(pids) == set()
+    finally:
+        _kill_processes(pids)
+
+
+def test_agent_subprocess_filter_flushes_before_return(tmp_path: Path) -> None:
+    log_path = tmp_path / "filtered.log"
+
+    async def exercise() -> int:
+        return await _run_agent_subprocess(
+            [sys.executable, "-c", "print('kept output')"],
+            env={},
+            cwd=tmp_path,
+            log_path=log_path,
+            timeout_s=2,
+            use_filter=True,
+        )
+
+    assert asyncio.run(exercise()) == 0
+    assert log_path.read_text() == "kept output\n"
+
+
+def test_cancelling_code_command_kills_tree_before_releasing_leaf(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = _write_blocking_process_tree_script(tmp_path, child_ignores_sigterm=True)
+    monkeypatch.setattr(
+        "metaproc.engine.resource_sampling._PROCESS_TERMINATION_GRACE_S",
+        0.05,
+    )
+    pids_path = tmp_path / "command-pids.json"
+    context = RunExecutionContext.create(max_concurrency=1)
+    pids: dict[str, int] = {}
+    release_observations: list[set[int]] = []
+    step = ProcessStep(
+        id="blocking-command",
+        mode="code",
+        command=shlex.join([sys.executable, str(script), str(pids_path)]),
+    )
+    target = ResolvedStep(
+        step_id=step.id,
+        mode="code",
+        command=step.command,
+    )
+
+    async def exercise() -> None:
+        nonlocal pids
+
+        async def run_leaf() -> bool:
+            async with _leaf_slot(context):
+                try:
+                    return await _execute_code_step(
+                        spec=ProcessSpec(name="test"),
+                        step_def=step,
+                        target=target,
+                        variables={},
+                        process_dir=tmp_path,
+                        run_dir=tmp_path / "run",
+                        run_id="test/run-1",
+                        execution_context=context,
+                        out=_Out(),
+                    )
+                finally:
+                    release_observations.append(_live_processes(pids))
+
+        task = asyncio.create_task(run_leaf())
+        pids = await _wait_for_process_tree(pids_path)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=2)
+
+    try:
+        asyncio.run(exercise())
+        assert release_observations == [set()]
+        assert _live_processes(pids) == set()
+        assert context.cancellation_event.is_set()
+        assert context.leaf_semaphore is not None
+        assert context.leaf_semaphore._value == 1  # noqa: SLF001 - ownership invariant
+    finally:
+        _kill_processes(pids)
+        context.close()
+
+
+def test_code_command_cleans_tree_after_leader_exits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = _write_blocking_process_tree_script(
+        tmp_path,
+        child_ignores_sigterm=True,
+        leader_exits=True,
+    )
+    monkeypatch.setattr(
+        "metaproc.engine.resource_sampling._PROCESS_TERMINATION_GRACE_S",
+        0.05,
+    )
+    pids_path = tmp_path / "exited-command-pids.json"
+    pids: dict[str, int] = {}
+    step = ProcessStep(
+        id="exited-command",
+        mode="code",
+        command=shlex.join([sys.executable, str(script), str(pids_path)]),
+    )
+
+    async def exercise() -> bool:
+        nonlocal pids
+        task = asyncio.create_task(
+            _execute_code_step(
+                spec=ProcessSpec(name="test"),
+                step_def=step,
+                target=ResolvedStep(
+                    step_id=step.id,
+                    mode="code",
+                    command=step.command,
+                ),
+                variables={},
+                process_dir=tmp_path,
+                run_dir=tmp_path / "run",
+                run_id="test/run-1",
+                out=_Out(),
+            )
+        )
+        pids = await _wait_for_process_tree(pids_path)
+        return await task
+
+    try:
+        assert asyncio.run(exercise()) is True
+        assert _live_processes(pids) == set()
+    finally:
+        _kill_processes(pids)
