@@ -51,7 +51,7 @@ mode requires. Never commit `.env`.
 | `METAPROC_GCP_CONTAINER_IMAGE` | Image that can run Metaproc and the consumer |
 | `METAPROC_GCS_BUCKET` | Wheel and workspace artifact transport |
 | `METAPROC_GCP_SECRET_GH_TOKEN` | Secret Manager ref used when a private repo must be cloned |
-| `METAPROC_GCP_FILESTORE_*` | Optional shared run storage |
+| `METAPROC_GCP_FILESTORE_*` | Optional shared live execution and restart storage |
 | `METAPROC_REPO_URL` / `METAPROC_RUN_BRANCH` | Optional repository source for remote bootstrap |
 | `METAPROC_WHEEL_GCS` | Optional exact prebuilt Metaproc wheel |
 | `METAPROC_WHEEL_SHA256` | Required digest when `METAPROC_WHEEL_GCS` is set |
@@ -97,6 +97,12 @@ Add process variables and an execution-profile override only when required by th
 consumer. Use `--spot` only when the workflow tolerates preemption.
 The product of workers and per-worker concurrency is the maximum task concurrency,
 subject to runtime resource and provider limits.
+
+Filestore is scratch state for live execution and restart, not Metaproc’s terminal
+durability contract.
+Before reclaiming it, the downstream consumer must publish the accepted terminal run
+tree to its registered durable object-store contract and verify that publication under
+its own policy.
 
 ## 5. Dispatch an Arbitrary Command
 
@@ -144,28 +150,30 @@ cloud-provider listing/logging commands:
 | --- | --- |
 | Which runs are active? | `metaproc gcp runs` |
 | What is the Batch state? | `metaproc gcp status <run-id>` |
-| What is the per-step/item state? | `metaproc status <run-id>` |
-| Is the orchestrator healthy? | `metaproc pulse <run-id>` |
 | What are workers logging? | `metaproc gcp logs <run-id> --follow` |
-| What is the pool pressure? | `metaproc pool status <run-id>` |
-| How has concurrency changed? | `metaproc pool concurrency-timeline <run-id>` |
 | Stop the run | `metaproc gcp cancel <run-id>` |
 
 For unattended runs, use the supported automation/monitoring mechanism in the active
 agent environment and have it call these commands.
-Store wrapper logs and evidence under persistent run storage, never `/tmp`.
+During execution, store wrapper logs and restart evidence in the live run tree, never
+`/tmp`; publish accepted terminal evidence through the downstream durable object-store
+contract before reclaiming scratch.
+Filesystem-oriented commands such as `metaproc status`, `pulse`, and `pool status`
+require an explicit, locally visible run-directory path.
+They do not resolve a cloud run ID through a persistent VM or remote mount.
+Use `metaproc gcp status` and `gcp logs` for Batch-native monitoring.
 
 ## 7. Recovery
 
-1. Read `metaproc gcp status`, `metaproc status`, and `metaproc gcp logs`.
+1. Read `metaproc gcp status` and `metaproc gcp logs`. If the run tree is already
+   available in the current environment, inspect it with `metaproc status <path>`.
 2. Classify the failure: bootstrap, auth, quota, process validation, provider, resource,
    or infrastructure.
 3. Fix the owning layer and push/build any code or image change.
 4. Re-run with the same `RUN_ID` when completion fingerprints should preserve valid
    work. Use a new run ID only for an intentional clean duplicate.
-5. Use `metaproc pool retry-missing`, `override`, or `--force` only after reviewing
-   their audit and caching semantics in the
-   [operator reference](../../src/metaproc/docs/metaproc-operator-reference.md).
+5. Use `override` or `--force` only after reviewing their audit and caching semantics in
+   the [operator reference](../../src/metaproc/docs/metaproc-operator-reference.md).
 
 Plaintext `GH_TOKEN`, `CLAUDE_CODE_CREDS_JSON`, and similar credentials are refused on
 cloud dispatch when their registered Secret Manager references are absent.
@@ -179,7 +187,8 @@ The downstream repository must document:
 - which process variables and execution profiles are approved;
 - expected cost and who authorizes it;
 - domain preflight and QA;
-- output retention and incident evidence;
+- the registered durable object-store contract for accepted terminal run trees, plus
+  retention and incident-evidence policy;
 - the exact Metaproc version or submodule commit used.
 
 Keep those policies out of this framework runbook.

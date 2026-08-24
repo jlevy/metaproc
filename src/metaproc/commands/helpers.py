@@ -97,6 +97,26 @@ def require_runtime_runs_dir(variables: dict[str, str], *, command: str) -> None
     variables["RUNS_DIR"] = str(runs_dir)
 
 
+def validate_gcp_worker_topology(
+    backend: str,
+    *,
+    cloud: bool = False,
+    dry_run: bool = False,
+    batch_task_index: str | None,
+) -> None:
+    """Reject operator-host execution through the internal GCP worker backend."""
+    if (
+        backend == "gcp-worker"
+        and not cloud
+        and not dry_run
+        and (batch_task_index is None or not batch_task_index.strip())
+    ):
+        raise CLIError(
+            "--backend gcp-worker without --cloud is only supported inside the GCP Batch "
+            "orchestrator. Use run-process --backend gcp-worker --cloud for a full-cloud run."
+        )
+
+
 def parse_adapter_config(raw: list[str]) -> dict[str, str]:
     """Parse adapter config KEY=VALUE arguments."""
     config: dict[str, str] = {}

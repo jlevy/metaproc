@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: Metaproc Core
 
-**Date:** 2026-03-23 (last updated 2026-08-09) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-08-24) **Status:** Approved
 
 > **Maintenance**: This is a maintained architecture doc.
 > Revise via `tbd shortcut revise-architecture-doc` (which prompts you to verify content
@@ -21,7 +21,7 @@ status: Approved
 > [arch-claude-code-harness](arch-claude-code-harness.md),
 > [arch-testing](arch-testing.md).
 
-Revision: rev2l
+Revision: rev2m
 
 Implementation reference for Metaproc, covering how the conceptual model defined in
 [metaproc-concepts-and-principles.md](../../src/metaproc/docs/metaproc-concepts-and-principles.md)
@@ -80,9 +80,9 @@ Claude Code, or launched by a cron job.
 
 ### Execution Chain by Topology
 
-The same process spec runs identically across local, hybrid, and full cloud topologies.
-The orchestrator and run pool move between machines; the adapter subprocesses at the
-bottom of the stack are always the same.
+The same process spec supports local and full-cloud topologies.
+Full-cloud execution moves both the orchestrator and run pool into Batch; the operator
+host is not part of the runtime path.
 See [arch-cloud-execution.md §2.2](arch-cloud-execution.md) for the full topology table.
 
 See § 19 for orchestrator details, § 21 for cloud execution.
@@ -128,8 +128,8 @@ claude-auth push / show / rotate  (single-secret pre-pool surface; use the `auth
 stats
 write-usage
 resource-report
-pool status / pool events / pool retry-missing
-gcp status / gcp scale / gcp logs / gcp cancel / gcp runs / gcp self-install / gcp resources / gcp filestore / gcp archive / gcp remote / gcp remote-run / gcp cleanup
+pool status / pool events
+gcp run / gcp status / gcp scale / gcp logs / gcp cancel / gcp runs / gcp resources / gcp filestore / gcp cleanup
 tail (log viewer)
 compare / compare-matrix
 
@@ -878,8 +878,9 @@ The user-facing execution model is two commands:
 
 `run-parallel` is internal plumbing used by `run-process` for fan-out steps and by
 worker VM entrypoints.
-Cloud worker-VM fan-out is triggered via `run-process --backend gcp-worker`; there is no
-standalone cloud-dispatch command.
+Cloud worker-VM fan-out is triggered via `run-process --backend gcp-worker --cloud`. The
+bare `gcp-worker` form is reserved for the inner Batch orchestrator leg, including
+direct `run-parallel` plumbing.
 
 ## 8.2 Example Resolved Plan
 
@@ -934,6 +935,7 @@ Implemented CLI surface:
   Supports `--backend` (local, gcp-worker), `--cloud` (run orchestrator on GCP),
   `--only`/`--from`/`--skip`/`--force`/`--continue-on-error`, `--dry-run`. See section
   19 for full details.
+  Outside GCP Batch, `gcp-worker` must be paired with `--cloud`.
 - `plan` -- resolve and display execution plan; `--format {yaml,svg,html}` emits a
   resolved plan YAML or renders the process as a static visualization.
   See the public
@@ -998,19 +1000,15 @@ Implemented CLI surface:
 - `gcp cancel <target>` -- cancel running/queued Batch jobs (auto-detect: local run dir
   or run-id)
 - `gcp runs` -- list all active metaproc runs across the project
-- `gcp self-install` -- install metaproc on a remote GCP VM via SSH
+- `gcp run` -- run an arbitrary command in a single Batch task
 - `gcp resources` -- show metaproc-related GCP assets via Cloud Asset Inventory
 - `gcp filestore` -- inspect Filestore instance status and utilization
-- `gcp archive` -- sync run directories to GCS for long-term retention
-- `gcp remote` -- run metaproc commands on the gateway host via SSH/IAP
-- `gcp remote-run` -- launch `run-process` in a remote tmux session
 - `gcp cleanup` -- delete old terminal-state Batch jobs
 
 **Pool subcommands (`metaproc pool ...`):**
 
 - `pool status` -- show RunPool live status (concurrency, pressure, active processes)
 - `pool events` -- show RunPool event log (starts, exits, kills, pressure checks)
-- `pool retry-missing` -- reset completion markers for items with missing cloud outputs
 
 The `qa` surface is intentionally not a standalone framework command: QA remains
 process-owned and is typically expressed as ordinary steps inside the DAG.
@@ -2580,12 +2578,12 @@ Code step stdout/stderr is captured to `{run_dir}/.logs/{step_id}_{ts}.log`.
 
 ### 19.3 Fan-Out Backends
 
-Fan-out steps dispatch through one of three backends:
+Fan-out steps dispatch through one of two backends:
 
 | Backend | Flag | Mechanism |
 | --- | --- | --- |
 | `local` | `--backend local` (default) | `RunPool` subprocess pool via `run-parallel` |
-| `gcp-worker` | `--backend gcp-worker` | Partition items across N worker VMs via GCP Batch (section 21) |
+| `gcp-worker` | `--backend gcp-worker --cloud` | Submit the orchestrator, which partitions items across N worker VMs via GCP Batch (section 21) |
 
 The local backend uses the RunPool (section 17) with step-scoped `.state/` and `.logs/`
 directories and an optional external semaphore for cross-step concurrency control.
@@ -2595,6 +2593,8 @@ directories and an optional external semaphore for cross-step concurrency contro
 different -- it is a multi-VM dispatch mode handled directly in `run-process` via
 `dispatch_to_workers()`, not a `LaunchBackend`. It partitions items across N worker VMs,
 each of which runs `run-parallel --backend local` internally.
+The bare `--backend gcp-worker` form is accepted only inside the Batch orchestrator
+container and is rejected on an operator host.
 If a second cloud provider were added, a new worker dispatch implementation would
 register alongside `gcp-worker` in the `run-process` dispatch logic.
 
@@ -2603,7 +2603,7 @@ register alongside `gcp-worker` in the `run-process` dispatch logic.
 | Flag | Purpose |
 | --- | --- |
 | `--var KEY=VALUE` | Parameter bindings (repeatable) |
-| `--backend` | Fan-out backend: `local`, `gcp-worker` |
+| `--backend` | Fan-out backend: `local`, or `gcp-worker` with `--cloud` outside Batch |
 | `--only <step>` | Run only this single step |
 | `--from <step>` | Start from this step (ancestors must be completed) |
 | `--skip <step>` | Skip specific steps (repeatable) |
@@ -2681,7 +2681,7 @@ For the full cloud execution architecture, see
 the core framework is summarized below.
 
 The cloud execution layer runs metaproc processes on GCP infrastructure using Batch API
-for compute and Filestore NFS for shared state.
+for compute and Filestore NFS for shared live execution and restart state.
 The design uses the same CLI commands in containers -- no cloud-specific execution logic
 exists outside of the dispatch and bootstrap layers.
 
@@ -2700,7 +2700,12 @@ run-process --cloud
                     └── Worker VM N (Spot) → run-parallel --backend local
 ```
 
-All VMs share a Filestore NFS mount for run outputs, state files, and progress.
+All VMs share a Filestore NFS mount for run outputs, state files, and progress while the
+run is executing or remains restartable.
+Metaproc does not claim terminal NFS durability.
+Before reclaiming that scratch storage, the downstream consumer must publish the
+accepted terminal run tree to its registered durable object-store contract and verify
+that publication under its own policy.
 The orchestrator uses a STANDARD VM (not Spot) to avoid preemption killing the DAG
 coordinator. Workers default to Spot VMs for cost efficiency.
 
@@ -2865,20 +2870,15 @@ tracking). `MockBackend` is available for testing.
   Modern jobs group by `metaproc-run-key`; the command recovers `RUN_ID` from
   hash-verified structured `METAPROC_VARS` metadata so exact IDs survive display and
   JSON output. Legacy jobs continue to group by readable label.
-- **`gcp resources` / `gcp filestore` / `gcp archive` / `gcp cleanup`**: operator tools
-  for cloud inventory, Filestore utilization, long-term run archiving, and terminal-job
-  cleanup.
+- **`gcp resources` / `gcp filestore` / `gcp cleanup`**: operator tools for cloud
+  inventory, Filestore utilization, and terminal-job cleanup.
 - **NFS progress polling**: during worker dispatch, the orchestrator reads
   `runpool-status.yaml` from NFS to report live progress (completed/failed/active).
 - **NFS error extraction**: on worker failure, reads `runpool-status.yaml` for failure
   counts and per-process kill reasons.
-- **`gcp remote <command...>`**: runs any metaproc command on the Filestore-connected
-  gateway host via SSH/IAP. Bootstraps the full repo on first use
-  (`_ensure_remote_repo()`). `--run-id <id>` expands to
-  `/mnt/filestore/runs/<id>/<phase>` on the remote host.
-  Primary use cases: `stats`, `status`, `pool status`, `tail`.
-- **`gcp remote-run`**: launches `run-process` in a tmux session on a remote GCE host,
-  so the session survives disconnects and can be reattached or cleaned up later.
+- Filesystem-oriented commands such as `status`, `pulse`, and `pool status` require an
+  explicit, locally visible run-directory path.
+  They do not route through a persistent gateway VM.
 
 ### 21.10 Cloud Provider Naming and Extensibility
 
@@ -2913,8 +2913,9 @@ The naming hierarchy:
 ### 21.11 Persistent Infrastructure Decoupling
 
 The framework does not depend on any specific deployment topology.
-Persistent infrastructure (VMs, NFS shares, container registries) is external to
-metaproc -- the framework provides CLI commands that can be run anywhere.
+Persistent infrastructure such as NFS shares, object-storage buckets, and container
+registries is external to metaproc.
+Batch compute is ephemeral; the framework has no required persistent gateway VM.
 
 Design principles for infrastructure dependencies:
 
@@ -2922,8 +2923,8 @@ Design principles for infrastructure dependencies:
   knowledge of specific VMs, Filestore instances, or persistent deployments.
   All infrastructure references are configuration, not code.
 - **Configuration via environment variables.** All GCP infrastructure parameters
-  (`METAPROC_GCP_PROJECT`, `METAPROC_GCP_FILESTORE_SERVER`, `METAPROC_GATEWAY_HOST`,
-  etc.) are configurable via env vars and overridable via CLI flags.
+  (`METAPROC_GCP_PROJECT`, `METAPROC_GCP_FILESTORE_SERVER`, and related values) are
+  configurable via env vars and overridable via CLI flags.
   No infrastructure names are hardcoded.
 - **The browser is a read-only local tool.** The `serve` command reads filesystem
   artifacts and can be deployed anywhere (local, GCE, Cloud Run, a container on any
@@ -2934,15 +2935,15 @@ Design principles for infrastructure dependencies:
 
 ### 21.12 Filesystem-First Resume Contract
 
-Authoritative run state lives only on the run filesystem -- local disk for full-local
-runs, Filestore NFS for all cloud-backed modes.
+Authoritative live and restart state lives only on the run filesystem -- local disk for
+full-local runs and Filestore NFS for full-cloud runs.
 
 **`run-config.yaml`** (`{run_dir}/.state/run-config.yaml`): written at run creation time
 with immutable run identity (process name, run_id, backend, variant, git SHA, creation
 timestamp). On resume, validated against current launch parameters -- process identity
 and run directory must match.
-Cross-topology resume (e.g. hybrid to full cloud) is allowed because they share the same
-authoritative filesystem.
+Resume requires the same authoritative run directory.
+Backend metadata does not replace that filesystem identity.
 
 **`orchestrator-lease.yaml`** (`{run_dir}/.state/orchestrator-lease.yaml`): records the
 current orchestrator owner and heartbeat so a second orchestrator will refuse to start
@@ -2964,11 +2965,10 @@ directory.
 
 ### 21.13 Mount Path Standardization
 
-All VM types (workers, orchestrators, browser host) mount the Filestore NFS share at
-`/mnt/filestore` by default.
-`RUNS_DIR` resolves to `<mount_path>/runs`, not the bare share root, so run trees live
-at `/mnt/filestore/runs/{run_id}/`. The mount path is a container-level Volume mount
-point set via the Batch API Volume spec, not subject to COS host-level path
+Batch worker and orchestrator VMs mount the Filestore NFS share at `/mnt/filestore` by
+default. `RUNS_DIR` resolves to `<mount_path>/runs`, not the bare share root, so run
+trees live at `/mnt/filestore/runs/{run_id}/`. The mount path is a container-level
+Volume mount point set via the Batch API Volume spec, not subject to COS host-level path
 restrictions.
 
 ### 21.14 Secret Manager Integration
@@ -3026,6 +3026,14 @@ the original future-work backlog.
 * * *
 
 ## Revision History
+
+### rev2m (2026-08-24)
+
+Removed the unsupported laptop-orchestrated GCP worker topology, split-tree validation
+and recovery commands, and the persistent gateway command family.
+The supported cloud surfaces are full-cloud `run-process --cloud`, one-shot `gcp run`,
+and Batch-native monitoring and lifecycle commands; a hydrated run is one locally
+visible tree.
 
 ### rev2l (2026-08-09)
 

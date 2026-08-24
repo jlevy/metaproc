@@ -138,11 +138,10 @@ class TestBuildGcpRunJob:
         assert env["RUNS_DIR"] == "/mnt/filestore/runs"
 
     def test_filestore_config_uses_container_mount_path_for_runs_dir(self):
-        # When the config has a filestore_server and a workstation-flavoured
-        # runs_dir, the dispatched job must use the container mount path so
-        # a local ``RUNS_DIR=~/mnt/filestore/runs`` can't leak in.
+        # When the config has a filestore_server and a caller-local runs_dir,
+        # the dispatched job must use the container mount path.
         cfg = _config(
-            runs_dir="/workspace/user/mnt/filestore/runs",
+            runs_dir="/tmp/local-runs",
             filestore_server="10.0.0.5",
             filestore_mount_path="/mnt/filestore",
         )

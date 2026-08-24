@@ -41,8 +41,6 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     ("src/metaproc/dispatch/secret_refs.py", 55): (
         "SecretRef.resolve: dynamic env via Mapping default to os.environ"
     ),
-    # _build_env_exports iterates a literal list of var names.
-    ("src/metaproc/commands/gcp.py", 2324): "iterates _REMOTE_RUN_ENV_VARS literal list",
     # Template-placeholder fallback: the key is an arbitrary template
     # variable name, not a fixed env var, so the call is genuinely dynamic.
     ("src/metaproc/engine/placeholders.py", 84): "template {{key}} dynamic env fallback",

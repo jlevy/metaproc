@@ -177,7 +177,9 @@ class TestWriteRunConfig:
             run_dir=Path("/mnt/filestore/runs/run-5b/mine"),
         )
 
-    def test_resume_accepts_local_mount_alias_for_same_run(self, tmp_path: Path) -> None:
+    def test_resume_rejects_workstation_path_containing_filestore_alias(
+        self, tmp_path: Path
+    ) -> None:
         run_dir = tmp_path / "run-5c" / "mine"
         run_dir.mkdir(parents=True)
 
@@ -196,11 +198,12 @@ class TestWriteRunConfig:
         data["run_dir"] = "/mnt/filestore/runs/run-5c/mine"
         config_path.write_text(to_yaml_string(data))
 
-        _validate_run_config(
-            config_path,
-            process_name="mine",
-            run_dir=Path("/workspace/user/mnt/filestore/runs/run-5c/mine"),
-        )
+        with pytest.raises(CLIError, match="Resume mismatch.*run_dir"):
+            _validate_run_config(
+                config_path,
+                process_name="mine",
+                run_dir=Path("/workspace/user/mnt/filestore/runs/run-5c/mine"),
+            )
 
     def test_resume_rejects_unrelated_local_runs_directory(self, tmp_path: Path) -> None:
         run_dir = tmp_path / "run-5d" / "mine"

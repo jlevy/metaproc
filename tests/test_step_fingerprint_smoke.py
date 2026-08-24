@@ -20,7 +20,6 @@ import yaml
 from typer.testing import CliRunner
 
 from metaproc.cli import app
-from metaproc.commands.status import build_remote_status_args
 from metaproc.io.state_io import read_result_at
 from metaproc.paths import STATE_DIR, TASKS_SUBDIR
 
@@ -276,37 +275,3 @@ def test_status_steps_text_suppresses_variant_block_via_cli(tmp_path: Path) -> N
     assert result.exit_code == 0
     assert "Variant" not in result.output
     assert result.output.lstrip().startswith("Steps:")
-
-
-def test_build_remote_status_args_threads_steps_and_stale_only() -> None:
-    """``--steps`` and ``--stale-only`` must propagate to the remote
-    gateway invocation; otherwise ``metaproc status <run-id> --steps``
-    silently renders the full payload in remote mode."""
-
-    args = build_remote_status_args(
-        "my-run-id",
-        remote_base="/mnt/filestore/runs",
-        variant=None,
-        check=None,
-        no_system=False,
-        steps_only=True,
-        stale_only=True,
-    )
-    assert "--steps" in args
-    assert "--stale-only" in args
-    # --format json is always forced; the remote payload must be parseable.
-    assert "--format" in args
-    assert args[args.index("--format") + 1] == "json"
-
-    # Neither flag → neither makes it into the remote argv.
-    bare = build_remote_status_args(
-        "my-run-id",
-        remote_base="/mnt/filestore/runs",
-        variant=None,
-        check=None,
-        no_system=False,
-        steps_only=False,
-        stale_only=False,
-    )
-    assert "--steps" not in bare
-    assert "--stale-only" not in bare

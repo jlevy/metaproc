@@ -35,11 +35,6 @@ def validate(
         None, "--items", help="Comma-separated list of items to validate"
     ),  # noqa: UP007
     run_root: str | None = typer.Option(None, "--run-root", help="Override run root directory"),  # noqa: UP007
-    cloud_runs_dir: str | None = typer.Option(  # noqa: UP007
-        None,
-        "--cloud-runs-dir",
-        help="Cloud storage path (e.g. /mnt/filestore/runs) to check output existence instead of local",
-    ),
 ) -> None:
     """Check expected outputs exist for completed steps."""
     out = get_output()
@@ -85,24 +80,9 @@ def validate(
         return
 
     # Fan-out step: validate per item
-    if not items and cloud_runs_dir:
-        # Auto-discover items from local run dir (all items with .state/status.yaml)
-        discovered: list[str] = []
-        for vdir in sorted(run_dir.iterdir()) if run_dir.is_dir() else []:
-            if not vdir.is_dir():
-                continue
-            for item_d in sorted(vdir.iterdir()):
-                if item_d.is_dir() and (item_d / ".state" / "status.yaml").exists():
-                    discovered.append(item_d.name)
-            if discovered:
-                break  # use items from first variant
-        if not discovered:
-            raise CLIError("No items found in run directory for cloud validation")
-        item_list = discovered
-    elif not items:
+    if not items:
         raise CLIError(f"--items required for fan-out step '{step}' (each={step_each})")
-    else:
-        item_list = [s.strip() for s in items.split(",") if s.strip()]
+    item_list = [s.strip() for s in items.split(",") if s.strip()]
 
     # Build expected file list from declared outputs, gating on condition:
     expected_files: list[str] = []
@@ -131,25 +111,8 @@ def validate(
     # Load plugin registry for schema-aware validation
     softschema_registry = get_plugin_registry().softschemas
 
-    # When cloud_runs_dir is set, check output files at the cloud path.
-    # The cloud item dir mirrors the local layout: cloud_runs_dir/variant/item/
-    cloud_base = Path(cloud_runs_dir) if cloud_runs_dir else None
-
     for item in item_list:
-        # For cloud validation, resolve item dir relative to cloud base
-        if cloud_base:
-            item_dir = find_item_dir(cloud_base, item)
-            if not item_dir:
-                # Try variant-prefixed lookup: cloud_runs_dir contains variant subdirs
-                # matching the local run_dir structure
-                for vdir in sorted(cloud_base.iterdir()) if cloud_base.is_dir() else []:
-                    if vdir.is_dir():
-                        candidate = find_item_dir(vdir, item)
-                        if candidate:
-                            item_dir = candidate
-                            break
-        else:
-            item_dir = find_item_dir(run_dir, item)
+        item_dir = find_item_dir(run_dir, item)
         if not item_dir:
             results.append((item, False, ["<directory not found>"]))
             continue
@@ -161,10 +124,7 @@ def validate(
                 missing.append(fname)
                 continue
             fpath = resolve_existing_artifact(fpath)
-            if cloud_base:
-                # Cloud mode: skip schema validation, just check existence
-                pass
-            elif fname in output_schemas:
+            if fname in output_schemas:
                 # Same check the step boundary runs, so a run and this command
                 # cannot disagree about whether an artifact honours its contract.
                 missing.extend(
@@ -189,8 +149,7 @@ def validate(
     passed = sum(1 for _, ok, _ in results if ok)
     failed = sum(1 for _, ok, _ in results if not ok)
 
-    mode = f"cloud ({cloud_runs_dir})" if cloud_runs_dir else "local"
-    out.data(f"\nValidation: {step} ({len(item_list)} items, {mode})")
+    out.data(f"\nValidation: {step} ({len(item_list)} items)")
     out.data(f"Forms expected: {', '.join(form_files)}")
     out.data("")
 

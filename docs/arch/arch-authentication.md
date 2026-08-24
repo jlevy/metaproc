@@ -6,7 +6,7 @@ status: Draft — partial currency notice below
 ---
 # Architecture: Authentication and Credentials
 
-**Date:** 2026-04-21 (last updated 2026-05-23) **Status:** Draft — partial currency
+**Date:** 2026-04-21 (last updated 2026-08-24) **Status:** Draft — partial currency
 notice below
 
 > **Maintenance**: This is a maintained architecture doc.
@@ -102,8 +102,8 @@ Credentials flow through four surfaces:
 3. **GCP Secret Manager** — the source of truth for every credential delivered to a
    Batch job. Names are registered in `GCP_SECRET_REFS` and bound by the Batch service
    via `Environment.secret_variables`.
-4. **GCP service account ADC** — used on cloud VMs (Batch workers, orchestrators, the
-   `gcp remote` gateway host) via the attached SA + GCE metadata server.
+4. **GCP service account ADC** — used on Batch worker and orchestrator VMs via the
+   attached SA and GCE metadata server.
 
 ```
 ┌────────────────┐    ┌────────────────┐    ┌────────────────────┐
@@ -207,11 +207,10 @@ Resolution order (standard `google.auth.default()` chain, with one metaproc pre-
 3. GCE metadata server — used automatically on GCP VMs.
 4. User ADC from `gcloud auth application-default login` — final fallback.
 
-**Cloud-VM suppression**
+**Batch-runtime suppression**
 ([gcp_credentials.py:46](../../src/metaproc/cloud/gcp/gcp_credentials.py#L46)
-`_is_on_cloud_vm`): if `BATCH_TASK_INDEX` is set (Batch runtime marker) OR the Filestore
-mount path is actually mounted, the base64 decode path is skipped and ADC via the
-attached SA is used.
+`_is_in_gcp_batch`): when `BATCH_TASK_INDEX` is non-empty, the base64 decode path is
+skipped and ADC via the attached service account is used.
 This prevents a stale or incorrect base64 blob from leaking into the image.
 
 **Token refresh**
@@ -556,14 +555,6 @@ credentials behave identically:
 
 No orchestrator lease, no claim registry — this path is for one-shot invocations.
 
-#### UC-11: `metaproc gcp remote` via gateway host
-
-The gateway host (e.g., `metaproc-gateway`) has the Filestore mounted and ADC via its
-own attached SA. `metaproc gcp remote <command>` SSH/IAPs to the gateway and runs
-metaproc there.
-Credentials on the gateway follow the same chain as a laptop: `~/.env` on
-the gateway if present, else ADC from the VM’s SA.
-
 ### Data Model
 
 #### AuthStatus
@@ -657,8 +648,9 @@ Adding a secret is one line.
 
 ### Decision 3: GCP ADC on cloud VMs, base64 blob on laptops
 
-**Chosen approach:** `_is_on_cloud_vm()` detection skips `GCP_CREDENTIALS_BASE64`
-decoding whenever `BATCH_TASK_INDEX` is set or Filestore is mounted.
+**Chosen approach:** `_is_in_gcp_batch()` skips `GCP_CREDENTIALS_BASE64` decoding when
+the non-empty `BATCH_TASK_INDEX` runtime marker proves that the process is inside GCP
+Batch.
 
 **Alternatives considered:**
 - Ship the base64 blob to cloud VMs via Secret Manager — rejected: the attached SA
@@ -666,8 +658,8 @@ decoding whenever `BATCH_TASK_INDEX` is set or Filestore is mounted.
 - Require operators to unset `GCP_CREDENTIALS_BASE64` on cloud VMs — rejected: fragile
   across orchestrator/worker env inheritance.
 
-**Rationale:** Batch workers should use ADC from their own SA; the laptop base64 path
-stays simple (CI-friendly, `.env`-portable).
+**Rationale:** Batch workers should use ADC from their own service account; an ordinary
+Filestore mount does not establish a trusted cloud runtime identity.
 
 ### Decision 4: Adapter `bootstrap(home)` for credential materialization
 

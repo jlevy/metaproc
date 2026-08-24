@@ -67,6 +67,16 @@ class TestSubcommandRegistration:
         result = runner.invoke(app, ["validate", "--help"])
         assert result.exit_code == 0
 
+    @pytest.mark.parametrize("command", ["status", "validate"])
+    def test_split_tree_options_are_not_registered(self, command: str) -> None:
+        result = runner.invoke(app, [command, "--help"])
+        assert result.exit_code == 0
+        assert "cloud-runs-dir" not in result.output
+
+    def test_split_tree_pool_recovery_is_not_registered(self) -> None:
+        result = runner.invoke(app, ["pool", "retry-missing", "--help"])
+        assert result.exit_code != 0
+
     def test_softschema_help(self):
         result = runner.invoke(app, ["softschema", "--help"])
         assert result.exit_code == 0

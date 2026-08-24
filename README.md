@@ -119,7 +119,6 @@ Operational procedures live in [`docs/runbooks/`](docs/runbooks/):
 | [adding-a-new-llm-provider](docs/runbooks/adding-a-new-llm-provider.runbook.md) | Provider onboarding: registry, catalog, pricing, secrets, smoke tests |
 | [softschema-validation](docs/runbooks/softschema-validation.runbook.md) | Validating softschema-tagged artifacts |
 | [browser-streaming-smoke](docs/runbooks/browser-streaming-smoke.runbook.md) | Manual Metabrowser UI verification checklist |
-| [claude-code-cli-remote-vm](docs/runbooks/claude-code-cli-remote-vm.runbook.md) | Superseded per-developer VM path for the Claude Code adapter |
 
 ### Architecture
 
@@ -159,8 +158,8 @@ monitoring questions to commands.
 | Monitor | `status`, `wait`, `tail`, `pulse`, `stats`, `trace`, `resource-report`, `write-usage` | Run completion, health, logs, timing, cost, and resource reporting |
 | Artifacts | `softschema`, `structure-report`, `check-headers`, `compact-logs`, `gzip-text` | Schema inspection and validation, frontmatter checks, log compaction |
 | Credentials | `auth-check`, `auth push/list/probe/status/enable/disable/rotate/prune` | Operator preflight and labeled credential-pool lifecycle |
-| Pools | `pool status/events/concurrency-timeline/rollup/retry-missing` | RunPool snapshots, event logs, concurrency history, rollups |
-| Cloud | `gcp status/scale/logs/cancel/runs/resources/archive/remote/cleanup` | GCP Batch dispatch monitoring and lifecycle (optional extras) |
+| Pools | `pool status/events/concurrency-timeline/rollup` | RunPool snapshots, event logs, concurrency history, rollups |
+| Cloud | `gcp run/status/scale/logs/cancel/runs/resources/filestore/cleanup` | GCP Batch dispatch, monitoring, and lifecycle (optional extras) |
 | Self-docs | `help`, `skill`, `env --template` | Bundled manuals, Agent Skill generation, environment template |
 
 ## Process Specs

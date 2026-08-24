@@ -12,10 +12,8 @@ Both artifact types ship to ``gs://<bucket>/<prefix>/...`` so a Batch task
 container can fetch the current-branch metaproc + workspace without
 requiring an agent-image rebuild or a cross-VPC git clone.
 
-The wheel build path was extracted from
-``metaproc/src/metaproc/commands/gcp.py:_run_self_install`` so the
-self-install SSH command and the gcp-run dispatcher share one
-implementation.
+The wheel build path is shared by local artifact packaging and the
+``gcp run`` dispatcher.
 """
 
 from __future__ import annotations

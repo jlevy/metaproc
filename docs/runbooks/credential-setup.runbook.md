@@ -367,22 +367,20 @@ Environment variables for cloud runs:
 | `METAPROC_GCP_FILESTORE_SERVER` | Filestore NFS server IP |
 | `METAPROC_GCP_FILESTORE_MOUNT_PATH` | Filestore mount path (default: `/mnt/filestore`) |
 | `METAPROC_GCP_SERVICE_ACCOUNT` | Service account email for Batch jobs. **Required** for any run that pulls `gh-token` from Secret Manager — without it, Batch uses the default Compute Engine SA and Secret Manager access fails with `PermissionDenied`. |
-| `METAPROC_GATEWAY_HOST` | GCE gateway host for `gcp remote` (SSH target with Filestore mounted) |
 | `METAPROC_GCP_SECRET_GH_TOKEN` | Secret Manager resource name for GH_TOKEN (required when `GH_TOKEN` is set — plaintext fallback is refused) |
 | `METAPROC_GCP_SECRET_CLAUDE_CREDS` | Secret Manager resource name for the Claude Code CLI Personal-Plan credential (required when dispatching `variant=claude-code-cli` via `--backend gcp-worker` with the subscription credential; see the Claude Code CLI adapter section above) |
 
-`METAPROC_GCP_FILESTORE_MOUNT_PATH` controls where cloud VMs mount the share.
+`METAPROC_GCP_FILESTORE_MOUNT_PATH` controls where Batch VMs mount the share.
 For local runs, authored specs see `RUNS_DIR` instead.
-If you mount Filestore on your Mac via SSHFS, set `RUNS_DIR=<local-mount>/runs` to have
-local metaproc commands write straight to the shared filesystem.
+A workstation-mounted Filestore is not a supported cloud-orchestration path.
 
 ### ADC (Application Default Credentials)
 
-On cloud VMs (Batch workers, cloud orchestrators, browser host), auth uses ADC — the
-VM’s attached service account provides credentials via the GCE metadata server.
+On Batch worker and orchestrator VMs, auth uses ADC — the VM’s attached service account
+provides credentials via the GCE metadata server.
 **Do not set `GCP_CREDENTIALS_BASE64` on cloud VMs.** The credential bootstrap detects
-cloud environments (via `BATCH_TASK_INDEX` or mounted Filestore) and skips the base64
-decode path, ensuring ADC is always used.
+the Batch environment via `BATCH_TASK_INDEX` and skips the base64 decode path, ensuring
+ADC is always used.
 
 For local and CI runs, ADC resolution order:
 1. `GOOGLE_APPLICATION_CREDENTIALS` (SA key file path)

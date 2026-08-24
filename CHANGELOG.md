@@ -52,6 +52,13 @@ development series.
 
 ### Changed
 
+- **Full-cloud GCP topology is now enforced**: launching `run-process` with
+  `--backend gcp-worker` from an operator host now fails unless `--cloud` is also set,
+  and direct non-dry `run-parallel --backend gcp-worker` execution requires the GCP
+  Batch runtime marker.
+  The bare backend form remains available to the inner GCP Batch orchestrator, and dry
+  runs remain available for inspection.
+
 - **Code-step outputs are no longer YAML-repaired**: `run-parallel`’s `mode: code`
   fan-out ran the frontmatter auto-repair pass over each item’s declared outputs before
   validating them, which `run-process`’s code path never did.
@@ -60,6 +67,18 @@ development series.
   Repair and conform stay scoped to agent-authored output.
   A process whose code handler was relying on the repair pass will start reporting
   `invalid_outputs`; fix the handler’s serializer rather than the artifact.
+
+### Removed
+
+- **Persistent GCP gateway compatibility**: removed `gcp remote`, `gcp remote-run`,
+  `gcp self-install`, remote status routing, and workstation Filestore path aliases.
+  Batch-native status and logs remain available, and filesystem-oriented commands now
+  require an explicit locally visible run directory.
+- **Framework-owned run archiving**: removed `gcp archive`; consumers own durable run
+  publication and retention.
+- **Split-tree cloud compatibility**: removed `status --cloud-runs-dir`,
+  `validate --cloud-runs-dir`, and `pool retry-missing`. Hydrated and full-cloud runs
+  use one run tree for state, output validation, and recovery.
 
 ## [0.2.1][] - 2026-08-09
 

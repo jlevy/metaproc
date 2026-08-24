@@ -70,6 +70,7 @@ from metaproc.commands.helpers import (
     resolve_process_path,
     resolve_record_output_paths,
     seed_runtime_vars,
+    validate_gcp_worker_topology,
 )
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.engine.build_plan import build_plan, merge_defaults
@@ -552,7 +553,11 @@ def run_parallel(
     limit: int | None = typer.Option(
         None, "--limit", help="Max number of items to process (for pre-checks)"
     ),  # noqa: UP007
-    backend: str = typer.Option("local", "--backend", help="Launch backend (e.g. local, mock)"),
+    backend: str = typer.Option(
+        "local",
+        "--backend",
+        help="Launch backend; gcp-worker is internal to GCP Batch",
+    ),
     max_concurrency: int | None = typer.Option(
         None, "--max-concurrency", help="Max concurrent processes (pool mode)"
     ),  # noqa: UP007
@@ -655,6 +660,12 @@ def run_parallel(
         validate_guard_posture(auth_preflight_quota_guard)
     except ValueError as exc:
         raise CLIError(str(exc)) from exc
+
+    validate_gcp_worker_topology(
+        backend,
+        dry_run=dry_run,
+        batch_task_index=MetaprocEnv.BATCH_TASK_INDEX.read_str(default=None),
+    )
 
     process_path = resolve_process_path(process_spec)
     process_dir = process_path.parent
