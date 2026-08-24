@@ -881,6 +881,9 @@ worker VM entrypoints.
 Cloud worker-VM fan-out is triggered via `run-process --backend gcp-worker --cloud`. The
 bare `gcp-worker` form is reserved for the inner Batch orchestrator leg, including
 direct `run-parallel` plumbing.
+That is the current implementation syntax, not the target public topology model.
+The planned interface exposes orchestrator and worker placement independently as
+`--orchestrator` and `--worker`; section 21.1 defines the resolution boundary.
 
 ## 8.2 Example Resolved Plan
 
@@ -1000,7 +1003,7 @@ Implemented CLI surface:
 - `gcp cancel <target>` -- cancel running/queued Batch jobs (auto-detect: local run dir
   or run-id)
 - `gcp runs` -- list all active metaproc runs across the project
-- `gcp run` -- run an arbitrary command in a single Batch task
+- `gcp run` -- run one lower-level command in a single Batch task
 - `gcp resources` -- show metaproc-related GCP assets via Cloud Asset Inventory
 - `gcp filestore` -- inspect Filestore instance status and utilization
 - `gcp cleanup` -- delete old terminal-state Batch jobs
@@ -2598,6 +2601,14 @@ container and is rejected on an operator host.
 If a second cloud provider were added, a new worker dispatch implementation would
 register alongside `gcp-worker` in the `run-process` dispatch logic.
 
+`backend` and `placement` are different concepts.
+A backend controls subprocess execution inside one environment; placement controls where
+the orchestrator and its worker pool execute.
+The future public CLI therefore uses `--orchestrator` and `--worker`, while the internal
+`LaunchBackend` registry remains available to each selected environment.
+The first placement implementation uses one run-wide worker placement and resource
+profile; per-step worker-pool overrides are an additive extension.
+
 ### 19.4 CLI Flags
 
 | Flag | Purpose |
@@ -2619,6 +2630,13 @@ register alongside `gcp-worker` in the `run-process` dispatch logic.
 | `--adapter-config KEY=VALUE` | Adapter config overrides (repeatable) |
 | `--orchestrator-machine-type` | GCP machine type for orchestrator VM (with `--cloud`) |
 | `--max-duration` | Max runtime for orchestrator job (e.g., `8h`, `2h30m`, `3600s`) |
+
+These are the implemented flags.
+The planned replacement resolves `--orchestrator local|gcp` and `--worker colocated|gcp`
+into one immutable execution-topology value before planning or dispatch, then updates
+all callers and maintained documentation atomically.
+No compatibility alias is required unless a released external consumer that cannot
+migrate with Metaproc is identified.
 
 ### 19.5 Completion and Resumability
 
@@ -2708,6 +2726,33 @@ accepted terminal run tree to its registered durable object-store contract and v
 that publication under its own policy.
 The orchestrator uses a STANDARD VM (not Spot) to avoid preemption killing the DAG
 coordinator. Workers default to Spot VMs for cost efficiency.
+
+Orchestrator and worker placement are independent axes even though the current
+full-cloud command selects both at once.
+The target public flags are `--orchestrator` and `--worker`:
+
+| Orchestrator | Worker | Topology |
+| --- | --- | --- |
+| `local` | `colocated` | Ordinary local execution |
+| `gcp` | `gcp` | Current distributed full-cloud execution |
+| `gcp` | `colocated` | Planned single-environment cloud execution |
+| `local` | `gcp` | Planned locally supervised cloud workers |
+
+The first implementation resolves one worker placement and one resource profile for the
+entire run.
+That placement may be `colocated` or `gcp`. That pool may span multiple Batch
+VMs; the workers share a placement and profile, not necessarily the orchestrator host.
+The resolver produces an immutable topology containing orchestrator placement, worker
+placement, resources, and state transport.
+The process engine consumes that type; provider dispatchers translate it into GCP Batch
+jobs, and the internal `LaunchBackend` remains a separate subprocess abstraction.
+This boundary permits later per-step adapter or harness pools without changing the
+process engine or the public placement axes.
+
+Same-locus execution can retain the filesystem state transport.
+Local-orchestrator/cloud-worker execution remains unsupported until a bidirectional
+transport owns dispatch inputs, leases, claims, events, results, cancellation, and
+resume; path aliases, SSHFS, and laptop-mounted Filestore are rejected substitutes.
 
 ### 21.2 Container Bootstrap (`container_bootstrap.py`)
 
@@ -2901,6 +2946,11 @@ directly in `run-process`, not a `LaunchBackend`. Each worker VM runs
 `run-parallel --backend local` internally, so the `LaunchBackend` protocol operates at
 the subprocess level within each VM.
 
+The planned placement resolver sits above both mechanisms.
+It selects the orchestrator locus, one run-wide worker locus and resource profile, and
+the compatible state transport.
+Provider-specific dispatch remains below that boundary.
+
 The naming hierarchy:
 
 | Layer | Example | Scope |
@@ -3026,6 +3076,14 @@ the original future-work backlog.
 * * *
 
 ## Revision History
+
+### rev2n (2026-08-24)
+
+Defined `run-process --cloud` as the application-level cloud surface and `gcp run` as a
+lower-level single-task primitive.
+Recorded the planned `--orchestrator` and `--worker` placement interface, its immutable
+resolved-topology boundary, a run-wide worker placement for the first implementation,
+and the explicit transport requirement for later split-locus execution.
 
 ### rev2m (2026-08-24)
 

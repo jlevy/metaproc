@@ -4,7 +4,7 @@ Requires the ``[gcp-batch]`` optional extra:
     uv sync --extra gcp-batch
 
 Commands:
-    run      — Run one arbitrary command in one Batch task
+    run      — Run one lower-level command in one Batch task
     status  — Show status for a run or exact Batch job resource
     scale   — Update desired topology for an active cloud fan-out step
     logs    — Stream logs for a run or exact Batch job resource

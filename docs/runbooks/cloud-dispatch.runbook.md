@@ -83,6 +83,12 @@ machine type, secret references, and mounts before removing any `--dry-run` gate
 
 ## 4. Dispatch a Process
 
+Use `run-process` for an application workflow.
+It is the orchestration API: the process graph, leases, claims, retries, resume state,
+and worker fan-out remain framework-owned.
+The current supported cloud topology places both the orchestrator and its run-wide
+worker pool in GCP.
+
 ```bash
 uv run metaproc run-process path/to/workflow.process.md \
   --var RUNS_DIR=/mnt/filestore/runs \
@@ -98,6 +104,13 @@ consumer. Use `--spot` only when the workflow tolerates preemption.
 The product of workers and per-worker concurrency is the maximum task concurrency,
 subject to runtime resource and provider limits.
 
+The current flags are implementation-facing and will be replaced together by explicit
+`--orchestrator` and `--worker` placement flags.
+Do not use those future names in executable commands yet.
+Local-orchestrator/cloud-worker execution is also planned, but is rejected until it has
+an explicit bidirectional state transport; a laptop path, SSHFS mount, or path alias is
+not that transport.
+
 Filestore is scratch state for live execution and restart, not Metaproc’s terminal
 durability contract.
 Before reclaiming it, the downstream consumer must publish the accepted terminal run
@@ -106,7 +119,12 @@ its own policy.
 
 ## 5. Dispatch an Arbitrary Command
 
-`metaproc gcp run` sends one command to one Batch task.
+`metaproc gcp run` is the lower-level single-task Batch primitive.
+Use it when no process graph is needed: for a probe, diagnostic, publication task, or an
+application such as a legacy coordinator that already owns its outer orchestration.
+Do not chain `gcp run` calls to recreate process scheduling; use `run-process` for that.
+
+The command sends one command to one Batch task.
 By default it builds and ships the current Metaproc wheel and repository workspace.
 
 ```bash

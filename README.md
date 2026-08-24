@@ -162,6 +162,19 @@ monitoring questions to commands.
 | Cloud | `gcp run/status/scale/logs/cancel/runs/resources/filestore/cleanup` | GCP Batch dispatch, monitoring, and lifecycle (optional extras) |
 | Self-docs | `help`, `skill`, `env --template` | Bundled manuals, Agent Skill generation, environment template |
 
+For an application process, the supported cloud entry point is currently
+`metaproc run-process <spec> --backend gcp-worker --cloud`. It submits the process
+orchestrator and its fan-out workers to GCP and preserves the process graph, resume
+state, leases, claims, and monitoring contracts.
+`metaproc gcp run` is a lower-level primitive for one command in one Batch task, such as
+a probe, diagnostic, publisher, or an application that already owns its outer
+orchestration. It is not a second process-orchestration API; do not build a process by
+chaining `gcp run` calls.
+
+The current `--backend` and `--cloud` spelling reflects the implemented CLI. The cloud
+architecture documents the planned provider-neutral `--orchestrator`/`--worker`
+placement model; those flags are not available yet.
+
 ## Process Specs
 
 Process specs define multi-step DAGs that `run-process` walks automatically.

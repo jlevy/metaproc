@@ -104,6 +104,53 @@ Before reclaiming that scratch storage, the downstream consumer must publish the
 accepted terminal run tree to its registered durable object-store contract and verify
 that publication under its own policy.
 
+#### 2.2.1 Target Placement Model
+
+Orchestrator placement and worker placement are separate topology axes.
+The implemented CLI still exposes them indirectly through `--cloud` and
+`--backend gcp-worker`; a future atomic CLI change will expose them as `--orchestrator`
+and `--worker`. The target vocabulary is:
+
+```text
+metaproc run-process <spec> \
+  --orchestrator local|gcp \
+  --worker colocated|gcp
+```
+
+`colocated` means fan-out executes in the orchestrator’s environment.
+It does not mean “the operator laptop” when the orchestrator is in GCP.
+
+| Orchestrator | Worker | Meaning | Availability |
+| --- | --- | --- | --- |
+| `local` | `colocated` | Ordinary local process | Current |
+| `gcp` | `gcp` | Batch orchestrator and distributed Batch workers | Current through `--backend gcp-worker --cloud` |
+| `gcp` | `colocated` | One cloud execution environment owns orchestration and work | Planned |
+| `local` | `gcp` | Local interactive orchestrator with GCP workers | Planned; requires an explicit state transport |
+
+The first placement implementation has one run-wide worker placement and resource
+profile. That placement may be `colocated` or `gcp`, but every worker uses the same
+provider, image, machine class, identity, secret policy, and network policy.
+The pool may still span multiple Batch VMs; run-wide means those workers share one
+placement and profile, not that they share the orchestrator host.
+Per-step placement overrides and adapter- or harness-specific pools are later
+extensions, not requirements for the first CLI change.
+
+The CLI resolver must produce one immutable execution-topology value before planning or
+dispatch. The process engine consumes that resolved value rather than testing raw CLI
+strings or provider environment variables.
+That value contains the orchestrator placement, the run-wide worker placement and
+resource profile, and a state-transport strategy.
+Provider dispatchers translate placements into provider jobs; the process graph does not
+contain GCP scheduling branches.
+
+Same-locus topologies may select the existing filesystem transport.
+A split-locus topology is valid only after a registered transport implements immutable
+dispatch inputs, leases, events, claims, results, failures, cancellation, and resume.
+It must fail closed before dispatch when no such transport is available; SSHFS, a
+laptop-mounted Filestore, and path-identity aliases are not transports.
+Later per-step worker profiles can override the run-wide default in the resolved
+topology without changing the two public placement axes.
+
 ### 2.3 Fan-Out Backend Dispatch
 
 Fan-out steps in `run-process` dispatch through a backend selected via `--backend`:
@@ -613,7 +660,7 @@ path.
 | `gcp logs` | Stream logs from Cloud Logging |
 | `gcp cancel` | Cancel running/queued Batch jobs |
 | `gcp runs` | List all active metaproc runs |
-| `gcp run` | Run an arbitrary command in a single Batch task |
+| `gcp run` | Run one lower-level command in a single Batch task |
 | `gcp resources` | Show GCP resource usage |
 | `gcp filestore` | Manage Filestore NFS |
 | `gcp cleanup` | Clean up cloud resources |
@@ -638,9 +685,13 @@ path.
 
 ### 3.15 `metaproc gcp run`: Arbitrary Command Dispatch
 
-A complement to the orchestrator/worker model in §3.3-§3.6 for running **arbitrary
-one-off commands** on GCP Batch with the dispatcher’s current Metaproc and repository
-state. Used for detached command fan-out and ad-hoc debug probes.
+This is the lower-level primitive for running **one arbitrary command in one Batch
+task** with the dispatcher’s current Metaproc and repository state.
+Appropriate uses include probes, diagnostics, terminal publication, and an application
+that already owns its outer orchestration.
+An application process should normally use `run-process --cloud`, which preserves the
+framework’s graph, lease, claim, retry, resume, and worker-fan-out contracts.
+Scripts must not construct a process by chaining `gcp run` calls.
 
 **Pipeline.** `commands/gcp_run.py` parses CLI flags, builds a `GCPBatchConfig`, ships
 artifacts (`build_wheel` and `package_workspace` under `dispatch_artifacts.py`, gated by
@@ -672,6 +723,7 @@ partitioning and resume contracts; that machinery is overkill for “run `echo` 
 The two paths share `batch_backend.py`, `container_bootstrap.py`, the `GCP_SECRET_REFS`
 registry, and the Filestore mount script, but `metaproc gcp run` carries no orchestrator
 lease, no claim registry, no per-item dispatch manifest.
+That absence is its boundary, not an invitation to grow a second orchestration layer.
 
 **Wheel and workspace overrides apply to both paths.** The URI variables and their
 required `METAPROC_WHEEL_SHA256` and `METAPROC_WORKSPACE_SHA256` digests are not
@@ -700,6 +752,11 @@ for operator recipes and this document for the full design.
 
 ### Open Questions
 
+- Which durable transport should implement local-orchestrator/cloud-worker state,
+  events, leases, cancellation, and recovery without making a laptop-mounted filesystem
+  authoritative?
+- Should the first per-step worker-profile extension live in process-spec data or in a
+  separately referenced placement profile?
 - Should `SecretRefSet` provider-ref aggregation be lazy (current) or eagerly validated
   at dispatch time? The current design silently skips unresolvable provider refs, which
   could mask a misconfigured credential until the adapter fails at runtime.
@@ -720,6 +777,14 @@ for operator recipes and this document for the full design.
   misconfigured networks before job submission.
 
 ## Revision History
+
+### rev9 (2026-08-24)
+
+Clarified that `run-process --cloud` is the application-level cloud API and `gcp run` is
+a lower-level single-task primitive.
+Recorded the planned `--orchestrator` and `--worker` placement axes, a run-wide worker
+placement for the first implementation, the resolved-topology/provider boundary, and the
+state-transport gate required before split-locus execution can be supported.
 
 ### rev8 (2026-08-24)
 
