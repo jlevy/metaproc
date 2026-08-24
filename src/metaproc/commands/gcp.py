@@ -4,10 +4,10 @@ Requires the ``[gcp-batch]`` optional extra:
     uv sync --extra gcp-batch
 
 Commands:
-    status  — Show status of GCP Batch jobs for a run (local dir or run-id)
+    status  — Show status for a run or exact Batch job resource
     scale   — Update desired topology for an active cloud fan-out step
-    logs    — Stream logs from Cloud Logging for a run (local dir or run-id)
-    cancel  — Cancel running GCP Batch jobs for a run (local dir or run-id)
+    logs    — Stream logs for a run or exact Batch job resource
+    cancel  — Cancel jobs for a run or exact Batch job resource
     runs    — List all active metaproc runs across the project
     archive — Sync a run directory to GCS for long-term storage
     cleanup — Delete old GCP Batch jobs in terminal states
@@ -113,6 +113,7 @@ except ImportError as exc:
         raise
 
 _BATCH_RPC_TIMEOUT_S = 60.0
+_BATCH_JOB_RESOURCE_RE = re.compile(r"^projects/(?P<project>[^/]+)/locations/[^/]+/jobs/[^/]+$")
 
 
 def _require_gcp_batch() -> None:
@@ -212,6 +213,12 @@ def _event_matches_item(event: dict[str, object], item: str) -> bool:
 def _is_run_dir(target: str) -> bool:
     """Return True if target is an existing directory (local run path)."""
     return Path(target).is_dir()
+
+
+def _batch_job_resource_project(target: str) -> str:
+    """Return the project encoded in an exact Batch job resource, if present."""
+    match = _BATCH_JOB_RESOURCE_RE.fullmatch(target)
+    return match.group("project") if match else ""
 
 
 def _run_id_from_job_metadata(job: Any, identity_key: str) -> str | None:
@@ -412,7 +419,7 @@ def _format_job_results(
 
 @gcp_app.command("status")
 def gcp_status(
-    target: str = typer.Argument(..., help="Run directory or run-id string"),
+    target: str = typer.Argument(..., help="Run directory, run-id, or Batch job resource"),
     failed_only: bool = typer.Option(False, "--failed", help="Show only failed/cancelled jobs"),
     project: str = typer.Option("", "--project", help="GCP project (default: from env)"),
     region: str = typer.Option("us-central1", "--region", help="GCP region"),
@@ -420,8 +427,9 @@ def gcp_status(
 ) -> None:
     """Show Batch job status for a run.
 
-    If <target> is an existing directory: read local runpool events, query jobs by name.
-    If <target> is a string: query Batch API by exact run key plus safe legacy recovery.
+    Existing directories resolve jobs from local runpool events. Exact Batch job
+    resources resolve directly. Other strings use exact run-key lookup plus safe
+    legacy recovery.
     """
     _require_gcp_batch()
     from google.cloud import batch_v1  # noqa: PLC0415 -- optional [gcp-batch] dependency
@@ -454,6 +462,13 @@ def gcp_status(
         # Run config is the canonical local identity source. Hash-verified job metadata
         # covers older layouts; the directory name remains a last-resort fallback.
         run_id = _resolve_local_run_id(run_dir, jobs)
+    elif _batch_job_resource_project(target):
+        client = batch_v1.BatchServiceClient()
+        try:
+            jobs = [client.get_job(batch_v1.GetJobRequest(name=target))]
+        except Exception as exc:
+            raise CLIError(f"Failed to fetch Batch job {target}: {exc}") from exc
+        run_id = target.rsplit("/", 1)[-1]
     else:
         # Run-id mode: query Batch API by label.
         run_id = target
@@ -677,8 +692,8 @@ def _infer_scale_spot_from_manifest(
 def _resolve_job_names_and_project(target: str, project: str, region: str) -> tuple[list[str], str]:
     """Resolve target to a list of job names and the GCP project.
 
-    If target is a directory, read local events. If it's a run-id, query Batch API.
-    Returns (job_names, project_id).
+    If target is a directory, read local events. An exact Batch job resource resolves
+    directly. Otherwise, query the Batch API by run ID. Returns job names and project.
     """
     if _is_run_dir(target):
         run_dir = Path(target)
@@ -690,6 +705,9 @@ def _resolve_job_names_and_project(target: str, project: str, region: str) -> tu
         match = re.match(r"projects/([^/]+)/", job_names[0])
         resolved_project = match.group(1) if match else ""
         return job_names, resolved_project
+    resource_project = _batch_job_resource_project(target)
+    if resource_project:
+        return [target], resource_project
     # Run-id mode: query Batch API by label.
     effective_project = project or MetaprocEnv.METAPROC_GCP_PROJECT.read_str(default="")
     if not effective_project:
@@ -1105,7 +1123,7 @@ def _format_log_entry(entry: Any) -> str:
 
 @gcp_app.command("logs")
 def gcp_logs(
-    target: str = typer.Argument(..., help="Run directory or run-id string"),
+    target: str = typer.Argument(..., help="Run directory, run-id, or Batch job resource"),
     item: str = typer.Option("", "--item", help="Filter to a specific item label"),
     errors_only: bool = typer.Option(False, "--errors", help="Show only ERROR+ severity"),
     limit: int = typer.Option(100, "--limit", help="Maximum number of log entries"),
@@ -1133,9 +1151,9 @@ def gcp_logs(
 ) -> None:
     """Stream logs from Cloud Logging for a run's GCP Batch jobs.
 
-    Resolves Batch job IDs from run events (for local run directories) or
-    from the exact run key with safe legacy recovery (for run-id strings), then
-    filters Cloud Logging on those jobs. By default only container stdout
+    Resolves Batch job IDs from run events, an exact Batch job resource, or an
+    exact run key with safe legacy recovery, then filters Cloud Logging on those
+    jobs. By default only container stdout
     (``batch_task_logs``) is included; pass ``--include-agent-logs`` to
     include VM agent startup logs (useful for early bootstrap failures
     such as NFS mount errors).
@@ -1159,7 +1177,10 @@ def gcp_logs(
         raise CLIError("--worker requires --role worker")
 
     # Resolve project — from flag, env, or local events. No Batch API call.
-    resolved_project = project or MetaprocEnv.METAPROC_GCP_PROJECT.read_str(default="")
+    resource_project = _batch_job_resource_project(target)
+    resolved_project = (
+        resource_project or project or MetaprocEnv.METAPROC_GCP_PROJECT.read_str(default="")
+    )
     if not resolved_project and _is_run_dir(target):
         events = _read_events(Path(target))
         job_names = _extract_job_names(events)
@@ -1188,6 +1209,11 @@ def gcp_logs(
         job_uids = _resolve_job_uids(job_names)
         if not job_uids:
             out.progress("No Batch job UIDs resolved for recorded job names.")
+            raise typer.Exit(code=0)
+    elif resource_project:
+        job_uids = _resolve_job_uids([target])
+        if not job_uids:
+            out.progress("Batch job resource did not resolve to a UID; cannot query logs.")
             raise typer.Exit(code=0)
     else:
         run_id = target
@@ -1317,16 +1343,16 @@ def _follow_logs(
 
 @gcp_app.command("cancel")
 def gcp_cancel(
-    target: str = typer.Argument(..., help="Run directory or run-id string"),
+    target: str = typer.Argument(..., help="Run directory, run-id, or Batch job resource"),
     confirm: bool = typer.Option(False, "--yes", help="Skip confirmation prompt"),
     project: str = typer.Option("", "--project", help="GCP project (default: from env)"),
     region: str = typer.Option("us-central1", "--region", help="GCP region"),
 ) -> None:
     """Cancel all running/queued/scheduled Batch jobs for a run.
 
-    If <target> is an existing directory: read local runpool events, extract job names.
-    If <target> is a string: query Batch API by exact run key plus safe legacy recovery.
-    Writes a kill sentinel if a local run directory exists.
+    Existing directories resolve jobs from local runpool events. Exact Batch job
+    resources resolve directly. Other strings use exact run-key lookup plus safe
+    legacy recovery. Writes a kill sentinel if a local run directory exists.
     """
     _require_gcp_batch()
     from google.cloud import batch_v1  # noqa: PLC0415 -- optional [gcp-batch] dependency

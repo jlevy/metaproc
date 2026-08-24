@@ -1,7 +1,7 @@
 """Tests for consolidated metaproc gcp commands (status, logs, cancel, runs).
 
-Tests the auto-detect pattern: each command accepts a <target> that is
-either a local run directory (path exists) or a run-id string (query Batch API).
+Tests the auto-detect pattern: each command accepts a <target> that is a local
+run directory, an exact Batch job resource, or a run-id string.
 """
 
 # pyright: reportAttributeAccessIssue=false
@@ -180,6 +180,20 @@ class TestResolveJobNamesAndProject:
 
         assert job_names == ["projects/p/locations/r/jobs/j1"]
         assert project == "test-project"
+
+    def test_exact_job_resource_mode_needs_no_project_lookup(self) -> None:
+        resource = "projects/p/locations/us-central1/jobs/gcprun-123"
+
+        with patch("metaproc.commands.gcp._query_jobs_by_run_id") as query_jobs:
+            job_names, project = _resolve_job_names_and_project(
+                resource,
+                "",
+                "us-central1",
+            )
+
+        assert job_names == [resource]
+        assert project == "p"
+        query_jobs.assert_not_called()
 
 
 class TestRunIdentityLookup:
@@ -439,6 +453,29 @@ class TestGcpRunsIdentity:
         assert result.exit_code == 0, result.output
         assert set(json.loads(result.output)) == {f"run-abc [{identity_key}]"}
 
+    def test_exact_job_resource_status_needs_no_run_label(self) -> None:
+        resource = "projects/p/locations/us-central1/jobs/gcprun-123"
+        job = MagicMock()
+        job.name = resource
+        job.labels = {"metaproc-role": "gcp-run"}
+        job.status.state = JobStatus.State.FAILED
+        client = MagicMock()
+        client.get_job.return_value = job
+
+        with (
+            patch("metaproc.commands.gcp._require_gcp_batch"),
+            patch("google.cloud.batch_v1.BatchServiceClient", return_value=client),
+            patch("metaproc.commands.gcp._query_jobs_by_run_id") as query_jobs,
+            patch.dict("os.environ", {"METAPROC_GCP_PROJECT": ""}),
+        ):
+            result = CliRunner().invoke(app, ["gcp", "status", resource, "--json"])
+
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload[0]["job_id"] == "gcprun-123"
+        assert payload[0]["state"] == "FAILED"
+        query_jobs.assert_not_called()
+
     def test_local_status_displays_exact_run_directory_identity(self, tmp_path: Path) -> None:
         run_id = "run-20260803T010203Z.1234560000.abc123def4"
         run_dir = tmp_path / run_id
@@ -515,6 +552,30 @@ class TestResolveScaleRunDir:
 
 
 class TestGcpLogs:
+    def test_exact_job_resource_resolves_delayed_generic_run_logs(self) -> None:
+        resource = "projects/test-proj/locations/us-central1/jobs/gcprun-123"
+        mock_client = MagicMock()
+        mock_client.list_entries.return_value = []
+
+        with (
+            patch("metaproc.commands.gcp._require_gcp_batch"),
+            patch("google.cloud.logging.Client", return_value=mock_client) as logging_client,
+            patch(
+                "metaproc.commands.gcp._resolve_job_uids",
+                return_value=["job-uid-123"],
+            ) as resolve_uids,
+            patch("metaproc.commands.gcp._query_jobs_by_run_id") as query_jobs,
+            patch.dict("os.environ", {"METAPROC_GCP_PROJECT": ""}),
+        ):
+            result = CliRunner().invoke(app, ["gcp", "logs", resource])
+
+        assert result.exit_code == 0, result.output
+        logging_client.assert_called_once_with(project="test-proj")
+        resolve_uids.assert_called_once_with([resource])
+        query_jobs.assert_not_called()
+        filter_str = mock_client.list_entries.call_args.kwargs["filter_"]
+        assert 'labels."job_uid"="job-uid-123"' in filter_str
+
     def test_local_run_dir_filters_by_job_ids(self, tmp_path: Path) -> None:
 
         events_file = runpool_events(tmp_path)
@@ -950,7 +1011,7 @@ class TestGCPCLIHelp:
         result = runner.invoke(app, ["gcp", "status", "--help"])
         assert result.exit_code == 0
         assert "target" in result.output.lower()
-        assert "run directory or run-id" in result.output.lower()
+        assert "batch job resource" in result.output.lower()
 
     def test_logs_help(self):
 

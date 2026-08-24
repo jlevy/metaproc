@@ -54,8 +54,8 @@ class TestBootstrapGcpRun:
         local_wheel = str(wheel_dir / "metaproc-1.0-py3-none-any.whl")
         assert not Path(local_wheel).exists()
         cmds = [call.args[0] for call in run_mock.call_args_list]
-        # Must install into the baked /opt/venv (which has [gcp-batch] extras)
-        # with the extra explicitly re-requested so force-reinstall keeps them.
+        # Replace only Metaproc itself. The image already contains the audited
+        # dependency/extras closure, which may use per-package cutoff exceptions.
         assert [
             "uv",
             "pip",
@@ -63,7 +63,8 @@ class TestBootstrapGcpRun:
             "--python",
             "/opt/venv/bin/python",
             "--force-reinstall",
-            f"{local_wheel}[gcp-batch]",
+            "--no-deps",
+            local_wheel,
         ] in cmds
 
     def test_wheel_install_rejects_non_gs_uri(self, tmp_path: Path):
