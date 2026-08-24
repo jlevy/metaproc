@@ -52,9 +52,8 @@ class PoolSlotUnavailableError(RuntimeError):
     """Raised when a pool dispatch can't acquire an eligible slot.
 
     Wraps a single classifier-reason string plus the (adapter, labels
-    tried) tuple for the caller's fail-fast / wait / signal decision.
-    Phase 2c's RetryLaterPolicy catches this at the dispatch layer
-    and decides whether to block, exit 78, or raise up to the user.
+    tried) tuple so the caller can report or reschedule the exhausted
+    item without parsing the exception message.
     """
 
     def __init__(

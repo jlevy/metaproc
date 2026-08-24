@@ -25,6 +25,11 @@ development series.
 
 ### Fixed
 
+- **Cloud authentication policy propagation**: `run-process --cloud` now carries the
+  complete authentication-pool configuration as one typed value through orchestrator
+  dispatch. Selection policy and future fields can no longer be silently dropped while
+  neighboring authentication flags continue to reach the cloud job.
+
 - **Valid-output recovery cannot rewrite terminal attempt history**: outputs produced
   before a nonzero or killed process exit are validated while the originating attempt is
   still live. A later valid file cannot silently turn an already-terminal durable attempt

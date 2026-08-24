@@ -543,12 +543,14 @@ scalar launch.
 - [x] Pass auth-pool flags and dispatch configuration to scalar agent steps; assert the
   actual credential-pool label used by a child invocation.
   This work is implemented in unmerged pull request 34.
-- [x] Define one typed retry-later configuration, persist it in `run-config.yaml`, and
-  transport it without field-by-field drift through local, orchestrator, and worker
-  dispatch. This work is implemented in draft pull request 36, which remains unmerged
-  until scheduler paths consume and validate the policy.
-- [ ] Converge scalar and fan-out pool exhaustion on the existing typed
-  `fail-fast|wait|signal` retry-later policy and checkpoint machinery.
+- [x] Carry the existing `AuthPoolFlags` value through local, orchestrator, and worker
+  dispatch so cloud execution cannot silently drop one authentication field.
+  Pull request 36 implements this boundary correction.
+- [x] Remove the unconsumed retry-later CLI proposal from pull request 36. Do not make
+  retry-later behavior a GTIA v3.0-pre prerequisite.
+- [ ] After successive smoke cohorts, remove the dormant wait/checkpoint/resume
+  machinery unless an observed failure demonstrates a smaller recovery primitive that
+  should replace it.
 - [x] Run synchronous handlers and command-backed code steps off the event loop through
   a run-owned executor sized to the operator ceiling when one is configured.
   This work is implemented in unmerged pull request 33.
@@ -722,18 +724,22 @@ agents; and retains agent/code process-group ownership through completion, timeo
 cancellation, including a leader-exit race and a child that ignores `SIGTERM`. Review
 findings `mp-nnxl` and `mp-xnk9` are closed.
 
-The retry-later configuration-transport slice in
+The cloud authentication-boundary correction in
 [pull request 36](https://github.com/jlevy/metaproc/pull/36) is stacked on pull request
-35 and has completed precommit review and verification: the full suite passes 4,295
-tests with 8 skipped, and lint, type, documentation, public-hygiene, supply-chain, and
-browser checks are green.
-Canonical GitHub lint, distribution, and Python 3.12/3.13/3.14 jobs also pass for the
-exact head. It replaces the duplicated auth fields on `OrchestratorDispatchConfig` with
-the existing `AuthPoolFlags` payload, fixing the cloud `auth_policy` loss while adding
-retry policy and wait-bound transport.
-It remains a draft release gate: scalar and fan-out admission semantics, deferred state
-and events, typed checkpoints, resume persistence, preflight routing, and GCP signal
-preservation remain open under the child beads of `mp-tibt`.
+35\. Review found that the original retry-later transport exposed inert policy and
+expanded dormant recovery machinery without a GTIA consumer.
+The revised slice removes that surface.
+It only replaces the duplicated authentication fields on `OrchestratorDispatchConfig`
+with the existing `AuthPoolFlags` payload, fixes the cloud `auth_policy` loss, and
+removes preflight advice for the unsupported retry flag.
+Its focused 140-test boundary suite and full 4,341-test local verification pass with 8
+skipped, along with lint, types, documentation, public-hygiene, browser, supply-chain,
+dependency-audit, distribution, and installed-wheel checks.
+
+Retry-later behavior is not a GTIA v3.0-pre prerequisite.
+The dormant wait, checkpoint, and resume-daemon primitives remain under `mp-tibt` for a
+removal-or-justification decision based on smoke-test evidence; they will not be
+expanded speculatively.
 
 The first mapped-scope slice is implemented on the rebased private integration branch.
 Its network-free three-item CLI test proves one parent run, per-item child roots, shared

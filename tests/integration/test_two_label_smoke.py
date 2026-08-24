@@ -218,7 +218,7 @@ class TestExhaustionAndRecovery:
     ) -> None:
         # Caller deliberately excluded both labels (e.g. inside a retry
         # walk that already tried each). Returns None so the caller's
-        # RetryLaterPolicy can decide wait vs fail-fast.
+        # The dispatch caller decides whether to fail or reschedule.
         lease = coord.acquire_slot(
             adapter="claude-code-cli",
             attempt=0,

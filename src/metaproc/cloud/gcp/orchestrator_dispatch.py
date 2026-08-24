@@ -15,7 +15,7 @@ import logging
 import os
 import secrets as _secrets
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from metaproc.cloud.gcp.batch_backend import (
     GCP_SECRET_REFS,
@@ -66,14 +66,9 @@ class OrchestratorDispatchConfig:
     orchestrator_machine_type: str = DEFAULT_ORCHESTRATOR_MACHINE_TYPE
     max_duration_s: int = DEFAULT_MAX_DURATION_S
     poll_interval: int = 60
-    # Auth-pool dispatch passthrough. Mirrors `run-process --auth-*` flags
-    # so cloud and local execution paths offer the same surface.
-    auth_account: str | None = None
-    auth_backend: str | None = None
-    auth_fallback_policy: str = "none"
-    auth_include_labels: tuple[str, ...] = ()
-    auth_exclude_labels: tuple[str, ...] = ()
-    auth_cross_quota_group: bool = True
+    # Keep the auth cohort in its boundary type so adding a field cannot
+    # silently desynchronize local, orchestrator, and worker dispatch.
+    auth_flags: AuthPoolFlags = field(default_factory=AuthPoolFlags)
 
 
 @dataclass
@@ -140,25 +135,9 @@ async def dispatch_orchestrator(
     # `--auth-*` flags onto the inner `run-process` command. Without them,
     # cloud workers silently fall back to the legacy single-credential path
     # even when operators pass `--auth-account` to the cloud dispatch.
-    # AuthPoolFlags centralizes the env-var names + CSV encoding so this
-    # site does not hardcode "METAPROC_AUTH_*" strings.
-    # OrchestratorDispatchConfig stores `auth_account` / `auth_backend`
-    # as `str | None` (None = unset); AuthPoolFlags uses `""` for the
-    # absent sentinel. Translate at the boundary so the dispatch config
-    # shape does not churn. The legacy "none" string for fallback_policy
-    # is also translated to "" here.
-    auth_flags = AuthPoolFlags(
-        auth_account=config.auth_account or "",
-        auth_backend=config.auth_backend or "",
-        auth_fallback_policy=(
-            config.auth_fallback_policy
-            if config.auth_fallback_policy and config.auth_fallback_policy != "none"
-            else ""
-        ),
-        auth_include_labels=tuple(config.auth_include_labels),
-        auth_exclude_labels=tuple(config.auth_exclude_labels),
-        auth_cross_quota_group=config.auth_cross_quota_group,
-    )
+    # AuthPoolFlags centralizes the env-var names and encodings so this
+    # site cannot omit one field while forwarding the rest of the cohort.
+    auth_flags = config.auth_flags
     env_vars.update(auth_flags.to_env_vars())
 
     # Pool owner: GcpSecretManagerBackend names secrets as
@@ -234,8 +213,12 @@ async def dispatch_orchestrator(
     # the pool's priority order; if alt1 cools, single-item steps degrade
     # but fan-out keeps rotating). Pool user is the same value
     # propagated to METAPROC_AUTH_POOL above.
-    if config.auth_account == "claude-code-cli" and pool_user and config.auth_include_labels:
-        primary_label = config.auth_include_labels[0]
+    if (
+        auth_flags.auth_account == "claude-code-cli"
+        and pool_user
+        and auth_flags.auth_include_labels
+    ):
+        primary_label = auth_flags.auth_include_labels[0]
         oauth_secret_ref = (
             f"projects/{config.gcp.project}/secrets/"
             f"claude-code-auth-{pool_user}-{primary_label}/versions/latest"
