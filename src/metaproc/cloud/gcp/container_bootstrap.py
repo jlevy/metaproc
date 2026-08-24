@@ -269,7 +269,18 @@ def _install_workspace_packages(
             raise RuntimeError(f"configured workspace package is missing: {relative}")
         _strip_uv_sources(os.path.join(package_dir, "pyproject.toml"))
         log.info("Installing workspace package %s from %s", relative, source)
-        rc = _run(["uv", "pip", "install", "--no-deps", "-e", package_dir])
+        rc = _run(
+            [
+                "uv",
+                "pip",
+                "install",
+                "--python",
+                "/opt/venv/bin/python",
+                "--no-deps",
+                "-e",
+                package_dir,
+            ]
+        )
         if rc != 0:
             raise RuntimeError(
                 f"failed to install workspace package {relative!r} from {source} (rc={rc})"

@@ -126,7 +126,9 @@ Useful controls:
 - `--sync PATH` and `--sync-only PATH` narrow workspace transport.
 - `--workspace-package PATH` installs a shipped Python package editable into the baked
   environment. Repeat it for multiple packages; it cannot be combined with
-  `--no-workspace`.
+  `--no-workspace`. Installation uses `--no-deps`, so every third-party dependency must
+  already be present in the agent image.
+  Rebuild the image when that dependency closure changes.
 - `--env K=V` adds non-secret configuration.
 - `--secret K=REF` binds a Secret Manager version.
 - `--timeout <seconds>` sets the task deadline.

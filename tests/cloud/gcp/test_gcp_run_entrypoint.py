@@ -186,28 +186,34 @@ class TestBootstrapGcpRun:
         monkeypatch.setattr(container_bootstrap, "_download_from_gcs", fake_download)
         monkeypatch.setattr(container_bootstrap, "_run", run_mock)
 
-        work_dir = container_bootstrap.bootstrap_gcp_run(
-            home=tmp_path,
-            env={
-                "METAPROC_WORKSPACE_GCS": "gs://b/gcp-run/job/workspace.tar.gz",
-                "METAPROC_WORKSPACE_SHA256": hashlib.sha256(tar_src.read_bytes()).hexdigest(),
-                "METAPROC_WORKSPACE_PACKAGES": "packages/example",
-            },
-        )
+        with patch.dict(os.environ):
+            work_dir = container_bootstrap.bootstrap_gcp_run(
+                home=tmp_path,
+                env={
+                    "METAPROC_WORKSPACE_GCS": "gs://b/gcp-run/job/workspace.tar.gz",
+                    "METAPROC_WORKSPACE_SHA256": hashlib.sha256(tar_src.read_bytes()).hexdigest(),
+                    "METAPROC_WORKSPACE_PACKAGES": "packages/example",
+                },
+            )
 
-        assert work_dir == str(workspace_dir)
-        run_mock.assert_called_once_with(
-            [
-                "uv",
-                "pip",
-                "install",
-                "--no-deps",
-                "-e",
-                str(workspace_dir / "packages" / "example"),
-            ]
-        )
-        assert os.environ["UV_PROJECT_ENVIRONMENT"] == "/opt/venv"
-        assert os.environ["UV_NO_SYNC"] == "1"
+            assert work_dir == str(workspace_dir)
+            run_mock.assert_called_once_with(
+                [
+                    "uv",
+                    "pip",
+                    "install",
+                    "--python",
+                    "/opt/venv/bin/python",
+                    "--no-deps",
+                    "-e",
+                    str(workspace_dir / "packages" / "example"),
+                ]
+            )
+            assert os.environ["UV_PROJECT_ENVIRONMENT"] == "/opt/venv"
+            assert os.environ["UV_NO_SYNC"] == "1"
+
+        assert "UV_PROJECT_ENVIRONMENT" not in os.environ
+        assert "UV_NO_SYNC" not in os.environ
 
     def test_workspace_packages_require_shipped_workspace(self, tmp_path: Path) -> None:
         with pytest.raises(RuntimeError, match="requires METAPROC_WORKSPACE_GCS"):

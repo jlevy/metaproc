@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import tarfile
 from pathlib import Path
@@ -217,6 +218,59 @@ class TestPackageWorkspace:
         assert "src/tracked.py" in names
         assert "src/new.py" in names
         assert "ignored.txt" not in names
+
+    def test_default_skips_untracked_fifo_with_warning(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        repo = tmp_path / "repo"
+        _git_init_with_files(repo, {"src/tracked.py": "pass"})
+        fifo_path = repo / "agent.fifo"
+        os.mkfifo(fifo_path)
+
+        with (
+            patch(
+                "metaproc.cloud.gcp.dispatch_artifacts.subprocess.run",
+                side_effect=[
+                    subprocess.CompletedProcess([], 0, stdout="src/tracked.py\n", stderr=""),
+                    subprocess.CompletedProcess([], 0, stdout="agent.fifo\n", stderr=""),
+                ],
+            ),
+            caplog.at_level("WARNING"),
+        ):
+            out = package_workspace(repo_root=repo, out_path=tmp_path / "ws.tar.gz")
+
+        with tarfile.open(out) as tar:
+            names = set(tar.getnames())
+        assert "src/tracked.py" in names
+        assert "agent.fifo" not in names
+        assert any("agent.fifo" in record.message for record in caplog.records)
+
+    @pytest.mark.parametrize("explicit_option", ["sync_only", "extra_paths"])
+    def test_explicit_non_regular_workspace_path_is_rejected(
+        self,
+        tmp_path: Path,
+        explicit_option: str,
+    ) -> None:
+        repo = tmp_path / "repo"
+        _git_init_with_files(repo, {"src/tracked.py": "pass"})
+        fifo_path = repo / "agent.fifo"
+        os.mkfifo(fifo_path)
+
+        with pytest.raises(ValueError, match="not a regular file or directory"):
+            if explicit_option == "sync_only":
+                package_workspace(
+                    repo_root=repo,
+                    out_path=tmp_path / "ws.tar.gz",
+                    sync_only=["agent.fifo"],
+                )
+            else:
+                package_workspace(
+                    repo_root=repo,
+                    out_path=tmp_path / "ws.tar.gz",
+                    extra_paths=["agent.fifo"],
+                )
 
     def test_sync_rejects_absolute_path(self, tmp_path: Path):
         repo = tmp_path / "repo"

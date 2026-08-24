@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -90,6 +91,23 @@ class TestBuildGcpRunJob:
             workspace_packages=("packages/example",),
         )
         with pytest.raises(ValueError, match="workspace_packages requires"):
+            build_gcp_run_job(["echo", "x"], opts)
+
+    @pytest.mark.parametrize(
+        "package_path",
+        ["", ".", "../outside", "/absolute", "packages/example,packages/other"],
+    )
+    def test_workspace_package_paths_must_be_safe_for_env_transport(
+        self, package_path: str
+    ) -> None:
+        opts = DispatchGcpRunOptions(
+            config=_config(),
+            workspace_gcs_uri="gs://b/workspace.tar.gz",
+            workspace_sha256="2" * 64,
+            workspace_packages=(package_path,),
+        )
+
+        with pytest.raises(ValueError, match="workspace package path"):
             build_gcp_run_job(["echo", "x"], opts)
 
     @pytest.mark.parametrize(
@@ -454,7 +472,9 @@ class TestGcpRunCli:
         assert env_vars["METAPROC_WORKSPACE_GCS"].startswith("gs://")
         assert env_vars["METAPROC_WORKSPACE_SHA256"] == "0" * 64
 
-    def test_run_invokes_dispatch_with_resolved_options(self, monkeypatch: pytest.MonkeyPatch):
+    def test_run_invokes_dispatch_with_resolved_options(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         monkeypatch.setenv("METAPROC_GCP_PROJECT", "p")
         monkeypatch.setenv("METAPROC_GCP_CONTAINER_IMAGE", "us-central1-docker.pkg.dev/p/i:t")
         monkeypatch.setenv("METAPROC_GCS_BUCKET", "test-dispatch-bucket")
@@ -463,6 +483,10 @@ class TestGcpRunCli:
         app = typer.Typer()
         app.command("run")(cmd_gcp_run.run_command)
         runner = CliRunner()
+        for relative in ("packages/example", "workflow"):
+            package_dir = tmp_path / relative
+            package_dir.mkdir(parents=True)
+            (package_dir / "pyproject.toml").write_text("[project]\nname = 'example'\n")
 
         captured: dict[str, object] = {}
 
@@ -477,6 +501,7 @@ class TestGcpRunCli:
             patch.object(cmd_gcp_run, "upload_wheel_to_gcs", return_value="gs://b/w.whl"),
             patch.object(cmd_gcp_run, "package_workspace"),
             patch.object(cmd_gcp_run, "upload_workspace_to_gcs", return_value="gs://b/ws.tgz"),
+            patch.object(cmd_gcp_run, "find_repo_root", return_value=tmp_path),
             patch.object(cmd_gcp_run, "dispatch_gcp_run", side_effect=fake_dispatch),
             patch.object(cmd_gcp_run, "tail_gcp_run_logs", return_value=0) as tail_mock,
         ):
@@ -540,6 +565,63 @@ class TestGcpRunCli:
         output = unstyle(result.output)
         assert "--workspace-package" in output
         assert "workspace shipping" in output
+
+    def test_workspace_package_missing_pyproject_fails_before_artifact_build(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("METAPROC_GCP_PROJECT", "p")
+        monkeypatch.setenv("METAPROC_GCP_CONTAINER_IMAGE", "example.invalid/agent:latest")
+        monkeypatch.setenv("METAPROC_GCS_BUCKET", "test-dispatch-bucket")
+        package_dir = tmp_path / "packages" / "example"
+        package_dir.mkdir(parents=True)
+        app = typer.Typer()
+        app.command("run")(cmd_gcp_run.run_command)
+
+        with (
+            patch.object(cmd_gcp_run, "find_repo_root", return_value=tmp_path),
+            patch.object(cmd_gcp_run, "build_wheel") as build_wheel_mock,
+        ):
+            result = CliRunner().invoke(
+                app,
+                ["--workspace-package", "packages/example", "echo", "hi"],
+            )
+
+        assert result.exit_code != 0
+        assert "pyproject.toml" in unstyle(result.output)
+        build_wheel_mock.assert_not_called()
+
+    def test_sync_only_must_ship_the_workspace_package_before_artifact_build(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("METAPROC_GCP_PROJECT", "p")
+        monkeypatch.setenv("METAPROC_GCP_CONTAINER_IMAGE", "example.invalid/agent:latest")
+        monkeypatch.setenv("METAPROC_GCS_BUCKET", "test-dispatch-bucket")
+        package_dir = tmp_path / "packages" / "example"
+        package_dir.mkdir(parents=True)
+        (package_dir / "pyproject.toml").write_text("[project]\nname = 'example'\n")
+        (tmp_path / "docs").mkdir()
+        app = typer.Typer()
+        app.command("run")(cmd_gcp_run.run_command)
+
+        with (
+            patch.object(cmd_gcp_run, "find_repo_root", return_value=tmp_path),
+            patch.object(cmd_gcp_run, "build_wheel") as build_wheel_mock,
+        ):
+            result = CliRunner().invoke(
+                app,
+                [
+                    "--sync-only",
+                    "docs",
+                    "--workspace-package",
+                    "packages/example",
+                    "echo",
+                    "hi",
+                ],
+            )
+
+        assert result.exit_code != 0
+        assert "--sync-only" in unstyle(result.output)
+        build_wheel_mock.assert_not_called()
 
     def test_detach_skips_tail_and_prints_log_url(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("METAPROC_GCP_PROJECT", "p")

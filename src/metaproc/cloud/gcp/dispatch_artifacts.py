@@ -112,6 +112,7 @@ def _add_workspace_path(
     arcname: str,
     emitted: set[str],
     active_directories: set[Path],
+    required: bool,
 ) -> None:
     """Add one workspace path while materializing only safe in-repo links."""
     resolved = source.resolve(strict=True)
@@ -125,7 +126,10 @@ def _add_workspace_path(
         emitted.add(arcname)
         return
     if not resolved.is_dir():
-        raise ValueError(f"Workspace path is not a regular file or directory: {source}")
+        if required:
+            raise ValueError(f"Workspace path is not a regular file or directory: {source}")
+        log.warning("Skipping %s — not a regular file or directory", source)
+        return
     if resolved in active_directories:
         raise ValueError(f"Workspace directory link cycle detected at: {source}")
 
@@ -142,6 +146,7 @@ def _add_workspace_path(
                 arcname=child_arcname,
                 emitted=emitted,
                 active_directories=active_directories,
+                required=required,
             )
     finally:
         active_directories.remove(resolved)
@@ -178,12 +183,15 @@ def package_workspace(
     All ``extra_paths`` and ``sync_only`` entries must resolve inside
     ``repo_root``; absolute paths or ``..`` escapes raise ``ValueError``.
 
-    Missing paths log a warning and are skipped. Returns the path to the
-    created tarball.
+    Missing paths log a warning and are skipped. Non-regular entries found by
+    the default Git scan also log and skip; explicitly requested paths fail.
+    Returns the path to the created tarball.
     """
     repo = repo_root.resolve()
+    required_paths: set[str] = set()
     if sync_only is not None:
         paths = [_contain_in_repo(repo, p) for p in sync_only]
+        required_paths.update(paths)
     else:
         tracked = subprocess.run(
             ["git", "ls-files"],
@@ -211,7 +219,9 @@ def package_workspace(
             if not any(p == pref.rstrip("/") or p.startswith(pref) for pref in exclude_prefixes)
         ]
         if extra_paths:
-            paths.extend(_contain_in_repo(repo, p) for p in extra_paths)
+            normalized_extra_paths = [_contain_in_repo(repo, p) for p in extra_paths]
+            paths.extend(normalized_extra_paths)
+            required_paths.update(normalized_extra_paths)
 
     if out_path is None:
         out_path = Path(tempfile.mkdtemp(prefix="metaproc-workspace-")) / WORKSPACE_TARBALL_NAME
@@ -231,6 +241,7 @@ def package_workspace(
                 arcname=rel,
                 emitted=emitted,
                 active_directories=set(),
+                required=rel in required_paths,
             )
     log.info("Packaged %d entries into %s", len(paths), out_path)
     return out_path

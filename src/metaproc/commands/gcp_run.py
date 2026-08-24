@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 
 import typer
 from google.protobuf.json_format import MessageToDict
@@ -38,6 +39,7 @@ from metaproc.cloud.gcp.gcp_run_dispatch import (
     RESERVED_ENV_KEYS,
     DispatchGcpRunOptions,
     _generate_job_id,
+    _normalize_workspace_package_paths,
     build_gcp_run_job,
     dispatch_gcp_run,
 )
@@ -98,6 +100,49 @@ def _expand_secret_ref(value: str, project: str) -> str:
             f"--secret value missing secret name: {value!r}", param_hint="--secret"
         )
     return f"projects/{project}/secrets/{secret}/versions/{version}"
+
+
+def _validate_workspace_package_sources(
+    repo_root: Path,
+    package_paths: tuple[str, ...],
+    sync_only: list[str] | None,
+) -> None:
+    """Fail before artifact work when a requested package cannot be shipped."""
+    resolved_repo = repo_root.resolve()
+    shipped_roots: tuple[Path, ...] = ()
+    if sync_only is not None:
+        roots: list[Path] = []
+        for raw_path in sync_only:
+            candidate = Path(raw_path)
+            resolved = (resolved_repo / candidate).resolve()
+            if candidate.is_absolute() or not resolved.is_relative_to(resolved_repo):
+                raise typer.BadParameter(
+                    f"--sync-only path must be repository-relative: {raw_path!r}",
+                    param_hint="--sync-only",
+                )
+            roots.append(resolved)
+        shipped_roots = tuple(roots)
+
+    for package_path in package_paths:
+        package_dir = (resolved_repo / package_path).resolve()
+        if not package_dir.is_relative_to(resolved_repo):
+            raise typer.BadParameter(
+                f"workspace package resolves outside the repository: {package_path!r}",
+                param_hint="--workspace-package",
+            )
+        pyproject = package_dir / "pyproject.toml"
+        if not pyproject.is_file():
+            raise typer.BadParameter(
+                f"workspace package must contain pyproject.toml: {package_path!r}",
+                param_hint="--workspace-package",
+            )
+        if shipped_roots and not any(
+            package_dir == root or package_dir.is_relative_to(root) for root in shipped_roots
+        ):
+            raise typer.BadParameter(
+                f"--sync-only does not ship workspace package {package_path!r}",
+                param_hint="--sync-only",
+            )
 
 
 def _build_config(
@@ -301,6 +346,17 @@ def run_command(
             param_hint="--workspace-package",
         )
 
+    try:
+        workspace_packages = _normalize_workspace_package_paths(tuple(workspace_package or ()))
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--workspace-package") from exc
+    if workspace_packages:
+        _validate_workspace_package_sources(
+            find_repo_root(),
+            workspace_packages,
+            list(sync_only) if sync_only else None,
+        )
+
     if not dry_run and (not no_wheel or not no_workspace) and not bucket:
         raise typer.BadParameter(
             "--dispatch-bucket or METAPROC_GCS_BUCKET is required when shipping artifacts",
@@ -339,7 +395,7 @@ def run_command(
         wheel_sha256=wheel_sha256,
         workspace_gcs_uri=workspace_uri,
         workspace_sha256=workspace_sha256,
-        workspace_packages=tuple(workspace_package or ()),
+        workspace_packages=workspace_packages,
         extra_env=extra_env,
         extra_secrets=extra_secrets,
         job_name=job_id,

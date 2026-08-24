@@ -1164,6 +1164,9 @@ def gcp_logs(
     """
     _require_gcp_batch()
     from google.cloud import (  # noqa: PLC0415 -- optional [gcp-batch] dependency
+        batch_v1,
+    )
+    from google.cloud import (  # noqa: PLC0415 -- optional [gcp-batch] dependency
         logging as cloud_logging,
     )
 
@@ -1172,12 +1175,14 @@ def gcp_logs(
     if role not in _VALID_LOG_ROLES:
         raise CLIError(f"--role must be one of: {', '.join(_VALID_LOG_ROLES)}")
 
+    resource_project = _batch_job_resource_project(target)
     worker_index = worker
+    if resource_project and (item or role != "all" or worker_index is not None):
+        raise CLIError("--item, --role, and --worker do not apply to an exact Batch job resource")
     if worker_index is not None and role != "worker":
         raise CLIError("--worker requires --role worker")
 
     # Resolve project — from flag, env, or local events. No Batch API call.
-    resource_project = _batch_job_resource_project(target)
     resolved_project = (
         resource_project or project or MetaprocEnv.METAPROC_GCP_PROJECT.read_str(default="")
     )
@@ -1211,10 +1216,15 @@ def gcp_logs(
             out.progress("No Batch job UIDs resolved for recorded job names.")
             raise typer.Exit(code=0)
     elif resource_project:
-        job_uids = _resolve_job_uids([target])
-        if not job_uids:
-            out.progress("Batch job resource did not resolve to a UID; cannot query logs.")
-            raise typer.Exit(code=0)
+        batch_client = batch_v1.BatchServiceClient()
+        try:
+            job = batch_client.get_job(batch_v1.GetJobRequest(name=target))
+        except Exception as exc:
+            raise CLIError(f"Failed to fetch Batch job {target}: {exc}") from exc
+        job_uid = str(getattr(job, "uid", "") or "")
+        if not job_uid:
+            raise CLIError(f"Batch job {target} did not return a UID")
+        job_uids = [job_uid]
     else:
         run_id = target
         jobs = _query_jobs_by_run_id(run_id, resolved_project, region)

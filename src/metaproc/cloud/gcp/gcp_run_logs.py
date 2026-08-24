@@ -93,17 +93,16 @@ def _rfc3339_watermark(timestamp: object) -> str:
     """
     if isinstance(timestamp, datetime):
         normalized = timestamp if timestamp.tzinfo is not None else timestamp.replace(tzinfo=UTC)
-        return normalized.isoformat().replace("+00:00", "Z")
+        return normalized.astimezone(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
     return str(timestamp or "")
 
 
 def _fetch_log_entries(
     *,
-    project: str,
+    client: Any,
     job_uid: str,
     job_id: str,
     since: str = "",
-    client: Any | None = None,
 ) -> list[Any]:
     """List Cloud Logging entries scoped to a single Batch job.
 
@@ -115,7 +114,6 @@ def _fetch_log_entries(
     re-asks for the oldest 500 entries and long-running jobs lose the tail
     once total log volume exceeds 500.
     """
-    effective_client: Any = client if client is not None else _get_logging_client(project)
     filter_parts = [
         'resource.type="batch.googleapis.com/Job"',
         f'labels."job_uid"="{job_uid}"'
@@ -126,7 +124,7 @@ def _fetch_log_entries(
         filter_parts.append(f'timestamp >= "{since}"')
     filter_str = " AND ".join(filter_parts)
     return list(
-        effective_client.list_entries(
+        client.list_entries(
             filter_=filter_str,
             order_by="timestamp asc",
             max_results=500,
@@ -152,7 +150,7 @@ def tail_gcp_run_logs(
     Returns the exit code derived from the terminal state.
     """
     batch_v1 = _get_batch_v1()
-    client = batch_v1.BatchServiceClient()
+    batch_client = batch_v1.BatchServiceClient()
     logging_client: Any | None = None
     job_id = _job_id_from_resource_name(job_resource_name)
     job_uid = ""
@@ -167,7 +165,7 @@ def tail_gcp_run_logs(
             sleep(poll_interval_s)
             request = batch_v1.GetJobRequest(name=job_resource_name)
             try:
-                job = client.get_job(request)
+                job = batch_client.get_job(request)
             except Exception as exc:  # noqa: BLE001
                 consecutive_errors += 1
                 log.warning(
@@ -196,11 +194,10 @@ def tail_gcp_run_logs(
                 if logging_client is None:
                     logging_client = _get_logging_client(project)
                 entries = _fetch_log_entries(
-                    project=project,
+                    client=logging_client,
                     job_uid=job_uid,
                     job_id=job_id,
                     since=watermark,
-                    client=logging_client,
                 )
                 consecutive_errors = 0
             except Exception as exc:  # noqa: BLE001
@@ -232,8 +229,11 @@ def tail_gcp_run_logs(
 
         return _state_to_exit_code(state)
     finally:
-        if logging_client is not None:
-            logging_client.close()
+        try:
+            if logging_client is not None:
+                logging_client.close()
+        finally:
+            batch_client.close()
 
 
 def build_log_url(job_resource_name: str) -> str:

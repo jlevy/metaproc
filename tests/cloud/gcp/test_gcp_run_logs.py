@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -32,6 +32,33 @@ def _log_entry(
     entry.insert_id = insert_id
     entry.timestamp = timestamp
     return entry
+
+
+class TestLogFetch:
+    def test_datetime_watermark_is_fixed_precision_utc(self) -> None:
+        assert gcp_run_logs._rfc3339_watermark(datetime(2026, 8, 23, 23, 9, 49)) == (
+            "2026-08-23T23:09:49.000000Z"
+        )
+        pacific = timezone(-timedelta(hours=7))
+        assert (
+            gcp_run_logs._rfc3339_watermark(
+                datetime(2026, 8, 23, 16, 9, 49, 310208, tzinfo=pacific)
+            )
+            == "2026-08-23T23:09:49.310208Z"
+        )
+
+    def test_fetch_uses_required_shared_client(self) -> None:
+        client = MagicMock()
+        client.list_entries.return_value = ["entry"]
+
+        entries = gcp_run_logs._fetch_log_entries(
+            client=client,
+            job_uid="uid-1",
+            job_id="job-1",
+        )
+
+        assert entries == ["entry"]
+        client.list_entries.assert_called_once()
 
 
 # ── _state_to_exit_code ───────────────────────────────────────
@@ -129,6 +156,7 @@ class TestTailGcpRunLogs:
         get_logging_client.assert_called_once_with("p")
         assert observed_clients == [logging_client, logging_client, logging_client]
         logging_client.close.assert_called_once_with()
+        batch_client.close.assert_called_once_with()
 
     def test_returns_one_on_failed(self, monkeypatch: pytest.MonkeyPatch):
         client = MagicMock()

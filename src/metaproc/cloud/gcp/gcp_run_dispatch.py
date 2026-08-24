@@ -22,6 +22,7 @@ import secrets as _secrets
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import PurePosixPath
 from typing import Any
 
 from metaproc.cloud.gcp.batch_backend import (
@@ -90,6 +91,27 @@ def _get_batch_v1() -> Any:
     return batch_v1
 
 
+def _normalize_workspace_package_paths(package_paths: tuple[str, ...]) -> tuple[str, ...]:
+    """Validate paths before serializing them into a comma-delimited env value."""
+    normalized: list[str] = []
+    for raw_path in package_paths:
+        candidate = raw_path.strip()
+        parsed = PurePosixPath(candidate)
+        if (
+            not candidate
+            or "," in candidate
+            or parsed.is_absolute()
+            or ".." in parsed.parts
+            or parsed == PurePosixPath(".")
+        ):
+            raise ValueError(
+                "workspace package path must be a non-empty, comma-free "
+                f"repository-relative path: {raw_path!r}"
+            )
+        normalized.append(parsed.as_posix())
+    return tuple(normalized)
+
+
 def build_gcp_run_job(
     cmd: list[str],
     options: DispatchGcpRunOptions,
@@ -103,6 +125,8 @@ def build_gcp_run_job(
     if not cmd:
         raise ValueError("cmd argv must be non-empty")
 
+    workspace_packages = _normalize_workspace_package_paths(options.workspace_packages)
+
     reserved_conflicts = sorted(set(options.extra_env) & RESERVED_ENV_KEYS)
     if reserved_conflicts:
         raise ValueError(f"extra_env cannot override dispatcher-owned keys: {reserved_conflicts}")
@@ -111,7 +135,7 @@ def build_gcp_run_job(
         raise ValueError("wheel_gcs_uri and wheel_sha256 must be provided together")
     if bool(options.workspace_gcs_uri) != bool(options.workspace_sha256):
         raise ValueError("workspace_gcs_uri and workspace_sha256 must be provided together")
-    if options.workspace_packages and not options.workspace_gcs_uri:
+    if workspace_packages and not options.workspace_gcs_uri:
         raise ValueError("workspace_packages requires a shipped workspace artifact")
     if options.wheel_sha256 and SHA256_PATTERN.fullmatch(options.wheel_sha256) is None:
         raise ValueError("wheel_sha256 must be exactly 64 hexadecimal characters")
@@ -125,8 +149,8 @@ def build_gcp_run_job(
     if options.workspace_gcs_uri:
         env_vars["METAPROC_WORKSPACE_GCS"] = options.workspace_gcs_uri
         env_vars["METAPROC_WORKSPACE_SHA256"] = options.workspace_sha256
-    if options.workspace_packages:
-        env_vars["METAPROC_WORKSPACE_PACKAGES"] = ",".join(options.workspace_packages)
+    if workspace_packages:
+        env_vars["METAPROC_WORKSPACE_PACKAGES"] = ",".join(workspace_packages)
     container_runs_dir = get_container_runs_dir(options.config)
     if container_runs_dir:
         env_vars["RUNS_DIR"] = container_runs_dir
