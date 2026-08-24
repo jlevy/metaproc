@@ -522,10 +522,10 @@ scalar launch.
   leaf, declared process inputs/outputs, three roster items, and one controlled failure.
 - [x] Characterize recursive argument and semaphore ownership, force, root skip,
   continue policies, and synchronous command behavior before changing them.
-- [ ] Complete the remaining cancellation, output-validation, result/state, resume, and
-  fan-in characterization.
-  Pull request 34 covers scalar credential behavior with a real subprocess and
-  selected-label fallback.
+- [ ] Complete the remaining output-validation, result/state, resume, and fan-in
+  characterization. Pull request 34 covers scalar credential behavior with a real
+  subprocess and selected-label fallback; the cancellation-safety slice covers
+  credential acquisition, executor work, late launches, and agent/code process trees.
 - [x] Complete the first deep architecture review and incorporate every finding in the
   proposal and beads. Keep the proposal in draft until the amended sequencing is
   reviewed.
@@ -543,8 +543,11 @@ scalar launch.
   `fail-fast|wait|signal` retry-later policy and checkpoint machinery.
 - [x] Run synchronous handlers and command-backed code steps off the event loop through
   a run-owned executor sized to the operator ceiling when one is configured.
-- [ ] Prove a slow command does not block sibling work, RunPool supervision,
-  cancellation, or heartbeats.
+- [x] Prove scalar agent processes and command-backed code work do not block sibling
+  work, and that cancellation retains leaf, host, executor, process-tree, and credential
+  ownership through cleanup.
+- [ ] Extend the nested fixture with explicit RunPool-supervision and heartbeat
+  responsiveness assertions.
 - [x] Remove the dead composite `external_semaphore` parameter and prove the run-wide
   executable-leaf ceiling across recursive siblings.
 
@@ -689,8 +692,18 @@ The first Python 3.14 CI sample tripped the existing readiness-scale timing rati
 `mp-npza` tracks a statistically stable replacement that preserves the complexity
 regression gate instead of weakening it by threshold alone.
 
-End-to-end cancellation proof, unified retry-later dispatch, the mapped-scope fixture,
-mapped execution, shared byte admission, and production-scale results remain open.
+The cancellation-safety slice in
+[pull request 35](https://github.com/jlevy/metaproc/pull/35) is stacked on pull request
+34 and has completed senior review, full local verification, and five-job CI: 4,283
+tests pass with 8 skipped, and all lint, type, documentation, dependency-audit,
+distribution, and installed-wheel checks are green.
+It drains executor work and late credential leases; reuses `LocalBackend` for scalar
+agents; and retains agent/code process-group ownership through completion, timeout, or
+cancellation, including a leader-exit race and a child that ignores `SIGTERM`. Review
+findings `mp-nnxl` and `mp-xnk9` are closed.
+
+Unified retry-later dispatch, the mapped-scope fixture, mapped execution, shared byte
+admission, and production-scale results remain open.
 The first F1–F8 architecture-review disposition is complete.
 The proposal remains a draft for review while implementation proceeds as independently
 reviewable stacked slices.
@@ -702,14 +715,15 @@ reviewable stacked slices.
 3. Merge the `RunExecutionContext` and nonblocking-execution slice through pull request
    33, which is based on pull request 32.
 4. Merge scalar credential propagation through pull request 34, which is based on pull
-   request 33; then finish cancellation-safe ownership and unified retry-later policy as
-   separately reviewable stacks.
-5. Land Phase 2 mapped scopes, ports, parent state/evidence, and per-item recovery.
-6. Land Phase 3 shared host byte authority before a mapped workflow is production-ready.
-7. Integrate the existing views and complete the M0-M4 framework ladder.
-8. Run the downstream workflow only as a shadow consumer until its comparison ladder
+   request 33.
+5. Merge cancellation-safe ownership as the next stack, then unified retry-later policy
+   as a separate reviewable slice.
+6. Land Phase 2 mapped scopes, ports, parent state/evidence, and per-item recovery.
+7. Land Phase 3 shared host byte authority before a mapped workflow is production-ready.
+8. Integrate the existing views and complete the M0-M4 framework ladder.
+9. Run the downstream workflow only as a shadow consumer until its comparison ladder
    passes.
-9. Keep the full scheduler beads deferred unless an escalation trigger is recorded.
+10. Keep the full scheduler beads deferred unless an escalation trigger is recorded.
 
 Every runtime pull request must be independently revertible.
 Existing specs continue to use their released paths throughout rollout.
@@ -727,8 +741,8 @@ Existing specs continue to use their released paths throughout rollout.
 nonblocking execution.
 Its first-slice beads are `mp-htd8` (characterization), `mp-vf21` (shared context and
 leaf ceiling), `mp-d12o` (run-owned executor), and `mp-bvjd` (scalar-auth policy), all
-complete, plus `mp-l6b5` (remaining cancellation proof) and `mp-tibt` (unified
-retry-later dispatch), both open.
+complete. `mp-l6b5` owns the completed cancellation-safety slice in pull request 35.
+`mp-tibt` (unified retry-later dispatch) remains open.
 `mp-npza` tracks the non-blocking stabilization of the noisy execution-model scale
 timing gate observed during pull requests 32 and 34. `mp-0ukj` owns mapped scopes,
 ports, parent evidence, and within-scope per-item recovery; `mp-0cyw` owns the common
