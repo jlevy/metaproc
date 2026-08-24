@@ -517,12 +517,13 @@ scalar launch.
 
 ### Phase 0: Architecture fixture and proof
 
-- [ ] Merge pull request 31 and base every runtime slice on the resulting main branch.
+- [x] Merge pull request 31 and base every runtime slice on the resulting main branch.
 - [ ] Add a tiny nested process fixture with two code leaves, one agent-shaped fake
   leaf, declared process inputs/outputs, three roster items, and one controlled failure.
-- [ ] Characterize current scalar composite semaphore, force, skip, continue, auth,
-  cancellation, output validation, result/state, resume, and fan-in behavior before
-  changing it.
+- [x] Characterize recursive argument and semaphore ownership, force, root skip,
+  continue policies, and synchronous command behavior before changing them.
+- [ ] Characterize cancellation, scalar auth, output validation, result/state, resume,
+  and fan-in behavior before changing those boundaries.
 - [x] Complete the first deep architecture review and incorporate every finding in the
   proposal and beads. Keep the proposal in draft until the amended sequencing is
   reviewed.
@@ -530,19 +531,18 @@ scalar launch.
 
 ### Phase 1: Shared recursive execution context
 
-- [ ] Introduce `RunExecutionContext` without changing authored specs and make every
-  recursive evaluator reuse one run semaphore, cancellation signal, event sinks, and
-  policy bundle.
-- [ ] Characterize and then propagate force, skip, continue-on-error,
-  continue-on-step-failure, backend, profiles, and admission policy consistently.
+- [x] Introduce `RunExecutionContext` without changing authored specs and make every
+  recursive evaluator reuse one run semaphore, cancellation signal, and policy bundle.
+- [x] Propagate force, root-scoped skip, both continue policies, backend, profiles, and
+  admission posture consistently through recursive scopes.
 - [ ] Pass auth-pool flags and dispatch configuration to scalar agent steps; assert the
   actual credential-pool label used by a child invocation.
-- [ ] Run command-backed code steps off the event loop and replace the hidden default
-  thread-pool cap with an explicitly sized, run-owned executor.
+- [x] Run synchronous handlers and command-backed code steps off the event loop through
+  a run-owned executor sized to the operator ceiling when one is configured.
 - [ ] Prove a slow command does not block sibling work, RunPool supervision,
   cancellation, or heartbeats.
-- [ ] Remove or wire the dead composite `external_semaphore` parameter and prove the
-  run-wide executable-leaf ceiling across recursive siblings.
+- [x] Remove the dead composite `external_semaphore` parameter and prove the run-wide
+  executable-leaf ceiling across recursive siblings.
 
 ### Phase 2: Mapped scopes, ports, state, and recovery
 
@@ -666,17 +666,20 @@ The pull request 32 deep review independently verified the load-bearing runtime 
 approved the mapped-scope primitive, and required the sequencing, state/evidence,
 resource, and recovery corrections recorded above.
 
-After this revision, formatting, Ruff, BasedPyright, local Markdown links, public
-hygiene, supply-chain checks, and browser checks pass.
-The local full suite reports 4,221 passed and 8 skipped; its only failure is an existing
-test that asserts the checkout directory is literally named `metaproc`, while this
-review worktree has a different basename.
-Pull request CI passes lint, distribution, and the full suite on Python 3.12, 3.13, and
-3.14 in the canonical checkout layout.
+Pull request 31 is merged, and
+[pull request 33](https://github.com/jlevy/metaproc/pull/33) publishes the first runtime
+slice from its merge commit.
+That slice introduces one recursive execution context, shared local leaf admission,
+off-loop synchronous execution, and explicit root-versus-child force, skip, and continue
+semantics. Its local verification passes formatting, Ruff, BasedPyright, Markdown links,
+public hygiene, supply-chain and browser checks, dependency audits, distribution build
+and smoke tests, plus 4,273 tests with 8 skipped.
 
-No runtime implementation or production-scale result is claimed.
+Scalar credential leasing, end-to-end cancellation proof, the mapped-scope fixture,
+mapped execution, shared byte admission, and production-scale results remain open.
 The first F1–F8 architecture-review disposition is complete.
-The proposal remains a draft for review, and runtime implementation remains open.
+The proposal remains a draft for review while implementation proceeds as independently
+reviewable stacked slices.
 
 ## Rollout Plan
 
@@ -704,9 +707,13 @@ Existing specs continue to use their released paths throughout rollout.
 
 `mp-0iy8` owns this proposal.
 `mp-p0sn` is the pull request 31 merge gate; `mp-zssw` owns shared recursive policy and
-nonblocking execution; `mp-0ukj` owns mapped scopes, ports, parent evidence, and
-within-scope per-item recovery; `mp-0cyw` owns the common host byte authority; `mp-1af0`
-owns views; and `mp-rrfn` owns the production proof.
+nonblocking execution.
+Its first-slice beads are `mp-htd8` (characterization), `mp-vf21` (shared context and
+leaf ceiling), `mp-d12o` (run-owned executor), `mp-bvjd` (remaining operator and
+scalar-auth policy), and `mp-l6b5` (remaining cancellation proof).
+`mp-0ukj` owns mapped scopes, ports, parent evidence, and within-scope per-item
+recovery; `mp-0cyw` owns the common host byte authority; `mp-1af0` owns views; and
+`mp-rrfn` owns the production proof.
 
 The general ready scheduler, persisted dynamic expansions, complete fenced publication,
 cross-scope causal force, budgets, and a standalone runtime artifact index remain
