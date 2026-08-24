@@ -5,12 +5,16 @@ title: "PR #35 I11: lifecycle fast-follows after merge"
 kind: task
 status: open
 priority: 2
-version: 1
+version: 2
 labels:
   - pr-review
 dependencies: []
 parent_id: is-01m0t5d345y4pdjcjpepb9h4q6
 created_at: 2026-08-24T23:04:16.575Z
-updated_at: 2026-08-24T23:04:16.575Z
+updated_at: 2026-08-24T23:14:30.229Z
 ---
 Four tracked defects from the round-2 review, none merge-blocking: (N3) _observed_descendants unbounded and re-walked at 10Hz — O(1e5) psutil lookups per kill for a long agent; prune + stop re-walking per poll. (N4) descendants first spawned in the last <=10s before leader exit are never recorded on the pool path — fence by pgid+create_time enumeration instead of prior observation. (N5) 'cancelled' outranks running/failed in _write_process_status and is carried forward, poisoning later partial runs. (N6) submit() after the kill sentinel raises RuntimeError that the scheduler converts into synthetic failures + retries, burning every item's retry budget. Review: pull/35 comment; holistic ledger #11.
+
+## Notes
+
+ADD from #37 head 49064f0: commit 49064f0 defers qualified per-item force. Rationale is sound for FAILED items (ordinary resume re-enters a failed mapped item without rerunning siblings; pinned by test_run_process.py:1706-1727) — this corrects my earlier F6 framing. Residual gap: no supported way to redo a SUCCESSFUL item (run-wide --force reruns all N; manual state edits explicitly unsupported). Ask: make the escalation trigger name that case concretely ('re-run a completed mapped item without re-running siblings') so it is testable.
