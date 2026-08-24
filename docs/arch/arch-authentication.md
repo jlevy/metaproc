@@ -899,24 +899,32 @@ slot:
 ```
 
 Fan-out uses the mapped item key for `<item>`; a scalar agent uses its step key.
-Nested processes bind `<run_id>` to the child scope rather than reusing the root
-identity, so same-named steps in sibling scopes cannot collide.
+`<run_id>` is the path of the current scope relative to `<RUNS_DIR>`, not the logical
+task identity that also contains the process name.
+Nested processes therefore bind slots to their child scope, and same-named steps in
+sibling scopes cannot collide or write credentials outside the run tree.
 Both paths use `PoolDispatchConfig`, `SlotCoordinator`, the adapter’s credential scope
-and scrub rules, and the shared completion primitive in `pool_dispatch.py`.
-
-Scalar acquisition and teardown use the run-owned executor because local or GCP-backed
-credential storage may block.
-A scalar leaf first receives run and host admission, then acquires its credential, and
-only then writes durable attempt state.
-It cannot hold a Vehicle B label lock while queued behind the run semaphore.
-
-and scopes the CLI to that slot via its native config env var:
+and scrub rules, and the shared completion primitive in `pool_dispatch.py`. They scope
+the CLI to that slot through its native configuration environment variable:
 
 - Claude Code → `CLAUDE_CONFIG_DIR=<slot_dir>`, with `<slot_dir>/.credentials.json` mode
   0600\.
 - Codex → `CODEX_HOME=<slot_dir>/.codex`, with `auth.json` plus a minimal `config.toml`
   pinning `cli_auth_credentials_store = "file"` and `forced_login_method = "chatgpt"` so
   the slot credential can’t be silently overridden by a stray `OPENAI_API_KEY`.
+
+Scalar acquisition and teardown use the run-owned executor because local or GCP-backed
+credential storage may block.
+A scalar leaf first receives run and host admission, then acquires its credential, and
+only then writes durable attempt state.
+It cannot hold a Vehicle B label lock while queued behind the run semaphore.
+The scalar path uses the same quota preflight primitive as fan-out, with a projected
+size of one. Admission or quota refusal fails the step before durable attempt history
+begins.
+
+A pool applies only to steps whose adapter matches the configured pool adapter.
+A different adapter uses its ambient authentication, and `run-process` emits an explicit
+warning naming the step adapter and pool adapter rather than silently skipping the pool.
 
 Higher-precedence OAuth vars (`ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`,
 `CLAUDE_CODE_APIKEY_HELPER`, `CODEX_CREDS_JSON`) are scrubbed from the subprocess env.

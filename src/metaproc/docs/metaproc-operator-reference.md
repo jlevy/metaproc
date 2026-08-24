@@ -443,6 +443,19 @@ uv run metaproc run-process <process.process.md> \
 Use `uv run metaproc run-process --help` for the full credential-pool flag set (the
 underlying CLI flags are named `--auth-*`), including fallback and preflight behavior.
 
+The configured pool applies to matching scalar and fan-out agent steps.
+A step using a different adapter continues with that adapter’s ambient authentication
+and emits a warning naming both adapters.
+Treat that warning as evidence that the step is outside the pool, especially when
+comparing pool usage with expected task counts.
+
+With `--backend gcp-worker`, scalar agent steps execute on the orchestrator while
+fan-out items execute on workers.
+Both lease from the same configured label set, so a long scalar call can hold a label
+that a worker is also waiting to acquire.
+Size the label set for the combined orchestrator-and-worker demand and use `auth usage`
+plus `pool events` to inspect contention.
+
 ## Monitoring Commands
 
 | Question | Command |

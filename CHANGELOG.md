@@ -103,8 +103,11 @@ development series.
   steps now lease the configured pool label, apply the same credential scope and scrub
   rules, classify failures, walk fallback labels on retry, and emit the same
   `auth_lease_acquired` and `auth_outcome` evidence as RunPool items.
-  Nested leaves bind slots and event join keys to their child run identity, and blocking
-  credential storage work runs through the run-owned executor.
+  Nested leaves bind slots and event join keys to their path-relative child scope, so
+  credential material stays inside the run tree.
+  Blocking credential storage work runs through the run-owned executor.
+  Scalar admission and quota refusals fail the step before attempt history starts, while
+  adapter mismatches emit an explicit warning before using ambient authentication.
 
 - **One execution context across recursive scopes**: local `run-process` execution now
   shares one executable-leaf ceiling across fan-out pools, scalar steps, code work, and

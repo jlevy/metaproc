@@ -66,6 +66,7 @@ from metaproc.dispatch.credential_pool import (
     local_backend,
 )
 from metaproc.dispatch.pool_dispatch import (
+    PoolAuthOverrideError,
     PoolDispatchConfig,
     PoolSlotUnavailableError,
     acquire_slot,
@@ -78,6 +79,7 @@ from metaproc.dispatch.pool_dispatch import (
 from metaproc.dispatch.preflight import (
     GuardPosture,
     check_dispatch_auth_env,
+    check_step_preflight,
     validate_guard_posture,
 )
 from metaproc.dispatch.slot_coordinator import SlotCoordinator
@@ -1575,20 +1577,40 @@ async def _run_agent_subprocess(
     return await _run_sync(execution_context, _run)
 
 
-def _pool_dispatch_for_agent(
-    execution_context: RunExecutionContext | None,
+def _bind_pool_dispatch(
+    template: PoolDispatchConfig | None,
     *,
     adapter_type: str,
-    run_id: str,
+    run_dir: Path,
     step_id: str,
+    out: Any,
 ) -> PoolDispatchConfig | None:
-    """Bind the run's credential policy to one agent leaf's scoped identity."""
-    if execution_context is None:
+    """Bind one matching agent step to a path-relative credential scope."""
+    if template is None:
         return None
-    template = execution_context.pool_dispatch_template
-    if template is None or adapter_type != template.adapter:
+    if adapter_type != template.adapter:
+        out.warning(
+            f"Step '{step_id}' uses adapter {adapter_type!r}, but the credential pool "
+            f"is configured for {template.adapter!r}; the pool is not applied and the "
+            "step uses its ambient adapter authentication."
+        )
         return None
-    return dataclasses.replace(template, run_id=run_id, step=step_id)
+
+    runs_root = template.runs_dir.resolve()
+    resolved_run_dir = run_dir.resolve()
+    try:
+        scope_id = resolved_run_dir.relative_to(runs_root).as_posix()
+    except ValueError as exc:
+        raise CLIError(
+            f"step '{step_id}': run directory {resolved_run_dir} is outside credential "
+            f"pool runs directory {runs_root}"
+        ) from exc
+    if scope_id == ".":
+        raise CLIError(
+            f"step '{step_id}': run directory must be below credential pool runs "
+            f"directory {runs_root}"
+        )
+    return dataclasses.replace(template, run_id=scope_id, step=step_id)
 
 
 async def _execute_agent_step(
@@ -1700,11 +1722,12 @@ async def _execute_agent_step(
     content_retry_cap = max_retries_for(FailureClass.INVALID_OUTPUT, retry_policy.max_retries)
     attempt = 1
     output_failure_feedback: Sequence[OutputFailure] = ()
-    pool_dispatch = _pool_dispatch_for_agent(
-        execution_context,
+    pool_dispatch = _bind_pool_dispatch(
+        execution_context.pool_dispatch_template if execution_context is not None else None,
         adapter_type=adapter_type,
-        run_id=run_id,
+        run_dir=run_dir,
         step_id=step_id,
+        out=out,
     )
     auth_events = (
         EventLogger(paths_mod.runpool_step_events(run_dir, step_id))
@@ -1716,6 +1739,27 @@ async def _execute_agent_step(
         auth_events.open()
 
     try:
+        if (
+            pool_dispatch is not None
+            and execution_context is not None
+            and execution_context.preflight_quota_guard != "off"
+        ):
+            quota_verdict = await _run_sync(
+                execution_context,
+                partial(
+                    check_step_preflight,
+                    pool_dispatch.coordinator.backend,
+                    adapter=pool_dispatch.adapter,
+                    step_id=step_id,
+                    fan_out_size=1,
+                    posture=cast(GuardPosture, execution_context.preflight_quota_guard),
+                ),
+            )
+            if quota_verdict.status == "refuse":
+                out.warning(
+                    f"Step '{step_id}': scalar quota gate refused launch: {quota_verdict.message}"
+                )
+                return False
         while True:
             # Each retry keeps its own log, so the attempt that failed its contract stays
             # readable beside the one that replaced it.
@@ -1807,7 +1851,8 @@ async def _execute_agent_step(
                                         ),
                                     )
                                 except PoolSlotUnavailableError as exc:
-                                    raise CLIError(f"step '{step_id}': {exc}") from exc
+                                    out.warning(f"Step '{step_id}': {exc}")
+                                    return False
                                 counts = pool_dispatch.coordinator.active_counter.snapshot()
                                 active_for_adapter = {
                                     label: count
@@ -1821,11 +1866,16 @@ async def _execute_agent_step(
                                         active_lease_count=active_for_adapter,
                                     )
                                 )
-                                env = compose_slot_env(
-                                    env,
-                                    lease=lease,
-                                    refuse_on_keys=auth_override_refusal_keys(lease.adapter),
-                                )
+                                try:
+                                    env = compose_slot_env(
+                                        env,
+                                        lease=lease,
+                                        refuse_on_keys=auth_override_refusal_keys(lease.adapter),
+                                    )
+                                except PoolAuthOverrideError as exc:
+                                    await _complete_auth_attempt(str(exc))
+                                    out.warning(f"Step '{step_id}': {exc}")
+                                    return False
                                 auth_adapter = get_auth_capable(lease.adapter)
                                 if auth_adapter is not None:
                                     cmd = [
@@ -2504,10 +2554,12 @@ async def _execute_fan_out_step(
             item_contexts=item_contexts,
         )
 
-    pool_dispatch = (
-        dataclasses.replace(pool_dispatch_template, run_id=run_id, step=step_id)
-        if pool_dispatch_template is not None
-        else None
+    pool_dispatch = _bind_pool_dispatch(
+        pool_dispatch_template,
+        adapter_type=adapter_type,
+        run_dir=run_dir,
+        step_id=step_id,
+        out=out,
     )
 
     all_results = await _run_agent_pool(
@@ -3852,9 +3904,9 @@ def run_process_command(
     out.progress(f"Backend: {backend}")
 
     # ── Auth-pool dispatch template ────────────────────
-    # Constructed once at top level and threaded through to fan-out steps.
-    # `step` is filled per-step inside _execute_fan_out_step via
-    # dataclasses.replace before passing to _run_agent_pool.
+    # Constructed once at top level and threaded through every agent step.
+    # The shared binder fills the path-relative scope and step for scalar
+    # and fan-out execution before either path acquires a credential.
     #
     # ``auth_flags_resolved`` is the AuthPoolFlags shape the gcp-worker
     # leg consumes. Built alongside pool_dispatch_template
@@ -3939,7 +3991,7 @@ def run_process_command(
             adapter=auth_account,
             runs_dir=runs_dir_for_pool,
             run_id=run_context,
-            step="",  # filled per-step in _execute_fan_out_step
+            step="",  # filled per-step by _bind_pool_dispatch
             strategy=strategy,
             fallback_policy=fallback_policy_enum,
             exclude=excluded_pairs,
