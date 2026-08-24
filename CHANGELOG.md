@@ -22,6 +22,17 @@ development series.
   dispatch now supplies its own `METAPROC_GCP_ORCHESTRATOR` admission marker instead of
   depending only on `BATCH_TASK_INDEX`.
 
+- **Attempt finalization survives auth-pool teardown failure**: a credential teardown
+  exception records the affected attempt as lost before propagating the operational
+  error.
+
+- **Terminal paths retain owned capacity until cleanup finishes**: local scalar agent
+  launches now reuse the local launch backend and drain late launches before returning.
+  On completion, timeout, or cancellation, agent and code-command process groups are
+  terminated, stubborn descendants are killed, and log filters are flushed before run
+  slots or host admission are released.
+  Late credential leases are likewise torn down before credential capacity is released.
+
 ### Changed
 
 - **Typed cloud authentication transport**: the internal `OrchestratorDispatchConfig`
@@ -50,9 +61,9 @@ development series.
 - **One execution context across recursive scopes**: local `run-process` execution now
   shares one executable-leaf ceiling across fan-out pools, scalar steps, code work, and
   composite descendants.
-  Synchronous code and scalar-process supervision use the run-owned executor instead of
-  blocking the event loop, and `--force` reaches composite descendants while root step
-  selectors remain root-scoped.
+  Synchronous handlers and code commands use the run-owned executor, while scalar agent
+  processes reuse the local launch backend without blocking the event loop.
+  `--force` reaches composite descendants while root step selectors remain root-scoped.
   Command-backed code steps at the same DAG level may now run concurrently and acquire
   the shared run ceiling; fan-out paths retain their step ceilings as well.
   The executor defaults to 32 workers and grows to an explicit higher run ceiling, so

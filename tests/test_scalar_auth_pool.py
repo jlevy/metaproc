@@ -7,6 +7,8 @@ import json
 import logging
 import os
 import sys
+import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -35,8 +37,13 @@ from metaproc.dispatch.pool_dispatch import (
     PoolAuthOverrideError,
     PoolDispatchConfig,
     PoolSlotUnavailableError,
+    acquire_slot as acquire_pool_slot,
 )
-from metaproc.dispatch.slot_coordinator import SlotCoordinator
+from metaproc.dispatch.slot_coordinator import (
+    SlotCoordinator,
+    SlotLease,
+    vehicle_b_label_lock_path,
+)
 from metaproc.engine.pathing import compute_task_state_dir
 from metaproc.errors import CLIError
 from metaproc.io import read_yaml_file
@@ -943,3 +950,135 @@ def test_scalar_pool_warn_posture_skips_per_step_quota_scan(
 
     assert succeeded is False
     preflight.assert_not_called()
+
+
+def test_cancellation_during_scalar_credential_acquisition_releases_ownership(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = _ScalarAuthAdapter()
+    monkeypatch.setitem(ADAPTER_REGISTRY, adapter.adapter_type, adapter)
+    backend = LocalFilesystemBackend(path=tmp_path / "pool" / "credentials.json")
+    backend.upsert_entry(
+        adapter.adapter_type,
+        "login",
+        blob="login",
+        state=EntryState(
+            status="active",
+            fp=fingerprint_blob("login"),
+            vehicle=Vehicle.LOGIN_CREDENTIALS,
+        ),
+    )
+    coordinator = SlotCoordinator(backend, adapter_registry={adapter.adapter_type: adapter})
+    runs_dir = tmp_path / "runs"
+    run_id = "cancel-acquire"
+    step_def = ProcessStep(id="scalar-agent", mode="agent", prompt_prefix="test")
+    spec = ProcessSpec(name="scalar-auth", steps=[step_def])
+    target = ResolvedStep(
+        step_id=step_def.id,
+        mode="agent",
+        adapter=ResolvedAdapter(type=adapter.adapter_type),
+        prompt_prefix="test",
+    )
+    pool_dispatch = PoolDispatchConfig(
+        coordinator=coordinator,
+        adapter=adapter.adapter_type,
+        runs_dir=runs_dir,
+        run_id=run_id,
+        step="",
+    )
+    context = RunExecutionContext.create(
+        max_concurrency=1,
+        pool_dispatch_template=pool_dispatch,
+        preflight_quota_guard="off",
+    )
+    acquisition_started = threading.Event()
+    allow_acquisition = threading.Event()
+    acquisition_finished = threading.Event()
+    host_admission_released = asyncio.Event()
+    acquired_lease: list[SlotLease] = []
+
+    def delayed_acquire(
+        config: PoolDispatchConfig,
+        *,
+        item: str,
+        attempt: int,
+        item_exclude: tuple[tuple[str, str], ...] = (),
+        session_log_path: Path | None = None,
+    ) -> SlotLease:
+        acquisition_started.set()
+        assert allow_acquisition.wait(timeout=2)
+        try:
+            lease = acquire_pool_slot(
+                config,
+                item=item,
+                attempt=attempt,
+                item_exclude=item_exclude,
+                session_log_path=session_log_path,
+            )
+            acquired_lease.append(lease)
+            return lease
+        finally:
+            acquisition_finished.set()
+
+    @asynccontextmanager
+    async def tracked_host_admission(**_kwargs: object):
+        try:
+            yield object()
+        finally:
+            host_admission_released.set()
+
+    async def exercise() -> None:
+        run_dir = runs_dir / run_id
+        with (
+            monkeypatch.context() as scoped,
+            pytest.raises(asyncio.CancelledError),
+        ):
+            scoped.setattr("metaproc.commands.run_process.acquire_slot", delayed_acquire)
+            scoped.setattr(
+                "metaproc.commands.run_process.admitted_launch",
+                tracked_host_admission,
+            )
+            task = asyncio.create_task(
+                _execute_agent_step(
+                    spec=spec,
+                    step_def=step_def,
+                    target=target,
+                    variables={
+                        "RUNS_DIR": str(runs_dir),
+                        "RUN_ID": run_id,
+                        "OBSERVED_LABEL": str(tmp_path / "never-written.txt"),
+                    },
+                    process_dir=tmp_path,
+                    run_dir=run_dir,
+                    run_id=run_id,
+                    execution_context=context,
+                    out=_Out(),
+                )
+            )
+            assert await asyncio.to_thread(acquisition_started.wait, 2)
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not host_admission_released.is_set()
+            allow_acquisition.set()
+            await task
+
+    try:
+        asyncio.run(exercise())
+        assert acquisition_finished.wait(timeout=2)
+        assert not any(coordinator.active_counter.snapshot().values())
+        assert not vehicle_b_label_lock_path(adapter.adapter_type, "login").exists()
+        assert not list((runs_dir / run_id / ".state" / "auth").rglob("credential.txt"))
+        assert context.leaf_semaphore is not None
+        assert context.leaf_semaphore._value == 1  # noqa: SLF001 - ownership invariant
+    finally:
+        allow_acquisition.set()
+        acquisition_finished.wait(timeout=2)
+        if any(coordinator.active_counter.snapshot().values()) and acquired_lease:
+            coordinator.teardown(
+                acquired_lease[0],
+                failure=AuthFailureClassification(
+                    status="unknown",
+                    reason="test-cleanup",
+                ),
+            )
+        context.close()

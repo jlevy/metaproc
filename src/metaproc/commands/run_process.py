@@ -191,6 +191,7 @@ from metaproc.paths import (
 )
 from metaproc.paths import STATE_DIR as _STATE_DIR
 from metaproc.paths import TASKS_SUBDIR as _TASKS_SUBDIR
+from metaproc.runpool.backend import LocalBackend, PreparedLaunch, launch_and_supervise
 from metaproc.runpool.events import EventLogger
 from metaproc.runpool.kill import install_subprocess_reaper_signal_handlers
 from metaproc.runpool.pool import (
@@ -301,12 +302,42 @@ class RunExecutionContext:
 async def _run_sync[SyncResult](
     execution_context: RunExecutionContext | None,
     function: Callable[[], SyncResult],
+    *,
+    on_cancelled_result: Callable[[SyncResult], object] | None = None,
 ) -> SyncResult:
-    """Run synchronous work without pinning the orchestration event loop."""
-    if execution_context is None:
-        return await asyncio.to_thread(function)
+    """Run synchronous work and retain its ownership through cancellation."""
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(execution_context.sync_executor, function)
+    executor = execution_context.sync_executor if execution_context is not None else None
+    future = loop.run_in_executor(executor, function)
+    try:
+        return await asyncio.shield(future)
+    except asyncio.CancelledError as cancelled:
+        if execution_context is not None:
+            execution_context.cancellation_event.set()
+        try:
+            while not future.done():
+                try:
+                    await asyncio.shield(future)
+                except asyncio.CancelledError:
+                    continue
+            result = future.result()
+        except asyncio.CancelledError:
+            raise cancelled from None
+        except BaseException:
+            raise
+
+        if on_cancelled_result is not None:
+            cleanup = loop.run_in_executor(
+                executor,
+                partial(on_cancelled_result, result),
+            )
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    continue
+            cleanup.result()
+        raise cancelled
 
 
 @asynccontextmanager
@@ -1190,6 +1221,11 @@ async def _execute_code_step(
                     run_dir=run_dir,
                     run_id=run_id,
                     step_node_id=step_id,
+                    cancel_requested=(
+                        execution_context.cancellation_event.is_set
+                        if execution_context is not None
+                        else None
+                    ),
                 ),
             )
             # Capture stdout/stderr to log file
@@ -1529,53 +1565,31 @@ async def _run_agent_subprocess(
     env: dict[str, str],
     cwd: Path | None,
     log_path: Path,
-    timeout_s: int | None,
+    timeout_s: float | None,
     use_filter: bool,
     execution_context: RunExecutionContext | None = None,
 ) -> int:
-    """Run one blocking adapter subprocess without blocking the DAG event loop."""
-
-    def _run() -> int:
-        if use_filter:
-            from metaproc.engine.runtime import (  # noqa: PLC0415 -- optional filter path
-                start_log_filter_thread,
-            )
-
-            log_fh = log_path.open("w")
-            try:
-                fg_proc = subprocess.Popen(
-                    cmd,
-                    env=env,
-                    cwd=cwd,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                )
-                stdout_pipe = fg_proc.stdout
-                if stdout_pipe is None:
-                    msg = "adapter subprocess did not expose the requested stdout pipe"
-                    raise RuntimeError(msg)
-                ft = start_log_filter_thread(stdout_pipe, log_fh)
-                fg_proc.wait(timeout=timeout_s)
-                ft.join(timeout=5.0)
-                return fg_proc.returncode
-            finally:
-                log_fh.close()
-
-        with log_path.open("w") as log_fh:
-            completed = subprocess.run(
-                cmd,
+    """Run one adapter subprocess under the existing local backend supervisor."""
+    backend = LocalBackend()
+    try:
+        return await launch_and_supervise(
+            backend,
+            PreparedLaunch(
+                command=tuple(cmd),
                 env=env,
                 cwd=cwd,
-                stdin=subprocess.DEVNULL,
-                stdout=log_fh,
-                stderr=subprocess.STDOUT,
-                check=False,
-                timeout=timeout_s,
-            )
-        return completed.returncode
-
-    return await _run_sync(execution_context, _run)
+                log_path=log_path,
+                filter_log=use_filter,
+            ),
+            timeout_s=timeout_s,
+            on_cancel=(
+                execution_context.cancellation_event.set if execution_context is not None else None
+            ),
+        )
+    except TimeoutError as exc:
+        if timeout_s is None:
+            raise
+        raise subprocess.TimeoutExpired(cmd, timeout_s) from exc
 
 
 def _bind_pool_dispatch(
@@ -1865,6 +1879,13 @@ async def _execute_agent_step(
                                             attempt=attempt,
                                             item_exclude=tuple(retry_exclude),
                                             session_log_path=attempt_log_path,
+                                        ),
+                                        on_cancelled_result=partial(
+                                            pool_dispatch.coordinator.teardown,
+                                            failure=AuthFailureClassification(
+                                                status="unknown",
+                                                reason="cancelled-before-launch",
+                                            ),
                                         ),
                                     )
                                 except PoolSlotUnavailableError as exc:

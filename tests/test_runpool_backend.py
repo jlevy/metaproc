@@ -9,10 +9,12 @@ from pathlib import Path
 import pytest
 
 from metaproc.runpool.backend import (
+    HealthMetrics,
     LaunchHandle,
     LocalBackend,
     PreparedLaunch,
     get_log_size,
+    launch_and_supervise,
     read_log_tail_sync,
 )
 
@@ -142,6 +144,61 @@ class TestLocalBackend:
             # Process exited — health returns None.
             metrics = await backend.health(handle)
             assert metrics is None
+
+        asyncio.run(_run())
+
+    def test_cancel_during_launch_kills_late_handle_before_return(self):
+        class DelayedBackend:
+            name = "delayed"
+
+            def __init__(self) -> None:
+                self.launch_started = asyncio.Event()
+                self.allow_launch = asyncio.Event()
+                self.killed = False
+
+            async def launch(
+                self,
+                prepared: PreparedLaunch,
+                label: str = "",
+            ) -> LaunchHandle:
+                del prepared, label
+                self.launch_started.set()
+                await self.allow_launch.wait()
+                return LaunchHandle(pid=123, backend_name=self.name)
+
+            async def poll(self, handle: LaunchHandle) -> int | None:
+                del handle
+                return 0 if self.killed else None
+
+            async def kill(self, handle: LaunchHandle, sig: int | None = None) -> None:
+                del handle, sig
+                self.killed = True
+
+            async def health(self, handle: LaunchHandle) -> HealthMetrics | None:
+                del handle
+                return None
+
+            async def read_log_tail(self, handle: LaunchHandle, lines: int = 50) -> str:
+                del handle, lines
+                return ""
+
+        async def _run() -> None:
+            delayed = DelayedBackend()
+            task = asyncio.create_task(
+                launch_and_supervise(
+                    delayed,
+                    PreparedLaunch(command=("unused",)),
+                    timeout_s=None,
+                )
+            )
+            await delayed.launch_started.wait()
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+            delayed.allow_launch.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert delayed.killed is True
 
         asyncio.run(_run())
 

@@ -2594,11 +2594,24 @@ Fan-out steps dispatch through one of two backends:
 The local backend uses the RunPool (section 17) with step-scoped `.state/` and `.logs/`
 directories. One run execution context owns the optional semaphore shared by fan-out
 pools, scalar agent launches, and code work across composite scopes.
-Its run-owned executor supervises synchronous handlers and commands off the event loop.
+Its run-owned executor supervises synchronous handlers, commands, and blocking credential
+operations off the event loop.
 That executor defaults to 32 workers and grows to an explicit higher
 `--max-concurrency`, so executor capacity cannot silently reduce the authored run
 ceiling. At terminal cleanup, the context cancels queued executor work and waits for
 started work before the orchestrator releases its run lease.
+A cancelled executor call is drained before its leaf slot is released; if credential
+acquisition returns a late lease, teardown completes first.
+
+Scalar agent launches reuse `LocalBackend` process-group lifecycle through the small
+`launch_and_supervise` helper.
+Cancellation during launch drains any late handle.
+Completion, cancellation, and timeout all close the full process group, escalate
+stubborn descendants to `SIGKILL`, and flush a log-filter thread before returning.
+Shell-backed code steps apply the same process-group ownership rule inside their sampled
+command runner. These paths do not add a second pool or adaptive controller: the run
+context supplies the leaf ceiling, host admission supplies cross-run capacity, and
+RunPool remains the adaptive manager for mapped local fan-out.
 
 **Note on backend abstraction:** `local` is a registered `LaunchBackend` implementation
 (section 21.8) in the backend registry (`runpool/registry.py`). `gcp-worker` is
@@ -3089,6 +3102,13 @@ the original future-work backlog.
 * * *
 
 ## Revision History
+
+### rev2o (2026-08-25)
+
+- Documented cancellation-safe ownership for executor work, scalar credentials, local
+  scalar agent process groups, and sampled code commands.
+- Clarified that scalar supervision reuses the launch backend lifecycle without creating
+  another pool or adaptive controller.
 
 ### rev2n (2026-08-24)
 

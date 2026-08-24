@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
+import signal
 import subprocess
-from collections.abc import Generator, Mapping, Sequence
+import sys
+import time
+from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +20,15 @@ from metaproc.osutils.psutil_sampler import PsutilSampler
 from metaproc.paths import LOGS_DIR, RESOURCE_EVENTS_FILE, run_config_file
 
 log = logging.getLogger(__name__)
+
+# How long supervised commands get to exit gracefully before escalation.
+_PROCESS_TERMINATION_GRACE_S = 5.0
+# How long Metaproc waits for the process group after an uncatchable kill signal.
+_PROCESS_KILL_WAIT_S = 5.0
+# Responsiveness bound for cancellation and exited-leader detection.
+_COMMAND_POLL_INTERVAL_S = 0.1
+# Poll cadence while waiting for a signalled process group to disappear.
+_PROCESS_GROUP_EXIT_POLL_INTERVAL_S = 0.05
 
 
 @dataclass(frozen=True)
@@ -96,6 +110,7 @@ def run_sampled_step_command(
     run_id: str,
     step_node_id: str,
     item_key: str | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run a code-step command while sampling only its process tree."""
     args = list(command)
@@ -106,6 +121,7 @@ def run_sampled_step_command(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        start_new_session=sys.platform != "win32",
     ) as process:
         with sample_step_resources(
             run_dir=run_dir,
@@ -114,7 +130,20 @@ def run_sampled_step_command(
             item_key=item_key,
             pid=process.pid,
         ):
-            stdout, stderr = process.communicate()
+            while True:
+                try:
+                    stdout, stderr = process.communicate(timeout=_COMMAND_POLL_INTERVAL_S)
+                    _terminate_process_tree(process)
+                    break
+                except subprocess.TimeoutExpired:
+                    if cancel_requested is not None and cancel_requested():
+                        _terminate_process_tree(process)
+                        stdout, stderr = process.communicate()
+                        raise asyncio.CancelledError from None
+                    if process.poll() is not None:
+                        _terminate_process_tree(process)
+                        stdout, stderr = process.communicate()
+                        break
 
     completed = subprocess.CompletedProcess(
         args=args,
@@ -124,3 +153,65 @@ def run_sampled_step_command(
     )
     completed.check_returncode()
     return completed
+
+
+def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
+    """Terminate a command's isolated process group, escalating when needed."""
+    if sys.platform == "win32":
+        if process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=_PROCESS_TERMINATION_GRACE_S)
+            return
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=_PROCESS_KILL_WAIT_S)
+            return
+
+    # start_new_session=True makes the leader PID the stable process-group ID.
+    pgid = process.pid
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        process.wait()
+        return
+    if _wait_for_process_group_exit(
+        process,
+        pgid,
+        timeout_s=_PROCESS_TERMINATION_GRACE_S,
+    ):
+        return
+    log.warning("Command process group %d survived SIGTERM; sending SIGKILL", pgid)
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        process.wait()
+        return
+    if not _wait_for_process_group_exit(
+        process,
+        pgid,
+        timeout_s=_PROCESS_KILL_WAIT_S,
+    ):
+        msg = f"Command process group {pgid} still has live members after SIGKILL"
+        raise RuntimeError(msg)
+
+
+def _wait_for_process_group_exit(
+    process: subprocess.Popen[str],
+    pgid: int,
+    *,
+    timeout_s: float,
+) -> bool:
+    """Reap the command leader while waiting for all group members to exit."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        process.poll()
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return True
+        remaining_s = deadline - time.monotonic()
+        if remaining_s <= 0:
+            return False
+        time.sleep(min(_PROCESS_GROUP_EXIT_POLL_INTERVAL_S, remaining_s))
