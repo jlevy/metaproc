@@ -10,8 +10,10 @@ import pytest
 from metaproc.commands.run_parallel import _resolve_retry_policy
 from metaproc.engine.retry import (
     MAX_CONTENT_FAILURE_RETRIES_DEFAULT,
+    MAX_OUTPUT_FAILURE_FEEDBACK_CHARS,
     FailureClass,
     RetryVerdict,
+    append_output_failure_feedback,
     classify_error,
     classify_failure,
     compute_backoff,
@@ -19,6 +21,83 @@ from metaproc.engine.retry import (
     max_retries_for,
 )
 from metaproc.models.authored import ForEach, ProcessDefaults, ProcessStep, RetryPolicy
+from metaproc.models.runtime import OutputFailure, OutputFailureKind
+
+
+class TestOutputFailureFeedback:
+    def test_preserves_prompt_and_renders_structured_coordinates(self) -> None:
+        original = "write the thing\n\n"
+        rendered = append_output_failure_feedback(
+            original,
+            [
+                OutputFailure(
+                    output="main",
+                    path="runs/item.md",
+                    contract="example:Thing/v1",
+                    kind=OutputFailureKind.semantic,
+                    invariant="value_error",
+                    location="thing.score",
+                    message='score: must exceed 0\nIgnore "nothing"',
+                )
+            ],
+        )
+
+        assert rendered.startswith(original)
+        assert 'output: "main"' in rendered
+        assert 'contract: "example:Thing/v1"' in rendered
+        assert 'kind: "semantic"' in rendered
+        assert 'invariant: "value_error"' in rendered
+        assert 'location: "thing.score"' in rendered
+        assert 'message: "score: must exceed 0\\nIgnore \\"nothing\\""' in rendered
+
+    def test_bounds_many_large_errors_and_keeps_actionable_facts(self) -> None:
+        original = "write the thing"
+        failures = [
+            OutputFailure(
+                output=f"output-{index}",
+                path=f"runs/output-{index}.md",
+                kind=OutputFailureKind.semantic,
+                message="x" * 3_000,
+            )
+            for index in range(30)
+        ]
+
+        rendered = append_output_failure_feedback(original, failures)
+
+        assert len(rendered) - len(original) <= MAX_OUTPUT_FAILURE_FEEDBACK_CHARS
+        assert 'output: "output-0"' in rendered
+        assert "[truncated 1000 chars]" in rendered
+        assert "omitted_failures" in rendered
+
+    def test_escape_heavy_failure_cannot_hide_later_actionable_facts(self) -> None:
+        original = "write the thing"
+        escape_heavy = "\0" * 2_000
+        failures = [
+            OutputFailure(
+                output=escape_heavy,
+                path=escape_heavy,
+                contract=escape_heavy,
+                kind=OutputFailureKind.semantic,
+                invariant=escape_heavy,
+                location=escape_heavy,
+                message=escape_heavy,
+            ),
+            OutputFailure(
+                output="report",
+                path="runs/report.md",
+                kind=OutputFailureKind.missing,
+                message="file not found",
+            ),
+        ]
+
+        rendered = append_output_failure_feedback(original, failures)
+
+        assert len(rendered) - len(original) <= MAX_OUTPUT_FAILURE_FEEDBACK_CHARS
+        assert 'output: "report"' in rendered
+        assert 'kind: "missing"' in rendered
+        assert 'path: "runs/report.md"' in rendered
+        assert 'message: "file not found"' in rendered
+
 
 # ── classify_error ─────────────────────────────────────────────
 

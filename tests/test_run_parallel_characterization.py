@@ -382,6 +382,107 @@ class TestPoolPrepareEnv:
 
         assert not stale_dir.exists()
 
+    @patch("metaproc.commands.run_parallel.get_adapter")
+    @patch("metaproc.commands.run_parallel.prepare_step")
+    @patch("metaproc.commands.run_parallel.enforce_no_unresolved_placeholders")
+    @patch("metaproc.commands.run_parallel.mark_running_at")
+    @patch("metaproc.commands.run_parallel.write_attempt_at")
+    def test_build_prepare_launch_preserves_attempt_prompts_with_structured_feedback(
+        self,
+        mock_write_attempt: MagicMock,
+        mock_mark_running: MagicMock,
+        mock_enforce: MagicMock,
+        mock_prepare_step: MagicMock,
+        mock_get_adapter: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """A fan-out retry receives the same structured correction facts as a scalar one."""
+        del mock_write_attempt, mock_mark_running
+        mock_adapter = MagicMock()
+        observed_prompts: list[str] = []
+        observed_prompt_paths: list[Path] = []
+
+        def _capture_prompt(prompt_file: Path, *_args: Any) -> list[str]:
+            observed_prompt_paths.append(Path(prompt_file))
+            observed_prompts.append(Path(prompt_file).read_text())
+            return ["echo", "hello"]
+
+        mock_adapter.build_command.side_effect = _capture_prompt
+        mock_adapter.prepare_env.return_value = {}
+        mock_adapter.working_directory.return_value = None
+        mock_get_adapter.return_value = mock_adapter
+
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir()
+        log_path = str(logs_dir / "AAPL.log")
+        mock_prepare_step.return_value = ("write the report", str(logs_dir), log_path)
+
+        shared = _make_shared("AAPL", tmp_path)
+        failure = OutputFailure(
+            output="report",
+            path="output.yaml",
+            kind=OutputFailureKind.missing,
+            message="file not found; literal {{VALIDATOR_DATA}}",
+        )
+        shared["attempt_number"] = 1
+        shared["output_failure_feedback"] = ()
+
+        first_prepare = _build_prepare_launch(
+            shared=shared,
+            item_vars={"ticker": "AAPL", "VARIANT": "v1"},
+            item_context={"ticker": "AAPL"},
+            attempt=1,
+            spec=_make_spec(),
+            step_def=_make_step_def(),
+            step="predict",
+            each="ticker",
+            process_dir=tmp_path,
+            merged_config={"model": "claude-3", "timeout_s": 300},
+            effective_outputs=None,
+            effective_variant="v1",
+            allowed_runtime=set(),
+            adapter_type="claude-code-cli",
+            target_env=None,
+            run_id="test/run",
+            refresh_token_fn=None,
+            pool_status_path=None,
+        )
+        first_prepare()
+
+        shared["attempt_number"] = 2
+        shared["output_failure_feedback"] = (failure,)
+        second_prepare = _build_prepare_launch(
+            shared=shared,
+            item_vars={"ticker": "AAPL", "VARIANT": "v1"},
+            item_context={"ticker": "AAPL"},
+            attempt=2,
+            spec=_make_spec(),
+            step_def=_make_step_def(),
+            step="predict",
+            each="ticker",
+            process_dir=tmp_path,
+            merged_config={"model": "claude-3", "timeout_s": 300},
+            effective_outputs=None,
+            effective_variant="v1",
+            allowed_runtime=set(),
+            adapter_type="claude-code-cli",
+            target_env=None,
+            run_id="test/run",
+            refresh_token_fn=None,
+            pool_status_path=None,
+        )
+        second_prepare()
+
+        assert len(observed_prompts) == 2
+        assert observed_prompts[0] == "write the report"
+        assert observed_prompts[1].startswith("write the report")
+        assert "The prior attempt's declared output failed validation." in observed_prompts[1]
+        assert 'output: "report"' in observed_prompts[1]
+        assert 'kind: "missing"' in observed_prompts[1]
+        assert len(set(observed_prompt_paths)) == 2
+        assert all(path.exists() for path in observed_prompt_paths)
+        assert mock_enforce.call_count == 2
+
 
 # ===========================================================================
 # Bug 3: Pool timeout uses shared merged_config (NOT per-item resolved)
@@ -501,6 +602,130 @@ class TestPoolSubmitAndShutdown:
             # The first item (AAPL) fails with submit error, second (GOOGL) succeeds
             failed = [item for item, code in results if code != 0]
             assert "AAPL" in failed
+
+        asyncio.run(_run())
+
+    def test_output_feedback_survives_a_transport_retry(self, tmp_path: Path) -> None:
+        """Transport failures retain the latest content-failure facts."""
+
+        async def _run() -> None:
+            class FakePool:
+                _status_path = None
+
+                def __init__(self) -> None:
+                    self.submission_count = 0
+
+                @property
+                def snapshot(self) -> Any:
+                    return SimpleNamespace(current_concurrency=1, active_count=0, pending_count=0)
+
+                def submit(self, _config: Any) -> asyncio.Future[Any]:
+                    self.submission_count += 1
+                    future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+                    future.set_result(
+                        SimpleNamespace(
+                            exit_code=1 if self.submission_count == 2 else 0,
+                            kill_reason=None,
+                            elapsed_s=0.01,
+                        )
+                    )
+                    return future
+
+                async def shutdown(self) -> None:
+                    pass
+
+                def record_failure_class(self, *_args: Any, **_kwargs: Any) -> None:
+                    pass
+
+                def record_retry_scheduled(self, *_args: Any, **_kwargs: Any) -> None:
+                    pass
+
+                def record_retry_consumed(self, *_args: Any, **_kwargs: Any) -> None:
+                    pass
+
+            failure = OutputFailure(
+                output="report",
+                path="output.yaml",
+                kind=OutputFailureKind.missing,
+                message="file not found",
+            )
+            prepared_feedback: list[tuple[OutputFailure, ...]] = []
+            completion_count = 0
+
+            def _capture_prepare(*, shared: dict[str, Any], **_kwargs: Any) -> MagicMock:
+                prepared_feedback.append(tuple(shared["output_failure_feedback"]))
+                return MagicMock()
+
+            def _fake_handle_success(
+                _each: str,
+                item: str,
+                _item_dir: Path | None,
+                _state_dir: Path,
+                _item_context: dict[str, str],
+                _log_path: Path | None,
+                _running_record: Any,
+                _effective_outputs: dict[str, IOSpec] | None,
+                _variables: dict[str, str],
+                _run_id: str,
+                _step: str,
+                _result: Any,
+                _out: Any,
+                all_results: list[tuple[str, int]],
+                batch_failed: list[tuple[dict[str, Any], str, list[OutputFailure]]],
+                shared: dict[str, Any],
+                **_kwargs: Any,
+            ) -> None:
+                nonlocal completion_count
+                completion_count += 1
+                if completion_count == 1:
+                    batch_failed.append(
+                        (shared, "output validation failed: output.yaml: file not found", [failure])
+                    )
+                else:
+                    all_results.append((item, 0))
+
+            with (
+                patch("metaproc.commands.run_parallel.RunPool", return_value=FakePool()),
+                patch(
+                    "metaproc.commands.run_parallel._build_prepare_launch",
+                    side_effect=_capture_prepare,
+                ),
+                patch("metaproc.commands.run_parallel.compute_item_dir", return_value=None),
+                patch(
+                    "metaproc.commands.run_parallel.compute_task_state_dir",
+                    return_value=tmp_path / "state",
+                ),
+                patch(
+                    "metaproc.commands.run_parallel._handle_success",
+                    side_effect=_fake_handle_success,
+                ),
+                patch("metaproc.commands.run_parallel.mark_failed_at"),
+            ):
+                results = await _run_agent_pool(
+                    spec=_make_spec(),
+                    step_def=_make_step_def(),
+                    step="predict",
+                    each="ticker",
+                    variables={"VARIANT": "v1"},
+                    item_contexts=[{"ticker": "AAPL"}],
+                    adapter_type="claude-code-cli",
+                    merged_config={"model": "claude-3"},
+                    effective_outputs={
+                        "report": IOSpec(path="output.yaml", on_invalid={"missing": "retry"})
+                    },
+                    effective_variant="v1",
+                    allowed_runtime=set(),
+                    retry_policy=RetryPolicy(max_retries=2, initial_backoff_s=0),
+                    process_dir=tmp_path,
+                    target_env=None,
+                    refresh_token_fn=None,
+                    pool_config=RunPoolConfig(),
+                    backend=MagicMock(),
+                    out=MagicMock(),
+                )
+
+            assert results == [("AAPL", 0)]
+            assert prepared_feedback == [(), (failure,), (failure,)]
 
         asyncio.run(_run())
 

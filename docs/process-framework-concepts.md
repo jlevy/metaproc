@@ -694,6 +694,7 @@ model; the rows below describe the implementation as it stands today.
 | Static planning | Spec resolved into a `Plan` as data; `plan`, `--dry-run`, validation | [arch-metaproc-core.md §8](arch/arch-metaproc-core.md) |
 | Dynamic width | Fan-out rosters re-discovered at execution time, so a mid-run step may write a later step’s roster | [run_process.py](../src/metaproc/commands/run_process.py) (execution-time `discover_items_from_source`) |
 | Fan-out | `for_each` over a declared items file, on agent and code steps; per-item retry with backoff on the agent path | [arch-metaproc-core.md §6.7, §11, §14.1](arch/arch-metaproc-core.md) |
+| Dependency clauses | Step-scoped `needs` by default; `for_each.align: same_key` for eligible linear code chains; collected inputs with `require: succeeded \| finished` | [arch-metaproc-core.md §11](arch/arch-metaproc-core.md), [arch-execution-model.md § Adoption Path](arch/arch-execution-model.md#adoption-path) |
 | Task state and resume | Per-item `status.yaml`, `attempt.yaml`, `result.yaml`; stale-marker reconciliation; `--force` invalidation with audit trail | [arch-metaproc-core.md §9-10, §19.5](arch/arch-metaproc-core.md), [artifact-catalog.md](artifact-catalog.md) |
 | Admission | RunPool: adaptive memory ceiling, provider ceiling, operator cap, cross-run host admission, health, kill | [arch-runpool.md](arch/arch-runpool.md) |
 | Visibility | `status` (with `--check`), `wait`, `tail`, `pulse`, `stats`, `deps`, `structure-report`, `pool status`, `pool events`, `pool health`, `pool concurrency-timeline`, `pool rollup`, `resource-report`, `trace`; classified `FailureClass` per item; Metabrowser plugin views | [arch-metaproc-core.md §9, §15](arch/arch-metaproc-core.md), [arch-runpool.md § Visibility Contract](arch/arch-runpool.md) |
@@ -704,14 +705,12 @@ These are the active design surface, not permanent properties.
 Most trace to two founding assumptions that were reasonable when made: the step was the
 original unit of execution and state, and one local orchestrator was the only writer.
 
-- **Edge granularity (test 4).** Declared `needs` edges are step-scoped, and the
-  executor is coarser still: it walks the step graph in topological *levels*, finishing
-  each level before the next.
-  Item-scoped edges do not exist, so chained fan-outs barrier at every step boundary.
-  Measured on a four-item cohort whose stages take 2, 5, 2 and 8 seconds: the fastest
-  item finishes stage one at 2.0s and cannot start stage two until 8.2s, because the
-  slowest item runs to 8.1s. The idle time is the spread of the roster, so it grows with
-  width and with how uneven the items are.
+- **Edge granularity (test 4, partially).** Declared `needs` edges are step-scoped by
+  default, and the executor walks the step graph in topological levels.
+  Consecutive `mode: code` fan-outs over the same item source can declare
+  `align: same_key`; the engine runs those linear chains per item without a barrier
+  between members. Other item-scoped shapes, including forks and agent or composite
+  chains, still acquire a step boundary that their data may not require.
 
 - **Mode decides more than invocation (no test; a structural deviation).** The model’s
   pivot is the task, but the runtime forks on step *mode* and each branch owns its own
@@ -722,9 +721,11 @@ original unit of execution and state, and one local orchestrator was the only wr
   Neither gap is a policy about what those modes mean.
   See [P8](metaproc-design-rev3-proposals.md) for the proposed decomposition.
 
-- **Dependency clauses (test 5).** Fan-in is implicitly “all items must succeed”;
-  mapping, requirement, and cardinality are not separately declarable, and fan-in
-  consumers receive no outcome descriptors.
+- **Dependency clauses (test 5, partially).** Eligible code chains expose `same_key`
+  mapping. Collected inputs expose `collect_all` with `succeeded` or `finished`
+  requirements, `all` cardinality, and typed outcome descriptors.
+  General per-input mappings, other cardinalities, and independently authored clause
+  axes remain absent.
 
 - **Closure (test 2).** Roster re-reading works today because the level walk guarantees
   the producing step finished before the consumer starts, so closure is implicit in the

@@ -1,6 +1,7 @@
 """Handlers for the replay-smoke fixture.
 
-Each stage writes one JSON record per item. The two declared failures use different
+Each stage writes one JSON record per item and logs every invocation so resume tests can
+distinguish reused tasks from rerun tasks. The two declared failures use different
 mechanisms on purpose: a raise is an operational failure the engine records with no
 structured contract detail, while returning without the declared output is a contract
 failure that output validation catches and retries. The replay harness has to map both
@@ -38,18 +39,17 @@ def _run_stage(variables: dict[str, str], step: ProcessStep, stage: str) -> None
     item = variables["item"]
     fail_in = variables.get("fail_in", "")
 
+    log = _out_path(step, variables).parent / "invocations.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("a") as handle:
+        handle.write(f"{stage}\n")
+
     if fail_in == stage:
         msg = f"{item}: deliberate failure in {stage}, declared by the roster"
         raise RuntimeError(msg)
     if fail_in == f"silent-in-{stage}":
         # Return as though it worked, without writing the declared output. Output
-        # validation is what catches this; the handler's own exit status cannot. The
-        # invocation log is durable evidence of how many times the engine really
-        # called this handler, which the status record's attempt field undercounts.
-        log = _out_path(step, variables).parent / "invocations.log"
-        log.parent.mkdir(parents=True, exist_ok=True)
-        with log.open("a") as handle:
-            handle.write(f"{stage}\n")
+        # validation is what catches this; the handler's own exit status cannot.
         return
 
     out = _out_path(step, variables)

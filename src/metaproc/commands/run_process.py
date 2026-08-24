@@ -107,6 +107,7 @@ from metaproc.engine.resource_snapshot import build_resource_run_snapshot
 from metaproc.engine.retry import (
     FailureClass,
     RetryVerdict,
+    append_output_failure_feedback,
     classify_error,
     classify_failure,
     classify_output_failures,
@@ -154,7 +155,7 @@ from metaproc.models.authored import IOSpec, ProcessSpec, ProcessStep
 from metaproc.models.plan import Plan, ResolvedStep
 from metaproc.models.resource_budget import FinalizationState
 from metaproc.models.resource_snapshot import ResourceRunSnapshot
-from metaproc.models.runtime import AttemptRecord, ResultRecord, StatusRecord
+from metaproc.models.runtime import AttemptRecord, OutputFailure, ResultRecord, StatusRecord
 from metaproc.paths import (
     LOGS_DIR,
     MANUAL_ACK_FILE,
@@ -1477,6 +1478,7 @@ async def _execute_agent_step(
     retry_policy = _resolve_retry_policy(step_def, spec.defaults)
     content_retry_cap = max_retries_for(FailureClass.INVALID_OUTPUT, retry_policy.max_retries)
     attempt = 1
+    output_failure_feedback: Sequence[OutputFailure] = ()
 
     while True:
         running_record = mark_running_at(
@@ -1494,9 +1496,10 @@ async def _execute_agent_step(
         # inline prompt contents (notably codex-cli) must receive a real, readable path;
         # a synthetic placeholder makes the run fail before dispatch.
         ts = datetime.now(tz=UTC).strftime("%H%M%S")
-        prompt_file = logs_dir / f"prompt-{step_id}-{ts}.txt"
+        prompt_file = logs_dir / f"prompt-{step_id}-attempt{attempt}-{ts}.txt"
+        attempt_prompt = append_output_failure_feedback(resolved_prompt, output_failure_feedback)
         with atomic_output_file(prompt_file) as tmp_path:
-            Path(tmp_path).write_text(resolved_prompt)
+            Path(tmp_path).write_text(attempt_prompt)
 
         cmd = adapter_obj.build_command(prompt_file, runtime_config, step_vars)
         write_attempt_at(
@@ -1644,6 +1647,7 @@ async def _execute_agent_step(
                 error_str = f"output validation failed: {'; '.join(output_errors)}"
                 verdict = classify_output_failures(output_failures, effective_outputs)
                 if verdict == RetryVerdict.RETRY and attempt <= content_retry_cap:
+                    output_failure_feedback = output_failures
                     backoff = compute_backoff(attempt, retry_policy)
                     out.progress(
                         f"  Step '{step_id}': retryable ({error_str}), "
@@ -2749,13 +2753,20 @@ async def _orchestrate(
                 out.progress(f"  Step '{step_id}': satisfied via override — skipping")
                 continue
             target = step_map[step_id]
-            if not force and _is_step_completed(
-                run_dir,
-                step_id,
-                outputs=target.outputs,
-                variables=variables,
-                is_fan_out=target.fan_out is not None,
-                step=target,
+            # The level walk reaches an item-aligned chain only through its head. Even
+            # when the head is complete, the chain may contain incomplete tasks; the
+            # chain executor's per-task checks decide what resume reuses.
+            if (
+                not force
+                and step_id not in _chain_head_of
+                and _is_step_completed(
+                    run_dir,
+                    step_id,
+                    outputs=target.outputs,
+                    variables=variables,
+                    is_fan_out=target.fan_out is not None,
+                    step=target,
+                )
             ):
                 completed_entry: dict[str, Any] = {
                     "state": "completed",
