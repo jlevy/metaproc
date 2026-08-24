@@ -14,13 +14,14 @@ import pytest
 
 from metaproc.commands.run_process import (
     RunExecutionContext,
-    _execute_code_step,
+    _execute_agent_step,
     _execute_composite_step,
     _orchestrate,
+    _run_sync,
 )
 from metaproc.errors import CLIError
 from metaproc.models.authored import ProcessSpec, ProcessStep
-from metaproc.models.plan import Plan, ResolvedStep
+from metaproc.models.plan import Plan, ResolvedAdapter, ResolvedStep
 
 
 class _Out:
@@ -175,59 +176,40 @@ def test_nested_scope_uses_continue_on_step_failure_policy(tmp_path: Path) -> No
     execute.assert_awaited_once()
 
 
-def test_command_steps_honor_executor_ceiling_above_asyncio_default(
-    tmp_path: Path,
-) -> None:
-    worker_count = 33
-    barrier = threading.Barrier(worker_count, timeout=5.0)
+def test_sync_executor_is_independent_of_leaf_ceiling() -> None:
+    first_started = threading.Event()
+    second_started = threading.Event()
 
-    def synchronized_command(
-        *_args: object,
-        **_kwargs: object,
-    ) -> subprocess.CompletedProcess[str]:
-        barrier.wait()
-        return subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout="",
-            stderr="",
-        )
+    def first() -> str:
+        first_started.set()
+        if not second_started.wait(timeout=2.0):
+            raise AssertionError("second executor worker did not start")
+        return "first"
 
-    async def exercise() -> list[bool]:
-        context = RunExecutionContext.create(max_concurrency=worker_count)
+    def second() -> str:
+        if not first_started.wait(timeout=2.0):
+            raise AssertionError("first executor worker did not start")
+        second_started.set()
+        return "second"
+
+    async def exercise() -> list[str]:
+        context = RunExecutionContext.create(max_concurrency=1)
         try:
-            steps = [
-                ProcessStep(id=f"command-{index}", mode="code", command="true")
-                for index in range(worker_count)
-            ]
-            with patch(
-                "metaproc.commands.run_process.run_sampled_step_command",
-                synchronized_command,
-            ):
-                return await asyncio.gather(
-                    *(
-                        _execute_code_step(
-                            spec=ProcessSpec(name="test"),
-                            step_def=step,
-                            target=ResolvedStep(
-                                step_id=step.id,
-                                mode="code",
-                                command="true",
-                            ),
-                            variables={},
-                            process_dir=tmp_path,
-                            run_dir=tmp_path / "run",
-                            run_id="test/run-1",
-                            execution_context=context,
-                            out=_Out(),
-                        )
-                        for step in steps
-                    )
+            return list(
+                await asyncio.gather(
+                    _run_sync(context, first),
+                    _run_sync(context, second),
                 )
+            )
         finally:
             context.close()
 
-    assert asyncio.run(exercise()) == [True] * worker_count
+    assert asyncio.run(exercise()) == ["first", "second"]
+
+
+def test_invalid_leaf_ceiling_is_a_cli_error() -> None:
+    with pytest.raises(CLIError, match="max_concurrency must be at least 1"):
+        RunExecutionContext.create(max_concurrency=0)
 
 
 def test_recursive_siblings_share_one_executable_leaf_ceiling(tmp_path: Path) -> None:
@@ -279,6 +261,71 @@ def test_recursive_siblings_share_one_executable_leaf_ceiling(tmp_path: Path) ->
                             run_dir=tmp_path / "run",
                             run_id="test/run-1",
                             scope_path=(),
+                            execution_context=context,
+                            out=_Out(),
+                        )
+                        for step_id in ("left", "right")
+                    )
+                )
+        finally:
+            context.close()
+
+    assert asyncio.run(exercise()) == [True, True]
+    assert peak == 1
+
+
+def test_scalar_agent_steps_share_one_executable_leaf_ceiling(tmp_path: Path) -> None:
+    active = 0
+    peak = 0
+    adapter = MagicMock()
+    adapter.build_command.return_value = ["fake-adapter"]
+    adapter.prepare_env.side_effect = lambda env, _config: env
+    adapter.working_directory.return_value = None
+
+    async def measured_agent(*_args: object, **kwargs: object) -> int:
+        nonlocal active, peak
+        log_path = kwargs["log_path"]
+        assert isinstance(log_path, Path)
+        log_path.write_text("")
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.05)
+        active -= 1
+        return 0
+
+    async def exercise() -> list[bool]:
+        context = RunExecutionContext.create(max_concurrency=1)
+        try:
+            with (
+                patch("metaproc.commands.run_process.get_adapter", return_value=adapter),
+                patch(
+                    "metaproc.commands.run_process._run_agent_subprocess",
+                    side_effect=measured_agent,
+                ),
+                patch(
+                    "metaproc.commands.run_process.capture_repo_snapshot",
+                    return_value=None,
+                ),
+            ):
+                return await asyncio.gather(
+                    *(
+                        _execute_agent_step(
+                            spec=ProcessSpec(name="test"),
+                            step_def=ProcessStep(
+                                id=step_id,
+                                mode="agent",
+                                prompt_prefix="test",
+                            ),
+                            target=ResolvedStep(
+                                step_id=step_id,
+                                mode="agent",
+                                adapter=ResolvedAdapter(type="test", config={}),
+                            ),
+                            variables={},
+                            process_dir=tmp_path,
+                            run_dir=tmp_path / "run",
+                            run_id="test/run-1",
+                            backend_name="gcp-worker",
                             execution_context=context,
                             out=_Out(),
                         )
