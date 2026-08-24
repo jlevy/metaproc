@@ -5,7 +5,7 @@ title: Unify recursive run policy and nonblocking execution
 kind: feature
 status: in_progress
 priority: 1
-version: 9
+version: 10
 spec_path: docs/project/specs/active/plan-2026-08-23-native-mapped-composite-scopes.md
 labels:
   - execution-model
@@ -21,7 +21,8 @@ child_order_hints:
   - is-01m0rwnn73b72kw4yvxp2jc1z7
   - is-01m0rwnnkmyr1agx7y3hfsbk30
   - is-01m0rwnp06bhsk91k8kw1szh2g
+  - is-01m0s0r624c0eszrgnq4qgjjbe
 created_at: 2026-08-24T02:22:39.072Z
-updated_at: 2026-08-24T03:22:52.293Z
+updated_at: 2026-08-24T04:34:08.579Z
 ---
 Introduce one RunExecutionContext after PR #31 merges. Share the run semaphore, cancellation, backend/profile/auth/admission policy, and explicit force/skip/continue semantics through recursion; propagate credential pools to scalar agents; move command-backed code work off the event loop; and use an explicitly sized run-owned executor with characterization tests.
