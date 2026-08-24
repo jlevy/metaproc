@@ -64,6 +64,7 @@ from metaproc.dispatch.credential_pool import (
     local_backend,
 )
 from metaproc.dispatch.pool_dispatch import (
+    AuthOutcome,
     PoolAuthOverrideError,
     PoolDispatchConfig,
     PoolSlotUnavailableError,
@@ -80,7 +81,7 @@ from metaproc.dispatch.preflight import (
     check_step_preflight,
     validate_guard_posture,
 )
-from metaproc.dispatch.slot_coordinator import SlotCoordinator
+from metaproc.dispatch.slot_coordinator import SlotCoordinator, SlotLease
 from metaproc.engine.build_plan import build_plan, merge_defaults
 from metaproc.engine.code_handler import resolve_code_handler
 from metaproc.engine.dep_state import (
@@ -168,7 +169,7 @@ from metaproc.io.state_io import (
     write_result_at,
 )
 from metaproc.logutil.compaction import try_compact_log
-from metaproc.models.authored import IOSpec, ProcessSpec, ProcessStep
+from metaproc.models.authored import IOSpec, ProcessSpec, ProcessStep, StepContext
 from metaproc.models.plan import Plan, ResolvedStep
 from metaproc.models.resource_budget import FinalizationState
 from metaproc.models.resource_snapshot import ResourceRunSnapshot
@@ -212,9 +213,9 @@ MANUAL_ACK_HEARTBEAT_S = 15 * 60
 class RunExecutionContext:
     """Run-owned policy and execution references shared by every scope.
 
-    `cancellation_event` reflects cooperative asyncio cancellation. The process-level
-    signal reaper remains the owner of direct OS signals until that path can preserve
-    cleanup ownership rather than terminating the interpreter immediately.
+    `cancellation_event` reflects cooperative asyncio cancellation, including the first
+    SIGINT translated by ``asyncio.Runner``. SIGTERM retains the hard process-tree reaper
+    for externally terminated orchestrators.
     """
 
     backend_name: str
@@ -311,10 +312,11 @@ async def _run_sync[SyncResult](
                 except asyncio.CancelledError:
                     continue
             result = future.result()
-        except asyncio.CancelledError:
-            raise cancelled from None
-        except BaseException:
-            raise
+        except BaseException as cleanup_exc:
+            log.exception(
+                "Run-owned synchronous work failed while cancellation was draining",
+            )
+            raise cancelled from cleanup_exc
 
         if on_cancelled_result is not None:
             cleanup = loop.run_in_executor(
@@ -326,7 +328,13 @@ async def _run_sync[SyncResult](
                     await asyncio.shield(cleanup)
                 except asyncio.CancelledError:
                     continue
-            cleanup.result()
+            try:
+                cleanup.result()
+            except BaseException as cleanup_exc:
+                log.exception(
+                    "Run-owned cancellation cleanup failed while draining",
+                )
+                raise cancelled from cleanup_exc
         raise cancelled
 
 
@@ -438,7 +446,7 @@ def _now_iso() -> str:
     return datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%S")
 
 
-StepState = str  # "pending" | "running" | "completed" | "failed" | "skipped" | "blocked"
+StepState = str  # pending | running | completed | failed | cancelled | skipped | blocked
 
 
 def _write_process_status(
@@ -460,7 +468,10 @@ def _write_process_status(
 
     # Determine overall state
     states = {s.get("state", "pending") for s in step_states.values()}
-    if "running" in states:
+    if "cancelled" in states:
+        data["state"] = "cancelled"
+        data["completed_at"] = _now_iso()
+    elif "running" in states:
         data["state"] = "running"
     elif "failed" in states:
         data["state"] = "failed"
@@ -1196,7 +1207,17 @@ async def _execute_code_step(
                     run_id=run_id,
                     step_node_id=step_id,
                 ):
-                    handler_fn(dict(variables), process_step)
+                    handler_fn(
+                        StepContext(
+                            dict(variables),
+                            cancel_requested=(
+                                execution_context.cancellation_event.is_set
+                                if execution_context is not None
+                                else None
+                            ),
+                        ),
+                        process_step,
+                    )
 
             await _run_sync(execution_context, _run_handler)
         elif command_ref is not None:
@@ -1809,6 +1830,14 @@ async def _execute_agent_step(
                     return None
                 completed_lease = lease
                 lease = None
+                event_logger = auth_events
+
+                def _emit_cancelled_outcome(
+                    result: tuple[AuthFailureClassification | None, AuthOutcome],
+                ) -> None:
+                    _classification, cancelled_outcome = result
+                    event_logger.auth_outcome(dataclasses.asdict(cancelled_outcome))
+
                 classification, outcome = await _run_sync(
                     execution_context,
                     partial(
@@ -1820,8 +1849,9 @@ async def _execute_agent_step(
                         retry_count=attempt_number - 1,
                         retry_exclude=retry_exclude,
                     ),
+                    on_cancelled_result=_emit_cancelled_outcome,
                 )
-                auth_events.auth_outcome(dataclasses.asdict(outcome))
+                event_logger.auth_outcome(dataclasses.asdict(outcome))
                 return classification
 
             try:
@@ -1846,6 +1876,35 @@ async def _execute_agent_step(
                             },
                         ):
                             if pool_dispatch is not None and auth_events is not None:
+
+                                def _complete_cancelled_acquisition(
+                                    cancelled_lease: SlotLease,
+                                    *,
+                                    session_log_path: Path = attempt_log_path,
+                                    attempt_number: int = attempt,
+                                ) -> None:
+                                    counts = pool_dispatch.coordinator.active_counter.snapshot()
+                                    active_for_adapter = {
+                                        label: count
+                                        for (adapter, label), count in counts.items()
+                                        if adapter == cancelled_lease.adapter
+                                    }
+                                    acquired_event = build_auth_lease_acquired(
+                                        cancelled_lease,
+                                        policy=str(pool_dispatch.strategy.policy),
+                                        active_lease_count=active_for_adapter,
+                                    )
+                                    _classification, cancelled_outcome = complete_slot(
+                                        pool_dispatch,
+                                        cancelled_lease,
+                                        error_str="CancelledError: cancelled before launch",
+                                        session_log_path=session_log_path,
+                                        retry_count=attempt_number - 1,
+                                        retry_exclude=retry_exclude,
+                                    )
+                                    auth_events.auth_lease_acquired(acquired_event)
+                                    auth_events.auth_outcome(dataclasses.asdict(cancelled_outcome))
+
                                 try:
                                     lease = await _run_sync(
                                         execution_context,
@@ -1857,13 +1916,7 @@ async def _execute_agent_step(
                                             item_exclude=tuple(retry_exclude),
                                             session_log_path=attempt_log_path,
                                         ),
-                                        on_cancelled_result=partial(
-                                            pool_dispatch.coordinator.teardown,
-                                            failure=AuthFailureClassification(
-                                                status="unknown",
-                                                reason="cancelled-before-launch",
-                                            ),
-                                        ),
+                                        on_cancelled_result=_complete_cancelled_acquisition,
                                     )
                                 except PoolSlotUnavailableError as exc:
                                     out.warning(f"Step '{step_id}': {exc}")
@@ -3309,15 +3362,26 @@ async def _orchestrate(
 
         # Execute steps at this level in parallel.
         level_start_t = time.monotonic()
-        results = await asyncio.gather(
-            *[
-                _run_one_step(
-                    sid,
-                    peer_allowed_targets=peer_allowed_by_step[sid],
-                )
-                for sid in runnable
-            ]
-        )
+        try:
+            results = await asyncio.gather(
+                *[
+                    _run_one_step(
+                        sid,
+                        peer_allowed_targets=peer_allowed_by_step[sid],
+                    )
+                    for sid in runnable
+                ]
+            )
+        except asyncio.CancelledError:
+            for step_id in runnable:
+                if step_states[step_id].get("state") == "running":
+                    step_states[step_id] = {
+                        "state": "cancelled",
+                        "started_at": step_states[step_id].get("started_at"),
+                        "completed_at": _now_iso(),
+                    }
+            _write_process_status(run_dir, spec.name, step_states, started_at)
+            raise
         events.level_complete(_level_idx, time.monotonic() - level_start_t)
 
         # Process results: block downstream of failed steps. Steps marked
@@ -4128,7 +4192,9 @@ def run_process_command(
         command_summary += f" --initial-concurrency {initial_concurrency}"
     acquire_lease(run_dir, owner_type="local", command_summary=command_summary, force=force)
 
-    install_subprocess_reaper_signal_handlers()
+    # Leave SIGINT at Python's default so asyncio.Runner translates Ctrl-C into
+    # cooperative task cancellation. SIGTERM retains the hard descendant reaper.
+    install_subprocess_reaper_signal_handlers(include_sigint=False)
 
     finalization_state = FinalizationState.COMPLETED
     terminal_error: BaseException | None = None

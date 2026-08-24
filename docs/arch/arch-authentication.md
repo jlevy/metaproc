@@ -1438,9 +1438,12 @@ Cancellation cannot stop a worker thread that is already inside
 `SlotCoordinator.acquire_slot`, so the orchestration task retains its host and run
 admission while it drains that worker.
 If acquisition returns a lease after cancellation, the same executor calls
-`SlotCoordinator.teardown` before the task releases either admission boundary.
-A cancelled-before-launch teardown is recorded with an `unknown` classification because
-no adapter process ran and there is no transport outcome to classify.
+`complete_slot` before the task releases either admission boundary.
+The cancellation path emits both `auth_lease_acquired` and `auth_outcome`; a
+cancelled-before-launch outcome uses an `unknown` classification because no adapter
+process ran and there is no transport outcome to classify.
+Cancellation during completion drains `complete_slot` and emits its returned outcome
+before propagating cancellation.
 
 This is an ownership handoff, not a second credential-pool protocol.
 Fan-out and scalar paths continue to use the same `SlotCoordinator`, `SlotLease`,

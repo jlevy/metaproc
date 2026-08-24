@@ -91,6 +91,23 @@ does not return until any late launch has been collected, its process group has 
 (with `SIGKILL` escalation for stubborn descendants), and its log-filter thread has
 flushed.
 
+`PreparedLaunch.env` is either `None` (inherit the parent environment) or the complete
+child environment. The local backend never merges the parent back into an explicit
+mapping; doing so would undo credential scrubbing.
+Each local handle records the leader identity and descendants observed while that leader
+is alive. Cleanup after leader exit signals the numeric process group only while one of
+those identities still proves ownership, preventing a delayed poll from signalling a
+recycled process group.
+
+Backend poll failures become terminal accounting events before the error reaches the
+submitter. Backend kill failures are logged without aborting the rest of shutdown, so
+RunPool continues killing siblings and closes its monitors and logs.
+Log-filter joins run off the orchestration event loop.
+RunPool owns each submission from enqueue through terminal cleanup.
+Forced shutdown cancels and drains work waiting on quota, pool capacity, host admission,
+or backend launch as well as already-running work; a queued submission cannot launch
+after the pool has closed.
+
 ## Current Telemetry
 
 RunPool samples resource health on `pressure_check_interval_s` and records component

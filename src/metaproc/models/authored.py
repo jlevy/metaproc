@@ -17,11 +17,31 @@ from metaproc.models.resource_budget import ResourceBudgetSpec
 
 # ── Code-mode handler types ──────────────────────────────────────
 
-#: Variable context passed to code-mode handlers — resolved step inputs.
-StepContext = dict[str, str]
+
+class StepContext(dict[str, str]):
+    """Resolved code-handler inputs plus cooperative cancellation state.
+
+    The mapping behavior preserves the original handler API. Long-running handlers can
+    call :meth:`cancel_requested` at safe checkpoints and return promptly when the
+    owning run is cancelled.
+    """
+
+    def __init__(
+        self,
+        values: dict[str, str],
+        *,
+        cancel_requested: Callable[[], bool] | None = None,
+    ) -> None:
+        super().__init__(values)
+        self._cancel_requested = cancel_requested
+
+    def cancel_requested(self) -> bool:
+        """Return whether the owning run has requested cooperative cancellation."""
+        return self._cancel_requested is not None and self._cancel_requested()
+
 
 #: Signature for a code-mode handler function loaded from a .py file.
-CodeHandler = Callable[["StepContext", "ProcessStep"], None]
+CodeHandler = Callable[[StepContext, "ProcessStep"], None]
 
 
 # ── Adapter config ──────────────────────────────────────────────
