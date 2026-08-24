@@ -93,9 +93,13 @@ class FakeOut:
 
     def __init__(self) -> None:
         self.messages: list[str] = []
+        self.warnings: list[str] = []
 
     def progress(self, msg: str) -> None:
         self.messages.append(msg)
+
+    def warning(self, msg: str) -> None:
+        self.warnings.append(msg)
 
 
 @contextmanager
@@ -974,6 +978,108 @@ class TestProcessStatusFile:
 
 
 class TestFanOutExecution:
+    @pytest.mark.parametrize(
+        ("adapter_type", "expected_scope", "warning_fragment"),
+        [
+            ("claude-code-cli", "2026-08-24/research/AAPL", None),
+            ("pi-cli", None, "pool is configured for 'claude-code-cli'"),
+        ],
+    )
+    def test_binds_matching_fan_out_pool_and_warns_on_mismatch(
+        self,
+        tmp_path: Path,
+        adapter_type: str,
+        expected_scope: str | None,
+        warning_fragment: str | None,
+    ) -> None:
+        runs_dir = tmp_path / "runs"
+        run_dir = runs_dir / "2026-08-24" / "research" / "AAPL"
+        source_path = tmp_path / "tickers.md"
+        source_path.write_text("---\nitems: []\n---\n")
+        step_def = ProcessStep(
+            id="predict",
+            mode="agent",
+            for_each=ForEach(
+                over="deps.tickers",
+                bind="ticker",
+                bind_fields=["ticker"],
+                key="{{ticker}}",
+            ),
+        )
+        target = ResolvedStep(
+            step_id="predict",
+            mode="agent",
+            adapter=ResolvedAdapter(type=adapter_type, config={}),
+            fan_out=FanOut(
+                over="deps.tickers",
+                bind="ticker",
+                source=str(source_path),
+                bind_fields=["ticker"],
+            ),
+        )
+        discovery = FanOutDiscovery(
+            source_path=source_path,
+            item_key="ticker",
+            item_fields=["ticker"],
+            actionable_contexts=[{"ticker": "AAPL"}],
+        )
+        template = PoolDispatchConfig(
+            coordinator=MagicMock(),
+            adapter="claude-code-cli",
+            runs_dir=runs_dir,
+            run_id="2026-08-24",
+            step="",
+        )
+        run_pool = AsyncMock(return_value=[("AAPL", 0)])
+        out = FakeOut()
+
+        with (
+            patch("metaproc.commands.run_process.derive_variant", return_value="test"),
+            patch(
+                "metaproc.commands.run_process.discover_items_from_source",
+                return_value=discovery,
+            ),
+            patch("metaproc.commands.run_process.reconcile_stale_running", return_value=0),
+            patch("metaproc.commands.run_process.run_preflight", return_value=[]),
+            patch("metaproc.commands.run_process.get_backend", return_value=MagicMock()),
+            patch("metaproc.commands.run_process.capture_repo_snapshot", return_value=None),
+            patch("metaproc.commands.run_parallel._run_agent_pool", new=run_pool),
+        ):
+            succeeded = asyncio.run(
+                _execute_fan_out_step(
+                    spec=ProcessSpec(name="gtia-v30-pre"),
+                    step_def=step_def,
+                    target=target,
+                    variables={},
+                    process_path=tmp_path / "test.process.md",
+                    process_dir=tmp_path,
+                    run_dir=run_dir,
+                    run_id="gtia-v30-pre/2026-08-24/research/AAPL",
+                    backend_name="local",
+                    max_concurrency=1,
+                    num_workers=1,
+                    machine_type="e2-standard-4",
+                    spot=False,
+                    variant_override=None,
+                    out=out,
+                    pool_dispatch_template=template,
+                )
+            )
+
+        assert succeeded is True
+        call = run_pool.await_args
+        assert call is not None
+        bound = call.kwargs["pool_dispatch"]
+        if expected_scope is None:
+            assert bound is None
+        else:
+            assert bound.run_id == expected_scope
+            assert (bound.runs_dir / bound.run_id).resolve() == run_dir.resolve()
+        if warning_fragment is None:
+            assert out.warnings == []
+        else:
+            assert any(warning_fragment in warning for warning in out.warnings)
+
     def test_write_boundary_still_runs_when_another_item_failed(self, tmp_path: Path) -> None:
         source_path = tmp_path / "tickers.md"
         source_path.write_text("---\nitems: []\n---\n")
