@@ -36,8 +36,8 @@ work and is specified explicitly below.
 Before mapped scopes ship, pull request 31 lands and one internal execution context
 carries run-wide policy, cancellation, credentials, and concurrency through every
 recursive call. Before the feature is used for production cohorts, one host authority
-must admit both RunPool and scalar launches against the same byte ledger.
-These are safety prerequisites, not a second scheduler.
+must admit RunPool, scalar-agent, and command-subprocess launches against the same byte
+ledger. These are safety prerequisites, not a second scheduler.
 
 The proposal does **not** make the general ready-task scheduler in
 [`execution-model-design.md`](../../../execution-model-design.md) a prerequisite.
@@ -59,8 +59,8 @@ Implement the smallest safe stack in dependency order:
    composite invoker; first reuse existing process and step output declarations for
    boundary validation, then add only the parent evidence, projection, and recovery
    semantics demonstrated by consumer smokes;
-4. make one mutex-protected host byte authority govern both RunPool and scalar launches,
-   including cold ramp and warm-state restoration; and
+4. make one mutex-protected host byte authority govern RunPool, scalar-agent, and
+   command-subprocess launches, including cold ramp and warm-state restoration; and
 5. extend existing plan, status, trace, and Metabrowser projections to show mapped
    scopes and their artifacts.
 
@@ -118,7 +118,7 @@ The relevant current behavior is:
 | Source visualization | `PlanBundle` and the viz projector recurse through composite children with qualified node IDs | Add the mapping declaration and runtime item instances |
 | Artifact ports | Process input/output declarations, step outputs, and output re-exports exist | Validate existing child and mapped-step declarations first; add automatic child-port projection only if consumer use shows the duplicated path declaration is unsafe |
 | Execution policy | Some backend, profile, variant, auth, and cloud arguments propagate into composites | Carry all run policy in one context; characterize force, skip, continue, cancellation, and auth behavior |
-| Command execution | Synchronous handlers are moved to a thread | Move command-backed code steps off the event loop too and give the run-owned executor an explicit ceiling |
+| Command execution | Synchronous handlers are moved to a thread | Move command-backed code steps off the event loop too; keep the executor independent of the authored leaf ceiling so the shared admission primitive remains testable and authoritative |
 | Fan-out resources | Each RunPool owns adaptive subprocess concurrency and takes count-only host slots | Keep RunPool execution, but make every actual launch claim bytes from one shared host authority and constrain ramp/restore with it |
 | Scalar resources | Scalar agents and command-backed code bypass RunPool; scalar agents use a separate best-effort count gate | Use the same byte authority for child subprocesses and propagate credential-pool policy |
 | Failure feedback | Structured output failures and bounded corrective prompts are merged on main through pull request 29 | Reuse unchanged inside mapped children |
@@ -177,12 +177,40 @@ required the following corrections before implementation:
 | --- | --- |
 | F1: sequencing and recursive policy | Pull request 31 is first. `RunExecutionContext`, one run semaphore, and characterized force/skip/continue/cancel propagation are Phase 1 prerequisites. |
 | F2: state, ports, and evidence are new work | Phase 2 starts with mapped-parent task state/results and child-boundary validation through existing declarations. Scoped namespaces, richer outcomes, and automatic port projection remain evidence-gated follow-ups. |
-| F3: split memory authority and blocked event loop | Command work moves off-loop in Phase 1. Phase 3 uses one byte authority for pool and scalar launches and governs ramp and warm restore. |
+| F3: split memory authority and blocked event loop | Command work moves off-loop in Phase 1. Phase 3 uses one byte authority for pool, scalar-agent, and command-subprocess launches and governs ramp and warm restore. |
 | F4: scalar credential-pool bypass | Auth and pool dispatch become run-context policy, with pool-label assertions in M1. |
 | F5: third fan-out path and ambiguous IDs | Mapped composites call `run_fan_out`; ports lower to dependency clauses; `/` identifies an item while `::` retains composite descent. |
 | F6: per-item recovery | Item-scoped force, child propagation, resume-time output validation, and three-view consistency move into Phase 2. |
 | F7: unreachable escalation tests | Derived-subset lineage and observable streaming/fairness triggers are restored; M4 and M5 measure barrier-drain idle. |
 | F8: smaller seams | The plan standardizes roster input indirection, specifies the byte mutex/ledger, states the single-host cloud limit, gates M4 on write-boundary cost, and feeds measured harness RSS into profiles. |
+
+### Review-driven pull request boundaries
+
+The implementation stack follows runtime contracts rather than preserving every
+historical branch boundary:
+
+- pull request 39 is independent test hardening against `main`; it replaces a noisy
+  timing ratio with a deterministic complexity guard;
+- pull request 32 remains the reviewed design and validation plan;
+- pull request 33 owns the shared recursive execution context and leaf-admission
+  contract;
+- pull request 34 owns authentication policy end to end, including scalar credential
+  parity and cloud transport of the complete `AuthPoolFlags` value;
+- pull request 35 owns subprocess, executor, credential, and cancellation lifecycle
+  safety; and
+- pull request 37 owns the first mapped-composite vertical slice.
+
+Pull request 36 is superseded by this organization.
+Its speculative retry-later public surface was deleted, and its retained cloud-auth fix
+belongs in pull request 34. The released but dormant retry-later command remains subject
+to a compatibility and adoption audit; it is not a prerequisite for the `v3.0-pre`
+consumer smokes.
+
+The context, lifecycle, and mapped-scope slices stay separate because they prove
+different invariants and have different rollback boundaries.
+Folding those together would make the design harder to review.
+Folding the cloud-auth transport into the auth slice removes an artificial seam and one
+inert stack level.
 
 ### Alternatives considered
 
@@ -386,8 +414,8 @@ policy that must be identical through the run:
 - admission posture and the shared leaf-admission authority;
 - force selectors, skip policy, and continue-on-error policy;
 - cancellation/fatal-error signal;
-- a run-owned executor with an explicit worker ceiling for synchronous handlers and
-  command supervision; and
+- a run-owned executor, independent of the authored leaf ceiling, for synchronous
+  handlers and command supervision; and
 - references to run-wide event and observation sinks where appropriate.
 
 Process variables, local plans, scope paths, and child run directories remain explicit
@@ -541,16 +569,11 @@ scalar launch.
   admission posture consistently through recursive scopes.
   This work is implemented in unmerged pull request 33.
 - [x] Pass auth-pool flags and dispatch configuration to scalar agent steps; assert the
-  actual credential-pool label used by a child invocation.
+  actual credential-pool label used by a child invocation, and transport the complete
+  `AuthPoolFlags` value through cloud dispatch without field-by-field copying.
   This work is implemented in unmerged pull request 34.
-- [x] Define one typed retry-later configuration, persist it in `run-config.yaml`, and
-  transport it without field-by-field drift through local, orchestrator, and worker
-  dispatch. This work is implemented in draft pull request 36, which remains unmerged
-  until scheduler paths consume and validate the policy.
-- [ ] Converge scalar and fan-out pool exhaustion on the existing typed
-  `fail-fast|wait|signal` retry-later policy and checkpoint machinery.
 - [x] Run synchronous handlers and command-backed code steps off the event loop through
-  a run-owned executor sized to the operator ceiling when one is configured.
+  a run-owned executor that is independent of the operator leaf ceiling.
   This work is implemented in unmerged pull request 33.
 - [x] Prove scalar agent processes and command-backed code work do not block sibling
   work, and that cancellation retains leaf, host, executor, process-tree, and credential
@@ -648,8 +671,8 @@ scalar launch.
 - Characterization tests for recursive semaphore, force, skip, continue, cancellation,
   auth, and output-validation behavior before and after `RunExecutionContext`.
 - Event-loop tests in which slow command-backed code work runs concurrently with sibling
-  scopes, pool supervision, cancellation, and heartbeats under the configured executor
-  ceiling.
+  scopes, pool supervision, cancellation, and heartbeats while the shared leaf ceiling
+  remains the policy authority.
 - Parent-state tests covering running/completed/failed transitions, child output
   validation, output/evidence projection, crash windows, and consistency among parent
   task, child process, and child task views.
@@ -657,13 +680,12 @@ scalar launch.
   outcomes, resolved output paths, and child-evidence pointers.
 - Credential-pool tests that assert scalar child agents use the requested pool label,
   not ambient credentials.
-- Retry-later tests for scalar and fan-out exhaustion under fail-fast, bounded wait, and
-  signal/checkpoint policy, with admission waits excluded from attempt history.
 - Compatibility tests proving all existing composite, agent fan-out, code fan-out,
   aligned-code-chain, and old-run readers behave unchanged.
-- Admission tests with concurrent pool and scalar claim races, fake headroom and
-  pressure signals, stale leases, unavailable namespaces, required versus best-effort
-  posture, cold ramp, and warm-state restoration after a fresh reading.
+- Admission tests with concurrent pool, scalar-agent, and command-subprocess claim
+  races, fake headroom and pressure signals, stale leases, unavailable namespaces,
+  required versus best-effort posture, cold ramp, and warm-state restoration after a
+  fresh reading.
 - Process-tree tests on Linux PSS and macOS physical footprint where the platform
   exposes them.
 
@@ -700,21 +722,32 @@ Pull request 31 is merged, and
 slice above this design.
 It introduces one recursive execution context, shared local leaf admission, off-loop
 synchronous execution, and explicit root-versus-child force, skip, and continue
-semantics. [Pull request 34](https://github.com/jlevy/metaproc/pull/34) is stacked on
-pull request 33 and completes scalar credential-pool propagation, including scoped child
-evidence, fallback-label retry, shared fan-out/scalar completion primitives, and
+semantics. Its senior-review fixes decouple executor capacity from the authored leaf
+ceiling, make the sibling and scalar ceiling proofs falsifiable, disclose command-step
+concurrency, narrow the cooperative-cancellation contract, make close nonblocking, and
+remove dead plumbing.
+
+[Pull request 34](https://github.com/jlevy/metaproc/pull/34) is stacked on pull request
+33 and completes scalar credential-pool propagation, including scoped child evidence,
+fallback-label retry, shared fan-out/scalar completion primitives, and
 classification-before-compaction ordering.
-Its local, pre-push, and five-job CI verification passes formatting, Ruff, BasedPyright,
+Its exact review-fix head passes local and pre-push formatting, Ruff, BasedPyright,
 Markdown links, public hygiene, supply-chain and browser checks, dependency audits,
-distribution build and smoke tests, plus 4,275 tests with 8 skipped.
-The first Python 3.14 CI sample tripped the existing readiness-scale timing ratio at
-6.4× against its 6.0× bound; the full 3.12/3.13/3.14 rerun passed.
-`mp-npza` tracks a statistically stable replacement that preserves the complexity
-regression gate instead of weakening it by threshold alone.
+distribution build and smoke tests, plus 4,318 tests with 8 skipped.
+The stack-wide exact-head GitHub matrix will be repeated after the review-driven rebase
+and auth-transport fold.
+
+The unrelated timing-ratio failures observed while validating this stack are resolved by
+[pull request 39](https://github.com/jlevy/metaproc/pull/39). It replaces the noisy
+wall-clock ratio with a deterministic equality-work guard.
+The indexed implementation passes at a 3,200-item width; a forced tuple-scan mutation
+performs 5,121,600 comparisons against a 12,800 ceiling.
+Local verification passes 4,299 tests with 8 skipped, and the GitHub distribution, lint,
+and Python 3.12/3.13/3.14 matrix is green at its exact head.
 
 The cancellation-safety slice in
 [pull request 35](https://github.com/jlevy/metaproc/pull/35) is stacked on pull request
-34 and has completed senior review, full local verification, and five-job CI: 4,283
+34 and has completed senior review, full local verification, and five-job CI: 4,339
 tests pass with 8 skipped, and all lint, type, documentation, dependency-audit,
 distribution, and installed-wheel checks are green.
 It drains executor work and late credential leases; reuses `LocalBackend` for scalar
@@ -722,21 +755,16 @@ agents; and retains agent/code process-group ownership through completion, timeo
 cancellation, including a leader-exit race and a child that ignores `SIGTERM`. Review
 findings `mp-nnxl` and `mp-xnk9` are closed.
 
-The retry-later configuration-transport slice in
-[pull request 36](https://github.com/jlevy/metaproc/pull/36) is stacked on pull request
-35 and has completed precommit review and verification: the full suite passes 4,295
-tests with 8 skipped, and lint, type, documentation, public-hygiene, supply-chain, and
-browser checks are green.
-Canonical GitHub lint, distribution, and Python 3.12/3.13/3.14 jobs also pass for the
-exact head. It replaces the duplicated auth fields on `OrchestratorDispatchConfig` with
-the existing `AuthPoolFlags` payload, fixing the cloud `auth_policy` loss while adding
-retry policy and wait-bound transport.
-It remains a draft release gate: scalar and fan-out admission semantics, deferred state
-and events, typed checkpoints, resume persistence, preflight routing, and GCP signal
-preservation remain open under the child beads of `mp-tibt`.
+Review of [pull request 36](https://github.com/jlevy/metaproc/pull/36) found that its
+retry-later options were inert transport with no `v3.0-pre` consumer.
+Those options and their duplicate parser were removed.
+The real defect it exposed—cloud dispatch dropping `auth_policy`—is retained by carrying
+the complete existing `AuthPoolFlags` value and is folded into pull request 34. Pull
+request 36 is superseded rather than preserved as an artificial stack layer.
 
-The first mapped-scope slice is implemented on the rebased private integration branch.
-Its network-free three-item CLI test proves one parent run, per-item child roots, shared
+The first mapped-scope slice is implemented in draft
+[pull request 37](https://github.com/jlevy/metaproc/pull/37). Its network-free
+three-item CLI test proves one parent run, per-item child roots, shared
 execution-context identity, scope evaluators that do not consume the run-wide executable
 leaf ceiling, no nested orchestrator lease, declared child-output validation, sibling
 failure isolation, and failed-item-only resume.
@@ -755,23 +783,24 @@ reviewable stacked slices.
 
 ## Rollout Plan
 
-1. Merge pull request 31.
-2. Merge this plan through pull request 32.
-3. Merge the `RunExecutionContext` and nonblocking-execution slice through pull request
-   33, which is based on pull request 32. Pull requests 33 through 36 form the runtime
-   stack beneath this reviewed design.
-4. Merge scalar credential propagation through pull request 34, which is based on pull
-   request 33.
-5. Merge cancellation-safe ownership through pull request 35, then review retry-later
-   configuration transport through pull request 36 and scheduler behavior as explicit
-   stacked slices. Do not land the transport layer alone while its public policy options
-   are inert.
-6. Land Phase 2 mapped scopes, ports, parent state/evidence, and per-item recovery.
-7. Land Phase 3 shared host byte authority before a mapped workflow is production-ready.
-8. Integrate the existing views and complete the M0-M4 framework ladder.
-9. Run the downstream workflow only as a shadow consumer until its comparison ladder
-   passes.
-10. Keep the full scheduler beads deferred unless an escalation trigger is recorded.
+1. Merge pull request 31. This prerequisite is complete.
+2. Land the independent deterministic scale guard in pull request 39.
+3. Merge this plan through pull request 32.
+4. Merge the `RunExecutionContext` and nonblocking-execution slice through pull request
+   33, which is based on pull request 32.
+5. Merge scalar credential propagation and complete cloud auth-policy transport through
+   pull request 34, which is based on pull request 33.
+6. Merge cancellation-safe ownership through pull request 35.
+7. Land the M0 mapped-scope vertical slice through pull request 37, then add the open
+   Phase 2 recovery and projection behavior only as the smoke ladder requires it.
+8. Land Phase 3 shared host byte authority before a mapped workflow is production-ready.
+9. Integrate the existing views and complete the M0-M4 framework ladder.
+10. Run the downstream `v3.0-pre` workflow only as a shadow consumer until its
+    comparison ladder passes.
+    Each run must store that declared pipeline identity with the exact consumer and
+    Metaproc revisions; directory names are not provenance.
+11. Keep the full scheduler and dormant retry-later integration beads deferred unless an
+    escalation trigger is recorded.
 
 Every runtime pull request must be independently revertible.
 Existing specs continue to use their released paths throughout rollout.
@@ -790,13 +819,12 @@ nonblocking execution.
 Its first-slice beads are `mp-htd8` (characterization), `mp-vf21` (shared context and
 leaf ceiling), `mp-d12o` (run-owned executor), and `mp-bvjd` (scalar-auth policy), all
 complete. `mp-l6b5` owns the completed cancellation-safety slice in pull request 35.
-`mp-tibt` owns unified retry-later dispatch; its closed `mp-w1so`
-configuration-transport slice is implemented and verified in pull request 36, while the
-scheduler, checkpoint, state, preflight, and cloud child beads remain open.
-`mp-npza` tracks the non-blocking stabilization of the noisy execution-model scale
-timing gate observed during pull requests 32 and 34. `mp-0ukj` owns mapped scopes,
-ports, parent evidence, and within-scope per-item recovery; `mp-0cyw` owns the common
-host byte authority; `mp-1af0` owns views; and `mp-rrfn` owns the production proof.
+`mp-tibt` is reframed as the compatibility and adoption audit for released but dormant
+retry-later machinery; no public retry surface is added for `v3.0-pre` without runtime
+evidence. `mp-npza` is complete through pull request 39’s deterministic execution-model
+scale guard. `mp-0ukj` owns mapped scopes, ports, parent evidence, and within-scope
+per-item recovery; `mp-0cyw` owns the common host byte authority; `mp-1af0` owns views;
+and `mp-rrfn` owns the production proof.
 
 The general ready scheduler, persisted dynamic expansions, complete fenced publication,
 cross-scope causal force, budgets, and a standalone runtime artifact index remain
