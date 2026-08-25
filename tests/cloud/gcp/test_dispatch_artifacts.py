@@ -11,6 +11,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from metaproc.cloud.gcp.dispatch_artifacts import (
+    GCS_UPLOAD_CHUNK_SIZE,
+    GCS_UPLOAD_RETRY,
+    GCS_UPLOAD_TIMEOUT_SECONDS,
     build_wheel,
     find_metaproc_source_dir,
     package_workspace,
@@ -441,7 +444,12 @@ class TestUploadToGcs:
         client_factory.assert_called_once_with(project="explicit-project")
         client.bucket.assert_called_once_with("my-bucket")
         bucket.blob.assert_called_once_with("gcp-run/jobid/payload.txt")
-        blob.upload_from_filename.assert_called_once_with(str(local))
+        assert blob.chunk_size == GCS_UPLOAD_CHUNK_SIZE
+        blob.upload_from_filename.assert_called_once_with(
+            str(local),
+            timeout=GCS_UPLOAD_TIMEOUT_SECONDS,
+            retry=GCS_UPLOAD_RETRY,
+        )
         assert blob.metadata == {"metaproc-sha256": file_sha256(local)}
 
     def test_rejects_non_gs_uri(self, tmp_path: Path):

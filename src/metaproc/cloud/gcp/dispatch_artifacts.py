@@ -26,6 +26,7 @@ import tempfile
 from pathlib import Path
 
 from google.cloud import storage
+from google.cloud.storage.retry import DEFAULT_RETRY
 
 from metaproc.io.digests import file_sha256
 
@@ -38,6 +39,14 @@ DEFAULT_GCS_PREFIX = "gcp-run"
 # step (build, upload, container-side fetch, dry-run URI) imports this
 # rather than spelling out the literal.
 WORKSPACE_TARBALL_NAME: str = "workspace.tar.gz"
+
+# google-cloud-storage otherwise sends resumable uploads in 100 MiB chunks. A valid
+# 100 MiB workspace hit the client's 120-second retry deadline on a slow uplink before
+# Batch submission. Smaller chunks preserve resumability without making the overall
+# artifact size a per-request latency requirement.
+GCS_UPLOAD_CHUNK_SIZE = 16 * 1024 * 1024
+GCS_UPLOAD_TIMEOUT_SECONDS = 120
+GCS_UPLOAD_RETRY = DEFAULT_RETRY.with_deadline(10 * 60)
 
 
 def find_metaproc_source_dir(start: Path | None = None) -> Path:
@@ -255,8 +264,13 @@ def upload_to_gcs(local_path: Path, gs_uri: str, *, project: str) -> str:
     client = storage.Client(project=project)
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(blob_path)
+    blob.chunk_size = GCS_UPLOAD_CHUNK_SIZE
     blob.metadata = {"metaproc-sha256": file_sha256(local_path)}
-    blob.upload_from_filename(str(local_path))
+    blob.upload_from_filename(
+        str(local_path),
+        timeout=GCS_UPLOAD_TIMEOUT_SECONDS,
+        retry=GCS_UPLOAD_RETRY,
+    )
     log.info("Uploaded %s -> %s", local_path, gs_uri)
     return gs_uri
 
