@@ -5,7 +5,7 @@ title: Senior engineering review of the GTIA v3 PR stack (#32-#39)
 kind: epic
 status: open
 priority: 1
-version: 26
+version: 27
 labels:
   - pr-review
   - architecture
@@ -37,10 +37,10 @@ child_order_hints:
   - is-01m0v08xy21dx5v6c0mp6sjz9w
   - is-01m0v08y91rs24908cqxb83dy0
 created_at: 2026-08-24T15:14:42.436Z
-updated_at: 2026-08-24T23:05:09.113Z
+updated_at: 2026-08-25T04:10:38.389Z
 ---
 Track senior reviews of the open stacked PRs: #32 (mapped-composite plan, review posted, updated since), #33 (shared run context), #34 (scalar auth pooling), #35 (lifecycle/cancellation), #36 (retry-later transport, draft). Includes an overall stack-structure review (ordering, bases, revertibility) and follow-up on whether posted findings are addressed before merge.
 
 ## Notes
 
-Holistic doc on #37 (https://github.com/jlevy/metaproc/pull/37#issuecomment-5402647775), amended 2026-08-24 with operator-decided order: #19 + MINOR RELEASE first (mp-qq8c), then #39 (mp-7z75) → #38 → #32 → #33 (mp-74vg) → #34 (mp-te1z, mp-5204) → #35 (mp-ah0p, mp-f761; fast-follows mp-va6t) → #37 rebase (mp-xkvz, mp-cr12, mp-s070; split mp-ledg; conflict gate mp-wzdl). Every open ledger row now has its own bead; design beads mp-t4xc (attempt-lifecycle scope), mp-1wf2 (decompose run_process); process bead mp-tx73 (CI on stacked heads + stack/spec rules).
+Definitive plan: docs/project/specs/active/plan-2026-08-23-native-mapped-composite-scopes.md on PR #37. Post-release baseline is main at 6ac9c65: v0.3.0 contains #19/#31/#39 and #38 merged immediately above the tag. Retain #32-#35 as contract layers, repair bottom-up, validate the consolidated #37 head, then pin it in GTIA L0 before landing unchanged commits. Pre-L0 gate mp-nxs9 depends on restack mp-1c19, all known #33-#37 findings, lifecycle N3-N6 children, scale-guard backstop, and shared-RunPool integration mp-g2r0. Weighted byte claims, a general scheduler, and successful-item force are evidence-triggered follow-ons. Holistic review: https://github.com/jlevy/metaproc/pull/37#issuecomment-5402647775

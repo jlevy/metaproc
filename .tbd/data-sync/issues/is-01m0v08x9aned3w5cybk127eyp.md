@@ -5,15 +5,15 @@ title: "Process: CI on stacked heads; stack and spec-change rules"
 kind: task
 status: open
 priority: 1
-version: 2
+version: 3
 labels:
   - pr-review
 dependencies: []
 parent_id: is-01m0t5d345y4pdjcjpepb9h4q6
 created_at: 2026-08-24T23:04:16.937Z
-updated_at: 2026-08-24T23:14:30.550Z
+updated_at: 2026-08-25T04:10:38.093Z
 ---
-The CI workflow runs only for main-based PRs, so no upper rung of the six-deep stack has ever run CI at its head and several PR bodies cite green runs from other commits. Fix the workflow (pull_request on any base, or push on codex/**) or rely on the landing plan collapsing the stack (auto-retarget). Adopt three standing rules: stack depth <=2; plan/spec narrowings land only as plan-branch commits, never inside the implementation PR measured against them; every lifecycle fix ships with an injected-failure test of the failure, not the fix. Holistic ledger #13 + section 4d: https://github.com/jlevy/metaproc/pull/37#issuecomment-5402647775
+Keep PRs #32-#35 stacked because execution context, auth policy, and lifecycle ownership remain coherent review and rollback boundaries; PR #37 is the definitive plan and integration head. The consolidated head is the validation unit: every stack level gets exact-head CI, the combined head gets full verification and failure injection, and the pinned GTIA L0 runs before any runtime layer lands. Plan narrowings are committed on #37 and reconciled into the consumer plan, not hidden in implementation commits. Consolidate only if a boundary stops being coherent; do not impose an arbitrary stack-depth rule.
 
 ## Notes
 
