@@ -163,6 +163,15 @@ rules [`conventions.md`](../../../docs/conventions.md).
    See [`arch-runpool.md`](../../../docs/arch/arch-runpool.md) § “Operator cap floor”
    for the full rationale and why per-adapter memory profiles are not yet stable enough
    to tune the cap tightly.
+8. Treat `mode: code` work as owned by the step.
+   A command-backed step owns its complete process group.
+   Metaproc terminates surviving descendants and flushes the command log before
+   releasing run capacity, including after an exit-zero leader.
+   Intentional daemonization is therefore unsupported.
+   A long-running Python handler under `run-process` must check
+   `StepContext.cancel_requested()` at safe checkpoints and return promptly; Metaproc
+   waits for started handler work rather than abandoning a thread that may still write
+   artifacts.
 
 ## Runtime Terms
 

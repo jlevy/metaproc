@@ -14,7 +14,9 @@ import psutil
 import pytest
 import yaml
 
+import metaproc.runpool.pool as pool_module
 from metaproc.osutils.memory_pressure import MemoryPressure, PressureLevel
+from metaproc.paths import POOL_KILL_SENTINEL_FILE
 from metaproc.runpool.backend import HealthMetrics, LaunchHandle, PreparedLaunch
 from metaproc.runpool.events import EventLogger
 from metaproc.runpool.pool import (
@@ -351,6 +353,68 @@ class TestRunPool:
         assert result_cancelled
         assert pending_count == 0
 
+    def test_kill_sentinel_cancels_owned_submissions(self, tmp_path: Path) -> None:
+        class BlockingBackend:
+            name = "blocking"
+
+            def __init__(self) -> None:
+                self.launched = asyncio.Event()
+                self.killed = asyncio.Event()
+
+            async def launch(
+                self,
+                prepared: PreparedLaunch,
+                label: str = "",
+            ) -> LaunchHandle:
+                del prepared, label
+                self.launched.set()
+                return LaunchHandle(external_id="blocked", backend_name=self.name)
+
+            async def poll(self, handle: LaunchHandle) -> int | None:
+                del handle
+                return None
+
+            async def kill(self, handle: LaunchHandle, sig: int | None = None) -> None:
+                del handle, sig
+                self.killed.set()
+
+            async def health(self, handle: LaunchHandle) -> HealthMetrics | None:
+                del handle
+                return None
+
+            async def read_log_tail(self, handle: LaunchHandle, lines: int = 50) -> str:
+                del handle, lines
+                return ""
+
+        async def _run() -> None:
+            backend = BlockingBackend()
+            state_dir = tmp_path / "state"
+            pool = RunPool(
+                RunPoolConfig(
+                    max_concurrency=1,
+                    initial_concurrency=1,
+                    monitor_interval_s=0.01,
+                    pressure_check_interval_s=0.01,
+                    state_dir=state_dir,
+                    logs_dir=tmp_path / "logs",
+                    host_admission_enabled=False,
+                ),
+                backend=backend,
+            )
+            future = pool.submit(
+                ProcessConfig(
+                    launch=PreparedLaunch(command=("unused",)),
+                    label="blocked",
+                )
+            )
+            await backend.launched.wait()
+            (state_dir / POOL_KILL_SENTINEL_FILE).write_text(yaml.safe_dump({"reason": "test"}))
+            await asyncio.wait_for(backend.killed.wait(), timeout=0.5)
+            assert future.cancelled()
+            await pool.shutdown()
+
+        asyncio.run(_run())
+
     def test_shutdown_continues_after_one_backend_kill_error(
         self,
         tmp_path: Path,
@@ -419,6 +483,154 @@ class TestRunPool:
         kill_calls, active_count = asyncio.run(_run())
         assert sorted(kill_calls) == ["first", "second"]
         assert active_count == 0
+
+    def test_shutdown_bounds_wedged_backend_cleanup_and_writes_tail(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        class WedgedKillBackend:
+            name = "wedged-kill"
+
+            def __init__(self) -> None:
+                self.launched = asyncio.Event()
+                self.release_kill = asyncio.Event()
+
+            async def launch(
+                self,
+                prepared: PreparedLaunch,
+                label: str = "",
+            ) -> LaunchHandle:
+                del prepared, label
+                self.launched.set()
+                return LaunchHandle(external_id="wedged", backend_name=self.name)
+
+            async def poll(self, handle: LaunchHandle) -> int | None:
+                del handle
+                return None
+
+            async def kill(self, handle: LaunchHandle, sig: int | None = None) -> None:
+                del handle, sig
+                await self.release_kill.wait()
+
+            async def health(self, handle: LaunchHandle) -> HealthMetrics | None:
+                del handle
+                return None
+
+            async def read_log_tail(self, handle: LaunchHandle, lines: int = 50) -> str:
+                del handle, lines
+                return ""
+
+        monkeypatch.setattr(pool_module, "_SHUTDOWN_CLEANUP_TIMEOUT_S", 0.05, raising=False)
+
+        async def _run() -> None:
+            backend = WedgedKillBackend()
+            pool = RunPool(
+                RunPoolConfig(
+                    max_concurrency=1,
+                    initial_concurrency=1,
+                    monitor_interval_s=0.01,
+                    pressure_check_interval_s=60,
+                    state_dir=tmp_path / "state",
+                    logs_dir=tmp_path / "logs",
+                    host_admission_enabled=False,
+                ),
+                backend=backend,
+            )
+            pool.submit(ProcessConfig(launch=PreparedLaunch(command=("unused",)), label="wedged"))
+            await backend.launched.wait()
+            shutdown = asyncio.create_task(pool.shutdown(timeout_s=0))
+            try:
+                await asyncio.wait_for(asyncio.shield(shutdown), timeout=0.25)
+                events = [
+                    json.loads(line)
+                    for line in (tmp_path / "logs" / "events.jsonl").read_text().splitlines()
+                ]
+                assert events[-1]["event"] == "pool_shutdown"
+            finally:
+                backend.release_kill.set()
+                await asyncio.wait_for(shutdown, timeout=1)
+
+        asyncio.run(_run())
+
+    def test_baseexception_still_releases_active_lane_accounting(self, tmp_path: Path) -> None:
+        class LifecycleAbort(BaseException):
+            pass
+
+        class AbortingBackend:
+            name = "aborting"
+
+            async def launch(
+                self,
+                prepared: PreparedLaunch,
+                label: str = "",
+            ) -> LaunchHandle:
+                del prepared, label
+                return LaunchHandle(external_id="abort", backend_name=self.name)
+
+            async def poll(self, handle: LaunchHandle) -> int | None:
+                del handle
+                raise LifecycleAbort
+
+            async def kill(self, handle: LaunchHandle, sig: int | None = None) -> None:
+                del handle, sig
+
+            async def health(self, handle: LaunchHandle) -> HealthMetrics | None:
+                del handle
+                return None
+
+            async def read_log_tail(self, handle: LaunchHandle, lines: int = 50) -> str:
+                del handle, lines
+                return ""
+
+        async def _run() -> None:
+            pool = RunPool(
+                RunPoolConfig(
+                    max_concurrency=1,
+                    initial_concurrency=1,
+                    execution_profile="lane",
+                    monitor_interval_s=0.01,
+                    pressure_check_interval_s=60,
+                    state_dir=tmp_path / "state",
+                    logs_dir=tmp_path / "logs",
+                    host_admission_enabled=False,
+                ),
+                backend=AbortingBackend(),
+            )
+            config = ProcessConfig(
+                launch=PreparedLaunch(command=("unused",)),
+                label="abort",
+                lane_id="lane",
+            )
+            with pytest.raises(LifecycleAbort):
+                await pool._launch_and_monitor(config)  # noqa: SLF001
+            assert pool.active_count == 0
+            lane = next(row for row in pool.snapshot.lanes if row.lane_id == "lane")
+            assert lane.active_count == 0
+            await pool.shutdown()
+
+        asyncio.run(_run())
+
+    def test_context_manager_keeps_grace_for_normal_errors(self, tmp_path: Path) -> None:
+        async def _run() -> None:
+            pool = RunPool(
+                RunPoolConfig(
+                    state_dir=tmp_path / "state",
+                    logs_dir=tmp_path / "logs",
+                    host_admission_enabled=False,
+                )
+            )
+            observed: list[float | None] = []
+
+            async def record_shutdown(timeout_s: float | None = None) -> None:
+                observed.append(timeout_s)
+
+            pool.shutdown = record_shutdown  # type: ignore[method-assign]
+            await pool.__aexit__(RuntimeError, RuntimeError("body failed"), None)
+            await pool.__aexit__(asyncio.CancelledError, asyncio.CancelledError(), None)
+            assert observed == [30.0, 0.0]
+
+        asyncio.run(_run())
 
     def test_cancelling_pool_scope_cleans_running_and_queued_siblings(
         self,

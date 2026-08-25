@@ -2596,8 +2596,8 @@ Fan-out steps dispatch through one of two backends:
 The local backend uses the RunPool (section 17) with step-scoped `.state/` and `.logs/`
 directories. One run execution context owns the optional semaphore shared by fan-out
 pools, scalar agent launches, and code work across composite scopes.
-Its run-owned executor supervises synchronous handlers, commands, and blocking credential
-operations off the event loop.
+Its run-owned executor supervises synchronous handlers, commands, and blocking
+credential operations off the event loop.
 That executor defaults to 32 workers and grows to an explicit higher
 `--max-concurrency`, so executor capacity cannot silently reduce the authored run
 ceiling. At terminal cleanup, the context cancels queued executor work and waits for

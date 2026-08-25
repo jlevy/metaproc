@@ -1797,9 +1797,16 @@ async def _run_agent_pool(  # noqa: PLR0913
             lane_id=pool_config.execution_profile,
             execution_profile=pool_config.execution_profile,
         )
+        if getattr(pool, "shutting_down", False) is True:
+            _cancel_item(shared, "pool shutdown requested")
+            return
+
         try:
             future = pool.submit(config)
         except Exception as exc:
+            if getattr(pool, "shutting_down", False) is True:
+                _cancel_item(shared, "pool shutdown requested")
+                return
             error_str = f"submission failed: {exc}"
             out.progress(f"  {each}={item}: {error_str}")
             state_dir.mkdir(parents=True, exist_ok=True)
@@ -1833,6 +1840,38 @@ async def _run_agent_pool(  # noqa: PLR0913
             shared=shared,
             error_str=error_str,
         )
+
+    def _cancel_item(shared: dict[str, Any], error_str: str) -> None:
+        """Finalize one item cancelled by pool shutdown without retry churn."""
+        item = shared["item"]
+        state_dir = shared["state_dir"]
+        running_record = shared.get("running_record")
+        state_dir.mkdir(parents=True, exist_ok=True)
+        if running_record is None:
+            running_record = mark_failed_synthetic_at(
+                state_dir,
+                run_id=run_id,
+                step_id=step,
+                item=dict(shared["item_context"]),
+                attempt=shared["attempt_number"],
+                item_key=state_dir.name,
+                error=error_str,
+                attempt_disposition=AttemptDisposition.cancelled,
+            )
+        else:
+            mark_failed_at(
+                state_dir,
+                error=error_str,
+                running_record=running_record,
+                attempt_disposition=AttemptDisposition.cancelled,
+            )
+        shared["running_record"] = None
+        try:
+            _pool_teardown(shared, error_str=error_str)
+        except Exception:
+            log.exception("Credential teardown failed for cancelled %s=%s", each, item)
+        all_results.append((item, 1))
+        out.progress(f"  Cancelled {each}={item}: {error_str}")
 
     def _classify_and_maybe_retry(
         shared: dict[str, Any],
@@ -2078,6 +2117,9 @@ async def _run_agent_pool(  # noqa: PLR0913
         # Handle future exceptions (launch failures from prepare_launch or backend).
         try:
             result = future.result()
+        except asyncio.CancelledError:
+            _cancel_item(shared, "pool shutdown requested")
+            return
         except Exception as exc:
             error_str = f"launch failed: {exc}"
             out.progress(f"  {each}={item}: {error_str}")
@@ -2268,6 +2310,17 @@ async def _run_agent_pool(  # noqa: PLR0913
                     await asyncio.sleep(sleep_time)
     finally:
         await pool.shutdown()
+        # Shutdown normally resolves or cancels every submitted future. Consume those
+        # terminal futures here when the outer scheduler itself was cancelled, so item
+        # state and credential teardown do not depend on returning to the main loop.
+        for future, shared in list(active.items()):
+            if not future.done():
+                continue
+            active.pop(future, None)
+            try:
+                _process_completion(future, shared)
+            except Exception:
+                log.exception("Could not finalize item after pool shutdown")
 
     return all_results
 

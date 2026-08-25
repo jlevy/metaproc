@@ -94,10 +94,11 @@ flushed.
 `PreparedLaunch.env` is either `None` (inherit the parent environment) or the complete
 child environment. The local backend never merges the parent back into an explicit
 mapping; doing so would undo credential scrubbing.
-Each local handle records the leader identity and descendants observed while that leader
-is alive. Cleanup after leader exit signals the numeric process group only while one of
-those identities still proves ownership, preventing a delayed poll from signalling a
-recycled process group.
+Each local handle records the leader identity and a bounded set of live descendants.
+Cleanup also discovers members of the isolated group after leader exit, but accepts only
+members created during that launch.
+It rechecks exact process identities before every signal, preventing a delayed poll from
+signalling a recycled process group.
 
 Backend poll failures become terminal accounting events before the error reaches the
 submitter. Backend kill failures are logged without aborting the rest of shutdown, so
@@ -107,6 +108,8 @@ RunPool owns each submission from enqueue through terminal cleanup.
 Forced shutdown cancels and drains work waiting on quota, pool capacity, host admission,
 or backend launch as well as already-running work; a queued submission cannot launch
 after the pool has closed.
+The drain is bounded, and terminal status, events, health state, and log closure still
+run if a backend cleanup task does not return in time.
 
 ## Current Telemetry
 

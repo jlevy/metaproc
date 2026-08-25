@@ -87,6 +87,9 @@ DISK_PRESSURE_ELEVATED_FREE_GB = 12.0
 DISK_PRESSURE_HIGH_FREE_GB = 8.0
 DISK_PRESSURE_CRITICAL_FREE_GB = 5.0
 ACTIVE_LOG_PRESSURE_BYTES = 1 * 1024**3
+# Hard bound after graceful shutdown expires. A backend may wedge while killing a
+# process; status and event-log finalization must still run.
+_SHUTDOWN_CLEANUP_TIMEOUT_S = 10.0
 
 
 @dataclass(frozen=True)
@@ -999,7 +1002,11 @@ class RunPool:
         host admission slots its processes hold, and a held slot is invisible capacity
         loss for every other run on the machine.
         """
-        await self.shutdown(timeout_s=0.0 if exc_type is not None else 30.0)
+        immediate = exc_type is not None and issubclass(
+            exc_type,
+            (asyncio.CancelledError, KeyboardInterrupt),
+        )
+        await self.shutdown(timeout_s=0.0 if immediate else 30.0)
 
     async def shutdown(self, timeout_s: float | None = None) -> None:
         """Graceful shutdown, or immediate shutdown during task cancellation."""
@@ -1019,37 +1026,55 @@ class RunPool:
             active.killed = True
             active.kill_reason = "shutdown"
 
-        # Cancellation unwinds queued admission and drives active launches through the
-        # same kill-and-record path as any other cancelled submission.
-        remaining_tasks = tuple(self._submission_tasks)
-        for task in remaining_tasks:
-            task.cancel()
-        if remaining_tasks:
-            await asyncio.gather(*remaining_tasks, return_exceptions=True)
+        try:
+            # Cancellation unwinds queued admission and drives active launches through
+            # the same kill-and-record path as any other cancelled submission.
+            remaining_tasks = tuple(self._submission_tasks)
+            for task in remaining_tasks:
+                task.cancel()
+            if remaining_tasks:
+                done, pending = await asyncio.wait(
+                    remaining_tasks,
+                    timeout=_SHUTDOWN_CLEANUP_TIMEOUT_S,
+                )
+                for task in done:
+                    with contextlib.suppress(BaseException):
+                        task.result()
+                if pending:
+                    log.error(
+                        "RunPool shutdown cleanup timed out with %d submission(s) still owned",
+                        len(pending),
+                    )
+                    for task in pending:
+                        task.cancel()
+        finally:
+            # The status/event tail must not sit behind an unbounded backend cleanup.
+            if self._monitor_task is not None:
+                self._monitor_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._monitor_task
 
-        # Stop the monitor task.
-        if self._monitor_task is not None:
-            self._monitor_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._monitor_task
-
-        # Write final status and close event log.
-        self._write_status()
-        if self._event_logger is not None:
-            self._event_logger.pool_shutdown(
-                self._pool_id,
-                self._completed_count,
-                self._failed_count,
-                self._killed_count,
-            )
-            self._event_logger.close()
-        if self._health_logger is not None:
-            self._health_logger.close()
+            self._write_status()
+            if self._event_logger is not None:
+                self._event_logger.pool_shutdown(
+                    self._pool_id,
+                    self._completed_count,
+                    self._failed_count,
+                    self._killed_count,
+                )
+                self._event_logger.close()
+            if self._health_logger is not None:
+                self._health_logger.close()
 
     @property
     def snapshot(self) -> RunPoolStatus:
         """Current pool state — same structure written to the status file."""
         return self._build_status()
+
+    @property
+    def shutting_down(self) -> bool:
+        """Return whether the pool has begun terminal shutdown."""
+        return self._shutdown_event.is_set()
 
     # ── Internal ────────────────────────────────────────────────
 
@@ -1085,6 +1110,10 @@ class RunPool:
             if not future.done():
                 future.set_exception(exc)
             return
+        except BaseException as exc:
+            if not future.done():
+                future.set_exception(exc)
+            raise
         finally:
             if not pending_removed:
                 self._pending_count = max(0, self._pending_count - 1)
@@ -1179,16 +1208,15 @@ class RunPool:
                 peak_descendants=active.peak_descendants or None,
                 log_size_bytes=active.current_log_bytes or None,
             )
-            self._active.pop(key, None)
             self._record_completion(result)
             raise
-        except Exception as exc:
+        except BaseException as exc:
             # A backend lifecycle failure is still a terminal accounting event. Keep
             # lane capacity and status projections honest, make a best-effort cleanup
             # attempt, then propagate the original backend error to the submitter.
             try:
                 await self._backend.kill(handle)
-            except Exception:
+            except BaseException:
                 log.exception(
                     "Backend failed to kill process %s after lifecycle error",
                     config.label,
@@ -1205,12 +1233,12 @@ class RunPool:
                 peak_descendants=active.peak_descendants or None,
                 log_size_bytes=active.current_log_bytes or None,
             )
-            self._active.pop(key, None)
             self._record_completion(result)
             raise
         else:
-            self._active.pop(key, None)
             self._record_completion(result)
+        finally:
+            self._active.pop(key, None)
 
         return result
 
@@ -1258,7 +1286,7 @@ class RunPool:
             exit_code = await self._backend.poll(handle)
             if exit_code is not None:
                 # Wait for the log filter thread (if any) to flush remaining lines.
-                if handle._filter_thread is not None:  # noqa: SLF001 - lifecycle owned here
+                if handle.has_filter_thread:
                     await asyncio.to_thread(handle.join_filter_thread, 5.0)
                 elapsed = time.monotonic() - active.start_time
                 return ProcessResult(
@@ -1281,7 +1309,7 @@ class RunPool:
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(self._wait_for_exit(active), timeout=10)
                 # Wait for the log filter thread (if any) to flush remaining lines.
-                if handle._filter_thread is not None:  # noqa: SLF001 - lifecycle owned here
+                if handle.has_filter_thread:
                     await asyncio.to_thread(handle.join_filter_thread, 5.0)
                 elapsed = time.monotonic() - active.start_time
                 return ProcessResult(
@@ -1577,6 +1605,8 @@ class RunPool:
                 active.kill_reason = "external_kill"
 
         self._shutdown_event.set()
+        for task in tuple(self._submission_tasks):
+            task.cancel()
         return True
 
     def _read_overrides(self) -> None:

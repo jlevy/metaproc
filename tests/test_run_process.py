@@ -33,6 +33,7 @@ from metaproc.dispatch.auth_pool_flags import AuthPoolFlags
 from metaproc.dispatch.pool_dispatch import PoolDispatchConfig
 from metaproc.engine.dep_state import fingerprint_step
 from metaproc.errors import CLIError
+from metaproc.io import read_yaml_file
 from metaproc.io.state_io import write_result_at
 from metaproc.logutil.resource_events import read_events
 from metaproc.models.resource_budget import FinalizationState
@@ -981,6 +982,56 @@ class TestProcessStatusFile:
         path = _write_process_status(tmp_path, "test", step_states, "2026-04-09T00:00:00")
         content = path.read_text()
         assert "state: failed" in content
+
+    @pytest.mark.parametrize(
+        ("other_state", "expected"),
+        [("running", "running"), ("failed", "failed")],
+    )
+    def test_current_work_outranks_carried_cancelled_state(
+        self,
+        tmp_path: Path,
+        other_state: str,
+        expected: str,
+    ) -> None:
+        path = _write_process_status(
+            tmp_path,
+            "test",
+            {
+                "prior-step": {"state": "cancelled"},
+                "active-step": {"state": other_state},
+            },
+            "2026-04-09T00:00:00",
+        )
+
+        assert read_yaml_file(path)["state"] == expected
+
+    def test_partial_success_ignores_carried_cancelled_state(self, tmp_path: Path) -> None:
+        path = _write_process_status(
+            tmp_path,
+            "test",
+            {
+                "prior-step": {"state": "cancelled"},
+                "active-step": {"state": "completed"},
+            },
+            "2026-04-09T00:00:00",
+            active_step_ids={"active-step"},
+        )
+
+        assert read_yaml_file(path)["state"] == "completed"
+
+    def test_partial_cancellation_uses_the_active_step_state(self, tmp_path: Path) -> None:
+        path = _write_process_status(
+            tmp_path,
+            "test",
+            {
+                "prior-step": {"state": "completed"},
+                "active-step": {"state": "cancelled"},
+            },
+            "2026-04-09T00:00:00",
+            active_step_ids={"active-step"},
+        )
+
+        assert read_yaml_file(path)["state"] == "cancelled"
 
 
 # ── Fan-out execution ────────────────────────────────────────────

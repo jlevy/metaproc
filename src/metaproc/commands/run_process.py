@@ -460,6 +460,8 @@ def _write_process_status(
     process_name: str,
     step_states: dict[str, dict[str, Any]],
     started_at: str,
+    *,
+    active_step_ids: set[str] | None = None,
 ) -> Path:
     """Write derived process-status.yaml to {run_dir}/.state/."""
     state_dir = run_dir / STATE_DIR
@@ -473,14 +475,18 @@ def _write_process_status(
     }
 
     # Determine overall state
-    states = {s.get("state", "pending") for s in step_states.values()}
-    if "cancelled" in states:
-        data["state"] = "cancelled"
-        data["completed_at"] = _now_iso()
-    elif "running" in states:
+    states = {
+        state.get("state", "pending")
+        for step_id, state in step_states.items()
+        if active_step_ids is None or step_id in active_step_ids
+    }
+    if "running" in states:
         data["state"] = "running"
     elif "failed" in states:
         data["state"] = "failed"
+    elif "cancelled" in states:
+        data["state"] = "cancelled"
+        data["completed_at"] = _now_iso()
     elif all(s in ("completed", "skipped") for s in states):
         data["state"] = "completed"
         data["completed_at"] = _now_iso()
@@ -3186,7 +3192,13 @@ async def _orchestrate(
         target = step_map[step_id]
 
         step_states[step_id] = {"state": "running", "started_at": _now_iso()}
-        _write_process_status(run_dir, spec.name, step_states, started_at)
+        _write_process_status(
+            run_dir,
+            spec.name,
+            step_states,
+            started_at,
+            active_step_ids=active_ids,
+        )
 
         step_start = time.monotonic()
         out.progress(f"\n--- Step: {step_id} ({target.mode}) ---")
@@ -3222,7 +3234,13 @@ async def _orchestrate(
                     events.step_complete(member_id, chain_elapsed)
                 else:
                     events.step_fail(member_id, chain_elapsed)
-            _write_process_status(run_dir, spec.name, step_states, started_at)
+            _write_process_status(
+                run_dir,
+                spec.name,
+                step_states,
+                started_at,
+                active_step_ids=active_ids,
+            )
             failed_members = [m for m, ok in chain_results.items() if not ok]
             for member_id in failed_members:
                 out.progress(f"  Step '{member_id}': FAILED")
@@ -3407,7 +3425,13 @@ async def _orchestrate(
                         "started_at": step_states[step_id].get("started_at"),
                         "completed_at": _now_iso(),
                     }
-            _write_process_status(run_dir, spec.name, step_states, started_at)
+            _write_process_status(
+                run_dir,
+                spec.name,
+                step_states,
+                started_at,
+                active_step_ids=active_ids,
+            )
             raise
         events.level_complete(_level_idx, time.monotonic() - level_start_t)
 
@@ -3420,16 +3444,34 @@ async def _orchestrate(
                 blocked_steps.update(actually_blocked)
 
                 if not continue_on_error:
-                    _write_process_status(run_dir, spec.name, step_states, started_at)
+                    _write_process_status(
+                        run_dir,
+                        spec.name,
+                        step_states,
+                        started_at,
+                        active_step_ids=active_ids,
+                    )
                     raise CLIError(
                         f"Step '{step_id}' failed (--no-continue-on-error set). "
                         f"Blocked: {', '.join(actually_blocked) if actually_blocked else 'none'}"
                     )
 
-            _write_process_status(run_dir, spec.name, step_states, started_at)
+            _write_process_status(
+                run_dir,
+                spec.name,
+                step_states,
+                started_at,
+                active_step_ids=active_ids,
+            )
 
     # Final status
-    _write_process_status(run_dir, spec.name, step_states, started_at)
+    _write_process_status(
+        run_dir,
+        spec.name,
+        step_states,
+        started_at,
+        active_step_ids=active_ids,
+    )
 
     completed_count = sum(1 for s in step_states.values() if s.get("state") == "completed")
     failed_steps = [sid for sid, s in step_states.items() if s.get("state") == "failed"]

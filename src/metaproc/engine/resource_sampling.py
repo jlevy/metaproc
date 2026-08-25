@@ -14,6 +14,8 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+import psutil
+
 from metaproc.logutil.resource_events import ResourceEventLogger
 from metaproc.models.resources import HierarchyRef, SourceRef
 from metaproc.osutils.psutil_sampler import PsutilSampler
@@ -123,6 +125,7 @@ def run_sampled_step_command(
         text=True,
         start_new_session=sys.platform != "win32",
     ) as process:
+        leader_create_time = _process_create_time(process.pid)
         with sample_step_resources(
             run_dir=run_dir,
             run_id=run_id,
@@ -133,15 +136,27 @@ def run_sampled_step_command(
             while True:
                 try:
                     stdout, stderr = process.communicate(timeout=_COMMAND_POLL_INTERVAL_S)
-                    _terminate_process_tree(process)
+                    _terminate_process_tree(
+                        process,
+                        leader_create_time=leader_create_time,
+                        ownership_observed_until=time.time(),
+                    )
                     break
                 except subprocess.TimeoutExpired:
                     if cancel_requested is not None and cancel_requested():
-                        _terminate_process_tree(process)
+                        _terminate_process_tree(
+                            process,
+                            leader_create_time=leader_create_time,
+                            ownership_observed_until=time.time(),
+                        )
                         stdout, stderr = process.communicate()
                         raise asyncio.CancelledError from None
                     if process.poll() is not None:
-                        _terminate_process_tree(process)
+                        _terminate_process_tree(
+                            process,
+                            leader_create_time=leader_create_time,
+                            ownership_observed_until=time.time(),
+                        )
                         stdout, stderr = process.communicate()
                         break
 
@@ -155,7 +170,12 @@ def run_sampled_step_command(
     return completed
 
 
-def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
+def _terminate_process_tree(
+    process: subprocess.Popen[str],
+    *,
+    leader_create_time: float | None = None,
+    ownership_observed_until: float | None = None,
+) -> None:
     """Best-effort terminate a command's isolated process group.
 
     Cleanup failure is logged; it never changes an already-observed command result.
@@ -180,6 +200,12 @@ def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
 
     # start_new_session=True makes the leader PID the stable process-group ID.
     pgid = process.pid
+    if not _owned_command_group_exists(
+        process,
+        leader_create_time=leader_create_time,
+        ownership_observed_until=ownership_observed_until,
+    ):
+        return
     try:
         os.killpg(pgid, signal.SIGTERM)
     except ProcessLookupError:
@@ -190,11 +216,18 @@ def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
         return
     if _wait_for_process_group_exit(
         process,
-        pgid,
         timeout_s=_PROCESS_TERMINATION_GRACE_S,
+        leader_create_time=leader_create_time,
+        ownership_observed_until=ownership_observed_until,
     ):
         return
     log.warning("Command process group %d survived SIGTERM; sending SIGKILL", pgid)
+    if not _owned_command_group_exists(
+        process,
+        leader_create_time=leader_create_time,
+        ownership_observed_until=ownership_observed_until,
+    ):
+        return
     try:
         os.killpg(pgid, signal.SIGKILL)
     except ProcessLookupError:
@@ -205,28 +238,75 @@ def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
         return
     if not _wait_for_process_group_exit(
         process,
-        pgid,
         timeout_s=_PROCESS_KILL_WAIT_S,
+        leader_create_time=leader_create_time,
+        ownership_observed_until=ownership_observed_until,
     ):
         log.error("Command process group %d still has live members after SIGKILL", pgid)
 
 
+def _process_create_time(pid: int) -> float | None:
+    """Return a process identity timestamp when it can be observed."""
+    try:
+        return psutil.Process(pid).create_time()
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        return None
+
+
+def _owned_command_group_exists(
+    process: subprocess.Popen[str],
+    *,
+    leader_create_time: float | None,
+    ownership_observed_until: float | None,
+) -> bool:
+    """Return whether a live group member still proves command ownership."""
+    pgid = process.pid
+    if leader_create_time is None:
+        return False
+    current_leader_create_time = _process_create_time(pgid)
+    if current_leader_create_time is not None:
+        if current_leader_create_time != leader_create_time:
+            return False
+        if process.poll() is None:
+            return True
+    if ownership_observed_until is None:
+        return False
+    for candidate in psutil.process_iter(["pid", "create_time"]):
+        candidate_pid = candidate.info.get("pid")
+        create_time = candidate.info.get("create_time")
+        if (
+            not isinstance(candidate_pid, int)
+            or candidate_pid == pgid
+            or not isinstance(create_time, (int, float))
+            or create_time < leader_create_time
+            or create_time > ownership_observed_until
+        ):
+            continue
+        try:
+            if os.getpgid(candidate_pid) == pgid:
+                return True
+        except (ProcessLookupError, PermissionError):
+            continue
+    return False
+
+
 def _wait_for_process_group_exit(
     process: subprocess.Popen[str],
-    pgid: int,
     *,
     timeout_s: float,
+    leader_create_time: float | None,
+    ownership_observed_until: float | None,
 ) -> bool:
     """Reap the command leader while waiting for all group members to exit."""
     deadline = time.monotonic() + timeout_s
     while True:
         process.poll()
-        try:
-            os.killpg(pgid, 0)
-        except ProcessLookupError:
+        if not _owned_command_group_exists(
+            process,
+            leader_create_time=leader_create_time,
+            ownership_observed_until=ownership_observed_until,
+        ):
             return True
-        except PermissionError:
-            pass
         remaining_s = deadline - time.monotonic()
         if remaining_s <= 0:
             return False

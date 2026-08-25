@@ -61,6 +61,28 @@ flexible yet minimally complex.
 See [`metaproc-concepts-and-principles.md`](metaproc-concepts-and-principles.md) for the
 design ethos.
 
+## Launch and Cancellation Contracts
+
+`PreparedLaunch.env` has two distinct meanings.
+`None` inherits the Metaproc process environment; an explicit mapping is the complete
+child environment. Adapter code must construct and scrub that mapping before launch.
+A backend must pass it through without merging ambient variables back in, because doing
+so can restore credentials that the adapter deliberately removed.
+
+Local command launches own their process group through terminal cleanup.
+A command is complete only after Metaproc has collected its leader, terminated surviving
+descendants, and flushed its captured log.
+A `mode: code` command therefore must not intentionally daemonize a child that should
+survive the step.
+
+Long-running Python handlers executed by `run-process` must call
+`StepContext.cancel_requested()` at safe checkpoints and return promptly when it becomes
+true. Metaproc drains synchronous work that has already started; it does not abandon or
+forcibly terminate a Python thread, because doing so could release run capacity while
+the handler still mutates run artifacts.
+Direct `run-step` and `run-parallel` handler calls do not establish a run-owned
+cooperative-cancellation event.
+
 ## Adapter Contract: `classify_failure` Is Mandatory
 
 **Every adapter MUST implement `classify_failure`.** The base-class default returning

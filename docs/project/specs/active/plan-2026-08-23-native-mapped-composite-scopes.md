@@ -760,13 +760,21 @@ and Python 3.12/3.13/3.14 matrix is green at its exact head.
 
 The cancellation-safety slice in
 [pull request 35](https://github.com/jlevy/metaproc/pull/35) is stacked on pull request
-34 and has completed senior review, full local verification, and five-job CI: 4,339
-tests pass with 8 skipped, and all lint, type, documentation, dependency-audit,
-distribution, and installed-wheel checks are green.
-It drains executor work and late credential leases; reuses `LocalBackend` for scalar
-agents; and retains agent/code process-group ownership through completion, timeout, or
-cancellation, including a leader-exit race and a child that ignores `SIGTERM`. Review
-findings `mp-nnxl` and `mp-xnk9` are closed.
+34\. Its second senior review found that the first remediation still leaked fan-out
+credential cleanup on cancellation, left shutdown unbounded, retained unsafe process
+group edges, retried operator stops, and let carried cancellation poison partial runs.
+Those failures now have direct regressions, including real process trees and signals.
+The consolidated exact-head local gate passes 4,351 tests with 8 skipped; formatting,
+Ruff, BasedPyright, documentation and link checks, public hygiene, browser checks,
+supply-chain checks, dependency audits, distribution build, and installed-wheel smoke
+are green. It drains executor work and late credential leases; reuses `LocalBackend` for
+scalar agents; and retains agent/code process-group ownership through completion,
+timeout, or cancellation, including a leader-exit race, a child that ignores `SIGTERM`,
+late descendant discovery, recycled-leader rejection, bounded cleanup, and active
+kill-sentinel cancellation.
+The only consciously deferred review suggestion is a dedicated executor for log-filter
+joins; it remains evidence-triggered because the standard executor has no measured
+contention and another executor would add lifecycle machinery without current benefit.
 
 Review of [pull request 36](https://github.com/jlevy/metaproc/pull/36) found that its
 retry-later options were inert transport with no `v3.0-pre` consumer.

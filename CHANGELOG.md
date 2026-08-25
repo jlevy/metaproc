@@ -39,8 +39,15 @@ development series.
   reported without replacing the command result or cancelling the remaining shutdown
   work. Ctrl-C follows cooperative asyncio cancellation; SIGTERM retains the hard
   descendant reaper for externally terminated orchestrators.
-  Forced RunPool shutdown also drains queued and late-launching submissions, preventing
-  work from starting after the pool has closed.
+  Forced RunPool shutdown gives cancelled futures a terminal attempt and credential
+  outcome, suppresses retry churn, and drains queued and late-launching submissions so
+  work cannot start after the pool has closed.
+  That drain is bounded; final status, events, health state, and log closure still run
+  if backend cleanup wedges.
+  Descendant tracking is pruned to live identities, late group members are discovered
+  after leader exit, and sampled commands fence both leader and group identity before
+  signalling. Active or failed work outranks carried cancellation when deriving process
+  status, so a later partial run does not remain falsely cancelled.
   Long-running Python handlers can observe that request through
   `StepContext.cancel_requested()`.
 

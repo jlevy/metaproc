@@ -183,6 +183,16 @@ class LaunchHandle:
         if self._filter_thread is not None:
             self._filter_thread.join(timeout=timeout)
 
+    @property
+    def has_filter_thread(self) -> bool:
+        """Return whether this launch owns a log-filter thread."""
+        return self._filter_thread is not None
+
+    @property
+    def filter_thread_alive(self) -> bool:
+        """Return whether the owned log-filter thread is still running."""
+        return self._filter_thread is not None and self._filter_thread.is_alive()
+
 
 @dataclass(frozen=True)
 class HealthMetrics:
@@ -308,20 +318,11 @@ class LocalBackend:
         proc = handle._process  # noqa: SLF001
         if proc is None:
             return -1
-        _observe_descendants(handle)
-        if proc.returncode is not None:
-            exit_code = proc.returncode
-            if _owned_process_group_exists(handle):
-                await self.kill(handle)
-            return exit_code
-        # returncode is only set after wait() completes; use a zero-timeout
-        # wait to check without blocking.
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=0.01)
-        except TimeoutError:
+        if proc.returncode is None:
             return None
         exit_code = proc.returncode
-        if exit_code is not None and _owned_process_group_exists(handle):
+        _refresh_owned_process_group_members(handle)
+        if _owned_process_group_exists(handle):
             await self.kill(handle)
         return exit_code
 
@@ -344,7 +345,7 @@ class LocalBackend:
                 await asyncio.wait_for(proc.wait(), timeout=_PROCESS_KILL_WAIT_S)
             return
 
-        _observe_descendants(handle)
+        _refresh_owned_process_group_members(handle)
         if not _owned_process_group_exists(handle):
             return
 
@@ -388,6 +389,12 @@ class LocalBackend:
         pid = handle.pid
         if pid is None:
             return None
+        process = handle._process  # noqa: SLF001
+        leader_create_time = handle._leader_create_time  # noqa: SLF001
+        if process is None or process.returncode is not None:
+            return None
+        if leader_create_time is not None and not _same_process(pid, leader_create_time):
+            return None
 
         rss_bytes: int | None = None
         descendants: int | None = None
@@ -397,7 +404,7 @@ class LocalBackend:
             p = psutil.Process(pid)
             # Sum RSS across entire process tree.
             rss_bytes = p.memory_info().rss
-            children = _observe_descendants(handle)
+            children = _refresh_owned_process_group_members(handle)
             descendants = len(children)
             for child in children:
                 with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
@@ -426,7 +433,7 @@ def _process_create_time(pid: int) -> float | None:
     """Return a process identity timestamp, or ``None`` if it cannot be observed."""
     try:
         return psutil.Process(pid).create_time()
-    except (psutil.NoSuchProcess, psutil.AccessDenied):
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
         return None
 
 
@@ -436,24 +443,86 @@ def _same_process(pid: int, create_time: float) -> bool:
     return observed is not None and observed == create_time
 
 
-def _observe_descendants(handle: LaunchHandle) -> list[psutil.Process]:
-    """Remember descendant identities while the launch leader is still inspectable."""
+def _same_running_process(pid: int, create_time: float) -> bool:
+    """Return whether an exact process identity is still running and non-zombie."""
+    try:
+        process = psutil.Process(pid)
+        return (
+            process.create_time() == create_time
+            and process.is_running()
+            and process.status() != psutil.STATUS_ZOMBIE
+        )
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        return False
+
+
+def _prune_observed_descendants(handle: LaunchHandle) -> None:
+    """Drop recorded identities that are dead, recycled, or no longer in the group."""
+    pid = handle.pid
+    if pid is None:
+        handle._observed_descendants.clear()  # noqa: SLF001
+        return
+    for child_pid, create_time in tuple(handle._observed_descendants.items()):  # noqa: SLF001
+        try:
+            owned = _same_process(child_pid, create_time) and os.getpgid(child_pid) == pid
+        except (ProcessLookupError, PermissionError):
+            owned = False
+        if not owned:
+            handle._observed_descendants.pop(child_pid, None)  # noqa: SLF001
+
+
+def _refresh_owned_process_group_members(handle: LaunchHandle) -> list[psutil.Process]:
+    """Refresh the bounded set of live identities owned by this process group."""
     pid = handle.pid
     proc = handle._process  # noqa: SLF001
-    if pid is None or proc is None or proc.returncode is not None:
+    if pid is None or proc is None:
         return []
+    _prune_observed_descendants(handle)
     leader_create_time = handle._leader_create_time  # noqa: SLF001
-    if leader_create_time is not None and not _same_process(pid, leader_create_time):
-        return []
-    try:
-        leader = psutil.Process(pid)
-        children = leader.children(recursive=True)
-    except (psutil.NoSuchProcess, psutil.AccessDenied):
-        return []
+    children: list[psutil.Process] = []
+    if proc.returncode is None and (
+        leader_create_time is None or _same_process(pid, leader_create_time)
+    ):
+        try:
+            children = psutil.Process(pid).children(recursive=True)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            children = []
+    elif leader_create_time is not None:
+        current_leader_create_time = _process_create_time(pid)
+        if (
+            current_leader_create_time is not None
+            and current_leader_create_time != leader_create_time
+        ):
+            return []
+        # The leader may be reaped before the next pool poll. Enumerate the isolated
+        # group once at exit so a child spawned after the last health sample cannot
+        # escape. A member must have been created after this launch and still carry the
+        # launch PGID; stale observations are pruned above.
+        for candidate in psutil.process_iter(["pid", "create_time"]):
+            candidate_pid = candidate.info.get("pid")
+            create_time = candidate.info.get("create_time")
+            if (
+                not isinstance(candidate_pid, int)
+                or candidate_pid == pid
+                or not isinstance(create_time, (int, float))
+                or create_time < leader_create_time
+            ):
+                continue
+            try:
+                if os.getpgid(candidate_pid) == pid:
+                    children.append(candidate)
+            except (ProcessLookupError, PermissionError):
+                continue
     for child in children:
         with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
-            handle._observed_descendants[child.pid] = child.create_time()  # noqa: SLF001
-    return children
+            child_info = getattr(child, "info", {})
+            create_time = child_info.get("create_time")
+            if not isinstance(create_time, (int, float)):
+                create_time = child.create_time()
+            handle._observed_descendants[child.pid] = create_time  # noqa: SLF001
+    _prune_observed_descendants(handle)
+    live_ids = handle._observed_descendants  # noqa: SLF001
+    return [child for child in children if child.pid in live_ids]
 
 
 def _owned_process_group_exists(handle: LaunchHandle) -> bool:
@@ -469,15 +538,8 @@ def _owned_process_group_exists(handle: LaunchHandle) -> bool:
         # The OS leader may exit before asyncio's child watcher updates returncode.
         # Fall through to the descendants recorded for this launch rather than
         # declaring the group unowned during that observation gap.
-    for child_pid, create_time in tuple(handle._observed_descendants.items()):  # noqa: SLF001
-        if not _same_process(child_pid, create_time):
-            continue
-        try:
-            if os.getpgid(child_pid) == pid:
-                return True
-        except (ProcessLookupError, PermissionError):
-            continue
-    return False
+    _prune_observed_descendants(handle)
+    return bool(handle._observed_descendants)  # noqa: SLF001
 
 
 def _owned_processes_exist(handle: LaunchHandle) -> bool:
@@ -491,10 +553,15 @@ def _owned_processes_exist(handle: LaunchHandle) -> bool:
         leader_create_time is None or _same_process(pid, leader_create_time)
     ):
         return True
-    return any(
-        _same_process(child_pid, create_time)
-        for child_pid, create_time in handle._observed_descendants.items()  # noqa: SLF001
-    )
+    # After a signal is sent, group membership can disappear just before the process
+    # reaches a terminal state. Keep waiting on the exact identities already proven
+    # to belong to this launch; unlike a numeric group lookup, that cannot target a
+    # recycled process.
+    for child_pid, create_time in tuple(handle._observed_descendants.items()):  # noqa: SLF001
+        if _same_running_process(child_pid, create_time):
+            return True
+        handle._observed_descendants.pop(child_pid, None)  # noqa: SLF001
+    return False
 
 
 async def _wait_for_owned_processes_exit(
@@ -523,14 +590,23 @@ async def _wait_for_owned_processes_exit(
         await asyncio.sleep(min(_PROCESS_GROUP_EXIT_POLL_INTERVAL_S, remaining_s))
 
 
-async def _await_task_completion[Result](task: asyncio.Task[Result]) -> Result:
+async def _await_task_completion[Result](
+    task: asyncio.Task[Result],
+    *,
+    propagate_cancellation: bool = False,
+) -> Result:
     """Drain an ownership cleanup task even if cancellation is requested again."""
+    cancellation: asyncio.CancelledError | None = None
     while not task.done():
         try:
             await asyncio.shield(task)
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as exc:
+            cancellation = exc
             continue
-    return task.result()
+    result = task.result()
+    if cancellation is not None and propagate_cancellation:
+        raise cancellation
+    return result
 
 
 async def cancel_launch(backend: LaunchBackend, handle: LaunchHandle) -> None:
@@ -612,13 +688,15 @@ async def launch_and_supervise(
         await cancel_launch(backend, handle)
         raise
     finally:
-        if handle._filter_thread is not None:  # noqa: SLF001 - lifecycle owned here
+        if handle.has_filter_thread:
             join_task = asyncio.create_task(asyncio.to_thread(handle.join_filter_thread, 5.0))
             try:
-                await _await_task_completion(join_task)
+                await _await_task_completion(join_task, propagate_cancellation=True)
+            except asyncio.CancelledError:
+                raise
             except BaseException:
                 log.exception("Log filter cleanup failed after supervised launch")
-            if handle._filter_thread.is_alive():  # noqa: SLF001 - lifecycle owned here
+            if handle.filter_thread_alive:
                 log.warning("Log filter thread did not exit after supervised launch ended")
 
 
