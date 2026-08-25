@@ -69,11 +69,9 @@ PYTEST_ARGS ?= -n logical
 test:
 	$(UV_RUN) pytest $(PYTEST_ARGS)
 
-# Audited advisory waiver. The waived ID is unreachable from this dependency
-# closure and its fix is still inside the cool-off; SUPPLY-CHAIN-SECURITY.md,
-# "Audited Advisory Waivers", owns the rationale and the removal condition.
-# Run `make audit AUDIT_IGNORES=` to see the unfiltered result.
-AUDIT_IGNORES ?= --ignore GHSA-g6cj-pr64-35w5
+# No advisory waivers are active. SUPPLY-CHAIN-SECURITY.md, "Audited Advisory
+# Waivers", owns the rationale and removal condition for any that are added here.
+AUDIT_IGNORES ?=
 
 audit:
 	npm audit --audit-level=moderate

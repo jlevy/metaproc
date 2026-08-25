@@ -109,15 +109,11 @@ carries no exposure, while any finding in a reachable path is fixed rather than 
 Waivers are per-ID, live in the `audit` target, and are removed as soon as the fix
 becomes eligible.
 
-One waiver is active:
+No waiver is active.
 
-- `GHSA-g6cj-pr64-35w5` / `CVE-2026-69247` (high, CVSS 8.2), a Bleichenbacher oracle in
-  the `cryptography` `pkcs7` `EnvelopedData` decryption path.
-  `cryptography` is an indirect dependency reached only through `google-auth` under the
-  `gcp` extra. Neither Metaproc nor `google-auth` imports the affected `pkcs7` module;
-  `google-auth` uses `cryptography` for JWT signing and verification only.
-  The fix, `cryptography` 50.0.0, was published 2026-07-31 and is inside the 14-day
-  cool-off until roughly 2026-08-14. Remove the waiver and relock once it is eligible.
+The previous waiver, `GHSA-g6cj-pr64-35w5` / `CVE-2026-69247` (high, CVSS 8.2) in the
+`cryptography` `pkcs7` `EnvelopedData` decryption path, was removed for the 0.3.0
+release: its fix, `cryptography` 50.0.0, cleared the cool-off and is now locked.
 
 Re-review a waiver whenever the closure changes such that the affected code could become
 reachable.
