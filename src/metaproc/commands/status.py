@@ -282,8 +282,10 @@ def _format_steps_section(status: RunStatus, *, stale_only: bool = False) -> str
     id_width = max(len("step_id"), max(len(e.step_id) for e in entries))
     lines: list[str] = [
         "Steps:",
-        f"  {'step_id':<{id_width}}  {'state':<{_STATE_LABEL_WIDTH}}  "
-        f"{'recorded':>16} → {'current':>16}  items / reason",
+        (
+            f"  {'step_id':<{id_width}}  {'state':<{_STATE_LABEL_WIDTH}}  "
+            f"{'recorded':>16} → {'current':>16}  items / reason"
+        ),
         "  " + "─" * (id_width + _STATE_LABEL_WIDTH + 16 + 16 + 20),
     ]
     for entry in entries:

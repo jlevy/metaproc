@@ -369,18 +369,22 @@ def check_metaproc_wheel_for_branch_edits(
     if _git(["rev-parse", "--is-inside-work-tree"], cwd=root) != "true":
         return (
             False,
-            f"Metaproc artifact: {root} is not a git repo — cannot verify whether this "
-            "dispatch will ship current-branch metaproc/ code. If you're on a branch "
-            "with metaproc/ changes, set METAPROC_WHEEL_GCS or the workers will run "
-            "the image-baked metaproc.",
+            (
+                f"Metaproc artifact: {root} is not a git repo — cannot verify whether this "
+                "dispatch will ship current-branch metaproc/ code. If you're on a branch "
+                "with metaproc/ changes, set METAPROC_WHEEL_GCS or the workers will run "
+                "the image-baked metaproc."
+            ),
         )
 
     if _git(["rev-parse", "--verify", base_ref], cwd=root) is None:
         return (
             False,
-            f"Metaproc artifact: base ref {base_ref} is not fetched — cannot "
-            "compare the tracked branch against it. `git fetch origin main` and "
-            "retry, or set METAPROC_WHEEL_GCS explicitly.",
+            (
+                f"Metaproc artifact: base ref {base_ref} is not fetched — cannot "
+                "compare the tracked branch against it. `git fetch origin main` and "
+                "retry, or set METAPROC_WHEEL_GCS explicitly."
+            ),
         )
 
     try:
@@ -388,8 +392,10 @@ def check_metaproc_wheel_for_branch_edits(
     except (OSError, configparser.Error) as exc:
         return (
             False,
-            "Metaproc artifact: cannot inspect .gitmodules to locate the source "
-            f"checkout ({exc}). Fix .gitmodules or set METAPROC_WHEEL_GCS explicitly.",
+            (
+                "Metaproc artifact: cannot inspect .gitmodules to locate the source "
+                f"checkout ({exc}). Fix .gitmodules or set METAPROC_WHEEL_GCS explicitly."
+            ),
         )
     source_pathspecs = [f":(literal){path}" for path in source_paths]
 
@@ -415,12 +421,14 @@ def check_metaproc_wheel_for_branch_edits(
     detail = " + ".join(pieces)
     return (
         False,
-        "Metaproc artifact: tracked branch has "
-        f"{detail} in Metaproc source but METAPROC_WHEEL_GCS is not set — Batch "
-        "will run the image-baked metaproc code, not this branch's. Build a "
-        "wheel from the Metaproc source checkout, upload it to gs://, "
-        "and `export METAPROC_WHEEL_GCS=gs://…`. METAPROC_WORKSPACE_GCS does "
-        "NOT cover metaproc itself — only configured companion packages.",
+        (
+            "Metaproc artifact: tracked branch has "
+            f"{detail} in Metaproc source but METAPROC_WHEEL_GCS is not set — Batch "
+            "will run the image-baked metaproc code, not this branch's. Build a "
+            "wheel from the Metaproc source checkout, upload it to gs://, "
+            "and `export METAPROC_WHEEL_GCS=gs://…`. METAPROC_WORKSPACE_GCS does "
+            "NOT cover metaproc itself — only configured companion packages."
+        ),
     )
 
 

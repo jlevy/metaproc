@@ -1556,9 +1556,11 @@ class TestCLIStaleMetaprocWarning:
         # Pretend the tracked branch has metaproc/ edits and no wheel override.
         warning_tuple = (
             False,
-            "Metaproc artifact: tracked branch has 1 commit(s) ahead of "
-            "origin/main under metaproc/ but METAPROC_WHEEL_GCS is not set — "
-            "Batch will run the image-baked metaproc code.",
+            (
+                "Metaproc artifact: tracked branch has 1 commit(s) ahead of "
+                "origin/main under metaproc/ but METAPROC_WHEEL_GCS is not set — "
+                "Batch will run the image-baked metaproc code."
+            ),
         )
         with patch(
             "metaproc.engine.preflight.run_cloud_preflight_warnings",

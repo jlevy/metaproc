@@ -194,8 +194,11 @@ class TestRunPool:
                     command=(
                         sys.executable,
                         "-c",
-                        "import sys; [sys.stdout.write('x'*1000+'\\n') for _ in range(10000)];"
-                        "import time; time.sleep(30)",
+                        (
+                            "import sys; "
+                            "[sys.stdout.write('x'*1000+'\\n') for _ in range(10000)];"
+                            "import time; time.sleep(30)"
+                        ),
                     ),
                     log_path=log_path,
                 ),
@@ -220,8 +223,10 @@ class TestRunPool:
                     command=(
                         sys.executable,
                         "-c",
-                        "import sys; sys.stdout.write('hello\\n'); sys.stdout.flush();"
-                        "import time; time.sleep(60)",
+                        (
+                            "import sys; sys.stdout.write('hello\\n'); sys.stdout.flush();"
+                            "import time; time.sleep(60)"
+                        ),
                     ),
                     log_path=log_path,
                 ),
@@ -245,9 +250,11 @@ class TestRunPool:
                     command=(
                         sys.executable,
                         "-c",
-                        "import subprocess, time;"
-                        "[subprocess.Popen(['sleep','30']) for _ in range(10)];"
-                        "time.sleep(30)",
+                        (
+                            "import subprocess, time;"
+                            "[subprocess.Popen(['sleep','30']) for _ in range(10)];"
+                            "time.sleep(30)"
+                        ),
                     ),
                 ),
                 max_descendants=3,

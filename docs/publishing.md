@@ -39,7 +39,8 @@ retroactively.
 5. Write release notes following `tbd guidelines release-notes-guidelines`. Describe the
    aggregate user-visible delta, compatibility notes, and shipped Agent Skill or
    process-content changes.
-   The prepared `v0.2.1` notes are in [releases/v0.2.1.md](releases/v0.2.1.md).
+   Past notes live in [releases/](releases/); the most recent are
+   [v0.3.0.md](releases/v0.3.0.md).
    End with a concrete compare link.
 
 6. Create a GitHub release with a `vX.Y.Z` tag:

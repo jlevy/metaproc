@@ -78,7 +78,7 @@ Before handoff: review the diff, run `make verify`, update and close the relevan
 issues, run `tbd sync`, commit, push, open or update the pull request, and watch CI to
 completion.
 
-<!-- BEGIN TBD INTEGRATION format=f06 surface=agents-md -->
+<!-- BEGIN TBD INTEGRATION format=f08 surface=agents-md -->
 ## tbd
 
 This repository uses **tbd** for git-native issue tracking (beads), spec-driven
@@ -92,6 +92,20 @@ actions rather than telling them to run commands.
 - Track all work as beads: `tbd create`, `tbd ready`, `tbd close`, and `tbd sync`.
 
 <!-- END TBD INTEGRATION -->
+
+## Template Maintenance
+
+This project was built from
+[simple-modern-uv](https://github.com/jlevy/simple-modern-uv).
+Routine project work uses the instructions above; do not fetch the upstream template for
+every task.
+
+For toolchain changes, selective adoption of another template feature, or a Copier
+update, use the portable
+[simple-modern-uv skill](https://github.com/jlevy/simple-modern-uv/tree/main/skills/simple-modern-uv).
+It preserves project-specific choices and distinguishes selective changes from full
+template management.
+`.copier-answers.yml` records this project’s update lineage.
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.
