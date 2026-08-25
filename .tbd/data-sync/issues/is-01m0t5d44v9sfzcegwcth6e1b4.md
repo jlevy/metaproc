@@ -5,7 +5,7 @@ title: "Review PR #35: retain lifecycle ownership through cleanup"
 kind: task
 status: closed
 priority: 1
-version: 18
+version: 29
 labels:
   - pr-review
 dependencies: []
@@ -23,10 +23,19 @@ child_order_hints:
   - is-01m0tcp77xca1zzp25pvq4x43y
   - is-01m0tcw3acmhtkj35g8thzxrmd
   - is-01m0td3dehfnryederv1dpm7f3
+  - is-01m0vr1m3c3ejrtef1t00tzh7t
+  - is-01m0vr1mjebqe896dg6m04xbhg
+  - is-01m0vr1n0xgcmd6aq695xc0dj7
+  - is-01m0vr1nkd00q7j71pj6f6at7z
+  - is-01m0vr1p242fa0sh9569ttbbre
+  - is-01m0vr1pgkrtw675qha1tms2w8
+  - is-01m0vr1pzhev78rrrvbznbycxz
+  - is-01m0vr1qhtvv7y9r7k5qs5tprg
+  - is-01m0vr1r3by2cydv5ekqxm47y7
 created_at: 2026-08-24T15:14:43.482Z
-updated_at: 2026-08-24T22:32:05.604Z
-closed_at: 2026-08-24T17:54:41.745Z
-close_reason: "Fixed in e233ec1. Per-finding disposition: https://github.com/jlevy/metaproc/pull/35#issuecomment-5399129306. Local make verify passed (4,339 passed, 8 skipped); GitHub CI run 32759134105 passed lint, distribution, and Python 3.12/3.13/3.14."
+updated_at: 2026-08-25T06:47:29.392Z
+closed_at: 2026-08-25T06:47:29.392Z
+close_reason: "PR #35 round-two review has a published disposition map at comment 5406589771. All correctness gates are fixed/rebutted in 4855c8d with exact-head make verify green; mp-vmjq remains explicitly deferred behind a measured-contention trigger."
 resolution: null
 duplicate_of: null
 ---

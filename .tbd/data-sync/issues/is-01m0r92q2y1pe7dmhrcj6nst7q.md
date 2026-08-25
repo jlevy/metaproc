@@ -5,7 +5,7 @@ title: Native mapped composite scopes and shared leaf admission
 kind: epic
 status: in_progress
 priority: 1
-version: 17
+version: 21
 spec_path: docs/project/specs/active/plan-2026-08-23-native-mapped-composite-scopes.md
 labels:
   - execution-model
@@ -24,7 +24,11 @@ child_order_hints:
   - is-01m0rs74ra22b0tz8n4v86kd8g
   - is-01m0rs7df0g28zgnsykar366kb
   - is-01m0s228q78197md50endt0eky
+  - is-01m0vhr5rv34k6cbvr6wqx24sw
+  - is-01m0vhs620ptcvxv074ccx88z4
+  - is-01m0vjtjdxm7g8gkrxznmp5qd2
+  - is-01m0vk0mxg72tsmdgcxsm2hz8n
 created_at: 2026-08-23T21:40:27.869Z
-updated_at: 2026-08-24T04:57:07.558Z
+updated_at: 2026-08-25T04:31:49.167Z
 ---
 Deliver the smallest safe Metaproc-native cohort primitive in dependency order: merge PR #31; establish one recursive RunExecutionContext and nonblocking leaf execution; map composite processes through the neutral fan-out runner with declared ports, durable parent state, and per-item recovery; then make one host byte authority govern pool and scalar launches. Project the result through existing views and keep the general scheduler evidence-triggered.
