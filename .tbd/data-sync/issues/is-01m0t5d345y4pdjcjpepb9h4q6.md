@@ -1,11 +1,12 @@
 ---
 type: is
 id: is-01m0t5d345y4pdjcjpepb9h4q6
-title: Senior engineering review of the GTIA v3 PR stack (#32-#39)
+title: Senior engineering review of the mapped-scope runtime stack
 kind: epic
 status: open
 priority: 1
-version: 36
+version: 37
+spec_path: null
 labels:
   - pr-review
   - architecture
@@ -46,10 +47,10 @@ child_order_hints:
   - is-01m0vxc0ck2z6yjxtcs3r18h9y
   - is-01m0w2fm7y9yzjbz6wz3qvdhws
 created_at: 2026-08-24T15:14:42.436Z
-updated_at: 2026-08-25T09:02:08.637Z
+updated_at: 2026-08-25T16:59:21.639Z
 ---
-Track senior reviews of the open stacked PRs: #32 (mapped-composite plan, review posted, updated since), #33 (shared run context), #34 (scalar auth pooling), #35 (lifecycle/cancellation), #36 (retry-later transport, draft). Includes an overall stack-structure review (ordering, bases, revertibility) and follow-up on whether posted findings are addressed before merge.
+Track senior reviews of the mapped-scope architecture and runtime changes: execution context, scalar credential policy, lifecycle ownership, retry-policy deletion, graph propagation, mapped composites, shared admission, and operator status. Reconcile every actionable finding before the consolidated replacement is eligible for downstream testing or merge.
 
 ## Notes
 
-Definitive plan: docs/project/specs/active/plan-2026-08-23-native-mapped-composite-scopes.md on PR #37. Post-release baseline is main at 6ac9c65: v0.3.0 contains #19/#31/#39 and #38 merged immediately above the tag. Retain #32-#35 as contract layers, repair bottom-up, validate the consolidated #37 head, then pin it in GTIA L0 before landing unchanged commits. Pre-L0 gate mp-nxs9 depends on restack mp-1c19, all known #33-#37 findings, lifecycle N3-N6 children, scale-guard backstop, and shared-RunPool integration mp-g2r0. Weighted byte claims, a general scheduler, and successful-item force are evidence-triggered follow-ons. Holistic review: https://github.com/jlevy/metaproc/pull/37#issuecomment-5402647775
+The post-release baseline is main at 6ac9c65. Preserve execution, credential, lifecycle, graph, and mapped-scope behavior as distinct review and failure domains inside one clean consolidated pull request. Retain only behavior justified by framework-owned tests. mp-nxs9 is the exact-head verification gate; broader scheduling, weighted byte claims, and successful-item force remain evidence-triggered follow-ons.

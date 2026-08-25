@@ -5,7 +5,7 @@ title: "Review PR #34: pool scalar agent credentials"
 kind: task
 status: closed
 priority: 1
-version: 19
+version: 20
 labels:
   - pr-review
 dependencies: []
@@ -25,14 +25,14 @@ child_order_hints:
   - is-01m0vq38pr4xq4qqfwj5n5r6n4
   - is-01m0vq396my2642ep070ydj0dq
 created_at: 2026-08-24T15:14:43.076Z
-updated_at: 2026-08-25T05:50:38.990Z
+updated_at: 2026-08-25T16:59:50.618Z
 closed_at: 2026-08-25T05:50:38.990Z
 close_reason: null
 resolution: null
 duplicate_of: null
 ---
-Senior review of #34 (codex/gtia-v3-scalar-auth-policy). Addresses finding F4: scalar agent steps bypassing the credential pool. Verify: _execute_agent_step receives pool dispatch/auth flags via context, run_parallel duplication reduced not copied, tests assert pool-label usage. Post review comment; follow up before merge.
+Senior review of pull request 34, which routes scalar agent steps through the credential pool. Verify that scalar execution receives pool dispatch and authentication policy through the shared context, reuses the fan-out binding path, contains failures, records terminal retry state, and proves pool-label use with falsifiable tests.
 
 ## Notes
 
-ROUND 2 (2026-08-24, head 3d11a64): https://github.com/jlevy/metaproc/pull/34#issuecomment-5402358604 — Finding 1 FIXED WELL (scope_id = run_dir.relative_to(runs_dir); scalar+fanout share _bind_pool_dispatch; falsifiable tests). Findings 5/6/7/8/9/10 FIXED. Cloud-auth absorbed from closed #36 WITHOUT retry-later transport (verified) — #36 hazards absent. Finding 2 PARTIAL: warning is stderr-only, no event/log, worker leg + gcp-worker still silent. Finding 3 PARTIAL: only attempt 1; on retry >=2 status.yaml stays running (likely case — retry_exclude cools both labels). NEW: B1 containment CLIError raises inside un-guarded gather, can abort runs that previously completed; B2 scalar preflight NFS rglob per step with verdict discarded at warn posture, on the shared sync_executor. F1: worker leg does not enforce the invariant the docs now assert globally.
+Review found and drove fixes for scope identity, containment, terminal retry state, preflight cost, and worker-policy wording. The replacement must preserve only the generic credential behavior and its framework-owned regression tests.

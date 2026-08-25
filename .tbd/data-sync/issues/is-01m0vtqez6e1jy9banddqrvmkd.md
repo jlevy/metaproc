@@ -5,14 +5,14 @@ title: Use the explicit GCP project for gcp-run artifact uploads
 kind: bug
 status: closed
 priority: 1
-version: 3
+version: 6
 labels:
   - gcp
 dependencies: []
 created_at: 2026-08-25T06:46:36.760Z
-updated_at: 2026-08-25T07:19:23.427Z
-closed_at: 2026-08-25T07:19:23.426Z
-close_reason: Fixed at 0b783f9 and verified by 79 focused tests, full make verify (4,270 passed, 8 skipped), five exact-head CI jobs, and live one- and two-ticker GCP Batch canaries shipping both wheel and workspace with service-account ADC lacking project_id.
+updated_at: 2026-08-25T17:01:15.351Z
+closed_at: 2026-08-25T17:01:15.351Z
+close_reason: The explicit project path passes focused tests, full verification, exact-head public CI, and private downstream dispatch validation. Exact downstream run identities are maintained outside this public repository.
 resolution: null
 duplicate_of: null
 ---
@@ -20,4 +20,4 @@ gcp run requires METAPROC_GCP_PROJECT for Batch configuration but its wheel/work
 
 ## Notes
 
-Fixed at 0b783f9 and published as PR #42. Required project is threaded through the generic gcp-run wheel and workspace artifact paths; storage.Client receives it explicitly and there is no ambient fallback. Validation: 79 focused tests plus full standalone make verify (4,270 passed, 8 skipped; lint, type checking, audits, distribution, installed-wheel smoke). Awaiting exact-head PR CI and Trading live canary.
+The explicit GCP project is threaded through generic wheel and workspace upload paths with no ambient fallback. Focused tests, full verification, and exact-head public CI passed. Private downstream canary identities are maintained outside this repository.

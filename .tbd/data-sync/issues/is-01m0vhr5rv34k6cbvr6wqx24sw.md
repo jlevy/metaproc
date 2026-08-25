@@ -1,12 +1,12 @@
 ---
 type: is
 id: is-01m0vhr5rv34k6cbvr6wqx24sw
-title: "Restack PRs #32-#37 on post-release main"
+title: Consolidate mapped-scope runtime fixes on released main
 kind: task
 status: in_progress
 priority: 0
-version: 4
-spec_path: docs/project/specs/active/plan-2026-08-23-native-mapped-composite-scopes.md
+version: 5
+spec_path: null
 labels:
   - execution-model
 dependencies:
@@ -16,6 +16,6 @@ parent_id: is-01m0r92q2y1pe7dmhrcj6nst7q
 child_order_hints:
   - is-01m0vqngx1ergbsmwwcn9mtz8x
 created_at: 2026-08-25T04:09:42.938Z
-updated_at: 2026-08-25T05:53:07.475Z
+updated_at: 2026-08-25T16:59:22.188Z
 ---
-Rebase the retained review stack bottom-up onto main at or after 6ac9c65. Preserve coherent PR boundaries, update every child base to the exact repaired parent, and resolve the PR #38 run-config conflict deliberately: retain immutable-variable resume validation and the released no-workstation-alias behavior. Record old and new head mappings and require no semantic conflict to be resolved mechanically.
+Create one clean replacement branch from released main. Carry forward only the still-needed generic behavior from pull requests 32, 33, 34, 35, 43, 37, and 47; exclude the superseded retry-later proposal and unrelated work. Preserve review domains in tests and documentation without importing consumer-specific plans, evidence, or commit history. Do not merge.

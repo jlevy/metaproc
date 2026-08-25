@@ -5,13 +5,13 @@ title: Pin no-workspace GCP runs to the baked uv environment
 kind: bug
 status: closed
 priority: 1
-version: 4
+version: 7
 labels: []
 dependencies: []
 created_at: 2026-08-25T10:33:24.397Z
-updated_at: 2026-08-25T11:29:28.306Z
-closed_at: 2026-08-25T11:29:28.305Z
-close_reason: The no-workspace environment pins pass unit, full-suite, exact-head CI, immutable-image probe, and a live baked-source V2 Batch resume. Full shipped workspaces retain ordinary uv resolution.
+updated_at: 2026-08-25T17:01:14.350Z
+closed_at: 2026-08-25T17:01:14.350Z
+close_reason: No-workspace environment pins pass focused tests, full verification, exact-head public CI, and a downstream baked-source Batch resume. Exact downstream run and image evidence is maintained outside this public repository.
 resolution: null
 duplicate_of: null
 ---
@@ -19,4 +19,4 @@ A no-workspace metaproc gcp run can execute baked code that launches nested uv r
 
 ## Notes
 
-Implemented at 1149e1fa77522730b7bdbda6102466e358e9090c with focused mode tests, standalone make verify (4287 passed, 8 skipped), and exact-head CI run 32838938027 (5/5 jobs). Final image sha256:77b79d292f94bb84578cd5c643fbc7d879436f07b247dd0f6f2b2ae10cffa034 then ran the baked V2 coordinator with --no-wheel --no-workspace; Batch job gtia-v2-gcp-stability-tgt-providerfree-resume-20260825-06 SUCCEEDED from Filestore with zero provider requests.
+Implemented no-workspace environment pins with focused mode tests, full verification, and exact-head public CI. A live downstream Batch resume confirmed baked-source execution without provider requests; exact run and image evidence is maintained outside this public repository.

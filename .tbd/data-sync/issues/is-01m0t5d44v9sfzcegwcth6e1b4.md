@@ -5,7 +5,7 @@ title: "Review PR #35: retain lifecycle ownership through cleanup"
 kind: task
 status: closed
 priority: 1
-version: 29
+version: 30
 labels:
   - pr-review
 dependencies: []
@@ -33,14 +33,14 @@ child_order_hints:
   - is-01m0vr1qhtvv7y9r7k5qs5tprg
   - is-01m0vr1r3by2cydv5ekqxm47y7
 created_at: 2026-08-24T15:14:43.482Z
-updated_at: 2026-08-25T06:47:29.392Z
+updated_at: 2026-08-25T16:59:50.898Z
 closed_at: 2026-08-25T06:47:29.392Z
 close_reason: "PR #35 round-two review has a published disposition map at comment 5406589771. All correctness gates are fixed/rebutted in 4855c8d with exact-head make verify green; mp-vmjq remains explicitly deferred behind a measured-contention trigger."
 resolution: null
 duplicate_of: null
 ---
-Senior review of #35 (codex/gtia-v3-cancellation-safety). Touches resource_sampling and runpool backend: check whether the synchronous run_sampled_step_command event-loop block (finding F3c) is fixed, cancellation/cleanup ownership is correct, no orphaned process trees. Post review comment; follow up before merge.
+Senior review of pull request 35, which retains process, credential, and capacity ownership through cancellation and cleanup. Verify nonblocking sampled commands, bounded shutdown, no orphaned process trees, cancellation-safe leases, and explicit failure when cleanup cannot be proven.
 
 ## Notes
 
-ROUND 2 (2026-08-24, head 0e0d3e3): https://github.com/jlevy/metaproc/pull/35#issuecomment-5402358872 — BLOCKER + both HIGHs genuinely FIXED (env=prepared.env both paths with child-side test; ownership fence; kill() never raises). Ctrl-C wired with real SIGINT end-to-end test. Strongest test work in the stack. NEW must-fix: N1 synthesized CancelledError escapes run_parallel.py:2027 'except Exception' on pool kill → leaked credential lease; N2 shutdown() lost every deadline (status/log tail now behind unbounded gather — same wedged-kill failure relocated); F2 _active no longer popped in finally. Should: N3 unbounded _observed_descendants re-walked at 10Hz; N4 <=10s unobserved-descendant window; N5 cancelled poisons later partial runs; N6 kill sentinel → retry churn.
+Blocker and high-severity lifecycle findings were fixed. Remaining performance and retry-policy ideas stay deferred behind measured triggers. The clean replacement head must retain the cancellation, process-tree, and ownership-fence regressions.

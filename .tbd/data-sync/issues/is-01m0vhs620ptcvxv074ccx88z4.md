@@ -1,12 +1,12 @@
 ---
 type: is
 id: is-01m0vhs620ptcvxv074ccx88z4
-title: "Prepare consolidated #32-#37 head for GTIA L0"
+title: Verify the consolidated mapped-scope runtime head
 kind: task
 status: open
 priority: 0
-version: 9
-spec_path: docs/project/specs/active/plan-2026-08-23-native-mapped-composite-scopes.md
+version: 10
+spec_path: null
 labels:
   - execution-model
 dependencies:
@@ -22,6 +22,6 @@ child_order_hints:
   - is-01m0wfhffpxa70k40qbyxkdcyk
   - is-01m0wg34819k1mk34rfh9pm007
 created_at: 2026-08-25T04:10:15.999Z
-updated_at: 2026-08-25T12:59:59.104Z
+updated_at: 2026-08-25T16:59:21.926Z
 ---
-Single pre-smoke gate for the retained Metaproc stack. After every dependency has a fixed or explicitly reviewed disposition, run focused failure tests at each repaired layer, full make verify on the consolidated pull request 37 head, exact-head GitHub CI on every stack level, and verify the PR diff/bases match the tested commit map. Publish the per-finding disposition maps. Closing this gate authorizes a clean pinned GTIA network-free L0; it does not authorize live provider concurrency or merge by itself.
+Single pre-smoke gate for the consolidated Metaproc runtime changes. After every dependency has a fixed, rebutted, or explicitly deferred disposition, run focused failure tests for each review domain, full make verify on the clean replacement head, exact-head GitHub CI, and a diff audit against released main. Closing this gate permits a private downstream network-free smoke test; it does not authorize provider concurrency or merge.

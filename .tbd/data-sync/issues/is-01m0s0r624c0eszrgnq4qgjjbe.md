@@ -1,11 +1,11 @@
 ---
 type: is
 id: is-01m0s0r624c0eszrgnq4qgjjbe
-title: Audit dormant retry-later recovery before v3.0-pre adoption
+title: Audit dormant retry-later recovery before adoption
 kind: bug
 status: in_progress
 priority: 1
-version: 15
+version: 16
 spec_path: docs/project/specs/active/plan-2026-08-23-native-mapped-composite-scopes.md
 delegate: codex
 labels:
@@ -26,9 +26,9 @@ child_order_hints:
   - is-01m0t808bang7nryyzzhtg6phy
   - is-01m0tjefebxck534azhjgd5ew9
 created_at: 2026-08-24T04:34:08.579Z
-updated_at: 2026-08-24T19:04:19.750Z
+updated_at: 2026-08-25T16:59:51.469Z
 ---
-Metaproc contains older wait, checkpoint, deferred-state, resume-daemon, and hard-coded fan-out cooling paths, but no current v3.0-pre scheduler consumes a public retry-later policy. Do not implement the former PR #36 proposal speculatively. Use released-consumer evidence and successive v3.0-pre smoke runs to decide whether each existing primitive should be removed, retained as-is, or connected through the smallest shared policy. Any retained behavior must avoid holding execution or host capacity while idle and must reuse the existing scheduler and checkpoint machinery.
+Metaproc contains older wait, checkpoint, deferred-state, resume-daemon, and hard-coded fan-out cooling paths, but no current scheduler consumes a coherent public retry-later policy. Do not reintroduce the superseded proposal speculatively. Use released-consumer and framework-owned evidence to decide whether each primitive should be removed, retained as-is, or connected through the smallest shared policy. Retained behavior must avoid holding execution or host capacity while idle and reuse existing scheduler and checkpoint machinery.
 
 ## Notes
 
