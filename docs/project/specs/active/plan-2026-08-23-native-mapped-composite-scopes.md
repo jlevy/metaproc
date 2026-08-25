@@ -429,6 +429,14 @@ semaphore and makes it hard to prove that an operator ceiling applies across sib
 scopes. It also removes the dead composite `external_semaphore` seam and the current
 hard-coded child `skip_steps=set()` and `force=False` behavior.
 
+The run-owned executor is implementation capacity, not a second authored concurrency
+policy. It defaults to 32 workers and grows to an explicit higher run ceiling so it
+cannot silently floor that ceiling.
+Terminal cleanup cancels queued executor work and waits for started work before
+releasing the run lease.
+The leaf-admission context manager only owns the shared permit; normal asyncio task
+cancellation owns lifecycle propagation and task-state cleanup.
+
 Both synchronous handlers and command-backed code steps run off the event loop.
 Tests must prove that a slow command cannot stop sibling scopes, RunPool supervision, or
 run heartbeats, and that configured concurrency is not silently replaced by

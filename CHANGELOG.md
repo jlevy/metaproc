@@ -105,10 +105,12 @@ development series.
   Synchronous code and scalar-process supervision use the run-owned executor instead of
   blocking the event loop, and `--force` reaches composite descendants while root step
   selectors remain root-scoped.
-  Command-backed code fan-outs that were previously serialized as a side effect of
-  blocking the event loop may now run concurrently, bounded by the run and step
-  ceilings. Commands share the process directory, so authored steps that mutate shared
-  files, repositories, or lockfiles must declare per-item paths or provide their own
+  Command-backed code steps at the same DAG level may now run concurrently and acquire
+  the shared run ceiling; fan-out paths retain their step ceilings as well.
+  The executor defaults to 32 workers and grows to an explicit higher run ceiling, so
+  its implementation capacity never silently reduces that ceiling.
+  Commands share the process directory, so authored steps that mutate shared files,
+  repositories, or lockfiles must declare per-item paths or provide their own
   synchronization.
 
 - **Code-step outputs are no longer YAML-repaired**: `run-parallel`’s `mode: code`

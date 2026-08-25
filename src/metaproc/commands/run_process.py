@@ -194,6 +194,12 @@ log = logging.getLogger(__name__)
 
 MANUAL_ACK_TIMEOUT_S = 24 * 3600
 MANUAL_ACK_HEARTBEAT_S = 15 * 60
+_MIN_SYNC_EXECUTOR_WORKERS = 32
+
+
+def _sync_executor_worker_count(max_concurrency: int | None) -> int:
+    """Size supervision capacity so it never floors an explicit leaf ceiling."""
+    return max(_MIN_SYNC_EXECUTOR_WORKERS, max_concurrency or 0)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -268,13 +274,14 @@ class RunExecutionContext:
             ),
             cancellation_event=asyncio.Event(),
             sync_executor=ThreadPoolExecutor(
+                max_workers=_sync_executor_worker_count(max_concurrency),
                 thread_name_prefix="metaproc-run",
             ),
         )
 
     def close(self) -> None:
-        """Stop accepting run-owned synchronous work without blocking the event loop."""
-        self.sync_executor.shutdown(wait=False, cancel_futures=True)
+        """Drain started synchronous work before the run releases its lease."""
+        self.sync_executor.shutdown(wait=True, cancel_futures=True)
 
 
 async def _run_sync[SyncResult](
@@ -296,15 +303,11 @@ async def _leaf_slot(
     if execution_context is None:
         yield
         return
-    if execution_context.cancellation_event.is_set():
-        raise asyncio.CancelledError
     semaphore = execution_context.leaf_semaphore
     if semaphore is None:
         yield
         return
     async with semaphore:
-        if execution_context.cancellation_event.is_set():
-            raise asyncio.CancelledError
         yield
 
 
@@ -3365,6 +3368,8 @@ def run_process_command(
         env_max = MetaprocEnv.METAPROC_DEFAULT_MAX_CONCURRENCY.read_int(default=None)
         if env_max is not None:
             max_concurrency = env_max
+    if max_concurrency is not None and max_concurrency < 1:
+        raise CLIError("max_concurrency must be at least 1")
     if num_workers is None:
         num_workers = MetaprocEnv.METAPROC_DEFAULT_NUM_WORKERS.read_int(default=1)
 

@@ -149,13 +149,15 @@ rules [`conventions.md`](../../../docs/conventions.md).
    fan-out pools, scalar steps, and composite scopes.
    A `gcp-worker` launch applies it independently inside each worker.
    The adaptive memory and provider ceilings are what actively govern under pressure.
-   Command-backed `mode: code` fan-outs also use the shared launch cap and may execute
-   concurrently. Their subprocesses share the process directory, so commands that mutate
-   repository state, lockfiles, or other shared paths must use per-item paths or their
-   own synchronization.
-   For local agent-pool dispatches (claude, codex, gemini, pi-cli), keep the operator
-   cap at ≥20 so the adaptive controller has room to ratchet down; setting it tighter
-   silently caps
+   Command-backed `mode: code` steps also use the shared launch cap and may execute
+   concurrently at one DAG level; fan-out paths retain their step caps.
+   The run-owned synchronous executor defaults to 32 workers and grows to an explicit
+   higher launch cap, so its implementation capacity does not silently lower that cap.
+   Code subprocesses share the process directory, so commands that mutate repository
+   state, lockfiles, or other shared paths must use per-item paths or their own
+   synchronization. For local agent-pool dispatches (claude, codex, gemini, pi-cli), keep
+   the operator cap at ≥20 so the adaptive controller has room to ratchet down; setting
+   it tighter silently caps
    `effective_target = min(memory_ceiling, provider_ceiling, operator_cap)` with no
    warning, even when the host could safely run more.
    See [`arch-runpool.md`](../../../docs/arch/arch-runpool.md) § “Operator cap floor”

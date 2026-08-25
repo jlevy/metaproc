@@ -1458,6 +1458,38 @@ class TestCodeStepLogs:
 class TestCLIDryRun:
     """Test --dry-run via the CLI runner."""
 
+    @pytest.mark.parametrize(
+        ("extra_args", "env_value"),
+        [
+            (["--max-concurrency", "0"], None),
+            ([], "0"),
+        ],
+    )
+    def test_invalid_leaf_ceiling_fails_before_process_resolution(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        extra_args: list[str],
+        env_value: str | None,
+    ) -> None:
+        monkeypatch.delenv("METAPROC_DEFAULT_MAX_CONCURRENCY", raising=False)
+        if env_value is not None:
+            monkeypatch.setenv("METAPROC_DEFAULT_MAX_CONCURRENCY", env_value)
+        resolver = MagicMock()
+
+        with patch(
+            "metaproc.commands.run_process.resolve_process_path",
+            resolver,
+        ):
+            result = CliRunner().invoke(
+                app,
+                ["run-process", "missing.process.md", "--dry-run", *extra_args],
+            )
+
+        assert result.exit_code != 0
+        assert result.exception is not None
+        assert "max_concurrency must be at least 1" in str(result.exception)
+        resolver.assert_not_called()
+
     def test_dry_run_synthetic_process(self) -> None:
         """Dry-run on the checked-in synthetic process spec."""
 

@@ -16,6 +16,7 @@ from metaproc.commands.run_process import (
     RunExecutionContext,
     _execute_agent_step,
     _execute_composite_step,
+    _leaf_slot,
     _orchestrate,
     _run_sync,
 )
@@ -205,6 +206,62 @@ def test_sync_executor_is_independent_of_leaf_ceiling() -> None:
             context.close()
 
     assert asyncio.run(exercise()) == ["first", "second"]
+
+
+@pytest.mark.parametrize(
+    ("max_concurrency", "expected_workers"),
+    [
+        (None, 32),
+        (1, 32),
+        (32, 32),
+        (40, 40),
+    ],
+)
+def test_sync_executor_never_floors_explicit_leaf_ceiling(
+    max_concurrency: int | None,
+    expected_workers: int,
+) -> None:
+    context = RunExecutionContext.create(max_concurrency=max_concurrency)
+    try:
+        assert context.sync_executor._max_workers == expected_workers  # noqa: SLF001
+    finally:
+        context.close()
+
+
+def test_leaf_slot_does_not_synthesize_cancellation() -> None:
+    async def exercise() -> bool:
+        context = RunExecutionContext.create(max_concurrency=1)
+        context.cancellation_event.set()
+        try:
+            async with _leaf_slot(context):
+                return True
+        finally:
+            context.close()
+
+    assert asyncio.run(exercise()) is True
+
+
+def test_close_waits_for_started_sync_work() -> None:
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def work() -> None:
+        started.set()
+        release.wait(timeout=2.0)
+        finished.set()
+
+    context = RunExecutionContext.create(max_concurrency=1)
+    context.sync_executor.submit(work)
+    assert started.wait(timeout=2.0)
+    timer = threading.Timer(0.05, release.set)
+    timer.start()
+    try:
+        context.close()
+    finally:
+        timer.join(timeout=2.0)
+
+    assert finished.is_set()
 
 
 def test_invalid_leaf_ceiling_is_a_cli_error() -> None:
