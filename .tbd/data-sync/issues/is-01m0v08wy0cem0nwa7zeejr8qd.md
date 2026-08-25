@@ -3,9 +3,9 @@ type: is
 id: is-01m0v08wy0cem0nwa7zeejr8qd
 title: "PR #35 lifecycle correctness follow-ups before live smoke"
 kind: task
-status: open
+status: in_progress
 priority: 1
-version: 8
+version: 9
 labels:
   - pr-review
 dependencies: []
@@ -17,7 +17,7 @@ child_order_hints:
   - is-01m0vhr7xyfyp95pz2xhsxd513
   - is-01m0vhr8b8gkgykcywwcq4z55c
 created_at: 2026-08-24T23:04:16.575Z
-updated_at: 2026-08-25T04:10:37.833Z
+updated_at: 2026-08-25T05:51:52.132Z
 ---
 Parent ledger for the round-2 lifecycle findings. Children mp-kxmn, mp-e9e5, mp-d50w, and mp-0xbi are correctness gates before live smoke: bound descendant bookkeeping, catch late descendants, avoid cancelled-state poisoning, and prevent kill-sentinel retry churn. Child mp-bq47 is explicitly deferred: failed-item resume is sufficient now, while targeted rerun of a successful mapped item requires operator evidence.
 

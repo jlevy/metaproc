@@ -3,9 +3,9 @@ type: is
 id: is-01m0t5d44v9sfzcegwcth6e1b4
 title: "Review PR #35: retain lifecycle ownership through cleanup"
 kind: task
-status: closed
+status: open
 priority: 1
-version: 18
+version: 19
 labels:
   - pr-review
 dependencies: []
@@ -24,9 +24,9 @@ child_order_hints:
   - is-01m0tcw3acmhtkj35g8thzxrmd
   - is-01m0td3dehfnryederv1dpm7f3
 created_at: 2026-08-24T15:14:43.482Z
-updated_at: 2026-08-24T22:32:05.604Z
-closed_at: 2026-08-24T17:54:41.745Z
-close_reason: "Fixed in e233ec1. Per-finding disposition: https://github.com/jlevy/metaproc/pull/35#issuecomment-5399129306. Local make verify passed (4,339 passed, 8 skipped); GitHub CI run 32759134105 passed lint, distribution, and Python 3.12/3.13/3.14."
+updated_at: 2026-08-25T05:51:50.660Z
+closed_at: null
+close_reason: null
 resolution: null
 duplicate_of: null
 ---
