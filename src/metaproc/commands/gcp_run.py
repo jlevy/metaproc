@@ -334,7 +334,8 @@ def run_command(
     Default behaviour here ships a fresh-built wheel from the local source tree
     plus a tarball of the current repo working tree, mounts Filestore at
     `/mnt/filestore` (with `RUNS_DIR=/mnt/filestore/runs`), resolves
-    `GCP_SECRET_REFS` (`GH_TOKEN`, `CLAUDE_CODE_CREDS_JSON`), and `execvp`'s `cmd`
+    registered Secret Manager refs (`GH_TOKEN`, `CLAUDE_CODE_CREDS_JSON`), and
+    `execvp`'s `cmd`
     inside the container.
     """
     config = _build_config(

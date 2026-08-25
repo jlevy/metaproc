@@ -73,6 +73,9 @@ class MetaprocEnv(EnvEnum):
     METAPROC_GCP_RUN_CMD = optional(
         "Serialized JSON command used by the `gcp-run` entrypoint. Set by the dispatcher."
     )
+    METAPROC_GCP_SECRET_REFS_JSON = optional(
+        "Dispatcher-owned JSON mapping of runtime env names to Secret Manager version refs."
+    )
 
     # ── Repo resolution for cloud workers ──
     METAPROC_REPO_URL = tunable(

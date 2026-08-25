@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import os
 from typing import Any
+from unittest.mock import patch
 
+from metaproc.cloud.gcp import worker_entrypoint
 from metaproc.cloud.gcp.worker_entrypoint import (
     arm_legacy_bootstrap_guard,
     build_runparallel_cmd,
@@ -64,6 +66,21 @@ def _auth(
         auth_include_labels=_split_csv(auth_include_labels),
         auth_exclude_labels=_split_csv(auth_exclude_labels),
     )
+
+
+def test_secret_hydration_failure_stops_before_resource_logging_and_bootstrap() -> None:
+    with (
+        patch.object(
+            worker_entrypoint,
+            "hydrate_secret_env",
+            side_effect=RuntimeError("denied"),
+        ),
+        patch.object(worker_entrypoint, "log_resource_context") as log_resources,
+        patch.object(worker_entrypoint, "bootstrap_container") as bootstrap,
+    ):
+        assert worker_entrypoint.main() == 1
+    log_resources.assert_not_called()
+    bootstrap.assert_not_called()
 
 
 class TestBaseline:

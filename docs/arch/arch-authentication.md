@@ -78,8 +78,8 @@ and the code paths referenced inline.
 - Make precedence rules for each credential explicit (what wins when multiple modes are
   set).
 - Map every relevant env var to its consumer and to the module where it is read.
-- Document the anti-leakage invariant (`resolve_gcp_secret_ref`) and the two-hop
-  Keychain → Secret Manager → adapter-bootstrap flow for Claude Code Personal Plan.
+- Document the anti-leakage invariant (`SecretRef.resolve`) and the two-hop Keychain →
+  Secret Manager → adapter-bootstrap flow for Claude Code Personal Plan.
 
 ### Non-Goals
 
@@ -100,8 +100,8 @@ Credentials flow through four surfaces:
 2. **macOS Keychain** — the Claude Code Personal-Plan OAuth blob.
    Read by `metaproc claude-auth push` and pushed to GCP Secret Manager.
 3. **GCP Secret Manager** — the source of truth for every credential delivered to a
-   Batch job. Names are registered in `GCP_SECRET_REFS` and bound by the Batch service
-   via `Environment.secret_variables`.
+   Batch job. Dispatch carries version resource names only; the container fetches their
+   values under its attached service account before bootstrap.
 4. **GCP service account ADC** — used on Batch worker and orchestrator VMs via the
    attached SA and GCE metadata server.
 
@@ -112,7 +112,7 @@ Credentials flow through four surfaces:
 │  GCP_CREDS_B64)│    │  OAuth blob)   │    │  claude-code-creds)│
 └────────┬───────┘    └────────┬───────┘    └─────────┬──────────┘
          │                     │                      │
-         │ _load_dotenv()      │ claude-auth push     │ Batch secret_variables
+         │ _load_dotenv()      │ claude-auth push     │ container-side fetch
          ▼                     ▼                      ▼
    ┌─────────────────────────────────────────────────────────┐
    │                     os.environ                           │
@@ -126,8 +126,8 @@ Credentials flow through four surfaces:
    └────────┬────────────────────────────────────────────────┘
             ├──► gcp_credentials.py       (ADC + token refresh)
             ├──► adapters/*.py            (check_auth, prepare_env, bootstrap)
-            ├──► cloud/gcp/batch_backend  (GCP_SECRET_REFS registry)
-            ├──► worker_dispatch.py       (Batch job env + secret_variables)
+            ├──► dispatch/secret_refs.py  (typed reference registry)
+            ├──► cloud/gcp/secret_hydration.py (container-side resolution)
             └──► commands/auth_check.py   (Phase 1/2/2b/3 verification)
 ```
 
@@ -227,24 +227,23 @@ Logs the token fingerprint (first 8 hex of SHA-256) to correlate without leaking
 exposes `resolve_gcp_token()` — thin wrapper called by pi-cli vertex-maas injection,
 `auth-check`, and `run_parallel` batch boundaries.
 
-#### 4. Secret Manager registry (`GCP_SECRET_REFS`)
+#### 4. Secret Manager reference registry and hydration
 
-**File:**
-[src/metaproc/cloud/gcp/batch_backend.py:68](../../src/metaproc/cloud/gcp/batch_backend.py#L68)
+**Files:**
+[src/metaproc/dispatch/secret_refs.py](../../src/metaproc/dispatch/secret_refs.py) and
+[src/metaproc/cloud/gcp/secret_hydration.py](../../src/metaproc/cloud/gcp/secret_hydration.py)
 
 ```python
-GCP_SECRET_REFS: tuple[tuple[str, str, str], ...] = (
-    ("GH_TOKEN", "METAPROC_GCP_SECRET_GH_TOKEN", "plaintext GitHub token"),
-    ("CLAUDE_CODE_CREDS_JSON", "METAPROC_GCP_SECRET_CLAUDE_CREDS", "Claude Code OAuth blob"),
-)
+known_refs = SecretRefSet.all_known()
+runtime_refs = known_refs.resolve_env_refs()
+attach_secret_refs(env_vars, runtime_refs)
 ```
 
-Every credential delivered to a Batch job flows through this table.
-Each row is `(plaintext_env, secret_env, description)`.
+Every credential delivered to a Batch job flows through this typed registry.
+Each `SecretRef` names the target runtime env var, the operator-side env var holding a
+Secret Manager version resource, and a human description.
 
-`resolve_gcp_secret_ref()`
-([batch_backend.py:78](../../src/metaproc/cloud/gcp/batch_backend.py#L78)) enforces the
-anti-leakage invariant:
+`SecretRef.resolve()` enforces the anti-leakage invariant:
 
 - If the Secret Manager ref env var is set → return its value (the Secret Manager
   resource name).
@@ -253,17 +252,16 @@ anti-leakage invariant:
   would expose it).
 - Else → return `""`.
 
-`_build_secret_env_vars()` walks the registry once and returns the
-`{plaintext_env: secret_resource_name}` mapping that becomes
-`Environment.secret_variables` on the Batch task.
-Consumed by both `worker_dispatch.py`
-([lines 577-579](../../src/metaproc/cloud/gcp/worker_dispatch.py#L577-L579)) and
-`orchestrator_dispatch.py`
-([lines 200-204](../../src/metaproc/cloud/gcp/orchestrator_dispatch.py#L200-L204)).
+`SecretRefSet.resolve_env_refs()` returns `{target_env: version_resource}`. Dispatch
+serializes that reference-only map as `METAPROC_GCP_SECRET_REFS_JSON`; it does not use
+Batch `Environment.secret_variables`, whose values can appear in Batch agent command
+logs. Each container entrypoint calls `hydrate_secret_env()` before bootstrap.
+The function validates every binding, fetches all versions, then mutates the environment
+atomically. A failed fetch leaves the environment unchanged.
 
-**Adding a new credential** is a one-line change: append a row to `GCP_SECRET_REFS`,
-then consume the plaintext env var in the code path that needs it (typically the
-corresponding adapter’s `bootstrap(home)` hook).
+**Adding a new credential** means adding a `SecretRef` to the registry, then consume the
+plaintext env var in the code path that needs it (typically the corresponding adapter’s
+`bootstrap(home)` hook).
 No dispatch or policy wiring is required.
 
 #### 5. Adapter protocol — auth-relevant methods
@@ -402,9 +400,9 @@ GCP Secret Manager: claude-code-creds-<user>    ┘
 
 Dispatch time (per Batch job):
   METAPROC_GCP_SECRET_CLAUDE_CREDS
-  → resolve_gcp_secret_ref()
-  → Batch Environment.secret_variables["CLAUDE_CODE_CREDS_JSON"] = ref
-  → Batch service resolves ref at task start
+  → SecretRefSet.resolve_env_refs()
+  → METAPROC_GCP_SECRET_REFS_JSON = {"CLAUDE_CODE_CREDS_JSON": ref}
+  → container Secret Manager API fetch under attached service account
   → container env has CLAUDE_CODE_CREDS_JSON=<json-blob>
 
 Container bootstrap (once per task):
@@ -527,9 +525,9 @@ Used much less than Pi / Claude Code in current runs.
 
 1. Operator exports
    `METAPROC_GCP_SECRET_GH_TOKEN=projects/<proj>/secrets/gh-token/versions/latest`.
-2. Dispatch: `resolve_gcp_secret_ref()` puts it in
-   `Environment.secret_variables["GH_TOKEN"]`.
-3. Container: `bootstrap_container()`
+2. Dispatch puts the version resource in `METAPROC_GCP_SECRET_REFS_JSON` without
+   resolving its value.
+3. The container hydrates `GH_TOKEN`, then `bootstrap_container()`
    ([container_bootstrap.py:101](../../src/metaproc/cloud/gcp/container_bootstrap.py#L101))
    configures a git credential helper that injects the token into HTTPS clones.
 4. No plaintext `GH_TOKEN` ever appears in the Batch job spec.
@@ -547,11 +545,11 @@ See
 
 Submits a Batch job that runs an arbitrary command (e.g., `python -m my_package.task`)
 with the dispatcher’s current metaproc + repo state.
-Shares `batch_backend.py` and the `GCP_SECRET_REFS` registry with worker dispatch, so
-credentials behave identically:
+Shares `batch_backend.py`, `SecretRefSet`, and `secret_hydration.py` with worker
+dispatch, so credentials behave identically:
 
 - Attached SA via `METAPROC_GCP_SERVICE_ACCOUNT`.
-- `secret_variables` populated by the same `_build_secret_env_vars()` call.
+- Reference-only dispatch plus container-side atomic hydration.
 - Entrypoint calls `adapter.bootstrap(home)` for every registered adapter, so
   `CLAUDE_CODE_CREDS_JSON` is materialized even when the user command is a
   package-specific CLI rather than `run-parallel`.
@@ -586,9 +584,9 @@ introspection output.
 [src/metaproc/cloud/gcp/batch_backend.py](../../src/metaproc/cloud/gcp/batch_backend.py)
 
 Frozen dataclass carrying everything needed to submit a Batch job.
-Auth-relevant fields: `project`, `service_account_email`, `secret_env_vars` (built via
-`_build_secret_env_vars()`), `filestore_*` (NFS network-level access, no per-request
-auth).
+Auth-relevant fields: `project`, `service_account_email`, and `filestore_*` (NFS
+network-level access, no per-request auth).
+Secret bindings are a dispatch payload, not infrastructure configuration.
 
 ### Interfaces
 
@@ -602,7 +600,7 @@ auth).
 | Google AI Studio | `GEMINI_API_KEY` | `gemini-cli`, `pi-cli` (google) |
 | GCP Vertex AI (MaaS) | GCP access token | `pi-cli` (vertex-maas) |
 | GCP Vertex AI (native Gemini) | ADC | `pi-cli` (google-vertex), `gemini-cli` (Vertex mode) |
-| GCP Secret Manager | ADC | Batch runtime (resolves `secret_variables`) |
+| GCP Secret Manager | Attached-service-account ADC | Container entrypoint hydration |
 | GCP Batch API | ADC | `cloud.gcp.worker_dispatch`, `orchestrator_dispatch`, `gcp_run_dispatch` |
 | GCP Filestore (NFS) | network-level (SA needs VPC) | all cloud VMs |
 | GCP Cloud Storage | ADC | `container_bootstrap._download_from_gcs` (wheel/workspace) |
@@ -615,8 +613,8 @@ auth).
   the system depends on.
 - `Adapter.bootstrap(home) -> None` — the container-side contract for materializing
   credential files that are unsafe to keep as env vars for the job lifetime.
-- `GCP_SECRET_REFS` + `resolve_gcp_secret_ref()` — the only sanctioned path for
-  delivering credentials to a Batch job.
+- `SecretRefSet.resolve_env_refs()` + `hydrate_secret_env()` — the only sanctioned path
+  for delivering credentials to a Batch job.
 
 ## Trade-offs and Alternatives
 
@@ -638,11 +636,14 @@ no direct `os.getenv` survives.
 
 ### Decision 2: Secret Manager required for every Batch-injected credential
 
-**Chosen approach:** `GCP_SECRET_REFS` registry with hard-fail `resolve_gcp_secret_ref`.
+**Chosen approach:** typed `SecretRefSet` with hard-fail plaintext refusal and
+container-side atomic hydration.
 
 **Alternatives considered:**
 - Plaintext env vars on Batch — rejected: `gcloud batch jobs describe` returns env vars
   in the job spec.
+- Batch `Environment.secret_variables` — rejected: the Batch agent expands secret values
+  into its generated container command and those values can reach agent logs.
 - Per-credential handling — rejected: bespoke wiring per secret is what we replaced when
   generalizing from GH_TOKEN-only (rev3 of cloud-design).
 
@@ -707,8 +708,9 @@ Batch boundary is the right cadence.
 - **Claude Code Personal Plan:** zero plaintext on disk between Keychain and Secret
   Manager; credentials are materialized 0600 on the worker and the env var is popped
   before any child subprocess runs.
-- **Batch jobs:** every injected credential comes from Secret Manager via
-  `secret_variables`; `resolve_gcp_secret_ref` refuses plaintext fallthrough.
+- **Batch jobs:** every injected credential comes from Secret Manager through the
+  reference-only dispatch and container hydration contract; `SecretRef.resolve()`
+  refuses plaintext fallthrough.
 
 ### Authorization model
 
@@ -736,8 +738,8 @@ Batch boundary is the right cadence.
   tempfile.
 - `GCP_CREDENTIALS_BASE64` is decoded to `${TMPDIR}/gcp/keys/sa-key.json` at 0600. This
   tempfile persists until system cleanup but is not world-readable.
-- Batch `secret_variables` bindings keep plaintext out of `gcloud batch jobs describe`
-  output.
+- Batch job specs contain only Secret Manager version resource names; values are fetched
+  inside the container and never included in Batch agent commands.
 
 ### Known leakage risks
 
@@ -835,7 +837,10 @@ No auth is on the per-item hot path.
 - [src/metaproc/cloud/gcp/gcp_credentials.py](../../src/metaproc/cloud/gcp/gcp_credentials.py)
   — GCP credential resolution and token refresh.
 - [src/metaproc/cloud/gcp/batch_backend.py](../../src/metaproc/cloud/gcp/batch_backend.py)
-  — `GCP_SECRET_REFS`, `resolve_gcp_secret_ref`, `GCPBatchConfig`.
+  — `GCPBatchConfig` and shared Batch assembly.
+- [src/metaproc/dispatch/secret_refs.py](../../src/metaproc/dispatch/secret_refs.py) and
+  [src/metaproc/cloud/gcp/secret_hydration.py](../../src/metaproc/cloud/gcp/secret_hydration.py)
+  — typed reference policy and container-side resolution.
 - [src/metaproc/adapters/claude_code.py](../../src/metaproc/adapters/claude_code.py) —
   `check_auth`, `bootstrap`, Personal-Plan flow.
 - [src/metaproc/adapters/pi_cli.py](../../src/metaproc/adapters/pi_cli.py) —
@@ -872,8 +877,9 @@ metaproc auth prune   [--adapter] [--status] [--older-than-days N] [--yes]
 ```
 
 `<adapter>` is `claude-code-cli` (Phase 1) or `codex-cli` (P1.2b — ChatGPT OAuth only;
-API-key blobs are rejected and routed to `OPENAI_API_KEY` secret_variables). Labels are
-operator-chosen (`laptop`, `home`, `work`, …) and must match `[a-z0-9-]{1,40}`.
+API-key blobs are rejected and routed to `OPENAI_API_KEY` through cloud secret
+hydration). Labels are operator-chosen (`laptop`, `home`, `work`, …) and must match
+`[a-z0-9-]{1,40}`.
 
 ### §N.2 Backends
 
@@ -1389,7 +1395,7 @@ cohorts that travel together.
 
 | Module | Cohort |
 | --- | --- |
-| [`metaproc/dispatch/secret_refs.py`](../../src/metaproc/dispatch/secret_refs.py) | `SecretRef` and `SecretRefSet` for the `GCP_SECRET_REFS` cohort: plaintext environment variable, Secret Manager reference variable, and human description. `SecretRefSet.all_known()` composes static refs (`GH_TOKEN`, `CLAUDE_CODE_CREDS_JSON`, `CODEX_CREDS_JSON`) with provider-derived refs from `gcp_secret_refs()`. `to_secret_variables()` produces the Batch API’s `secret_variables` mapping. `as_tuples()` preserves the legacy 3-tuple shape for backward compatibility. |
+| [`metaproc/dispatch/secret_refs.py`](../../src/metaproc/dispatch/secret_refs.py) | `SecretRef` and `SecretRefSet` define target environment variables, operator-side Secret Manager references, and plaintext-refusal policy. `SecretRefSet.all_known()` composes static refs (`GH_TOKEN`, `CLAUDE_CODE_CREDS_JSON`, `CODEX_CREDS_JSON`) with provider-derived refs from `gcp_secret_refs()`. `resolve_env_refs()` produces the reference-only container hydration mapping. |
 | [`metaproc/dispatch/repo_sync_payload.py`](../../src/metaproc/dispatch/repo_sync_payload.py) | `RepoSyncPayload` for the four-field repo-sync cohort: `METAPROC_REPO_URL`, `METAPROC_RUN_BRANCH`, `METAPROC_WHEEL_GCS`, `METAPROC_WORKSPACE_GCS`. Used by `container_bootstrap`, `orchestrator_dispatch`, `worker_dispatch`. |
 | [`metaproc/dispatch/orchestrator_payload.py`](../../src/metaproc/dispatch/orchestrator_payload.py) | `OrchestratorDispatchPayload` for the 13-field operator-CLI-to-orchestrator cohort. Replaces about 50 lines of conditional `env_vars` manipulation with one constructor and `update`. Spot defaults to true (silent emission); `num_workers` always emits both `METAPROC_NUM_WORKERS` and `METAPROC_DEFAULT_NUM_WORKERS` to tolerate code-version drift. |
 | [`metaproc/dispatch/worker_payload.py`](../../src/metaproc/dispatch/worker_payload.py) | `WorkerDispatchPayload` for the 12-field orchestrator-to-worker cohort. Worker identity is load-bearing and always emitted; inline and file item contexts are mutually exclusive, with the file path winning when both are populated. Call-site migration in `worker_dispatch` is deferred because the existing inline construction handles size-gated spill and NFS path resolution; the dataclass is ready for new sites. |

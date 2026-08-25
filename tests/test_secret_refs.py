@@ -1,12 +1,4 @@
-"""Tests for the SecretRefSet typed wrapper for the GCP_SECRET_REFS cohort.
-
-Phase 10 follow-up of the Vehicle A pool redesign.
-
-Mirrors the AuthPoolFlags shape: SecretRef.resolve handles per-ref
-env reads with plaintext-leakage refusal; SecretRefSet.to_secret_-
-variables produces the Batch ``secret_variables`` mapping; .as_tuples
-preserves the legacy 3-tuple shape for back-compat callers.
-"""
+"""Tests for the typed cloud-runtime Secret Manager reference registry."""
 
 from __future__ import annotations
 
@@ -46,9 +38,7 @@ class TestSecretRefSet:
         assert "CLAUDE_CODE_CREDS_JSON" in plaintext_envs
         assert "CODEX_CREDS_JSON" in plaintext_envs
 
-    def test_to_secret_variables_only_includes_resolved(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_resolve_env_refs_only_includes_resolved(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Set just GH_TOKEN's SM ref; the others stay unset and are
         # omitted from the resulting mapping.
         monkeypatch.setenv("METAPROC_GCP_SECRET_GH_TOKEN", "projects/p/secrets/gh/versions/1")
@@ -59,29 +49,14 @@ class TestSecretRefSet:
         monkeypatch.delenv("CLAUDE_CODE_CREDS_JSON", raising=False)
         monkeypatch.delenv("CODEX_CREDS_JSON", raising=False)
         s = SecretRefSet.all_known()
-        result = s.to_secret_variables()
+        result = s.resolve_env_refs()
         assert result["GH_TOKEN"] == "projects/p/secrets/gh/versions/1"
         assert "CLAUDE_CODE_CREDS_JSON" not in result
         assert "CODEX_CREDS_JSON" not in result
 
-    def test_to_secret_variables_refuses_plaintext_leak(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_resolve_env_refs_refuses_plaintext_leak(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("GH_TOKEN", "ghp_plaintext_no_secret_ref")
         monkeypatch.delenv("METAPROC_GCP_SECRET_GH_TOKEN", raising=False)
         s = SecretRefSet.all_known()
         with pytest.raises(RuntimeError, match="GH_TOKEN.*METAPROC_GCP_SECRET_GH_TOKEN"):
-            s.to_secret_variables()
-
-    def test_as_tuples_back_compat(self) -> None:
-        # Legacy callers iterate (plaintext_env, secret_env, description) triples.
-        s = SecretRefSet(
-            refs=(
-                SecretRef(plaintext_env="A_TOKEN", secret_env="A_SECRET", description="a"),
-                SecretRef(plaintext_env="B_TOKEN", secret_env="B_SECRET", description="b"),
-            )
-        )
-        assert s.as_tuples() == (
-            ("A_TOKEN", "A_SECRET", "a"),
-            ("B_TOKEN", "B_SECRET", "b"),
-        )
+            s.resolve_env_refs()

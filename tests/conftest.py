@@ -175,7 +175,7 @@ def _clear_provider_credential_env(monkeypatch: pytest.MonkeyPatch) -> None:
     leaks into tests that only monkeypatch the historical subset of
     keys, producing flaky pollution failures: pi-cli's `check_auth`
     sees real creds when tests assume none, and
-    `_build_secret_env_vars` raises plaintext-leakage RuntimeErrors
+    `SecretRefSet.resolve_env_refs()` raises plaintext-leakage RuntimeErrors
     because the matching SECRET ref is unset.
 
     The list is derived from `metaproc.config.providers.PROVIDERS` so

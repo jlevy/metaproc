@@ -49,6 +49,7 @@ import sys
 from pathlib import Path
 
 from metaproc.cloud.gcp.container_bootstrap import _run, bootstrap_container
+from metaproc.cloud.gcp.secret_hydration import hydrate_secret_env
 from metaproc.commands.helpers import seed_runtime_vars
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.dispatch.auth_pool_flags import AuthPoolFlags
@@ -146,6 +147,14 @@ def main() -> int:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+    try:
+        hydrated = hydrate_secret_env()
+    except RuntimeError as exc:
+        log.error("Secret hydration failed: %s", exc)
+        return 1
+    if hydrated:
+        log.info("Hydrated %d secret environment variables", len(hydrated))
 
     # Dump host + cgroup + rlimits + runtime + env at startup. See
     # metaproc/osutils/resource_context.py for what's collected and why.

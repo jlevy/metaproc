@@ -5,7 +5,7 @@ collapsed to one task. Composes the env (``METAPROC_GCP_RUN_CMD``, the
 ``METAPROC_WHEEL_GCS`` and ``METAPROC_WHEEL_SHA256`` pair, the
 ``METAPROC_WORKSPACE_GCS`` and ``METAPROC_WORKSPACE_SHA256`` pair, and
 optional ``METAPROC_WORKSPACE_PACKAGES``, and ``RUNS_DIR``), resolves the
-``GCP_SECRET_REFS`` registry, builds the Job via
+typed secret-reference registry, builds the Job via
 ``batch_backend.create_single_task_job``, and submits it via the Batch
 client.
 
@@ -27,11 +27,15 @@ from typing import Any
 
 from metaproc.cloud.gcp.batch_backend import (
     GCPBatchConfig,
-    _build_secret_env_vars,
     build_job_id,
     create_single_task_job,
     get_container_runs_dir,
 )
+from metaproc.cloud.gcp.secret_hydration import (
+    SECRET_REFS_ENV,
+    require_secret_service_account,
+)
+from metaproc.dispatch.secret_refs import SecretRefSet
 from metaproc.io.digests import SHA256_PATTERN
 
 log = logging.getLogger(__name__)
@@ -50,6 +54,7 @@ RESERVED_ENV_KEYS: frozenset[str] = frozenset(
         "METAPROC_WORKSPACE_GCS",
         "METAPROC_WORKSPACE_SHA256",
         "METAPROC_WORKSPACE_PACKAGES",
+        SECRET_REFS_ENV,
         "RUNS_DIR",
     }
 )
@@ -122,14 +127,10 @@ def validate_gcp_run_secret_service_account(
     account. That implicit identity may not have Secret Manager access and, more
     importantly, is not an operator-selected security boundary.
     """
-    secret_env_vars: dict[str, str] = dict(_build_secret_env_vars())
-    secret_env_vars.update(extra_secrets)
-    if secret_env_vars and not config.service_account_email:
-        raise ValueError(
-            "Set METAPROC_GCP_SERVICE_ACCOUNT before binding Secret Manager secrets "
-            "to a GCP Batch run"
-        )
-    return secret_env_vars
+    secret_refs = SecretRefSet.all_known().resolve_env_refs()
+    secret_refs.update(extra_secrets)
+    require_secret_service_account(secret_refs, config.service_account_email)
+    return secret_refs
 
 
 def build_gcp_run_job(
@@ -176,7 +177,7 @@ def build_gcp_run_job(
         env_vars["RUNS_DIR"] = container_runs_dir
     env_vars.update(options.extra_env)
 
-    secret_env_vars = validate_gcp_run_secret_service_account(
+    secret_refs = validate_gcp_run_secret_service_account(
         options.config,
         options.extra_secrets,
     )
@@ -187,7 +188,7 @@ def build_gcp_run_job(
     job = create_single_task_job(
         config=options.config,
         env_vars=env_vars,
-        secret_env_vars=secret_env_vars,
+        secret_refs=secret_refs,
         container_command=["-m", ENTRYPOINT_MODULE],
         spot=options.spot,
         job_labels=labels,

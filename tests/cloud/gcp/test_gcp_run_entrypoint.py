@@ -20,6 +20,7 @@ from metaproc.adapters.codex import CODEX_CREDS_ENV_VAR
 from metaproc.adapters.registry import ADAPTER_REGISTRY
 from metaproc.cloud.gcp import container_bootstrap, gcp_run_entrypoint
 from metaproc.cloud.gcp.batch_backend import GCPBatchConfig, create_single_task_job
+from metaproc.cloud.gcp.secret_hydration import SECRET_REFS_ENV
 
 # ── bootstrap_gcp_run ────────────────────────────────────────
 
@@ -254,6 +255,19 @@ class TestBootstrapGcpRun:
 
 
 class TestGcpRunEntrypoint:
+    def test_secret_hydration_failure_stops_before_bootstrap(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("METAPROC_GCP_RUN_CMD", json.dumps(["echo", "x"]))
+        with (
+            patch.object(
+                gcp_run_entrypoint,
+                "hydrate_secret_env",
+                side_effect=RuntimeError("denied"),
+            ),
+            patch.object(gcp_run_entrypoint, "bootstrap_gcp_run") as bootstrap,
+        ):
+            assert gcp_run_entrypoint.main() == 1
+        bootstrap.assert_not_called()
+
     def test_missing_cmd_returns_2(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv("METAPROC_GCP_RUN_CMD", raising=False)
         rc = gcp_run_entrypoint.main()
@@ -396,7 +410,7 @@ class TestCreateSingleTaskJob:
         job = create_single_task_job(
             config=cfg,
             env_vars={"FOO": "bar"},
-            secret_env_vars={},
+            secret_refs={},
             container_command=["-m", "metaproc.cloud.gcp.gcp_run_entrypoint"],
         )
         assert job.task_groups[0].task_count == 1
@@ -413,28 +427,29 @@ class TestCreateSingleTaskJob:
         assert dict(runnable.environment.variables) == {"FOO": "bar"}
         assert job.labels["metaproc-role"] == "gcp-run"
 
-    def test_secret_env_vars_attached(self):
+    def test_secret_refs_attached_without_batch_secret_variables(self):
         cfg = self._config()
         job = create_single_task_job(
             config=cfg,
             env_vars={"X": "y"},
-            secret_env_vars={
+            secret_refs={
                 "CLAUDE_CODE_CREDS_JSON": "projects/p/secrets/claude-creds/versions/latest",
             },
             container_command=["-c", "echo hi"],
         )
         runnable = job.task_groups[0].task_spec.runnables[0]
-        secrets = dict(runnable.environment.secret_variables)
+        secrets = json.loads(runnable.environment.variables[SECRET_REFS_ENV])
         assert (
             secrets["CLAUDE_CODE_CREDS_JSON"] == "projects/p/secrets/claude-creds/versions/latest"
         )
+        assert not runnable.environment.secret_variables
 
     def test_filestore_adds_mount_runnable(self):
         cfg = self._config(filestore_server="10.0.0.5")
         job = create_single_task_job(
             config=cfg,
             env_vars={},
-            secret_env_vars={},
+            secret_refs={},
             container_command=["-V"],
         )
         # Two runnables: mount script + container.
@@ -449,7 +464,7 @@ class TestCreateSingleTaskJob:
         job = create_single_task_job(
             config=cfg,
             env_vars={},
-            secret_env_vars={},
+            secret_refs={},
             container_command=["-V"],
         )
         instance = job.allocation_policy.instances[0].policy
@@ -460,7 +475,7 @@ class TestCreateSingleTaskJob:
         job = create_single_task_job(
             config=cfg,
             env_vars={},
-            secret_env_vars={},
+            secret_refs={},
             container_command=["-V"],
             spot=False,
         )
@@ -472,7 +487,7 @@ class TestCreateSingleTaskJob:
         job = create_single_task_job(
             config=cfg,
             env_vars={},
-            secret_env_vars={},
+            secret_refs={},
             container_command=["-V"],
             job_labels={"metaproc-run-id": "run-x", "extra": "v"},
         )

@@ -157,9 +157,17 @@ Useful controls:
 - `--secret K=REF` binds a Secret Manager version.
   Secret-bearing runs require `METAPROC_GCP_SERVICE_ACCOUNT`; dispatch refuses them
   before artifact upload when the identity is unset.
+  The Batch spec carries only `REF`; the container fetches its value under that service
+  account before bootstrap.
+  Do not replace this with Batch `secret_variables`, because Batch agent logs can expose
+  their expanded values.
 - `--timeout <seconds>` sets the task deadline.
 
 Do not pass credentials through `--env`. Use Secret Manager references.
+For a new identity or secret, first run a harmless canary that tests only for the target
+environment variable’s presence.
+Inspect both task and agent logs and confirm the canary value does not appear before
+dispatching a real provider credential.
 
 ## 6. Monitor Through Metaproc
 

@@ -171,6 +171,11 @@ When you do need GCP:
 pick up branch edits automatically.
 Ship code with the `METAPROC_WHEEL_GCS` and `METAPROC_WHEEL_SHA256` pair (fast), or
 rebuild the image when an edit should become the default for every dispatch.
+The wheel is installed by an already-running image entrypoint.
+It therefore cannot replace that entrypoint’s own pre-bootstrap behavior during the same
+process. Rebuild a candidate image for changes to `gcp_run_entrypoint.py`,
+`worker_entrypoint.py`, `orchestrator_entrypoint.py`, secret hydration, or any code
+needed before wheel installation.
 See
 [Required Configuration](runbooks/cloud-dispatch.runbook.md#2-required-configuration)
 for details.
