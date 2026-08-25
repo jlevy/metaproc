@@ -187,6 +187,62 @@ def test_linker_links_attempt_to_item_cross_source():
     assert by_id["att00000"].parent_span_id == "item0000"
 
 
+def test_linker_keeps_same_named_items_isolated_by_scope():
+    root_item = _minimal_event(
+        span_id="rootitem",
+        kind="item",
+        source="metaproc-engine",
+        attributes={"scope.path": ".", "step.id": "research", "item.key": "UI"},
+    )
+    child_item = _minimal_event(
+        span_id="childitm",
+        kind="item",
+        source="metaproc-engine",
+        attributes={
+            "scope.path": "query-plan/UI",
+            "step.id": "research",
+            "item.key": "UI",
+        },
+    )
+    child_attempt = _minimal_event(
+        span_id="childatt",
+        kind="attempt",
+        source="gemini-agent",
+        attributes={
+            "scope.path": "query-plan/UI",
+            "step.id": "research",
+            "item.key": "UI",
+        },
+    )
+
+    linked = link_and_propagate([child_item, root_item, child_attempt])
+    by_id = {span.span_id: span for span in linked}
+    assert by_id["childatt"].parent_span_id == "childitm"
+
+
+def test_linker_falls_back_from_scalar_attempt_to_scoped_step():
+    step = _minimal_event(
+        span_id="childstep",
+        kind="step",
+        source="metaproc-engine",
+        attributes={"scope.path": "query-plan/UI", "step.id": "generate"},
+    )
+    attempt = _minimal_event(
+        span_id="childatt",
+        kind="attempt",
+        source="gemini-agent",
+        attributes={
+            "scope.path": "query-plan/UI",
+            "step.id": "generate",
+            "item.key": "attempt.jsonl",
+        },
+    )
+
+    linked = link_and_propagate([step, attempt])
+    by_id = {span.span_id: span for span in linked}
+    assert by_id["childatt"].parent_span_id == "childstep"
+
+
 def test_linker_links_subprocess_to_step():
     step = _minimal_event(
         span_id="step000",

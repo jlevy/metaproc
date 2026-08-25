@@ -82,6 +82,8 @@ def _load_plan_from_run(run_dir: Path) -> Plan | None:
             spec,
             params,
             process_path=spec_path,
+            adapter_override=_optional_config_string(config, "execution_profile"),
+            artifact_namespace=_optional_config_string(config, "artifact_namespace"),
             validate_required_inputs=False,
             validate_spec=False,
         )
@@ -92,6 +94,12 @@ def _load_plan_from_run(run_dir: Path) -> Plan | None:
             exc,
         )
         return None
+
+
+def _optional_config_string(config: dict[object, object], key: str) -> str | None:
+    """Return one non-empty immutable run-config identity field."""
+    value = config.get(key)
+    return value if isinstance(value, str) and value else None
 
 
 def _recover_resource_artifacts(run_dir: Path, status: RunStatus) -> None:

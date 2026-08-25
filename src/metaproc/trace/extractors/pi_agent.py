@@ -54,6 +54,7 @@ class PiAgentExtractor:
     """V1 extractor for Pi CLI per-attempt JSONL logs."""
 
     source = "pi-agent"
+    scope_local = True
 
     def detect(self, run_dir: Path) -> bool:
         """Detect pi stream-json by schema sniff.

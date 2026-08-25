@@ -322,7 +322,7 @@ class TestPoolRollupCommand:
         _mark_v2(tmp_path)
         result = runner.invoke(app, ["pool", "rollup", str(tmp_path)])
         assert result.exit_code == 0, result.output
-        assert "No sub-step pool dirs found" in result.output
+        assert "No pool dirs found" in result.output
 
 
 class TestRunPoolEventAndHealthHelpers:

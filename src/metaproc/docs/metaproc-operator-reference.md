@@ -504,6 +504,7 @@ plus `pool events` to inspect contention.
 | What did it cost? | `uv run metaproc trace --extract <run-dir> && uv run metaproc trace <run-dir> --cost` |
 | How did concurrency change? | `uv run metaproc pool concurrency-timeline <run-dir>` |
 | What did the pool record? | `uv run metaproc pool events <run-dir>` |
+| What did every run-owned and step pool record? | `uv run metaproc pool rollup <run-dir>` |
 | What are throughput and resource totals? | `uv run metaproc stats <run-dir>` |
 | Which auth labels were used? | `uv run metaproc auth usage <run-dir>` |
 | What is the cloud Batch state? | `uv run metaproc gcp status <run-id>` |
@@ -698,6 +699,18 @@ uv run metaproc trace <run-dir> --tree
 uv run metaproc trace <run-dir> --health
 uv run metaproc trace <run-dir> --cost
 ```
+
+Extraction from a parent run includes framework logs from nested composite scope roots.
+Every span carries `scope.path`; `.` identifies the parent and paths such as
+`research/AAPL` identify child scopes.
+Nested span IDs and cross-source joins are scoped, so repeated child step and item names
+do not collide. If a Gemini attempt finishes successfully after a failed tool call, the
+tool remains an `error` span with `error.recovered: true` for diagnosis but does not
+change the successful session or attempt status.
+
+`pool rollup` follows the same composite-scope discovery rule.
+It includes a scope’s run-owned root pool at `.` or its relative scope path, plus any
+step-owned pools below that scope.
 
 Re-run extraction after a run completes, after recovering old logs, or after changing an
 extractor. Do not edit trace JSONL by hand; fix the source log or extractor and

@@ -951,22 +951,48 @@ finishing before the test-only 50 ms pressure tick.
 The fixture now declares a fast completion poll and a 60-second pressure interval; its
 lifecycle snapshots remain unchanged, and the adaptive controller retains separate
 behavioral coverage.
-The split graph layer, the checked-in downstream L0 gate, and exact-head GitHub CI
-remain before this revision is merge-eligible.
+The split graph layer and exact-head GitHub CI remain before this revision is
+merge-eligible.
+
+On 2026-08-25, the first fresh one-item harness run completed the parent GTIA `v3.0-pre`
+graph with one orchestrator lease, one in-process mapped child, one run-owned RunPool
+completion, Softschema 0.7.0-valid child artifacts, successful parent fan-in and review,
+and no child Metaproc command or lease.
+Repeating the exact launch reused every completed step and submitted no second agent
+task. This proves the M1 functional path; it does not prove three-item concurrency,
+cross-harness behavior, memory adaptation, or production equivalence.
+
+The same run exposed five operator-projection defects rather than execution failures:
+status rebuilt profile-selected steps under the wrong execution identity; pool rollup
+omitted the canonical root pool; successful pressure observations appeared as partial
+trace failures; parent trace extraction omitted nested child agent logs; and a recovered
+Gemini tool failure poisoned its successful parent spans while compacted event order
+inverted the attempt timestamps.
+The current candidate fixes these through recorded run identity, shared composite-scope
+discovery, root-pool inclusion, scope-aware trace IDs and joins, recovered-error
+evidence, and terminal-result timestamp bounds.
+Focused status, pool, trace, and adapter coverage passes 167 tests.
+The full local handoff gate passes 4,385 tests with 8 skipped, plus formatting, Ruff,
+BasedPyright, Markdown links, public hygiene, browser checks, supply-chain and
+dependency audits, distribution build, and installed-wheel smoke.
+Replaying the operator views over the completed run reports every parent step current,
+one root pool with one completion and no failures, 69 parent trace spans including the
+nested Gemini attempt, ordered attempt timestamps, and only the recovered tool call as
+an error.
+A fresh run pinned to the committed candidate remains required before advancing
+to repeated M1 or M2.
 
 Successful-item targeted force, richer evidence/fan-in projection, scoped child
 variables, weighted host claims, live harnesses, and production-scale results remain
 open. They are added only when the successive GTIA smoke rungs demonstrate a need.
 Failed-item-only resume is already the M0 repair contract.
 
-The first F1–F8 architecture disposition is complete, but the consolidated stack is not
-smoke-ready or merge-ready.
-Readiness requires every known finding above to receive an explicit disposition, the
-branches to be restacked on post-release `main` at or after `6ac9c65`, one run-owned
-RunPool path to replace per-scope scalar resource control for the consumer, exact-head
-CI and repository verification, and the pinned GTIA L0 gate.
-Until then, earlier passing test counts are historical evidence rather than a release
-claim.
+The first F1–F8 architecture disposition and local M1 functional proof are complete, but
+the consolidated stack is not merge-ready or scale-ready.
+The current candidate must be committed and pushed, every known finding must receive an
+explicit disposition, exact-head CI must pass, and the downstream must repeat M1 under
+the new exact pin before M2 begins.
+The retained stack must land without changing those tested commits.
 
 ## Rollout Plan
 
@@ -998,9 +1024,11 @@ claim.
    0.7.0 upgrade and its structural-diagnostic migration (`mp-vuxc`). Commit the exact
    candidate, run exact-head GitHub CI on each retained stack level, and publish one
    disposition map per review channel.
-10. Pin the exact consolidated pull request 37 head in the downstream `v3.0-pre`
-    implementation and pass the network-free L0 gate.
-    Only then may the tested stack land bottom-up without changing its commits.
+10. [In progress] The downstream `v3.0-pre` implementation passed its network-free L0
+    gate and one live M1 candidate under the previous exact Metaproc pin.
+    Update the pin to the committed pull request 37 candidate and repeat M1 plus exact
+    resume and operator checks.
+    Only then advance to repeated M1 and M2.
 11. Advance M1 through M5 as a shadow consumer.
     Each run stores the declared pipeline identity with exact consumer and Metaproc
     revisions; directory names are not provenance.
@@ -1037,6 +1065,9 @@ child `mp-g2r0` owns the immediate run-owned-pool integration.
 `mp-nxs9` is the single pre-L0 gate over all known review fixes, the consolidated
 exact-head verification, and disposition maps; `mp-joix` runs the network-free consumer
 fixture after that gate.
+The live one-item operator findings are `mp-061f` (profile-aware status), `mp-tftl`
+(root-pool rollup), `mp-kf4i` (pressure trace status), and `mp-r3x4` (nested-scope trace
+extraction). `mp-07b2` tracks recovered Gemini failures and compacted timestamp order.
 `mp-1af0` owns views, and `mp-rrfn` owns the production proof.
 
 The final mapped-scope review children are `mp-xkvz` (scope identity), `mp-cr12`

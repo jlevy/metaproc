@@ -188,6 +188,47 @@ def test_status_steps_works_from_unrelated_cwd(
         assert step_id in status.output, f"expected {step_id} in steps table:\n{status.output}"
 
 
+def test_status_rebuilds_plan_with_recorded_execution_identity(tmp_path: Path) -> None:
+    """A completed profile-selected run must remain current in ``status``.
+
+    The operator may select a non-default execution profile and a separate
+    artifact namespace. Both affect the resolved step fingerprint, so status
+    must rebuild with the immutable identity captured in run-config.yaml.
+    """
+    process_path = _stage_fixture(tmp_path / "proc")
+    runs_dir = tmp_path / "runs"
+    run_id = "fingerprint-profile-status"
+    runner = CliRunner()
+
+    launch = runner.invoke(
+        app,
+        [
+            "run-process",
+            str(process_path),
+            "--var",
+            f"RUNS_DIR={runs_dir}",
+            "--var",
+            f"RUN_ID={run_id}",
+            "--variant",
+            "gemini-flash-36",
+            "--artifact-namespace",
+            "status-test-artifacts",
+            "--backend",
+            "local",
+        ],
+    )
+    assert launch.exit_code == 0, launch.output
+
+    status = runner.invoke(
+        app,
+        ["status", str(runs_dir / run_id), "--steps", "--format", "json"],
+    )
+    assert status.exit_code == 0, status.output
+    payload = yaml.safe_load(status.output)
+    assert payload["process_state"] == "current"
+    assert {step["state"] for step in payload["steps"]} == {"current"}
+
+
 def test_resume_with_unchanged_runbooks_skips_everything(tmp_path: Path) -> None:
     """No edits between runs → all three steps cached on the second run.
 

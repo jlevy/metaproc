@@ -7,6 +7,7 @@ Import from this module instead of hardcoding path strings.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from pathlib import Path
 
 from ruamel.yaml import YAMLError
@@ -171,6 +172,49 @@ def run_state_dir(run_dir: Path) -> Path:
 def run_logs_dir(run_dir: Path) -> Path:
     """Return ``<run_dir>/.logs/`` (run-level engine logs branch)."""
     return run_dir / LOGS_DIR
+
+
+def iter_composite_run_dirs(run_dir: Path, *, max_depth: int = 4) -> Iterable[Path]:
+    """Yield a run root and bounded nested composite scope roots.
+
+    A nested scope is identified by its own ``.state`` branch. Runtime and
+    hidden directories are never traversed, and resolved paths are deduplicated
+    so a symlinked scope cannot be reported twice.
+    """
+    yield run_dir
+    if not run_dir.is_dir():
+        return
+    seen: set[Path] = set()
+    try:
+        seen.add(run_dir.resolve())
+    except OSError:
+        return
+
+    def _walk(parent: Path, depth: int) -> Iterable[Path]:
+        if depth > max_depth:
+            return
+        try:
+            children = sorted(parent.iterdir())
+        except OSError:
+            return
+        for child in children:
+            if not child.is_dir():
+                continue
+            name = child.name
+            if name in {STATE_DIR, LOGS_DIR} or name.startswith((".", "worker-", "slot-")):
+                continue
+            try:
+                resolved = child.resolve()
+            except OSError:
+                continue
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            if (child / STATE_DIR).is_dir():
+                yield child
+            yield from _walk(child, depth + 1)
+
+    yield from _walk(run_dir, depth=1)
 
 
 def run_config_file(run_dir: Path) -> Path:
