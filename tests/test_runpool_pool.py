@@ -1039,8 +1039,9 @@ class TestRunPool:
                 label="shutdown-test",
             )
             pool.submit(config)
-            await asyncio.sleep(0.3)
-            assert pool.active_count == 1
+            async with asyncio.timeout(5.0):
+                while pool.active_count == 0:
+                    await asyncio.sleep(0.05)
             await pool.shutdown(timeout_s=2.0)
             assert pool.active_count == 0
 

@@ -845,8 +845,9 @@ heads did not exercise:
 - the lifecycle findings grouped in `mp-va6t` require explicit fixed or deferred
   dispositions before live smoke, with descendant leaks, poisoned status, and retry
   churn treated as correctness work rather than an unexamined fast-follow; and
-- the RunPool snapshot regression must observe activation with a bounded wait instead of
-  assuming a launch beats its configured monitor interval (`mp-hcrw`); and
+- RunPool activation tests must use a bounded observed-state wait instead of assuming a
+  snapshot or graceful-shutdown launch beats its configured monitor interval
+  (`mp-hcrw`); and
 - CLI smoke fixtures with tiny outputs must declare their test disk budget so the suite
   remains hermetic while default preflight semantics keep independent unit coverage
   (`mp-4ht7`).
@@ -1043,7 +1044,8 @@ until the 10- and 32-item smoke rungs supply measurements.
 The pull request 35 lifecycle ledger is `mp-va6t`. Its correctness children `mp-kxmn`,
 `mp-e9e5`, `mp-d50w`, and `mp-0xbi` gate live smoke.
 `mp-bq47` tracks the explicitly deferred successful-item rerun selector.
-`mp-hcrw` tracks the bounded RunPool snapshot test fixed while validating this plan.
+`mp-hcrw` tracks bounded activation waits for RunPool snapshot and graceful-shutdown
+tests found while validating this plan.
 `mp-4ht7` tracks low-disk isolation for CLI smoke fixtures while preserving default
 preflight coverage.
 
