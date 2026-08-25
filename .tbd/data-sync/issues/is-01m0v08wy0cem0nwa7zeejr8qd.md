@@ -3,9 +3,9 @@ type: is
 id: is-01m0v08wy0cem0nwa7zeejr8qd
 title: "PR #35 lifecycle correctness follow-ups before live smoke"
 kind: task
-status: in_progress
+status: closed
 priority: 1
-version: 9
+version: 10
 labels:
   - pr-review
 dependencies: []
@@ -17,7 +17,11 @@ child_order_hints:
   - is-01m0vhr7xyfyp95pz2xhsxd513
   - is-01m0vhr8b8gkgykcywwcq4z55c
 created_at: 2026-08-24T23:04:16.575Z
-updated_at: 2026-08-25T05:51:52.132Z
+updated_at: 2026-08-25T06:47:29.382Z
+closed_at: 2026-08-25T06:47:29.381Z
+close_reason: "PR #35 round-two review has a published disposition map at comment 5406589771. All correctness gates are fixed/rebutted in 4855c8d with exact-head make verify green; mp-vmjq remains explicitly deferred behind a measured-contention trigger."
+resolution: null
+duplicate_of: null
 ---
 Parent ledger for the round-2 lifecycle findings. Children mp-kxmn, mp-e9e5, mp-d50w, and mp-0xbi are correctness gates before live smoke: bound descendant bookkeeping, catch late descendants, avoid cancelled-state poisoning, and prevent kill-sentinel retry churn. Child mp-bq47 is explicitly deferred: failed-item resume is sufficient now, while targeted rerun of a successful mapped item requires operator evidence.
 

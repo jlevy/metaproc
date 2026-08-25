@@ -5,15 +5,15 @@ title: "PR #35 review 6: give handlers cooperative bounded cancellation"
 kind: bug
 status: closed
 priority: 2
-version: 3
+version: 5
 labels:
   - pr-review
 dependencies: []
 parent_id: is-01m0t5d44v9sfzcegwcth6e1b4
 created_at: 2026-08-24T16:00:00.529Z
-updated_at: 2026-08-24T17:54:41.688Z
-closed_at: 2026-08-24T17:54:41.688Z
-close_reason: "Fixed in e233ec1. Per-finding disposition: https://github.com/jlevy/metaproc/pull/35#issuecomment-5399129306. Local make verify passed (4,339 passed, 8 skipped); GitHub CI run 32759134105 passed lint, distribution, and Python 3.12/3.13/3.14."
+updated_at: 2026-08-25T06:46:53.977Z
+closed_at: 2026-08-25T06:46:53.975Z
+close_reason: "Cooperative run-process handler cancellation and its public contract are fixed in the PR #35 stack. A bounded drain that abandons a live Python thread is rebutted because it would release ownership while artifact writes can continue; direct run-step/run-parallel do not create a second run-owned cancellation authority."
 resolution: null
 duplicate_of: null
 ---
