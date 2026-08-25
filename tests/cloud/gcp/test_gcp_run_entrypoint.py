@@ -26,11 +26,21 @@ from metaproc.cloud.gcp.secret_hydration import SECRET_REFS_ENV
 
 
 class TestBootstrapGcpRun:
-    def test_no_env_vars_is_noop(self, tmp_path: Path):
-        with patch.object(container_bootstrap, "_run") as run_mock:
+    def test_no_workspace_uses_baked_uv_environment(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("UV_PROJECT_ENVIRONMENT", raising=False)
+        monkeypatch.delenv("UV_NO_SYNC", raising=False)
+
+        with patch.dict(os.environ), patch.object(container_bootstrap, "_run") as run_mock:
             work_dir = container_bootstrap.bootstrap_gcp_run(home=tmp_path, env={})
+            assert os.environ["UV_PROJECT_ENVIRONMENT"] == "/opt/venv"
+            assert os.environ["UV_NO_SYNC"] == "1"
+
         run_mock.assert_not_called()
         assert work_dir == "/tmp"
+        assert "UV_PROJECT_ENVIRONMENT" not in os.environ
+        assert "UV_NO_SYNC" not in os.environ
 
     def test_wheel_install_downloads_and_uv_installs(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -140,6 +150,8 @@ class TestBootstrapGcpRun:
         monkeypatch.setattr(container_bootstrap, "GCP_RUN_WORKSPACE_DIR", str(workspace_dir))
         monkeypatch.setattr(container_bootstrap, "GCP_RUN_WORKSPACE_ARCHIVE_DIR", str(wheel_dir))
         monkeypatch.setattr(container_bootstrap, "GCP_RUN_WHEEL_DIR", str(wheel_dir))
+        monkeypatch.delenv("UV_PROJECT_ENVIRONMENT", raising=False)
+        monkeypatch.delenv("UV_NO_SYNC", raising=False)
 
         # Stub _download_from_gcs to copy the local tarball to the destination.
         def fake_download(uri: str, dst: str) -> None:
@@ -148,13 +160,16 @@ class TestBootstrapGcpRun:
 
         monkeypatch.setattr(container_bootstrap, "_download_from_gcs", fake_download)
 
-        work_dir = container_bootstrap.bootstrap_gcp_run(
-            home=tmp_path,
-            env={
-                "METAPROC_WORKSPACE_GCS": "gs://b/gcp-run/job/workspace.tar.gz",
-                "METAPROC_WORKSPACE_SHA256": hashlib.sha256(tar_src.read_bytes()).hexdigest(),
-            },
-        )
+        with patch.dict(os.environ):
+            work_dir = container_bootstrap.bootstrap_gcp_run(
+                home=tmp_path,
+                env={
+                    "METAPROC_WORKSPACE_GCS": "gs://b/gcp-run/job/workspace.tar.gz",
+                    "METAPROC_WORKSPACE_SHA256": hashlib.sha256(tar_src.read_bytes()).hexdigest(),
+                },
+            )
+            assert "UV_PROJECT_ENVIRONMENT" not in os.environ
+            assert "UV_NO_SYNC" not in os.environ
         assert work_dir == str(workspace_dir)
         assert (workspace_dir / "file.py").read_text() == "hello"
         # Downloaded tarball is staged outside the destination and removed.

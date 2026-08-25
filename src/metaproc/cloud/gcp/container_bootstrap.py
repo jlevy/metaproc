@@ -440,6 +440,10 @@ def bootstrap_gcp_run(*, home: Path, env: Mapping[str, str]) -> str:
        (``/workspace``), where the user's command sees the current-branch
        repository files.
 
+    No-workspace runs pin nested ``uv run`` commands to ``/opt/venv`` without
+    syncing. Full shipped workspaces retain ordinary uv project resolution unless
+    explicit workspace packages were installed into the baked environment.
+
     Returns the path the user command should chdir into
     (``/workspace`` if a workspace was extracted, else ``/tmp``). The
     ``home`` argument is reserved for future per-user state (e.g.
@@ -458,6 +462,10 @@ def bootstrap_gcp_run(*, home: Path, env: Mapping[str, str]) -> str:
 
     if wheel_gcs:
         _install_wheel_from_gcs(wheel_gcs, wheel_sha256)
+
+    if not workspace_gcs:
+        os.environ.setdefault("UV_PROJECT_ENVIRONMENT", "/opt/venv")
+        os.environ.setdefault("UV_NO_SYNC", "1")
 
     work_dir = "/tmp"
     if workspace_gcs:

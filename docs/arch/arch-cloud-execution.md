@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: Cloud Execution
 
-**Date:** 2026-04-12 (last updated 2026-08-24) **Status:** Approved
+**Date:** 2026-04-12 (last updated 2026-08-25) **Status:** Approved
 
 > **Maintenance**: This is a maintained architecture doc.
 > Revise via `tbd shortcut revise-architecture-doc` (which prompts you to verify content
@@ -740,8 +740,13 @@ It verifies and safely extracts the workspace archive into `/workspace` when the
 corresponding URI and digest pair is set.
 Each repeated `--workspace-package` path is then installed editable from that archive,
 and nested `uv` commands stay on the baked `/opt/venv` without re-resolving the shipped
-workspace. The entrypoint runs adapter `bootstrap()` hooks per §2.8 and executes the
-JSON-encoded argv from `METAPROC_GCP_RUN_CMD` with `execvp`.
+workspace. A run with no workspace archive also pins nested `uv` commands to the baked
+environment, because consumer source must already be present in the image and no project
+lock is available. A shipped Metaproc wheel may still replace its image-baked version.
+A full shipped workspace without editable package installation retains ordinary uv
+project resolution.
+The entrypoint runs adapter `bootstrap()` hooks per §2.8 and executes
+the JSON-encoded argv from `METAPROC_GCP_RUN_CMD` with `execvp`.
 
 The default workspace archive excludes both the historical top-level `metaproc/` source
 layout and a `vendor/metaproc` gitlink.
