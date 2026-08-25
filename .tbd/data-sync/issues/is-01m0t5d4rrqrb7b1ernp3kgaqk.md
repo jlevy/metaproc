@@ -5,7 +5,7 @@ title: "Overall stack-structure review of #32-#36"
 kind: task
 status: closed
 priority: 1
-version: 6
+version: 8
 labels:
   - pr-review
   - architecture
@@ -14,7 +14,7 @@ parent_id: is-01m0t5d345y4pdjcjpepb9h4q6
 child_order_hints:
   - is-01m0t7zmhacz125fmx2mn99b2m
 created_at: 2026-08-24T15:14:44.119Z
-updated_at: 2026-08-24T19:05:45.685Z
+updated_at: 2026-08-24T23:01:03.383Z
 closed_at: 2026-08-24T19:05:45.685Z
 close_reason: "The reviewed stack was consolidated only at the auth boundary and is now #39 → #32 → #33 → #34 → #35 → #37; #36 is closed as superseded. Per-PR defects have explicit dispositions, and integration head c061cad passed exact five-job GitHub CI run 32765621039. Stack disposition published at issuecomment-5399988297."
 resolution: null
@@ -24,4 +24,4 @@ Review the stacking itself: bases and merge order (implementation PRs based on t
 
 ## Notes
 
-Stack review posted 2026-08-24 on #32: https://github.com/jlevy/metaproc/pull/32#issuecomment-5397585780 — verdict: stack structure sound (true linear commit stack, one commit per rung, plan-branch gating, declared boundaries, sequencing matches accepted review order). Cross-cutting theme: serious defects sit at the exact seams being fixed (identity binding #34, env composition #35, cancellation reachability #33/#35, test falsifiability #33) — 'seam characterization tests land with the seam' is the rule for the mapped-scope slice. Merge order: #32 (with checkbox-annotation nit) → #33 → #34 → #35 after respective must-fixes; #36 stays draft until mp-tibt convergence. #19 independent, decide separately. FOLLOW UP: confirm merge lands in this order with fixes.
+HOLISTIC DOC posted 2026-08-24 on #37 (top of stack): https://github.com/jlevy/metaproc/pull/37#issuecomment-5402647775 — consolidated ledger (15 issues, ranked, with status), added/removed inventory, 4 root causes (scope identity not first-class; lifecycle hand-woven per site; run_process.py monolith; unverified stack + moving spec), and the landing plan: Wave 1 = #39 (+2 small fixes) → #19 → #38 (verified at 809fccc, exact-head CI green) → #32 (auto-retargets); Wave 2 = #33 → #34 → #35 one at a time rebased on main so CI runs, #35 gated on 3 injected-failure tests; Hold = #37 rebased, undraft on ScopeIdentity fix + terminal-state + item-key anchor, graph.py split out. End state: 1 draft + 1 small PR. #32-base-on-#39 confirmed deliberate (plan branch contains the guard commit). AUTHOR RESPONSES so far: #38 all 8 findings fixed and spot-verified; #37/#33/#34/#35/#39 round-2 unanswered.
