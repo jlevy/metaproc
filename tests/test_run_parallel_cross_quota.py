@@ -90,6 +90,25 @@ class TestCrossQuotaGroupPropagation:
                 auth_cross_quota_group=True,
             )
 
+    def test_run_context_parent_traversal_is_rejected(self, common_kwargs):
+        common_kwargs["run_context"] = "../escape"
+
+        with pytest.raises(CLIError, match="outside credential pool runs directory"):
+            _build_pool_dispatch_template(
+                **common_kwargs,
+                auth_cross_quota_group=True,
+            )
+
+    def test_worker_scope_uses_actual_nested_run_directory(self, common_kwargs, tmp_path):
+        template = _build_pool_dispatch_template(
+            **common_kwargs,
+            auth_cross_quota_group=True,
+            run_dir=tmp_path / "root-run" / "child-scope",
+        )
+
+        assert template is not None
+        assert template.run_id == "root-run/child-scope"
+
 
 def test_worker_adapter_mismatch_records_durable_skip(tmp_path, caplog: pytest.LogCaptureFixture):
     template = MagicMock(adapter="claude-code-cli")

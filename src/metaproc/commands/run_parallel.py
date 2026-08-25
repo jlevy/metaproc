@@ -33,6 +33,7 @@ from metaproc.dispatch.credential_pool import (
 from metaproc.dispatch.pool_dispatch import (
     PoolDispatchConfig,
     auth_forces_abort,
+    bind_pool_dispatch_scope,
     complete_slot,
 )
 from metaproc.dispatch.preflight import validate_guard_posture
@@ -287,6 +288,7 @@ def _build_pool_dispatch_template(
     run_context: str,
     out: Any,
     auth_policy: str | None = None,
+    run_dir: Path | None = None,
 ) -> Any | None:
     """Construct a :class:`PoolDispatchConfig` from CLI flags, or ``None``.
 
@@ -374,6 +376,14 @@ def _build_pool_dispatch_template(
         exclude=excluded_pairs,
         cross_quota_group=auth_cross_quota_group,
     )
+    try:
+        template = bind_pool_dispatch_scope(
+            template,
+            run_dir=run_dir if run_dir is not None else template.runs_dir / run_context,
+            step="",
+        )
+    except ValueError as exc:
+        raise CLIError(str(exc)) from exc
     priority_repr = list(strategy.labels) or "(any active)"
     out.progress(
         f"Auth pool: adapter={auth_account} backend={resolved_auth_backend} "
@@ -1183,6 +1193,7 @@ def run_parallel(
         run_context=variables.get("RUN_ID", ""),
         out=out,
         auth_policy=auth_policy,
+        run_dir=run_dir,
     )
     pool_dispatch_template = _filter_pool_dispatch_for_adapter(
         pool_dispatch_template,

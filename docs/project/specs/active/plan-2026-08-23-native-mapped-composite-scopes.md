@@ -740,11 +740,12 @@ remove dead plumbing.
 fallback-label retry, shared fan-out/scalar completion primitives, and
 classification-before-compaction ordering.
 The review-driven restack also contains path-binding failures within the affected step,
-normalizes the logical runs root once without following run-directory symlinks, makes
-retry-time pool exhaustion terminal, avoids nonblocking scalar quota scans, and records
-every adapter-mismatch fallback as an `auth_skipped` event and warning log.
+normalizes the logical runs root once without following run-directory symlinks, and uses
+one path-relative scope binder for `run-process` and direct or worker `run-parallel`. It
+also makes retry-time pool exhaustion terminal, avoids nonblocking scalar quota scans,
+and records every adapter-mismatch fallback as an `auth_skipped` event and warning log.
 Focused tests cover local scalar and fan-out paths plus the worker entrypoint.
-The consolidated local gate passes 4,308 tests with 8 skipped, plus formatting, Ruff,
+The consolidated local gate passes 4,310 tests with 8 skipped, plus formatting, Ruff,
 BasedPyright, Markdown links, public hygiene, browser checks, supply-chain checks,
 dependency audits, distribution build, and installed-wheel smoke.
 The exact-head GitHub matrix is repeated before pull request 35 is restacked.

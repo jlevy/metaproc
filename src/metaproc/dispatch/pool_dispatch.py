@@ -107,6 +107,28 @@ class PoolDispatchConfig:
         object.__setattr__(self, "runs_dir", Path(os.path.abspath(self.runs_dir)))
 
 
+def bind_pool_dispatch_scope(
+    config: PoolDispatchConfig,
+    *,
+    run_dir: Path,
+    step: str,
+) -> PoolDispatchConfig:
+    """Bind a dispatch to one logical run-tree scope without following symlinks."""
+    logical_run_dir = Path(os.path.abspath(run_dir))
+    try:
+        scope_id = logical_run_dir.relative_to(config.runs_dir).as_posix()
+    except ValueError as exc:
+        raise ValueError(
+            f"run directory {logical_run_dir} is outside credential pool runs "
+            f"directory {config.runs_dir}"
+        ) from exc
+    if scope_id == ".":
+        raise ValueError(
+            f"run directory must be below credential pool runs directory {config.runs_dir}"
+        )
+    return replace(config, run_id=scope_id, step=step)
+
+
 def acquire_slot(
     config: PoolDispatchConfig,
     *,

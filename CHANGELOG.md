@@ -104,6 +104,12 @@ development series.
 
 ### Changed
 
+- **Typed cloud authentication transport**: the internal `OrchestratorDispatchConfig`
+  constructor now accepts one `AuthPoolFlags` value instead of separate
+  authentication-policy fields.
+  This keeps the operator-to-orchestrator and orchestrator-to-worker boundaries on the
+  same transport shape.
+
 - **One credential-pool lifecycle for scalar and fan-out agents**: non-fan-out agent
   steps now lease the configured pool label, apply the same credential scope and scrub
   rules, classify failures, walk fallback labels on retry, and emit the same
@@ -111,6 +117,9 @@ development series.
   Nested leaves bind slots and event join keys to their path-relative child scope, so
   credential material stays inside the logical run tree even when a run directory is
   symlinked to another volume.
+  Composite fan-out slot paths and authentication-event `run_id` values now include that
+  child scope; consumers should treat the field as a run-tree path scope rather than a
+  root-only identifier.
   Blocking credential storage work runs through the run-owned executor.
   Scalar quota scans run only for the blocking `refuse` posture; admission failures
   before the first launch create no attempt, while exhaustion after a retry makes the

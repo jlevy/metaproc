@@ -217,8 +217,8 @@ class TestExhaustionAndRecovery:
         self, coord: SlotCoordinator, lease_kwargs: dict[str, Any]
     ) -> None:
         # Caller deliberately excluded both labels (e.g. inside a retry
-        # walk that already tried each). Returns None so the caller's
-        # The dispatch caller decides whether to fail or reschedule.
+        # walk that already tried each). The dispatch caller decides whether
+        # to fail or reschedule when no lease is returned.
         lease = coord.acquire_slot(
             adapter="claude-code-cli",
             attempt=0,

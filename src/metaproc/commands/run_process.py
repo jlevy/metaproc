@@ -72,6 +72,7 @@ from metaproc.dispatch.pool_dispatch import (
     acquire_slot,
     auth_forces_abort,
     auth_override_refusal_keys,
+    bind_pool_dispatch_scope,
     build_auth_lease_acquired,
     complete_slot,
     compose_slot_env,
@@ -1606,21 +1607,10 @@ def _bind_pool_dispatch(
 
     # Keep containment lexical. Run trees may intentionally be symlinked to larger
     # volumes, and following the final symlink would reject their logical RUNS_DIR scope.
-    runs_root = template.runs_dir
-    resolved_run_dir = Path(os.path.abspath(run_dir))
     try:
-        scope_id = resolved_run_dir.relative_to(runs_root).as_posix()
+        return bind_pool_dispatch_scope(template, run_dir=run_dir, step=step_id)
     except ValueError as exc:
-        raise CLIError(
-            f"step '{step_id}': run directory {resolved_run_dir} is outside credential "
-            f"pool runs directory {runs_root}"
-        ) from exc
-    if scope_id == ".":
-        raise CLIError(
-            f"step '{step_id}': run directory must be below credential pool runs "
-            f"directory {runs_root}"
-        )
-    return dataclasses.replace(template, run_id=scope_id, step=step_id)
+        raise CLIError(f"step '{step_id}': {exc}") from exc
 
 
 def _mark_scalar_prelaunch_failure_after_retry(state_dir: Path, *, error: str) -> None:
