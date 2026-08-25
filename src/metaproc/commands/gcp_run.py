@@ -46,6 +46,7 @@ from metaproc.cloud.gcp.gcp_run_dispatch import (
     _normalize_workspace_package_paths,
     build_gcp_run_job,
     dispatch_gcp_run,
+    validate_gcp_run_secret_service_account,
 )
 from metaproc.cloud.gcp.gcp_run_logs import build_log_url, tail_gcp_run_logs
 from metaproc.config.env_vars import MetaprocEnv
@@ -305,7 +306,7 @@ def run_command(
         help=(
             "K=REF Secret Manager binding. REF may be a full "
             "``projects/P/secrets/S/versions/V`` path, bare ``S`` (→ versions/latest), "
-            "or ``S:V``. Repeatable."
+            "or ``S:V``. Repeatable; requires METAPROC_GCP_SERVICE_ACCOUNT."
         ),
     ),
     detach: bool = typer.Option(
@@ -356,6 +357,13 @@ def run_command(
     extra_secrets = {
         key: _expand_secret_ref(val, config.project) for key, val in raw_secrets.items()
     }
+    try:
+        validate_gcp_run_secret_service_account(config, extra_secrets)
+    except ValueError as exc:
+        raise typer.BadParameter(
+            str(exc),
+            param_hint="METAPROC_GCP_SERVICE_ACCOUNT",
+        ) from exc
 
     if no_workspace and workspace_package:
         raise typer.BadParameter(

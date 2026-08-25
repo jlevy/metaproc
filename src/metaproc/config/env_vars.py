@@ -38,8 +38,8 @@ class MetaprocEnv(EnvEnum):
         "<your-gcp-project-id>",
     )
     METAPROC_GCP_SERVICE_ACCOUNT = tunable(
-        "Custom service account for Batch VMs. Required in practice — the default "
-        "compute SA lacks Secret Manager access, so Batch jobs fail silently without it.",
+        "Explicit service account for Batch VMs. Required for every job that binds "
+        "Secret Manager values; dispatch refuses secret-bearing jobs without it.",
         "<worker-sa>@<your-gcp-project-id>.iam.gserviceaccount.com",
     )
     METAPROC_GCP_CONTAINER_IMAGE = tunable(
