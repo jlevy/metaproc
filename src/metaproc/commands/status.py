@@ -82,6 +82,8 @@ def _load_plan_from_run(run_dir: Path) -> Plan | None:
             spec,
             params,
             process_path=spec_path,
+            adapter_override=_optional_config_string(config, "execution_profile"),
+            artifact_namespace=_optional_config_string(config, "artifact_namespace"),
             validate_required_inputs=False,
             validate_spec=False,
         )
@@ -92,6 +94,12 @@ def _load_plan_from_run(run_dir: Path) -> Plan | None:
             exc,
         )
         return None
+
+
+def _optional_config_string(config: dict[object, object], key: str) -> str | None:
+    """Return one non-empty immutable run-config identity field."""
+    value = config.get(key)
+    return value if isinstance(value, str) and value else None
 
 
 def _recover_resource_artifacts(run_dir: Path, status: RunStatus) -> None:
@@ -152,12 +160,24 @@ def _format_text(status: RunStatus, *, steps_only: bool = False, stale_only: boo
         # Legacy backstop: is_active is True but neither sub-flag fired
         # (e.g. RunStatus came from a reader without the sub-flags).
         status_label = "RUNNING"
+    elif status.process_execution_state == "running":
+        status_label = "RUNNING"
+    elif status.process_execution_state == "failed":
+        status_label = "FAILED"
+    elif status.process_execution_state == "cancelled":
+        status_label = "CANCELLED"
     else:
         status_label = "COMPLETE"
     if status.pending_retries > 0:
         status_label += f" ({status.pending_retries} retries pending)"
     lines.append(f"Status: {status_label}")
-    if status.process_state is not None:
+    terminal_execution = not status.is_active and status.process_execution_state in (
+        "failed",
+        "cancelled",
+    )
+    if status.process_error is not None and terminal_execution:
+        lines.append(f"Failure: {status.process_error}")
+    if status.process_state is not None and not terminal_execution:
         non_current = sum(
             1 for entry in status.steps if entry.state in (StepState.stale, StepState.invalidated)
         )

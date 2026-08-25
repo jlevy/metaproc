@@ -193,11 +193,14 @@ Full per-artifact schemas and lifecycles live in
 subset.
 
 **`run-config.yaml`** (`{run_dir}/.state/run-config.yaml`): written at run creation time
-with immutable run identity (process name, run_id, backend, variant, git SHA, creation
-timestamp). On resume, validated against current launch parameters; process identity and
-run directory must match.
-Resume requires the same authoritative run directory.
-Backend metadata does not replace that filesystem identity.
+with the process name, run ID, resolved variables, creation-time backend and variant,
+git SHA, and timestamp.
+On resume, the process identity, run directory, and resolved variables must match.
+The two canonical cloud Filestore mount roots normalize to one identity; workstation
+paths do not. No other variable changes are accepted.
+Cross-topology resume (for example, hybrid to full cloud) remains allowed because the
+backend is not part of resume identity and both topologies share the authoritative
+filesystem. Authentication and concurrency changes remain explicit timeline events.
 
 **`orchestrator-lease.yaml`** (`{run_dir}/.state/orchestrator-lease.yaml`): prevents two
 orchestrators from walking the same DAG at once.
@@ -445,9 +448,8 @@ Unified container entrypoint for worker containers:
 `num_workers`, `worker_machine_type`, `max_concurrency`, `initial_concurrency`,
 `spot_workers`, `variant`, `adapter_config`, `skip_steps`, `from_step`, `only_step`,
 `force`, `continue_on_error`, `orchestrator_machine_type`, `max_duration_s` (default
-8h), `poll_interval`, plus auth-pool passthrough fields (`auth_account`, `auth_backend`,
-`auth_fallback_policy`, `auth_include_labels`, `auth_exclude_labels`,
-`auth_cross_quota_group`).
+8h), `poll_interval`, and one `auth_flags` (`AuthPoolFlags`) payload for the complete
+authentication-pool transport cohort.
 
 ### 3.6 Orchestrator Entrypoint (`orchestrator_entrypoint.py`)
 
@@ -811,16 +813,18 @@ for operator recipes and this document for the full design.
 
 ### Potential Improvements
 
-- Auth-pool dispatch passthrough adds ~6 fields to both `WorkerDispatchConfig` and
-  `OrchestratorDispatchConfig`. A shared `AuthPoolFlags` payload (already used in
-  `WorkerDispatchConfig`) could replace the individual fields in
-  `OrchestratorDispatchConfig` for consistency.
 - `run_cloud_preflight()` validates env-var presence but does not probe GCP API
   reachability (e.g., can the Batch API be called?
   Is the Filestore server resolvable?). Adding a lightweight API probe could catch
   misconfigured networks before job submission.
 
 ## Revision History
+
+### rev10 (2026-08-24)
+
+Replaced duplicated authentication-pool fields on `OrchestratorDispatchConfig` with the
+shared `AuthPoolFlags` payload already used by worker dispatch, and removed the
+completed consolidation item from Potential Improvements.
 
 ### rev9 (2026-08-24)
 

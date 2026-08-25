@@ -7,6 +7,7 @@ Import from this module instead of hardcoding path strings.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from pathlib import Path
 
 from ruamel.yaml import YAMLError
@@ -27,7 +28,7 @@ is safe to use as a path component on every supported filesystem.
 
 def is_safe_item_key(key: str) -> bool:
     """Return whether *key* is safe to use as a filesystem path component."""
-    return bool(ITEM_KEY_RE.fullmatch(key))
+    return key not in {".", ".."} and bool(ITEM_KEY_RE.fullmatch(key))
 
 
 # ── Runtime directories (under each item or run dir) ────────────
@@ -171,6 +172,68 @@ def run_state_dir(run_dir: Path) -> Path:
 def run_logs_dir(run_dir: Path) -> Path:
     """Return ``<run_dir>/.logs/`` (run-level engine logs branch)."""
     return run_dir / LOGS_DIR
+
+
+def iter_composite_run_dirs(run_dir: Path) -> Iterable[Path]:
+    """Yield a run root and nested composite scope roots.
+
+    Child scopes have the runtime-owned shape ``<scope>/<step>[/<item>]`` and
+    contain their own ``.state`` branch. Traversing only those two structural
+    levels avoids scanning arbitrary artifact trees while supporting recursive
+    composites at any depth. Resolved paths stay inside the requested run tree
+    and are deduplicated so symlinks cannot escape or repeat a scope.
+    """
+    yield run_dir
+    if not run_dir.is_dir():
+        return
+    try:
+        resolved_root = run_dir.resolve()
+    except OSError:
+        return
+    seen = {resolved_root}
+
+    def _children(parent: Path) -> list[Path]:
+        try:
+            candidates = sorted(parent.iterdir())
+        except OSError:
+            return []
+        children: list[Path] = []
+        for child in candidates:
+            if not child.is_dir():
+                continue
+            name = child.name
+            if name in {STATE_DIR, LOGS_DIR} or name.startswith((".", "worker-", "slot-")):
+                continue
+            children.append(child)
+        return children
+
+    def _claim_scope(candidate: Path) -> Path | None:
+        if not (candidate / STATE_DIR).is_dir():
+            return None
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            return None
+        if not resolved.is_relative_to(resolved_root) or resolved in seen:
+            return None
+        seen.add(resolved)
+        return candidate
+
+    def _walk_scope(scope: Path) -> Iterable[Path]:
+        for step_dir in _children(scope):
+            scalar_scope = _claim_scope(step_dir)
+            if scalar_scope is not None:
+                yield scalar_scope
+                yield from _walk_scope(scalar_scope)
+                continue
+            for item_dir in _children(step_dir):
+                mapped_scope = _claim_scope(item_dir)
+                if mapped_scope is None:
+                    continue
+                yield mapped_scope
+                yield from _walk_scope(mapped_scope)
+
+    yield from _walk_scope(run_dir)
 
 
 def run_config_file(run_dir: Path) -> Path:

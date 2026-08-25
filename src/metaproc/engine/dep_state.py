@@ -71,8 +71,17 @@ def fingerprint_step(step: ResolvedStep) -> str:
     fingerprint still participates so the step id, I/O, and adapter
     changes are still detected; only the content-edit sensitivity is lost
     for that one entry.
+
+    Runtime-discovered fan-out items and their filtered count are excluded.
+    The same authored step may be fingerprinted before and after a generated
+    roster exists, and discovery results are execution state rather than part
+    of the step definition.
     """
-    payload = step.model_dump(mode="json", exclude_none=True)
+    payload = step.model_dump(
+        mode="json",
+        exclude_none=True,
+        exclude={"fan_out": {"items", "filtered_count"}},
+    )
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     hasher = hashlib.sha256(encoded)
     for path_str in _referenced_runbook_paths(step):

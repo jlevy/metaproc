@@ -338,10 +338,45 @@ class TestCheckCompletion:
         assert result.passed is False
         assert result.exit_code == 1
 
+    @pytest.mark.parametrize("condition", ["completed", "no-failures"])
+    def test_process_failure_fails_even_without_item_failures(self, condition: str) -> None:
+        status = self._make_run_status(completed=0, failed=0, running=0, pending=0)
+        status = status.model_copy(
+            update={
+                "process_execution_state": "failed",
+                "process_error": "intake: RuntimeError: source attestation mismatch",
+            }
+        )
+
+        result = check_completion(status, condition)
+
+        assert result.passed is False
+        assert result.exit_code == 1
+        assert "source attestation mismatch" in result.reason
+
+    def test_active_resume_does_not_reuse_a_carried_terminal_verdict(self) -> None:
+        status = self._make_run_status(completed=0, failed=0, running=0, pending=0)
+        status = status.model_copy(
+            update={
+                "is_active": True,
+                "orchestrator_alive": True,
+                "process_execution_state": "failed",
+                "process_error": "prior attempt failed",
+            }
+        )
+
+        result = check_completion(status, "completed")
+
+        assert result.passed is False
+        assert result.exit_code == 2
+        assert result.reason == "Run still in progress"
+
     def test_unknown_condition_raises(self) -> None:
-        status = self._make_run_status(completed=10, failed=0, running=0, pending=0)
-        with pytest.raises(ValueError, match="Unknown check condition"):
-            check_completion(status, "bogus")
+        clean = self._make_run_status(completed=10, failed=0, running=0, pending=0)
+        failed = clean.model_copy(update={"process_execution_state": "failed"})
+        for status in (clean, failed):
+            with pytest.raises(ValueError, match="Unknown check condition"):
+                check_completion(status, "bogus")
 
 
 # ── scan_run_status (integration) ────────────────────────────────
@@ -484,6 +519,38 @@ class TestScanRunStatus:
 
 
 class TestWaitForCompletion:
+    def test_live_resume_outlasts_a_carried_terminal_projection(self, tmp_path: Path) -> None:
+        active = RunStatus(
+            run_dir=tmp_path,
+            is_active=True,
+            orchestrator_alive=True,
+            process_execution_state="failed",
+            process_error="prior attempt failed",
+            totals=ProgressCounts(),
+        )
+        terminal = active.model_copy(
+            update={
+                "is_active": False,
+                "orchestrator_alive": False,
+                "process_execution_state": "completed",
+                "process_error": None,
+            }
+        )
+
+        with patch(
+            "metaproc.engine.run_status.scan_run_status",
+            side_effect=[active, terminal],
+        ) as scan:
+            status, exit_code = wait_for_completion(
+                tmp_path,
+                interval=0,
+                include_system=False,
+            )
+
+        assert scan.call_count == 2
+        assert status is terminal
+        assert exit_code == 0
+
     def test_already_terminal(self, tmp_path: Path) -> None:
         """If all items are already done, returns immediately."""
         run_dir = tmp_path / "my-run"
@@ -505,6 +572,26 @@ class TestWaitForCompletion:
         status, exit_code = wait_for_completion(run_dir, interval=0.1, include_system=False)
         assert exit_code == 1
         assert status.totals.failed == 1
+
+    def test_terminal_process_failure_without_items(self, tmp_path: Path) -> None:
+        run_dir = tmp_path / "my-run"
+        state_dir = run_dir / STATE_DIR
+        state_dir.mkdir(parents=True)
+        (state_dir / "process-status.yaml").write_text(
+            "process: demo\n"
+            "state: failed\n"
+            "steps:\n"
+            "  intake:\n"
+            "    state: failed\n"
+            "    error: 'RuntimeError: source attestation mismatch'\n",
+            encoding="utf-8",
+        )
+
+        status, exit_code = wait_for_completion(run_dir, interval=0.1, include_system=False)
+
+        assert exit_code == 1
+        assert status.process_execution_state == "failed"
+        assert status.process_error == "intake: RuntimeError: source attestation mismatch"
 
     def test_timeout(self, tmp_path: Path) -> None:
         """If items are still running and timeout expires, exit code 2."""
@@ -660,6 +747,65 @@ class TestRunStatusSteps:
         # No state on disk → both missing → process is current (no non-current steps).
         assert all(e.state == StepState.missing for e in result.steps)
         assert result.process_state == "current"
+
+    def test_failed_process_status_annotates_missing_step(self, tmp_path: Path) -> None:
+        runbook = tmp_path / "intake.md"
+        runbook.write_text("v1")
+        plan = Plan(process="demo", steps=[_agent_step("intake", runbook)])
+        run_dir = tmp_path / "run"
+        state_dir = run_dir / STATE_DIR
+        state_dir.mkdir(parents=True)
+        (state_dir / "process-status.yaml").write_text(
+            "process: demo\n"
+            "state: failed\n"
+            "steps:\n"
+            "  intake:\n"
+            "    state: failed\n"
+            "    error: 'RuntimeError: source attestation mismatch'\n",
+            encoding="utf-8",
+        )
+
+        result = scan_run_status(run_dir, include_system=False, plan=plan)
+
+        assert result.process_execution_state == "failed"
+        assert result.process_error == "intake: RuntimeError: source attestation mismatch"
+        assert result.steps[0].state == StepState.missing
+        assert result.steps[0].reason == (
+            "last execution failed: RuntimeError: source attestation mismatch"
+        )
+
+    def test_completed_partial_run_does_not_promote_a_carried_failure(self, tmp_path: Path) -> None:
+        prior_runbook = tmp_path / "prior.md"
+        prior_runbook.write_text("v1")
+        active_runbook = tmp_path / "active.md"
+        active_runbook.write_text("v1")
+        plan = Plan(
+            process="demo",
+            steps=[
+                _agent_step("prior", prior_runbook),
+                _agent_step("active", active_runbook),
+            ],
+        )
+        run_dir = tmp_path / "run"
+        state_dir = run_dir / STATE_DIR
+        state_dir.mkdir(parents=True)
+        (state_dir / "process-status.yaml").write_text(
+            "process: demo\n"
+            "state: completed\n"
+            "steps:\n"
+            "  prior:\n"
+            "    state: failed\n"
+            "    error: prior failure\n"
+            "  active:\n"
+            "    state: completed\n",
+            encoding="utf-8",
+        )
+
+        result = scan_run_status(run_dir, include_system=False, plan=plan)
+
+        assert result.process_execution_state == "completed"
+        assert result.process_error is None
+        assert result.steps[0].reason == "last execution failed: prior failure"
 
     def test_process_state_stale_when_any_step_stale(self, tmp_path: Path) -> None:
 

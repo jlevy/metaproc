@@ -6,8 +6,8 @@ import logging
 
 import pytest
 
-from metaproc.engine.pathing import _KEY_DEFAULT_WARNED, resolve_item_key
-from metaproc.models.authored import ForEach
+from metaproc.engine.pathing import _KEY_DEFAULT_WARNED, compute_task_state_dir, resolve_item_key
+from metaproc.models.authored import ForEach, ProcessStep
 from metaproc.paths import ITEM_KEY_RE, is_safe_item_key
 
 
@@ -44,7 +44,7 @@ class TestItemKeyRegex:
             assert is_safe_item_key(v), v
 
     def test_unsafe(self):
-        for v in ("a/b", "a b", "a:b", "", "a/", "a\\b"):
+        for v in ("a/b", "a b", "a:b", "", ".", "..", "a/", "a\\b"):
             assert not is_safe_item_key(v), v
 
     def test_regex_pattern(self):
@@ -89,3 +89,20 @@ class TestResolveItemKey:
         fe = ForEach(over="deps.x", bind="ticker", key="{{ticker}}")
         with pytest.raises(ValueError, match="unsafe path component"):
             resolve_item_key(fe, {"ticker": "bad/value"}, "step1")
+
+    def test_dot_only_key_cannot_escape_the_task_parent(self, tmp_path):
+        step = ProcessStep(
+            id="predict",
+            mode="code",
+            command="true",
+            for_each=ForEach(
+                over="deps.tickers",
+                bind="ticker",
+                bind_fields=["ticker"],
+                key="{{ticker}}",
+            ),
+        )
+
+        for item_key in (".", ".."):
+            with pytest.raises(ValueError, match="unsafe path component"):
+                compute_task_state_dir(tmp_path / "run", step, {"ticker": item_key})

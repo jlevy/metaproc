@@ -292,6 +292,9 @@ run’s policy decides the overall verdict.
 With step-scoped edges, one failed item blocks the entire downstream graph.
 A framework whose workflows routinely tolerate partial batches must propagate failure at
 the granularity of the edges, or authors will route around it.
+Tolerance belongs to the edge that declares it: if the same failure also reaches a
+consumer through a success-requiring edge, that edge still blocks, while an independent
+edge that has already succeeded does not cancel the tolerant one.
 
 ## Resources: Readiness Versus Admission
 
@@ -713,13 +716,14 @@ original unit of execution and state, and one local orchestrator was the only wr
   chains, still acquire a step boundary that their data may not require.
 
 - **Mode decides more than invocation (no test; a structural deviation).** The model’s
-  pivot is the task, but the runtime forks on step *mode* and each branch owns its own
-  execution path. Mapping and governance therefore attach to modes rather than to tasks:
-  fan-out was implemented for agent steps and, until recently, existed nowhere else, and
-  `mode: composite` still cannot fan out, which forces a consumer wanting a child spec
-  mapped over a roster to express it as a code handler launching one child run per item.
-  Neither gap is a policy about what those modes mean.
-  See [P8](metaproc-design-rev3-proposals.md) for the proposed decomposition.
+  pivot is the task, but the runtime still forks on step *mode* and each branch owns
+  substantial execution policy.
+  Agent, code, and composite steps now share neutral item discovery and `run_fan_out`; a
+  mapped composite invokes each child scope in-process, so consumers no longer need a
+  code handler that launches child Metaproc commands.
+  Admission, retry, lifecycle, and placement are not yet one mode-neutral invoker
+  contract, and manual steps remain scalar.
+  See [P8](metaproc-design-rev3-proposals.md) for the remaining decomposition.
 
 - **Dependency clauses (test 5, partially).** Eligible code chains expose `same_key`
   mapping. Collected inputs expose `collect_all` with `succeeded` or `finished`
@@ -739,11 +743,13 @@ original unit of execution and state, and one local orchestrator was the only wr
   Sufficient for one local writer; not for distributed retry.
 
 - **Universal admission (test 7, partially).** Scalar steps, meaning those with no
-  `for_each`, now take a slot in the same host-wide namespace the fan-out pools use, so
+  `for_each`, take a slot in the same host-wide namespace the fan-out pools use, so
   independent orchestrators on one machine no longer launch over each other unseen.
-  The gate is a slot count on the `local` backend only, without the memory backpressure
-  or process-tree charging the test asks for, and it is deliberately best-effort: an
-  unreachable gate lets the launch proceed rather than failing the run.
+  Local `run-process` also owns one adaptive RunPool for scalar agent leaves in its
+  initial single-profile topology, including leaves reached through mapped composites.
+  The pool adds memory-pressure response and process-tree supervision across those
+  scopes. The outer host gate remains count-based and deliberately best-effort; command
+  subprocesses and multi-profile runs do not yet share this pool.
 
 - **Task-scoped operator surface (test 3, partially).** Force and resume selection are
   step-scoped (`--force`, `--from`, `--only`); there is no per-item force, and

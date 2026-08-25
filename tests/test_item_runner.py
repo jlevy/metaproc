@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable
 
+import pytest
+
 from metaproc.engine.item_runner import (
     StepInvoker,
     effective_concurrency,
@@ -85,6 +87,21 @@ class TestRunFanOut:
         )
         assert result == (2, 3)
         assert sorted(seen) == ["a", "b", "c"]
+
+    def test_an_exception_waits_for_siblings_before_it_propagates(self) -> None:
+        completed: list[str] = []
+
+        async def invoke(step_id: str, variables: dict[str, str]) -> bool:
+            if variables["k"] == "b":
+                raise OSError("injected item failure")
+            await asyncio.sleep(0.01)
+            completed.append(variables["k"])
+            return True
+
+        with pytest.raises(OSError, match="injected item failure"):
+            asyncio.run(run_fan_out(item_contexts=ITEMS, variables={}, invoke=invoke, step_id="s"))
+
+        assert sorted(completed) == ["a", "c"]
 
     def test_concurrency_is_bounded(self) -> None:
         in_flight = 0

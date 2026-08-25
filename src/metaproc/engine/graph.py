@@ -137,24 +137,25 @@ def propagate_failure(
 def _requires_only_finished(
     step: ResolvedStep, failed_step_id: str, steps: Sequence[ResolvedStep]
 ) -> bool:
-    """Whether *step* tolerates *failed_step_id* failing, per a collected edge.
+    """Whether every affected direct edge tolerates *failed_step_id* failing.
 
     The consumer declares `require: finished` against the step it collects, but the
     failure can land anywhere upstream of that step: an item dying at stage two is why
     stage three has partial coverage, and the consumer asked for exactly that. So the
     edge tolerates a failure at the collected step itself or anywhere feeding it.
 
-    It does not tolerate failures outside that subtree. Those reach the consumer through
-    a different edge, which said nothing about accepting terminal outcomes.
+    A consumer can also depend on another step through a success-requiring edge. When
+    both paths descend from the failure, the tolerant collection must not erase that
+    separate requirement.
     """
-    for spec in step.inputs.values():
-        if spec.require != "finished" or not spec.collect:
-            continue
-        if spec.collect == failed_step_id:
-            return True
-        if spec.collect in downstream(steps, failed_step_id):
-            return True
-    return False
+    affected_steps = {failed_step_id, *downstream(steps, failed_step_id)}
+    affected_needs = set(step.needs) & affected_steps
+    finished_collections = {
+        spec.collect
+        for spec in step.inputs.values()
+        if spec.require == "finished" and spec.collect is not None
+    }
+    return bool(affected_needs) and affected_needs <= finished_collections
 
 
 def topo_sort(

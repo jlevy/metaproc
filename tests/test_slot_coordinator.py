@@ -649,6 +649,30 @@ class TestTeardownOk:
 
 
 class TestTeardownFailures:
+    def test_adapter_resolution_failure_still_releases_ownership(
+        self,
+        tmp_path,
+        coord,
+        monkeypatch,
+    ):
+        lease = coord.acquire_slot(
+            "stub-cli", runs_dir=tmp_path, run_id="r", step="s", item="i", attempt=0
+        )
+        assert lease is not None
+        assert coord.active_counter.get(lease.adapter, lease.label) == 1
+        assert lease.slot_dir.exists()
+
+        def fail_resolution(_adapter: str):
+            raise RuntimeError("simulated adapter resolution failure")
+
+        monkeypatch.setattr(coord, "_resolve_adapter", fail_resolution)
+
+        with pytest.raises(RuntimeError, match="simulated adapter resolution"):
+            coord.teardown(lease, failure=None)
+
+        assert coord.active_counter.get(lease.adapter, lease.label) == 0
+        assert not lease.slot_dir.exists()
+
     def test_cooling_marks_label_and_releases(self, tmp_path, coord, pool):
         lease = coord.acquire_slot(
             "stub-cli", runs_dir=tmp_path, run_id="r", step="s", item="i", attempt=0

@@ -897,19 +897,46 @@ hydration). Labels are operator-chosen (`laptop`, `home`, `work`, …) and must 
 
 ### §N.3 Per-slot credential isolation
 
-Pool dispatch materializes each in-flight step’s credential into a **per-item slot**:
+Pool dispatch materializes each in-flight agent attempt’s credential into a private
+slot:
 
 ```
-<RUNS_DIR>/<run_id>/.auth/<step>/<item>/a<attempt>/
+<RUNS_DIR>/<run_id>/.state/auth/<step>/<item>/a<attempt>/
 ```
 
-and scopes the CLI to that slot via its native config env var:
+Fan-out uses the mapped item key for `<item>`; a scalar agent uses its step key.
+`<run_id>` is the path of the current scope relative to `<RUNS_DIR>`, not the logical
+task identity that also contains the process name.
+Nested processes therefore bind slots to their child scope, and same-named steps in
+sibling scopes cannot collide or write credentials outside the run tree.
+Both paths use `PoolDispatchConfig`, `SlotCoordinator`, the adapter’s credential scope
+and scrub rules, and the shared completion primitive in `pool_dispatch.py`. They scope
+the CLI to that slot through its native configuration environment variable:
 
 - Claude Code → `CLAUDE_CONFIG_DIR=<slot_dir>`, with `<slot_dir>/.credentials.json` mode
   0600\.
 - Codex → `CODEX_HOME=<slot_dir>/.codex`, with `auth.json` plus a minimal `config.toml`
   pinning `cli_auth_credentials_store = "file"` and `forced_login_method = "chatgpt"` so
   the slot credential can’t be silently overridden by a stray `OPENAI_API_KEY`.
+
+Scalar acquisition and teardown use the run-owned executor because local or GCP-backed
+credential storage may block.
+A scalar leaf first receives run and host admission, then acquires its credential, and
+only then writes durable attempt state.
+It cannot hold a Vehicle B label lock while queued behind the run semaphore.
+The scalar path uses the same quota preflight primitive as fan-out, with a projected
+size of one, only when the operator selects the blocking `refuse` posture.
+The default `warn` posture remains a run-level fan-out check; scalar leaves skip its
+per-step runs-tree scan because the verdict cannot block launch.
+Admission or quota refusal before the first launch creates no durable attempt.
+If a retry has already finalized its attempt and the next credential acquisition fails,
+the existing task projection becomes `failed` without inventing another attempt.
+
+A pool applies only to steps whose adapter matches the configured pool adapter.
+A different adapter uses its ambient authentication.
+Local scalar and fan-out paths and the cloud-worker entrypoint all emit an explicit CLI
+warning, a warning log record, and an `auth_skipped` runpool event naming the step and
+configured adapters rather than silently skipping the pool.
 
 Higher-precedence OAuth vars (`ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`,
 `CLAUDE_CODE_APIKEY_HELPER`, `CODEX_CREDS_JSON`) are scrubbed from the subprocess env.
@@ -945,24 +972,24 @@ coordinator’s walk when a label’s lease fails on the first attempt:
 At most one retry per step across policies (same-provider + cross-provider are not
 additive).
 
-### §N.5 Retry-later policy
+### §N.5 Deferred recovery primitives
 
-`--auth-retry-later {fail-fast,wait,signal}` runs after fallback exhausts:
+Metaproc contains an enum, coordinator wait helper, checkpoint format, and resume daemon
+from an earlier recovery proposal.
+`run-process` and `run-parallel` do not expose that proposal as CLI policy, and no
+current scheduler path writes its checkpoints or calls its wait helper.
 
-- `fail-fast` — raise the classifier’s error up to the dispatch.
-  Default for non-deadline runs.
-- `wait` — `SlotCoordinator.wait_for_pool_recovery` sleeps to
-  `min(cooling_until_ts, now+poll_interval)` plus 30-120s jitter, re-probes on wake.
-  Bounded by `--auth-retry-max-wait` (default 6h).
-- `signal` — write a `retry_later.yaml` checkpoint, exit 78. The
-  `metaproc resume-daemon` (§N.6) picks it up.
-
-Cloud Batch dispatches with walltime caps should use `signal`; long-lived laptop
-dispatches can use `wait`.
+Current fan-out code performs an internal cooling-aware reschedule; scalar exhaustion
+fails immediately. These paths are intentionally not being unified before released
+behavior or a measured downstream smoke demonstrates a concrete recovery requirement.
+Bead `mp-tibt` owns the decision to remove the dormant machinery or introduce the
+smallest proved replacement.
 
 ### §N.6 Resume daemon
 
-`metaproc resume-daemon --runs-dir <dir> [--poll-interval-s 60] [--once]`
+`metaproc resume-daemon --runs-dir <dir> [--poll-interval-s 60] [--once]` is installed,
+but current dispatch paths do not produce the checkpoint it consumes.
+It is not a live recovery path for new runs.
 
 Long-lived polling loop.
 Scans `<runs_dir>/*/*/.state/retry_later.yaml`, re-dispatches
@@ -982,8 +1009,8 @@ Sums each adapter’s eligible-label `query_quota_usage` against
 
 - `off` — no check.
 - `warn` — logs a `quota_warn` event on near-empty, always returns `go`.
-- `refuse` — returns `refuse` when projected > 80% of pool remaining; caller consults
-  `RetryLaterPolicy` (exit 64 fail-fast, wait, or exit 78 signal).
+- `refuse` — returns `refuse` when projected > 80% of pool remaining; the caller stops
+  before launching work.
 
 Defaults to `warn`; deadline-run playbooks set `refuse`.
 
@@ -1270,14 +1297,16 @@ The Phase 6 work closed the gap: cloud workers now construct the same
 The chain is
 `run-process --cloud --auth-* → OrchestratorDispatchConfig → orchestrator entrypoint → inner run-process --backend gcp-worker --auth-* → worker_dispatch propagates METAPROC_AUTH_* → worker entrypoint → inner run-parallel --backend local --auth-*`.
 Each layer calls `AuthPoolFlags.from_env()` / `to_cli_flags()` / `to_env_vars()` so the
-five env-var names and CSV encoding are sourced from a single typed dataclass.
+authentication env-var names and encodings are sourced from a single typed dataclass.
+Both worker and orchestrator dispatch carry that dataclass directly.
 
 #### AuthPoolFlags — single source of truth (Phase 10)
 
 `src/metaproc/dispatch/auth_pool_flags.py` defines the `AuthPoolFlags` frozen dataclass
-with the five fields and ClassVar env- var names sourced from
-`MetaprocEnv.<member>.name`. Every dispatch-layer site that previously hardcoded
-`"METAPROC_AUTH_*"` strings now goes through this dataclass:
+for the account, backend, fallback and selection policies, label filters, and
+cross-quota-group posture.
+Its `ClassVar` env-var names come from `MetaprocEnv.<member>.name`. Every dispatch-layer
+site that previously hardcoded `"METAPROC_AUTH_*"` strings goes through this dataclass:
 
 ```
 AuthPoolFlags(...).to_env_vars()   # for Batch job env_vars dicts
@@ -1404,6 +1433,25 @@ The pattern is now well-trodden: any new env-var cohort that travels together ge
 typed module mirroring this shape.
 The `setup_token_command` capability seam (Phase 7.3) follows the same principle at the
 Protocol level.
+
+### §N.17 Cancellation-safe scalar lease handoff
+
+Scalar credential acquisition runs in the run-owned executor because local and GCP
+credential backends can block.
+Cancellation cannot stop a worker thread that is already inside
+`SlotCoordinator.acquire_slot`, so the orchestration task retains its host and run
+admission while it drains that worker.
+If acquisition returns a lease after cancellation, the same executor calls
+`complete_slot` before the task releases either admission boundary.
+The cancellation path emits both `auth_lease_acquired` and `auth_outcome`; a
+cancelled-before-launch outcome uses an `unknown` classification because no adapter
+process ran and there is no transport outcome to classify.
+Cancellation during completion drains `complete_slot` and emits its returned outcome
+before propagating cancellation.
+
+This is an ownership handoff, not a second credential-pool protocol.
+Fan-out and scalar paths continue to use the same `SlotCoordinator`, `SlotLease`,
+materialization, and teardown primitives.
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

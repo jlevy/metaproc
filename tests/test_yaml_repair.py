@@ -7,6 +7,7 @@ import inspect
 from pathlib import Path
 from types import ModuleType
 
+import pytest
 from typer.testing import CliRunner
 
 from metaproc.cli import app
@@ -241,7 +242,7 @@ class TestWhichExecutorsRewriteAgentOutput:
     """
 
     def test_a_code_handlers_unparsable_output_is_left_alone_and_fails(
-        self, tmp_path: Path
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The rule as an operator meets it: the item fails, the document is untouched.
 
@@ -249,6 +250,7 @@ class TestWhichExecutorsRewriteAgentOutput:
         Re-adding either pass to the code branch flips both halves at once — the run
         goes green and the file comes back quoted.
         """
+        monkeypatch.setenv("METAPROC_PREFLIGHT_MIN_DISK_GB", "0.1")
         source_path = tmp_path / "items.md"
         source_path.write_text(
             "---\nprogress:\n  process: code-branch\n  items:\n    - ticker: AAPL\n---\n"

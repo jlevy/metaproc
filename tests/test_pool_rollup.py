@@ -20,7 +20,7 @@ import pytest
 
 from metaproc.commands.pool import _build_rollup, _collect_sub_pools, _render_rollup
 from metaproc.io import to_yaml_string
-from metaproc.paths import runpool_step_events, step_state_dir
+from metaproc.paths import run_state_dir, runpool_events, runpool_step_events, step_state_dir
 
 
 def _write_status(run_dir: Path, step_id: str, **fields):
@@ -71,6 +71,14 @@ def _write_status(run_dir: Path, step_id: str, **fields):
     if "concurrency_plan" in fields:
         base["concurrency_plan"] = fields["concurrency_plan"]
     (state / "runpool-status.yaml").write_text(to_yaml_string(base))
+
+
+def _write_root_status(run_dir: Path, **fields: Any) -> None:
+    _write_status(run_dir, "temporary-root", **fields)
+    temporary = step_state_dir(run_dir, "temporary-root") / "runpool-status.yaml"
+    root = run_state_dir(run_dir) / "runpool-status.yaml"
+    root.parent.mkdir(parents=True, exist_ok=True)
+    temporary.replace(root)
 
 
 def _concurrency_plan() -> dict[str, Any]:
@@ -164,6 +172,28 @@ class TestCollectSubPools:
         assert len(entries) == 1
         assert entries[0]["status"] is None
         assert "error" in entries[0]
+
+    def test_includes_run_owned_root_pool_and_events(self, tmp_path: Path) -> None:
+        _write_root_status(tmp_path, completed_count=1)
+        root_events = runpool_events(tmp_path)
+        root_events.parent.mkdir(parents=True, exist_ok=True)
+        root_events.write_text(
+            json.dumps(
+                {
+                    "event": "auth_outcome",
+                    "label": "ambient",
+                    "classification": "ok",
+                    "retry_count": 0,
+                }
+            )
+            + "\n"
+        )
+
+        entries = _collect_sub_pools(tmp_path, with_auth_outcomes=True)
+
+        assert [entry["step_dir"] for entry in entries] == ["."]
+        assert entries[0]["status"]["completed_count"] == 1
+        assert len(entries[0]["auth_outcomes"]) == 1
 
 
 class TestBuildRollup:

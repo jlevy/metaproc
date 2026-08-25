@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -21,20 +21,15 @@ from metaproc.io import (
     iter_jsonl_objects,
     resolve_existing_artifact,
 )
-from metaproc.paths import LOGS_DIR, POOL_STATUS_FILE, SCALE_OVERRIDE_FILE, STATE_DIR
+from metaproc.paths import POOL_STATUS_FILE, SCALE_OVERRIDE_FILE, STATE_DIR
 from metaproc.runpool.host_admission import (
     DEFAULT_HOST_ADMISSION_NAMESPACE,
     list_host_admission_slots,
 )
 from metaproc.runpool.status import ScaleOverride, is_pool_alive, read_status, write_scale_override
 
-_COMPOSITE_WALK_MAX_DEPTH = 4
-"""Cap how deep `_iter_composite_run_dirs` recurses.
-
-Composite nesting in production is one or two levels (e.g. a dispatch parent
-runs a child process, which in turn fans out per-item). Four levels gives
-headroom for nested composites without scanning unrelated subtrees.
-"""
+_iter_composite_run_dirs = paths_mod.iter_composite_run_dirs
+"""Backward-compatible private alias for the shared scope discovery helper."""
 
 pool_app = typer.Typer(
     name="pool",
@@ -792,69 +787,6 @@ def _resolve_event_path(*, is_v2: bool, v2_path: Path, legacy_path: Path) -> Pat
     return resolve_existing_artifact(legacy_path)
 
 
-def _iter_composite_run_dirs(run_dir: Path) -> Iterable[Path]:
-    """Yield ``run_dir`` and every composite child run directory beneath it.
-
-    A composite child run directory is any nested directory that owns its own
-    ``.state/`` branch. A dispatch parent that fans out to a child process is
-    the canonical case: the parent has a ``.state/`` and
-    a ``.logs/`` at the top, and each child step that runs through a
-    sub-process gets ``<parent>/<step_id>/.state/`` of its own.
-
-    The walk:
-
-    - always yields ``run_dir`` first (even if it has no ``.state/``), so
-      callers preserve the existing single-run path when there is no
-      composite nesting;
-    - is depth-capped at :data:`_COMPOSITE_WALK_MAX_DEPTH` to avoid scanning
-      unbounded subtrees;
-    - never descends into ``.state/``, ``.logs/``, or ``worker-*`` /
-      ``slot-*`` directories (those are runpool internals, not nested runs);
-    - dedupes by resolved path so symlinked composite mounts don't double-up.
-
-    This shared discovery helper keeps pool events, pool health, and pool rollup
-    on one source of truth.
-    """
-    yield run_dir
-    if not run_dir.is_dir():
-        return
-    seen: set[Path] = set()
-    try:
-        seen.add(run_dir.resolve())
-    except OSError:
-        return
-
-    def _walk(parent: Path, depth: int) -> Iterable[Path]:
-        if depth > _COMPOSITE_WALK_MAX_DEPTH:
-            return
-        try:
-            children = sorted(parent.iterdir())
-        except OSError:
-            return
-        for child in children:
-            if not child.is_dir():
-                continue
-            name = child.name
-            if name in {STATE_DIR, LOGS_DIR}:
-                continue
-            if name.startswith(("worker-", "slot-")):
-                continue
-            if name.startswith("."):
-                continue
-            try:
-                resolved = child.resolve()
-            except OSError:
-                continue
-            if resolved in seen:
-                continue
-            seen.add(resolved)
-            if (child / STATE_DIR).is_dir():
-                yield child
-            yield from _walk(child, depth + 1)
-
-    yield from _walk(run_dir, depth=1)
-
-
 def _composite_pool_status_files(run_dir: Path) -> list[dict[str, Any]]:
     """Return one entry per ``runpool-status.yaml`` discovered under ``run_dir``.
 
@@ -1195,7 +1127,7 @@ def _render_concurrency_timeline(timeline: dict[str, Any], *, out: Any) -> None:
 def pool_rollup(
     run_dir: Path = typer.Argument(
         ...,
-        help="Run / process directory (walks down to find every sub-step pool)",
+        help="Run / process directory (walks down to find every run-owned and step pool)",
     ),
     as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
     auth_outcomes: bool = typer.Option(
@@ -1204,7 +1136,7 @@ def pool_rollup(
         help="Also aggregate auth_outcome events across every sub-pool (per-label/per-classification/per-step rollup)",
     ),
 ) -> None:
-    """Roll up pool status (and optionally auth_outcome events) across every sub-step pool.
+    """Roll up status and optional auth outcomes across every discovered pool.
 
     Each fan-out step in a multi-step run gets its own RunPool instance
     (mine-adhoc, process-item, qa-check, ...). ``pool status`` only
@@ -1217,7 +1149,7 @@ def pool_rollup(
 
     sub_pools = _collect_sub_pools(run_dir, with_auth_outcomes=auth_outcomes)
     if not sub_pools:
-        out.progress(f"No sub-step pool dirs found under {run_dir}")
+        out.progress(f"No pool dirs found under {run_dir}")
         raise typer.Exit(code=0)
 
     rollup = _build_rollup(sub_pools, with_auth_outcomes=auth_outcomes)
@@ -1232,10 +1164,11 @@ def _collect_sub_pools(
     *,
     with_auth_outcomes: bool,
 ) -> list[dict[str, Any]]:
-    """Walk *run_dir* and collect one entry per sub-step pool.
+    """Walk *run_dir* and collect one entry per run-owned or step pool.
 
-    Status files live at ``<run>/.state/steps/<step_id>/runpool-status.yaml``
-    with matching events at ``<run>/.logs/runpool/steps/<step_id>/events.jsonl``.
+    A run-owned pool lives at ``<run>/.state/runpool-status.yaml`` with events
+    under ``<run>/.logs/runpool/events.jsonl``. Step-owned pools live below
+    the corresponding ``steps/<step_id>`` branches.
     Composite parent runs (e.g. large workflow dispatch) also discover pools nested under
     ``<parent>/<step_id>/.state/steps/...`` via :func:`_iter_composite_run_dirs`,
     so a rollup invoked on the parent answers "every sub-pool below this
@@ -1252,13 +1185,25 @@ def _collect_sub_pools(
     seen_status_files: set[Path] = set()
 
     for sub_run in _iter_composite_run_dirs(run_dir):
-        steps_state_root = paths_mod.run_state_dir(sub_run) / paths_mod.STEPS_SUBDIR
-        if not steps_state_root.exists():
-            continue
         try:
             sub_run_rel = sub_run.relative_to(run_dir)
         except ValueError:
             sub_run_rel = Path(sub_run.name)
+        root_rel = "." if sub_run == run_dir else sub_run_rel.as_posix()
+        root_status_file = paths_mod.run_state_dir(sub_run) / POOL_STATUS_FILE
+        if root_status_file.exists() and root_status_file not in seen_status_files:
+            seen_status_files.add(root_status_file)
+            candidates.append(
+                (
+                    root_status_file,
+                    paths_mod.runpool_events_for_read(sub_run),
+                    root_rel,
+                )
+            )
+
+        steps_state_root = paths_mod.run_state_dir(sub_run) / paths_mod.STEPS_SUBDIR
+        if not steps_state_root.exists():
+            continue
         rel_prefix = "" if sub_run == run_dir else f"{sub_run_rel.as_posix()}/"
         for step_state in sorted(steps_state_root.iterdir()):
             if not step_state.is_dir():

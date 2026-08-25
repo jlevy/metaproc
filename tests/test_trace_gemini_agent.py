@@ -13,6 +13,7 @@ results, unpaired starts, disambiguation).
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ from metaproc.trace.extractors.gemini_agent import (
     _is_gemini_log,
     _looks_like_gemini,
 )
+from metaproc.trace.runner import extract_trace
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "trace_agents"
 GEMINI_JSONL = FIXTURE_DIR / "gemini-sample.jsonl"
@@ -194,6 +196,33 @@ def test_attempt_duration_from_result_stats(gemini_run_dir: Path) -> None:
     spans = list(extractor.extract(gemini_run_dir, trace_id="trace-1"))
     attempt = next(s for s in spans if s.kind == "attempt")
     assert attempt.duration_ms == 335167.0
+
+
+def test_compacted_history_keeps_attempt_timestamp_bounds_ordered(
+    gemini_run_dir: Path,
+) -> None:
+    """A leading compaction marker may be newer than replayed history."""
+    spans = list(GeminiAgentExtractor().extract(gemini_run_dir, trace_id="trace-1"))
+    attempt = next(s for s in spans if s.kind == "attempt")
+    assert attempt.ts_end is not None
+    start = datetime.fromisoformat(attempt.ts_start)
+    end = datetime.fromisoformat(attempt.ts_end)
+    assert start <= end
+    assert (end - start).total_seconds() * 1000 == pytest.approx(attempt.duration_ms)
+
+
+def test_successful_attempt_does_not_inherit_recovered_tool_error(
+    gemini_run_dir: Path,
+) -> None:
+    spans = extract_trace(gemini_run_dir)
+    attempt = next(s for s in spans if s.kind == "attempt")
+    session = next(s for s in spans if s.kind == "agent_session")
+    failed_tools = [s for s in spans if s.kind == "tool_call" and s.status == "error"]
+
+    assert failed_tools
+    assert all(s.attributes.get("error.recovered") is True for s in failed_tools)
+    assert attempt.status == "ok"
+    assert session.status == "ok"
 
 
 # -- extract: session span --

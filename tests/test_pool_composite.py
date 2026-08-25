@@ -187,6 +187,28 @@ class TestIterCompositeRunDirs:
         dirs = list(_iter_composite_run_dirs(composite_run))
         assert composite_run / "worker-0" not in dirs
 
+    def test_follows_recursive_scope_layout_without_a_depth_limit(self, tmp_path: Path):
+        _mark_v2(tmp_path)
+        expected: list[Path] = []
+        scope = tmp_path
+        for index in range(6):
+            scope = scope / f"step-{index}" / f"item-{index}"
+            (scope / paths_mod.STATE_DIR).mkdir(parents=True)
+            expected.append(scope)
+
+        assert list(_iter_composite_run_dirs(tmp_path)) == [tmp_path, *expected]
+
+    def test_does_not_follow_scope_symlink_outside_run_tree(self, tmp_path: Path):
+        run_dir = tmp_path / "run"
+        _mark_v2(run_dir)
+        external_scope = tmp_path / "external" / "item"
+        (external_scope / paths_mod.STATE_DIR).mkdir(parents=True)
+        step_dir = run_dir / "step"
+        step_dir.mkdir()
+        (step_dir / "item").symlink_to(external_scope, target_is_directory=True)
+
+        assert list(_iter_composite_run_dirs(run_dir)) == [run_dir]
+
 
 class TestCompositePoolStatusFiles:
     def test_finds_child_pools_under_composite_parent(self, composite_run: Path):
@@ -322,7 +344,7 @@ class TestPoolRollupCommand:
         _mark_v2(tmp_path)
         result = runner.invoke(app, ["pool", "rollup", str(tmp_path)])
         assert result.exit_code == 0, result.output
-        assert "No sub-step pool dirs found" in result.output
+        assert "No pool dirs found" in result.output
 
 
 class TestRunPoolEventAndHealthHelpers:

@@ -98,6 +98,7 @@ class _LayoutSmokeMockAdapter:
 def smoke_run(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
     """Run the layout-smoke fixture once and return the run dir."""
     with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setenv("METAPROC_PREFLIGHT_MIN_DISK_GB", "0.1")
         monkeypatch.setitem(ADAPTER_REGISTRY, "layout-smoke-mock", _LayoutSmokeMockAdapter())
         monkeypatch.setitem(ENVELOPE_MAP, "items", _TickersEnvelope)
 

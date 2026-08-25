@@ -20,8 +20,7 @@ Three postures via ``--auth-preflight-quota-guard``:
 - ``warn``: compute verdict, log ``quota_warn`` event on near-empty
   pool, always return ``go``.
 - ``refuse``: near-empty → return ``refuse`` so the dispatch command
-  consults ``RetryLaterPolicy`` (fail-fast exit 64, wait, or signal
-  exit 78).
+  stops before launching work.
 
 The gate is intentionally code-only; no LLM judgment in the
 critical path (G15).
@@ -133,8 +132,8 @@ class PreflightVerdict:
     """Outcome of a single preflight check.
 
     ``status``: ``go`` (dispatch proceeds), ``warn`` (dispatch
-    proceeds but emits a quota_warn event), ``refuse`` (caller
-    consults RetryLaterPolicy).
+    proceeds but emits a quota_warn event), or ``refuse`` (caller
+    stops before launch).
 
     ``projected_units`` is the estimate the gate used; ``None`` when
     the dispatcher couldn't estimate (no telemetry and no adapter
@@ -308,7 +307,7 @@ def _compose_message(
             )
         lines.append("    (b) `metaproc auth push` additional pool labels")
         lines.append("    (c) reduce fan-out or split the run")
-        lines.append("    (d) re-dispatch with --auth-retry-later=wait or =signal")
+        lines.append("    (d) retry after the reported quota reset time")
     return "\n".join(lines)
 
 

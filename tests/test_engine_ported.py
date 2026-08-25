@@ -21,7 +21,13 @@ from metaproc.engine.placeholders import (
     resolve_runtime_config,
     resolve_templates,
 )
-from metaproc.models.authored import AdapterConfig, ForEach, ProcessDefaults, ProcessStep
+from metaproc.models.authored import (
+    AdapterConfig,
+    ForEach,
+    ProcessDefaults,
+    ProcessStep,
+    StepContext,
+)
 from metaproc.models.runtime import StatusRecord
 
 # ── resolve_templates ─────────────────────────────────────────────
@@ -466,7 +472,7 @@ def test_resolve_code_handler_bootstraps_repo_imports(tmp_path):
     fn = resolve_code_handler("handler.py:good_func", process_dir)
 
     assert callable(fn)
-    assert fn({}, cast("ProcessStep", cast("object", None))) == "ok"
+    assert fn(StepContext({}), cast("ProcessStep", cast("object", None))) == "ok"
 
 
 def test_resolve_code_handler_syntax_error(tmp_path):
@@ -498,7 +504,7 @@ def test_resolve_code_handler_future_annotations_with_dataclass(tmp_path):
     )
     fn = resolve_code_handler("dc_handler.py:h", tmp_path)
     assert callable(fn)
-    result = fn({}, cast("ProcessStep", cast("object", None)))
+    result = fn(StepContext({}), cast("ProcessStep", cast("object", None)))
     assert result.value == 42  # pyright: ignore[reportAttributeAccessIssue]
     assert result.label == "ok"  # pyright: ignore[reportAttributeAccessIssue]
 

@@ -22,7 +22,6 @@ import metaproc.dispatch.pool_dispatch as pd
 from metaproc.adapters.base import AuthFailureClassification, FailureSeverity
 from metaproc.adapters.claude_code import ClaudeApiSignals, ClaudeCodeCliAdapter
 from metaproc.commands.run_parallel import (
-    _auth_forces_abort,
     _build_prepare_launch,
     _compute_pool_cooling_delay,
     _run_agent_pool,
@@ -49,9 +48,13 @@ from metaproc.dispatch.pool_dispatch import (
     build_auth_lease_acquired,
     build_auth_outcome,
     classify_failure_for_slot,
+    complete_slot,
     compose_slot_env,
     pre_fan_out_probe,
     probe_credential,
+)
+from metaproc.dispatch.pool_dispatch import (
+    auth_forces_abort as _auth_forces_abort,
 )
 from metaproc.dispatch.slot_coordinator import (
     SLOT_ACTIVE_ENV_VAR,
@@ -300,6 +303,74 @@ class TestAcquireSlot:
             acquire_slot(config, item="AAPL", attempt=1)
         assert exc_info.value.adapter == "claude-code-cli"
         assert exc_info.value.policy == FallbackPolicy.SAME_PROVIDER
+
+
+class TestCompleteSlot:
+    def test_classifier_failure_still_tears_down_lease(
+        self, pool_and_adapter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pool, _adapter, coordinator, tmp_path = pool_and_adapter
+        config = PoolDispatchConfig(
+            coordinator=coordinator,
+            adapter="claude-code-cli",
+            runs_dir=tmp_path,
+            run_id="r1",
+            step="predict",
+            strategy=SelectionStrategy(SelectionPolicy.PRIORITY_ORDER, ("laptop",)),
+        )
+        lease = acquire_slot(config, item="AAPL", attempt=1)
+
+        def fail_classification(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("classifier crash")
+
+        monkeypatch.setattr(pd, "classify_failure_for_slot", fail_classification)
+
+        with pytest.raises(RuntimeError, match="classifier crash"):
+            complete_slot(
+                config,
+                lease,
+                error_str="exit code 1",
+                session_log_path=None,
+                retry_count=0,
+                retry_exclude=[],
+            )
+
+        assert not lease.slot_dir.exists()
+        assert coordinator.active_counter.snapshot()[(lease.adapter, lease.label)] == 0
+        assert pool.get_entry(lease.adapter, lease.label).state.status == "active"
+
+    def test_diagnostic_failure_still_tears_down_lease(
+        self, pool_and_adapter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pool, _adapter, coordinator, tmp_path = pool_and_adapter
+        config = PoolDispatchConfig(
+            coordinator=coordinator,
+            adapter="claude-code-cli",
+            runs_dir=tmp_path,
+            run_id="r1",
+            step="predict",
+            strategy=SelectionStrategy(SelectionPolicy.PRIORITY_ORDER, ("laptop",)),
+        )
+        lease = acquire_slot(config, item="AAPL", attempt=1)
+
+        def fail_diagnostics(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("diagnostics crash")
+
+        monkeypatch.setattr(coordinator, "preserve_diagnostics", fail_diagnostics)
+
+        with pytest.raises(RuntimeError, match="diagnostics crash"):
+            complete_slot(
+                config,
+                lease,
+                error_str=None,
+                session_log_path=tmp_path / "session.jsonl",
+                retry_count=0,
+                retry_exclude=[],
+            )
+
+        assert not lease.slot_dir.exists()
+        assert coordinator.active_counter.snapshot()[(lease.adapter, lease.label)] == 0
+        assert pool.get_entry(lease.adapter, lease.label).state.status == "active"
 
 
 # ── compose_slot_env ────────────────────────────────────────────
