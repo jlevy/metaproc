@@ -21,6 +21,8 @@ from metaproc.execution_model.model import (
     AttemptDisposition,
     ClauseMapping,
     DependencyClause,
+    ExpansionRecord,
+    ExpansionState,
     Requirement,
     RunState,
     StepTemplate,
@@ -54,6 +56,17 @@ class _ComparisonCountingKey(str):
     def __eq__(self, other: object) -> bool:
         _ComparisonCountingKey.comparisons += 1
         return str.__eq__(self, other)
+
+
+class _IndexConstructionCountingKey(str):
+    """String key that exposes repeated membership-index construction."""
+
+    hash_calls: ClassVar[int] = 0
+
+    @override
+    def __hash__(self) -> int:
+        _IndexConstructionCountingKey.hash_calls += 1
+        return str.__hash__(self)
 
 
 def _aligned_membership_comparisons(width: int) -> int:
@@ -165,11 +178,32 @@ class TestEnvelope:
         comparison_ceiling = width * _MAX_EQUALITY_COMPARISONS_PER_LOOKUP
 
         # A hash index normally performs one equality check per successful lookup. The
-        # allowance covers collisions; a tuple scan performs about width**2 / 2.
-        assert comparisons <= comparison_ceiling, (
+        # lower bound proves the instrument is live, the allowance covers collisions,
+        # and a tuple scan performs about width**2 / 2.
+        assert width <= comparisons <= comparison_ceiling, (
             f"{comparisons:,} equality comparisons for {width:,} aligned lookups; "
-            f"expected no more than {comparison_ceiling:,}"
+            f"expected between {width:,} and {comparison_ceiling:,}"
         )
+
+    def test_aligned_roster_membership_index_is_memoized(self) -> None:
+        """Repeated aligned lookups must reuse one constructed membership index."""
+        keys = tuple(_IndexConstructionCountingKey(f"item{i:05d}") for i in range(200))
+        expansion = ExpansionRecord(
+            expansion_id="upstream:1",
+            step_id="upstream",
+            generation=1,
+            state=ExpansionState.CLOSED,
+            keys=keys,
+        )
+
+        _IndexConstructionCountingKey.hash_calls = 0
+        first_index = expansion.key_set
+        construction_hash_calls = _IndexConstructionCountingKey.hash_calls
+
+        assert construction_hash_calls > 0
+        for _ in range(32):
+            assert expansion.key_set is first_index
+        assert _IndexConstructionCountingKey.hash_calls == construction_hash_calls
 
     @pytest.mark.timeout(120)
     def test_status_projection_stays_within_the_envelope(self) -> None:
