@@ -39,7 +39,6 @@ development series.
   `validate --cloud-runs-dir`, and `pool retry-missing`. Hydrated and full-cloud runs
   use one run tree for state, output validation, and recovery.
 
-
 ## [0.3.0][] - 2026-08-25
 
 ### Added
