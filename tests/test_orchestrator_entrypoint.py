@@ -10,8 +10,10 @@ to the legacy single-credential path.
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import patch
 
-from metaproc.cloud.gcp.orchestrator_entrypoint import build_runprocess_cmd
+from metaproc.cloud.gcp.container_bootstrap import BootstrapResult
+from metaproc.cloud.gcp.orchestrator_entrypoint import build_runprocess_cmd, main
 from metaproc.dispatch.auth_pool_flags import AuthPoolFlags, _split_csv
 
 
@@ -85,6 +87,28 @@ class TestBaseline:
             "--no-spot",
         ):
             assert flag not in cmd, f"unexpected flag in baseline: {flag}"
+
+
+class TestEntrypoint:
+    def test_forwards_orchestrator_admission_marker_to_inner_process(self) -> None:
+        env = {
+            "METAPROC_PROCESS_SPEC": "path/to/spec.process.md",
+            "METAPROC_VARS": '{"RUN_ID": "test-run"}',
+            "METAPROC_GCP_ORCHESTRATOR": "1",
+        }
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch(
+                "metaproc.cloud.gcp.orchestrator_entrypoint.bootstrap_container",
+                return_value=BootstrapResult(work_dir="/work/repo"),
+            ),
+            patch("metaproc.cloud.gcp.orchestrator_entrypoint.log_resource_context"),
+            patch("metaproc.cloud.gcp.orchestrator_entrypoint._run", return_value=0) as run,
+        ):
+            assert main() == 0
+
+        child_env = run.call_args.kwargs["env"]
+        assert child_env["METAPROC_GCP_ORCHESTRATOR"] == "1"
 
 
 class TestAuthFlags:

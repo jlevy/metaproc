@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from typer.testing import CliRunner
 
 from metaproc.cli import app
+from metaproc.commands.helpers import validate_gcp_worker_topology
+from metaproc.errors import CLIError
 from metaproc.runpool.registry import get_backend, register_backend, reset_registry
 
 runner = CliRunner()
@@ -75,3 +79,45 @@ class TestBackendCLIFlag:
             assert backend.name == "test-backend"
         finally:
             reset_registry()
+
+    def test_gcp_worker_allows_batch_runtime_and_dry_run(self) -> None:
+        validate_gcp_worker_topology(
+            "gcp-worker",
+            batch_task_index="0",
+        )
+        validate_gcp_worker_topology(
+            "gcp-worker",
+            dry_run=True,
+            batch_task_index=None,
+        )
+
+    def test_gcp_worker_allows_dispatcher_owned_orchestrator_marker(self) -> None:
+        validate_gcp_worker_topology(
+            "gcp-worker",
+            batch_task_index=None,
+            orchestrator_marker="1",
+        )
+
+    def test_gcp_worker_rejects_non_dry_operator_host_execution(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("BATCH_TASK_INDEX", raising=False)
+
+        result = runner.invoke(
+            app,
+            [
+                "run-parallel",
+                str(tmp_path / "missing.process.md"),
+                "--step",
+                "fan-out",
+                "--backend",
+                "gcp-worker",
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, CLIError)
+        assert "run-parallel --backend gcp-worker is only supported inside" in str(result.exception)
+        assert "run-process <spec> --backend gcp-worker --cloud" in str(result.exception)

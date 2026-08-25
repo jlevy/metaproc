@@ -1,4 +1,8 @@
-"""``metaproc gcp run`` — dispatch arbitrary commands to a single GCP Batch task.
+"""``metaproc gcp run`` — dispatch one command to one GCP Batch task.
+
+This is a lower-level execution primitive for probes, diagnostics, publishers, and
+applications that already own their outer orchestration. Framework-owned process DAGs
+should use ``metaproc run-process ... --backend gcp-worker --cloud`` instead.
 
 See ``docs/arch/arch-metaproc-core.md``
 for the full design. This module owns:
@@ -311,13 +315,15 @@ def run_command(
         help="Required GCS bucket for wheel + workspace artifacts.",
     ),
 ) -> None:
-    """Dispatch ``cmd`` to a single GCP Batch task with current metaproc + repo.
+    """Run one lower-level command in one GCP Batch task.
 
-    Default behaviour ships a fresh-built wheel from the local source tree
+    Use `metaproc run-process <spec> --backend gcp-worker --cloud` for a Metaproc
+    process DAG.
+    Default behaviour here ships a fresh-built wheel from the local source tree
     plus a tarball of the current repo working tree, mounts Filestore at
-    ``/mnt/filestore`` (with ``RUNS_DIR=/mnt/filestore/runs``), resolves
-    ``GCP_SECRET_REFS`` (``GH_TOKEN``, ``CLAUDE_CODE_CREDS_JSON``), and
-    ``execvp``'s ``cmd`` inside the container.
+    `/mnt/filestore` (with `RUNS_DIR=/mnt/filestore/runs`), resolves
+    `GCP_SECRET_REFS` (`GH_TOKEN`, `CLAUDE_CODE_CREDS_JSON`), and `execvp`'s `cmd`
+    inside the container.
     """
     config = _build_config(
         image=image,

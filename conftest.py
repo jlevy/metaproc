@@ -14,4 +14,4 @@ os.environ.setdefault("METAPROC_SKIP_CODEX_VERSION_CHECK", "1")
 os.environ.setdefault("METAPROC_SKIP_GEMINI_VERSION_CHECK", "1")
 os.environ.setdefault("METAPROC_SKIP_PI_VERSION_CHECK", "1")
 
-collect_ignore_glob = ["**/cloud/gcp/prefect_flow.py", "**/__main__.py"]
+collect_ignore_glob = ["**/__main__.py"]

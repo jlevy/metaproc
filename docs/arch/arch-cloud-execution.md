@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: Cloud Execution
 
-**Date:** 2026-04-12 (last updated 2026-08-09) **Status:** Approved
+**Date:** 2026-04-12 (last updated 2026-08-24) **Status:** Approved
 
 > **Maintenance**: This is a maintained architecture doc.
 > Revise via `tbd shortcut revise-architecture-doc` (which prompts you to verify content
@@ -84,19 +84,81 @@ retryable on resume.
 
 ### 2.2 Execution Chain by Topology
 
-The same process spec runs identically across local, hybrid, and full cloud topologies.
-The orchestrator and run pool move between machines; the adapter subprocesses at the
-bottom of the stack are always the same.
+The same process spec supports local and full-cloud execution.
+In the full-cloud path, the outer command submits the orchestrator itself to Batch; a
+laptop never remains in the orchestration or storage path.
 
-| Layer | Local | Hybrid | Full Cloud (`--cloud`) |
+| Layer | Local | Full Cloud (`--cloud`) |
+| --- | --- | --- |
+| Entry | `metaproc run-process` on operator host | `metaproc run-process --cloud` on operator host |
+| Orchestrator | `run-process` on operator host | `run-process` on orchestrator VM |
+| Code steps | Run locally | Run on orchestrator VM |
+| Fan-out dispatch | `run-parallel` locally | `dispatch_to_workers()` -> N worker VMs |
+| Item execution | RunPool with LocalBackend locally | RunPool with LocalBackend on each worker VM |
+| Adapter subprocess | `pi`/`claude`/`gemini` locally | `pi`/`claude`/`gemini` on worker VM |
+| Authoritative live/restart state | Local disk | Filestore NFS |
+
+Filestore is authoritative only while a cloud run is executing or remains restartable.
+Metaproc does not claim terminal NFS durability.
+Before reclaiming that scratch storage, the downstream consumer must publish the
+accepted terminal run tree to its registered durable object-store contract and verify
+that publication under its own policy.
+
+#### 2.2.1 Target Placement Model
+
+Orchestrator placement and worker placement are separate topology axes.
+The implemented CLI still exposes them indirectly through `--cloud` and
+`--backend gcp-worker`; a future atomic CLI change will expose them as `--orchestrator`
+and `--worker`. The target vocabulary is:
+
+```text
+metaproc run-process <spec> \
+  --orchestrator local|gcp \
+  --worker colocated|gcp
+```
+
+`colocated` means fan-out executes in the orchestrator’s environment.
+It does not mean “the operator laptop” when the orchestrator is in GCP.
+
+| Orchestrator | Worker | Meaning | Availability |
 | --- | --- | --- | --- |
-| Entry | `metaproc run-process` on laptop | `metaproc run-process` on laptop | `metaproc run-process --cloud` on laptop |
-| Orchestrator | `run-process` on laptop | `run-process` on laptop | `run-process` on orchestrator VM |
-| Code steps | Run locally on laptop | Run locally on laptop | Run locally on orchestrator VM |
-| Fan-out dispatch | `run-parallel` on laptop | `dispatch_to_workers()` -> N worker VMs | `dispatch_to_workers()` -> N worker VMs |
-| Item execution | RunPool with LocalBackend on laptop | RunPool with LocalBackend on each worker VM | RunPool with LocalBackend on each worker VM |
-| Adapter subprocess | `pi`/`claude`/`gemini` on laptop | `pi`/`claude`/`gemini` on worker VM | `pi`/`claude`/`gemini` on worker VM |
-| Shared state | Local disk | NFS | NFS |
+| `local` | `colocated` | Ordinary local process | Current |
+| `gcp` | `gcp` | Batch orchestrator and distributed Batch workers | Current through `--backend gcp-worker --cloud` |
+| `gcp` | `colocated` | One cloud execution environment owns orchestration and work | Planned |
+| `local` | `gcp` | Local interactive orchestrator with GCP workers | Planned; requires an explicit state transport |
+
+The first placement implementation has one run-wide worker placement and resource
+profile. That placement may be `colocated` or `gcp`, but every worker uses the same
+provider, image, machine class, identity, secret policy, and network policy.
+The pool may still span multiple Batch VMs; run-wide means those workers share one
+placement and profile, not that they share the orchestrator host.
+Per-step placement overrides and adapter- or harness-specific pools are later
+extensions, not requirements for the first CLI change.
+
+The CLI resolver must produce one immutable execution-topology value before planning or
+dispatch. The process engine consumes that resolved value rather than testing raw CLI
+strings or provider environment variables.
+That value contains the orchestrator placement, the run-wide worker placement and
+resource profile, and a state-transport strategy.
+Provider dispatchers translate placements into provider jobs; the process graph does not
+contain GCP scheduling branches.
+
+Same-locus topologies may select the existing filesystem transport.
+A split-locus topology is valid only after a registered transport implements immutable
+dispatch inputs, leases, events, claims, results, failures, cancellation, and resume.
+It must fail closed before dispatch when no such transport is available; SSHFS, a
+laptop-mounted Filestore, and path-identity aliases are not transports.
+Later per-step worker profiles can override the run-wide default in the resolved
+topology without changing the two public placement axes.
+
+SSH remains a valid control transport for a future persistent-host placement, but it is
+not a pipeline state transport.
+The open-source MetaBrowser project owns the maintained
+[SSH command, IAP, tunnel, and disconnect-watchdog utilities](https://github.com/jlevy/metabrowser/blob/main/src/metabrowser/cli/ssh_utils.py)
+and their
+[remote-command integration](https://github.com/jlevy/metabrowser/blob/main/src/metabrowser/cli/remote.py).
+If Metaproc gains an SSH-backed placement with a real consumer, reuse or extract that
+implementation rather than restoring an unused Metaproc copy.
 
 ### 2.3 Fan-Out Backend Dispatch
 
@@ -105,7 +167,7 @@ Fan-out steps in `run-process` dispatch through a backend selected via `--backen
 | Backend | Flag | Mechanism |
 | --- | --- | --- |
 | `local` | `--backend local` (default) | `RunPool` subprocess pool via `run-parallel` |
-| `gcp-worker` | `--backend gcp-worker` | Partition items across N worker VMs via GCP Batch |
+| `gcp-worker` | `--backend gcp-worker --cloud` | Submit the orchestrator, which partitions items across N worker VMs via GCP Batch |
 
 **Note on backend abstraction:** `local` is a registered `LaunchBackend` implementation
 (see section 2.5) in the backend registry (`runpool/registry.py`). Cloud worker backends
@@ -113,14 +175,19 @@ are different: they are multi-VM dispatch modes handled directly in `run-process
 `LaunchBackend` implementations.
 A cloud worker backend partitions items across N VMs, each of which runs
 `run-parallel --backend local` internally.
+The bare `--backend gcp-worker` form is reserved for the inner Batch orchestrator leg
+only. `orchestrator_dispatch.py` sets `METAPROC_GCP_ORCHESTRATOR=1`; the inner process
+also accepts the GCP-provided `BATCH_TASK_INDEX` as a fallback runtime signal.
+The explicit dispatcher marker is the primary admission contract, so a missing provider
+variable cannot reject a correctly dispatched orchestrator.
 
 If a second cloud provider were added, a new worker dispatch implementation would
 register alongside `gcp-worker` in the `run-process` dispatch logic.
 
 ### 2.4 Filesystem-First Resume Contract
 
-Authoritative run state lives only on the run filesystem: local disk for full-local
-runs, shared NFS for all cloud-backed modes.
+Authoritative live and restart state lives only on the run filesystem: local disk for
+full-local runs and shared NFS for full-cloud runs.
 Full per-artifact schemas and lifecycles live in
 [artifact-catalog.md](../artifact-catalog.md); this section covers the dispatch-relevant
 subset.
@@ -129,8 +196,8 @@ subset.
 with immutable run identity (process name, run_id, backend, variant, git SHA, creation
 timestamp). On resume, validated against current launch parameters; process identity and
 run directory must match.
-Cross-topology resume (e.g., hybrid to full cloud) is allowed because they share the
-same authoritative filesystem.
+Resume requires the same authoritative run directory.
+Backend metadata does not replace that filesystem identity.
 
 **`orchestrator-lease.yaml`** (`{run_dir}/.state/orchestrator-lease.yaml`): prevents two
 orchestrators from walking the same DAG at once.
@@ -272,7 +339,9 @@ container-level volume mount point, not subject to host-level path restrictions.
 ### 3.1 Infrastructure Components
 
 - **Compute:** GCP Batch API for submitting and managing VM jobs.
-- **Storage:** Filestore NFS for shared run state across all VMs.
+- **Storage:** Filestore NFS for shared live execution and restart state across all VMs;
+  accepted terminal trees move to the downstream consumer’s registered durable
+  object-store contract before scratch reclamation.
 - **Secrets:** Secret Manager for credential injection (e.g., `GH_TOKEN`, Claude Code
   CLI Personal-Plan OAuth blob).
   See §3.10.
@@ -381,8 +450,10 @@ Unified container entrypoint for worker containers:
    steps.
 4. Build and run:
    `python -m metaproc run-process <process_dir> --backend gcp-worker [all forwarded flags]`.
-5. Does **not** pass `--cloud` to avoid infinite recursion.
-6. Exit with `run-process`’s exit code.
+5. Forward the dispatcher-owned `METAPROC_GCP_ORCHESTRATOR=1` admission marker to the
+   inner process.
+6. Does **not** pass `--cloud` to avoid infinite recursion.
+7. Exit with `run-process`’s exit code.
 
 ### 3.7 GCP Batch Shared Utilities (`batch_backend.py`)
 
@@ -456,28 +527,22 @@ Confirm a live container’s effective limits with `gcp resources` (CLI) or by r
   structured `METAPROC_VARS` metadata and accepts it only when its hash matches the key,
   preserving exact IDs for display and JSON output.
   Legacy jobs continue to group by readable label.
-- **`gcp resources` / `gcp filestore` / `gcp archive` / `gcp cleanup`**: operator tools
-  for cloud inventory, Filestore utilization, long-term run archiving, and terminal-job
-  cleanup.
+- **`gcp resources` / `gcp filestore` / `gcp cleanup`**: operator tools for cloud
+  inventory, Filestore utilization, and terminal-job cleanup.
 - **NFS progress polling**: during worker dispatch, the orchestrator reads
   `runpool-status.yaml` from NFS to report live progress (completed/failed/active).
 - **NFS error extraction**: on worker failure, reads `runpool-status.yaml` for failure
   counts and per-process kill reasons.
-- **`gcp remote <command...>`**: runs any metaproc command on the Filestore-connected
-  gateway host via SSH/IAP. Bootstraps the full repo on first use
-  (`_ensure_remote_repo()`). `--run-id <id>` expands to
-  `/mnt/filestore/runs/<id>/<phase>` on the remote host.
-  Primary use cases: `stats`, `status`, `pool status`, `tail`.
-- **`gcp remote-run`**: launches `run-process` in a tmux session on a remote GCE host,
-  so the session survives disconnects and can be reattached or cleaned up later.
+- Filesystem-oriented commands such as `status`, `pulse`, and `pool status` require an
+  explicit, locally visible run-directory path.
+  They do not route through a persistent gateway VM.
 
 ### 3.9 GCP Mount Path
 
-All GCP VM types (workers, orchestrators, browser host) mount the Filestore NFS share at
-`/mnt/filestore` by default.
-`RUNS_DIR` resolves to `<mount_path>/runs`, not the bare share root, so run trees live
-at `/mnt/filestore/runs/{run_id}/`. The mount path is a container-level Volume mount
-point set via the Batch API Volume spec, not subject to COS host-level path
+Batch worker and orchestrator VMs mount the Filestore NFS share at `/mnt/filestore` by
+default. `RUNS_DIR` resolves to `<mount_path>/runs`, not the bare share root, so run
+trees live at `/mnt/filestore/runs/{run_id}/`. The mount path is a container-level
+Volume mount point set via the Batch API Volume spec, not subject to COS host-level path
 restrictions.
 
 ### 3.10 Secret Manager Integration
@@ -524,7 +589,6 @@ All GCP infrastructure parameters are configurable via env vars:
 - `METAPROC_GCP_FILESTORE_SERVER`: Filestore IP or hostname
 - `METAPROC_GCP_FILESTORE_SHARE`: Filestore share name
 - `METAPROC_GCP_FILESTORE_MOUNT_PATH`: NFS mount path (default `/mnt/filestore`)
-- `METAPROC_GATEWAY_HOST`: gateway host for `gcp remote`
 - `METAPROC_GCP_SECRET_GH_TOKEN`: Secret Manager resource name for GH_TOKEN
 - `METAPROC_GCP_SECRET_CLAUDE_CREDS`: Secret Manager resource name for the Claude Code
   CLI Personal-Plan OAuth blob (required when dispatching `variant=claude-code-cli` on
@@ -610,12 +674,9 @@ path.
 | `gcp logs` | Stream logs from Cloud Logging |
 | `gcp cancel` | Cancel running/queued Batch jobs |
 | `gcp runs` | List all active metaproc runs |
-| `gcp self-install` | Install metaproc on a GCP VM |
+| `gcp run` | Run one lower-level command in a single Batch task |
 | `gcp resources` | Show GCP resource usage |
 | `gcp filestore` | Manage Filestore NFS |
-| `gcp archive` | Archive completed runs |
-| `gcp remote` | Run metaproc commands on gateway host via SSH/IAP |
-| `gcp remote-run` | Launch `run-process` in a tmux session on a remote GCE host |
 | `gcp cleanup` | Clean up cloud resources |
 
 ### 3.14 Module Summary
@@ -638,9 +699,13 @@ path.
 
 ### 3.15 `metaproc gcp run`: Arbitrary Command Dispatch
 
-A complement to the orchestrator/worker model in §3.3-§3.6 for running **arbitrary
-one-off commands** on GCP Batch with the dispatcher’s current Metaproc and repository
-state. Used for detached command fan-out and ad-hoc debug probes.
+This is the lower-level primitive for running **one arbitrary command in one Batch
+task** with the dispatcher’s current Metaproc and repository state.
+Appropriate uses include probes, diagnostics, terminal publication, and an application
+that already owns its outer orchestration.
+An application process should normally use `run-process --cloud`, which preserves the
+framework’s graph, lease, claim, retry, resume, and worker-fan-out contracts.
+Scripts must not construct a process by chaining `gcp run` calls.
 
 **Pipeline.** `commands/gcp_run.py` parses CLI flags, builds a `GCPBatchConfig`, ships
 artifacts (`build_wheel` and `package_workspace` under `dispatch_artifacts.py`, gated by
@@ -672,6 +737,7 @@ partitioning and resume contracts; that machinery is overkill for “run `echo` 
 The two paths share `batch_backend.py`, `container_bootstrap.py`, the `GCP_SECRET_REFS`
 registry, and the Filestore mount script, but `metaproc gcp run` carries no orchestrator
 lease, no claim registry, no per-item dispatch manifest.
+That absence is its boundary, not an invitation to grow a second orchestration layer.
 
 **Wheel and workspace overrides apply to both paths.** The URI variables and their
 required `METAPROC_WHEEL_SHA256` and `METAPROC_WORKSPACE_SHA256` digests are not
@@ -700,6 +766,11 @@ for operator recipes and this document for the full design.
 
 ### Open Questions
 
+- Which durable transport should implement local-orchestrator/cloud-worker state,
+  events, leases, cancellation, and recovery without making a laptop-mounted filesystem
+  authoritative?
+- Should the first per-step worker-profile extension live in process-spec data or in a
+  separately referenced placement profile?
 - Should `SecretRefSet` provider-ref aggregation be lazy (current) or eagerly validated
   at dispatch time? The current design silently skips unresolvable provider refs, which
   could mask a misconfigured credential until the adapter fails at runtime.
@@ -720,6 +791,22 @@ for operator recipes and this document for the full design.
   misconfigured networks before job submission.
 
 ## Revision History
+
+### rev9 (2026-08-24)
+
+Clarified that `run-process --cloud` is the application-level cloud API and `gcp run` is
+a lower-level single-task primitive.
+Recorded the planned `--orchestrator` and `--worker` placement axes, a run-wide worker
+placement for the first implementation, the resolved-topology/provider boundary, and the
+state-transport gate required before split-locus execution can be supported.
+
+### rev8 (2026-08-24)
+
+Removed the unsupported laptop-orchestrated hybrid topology, split-tree validation and
+recovery commands, and the persistent gateway command family.
+The supported paths are now local execution, full-cloud `run-process --cloud`, and
+one-shot `gcp run`; filesystem-oriented commands operate on one locally visible run
+tree.
 
 ### rev7 (2026-08-09)
 

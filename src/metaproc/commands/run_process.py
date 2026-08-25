@@ -46,9 +46,11 @@ from metaproc.commands.helpers import (
     parse_step_variant_args,
     parse_var_args,
     require_runtime_runs_dir,
+    resolve_gcp_worker_runs_dir,
     resolve_process_path,
     resolve_record_output_paths,
     seed_runtime_vars,
+    validate_gcp_worker_topology,
 )
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.dispatch.auth_pool_flags import AuthPoolFlags
@@ -609,7 +611,9 @@ def _validate_run_config(
         raise CLIError(
             f"Resume mismatch: run-config.yaml has run_dir={saved_run_dir!r} "
             f"but current run_dir={str(run_dir)!r}. "
-            f"Use the same RUNS_DIR or RUN_ID that created this run."
+            "Use the same locally visible RUNS_DIR and RUN_ID that created this run. "
+            "Workstation-mounted Filestore aliases are not supported resume identities; "
+            "resume on the canonical cloud mount or start a new local run."
         )
 
     log.info("Resume validated against run-config.yaml (%s)", config_path)
@@ -618,11 +622,10 @@ def _validate_run_config(
 def _resume_run_dir_identity(run_dir: str) -> str:
     """Normalize run_dir for resume validation across Filestore mount aliases.
 
-    Cloud and operator hosts can mount the same Filestore share at different
-    prefixes (for example ``/mnt/disks/filestore`` vs ``/mnt/filestore`` vs a
-    local workstation mount under ``.../mnt/filestore``). Normalize only those
-    known Filestore aliases. All other paths keep their full normalized form so
-    unrelated local ``runs/`` directories cannot collide.
+    Cloud images have used ``/mnt/disks/filestore`` and ``/mnt/filestore`` for
+    the same share. Normalize those two root-level mount paths only. All other
+    paths keep their full normalized form so workstation directories that happen
+    to contain ``mnt/filestore`` cannot impersonate the cloud run tree.
     """
     normalized = os.path.normpath(run_dir)
     filestore_markers = (
@@ -630,7 +633,7 @@ def _resume_run_dir_identity(run_dir: str) -> str:
         f"{os.sep}mnt{os.sep}filestore{os.sep}runs{os.sep}",
     )
     for marker in filestore_markers:
-        if marker in normalized:
+        if normalized.startswith(marker):
             return (
                 f"{os.sep}mnt{os.sep}filestore{os.sep}runs{os.sep}" + normalized.split(marker, 1)[1]
             )
@@ -2166,16 +2169,8 @@ async def _execute_fan_out_step(
     if failures:
         raise CLIError(f"Pre-flight check failed: {'; '.join(failures)}")
 
-    # Cloud runs dir
-    # RUNS_DIR = <mount_path>/runs (runs/ subdirectory, not share root).
-    cloud_runs_dir = ""
-    if backend_name != "local":
-        _fs_server = MetaprocEnv.METAPROC_GCP_FILESTORE_SERVER.read_str(default="")
-        if _fs_server:
-            _fs_mount = MetaprocEnv.METAPROC_GCP_FILESTORE_MOUNT_PATH.read_str(
-                default="/mnt/filestore"
-            )
-            cloud_runs_dir = _fs_mount + "/runs"
+    # GCP worker RUNS_DIR = <mount_path>/runs (runs/ subdirectory, not share root).
+    cloud_runs_dir = resolve_gcp_worker_runs_dir(backend_name)
 
     allowed_runtime = collect_step_runtime_placeholders(step_def)
     optional_unset = {name for name in spec.optional_input_names if name not in step_vars}
@@ -2343,8 +2338,8 @@ async def _execute_gcp_worker_dispatch(
     """Dispatch a fan-out step to GCP worker VMs via worker_dispatch.
 
     ``auth_flags`` is the resolved auth-pool dispatch config from the
-    top-level CLI. Threaded explicitly so hybrid (no env-var leg) works
-    the same as full-cloud (env-var leg via the orchestrator container).
+    outer full-cloud request. It is threaded explicitly through the Batch
+    orchestrator and worker-dispatch legs.
     Defaults to an empty :class:`AuthPoolFlags` for legacy callers /
     tests that don't construct one — matches the worker_dispatch
     config-field default and the no-auth-pool dispatch shape.
@@ -3087,7 +3082,12 @@ def run_process_command(
     skip: list[str] = typer.Option([], "--skip", help="Skip specific steps (repeatable)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show execution plan without running"),
     backend: str = typer.Option(
-        "local", "--backend", help="Launch backend for fan-out steps (local, gcp-worker)"
+        "local",
+        "--backend",
+        help=(
+            "Launch backend for fan-out steps (local, gcp-worker). "
+            "gcp-worker requires --cloud outside GCP Batch."
+        ),
     ),
     max_concurrency: int | None = typer.Option(  # noqa: UP007
         None,
@@ -3426,11 +3426,11 @@ def run_process_command(
             "§ Phase 2 follow-up."
         )
 
-    # ── Batch-dispatch warnings (fire for both --cloud and hybrid) ──
+    # ── Batch-dispatch warnings ──
     # Any dispatch path that sends work to GCP Batch (orchestrator or per-step
     # worker fan-out) exercises the agent image's baked metaproc/ code unless
     # METAPROC_WHEEL_GCS is set. Surface the preflight warnings once, before
-    # either branch submits a Batch job. Emit on dry-run too so operators
+    # a cloud submission. Emit on dry-run too so operators
     # iterating invocations see the warning before they hit enter.
     if backend == "gcp-worker":
         from metaproc.engine.preflight import (  # noqa: PLC0415 -- pre-existing local import; needs review
@@ -3479,6 +3479,19 @@ def run_process_command(
             parallel_note = "  [parallel]" if len(level) > 1 else ""
             out.data(f"Level {level_idx}: {', '.join(step_descs)}{parallel_note}")
         return
+
+    # ``gcp-worker`` is the internal fan-out leg of a full-cloud Batch run.
+    # Running that backend from a laptop leaves the outer orchestrator and its
+    # state on the workstation, which is not a supported or durable topology.
+    # GCP Batch injects BATCH_TASK_INDEX into the orchestrator container, so
+    # require that runtime marker unless this invocation is the outer --cloud
+    # submission handled below.
+    validate_gcp_worker_topology(
+        backend,
+        cloud=cloud,
+        batch_task_index=MetaprocEnv.BATCH_TASK_INDEX.read_str(default=None),
+        orchestrator_marker=MetaprocEnv.METAPROC_GCP_ORCHESTRATOR.read_str(default=None),
+    )
 
     # ── Cloud dispatch path ──────────────────────────────────────────
     if cloud:
@@ -3608,31 +3621,6 @@ def run_process_command(
         max_concurrency=max_concurrency,
         resource_snapshot=resource_snapshot,
     )
-
-    # Hybrid-mode alignment check: warn if a cloud backend is used but the
-    # orchestrator's RUNS_DIR is on local disk (not Filestore). In that
-    # case the orchestrator state lives locally and the run is not resumable
-    # from another host. Use --cloud for durable cloud execution.
-    if backend != "local":
-        _fs_server = MetaprocEnv.METAPROC_GCP_FILESTORE_SERVER.read_str(default="")
-        if _fs_server:
-            _fs_mount = MetaprocEnv.METAPROC_GCP_FILESTORE_MOUNT_PATH.read_str(
-                default="/mnt/filestore"
-            )
-            cloud_runs_dir = _fs_mount + "/runs"
-            if not str(run_dir).startswith(cloud_runs_dir):
-                log.warning(
-                    "Hybrid mode: orchestrator run_dir (%s) is not on Filestore (%s). "
-                    "Orchestrator state lives on local disk only. For cross-host resume, "
-                    "use --cloud or set RUNS_DIR to the Filestore mount path.",
-                    run_dir,
-                    cloud_runs_dir,
-                )
-                out.progress(
-                    f"  WARNING: hybrid mode — orchestrator state is local ({run_dir}), "
-                    f"not on Filestore ({cloud_runs_dir}). "
-                    f"Use --cloud for durable cloud execution."
-                )
 
     out.progress(f"run-process: {spec.name} ({len(active_step_ids)} steps, {len(levels)} levels)")
     out.progress(f"Run dir: {run_dir}")

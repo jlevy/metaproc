@@ -67,9 +67,11 @@ from metaproc.commands.helpers import (
     parse_adapter_config,
     parse_var_args,
     require_runtime_runs_dir,
+    resolve_gcp_worker_runs_dir,
     resolve_process_path,
     resolve_record_output_paths,
     seed_runtime_vars,
+    validate_gcp_worker_topology,
 )
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.engine.build_plan import build_plan, merge_defaults
@@ -552,7 +554,11 @@ def run_parallel(
     limit: int | None = typer.Option(
         None, "--limit", help="Max number of items to process (for pre-checks)"
     ),  # noqa: UP007
-    backend: str = typer.Option("local", "--backend", help="Launch backend (e.g. local, mock)"),
+    backend: str = typer.Option(
+        "local",
+        "--backend",
+        help="Launch backend; gcp-worker is internal to GCP Batch",
+    ),
     max_concurrency: int | None = typer.Option(
         None, "--max-concurrency", help="Max concurrent processes (pool mode)"
     ),  # noqa: UP007
@@ -655,6 +661,14 @@ def run_parallel(
         validate_guard_posture(auth_preflight_quota_guard)
     except ValueError as exc:
         raise CLIError(str(exc)) from exc
+
+    validate_gcp_worker_topology(
+        backend,
+        dry_run=dry_run,
+        batch_task_index=MetaprocEnv.BATCH_TASK_INDEX.read_str(default=None),
+        orchestrator_marker=MetaprocEnv.METAPROC_GCP_ORCHESTRATOR.read_str(default=None),
+        command="run-parallel",
+    )
 
     process_path = resolve_process_path(process_spec)
     process_dir = process_path.parent
@@ -1134,18 +1148,11 @@ def run_parallel(
 
     # ── mode: agent branch (parallel) ──────────────────────────────
 
-    # For cloud backends with Filestore NFS, determine the cloud-side RUNS_DIR
+    # For the GCP worker backend with Filestore NFS, determine the cloud-side RUNS_DIR
     # so template resolution in prompts/output paths uses the NFS mount path
     # instead of the orchestrator's local RUNS_DIR.
     # RUNS_DIR = <mount_path>/runs (runs/ subdirectory, not share root).
-    cloud_runs_dir = ""
-    if backend != "local":
-        _fs_server = MetaprocEnv.METAPROC_GCP_FILESTORE_SERVER.read_str(default="")
-        if _fs_server:
-            _fs_mount = MetaprocEnv.METAPROC_GCP_FILESTORE_MOUNT_PATH.read_str(
-                default="/mnt/filestore"
-            )
-            cloud_runs_dir = _fs_mount + "/runs"
+    cloud_runs_dir = resolve_gcp_worker_runs_dir(backend)
 
     if dry_run:
         assert adapter_obj is not None
@@ -1349,7 +1356,7 @@ def _build_prepare_launch(  # noqa: PLR0913
         if refresh_token_fn is not None and callable(refresh_token_fn):
             refresh_token_fn()
 
-        # For cloud backends with Filestore, override RUNS_DIR so template
+        # For the GCP worker backend with Filestore, override RUNS_DIR so template
         # resolution in the prompt and output paths uses the NFS mount path
         # instead of the orchestrator's local RUNS_DIR.
         resolve_vars = dict(item_vars)

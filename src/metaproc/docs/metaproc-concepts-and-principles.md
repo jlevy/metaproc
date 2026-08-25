@@ -464,8 +464,9 @@ experiment.
   `composite`: delegates to a child `*.process.md`. See §1.3 for the practical execution
   surface and the work-semantics framing.
 - **Backend:** the execution environment for agent subprocesses.
-  `local` runs subprocesses on the current machine; `gcp-worker` dispatches items across
-  cloud VMs. The backend determines *where* the run pool operates, not *what* it runs.
+  `local` runs subprocesses on the current machine; the full-cloud `gcp-worker --cloud`
+  path dispatches items across cloud VMs.
+  The backend determines *where* the run pool operates, not *what* it runs.
 
 ### 4.6 Run record
 

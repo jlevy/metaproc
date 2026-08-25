@@ -126,7 +126,8 @@ class TestTailGcpRunLogs:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         states = iter(["SCHEDULED", "RUNNING", "SUCCEEDED"])
-        batch_client = MagicMock()
+        batch_client = MagicMock(spec=["get_job", "transport"])
+        batch_client.transport = MagicMock()
         batch_client.get_job.side_effect = lambda req: _job(next(states))
         fake_batch_v1 = MagicMock()
         fake_batch_v1.BatchServiceClient.return_value = batch_client
@@ -156,7 +157,7 @@ class TestTailGcpRunLogs:
         get_logging_client.assert_called_once_with("p")
         assert observed_clients == [logging_client, logging_client, logging_client]
         logging_client.close.assert_called_once_with()
-        batch_client.close.assert_called_once_with()
+        batch_client.transport.close.assert_called_once_with()
 
     def test_returns_one_on_failed(self, monkeypatch: pytest.MonkeyPatch):
         client = MagicMock()

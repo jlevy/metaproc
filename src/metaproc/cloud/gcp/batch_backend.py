@@ -69,8 +69,8 @@ class GCPBatchConfig:
     filestore_share: str = "/metaproc_runs"  # Filestore share name
     # NFS mount path inside the container.  This is a container-level mount
     # point set via the Batch API Volume spec — not subject to COS host-level
-    # path restrictions.  Standardized to /mnt/filestore across all VM types
-    # (workers, orchestrators, browser host) for consistent path resolution.
+    # path restrictions. Standardized to /mnt/filestore across Batch worker
+    # and orchestrator VMs for consistent path resolution.
     # RUNS_DIR is set to <mount_path>/runs so run-id directories live in a
     # runs/ subdirectory on the share, not at the share root.
     filestore_mount_path: str = "/mnt/filestore"
@@ -480,7 +480,7 @@ def get_container_runs_dir(config: GCPBatchConfig) -> str:
     """Return the RUNS_DIR path jobs should use inside the container.
 
     For Filestore-backed cloud runs, always prefer the container mount path so
-    serialized runtime vars cannot leak a workstation-local RUNS_DIR into
+    serialized runtime vars cannot leak a caller-local RUNS_DIR into
     child commands.
     """
     if config.filestore_server:

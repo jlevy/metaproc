@@ -10,6 +10,7 @@ from softschema import validate_artifact
 from typer.testing import CliRunner
 
 from metaproc.cli import app
+from metaproc.errors import CLIError
 from metaproc.plugins.discovery import get_plugin_registry
 
 runner = CliRunner()
@@ -66,6 +67,35 @@ class TestSubcommandRegistration:
     def test_validate_help(self):
         result = runner.invoke(app, ["validate", "--help"])
         assert result.exit_code == 0
+
+    @pytest.mark.parametrize("command", ["status", "validate"])
+    def test_split_tree_options_are_not_registered(self, command: str) -> None:
+        result = runner.invoke(app, [command, "--help"])
+        assert result.exit_code == 0
+        assert "cloud-runs-dir" not in result.output
+
+    def test_split_tree_pool_recovery_is_not_registered(self) -> None:
+        result = runner.invoke(app, ["pool", "retry-missing", "--help"])
+        assert result.exit_code != 0
+
+    def test_status_rejects_missing_local_run_directory(self, tmp_path) -> None:
+        missing_run = tmp_path / "missing-run"
+
+        result = runner.invoke(app, ["status", str(missing_run), "--check", "completed"])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, CLIError)
+        assert "locally visible run directory not found" in str(result.exception)
+        assert "metaproc gcp status" in str(result.exception)
+
+    def test_pool_status_rejects_missing_local_run_directory(self, tmp_path) -> None:
+        missing_run = tmp_path / "missing-run"
+
+        result = runner.invoke(app, ["pool", "status", str(missing_run)])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, CLIError)
+        assert "locally visible run directory not found" in str(result.exception)
 
     def test_softschema_help(self):
         result = runner.invoke(app, ["softschema", "--help"])

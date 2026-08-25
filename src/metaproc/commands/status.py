@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import sys
 from pathlib import Path
 
@@ -13,8 +12,6 @@ from prettyfmt import fmt_timedelta
 from ruamel.yaml import YAMLError
 
 from metaproc.cli import app, get_output
-from metaproc.commands.gcp import run_remote_metaproc
-from metaproc.config.env_vars import MetaprocEnv
 from metaproc.engine.resource_finalization import (
     finalize_run_resources,
     infer_recovery_outcome,
@@ -28,7 +25,6 @@ from metaproc.engine.run_status import (
     scan_run_status,
 )
 from metaproc.errors import CLIError
-from metaproc.ids import is_typed_id
 from metaproc.io import read_yaml_file
 from metaproc.io.overrides import read_overrides
 from metaproc.models.plan import Plan
@@ -37,8 +33,6 @@ from metaproc.output import OutputFormat
 from metaproc.viz_loader import load_plan_bundle_from_run
 
 log = logging.getLogger(__name__)
-
-_RUN_ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+){2,}$")
 
 
 def _load_plan_from_run(run_dir: Path) -> Plan | None:
@@ -98,27 +92,6 @@ def _load_plan_from_run(run_dir: Path) -> Plan | None:
             exc,
         )
         return None
-
-
-def _looks_like_run_id(target: str) -> bool:
-    """Return True if ``target`` looks like a run-id rather than a path.
-
-    A typed identifier is recognized by its registered prefix, which is exact rather than
-    heuristic. The pattern below still covers historical untyped run-ids.
-
-    Historical run-ids are lowercase alphanumeric, hyphen-separated, with at least
-    three segments (e.g. ``mine-2026-04-09``, ``cloud-500-ds-2026-04-12``).
-    Their heuristic retains the old 63-character GCP-label bound. Exact typed IDs are
-    not label-limited because modern cloud lookup uses a fixed-width identity hash.
-
-    Requiring multiple segments avoids false positives on short bare
-    words like ``abc`` or ``cache`` that happen to live in cwd. Operators
-    can still force remote mode with ``--remote`` when the heuristic
-    rejects a legitimate run-id.
-    """
-    if is_typed_id(target, "run"):
-        return True
-    return len(target) <= 63 and bool(_RUN_ID_RE.match(target))
 
 
 def _recover_resource_artifacts(run_dir: Path, status: RunStatus) -> None:
@@ -377,168 +350,15 @@ def _format_json(status: RunStatus) -> dict[str, object]:
     return status.model_dump(mode="json")  # pyright: ignore[reportReturnType]
 
 
-def _cloud_verify(
-    run_dir: Path, cloud_runs_dir: str, variant_filter: str | None
-) -> dict[str, dict[str, int]]:
-    """Cross-reference local completed markers against cloud output existence."""
-    cloud_base = Path(cloud_runs_dir)
-    results: dict[str, dict[str, int]] = {}
-
-    for vdir in sorted(run_dir.iterdir()) if run_dir.is_dir() else []:
-        if not vdir.is_dir():
-            continue
-        if variant_filter and vdir.name != variant_filter:
-            continue
-
-        completed = 0
-        verified = 0
-        missing = 0
-
-        for item_d in sorted(vdir.iterdir()):
-            if not item_d.is_dir():
-                continue
-            status_path = item_d / ".state" / "status.yaml"
-            if not status_path.exists():
-                continue
-            # Quick check: is it completed?
-            text = status_path.read_text()
-            if "state: completed" not in text:
-                continue
-            completed += 1
-
-            cloud_item = cloud_base / vdir.name / item_d.name
-            if cloud_item.is_dir() and any(f.is_file() for f in cloud_item.iterdir()):
-                verified += 1
-            else:
-                missing += 1
-
-        if completed > 0:
-            results[vdir.name] = {
-                "completed_local": completed,
-                "verified_cloud": verified,
-                "missing_cloud": missing,
-            }
-
-    return results
-
-
-def _format_cloud_verify(run_dir: Path, cloud_runs_dir: str, variant_filter: str | None) -> str:
-    """Format cloud verification as text."""
-    data = _cloud_verify(run_dir, cloud_runs_dir, variant_filter)
-    if not data:
-        return "\nCloud: no completed items to verify"
-
-    lines = ["\nCloud output verification:"]
-    for vname, counts in data.items():
-        local = counts["completed_local"]
-        verified = counts["verified_cloud"]
-        missing = counts["missing_cloud"]
-        pct = f"{verified * 100 // local}%" if local > 0 else "0%"
-        lines.append(
-            f"  {vname:<35} {verified}/{local} verified ({pct})"
-            + (f"  {missing} missing" if missing else "")
-        )
-    return "\n".join(lines)
-
-
 _STATUS_FORMAT_HUMAN = {"human", "text"}
 _STATUS_FORMAT_JSON = {"json"}
-
-
-def build_remote_status_args(
-    run_id: str,
-    *,
-    remote_base: str,
-    variant: str | None,
-    check: str | None,
-    no_system: bool,
-    steps_only: bool,
-    stale_only: bool,
-) -> list[str]:
-    """Construct the argv passed to the gateway VM's ``metaproc status``.
-
-    Always requests ``--format json`` so the local renderer can parse the
-    payload. All other operator-facing flags propagate so the gateway run
-    produces the same shape the local invocation would have.
-    """
-    args = ["status", f"{remote_base}/{run_id}", "--format", "json"]
-    if variant:
-        args += ["--variant", variant]
-    if no_system:
-        args += ["--no-system"]
-    if check:
-        args += ["--check", check]
-    if steps_only:
-        args += ["--steps"]
-    if stale_only:
-        args += ["--stale-only"]
-    return args
-
-
-def _run_status_remote(
-    *,
-    run_id: str,
-    variant: str | None,
-    check: str | None,
-    no_system: bool,
-    format: str | None,
-    steps_only: bool,
-    stale_only: bool,
-) -> None:
-    """Fetch and render status for ``run_id`` from the Filestore gateway VM.
-
-    Execs ``metaproc status <remote-path> --format json [flags]`` on the
-    gateway over IAP SSH, parses the JSON, and renders it through the
-    local formatter. Avoids SSHFS: the gateway VM already has Filestore
-    mounted and metaproc installed.
-    """
-
-    out = get_output()
-    use_json = (format in _STATUS_FORMAT_JSON) or (out.format == OutputFormat.JSON)
-
-    remote_base = MetaprocEnv.METAPROC_GCP_FILESTORE_REMOTE_RUNS_DIR.read_str(
-        default="/mnt/filestore/runs"
-    )
-    remote_args = build_remote_status_args(
-        run_id,
-        remote_base=remote_base,
-        variant=variant,
-        check=check,
-        no_system=no_system,
-        steps_only=steps_only,
-        stale_only=stale_only,
-    )
-
-    stdout = run_remote_metaproc(remote_args)
-    try:
-        data = json.loads(stdout)
-    except json.JSONDecodeError as err:
-        raise CLIError(
-            f"Could not parse JSON from remote metaproc status: {err}\nOutput was:\n{stdout[:2000]}"
-        ) from err
-
-    if check:
-        # Remote emits {passed, exit_code, reason, ...status} when --check is given.
-        if use_json:
-            json.dump(data, sys.stdout, default=str)
-            sys.stdout.write("\n")
-        exit_code = int(data.get("exit_code", 0))
-        raise SystemExit(exit_code)
-
-    if use_json:
-        json.dump(data, sys.stdout, default=str, indent=2)
-        sys.stdout.write("\n")
-        return
-
-    run_status = RunStatus.model_validate(data)
-    print(_format_text(run_status, steps_only=steps_only, stale_only=stale_only))
 
 
 @app.command()
 def status(
     run_dir: str = typer.Argument(
         ...,
-        help="Path to a local run directory, or a run-id (auto-detected as remote)",
+        help="Path to a locally visible run directory",
     ),
     variant: str | None = typer.Option(None, "--variant", help="Filter to a specific variant"),  # noqa: UP007
     check: str | None = typer.Option(
@@ -550,17 +370,6 @@ def status(
     ),
     failed: bool = typer.Option(False, "--failed", help="Show only failed items"),
     slow: int | None = typer.Option(None, "--slow", help="Show slowest N items"),  # noqa: UP007
-    cloud_runs_dir: str | None = typer.Option(  # noqa: UP007
-        None,
-        "--cloud-runs-dir",
-        help="Cloud storage path — cross-reference local completed markers against actual output",
-    ),
-    remote: bool = typer.Option(
-        False,
-        "--remote",
-        help="Force remote resolution: exec metaproc status on the gateway VM via IAP SSH. "
-        "Auto-detected when the argument is a run-id and no local path with that name exists.",
-    ),
     steps_only: bool = typer.Option(
         False,
         "--steps",
@@ -572,42 +381,18 @@ def status(
         help="Filter the Steps table to non-current rows (stale / invalidated / in_flight).",
     ),
 ) -> None:
-    """Show run progress and status.
-
-    Local path or run-id are both accepted. When a run-id is passed (or
-    ``--remote`` is given), the command execs ``metaproc status`` on the
-    Filestore gateway VM over IAP SSH and renders the result locally —
-    no SSHFS mount needed.
-    """
+    """Show progress and status for a locally visible run directory."""
     out = get_output()
 
     if format is not None and format not in _STATUS_FORMAT_HUMAN | _STATUS_FORMAT_JSON:
         raise CLIError(f"--format must be one of: human, json (got {format!r})")
 
     run_path = Path(run_dir)
-    is_remote = remote or (not run_path.exists() and _looks_like_run_id(run_dir))
-
-    if is_remote:
-        if cloud_runs_dir:
-            # cloud_runs_dir does local↔cloud cross-referencing against a
-            # locally-visible cloud path. In remote mode the run already lives
-            # on the gateway, so the verification surface doesn't apply.
-            raise CLIError(
-                "--cloud-runs-dir is not supported with --remote / run-id mode; "
-                "use `metaproc gcp remote status <run-id> --cloud-runs-dir <path>` "
-                "to run verification on the gateway instead."
-            )
-        _run_status_remote(
-            run_id=run_dir,
-            variant=variant,
-            check=check,
-            no_system=no_system,
-            format=format,
-            steps_only=steps_only,
-            stale_only=stale_only,
+    if not run_path.is_dir():
+        raise CLIError(
+            f"status: locally visible run directory not found: {run_path}. "
+            "For a cloud run, use `metaproc gcp status <run-id>` or hydrate the run tree first."
         )
-        return
-
     plan = _load_plan_from_run(run_path)
     run_status = scan_run_status(run_path, variant=variant, include_system=not no_system, plan=plan)
     _recover_resource_artifacts(run_path, run_status)
@@ -635,8 +420,6 @@ def status(
     # Normal output
     if use_json:
         data = _format_json(run_status)
-        if cloud_runs_dir:
-            data["cloud"] = _cloud_verify(run_path, cloud_runs_dir, variant)
         if stale_only:
             raw_steps = data.get("steps")
             if isinstance(raw_steps, list):
@@ -659,5 +442,3 @@ def status(
         sys.stdout.write("\n")
     else:
         print(_format_text(run_status, steps_only=steps_only, stale_only=stale_only))
-        if cloud_runs_dir and not steps_only:
-            print(_format_cloud_verify(run_path, cloud_runs_dir, variant))

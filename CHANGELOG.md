@@ -7,6 +7,38 @@ development series.
 
 ## [Unreleased][unreleased]
 
+### Fixed
+
+- **Filesystem status fails closed**: `status` and `pool status` reject a nonexistent
+  local run directory instead of projecting an empty tree as complete or healthy.
+
+- **Cloud identity and orchestrator admission remain explicit**: a mounted Filestore
+  preserves attached-identity ADC precedence on persistent GCP hosts, and full-cloud
+  dispatch now supplies its own `METAPROC_GCP_ORCHESTRATOR` admission marker instead of
+  depending only on `BATCH_TASK_INDEX`.
+
+### Changed
+
+- **Full-cloud GCP topology is now enforced**: launching `run-process` with
+  `--backend gcp-worker` from an operator host now fails unless `--cloud` is also set,
+  and direct non-dry `run-parallel --backend gcp-worker` execution requires the GCP
+  Batch runtime marker.
+  The bare backend form remains available to the inner GCP Batch orchestrator, and dry
+  runs remain available for inspection.
+
+### Removed
+
+- **Persistent GCP gateway compatibility**: removed `gcp remote`, `gcp remote-run`,
+  `gcp self-install`, remote status routing, workstation Filestore path aliases, and the
+  `METAPROC_GATEWAY_HOST` and `METAPROC_GCP_FILESTORE_REMOTE_RUNS_DIR` environment
+  variables. Batch-native status and logs remain available, and filesystem-oriented
+  commands now require an explicit locally visible run directory.
+- **Framework-owned run archiving**: removed `gcp archive`; consumers own durable run
+  publication and retention.
+- **Split-tree cloud compatibility**: removed `status --cloud-runs-dir`,
+  `validate --cloud-runs-dir`, and `pool retry-missing`. Hydrated and full-cloud runs
+  use one run tree for state, output validation, and recovery.
+
 ## [0.3.0][] - 2026-08-25
 
 ### Added

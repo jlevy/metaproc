@@ -42,6 +42,7 @@ _SYNTHETIC_PROCESS = str(
     _REPO_ROOT / "tests" / "fixtures" / "fingerprint_smoke" / "fingerprint-smoke.process.md"
 )
 
+from metaproc.commands.helpers import validate_gcp_worker_topology
 from metaproc.commands.run_process import (
     _execute_code_step,
     _execute_composite_step,
@@ -1543,10 +1544,10 @@ class TestCLIDryRun:
 
 
 class TestCLIStaleMetaprocWarning:
-    """The stale-metaproc-wheel warning must fire on both --cloud and hybrid
-    gcp-worker dispatches, not just the full-cloud path. Uses --dry-run so
-    no Batch job is actually submitted; the warning is hoisted above dry-run
-    so operators see it during invocation iteration.
+    """The stale-wheel warning must fire for GCP worker launch previews.
+
+    Uses --dry-run so no Batch job is submitted; the warning is hoisted above
+    dry-run so operators see it while iterating on an invocation.
     """
 
     def _invoke(self, *extra_args: str) -> tuple[int, str]:
@@ -1581,7 +1582,7 @@ class TestCLIStaleMetaprocWarning:
         # CliRunner merges stdout + stderr into result.output.
         return result.exit_code, result.output
 
-    def test_hybrid_gcp_worker_emits_warning(self) -> None:
+    def test_gcp_worker_dry_run_emits_warning(self) -> None:
         exit_code, output = self._invoke("--backend", "gcp-worker")
         assert exit_code == 0, output
         assert "Cloud preflight warning" in output
@@ -1828,6 +1829,52 @@ class TestGCPWorkerBackendFlags:
         assert result.exit_code == 0, (
             f"exit={result.exit_code}, output={result.output}, exc={result.exception}"
         )
+
+    def test_laptop_orchestrator_is_rejected(self) -> None:
+        for task_index in (None, "", "  "):
+            with pytest.raises(CLIError, match="without --cloud"):
+                validate_gcp_worker_topology(
+                    "gcp-worker",
+                    cloud=False,
+                    batch_task_index=task_index,
+                )
+
+    def test_batch_orchestrator_inner_leg_is_allowed(self) -> None:
+        validate_gcp_worker_topology(
+            "gcp-worker",
+            cloud=False,
+            batch_task_index="0",
+        )
+
+    def test_cli_rejects_laptop_orchestrator_before_creating_run_dir(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        runs_dir = tmp_path / "runs"
+        monkeypatch.delenv("BATCH_TASK_INDEX", raising=False)
+        with (
+            patch("metaproc.commands.run_process._preflight_plan_adapters", return_value=[]),
+            patch("metaproc.engine.preflight.run_cloud_preflight_warnings", return_value=[]),
+        ):
+            result = CliRunner().invoke(
+                app,
+                [
+                    "run-process",
+                    _SYNTHETIC_PROCESS,
+                    "--var",
+                    f"RUNS_DIR={runs_dir}",
+                    "--var",
+                    "RUN_ID=unsupported-laptop-orchestrator",
+                    "--backend",
+                    "gcp-worker",
+                ],
+            )
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, CLIError)
+        assert "without --cloud" in str(result.exception)
+        assert not runs_dir.exists()
 
 
 class TestProcessContractValidation:

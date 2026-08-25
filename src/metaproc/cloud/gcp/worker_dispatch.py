@@ -1,7 +1,7 @@
 """Worker VM dispatch — submit N dense worker VMs for fan-out execution.
 
-Used by ``run-process --backend gcp-worker``. Partitions items across N worker
-VMs (round-robin), submits GCP Batch jobs each running
+Used by the inner orchestrator of a full-cloud ``run-process``. Partitions items across
+N worker VMs (round-robin), submits GCP Batch jobs each running
 ``metaproc run-parallel --backend local``, and polls until all complete.
 Results land on Filestore NFS.
 """
@@ -573,13 +573,9 @@ async def _submit_workers(
         # env-var names and CSV encoding so this site does not hardcode
         # any "METAPROC_AUTH_*" strings.
         #
-        # Prefer the explicitly-resolved flags from
-        # :class:`WorkerDispatchConfig`. Hybrid (`run-process --backend
-        # gcp-worker`) only has these as CLI flags, never as env vars,
-        # so a ``from_env()`` fallback at this site silently dropped the
-        # entire auth chain. The ``from_env()`` fallback is preserved
-        # for the full-cloud orchestrator container path, which
-        # genuinely sources METAPROC_AUTH_* from the Batch job env.
+        # Prefer explicitly resolved flags from WorkerDispatchConfig. The
+        # fallback supports orchestrator containers that source
+        # METAPROC_AUTH_* directly from the Batch job environment.
         auth_flags = (
             config.auth_flags
             if config.auth_flags.is_pool_dispatch_enabled()

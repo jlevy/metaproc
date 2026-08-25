@@ -52,24 +52,26 @@ def _remove_temporary_credential(path: Path) -> None:
         path.unlink()
 
 
-def _is_on_cloud_vm() -> bool:
-    """Detect if running on a GCP cloud VM (Batch worker, orchestrator, browser host).
+def _is_in_gcp_batch() -> bool:
+    """Detect whether the process is running in a GCP Batch task.
 
-    On cloud VMs, the attached service account provides credentials via ADC
+    In Batch, the attached service account provides credentials via ADC
     (metadata server). We should NOT use ``GCP_CREDENTIALS_BASE64`` there — it
     may be stale or absent, and ADC is the correct auth path.
     """
     # GCP Batch sets BATCH_TASK_INDEX on all worker/orchestrator containers.
-    if MetaprocEnv.BATCH_TASK_INDEX.read_str(default=None) is not None:
+    task_index = MetaprocEnv.BATCH_TASK_INDEX.read_str(default=None)
+    return bool(task_index and task_index.strip())
+
+
+def _should_prefer_attached_gcp_identity() -> bool:
+    """Return whether runtime evidence supports using the attached GCP identity."""
+    if _is_in_gcp_batch():
         return True
-    # Filestore mount path set → likely a cloud VM with Filestore mounted.
-    if MetaprocEnv.METAPROC_GCP_FILESTORE_SERVER.read_str(default=None):
-        mount_path = MetaprocEnv.METAPROC_GCP_FILESTORE_MOUNT_PATH.read_str(
-            default="/mnt/filestore"
-        )
-        if Path(mount_path).is_mount():
-            return True
-    return False
+    if not MetaprocEnv.METAPROC_GCP_FILESTORE_SERVER.read_str(default=None):
+        return False
+    mount_path = MetaprocEnv.METAPROC_GCP_FILESTORE_MOUNT_PATH.read_str(default="/mnt/filestore")
+    return Path(mount_path).is_mount()
 
 
 def _bootstrap_credentials_from_base64() -> None:
@@ -84,8 +86,8 @@ def _bootstrap_credentials_from_base64() -> None:
     """
     if MetaprocEnv.GOOGLE_APPLICATION_CREDENTIALS.read_str(default=None):
         return  # already set — nothing to do
-    if _is_on_cloud_vm():
-        log.debug("Running on cloud VM — skipping GCP_CREDENTIALS_BASE64, using ADC")
+    if _should_prefer_attached_gcp_identity():
+        log.debug("Attached GCP identity detected; skipping GCP_CREDENTIALS_BASE64 and using ADC")
         return
     b64 = MetaprocEnv.GCP_CREDENTIALS_BASE64.read_str(default="")
     if not b64:

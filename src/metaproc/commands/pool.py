@@ -14,14 +14,13 @@ from prettyfmt import fmt_timedelta
 
 from metaproc import paths as paths_mod
 from metaproc.cli import app, get_output
+from metaproc.errors import CLIError
 from metaproc.io import (
     artifact_exists,
     iter_artifact_paths,
     iter_jsonl_objects,
     resolve_existing_artifact,
 )
-from metaproc.io.state_io import read_status_at, write_status_at
-from metaproc.models.runtime import StatusRecord
 from metaproc.paths import LOGS_DIR, POOL_STATUS_FILE, SCALE_OVERRIDE_FILE, STATE_DIR
 from metaproc.runpool.host_admission import (
     DEFAULT_HOST_ADMISSION_NAMESPACE,
@@ -110,6 +109,11 @@ def pool_status(
     pool anywhere under the composite run".
     """
     out = get_output()
+    if not run_dir.is_dir():
+        raise CLIError(
+            f"pool status: locally visible run directory not found: {run_dir}. "
+            "Hydrate the run tree or execute the command where its files are mounted."
+        )
 
     entries = _composite_pool_status_files(run_dir)
 
@@ -1474,112 +1478,6 @@ def _render_rollup(rollup: dict[str, Any], *, out: Any, with_auth_outcomes: bool
         for step, by_label in auth["by_step_label"].items():
             out.data(f"    {step}: {by_label}")
     out.data(f"\n  Rotations: {auth.get('rotated', 0)}")
-
-
-@pool_app.command("retry-missing")
-def retry_missing(
-    run_dir: Path = typer.Argument(..., help="Local run directory"),
-    cloud_runs_dir: str = typer.Option(
-        ..., "--cloud-runs-dir", help="Cloud storage path to check output existence"
-    ),
-    variant: str | None = typer.Option(None, "--variant", help="Filter to a specific variant"),  # noqa: UP007
-    expected_files: str = typer.Option(
-        "", "--expected-files", help="Comma-separated output filenames to check"
-    ),
-    dry_run: bool = typer.Option(
-        False, "--dry-run", help="Show what would be reset without changing state"
-    ),
-) -> None:
-    """Reset completion markers for items where cloud output is missing.
-
-    Scans the local run directory for items marked "completed", checks if
-    expected output files exist at the cloud path, and resets missing items
-    to "failed" so run-parallel will retry them.
-    """
-    out = get_output()
-    cloud_base = Path(cloud_runs_dir)
-
-    if not run_dir.is_dir():
-        out.data(f"Run directory not found: {run_dir}")
-        raise typer.Exit(code=1)
-
-    expected = [f.strip() for f in expected_files.split(",") if f.strip()] if expected_files else []
-
-    # Discover per-step task state roots at <run>/.state/tasks/<step_id>/.
-    # --variant filters by step_id.
-    tasks_root = run_dir / STATE_DIR / "tasks"
-    variant_dirs: list[Path] = []
-    if tasks_root.exists():
-        for candidate in sorted(tasks_root.iterdir()):
-            if not candidate.is_dir():
-                continue
-            if variant and candidate.name != variant:
-                continue
-            has_items = any(
-                (item / "status.yaml").exists() for item in candidate.iterdir() if item.is_dir()
-            )
-            if has_items:
-                variant_dirs.append(candidate)
-
-    if not variant_dirs:
-        out.data("No variant directories found")
-        raise typer.Exit(code=1)
-
-    total_reset = 0
-    total_checked = 0
-
-    for vdir in variant_dirs:
-        variant_name = vdir.name
-        cloud_variant_dir = cloud_base / variant_name
-
-        for item_d in sorted(vdir.iterdir()):
-            if not item_d.is_dir():
-                continue
-            # item_d is the per-task state dir; status.yaml lives directly inside.
-            record = read_status_at(item_d)
-            if record is None or record.state != "completed":
-                continue
-
-            total_checked += 1
-            item_name = item_d.name
-            cloud_item_dir = cloud_variant_dir / item_name
-
-            # Check output existence on cloud
-            missing: list[str] = []
-            if expected:
-                for fname in expected:
-                    if not (cloud_item_dir / fname).exists():
-                        missing.append(fname)
-            elif not cloud_item_dir.is_dir():
-                missing.append("<directory>")
-            else:
-                # No expected files specified — check dir is non-empty (has files, not just subdirs)
-                has_output = any(f.is_file() for f in cloud_item_dir.iterdir())
-                if not has_output:
-                    missing.append("<no output files>")
-
-            if missing:
-                total_reset += 1
-                if dry_run:
-                    out.data(
-                        f"  would reset  {variant_name}/{item_name}: missing {', '.join(missing)}"
-                    )
-                else:
-                    # Reset to failed so run-parallel retries it
-                    reset_record = StatusRecord(
-                        run_id=record.run_id,
-                        step_id=record.step_id,
-                        item=record.item,
-                        state="failed",
-                        attempt=record.attempt,
-                        started_at=record.started_at,
-                        error=f"cloud output missing: {', '.join(missing)}",
-                    )
-                    write_status_at(item_d, reset_record)
-                    out.data(f"  reset  {variant_name}/{item_name}: missing {', '.join(missing)}")
-
-    action = "Would reset" if dry_run else "Reset"
-    out.data(f"\n{action}: {total_reset}/{total_checked} completed items missing cloud output")
 
 
 @pool_app.command("override")

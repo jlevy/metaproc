@@ -110,7 +110,6 @@ For procedural how-tos, see the runbooks under [`runbooks/`](../../../docs/runbo
 | [`cloud-dispatch.runbook.md`](../../../docs/runbooks/cloud-dispatch.runbook.md) | Running, monitoring, and recovering jobs on GCP Batch (`--backend gcp-worker`). |
 | [`adapter-compatibility.runbook.md`](../../../docs/runbooks/adapter-compatibility.runbook.md) | Adapter-routing pitfalls (pi-cli API matrix, Gemini 3 `thought_signature`, ADC on Batch, `derive_variant` cascade). |
 | [`adding-a-new-llm-provider.runbook.md`](../../../docs/runbooks/adding-a-new-llm-provider.runbook.md) | Onboarding a new model or provider into the dispatch matrix. |
-| [`claude-code-cli-remote-vm.runbook.md`](../../../docs/runbooks/claude-code-cli-remote-vm.runbook.md) | Operator setup for the Claude Code CLI on a remote VM. |
 | [`softschema-validation.runbook.md`](../../../docs/runbooks/softschema-validation.runbook.md) | Validating softschema-tagged artifacts. |
 | [`browser-streaming-smoke.runbook.md`](../../../docs/runbooks/browser-streaming-smoke.runbook.md) | Browser streaming smoke procedure. |
 
@@ -390,8 +389,9 @@ OAuth check because it would override the scoped Codex credential.
 ## Local, Cloud, and Worker Execution
 
 Local runs use the default local backend.
-Cloud fan-out uses `--backend gcp-worker` or the workflow’s cloud-oriented wrapper
-options; use command help for the current flag set:
+Cloud fan-out uses `--backend gcp-worker --cloud` or the workflow’s cloud-oriented
+wrapper options. The bare `gcp-worker` backend is reserved for the inner Batch
+orchestrator leg. Use command help for the current flag set:
 
 ```bash
 uv run metaproc run-process --help

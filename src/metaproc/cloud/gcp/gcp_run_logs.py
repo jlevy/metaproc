@@ -233,7 +233,7 @@ def tail_gcp_run_logs(
             if logging_client is not None:
                 logging_client.close()
         finally:
-            batch_client.close()
+            batch_client.transport.close()
 
 
 def build_log_url(job_resource_name: str) -> str:

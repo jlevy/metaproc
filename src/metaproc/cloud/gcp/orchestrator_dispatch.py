@@ -176,6 +176,7 @@ async def dispatch_orchestrator(
         env_vars["METAPROC_AUTH_POOL"] = pool_user
 
     # Forward GCP config so orchestrator can dispatch workers.
+    env_vars["METAPROC_GCP_ORCHESTRATOR"] = "1"
     env_vars["METAPROC_GCP_PROJECT"] = config.gcp.project
     env_vars["METAPROC_GCP_REGION"] = config.gcp.region
     env_vars["METAPROC_GCP_CONTAINER_IMAGE"] = config.gcp.container_image
