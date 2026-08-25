@@ -13,9 +13,11 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import cast
+from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import psutil
@@ -34,8 +36,11 @@ from metaproc.commands.run_process import (
 )
 from metaproc.errors import CLIError
 from metaproc.io import read_yaml_file
+from metaproc.io.state_io import read_attempt_history_at, read_status_at
 from metaproc.models.authored import ForEach, ProcessSpec, ProcessStep, StepContext
 from metaproc.models.plan import FanOut, Plan, ResolvedAdapter, ResolvedStep
+from metaproc.models.runtime import AttemptDisposition
+from metaproc.runpool.pool import ProcessConfig
 
 
 class _Out:
@@ -60,6 +65,9 @@ def test_composite_reuses_parent_execution_context(tmp_path: Path) -> None:
     async def fake_orchestrate(**kwargs: object) -> None:
         captured["execution_context"] = kwargs["execution_context"]
         captured["scope_path"] = kwargs["scope_path"]
+        captured["run_id"] = kwargs["run_id"]
+        captured["run_dir"] = kwargs["run_dir"]
+        captured["variables"] = kwargs["variables"]
 
     async def exercise() -> bool:
         context = RunExecutionContext.create(max_concurrency=2)
@@ -78,6 +86,11 @@ def test_composite_reuses_parent_execution_context(tmp_path: Path) -> None:
                 )
             assert captured["execution_context"] is context
             assert captured["scope_path"] == ("child",)
+            assert captured["run_id"] == "test/run-1/child"
+            assert captured["run_dir"] == tmp_path / "run" / "child"
+            child_variables = cast(dict[str, str], captured["variables"])
+            assert child_variables["RUN_ID"] == "run-1/child"
+            assert child_variables["run.dir"] == str((tmp_path / "run" / "child").resolve())
             return result
         finally:
             context.close()
@@ -119,17 +132,23 @@ def test_mapped_composite_scopes_share_run_context_and_leaf_ceiling(tmp_path: Pa
         ),
     )
     captured: list[RunExecutionContext] = []
+    captured_keys: list[str] = []
     all_scopes_started = asyncio.Event()
     active_leaves = 0
     peak_leaves = 0
+    events = MagicMock()
 
     async def fake_execute_composite_step(**kwargs: object) -> bool:
         nonlocal active_leaves, peak_leaves
         context = cast(RunExecutionContext, kwargs["execution_context"])
+        variables = cast(dict[str, str], kwargs["variables"])
         captured.append(context)
+        captured_keys.append(cast(str, kwargs["mapped_item_key"]))
         if len(captured) == 3:
             all_scopes_started.set()
         await asyncio.wait_for(all_scopes_started.wait(), timeout=0.5)
+        if variables["item"] == "brvo":
+            raise OSError("injected child-scope failure")
         async with _leaf_slot(context):
             active_leaves += 1
             peak_leaves = max(peak_leaves, active_leaves)
@@ -153,15 +172,171 @@ def test_mapped_composite_scopes_share_run_context_and_leaf_ceiling(tmp_path: Pa
                     run_id="test/run-1",
                     scope_path=(),
                     execution_context=context,
+                    events=events,
                     out=_Out(),
                 )
             assert captured == [context, context, context]
+            assert sorted(captured_keys) == ["alfa", "brvo", "chrl"]
             assert peak_leaves == 1
+            state_root = tmp_path / "run" / ".state" / "tasks" / "mapped-child"
+            statuses = {
+                item: read_status_at(state_root / item) for item in ("alfa", "brvo", "chrl")
+            }
+            assert all(status is not None for status in statuses.values())
+            assert statuses["alfa"] is not None and statuses["alfa"].state == "completed"
+            assert statuses["brvo"] is not None and statuses["brvo"].state == "failed"
+            assert statuses["chrl"] is not None and statuses["chrl"].state == "completed"
             return result
         finally:
             context.close()
 
+    assert asyncio.run(exercise()) is False
+    assert sorted(call.args[1] for call in events.item_start.call_args_list) == [
+        "alfa",
+        "brvo",
+        "chrl",
+    ]
+    assert sorted(call.args[1] for call in events.item_complete.call_args_list) == [
+        "alfa",
+        "chrl",
+    ]
+    assert [call.args[1] for call in events.item_fail.call_args_list] == ["brvo"]
+
+
+def test_mapped_composite_has_a_structural_scope_default(tmp_path: Path) -> None:
+    roster_path = tmp_path / "roster.md"
+    roster_path.write_text(
+        "---\nprogress:\n  items:\n    - item: alfa\n---\n",
+        encoding="utf-8",
+    )
+    child_spec_path = tmp_path / "child.process.md"
+    child_spec_path.write_text(
+        "---\nprocess:\n  name: child\n  steps: []\n---\n",
+        encoding="utf-8",
+    )
+    step_def = ProcessStep(
+        id="mapped-child",
+        mode="composite",
+        uses="deps.child",
+        for_each=ForEach(
+            over="deps.roster",
+            bind="item",
+            bind_fields=["item"],
+            key="{{item}}",
+        ),
+    )
+    target = ResolvedStep(
+        step_id="mapped-child",
+        mode="composite",
+        uses_path=str(child_spec_path),
+        fan_out=FanOut(
+            over="deps.roster",
+            bind="item",
+            source=str(roster_path),
+            bind_fields=["item"],
+        ),
+    )
+    run_fan_out = AsyncMock(return_value=(1, 1))
+
+    async def exercise() -> bool:
+        context = RunExecutionContext.create(max_concurrency=None)
+        try:
+            with patch("metaproc.commands.run_process.run_fan_out", run_fan_out):
+                return await _execute_composite_fan_out_step(
+                    step_def=step_def,
+                    target=target,
+                    variables={},
+                    process_dir=tmp_path,
+                    run_dir=tmp_path / "run",
+                    run_id="test/run-1",
+                    scope_path=(),
+                    execution_context=context,
+                    out=_Out(),
+                )
+        finally:
+            context.close()
+
     assert asyncio.run(exercise()) is True
+    assert run_fan_out.await_args is not None
+    scope_ceiling = run_fan_out.await_args.kwargs["max_concurrency"]
+    assert isinstance(scope_ceiling, int) and scope_ceiling > 0
+
+
+def test_mapped_composite_cancellation_ends_parent_attempt(tmp_path: Path) -> None:
+    roster_path = tmp_path / "roster.md"
+    roster_path.write_text(
+        "---\nprogress:\n  items:\n    - item: alfa\n---\n",
+        encoding="utf-8",
+    )
+    child_spec_path = tmp_path / "child.process.md"
+    child_spec_path.write_text(
+        "---\nprocess:\n  name: child\n  steps: []\n---\n",
+        encoding="utf-8",
+    )
+    step_def = ProcessStep(
+        id="mapped-child",
+        mode="composite",
+        uses="deps.child",
+        for_each=ForEach(
+            over="deps.roster",
+            bind="item",
+            bind_fields=["item"],
+            key="{{item}}",
+        ),
+    )
+    target = ResolvedStep(
+        step_id="mapped-child",
+        mode="composite",
+        uses_path=str(child_spec_path),
+        fan_out=FanOut(
+            over="deps.roster",
+            bind="item",
+            source=str(roster_path),
+            bind_fields=["item"],
+        ),
+    )
+    child_started = asyncio.Event()
+
+    async def wait_forever(**_kwargs: object) -> bool:
+        child_started.set()
+        await asyncio.Event().wait()
+        return True
+
+    async def exercise() -> None:
+        context = RunExecutionContext.create(max_concurrency=1)
+        try:
+            with patch(
+                "metaproc.commands.run_process._execute_composite_step",
+                wait_forever,
+            ):
+                task = asyncio.create_task(
+                    _execute_composite_fan_out_step(
+                        step_def=step_def,
+                        target=target,
+                        variables={},
+                        process_dir=tmp_path,
+                        run_dir=tmp_path / "run",
+                        run_id="test/run-1",
+                        scope_path=(),
+                        execution_context=context,
+                        out=_Out(),
+                    )
+                )
+                await asyncio.wait_for(child_started.wait(), timeout=1)
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+        finally:
+            context.close()
+
+    asyncio.run(exercise())
+    state_dir = tmp_path / "run" / ".state" / "tasks" / "mapped-child" / "alfa"
+    status = read_status_at(state_dir)
+    assert status is not None
+    assert status.state == "failed"
+    assert status.error == "mapped child process cancelled"
+    history = read_attempt_history_at(state_dir)
+    assert [attempt.disposition for attempt in history] == [AttemptDisposition.cancelled]
 
 
 def test_mapped_composite_rejects_gcp_worker_partitioning(tmp_path: Path) -> None:
@@ -530,6 +705,113 @@ def test_scalar_agent_steps_share_one_executable_leaf_ceiling(tmp_path: Path) ->
 
     assert asyncio.run(exercise()) == [True, True]
     assert peak == 1
+
+
+def test_scalar_agent_steps_use_one_run_owned_pool(tmp_path: Path) -> None:
+    adapter = MagicMock()
+    adapter.build_command.return_value = ["fake-adapter"]
+    adapter.prepare_env.side_effect = lambda env, _config: env
+    adapter.working_directory.return_value = None
+    submitted: list[ProcessConfig] = []
+    pool = MagicMock()
+    pool.shutdown = AsyncMock()
+
+    def submit(config: ProcessConfig) -> asyncio.Future[Any]:
+        submitted.append(config)
+        launch = config.launch
+        assert launch is not None and launch.log_path is not None
+        launch.log_path.write_text("", encoding="utf-8")
+        future = asyncio.get_running_loop().create_future()
+        future.set_result(SimpleNamespace(exit_code=0, kill_reason=None))
+        return future
+
+    pool.submit.side_effect = submit
+
+    @asynccontextmanager
+    async def no_host_admission(**_kwargs: object) -> AsyncGenerator[None]:
+        yield None
+
+    async def exercise() -> list[bool]:
+        context = RunExecutionContext.create(
+            max_concurrency=2,
+            run_dir=tmp_path / "run",
+            enable_run_pool=True,
+        )
+        direct_launch = AsyncMock(side_effect=AssertionError("direct launch used"))
+        pool_factory = MagicMock(return_value=pool)
+        try:
+            with (
+                patch("metaproc.commands.run_process.RunPool", pool_factory),
+                patch("metaproc.commands.run_process.get_adapter", return_value=adapter),
+                patch(
+                    "metaproc.commands.run_process._run_agent_subprocess",
+                    direct_launch,
+                ),
+                patch(
+                    "metaproc.commands.run_process.admitted_launch",
+                    no_host_admission,
+                ),
+                patch(
+                    "metaproc.commands.run_process.capture_repo_snapshot",
+                    return_value=None,
+                ),
+            ):
+                results = await asyncio.gather(
+                    *(
+                        _execute_agent_step(
+                            spec=ProcessSpec(name="test"),
+                            step_def=ProcessStep(
+                                id=step_id,
+                                mode="agent",
+                                prompt_prefix="test",
+                            ),
+                            target=ResolvedStep(
+                                step_id=step_id,
+                                mode="agent",
+                                adapter=ResolvedAdapter(type="test", config={}),
+                            ),
+                            variables={},
+                            process_dir=tmp_path,
+                            run_dir=tmp_path / "run",
+                            run_id="test/run-1",
+                            execution_context=context,
+                            out=_Out(),
+                        )
+                        for step_id in ("left", "right")
+                    )
+                )
+            assert direct_launch.await_count == 0
+            assert pool_factory.call_count == 1
+            return results
+        finally:
+            await context.aclose()
+
+    assert asyncio.run(exercise()) == [True, True]
+    assert len(submitted) == 2
+    assert {config.label for config in submitted} == {
+        "test/run-1/left",
+        "test/run-1/right",
+    }
+    assert all(config.execution_profile == "test" for config in submitted)
+    pool.shutdown.assert_awaited_once()
+
+
+def test_run_context_closes_executor_when_pool_shutdown_fails(tmp_path: Path) -> None:
+    context = RunExecutionContext.create(
+        max_concurrency=None,
+        run_dir=tmp_path / "run",
+        enable_run_pool=True,
+    )
+    assert context.run_pool_owner is not None
+    pool = MagicMock()
+    pool.shutdown = AsyncMock(side_effect=OSError("injected pool shutdown failure"))
+    cast(Any, context.run_pool_owner).pool = pool
+
+    with pytest.raises(OSError, match="injected pool shutdown failure"):
+        asyncio.run(context.aclose())
+
+    with pytest.raises(RuntimeError, match="cannot schedule new futures after shutdown"):
+        context.sync_executor.submit(lambda: None)
 
 
 def _write_blocking_process_tree_script(

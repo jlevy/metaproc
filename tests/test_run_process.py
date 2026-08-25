@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
+import shlex
 import subprocess
 import sys
 import textwrap
@@ -39,6 +41,8 @@ from metaproc.logutil.resource_events import read_events
 from metaproc.models.resource_budget import FinalizationState
 from metaproc.models.resources import ResourcesDocument, SampleEvent, read_resources_document
 from metaproc.models.runtime import ResultRecord
+from metaproc.runpool.backend import LaunchBackend
+from metaproc.runpool.pool import RunPool, RunPoolConfig
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SYNTHETIC_PROCESS = str(
@@ -254,6 +258,55 @@ def test_run_process_preserves_original_failure_and_releases_lease_when_finalize
 
     assert result.exception is original_error
     assert released == [tmp_path / "runs" / "run-1"]
+
+
+def test_run_process_preserves_original_failure_when_pool_shutdown_also_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process_path = tmp_path / "causal.process.md"
+    process_path.write_text(
+        "---\nprocess:\n  name: causal\n  steps:\n    - id: noop\n"
+        "      mode: code\n      command: 'true'\n---\n"
+    )
+    original_error = RuntimeError("orchestration failed")
+
+    async def fail_orchestration(**_kwargs: object) -> None:
+        raise original_error
+
+    context = RunExecutionContext.create(
+        max_concurrency=None,
+        run_dir=tmp_path / "runs" / "run-1",
+        enable_run_pool=True,
+    )
+    assert context.run_pool_owner is not None
+    pool = MagicMock()
+    pool.shutdown = AsyncMock(side_effect=OSError("pool shutdown failed"))
+    context.run_pool_owner.pool = pool
+
+    monkeypatch.setattr("metaproc.commands.run_process._orchestrate", fail_orchestration)
+    monkeypatch.setattr(
+        "metaproc.commands.run_process.RunExecutionContext.create",
+        lambda **_kwargs: context,
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-process",
+            str(process_path),
+            "--var",
+            f"RUNS_DIR={tmp_path / 'runs'}",
+            "--var",
+            "RUN_ID=run-1",
+        ],
+    )
+
+    assert result.exception is original_error
+    assert getattr(original_error, "__notes__", []) == [
+        "run-owned execution cleanup also failed: OSError('pool shutdown failed')"
+    ]
+    pool.shutdown.assert_awaited_once()
 
 
 def test_agent_subprocesses_do_not_block_the_dag_event_loop(tmp_path: Path) -> None:
@@ -1738,15 +1791,15 @@ class TestCompositeStepExecution:
                     fail_marker: { param: FAIL_MARKER, as: path }
                   outputs:
                     report:
-                      path: "{{run.dir}}/artifacts/{{TICKER}}.txt"
+                      path: "{{run.dir}}/report.txt"
                       as: path
                   steps:
                     - id: write-report
                       mode: code
                       command: >-
                         /bin/sh -c 'if [ "{{SHOULD_FAIL}}" = "true" ] && [ -f "{{FAIL_MARKER}}" ]; then exit 7; fi;
-                        mkdir -p "{{run.dir}}/artifacts";
-                        printf "%s\\n" "{{TICKER}}" > "{{run.dir}}/artifacts/{{TICKER}}.txt"'
+                        mkdir -p "{{run.dir}}";
+                        printf "%s\\n" "{{TICKER}}" > "{{run.dir}}/report.txt"'
                 ---
                 One deterministic child scope per item.
                 """
@@ -1784,7 +1837,7 @@ class TestCompositeStepExecution:
                         FAIL_MARKER: "{{FAIL_MARKER}}"
                       outputs:
                         report:
-                          path: "{{run.dir}}/artifacts/{{ticker}}.txt"
+                          path: "{{run.dir}}/ticker-flow/{{ticker}}/report.txt"
                           kind: file
                 ---
                 Minimal mapped-composite parent.
@@ -1822,6 +1875,20 @@ class TestCompositeStepExecution:
         assert (run_dir / "ticker-flow" / "brvo" / STATE_DIR / "process-status.yaml").exists()
         assert (run_dir / "ticker-flow" / "chrl" / STATE_DIR / "process-status.yaml").exists()
         assert not list((run_dir / "ticker-flow").rglob(ORCHESTRATOR_LEASE_FILE))
+        process_events_path = run_dir / LOGS_DIR / "process-events.jsonl"
+        first_events = [
+            json.loads(line)
+            for line in process_events_path.read_text(encoding="utf-8").splitlines()
+        ]
+        assert sorted(
+            event["item_key"] for event in first_events if event["event"] == "item_start"
+        ) == ["alfa", "brvo", "chrl"]
+        assert sorted(
+            event["item_key"] for event in first_events if event["event"] == "item_complete"
+        ) == ["alfa", "chrl"]
+        assert [event["item_key"] for event in first_events if event["event"] == "item_fail"] == [
+            "brvo"
+        ]
 
         fail_marker.unlink()
         second = runner.invoke(app, args)
@@ -1837,9 +1904,150 @@ class TestCompositeStepExecution:
             AttemptDisposition.succeeded
         ]
         assert {
-            path.name: path.read_text(encoding="utf-8").strip()
-            for path in (run_dir / "artifacts").glob("*.txt")
-        } == {"alfa.txt": "alfa", "brvo.txt": "brvo", "chrl.txt": "chrl"}
+            child_dir.name: (child_dir / "report.txt").read_text(encoding="utf-8").strip()
+            for child_dir in (run_dir / "ticker-flow").iterdir()
+            if child_dir.is_dir()
+        } == {"alfa": "alfa", "brvo": "brvo", "chrl": "chrl"}
+        all_events = [
+            json.loads(line)
+            for line in process_events_path.read_text(encoding="utf-8").splitlines()
+        ]
+        assert [event["item_key"] for event in all_events if event["event"] == "item_start"].count(
+            "brvo"
+        ) == 2
+        assert [
+            event["item_key"] for event in all_events if event["event"] == "item_complete"
+        ].count("brvo") == 1
+
+    def test_mapped_scalar_agents_share_one_real_run_pool(self, tmp_path: Path) -> None:
+        process_dir = tmp_path / "process"
+        process_dir.mkdir()
+        (process_dir / "roster.md").write_text(
+            "---\nprogress:\n  items:\n    - ticker: alfa\n    - ticker: brvo\n---\n",
+            encoding="utf-8",
+        )
+        (process_dir / "child.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: agent-child
+                  inputs:
+                    ticker: { param: TICKER, as: string }
+                  outputs:
+                    analysis: { path: "{{run.dir}}/analysis.txt", as: path }
+                  steps:
+                    - id: analyze
+                      mode: agent
+                      prompt_prefix: "Analyze {{TICKER}}."
+                      outputs:
+                        analysis: { path: "{{run.dir}}/analysis.txt", kind: file }
+                ---
+                One scalar agent leaf.
+                """
+            ),
+            encoding="utf-8",
+        )
+        (process_dir / "parent.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: mapped-agent-pool-smoke
+                  deps:
+                    roster: { path: ./roster.md, as: path }
+                    child: { path: ./child.process.md, as: path }
+                  steps:
+                    - id: ticker-flow
+                      mode: composite
+                      uses: deps.child
+                      for_each:
+                        over: deps.roster
+                        bind: ticker
+                        bind_fields: [ticker]
+                        key: "{{ticker}}"
+                      with:
+                        TICKER: "{{ticker}}"
+                      outputs:
+                        analysis:
+                          path: "{{run.dir}}/ticker-flow/{{ticker}}/analysis.txt"
+                          kind: file
+                ---
+                Two mapped scalar leaves.
+                """
+            ),
+            encoding="utf-8",
+        )
+        adapter = MagicMock()
+        adapter.preflight.return_value = None
+
+        def build_command(
+            _prompt_file: Path,
+            _config: dict[str, object],
+            variables: dict[str, str],
+        ) -> list[str]:
+            output_path = Path(variables["run.dir"]) / "analysis.txt"
+            command = (
+                f"sleep 0.05; mkdir -p {shlex.quote(str(output_path.parent))}; "
+                f"printf done > {shlex.quote(str(output_path))}"
+            )
+            return ["/bin/sh", "-c", command]
+
+        adapter.build_command.side_effect = build_command
+        adapter.prepare_env.side_effect = lambda env, _config: env
+        adapter.working_directory.return_value = None
+        real_run_pool = RunPool
+
+        def fast_run_pool(
+            pool_config: RunPoolConfig | None = None,
+            backend: LaunchBackend | None = None,
+        ) -> RunPool:
+            assert pool_config is not None
+            return real_run_pool(
+                pool_config.model_copy(update={"monitor_interval_s": 0.01}),
+                backend=backend,
+            )
+
+        runs_dir = tmp_path / "runs"
+        direct_launch = AsyncMock(side_effect=AssertionError("direct scalar launch used"))
+        with (
+            patch("metaproc.commands.run_process.get_adapter", return_value=adapter),
+            patch("metaproc.commands.run_process.RunPool", side_effect=fast_run_pool),
+            patch(
+                "metaproc.commands.run_process._run_agent_subprocess",
+                direct_launch,
+            ),
+        ):
+            result = CliRunner().invoke(
+                app,
+                [
+                    "run-process",
+                    str(process_dir / "parent.process.md"),
+                    "--var",
+                    f"RUNS_DIR={runs_dir}",
+                    "--var",
+                    "RUN_ID=gtia-v30pre-real-pool-l0",
+                    "--max-concurrency",
+                    "2",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert direct_launch.await_count == 0
+        run_dir = runs_dir / "gtia-v30pre-real-pool-l0"
+        status = read_yaml_file(run_dir / STATE_DIR / "runpool-status.yaml")
+        assert status["completed_count"] == 2
+        assert status["failed_count"] == 0
+        assert status["lanes"][0]["completed_count"] == 2
+        pool_events = [
+            json.loads(line)
+            for line in (run_dir / LOGS_DIR / "runpool" / "events.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        assert sum(event["event"] == "pool_start" for event in pool_events) == 1
+        assert sum(event["event"] == "process_start" for event in pool_events) == 2
+        assert sum(event["event"] == "process_exit" for event in pool_events) == 2
 
 
 class TestCodeStepLogs:

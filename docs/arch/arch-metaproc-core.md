@@ -655,7 +655,7 @@ fan-out dispatch.
 | `prompt_prefix` | agent | optional inline prompt template |
 | `handler` | code | file-relative Python callable (`file.py:function`) |
 | `command` | code | shell command string (subprocess) |
-| `for_each` | agent, code | items-file-driven fan-out declaration |
+| `for_each` | agent, code, composite | items-file-driven fan-out declaration |
 | `inputs` | all | declared input artifact contracts |
 | `outputs` | all | declared output artifact contracts |
 | `output_root` | agent, code, manual | per-step output root override |
@@ -2608,7 +2608,7 @@ Each step routes based on its mode:
 | `code` | Execute `handler` (Python callable) or `command` (shell subprocess) |
 | `agent` (no fan-out) | Build prompt, launch adapter subprocess, validate outputs |
 | `agent` (with `for_each`) | Fan-out via backend (see 19.3) |
-| `composite` | Resolve `uses` spec, apply `with` bindings, recurse into child `_orchestrate()` under `{run_dir}/{step_id}/` |
+| `composite` | Resolve `uses`, apply `with`, and recurse in-process under `{run_dir}/{step_id}/`; with `for_each`, create one child scope under `{run_dir}/{step_id}/{item_key}/` |
 | `manual` | Wait for `.state/manual-ack.yaml`, then validate outputs and publish completion |
 
 Code step stdout/stderr is captured to `{run_dir}/.logs/{step_id}_{ts}.log`.
@@ -2622,9 +2622,14 @@ Fan-out steps dispatch through one of two backends:
 | `local` | `--backend local` (default) | `RunPool` subprocess pool via `run-parallel` |
 | `gcp-worker` | `--backend gcp-worker --cloud` | Submit the orchestrator, which partitions items across N worker VMs via GCP Batch (section 21) |
 
-The local backend uses the RunPool (section 17) with step-scoped `.state/` and `.logs/`
+Local agent fan-out uses RunPool (section 17) with step-scoped `.state/` and `.logs/`
 directories. One run execution context owns the optional semaphore shared by fan-out
 pools, scalar agent launches, and code work across composite scopes.
+For the initial single-profile topology, it also lazily owns one run-scoped RunPool for
+scalar agent leaves.
+Every scalar leaf reached through mapped child scopes submits a prepared launch to that
+pool, so adaptive pressure response, process-tree supervision, status, and events cover
+the whole run rather than one child at a time.
 Its run-owned executor supervises synchronous handlers, commands, and blocking
 credential operations off the event loop.
 That executor defaults to 32 workers and grows to an explicit higher
@@ -2645,9 +2650,12 @@ A code command owns its descendants only for the duration of the step; it
 must not daemonize intentional background work because any remaining group member is
 terminated when the command leader exits.
 Cleanup failure is logged and does not replace an already-observed exit-zero result.
-These paths do not add a second pool or adaptive controller: the run context supplies
-the leaf ceiling, host admission supplies cross-run capacity, and RunPool remains the
-adaptive manager for mapped local fan-out.
+These paths do not add a second adaptive controller.
+The run context supplies the hard leaf ceiling, host admission supplies cross-run
+capacity, and the single run-owned RunPool adapts local scalar-agent concurrency.
+Command-backed code work retains its existing supervised executor path; moving it into
+RunPool requires separate contract evidence.
+A second execution profile in the same run is rejected by this first slice.
 
 **Note on backend abstraction:** `local` is a registered `LaunchBackend` implementation
 (section 21.8) in the backend registry (`runpool/registry.py`). `gcp-worker` is

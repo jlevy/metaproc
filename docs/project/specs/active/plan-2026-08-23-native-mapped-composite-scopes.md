@@ -6,7 +6,7 @@ description: >-
   resource controller, or a new general scheduler.
 author: Joshua Levy (github.com/jlevy) with LLM assistance
 date: 2026-08-23
-last_updated: 2026-08-24
+last_updated: 2026-08-25
 status: Draft — Consolidated Validation
 category: plan
 ---
@@ -587,19 +587,19 @@ scalar launch.
 ### Phase 0: Architecture fixture and proof
 
 - [x] Merge pull request 31 and base every runtime slice on the resulting main branch.
-- [ ] Add a tiny nested process fixture with two code leaves, one agent-shaped fake
+- [x] Add a tiny nested process fixture with two code leaves, one agent-shaped fake
   leaf, declared process inputs/outputs, three roster items, and one controlled failure.
 - [x] Characterize recursive argument and semaphore ownership, force, root skip,
   continue policies, and synchronous command behavior before changing them.
   This work is implemented in unmerged pull request 33.
-- [ ] Complete the remaining output-validation, result/state, resume, and fan-in
+- [x] Complete the remaining output-validation, result/state, resume, and fan-in
   characterization. Pull request 34 covers scalar credential behavior with a real
   subprocess and selected-label fallback; the cancellation-safety slice covers
   credential acquisition, executor work, late launches, and agent/code process trees.
 - [x] Complete the first deep architecture review and incorporate every finding in the
   proposal and beads. Keep the proposal in draft until the amended sequencing is
   reviewed.
-- [ ] Do not merge mapped execution before Phase 1 is complete.
+- [x] Do not merge mapped execution before Phase 1 is complete.
 
 ### Phase 1: Shared recursive execution context
 
@@ -654,29 +654,33 @@ scalar launch.
   qualified item or child-step selector without operator evidence.
 - [x] Reject duplicate resolved item keys before task or child-scope state writes.
   This work is implemented in draft pull request 37 after senior review.
-- [ ] Add the remaining cancellation, mixed-success, invalid-port, namespace-isolation,
-  path-containment, crash-window, and resume tests as the consumer ladder exercises
-  those paths.
+- [x] Add cancellation, mixed-success, namespace-isolation, path-containment, and
+  failed-item resume tests, including terminal parent state on cancellation and sibling
+  completion after an ordinary exception.
+- [ ] Add invalid-port and remaining crash-window coverage only at the layer where those
+  failures are admitted; the mapped executor must not duplicate leaf lifecycle tests.
 - [x] Reject `gcp-worker` mapped-composite partitioning until a multi-host slice exists.
   This work is implemented in draft pull request 37.
 
 ### Phase 3: Shared RunPool and evidence-gated host admission
 
-- [ ] Characterize the production-shaped scalar agent and command-subprocess launch
+- [x] Characterize the production-shaped scalar agent and command-subprocess launch
   paths before changing them; preserve task state, retry, output validation, auth, and
   cancellation behavior.
-- [ ] Make `RunExecutionContext` own one RunPool for local resource-bearing leaves in
+- [x] Make `RunExecutionContext` own one RunPool for local resource-bearing leaves in
   the first single-profile topology; mapped scopes share it by identity and hold no
   capacity of their own.
-- [ ] Submit scalar mapped agent launches to that pool.
-  Submit long-lived command subprocesses too when doing so preserves their contract;
-  otherwise account for them through the same existing admission primitive and record
-  the exception explicitly.
-- [ ] Reuse RunPool’s adaptive pressure control, process-tree supervision, status,
+- [x] Submit scalar mapped agent launches to that pool.
+  Command-backed code work retains its existing supervised executor, leaf ceiling, and
+  host admission until a smoke shows that moving it into RunPool preserves its contract
+  and materially improves control.
+- [x] Reuse RunPool’s adaptive pressure control, process-tree supervision, status,
   events, cold-start calculation, and current host admission.
   Do not duplicate those mechanisms in `RunExecutionContext`.
-- [ ] Prove fail-closed required admission, fresh capacity after resume, shared
-  concurrency across ticker scopes, and no direct child launch outside the authority.
+- [x] Prove shared concurrency across ticker scopes and no direct scalar child launch
+  outside the authority with a real two-item RunPool CLI smoke.
+- [ ] Prove required-admission failure and fresh capacity after resume before live M1;
+  these are lifecycle gates, not reasons to add another controller.
 - [ ] Measure Pi, Claude, and Gemini process trees in separate single-profile runs and
   update conservative profile estimates before high-concurrency testing.
 - [ ] Add weighted byte claims only after a recorded multi-profile or concurrent-run
@@ -875,13 +879,18 @@ A second review finding about omitting the primary binding was rebutted because
 The shipped architecture, concepts, proposal, operator, and changelog documentation now
 describe the M0 behavior and its limits.
 
-The latest holistic review rechecked head `49064f0` and left four pull request 37
-blockers open: mapped items still share the parent `{{run.dir}}` (`mp-xkvz`), unexpected
-item exceptions can abandon siblings and scope evaluation is unbounded (`mp-cr12`),
-dot-only item keys can escape their intended path (`mp-s070`), and a global graph
-failure-propagation change must be split and proved separately (`mp-ledg`). The rebase
-onto pull request 38 must also retain immutable-variable validation while preserving the
-released no-workstation-alias behavior (`mp-wzdl`).
+The latest holistic review rechecked head `49064f0` and identified four pull request 37
+blockers. The current candidate addresses three in the smallest runtime seam:
+`ScopeIdentity` binds each child’s record ID, path ID, scope path, run directory, and
+template variables (`mp-xkvz`); ordinary item exceptions become terminal only after
+sibling scopes finish, with a default structural ceiling of 32 (`mp-cr12`); and dot-only
+item keys are rejected before path construction (`mp-s070`). Cancellation now ends the
+mapped parent attempt as cancelled (`mp-1ybo`), canonical item keys flow into child
+identity and events (`mp-27d3`), and mapped items emit durable lifecycle events
+(`mp-35zi`). The global graph failure-propagation change still moves to its own small
+stack layer with the missing shape tests and architecture correction (`mp-ledg`). The
+rebase onto pull request 38 is complete and preserves immutable-variable validation and
+the released no-workstation-alias behavior (`mp-wzdl`).
 
 The same M0 pull request now closes a resume-identity hole found while preparing its
 first consumer. `run-config.yaml` already persisted resolved variables, but resume did
@@ -913,13 +922,21 @@ Every resolved step carries a default adapter, so launch preflight invoked
 and code steps. Preflight now selects active `mode: agent` steps only; actual agent
 leaves retain the existing once-per-adapter check.
 
-The focused fingerprint, dependency-state, status, mapped-scope, recursive-context, and
-adapter-preflight sets pass.
-The exact stack-wide candidate passes 4,356 tests with 8 skipped.
-Formatting, Ruff, BasedPyright, Markdown links, public hygiene, browser and supply-chain
-checks, dependency audits, distribution build, and installed-wheel smoke are also green.
-The checked-in downstream L0 gate and exact-head GitHub CI remain before this revision
-is merge-eligible.
+The current candidate’s focused run-config, dependency graph, status, mapped-scope,
+recursive-context, item-runner, scalar-auth, replay, event, and key-containment set
+passes 160 tests. A separate real CLI test maps two child scopes whose scalar agent
+commands share one actual RunPool, writes distinct child artifacts, records two lane
+completions in one pool status/event stream, and makes the legacy direct scalar launcher
+fatal if called. The first full-suite pass then exposed a real compatibility defect:
+RunPool’s own status and scale snapshots were misclassified as agent-authored write
+boundary violations.
+The correction exempts only those two exact framework-owned files, and all 11 affected
+scalar boundary, output-retry, prompt, and transient-retry cases pass.
+The complete local gate passes 4,374 tests with 8 skipped, together with formatting,
+Ruff, BasedPyright, Markdown links, public hygiene, browser checks, supply-chain and
+dependency audits, distribution build, and installed-wheel smoke.
+The split graph layer, the checked-in downstream L0 gate, and exact-head GitHub CI
+remain before this revision is merge-eligible.
 
 Successful-item targeted force, richer evidence/fan-in projection, scoped child
 variables, weighted host claims, live harnesses, and production-scale results remain
@@ -942,24 +959,28 @@ claim.
    scale-guard follow-up.
 2. Make this pull request 37 document the definitive plan and make the consumer plan
    link to it for framework behavior.
-3. Rebase pull requests 32 through 37 bottom-up onto post-release `main` at or after
-   `6ac9c65`. Preserve each coherent contract boundary and resolve the pull request 38
-   conflict deliberately.
-4. Fix and verify pull request 33 (`mp-74vg`), then restack pull request 34 on that
-   exact head.
-5. Fix and verify pull request 34 (`mp-te1z`, `mp-5204`), then restack pull request 35
-   on that exact head.
-6. Fix and verify pull request 35 (`mp-ah0p`, `mp-f761`, and the correctness subset of
-   `mp-va6t`) with the named injected-failure tests.
-7. Restack pull request 37, split the global graph change, and fix scope identity,
-   exception isolation, bounded scope evaluation, and path containment (`mp-xkvz`,
-   `mp-cr12`, `mp-ledg`, `mp-s070`, `mp-wzdl`).
-8. Route the production-shaped mapped leaf subprocess path through one run-owned
-   RunPool. Prove shared identity, admission, pressure response, process ownership, and
-   auth evidence without adding a parallel resource controller.
-9. Run focused tests after each repair, then full repository verification and exact-head
-   GitHub CI on every stack level.
-   Publish one disposition map per review channel.
+3. [Complete] Rebase pull requests 32 through 37 bottom-up onto post-release `main` at
+   or after `6ac9c65`, preserving each coherent contract boundary and resolving the pull
+   request 38 conflict deliberately.
+4. [Complete] Fix pull request 33’s executor-capacity defect (`mp-74vg`) and preserve
+   the shared recursive execution context through the restack.
+5. [Complete] Fix pull request 34’s authentication-boundary findings (`mp-te1z`,
+   `mp-5204`) and restack pull request 35 on that exact head.
+6. [Complete] Fix pull request 35’s lifecycle findings (`mp-ah0p`, `mp-f761`, and the
+   correctness subset of `mp-va6t`) with the named injected-failure tests.
+7. [In progress] Finalize pull request 37: its scope identity, exception isolation,
+   structural bound, cancellation state, canonical key, lifecycle event, and path
+   containment fixes are complete.
+   Move the global graph change to its own small layer with missing shape tests and
+   architecture correction (`mp-ledg`).
+8. [Complete locally] Route production-shaped scalar agent leaves through one run-owned
+   RunPool and prove shared identity, process ownership, distinct artifacts, and no
+   direct child scalar launch.
+   Required-admission and fresh-resume gates remain before live M1, without adding a
+   parallel resource controller.
+9. [In progress] The focused and full local gates pass.
+   Commit the exact candidate, run exact-head GitHub CI on each retained stack level,
+   and publish one disposition map per review channel.
 10. Pin the exact consolidated pull request 37 head in the downstream `v3.0-pre`
     implementation and pass the network-free L0 gate.
     Only then may the tested stack land bottom-up without changing its commits.
@@ -1000,6 +1021,15 @@ child `mp-g2r0` owns the immediate run-owned-pool integration.
 exact-head verification, and disposition maps; `mp-joix` runs the network-free consumer
 fixture after that gate.
 `mp-1af0` owns views, and `mp-rrfn` owns the production proof.
+
+The final mapped-scope review children are `mp-xkvz` (scope identity), `mp-cr12`
+(exception containment and structural concurrency), `mp-s070` (path containment),
+`mp-1ybo` (cancellation state), `mp-27d3` (canonical key derivation), and `mp-35zi`
+(lifecycle events). `mp-t6xn` tracks the evidence-gated child-only resume question;
+`mp-1pld` documents scalar child-output compatibility; `mp-ai7a` records the rebutted
+optional-default resume behavior; and `mp-cuet` defers planning-overhead optimization
+until the 10- and 32-item smoke rungs supply measurements.
+`mp-ifbo` preserves the primary pipeline failure if run-owned pool cleanup also fails.
 
 The pull request 35 lifecycle ledger is `mp-va6t`. Its correctness children `mp-kxmn`,
 `mp-e9e5`, `mp-d50w`, and `mp-0xbi` gate live smoke.

@@ -743,11 +743,13 @@ original unit of execution and state, and one local orchestrator was the only wr
   Sufficient for one local writer; not for distributed retry.
 
 - **Universal admission (test 7, partially).** Scalar steps, meaning those with no
-  `for_each`, now take a slot in the same host-wide namespace the fan-out pools use, so
+  `for_each`, take a slot in the same host-wide namespace the fan-out pools use, so
   independent orchestrators on one machine no longer launch over each other unseen.
-  The gate is a slot count on the `local` backend only, without the memory backpressure
-  or process-tree charging the test asks for, and it is deliberately best-effort: an
-  unreachable gate lets the launch proceed rather than failing the run.
+  Local `run-process` also owns one adaptive RunPool for scalar agent leaves in its
+  initial single-profile topology, including leaves reached through mapped composites.
+  The pool adds memory-pressure response and process-tree supervision across those
+  scopes. The outer host gate remains count-based and deliberately best-effort; command
+  subprocesses and multi-profile runs do not yet share this pool.
 
 - **Task-scoped operator surface (test 3, partially).** Force and resume selection are
   step-scoped (`--force`, `--from`, `--only`); there is no per-item force, and

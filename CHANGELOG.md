@@ -13,6 +13,13 @@ development series.
   run one child process scope per item in-process under `<run>/<step>/<item-key>/`. All
   scopes share the parent run execution context and executable-leaf ceiling; each parent
   item records durable status, attempt history, validated outputs, and a result.
+  Each scope binds one canonical identity to its run directory, template variables, task
+  state, and child event stream, so a fixed child output path remains isolated per item.
+  Dot-only item keys are rejected before path construction.
+  Scope evaluation defaults to a bounded concurrency of 32 and waits for siblings to
+  finish after an ordinary item exception.
+  Cancellation terminally records the affected parent attempt, and mapped items emit
+  start, completion, and failure events.
   Declared child process outputs now validate at the composite boundary for scalar and
   mapped composites. The first implementation is single-host: `gcp-worker` partitioning
   and whole-scope `for_each.retry` are rejected, while retries remain available on child
@@ -125,6 +132,11 @@ development series.
   the shared run ceiling; fan-out paths retain their step ceilings as well.
   The executor defaults to 32 workers and grows to an explicit higher run ceiling, so
   its implementation capacity never silently reduces that ceiling.
+  In the initial single-profile topology, the context also lazily owns one adaptive
+  RunPool. Scalar agent leaves in every mapped child submit prepared launches to that
+  pool, which supplies shared pressure response, process-tree supervision, status, and
+  events. The existing run leaf ceiling and host admission remain the hard run and
+  cross-run boundaries; command-backed code work retains its existing supervised path.
   Commands share the process directory, so authored steps that mutate shared files,
   repositories, or lockfiles must declare per-item paths or provide their own
   synchronization.

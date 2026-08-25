@@ -27,7 +27,7 @@ is safe to use as a path component on every supported filesystem.
 
 def is_safe_item_key(key: str) -> bool:
     """Return whether *key* is safe to use as a filesystem path component."""
-    return bool(ITEM_KEY_RE.fullmatch(key))
+    return key not in {".", ".."} and bool(ITEM_KEY_RE.fullmatch(key))
 
 
 # ── Runtime directories (under each item or run dir) ────────────
