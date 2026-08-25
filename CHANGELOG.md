@@ -24,6 +24,43 @@ development series.
 
 ### Changed
 
+- **Typed cloud authentication transport**: the internal `OrchestratorDispatchConfig`
+  constructor now accepts one `AuthPoolFlags` value instead of separate
+  authentication-policy fields.
+  This keeps the operator-to-orchestrator and orchestrator-to-worker boundaries on the
+  same transport shape.
+
+- **One credential-pool lifecycle for scalar and fan-out agents**: non-fan-out agent
+  steps now lease the configured pool label, apply the same credential scope and scrub
+  rules, classify failures, walk fallback labels on retry, and emit the same
+  `auth_lease_acquired` and `auth_outcome` evidence as RunPool items.
+  Nested leaves bind slots and event join keys to their path-relative child scope, so
+  credential material stays inside the logical run tree even when a run directory is
+  symlinked to another volume.
+  Composite fan-out slot paths and authentication-event `run_id` values now include that
+  child scope; consumers should treat the field as a run-tree path scope rather than a
+  root-only identifier.
+  Blocking credential storage work runs through the run-owned executor.
+  Scalar quota scans run only for the blocking `refuse` posture; admission failures
+  before the first launch create no attempt, while exhaustion after a retry makes the
+  existing task state terminal.
+  Adapter mismatches emit an explicit warning, log record, and `auth_skipped` event
+  before using ambient authentication, including on worker entrypoints.
+
+- **One execution context across recursive scopes**: local `run-process` execution now
+  shares one executable-leaf ceiling across fan-out pools, scalar steps, code work, and
+  composite descendants.
+  Synchronous code and scalar-process supervision use the run-owned executor instead of
+  blocking the event loop, and `--force` reaches composite descendants while root step
+  selectors remain root-scoped.
+  Command-backed code steps at the same DAG level may now run concurrently and acquire
+  the shared run ceiling; fan-out paths retain their step ceilings as well.
+  The executor defaults to 32 workers and grows to an explicit higher run ceiling, so
+  its implementation capacity never silently reduces that ceiling.
+  Commands share the process directory, so authored steps that mutate shared files,
+  repositories, or lockfiles must declare per-item paths or provide their own
+  synchronization.
+
 - **Full-cloud GCP topology is now enforced**: launching `run-process` with
   `--backend gcp-worker` from an operator host now fails unless `--cloud` is also set,
   and direct non-dry `run-parallel --backend gcp-worker` execution requires the GCP
@@ -103,43 +140,6 @@ development series.
   links and directory-link cycles are rejected.
 
 ### Changed
-
-- **Typed cloud authentication transport**: the internal `OrchestratorDispatchConfig`
-  constructor now accepts one `AuthPoolFlags` value instead of separate
-  authentication-policy fields.
-  This keeps the operator-to-orchestrator and orchestrator-to-worker boundaries on the
-  same transport shape.
-
-- **One credential-pool lifecycle for scalar and fan-out agents**: non-fan-out agent
-  steps now lease the configured pool label, apply the same credential scope and scrub
-  rules, classify failures, walk fallback labels on retry, and emit the same
-  `auth_lease_acquired` and `auth_outcome` evidence as RunPool items.
-  Nested leaves bind slots and event join keys to their path-relative child scope, so
-  credential material stays inside the logical run tree even when a run directory is
-  symlinked to another volume.
-  Composite fan-out slot paths and authentication-event `run_id` values now include that
-  child scope; consumers should treat the field as a run-tree path scope rather than a
-  root-only identifier.
-  Blocking credential storage work runs through the run-owned executor.
-  Scalar quota scans run only for the blocking `refuse` posture; admission failures
-  before the first launch create no attempt, while exhaustion after a retry makes the
-  existing task state terminal.
-  Adapter mismatches emit an explicit warning, log record, and `auth_skipped` event
-  before using ambient authentication, including on worker entrypoints.
-
-- **One execution context across recursive scopes**: local `run-process` execution now
-  shares one executable-leaf ceiling across fan-out pools, scalar steps, code work, and
-  composite descendants.
-  Synchronous code and scalar-process supervision use the run-owned executor instead of
-  blocking the event loop, and `--force` reaches composite descendants while root step
-  selectors remain root-scoped.
-  Command-backed code steps at the same DAG level may now run concurrently and acquire
-  the shared run ceiling; fan-out paths retain their step ceilings as well.
-  The executor defaults to 32 workers and grows to an explicit higher run ceiling, so
-  its implementation capacity never silently reduces that ceiling.
-  Commands share the process directory, so authored steps that mutate shared files,
-  repositories, or lockfiles must declare per-item paths or provide their own
-  synchronization.
 
 - **Code-step outputs are no longer YAML-repaired**: `run-parallel`’s `mode: code`
   fan-out ran the frontmatter auto-repair pass over each item’s declared outputs before
