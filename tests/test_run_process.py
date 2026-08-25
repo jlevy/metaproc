@@ -1019,6 +1019,92 @@ class TestAncestorVerification:
 
 
 class TestProcessStatusFile:
+    @pytest.mark.parametrize(
+        ("suffix", "extra_args", "expected_publish_state"),
+        [
+            ("only", ["--only", "intake", "--no-continue-on-error"], None),
+            ("full", [], "blocked"),
+        ],
+    )
+    def test_code_handler_failure_is_projected_to_run_status_and_events(
+        self,
+        tmp_path: Path,
+        suffix: str,
+        extra_args: list[str],
+        expected_publish_state: str | None,
+    ) -> None:
+        process_dir = tmp_path / "failing-process"
+        process_dir.mkdir()
+        (process_dir / "handlers.py").write_text(
+            "def fail(_context, _step):\n    raise RuntimeError('source attestation mismatch')\n",
+            encoding="utf-8",
+        )
+        process_path = process_dir / "test.process.md"
+        process_path.write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: failing-process
+                  steps:
+                    - id: intake
+                      mode: code
+                      handler: handlers.py:fail
+                    - id: publish
+                      mode: code
+                      command: "true"
+                      needs: [intake]
+                ---
+                """
+            ),
+            encoding="utf-8",
+        )
+        runs_dir = tmp_path / "runs"
+        run_id = f"failed-code-handler-{suffix}"
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "run-process",
+                str(process_path),
+                "--var",
+                f"RUNS_DIR={runs_dir}",
+                "--var",
+                f"RUN_ID={run_id}",
+                *extra_args,
+            ],
+        )
+
+        assert result.exit_code == 1
+        expected_error = "RuntimeError: source attestation mismatch"
+        assert expected_error in result.output
+        assert result.exception is not None
+        assert expected_error in str(result.exception)
+
+        run_dir = runs_dir / run_id
+        process_status = read_yaml_file(run_dir / STATE_DIR / "process-status.yaml")
+        assert process_status["state"] == "failed"
+        assert expected_error in process_status["steps"]["intake"]["error"]
+        if expected_publish_state is None:
+            assert "publish" not in process_status["steps"]
+        else:
+            assert process_status["steps"]["publish"]["state"] == expected_publish_state
+
+        events = [
+            json.loads(line)
+            for line in (run_dir / LOGS_DIR / "process-events.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        failure = next(event for event in events if event["event"] == "step_fail")
+        assert expected_error in failure["error"]
+
+        status = CliRunner().invoke(app, ["status", str(run_dir)])
+        assert status.exit_code == 0, status.output
+        assert "Status: FAILED" in status.output
+        assert expected_error in status.output
+        assert "Process: current" not in status.output
+
     def test_orchestrator_reconciles_tasks_before_topology_walk(self, tmp_path: Path) -> None:
         out = FakeOut()
         reconcile = MagicMock(return_value=2)

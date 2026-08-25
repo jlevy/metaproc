@@ -536,6 +536,13 @@ Above the table, a one-line summary tells you whether anything needs attention:
   `N` counts those two states (running steps are excluded — the orchestrator is already
   on them).
 
+The top `Status:` label reports execution, while `Process:` reports definition
+freshness. A terminal code-step failure therefore renders `Status: FAILED` with its
+durable task error and does not render the potentially misleading `Process: current`
+summary. Full JSON output exposes these facts as `process_execution_state` and
+`process_error`; the projected `--steps` JSON surface remains
+`{run_dir, process_state, steps}`.
+
 Useful flags:
 
 - `--steps` shows only the Steps table (skips the variant table, timing, system metrics,
@@ -552,7 +559,9 @@ Useful flags:
 
 When `run-config.yaml` is missing, the spec has moved, or the plan no longer builds
 under the captured params, the Steps section is omitted silently — the rest of
-`metaproc status` still works.
+`metaproc status` still works because execution state comes directly from
+`process-status.yaml`. `status --check` and `wait` treat a terminal process failure as
+failed even when the process had no fan-out items.
 
 ## Log Compression
 

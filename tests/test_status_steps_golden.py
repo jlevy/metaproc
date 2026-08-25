@@ -233,6 +233,22 @@ def test_status_label_complete_when_fully_terminal() -> None:
     assert "Status: COMPLETE" in _format_text(rs)
 
 
+def test_status_label_failed_includes_error_and_hides_definition_summary() -> None:
+    rs = _bare_run_status(is_active=False).model_copy(
+        update={
+            "process_execution_state": "failed",
+            "process_error": "intake: RuntimeError: source attestation mismatch",
+            "process_state": "current",
+        }
+    )
+
+    rendered = _format_text(rs)
+
+    assert "Status: FAILED" in rendered
+    assert "Failure: intake: RuntimeError: source attestation mismatch" in rendered
+    assert "Process: current" not in rendered
+
+
 def test_status_label_falls_back_to_running_when_subflags_absent() -> None:
     """Legacy callers that build RunStatus without sub-flags don't regress.
 

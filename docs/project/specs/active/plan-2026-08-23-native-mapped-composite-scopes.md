@@ -982,6 +982,22 @@ an error.
 A fresh run pinned to the committed candidate remains required before advancing
 to repeated M1 or M2.
 
+The next attested M1 run deliberately supplied a mismatched consumer revision to its
+scalar intake handler.
+The handler failed before pool or provider work, but Metaproc `b5c4721` dropped the
+durable task error at the DAG projection boundary: `run-process` exited nonzero while
+the event and trace error were empty, and `status` reported the inactive run complete.
+`mp-l4aw` owns the narrow correction above pull request 37. It copies the existing
+scalar code-task error into process status and events, exposes the process execution
+state separately from definition freshness, and makes status, wait, and completion
+checks honor terminal failure.
+Fail-fast `--only` and ordinary dependency-blocking tests cover the two paths.
+The complete local gate passes 4,393 tests with 8 skipped, plus formatting, Ruff,
+BasedPyright, Markdown links, public hygiene, browser checks, supply-chain and
+dependency audits, distribution build, and installed-wheel smoke.
+This layer must be pinned and live-retested with both the injected failure and a fresh
+successful M1 before repeated M1 begins.
+
 Successful-item targeted force, richer evidence/fan-in projection, scoped child
 variables, weighted host claims, live harnesses, and production-scale results remain
 open. They are added only when the successive GTIA smoke rungs demonstrate a need.
@@ -1022,8 +1038,9 @@ The retained stack must land without changing those tested commits.
    parallel resource controller.
 9. [In progress] The focused and full local gates pass, including the audited Softschema
    0.7.0 upgrade and its structural-diagnostic migration (`mp-vuxc`). Commit the exact
-   candidate, run exact-head GitHub CI on each retained stack level, and publish one
-   disposition map per review channel.
+   candidate and the live-earned failure projection fix (`mp-l4aw`), run exact-head
+   GitHub CI on each retained stack level, and publish one disposition map per review
+   channel.
 10. [In progress] The downstream `v3.0-pre` implementation passed its network-free L0
     gate and one live M1 candidate under the previous exact Metaproc pin.
     Update the pin to the committed pull request 37 candidate and repeat M1 plus exact
@@ -1079,6 +1096,9 @@ optional-default resume behavior; and `mp-cuet` defers planning-overhead optimiz
 until the 10- and 32-item smoke rungs supply measurements.
 `mp-ifbo` preserves the primary pipeline failure if run-owned pool cleanup also fails.
 `mp-vuxc` owns the Softschema 0.7.0 dependency and structural-diagnostic migration.
+`mp-l4aw` owns the scalar code-step failure projection exposed by the attested GTIA
+negative smoke; it must pass exact-pin negative and positive M1 revalidation before
+closure.
 
 The pull request 35 lifecycle ledger is `mp-va6t`. Its correctness children `mp-kxmn`,
 `mp-e9e5`, `mp-d50w`, and `mp-0xbi` gate live smoke.

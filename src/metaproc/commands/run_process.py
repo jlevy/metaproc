@@ -1045,6 +1045,33 @@ def _read_step_status(run_dir: Path, step_id: str) -> StatusRecord | None:
     return read_status_at(_step_item_dir(run_dir, step_id))
 
 
+def _read_scalar_code_failure_error(
+    run_dir: Path,
+    target: ResolvedStep,
+) -> str:
+    """Return the durable task error for a failed scalar code step.
+
+    ``_execute_code_step`` owns the detailed failure record. The DAG layer
+    only receives a boolean, so recover that already-persisted detail here
+    rather than introducing a second execution-result type solely for
+    observability.
+    """
+    if target.mode != "code" or target.fan_out is not None:
+        return ""
+    try:
+        record = _read_step_status(run_dir, target.step_id)
+    except Exception:  # noqa: BLE001 -- status projection is best-effort
+        log.warning(
+            "could not read failure detail for scalar code step %r",
+            target.step_id,
+            exc_info=True,
+        )
+        return ""
+    if record is None or record.state != "failed" or not record.error:
+        return ""
+    return record.error
+
+
 def _read_process_status_yaml(run_dir: Path) -> dict[str, Any] | None:
     """Read ``.state/process-status.yaml`` as a raw dict, or ``None``.
 
@@ -3785,14 +3812,18 @@ async def _orchestrate(
             events.step_complete(step_id, elapsed)
             out.progress(f"  Step '{step_id}': completed ({fmt_timedelta(elapsed)})")
         else:
+            error = _read_scalar_code_failure_error(run_dir, target)
             step_states[step_id] = {
                 "state": "failed",
                 "started_at": step_states[step_id].get("started_at"),
                 "completed_at": _now_iso(),
                 "elapsed_s": round(elapsed, 1),
             }
-            events.step_fail(step_id, elapsed)
-            out.progress(f"  Step '{step_id}': FAILED ({fmt_timedelta(elapsed)})")
+            if error:
+                step_states[step_id]["error"] = error
+            events.step_fail(step_id, elapsed, error=error)
+            detail = f": {error}" if error else ""
+            out.progress(f"  Step '{step_id}': FAILED ({fmt_timedelta(elapsed)}){detail}")
 
         return step_id, success
 
@@ -3960,9 +3991,12 @@ async def _orchestrate(
                         started_at,
                         active_step_ids=active_ids,
                     )
+                    detail = step_states[step_id].get("error")
+                    detail_text = f" Error: {detail}." if detail else ""
                     raise CLIError(
-                        f"Step '{step_id}' failed (--no-continue-on-error set). "
-                        f"Blocked: {', '.join(actually_blocked) if actually_blocked else 'none'}"
+                        f"Step '{step_id}' failed (--no-continue-on-error set)."
+                        f"{detail_text} Blocked: "
+                        f"{', '.join(actually_blocked) if actually_blocked else 'none'}"
                     )
 
             _write_process_status(
@@ -3998,8 +4032,12 @@ async def _orchestrate(
     )
 
     if failed_steps:
+        failures = []
+        for step_id in failed_steps:
+            error = step_states[step_id].get("error")
+            failures.append(f"{step_id}: {error}" if error else step_id)
         raise CLIError(
-            f"Process completed with failures: {', '.join(failed_steps)}. "
+            f"Process completed with failures: {'; '.join(failures)}. "
             f"Blocked: {', '.join(blocked_list) if blocked_list else 'none'}"
         )
 

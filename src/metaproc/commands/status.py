@@ -152,7 +152,11 @@ def _format_text(status: RunStatus, *, steps_only: bool = False, stale_only: boo
     # quiescent-between-steps from truly terminal. `is_active` collapses
     # them; the sub-flags expose what's actually happening. This prevents the
     # variant table from reading 100% while the orchestrator has queued work.
-    if status.items_running:
+    if status.process_execution_state == "failed":
+        status_label = "FAILED"
+    elif status.process_execution_state == "cancelled":
+        status_label = "CANCELLED"
+    elif status.items_running:
         status_label = "RUNNING"
     elif status.orchestrator_alive or (status.pending_retries > 0 and status.is_active):
         status_label = "WAITING"
@@ -160,12 +164,19 @@ def _format_text(status: RunStatus, *, steps_only: bool = False, stale_only: boo
         # Legacy backstop: is_active is True but neither sub-flag fired
         # (e.g. RunStatus came from a reader without the sub-flags).
         status_label = "RUNNING"
+    elif status.process_execution_state == "running":
+        status_label = "RUNNING"
     else:
         status_label = "COMPLETE"
     if status.pending_retries > 0:
         status_label += f" ({status.pending_retries} retries pending)"
     lines.append(f"Status: {status_label}")
-    if status.process_state is not None:
+    if status.process_error is not None:
+        lines.append(f"Failure: {status.process_error}")
+    if status.process_state is not None and status.process_execution_state not in (
+        "failed",
+        "cancelled",
+    ):
         non_current = sum(
             1 for entry in status.steps if entry.state in (StepState.stale, StepState.invalidated)
         )

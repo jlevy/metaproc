@@ -2556,11 +2556,14 @@ multi-phase workflows.
   failed, pending, retrying), computes timing statistics and optionally system metrics
   (memory pressure, subprocess count).
   Supports text and JSON output.
+  The process execution state is distinct from process definition freshness, and scalar
+  code-step errors are projected from durable task state into process status and events.
 - **`metaproc status --check <condition>`**: programmatic check mode for agent
   orchestration: asserts completion state via exit codes (0=passed, 1=failures,
   2=still-running), replacing ad-hoc `--dry-run | grep` patterns.
 - **`metaproc wait <run-dir>`**: blocks until a run reaches terminal state, then prints
-  final status. Eliminates polling loops in multi-phase playbooks.
+  final status. A terminal process failure returns failure even when no fan-out item
+  records exist. Eliminates polling loops in multi-phase playbooks.
 
 Architecture: core logic in `engine/run_status.py` as a Python API; CLI commands are
 thin wrappers. The `status` command reads `.state/` artifacts (the same ones
