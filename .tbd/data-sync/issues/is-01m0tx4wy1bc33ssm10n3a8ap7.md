@@ -3,15 +3,19 @@ type: is
 id: is-01m0tx4wy1bc33ssm10n3a8ap7
 title: "Land PR #39 to get main green before tagging 0.3.0"
 kind: task
-status: open
+status: closed
 priority: 0
-version: 1
+version: 2
 labels:
   - release,ci
 dependencies: []
 parent_id: is-01m0tx34t3n8g39jjbhzdrrpwf
 created_at: 2026-08-24T22:09:39.776Z
-updated_at: 2026-08-24T22:09:39.776Z
+updated_at: 2026-08-25T02:37:49.075Z
+closed_at: 2026-08-25T02:37:49.075Z
+close_reason: "PR #39 merged as 4cda506 on 2026-08-25. Main CI was already green at 93766dd (the PR #19 merge), but #39 removes the wall-clock flake from the release path so it cannot fail the publish workflow's make verify."
+resolution: null
+duplicate_of: null
 ---
 ## Blocker
 

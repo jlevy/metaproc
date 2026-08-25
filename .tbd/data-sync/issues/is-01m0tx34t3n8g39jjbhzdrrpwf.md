@@ -3,9 +3,9 @@ type: is
 id: is-01m0tx34t3n8g39jjbhzdrrpwf
 title: Cut the 0.3.0 release from main
 kind: epic
-status: open
+status: closed
 priority: 1
-version: 9
+version: 10
 labels:
   - release
 dependencies: []
@@ -19,7 +19,18 @@ child_order_hints:
   - is-01m0txm9k40pwdbx279nqezdy5
   - is-01m0txmwd5ndrr55r28vcnka4w
 created_at: 2026-08-24T22:08:42.306Z
-updated_at: 2026-08-24T22:18:23.525Z
+updated_at: 2026-08-25T02:55:26.180Z
+closed_at: 2026-08-25T02:55:26.180Z
+close_reason: |-
+  Released. metaproc 0.3.0 is on PyPI.
+
+  Sequence: PR #39 merged (4cda506) to take the wall-clock flake out of the release path; release prep merged as PR #40 (4d518d8) carrying the completed CHANGELOG, docs/releases/v0.3.0.md, and the cryptography 50.0.0 relock that retired the GHSA-g6cj-pr64-35w5 waiver; CI green on all five jobs at exactly 4d518d8; tagged v0.3.0 there; Publish to PyPI succeeded (run 32803000723).
+
+  Verified after publish: PyPI reports 0.3.0 with AGPL-3.0-or-later, requires-python >=3.12,<4.0, 3.12/3.13/3.14 classifiers, project URLs, and both wheel and sdist. Isolated uvx smoke tests pass for --version (0.3.0), --help, skill metaproc, env --template, and help operator.
+
+  PR #38 and the GTIA v3 stack (#32-#37) were deliberately excluded and ship in the next release.
+resolution: null
+duplicate_of: null
 ---
 Ship a minor release covering the 103 commits merged since v0.2.1 (2026-08-09), before the larger GTIA v3 stack (#32-#37) lands as a separate follow-up release.
 

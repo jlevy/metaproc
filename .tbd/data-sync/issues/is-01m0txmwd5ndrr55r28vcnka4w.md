@@ -3,15 +3,19 @@ type: is
 id: is-01m0txmwd5ndrr55r28vcnka4w
 title: Write the 0.3.0 release notes and convert the CHANGELOG section
 kind: task
-status: open
+status: closed
 priority: 1
-version: 1
+version: 3
 labels:
   - release,docs
 dependencies: []
 parent_id: is-01m0tx34t3n8g39jjbhzdrrpwf
 created_at: 2026-08-24T22:18:23.525Z
-updated_at: 2026-08-24T22:18:23.525Z
+updated_at: 2026-08-25T02:55:25.968Z
+closed_at: 2026-08-25T02:55:25.967Z
+close_reason: "Written and shipped. CHANGELOG [Unreleased] converted to [0.3.0] - 2026-08-25 with links updated, docs/releases/v0.3.0.md written per release-notes-guidelines, docs/publishing.md repointed at the current notes. Merged in PR #40."
+resolution: null
+duplicate_of: null
 ---
 Release checklist step 5. Depends on mp-bn76 filling the CHANGELOG gaps first.
 
