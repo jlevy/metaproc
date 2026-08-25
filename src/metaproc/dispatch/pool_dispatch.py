@@ -102,6 +102,10 @@ class PoolDispatchConfig:
     # expansion would empty the pool.
     cross_quota_group: bool = True
 
+    def __post_init__(self) -> None:
+        """Normalize the logical runs root once without following symlinks."""
+        object.__setattr__(self, "runs_dir", Path(os.path.abspath(self.runs_dir)))
+
 
 def acquire_slot(
     config: PoolDispatchConfig,

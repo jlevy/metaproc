@@ -642,6 +642,12 @@ for unmarked old runs.
 | Workflow tool logs | `<run>/.logs/tools/<tool-name>/invocations.jsonl` | Workflow-owned tool invocation streams |
 | Trace output | `<run>/.logs/derived/trace.jsonl` | Derived `TraceEvent/0.1` output from `metaproc trace --extract` |
 
+Runpool event streams include `auth_lease_acquired` and `auth_outcome` when a pooled
+credential is used.
+An `auth_skipped` event with `pool_enabled: false` records an adapter
+mismatch that used ambient authentication instead, so pool use can be audited without
+scraping console output.
+
 `tools/<tool-name>/` marks workflow ownership even though the file is operationally a
 log. `derived/` marks extractor output; trace extractors should not treat it as source
 input.

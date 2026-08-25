@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -39,9 +40,10 @@ from metaproc.dispatch.slot_coordinator import SlotCoordinator
 from metaproc.engine.pathing import compute_task_state_dir
 from metaproc.errors import CLIError
 from metaproc.io import read_yaml_file
-from metaproc.io.state_io import read_attempt_history_at
+from metaproc.io.state_io import read_attempt_history_at, read_status_at
 from metaproc.models.authored import ProcessDefaults, ProcessSpec, ProcessStep, RetryPolicy
 from metaproc.models.plan import Plan, ResolvedAdapter, ResolvedStep
+from metaproc.models.runtime import AttemptDisposition
 
 
 class _Out:
@@ -431,6 +433,83 @@ def test_pool_exhaustion_fails_before_scalar_attempt_history_starts(
     assert read_attempt_history_at(state_dir) == ()
 
 
+def test_pool_exhaustion_after_retry_marks_existing_attempt_terminal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = _ScalarAuthAdapter()
+    monkeypatch.setitem(ADAPTER_REGISTRY, adapter.adapter_type, adapter)
+    backend = LocalFilesystemBackend(path=tmp_path / "pool" / "credentials.json")
+    backend.upsert_entry(
+        adapter.adapter_type,
+        "alt1",
+        blob="alt1",
+        state=EntryState(
+            status="active",
+            fp=fingerprint_blob("alt1"),
+            vehicle=Vehicle.OAUTH_TOKEN,
+        ),
+    )
+    coordinator = SlotCoordinator(backend, adapter_registry={adapter.adapter_type: adapter})
+    runs_dir = tmp_path / "runs"
+    run_id = "retry-exhausted"
+    run_dir = runs_dir / run_id
+    step_def = ProcessStep(id="scalar-agent", mode="agent", prompt_prefix="test")
+    target = ResolvedStep(
+        step_id=step_def.id,
+        mode="agent",
+        adapter=ResolvedAdapter(type=adapter.adapter_type),
+        prompt_prefix="test",
+    )
+    context = RunExecutionContext.create(
+        max_concurrency=1,
+        pool_dispatch_template=PoolDispatchConfig(
+            coordinator=coordinator,
+            adapter=adapter.adapter_type,
+            runs_dir=runs_dir,
+            run_id=run_id,
+            step="",
+            strategy=SelectionStrategy(SelectionPolicy.PRIORITY_ORDER, ("alt1",)),
+        ),
+        preflight_quota_guard="off",
+    )
+    try:
+        succeeded = asyncio.run(
+            _execute_agent_step(
+                spec=ProcessSpec(
+                    name="scalar-auth",
+                    defaults=ProcessDefaults(retry=RetryPolicy(max_retries=1, initial_backoff_s=0)),
+                    steps=[step_def],
+                ),
+                step_def=step_def,
+                target=target,
+                variables={
+                    "RUNS_DIR": str(runs_dir),
+                    "RUN_ID": run_id,
+                    "OBSERVED_LABEL": str(tmp_path / "never-written.txt"),
+                },
+                process_dir=tmp_path,
+                run_dir=run_dir,
+                run_id=f"scalar-auth/{run_id}",
+                execution_context=context,
+                out=_Out(),
+            )
+        )
+    finally:
+        context.close()
+
+    assert succeeded is False
+    state_dir = compute_task_state_dir(run_dir, step_def, {})
+    history = read_attempt_history_at(state_dir)
+    assert len(history) == 1
+    assert history[0].disposition is AttemptDisposition.retryable
+    status = read_status_at(state_dir)
+    assert status is not None
+    assert status.state == "failed"
+    assert status.attempt == 1
+    assert status.error is not None
+    assert "no eligible pool label" in status.error
+
+
 def test_pool_exhaustion_marks_top_level_scalar_step_failed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -499,7 +578,9 @@ def test_pool_exhaustion_marks_top_level_scalar_step_failed(
     assert read_attempt_history_at(state_dir) == ()
 
 
-def test_pool_adapter_mismatch_is_visible_and_uses_ambient_auth(tmp_path: Path) -> None:
+def test_pool_adapter_mismatch_is_visible_and_uses_ambient_auth(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     out = _Out()
     template = PoolDispatchConfig(
         coordinator=MagicMock(),
@@ -509,20 +590,120 @@ def test_pool_adapter_mismatch_is_visible_and_uses_ambient_auth(tmp_path: Path) 
         step="",
     )
 
-    bound = _bind_pool_dispatch(
-        template,
-        adapter_type="pi-cli",
-        run_dir=tmp_path / "runs" / "run",
-        step_id="mine",
-        out=out,
-    )
+    with caplog.at_level(logging.WARNING, logger="metaproc.commands.run_process"):
+        bound = _bind_pool_dispatch(
+            template,
+            adapter_type="pi-cli",
+            run_dir=tmp_path / "runs" / "run",
+            step_id="mine",
+            out=out,
+        )
 
-    assert bound is None
-    assert out.warnings == [
+    expected_warning = (
         "Step 'mine' uses adapter 'pi-cli', but the credential pool is configured for "
         "'claude-code-cli'; the pool is not applied and the step uses its ambient "
         "adapter authentication."
+    )
+    assert bound is None
+    assert out.warnings == [expected_warning]
+    assert expected_warning in caplog.messages
+    records = [
+        json.loads(line)
+        for line in paths_mod.runpool_step_events(tmp_path / "runs" / "run", "mine")
+        .read_text()
+        .splitlines()
     ]
+    assert records == [
+        {
+            "event": "auth_skipped",
+            "schema_version": 1,
+            "pool_enabled": False,
+            "step_id": "mine",
+            "step_adapter": "pi-cli",
+            "configured_adapter": "claude-code-cli",
+            "reason": "adapter_mismatch",
+            "ts": records[0]["ts"],
+        }
+    ]
+
+
+def test_pool_scope_uses_logical_run_path_when_run_dir_is_a_symlink(tmp_path: Path) -> None:
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+    physical_run_dir = tmp_path / "physical-run"
+    physical_run_dir.mkdir()
+    logical_run_dir = runs_dir / "linked-run"
+    logical_run_dir.symlink_to(physical_run_dir, target_is_directory=True)
+    template = PoolDispatchConfig(
+        coordinator=MagicMock(),
+        adapter="claude-code-cli",
+        runs_dir=runs_dir,
+        run_id="run",
+        step="",
+    )
+
+    bound = _bind_pool_dispatch(
+        template,
+        adapter_type="claude-code-cli",
+        run_dir=logical_run_dir,
+        step_id="research",
+        out=_Out(),
+    )
+
+    assert bound is not None
+    assert bound.run_id == "linked-run"
+
+
+def test_scalar_binding_failure_degrades_to_step_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = _ScalarAuthAdapter()
+    monkeypatch.setitem(ADAPTER_REGISTRY, adapter.adapter_type, adapter)
+    runs_dir = tmp_path / "runs"
+    run_dir = tmp_path / "outside" / "run"
+    step_def = ProcessStep(id="scalar-agent", mode="agent", prompt_prefix="test")
+    target = ResolvedStep(
+        step_id=step_def.id,
+        mode="agent",
+        adapter=ResolvedAdapter(type=adapter.adapter_type),
+        prompt_prefix="test",
+    )
+    context = RunExecutionContext.create(
+        max_concurrency=1,
+        pool_dispatch_template=PoolDispatchConfig(
+            coordinator=MagicMock(),
+            adapter=adapter.adapter_type,
+            runs_dir=runs_dir,
+            run_id="run",
+            step="",
+        ),
+        preflight_quota_guard="off",
+    )
+    out = _Out()
+    try:
+        succeeded = asyncio.run(
+            _execute_agent_step(
+                spec=ProcessSpec(name="scalar-auth", steps=[step_def]),
+                step_def=step_def,
+                target=target,
+                variables={
+                    "RUNS_DIR": str(runs_dir),
+                    "RUN_ID": "run",
+                    "OBSERVED_LABEL": str(tmp_path / "never-written.txt"),
+                },
+                process_dir=tmp_path,
+                run_dir=run_dir,
+                run_id="scalar-auth/run",
+                execution_context=context,
+                out=out,
+            )
+        )
+    finally:
+        context.close()
+
+    assert succeeded is False
+    assert len(out.warnings) == 1
+    assert "outside credential pool runs directory" in out.warnings[0]
 
 
 def test_pool_scope_must_remain_inside_runs_directory(tmp_path: Path) -> None:
@@ -539,6 +720,25 @@ def test_pool_scope_must_remain_inside_runs_directory(tmp_path: Path) -> None:
             template,
             adapter_type="claude-code-cli",
             run_dir=tmp_path / "elsewhere" / "run",
+            step_id="research",
+            out=_Out(),
+        )
+
+
+def test_pool_scope_rejects_parent_traversal_outside_runs_directory(tmp_path: Path) -> None:
+    template = PoolDispatchConfig(
+        coordinator=MagicMock(),
+        adapter="claude-code-cli",
+        runs_dir=tmp_path / "runs",
+        run_id="run",
+        step="",
+    )
+
+    with pytest.raises(CLIError, match="outside credential pool runs directory"):
+        _bind_pool_dispatch(
+            template,
+            adapter_type="claude-code-cli",
+            run_dir=tmp_path / "runs" / ".." / "elsewhere" / "run",
             step_id="research",
             out=_Out(),
         )
@@ -681,3 +881,65 @@ def test_scalar_pool_reuses_quota_preflight_before_acquiring(
     assert out.warnings == [
         "Step 'scalar-agent': scalar quota gate refused launch: not enough quota"
     ]
+
+
+def test_scalar_pool_warn_posture_skips_per_step_quota_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = _ScalarAuthAdapter()
+    monkeypatch.setitem(ADAPTER_REGISTRY, adapter.adapter_type, adapter)
+    preflight = MagicMock()
+
+    def unavailable(*_args: object, **_kwargs: object) -> None:
+        raise PoolSlotUnavailableError(
+            adapter.adapter_type,
+            policy=FallbackPolicy.NONE,
+            excluded=(),
+        )
+
+    monkeypatch.setattr("metaproc.commands.run_process.check_step_preflight", preflight)
+    monkeypatch.setattr("metaproc.commands.run_process.acquire_slot", unavailable)
+    runs_dir = tmp_path / "runs"
+    run_id = "warn-no-scan"
+    run_dir = runs_dir / run_id
+    step_def = ProcessStep(id="scalar-agent", mode="agent", prompt_prefix="test")
+    target = ResolvedStep(
+        step_id=step_def.id,
+        mode="agent",
+        adapter=ResolvedAdapter(type=adapter.adapter_type),
+        prompt_prefix="test",
+    )
+    context = RunExecutionContext.create(
+        max_concurrency=1,
+        pool_dispatch_template=PoolDispatchConfig(
+            coordinator=MagicMock(),
+            adapter=adapter.adapter_type,
+            runs_dir=runs_dir,
+            run_id=run_id,
+            step="",
+        ),
+        preflight_quota_guard="warn",
+    )
+    try:
+        succeeded = asyncio.run(
+            _execute_agent_step(
+                spec=ProcessSpec(name="scalar-auth", steps=[step_def]),
+                step_def=step_def,
+                target=target,
+                variables={
+                    "RUNS_DIR": str(runs_dir),
+                    "RUN_ID": run_id,
+                    "OBSERVED_LABEL": str(tmp_path / "never-written.txt"),
+                },
+                process_dir=tmp_path,
+                run_dir=run_dir,
+                run_id=f"scalar-auth/{run_id}",
+                execution_context=context,
+                out=_Out(),
+            )
+        )
+    finally:
+        context.close()
+
+    assert succeeded is False
+    preflight.assert_not_called()

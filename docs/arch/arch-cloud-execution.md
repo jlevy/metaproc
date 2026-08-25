@@ -790,8 +790,8 @@ for operator recipes and this document for the full design.
 ### rev10 (2026-08-24)
 
 Replaced duplicated authentication-pool fields on `OrchestratorDispatchConfig` with the
-shared `AuthPoolFlags` payload already used by worker dispatch, and removed the completed
-consolidation item from Potential Improvements.
+shared `AuthPoolFlags` payload already used by worker dispatch, and removed the
+completed consolidation item from Potential Improvements.
 
 ### rev9 (2026-08-24)
 

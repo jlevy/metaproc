@@ -739,11 +739,15 @@ remove dead plumbing.
 33 and completes scalar credential-pool propagation, including scoped child evidence,
 fallback-label retry, shared fan-out/scalar completion primitives, and
 classification-before-compaction ordering.
-Its exact review-fix head passes local and pre-push formatting, Ruff, BasedPyright,
-Markdown links, public hygiene, supply-chain and browser checks, dependency audits,
-distribution build and smoke tests, plus 4,318 tests with 8 skipped.
-The stack-wide exact-head GitHub matrix will be repeated after the review-driven rebase
-and auth-transport fold.
+The review-driven restack also contains path-binding failures within the affected step,
+normalizes the logical runs root once without following run-directory symlinks, makes
+retry-time pool exhaustion terminal, avoids nonblocking scalar quota scans, and records
+every adapter-mismatch fallback as an `auth_skipped` event and warning log.
+Focused tests cover local scalar and fan-out paths plus the worker entrypoint.
+The consolidated local gate passes 4,308 tests with 8 skipped, plus formatting, Ruff,
+BasedPyright, Markdown links, public hygiene, browser checks, supply-chain checks,
+dependency audits, distribution build, and installed-wheel smoke.
+The exact-head GitHub matrix is repeated before pull request 35 is restacked.
 
 The unrelated timing-ratio failures observed while validating this stack are resolved by
 [pull request 39](https://github.com/jlevy/metaproc/pull/39). It replaces the noisy

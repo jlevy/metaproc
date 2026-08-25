@@ -37,6 +37,7 @@ from metaproc.dispatch.pool_dispatch import (
 )
 from metaproc.dispatch.preflight import validate_guard_posture
 from metaproc.dispatch.slot_coordinator import SlotCoordinator
+from metaproc.runpool.events import EventLogger
 from metaproc.runpool.pool import resolve_min_concurrency
 from metaproc.settings import POOL_MIN_CONCURRENCY
 
@@ -380,6 +381,33 @@ def _build_pool_dispatch_template(
         f"fallback={fallback_policy_enum.value}"
     )
     return template
+
+
+def _filter_pool_dispatch_for_adapter(
+    template: Any | None,
+    *,
+    adapter_type: str,
+    step_id: str,
+    events_path: Path,
+    out: Any,
+) -> Any | None:
+    """Disable a mismatched worker pool with visible and durable evidence."""
+    if template is None or adapter_type == template.adapter:
+        return template
+    message = (
+        f"Step '{step_id}' uses adapter {adapter_type!r}, but the credential pool "
+        f"is configured for {template.adapter!r}; the pool is not applied and the "
+        "step uses its ambient adapter authentication."
+    )
+    out.warning(message)
+    log.warning(message)
+    with EventLogger(events_path) as events:
+        events.auth_skipped(
+            step_id=step_id,
+            step_adapter=adapter_type,
+            configured_adapter=template.adapter,
+        )
+    return None
 
 
 def _resolve_retry_policy(
@@ -1155,6 +1183,13 @@ def run_parallel(
         run_context=variables.get("RUN_ID", ""),
         out=out,
         auth_policy=auth_policy,
+    )
+    pool_dispatch_template = _filter_pool_dispatch_for_adapter(
+        pool_dispatch_template,
+        adapter_type=adapter_type,
+        step_id=step,
+        events_path=logs_dir / paths_mod.RUNPOOL_EVENTS_FILE,
+        out=out,
     )
 
     all_results_pool = asyncio.run(

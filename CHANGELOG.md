@@ -109,10 +109,14 @@ development series.
   rules, classify failures, walk fallback labels on retry, and emit the same
   `auth_lease_acquired` and `auth_outcome` evidence as RunPool items.
   Nested leaves bind slots and event join keys to their path-relative child scope, so
-  credential material stays inside the run tree.
+  credential material stays inside the logical run tree even when a run directory is
+  symlinked to another volume.
   Blocking credential storage work runs through the run-owned executor.
-  Scalar admission and quota refusals fail the step before attempt history starts, while
-  adapter mismatches emit an explicit warning before using ambient authentication.
+  Scalar quota scans run only for the blocking `refuse` posture; admission failures
+  before the first launch create no attempt, while exhaustion after a retry makes the
+  existing task state terminal.
+  Adapter mismatches emit an explicit warning, log record, and `auth_skipped` event
+  before using ambient authentication, including on worker entrypoints.
 
 - **One execution context across recursive scopes**: local `run-process` execution now
   shares one executable-leaf ceiling across fan-out pools, scalar steps, code work, and

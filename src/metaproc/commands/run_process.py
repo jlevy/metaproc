@@ -1589,15 +1589,25 @@ def _bind_pool_dispatch(
     if template is None:
         return None
     if adapter_type != template.adapter:
-        out.warning(
+        message = (
             f"Step '{step_id}' uses adapter {adapter_type!r}, but the credential pool "
             f"is configured for {template.adapter!r}; the pool is not applied and the "
             "step uses its ambient adapter authentication."
         )
+        out.warning(message)
+        log.warning(message)
+        with EventLogger(paths_mod.runpool_step_events(run_dir, step_id)) as events:
+            events.auth_skipped(
+                step_id=step_id,
+                step_adapter=adapter_type,
+                configured_adapter=template.adapter,
+            )
         return None
 
-    runs_root = template.runs_dir.resolve()
-    resolved_run_dir = run_dir.resolve()
+    # Keep containment lexical. Run trees may intentionally be symlinked to larger
+    # volumes, and following the final symlink would reject their logical RUNS_DIR scope.
+    runs_root = template.runs_dir
+    resolved_run_dir = Path(os.path.abspath(run_dir))
     try:
         scope_id = resolved_run_dir.relative_to(runs_root).as_posix()
     except ValueError as exc:
@@ -1611,6 +1621,18 @@ def _bind_pool_dispatch(
             f"directory {runs_root}"
         )
     return dataclasses.replace(template, run_id=scope_id, step=step_id)
+
+
+def _mark_scalar_prelaunch_failure_after_retry(state_dir: Path, *, error: str) -> None:
+    """Make a previously launched attempt terminal when its retry cannot launch."""
+    current = read_status_at(state_dir)
+    if current is not None and current.state == "running":
+        mark_failed_at(
+            state_dir,
+            error=error,
+            running_record=current,
+            attempt_disposition=None,
+        )
 
 
 async def _execute_agent_step(
@@ -1722,13 +1744,18 @@ async def _execute_agent_step(
     content_retry_cap = max_retries_for(FailureClass.INVALID_OUTPUT, retry_policy.max_retries)
     attempt = 1
     output_failure_feedback: Sequence[OutputFailure] = ()
-    pool_dispatch = _bind_pool_dispatch(
-        execution_context.pool_dispatch_template if execution_context is not None else None,
-        adapter_type=adapter_type,
-        run_dir=run_dir,
-        step_id=step_id,
-        out=out,
-    )
+    try:
+        pool_dispatch = _bind_pool_dispatch(
+            execution_context.pool_dispatch_template if execution_context is not None else None,
+            adapter_type=adapter_type,
+            run_dir=run_dir,
+            step_id=step_id,
+            out=out,
+        )
+    except CLIError as exc:
+        out.warning(str(exc))
+        log.warning("Step %s credential-pool binding failed: %s", step_id, exc)
+        return False
     auth_events = (
         EventLogger(paths_mod.runpool_step_events(run_dir, step_id))
         if pool_dispatch is not None
@@ -1742,7 +1769,7 @@ async def _execute_agent_step(
         if (
             pool_dispatch is not None
             and execution_context is not None
-            and execution_context.preflight_quota_guard != "off"
+            and execution_context.preflight_quota_guard == "refuse"
         ):
             quota_verdict = await _run_sync(
                 execution_context,
@@ -1851,7 +1878,11 @@ async def _execute_agent_step(
                                         ),
                                     )
                                 except PoolSlotUnavailableError as exc:
-                                    out.warning(f"Step '{step_id}': {exc}")
+                                    error = f"Step '{step_id}': {exc}"
+                                    out.warning(error)
+                                    _mark_scalar_prelaunch_failure_after_retry(
+                                        state_dir, error=str(exc)
+                                    )
                                     return False
                                 counts = pool_dispatch.coordinator.active_counter.snapshot()
                                 active_for_adapter = {
@@ -1875,6 +1906,9 @@ async def _execute_agent_step(
                                 except PoolAuthOverrideError as exc:
                                     await _complete_auth_attempt(str(exc))
                                     out.warning(f"Step '{step_id}': {exc}")
+                                    _mark_scalar_prelaunch_failure_after_retry(
+                                        state_dir, error=str(exc)
+                                    )
                                     return False
                                 auth_adapter = get_auth_capable(lease.adapter)
                                 if auth_adapter is not None:
@@ -2546,6 +2580,19 @@ async def _execute_fan_out_step(
         profile_max_concurrency_hint=adapter_max_int,
     )
 
+    try:
+        pool_dispatch = _bind_pool_dispatch(
+            pool_dispatch_template,
+            adapter_type=adapter_type,
+            run_dir=run_dir,
+            step_id=step_id,
+            out=out,
+        )
+    except CLIError as exc:
+        out.warning(str(exc))
+        log.warning("Step %s credential-pool binding failed: %s", step_id, exc)
+        return False
+
     if events is not None:
         _emit_fan_out_item_starts(
             events,
@@ -2553,14 +2600,6 @@ async def _execute_fan_out_step(
             each=each,
             item_contexts=item_contexts,
         )
-
-    pool_dispatch = _bind_pool_dispatch(
-        pool_dispatch_template,
-        adapter_type=adapter_type,
-        run_dir=run_dir,
-        step_id=step_id,
-        out=out,
-    )
 
     all_results = await _run_agent_pool(
         spec=spec,

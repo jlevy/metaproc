@@ -981,16 +981,31 @@ class TestProcessStatusFile:
 
 class TestFanOutExecution:
     @pytest.mark.parametrize(
-        ("adapter_type", "expected_scope", "warning_fragment"),
+        (
+            "adapter_type",
+            "pool_root_name",
+            "expected_success",
+            "expected_scope",
+            "warning_fragment",
+        ),
         [
-            ("claude-code-cli", "2026-08-24/research/AAPL", None),
-            ("pi-cli", None, "pool is configured for 'claude-code-cli'"),
+            ("claude-code-cli", "runs", True, "2026-08-24/research/AAPL", None),
+            ("pi-cli", "runs", True, None, "pool is configured for 'claude-code-cli'"),
+            (
+                "claude-code-cli",
+                "other-runs",
+                False,
+                None,
+                "outside credential pool runs directory",
+            ),
         ],
     )
     def test_binds_matching_fan_out_pool_and_warns_on_mismatch(
         self,
         tmp_path: Path,
         adapter_type: str,
+        pool_root_name: str,
+        expected_success: bool,
         expected_scope: str | None,
         warning_fragment: str | None,
     ) -> None:
@@ -1028,7 +1043,7 @@ class TestFanOutExecution:
         template = PoolDispatchConfig(
             coordinator=MagicMock(),
             adapter="claude-code-cli",
-            runs_dir=runs_dir,
+            runs_dir=tmp_path / pool_root_name,
             run_id="2026-08-24",
             step="",
         )
@@ -1068,15 +1083,18 @@ class TestFanOutExecution:
                 )
             )
 
-        assert succeeded is True
+        assert succeeded is expected_success
         call = run_pool.await_args
-        assert call is not None
-        bound = call.kwargs["pool_dispatch"]
-        if expected_scope is None:
-            assert bound is None
+        if expected_success:
+            assert call is not None
+            bound = call.kwargs["pool_dispatch"]
+            if expected_scope is None:
+                assert bound is None
+            else:
+                assert bound.run_id == expected_scope
+                assert (bound.runs_dir / bound.run_id).resolve() == run_dir.resolve()
         else:
-            assert bound.run_id == expected_scope
-            assert (bound.runs_dir / bound.run_id).resolve() == run_dir.resolve()
+            assert call is None
         if warning_fragment is None:
             assert out.warnings == []
         else:

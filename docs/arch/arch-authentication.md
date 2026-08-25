@@ -919,12 +919,18 @@ A scalar leaf first receives run and host admission, then acquires its credentia
 only then writes durable attempt state.
 It cannot hold a Vehicle B label lock while queued behind the run semaphore.
 The scalar path uses the same quota preflight primitive as fan-out, with a projected
-size of one. Admission or quota refusal fails the step before durable attempt history
-begins.
+size of one, only when the operator selects the blocking `refuse` posture.
+The default `warn` posture remains a run-level fan-out check; scalar leaves skip its
+per-step runs-tree scan because the verdict cannot block launch.
+Admission or quota refusal before the first launch creates no durable attempt.
+If a retry has already finalized its attempt and the next credential acquisition fails,
+the existing task projection becomes `failed` without inventing another attempt.
 
 A pool applies only to steps whose adapter matches the configured pool adapter.
-A different adapter uses its ambient authentication, and `run-process` emits an explicit
-warning naming the step adapter and pool adapter rather than silently skipping the pool.
+A different adapter uses its ambient authentication.
+Local scalar and fan-out paths and the cloud-worker entrypoint all emit an explicit CLI
+warning, a warning log record, and an `auth_skipped` runpool event naming the step and
+configured adapters rather than silently skipping the pool.
 
 Higher-precedence OAuth vars (`ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`,
 `CLAUDE_CODE_APIKEY_HELPER`, `CODEX_CREDS_JSON`) are scrubbed from the subprocess env.
