@@ -2,12 +2,12 @@
 title: Native Mapped Composite Scopes
 description: >-
   Add the missing composition of mapping and in-process process scopes, after unifying
-  recursive run policy and host admission, without a child CLI or a new general
-  scheduler.
+  recursive run policy and shared RunPool execution, without a child CLI, a second
+  resource controller, or a new general scheduler.
 author: Joshua Levy (github.com/jlevy) with LLM assistance
 date: 2026-08-23
 last_updated: 2026-08-24
-status: Draft — Implementation Validation
+status: Draft — Consolidated Validation
 category: plan
 ---
 # Feature: Native Mapped Composite Scopes
@@ -33,11 +33,14 @@ The mapped executor can reuse the current recursive evaluator, neutral fan-out r
 and leaf executors. The state, port, evidence, and recovery boundary around it is new
 work and is specified explicitly below.
 
-Before mapped scopes ship, pull request 31 lands and one internal execution context
-carries run-wide policy, cancellation, credentials, and concurrency through every
-recursive call. Before the feature is used for production cohorts, one host authority
-must admit RunPool, scalar-agent, and command-subprocess launches against the same byte
-ledger. These are safety prerequisites, not a second scheduler.
+Pull request 31 and the `v0.3.0` release baseline have landed.
+One internal execution context must now carry run-wide policy, cancellation,
+credentials, concurrency, and a run-owned resource authority through every recursive
+call. For the first single-profile consumer, that authority is the existing RunPool:
+resource-bearing child leaves submit to it instead of creating scalar launch
+controllers. Existing host admission remains the cross-run safety boundary.
+Weighted byte claims are an evidence-triggered extension of those primitives, not a
+prerequisite invented in advance.
 
 The proposal does **not** make the general ready-task scheduler in
 [`execution-model-design.md`](../../../execution-model-design.md) a prerequisite.
@@ -49,23 +52,29 @@ multi-writer scheduling.
 
 ## Decision Summary
 
-Implement the smallest safe stack in dependency order:
+Implement and validate the smallest safe stack in dependency order:
 
-1. merge pull request 31’s attempt-history and `scope_path` slice;
-2. introduce one `RunExecutionContext`, unify recursive policy and concurrency, pass
-   credential-pool policy to scalar agents, and move blocking command work off the
-   shared event loop;
+1. use post-release `main` at or after `6ac9c65` as the immutable baseline for the
+   remaining stack: `v0.3.0` contains pull requests 31 and 39, while pull request 38 is
+   the next merge above that tag;
+2. keep pull requests 32 through 35 as reviewable contract layers, repair every known
+   correctness finding, and validate their combined head rather than treating an upper
+   stacked PR with no CI as proven;
 3. permit `for_each` on composites by calling the neutral `run_fan_out` runner with a
    composite invoker; first reuse existing process and step output declarations for
    boundary validation, then add only the parent evidence, projection, and recovery
    semantics demonstrated by consumer smokes;
-4. make one mutex-protected host byte authority govern RunPool, scalar-agent, and
-   command-subprocess launches, including cold ramp and warm-state restoration; and
+4. make `RunExecutionContext` own the existing run-wide execution authorities, including
+   one RunPool for local resource-bearing leaves in the initial single-profile topology;
+   retain existing cross-run host admission and add weighted byte claims only if
+   measured multi-profile or concurrent-run behavior requires them;
 5. extend existing plan, status, trace, and Metabrowser projections to show mapped
-   scopes and their artifacts.
+   scopes and their artifacts; and
+6. pin the exact consolidated pull request 37 head in the GTIA consumer and advance an
+   ordered offline-to-live smoke ladder before landing runtime slices on `main`.
 
 Do not add a new mode, workflow service, scheduler DSL, provider ontology, artifact
-registry, or agent serialization protocol.
+registry, agent serialization protocol, or parallel memory controller.
 Do not refactor all four execution modes behind a new `Invoker` hierarchy as part of
 this work.
 
@@ -80,8 +89,9 @@ this work.
 - Reuse execution-profile memory estimates, host admission, OS pressure telemetry,
   RunPool, credential pools, output validation, retry feedback, and task records.
 - Preserve named, declared artifact boundaries between parent and child processes.
-- Make one-item repair a normal framework operation: force an item or one of its child
-  steps without launching a child CLI or editing state by hand.
+- Make failed-item repair a normal framework operation through resume without launching
+  a child CLI or editing state by hand.
+  Add targeted force for an already-successful item only when an operator case earns it.
 - Make the authored process tree, mapped item scopes, outcomes, and produced artifacts
   visible through the existing inspection surfaces.
 - Preserve current behavior for every existing process spec.
@@ -119,8 +129,8 @@ The relevant current behavior is:
 | Artifact ports | Process input/output declarations, step outputs, and output re-exports exist | Validate existing child and mapped-step declarations first; add automatic child-port projection only if consumer use shows the duplicated path declaration is unsafe |
 | Execution policy | Some backend, profile, variant, auth, and cloud arguments propagate into composites | Carry all run policy in one context; characterize force, skip, continue, cancellation, and auth behavior |
 | Command execution | Synchronous handlers are moved to a thread | Move command-backed code steps off the event loop too; keep the executor independent of the authored leaf ceiling so the shared admission primitive remains testable and authoritative |
-| Fan-out resources | Each RunPool owns adaptive subprocess concurrency and takes count-only host slots | Keep RunPool execution, but make every actual launch claim bytes from one shared host authority and constrain ramp/restore with it |
-| Scalar resources | Scalar agents and command-backed code bypass RunPool; scalar agents use a separate best-effort count gate | Use the same byte authority for child subprocesses and propagate credential-pool policy |
+| Fan-out resources | Each fan-out step creates a RunPool with adaptive subprocess concurrency and count-only host slots | For the first single-profile mapped workflow, make the run context own one RunPool across resource-bearing child leaves; retain existing host admission and add weighted claims only if measured evidence requires them |
+| Scalar resources | Scalar agents and command-backed code bypass RunPool; scalar agents use a separate best-effort count gate | Submit production-shaped mapped scalar agents to the run-owned pool, account for significant command subprocesses through the same existing authority, and propagate credential-pool policy |
 | Failure feedback | Structured output failures and bounded corrective prompts are merged on main through pull request 29 | Reuse unchanged inside mapped children |
 | Task evidence | Leaf task records and basic item outcomes are durable; a scalar composite itself writes no task result | Add mapped-parent task state/results and outcome links to child evidence; merge pull request 31 first |
 
@@ -177,20 +187,29 @@ required the following corrections before implementation:
 | --- | --- |
 | F1: sequencing and recursive policy | Pull request 31 is first. `RunExecutionContext`, one run semaphore, and characterized force/skip/continue/cancel propagation are Phase 1 prerequisites. |
 | F2: state, ports, and evidence are new work | Phase 2 starts with mapped-parent task state/results and child-boundary validation through existing declarations. Scoped namespaces, richer outcomes, and automatic port projection remain evidence-gated follow-ups. |
-| F3: split memory authority and blocked event loop | Command work moves off-loop in Phase 1. Phase 3 uses one byte authority for pool, scalar-agent, and command-subprocess launches and governs ramp and warm restore. |
+| F3: split memory authority and blocked event loop | Command work moves off-loop in Phase 1. Phase 3 routes production-shaped mapped leaves through one run-owned RunPool and current host admission; weighted host claims require measured evidence. |
 | F4: scalar credential-pool bypass | Auth and pool dispatch become run-context policy, with pool-label assertions in M1. |
 | F5: third fan-out path and ambiguous IDs | Mapped composites call `run_fan_out`; ports lower to dependency clauses; `/` identifies an item while `::` retains composite descent. |
-| F6: per-item recovery | Item-scoped force, child propagation, resume-time output validation, and three-view consistency move into Phase 2. |
+| F6: per-item recovery | Failed-item resume, run-wide force propagation, resume-time output validation, and three-view consistency move into Phase 2. Successful-item targeted rerun remains evidence-triggered. |
 | F7: unreachable escalation tests | Derived-subset lineage and observable streaming/fairness triggers are restored; M4 and M5 measure barrier-drain idle. |
-| F8: smaller seams | The plan standardizes roster input indirection, specifies the byte mutex/ledger, states the single-host cloud limit, gates M4 on write-boundary cost, and feeds measured harness RSS into profiles. |
+| F8: smaller seams | The plan standardizes roster input indirection, reuses RunPool and HostAdmissionGate before extending them, states the single-host cloud limit, gates M4 on write-boundary cost, and feeds measured harness RSS into profiles. |
 
 ### Review-driven pull request boundaries
+
+This document on pull request 37 is the definitive framework plan for the remaining
+stack. Pull request 32 remains the reviewed architecture baseline, but later review,
+consumer evidence, and scope decisions are reconciled here rather than left in PR
+comments or silently narrowed inside implementation commits.
+The GTIA plan in the consumer repository owns the domain graph, artifacts, and v2.4
+comparison policy; it must link here rather than restating Metaproc runtime commitments
+differently.
 
 The implementation stack follows runtime contracts rather than preserving every
 historical branch boundary:
 
-- pull request 39 is independent test hardening against `main`; it replaces a noisy
-  timing ratio with a deterministic complexity guard;
+- pull request 39 is in released `v0.3.0`, and pull request 38 is merged immediately
+  above that tag on `main`; the remaining memoization backstop for pull request 39 is
+  test hardening against this post-release baseline;
 - pull request 32 remains the reviewed design and validation plan;
 - pull request 33 owns the shared recursive execution context and leaf-admission
   contract;
@@ -211,6 +230,15 @@ different invariants and have different rollback boundaries.
 Folding those together would make the design harder to review.
 Folding the cloud-auth transport into the auth slice removes an artificial seam and one
 inert stack level.
+
+The branches remain stacked while they are repaired, but the consolidated pull request
+37 head is the validation unit.
+No runtime slice is merge-eligible merely because an older isolated head was green.
+The exact repaired heads must receive CI, the combined head must pass repository
+verification and failure injection, and the GTIA consumer must pass its pinned
+network-free gate. Once those facts exist, land bottom-up without changing the tested
+commits. Consolidation is allowed only when a boundary no longer describes a coherent
+contract or rollback unit.
 
 ### Alternatives considered
 
@@ -257,7 +285,8 @@ properties and cannot be expressed cleanly with mapped scopes and explicit barri
   close, with material barrier-drain idle as a fraction of wall-clock;
 - task wait-time skew across mapped scopes shows that host/provider admission cannot
   provide the required global fairness;
-- an operator needs causal per-item force across scope boundaries;
+- an operator needs to rerun a completed mapped item without rerunning successful
+  siblings;
 - constrained multi-writer scheduling must extend beyond the current `gcp-worker` path;
   or
 - static and runtime views cannot explain readiness without a persisted global graph.
@@ -376,8 +405,8 @@ New fields are additive for existing `collect:` readers.
 
 The runtime keeps three completion views consistent for every item: mapped-parent task
 state, child `process-status.yaml`, and child task state.
-A crash between writes must recover to one explainable result, and a forced or resumed
-item must not be considered complete until all three views and declared outputs agree.
+A crash between writes must recover to one explainable result, and a resumed item must
+not be considered complete until all three views and declared outputs agree.
 
 ### Declared process outputs
 
@@ -445,55 +474,58 @@ run heartbeats, and that configured concurrency is not silently replaced by
 
 ### Resource admission
 
-RunPool remains the executor for real fan-out subprocesses.
-Scalar child agent steps retain their direct adapter path.
-Command-backed code steps retain their direct subprocess path.
-Every actual child-process launch from these paths must, however, acquire capacity from
-one host authority. A count-only gate in front of independently adaptive pools is
-insufficient: each pool otherwise sizes the same host as if it were alone.
+RunPool is already Metaproc’s local process manager and adaptive memory controller.
+The first production-shaped slice must use it as the run-owned launch authority for
+resource-bearing local child leaves across mapped scopes.
+A mapped scope is structural and consumes no pool slot.
+An agent or long-lived command subprocess consumes capacity only when it is ready to
+launch. In-process deterministic handlers remain on the run-owned executor and leaf
+ceiling rather than being disguised as subprocess work.
 
-The authority is a small filesystem protocol in the existing host namespace, not a
-daemon or executor. A decision mutex protects a claims ledger.
-Under that mutex, a caller reaps stale claims, samples current capacity, sums active
-byte claims, and either records a new lease or waits.
-Reusing the existing slot layout, `mkdir_lock` primitive, execution-profile hints, and
-RunPool memory/process-tree utilities keeps the mechanism small while acknowledging that
-atomic byte decisions are new coordination work.
+The initial GTIA topology selects one harness and execution profile per run.
+One run-owned RunPool can therefore use that profile’s conservative process-tree
+estimate, current host telemetry, adaptive ramp, provider ceiling, and operator cap
+across all tickers and stages.
+Scalar mapped leaves submit prepared launches to that pool instead of creating one
+direct scalar controller per scope.
+Retry, output validation, durable task state, and dependency decisions stay in the
+orchestrator; RunPool owns admission, subprocess supervision, pressure response, and
+terminal process cleanup.
 
-Each claim uses:
+Existing disk-backed host admission remains the cross-run safety boundary.
+It already coordinates local RunPools and records child identity without a daemon.
+For the first single-run and single-profile ladder, use a conservative host count
+ceiling derived from the selected profile and keep every launch fail-closed when
+required admission is selected.
+RunPool must take a fresh pressure reading on startup and re-earn its memory ceiling;
+saved memory capacity is never trusted after resume.
 
-- conservative `estimated_process_rss_bytes` for the selected harness/profile;
-- current platform headroom and pressure state;
-- configured host reserve and operator count ceiling;
-- active leases and their outstanding estimated claims; and
-- the launched child PID, creation time, and observed process-tree footprint.
+Do not add a second adaptive controller or a new byte-ledger protocol before this path
+is measured. A weighted host claim becomes justified only if a named test demonstrates
+one of these failures:
 
-No pool or scalar attempt starts before its claim is accepted under `required` posture.
-After launch, the lease records the child identity and remains held until the supervised
-process tree exits. Rising pressure stops new admissions; completed work releases
-capacity. A high-memory host therefore admits more tasks up to the operator/provider
-ceilings without changing the process spec.
+- concurrent runs with materially different process footprints can pass the existing
+  host count gate and oversubscribe the host before RunPool pressure response catches
+  up;
+- one run must mix execution profiles whose conservative maximum estimate wastes enough
+  capacity to fail the high-memory-host throughput objective; or
+- a resource-significant subprocess cannot be submitted to the run-owned pool without
+  violating its execution contract.
 
-RunPool may still calculate a desired concurrency and ramp it gradually, but desired
-capacity never bypasses launch admission.
-Every ramped launch re-consults the shared byte authority.
-Warm scale state is advisory only: the pool takes a fresh pressure/headroom reading and
-caps restored state through the same authority before launching.
-Cold-ramp and warm-restore tests characterize the downstream crash fix that motivated
-this rule.
-
-Legacy processes retain the released best-effort posture by default.
-A run may select `required` admission, and the motivating consumer must do so: timeout
-or an unavailable authority leaves the task in an inspectable admission-wait/failure
-state and never launches it unguverned.
-The posture is run policy, not a domain step field.
+If one occurs, extend the existing `HostAdmissionGate` or RunPool submission contract
+with the smallest weighted claim that fixes the measured case.
+Reuse its mkdir leases, process identity, pressure telemetry, status, and event streams;
+do not create an independent scheduler or authority.
+A failed or unavailable required admission leaves an inspectable terminal task state and
+never launches it unguverned.
+The required posture remains run policy, not a domain step field.
 
 Provider/account quota remains with the existing credential-pool and adapter machinery.
 Do not build a generic vector-claim or budget ledger in this slice.
 Execution profiles already distinguish Pi, Claude, Gemini, provider, model, and resource
 hints, but their current default RSS estimates are mostly uniform.
-M3 measures each harness process tree and feeds conservative values back into the
-profiles before M4.
+M1 through M3 measure each harness process tree and feed conservative values back into
+the profiles before M4.
 
 ### Deployment boundary
 
@@ -628,21 +660,28 @@ scalar launch.
 - [x] Reject `gcp-worker` mapped-composite partitioning until a multi-host slice exists.
   This work is implemented in draft pull request 37.
 
-### Phase 3: One host byte authority
+### Phase 3: Shared RunPool and evidence-gated host admission
 
-- [ ] Add a decision mutex and active-claims ledger to the existing host namespace;
-  reconcile stale claims and admit atomically over fresh headroom, reserve, claims, and
-  count ceilings.
-- [ ] Make every RunPool, scalar-agent, and command-subprocess launch use that authority
-  while retaining its existing execution path.
-- [ ] Extend claims with profile, estimated bytes, child identity, and observed process
-  tree by reusing RunPool platform utilities.
-- [ ] Make cold ramp and warm-state restoration re-sample and obey the same byte
-  authority before each launch.
-- [ ] Add required admission posture while preserving the legacy default outside
-  opted-in workflows.
-- [ ] Measure Pi, Claude, and Gemini process trees and update conservative profile
-  claims before high-concurrency testing.
+- [ ] Characterize the production-shaped scalar agent and command-subprocess launch
+  paths before changing them; preserve task state, retry, output validation, auth, and
+  cancellation behavior.
+- [ ] Make `RunExecutionContext` own one RunPool for local resource-bearing leaves in
+  the first single-profile topology; mapped scopes share it by identity and hold no
+  capacity of their own.
+- [ ] Submit scalar mapped agent launches to that pool.
+  Submit long-lived command subprocesses too when doing so preserves their contract;
+  otherwise account for them through the same existing admission primitive and record
+  the exception explicitly.
+- [ ] Reuse RunPool’s adaptive pressure control, process-tree supervision, status,
+  events, cold-start calculation, and current host admission.
+  Do not duplicate those mechanisms in `RunExecutionContext`.
+- [ ] Prove fail-closed required admission, fresh capacity after resume, shared
+  concurrency across ticker scopes, and no direct child launch outside the authority.
+- [ ] Measure Pi, Claude, and Gemini process trees in separate single-profile runs and
+  update conservative profile estimates before high-concurrency testing.
+- [ ] Add weighted byte claims only after a recorded multi-profile or concurrent-run
+  test demonstrates that RunPool plus the existing host gate cannot meet safety or
+  utilization goals.
 
 ### Phase 4: Existing-view integration
 
@@ -694,10 +733,10 @@ scalar launch.
   not ambient credentials.
 - Compatibility tests proving all existing composite, agent fan-out, code fan-out,
   aligned-code-chain, and old-run readers behave unchanged.
-- Admission tests with concurrent pool, scalar-agent, and command-subprocess claim
-  races, fake headroom and pressure signals, stale leases, unavailable namespaces,
-  required versus best-effort posture, cold ramp, and warm-state restoration after a
-  fresh reading.
+- Shared-pool tests with mapped scalar-agent and command-subprocess submissions, fake
+  headroom and pressure signals, stale host leases, unavailable namespaces, required
+  versus best-effort posture, cold ramp, and resume from a fresh reading.
+  Weighted-claim race tests are added only if their escalation trigger fires.
 - Process-tree tests on Linux PSS and macOS physical footprint where the platform
   exposes them.
 
@@ -707,11 +746,11 @@ Run an ordered cohort ladder rather than jumping directly to a report-day run:
 
 | Rung | Workload | Required evidence |
 | --- | --- | --- |
-| M0 | Network-free three-item nested fixture | In-process mapping, declared outputs, parent/child state, mixed outcomes, failed-item-only resume, shared context, and no nested lease; force, richer outcome links, and artifact trace remain follow-ups |
-| M1 | One real harness, one item | Child stages run in-process with inherited policy, asserted credential-pool label, and no domain launcher |
-| M2 | One harness, three items | Mixed outcome isolation, closed fan-in, output revalidation, and one-item repair |
-| M3 | Pi, Claude, and Gemini, ten items | Profile/auth propagation, measured per-harness process-tree RSS fed back into profiles, provider behavior, and responsive event loop |
-| M4 | Same 32-item spec on constrained and high-memory Linux hosts | Higher safe throughput on the larger host, no unadmitted launch, cold/warm safety, bounded pressure/stalls, write-boundary cost gate, and barrier-drain fraction |
+| M0 | Network-free three-item nested fixture | In-process mapping, declared outputs, parent/child state, mixed outcomes, failed-item-only resume, shared context, path containment, bounded scope evaluation, and no nested lease; successful-item force, richer outcome links, and artifact trace remain follow-ups |
+| M1 | One real harness, one item | Child stages run in-process with inherited policy, asserted credential-pool label, one run-owned RunPool, and no domain or direct scalar launcher |
+| M2 | One harness, three items | Shared-pool concurrency across scopes, mixed outcome isolation, closed fan-in, output revalidation, and failed-item repair |
+| M3 | Separate Pi, Claude, and Gemini ten-item runs | Profile/auth propagation, measured per-harness process-tree RSS fed back into profiles, provider behavior, responsive event loop, and no unexplained direct-launch path |
+| M4 | Same 32-item spec on constrained and high-memory Linux hosts | Higher safe throughput on the larger host, no unadmitted launch, cold/resume safety, bounded pressure/stalls, write-boundary cost gate, barrier-drain fraction, and evidence for or against weighted host claims |
 | M5 | Full downstream shadow cohort | Eligible retained-baseline comparison, successful item repair/resume drill, and barrier-drain fraction |
 
 Measure actual agent-tree memory, admission wait, active concurrency, throughput,
@@ -722,12 +761,20 @@ A completed run alone does not prove adaptive capacity.
 
 ## Current Validation Status
 
-As of 2026-08-24, this proposal has been checked against the document and pull request
-stack listed above, the production composite evaluator, fan-out paths, execution-profile
-models, host admission, RunPool, and recursive visualization code.
-The pull request 32 deep review independently verified the load-bearing runtime claims,
-approved the mapped-scope primitive, and required the sequencing, state/evidence,
-resource, and recovery corrections recorded above.
+As of 2026-08-24, `v0.3.0` is released and pull request 38 is merged on top of it.
+Pull request 39 is also merged; its deterministic complexity guard still needs the
+tracked two-sided assertion and memoization backstop before it can protect the repaired
+stack. Pull requests 32 through 37 remain unmerged and stacked on pre-release branch
+bases. They must be rebased bottom-up onto the released main branch, with the pull
+request 38 resume-normalization conflict resolved deliberately.
+
+This proposal has been checked against the document and pull request stack, production
+composite evaluator, fan-out paths, execution profiles, host admission, RunPool, and
+recursive visualization code.
+The pull request 32 deep review approved the mapped-scope primitive.
+The later pull request 37 review and holistic stack review found remaining correctness
+defects in every runtime layer; those findings supersede earlier statements that the
+isolated heads were merge-ready.
 
 Pull request 31 is merged, and
 [pull request 33](https://github.com/jlevy/metaproc/pull/33) publishes the first runtime
@@ -780,6 +827,21 @@ The only consciously deferred review suggestion is a dedicated executor for log-
 joins; it remains evidence-triggered because the standard executor has no measured
 contention and another executor would add lifecycle machinery without current benefit.
 
+A later whole-stack review found additional pre-smoke blockers that the earlier green
+heads did not exercise:
+
+- pull request 33 must size and close its executor truthfully and reconcile its ceiling
+  documentation (`mp-74vg`);
+- pull request 34 must contain slot-binding failures, write terminal retry-exhaustion
+  state, avoid discarded scalar preflight work, and record auth bypass durably
+  (`mp-te1z`, `mp-5204`);
+- pull request 35 must contain `BaseException` cancellation paths, bound shutdown,
+  restore terminal bookkeeping, and pass the named injected-failure tests (`mp-ah0p`,
+  `mp-f761`); and
+- the lifecycle findings grouped in `mp-va6t` require explicit fixed or deferred
+  dispositions before live smoke, with descendant leaks, poisoned status, and retry
+  churn treated as correctness work rather than an unexamined fast-follow.
+
 Review of [pull request 36](https://github.com/jlevy/metaproc/pull/36) found that its
 retry-later options were inert transport with no `v3.0-pre` consumer.
 Those options and their duplicate parser were removed.
@@ -807,6 +869,14 @@ A second review finding about omitting the primary binding was rebutted because
 `ProcessStep` validation already rejects that configuration before runtime.
 The shipped architecture, concepts, proposal, operator, and changelog documentation now
 describe the M0 behavior and its limits.
+
+The latest holistic review rechecked head `49064f0` and left four pull request 37
+blockers open: mapped items still share the parent `{{run.dir}}` (`mp-xkvz`), unexpected
+item exceptions can abandon siblings and scope evaluation is unbounded (`mp-cr12`),
+dot-only item keys can escape their intended path (`mp-s070`), and a global graph
+failure-propagation change must be split and proved separately (`mp-ledg`). The rebase
+onto pull request 38 must also retain immutable-variable validation while preserving the
+released no-workstation-alias behavior (`mp-wzdl`).
 
 The same M0 pull request now closes a resume-identity hole found while preparing its
 first consumer. `run-config.yaml` already persisted resolved variables, but resume did
@@ -846,33 +916,53 @@ checks, dependency audits, distribution build, and installed-wheel smoke are als
 The checked-in downstream L0 gate and exact-head GitHub CI remain before this revision
 is merge-eligible.
 
-Per-item force, richer evidence/fan-in projection, scoped child variables, shared byte
-admission, live harnesses, and production-scale results remain open.
-They will be added only when the successive GTIA smoke rungs require them.
-The first F1–F8 architecture-review disposition is complete.
-The proposal remains a draft for review while implementation proceeds as independently
-reviewable stacked slices.
+Successful-item targeted force, richer evidence/fan-in projection, scoped child
+variables, weighted host claims, live harnesses, and production-scale results remain
+open. They are added only when the successive GTIA smoke rungs demonstrate a need.
+Failed-item-only resume is already the M0 repair contract.
+
+The first F1–F8 architecture disposition is complete, but the consolidated stack is not
+smoke-ready or merge-ready.
+Readiness requires every known finding above to receive an explicit disposition, the
+branches to be restacked on post-release `main` at or after `6ac9c65`, one run-owned
+RunPool path to replace per-scope scalar resource control for the consumer, exact-head
+CI and repository verification, and the pinned GTIA L0 gate.
+Until then, earlier passing test counts are historical evidence rather than a release
+claim.
 
 ## Rollout Plan
 
-1. Merge pull request 31. This prerequisite is complete.
-2. Land the independent deterministic scale guard in pull request 39.
-3. Merge this plan through pull request 32.
-4. Merge the `RunExecutionContext` and nonblocking-execution slice through pull request
-   33, which is based on pull request 32.
-5. Merge scalar credential propagation and complete cloud auth-policy transport through
-   pull request 34, which is based on pull request 33.
-6. Merge cancellation-safe ownership through pull request 35.
-7. Land the M0 mapped-scope vertical slice through pull request 37, then add the open
-   Phase 2 recovery and projection behavior only as the smoke ladder requires it.
-8. Land Phase 3 shared host byte authority before a mapped workflow is production-ready.
-9. Integrate the existing views and complete the M0-M4 framework ladder.
-10. Run the downstream `v3.0-pre` workflow only as a shadow consumer until its
-    comparison ladder passes.
-    Each run must store that declared pipeline identity with the exact consumer and
-    Metaproc revisions; directory names are not provenance.
-11. Keep the full scheduler and dormant retry-later integration beads deferred unless an
-    escalation trigger is recorded.
+1. Treat released `v0.3.0` plus merged pull requests 38 and 39 as the baseline.
+   Close their completed release gates while retaining the narrow scale-guard follow-up.
+2. Make this pull request 37 document the definitive plan and make the consumer plan
+   link to it for framework behavior.
+3. Rebase pull requests 32 through 37 bottom-up onto post-release `main` at or after
+   `6ac9c65`. Preserve each coherent contract boundary and resolve the pull request 38
+   conflict deliberately.
+4. Fix and verify pull request 33 (`mp-74vg`), then restack pull request 34 on that
+   exact head.
+5. Fix and verify pull request 34 (`mp-te1z`, `mp-5204`), then restack pull request 35
+   on that exact head.
+6. Fix and verify pull request 35 (`mp-ah0p`, `mp-f761`, and the correctness subset of
+   `mp-va6t`) with the named injected-failure tests.
+7. Restack pull request 37, split the global graph change, and fix scope identity,
+   exception isolation, bounded scope evaluation, and path containment (`mp-xkvz`,
+   `mp-cr12`, `mp-ledg`, `mp-s070`, `mp-wzdl`).
+8. Route the production-shaped mapped leaf subprocess path through one run-owned
+   RunPool. Prove shared identity, admission, pressure response, process ownership, and
+   auth evidence without adding a parallel resource controller.
+9. Run focused tests after each repair, then full repository verification and exact-head
+   GitHub CI on every stack level.
+   Publish one disposition map per review channel.
+10. Pin the exact consolidated pull request 37 head in the downstream `v3.0-pre`
+    implementation and pass the network-free L0 gate.
+    Only then may the tested stack land bottom-up without changing its commits.
+11. Advance M1 through M5 as a shadow consumer.
+    Each run stores the declared pipeline identity with exact consumer and Metaproc
+    revisions; directory names are not provenance.
+12. Keep weighted host claims, the full scheduler, successful-item targeted force, and
+    dormant retry-later integration deferred unless a named escalation trigger is
+    recorded.
 
 Every runtime pull request must be independently revertible.
 Existing specs continue to use their released paths throughout rollout.
@@ -896,8 +986,18 @@ retry-later machinery; no public retry surface is added for `v3.0-pre` without r
 evidence. `mp-npza` is complete through pull request 39’s deterministic execution-model
 scale guard. `mp-0ukj` owns mapped scopes, ports, parent evidence, and within-scope
 per-item recovery; its child `mp-0pjp` owns immutable resolved-variable validation on
-resume. `mp-0cyw` owns the common host byte authority; `mp-1af0` owns views; and
-`mp-rrfn` owns the production proof.
+resume.
+`mp-0cyw` owns shared mapped-leaf admission through the existing RunPool, and its
+child `mp-g2r0` owns the immediate run-owned-pool integration.
+`mp-1c19` owns the post-release restack.
+`mp-nxs9` is the single pre-L0 gate over all known review fixes, the consolidated
+exact-head verification, and disposition maps; `mp-joix` runs the network-free consumer
+fixture after that gate.
+`mp-1af0` owns views, and `mp-rrfn` owns the production proof.
+
+The pull request 35 lifecycle ledger is `mp-va6t`. Its correctness children `mp-kxmn`,
+`mp-e9e5`, `mp-d50w`, and `mp-0xbi` gate live smoke.
+`mp-bq47` tracks the explicitly deferred successful-item rerun selector.
 
 The general ready scheduler, persisted dynamic expansions, complete fenced publication,
 cross-scope causal force, budgets, and a standalone runtime artifact index remain

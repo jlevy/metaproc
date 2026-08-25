@@ -4,10 +4,18 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
 
 ## Current Release
 
-- **v0.2.1** (`mp-eq0b`): audit the aggregate delta from v0.2.0, ship the tracked CLI
-  version option, prepare [release notes](docs/releases/v0.2.1.md), pass the complete
-  local and hosted gates, publish through trusted publishing, and verify the installed
-  package.
+- **[v0.3.0](https://github.com/jlevy/metaproc/releases/tag/v0.3.0)** (`mp-wg5f`):
+  published from tag `4d518d8`. Pull request 38 merged immediately above the tag at
+  `6ac9c65`, so co-development work pins that post-release main commit rather than
+  assuming the published wheel contains pull request 38.
+
+## Active Development
+
+- **Native mapped composite scopes** (`mp-0iy8`): repair and restack pull requests 32
+  through 37, use pull request 37 as the definitive framework plan, route mapped local
+  leaves through one run-owned RunPool, and pass the consolidated pre-L0 gate `mp-nxs9`
+  before the pinned GTIA consumer smoke
+  ([plan](docs/project/specs/active/plan-2026-08-23-native-mapped-composite-scopes.md)).
 
 ## Deferred Quality Ratchets
 
