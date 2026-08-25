@@ -937,9 +937,11 @@ Metaproc maps stable structural error codes into its existing invariant field an
 property-specific diagnostics into the complete location, without adding a second
 failure vocabulary or schema layer.
 The focused compatibility suite passes 161 tests.
-The complete local gate passes 4,375 tests with 8 skipped, together with formatting,
-Ruff, BasedPyright, Markdown links, public hygiene, browser checks, supply-chain and
-dependency audits, distribution build, and installed-wheel smoke.
+The separated graph layer adds direct, transitive, unaffected-sibling, and required
+diamond failure-propagation shapes; its focused graph/replay suite passes 47 tests.
+The complete integrated local gate passes 4,378 tests with 8 skipped, together with
+formatting, Ruff, BasedPyright, Markdown links, public hygiene, browser checks,
+supply-chain and dependency audits, distribution build, and installed-wheel smoke.
 The split graph layer, the checked-in downstream L0 gate, and exact-head GitHub CI
 remain before this revision is merge-eligible.
 
