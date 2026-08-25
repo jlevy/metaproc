@@ -3,15 +3,19 @@ type: is
 id: is-01m0tx8jrdfkjcr0n1v2b1qs9q
 title: "Hold PR #38 out of 0.3.0: it removes public CLI surfaces"
 kind: task
-status: open
+status: closed
 priority: 1
-version: 1
+version: 2
 labels:
   - release,scope
 dependencies: []
 parent_id: is-01m0tx34t3n8g39jjbhzdrrpwf
 created_at: 2026-08-24T22:11:40.429Z
-updated_at: 2026-08-24T22:11:40.429Z
+updated_at: 2026-08-25T02:37:49.826Z
+closed_at: 2026-08-25T02:37:49.826Z
+close_reason: "Held as planned. PR #38 remains open and out of 0.3.0; it ships with the GTIA v3 stack in the following release, where its CLI removals get a migration note."
+resolution: null
+duplicate_of: null
 ---
 ## Decision
 

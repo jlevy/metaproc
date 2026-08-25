@@ -3,15 +3,19 @@ type: is
 id: is-01m0txm9k40pwdbx279nqezdy5
 title: Remove the expired cryptography advisory waiver and relock before 0.3.0
 kind: bug
-status: open
+status: closed
 priority: 0
-version: 1
+version: 2
 labels:
   - security,supply-chain,release
 dependencies: []
 parent_id: is-01m0tx34t3n8g39jjbhzdrrpwf
 created_at: 2026-08-24T22:18:04.260Z
-updated_at: 2026-08-24T22:18:04.260Z
+updated_at: 2026-08-25T02:37:49.380Z
+closed_at: 2026-08-25T02:37:49.380Z
+close_reason: "Fixed in the 0.3.0 release prep. cryptography relocked 49.0.0 -> 50.0.0, --ignore GHSA-g6cj-pr64-35w5 dropped from AUDIT_IGNORES in the Makefile, and the waiver entry replaced with a no-waivers statement in SUPPLY-CHAIN-SECURITY.md. npm audit is clean locally; the uv/osv.dev half is confirmed by CI, which now runs the audit unfiltered (api.osv.dev returns x-deny-reason: host_not_allowed from this sandbox, a real network policy denial, so it was not worked around)."
+resolution: null
+duplicate_of: null
 ---
 ## Finding
 

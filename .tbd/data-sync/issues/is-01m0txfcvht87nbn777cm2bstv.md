@@ -3,15 +3,19 @@ type: is
 id: is-01m0txfcvht87nbn777cm2bstv
 title: Decide 0.3.0 disposition of the pool-admission attempt-history divergence
 kind: task
-status: open
+status: closed
 priority: 1
-version: 1
+version: 2
 labels:
   - release,execution-model
 dependencies: []
 parent_id: is-01m0tx34t3n8g39jjbhzdrrpwf
 created_at: 2026-08-24T22:15:23.760Z
-updated_at: 2026-08-24T22:15:23.760Z
+updated_at: 2026-08-25T02:38:01.226Z
+closed_at: 2026-08-25T02:38:01.226Z
+close_reason: Decided option 2 (ship and document) for 0.3.0, as recommended. Live execution is correct — the pool-exhausted path does not consume the production retry budget — so the blast radius is replay and post-hoc analysis, not run outcomes. Re-cutting the fan-out admission path in a release whose purpose is to stabilize what already landed would carry more risk than the defect. Recorded as a known gap in the Compatibility section of docs/releases/v0.3.0.md, citing mp-ux0f and mp-f5m5, which stay open to carry the fix in the follow-up release.
+resolution: null
+duplicate_of: null
 ---
 ## What was confirmed
 

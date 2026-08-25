@@ -3,9 +3,9 @@ type: is
 id: is-01m0tx6r53cen6nyye2ap03yme
 title: CHANGELOG Unreleased omits five merged PRs of user-visible change
 kind: bug
-status: open
+status: closed
 priority: 1
-version: 2
+version: 3
 labels:
   - release,docs
 dependencies:
@@ -13,7 +13,14 @@ dependencies:
     target: is-01m0txmwd5ndrr55r28vcnka4w
 parent_id: is-01m0tx34t3n8g39jjbhzdrrpwf
 created_at: 2026-08-24T22:10:40.418Z
-updated_at: 2026-08-24T22:18:23.525Z
+updated_at: 2026-08-25T02:38:01.587Z
+closed_at: 2026-08-25T02:38:01.587Z
+close_reason: |-
+  Fixed while writing the 0.3.0 notes. All five omitted PRs are now covered (#21 scalar admission and RunPool as a library, #22 Gemini minimum-version refusal, #23 contract failure primitives, #26 schema conform, #30 GCP Batch dispatch hardening), plus #20's chains/fan-in/declared retry.
+
+  Applying release-notes-guidelines also reclassified several existing entries: the durable-attempt-history and item-aligned-chain 'fixes' were defects on development branches for features shipping first in 0.3.0, so they fold into the feature descriptions rather than standing as fixes. Verified against v0.2.1 that aligned chains and fan_in did not exist there, while mode: code and gcp run did — so the code-repair and GCP entries are genuine deltas for 0.2.1 users.
+resolution: null
+duplicate_of: null
 ---
 ## Problem
 
