@@ -1072,11 +1072,13 @@ class TestRunPool:
         async def _run():
             pool = RunPool(pool_config)
             config = ProcessConfig(
-                launch=PreparedLaunch(command=("sleep", "1")),
+                launch=PreparedLaunch(command=("sleep", "10")),
                 label="snapshot-test",
             )
             pool.submit(config)
-            await asyncio.sleep(0.2)
+            async with asyncio.timeout(5.0):
+                while pool.active_count == 0:
+                    await asyncio.sleep(0.05)
             snap = pool.snapshot
             assert snap.active_count == 1
             assert snap.pool_id == pool.pool_id

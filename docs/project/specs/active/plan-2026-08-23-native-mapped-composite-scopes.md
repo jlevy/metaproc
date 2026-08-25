@@ -840,7 +840,9 @@ heads did not exercise:
   `mp-f761`); and
 - the lifecycle findings grouped in `mp-va6t` require explicit fixed or deferred
   dispositions before live smoke, with descendant leaks, poisoned status, and retry
-  churn treated as correctness work rather than an unexamined fast-follow.
+  churn treated as correctness work rather than an unexamined fast-follow; and
+- the RunPool snapshot regression must observe activation with a bounded wait instead of
+  assuming a launch beats its configured monitor interval (`mp-hcrw`).
 
 Review of [pull request 36](https://github.com/jlevy/metaproc/pull/36) found that its
 retry-later options were inert transport with no `v3.0-pre` consumer.
@@ -932,8 +934,9 @@ claim.
 
 ## Rollout Plan
 
-1. Treat released `v0.3.0` plus merged pull requests 38 and 39 as the baseline.
-   Close their completed release gates while retaining the narrow scale-guard follow-up.
+1. Treat released `v0.3.0`, which includes pull request 39, plus merged pull request 38
+   as the baseline. Close their completed release gates while retaining the narrow
+   scale-guard follow-up.
 2. Make this pull request 37 document the definitive plan and make the consumer plan
    link to it for framework behavior.
 3. Rebase pull requests 32 through 37 bottom-up onto post-release `main` at or after
@@ -998,6 +1001,7 @@ fixture after that gate.
 The pull request 35 lifecycle ledger is `mp-va6t`. Its correctness children `mp-kxmn`,
 `mp-e9e5`, `mp-d50w`, and `mp-0xbi` gate live smoke.
 `mp-bq47` tracks the explicitly deferred successful-item rerun selector.
+`mp-hcrw` tracks the bounded RunPool snapshot test fixed while validating this plan.
 
 The general ready scheduler, persisted dynamic expansions, complete fenced publication,
 cross-scope causal force, budgets, and a standalone runtime artifact index remain
