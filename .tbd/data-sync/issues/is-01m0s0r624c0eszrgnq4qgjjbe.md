@@ -3,10 +3,10 @@ type: is
 id: is-01m0s0r624c0eszrgnq4qgjjbe
 title: Audit dormant retry-later recovery before adoption
 kind: bug
-status: in_progress
+status: open
 priority: 1
-version: 16
-spec_path: docs/project/specs/active/plan-2026-08-23-native-mapped-composite-scopes.md
+version: 18
+spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 delegate: codex
 labels:
   - authentication
@@ -25,11 +25,12 @@ child_order_hints:
   - is-01m0t8070qf1kded17fc1tjya3
   - is-01m0t808bang7nryyzzhtg6phy
   - is-01m0tjefebxck534azhjgd5ew9
+hold: paused
 created_at: 2026-08-24T04:34:08.579Z
-updated_at: 2026-08-25T16:59:51.469Z
+updated_at: 2026-08-25T19:19:11.164Z
 ---
 Metaproc contains older wait, checkpoint, deferred-state, resume-daemon, and hard-coded fan-out cooling paths, but no current scheduler consumes a coherent public retry-later policy. Do not reintroduce the superseded proposal speculatively. Use released-consumer and framework-owned evidence to decide whether each primitive should be removed, retained as-is, or connected through the smallest shared policy. Retained behavior must avoid holding execution or host capacity while idle and reuse existing scheduler and checkpoint machinery.
 
 ## Notes
 
-PR #36 retry transport was deleted after review and is being closed as superseded. Its independent cloud auth_policy transport fix moved to PR #34 at 3d11a64. Follow-on implementation beads are paused until this audit produces evidence; tracking them does not authorize implementation.
+Excluded from the consolidated runtime pull request. Revisit only after framework-owned or downstream smoke evidence requires retry-later behavior; no speculative implementation is authorized.

@@ -5,7 +5,8 @@ title: "Review PR #33: share recursive run context"
 kind: task
 status: closed
 priority: 1
-version: 19
+version: 20
+spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - pr-review
 dependencies: []
@@ -24,7 +25,7 @@ child_order_hints:
   - is-01m0t7zt2kfff1eg1x9w8d6hq3
   - is-01m0t7zthnzm9zcqnt2bffh0rd
 created_at: 2026-08-24T15:14:42.764Z
-updated_at: 2026-08-25T16:59:50.346Z
+updated_at: 2026-08-25T19:28:30.034Z
 closed_at: 2026-08-24T19:03:47.276Z
 close_reason: "All PR #33 review findings now have explicit dispositions: R1/R3/R4/R5/R7/R8/C3 fixed, R2 fixed in the lifecycle rung, C1 rebutted, and R6/R9/C2 deferred under mp-0cyw/mp-zssw/mp-0ukj. Exact integration head c061cad passed local/pre-push verification and GitHub CI run 32765621039."
 resolution: null

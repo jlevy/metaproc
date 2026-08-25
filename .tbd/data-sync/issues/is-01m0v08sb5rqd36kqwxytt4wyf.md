@@ -5,7 +5,8 @@ title: "PR #37 I1: give mapped child scopes their own run identity"
 kind: bug
 status: closed
 priority: 1
-version: 4
+version: 5
+spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - pr-review
 dependencies:
@@ -13,7 +14,7 @@ dependencies:
     target: is-01m0vhs620ptcvxv074ccx88z4
 parent_id: is-01m0t5d345y4pdjcjpepb9h4q6
 created_at: 2026-08-24T23:04:12.899Z
-updated_at: 2026-08-25T13:19:02.263Z
+updated_at: 2026-08-25T19:28:30.034Z
 closed_at: 2026-08-25T13:19:02.256Z
 close_reason: "Re-verified addressed at PR #37 head b5c4721: scope identity/containment and exception/concurrency fixes are present, required-edge graph work is split into the base, and the branch descends from post-#38 main without restoring workstation aliasing. Full and pre-push verification passed."
 resolution: null

@@ -5,8 +5,8 @@ title: Senior engineering review of the mapped-scope runtime stack
 kind: epic
 status: open
 priority: 1
-version: 37
-spec_path: null
+version: 39
+spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - pr-review
   - architecture
@@ -47,10 +47,10 @@ child_order_hints:
   - is-01m0vxc0ck2z6yjxtcs3r18h9y
   - is-01m0w2fm7y9yzjbz6wz3qvdhws
 created_at: 2026-08-24T15:14:42.436Z
-updated_at: 2026-08-25T16:59:21.639Z
+updated_at: 2026-08-25T19:31:34.822Z
 ---
 Track senior reviews of the mapped-scope architecture and runtime changes: execution context, scalar credential policy, lifecycle ownership, retry-policy deletion, graph propagation, mapped composites, shared admission, and operator status. Reconcile every actionable finding before the consolidated replacement is eligible for downstream testing or merge.
 
 ## Notes
 
-The post-release baseline is main at 6ac9c65. Preserve execution, credential, lifecycle, graph, and mapped-scope behavior as distinct review and failure domains inside one clean consolidated pull request. Retain only behavior justified by framework-owned tests. mp-nxs9 is the exact-head verification gate; broader scheduling, weighted byte claims, and successful-item force remain evidence-triggered follow-ons.
+All historical mapped-scope review findings now have fixed, duplicate, or explicit evidence-triggered dispositions. Refactor/API/retry follow-ups are paused outside the consolidation; the minimum runtime passes full local verification. Keep open through the clean draft PR CI summary.

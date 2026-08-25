@@ -3,10 +3,10 @@ type: is
 id: is-01m0vhs620ptcvxv074ccx88z4
 title: Verify the consolidated mapped-scope runtime head
 kind: task
-status: open
+status: in_progress
 priority: 0
-version: 10
-spec_path: null
+version: 14
+spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - execution-model
 dependencies:
@@ -22,6 +22,10 @@ child_order_hints:
   - is-01m0wfhffpxa70k40qbyxkdcyk
   - is-01m0wg34819k1mk34rfh9pm007
 created_at: 2026-08-25T04:10:15.999Z
-updated_at: 2026-08-25T16:59:21.926Z
+updated_at: 2026-08-25T19:31:34.109Z
 ---
-Single pre-smoke gate for the consolidated Metaproc runtime changes. After every dependency has a fixed, rebutted, or explicitly deferred disposition, run focused failure tests for each review domain, full make verify on the clean replacement head, exact-head GitHub CI, and a diff audit against released main. Closing this gate permits a private downstream network-free smoke test; it does not authorize provider concurrency or merge.
+Single pre-smoke gate for the clean consolidated runtime. After each known finding has a fixed, rebutted, or explicitly deferred disposition, run focused failure tests, complete make verify, audit the diff and public boundary, and wait for exact-head GitHub CI. Closing this gate permits an immutable downstream M0 pin; it does not authorize provider concurrency or merge.
+
+## Notes
+
+Local exact-head gate passed on the clean working tree: make verify completed with 4,408 passed, 8 skipped; lint, docs, public hygiene, supply-chain checks, browser checks, audits, build, distribution inspection, and installed-wheel smoke all passed. Remaining: commit, draft PR, exact-head GitHub CI, then close this gate before downstream M0.

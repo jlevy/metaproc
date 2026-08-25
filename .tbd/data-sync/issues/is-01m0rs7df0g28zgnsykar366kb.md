@@ -3,10 +3,10 @@ type: is
 id: is-01m0rs7df0g28zgnsykar366kb
 title: Unify recursive run policy and nonblocking execution
 kind: feature
-status: in_progress
+status: closed
 priority: 1
-version: 11
-spec_path: docs/project/specs/active/plan-2026-08-23-native-mapped-composite-scopes.md
+version: 15
+spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - execution-model
 dependencies:
@@ -24,6 +24,10 @@ child_order_hints:
   - is-01m0s0r624c0eszrgnq4qgjjbe
   - is-01m0t7zs3etjttp22nytn7abcn
 created_at: 2026-08-24T02:22:39.072Z
-updated_at: 2026-08-24T19:03:43.197Z
+updated_at: 2026-08-25T19:31:21.933Z
+closed_at: 2026-08-25T19:31:21.932Z
+close_reason: One recursive execution context now carries run policy, shared admission, cancellation, executor, credential settings, and pool ownership; optional API cleanup and retry audit remain separately paused.
+resolution: null
+duplicate_of: null
 ---
-Introduce one RunExecutionContext after PR #31 merges. Share the run semaphore, cancellation, backend/profile/auth/admission policy, and explicit force/skip/continue semantics through recursion; propagate credential pools to scalar agents; move command-backed code work off the event loop; and use an explicitly sized run-owned executor with characterization tests.
+Use one RunExecutionContext for recursive scopes. Share cancellation, backend/profile/auth/admission policy, force/skip/continue semantics, the executable-leaf ceiling, and the run-owned synchronous executor; propagate credential policy to scalar agents and keep command-backed code off the event loop with owned cancellation cleanup.
