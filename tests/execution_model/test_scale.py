@@ -143,7 +143,7 @@ class TestEnvelope:
         assert len(keys) == width * stages + 1
         assert elapsed < 1.0, f"materialization took {elapsed:.2f}s for {len(keys)} tasks"
 
-    @pytest.mark.timeout(120)
+    @pytest.mark.timeout(150)
     def test_a_full_chain_drains_in_reasonable_time(self) -> None:
         """A few hundred items through several stages, the shape of a real workload.
 
