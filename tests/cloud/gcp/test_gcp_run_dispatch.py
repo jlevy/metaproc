@@ -322,9 +322,17 @@ class TestGcpRunCli:
         with (
             patch.object(cmd_gcp_run, "build_wheel"),
             patch.object(cmd_gcp_run, "file_sha256", side_effect=["1" * 64, "2" * 64]),
-            patch.object(cmd_gcp_run, "upload_wheel_to_gcs", return_value="gs://b/w.whl"),
+            patch.object(
+                cmd_gcp_run,
+                "upload_wheel_to_gcs",
+                return_value="gs://b/w.whl",
+            ) as wheel_upload,
             patch.object(cmd_gcp_run, "package_workspace"),
-            patch.object(cmd_gcp_run, "upload_workspace_to_gcs", return_value="gs://b/ws.tgz"),
+            patch.object(
+                cmd_gcp_run,
+                "upload_workspace_to_gcs",
+                return_value="gs://b/ws.tgz",
+            ) as workspace_upload,
             patch.object(cmd_gcp_run, "dispatch_gcp_run", side_effect=fake_dispatch),
             patch.object(cmd_gcp_run, "tail_gcp_run_logs", return_value=0),
         ):
@@ -345,6 +353,8 @@ class TestGcpRunCli:
         opts = captured["options"]
         assert opts.extra_secrets["MY"] == "projects/p/secrets/bare-name/versions/latest"
         assert opts.extra_secrets["PINNED"] == "projects/p/secrets/pinned-name/versions/5"
+        assert wheel_upload.call_args.kwargs["project"] == "p"
+        assert workspace_upload.call_args.kwargs["project"] == "p"
 
     def test_build_config_requires_project(self, monkeypatch: pytest.MonkeyPatch):
 

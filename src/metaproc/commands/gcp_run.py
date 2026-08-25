@@ -210,6 +210,7 @@ def _ship_artifacts(
     sync_only: list[str] | None,
     job_id: str,
     bucket: str,
+    project: str,
     prefix: str,
 ) -> tuple[str, str, str, str]:
     """Build + upload the wheel and workspace tarball as configured.
@@ -222,7 +223,13 @@ def _ship_artifacts(
     if not no_wheel:
         wheel = build_wheel()
         wheel_sha256 = file_sha256(wheel)
-        wheel_uri = upload_wheel_to_gcs(wheel, bucket=bucket, job_id=job_id, prefix=prefix)
+        wheel_uri = upload_wheel_to_gcs(
+            wheel,
+            bucket=bucket,
+            job_id=job_id,
+            project=project,
+            prefix=prefix,
+        )
 
     workspace_uri = ""
     workspace_sha256 = ""
@@ -234,7 +241,11 @@ def _ship_artifacts(
         )
         workspace_sha256 = file_sha256(workspace)
         workspace_uri = upload_workspace_to_gcs(
-            workspace, bucket=bucket, job_id=job_id, prefix=prefix
+            workspace,
+            bucket=bucket,
+            job_id=job_id,
+            project=project,
+            prefix=prefix,
         )
 
     return wheel_uri, wheel_sha256, workspace_uri, workspace_sha256
@@ -392,6 +403,7 @@ def run_command(
             sync_only=sync_only,
             job_id=job_id,
             bucket=bucket,
+            project=config.project,
             prefix=DEFAULT_GCS_PREFIX,
         )
 
