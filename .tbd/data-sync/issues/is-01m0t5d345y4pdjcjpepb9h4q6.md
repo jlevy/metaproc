@@ -3,9 +3,9 @@ type: is
 id: is-01m0t5d345y4pdjcjpepb9h4q6
 title: Senior engineering review of the mapped-scope runtime stack
 kind: epic
-status: open
+status: closed
 priority: 1
-version: 39
+version: 40
 spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - pr-review
@@ -47,7 +47,11 @@ child_order_hints:
   - is-01m0vxc0ck2z6yjxtcs3r18h9y
   - is-01m0w2fm7y9yzjbz6wz3qvdhws
 created_at: 2026-08-24T15:14:42.436Z
-updated_at: 2026-08-25T19:31:34.822Z
+updated_at: 2026-08-25T19:37:17.820Z
+closed_at: 2026-08-25T19:37:17.820Z
+close_reason: "Clean draft PR #48 is pinned to 98cae8d1d42564454ad461612c40073b700e88b8; every review finding has a fixed, duplicate, or explicit evidence-triggered disposition; local make verify passed with 4,408 tests and 8 skips; all five exact-head GitHub CI jobs passed. No merge occurred, and downstream M0/scale gates remain open."
+resolution: null
+duplicate_of: null
 ---
 Track senior reviews of the mapped-scope architecture and runtime changes: execution context, scalar credential policy, lifecycle ownership, retry-policy deletion, graph propagation, mapped composites, shared admission, and operator status. Reconcile every actionable finding before the consolidated replacement is eligible for downstream testing or merge.
 

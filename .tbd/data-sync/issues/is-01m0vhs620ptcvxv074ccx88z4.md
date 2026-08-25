@@ -3,9 +3,9 @@ type: is
 id: is-01m0vhs620ptcvxv074ccx88z4
 title: Verify the consolidated mapped-scope runtime head
 kind: task
-status: in_progress
+status: closed
 priority: 0
-version: 14
+version: 15
 spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - execution-model
@@ -22,7 +22,11 @@ child_order_hints:
   - is-01m0wfhffpxa70k40qbyxkdcyk
   - is-01m0wg34819k1mk34rfh9pm007
 created_at: 2026-08-25T04:10:15.999Z
-updated_at: 2026-08-25T19:31:34.109Z
+updated_at: 2026-08-25T19:37:17.779Z
+closed_at: 2026-08-25T19:37:17.779Z
+close_reason: "Clean draft PR #48 is pinned to 98cae8d1d42564454ad461612c40073b700e88b8; every review finding has a fixed, duplicate, or explicit evidence-triggered disposition; local make verify passed with 4,408 tests and 8 skips; all five exact-head GitHub CI jobs passed. No merge occurred, and downstream M0/scale gates remain open."
+resolution: null
+duplicate_of: null
 ---
 Single pre-smoke gate for the clean consolidated runtime. After each known finding has a fixed, rebutted, or explicitly deferred disposition, run focused failure tests, complete make verify, audit the diff and public boundary, and wait for exact-head GitHub CI. Closing this gate permits an immutable downstream M0 pin; it does not authorize provider concurrency or merge.
 
