@@ -7,48 +7,63 @@ development series.
 
 ## [Unreleased][unreleased]
 
+## [0.3.0][] - 2026-08-25
+
 ### Added
 
-- **Durable per-attempt history**: scalar and fan-out work managed by `run-process`,
-  `run-parallel`, or waited `run-step` now writes a typed
+- **Durable per-attempt task history**: scalar and fan-out work managed by
+  `run-process`, `run-parallel`, or waited `run-step` now writes a typed
   `metaproc:TaskAttemptRecord/0.1` before execution and finalizes it once with its
   disposition and failure class.
   Replay consumes the exact history when present and retains status-based compatibility
   for historical run trees.
   Attempt success waits for every attempt-owned validator, including the fan-out
-  write-boundary check, and outputless tasks now reach a durable terminal state.
+  write-boundary check, and outputless tasks reach a durable terminal state.
+  Process startup reconciles both attempt history and mutable task status: it closes
+  attempts orphaned by a crash and rebuilds a missing terminal projection without
+  disturbing work owned by a live step-scoped pool.
+  Resume rejects status or attempt history addressed to another run, step, or item.
 
-- **Crash-safe task reconciliation**: process startup reconciles both attempt history
-  and mutable task status.
-  It closes attempts orphaned before status projection and rebuilds a missing terminal
-  projection without disturbing work owned by a live step-scoped pool.
+- **Item-aligned chains, fan-in collections, and declared retry**: process specs can now
+  chain steps against the same fan-out item, collect fan-out results into a typed fan-in
+  outcome, and declare retry policy in the spec.
+  A resume enters a chain even when its head is already complete, rerunning the
+  incomplete tasks and reusing the completed ones; `--force` remains the explicit
+  operation for invalidating a step and its downstream work.
 
-### Fixed
-
-- **Valid-output recovery cannot rewrite terminal attempt history**: outputs produced
-  before a nonzero or killed process exit are validated while the originating attempt is
-  still live. A later valid file cannot silently turn an already-terminal durable attempt
-  into success; that requires the forthcoming commit/adoption fact.
-
-- **Attempt finalization survives auth-pool teardown failure**: a credential teardown
-  exception records the affected attempt as lost before propagating the operational
-  error.
-
-- **Resume validates task identity before reuse**: scalar, mapped, chained, and manual
-  paths reject status or attempt history addressed to another run, step, or item rather
-  than accepting a misplaced completion.
-
-- **Resuming item-aligned chains**: a normal resume now enters a chain even when its
-  head is complete, reruns incomplete tasks, and reuses completed tasks.
-  Previously, the whole chain was silently skipped.
-  `--force` remains the explicit operation for invalidating a step and its downstream
-  work.
-
-- **Actionable invalid-output retries**: agent steps now append the latest structured
+- **Actionable invalid-output retries**: agent steps append the latest structured
   validation failures to the next retry prompt, including output, failure kind, path,
   contract, invariant, location, and message.
   Fan-out and non-fan-out execution use the same feedback; transport failures never
   create or replace it.
+
+- **Schema conform for agent-authored YAML**: a frontmatter scalar that YAML would
+  resolve to the wrong type is requoted against the contract that is about to judge it,
+  so a value genuinely named `1850` survives a `type: string` field.
+  The contract’s own model decides what is wrong — only pydantic `string_type` errors
+  are acted on — and the document’s own serializer decides how to rewrite it, so `1.10`,
+  `007`, `1e3`, and `0x1F` keep their written form.
+  A real type disagreement still fails.
+
+- **Structured contract failure primitives**: validation failures now carry softschema’s
+  `validator`, `path`, and `message` rather than a rendered sentence, plus a `kind` that
+  subdivides `INVALID_OUTPUT` and adds `unreadable`. `validate_item_outputs_detailed`
+  exposes them; `validate_item_outputs` keeps its existing string view.
+
+- **Host admission for scalar launches, and RunPool as a library**: a `run-process`
+  invocation with no `for_each` is now admitted through the same host gate as fan-out
+  work, so several orchestrators on one machine account for each other instead of
+  launching blind. Admission is deliberately best-effort: an unreachable gate or a wait
+  timeout lets the launch proceed rather than failing a step that worked before
+  admission existed. Enabled for the local backend.
+
+- **GCP Batch dispatch hardening**: `metaproc gcp run` accepts repeatable
+  `--workspace-package PATH` to install current-branch consumer packages, prints Batch
+  state transitions while provisioning and executing, and emits an exact resource
+  identity that `gcp status`, `gcp logs`, and `gcp cancel` can reattach to.
+  Default workspace archives exclude top-level and vendored Metaproc source layouts, and
+  safe in-repository symlinks are materialized as regular archive content while external
+  links and directory-link cycles are rejected.
 
 ### Changed
 
@@ -60,6 +75,48 @@ development series.
   Repair and conform stay scoped to agent-authored output.
   A process whose code handler was relying on the repair pass will start reporting
   `invalid_outputs`; fix the handler’s serializer rather than the artifact.
+
+- **A Gemini CLI below the supported minimum is refused up front**: the adapter passes
+  `--skip-trust`, which gemini-cli introduced in 0.40, so an older CLI failed every
+  agent step partway through a run with an unexplained “Unknown arguments”.
+  This was previously only a warning.
+  The refusal reports the version found, the path it resolved, and the remedy; drift at
+  or above the minimum stays a warning.
+  A stale CLI shadowing the pinned binary on `PATH` now fails immediately instead of
+  costing a whole run.
+
+- **`cryptography` moves to 50.0.0**, retiring the audited advisory waiver for
+  `GHSA-g6cj-pr64-35w5` / `CVE-2026-69247`. No advisory waiver is active in this
+  release.
+
+- **Development toolchain**: this repository now pins uv 0.12.3 and Node 24.19.0, tracks
+  the `simple-modern-uv` v0.5.0 template, and installs its pinned, checksum-verified
+  toolchain at agent session start.
+  This affects contributors, not consumers of the published package.
+
+### Fixed
+
+- **Retry classification no longer depends on an artifact’s filename**: the decision to
+  retry a missing output or give up on a structural mismatch was recovered by
+  substring-matching a rendered error sentence that contained the artifact’s name.
+  Two declared outputs missing for the same transient reason could receive opposite
+  verdicts because one was named for a schema manifest.
+  The decision now reads the structured failure kind.
+
+- **Representation-only validation failures**: `date`, `datetime`, `time`, `Decimal`,
+  and `UUID` values are normalized to their serialized form before the structural pass,
+  so a quoted and an unquoted YAML date stop disagreeing.
+  Only types with an unambiguous serialized form convert.
+
+- **Cloud log tailing**: Cloud Logging entry datetimes are normalized to RFC3339 before
+  being used as tail watermarks, fixing a log tail that could fail mid-run.
+  A blocking generic run now reuses and closes one Cloud Logging client instead of
+  leaking a client per poll.
+
+- **Wheel overrides preserve the image dependency closure**: a verified Metaproc wheel
+  override installs with `--no-deps`, keeping the audited dependencies and per-package
+  release-cutoff exceptions baked into the image, and nested `uv` commands stay on the
+  baked environment after package installation.
 
 ## [0.2.1][] - 2026-08-09
 
@@ -166,7 +223,8 @@ development series.
   implicitly. Schemas consumed through Metaproc must be self-contained: use local `$defs`
   references or a registered Pydantic model instead of network-resolved references.
 
-[unreleased]: https://github.com/jlevy/metaproc/compare/v0.2.1...HEAD
+[unreleased]: https://github.com/jlevy/metaproc/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/jlevy/metaproc/releases/tag/v0.3.0
 [0.2.1]: https://github.com/jlevy/metaproc/releases/tag/v0.2.1
 [0.2.0]: https://github.com/jlevy/metaproc/releases/tag/v0.2.0
 
