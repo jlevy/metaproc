@@ -6,6 +6,16 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bash devtools/ensure-toolchain.sh",
+            "timeout": 300
+          }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
             "command": "bash .codex/tbd-session.sh"
           }
         ]

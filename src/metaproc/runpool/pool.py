@@ -1603,7 +1603,13 @@ class RunPool:
 
     def _handle_telemetry_failure(self, exc: UnsupportedTelemetryPlatformError) -> None:
         """Make runtime telemetry failures visible and reduce launch pressure."""
-        log.exception("RunPool resource telemetry failed; reducing concurrency to minimum")
+        # Callers reach this from inside an `except ... as exc` block, so the ambient
+        # exception state is set; pass it explicitly so the traceback does not depend
+        # on that and the intent is visible at this call site.
+        log.error(
+            "RunPool resource telemetry failed; reducing concurrency to minimum",
+            exc_info=exc,
+        )
         self._memory_ceiling = self._config.min_concurrency
         self._set_capacity(self._effective_target(), reason="telemetry_unavailable")
         if self._event_logger is not None:

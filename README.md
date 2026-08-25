@@ -139,6 +139,7 @@ and the Metaproc-owned [plugin](src/metaproc/metabrowser_plugin/README.md).
 | --- | --- |
 | [development](docs/development.md) | Dev guide for hacking on metaproc itself: layout, conventions, testing, arch-doc index |
 | [AGENTS.md](AGENTS.md) | Instructions for coding agents working in this repository |
+| [agent-toolchain-bootstrap](docs/agent-toolchain-bootstrap.md) | Which toolchain pins agent sessions install for themselves, where that is wired, and how it is guarded |
 | [SUPPLY-CHAIN-SECURITY](SUPPLY-CHAIN-SECURITY.md) | Dependency policy: cool-off, lockfiles, audited exceptions |
 | [SECURITY](SECURITY.md) | Vulnerability reporting and security boundaries |
 | [publishing](docs/publishing.md) | Release process with PyPI trusted publishing |
@@ -180,6 +181,18 @@ See [testing architecture](docs/arch/arch-testing.md) for when to use each tier 
 to set up per-adapter credentials.
 Downstream packages own their domain process specs, schemas, handlers, fixtures, and
 runbooks.
+
+## Working with a Coding Agent
+
+This repository includes [`AGENTS.md`](AGENTS.md), with the build, test, dependency,
+layout, and release conventions a coding agent needs for routine work.
+`CLAUDE.md` imports the same instructions for Claude Code.
+
+For an ordinary change, tell your agent: “Read `AGENTS.md`, implement this change, and
+run the required checks.”
+For toolchain or template maintenance, ask it to use the
+[simple-modern-uv skill](https://github.com/jlevy/simple-modern-uv/tree/main/skills/simple-modern-uv),
+which distinguishes selective feature adoption from a full Copier update.
 
 ## Development
 
