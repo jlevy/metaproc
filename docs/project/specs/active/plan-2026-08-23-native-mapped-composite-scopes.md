@@ -842,7 +842,10 @@ heads did not exercise:
   dispositions before live smoke, with descendant leaks, poisoned status, and retry
   churn treated as correctness work rather than an unexamined fast-follow; and
 - the RunPool snapshot regression must observe activation with a bounded wait instead of
-  assuming a launch beats its configured monitor interval (`mp-hcrw`).
+  assuming a launch beats its configured monitor interval (`mp-hcrw`); and
+- CLI smoke fixtures with tiny outputs must declare their test disk budget so the suite
+  remains hermetic while default preflight semantics keep independent unit coverage
+  (`mp-4ht7`).
 
 Review of [pull request 36](https://github.com/jlevy/metaproc/pull/36) found that its
 retry-later options were inert transport with no `v3.0-pre` consumer.
@@ -1002,6 +1005,8 @@ The pull request 35 lifecycle ledger is `mp-va6t`. Its correctness children `mp-
 `mp-e9e5`, `mp-d50w`, and `mp-0xbi` gate live smoke.
 `mp-bq47` tracks the explicitly deferred successful-item rerun selector.
 `mp-hcrw` tracks the bounded RunPool snapshot test fixed while validating this plan.
+`mp-4ht7` tracks low-disk isolation for CLI smoke fixtures while preserving default
+preflight coverage.
 
 The general ready scheduler, persisted dynamic expansions, complete fenced publication,
 cross-scope causal force, budgets, and a standalone runtime artifact index remain
