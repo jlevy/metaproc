@@ -72,9 +72,10 @@ class OutputFailureKind(StrEnum):
 class OutputFailure(BaseModel):
     """One declared output that failed validation, with what refused it.
 
-    Carries softschema's own vocabulary through unchanged rather than renaming
-    it: ``invariant`` is the failing validator, ``location`` is the path within
-    the document, and ``message`` is the text softschema produced.
+    Carries softschema's stable vocabulary through Metaproc's existing fields:
+    ``invariant`` is the structural error code or semantic validator,
+    ``location`` is the complete affected path, and ``message`` is the text
+    softschema produced.
     """
 
     output: str

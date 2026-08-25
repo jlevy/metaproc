@@ -99,6 +99,13 @@ development series.
 
 ### Changed
 
+- **Softschema 0.7 structural diagnostics**: require `softschema>=0.7.0,<0.8` and map
+  structural failures to its stable error `code` instead of a JSON Schema engine
+  keyword. Property-level failures now resolve to the affected field in Metaproc’s
+  existing `location` value.
+  Supported composed and conditional schemas can therefore use `status: enforced`
+  without adding a Metaproc-specific schema layer.
+
 - **Typed cloud authentication transport**: the internal `OrchestratorDispatchConfig`
   constructor now accepts one `AuthPoolFlags` value instead of separate
   authentication-policy fields.

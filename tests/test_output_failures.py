@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import BaseModel
-from softschema import Contract, Contracts, SchemaProfile, SchemaStatus
+from softschema import Contract, Contracts, SchemaProfile, SchemaStatus, compile_model
 
 from metaproc.commands.run_parallel import _handle_success
 from metaproc.engine.build_plan import _resolve_step_inputs
@@ -165,6 +165,35 @@ class TestStructuredFailures:
         failures = validate_item_outputs_detailed(tmp_path, outputs, softschema_registry=registry)
 
         assert len(failures) > 1, "three missing required fields should not collapse to one"
+
+    def test_structural_failures_use_stable_codes_and_field_locations(self, tmp_path):
+        class Strict(BaseModel):
+            model_config = {"extra": "forbid"}
+            needed: str
+
+        schema_path = tmp_path / "strict.schema.yaml"
+        compile_model(Strict, schema_path, contract_id="example:Strict/v1")
+        registry = Contracts()
+        registry.register(
+            Contract(
+                id="example:Strict/v1",
+                model=Strict,
+                envelope_key="strict",
+                status=SchemaStatus.enforced,
+                schema_path=schema_path,
+            )
+        )
+        (tmp_path / "output.md").write_text("---\nstrict:\n  surprise: x\n---\nBody\n")
+        outputs = {
+            "main": IOSpec(path="output.md", format="frontmatter-md", contract="example:Strict/v1")
+        }
+
+        failures = validate_item_outputs_detailed(tmp_path, outputs, softschema_registry=registry)
+
+        assert {(failure.invariant, failure.location) for failure in failures} == {
+            ("missing_property", "needed"),
+            ("undeclared_property", "surprise"),
+        }
 
 
 class TestStringViewIsUnchanged:

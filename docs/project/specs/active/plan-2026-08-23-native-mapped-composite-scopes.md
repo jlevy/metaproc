@@ -932,7 +932,12 @@ RunPool’s own status and scale snapshots were misclassified as agent-authored 
 boundary violations.
 The correction exempts only those two exact framework-owned files, and all 11 affected
 scalar boundary, output-retry, prompt, and transient-retry cases pass.
-The complete local gate passes 4,374 tests with 8 skipped, together with formatting,
+The candidate also upgrades its first-party schema boundary to Softschema 0.7.0.
+Metaproc maps stable structural error codes into its existing invariant field and
+property-specific diagnostics into the complete location, without adding a second
+failure vocabulary or schema layer.
+The focused compatibility suite passes 161 tests.
+The complete local gate passes 4,375 tests with 8 skipped, together with formatting,
 Ruff, BasedPyright, Markdown links, public hygiene, browser checks, supply-chain and
 dependency audits, distribution build, and installed-wheel smoke.
 The split graph layer, the checked-in downstream L0 gate, and exact-head GitHub CI
@@ -978,9 +983,10 @@ claim.
    direct child scalar launch.
    Required-admission and fresh-resume gates remain before live M1, without adding a
    parallel resource controller.
-9. [In progress] The focused and full local gates pass.
-   Commit the exact candidate, run exact-head GitHub CI on each retained stack level,
-   and publish one disposition map per review channel.
+9. [In progress] The focused and full local gates pass, including the audited Softschema
+   0.7.0 upgrade and its structural-diagnostic migration (`mp-vuxc`). Commit the exact
+   candidate, run exact-head GitHub CI on each retained stack level, and publish one
+   disposition map per review channel.
 10. Pin the exact consolidated pull request 37 head in the downstream `v3.0-pre`
     implementation and pass the network-free L0 gate.
     Only then may the tested stack land bottom-up without changing its commits.
@@ -1030,6 +1036,7 @@ The final mapped-scope review children are `mp-xkvz` (scope identity), `mp-cr12`
 optional-default resume behavior; and `mp-cuet` defers planning-overhead optimization
 until the 10- and 32-item smoke rungs supply measurements.
 `mp-ifbo` preserves the primary pipeline failure if run-owned pool cleanup also fails.
+`mp-vuxc` owns the Softschema 0.7.0 dependency and structural-diagnostic migration.
 
 The pull request 35 lifecycle ledger is `mp-va6t`. Its correctness children `mp-kxmn`,
 `mp-e9e5`, `mp-d50w`, and `mp-0xbi` gate live smoke.

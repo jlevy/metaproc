@@ -39,7 +39,13 @@ Confirm:
 
 Seven exact first-party releases are exempt from the ordinary cool-off for this release:
 
-- `softschema==0.4.0`, required for portable date- and timestamp-shaped YAML scalars;
+- `softschema==0.7.0`, adopted inside the cool-off as a first-party release.
+  Reviewed against `0.6.0`: it keeps the same package source, package-root exports,
+  Python floor, and five direct dependencies.
+  It adds enforced validation for supported composed schemas and replaces engine-keyword
+  matching with stable structural error codes and property-specific diagnostics.
+  Metaproc’s contract-failure adapter and tests migrate that deliberate record-shape
+  change;
 - `frontmatter-format==0.4.0`, required by SoftSchema 0.4.0 and used directly for
   deterministic alias-free Metaproc artifact writes;
 - `metabrowser==0.1.0`, used only by the development and plugin test group;
