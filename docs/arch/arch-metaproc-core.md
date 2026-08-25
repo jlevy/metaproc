@@ -1409,8 +1409,10 @@ in some contexts and as success in others.
 `require: finished` also governs blocking: a consumer declaring it is not blocked when
 the failure lies at the collected step or anywhere feeding it, since an item dying two
 stages back is exactly why the collection has partial coverage.
-Failures outside that subtree reach the consumer through a different edge, which said
-nothing about accepting terminal outcomes, and still block.
+This tolerance is evaluated over the consumer’s affected direct dependencies.
+An independent required dependency that did not descend from the failure remains
+satisfied, but a second required dependency that did descend from the same failure still
+blocks the consumer; one tolerant collection never rewrites another edge’s contract.
 
 Where an item failed a contract, its record carries the structured failure alongside the
 message: the failing `invariant`, its `location` in the document, the `contract` the

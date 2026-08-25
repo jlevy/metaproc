@@ -292,6 +292,9 @@ run’s policy decides the overall verdict.
 With step-scoped edges, one failed item blocks the entire downstream graph.
 A framework whose workflows routinely tolerate partial batches must propagate failure at
 the granularity of the edges, or authors will route around it.
+Tolerance belongs to the edge that declares it: if the same failure also reaches a
+consumer through a success-requiring edge, that edge still blocks, while an independent
+edge that has already succeeded does not cancel the tolerant one.
 
 ## Resources: Readiness Versus Admission
 

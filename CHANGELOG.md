@@ -9,6 +9,11 @@ development series.
 
 ### Fixed
 
+- **Fan-in failure propagation across dependency diamonds**: `require: finished` now
+  tolerates failure only for affected direct dependencies collected with that policy.
+  A separate success-requiring path from the same failure still blocks the consumer,
+  while an unaffected required dependency does not erase the tolerant collection.
+
 - **Cloud authentication policy propagation**: `run-process --cloud` now carries the
   complete authentication-pool configuration as one typed value through orchestrator
   dispatch. Selection policy and future fields can no longer be silently dropped while

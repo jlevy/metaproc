@@ -404,6 +404,63 @@ class TestPropagateFailure:
         steps = [_step("leaf")]
         assert propagate_failure(steps, "leaf") == []
 
+    def test_finished_collection_tolerates_direct_failure(self):
+        steps = [
+            _step("collected-work"),
+            _step(
+                "review",
+                ["collected-work"],
+                inputs={
+                    "outcomes": IOSpec(
+                        path="outcomes.yaml",
+                        collect="collected-work",
+                        require="finished",
+                    )
+                },
+            ),
+        ]
+
+        assert propagate_failure(steps, "collected-work") == []
+
+    def test_finished_collection_tolerates_transitive_failure(self):
+        steps = [
+            _step("source"),
+            _step("collected-work", ["source"]),
+            _step(
+                "review",
+                ["collected-work"],
+                inputs={
+                    "outcomes": IOSpec(
+                        path="outcomes.yaml",
+                        collect="collected-work",
+                        require="finished",
+                    )
+                },
+            ),
+        ]
+
+        assert propagate_failure(steps, "source") == ["collected-work"]
+
+    def test_unaffected_required_edge_does_not_cancel_finished_collection(self):
+        steps = [
+            _step("source"),
+            _step("collected-work", ["source"]),
+            _step("independent"),
+            _step(
+                "review",
+                ["collected-work", "independent"],
+                inputs={
+                    "outcomes": IOSpec(
+                        path="outcomes.yaml",
+                        collect="collected-work",
+                        require="finished",
+                    )
+                },
+            ),
+        ]
+
+        assert propagate_failure(steps, "source") == ["collected-work"]
+
     def test_finished_collector_does_not_override_separate_required_diamond_edge(self):
         steps = [
             _step("source"),
