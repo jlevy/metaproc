@@ -3,16 +3,20 @@ type: is
 id: is-01m0tt2515e5hd0p668h4cpqgp
 title: Preserve required diamond edges beside finished collectors
 kind: bug
-status: in_progress
+status: closed
 priority: 1
-version: 3
+version: 4
 spec_path: docs/project/specs/active/plan-2026-08-23-native-mapped-composite-scopes.md
 labels:
   - execution-model
 dependencies: []
 parent_id: is-01m0r93je6fk789d26aef6wx11
 created_at: 2026-08-24T21:15:44.037Z
-updated_at: 2026-08-24T21:23:50.705Z
+updated_at: 2026-08-25T13:19:02.782Z
+closed_at: 2026-08-25T13:19:02.782Z
+close_reason: The pinned GTIA L0 and live one-item parent run proved one run-owned shared RunPool with no child CLI/lease and proved the required dependency-diamond behavior; framework regressions and full verification pass at b5c4721.
+resolution: null
+duplicate_of: null
 ---
 GTIA v3.0-pre L0 exposed a dependency-propagation defect in src/metaproc/engine/graph.py. A consumer with both a required artifact/ref edge and a collect: downstream-step require: finished edge is allowed through when an upstream producer needed by the required artifact fails, because _requires_only_finished treats ancestry of the collected step as sufficient and ignores the separate required edge. Reproduce with a diamond graph, make failure propagation edge-aware, and prove the finished collector still runs for failures reachable only through its tolerant collected edge.
 
