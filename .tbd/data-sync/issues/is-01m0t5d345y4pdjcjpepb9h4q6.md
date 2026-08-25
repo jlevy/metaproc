@@ -5,7 +5,7 @@ title: Senior engineering review of the GTIA v3 PR stack (#32-#39)
 kind: epic
 status: open
 priority: 1
-version: 28
+version: 36
 labels:
   - pr-review
   - architecture
@@ -37,8 +37,16 @@ child_order_hints:
   - is-01m0v08xy21dx5v6c0mp6sjz9w
   - is-01m0v08y91rs24908cqxb83dy0
   - is-01m0vnhtk2w34td9qsgyf7vmbr
+  - is-01m0vxbyq2q0vffmgwbb8q8j60
+  - is-01m0vxbz0kar3cyk8njpkemq1w
+  - is-01m0vxbz9jtabns9g14758gm8s
+  - is-01m0vxbzj2w00ynmcp61qzqj48
+  - is-01m0vxbztqvdpppp9spempgqzg
+  - is-01m0vxc03xpq9q76ae6vtapsgq
+  - is-01m0vxc0ck2z6yjxtcs3r18h9y
+  - is-01m0w2fm7y9yzjbz6wz3qvdhws
 created_at: 2026-08-24T15:14:42.436Z
-updated_at: 2026-08-25T05:16:09.185Z
+updated_at: 2026-08-25T09:02:08.637Z
 ---
 Track senior reviews of the open stacked PRs: #32 (mapped-composite plan, review posted, updated since), #33 (shared run context), #34 (scalar auth pooling), #35 (lifecycle/cancellation), #36 (retry-later transport, draft). Includes an overall stack-structure review (ordering, bases, revertibility) and follow-up on whether posted findings are addressed before merge.
 

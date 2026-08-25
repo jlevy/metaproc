@@ -1,11 +1,11 @@
 ---
 type: is
 id: is-01m0vjtjdxm7g8gkrxznmp5qd2
-title: RunPool snapshot test must wait for observed activation
+title: RunPool activation tests must wait for observed launch state
 kind: bug
 status: closed
-priority: 1
-version: 3
+priority: 0
+version: 7
 spec_path: docs/project/specs/active/plan-2026-08-23-native-mapped-composite-scopes.md
 labels:
   - testing
@@ -14,10 +14,14 @@ dependencies:
     target: is-01m0vhs620ptcvxv074ccx88z4
 parent_id: is-01m0r92q2y1pe7dmhrcj6nst7q
 created_at: 2026-08-25T04:28:30.013Z
-updated_at: 2026-08-25T04:36:01.063Z
-closed_at: 2026-08-25T04:36:01.062Z
-close_reason: "Fixed on PR #37 head d5accf7. Snapshot activation uses a bounded observed-state wait and passed three consecutive focused runs. CLI smoke fixtures declare their tiny test disk budget while default preflight unit tests remain isolated. The unmodified full pre-push gate passed 4,356 tests with 8 skipped plus lint, type, docs, supply-chain, browser, distribution, and installed-wheel checks."
+updated_at: 2026-08-25T09:27:23.028Z
+closed_at: 2026-08-25T09:27:23.027Z
+close_reason: Fixed through exact PR 37 head d776840; focused tests and full make verify pass, the disposition is published on PR 37, and pinned trading consumer GitHub Actions run 32831285879 is green.
 resolution: null
 duplicate_of: null
 ---
-The full pre-push suite exposed a deterministic timing defect under load: tests/test_runpool_pool.py::TestRunPool::test_snapshot sleeps 0.2s even though pool_config.monitor_interval_s is 0.5s, then requires active_count == 1. Replace the fixed sleep with a bounded observation of active launch state, keep the child alive long enough to inspect, and prove repeated focused plus full-suite stability. This is test hardening, not a production retry or admission change.
+The full pre-push suite first exposed a fixed-delay assumption in the snapshot test and now exposed the same defect in graceful-shutdown coverage: a submitted process is not guaranteed active within 300 ms under parallel load. Replace each launch-timing sleep with a bounded observed-state wait, keep the child alive long enough to inspect or shut down, and prove repeated focused plus full-suite stability. This is test hardening, not a production retry or admission change.
+
+## Notes
+
+2026-08-25: Both fixed-delay activation assumptions are replaced by bounded observed-state waits through ee4ddeb, which is included in d776840. Repeated focused coverage and full make verify pass at d776840. Keep open until the pinned trading PR 380 replacement CI completes, then close with consumer evidence.
