@@ -848,6 +848,9 @@ heads did not exercise:
 - RunPool activation tests must use a bounded observed-state wait instead of assuming a
   snapshot or graceful-shutdown launch beats its configured monitor interval
   (`mp-hcrw`); and
+- RunPool lifecycle goldens must opt out of the session’s 50 ms adaptive-pressure test
+  clock, because those snapshots cover deterministic process events while dedicated
+  controller tests cover pressure-driven concurrency changes (`mp-628l`); and
 - CLI smoke fixtures with tiny outputs must declare their test disk budget so the suite
   remains hermetic while default preflight semantics keep independent unit coverage
   (`mp-4ht7`).
@@ -943,6 +946,11 @@ diamond failure-propagation shapes; its focused graph/replay suite passes 47 tes
 The complete integrated local gate passes 4,378 tests with 8 skipped, together with
 formatting, Ruff, BasedPyright, Markdown links, public hygiene, browser checks,
 supply-chain and dependency audits, distribution build, and installed-wheel smoke.
+The clean Linux consumer gate then exposed the golden fixture’s undeclared dependence on
+finishing before the test-only 50 ms pressure tick.
+The fixture now declares a fast completion poll and a 60-second pressure interval; its
+lifecycle snapshots remain unchanged, and the adaptive controller retains separate
+behavioral coverage.
 The split graph layer, the checked-in downstream L0 gate, and exact-head GitHub CI
 remain before this revision is merge-eligible.
 
@@ -1046,6 +1054,8 @@ The pull request 35 lifecycle ledger is `mp-va6t`. Its correctness children `mp-
 `mp-bq47` tracks the explicitly deferred successful-item rerun selector.
 `mp-hcrw` tracks bounded activation waits for RunPool snapshot and graceful-shutdown
 tests found while validating this plan.
+`mp-628l` tracks the RunPool golden fixture’s explicit pressure-clock isolation found by
+the clean downstream Linux gate.
 `mp-4ht7` tracks low-disk isolation for CLI smoke fixtures while preserving default
 preflight coverage.
 
