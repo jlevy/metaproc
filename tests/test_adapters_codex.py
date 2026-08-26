@@ -629,7 +629,7 @@ class TestCodexAuthCapableSubprotocol:
 
     def test_materialize_credential_rejects_api_key_blob(self, tmp_path):
         # API-key blobs don't need pooling — they must arrive as
-        # OPENAI_API_KEY via secret_variables, not as a pool label.
+        # OPENAI_API_KEY through cloud secret hydration, not as a pool label.
         api_key_blob = json.dumps({"OPENAI_API_KEY": "sk-x", "tokens": {"auth_mode": "apikey"}})
         with pytest.raises(RuntimeError, match="auth_mode='apikey'|apikey"):
             self.adapter.materialize_credential(tmp_path / "slot", api_key_blob)

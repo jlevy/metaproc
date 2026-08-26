@@ -25,6 +25,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Any, cast
 
+from metaproc.cloud.gcp.secret_hydration import attach_secret_refs
 from metaproc.config.env_vars import MetaprocEnv
 
 log = logging.getLogger(__name__)
@@ -56,9 +57,6 @@ class GCPBatchConfig:
     network: str = ""
     subnetwork: str = ""
     labels: dict[str, str] = field(default_factory=dict)
-    # Secret Manager secrets to mount as env vars.
-    # Format: {"ENV_VAR_NAME": "projects/P/secrets/S/versions/V"}
-    secret_env_vars: dict[str, str] = field(default_factory=dict)
     # RUNS_DIR: base path for run artifacts inside the container.
     # When set, passed as RUNS_DIR env var so {{RUNS_DIR}} resolves in process specs.
     # When filestore_server is also set, Batch dispatch mounts Filestore on the
@@ -77,45 +75,6 @@ class GCPBatchConfig:
     # Maximum time (seconds) a job may stay in QUEUED/SCHEDULED state before
     # being cancelled.  Prevents Spot VM queue starvation from blocking the pool.
     queue_timeout_s: int = 1800
-
-
-# Plaintext env var → Secret Manager ref env var → human description.
-# Any credential injected into a Batch job must go through Secret Manager;
-# plaintext values would persist in the job spec (`gcloud batch jobs describe`).
-#
-# Phase 10 follow-up: the cohort lives as a typed
-# :class:`SecretRefSet` in metaproc.dispatch.secret_refs. The legacy
-# ``GCP_SECRET_REFS`` tuple shape is preserved here as a back-compat
-# alias so existing imports keep working; new call sites should use
-# ``SecretRefSet.all_known()`` directly.
-from metaproc.dispatch.secret_refs import SecretRef, SecretRefSet  # noqa: E402
-
-GCP_SECRET_REFS: tuple[tuple[str, str, str], ...] = SecretRefSet.all_known().as_tuples()
-
-
-def resolve_gcp_secret_ref(
-    plaintext_env: str,
-    secret_env: str,
-    description: str,
-) -> str:
-    """Return the Secret Manager resource name from ``secret_env``.
-
-    Refuses plaintext leakage: if ``plaintext_env`` is set without ``secret_env``,
-    raises ``RuntimeError``. Returns ``""`` when neither is set.
-
-    Thin wrapper over :meth:`SecretRef.resolve` so legacy callers that
-    pass three positional strings keep working.
-    """
-    return SecretRef(
-        plaintext_env=plaintext_env,
-        secret_env=secret_env,
-        description=description,
-    ).resolve()
-
-
-def _build_secret_env_vars() -> dict[str, str]:
-    """Build secret env var mapping from METAPROC_GCP_SECRET_* env vars."""
-    return SecretRefSet.all_known().to_secret_variables()
 
 
 # ── ComputeResource derivation ────────────────────────────────────
@@ -624,7 +583,7 @@ def create_single_task_job(
     *,
     config: GCPBatchConfig,
     env_vars: dict[str, str],
-    secret_env_vars: dict[str, str],
+    secret_refs: dict[str, str],
     container_command: list[str],
     container_entrypoint: str = "python",
     spot: bool = True,
@@ -646,9 +605,9 @@ def create_single_task_job(
         TaskSpec,
     )
 
-    env_kwargs: dict[str, object] = {"variables": dict(env_vars)}
-    if secret_env_vars:
-        env_kwargs["secret_variables"] = dict(secret_env_vars)
+    container_env = dict(env_vars)
+    attach_secret_refs(container_env, secret_refs)
+    env_kwargs: dict[str, object] = {"variables": container_env}
 
     runnables = build_batch_runnables(
         config,

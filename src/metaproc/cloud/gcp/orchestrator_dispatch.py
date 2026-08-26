@@ -18,7 +18,6 @@ import time
 from dataclasses import dataclass
 
 from metaproc.cloud.gcp.batch_backend import (
-    GCP_SECRET_REFS,
     GCPBatchConfig,
     apply_container_runs_dir,
     build_batch_runnables,
@@ -27,14 +26,18 @@ from metaproc.cloud.gcp.batch_backend import (
     build_pi_models_json,
     get_container_runs_dir,
     get_job_with_retry,
-    resolve_gcp_secret_ref,
     run_identity_labels,
     sanitize_label,
+)
+from metaproc.cloud.gcp.secret_hydration import (
+    attach_secret_refs,
+    require_secret_service_account,
 )
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.dispatch.auth_pool_flags import AuthPoolFlags
 from metaproc.dispatch.orchestrator_payload import OrchestratorDispatchPayload
 from metaproc.dispatch.repo_sync_payload import RepoSyncPayload
+from metaproc.dispatch.secret_refs import SecretRefSet
 from metaproc.plugins.discovery import get_bootstrap_env_vars
 
 log = logging.getLogger(__name__)
@@ -216,13 +219,14 @@ async def dispatch_orchestrator(
     # persist in the Batch job spec (visible via `gcloud batch jobs describe`
     # and the API). For each entry we also forward METAPROC_GCP_SECRET_* as a
     # plain env var so the orchestrator can pass it through when dispatching
-    # workers. See `GCP_SECRET_REFS` in batch_backend.py for the table.
-    secret_env_vars: dict[str, str] = {}
-    for plaintext_env, secret_env, description in GCP_SECRET_REFS:
-        ref = resolve_gcp_secret_ref(plaintext_env, secret_env, description)
-        if ref:
-            env_vars[secret_env] = ref
-            secret_env_vars[plaintext_env] = ref
+    # workers. The container hydrates target env vars after startup; the
+    # orchestrator also retains each operator-side ref so it can dispatch workers.
+    known_refs = SecretRefSet.all_known()
+    secret_refs = known_refs.resolve_env_refs()
+    for binding in known_refs.refs:
+        resolved = secret_refs.get(binding.plaintext_env)
+        if resolved:
+            env_vars[binding.secret_env] = resolved
 
     # CLAUDE_CODE_OAUTH_TOKEN for orchestrator-side single-item agent steps
     # (create-ops-review, create-prediction-summary, create-run-overview).
@@ -241,14 +245,23 @@ async def dispatch_orchestrator(
             f"projects/{config.gcp.project}/secrets/"
             f"claude-code-auth-{pool_user}-{primary_label}/versions/latest"
         )
-        secret_env_vars["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_secret_ref
+        secret_refs["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_secret_ref
+
+    require_secret_service_account(secret_refs, config.gcp.service_account_email)
 
     # Pi CLI models config.
     pi_models = build_pi_models_json(config.gcp.project)
     if pi_models:
         env_vars["METAPROC_PI_MODELS_JSON"] = pi_models
 
-    env_vars.update(get_bootstrap_env_vars())
+    bootstrap_env = get_bootstrap_env_vars()
+    plaintext_conflicts = SecretRefSet.all_known().plaintext_conflicts(bootstrap_env)
+    if plaintext_conflicts:
+        raise ValueError(
+            "Plugin bootstrap env cannot carry registered credentials; bind Secret "
+            f"Manager references instead: {plaintext_conflicts}"
+        )
+    env_vars.update(bootstrap_env)
 
     # Diagnostic-only opt-in: METAPROC_SKIP_PREFLIGHT_PROBE=1 lets a cloud
     # debug dispatch skip the auth pool's pre-fan-out probe so process-item
@@ -261,13 +274,12 @@ async def dispatch_orchestrator(
     if skip_probe:
         env_vars["METAPROC_SKIP_PREFLIGHT_PROBE"] = skip_probe
 
+    attach_secret_refs(env_vars, secret_refs)
+    env_kwargs: dict[str, object] = {"variables": env_vars}
+
     # Build Batch job.
     # Use entrypoint (not commands) to override the Dockerfile's ENTRYPOINT
     # which defaults to worker_entrypoint.
-    env_kwargs: dict[str, object] = {"variables": env_vars}
-    if secret_env_vars:
-        env_kwargs["secret_variables"] = secret_env_vars
-
     runnables = build_batch_runnables(
         config.gcp,
         container_kwargs={

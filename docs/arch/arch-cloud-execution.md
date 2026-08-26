@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: Cloud Execution
 
-**Date:** 2026-04-12 (last updated 2026-08-24) **Status:** Approved
+**Date:** 2026-04-12 (last updated 2026-08-25) **Status:** Approved
 
 > **Maintenance**: This is a maintained architecture doc.
 > Revise via `tbd shortcut revise-architecture-doc` (which prompts you to verify content
@@ -301,14 +301,16 @@ Design principles for infrastructure dependencies:
 All cloud providers share a container bootstrap sequence.
 The concrete implementation is provider-specific, but the contract is:
 
-1. Configure git identity and credential helper.
-2. Use the bundled repo content from the image when possible, or sparse-clone the
+1. Resolve dispatched secret-store references under the workload identity before logging
+   runtime context or reading bootstrap inputs.
+2. Configure git identity and credential helper.
+3. Use the bundled repo content from the image when possible, or sparse-clone the
    requested branch when a runtime branch override is needed.
-3. Install the domain package(s) needed for plugin discovery.
-4. Bootstrap any opt-in domain tooling required by the process.
-5. Ensure the runs directory exists on the shared filesystem.
-6. Write any adapter-specific configuration files from environment variables.
-7. Invoke each adapter’s `bootstrap(home)` hook so adapters can materialize credential
+4. Install the domain package(s) needed for plugin discovery.
+5. Bootstrap any opt-in domain tooling required by the process.
+6. Ensure the runs directory exists on the shared filesystem.
+7. Write any adapter-specific configuration files from environment variables.
+8. Invoke each adapter’s `bootstrap(home)` hook so adapters can materialize credential
    files that are not safe to carry as env vars for the full job lifetime (e.g., OAuth
    blobs bound from a secret store).
    Adapters that don’t need one leave the hook as the default no-op.
@@ -353,21 +355,24 @@ container-level volume mount point, not subject to host-level path restrictions.
 Shared by worker and orchestrator entrypoints via
 `bootstrap_container() -> BootstrapResult`:
 
-1. Read `GH_TOKEN` once, remove it from the environment, and expose it only through a
+1. Before `bootstrap_container()`, call `hydrate_secret_env()` to resolve the
+   dispatcher’s Secret Manager references atomically under the attached Batch service
+   account. No resource-context log or bootstrap action runs if hydration fails.
+2. Read `GH_TOKEN` once, remove it from the environment, and expose it only through a
    temporary askpass helper when a sparse clone needs authentication.
-2. Install a current-branch metaproc wheel from `METAPROC_WHEEL_GCS` when set with its
+3. Install a current-branch metaproc wheel from `METAPROC_WHEEL_GCS` when set with its
    required `METAPROC_WHEEL_SHA256`, overriding any image-baked metaproc.
-3. Acquire the consumer workspace: a `METAPROC_WORKSPACE_GCS` tarball when set, verified
+4. Acquire the consumer workspace: a `METAPROC_WORKSPACE_GCS` tarball when set, verified
    against its required `METAPROC_WORKSPACE_SHA256`; otherwise a sparse clone of
    `METAPROC_RUN_BRANCH` and `METAPROC_REPO_URL`, falling back to the workspace bundled
    into the image.
-4. Editable-install the workspace packages named in the repo-sync payload so consumer
+5. Editable-install the workspace packages named in the repo-sync payload so consumer
    plugin entry points resolve inside the container.
-5. Run each `metaproc.container_bootstrap` entry-point hook so downstream images can
+6. Run each `metaproc.container_bootstrap` entry-point hook so downstream images can
    bootstrap their own tooling.
-6. Ensure `RUNS_DIR` exists.
-7. Write `~/.pi/agent/models.json` from `METAPROC_PI_MODELS_JSON` if set.
-8. Back in the worker and orchestrator entrypoints, invoke each registered adapter’s
+7. Ensure `RUNS_DIR` exists.
+8. Write `~/.pi/agent/models.json` from `METAPROC_PI_MODELS_JSON` if set.
+9. Back in the worker and orchestrator entrypoints, invoke each registered adapter’s
    `bootstrap(home)` hook.
    The `ClaudeCodeCliAdapter` uses this to write `~/.claude/.credentials.json` (mode
    0600\) from `CLAUDE_CODE_CREDS_JSON` (see §3.10), then unsets the env var so the
@@ -407,16 +412,18 @@ Shared by worker and orchestrator entrypoints via
 
 Unified container entrypoint for worker containers:
 
-1. Read env vars (`METAPROC_WORKER_ITEMS`, `METAPROC_PROCESS_SPEC` (with
+1. Hydrate Secret Manager references as described in §3.10. Fail before resource logging
+   or bootstrap if any binding is invalid or inaccessible.
+2. Read env vars (`METAPROC_WORKER_ITEMS`, `METAPROC_PROCESS_SPEC` (with
    `METAPROC_PROCESS_DIR` as legacy fallback), `METAPROC_STEP`, etc.). Auth-pool
    dispatch env vars (`METAPROC_AUTH_ACCOUNT`, `METAPROC_AUTH_BACKEND`,
    `METAPROC_AUTH_FALLBACK_POLICY`, `METAPROC_AUTH_INCLUDE_LABELS`,
    `METAPROC_AUTH_EXCLUDE_LABELS`) are forwarded as `--auth-*` flags when present;
    without them, the worker falls back to single-credential bootstrap.
-2. Call `bootstrap_container()`.
-3. Build and run:
+3. Call `bootstrap_container()`.
+4. Build and run:
    `python -m metaproc run-parallel <process_spec> --step <step> --items <items> --backend local [--auth-* flags]`.
-4. Exit with `run-parallel`’s exit code.
+5. Exit with `run-parallel`’s exit code.
    Outputs land on NFS.
 
 ### 3.5 Orchestrator Dispatch (`orchestrator_dispatch.py`)
@@ -444,16 +451,18 @@ Unified container entrypoint for worker containers:
 
 ### 3.6 Orchestrator Entrypoint (`orchestrator_entrypoint.py`)
 
-1. Read orchestrator env vars.
-2. Call `bootstrap_container()`.
-3. Let the process DAG materialize any roster/run inputs on NFS via ordinary in-DAG code
+1. Hydrate Secret Manager references as described in §3.10. Fail before resource logging
+   or bootstrap if any binding is invalid or inaccessible.
+2. Read orchestrator env vars.
+3. Call `bootstrap_container()`.
+4. Let the process DAG materialize any roster/run inputs on NFS via ordinary in-DAG code
    steps.
-4. Build and run:
+5. Build and run:
    `python -m metaproc run-process <process_dir> --backend gcp-worker [all forwarded flags]`.
-5. Forward the dispatcher-owned `METAPROC_GCP_ORCHESTRATOR=1` admission marker to the
+6. Forward the dispatcher-owned `METAPROC_GCP_ORCHESTRATOR=1` admission marker to the
    inner process.
-6. Does **not** pass `--cloud` to avoid infinite recursion.
-7. Exit with `run-process`’s exit code.
+7. Does **not** pass `--cloud` to avoid infinite recursion.
+8. Exit with `run-process`’s exit code.
 
 ### 3.7 GCP Batch Shared Utilities (`batch_backend.py`)
 
@@ -462,16 +471,15 @@ Unified container entrypoint for worker containers:
 
 `GCPBatchConfig` (frozen dataclass): `project`, `region`, `container_image`,
 `machine_type`, `spot`, `boot_disk_gb`, `max_run_duration_s`, `service_account_email`,
-`network`/`subnetwork`, `labels`, `secret_env_vars`, `runs_dir`,
+`network`/`subnetwork`, `labels`, `runs_dir`,
 `filestore_server`/`filestore_share`/`filestore_mount_path`, `queue_timeout_s`.
 
 Utility functions: `sanitize_label()` (GCP-safe resource names and readable labels),
 `run_identity_label()` / `run_identity_labels()` (fixed-width exact run locator plus
-readable compatibility label), `_build_secret_env_vars()` (Secret Manager mapping from
-env vars), `build_pi_models_json()` (rewrite pi CLI config for cloud),
-`infer_compute_resource()` / `resolve_compute_resource()` / `build_compute_resource()`
-(right-size container cgroup from VM machine type; see below),
-`is_transient_api_error()` (retry classification).
+readable compatibility label), `build_pi_models_json()` (rewrite pi CLI config for
+cloud), `infer_compute_resource()` / `resolve_compute_resource()` /
+`build_compute_resource()` (right-size container cgroup from VM machine type; see
+below), `is_transient_api_error()` (retry classification).
 
 #### Container compute_resource
 
@@ -547,12 +555,26 @@ restrictions.
 
 ### 3.10 Secret Manager Integration
 
-Every credential delivered to a Batch job is injected via Secret Manager rather than as
-a plaintext env var; plaintext would persist in the job spec returned by
-`gcloud batch jobs describe`. The complete registry is `SecretRefSet.all_known()` in
-`metaproc.dispatch.secret_refs`, composing static refs with dynamic provider refs
-aggregated from `metaproc.config.providers.gcp_secret_refs()`. The legacy
-`GCP_SECRET_REFS` tuple in `cloud/gcp/batch_backend.py` is a back-compat alias.
+Every credential delivered to a Batch job comes from Secret Manager.
+Dispatch never puts the plaintext value in the Batch job spec, and it deliberately does
+not use Batch `Environment.secret_variables`: the Batch agent expands those values into
+its generated `docker run --env` command, which can expose them in agent logs.
+
+The current contract is reference-only until the container starts:
+
+1. `SecretRefSet.all_known()` composes static bindings with provider bindings from
+   `metaproc.config.providers.gcp_secret_refs()` and refuses any ambient plaintext
+   credential that lacks its corresponding Secret Manager reference.
+2. Dispatch serializes only `{target_env: version_resource}` into
+   `METAPROC_GCP_SECRET_REFS_JSON`. The job spec and Batch agent therefore see resource
+   names, never secret values.
+3. The Batch VM runs under the explicit `METAPROC_GCP_SERVICE_ACCOUNT` identity.
+4. `hydrate_secret_env()` validates the complete mapping, fetches every version through
+   the Secret Manager API, and mutates the process environment only after all fetches
+   succeed. It refuses pre-existing target variables and never logs values.
+5. The generic-run, orchestrator, and worker entrypoints all hydrate before bootstrap;
+   the orchestrator retains the operator-side resource refs so it can bind its workers
+   through the same contract.
 
 Static refs (as of 2026-05-23):
 
@@ -566,14 +588,14 @@ Provider-specific refs (pi-cli API keys, etc.)
 are added dynamically via `gcp_secret_refs()` in `metaproc.config.providers`; adding a
 new provider credential there is sufficient, no edits to dispatch wiring needed.
 
-`resolve_gcp_secret_ref()` enforces a uniform policy: if the plaintext env var is set
-but the corresponding Secret Manager ref is not, dispatch fails up front rather than
-leaking the value.
+`SecretRef.resolve()` enforces the uniform anti-leakage policy; adding a provider
+credential to the provider registry automatically includes it in all three dispatch
+paths.
 
 The Claude Code CLI OAuth blob is a two-hop credential: the operator pushes
 `~/.claude/.credentials.json` (read from macOS Keychain) to Secret Manager via
 `metaproc claude-auth push`; dispatch binds `METAPROC_GCP_SECRET_CLAUDE_CREDS` →
-`CLAUDE_CODE_CREDS_JSON` as a Batch `secret_variables` entry; the
+`CLAUDE_CODE_CREDS_JSON` through the reference-only hydration contract; the
 `ClaudeCodeCliAdapter.bootstrap(home)` hook (invoked by §2.8 / §3.2) materializes the
 credential file on the worker and unsets the env var.
 See [credential-setup.runbook.md](../runbooks/credential-setup.runbook.md) for the
@@ -718,8 +740,13 @@ It verifies and safely extracts the workspace archive into `/workspace` when the
 corresponding URI and digest pair is set.
 Each repeated `--workspace-package` path is then installed editable from that archive,
 and nested `uv` commands stay on the baked `/opt/venv` without re-resolving the shipped
-workspace. The entrypoint runs adapter `bootstrap()` hooks per §2.8 and executes the
-JSON-encoded argv from `METAPROC_GCP_RUN_CMD` with `execvp`.
+workspace. A run with no workspace archive also pins nested `uv` commands to the baked
+environment, because consumer source must already be present in the image and no project
+lock is available. A shipped Metaproc wheel may still replace its image-baked version.
+A full shipped workspace without editable package installation retains ordinary uv
+project resolution.
+The entrypoint runs adapter `bootstrap()` hooks per §2.8 and executes
+the JSON-encoded argv from `METAPROC_GCP_RUN_CMD` with `execvp`.
 
 The default workspace archive excludes both the historical top-level `metaproc/` source
 layout and a `vendor/metaproc` gitlink.
@@ -734,9 +761,9 @@ skips the tail entirely and prints the job name and console URL.
 **Why a separate primitive.** Worker dispatch (§3.3) is shaped around per-item
 partitioning and resume contracts; that machinery is overkill for “run `echo` once” or
 “run a package-specific analyzer against a fixed input file.”
-The two paths share `batch_backend.py`, `container_bootstrap.py`, the `GCP_SECRET_REFS`
-registry, and the Filestore mount script, but `metaproc gcp run` carries no orchestrator
-lease, no claim registry, no per-item dispatch manifest.
+The two paths share `batch_backend.py`, `container_bootstrap.py`, `SecretRefSet`,
+`secret_hydration.py`, and the Filestore mount script, but `metaproc gcp run` carries no
+orchestrator lease, no claim registry, no per-item dispatch manifest.
 That absence is its boundary, not an invitation to grow a second orchestration layer.
 
 **Wheel and workspace overrides apply to both paths.** The URI variables and their
@@ -746,8 +773,11 @@ four values into the worker and orchestrator Batch environments.
 `bootstrap_container()` verifies and installs the wheel into `/opt/venv`; a verified
 workspace archive replaces the repository clone, and the explicitly configured workspace
 packages are installed from that archive.
-This is the supported way to ship a current-branch `metaproc/` fix to workers without an
-agent-image rebuild.
+This can ship code imported after bootstrap without an agent-image rebuild.
+It cannot replace the generic-run, orchestrator, or worker entrypoint code already
+imported by the image’s initial Python process.
+Changes to those entrypoints, secret hydration, or pre-wheel bootstrap require a
+candidate image rebuild.
 
 See
 [Dispatch an Arbitrary Command](../runbooks/cloud-dispatch.runbook.md#5-dispatch-an-arbitrary-command)
@@ -843,8 +873,8 @@ Maintenance revision via `tbd shortcut revise-architecture-doc`:
   (`orchestrator_dispatch.py:48`).
 - Added `initial_concurrency` and auth-pool passthrough fields to both
   `WorkerDispatchConfig` and `OrchestratorDispatchConfig`.
-- Updated `GCP_SECRET_REFS` to reflect `SecretRefSet` refactor
-  (`dispatch/secret_refs.py`) and added `CODEX_CREDS_JSON` row.
+- Updated the credential registry to use `SecretRefSet` (`dispatch/secret_refs.py`) and
+  added `CODEX_CREDS_JSON` row.
 - Corrected §2.9 pre-flight: parameter is `needs_gcloud` (not `needs_gcp`), gated on
   `backend == "local"`; added `run_cloud_preflight()` mention.
 - Updated §3.4 worker entrypoint: `METAPROC_PROCESS_SPEC` is primary env var (with
@@ -883,8 +913,8 @@ Claude Code CLI Personal-Plan auth on GCP Batch (the original design):
 - **§3.2 Container Bootstrap**: documents the adapter-bootstrap invocation (Claude Code
   CLI writes `~/.claude/.credentials.json` from `CLAUDE_CODE_CREDS_JSON` and unsets the
   env var).
-- **§3.10 Secret Manager Integration**: generalized from GH_TOKEN-only to the
-  `GCP_SECRET_REFS` registry pattern; added the two-hop Keychain → Secret Manager →
+- **§3.10 Secret Manager Integration**: generalized from GH_TOKEN-only to the typed
+  secret-reference registry; added the two-hop Keychain → Secret Manager →
   adapter-bootstrap flow for the Claude credential; cross-links to credential-setup.md
   and cloud-dispatch.runbook.md.
 - **§3.11 GCP Configuration Environment Variables**: added

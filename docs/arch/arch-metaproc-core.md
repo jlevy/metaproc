@@ -1696,7 +1696,7 @@ Registered adapters (in `ADAPTER_REGISTRY`):
   3. Personal-plan OAuth blob via Secret Manager on GCP Batch workers: the operator
      pushes the Keychain-held `~/.claude/.credentials.json` to Secret Manager with
      `metaproc claude-auth push`; dispatch binds `METAPROC_GCP_SECRET_CLAUDE_CREDS` →
-     `CLAUDE_CODE_CREDS_JSON` as a Batch `secret_variables` entry (see §21.14); the
+     `CLAUDE_CODE_CREDS_JSON` through container-side hydration (see §21.14); the
      adapter’s `bootstrap(home)` hook materializes the credential file on first use (see
      §21.2).
 - `codex-cli` -- invokes
@@ -1723,8 +1723,8 @@ Registered adapters (in `ADAPTER_REGISTRY`):
      (see `research-2026-04-23-codex-cli-auth.md` §F10).
   3. GCP Batch Vehicle B via Secret Manager: `metaproc codex-auth push` pushes
      `~/.codex/auth.json` to Secret Manager; dispatch binds
-     `METAPROC_GCP_SECRET_CODEX_CREDS` → `CODEX_CREDS_JSON` as a Batch
-     `secret_variables` entry; the adapter’s `bootstrap(home)` materializes
+     `METAPROC_GCP_SECRET_CODEX_CREDS` → `CODEX_CREDS_JSON` as a Batch container-side
+     hydration binding; the adapter’s `bootstrap(home)` materializes
      `{home}/.codex/auth.json` (mode 0600, parent 0700), pops the env var to prevent
      child-process leaks, and rejects `apikey` blobs (API-key auth should arrive as
      `OPENAI_API_KEY` directly).
@@ -2858,14 +2858,13 @@ Unified container entrypoint for worker containers:
 
 `GCPBatchConfig` (frozen dataclass): `project`, `region`, `container_image`,
 `machine_type`, `spot`, `boot_disk_gb`, `max_run_duration_s`, `service_account_email`,
-`network`/`subnetwork`, `labels`, `secret_env_vars`, `runs_dir`,
+`network`/`subnetwork`, `labels`, `runs_dir`,
 `filestore_server`/`filestore_share`/`filestore_mount_path`, `queue_timeout_s`.
 
 Utility functions: `sanitize_label()` (GCP-safe resource names and readable labels),
 `run_identity_label()` / `run_identity_labels()` (fixed-width exact run locator plus
-readable compatibility label), `_build_secret_env_vars()` (Secret Manager mapping from
-env vars), `build_pi_models_json()` (rewrite pi CLI config for cloud),
-`is_transient_api_error()` (retry classification).
+readable compatibility label), `build_pi_models_json()` (rewrite pi CLI config for
+cloud), `is_transient_api_error()` (retry classification).
 
 ### 21.8 LaunchBackend Protocol
 
@@ -3029,10 +3028,15 @@ restrictions.
 UC-10):** any credential delivered to a Batch job is injected via Secret Manager rather
 than as a plaintext env var, because `gcloud batch jobs describe` would otherwise return
 the plaintext value as part of the job spec.
-The `GCP_SECRET_REFS` registry in `cloud/gcp/batch_backend.py` centralizes the
-`(plaintext_env, secret_env, description)` rows so adding a new credential is a one-row
-change. `resolve_gcp_secret_ref()` enforces the anti-leakage invariant: setting the
-plaintext env without the Secret Manager ref fails dispatch up front.
+`SecretRefSet` centralizes the typed bindings.
+Dispatch serializes version resource names only into `METAPROC_GCP_SECRET_REFS_JSON`; it
+does not use Batch `Environment.secret_variables`, whose expanded values can reach Batch
+agent logs. The generic-run, orchestrator, and worker entrypoints call
+`hydrate_secret_env()` before bootstrap.
+Hydration validates and fetches every binding under the attached service account before
+atomically updating the process environment.
+`SecretRef.resolve()` enforces the anti-leakage invariant: setting plaintext without the
+corresponding Secret Manager ref fails dispatch up front.
 
 ## Future Considerations
 
@@ -3158,9 +3162,9 @@ Claude Code CLI Personal-Plan auth on GCP Batch (the original design):
   hook so adapters can materialize credential files (Claude Code CLI writes
   `~/.claude/.credentials.json` from `CLAUDE_CODE_CREDS_JSON`, then unsets the env var
   so it does not leak to child processes).
-- **Section 21.14**: generalized from GH_TOKEN-only to the `GCP_SECRET_REFS` registry
-  pattern in `batch_backend.py`; documents `resolve_gcp_secret_ref()` and the
-  plaintext-refusal policy that applies uniformly to every row.
+- **Section 21.14**: generalized from GH_TOKEN-only to the typed `SecretRefSet`
+  registry; documents `SecretRef.resolve()` and the plaintext-refusal policy that
+  applies uniformly to every row.
   Adding a new credential now means appending one row, with no further dispatch wiring.
 
 Validated 2026-04-19 end-to-end via the `claude-cli-smoke-20260419-114859` single-task

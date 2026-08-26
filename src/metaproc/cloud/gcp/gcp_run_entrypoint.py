@@ -48,6 +48,7 @@ from pathlib import Path
 
 from metaproc.adapters.registry import ADAPTER_REGISTRY
 from metaproc.cloud.gcp.container_bootstrap import bootstrap_gcp_run
+from metaproc.cloud.gcp.secret_hydration import hydrate_secret_env
 from metaproc.config.env_vars import MetaprocEnv
 
 log = logging.getLogger(__name__)
@@ -62,6 +63,14 @@ def main() -> int:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+    try:
+        hydrated = hydrate_secret_env()
+    except RuntimeError as exc:
+        log.error("Secret hydration failed: %s", exc)
+        return 1
+    if hydrated:
+        log.info("Hydrated secret environment variables: %s", ", ".join(hydrated))
 
     cmd_json = MetaprocEnv.METAPROC_GCP_RUN_CMD.read_str(default="")
     if not cmd_json:

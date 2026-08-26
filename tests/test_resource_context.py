@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
 import pytest
@@ -41,6 +42,21 @@ def test_secrets_are_redacted(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "redacted" in tok
     key = ctx.runtime.env["METAPROC_API_KEY"]
     assert "sekret456" not in key
+
+
+def test_dispatched_secret_targets_are_redacted_regardless_of_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "METAPROC_GCP_SECRET_REFS_JSON",
+        json.dumps({"METAPROC_OPAQUE": "projects/p/secrets/opaque/versions/1"}),
+    )
+    monkeypatch.setenv("METAPROC_OPAQUE", "hydrated-value")
+
+    ctx = collect_resource_context()
+
+    assert ctx.runtime.env["METAPROC_OPAQUE"] == "<redacted:14chars>"
+    assert "opaque/versions/1" not in ctx.runtime.env["METAPROC_GCP_SECRET_REFS_JSON"]
 
 
 def test_format_is_multiline_and_mentions_key_sections() -> None:

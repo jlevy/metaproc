@@ -22,7 +22,6 @@ from strif import atomic_output_file
 
 from metaproc import paths as paths_mod
 from metaproc.cloud.gcp.batch_backend import (
-    GCP_SECRET_REFS,
     GCPBatchConfig,
     apply_container_runs_dir,
     build_batch_runnables,
@@ -31,13 +30,17 @@ from metaproc.cloud.gcp.batch_backend import (
     build_pi_models_json,
     get_container_runs_dir,
     get_job_with_retry,
-    resolve_gcp_secret_ref,
     run_identity_labels,
     sanitize_label,
+)
+from metaproc.cloud.gcp.secret_hydration import (
+    attach_secret_refs,
+    require_secret_service_account,
 )
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.dispatch.auth_pool_flags import AuthPoolFlags
 from metaproc.dispatch.repo_sync_payload import RepoSyncPayload
+from metaproc.dispatch.secret_refs import SecretRefSet
 from metaproc.errors import CLIError
 from metaproc.io.claimed_items import clear_claimed_items, collect_claimed_items, read_claimed_items
 from metaproc.io.dispatch_manifest import (
@@ -621,24 +624,28 @@ async def _submit_workers(
 
         # Credentials injected via Secret Manager only — plaintext values would
         # persist in the Batch job spec (visible via `gcloud batch jobs describe`
-        # and the API). See `GCP_SECRET_REFS` in batch_backend.py for the table.
-        secret_env_vars: dict[str, str] = {}
-        for plaintext_env, secret_env, description in GCP_SECRET_REFS:
-            ref = resolve_gcp_secret_ref(plaintext_env, secret_env, description)
-            if ref:
-                secret_env_vars[plaintext_env] = ref
+        # and the API). The container resolves these resource references only
+        # after it starts under the explicit Batch service account.
+        secret_refs = SecretRefSet.all_known().resolve_env_refs()
+        require_secret_service_account(secret_refs, config.gcp.service_account_email)
 
         # Pi CLI models config.
         pi_models = build_pi_models_json(config.gcp.project)
         if pi_models:
             env_vars["METAPROC_PI_MODELS_JSON"] = pi_models
 
-        env_vars.update(get_bootstrap_env_vars())
+        bootstrap_env = get_bootstrap_env_vars()
+        plaintext_conflicts = SecretRefSet.all_known().plaintext_conflicts(bootstrap_env)
+        if plaintext_conflicts:
+            raise CLIError(
+                "Plugin bootstrap env cannot carry registered credentials; bind Secret "
+                f"Manager references instead: {plaintext_conflicts}"
+            )
+        env_vars.update(bootstrap_env)
 
         # Build Batch job.
+        attach_secret_refs(env_vars, secret_refs)
         env_kwargs: dict[str, object] = {"variables": env_vars}
-        if secret_env_vars:
-            env_kwargs["secret_variables"] = secret_env_vars
 
         runnables = build_batch_runnables(
             config.gcp,

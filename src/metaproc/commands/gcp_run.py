@@ -50,6 +50,7 @@ from metaproc.cloud.gcp.gcp_run_dispatch import (
 )
 from metaproc.cloud.gcp.gcp_run_logs import build_log_url, tail_gcp_run_logs
 from metaproc.config.env_vars import MetaprocEnv
+from metaproc.dispatch.secret_refs import SecretRefSet
 from metaproc.io.digests import file_sha256
 
 log = logging.getLogger(__name__)
@@ -334,7 +335,8 @@ def run_command(
     Default behaviour here ships a fresh-built wheel from the local source tree
     plus a tarball of the current repo working tree, mounts Filestore at
     `/mnt/filestore` (with `RUNS_DIR=/mnt/filestore/runs`), resolves
-    `GCP_SECRET_REFS` (`GH_TOKEN`, `CLAUDE_CODE_CREDS_JSON`), and `execvp`'s `cmd`
+    registered Secret Manager refs (`GH_TOKEN`, `CLAUDE_CODE_CREDS_JSON`), and
+    `execvp`'s `cmd`
     inside the container.
     """
     config = _build_config(
@@ -351,6 +353,13 @@ def run_command(
     if reserved:
         raise typer.BadParameter(
             f"--env cannot set reserved keys owned by the dispatcher: {reserved}",
+            param_hint="--env",
+        )
+    plaintext_conflicts = SecretRefSet.all_known().plaintext_conflicts(extra_env)
+    if plaintext_conflicts:
+        raise typer.BadParameter(
+            "--env cannot carry registered credentials; bind Secret Manager "
+            f"references instead: {plaintext_conflicts}",
             param_hint="--env",
         )
     raw_secrets = _parse_kv_pairs(secret, "--secret")

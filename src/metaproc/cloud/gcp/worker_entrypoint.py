@@ -51,6 +51,7 @@ from typing import Any
 
 from metaproc.adapters.registry import ADAPTER_REGISTRY
 from metaproc.cloud.gcp.container_bootstrap import _run, bootstrap_container
+from metaproc.cloud.gcp.secret_hydration import hydrate_secret_env
 from metaproc.commands.helpers import seed_runtime_vars
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.dispatch.auth_pool_flags import AuthPoolFlags
@@ -81,6 +82,14 @@ def main() -> int:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+    try:
+        hydrated = hydrate_secret_env()
+    except RuntimeError as exc:
+        log.error("Secret hydration failed: %s", exc)
+        return 1
+    if hydrated:
+        log.info("Hydrated secret environment variables: %s", ", ".join(hydrated))
 
     # Dump the full resource envelope (host, cgroup, rlimits, runtime, env)
     # before any work. When a worker OOM-kills mid-run, this is the first
