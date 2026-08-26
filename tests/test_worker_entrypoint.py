@@ -20,7 +20,6 @@ explicitly opted into the pool.
 
 from __future__ import annotations
 
-import os
 from typing import Any
 from unittest.mock import patch
 
@@ -270,32 +269,32 @@ class TestLegacyBootstrapGuard:
     bootstrap path stays intact.
     """
 
-    def test_pool_dispatch_enabled_arms_guard(self, monkeypatch) -> None:
-        monkeypatch.delenv("METAPROC_AUTH_POOL_RUN", raising=False)
+    def test_pool_dispatch_enabled_arms_guard(self) -> None:
         flags = AuthPoolFlags(auth_account="claude-code-cli")
-        arm_legacy_bootstrap_guard(flags)
+        env: dict[str, str] = {}
+        arm_legacy_bootstrap_guard(flags, env=env)
 
-        assert os.environ.get("METAPROC_AUTH_POOL_RUN") == "1"
+        assert env["METAPROC_AUTH_POOL_RUN"] == "1"
 
-    def test_no_auth_account_leaves_guard_unset(self, monkeypatch) -> None:
+    def test_no_auth_account_leaves_guard_unset(self) -> None:
         # Legacy single-credential dispatch (no --auth-account) must
         # NOT set METAPROC_AUTH_POOL_RUN — adapter.bootstrap(home)
         # needs to run normally and materialize CLAUDE_CODE_CREDS_JSON.
-        monkeypatch.delenv("METAPROC_AUTH_POOL_RUN", raising=False)
         flags = AuthPoolFlags()
-        arm_legacy_bootstrap_guard(flags)
+        env: dict[str, str] = {}
+        arm_legacy_bootstrap_guard(flags, env=env)
 
-        assert "METAPROC_AUTH_POOL_RUN" not in os.environ
+        assert "METAPROC_AUTH_POOL_RUN" not in env
 
-    def test_arms_guard_independent_of_other_auth_fields(self, monkeypatch) -> None:
+    def test_arms_guard_independent_of_other_auth_fields(self) -> None:
         # is_pool_dispatch_enabled() keys on auth_account alone. Other
         # fields without an account are inert and must not arm the
         # guard (matches AuthPoolFlags's master-switch contract).
-        monkeypatch.delenv("METAPROC_AUTH_POOL_RUN", raising=False)
         flags = AuthPoolFlags(
             auth_backend="gcp-secret-manager",
             auth_include_labels=("alt1",),
         )
-        arm_legacy_bootstrap_guard(flags)
+        env: dict[str, str] = {}
+        arm_legacy_bootstrap_guard(flags, env=env)
 
-        assert "METAPROC_AUTH_POOL_RUN" not in os.environ
+        assert "METAPROC_AUTH_POOL_RUN" not in env

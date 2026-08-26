@@ -47,7 +47,7 @@ mode requires. Never commit `.env`.
 | --- | --- |
 | `METAPROC_GCP_PROJECT` | GCP project containing Batch resources |
 | `METAPROC_GCP_REGION` | Batch region |
-| `METAPROC_GCP_SERVICE_ACCOUNT` | Explicit Batch identity; required when a run binds Secret Manager secrets |
+| `METAPROC_GCP_SERVICE_ACCOUNT` | Explicit Batch identity; required when a run binds Secret Manager secrets or uses a Secret Manager auth pool |
 | `METAPROC_GCP_CONTAINER_IMAGE` | Image that can run Metaproc and the consumer |
 | `METAPROC_GCS_BUCKET` | Wheel and workspace artifact transport |
 | `METAPROC_GCP_SECRET_GH_TOKEN` | Secret Manager ref used when a private repo must be cloned |
@@ -163,6 +163,10 @@ Useful controls:
   account before bootstrap.
   Do not replace this with Batch `secret_variables`, because Batch agent logs can expose
   their expanded values.
+- A cloud auth pool backed by Secret Manager also requires
+  `METAPROC_GCP_SERVICE_ACCOUNT`. Each scalar or fan-out launch acquires its credential
+  through the shared pool under that identity; the dispatcher does not inject a
+  preferred credential into the container environment.
 - `--timeout <seconds>` sets the task deadline.
 
 Container-side hydration requires the agent image to install `metaproc[gcp-batch]` so

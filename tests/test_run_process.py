@@ -4202,10 +4202,9 @@ class TestNonFanOutContentRetry:
 class TestNonFanOutTransientRetry:
     """A non-fan-out agent step survives a transient failure the way a fan-out item does.
 
-    The week-35 cohorts lost five names to `UND_ERR_BODY_TIMEOUT`: undici gave up
-    waiting for the response body, the CLI exited 1 having produced nothing, and
-    the scalar path recorded `attempt: 1` and moved on. `run_parallel` retries
-    exactly this. These tests pin both halves of the behavior, because a retry
+    `UND_ERR_BODY_TIMEOUT` means undici gave up waiting for the response body;
+    the CLI can exit 1 having produced nothing. `run_parallel` retries exactly
+    this. These tests pin both halves of the behavior, because a retry
     that cannot tell a body timeout from an exhausted quota is worse than none.
     """
 

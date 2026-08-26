@@ -70,8 +70,8 @@ class AuthPoolFlags:
     auth_account: str = ""
     auth_backend: str = ""
     auth_fallback_policy: str = ""
-    # plan-2026-05-03: label selection policy. Empty
-    # string means "use the default" — round-robin for ≥ 2 included
+    # Empty string means "use the default" label selection policy:
+    # round-robin for ≥ 2 included
     # labels, else priority-order. Values: priority-order|round-robin|
     # least-active.
     auth_policy: str = ""

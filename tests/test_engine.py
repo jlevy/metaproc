@@ -1017,9 +1017,8 @@ class TestValidateItemOutputs:
     def test_run_variant_template_resolves_when_variant_in_variables(self, tmp_path):
         """Regression: non-fan-out agent steps need VARIANT in the validator's variables.
 
-        Wed/Thu 2026-04-29/30 dispatch hit this: create-ops-review and
-        create-prediction-summary are non-fan-out agent steps with output paths
-        like {{run.dir}}/{{run.variant}}/ops-review.md. _execute_agent_step
+        A non-fan-out agent step can declare an output path such as
+        {{run.dir}}/{{run.variant}}/summary.md. _execute_agent_step
         previously passed the run-level `variables` (without VARIANT) to
         validate_item_outputs, so {{run.variant}} rendered as the literal
         token and exists() returned False even though the agent had written

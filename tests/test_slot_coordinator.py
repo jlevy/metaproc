@@ -472,7 +472,7 @@ class TestAcquireSlot:
         assert lease.label == "home"
 
     def test_slot_lease_carries_v2_join_keys(self, tmp_path, coord, pool, adapter):
-        # Schema-v2 (plan-2026-05-03): SlotLease holds run_id/step_id/
+        # Schema v2: SlotLease holds run_id/step_id/
         # item/attempt/session_log_path so build_auth_outcome and
         # build_auth_lease_acquired can pair acquisitions and outcomes
         # by primary key without timestamp inference.

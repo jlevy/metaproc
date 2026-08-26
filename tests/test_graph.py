@@ -45,8 +45,8 @@ def _predict_steps() -> list[ResolvedStep]:
         _step("scaffold-day"),
         _step("generate-base-rates", ["scaffold-day"]),
         _step("generate-research-packet", ["scaffold-day"]),
-        _step("mine-adhoc", ["scaffold-day", "generate-base-rates"]),
-        _step("retrieve-precedent", ["scaffold-day", "generate-base-rates", "mine-adhoc"]),
+        _step("extract-items", ["scaffold-day", "generate-base-rates"]),
+        _step("retrieve-precedent", ["scaffold-day", "generate-base-rates", "extract-items"]),
         _step(
             "predict-ticker",
             [
@@ -57,12 +57,12 @@ def _predict_steps() -> list[ResolvedStep]:
             ],
         ),
         _step("qa-check", ["predict-ticker"]),
-        _step("create-prediction-summary", ["predict-ticker"]),
-        _step("create-ops-review", ["predict-ticker"]),
+        _step("write-result-summary", ["predict-ticker"]),
+        _step("write-operator-review", ["predict-ticker"]),
         _step("generate-usage-report", ["predict-ticker", "qa-check"]),
         _step(
-            "create-run-overview",
-            ["qa-check", "create-prediction-summary", "generate-usage-report"],
+            "write-run-overview",
+            ["qa-check", "write-result-summary", "generate-usage-report"],
         ),
     ]
 
@@ -92,7 +92,7 @@ def _retro_steps() -> list[ResolvedStep]:
         _step("create-integrity-check-summary", ["integrity-check"]),
         _step("generate-usage-report", ["predict-retro"]),
         _step(
-            "create-run-overview",
+            "write-run-overview",
             [
                 "qa-check",
                 "create-retro-summary",
@@ -220,10 +220,10 @@ class TestDownstream:
         result = downstream(steps, "predict-ticker")
         expected = {
             "qa-check",
-            "create-prediction-summary",
-            "create-ops-review",
+            "write-result-summary",
+            "write-operator-review",
             "generate-usage-report",
-            "create-run-overview",
+            "write-run-overview",
         }
         assert set(result) == expected
 

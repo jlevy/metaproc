@@ -187,10 +187,10 @@ class TestIsStepSatisfiedUniversally:
     def test_universal_satisfied_returns_true(self) -> None:
         doc = self._make_doc(
             [
-                {"step": "mine-adhoc", "action": "satisfied", "by": "levy", "at": "t0"},
+                {"step": "extract-items", "action": "satisfied", "by": "operator", "at": "t0"},
             ]
         )
-        assert is_step_satisfied_universally(doc, "mine-adhoc") is True
+        assert is_step_satisfied_universally(doc, "extract-items") is True
 
     def test_scoped_override_does_not_satisfy_universally(self) -> None:
         """An override that targets specific downstreams should NOT count as
@@ -198,36 +198,36 @@ class TestIsStepSatisfiedUniversally:
         doc = self._make_doc(
             [
                 {
-                    "step": "mine-adhoc",
+                    "step": "extract-items",
                     "action": "satisfied",
-                    "for_downstream": ["postprocess-adhoc-kb"],
-                    "by": "levy",
+                    "for_downstream": ["normalize-items"],
+                    "by": "operator",
                     "at": "t0",
                 },
             ]
         )
-        assert is_step_satisfied_universally(doc, "mine-adhoc") is False
+        assert is_step_satisfied_universally(doc, "extract-items") is False
 
     def test_other_action_does_not_satisfy(self) -> None:
         """Only ``satisfied`` action counts."""
         doc = self._make_doc(
             [
-                {"step": "mine-adhoc", "action": "skipped", "by": "levy", "at": "t0"},
+                {"step": "extract-items", "action": "skipped", "by": "operator", "at": "t0"},
             ]
         )
-        assert is_step_satisfied_universally(doc, "mine-adhoc") is False
+        assert is_step_satisfied_universally(doc, "extract-items") is False
 
     def test_other_step_does_not_satisfy(self) -> None:
         doc = self._make_doc(
             [
-                {"step": "predict-ticker", "action": "satisfied", "by": "levy", "at": "t0"},
+                {"step": "analyze-item", "action": "satisfied", "by": "operator", "at": "t0"},
             ]
         )
-        assert is_step_satisfied_universally(doc, "mine-adhoc") is False
+        assert is_step_satisfied_universally(doc, "extract-items") is False
 
     def test_no_entries_returns_false(self) -> None:
         doc = self._make_doc([])
-        assert is_step_satisfied_universally(doc, "mine-adhoc") is False
+        assert is_step_satisfied_universally(doc, "extract-items") is False
 
 
 class TestOverridesForStep:

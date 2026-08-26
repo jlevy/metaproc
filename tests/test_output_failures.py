@@ -224,16 +224,14 @@ class TestRetryVerdictIgnoresFilenames:
 
     def test_the_string_path_is_filename_sensitive(self):
         """Pins the behaviour being replaced, so the improvement is visible."""
-        schema_named = (
-            "output validation failed: company-research-schema-manifest.md: file not found"
-        )
+        schema_named = "output validation failed: schema-manifest.md: file not found"
         plain = "output validation failed: source-snapshot.md: file not found"
 
         assert classify_error(schema_named) is RetryVerdict.FAIL
         assert classify_error(plain) is RetryVerdict.RETRY
 
     def test_the_structured_path_is_not(self):
-        schema_named = self._missing("company-research-schema-manifest.md")
+        schema_named = self._missing("schema-manifest.md")
         plain = self._missing("source-snapshot.md")
 
         assert classify_output_failures([schema_named]) is RetryVerdict.RETRY
@@ -512,7 +510,7 @@ class TestTheRecordSurvivesTheAgentPool:
 
     def test_the_pool_verdict_no_longer_reads_the_filename(self, tmp_path):
         """The end-to-end form of the defect: same miss, name containing 'schema'."""
-        batch_failed, _, outputs = self._pool_call(tmp_path, "company-research-schema-manifest.md")
+        batch_failed, _, outputs = self._pool_call(tmp_path, "schema-manifest.md")
         (_, error_str, failures) = batch_failed[0]
 
         assert classify_error(error_str) is RetryVerdict.FAIL, "the sentence still misreads it"

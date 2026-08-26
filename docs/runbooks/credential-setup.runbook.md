@@ -111,6 +111,10 @@ metaproc run-process <spec> \
   --auth-fallback-policy same-provider
 ```
 
+Cloud dispatch defaults this pool to the GCP Secret Manager backend and therefore
+requires `METAPROC_GCP_SERVICE_ACCOUNT`. Every agent launch acquires its own isolated
+pool slot; no label is exported as an ambient credential for the run.
+
 Cloud dispatch is identical with `--cloud --backend gcp-worker`; the orchestrator and
 worker entrypoints both consume the pool transparently.
 

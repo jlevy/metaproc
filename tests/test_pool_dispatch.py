@@ -717,7 +717,7 @@ class TestAuthOutcome:
         assert oc.reason == "invalid_grant"
 
     def test_auth_outcome_schema_version(self):
-        # Schema v2 (plan-2026-05-03) added the run_id/step_id/item/
+        # Schema v2 added the run_id/step_id/item/
         # attempt/session_log_path join keys. Existing v1 readers
         # tolerate the additive change; v2 readers see legacy events
         # with the new fields defaulting to "" / 0 / "".
@@ -932,7 +932,7 @@ class TestAuthOutcome:
 
 
 class TestBuildAuthLeaseAcquired:
-    """Schema-v2 acquisition-time event payload (plan-2026-05-03).
+    """Schema-v2 acquisition-time event payload.
 
     Companion to AuthOutcome — emitted before the subprocess starts so
     post-hoc analysis can pair acquisitions with outcomes by primary
@@ -1471,8 +1471,7 @@ class TestComputePoolCoolingDelay:
 
         # All active, none cooling — this is lease contention (labels
         # healthy, just all leased by other items). Return contention_s
-        # so the next retry grabs a freed slot quickly. Surfaced by the
-        # 2026-04-28 smoke at mine-adhoc.
+        # so the next retry grabs a freed slot quickly.
         dispatch = self._make_dispatch(
             [
                 PoolEntry(

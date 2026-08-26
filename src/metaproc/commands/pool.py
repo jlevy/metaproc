@@ -1139,7 +1139,7 @@ def pool_rollup(
     """Roll up status and optional auth outcomes across every discovered pool.
 
     Each fan-out step in a multi-step run gets its own RunPool instance
-    (mine-adhoc, process-item, qa-check, ...). ``pool status`` only
+    (extract-items, process-item, qa-check, ...). ``pool status`` only
     inspects one. Cloud workers add another axis: each Batch worker
     writes its own per-step pool dir on Filestore. To answer
     "is the pool actually rotating across the whole run?" — the local

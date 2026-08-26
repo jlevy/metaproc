@@ -462,10 +462,9 @@ def check_dispatch_auth_env(
     Mirrors the per-item ``compose_slot_env`` refusal
     (:func:`metaproc.dispatch.pool_dispatch.compose_slot_env`) but
     fires once at dispatch start so a non-pool step can't complete
-    before the next step's first item discovers the conflict — the
-    failure mode that cost the 2026-05-10 dispatch 30+ minutes
-    when ``ANTHROPIC_API_KEY`` was set during a long pi-cli
-    ``mine-adhoc`` step that bypasses the pool entirely.
+    before the next step's first item discovers the conflict. For example,
+    a long ``extract-items`` step may bypass the pool entirely while an
+    ambient credential would conflict with the following pooled step.
 
     Posture semantics match :func:`check_step_preflight`:
 

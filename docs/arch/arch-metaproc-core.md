@@ -838,7 +838,7 @@ process:
     - id: setup-roster
       mode: code
 
-    - id: mine-adhoc
+    - id: extract-items
       mode: agent
       inputs:
         roster: deps.roster
@@ -855,7 +855,7 @@ process:
 
     - id: validate-records
       mode: code
-      needs: [mine-adhoc]
+      needs: [extract-items]
 
     - id: publish-kb
       mode: code
@@ -1995,7 +1995,7 @@ test read the filename too, and two outputs missing for the same transient reaso
 opposite verdicts:
 
 ```text
-output validation failed: company-research-schema-manifest.md: file not found   -> FAIL
+output validation failed: schema-manifest.md: file not found                    -> FAIL
 output validation failed: source-snapshot.md: file not found                    -> RETRY
 ```
 

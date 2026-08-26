@@ -2749,10 +2749,8 @@ async def _execute_composite_step(
                 events=events,
             )
     except CLIError as exc:
-        # Surface the inner failure message — without this the operator
-        # sees `Step '<composite>': FAILED` with no reason. Caught during
-        # 2026-05-13 production rerun where two dispatches died at the
-        # bundle→agent boundary with no visible error.
+        # Surface the inner failure message; otherwise the operator sees only
+        # `Step '<composite>': FAILED` with no actionable reason.
         out.progress(f"  Step '{step_id}': inner CLIError — {exc}")
         return False
 
@@ -4042,9 +4040,8 @@ async def _orchestrate(
         # the step on bare resume (without --from). Without this, a step with
         # state=failed but a `metaproc override <step> --satisfied` entry was
         # re-run from scratch on whole-DAG resume — the override only fired
-        # on `--from <step>` resumes via _verify_ancestors. Friday 2026-05-01
-        # cohort: bare resume cleaned adhoc-kb-candidates and rebuilt mine-adhoc
-        # despite an earlier `override mine-adhoc --satisfied`.
+        # on `--from <step>` resumes via _verify_ancestors. A bare resume must
+        # preserve an earlier `override extract-items --satisfied` entry.
         level_overrides_doc = _read_overrides_for_verify(run_dir)
 
         # Filter steps: skip blocked, user-skipped, override-satisfied, and already-completed.
@@ -4465,10 +4462,9 @@ def run_process_command(
     # — so operators previewing an upcoming dispatch see the conflict
     # surfaced at the same point a real launch would. The per-item
     # compose_slot_env check only fires when the first matching-adapter
-    # item tries to launch; a long pool-bypass step (e.g. mine-adhoc on
-    # pi-cli) running first can complete before any pooled step's first
-    # item ever calls compose_slot_env, so this gate eliminates the
-    # 30+-minute timing window the 2026-05-10 dispatch hit.
+    # item tries to launch; a long pool-bypass step (e.g. extract-items on
+    # another adapter) can complete before any pooled step's first item
+    # calls compose_slot_env, so this gate reports conflicts at dispatch start.
     if auth_account:
         env_verdict = check_dispatch_auth_env(
             auth_account,
@@ -4964,9 +4960,8 @@ def run_process_command(
                 out.progress(f"  pre-flight probe: {label} → {target} ({note})")
 
         out.progress("Pre-flight probe: validating each pool label before fan-out")
-        # Per-label invocation sidecars land here so we can diff what the
-        # probe actually invoked claude with against the laptop snapshot.
-        # See plan-2026-05-01 § Phase 3.5.
+        # Per-label invocation sidecars land here so operators can inspect
+        # the exact probe invocation during diagnostics.
         preflight_sidecar_dir = run_dir / ".state" / "preflight-probes"
         try:
             pool_dispatch_template = pre_fan_out_probe(

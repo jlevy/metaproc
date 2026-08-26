@@ -114,13 +114,13 @@ def _write_auth_outcomes(run_dir: Path, step_id: str, outcomes: list[dict[str, A
 
 @pytest.fixture
 def two_step_run(tmp_path):
-    # mine-adhoc: 6 completed; auth_outcomes: 4×alt1 + 2×alt2
+    # extract-items: 6 completed; auth_outcomes: 4×alt1 + 2×alt2
     _write_status(
-        tmp_path, "mine-adhoc", completed_count=6, max_concurrency=25, current_concurrency=5
+        tmp_path, "extract-items", completed_count=6, max_concurrency=25, current_concurrency=5
     )
     _write_auth_outcomes(
         tmp_path,
-        "mine-adhoc",
+        "extract-items",
         [
             {"label": "alt1", "classification": "ok", "retry_count": 0},
             {"label": "alt1", "classification": "ok", "retry_count": 0},
@@ -130,13 +130,13 @@ def two_step_run(tmp_path):
             {"label": "alt2", "classification": "ok", "retry_count": 0},
         ],
     )
-    # predict-ticker: 24 failed; auth_outcomes: 24×alt1 (no rotation since alt1 stayed eligible)
+    # analyze-item: 24 failed; auth_outcomes: 24×alt1 (no rotation since alt1 stayed eligible)
     _write_status(
-        tmp_path, "predict-ticker", failed_count=24, max_concurrency=25, current_concurrency=25
+        tmp_path, "analyze-item", failed_count=24, max_concurrency=25, current_concurrency=25
     )
     _write_auth_outcomes(
         tmp_path,
-        "predict-ticker",
+        "analyze-item",
         [{"label": "alt1", "classification": "ok", "retry_count": 0} for _ in range(24)],
     )
     return tmp_path
@@ -146,7 +146,7 @@ class TestCollectSubPools:
     def test_walks_tree_and_finds_each_step(self, two_step_run):
         entries = _collect_sub_pools(two_step_run, with_auth_outcomes=False)
         step_dirs = sorted(e["step_dir"] for e in entries)
-        assert step_dirs == ["mine-adhoc", "predict-ticker"]
+        assert step_dirs == ["analyze-item", "extract-items"]
 
     def test_skips_event_load_when_auth_outcomes_off(self, two_step_run):
         entries = _collect_sub_pools(two_step_run, with_auth_outcomes=False)
@@ -156,8 +156,8 @@ class TestCollectSubPools:
     def test_loads_auth_outcomes_when_on(self, two_step_run):
         entries = _collect_sub_pools(two_step_run, with_auth_outcomes=True)
         by_step = {e["step_dir"]: e for e in entries}
-        assert len(by_step["mine-adhoc"]["auth_outcomes"]) == 6
-        assert len(by_step["predict-ticker"]["auth_outcomes"]) == 24
+        assert len(by_step["extract-items"]["auth_outcomes"]) == 6
+        assert len(by_step["analyze-item"]["auth_outcomes"]) == 24
 
     def test_empty_dir_returns_empty(self, tmp_path):
         assert _collect_sub_pools(tmp_path, with_auth_outcomes=True) == []
@@ -202,8 +202,8 @@ class TestBuildRollup:
         rollup = _build_rollup(sub_pools, with_auth_outcomes=False)
         assert rollup["sub_pool_count"] == 2
         per_step_by_dir = {s["step_dir"]: s for s in rollup["per_step"]}
-        assert per_step_by_dir["mine-adhoc"]["completed_count"] == 6
-        assert per_step_by_dir["predict-ticker"]["failed_count"] == 24
+        assert per_step_by_dir["extract-items"]["completed_count"] == 6
+        assert per_step_by_dir["analyze-item"]["failed_count"] == 24
 
     def test_totals_sum_across_steps(self, two_step_run):
         sub_pools = _collect_sub_pools(two_step_run, with_auth_outcomes=False)
@@ -214,7 +214,7 @@ class TestBuildRollup:
     def test_per_step_summary_carries_concurrency_plan(self, tmp_path):
         _write_status(
             tmp_path,
-            "mine-adhoc",
+            "extract-items",
             completed_count=6,
             max_concurrency=8,
             current_concurrency=2,
@@ -231,7 +231,7 @@ class TestBuildRollup:
     def test_render_rollup_includes_concurrency_plan_summary(self, tmp_path):
         _write_status(
             tmp_path,
-            "mine-adhoc",
+            "extract-items",
             completed_count=6,
             max_concurrency=8,
             current_concurrency=2,
@@ -255,17 +255,17 @@ class TestBuildRollup:
         sub_pools = _collect_sub_pools(two_step_run, with_auth_outcomes=True)
         rollup = _build_rollup(sub_pools, with_auth_outcomes=True)
         ao = rollup["auth_outcomes"]
-        # 6 mine-adhoc events + 24 predict-ticker events = 30 cross-step.
+        # 6 extract-items events + 24 analyze-item events = 30 cross-step.
         assert ao["total"] == 30
-        # alt1 = 4 mine-adhoc + 24 predict-ticker = 28; alt2 = 2 mine-adhoc.
+        # alt1 = 4 extract-items + 24 analyze-item = 28; alt2 = 2 extract-items.
         assert ao["by_label"] == {"alt1": 28, "alt2": 2}
 
     def test_by_step_label_breakdown(self, two_step_run):
         sub_pools = _collect_sub_pools(two_step_run, with_auth_outcomes=True)
         rollup = _build_rollup(sub_pools, with_auth_outcomes=True)
         by_step = rollup["auth_outcomes"]["by_step_label"]
-        assert by_step["mine-adhoc"] == {"alt1": 4, "alt2": 2}
-        assert by_step["predict-ticker"] == {"alt1": 24}
+        assert by_step["extract-items"] == {"alt1": 4, "alt2": 2}
+        assert by_step["analyze-item"] == {"alt1": 24}
 
     def test_no_auth_outcomes_when_disabled(self, two_step_run):
         sub_pools = _collect_sub_pools(two_step_run, with_auth_outcomes=False)

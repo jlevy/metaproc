@@ -131,7 +131,7 @@ class TestRepairFrontmatterFile:
 
         Verify by reading the source: an old version of repair_frontmatter_file
         used PyYAML's yaml.safe_load for both the pre-check and the post-repair
-        verification. The post-2026-05-21 fix uses _ruamel_safe_load. Without
+        verification. The corrected path uses _ruamel_safe_load. Without
         this harmonization, the operator sees \"Repaired YAML\" log lines
         followed by invalid_outputs failures (the document passed PyYAML but
         fails the validator).
@@ -146,7 +146,7 @@ class TestRepairFrontmatterFile:
         # The bare PyYAML self-check is gone — both call sites must use ruamel.
         assert "yaml.safe_load" not in src, (
             "PyYAML's yaml.safe_load should not appear in repair_frontmatter_file — "
-            "parser mismatch with downstream validator caused 2026-05-21 incident."
+            "parser mismatch with the downstream validator must not recur."
         )
 
 

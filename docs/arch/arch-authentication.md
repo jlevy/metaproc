@@ -885,7 +885,7 @@ hydration). Labels are operator-chosen (`laptop`, `home`, `work`, …) and must 
 
 - **`--backend gcp-secret-manager`** (default in cloud): one Secret Manager secret per
   labeled credential, `<adapter-short>-auth-<user>-<label>` (e.g.
-  `claude-code-auth-levy-laptop`). State lives in Secret labels; payload lives in
+  `claude-code-auth-operator-laptop`). State lives in Secret labels; payload lives in
   versions. An `active_version` label pins reads to a specific version id so a failed CAS
   on `update_secret` after `add_secret_version` never leaves readers on a
   stale-label/new-blob mismatch.
@@ -1046,10 +1046,10 @@ The pool stores credentials in `~/.metaproc/credentials.json` (local backend) or
 Secret Manager. Slot materialization writes the blob to `<slot>/.credentials.json` and
 points `CLAUDE_CONFIG_DIR=<slot>` at the worker subprocess.
 
-**Observed pattern (not yet proven invariant):** during the Tuesday 2026-04-28 incident
-every alt1 / alt2 auth_outcome event showed `flush_fp == bootstrap_fp` and
-`rotated: false`. That’s consistent with Claude Code on macOS writing rotated tokens to
-the OS Keychain rather than the slot’s `.credentials.json`, despite `CLAUDE_CONFIG_DIR`
+**Observed pattern (not yet proven invariant):** some OAuth pool runs have shown
+`flush_fp == bootstrap_fp` and `rotated: false`. That is consistent with Claude Code on
+macOS writing rotated tokens to the OS Keychain rather than the slot’s
+`.credentials.json`, despite `CLAUDE_CONFIG_DIR`
 ([anthropic/claude-code #19456](https://github.com/anthropics/claude-code/issues/19456)).
 But the unchanged-fingerprint observation alone doesn’t fully prove that’s the mechanism
 — the rotation might not have occurred during those windows for an unrelated reason, or
@@ -1058,9 +1058,8 @@ the behavior may be CLI-version-specific.
 What is empirically certain: when this gap manifests, the pool’s stored refresh token
 goes stale on the next server-side rotation, and a future probe / dispatch fails with
 `oauth_refresh_status=400` (`invalid_grant`). Anthropic’s changelog claims related fixes
-for the OAuth refresh race in Claude Code 2.1.81 / 2.1.117 / 2.1.118; the incident-time
-local was 2.1.114; latest at writing is 2.1.119. The behavior should be retested
-whenever the pinned CLI version changes.
+for the OAuth refresh race in several releases.
+The behavior should be retested whenever the pinned CLI version changes.
 
 Sections 2.5 and 5.3 of the pre-extraction research note
 `research-2026-04-27-claude-code-oauth-multi-account-failover.md` walk through the

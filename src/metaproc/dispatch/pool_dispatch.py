@@ -717,11 +717,10 @@ def pre_fan_out_probe(
     """
 
     # Diagnostic bypass: when METAPROC_SKIP_PREFLIGHT_PROBE=1, return the
-    # pool config unchanged. Used during cloud tool-surface investigations
-    # where we want process-item to spawn claude (and write its
-    # invocation sidecar) even when alt1+alt2 are cooling. Probing would
-    # itself burn quota and fail before fan-out had a chance to log the
-    # claude argv we are trying to capture. Spec: plan-2026-05-01 § Phase 3.5.
+    # pool config unchanged. This lets a cloud diagnostic reach the worker
+    # invocation path even when every configured credential is cooling.
+    # Probing would consume quota and fail before the worker-side command
+    # could be inspected.
     if os.environ.get("METAPROC_SKIP_PREFLIGHT_PROBE") == "1":
         log.warning(
             "pre_fan_out_probe: skipping (METAPROC_SKIP_PREFLIGHT_PROBE=1). "
@@ -795,9 +794,8 @@ def pre_fan_out_probe(
             # stays cooling in pool state even though the live probe just
             # said it's healthy. The fan-out workers then can't acquire it
             # and dispatch fails with "no eligible pool label" despite the
-            # in-process strategy showing it as healthy.
-            # See plan-2026-05-01 § Phase 3.5 (cloud-validate-2 incident
-            # 2026-05-04 17:33 → 19:09).
+            # in-process strategy showing it as healthy. A successful probe
+            # is authoritative for subsequent worker eligibility.
             safe_apply_state(
                 pool_backend,
                 adapter=adapter_name,

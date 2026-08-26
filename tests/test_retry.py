@@ -169,11 +169,9 @@ class TestClassifyErrorTransient:
             "connection refused",
             "log_runaway: streaming anomaly detected — log is 500 MB for 100 output tokens (5000 KB/token, expected ~2 KB/token)",
             "stalled (no log output for 300s)",
-            # P3.1.3 I2/I5 regression — exact 2026-04-22 Anthropic stream-idle
-            # signature from CACI/CASH/CATY/CCI/EGBN/OSBC/SIGI/TNL/WCN/BANC and
-            # the 2026-04-23 deadline-run transient cohort. Must classify as
-            # RETRY so the framework retry-with-backoff default recovers the
-            # ticker in-session across ~20 min without operator intervention.
+            # An Anthropic stream-idle timeout is transient. It must classify as
+            # RETRY so the framework retry-with-backoff default can recover
+            # in-session without operator intervention.
             "API Error: Stream idle timeout - partial response received",
         ],
     )

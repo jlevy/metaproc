@@ -182,8 +182,7 @@ def _compute_pool_cooling_delay(
 
     Without this distinction, a fan-out with 10 items and 2 labels would
     stall items 3-10 by ``ceiling_s`` each (30 min) under the cooling
-    interpretation, even though the labels are healthy. Surfaced by the
-    Tuesday 2026-04-28 smoke (mine-adhoc step) — see plan progress log.
+    interpretation, even though the labels are healthy.
 
     Returns ``ceiling_s`` defensively when the pool peek fails.
     """
@@ -615,14 +614,14 @@ def run_parallel(
 
     # `--variant` may name an entry in `spec.defaults.adapters` (e.g.
     # `claude-code-cli`) OR be a synthetic composite the engine derives at
-    # fan-out time from adapter+model (e.g. `pi-cli-glm-5-maas` for a
-    # mine-adhoc step whose spec declares `adapter.type: pi-cli` with
+    # fan-out time from adapter+model (e.g. `pi-cli-managed-model` for an
+    # extract-items step whose spec declares `adapter.type: pi-cli` with
     # config_by_variant.pi-cli.{provider,model}). Mirror run-process: when no
     # explicit `--adapter` is passed and the variant DOES name a known
     # adapter slot, let the variant drive adapter resolution. Otherwise the
     # variant is just a run-dir label and the step's own spec drives adapter
     # selection. Without this branch, a worker invoked with
-    # `--variant pi-cli-glm-5-maas` (the cloud worker leg of mine-adhoc) was
+    # `--variant pi-cli-managed-model` (the cloud worker leg of extract-items) was
     # rejected by build_plan as `unknown adapter override`.
     if adapter:
         effective_adapter_override: str | None = adapter
@@ -1443,15 +1442,15 @@ def _build_prepare_launch(  # noqa: PLR0913
         # Adapter-type gate: the pool is set per-dispatch (e.g.
         # ``--auth-account claude-code-cli``) and applies cleanly to
         # steps that USE that adapter (process-item, retrieve-precedent).
-        # Steps that use a DIFFERENT adapter — e.g. mine-adhoc with
-        # pi-cli + vertex-maas — must NOT lease a claude slot: the slot
+        # Steps that use a DIFFERENT adapter — e.g. extract-items with
+        # pi-cli + a managed model — must NOT lease a claude slot: the slot
         # path appends adapter-specific debug flags (``claude -d api``) to
         # the cmd, which pi-cli rejects with ``Unknown option: -d`` and
         # exits 1 in <10s; the runpool then classifies this as a crash
         # and cools the underlying Claude credential, eventually
         # exhausting the pool. Skipping the pool path for non-matching
-        # adapter types keeps mine-adhoc on the legacy single-credential
-        # path (or no auth at all for pi-cli/vertex-maas which uses GCP
+        # adapter types keeps extract-items on the legacy single-credential
+        # path (or no auth at all for an adapter that uses cloud
         # access tokens).
         if pool_dispatch is not None and adapter_type == pool_dispatch.adapter:
             from metaproc.adapters.registry import (  # noqa: PLC0415 -- pre-existing local import; needs review

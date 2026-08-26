@@ -26,8 +26,8 @@ from metaproc.cloud.gcp.orchestrator_dispatch import (
 )
 from metaproc.cloud.gcp.secret_hydration import SECRET_REFS_ENV
 from metaproc.cloud.gcp.worker_dispatch import WorkerDispatchConfig, _submit_workers
-from metaproc.dispatch.secret_refs import SecretRefSet
 from metaproc.dispatch.auth_pool_flags import AuthPoolFlags
+from metaproc.dispatch.secret_refs import SecretRefSet
 
 # ── Secret reference registry ────────────────────────────────────
 
@@ -139,12 +139,17 @@ class TestWorkerDispatchLabelPropagation:
 
 
 class TestOrchestratorDispatchLabelPropagation:
-    def test_auth_policy_reaches_orchestrator_environment(self):
+    def test_auth_policy_reaches_orchestrator_environment(self, monkeypatch):
+        for binding in SecretRefSet.all_known().refs:
+            monkeypatch.delenv(binding.plaintext_env, raising=False)
+            monkeypatch.delenv(binding.secret_env, raising=False)
+        monkeypatch.setenv("METAPROC_AUTH_POOL", "synthetic-pool")
         gcp_config = GCPBatchConfig(
             project="test-project",
             region="us-central1",
             container_image="gcr.io/test/agent:latest",
             filestore_server="10.0.0.1",
+            service_account_email="runner@example.invalid",
         )
         config = OrchestratorDispatchConfig(
             gcp=gcp_config,
@@ -187,6 +192,31 @@ class TestOrchestratorDispatchLabelPropagation:
             "METAPROC_AUTH_INCLUDE_LABELS": "primary,alternate",
             "METAPROC_AUTH_CROSS_QUOTA_GROUP": "false",
         }
+        assert SECRET_REFS_ENV not in env_vars
+
+    def test_gcp_auth_pool_requires_explicit_service_account(self, monkeypatch):
+        for binding in SecretRefSet.all_known().refs:
+            monkeypatch.delenv(binding.plaintext_env, raising=False)
+            monkeypatch.delenv(binding.secret_env, raising=False)
+        config = OrchestratorDispatchConfig(
+            gcp=GCPBatchConfig(
+                project="test-project",
+                region="us-central1",
+                container_image="gcr.io/test/agent:latest",
+                filestore_server="10.0.0.1",
+            ),
+            process_spec_rel="example_plugin",
+            variables={"RUN_ID": "test-run"},
+            auth_flags=AuthPoolFlags(
+                auth_account="claude-code-cli",
+                auth_backend="gcp-secret-manager",
+                auth_include_labels=("primary",),
+            ),
+        )
+
+        with patch("google.cloud.batch_v1.BatchServiceClient", return_value=MagicMock()):
+            with pytest.raises(ValueError, match="GCP Secret Manager auth pool"):
+                asyncio.run(dispatch_orchestrator(config))
 
     def test_allocation_policy_labels_match_job_labels(self):
 

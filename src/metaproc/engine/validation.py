@@ -316,7 +316,7 @@ def validate_item_outputs_detailed(
 
     Directory-kind outputs must be non-empty — an empty directory indicates
     the step produced zero records and is treated as a silent-success failure
-    (the classic ``mine-adhoc`` mode where an agent reports SUCCESS but wrote
+    (the classic ``extract-items`` mode where an agent reports SUCCESS but wrote
     nothing under the item directory). ``.state/``, ``.logs/``, ``__pycache__``,
     and ``.DS_Store`` are ignored when counting content.
 

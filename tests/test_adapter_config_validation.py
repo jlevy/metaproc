@@ -38,7 +38,7 @@ def _make_predict_like_spec() -> ProcessSpec:
             },
             "steps": [
                 {
-                    "id": "mine-adhoc",
+                    "id": "extract-items",
                     "mode": "agent",
                     "prompt_prefix": "do thing",
                     "adapter": {
@@ -97,7 +97,7 @@ class TestAdapterConfigValidation:
                 },
                 "steps": [
                     {
-                        "id": "mine-adhoc",
+                        "id": "extract-items",
                         "mode": "agent",
                         "prompt_prefix": "do thing",
                         "adapter": {

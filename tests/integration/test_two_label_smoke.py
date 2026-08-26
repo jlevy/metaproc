@@ -75,14 +75,14 @@ def lease_kwargs(tmp_path: Path) -> dict[str, Any]:
     runs_dir.mkdir()
     return {
         "runs_dir": runs_dir,
-        "run_id": "tuesday-smoke",
-        "step": "predict-ticker",
-        "item": "AAPL",
+        "run_id": "two-label-smoke",
+        "step": "process-item",
+        "item": "item-1",
     }
 
 
-class TestTuesdayWorkerPoolShape:
-    """Phase 0a baseline: pool should expose alt1+alt2 as eligible."""
+class TestTwoLabelWorkerPoolShape:
+    """The baseline pool exposes both configured labels as eligible."""
 
     def test_two_labels_eligible(self, two_label_pool: LocalFilesystemBackend) -> None:
         entries = two_label_pool.list_entries(adapter="claude-code-cli")

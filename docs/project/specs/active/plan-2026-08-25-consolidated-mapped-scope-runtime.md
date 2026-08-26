@@ -205,10 +205,21 @@ the local exact-head and public CI gates below remain independent landing requir
 | R11: scalar cancellation and teardown failure | Fixed | Existing scalar attempts become terminal while preserving the primary exception. |
 | R12: cancelled pooled scalar ownership | Fixed | Per-submission cancellation drains the process and pool task before credential, host, or leaf release. |
 | R13: code and mapped abort state | Fixed | Code cancellation and mapped nonstandard aborts now terminalize durable attempts before propagation. |
+| R14: ambient auth in pooled cloud orchestration | Fixed | Cloud scalar and fan-out leaves both acquire pool slots; the dispatcher no longer hydrates one label as ambient auth and requires an explicit Batch identity for pool access. |
+| R15: worker bootstrap guard test isolation | Fixed | Guard tests use an injected environment mapping, so the one-shot worker mutation cannot leak into later entrypoint tests. |
 
 The superseded retry-later transport is excluded.
 Dormant retry primitives remain under their separate removal-or-justification audit.
 Unrelated cloud dispatch changes and a general scheduler are outside this pull request.
+
+The consolidation audit compared the replacement against the complete superseded
+implementation stack, not only its final diff.
+Ninety code, test, and documentation files are common to both implementations.
+The superseded-only material is a historical plan; the replacement carries this
+consolidated plan and additional coordinator regressions.
+Every superseded-only test name is accounted for by prerequisite coverage or by a
+domain-neutral rename with the same assertion.
+No executable behavior was silently dropped.
 
 ## Deferred Work
 
@@ -284,9 +295,17 @@ It remains unmerged until:
 
 ## Tracking
 
-`mp-1c19` owns this clean consolidation and plan.
 `mp-0iy8` is the enclosing mapped-composite epic.
-`mp-nxs9` is the exact-head framework verification gate.
+`mp-1c19` and `mp-nxs9` record the completed first consolidation and its original
+verification evidence.
+`mp-re9l` owns final merge readiness on the settled prerequisite baseline:
+
+- `mp-nued` integrates that baseline while preserving a clean runtime review boundary;
+- `mp-3170` accounts for every retained behavior from the superseded stack;
+- `mp-gc19` removes consumer-specific material from public files and review surfaces;
+- `mp-7crh` reruns focused and complete verification on the integrated exact head; and
+- `mp-nbt1` publishes the final disposition map only after every prerequisite closes.
+
 `mp-joix` owns the offline vertical slice.
 `mp-rrfn` owns successive recovery, resource, and scale proof.
 Deferred retry behavior remains under `mp-tibt`.
