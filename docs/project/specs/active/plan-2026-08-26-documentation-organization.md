@@ -31,8 +31,9 @@ one vocabulary.
   lives under `docs/project/`.
 - The core design document is named and framed as a design document, not as one
   architecture reference among peers.
-- The top-level README links project documents directly and says which are also readable
-  through `metaproc help`.
+- The top-level README links project documents directly, says which are also readable
+  through `metaproc help`, and states the order in which the three core documents should
+  be read.
 - The general and shipped concepts docs share one vocabulary, with every remaining
   divergence deliberate and stated.
 - No broken links at any point; `devtools/check_links.py` stays green.
@@ -155,6 +156,33 @@ Phase 3 aligns it with the shipped concepts doc rather than shipping it.
 The link direction is the fix instead: README links these directly, and
 `metaproc help developer` routes to the design doc.
 
+### The reading path
+
+There is an order in which these documents actually make sense, and no current index
+states it.
+Someone arriving at the repository wanting to understand Metaproc should read:
+
+1. **`metaproc-concepts-and-principles.md`** — the vocabulary, the ownership boundaries,
+   the four step modes, the optimization loops.
+   Everything else assumes it; the design doc says so in its own scope section: “read it
+   first for the definitions assumed below.”
+2. **`metaproc-design.md`** — how the system is actually built, in detail.
+   This is the document whose §5 numbering exists *because* the first four sections
+   became doc 1.
+3. **`process-framework-concepts.md`** — the general model beneath any process
+   framework, plus the explicit map of how Metaproc instantiates it and where it
+   deviates. A reference for readers who want the theory, not a prerequisite.
+
+Docs 2 and 3 become siblings in `docs/project/design/` under this plan, which is part of
+why `design/` is the right name for that directory.
+Doc 1 stays in `src/metaproc/docs/` because it ships in the wheel — the one member of
+the path that lives elsewhere, for a reason worth stating rather than hiding.
+
+This ordering is the organizing principle for the README rewrite below, and it is why
+the design doc must be linked prominently even though it moves under `docs/project/`.
+Filing something as a project record must not mean burying it: this is the second
+document a new contributor should read.
+
 ### README changes
 
 The Start Here table gets the document as the row and the command as an annotation,
@@ -164,6 +192,8 @@ inverting the current presentation:
 | --- | --- | --- |
 | `metaproc-concepts-and-principles` (linked to its path) | `metaproc help concepts` | … |
 
+Start Here then presents the three documents above as a numbered path, in order, with
+one line each on what it answers and whether it is required or optional.
 A new Project Documentation section links the design doc, the proposals doc, the
 architecture index, and the project records index directly.
 
@@ -217,9 +247,10 @@ Mechanical. Every step is `git mv` plus a link sweep, verified by
   and status reflecting a design record.
   Keep the section numbering, the Revision History, and the §5 explanation, which are
   the reasons for the rename.
-- [ ] Rewrite the README Documentation section: invert Start Here, add Project
-  Documentation, link `docs/project/releases/` and state its relationship to
-  `CHANGELOG.md`.
+- [ ] Rewrite the README Documentation section: present the three-document reading path
+  in order, invert Start Here so documents are rows and `metaproc help` is an
+  annotation, add Project Documentation, link `docs/project/releases/` and state its
+  relationship to `CHANGELOG.md`.
 - [ ] Route `metaproc help developer` to the design doc by path.
 - [ ] Link `src/metaproc/runpool/README.md` from `arch-runpool.md`, or fold it in and
   delete it.
@@ -289,6 +320,12 @@ required beyond a CHANGELOG entry noting the documentation paths moved.
   The two overlap, and the per-release files have almost no inbound links.
 - After Phase 3, is `process-framework-concepts.md` still the right name, given it will
   sit under `design/` next to `metaproc-design.md`?
+- Is `docs/project/` the right name for a directory whose `design/` subdirectory holds
+  the second document a new contributor should read?
+  The rule it encodes — internals separate from user and operator docs — is sound, but
+  “project records” undersells what now lives there.
+  `docs/internals/` would describe the contents more honestly.
+  Deferred because renaming twice is worse than renaming once late.
 
 ## References
 
