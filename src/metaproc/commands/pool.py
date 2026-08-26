@@ -28,9 +28,6 @@ from metaproc.runpool.host_admission import (
 )
 from metaproc.runpool.status import ScaleOverride, is_pool_alive, read_status, write_scale_override
 
-_iter_composite_run_dirs = paths_mod.iter_composite_run_dirs
-"""Backward-compatible private alias for the shared scope discovery helper."""
-
 pool_app = typer.Typer(
     name="pool",
     help="Inspect RunPool status and event logs.",
@@ -797,7 +794,7 @@ def _composite_pool_status_files(run_dir: Path) -> list[dict[str, Any]]:
     message — matches the shape consumed by both the JSON and text renderers.
 
     Discovery walks two levels for each run directory found by
-    :func:`_iter_composite_run_dirs`:
+    :func:`metaproc.paths.iter_composite_run_dirs`:
 
     1. **Run-level pool**: ``<run>/.state/runpool-status.yaml``
     2. **Per-step pools**: ``<run>/.state/steps/<step>/runpool-status.yaml``
@@ -838,7 +835,7 @@ def _composite_pool_status_files(run_dir: Path) -> list[dict[str, Any]]:
             }
         )
 
-    for sub_run in _iter_composite_run_dirs(run_dir):
+    for sub_run in paths_mod.iter_composite_run_dirs(run_dir):
         # 1. Run-level pool.
         _try_add(sub_run, paths_mod.run_state_dir(sub_run) / POOL_STATUS_FILE)
         # 2. Per-step pools under .state/steps/<step_id>/.
@@ -930,11 +927,11 @@ def _runpool_event_files_for_read(run_dir: Path) -> list[Path]:
     """Composite-aware: return event streams across ``run_dir`` and every
     nested composite child run directory.
 
-    See :func:`_iter_composite_run_dirs` for the discovery rules.
+    See :func:`metaproc.paths.iter_composite_run_dirs` for the discovery rules.
     """
     seen: set[Path] = set()
     files: list[Path] = []
-    for sub_run in _iter_composite_run_dirs(run_dir):
+    for sub_run in paths_mod.iter_composite_run_dirs(run_dir):
         for candidate in _runpool_event_files_for_one_run(sub_run):
             if candidate in seen:
                 continue
@@ -972,7 +969,7 @@ def _runpool_health_files_for_read(run_dir: Path) -> list[Path]:
     nested composite child run directory."""
     seen: set[Path] = set()
     files: list[Path] = []
-    for sub_run in _iter_composite_run_dirs(run_dir):
+    for sub_run in paths_mod.iter_composite_run_dirs(run_dir):
         for candidate in _runpool_health_files_for_one_run(sub_run):
             if candidate in seen:
                 continue
@@ -1170,7 +1167,8 @@ def _collect_sub_pools(
     under ``<run>/.logs/runpool/events.jsonl``. Step-owned pools live below
     the corresponding ``steps/<step_id>`` branches.
     Composite parent runs (e.g. large workflow dispatch) also discover pools nested under
-    ``<parent>/<step_id>/.state/steps/...`` via :func:`_iter_composite_run_dirs`,
+    ``<parent>/<step_id>/.state/steps/...`` via
+    :func:`metaproc.paths.iter_composite_run_dirs`,
     so a rollup invoked on the parent answers "every sub-pool below this
     composite run" rather than only the parent's own steps.
 
@@ -1184,7 +1182,7 @@ def _collect_sub_pools(
     candidates: list[tuple[Path, Path, str]] = []
     seen_status_files: set[Path] = set()
 
-    for sub_run in _iter_composite_run_dirs(run_dir):
+    for sub_run in paths_mod.iter_composite_run_dirs(run_dir):
         try:
             sub_run_rel = sub_run.relative_to(run_dir)
         except ValueError:
