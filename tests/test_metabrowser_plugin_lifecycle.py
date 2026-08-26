@@ -63,3 +63,8 @@ def test_async_views_ignore_stale_responses_and_share_requests_until_dispose() -
     assert payload["statsRequestCount"] == 1
     assert payload["chartDisposeCalls"] == 1
     assert payload["chartRenderCalls"] == 2
+    assert payload["runtimeRequestCount"] == 1
+    assert "Runtime tasks and outputs" in payload["resourceHtml"]
+    assert "batch / collect / alpha" in payload["resourceHtml"]
+    assert "runs/current/report.md" in payload["resourceHtml"]
+    assert "result-not-validated" in payload["resourceHtml"]

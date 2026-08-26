@@ -6,7 +6,7 @@ description: >-
   primitives.
 author: Joshua Levy (github.com/jlevy) with LLM assistance
 date: 2026-08-25
-last_updated: 2026-08-25
+last_updated: 2026-08-26
 status: Draft — Consolidated Review
 category: plan
 tracking_bead: mp-1c19
@@ -169,6 +169,15 @@ Automatic port projection, aliases, and a second composite I/O language are defe
 Operator views rebuild lineage from declarations and accepted results rather than
 introducing another artifact authority.
 
+The runtime task/output view is therefore a rebuildable projection, not another durable
+record. It qualifies scalar and mapped tasks by scope, validates each mutable status
+against retained attempts, and binds a consumable result to the exact successful attempt
+and current step fingerprint.
+Only declared, portable, available outputs of the declared kind enter the accepted set.
+Legacy unbound, stale, undeclared, missing, and external outputs remain explicit
+diagnostics so partial hydration and definition drift cannot masquerade as accepted
+evidence.
+
 ## Consolidated Review Domains
 
 The pull request is one review surface, but its failure domains remain explicit:
@@ -207,6 +216,15 @@ the local exact-head and public CI gates below remain independent landing requir
 | R13: code and mapped abort state | Fixed | Code cancellation and mapped nonstandard aborts now terminalize durable attempts before propagation. |
 | R14: ambient auth in pooled cloud orchestration | Fixed | Cloud scalar and fan-out leaves both acquire pool slots; the dispatcher no longer hydrates one label as ambient auth and requires an explicit Batch identity for pool access. |
 | R15: worker bootstrap guard test isolation | Fixed | Guard tests use an injected environment mapping, so the one-shot worker mutation cannot leak into later entrypoint tests. |
+| R16: runtime run identity reconstruction | Fixed | The projection derives the task-record root from the persisted process name and run context, matching `run-process`. |
+| R17: stale result accepted after retry | Fixed | New results name the exact successful attempt; legacy or mismatched results remain unaccepted diagnostics. |
+| R18: current declarations relabel stale outputs | Fixed | Acceptance requires the current step fingerprint and an exact declared output port. |
+| R19: missing or wrong-kind artifacts look consumable | Fixed | Availability and declared kind are checked before an output enters the accepted set. |
+| R20: projection errors hide structural visualization | Fixed | Expected scan failures become typed warnings while the process graph remains available. |
+| R21: runtime projection is not exposed in the browser | Fixed | The browser supplies its active run context and renders task and output facts. Cross-host process-spec portability is tracked separately as `mp-e3mg`. |
+| R22: cross-scope task sorting is partial | Fixed | Task projection uses an explicit total ordering over scope, step, and optional item key. |
+| R23: public projection embeds mutable runtime models | Fixed | A strict, narrow DTO carries only stable task, binding, and output facts; historical `VizModel/0.3` remains readable. |
+| R24: external outputs abort hydrated views | Fixed | Nonportable output paths are retained as diagnostics and never treated as hydrated artifacts. |
 
 The superseded retry-later transport is excluded.
 Dormant retry primitives remain under their separate removal-or-justification audit.
@@ -224,9 +242,10 @@ No executable behavior was silently dropped.
 ## Deferred Work
 
 - multi-host mapped-composite partitioning;
+- portable process-spec identity for cross-host hydrated browser views (`mp-e3mg`);
 - a general ready-task scheduler or persisted dynamic expansion graph;
 - weighted host claims and mixed-profile placement;
-- automatic child-output projection;
+- automatic child-output declaration synthesis or aliasing;
 - successful-item targeted force;
 - scoped child-variable restriction beyond declared bindings;
 - same-upstream mixed tolerant/strict dependency clauses;

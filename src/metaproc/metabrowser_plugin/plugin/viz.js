@@ -2255,7 +2255,16 @@
     var div = document.createElement("div");
     div.className = "viz-warning-banner";
     var items = warnings
-      .map((w) => '<pre class="viz-warning-detail">' + escHtml(w) + "</pre>")
+      .map((w) => {
+        var message = w;
+        if (w && typeof w === "object") {
+          message = w.code ? String(w.code) : "warning";
+          if (w.message) {
+            message += ": " + String(w.message);
+          }
+        }
+        return '<pre class="viz-warning-detail">' + escHtml(message) + "</pre>";
+      })
       .join("");
     var reg = typeof window !== "undefined" ? window.MetabrowserIcons : null;
     var alertIcon = reg?.withClass ? reg.withClass("alert", "viz-alert-icon") : "";

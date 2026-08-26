@@ -39,7 +39,14 @@ function requestPluginData(route, parameters) {
   return request;
 }
 
-function loadVizModel(path) {
+function loadVizModel(path, runDir) {
+  if (runDir) {
+    var parameters = { run_dir: runDir };
+    if (path) {
+      parameters.process = path;
+    }
+    return requestPluginData("viz-model", parameters);
+  }
   return requestPluginData("viz-model", { process: path });
 }
 
@@ -132,6 +139,26 @@ function runDirFromResourceReportPath(path) {
     return path.slice(0, -suffix.length);
   }
   return "";
+}
+
+async function loadRuntimeProjectionForResource(report, path) {
+  var runDir = runDirFromResourceReportPath(path);
+  if (!runDir && path !== "resources.json") {
+    return report;
+  }
+  try {
+    var payload = await loadVizModel("", runDir || ".");
+    report._runtimeTaskProjection = payload?.viz?.task_projection || null;
+    report._runtimeValidationWarnings = payload?.validation_warnings || [];
+  } catch (error) {
+    report._runtimeValidationWarnings = [
+      {
+        code: "runtime_projection_request_failed",
+        message: errorMessage(error),
+      },
+    ];
+  }
+  return report;
 }
 
 function resourceMetricChanged(sel) {
@@ -338,8 +365,89 @@ function renderResourceReportPayload(report, metricKey, selectedNodeId) {
   html += renderResourceBudgets(report.budget_evaluations || []);
   html += renderTaxonomyRollups(report.taxonomy_rollups || {}, metricKey);
   html += renderResourceSourceLogs(report.source_logs || []);
+  html += renderRuntimeTaskProjection(
+    report._runtimeTaskProjection,
+    report._runtimeValidationWarnings || [],
+  );
   html += "</div>";
   return html;
+}
+
+function warningText(warning) {
+  if (typeof warning === "string") {
+    return warning;
+  }
+  if (!warning || typeof warning !== "object") {
+    return String(warning || "");
+  }
+  var code = warning.code ? String(warning.code) : "warning";
+  var message = warning.message ? String(warning.message) : "";
+  return message ? code + ": " + message : code;
+}
+
+function renderRuntimeOutput(output, disposition) {
+  var name = esc(output?.name || "output");
+  var path = output?.path || "";
+  var pathHtml = path
+    ? '<button class="resource-link" data-metaproc-action="open-path" data-path="' +
+      esc(path) +
+      '">' +
+      esc(path) +
+      "</button>"
+    : "path unavailable";
+  var reason = output?.reason ? " (" + esc(output.reason) + ")" : "";
+  return (
+    "<li><strong>" + esc(disposition) + "</strong> " + name + ": " + pathHtml + reason + "</li>"
+  );
+}
+
+function renderRuntimeTaskProjection(projection, warnings) {
+  if (!projection && !warnings.length) {
+    return "";
+  }
+  var html = '<div class="resource-section-title">Runtime tasks and outputs</div>';
+  if (warnings.length) {
+    html +=
+      '<div class="viz-warning-banner"><div class="viz-warning-content">' +
+      '<div class="viz-warning-title">Runtime projection is incomplete</div>' +
+      warnings
+        .map((warning) => '<pre class="viz-warning-detail">' + esc(warningText(warning)) + "</pre>")
+        .join("") +
+      "</div></div>";
+  }
+  if (!projection) {
+    return html;
+  }
+  var tasks = Array.isArray(projection.tasks) ? projection.tasks : [];
+  html += '<div class="resource-subtitle">Run: ' + esc(projection.run_dir || "") + "</div>";
+  if (!tasks.length) {
+    return html + '<div class="preview-empty">No runtime task records</div>';
+  }
+  html +=
+    '<table class="resource-table"><thead><tr><th>Task</th><th>State</th><th>Attempt</th><th>Outputs</th></tr></thead><tbody>';
+  for (var i = 0; i < tasks.length; i++) {
+    var task = tasks[i] || {};
+    var key = task.key || {};
+    var parts = Array.isArray(key.scope_path) ? key.scope_path.slice() : [];
+    parts.push(key.step_id || "unknown-step");
+    if (key.item_key) {
+      parts.push(key.item_key);
+    }
+    var outputs = [];
+    for (var accepted of task.accepted_outputs || []) {
+      outputs.push(renderRuntimeOutput(accepted, "accepted"));
+    }
+    for (var unaccepted of task.unaccepted_outputs || []) {
+      outputs.push(renderRuntimeOutput(unaccepted, "unaccepted"));
+    }
+    html += "<tr>";
+    html += "<td>" + esc(parts.join(" / ")) + "</td>";
+    html += "<td>" + esc(task.state || "unknown") + "</td>";
+    html += "<td>" + esc(task.attempt_id || "-") + "</td>";
+    html += "<td>" + (outputs.length ? "<ul>" + outputs.join("") + "</ul>" : "-") + "</td>";
+    html += "</tr>";
+  }
+  return html + "</tbody></table>";
 }
 
 function resourceSummaryCell(label, value) {
@@ -1737,6 +1845,7 @@ window.MetaprocDomainViews = {
   disposeCharts: disposeCharts,
   loadCharts: loadCharts,
   loadResourcesForRunDir: loadResourcesForRunDir,
+  loadRuntimeProjectionForResource: loadRuntimeProjectionForResource,
   loadStats: loadStats,
   loadVisual: loadVisual,
   loadVizModel: loadVizModel,
@@ -1745,6 +1854,7 @@ window.MetaprocDomainViews = {
   resourceTreemapMetricChanged: resourceTreemapMetricChanged,
   resourceTreemapTileClicked: resourceTreemapTileClicked,
   renderResourceReportPayload: renderResourceReportPayload,
+  renderRuntimeTaskProjection: renderRuntimeTaskProjection,
   renderResourceTreemapPayload: renderResourceTreemapPayload,
   setCurrentResourceReportPayload: setCurrentResourceReportPayload,
   openPath: mb.openPath,

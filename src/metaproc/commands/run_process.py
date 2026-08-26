@@ -1586,12 +1586,13 @@ async def _execute_code_step(
             )
             return False
 
-    mark_completed_at(state_dir, running_record=running_record)
+    completed = mark_completed_at(state_dir, running_record=running_record)
     write_result_at(
         state_dir,
         ResultRecord(
             run_id=run_id,
             step_id=step_id,
+            attempt_id=completed.attempt_id,
             state="completed",
             validated=True,
             outputs=resolve_record_output_paths(effective_outputs, variables),
@@ -2602,12 +2603,13 @@ async def _execute_agent_step(
         if auth_events is not None:
             auth_events.close()
 
-    mark_completed_at(state_dir, running_record=running_record)
+    completed = mark_completed_at(state_dir, running_record=running_record)
     write_result_at(
         state_dir,
         ResultRecord(
             run_id=run_id,
             step_id=step_id,
+            attempt_id=completed.attempt_id,
             state="completed",
             validated=True,
             outputs=resolve_record_output_paths(effective_outputs, step_vars),
@@ -2999,6 +3001,7 @@ async def _execute_composite_fan_out_step(
             ResultRecord(
                 run_id=run_id,
                 step_id=step_id,
+                attempt_id=completed.attempt_id,
                 state="completed",
                 validated=True,
                 outputs=resolve_record_output_paths(target.outputs, item_vars),
@@ -3129,6 +3132,7 @@ def _finish_deferred_fan_out_attempts(
             ResultRecord(
                 run_id=run_id,
                 step_id=step_id,
+                attempt_id=completed.attempt_id,
                 state="completed",
                 validated=True,
                 outputs=resolve_record_output_paths(outputs, item_vars),
@@ -3654,6 +3658,7 @@ async def _execute_manual_step(
         ResultRecord(
             run_id=run_id,
             step_id=step_id,
+            attempt_id=completed.attempt_id,
             state="completed",
             validated=True,
             outputs=resolve_record_output_paths(target.outputs, variables),

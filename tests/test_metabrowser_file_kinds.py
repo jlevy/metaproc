@@ -147,7 +147,7 @@ def test_api_viz_returns_projected_model(tmp_path: Path, monkeypatch) -> None:
     resp = _run_api_viz(pb, {"process": "test.process.md"})
     payload = json.loads(bytes(resp.body))
     viz = payload["viz"]
-    assert viz["schema"] == "metaproc:VizModel/0.3"
+    assert viz["schema"] == "metaproc:VizModel/0.4"
     assert viz["header"]["name"] == "p"
     assert viz["header"]["description"] == "d"
     assert viz["root_process"].endswith(".process.md")
@@ -159,6 +159,75 @@ def test_api_viz_returns_404_for_missing_process(tmp_path: Path, monkeypatch) ->
 
     resp = _run_api_viz(pb, {"process": "missing.md"})
     assert resp.status_code == 404
+
+
+def test_api_viz_preserves_structure_when_runtime_reads_fail(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write(
+        tmp_path,
+        "test.process.md",
+        "---\nprocess:\n  name: p\n  steps:\n    - id: inspect\n"
+        "      mode: code\n      handler: handler.py:noop\n---\n",
+    )
+    (tmp_path / "runs" / "current").mkdir(parents=True)
+    monkeypatch.setattr(pb, "ROOT_DIR", tmp_path)
+
+    def _fail_progress(*_args, **_kwargs):
+        raise ValueError("status record is inconsistent")
+
+    def _fail_projection(*_args, **_kwargs):
+        raise OSError("result record cannot be read")
+
+    monkeypatch.setattr(sidekick, "scan_bundle_progress", _fail_progress)
+    monkeypatch.setattr(sidekick, "scan_task_output_projection", _fail_projection)
+
+    resp = _run_api_viz(
+        pb,
+        {"process": "test.process.md", "run_dir": "runs/current"},
+    )
+    payload = json.loads(bytes(resp.body))
+
+    assert resp.status_code == 200
+    assert payload["viz"]["header"]["name"] == "p"
+    assert [node["id"] for node in payload["viz"]["nodes"] if node["kind"] == "step"] == ["inspect"]
+    assert payload["validation_warnings"] == [
+        {
+            "code": "runtime_progress_unavailable",
+            "message": "status record is inconsistent",
+        },
+        {
+            "code": "runtime_projection_unavailable",
+            "message": "result record cannot be read",
+        },
+    ]
+
+
+def test_api_viz_uses_run_config_for_run_only_context(tmp_path: Path, monkeypatch) -> None:
+    process_path = _write(
+        tmp_path,
+        "test.process.md",
+        "---\nprocess:\n  name: from-run\n---\n",
+    )
+    run_dir = tmp_path / "runs" / "current"
+    (run_dir / ".state").mkdir(parents=True)
+    (run_dir / ".state" / "run-config.yaml").write_text(
+        "process: from-run\n"
+        "process_spec: "
+        + str(process_path)
+        + "\nrun_id: current\nrun_dir: "
+        + str(run_dir)
+        + "\nvariables: {}\n"
+    )
+    monkeypatch.setattr(pb, "ROOT_DIR", tmp_path)
+
+    resp = _run_api_viz(pb, {"run_dir": "runs/current"})
+    payload = json.loads(bytes(resp.body))
+
+    assert resp.status_code == 200
+    assert payload["viz"]["header"]["name"] == "from-run"
+    assert payload["viz"]["task_projection"]["run_dir"] == "runs/current"
 
 
 def test_api_viz_returns_400_for_non_process_md_suffix(tmp_path: Path, monkeypatch) -> None:

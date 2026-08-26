@@ -6,6 +6,7 @@ import pytest
 
 from metaproc.models.authored import IOSpec, RetryPolicy
 from metaproc.models.viz import (
+    AcceptedOutputProjection,
     AdapterSummary,
     DefaultsBlock,
     DepDetails,
@@ -18,7 +19,10 @@ from metaproc.models.viz import (
     NodeProgress,
     ProcessHeader,
     ProgressSnapshot,
+    RuntimeTaskProjection,
     StepDetails,
+    TaskKeyProjection,
+    TaskOutputProjection,
     VizEdge,
     VizModel,
     VizNode,
@@ -143,6 +147,23 @@ def test_viz_model_round_trip_with_full_payload():
         run_dir="runs/2026-04-21",
         nodes={"predict": NodeProgress(state="completed", completed=10, total=10)},
     )
+    task_projection = TaskOutputProjection(
+        run_dir="runs/2026-04-21",
+        tasks=[
+            RuntimeTaskProjection(
+                key=TaskKeyProjection(step_id="predict", item_key="AAA"),
+                state="completed",
+                accepted_outputs=[
+                    AcceptedOutputProjection(
+                        name="prediction",
+                        path="runs/2026-04-21/AAA/prediction.md",
+                        recorded_path="runs/2026-04-21/AAA/prediction.md",
+                        declaration=IOSpec(path="{{run.dir}}/{{ticker}}/prediction.md"),
+                    )
+                ],
+            )
+        ],
+    )
     model = VizModel(
         root_process="example_plugin/main.process.md",
         header=header,
@@ -151,15 +172,46 @@ def test_viz_model_round_trip_with_full_payload():
         levels=[["predict"]],
         subgraphs={"root": ["predict"]},
         progress=progress,
+        task_projection=task_projection,
     )
 
     restored = VizModel.model_validate_json(model.model_dump_json(by_alias=True))
     assert restored == model
-    assert restored.model_dump(by_alias=True)["schema"] == "metaproc:VizModel/0.3"
+    assert restored.model_dump(by_alias=True)["schema"] == "metaproc:VizModel/0.4"
     assert restored.header.name == "example_plugin"
     assert restored.nodes[0].step is not None
     assert restored.nodes[0].step.fan_out is not None
     assert restored.nodes[0].step.fan_out.retry is not None
+    assert restored.task_projection is not None
+    assert restored.task_projection.tasks[0].key == TaskKeyProjection(
+        step_id="predict", item_key="AAA"
+    )
+
+
+def test_task_projection_rejects_unknown_fields_and_wrong_schema() -> None:
+    payload = TaskOutputProjection(run_dir="runs/r1").model_dump(by_alias=True)
+    payload["unknown"] = True
+    with pytest.raises(ValueError):
+        TaskOutputProjection.model_validate(payload)
+
+    payload.pop("unknown")
+    payload["schema"] = "metaproc:TaskOutputProjection/9.9"
+    with pytest.raises(ValueError):
+        TaskOutputProjection.model_validate(payload)
+
+
+def test_viz_model_accepts_historical_0_3_without_task_projection() -> None:
+    model = VizModel(
+        root_process="example_plugin/main.process.md",
+        header=_sample_process_header(),
+    )
+    payload = model.model_dump(by_alias=True, exclude_none=True)
+    payload["schema"] = "metaproc:VizModel/0.3"
+
+    restored = VizModel.model_validate(payload)
+
+    assert restored.schema_ == "metaproc:VizModel/0.3"
+    assert restored.task_projection is None
 
 
 def test_viz_model_accepts_historical_fan_out_without_source() -> None:

@@ -267,6 +267,7 @@ def run_step(
             ResultRecord(
                 run_id=run_id,
                 step_id=step,
+                attempt_id=completed.attempt_id,
                 state="completed",
                 validated=True,
                 outputs=resolve_record_output_paths(effective_outputs, variables),
@@ -424,12 +425,13 @@ def run_step(
                 )
                 exit_code = 1
             else:
-                mark_completed_at(state_dir)
+                completed = mark_completed_at(state_dir)
                 write_result_at(
                     state_dir,
                     ResultRecord(
                         run_id=run_id,
                         step_id=step,
+                        attempt_id=completed.attempt_id,
                         state="completed",
                         validated=True,
                         outputs=resolve_record_output_paths(effective_outputs, variables),
@@ -594,12 +596,16 @@ def run_step(
                 )
                 exit_code = 1
             else:
-                mark_completed_at(state_dir, running_record=running_record)
+                completed = mark_completed_at(
+                    state_dir,
+                    running_record=running_record,
+                )
                 write_result_at(
                     state_dir,
                     ResultRecord(
                         run_id=run_id,
                         step_id=step,
+                        attempt_id=completed.attempt_id,
                         state="completed",
                         validated=True,
                         outputs=resolve_record_output_paths(effective_outputs, variables),

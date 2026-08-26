@@ -157,7 +157,7 @@
     }
   }
 
-  function renderResources(container, ctx) {
+  async function renderResources(container, ctx, isCurrent) {
     const payload = _parsePayload(ctx);
     if (!payload) {
       container.innerHTML = '<div class="preview-empty">Could not parse resource report</div>';
@@ -165,6 +165,13 @@
     }
     const views = domainViews();
     const stamped = views.setCurrentResourceReportPayload(payload, ctx.path);
+    container.innerHTML = views.renderResourceReportPayload(stamped || payload, "actual_cost_usd");
+    if (typeof views.loadRuntimeProjectionForResource === "function") {
+      await views.loadRuntimeProjectionForResource(stamped || payload, ctx.path);
+    }
+    if (!isCurrent()) {
+      return;
+    }
     container.innerHTML = views.renderResourceReportPayload(stamped || payload, "actual_cost_usd");
   }
 
@@ -352,7 +359,7 @@
 
   // resource-report — raw uses jsonRaw, not jsonlRaw, because the file
   // is a single JSON document served as text/content (not a JSONL stream).
-  mb.registerView("resource-report", "resources", { render: renderResources });
+  mb.registerView("resource-report", "resources", asyncView(renderResources, disposeAsyncData));
   mb.registerView("resource-report", "treemap", { render: renderTreemap });
   mb.registerView("resource-report", "raw", { render: jsonRaw });
 

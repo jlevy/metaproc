@@ -37,6 +37,7 @@ from metaproc.models.viz import (
     ProcessHeader,
     ProgressSnapshot,
     StepDetails,
+    TaskOutputProjection,
     VizEdge,
     VizModel,
     VizNode,
@@ -58,6 +59,7 @@ def build_viz_model(
     bundle: PlanBundle,
     *,
     progress: ProgressSnapshot | None = None,
+    task_projection: TaskOutputProjection | None = None,
 ) -> VizModel:
     """Project a :class:`PlanBundle` into a :class:`VizModel`.
 
@@ -76,6 +78,10 @@ def build_viz_model(
     matches :func:`_step_node_id` — bare ``step_id`` at the root level,
     ``parent::child`` for composite descendants — so progress for a child
     step never collides with a sibling of the same name at another level.
+
+    ``task_projection`` is an optional read-only runtime view rebuilt by the caller
+    from existing task records. The structural projector carries it without deriving
+    or persisting another source of truth.
     """
     nodes: list[VizNode] = []
     edges: list[VizEdge] = []
@@ -104,6 +110,7 @@ def build_viz_model(
         subgraphs=subgraphs,
         root_process_node=root_process_node_id,
         progress=progress,
+        task_projection=task_projection,
     )
 
 

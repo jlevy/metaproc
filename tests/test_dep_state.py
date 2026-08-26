@@ -67,7 +67,10 @@ class TestBuildDepReport:
             step_id=present_step.step_id,
             item={"step": present_step.step_id},
         )
-        mark_completed_at(present_state, running_record=present_running)
+        present_completed = mark_completed_at(
+            present_state,
+            running_record=present_running,
+        )
         present_path = run_dir / "present.md"
         present_path.write_text("present")
         write_result_at(
@@ -75,6 +78,7 @@ class TestBuildDepReport:
             ResultRecord(
                 run_id="demo/run-1",
                 step_id=present_step.step_id,
+                attempt_id=present_completed.attempt_id,
                 state="completed",
                 validated=True,
                 outputs={"out": str(present_path)},
@@ -91,7 +95,10 @@ class TestBuildDepReport:
             step_id=stale_step.step_id,
             item={"step": stale_step.step_id},
         )
-        mark_completed_at(stale_state, running_record=stale_running)
+        stale_completed = mark_completed_at(
+            stale_state,
+            running_record=stale_running,
+        )
         stale_path = run_dir / "stale.md"
         stale_path.write_text("stale")
         write_result_at(
@@ -99,6 +106,7 @@ class TestBuildDepReport:
             ResultRecord(
                 run_id="demo/run-1",
                 step_id=stale_step.step_id,
+                attempt_id=stale_completed.attempt_id,
                 state="completed",
                 validated=True,
                 outputs={"out": str(stale_path)},

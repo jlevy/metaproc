@@ -19,6 +19,7 @@ from metaproc.metabrowser_plugin import plugin_dir as metaproc_plugin_dir
 from metaproc.metabrowser_plugin import sidekick
 from metaproc.models.authored import IOSpec
 from metaproc.models.viz import (
+    AcceptedOutputProjection,
     DepDetails,
     FanOutDetails,
     InputSpec,
@@ -26,7 +27,11 @@ from metaproc.models.viz import (
     OutputSpec,
     ProcessHeader,
     ProgressSnapshot,
+    RuntimeTaskProjection,
     StepDetails,
+    TaskKeyProjection,
+    TaskOutputProjection,
+    UnacceptedOutputProjection,
     VizModel,
     VizNode,
 )
@@ -202,6 +207,36 @@ def test_relativize_viz_paths_walks_every_path_field(tmp_path: Path) -> None:
             run_dir=root + "/runs/2026-04-23",
             nodes={"s": NodeProgress(state="running")},
         ),
+        task_projection=TaskOutputProjection(
+            run_dir=root + "/runs/2026-04-23",
+            tasks=[
+                RuntimeTaskProjection(
+                    key=TaskKeyProjection(step_id="s"),
+                    state="completed",
+                    accepted_outputs=[
+                        AcceptedOutputProjection(
+                            name="report",
+                            path=root + "/runs/2026-04-23/report.md",
+                            recorded_path=root + "/runs/2026-04-23/report.md",
+                            declaration=IOSpec(path="{{run.dir}}/report.md"),
+                        )
+                    ],
+                    unaccepted_outputs=[
+                        UnacceptedOutputProjection(
+                            name="draft",
+                            path=root + "/runs/2026-04-23/draft.md",
+                            recorded_path=root + "/runs/2026-04-23/draft.md",
+                            reason="result-not-validated",
+                        ),
+                        UnacceptedOutputProjection(
+                            name="external",
+                            recorded_path="/external/report.md",
+                            reason="external",
+                        ),
+                    ],
+                )
+            ],
+        ),
     )
 
     sidekick._relativize_viz_paths(model)  # noqa: SLF001
@@ -233,3 +268,8 @@ def test_relativize_viz_paths_walks_every_path_field(tmp_path: Path) -> None:
     assert model.nodes[2].process.process_outputs["report"].path == "p/out/report.md"
     assert model.progress is not None
     assert model.progress.run_dir == "runs/2026-04-23"
+    assert model.task_projection is not None
+    assert model.task_projection.run_dir == "runs/2026-04-23"
+    assert model.task_projection.tasks[0].accepted_outputs[0].path == ("runs/2026-04-23/report.md")
+    assert model.task_projection.tasks[0].unaccepted_outputs[0].path == ("runs/2026-04-23/draft.md")
+    assert model.task_projection.tasks[0].unaccepted_outputs[1].path is None

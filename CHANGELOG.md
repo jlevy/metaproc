@@ -50,6 +50,14 @@ development series.
   the resource, failure, execution-profile, namespace, and fan-out fields carried by a
   resolved plan. The MetaBrowser process and step panels render these fields, and
   projection tests enforce field parity with the authored and resolved source models.
+  When a run directory is supplied, the same model includes a rebuildable view of
+  scalar, mapped, and nested task records.
+  A result is consumable only when it names the latest successful attempt, matches the
+  current step fingerprint and declared output port, and resolves to an available
+  artifact of the declared kind.
+  Historical unbound, stale, missing, undeclared, and external outputs remain visible as
+  diagnostics. Hydrated runs safely rebase portable paths to the local run root; no
+  additional runtime ledger is written.
 
 - **GCP credentials hydrate inside the container**: Batch job specifications now carry
   Secret Manager references rather than plaintext-expanded `secret_variables`, require

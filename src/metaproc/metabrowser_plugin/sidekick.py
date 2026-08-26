@@ -26,8 +26,9 @@ escape the served root.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from metabrowser import (
     ArtifactPath,
@@ -44,12 +45,23 @@ from starlette.responses import JSONResponse
 
 from metaproc.engine.write_boundary import WriteBoundaryOverlapError
 from metaproc.errors import CLIError as MetaprocCLIError
+from metaproc.io import read_yaml_file
+from metaproc.models.plan_bundle import PlanBundle
+from metaproc.paths import run_config_file
+from metaproc.runtime_projection import scan_task_output_projection
 from metaproc.stats.engine import compute_run_stats
 from metaproc.viz import build_viz_model
 from metaproc.viz_loader import load_plan_bundle, scan_bundle_progress
 
 if TYPE_CHECKING:
     from starlette.requests import Request
+
+
+class ValidationWarning(TypedDict):
+    """Machine-readable warning returned with a usable partial view."""
+
+    code: str
+    message: str
 
 
 # ── /info ───────────────────────────────────────────────────────
@@ -131,57 +143,133 @@ def _relativize_viz_paths(viz: Any) -> None:
             _relativize_process_header_paths(node.process)
     if viz.progress is not None:
         viz.progress.run_dir = relativize_path(viz.progress.run_dir) or viz.progress.run_dir
+    if viz.task_projection is not None:
+        viz.task_projection.run_dir = (
+            relativize_path(viz.task_projection.run_dir) or viz.task_projection.run_dir
+        )
+        for task in viz.task_projection.tasks:
+            for output in (*task.accepted_outputs, *task.unaccepted_outputs):
+                if output.path is not None:
+                    output.path = relativize_path(output.path) or output.path
+
+
+def _warning(code: str, exc: BaseException) -> ValidationWarning:
+    return {"code": code, "message": str(exc)}
+
+
+def _load_run_bundle(run_dir: Path) -> PlanBundle:
+    """Load a run's recorded process without leaving the served browser root."""
+    config_path = run_config_file(run_dir)
+    try:
+        config_is_contained = config_path.resolve().is_relative_to(run_dir.resolve())
+    except OSError:
+        config_is_contained = False
+    if not config_path.is_file() or not config_is_contained:
+        raise ValueError(f"{config_path}: run config not found")
+    raw = read_yaml_file(config_path)
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"{config_path}: run config must be a mapping")
+    process_spec = raw.get("process_spec")
+    if not isinstance(process_spec, str) or not process_spec:
+        raise ValueError(f"{config_path}: process_spec must be a non-empty string")
+    target = resolve_path(process_spec)
+    if target is None or not target.is_file():
+        raise ValueError(f"{config_path}: process_spec is not available under the served root")
+    variables_raw = raw.get("variables", {})
+    if not isinstance(variables_raw, Mapping) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in variables_raw.items()
+    ):
+        raise ValueError(f"{config_path}: variables must be a string-to-string mapping")
+    variables = cast(dict[str, str], dict(variables_raw))
+    return load_plan_bundle(target, params=variables, validate_spec=False)
 
 
 def viz_model_handler(request: Request) -> JSONResponse:
     """Return a VizModel envelope for the given process path."""
     process = request.query_params.get("process", "")
     run_dir_param = request.query_params.get("run_dir")
-    target = resolve_path(process)
-    if target is None or not target.is_file():
-        return JSONResponse({"error": "Not found", "process": process}, status_code=404)
+    run_dir_path = resolve_directory(run_dir_param) if run_dir_param is not None else None
+    warnings: list[ValidationWarning] = []
 
-    warnings: list[str] = []
-    try:
-        bundle = load_plan_bundle(target)
-    except WriteBoundaryOverlapError as overlap_exc:
-        return JSONResponse(
-            {
-                "error": "Process spec has overlapping agent write boundaries",
-                "error_code": "write_boundary_overlap",
-                "process": process,
-                "overlaps": [
-                    {
-                        "left_step": overlap.left_step,
-                        "right_step": overlap.right_step,
-                        "left_path": str(overlap.left_path),
-                        "right_path": str(overlap.right_path),
-                    }
-                    for overlap in overlap_exc.overlaps
-                ],
-                "suggested_fix": (
-                    overlap_exc.overlaps[0].suggested_fix if overlap_exc.overlaps else ""
-                ),
-            },
-            status_code=422,
-        )
-    except (OSError, ValueError, MetabrowserCLIError, MetaprocCLIError) as exc:
-        warnings.append(str(exc))
+    if process:
+        target = resolve_path(process)
+        if target is None or not target.is_file():
+            return JSONResponse({"error": "Not found", "process": process}, status_code=404)
         try:
-            bundle = load_plan_bundle(target, validate_spec=False)
-        except (OSError, ValueError, MetabrowserCLIError, MetaprocCLIError) as exc2:
+            bundle = load_plan_bundle(target)
+        except WriteBoundaryOverlapError as overlap_exc:
             return JSONResponse(
-                {"error": "Failed to load process", "process": process, "detail": str(exc2)},
+                {
+                    "error": "Process spec has overlapping agent write boundaries",
+                    "error_code": "write_boundary_overlap",
+                    "process": process,
+                    "overlaps": [
+                        {
+                            "left_step": overlap.left_step,
+                            "right_step": overlap.right_step,
+                            "left_path": str(overlap.left_path),
+                            "right_path": str(overlap.right_path),
+                        }
+                        for overlap in overlap_exc.overlaps
+                    ],
+                    "suggested_fix": (
+                        overlap_exc.overlaps[0].suggested_fix if overlap_exc.overlaps else ""
+                    ),
+                },
+                status_code=422,
+            )
+        except (OSError, ValueError, MetabrowserCLIError, MetaprocCLIError) as exc:
+            warnings.append(_warning("process_validation_failed", exc))
+            try:
+                bundle = load_plan_bundle(target, validate_spec=False)
+            except (OSError, ValueError, MetabrowserCLIError, MetaprocCLIError) as exc2:
+                return JSONResponse(
+                    {"error": "Failed to load process", "process": process, "detail": str(exc2)},
+                    status_code=400,
+                )
+    elif run_dir_path is not None:
+        try:
+            bundle = _load_run_bundle(run_dir_path)
+        except (OSError, ValueError, MetabrowserCLIError, MetaprocCLIError) as exc:
+            return JSONResponse(
+                {
+                    "error": "Failed to load run process",
+                    "run_dir": run_dir_param,
+                    "detail": str(exc),
+                },
                 status_code=400,
             )
+    else:
+        status_code = 400 if run_dir_param is not None else 404
+        return JSONResponse(
+            {"error": "Not found", "process": process, "run_dir": run_dir_param},
+            status_code=status_code,
+        )
 
     progress = None
-    if run_dir_param:
-        run_dir_path = resolve_path(run_dir_param)
-        if run_dir_path is not None and run_dir_path.is_dir():
+    task_projection = None
+    if run_dir_path is not None:
+        try:
             progress = scan_bundle_progress(run_dir_path, bundle)
+        except (OSError, ValueError, MetabrowserCLIError, MetaprocCLIError) as exc:
+            warnings.append(_warning("runtime_progress_unavailable", exc))
+        try:
+            task_projection = scan_task_output_projection(run_dir_path, bundle)
+        except (OSError, ValueError, MetabrowserCLIError, MetaprocCLIError) as exc:
+            warnings.append(_warning("runtime_projection_unavailable", exc))
+    elif run_dir_param is not None:
+        warnings.append(
+            {
+                "code": "run_context_unavailable",
+                "message": "run_dir not found or outside the served root",
+            }
+        )
 
-    viz = build_viz_model(bundle, progress=progress)
+    viz = build_viz_model(
+        bundle,
+        progress=progress,
+        task_projection=task_projection,
+    )
     _relativize_viz_paths(viz)
     payload: dict[str, Any] = {"viz": viz.model_dump(by_alias=True, exclude_none=True)}
     if warnings:

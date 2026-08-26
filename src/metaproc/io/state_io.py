@@ -74,6 +74,7 @@ def write_attempt_at(state_dir: Path, record: AttemptRecord) -> Path:
 
 
 def write_result_at(state_dir: Path, record: ResultRecord) -> Path:
+    validate_result_attempt_identity_at(state_dir, record)
     return _write_record_at(state_dir, RESULT_FILE, record.model_dump(exclude_none=True))
 
 
@@ -135,6 +136,40 @@ def read_attempt_history_at(state_dir: Path) -> tuple[TaskAttemptRecord, ...]:
                 f"{previous.attempt_id!r} and {current.attempt_id!r}"
             )
     return tuple(ordered)
+
+
+def validate_result_attempt_identity_at(
+    state_dir: Path,
+    result: ResultRecord,
+) -> TaskAttemptRecord | None:
+    """Require a result to name the latest successful durable attempt, when present."""
+    history = read_attempt_history_at(state_dir)
+    if not history:
+        if result.attempt_id is not None:
+            raise ValueError(f"{state_dir}: result names missing attempt {result.attempt_id!r}")
+        return None
+
+    latest = history[-1]
+    if result.attempt_id != latest.attempt_id:
+        raise ValueError(f"{state_dir}: result does not name latest attempt {latest.attempt_id!r}")
+    mismatches = [
+        field_name
+        for field_name, result_value, attempt_value in (
+            ("run_id", result.run_id, latest.run_id),
+            ("step_id", result.step_id, latest.step_id),
+        )
+        if result_value != attempt_value
+    ]
+    if mismatches:
+        raise ValueError(
+            f"{state_dir}: result does not match latest attempt fields {', '.join(mismatches)}"
+        )
+    if latest.disposition is not AttemptDisposition.succeeded:
+        raise ValueError(
+            f"{state_dir}: result points to {latest.disposition or 'live'} attempt "
+            f"{latest.attempt_id!r}"
+        )
+    return latest
 
 
 def _write_task_attempt_at(state_dir: Path, record: TaskAttemptRecord) -> Path:

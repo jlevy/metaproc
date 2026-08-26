@@ -21,7 +21,7 @@ status: Approved
 > [arch-claude-code-harness](arch-claude-code-harness.md),
 > [arch-testing](arch-testing.md).
 
-Revision: rev2m
+Revision: rev2o
 
 Implementation reference for Metaproc, covering how the conceptual model defined in
 [metaproc-concepts-and-principles.md](../../src/metaproc/docs/metaproc-concepts-and-principles.md)
@@ -147,6 +147,7 @@ discovery (resume-safe item filtering)
 usage (extraction, pricing, aggregation)
 process_events (structured DAG event logging)
 viz (pure projection of Plan -> VizModel; browser and static SVG/HTML renderers; see MetaBrowser architecture)
+runtime_projection (read-only task and accepted-output projection from existing runtime records)
 
 Cloud subsystems (cloud/gcp/)
 -----------------------------
@@ -1251,6 +1252,23 @@ server for browsing run artifacts, logs, and results.
 The complete architecture, including the file-kind registry, view registry, charts,
 visualization plane, and remote tunnel, lives in
 [MetaBrowser architecture](https://github.com/jlevy/metabrowser/blob/main/docs/architecture.md).
+
+When the `viz-model` route receives a run directory, Metaproc adds a rebuildable task
+and output projection to `VizModel`. The projection walks contained scalar and mapped
+composite scopes and reconstructs qualified task identities from the immutable run
+configuration. It validates mutable status against retained attempts.
+A recorded output enters the consumable set only when its result names the latest
+successful attempt, its step fingerprint matches the loaded plan, its port is declared,
+and its local artifact exists with the declared file or directory kind.
+
+The public projection is a narrow, versioned DTO rather than a serialization of the
+complete mutable runtime records.
+Historical results without attempt or step identity, stale results, undeclared ports,
+missing artifacts, and nonportable external paths are reported as unaccepted
+diagnostics. If a run was hydrated at a different path, the immutable `run-config.yaml`
+`run_dir` anchors safe rebasing into the local run tree.
+Projection errors become view warnings rather than hiding the structural process graph.
+The projection writes no artifact index, lineage ledger, or scheduler state.
 
 The browser classifies files into a **file kind** taxonomy (`agent-log`, `runpool-log`,
 `process-log`, `markdown`, `text`, etc.)

@@ -1044,12 +1044,16 @@ def run_parallel(
                             )
                             exit_code = 1
                         else:
-                            mark_completed_at(state_dir, running_record=running_record)
+                            completed = mark_completed_at(
+                                state_dir,
+                                running_record=running_record,
+                            )
                             write_result_at(
                                 state_dir,
                                 ResultRecord(
                                     run_id=run_id,
                                     step_id=step,
+                                    attempt_id=completed.attempt_id,
                                     state="completed",
                                     validated=True,
                                     outputs=resolve_record_output_paths(
@@ -2393,12 +2397,13 @@ def _handle_success(  # noqa: PLR0913
         completion_vars = dict(variables)
         completion_vars.update(item_context)
         state_dir.mkdir(parents=True, exist_ok=True)
-        mark_completed_at(state_dir, running_record=running_record)
+        completed = mark_completed_at(state_dir, running_record=running_record)
         write_result_at(
             state_dir,
             ResultRecord(
                 run_id=run_id,
                 step_id=step,
+                attempt_id=completed.attempt_id,
                 state="completed",
                 validated=validated,
                 outputs=resolve_record_output_paths(effective_outputs or {}, completion_vars),
