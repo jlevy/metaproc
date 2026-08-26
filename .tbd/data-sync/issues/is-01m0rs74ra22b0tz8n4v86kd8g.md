@@ -5,8 +5,8 @@ title: "Land PR #31 before mapped-scope runtime changes"
 kind: task
 status: closed
 priority: 1
-version: 4
-spec_path: docs/project/specs/active/plan-2026-08-23-native-mapped-composite-scopes.md
+version: 5
+spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - execution-model
 dependencies:
@@ -14,7 +14,7 @@ dependencies:
     target: is-01m0rs7df0g28zgnsykar366kb
 parent_id: is-01m0r92q2y1pe7dmhrcj6nst7q
 created_at: 2026-08-24T02:22:30.154Z
-updated_at: 2026-08-24T03:20:32.214Z
+updated_at: 2026-08-25T19:18:17.053Z
 closed_at: 2026-08-24T03:20:32.213Z
 close_reason: "PR #31 merged into main at 41c4efc after the architecture review and green CI."
 resolution: null

@@ -3,10 +3,10 @@ type: is
 id: is-01m0r93gwcj17mn4dmw1ts7fqa
 title: Production task records, fenced commits, and replay parity
 kind: feature
-status: in_progress
+status: open
 priority: 1
-version: 14
-spec_path: docs/project/specs/active/plan-2026-08-23-native-mapped-composite-scopes.md
+version: 17
+spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - execution-model
 dependencies:
@@ -26,10 +26,11 @@ child_order_hints:
   - is-01m0r9d2ckfh04hjx3v2qgafy7
   - is-01m0rady1w8hjdbjz5gvkb5qy8
   - is-01m0ragf2xm87db9bbwhv7ys57
+hold: paused
 created_at: 2026-08-23T21:40:54.283Z
-updated_at: 2026-08-24T00:51:39.502Z
+updated_at: 2026-08-25T19:18:56.749Z
 ---
-Map the reference model onto production records: versioned task keys and generations, append-only attempts, attempt-private staging, one fenced validated commit, compatibility readers, and trace replay that makes model-versus-engine disposition differences fail.
+Evidence-triggered follow-on, not part of the consolidated slice. Existing append-only attempts, status/results, output validation, and immutable run identity remain the current recovery contract. Introduce generations, attempt-private staging, or fenced commits only after a named recovery test proves the released primitives cannot preserve correctness.
 
 ## Notes
 

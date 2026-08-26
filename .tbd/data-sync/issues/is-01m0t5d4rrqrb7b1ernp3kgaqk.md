@@ -5,7 +5,8 @@ title: "Overall stack-structure review of #32-#36"
 kind: task
 status: closed
 priority: 1
-version: 8
+version: 9
+spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - pr-review
   - architecture
@@ -14,7 +15,7 @@ parent_id: is-01m0t5d345y4pdjcjpepb9h4q6
 child_order_hints:
   - is-01m0t7zmhacz125fmx2mn99b2m
 created_at: 2026-08-24T15:14:44.119Z
-updated_at: 2026-08-24T23:01:03.383Z
+updated_at: 2026-08-25T19:28:30.034Z
 closed_at: 2026-08-24T19:05:45.685Z
 close_reason: "The reviewed stack was consolidated only at the auth boundary and is now #39 → #32 → #33 → #34 → #35 → #37; #36 is closed as superseded. Per-PR defects have explicit dispositions, and integration head c061cad passed exact five-job GitHub CI run 32765621039. Stack disposition published at issuecomment-5399988297."
 resolution: null

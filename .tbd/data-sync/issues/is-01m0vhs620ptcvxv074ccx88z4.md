@@ -1,12 +1,12 @@
 ---
 type: is
 id: is-01m0vhs620ptcvxv074ccx88z4
-title: "Prepare consolidated #32-#37 head for GTIA L0"
+title: Verify the consolidated mapped-scope runtime head
 kind: task
-status: open
+status: closed
 priority: 0
-version: 4
-spec_path: docs/project/specs/active/plan-2026-08-23-native-mapped-composite-scopes.md
+version: 15
+spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - execution-model
 dependencies:
@@ -16,7 +16,20 @@ parent_id: is-01m0r92q2y1pe7dmhrcj6nst7q
 child_order_hints:
   - is-01m0vykwfjbp8gqe73nt1bh7kp
   - is-01m0vz82a3231p6v4ra7ecsf6w
+  - is-01m0wfher3044jkd78877hrf0j
+  - is-01m0wfhf03q07b1m3hd8cxw1f1
+  - is-01m0wfhf7yd1mpqx1pdh0rbepj
+  - is-01m0wfhffpxa70k40qbyxkdcyk
+  - is-01m0wg34819k1mk34rfh9pm007
 created_at: 2026-08-25T04:10:15.999Z
-updated_at: 2026-08-25T08:05:35.170Z
+updated_at: 2026-08-25T19:37:17.779Z
+closed_at: 2026-08-25T19:37:17.779Z
+close_reason: "Clean draft PR #48 is pinned to 98cae8d1d42564454ad461612c40073b700e88b8; every review finding has a fixed, duplicate, or explicit evidence-triggered disposition; local make verify passed with 4,408 tests and 8 skips; all five exact-head GitHub CI jobs passed. No merge occurred, and downstream M0/scale gates remain open."
+resolution: null
+duplicate_of: null
 ---
-Single pre-smoke gate for the retained Metaproc stack. After every dependency has a fixed or explicitly reviewed disposition, run focused failure tests at each repaired layer, full make verify on the consolidated pull request 37 head, exact-head GitHub CI on every stack level, and verify the PR diff/bases match the tested commit map. Publish the per-finding disposition maps. Closing this gate authorizes a clean pinned GTIA network-free L0; it does not authorize live provider concurrency or merge by itself.
+Single pre-smoke gate for the clean consolidated runtime. After each known finding has a fixed, rebutted, or explicitly deferred disposition, run focused failure tests, complete make verify, audit the diff and public boundary, and wait for exact-head GitHub CI. Closing this gate permits an immutable downstream M0 pin; it does not authorize provider concurrency or merge.
+
+## Notes
+
+Local exact-head gate passed on the clean working tree: make verify completed with 4,408 passed, 8 skipped; lint, docs, public hygiene, supply-chain checks, browser checks, audits, build, distribution inspection, and installed-wheel smoke all passed. Remaining: commit, draft PR, exact-head GitHub CI, then close this gate before downstream M0.

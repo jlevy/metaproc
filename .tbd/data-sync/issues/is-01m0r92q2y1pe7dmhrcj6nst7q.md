@@ -5,8 +5,8 @@ title: Native mapped composite scopes and shared leaf admission
 kind: epic
 status: in_progress
 priority: 1
-version: 21
-spec_path: docs/project/specs/active/plan-2026-08-23-native-mapped-composite-scopes.md
+version: 24
+spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - execution-model
 dependencies: []
@@ -28,7 +28,8 @@ child_order_hints:
   - is-01m0vhs620ptcvxv074ccx88z4
   - is-01m0vjtjdxm7g8gkrxznmp5qd2
   - is-01m0vk0mxg72tsmdgcxsm2hz8n
+  - is-01m0wpb4m8fr758mmbnkd7x6vr
 created_at: 2026-08-23T21:40:27.869Z
-updated_at: 2026-08-25T04:31:49.167Z
+updated_at: 2026-08-25T19:18:54.470Z
 ---
-Deliver the smallest safe Metaproc-native cohort primitive in dependency order: merge PR #31; establish one recursive RunExecutionContext and nonblocking leaf execution; map composite processes through the neutral fan-out runner with declared ports, durable parent state, and per-item recovery; then make one host byte authority govern pool and scalar launches. Project the result through existing views and keep the general scheduler evidence-triggered.
+Deliver the smallest safe native mapped-composite primitive: reuse one recursive RunExecutionContext, invoke child scopes in-process through the neutral fan-out runner, retain existing child and parent output declarations, write durable per-item state, and route local scalar agent leaves through one run-owned RunPool plus existing host admission. Exact-head verification and the successive smoke ladder gate expansion; schedulers, weighted claims, and new lineage stores remain evidence-triggered.

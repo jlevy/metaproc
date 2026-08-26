@@ -5,7 +5,8 @@ title: "PR #35 lifecycle correctness follow-ups before live smoke"
 kind: task
 status: closed
 priority: 1
-version: 10
+version: 11
+spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - pr-review
 dependencies: []
@@ -17,7 +18,7 @@ child_order_hints:
   - is-01m0vhr7xyfyp95pz2xhsxd513
   - is-01m0vhr8b8gkgykcywwcq4z55c
 created_at: 2026-08-24T23:04:16.575Z
-updated_at: 2026-08-25T06:47:29.382Z
+updated_at: 2026-08-25T19:28:30.034Z
 closed_at: 2026-08-25T06:47:29.381Z
 close_reason: "PR #35 round-two review has a published disposition map at comment 5406589771. All correctness gates are fixed/rebutted in 4855c8d with exact-head make verify green; mp-vmjq remains explicitly deferred behind a measured-contention trigger."
 resolution: null

@@ -5,7 +5,8 @@ title: "PR #34 I6: contain slot-binding failures; terminal state on retry exhaus
 kind: bug
 status: closed
 priority: 1
-version: 4
+version: 5
+spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - pr-review
 dependencies:
@@ -13,7 +14,7 @@ dependencies:
     target: is-01m0vhs620ptcvxv074ccx88z4
 parent_id: is-01m0t5d345y4pdjcjpepb9h4q6
 created_at: 2026-08-24T23:04:14.819Z
-updated_at: 2026-08-25T05:50:38.944Z
+updated_at: 2026-08-25T19:28:30.034Z
 closed_at: 2026-08-25T05:50:38.943Z
 close_reason: null
 resolution: null

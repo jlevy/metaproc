@@ -5,7 +5,8 @@ title: "Review PR #36: transport retry-later policy"
 kind: task
 status: closed
 priority: 1
-version: 15
+version: 17
+spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - pr-review
 dependencies: []
@@ -21,14 +22,14 @@ child_order_hints:
   - is-01m0t809p8h99cy79t3hwd3j1f
   - is-01m0tjefebxck534azhjgd5ew9
 created_at: 2026-08-24T15:14:43.810Z
-updated_at: 2026-08-24T22:32:05.677Z
+updated_at: 2026-08-25T19:28:30.034Z
 closed_at: 2026-08-24T22:31:55.135Z
 close_reason: "PR #36 closed as superseded; findings verified as resolved-by-deletion; behavior work tracked under mp-tibt"
 resolution: null
 duplicate_of: null
 ---
-Senior review of #36 (codex/gtia-v3-retry-later, draft). Retry-later policy across cloud dispatch, entrypoints, env vars, auth-pool flags. Verify env-var plumbing, flag compatibility, cloud entrypoint behavior. Post review comment; follow up before merge.
+Senior review of the closed retry-later transport proposal in pull request 36. Verify environment plumbing, flag compatibility, cloud entrypoint behavior, cancellation, and checkpoint semantics, then remove the proposal if released behavior does not justify the new public policy.
 
 ## Notes
 
-PR #36 CLOSED 2026-08-24 as superseded ('retry transport; cloud auth moved to #34'). Verified: the speculative retry-later public surface was deleted (not merged), and #34 carries only the cloud-auth fix — no env vars, CLI flags, or worker-image surface changed, so the spurious-resume-diff and image-skew hazards from the #36 review are absent. Remaining retry-later behavior work tracked under mp-tibt.
+The speculative retry-later public surface was deleted and the pull request was closed as superseded. The independent cloud authentication transport fix moved to the credential-policy slice without adding retry-later flags, environment variables, or worker-image surface. Dormant behavior remains under audit.

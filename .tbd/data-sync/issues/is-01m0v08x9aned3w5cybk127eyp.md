@@ -1,20 +1,25 @@
 ---
 type: is
 id: is-01m0v08x9aned3w5cybk127eyp
-title: "Process: CI on stacked heads; stack and spec-change rules"
+title: "Process: exact-head CI and spec-change rules"
 kind: task
-status: open
+status: closed
 priority: 1
-version: 3
+version: 9
+spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - pr-review
 dependencies: []
 parent_id: is-01m0t5d345y4pdjcjpepb9h4q6
 created_at: 2026-08-24T23:04:16.937Z
-updated_at: 2026-08-25T04:10:38.093Z
+updated_at: 2026-08-25T19:37:17.826Z
+closed_at: 2026-08-25T19:37:17.826Z
+close_reason: "Clean draft PR #48 is pinned to 98cae8d1d42564454ad461612c40073b700e88b8; every review finding has a fixed, duplicate, or explicit evidence-triggered disposition; local make verify passed with 4,408 tests and 8 skips; all five exact-head GitHub CI jobs passed. No merge occurred, and downstream M0/scale gates remain open."
+resolution: null
+duplicate_of: null
 ---
-Keep PRs #32-#35 stacked because execution context, auth policy, and lifecycle ownership remain coherent review and rollback boundaries; PR #37 is the definitive plan and integration head. The consolidated head is the validation unit: every stack level gets exact-head CI, the combined head gets full verification and failure injection, and the pinned GTIA L0 runs before any runtime layer lands. Plan narrowings are committed on #37 and reconciled into the consumer plan, not hidden in implementation commits. Consolidate only if a boundary stops being coherent; do not impose an arbitrary stack-depth rule.
+Treat execution context, credential policy, lifecycle ownership, graph propagation, and mapped scopes as explicit review and test sections inside one consolidated pull request. Require exact-head CI, full verification, failure injection, and a private downstream smoke before merge. Keep consumer-specific plans and evidence outside this public repository.
 
 ## Notes
 
-FOURTH instance observed 2026-08-24: commit 49064f0 on #37 narrows the reviewed per-item-force contract inside the implementation PR (after ports, child namespaces, evidence pointer). Each call defensible; the pattern is the problem. Rule to adopt: plan/spec narrowings land as plan-branch commits only.
+The consolidated plan and PR structure preserve review domains in one clean surface, public/private boundaries are documented, and local exact-head verification passes. Remaining acceptance is the draft PR and final exact-head CI summary; no merge.
