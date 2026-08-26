@@ -524,9 +524,10 @@ class TestGcpRunCli:
         ):
             result = CliRunner().invoke(app, ["echo", "hi"])
 
+        output = unstyle(result.output)
         assert result.exit_code != 0
-        assert "METAPROC_GCP_FILESTORE_SERVER" in result.output
-        assert "--no-filestore" in result.output
+        assert "METAPROC_GCP_FILESTORE_SERVER" in output
+        assert "--no-filestore" in output
         ship_artifacts.assert_not_called()
         dispatch.assert_not_called()
 
