@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import stat
+import subprocess
 import sys
 import time as _time
 import types
@@ -523,8 +524,30 @@ class TestGeminiCliAdapter:
         prompt = tmp_path / "prompt.md"
         prompt.write_text("Do something.")
         cmd = self.adapter.build_command(prompt, {}, {})
-        assert cmd[0] == "gemini"
-        assert "-p" in cmd
+        assert cmd[:2] == ["/bin/sh", "-c"]
+        assert cmd[4:6] == [str(prompt), "gemini"]
+        assert "-p" not in cmd[5:]
+
+    def test_build_command_streams_ignored_audit_prompt_to_stdin(self, tmp_path, monkeypatch):
+        logs_dir = tmp_path / ".logs"
+        logs_dir.mkdir()
+        prompt = logs_dir / "prompt.md"
+        prompt.write_text("Use the complete prompt body.")
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        fake_gemini = bin_dir / "gemini"
+        fake_gemini.write_text("#!/bin/sh\n/bin/cat\n")
+        fake_gemini.chmod(fake_gemini.stat().st_mode | stat.S_IXUSR)
+        monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+        monkeypatch.setenv("METAPROC_SKIP_GEMINI_VERSION_CHECK", "1")
+
+        cmd = self.adapter.build_command(prompt, {}, {})
+        completed = subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+        assert completed.stdout == "Use the complete prompt body."
+        assert all(str(prompt) not in arg for arg in cmd[cmd.index("gemini") :])
+        assert prompt.read_text() == "Use the complete prompt body."
 
     def test_build_command_bypass_permissions(self, tmp_path):
         prompt = tmp_path / "prompt.md"

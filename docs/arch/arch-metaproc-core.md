@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: Metaproc Core
 
-**Date:** 2026-03-23 (last updated 2026-08-24) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-08-26) **Status:** Approved
 
 > **Maintenance**: This is a maintained architecture doc.
 > Revise via `tbd shortcut revise-architecture-doc` (which prompts you to verify content
@@ -1780,8 +1780,10 @@ Registered adapters (in `ADAPTER_REGISTRY`):
      Log compaction strips `item.started` / `item.updated` / intermediate `error`; keeps
      `item.completed` (agent_message / reasoning / command_execution / file_change /
      mcp_tool_call / web_search / todo_list) and both terminal events.
-- `gemini-cli` -- invokes `gemini -p <prompt_text>` (reads prompt file inline).
-  Supports model, permission-mode (yolo), output-format, sandbox.
+- `gemini-cli` -- invokes `gemini` in headless mode with the durable audit prompt
+  streamed through stdin.
+  The prompt path is not exposed to the model, so workspace ignore rules cannot block
+  prompt delivery. Supports model, permission-mode (yolo), output-format, sandbox.
   Injects system prompt and native settings (thinking config, agent overrides) via temp
   files and env vars. Auth via `GEMINI_API_KEY`, Vertex AI, or OAuth.
 - `pi-cli` -- invokes `pi -p @<prompt> --no-session`. Supports `--provider` (anthropic,

@@ -274,7 +274,9 @@ class TestGeminiCliAdapter:
 
     def test_minimal_command(self) -> None:
         cmd = self.adapter.build_command(self.prompt_file, {}, {})
-        assert cmd[:3] == ["gemini", "-p", f"@{self.prompt_file}"]
+        assert cmd[:2] == ["/bin/sh", "-c"]
+        assert cmd[4:6] == [str(self.prompt_file), "gemini"]
+        assert "-p" not in cmd[5:]
         assert "--output-format" in cmd
         assert "stream-json" in cmd
         # Gemini should NOT have --verbose or --no-session-persistence
@@ -286,11 +288,12 @@ class TestGeminiCliAdapter:
         idx = cmd.index("-m")
         assert cmd[idx + 1] == "flash"
 
-    def test_existing_prompt_file_is_referenced(self, tmp_path: Path) -> None:
+    def test_existing_prompt_file_is_redirected(self, tmp_path: Path) -> None:
         prompt_file = tmp_path / "prompt.txt"
         prompt_file.write_text("Analyze PAYX")
         cmd = self.adapter.build_command(prompt_file, {}, {})
-        assert cmd[:3] == ["gemini", "-p", f"@{prompt_file}"]
+        assert cmd[4:6] == [str(prompt_file), "gemini"]
+        assert "-p" not in cmd[5:]
 
     def test_bypass_permissions_maps_to_yolo(self) -> None:
         cmd = self.adapter.build_command(
@@ -333,9 +336,12 @@ class TestGeminiCliAdapter:
         }
         cmd = self.adapter.build_command(self.prompt_file, config, {})
         assert cmd == [
+            "/bin/sh",
+            "-c",
+            'prompt_file=$1; shift; exec "$@" < "$prompt_file"',
+            "metaproc-gemini",
+            str(self.prompt_file),
             "gemini",
-            "-p",
-            f"@{self.prompt_file}",
             "-m",
             "pro",
             "--approval-mode",
