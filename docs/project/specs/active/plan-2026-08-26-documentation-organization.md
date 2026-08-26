@@ -50,8 +50,8 @@ one vocabulary.
 
 ## Background
 
-A documentation audit on 2026-08-26 (against `a7cb65b`) inventoried 45 first-party
-documents and found the structure sound but the placement inconsistent.
+A documentation audit on 2026-08-26 inventoried 45 first-party documents and found the
+structure sound but the placement inconsistent.
 
 Four findings drive this plan.
 
@@ -64,7 +64,7 @@ existed on disk.
 
 **`arch-metaproc-core.md` is the original design doc wearing an architecture doc’s
 filename.** The evidence is in the file.
-It carries 19,026 words against 8,256 for the next largest architecture doc.
+It carries 19,926 words against 8,792 for the next largest architecture doc.
 It has 56 numbered sections where no other document has more than 4. Its numbering
 starts at §5, and it says why: “numbering starts at 5 because earlier sections moved
 into the concepts doc and the companion arch docs.”
@@ -80,7 +80,7 @@ other. Term counts across the pair:
 
 | Term | General | Shipped | Status |
 | --- | --- | --- | --- |
-| roster | 25 | 1 | The 1 is a disclaimer saying the framework does not use it |
+| roster | 24 | 1 | The 1 is a disclaimer saying the framework does not use it |
 | task | 64 | 8 | General calls it “the pivotal object”; shipped calls it “not an authored process object” |
 | attempt | 32 | 5 | Core object in general; incidental in shipped |
 | commit | 17 | 1 | The 1 is `git commit`, unrelated |
@@ -91,7 +91,7 @@ other. Term counts across the pair:
 
 **The shipped manuals are linked as commands, not as documents.** README rows 89-91 make
 the invocation the row and the document a parenthetical `(source)`. Those three files
-hold 12,750 words, including the second-largest document in the repository.
+hold 13,742 words, including the second-largest document in the repository.
 A GitHub reader cannot run `metaproc help`.
 
 ## Design
@@ -131,7 +131,7 @@ elsewhere. Naming it `metaproc-design.md` also matches what contributors already
 from memory.
 
 The remaining seven `arch-*.md` files stay architecture docs.
-They are what the category is for: focused component references, each 1,179 to 8,256
+They are what the category is for: focused component references, each 1,179 to 8,792
 words, covering RunPool admission and memory pressure, the Claude Code harness, cloud
 execution, authentication, file IO, the execution model, and testing.
 
@@ -140,7 +140,7 @@ execution, authentication, file IO, the execution model, and testing.
 The shipped manual set stays `operator`, `developer`, `concepts` and nothing is added.
 
 For the design doc, the reasons not to bake it in are its size and its kind.
-At 19,026 words it would more than double the wheel’s 12,750-word documentation payload,
+At 19,926 words it would more than double the wheel’s 13,742-word documentation payload,
 and a document with a Revision History and a Future Considerations section is a design
 record, not a help topic.
 `metaproc help` topics are task-oriented: how to run something, how to extend something,
@@ -329,6 +329,7 @@ required beyond a CHANGELOG entry noting the documentation paths moved.
 
 ## References
 
-- Documentation audit, 2026-08-26, against `a7cb65b`
+- Documentation audit, 2026-08-26. Figures re-measured against `d17b493`, the base this
+  plan merges into; the audit’s conclusions were unchanged by that rebase.
 - `docs/project/README.md` — the project-records rule this plan applies
 - `devtools/check_links.py` — the gate that makes a rename of this size safe
