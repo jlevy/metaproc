@@ -512,11 +512,20 @@ def extract_log_error(log_path: Path, tail_lines: int = 30) -> str | None:
                 msg = error.get("message")
                 if msg:
                     return str(msg)[:200]
+        elif event.get("status") == "error":
+            error = event.get("error")
+            if isinstance(error, dict):
+                msg = error.get("message")
+                if msg:
+                    return str(msg)[:200]
 
-    # Priority 2: raw stderr lines (non-JSON) — last non-JSON line from the tail
+    # Priority 2: raw stderr lines (non-JSON) — last meaningful line from the tail.
+    # Pretty-printed errors commonly end with a bare delimiter; never let that
+    # hide the preceding diagnostic.
+    delimiters = {"{", "}", "[", "]", "},", "],"}
     for line in reversed(lines):
         stripped = line.strip()
-        if not stripped:
+        if not stripped or stripped in delimiters:
             continue
         try:
             json.loads(stripped)
