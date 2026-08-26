@@ -83,11 +83,31 @@ def info_handler(request: Request) -> JSONResponse:  # noqa: ARG001
 # ── /viz-model ──────────────────────────────────────────────────
 
 
+def _relativize_io_paths(entries: Any) -> None:
+    """Rewrite path-bearing fields in an input/output declaration mapping."""
+    for entry in entries.values():
+        if entry.path is not None:
+            entry.path = relativize_path(entry.path)
+        template = getattr(entry, "template", None)
+        if template is not None:
+            entry.template = relativize_path(template)
+
+
+def _relativize_process_header_paths(header: Any) -> None:
+    """Rewrite every path carried by a process header."""
+    header.source_path = relativize_path(header.source_path) or header.source_path
+    _relativize_io_paths(header.process_inputs)
+    for entry in header.process_inputs.values():
+        if entry.as_type == "path" and isinstance(entry.default, str):
+            entry.default = relativize_path(entry.default)
+    _relativize_io_paths(header.process_outputs)
+
+
 def _relativize_viz_paths(viz: Any) -> None:
     """Rewrite every path field on a ``VizModel`` to be ROOT_DIR-relative."""
     viz.root_process = relativize_path(viz.root_process) or viz.root_process
     if viz.header is not None:
-        viz.header.source_path = relativize_path(viz.header.source_path) or viz.header.source_path
+        _relativize_process_header_paths(viz.header)
     for node in viz.nodes:
         if node.path is not None:
             node.path = relativize_path(node.path)
@@ -98,13 +118,17 @@ def _relativize_viz_paths(viz: Any) -> None:
             if node.step.output_root is not None:
                 node.step.output_root = relativize_path(node.step.output_root)
             node.step.prompt_paths = [relativize_path(p) or p for p in node.step.prompt_paths]
+            _relativize_io_paths(node.step.inputs)
+            _relativize_io_paths(node.step.outputs)
+            if node.step.fan_out is not None and node.step.fan_out.source is not None:
+                node.step.fan_out.source = (
+                    relativize_path(node.step.fan_out.source) or node.step.fan_out.source
+                )
         if node.dep is not None:
             node.dep.path = relativize_path(node.dep.path) or node.dep.path
             node.dep.source_path = relativize_path(node.dep.source_path) or node.dep.source_path
         if node.process is not None:
-            node.process.source_path = (
-                relativize_path(node.process.source_path) or node.process.source_path
-            )
+            _relativize_process_header_paths(node.process)
     if viz.progress is not None:
         viz.progress.run_dir = relativize_path(viz.progress.run_dir) or viz.progress.run_dir
 

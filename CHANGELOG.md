@@ -27,6 +27,12 @@ development series.
 
 ### Fixed
 
+- **Visualization projections preserve authored and resolved fields**: `VizModel` now
+  includes public process outputs, complete process-input and default declarations, and
+  the resource, failure, execution-profile, namespace, and fan-out fields carried by a
+  resolved plan. The MetaBrowser process and step panels render these fields, and
+  projection tests enforce field parity with the authored and resolved source models.
+
 - **GCP credentials hydrate inside the container**: Batch job specifications now carry
   Secret Manager references rather than plaintext-expanded `secret_variables`, require
   an explicit runtime service account, reject registered credentials passed through

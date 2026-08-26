@@ -147,7 +147,7 @@ def test_api_viz_returns_projected_model(tmp_path: Path, monkeypatch) -> None:
     resp = _run_api_viz(pb, {"process": "test.process.md"})
     payload = json.loads(bytes(resp.body))
     viz = payload["viz"]
-    assert viz["schema"] == "metaproc:VizModel/0.2"
+    assert viz["schema"] == "metaproc:VizModel/0.3"
     assert viz["header"]["name"] == "p"
     assert viz["header"]["description"] == "d"
     assert viz["root_process"].endswith(".process.md")

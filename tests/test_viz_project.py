@@ -20,12 +20,23 @@ from pathlib import Path
 import pytest
 
 from metaproc.io.state_io import write_status_at
-from metaproc.models.authored import ProcessSpec
-from metaproc.models.plan import Plan
+from metaproc.models.authored import (
+    ParseConfig,
+    ProcessDefaults,
+    ProcessInput,
+    ProcessOutput,
+    ProcessSpec,
+)
+from metaproc.models.plan import FanOut, Plan, ResolvedStep
 from metaproc.models.runtime import StatusRecord
 from metaproc.models.viz import (
+    DefaultsBlock,
+    FanOutDetails,
+    InputSpec,
     NodeProgress,
+    OutputSpec,
     ProgressSnapshot,
+    StepDetails,
     VizModel,
 )
 from metaproc.viz import build_viz_model
@@ -215,6 +226,122 @@ def test_field_coverage_every_step_and_dep_field_round_trips(tmp_path: Path) -> 
     predictions_out = deps_by_name["predictions_out"].dep
     assert predictions_out is not None
     assert predictions_out.produced_by == "predict"
+
+
+def test_projection_contract_covers_authored_and_resolved_source_models() -> None:
+    assert set(ProcessDefaults.model_fields) <= set(DefaultsBlock.model_fields)
+    assert set(ProcessInput.model_fields) - {"as_"} <= set(InputSpec.model_fields)
+    assert set(ProcessOutput.model_fields) - {"as_"} <= set(OutputSpec.model_fields)
+    assert "as_type" in InputSpec.model_fields
+    assert "as_type" in OutputSpec.model_fields
+    assert set(ResolvedStep.model_fields) <= set(StepDetails.model_fields)
+    assert set(FanOut.model_fields) - {"items"} <= set(FanOutDetails.model_fields)
+
+
+def test_projection_preserves_public_ports_and_resolved_execution_fields() -> None:
+    spec = ProcessSpec(
+        name="projection-coverage",
+        defaults=ProcessDefaults(
+            default_execution_profile="pi-fast",
+            recommended_execution_profiles=["pi-fast", "gemini-flash"],
+            reuse_policy="exact_inputs",
+        ),
+        inputs={
+            "roster": ProcessInput.model_validate(
+                {
+                    "path": "data/roster.md",
+                    "as": "path",
+                    "parse": ParseConfig(format="frontmatter-md", extract="progress.items"),
+                    "required": False,
+                    "default": "data/default-roster.md",
+                    "description": "Mapped work roster.",
+                }
+            )
+        },
+        outputs={
+            "report": ProcessOutput.model_validate(
+                {
+                    "ref": "work.report",
+                    "as": "path",
+                    "format": "frontmatter-md",
+                    "template": "templates/report.template.md",
+                    "condition": "RUN_MODE == smoke",
+                    "description": "Accepted process report.",
+                }
+            )
+        },
+    )
+    plan = Plan(
+        process="projection-coverage.process.md",
+        steps=[
+            ResolvedStep(
+                step_id="work",
+                mode="agent",
+                resources={"memory": "large"},
+                on_failure="continue",
+                execution_profile="pi-fast",
+                artifact_namespace="pi-fast",
+                fan_out=FanOut(
+                    over="roster",
+                    bind="ticker",
+                    source="data/roster.md",
+                    bind_fields=["ticker", "company"],
+                    batch_size=4,
+                    filtered_count=2,
+                    align="same_key",
+                    max_concurrency=3,
+                ),
+            )
+        ],
+    )
+    viz = build_viz_model(
+        PlanBundle(
+            plan=plan,
+            spec=spec,
+            source_path="projection-coverage.process.md",
+            body_markdown="Projection coverage.",
+        )
+    )
+    viz = VizModel.model_validate_json(viz.model_dump_json(by_alias=True))
+
+    assert viz.header.defaults.default_execution_profile == "pi-fast"
+    assert viz.header.defaults.recommended_execution_profiles == [
+        "pi-fast",
+        "gemini-flash",
+    ]
+    assert viz.header.defaults.reuse_policy == "exact_inputs"
+    assert viz.header.process_inputs["roster"] == InputSpec(
+        name="roster",
+        path="data/roster.md",
+        param=None,
+        as_type="path",
+        parse=ParseConfig(format="frontmatter-md", extract="progress.items"),
+        required=False,
+        default="data/default-roster.md",
+        description="Mapped work roster.",
+    )
+    assert viz.header.process_outputs["report"] == OutputSpec(
+        name="report",
+        path=None,
+        ref="work.report",
+        as_type="path",
+        format="frontmatter-md",
+        template="templates/report.template.md",
+        condition="RUN_MODE == smoke",
+        description="Accepted process report.",
+    )
+
+    work = next(node.step for node in viz.nodes if node.id == "work")
+    assert work is not None
+    assert work.resources == {"memory": "large"}
+    assert work.on_failure == "continue"
+    assert work.execution_profile == "pi-fast"
+    assert work.artifact_namespace == "pi-fast"
+    assert work.fan_out is not None
+    assert work.fan_out.source == "data/roster.md"
+    assert work.fan_out.filtered_count == 2
+    assert work.fan_out.align == "same_key"
+    assert work.fan_out.max_concurrency == 3
 
 
 def test_step_io_summaries_pull_as_type_and_producer_from_deps(tmp_path: Path) -> None:

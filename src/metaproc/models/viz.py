@@ -21,7 +21,7 @@ from typing import ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from metaproc.models.authored import IOSpec, RetryPolicy
+from metaproc.models.authored import IOSpec, ParseConfig, RetryPolicy
 
 # ── Leaf / sub-types ────────────────────────────────────────────
 # Embedded in StepDetails / DepDetails / ProcessHeader. These do not carry their
@@ -48,19 +48,39 @@ class FanOutDetails(BaseModel):
 
     over: str
     bind: str | None = None
+    source: str | None = None
     bind_fields: list[str] = Field(default_factory=list)
     batch_size: int | None = None
     retry: RetryPolicy | None = None
     item_count: int | None = None
+    filtered_count: int = 0
+    align: Literal["same_key"] | None = None
+    max_concurrency: int | None = None
 
 
 class InputSpec(BaseModel):
     """One entry of ``process.inputs`` (operator binding)."""
 
     name: str
+    path: str | None = None
     param: str | None = None
     as_type: str
+    parse: ParseConfig | None = None
+    required: bool = True
     default: str | int | float | bool | None = None
+    description: str | None = None
+
+
+class OutputSpec(BaseModel):
+    """One entry of ``process.outputs`` (public process artifact)."""
+
+    name: str
+    path: str | None = None
+    ref: str | None = None
+    as_type: str
+    format: str | None = None
+    template: str | None = None
+    condition: str | None = None
     description: str | None = None
 
 
@@ -69,6 +89,9 @@ class DefaultsBlock(BaseModel):
 
     default_adapter: str | None = None
     adapters: dict[str, AdapterSummary] = Field(default_factory=dict)
+    default_execution_profile: str | None = None
+    recommended_execution_profiles: list[str] = Field(default_factory=list)
+    reuse_policy: str = "validated_outputs"
     retry: RetryPolicy | None = None
 
 
@@ -90,11 +113,11 @@ class IOSummaryEntry(BaseModel):
 
 
 class StepDetails(BaseModel):
-    """Exhaustive step payload — one slot per authored step field."""
+    """Exhaustive step payload — one slot per resolved step field."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(populate_by_name=True)
 
-    schema_: str = Field(default="metaproc:StepDetails/0.1", alias="schema")
+    schema_: str = Field(default="metaproc:StepDetails/0.2", alias="schema")
 
     step_id: str
     mode: Literal["code", "agent", "composite", "manual"]
@@ -119,11 +142,15 @@ class StepDetails(BaseModel):
     with_: dict[str, str] = Field(default_factory=dict, alias="with")
 
     adapter: AdapterSummary | None = None
+    resources: dict[str, object] = Field(default_factory=dict)
     variant: str | None = None
     env: dict[str, str] = Field(default_factory=dict)
     max_budget_usd: float | None = None
     token_budget: int | None = None
     reuse_policy: Literal["validated_outputs", "exact_inputs", "never"] | None = None
+    on_failure: Literal["block", "continue"] = "block"
+    execution_profile: str | None = None
+    artifact_namespace: str | None = None
 
     fan_out: FanOutDetails | None = None
 
@@ -158,13 +185,14 @@ class ProcessHeader(BaseModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(populate_by_name=True)
 
-    schema_: str = Field(default="metaproc:ProcessHeader/0.1", alias="schema")
+    schema_: str = Field(default="metaproc:ProcessHeader/0.2", alias="schema")
 
     name: str
     description: str | None = None
     process_schema_token: str
     source_path: str
     process_inputs: dict[str, InputSpec] = Field(default_factory=dict)
+    process_outputs: dict[str, OutputSpec] = Field(default_factory=dict)
     defaults: DefaultsBlock = Field(default_factory=DefaultsBlock)
     registered_schemas: list[str] = Field(default_factory=list)
     body_markdown: str = ""
@@ -250,7 +278,7 @@ class VizModel(BaseModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(populate_by_name=True)
 
-    schema_: str = Field(default="metaproc:VizModel/0.2", alias="schema")
+    schema_: str = Field(default="metaproc:VizModel/0.3", alias="schema")
 
     root_process: str
     header: ProcessHeader

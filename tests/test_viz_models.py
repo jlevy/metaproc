@@ -47,6 +47,7 @@ def _sample_step_details() -> StepDetails:
             "fan_out": FanOutDetails(
                 over="tickers",
                 bind="ticker",
+                source="data/tickers.yaml",
                 bind_fields=["ticker"],
                 batch_size=10,
                 retry=RetryPolicy(max_retries=2),
@@ -98,9 +99,9 @@ def _sample_process_header() -> ProcessHeader:
             lambda: VizEdge(source="a", target="b", kind="needs"),
             "metaproc:VizEdge/0.2",
         ),
-        (lambda: _sample_step_details(), "metaproc:StepDetails/0.1"),
+        (lambda: _sample_step_details(), "metaproc:StepDetails/0.2"),
         (lambda: _sample_dep_details(), "metaproc:DepDetails/0.1"),
-        (lambda: _sample_process_header(), "metaproc:ProcessHeader/0.1"),
+        (lambda: _sample_process_header(), "metaproc:ProcessHeader/0.2"),
         (
             lambda: NodeProgress(state="running", completed=3, total=10),
             "metaproc:NodeProgress/0.1",
@@ -154,11 +155,32 @@ def test_viz_model_round_trip_with_full_payload():
 
     restored = VizModel.model_validate_json(model.model_dump_json(by_alias=True))
     assert restored == model
-    assert restored.model_dump(by_alias=True)["schema"] == "metaproc:VizModel/0.2"
+    assert restored.model_dump(by_alias=True)["schema"] == "metaproc:VizModel/0.3"
     assert restored.header.name == "example_plugin"
     assert restored.nodes[0].step is not None
     assert restored.nodes[0].step.fan_out is not None
     assert restored.nodes[0].step.fan_out.retry is not None
+
+
+def test_viz_model_accepts_historical_fan_out_without_source() -> None:
+    model = VizModel(
+        root_process="example_plugin/main.process.md",
+        header=_sample_process_header(),
+        nodes=[VizNode(id="predict", kind="step", label="predict", step=_sample_step_details())],
+    )
+    payload = model.model_dump(by_alias=True)
+    payload["schema"] = "metaproc:VizModel/0.2"
+    payload["header"]["schema"] = "metaproc:ProcessHeader/0.1"
+    step_payload = payload["nodes"][0]["step"]
+    assert step_payload is not None
+    step_payload["schema"] = "metaproc:StepDetails/0.1"
+    del step_payload["fan_out"]["source"]
+
+    restored = VizModel.model_validate(payload)
+
+    assert restored.nodes[0].step is not None
+    assert restored.nodes[0].step.fan_out is not None
+    assert restored.nodes[0].step.fan_out.source is None
 
 
 def test_laid_out_round_trip():

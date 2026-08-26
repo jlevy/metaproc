@@ -21,6 +21,7 @@ from metaproc.models.authored import (
     IOSpec,
     ProcessDefaults,
     ProcessInput,
+    ProcessOutput,
     ProcessSpec,
     ValueType,
 )
@@ -32,6 +33,7 @@ from metaproc.models.viz import (
     FanOutDetails,
     InputSpec,
     IOSummaryEntry,
+    OutputSpec,
     ProcessHeader,
     ProgressSnapshot,
     StepDetails,
@@ -236,12 +238,14 @@ def _project_bundle(
 
 def _project_header(spec: ProcessSpec, source_path: str, body_markdown: str) -> ProcessHeader:
     inputs = {name: _project_input(name, decl) for name, decl in spec.inputs.items()}
+    outputs = {name: _project_output(name, decl) for name, decl in spec.outputs.items()}
     return ProcessHeader(
         name=spec.name,
         description=spec.description or None,
         process_schema_token=spec.schema_,
         source_path=source_path,
         process_inputs=inputs,
+        process_outputs=outputs,
         defaults=_project_defaults(spec.defaults),
         body_markdown=body_markdown,
     )
@@ -250,8 +254,25 @@ def _project_header(spec: ProcessSpec, source_path: str, body_markdown: str) -> 
 def _project_input(name: str, decl: ProcessInput) -> InputSpec:
     return InputSpec(
         name=name,
+        path=decl.path,
         param=decl.param,
         as_type=_value_type_to_string(decl.as_),
+        parse=decl.parse.model_copy() if decl.parse is not None else None,
+        required=decl.required,
+        default=decl.default,
+        description=decl.description,
+    )
+
+
+def _project_output(name: str, decl: ProcessOutput) -> OutputSpec:
+    return OutputSpec(
+        name=name,
+        path=decl.path,
+        ref=decl.ref,
+        as_type=_value_type_to_string(decl.as_),
+        format=decl.format,
+        template=decl.template,
+        condition=decl.condition,
         description=decl.description,
     )
 
@@ -261,6 +282,9 @@ def _project_defaults(defaults: ProcessDefaults) -> DefaultsBlock:
     return DefaultsBlock(
         default_adapter=defaults.default_adapter or None,
         adapters=adapters,
+        default_execution_profile=defaults.default_execution_profile,
+        recommended_execution_profiles=list(defaults.recommended_execution_profiles),
+        reuse_policy=defaults.reuse_policy,
         retry=defaults.retry,
     )
 
@@ -299,11 +323,15 @@ def _project_step_details(
         output_root=step.output_root,
         with_=dict(step.with_),  # pyright: ignore[reportCallIssue]  # alias="with" populated by name
         adapter=_project_adapter(step.adapter),
+        resources=dict(step.resources),
         variant=step.variant,
         env=dict(step.env),
         max_budget_usd=step.max_budget_usd,
         token_budget=step.token_budget,
         reuse_policy=reuse,
+        on_failure=step.on_failure,
+        execution_profile=step.execution_profile,
+        artifact_namespace=step.artifact_namespace,
         fan_out=_project_fan_out(step.fan_out),
         inputs_summary=_io_summaries(step.inputs, deps),
         outputs_summary=_io_summaries(step.outputs, deps),
@@ -409,10 +437,14 @@ def _project_fan_out(fan_out: FanOut | None) -> FanOutDetails | None:
     return FanOutDetails(
         over=fan_out.over,
         bind=fan_out.bind,
+        source=fan_out.source,
         bind_fields=list(fan_out.bind_fields),
         batch_size=fan_out.batch_size,
         retry=fan_out.retry,
         item_count=len(fan_out.items),
+        filtered_count=fan_out.filtered_count,
+        align=fan_out.align,
+        max_concurrency=fan_out.max_concurrency,
     )
 
 
