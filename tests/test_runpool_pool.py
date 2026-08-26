@@ -545,7 +545,7 @@ class TestRunPool:
             try:
                 # Start the deadlock guard only after cleanup is demonstrably wedged;
                 # the production cleanup timeout remains the bound under test.
-                await backend.kill_started.wait()
+                await asyncio.wait_for(backend.kill_started.wait(), timeout=1)
                 await asyncio.wait_for(asyncio.shield(shutdown), timeout=1)
                 events = [
                     json.loads(line)
