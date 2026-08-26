@@ -5,7 +5,7 @@ title: "Documentation organization: project docs, design doc, concepts reconcili
 kind: epic
 status: open
 priority: 1
-version: 21
+version: 22
 spec_path: docs/project/specs/active/plan-2026-08-26-documentation-organization.md
 labels:
   - docs
@@ -31,7 +31,8 @@ child_order_hints:
   - is-01m0zfnrc1pv65hd87f5j82j6z
   - is-01m0zfp2wxy4t1c76mez33z2v7
   - is-01m0zfp3a1snmnqjt7pgp791sc
+  - is-01m0zg02jxkanjfngqpypfb6jn
 created_at: 2026-08-26T16:49:22.254Z
-updated_at: 2026-08-26T16:50:35.457Z
+updated_at: 2026-08-26T16:56:02.397Z
 ---
 Umbrella for the 2026-08-26 documentation audit. Move every project-internal doc under docs/project, restore arch-metaproc-core.md to its real role as the main design doc, link project docs directly from README, and reconcile the general and shipped concepts docs onto one vocabulary. Phases and rationale in the linked spec.
