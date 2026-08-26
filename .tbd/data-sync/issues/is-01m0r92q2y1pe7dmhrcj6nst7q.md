@@ -5,7 +5,7 @@ title: Native mapped composite scopes and shared leaf admission
 kind: epic
 status: in_progress
 priority: 1
-version: 25
+version: 26
 spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - execution-model
@@ -30,7 +30,8 @@ child_order_hints:
   - is-01m0vk0mxg72tsmdgcxsm2hz8n
   - is-01m0wpb4m8fr758mmbnkd7x6vr
   - is-01m0xrg4vr6n4znzxz0kkxxxt7
+  - is-01m0yzwdz90x505k59tq1w73xa
 created_at: 2026-08-23T21:40:27.869Z
-updated_at: 2026-08-26T00:46:08.736Z
+updated_at: 2026-08-26T12:14:25.767Z
 ---
 Deliver the smallest safe native mapped-composite primitive: reuse one recursive RunExecutionContext, invoke child scopes in-process through the neutral fan-out runner, retain existing child and parent output declarations, write durable per-item state, and route local scalar agent leaves through one run-owned RunPool plus existing host admission. Exact-head verification and the successive smoke ladder gate expansion; schedulers, weighted claims, and new lineage stores remain evidence-triggered.
