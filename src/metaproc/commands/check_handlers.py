@@ -28,7 +28,12 @@ from pydantic import ValidationError
 from metaproc.cli import app, get_output
 from metaproc.commands.helpers import load_process_spec, resolve_process_path
 from metaproc.engine.code_handler import resolve_code_handler
-from metaproc.engine.process_scope import is_dep_ref, parse_dep_ref, resolve_process_dep_path
+from metaproc.engine.process_scope import (
+    expand_process_vars,
+    is_dep_ref,
+    parse_dep_ref,
+    resolve_process_dep_path,
+)
 
 
 @app.command("check-handlers")
@@ -59,6 +64,7 @@ def check_handlers(
             return
 
         process_root = path.parent
+        process_vars = expand_process_vars(spec, {})
 
         for step in spec.steps:
             if step.mode == "code" and step.handler:
@@ -95,7 +101,7 @@ def check_handlers(
                         out.data(f"  FAIL  uses     {label}:{step.id}: {msg}")
                         errors.append(f"{path}:{step.id}: {msg}")
                         continue
-                    sub_path = Path(resolve_process_dep_path(dep.path, {}, process_root))
+                    sub_path = Path(resolve_process_dep_path(dep.path, process_vars, process_root))
                 else:
                     sub_path = process_root / step.uses
                 if sub_path.exists():
