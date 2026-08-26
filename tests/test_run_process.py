@@ -2292,7 +2292,7 @@ class TestCompositeStepExecution:
                     "--var",
                     "RUN_ID=mapped-composite-pool-m0",
                     "--max-concurrency",
-                    "2",
+                    "1",
                 ],
             )
 
@@ -2300,6 +2300,7 @@ class TestCompositeStepExecution:
         assert direct_launch.await_count == 0
         run_dir = runs_dir / "mapped-composite-pool-m0"
         status = read_yaml_file(run_dir / STATE_DIR / "runpool-status.yaml")
+        assert status["max_concurrency"] == 1
         assert status["completed_count"] == 2
         assert status["failed_count"] == 0
         assert status["lanes"][0]["completed_count"] == 2
@@ -2312,6 +2313,11 @@ class TestCompositeStepExecution:
         assert sum(event["event"] == "pool_start" for event in pool_events) == 1
         assert sum(event["event"] == "process_start" for event in pool_events) == 2
         assert sum(event["event"] == "process_exit" for event in pool_events) == 2
+        assert [
+            event["event"]
+            for event in pool_events
+            if event["event"] in {"process_start", "process_exit"}
+        ] == ["process_start", "process_exit", "process_start", "process_exit"]
 
 
 class TestCodeStepLogs:
