@@ -541,7 +541,7 @@ def test_build_plan_rejects_fan_out_agent_outputs_outside_run_dir():
                 "name": "test",
                 "steps": [
                     {
-                        "id": "mine-adhoc",
+                        "id": "extract-items",
                         "mode": "agent",
                         "prompt_prefix": "mine",
                         "inputs": {"tickers": {"path": str(Path(tmpdir) / "tickers.md")}},

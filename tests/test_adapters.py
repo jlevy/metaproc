@@ -372,10 +372,9 @@ class TestClaudeCodeCliAdapterAuthCapable:
         # Regression: the classifier MUST NOT mark a credential expired
         # when the keyword `authentication_error` or `invalid_grant`
         # appears as ordinary tool / model output rather than a
-        # structured auth signal. This was the failure mode that
-        # destroyed Test A's V predict-ticker — a 403 from www.sec.gov
-        # got misclassified as an Anthropic auth failure because the
-        # session log happened to contain the substring.
+        # structured auth signal. A remote-site 403 must not be
+        # misclassified as an Anthropic auth failure merely because the
+        # session log happens to contain the substring.
         session_log = tmp_path / "session.jsonl"
         session_log.write_text(
             # Realistic shape: agent-emitted text mentioning auth keywords
@@ -386,7 +385,7 @@ class TestClaudeCodeCliAdapterAuthCapable:
             "appears to be invalid_grant — but that is unrelated to our actual "
             'auth state."}]}}\n'
             '{"type":"result","is_error":true,"result":"Failed to fetch '
-            "https://www.sec.gov/...: AxiosError: Request failed with status "
+            "https://example.invalid/...: AxiosError: Request failed with status "
             'code 403"}\n'
         )
         result = self.adapter.classify_failure(None, "exit code 1", session_log)
@@ -441,7 +440,7 @@ class TestClaudeCodeCliAdapterAuthCapable:
         # misses 401 and the broad claude-startup-exit-1-silent
         # known-bug detector misclassifies the failure as ``unknown``,
         # leaving the bad credential active in the pool.
-        session_log = tmp_path / "predict-ticker_TELNY_2026-04-27.jsonl"
+        session_log = tmp_path / "process-item_item-1.jsonl"
         session_log.write_text(
             '{"type":"result","subtype":"success","is_error":true,'
             '"api_error_status":401,'

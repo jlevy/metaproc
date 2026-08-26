@@ -61,6 +61,7 @@ from metaproc.io.state_io import (
     write_result_at,
 )
 from metaproc.logutil.compaction import try_compact_log
+from metaproc.models.authored import StepContext
 from metaproc.models.runtime import AttemptRecord, ManualAckRecord, ResultRecord
 from metaproc.paths import MANUAL_ACK_FILE
 
@@ -379,7 +380,7 @@ def run_step(
                     step_node_id=step,
                     item_key=canonical_item_key,
                 ):
-                    handler_fn(dict(variables), process_step)
+                    handler_fn(StepContext(dict(variables)), process_step)
             else:
                 if command_ref is None:
                     raise CLIError(f"no command or handler configured for step '{step}'")

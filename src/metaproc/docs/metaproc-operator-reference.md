@@ -145,15 +145,33 @@ rules [`conventions.md`](../../../docs/conventions.md).
 7. Hold the operator cap high; let the runpool govern down.
    `--max-concurrency` at launch and `pool override --cap N` mid-run set the *operator
    cap*, which is a hand-set ceiling, not the safety governor.
+   For a local `run-process`, the launch cap is shared by executable leaves across
+   fan-out pools, scalar steps, and composite scopes.
+   A `gcp-worker` launch applies it independently inside each worker.
    The adaptive memory and provider ceilings are what actively govern under pressure.
-   For local agent-pool dispatches (claude, codex, gemini, pi-cli), keep the operator
-   cap at ≥20 so the adaptive controller has room to ratchet down; setting it tighter
-   silently caps
+   Command-backed `mode: code` steps also use the shared launch cap and may execute
+   concurrently at one DAG level; fan-out paths retain their step caps.
+   The run-owned synchronous executor defaults to 32 workers and grows to an explicit
+   higher launch cap, so its implementation capacity does not silently lower that cap.
+   Code subprocesses share the process directory, so commands that mutate repository
+   state, lockfiles, or other shared paths must use per-item paths or their own
+   synchronization. For local agent-pool dispatches (claude, codex, gemini, pi-cli), keep
+   the operator cap at ≥20 so the adaptive controller has room to ratchet down; setting
+   it tighter silently caps
    `effective_target = min(memory_ceiling, provider_ceiling, operator_cap)` with no
    warning, even when the host could safely run more.
    See [`arch-runpool.md`](../../../docs/arch/arch-runpool.md) § “Operator cap floor”
    for the full rationale and why per-adapter memory profiles are not yet stable enough
    to tune the cap tightly.
+8. Treat `mode: code` work as owned by the step.
+   A command-backed step owns its complete process group.
+   Metaproc terminates surviving descendants and flushes the command log before
+   releasing run capacity, including after an exit-zero leader.
+   Intentional daemonization is therefore unsupported.
+   A long-running Python handler under `run-process` must check
+   `StepContext.cancel_requested()` at safe checkpoints and return promptly; Metaproc
+   waits for started handler work rather than abandoning a thread that may still write
+   artifacts.
 
 ## Runtime Terms
 
@@ -168,6 +186,29 @@ rules [`conventions.md`](../../../docs/conventions.md).
 
 Use **item** for workflow data and **task** for the harness-owned execution record.
 The `tasks/` path segment is about execution state, not the input data by itself.
+
+### Mapped composite scopes
+
+A composite step may declare `for_each` to run one child process per roster item.
+The child evaluator runs in the parent process; it does not start a child Metaproc
+command or acquire another orchestrator lease.
+For item `AAPL` on step `research`, the child scope is `<run>/research/AAPL/` and the
+parent task state is `<run>/.state/tasks/research/AAPL/`.
+
+The child process declares every output required for its own valid completion.
+The mapped parent separately declares the subset it publishes to downstream steps; the
+first implementation does not automatically project child ports.
+Metaproc validates both boundaries and revalidates every child-process output before
+reusing a completed parent item.
+This is stricter than earlier scalar-composite behavior: an inaccurate child output
+declaration now fails and must be corrected or removed.
+Duplicate resolved item keys fail before execution.
+
+`for_each.max_concurrency` is an optional ceiling on active structural scope evaluators.
+It is not a memory estimate or a replacement for executable-leaf and host admission.
+Retries belong to child leaves; a whole-scope `for_each.retry` is rejected.
+Mapped composites currently run on one host; selecting `gcp-worker` is rejected before
+any active DAG step or cloud dispatch begins.
 
 ## Starting Runs
 
@@ -185,8 +226,16 @@ Useful dispatch selectors:
 - `--from <step>` starts at a step and lets downstream dependencies run
 - `--only <step>` runs only the named step
 - `--skip <step>` marks a step skipped for this invocation
-- `--force` bypasses reuse checks and reruns eligible work
+- `--force` bypasses reuse checks throughout the run, including composite descendants
 - `--dry-run` prints the plan without launching work
+
+`--skip`, `--from`, and `--only` currently name root-process steps.
+They are not matched against same-named steps inside a composite child.
+
+The initial local run-owned pool supports one execution profile per run.
+If a later scalar agent leaf resolves to a different profile, Metaproc fails before
+launching it; run distinct profiles as separate sibling runs until mixed-profile pool
+placement is implemented.
 
 For the common “I edited one step, rerun and reuse the rest” loop, you usually do
 **not** pass any of these flags; rerun with the same `RUN_ID` and let the fingerprint
@@ -305,6 +354,12 @@ decision:
 
 Use `run-process --dry-run` or `metaproc deps <run>` to preview the cascade if you are
 unsure what the next launch will execute.
+
+Keep every resolved `--var` value unchanged when resuming a run ID. Metaproc rejects a
+changed, added, or removed variable before it reuses task state; start a new run ID for
+a different input set.
+Equivalent local and cloud Filestore mount aliases for `RUNS_DIR` are the sole
+normalization exception.
 
 ### Worked example
 
@@ -431,6 +486,19 @@ uv run metaproc run-process <process.process.md> \
 Use `uv run metaproc run-process --help` for the full credential-pool flag set (the
 underlying CLI flags are named `--auth-*`), including fallback and preflight behavior.
 
+The configured pool applies to matching scalar and fan-out agent steps.
+A step using a different adapter continues with that adapter’s ambient authentication
+and emits a warning naming both adapters.
+Treat that warning as evidence that the step is outside the pool, especially when
+comparing pool usage with expected task counts.
+
+With `--backend gcp-worker`, scalar agent steps execute on the orchestrator while
+fan-out items execute on workers.
+Both lease from the same configured label set, so a long scalar call can hold a label
+that a worker is also waiting to acquire.
+Size the label set for the combined orchestrator-and-worker demand and use `auth usage`
+plus `pool events` to inspect contention.
+
 ## Monitoring Commands
 
 | Question | Command |
@@ -445,6 +513,7 @@ underlying CLI flags are named `--auth-*`), including fallback and preflight beh
 | What did it cost? | `uv run metaproc trace --extract <run-dir> && uv run metaproc trace <run-dir> --cost` |
 | How did concurrency change? | `uv run metaproc pool concurrency-timeline <run-dir>` |
 | What did the pool record? | `uv run metaproc pool events <run-dir>` |
+| What did every run-owned and step pool record? | `uv run metaproc pool rollup <run-dir>` |
 | What are throughput and resource totals? | `uv run metaproc stats <run-dir>` |
 | Which auth labels were used? | `uv run metaproc auth usage <run-dir>` |
 | What is the cloud Batch state? | `uv run metaproc gcp status <run-id>` |
@@ -476,6 +545,13 @@ Above the table, a one-line summary tells you whether anything needs attention:
   `N` counts those two states (running steps are excluded — the orchestrator is already
   on them).
 
+The top `Status:` label reports execution, while `Process:` reports definition
+freshness. A terminal code-step failure therefore renders `Status: FAILED` with its
+durable task error and does not render the potentially misleading `Process: current`
+summary. Full JSON output exposes these facts as `process_execution_state` and
+`process_error`; the projected `--steps` JSON surface remains
+`{run_dir, process_state, steps}`.
+
 Useful flags:
 
 - `--steps` shows only the Steps table (skips the variant table, timing, system metrics,
@@ -492,7 +568,9 @@ Useful flags:
 
 When `run-config.yaml` is missing, the spec has moved, or the plan no longer builds
 under the captured params, the Steps section is omitted silently — the rest of
-`metaproc status` still works.
+`metaproc status` still works because execution state comes directly from
+`process-status.yaml`. `status --check` and `wait` treat a terminal process failure as
+failed even when the process had no fan-out items.
 
 ## Log Compression
 
@@ -617,6 +695,12 @@ for unmarked old runs.
 | Workflow tool logs | `<run>/.logs/tools/<tool-name>/invocations.jsonl` | Workflow-owned tool invocation streams |
 | Trace output | `<run>/.logs/derived/trace.jsonl` | Derived `TraceEvent/0.1` output from `metaproc trace --extract` |
 
+Runpool event streams include `auth_lease_acquired` and `auth_outcome` when a pooled
+credential is used.
+An `auth_skipped` event with `pool_enabled: false` records an adapter
+mismatch that used ambient authentication instead, so pool use can be audited without
+scraping console output.
+
 `tools/<tool-name>/` marks workflow ownership even though the file is operationally a
 log. `derived/` marks extractor output; trace extractors should not treat it as source
 input.
@@ -633,6 +717,18 @@ uv run metaproc trace <run-dir> --tree
 uv run metaproc trace <run-dir> --health
 uv run metaproc trace <run-dir> --cost
 ```
+
+Extraction from a parent run includes framework logs from nested composite scope roots.
+Every span carries `scope.path`; `.` identifies the parent and paths such as
+`research/AAPL` identify child scopes.
+Nested span IDs and cross-source joins are scoped, so repeated child step and item names
+do not collide. If a Gemini attempt finishes successfully after a failed tool call, the
+tool remains an `error` span with `error.recovered: true` for diagnosis but does not
+change the successful session or attempt status.
+
+`pool rollup` follows the same composite-scope discovery rule.
+It includes a scope’s run-owned root pool at `.` or its relative scope path, plus any
+step-owned pools below that scope.
 
 Re-run extraction after a run completes, after recovering old logs, or after changing an
 extractor. Do not edit trace JSONL by hand; fix the source log or extractor and

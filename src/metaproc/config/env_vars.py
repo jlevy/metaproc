@@ -39,7 +39,7 @@ class MetaprocEnv(EnvEnum):
     )
     METAPROC_GCP_SERVICE_ACCOUNT = tunable(
         "Explicit service account for Batch VMs. Required for every job that binds "
-        "Secret Manager values; dispatch refuses secret-bearing jobs without it.",
+        "Secret Manager values or uses a Secret Manager auth pool.",
         "<worker-sa>@<your-gcp-project-id>.iam.gserviceaccount.com",
     )
     METAPROC_GCP_CONTAINER_IMAGE = tunable(

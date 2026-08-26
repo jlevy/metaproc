@@ -269,7 +269,7 @@ express, and each names its own trigger:
 | Model semantics absent from the engine | Trigger that justifies building it |
 | --- | --- |
 | Item streaming across forks (aligned chains are linear, single-consumer) | two consumers need the same producer’s items without a barrier |
-| Closed dynamic expansions and re-expansion generations | a roster grows mid-run, e.g. promotion-to-depth producing items while consumers run |
+| Closed dynamic expansions and re-expansion generations | an upstream expansion produces additional items while consumers run |
 | Derived-subset lineage | a promoted subset must stay item-aligned to its parent roster instead of re-barriering |
 | Per-item causal force with mapped invalidation | an operator needs to re-run one item through a chain without invalidating siblings |
 | Deterministic fair admission across step scopes | starvation is observed between concurrently expanding steps |

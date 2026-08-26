@@ -626,6 +626,235 @@ class TestPoolSubmitAndShutdown:
 
         asyncio.run(_run())
 
+    def test_cancelled_pool_future_is_terminal_and_tears_down_auth(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        async def _run() -> None:
+            class CancelledPool:
+                _status_path = None
+
+                @property
+                def snapshot(self) -> Any:
+                    return SimpleNamespace(
+                        current_concurrency=1,
+                        active_count=0,
+                        pending_count=0,
+                    )
+
+                @property
+                def shutting_down(self) -> bool:
+                    return False
+
+                def submit(self, _config: Any) -> asyncio.Future[Any]:
+                    future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+                    future.cancel()
+                    return future
+
+                async def shutdown(self) -> None:
+                    pass
+
+            teardown = MagicMock(return_value=None)
+            state_dir = tmp_path / "state" / "AAPL"
+            with (
+                patch("metaproc.commands.run_parallel.RunPool", return_value=CancelledPool()),
+                patch(
+                    "metaproc.commands.run_parallel._build_prepare_launch",
+                    return_value=MagicMock(),
+                ),
+                patch("metaproc.commands.run_parallel.compute_item_dir", return_value=None),
+                patch(
+                    "metaproc.commands.run_parallel.compute_task_state_dir",
+                    return_value=state_dir,
+                ),
+                patch("metaproc.commands.run_parallel._teardown_pool_slot", teardown),
+            ):
+                results = await _run_agent_pool(
+                    spec=_make_spec(),
+                    step_def=_make_step_def(),
+                    step="predict",
+                    each="ticker",
+                    variables={"RUN_ID": "test/run", "VARIANT": "v1"},
+                    item_contexts=[{"ticker": "AAPL"}],
+                    adapter_type="claude-code-cli",
+                    merged_config={"model": "claude-3"},
+                    effective_outputs=None,
+                    effective_variant="v1",
+                    allowed_runtime=set(),
+                    retry_policy=RetryPolicy(max_retries=3),
+                    process_dir=tmp_path,
+                    target_env=None,
+                    refresh_token_fn=None,
+                    pool_config=RunPoolConfig(),
+                    backend=MagicMock(),
+                    out=MagicMock(),
+                )
+
+            assert results == [("AAPL", 1)]
+            history = read_attempt_history_at(state_dir)
+            assert [row.disposition for row in history] == [AttemptDisposition.cancelled]
+            teardown.assert_called_once()
+
+        asyncio.run(_run())
+
+    def test_shutting_down_pool_does_not_submit_or_retry_new_items(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        async def _run() -> None:
+            class StoppingPool:
+                _status_path = None
+
+                @property
+                def snapshot(self) -> Any:
+                    return SimpleNamespace(
+                        current_concurrency=1,
+                        active_count=0,
+                        pending_count=0,
+                    )
+
+                @property
+                def shutting_down(self) -> bool:
+                    return True
+
+                def submit(self, _config: Any) -> asyncio.Future[Any]:
+                    raise AssertionError("a stopping pool must not receive new work")
+
+                async def shutdown(self) -> None:
+                    pass
+
+            state_dir = tmp_path / "state" / "AAPL"
+            with (
+                patch("metaproc.commands.run_parallel.RunPool", return_value=StoppingPool()),
+                patch(
+                    "metaproc.commands.run_parallel._build_prepare_launch",
+                    return_value=MagicMock(),
+                ),
+                patch("metaproc.commands.run_parallel.compute_item_dir", return_value=None),
+                patch(
+                    "metaproc.commands.run_parallel.compute_task_state_dir",
+                    return_value=state_dir,
+                ),
+                patch("metaproc.commands.run_parallel._teardown_pool_slot", return_value=None),
+            ):
+                results = await _run_agent_pool(
+                    spec=_make_spec(),
+                    step_def=_make_step_def(),
+                    step="predict",
+                    each="ticker",
+                    variables={"RUN_ID": "test/run", "VARIANT": "v1"},
+                    item_contexts=[{"ticker": "AAPL"}],
+                    adapter_type="claude-code-cli",
+                    merged_config={"model": "claude-3"},
+                    effective_outputs=None,
+                    effective_variant="v1",
+                    allowed_runtime=set(),
+                    retry_policy=RetryPolicy(max_retries=3),
+                    process_dir=tmp_path,
+                    target_env=None,
+                    refresh_token_fn=None,
+                    pool_config=RunPoolConfig(),
+                    backend=MagicMock(),
+                    out=MagicMock(),
+                )
+
+            assert results == [("AAPL", 1)]
+            history = read_attempt_history_at(state_dir)
+            assert [row.disposition for row in history] == [AttemptDisposition.cancelled]
+
+        asyncio.run(_run())
+
+    def test_scheduler_cancellation_finalizes_active_item_auth(self, tmp_path: Path) -> None:
+        async def _run() -> None:
+            class CancellingPool:
+                _status_path = None
+
+                def __init__(self) -> None:
+                    self.submitted = asyncio.Event()
+                    self.future: asyncio.Future[Any] | None = None
+
+                @property
+                def snapshot(self) -> Any:
+                    return SimpleNamespace(
+                        current_concurrency=1,
+                        active_count=1 if self.future is not None else 0,
+                        pending_count=0,
+                    )
+
+                @property
+                def shutting_down(self) -> bool:
+                    return False
+
+                def submit(self, _config: Any) -> asyncio.Future[Any]:
+                    self.future = asyncio.get_running_loop().create_future()
+                    self.submitted.set()
+                    return self.future
+
+                async def shutdown(self) -> None:
+                    assert self.future is not None
+                    self.future.cancel()
+
+            pool = CancellingPool()
+            teardown = MagicMock(return_value=None)
+            state_dir = tmp_path / "state" / "AAPL"
+
+            def _prepare(*, shared: dict[str, Any], **_kwargs: Any) -> MagicMock:
+                shared["running_record"] = mark_running_at(
+                    state_dir,
+                    run_id="test/run",
+                    step_id="predict",
+                    item={"ticker": "AAPL"},
+                    item_key="AAPL",
+                )
+                shared["slot_lease"] = object()
+                return MagicMock()
+
+            with (
+                patch("metaproc.commands.run_parallel.RunPool", return_value=pool),
+                patch(
+                    "metaproc.commands.run_parallel._build_prepare_launch",
+                    side_effect=_prepare,
+                ),
+                patch("metaproc.commands.run_parallel.compute_item_dir", return_value=None),
+                patch(
+                    "metaproc.commands.run_parallel.compute_task_state_dir",
+                    return_value=state_dir,
+                ),
+                patch("metaproc.commands.run_parallel._teardown_pool_slot", teardown),
+            ):
+                run = asyncio.create_task(
+                    _run_agent_pool(
+                        spec=_make_spec(),
+                        step_def=_make_step_def(),
+                        step="predict",
+                        each="ticker",
+                        variables={"RUN_ID": "test/run", "VARIANT": "v1"},
+                        item_contexts=[{"ticker": "AAPL"}],
+                        adapter_type="claude-code-cli",
+                        merged_config={"model": "claude-3"},
+                        effective_outputs=None,
+                        effective_variant="v1",
+                        allowed_runtime=set(),
+                        retry_policy=RetryPolicy(max_retries=3),
+                        process_dir=tmp_path,
+                        target_env=None,
+                        refresh_token_fn=None,
+                        pool_config=RunPoolConfig(),
+                        backend=MagicMock(),
+                        out=MagicMock(),
+                    )
+                )
+                await pool.submitted.wait()
+                run.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await run
+
+            history = read_attempt_history_at(state_dir)
+            assert [row.disposition for row in history] == [AttemptDisposition.cancelled]
+            teardown.assert_called_once()
+
+        asyncio.run(_run())
+
     def test_completed_item_from_another_run_is_not_reused(self, tmp_path: Path) -> None:
         async def _run() -> None:
             class FakePool:

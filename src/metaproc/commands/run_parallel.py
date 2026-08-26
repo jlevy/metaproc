@@ -22,7 +22,6 @@ import typer
 from prettyfmt import fmt_timedelta
 from strif import atomic_output_file
 
-from metaproc.adapters.base import FailureSeverity
 from metaproc.cloud.gcp.resolve_token import resolve_gcp_token
 from metaproc.dispatch.credential_pool import (
     FallbackPolicy,
@@ -31,9 +30,15 @@ from metaproc.dispatch.credential_pool import (
     gcp_backend,
     local_backend,
 )
-from metaproc.dispatch.pool_dispatch import PoolDispatchConfig
+from metaproc.dispatch.pool_dispatch import (
+    PoolDispatchConfig,
+    auth_forces_abort,
+    bind_pool_dispatch_scope,
+    complete_slot,
+)
 from metaproc.dispatch.preflight import validate_guard_posture
 from metaproc.dispatch.slot_coordinator import SlotCoordinator
+from metaproc.runpool.events import EventLogger
 from metaproc.runpool.pool import resolve_min_concurrency
 from metaproc.settings import POOL_MIN_CONCURRENCY
 
@@ -126,7 +131,14 @@ from metaproc.io.state_io import (
     write_result_at,
 )
 from metaproc.logutil.compaction import try_compact_log
-from metaproc.models.authored import IOSpec, ProcessDefaults, ProcessSpec, ProcessStep, RetryPolicy
+from metaproc.models.authored import (
+    IOSpec,
+    ProcessDefaults,
+    ProcessSpec,
+    ProcessStep,
+    RetryPolicy,
+    StepContext,
+)
 from metaproc.models.runtime import (
     AttemptDisposition,
     AttemptRecord,
@@ -145,23 +157,6 @@ from metaproc.runpool.pool import (
 )
 from metaproc.runpool.registry import get_backend
 from metaproc.settings import POOL_STALL_TIMEOUT_MINUTES
-
-
-def _auth_forces_abort(classification: AuthFailureClassification | None) -> bool:
-    """Return True when a pool auth classification demands skipping retry.
-
-    Plan §Phase 5: the pool adapter's ``effective_severity()`` takes
-    precedence over the generic retry classifier. ABORT means retrying
-    won't help — dead refresh token, expired credential, matched known
-    bug — so the dispatch must fail fast instead of burning attempts.
-
-    ``None`` (non-pool dispatch or success teardown) returns ``False``
-    so the generic retry path is untouched.
-    """
-
-    if classification is None:
-        return False
-    return classification.effective_severity() == FailureSeverity.ABORT
 
 
 def _compute_pool_cooling_delay(
@@ -187,8 +182,7 @@ def _compute_pool_cooling_delay(
 
     Without this distinction, a fan-out with 10 items and 2 labels would
     stall items 3-10 by ``ceiling_s`` each (30 min) under the cooling
-    interpretation, even though the labels are healthy. Surfaced by the
-    Tuesday 2026-04-28 smoke (mine-adhoc step) — see plan progress log.
+    interpretation, even though the labels are healthy.
 
     Returns ``ceiling_s`` defensively when the pool peek fails.
     """
@@ -227,56 +221,6 @@ def _compute_pool_cooling_delay(
         return ceiling_s
 
 
-def _expand_pool_exclude_by_quota_group(
-    *,
-    pool_dispatch: Any,
-    lease: Any,
-    exclude_list: list[tuple[str, str]],
-) -> None:
-    """Add every sibling label sharing the failing label's quota_group to
-    *exclude_list*.
-
-    Phase 4: on a 429 cooling classification, the next
-    retry should skip the entire quota group, not just the failing
-    label. Otherwise a same-org alt label gets a wasted 429 in lockstep.
-
-    Treats unknown-quota-group labels conservatively — if the failing
-    label's group is ``unknown``, we don't expand (we don't know what
-    else shares quota). Operators can resolve this by setting
-    ``--quota-group org:<uuid>`` or ``account:<hex>`` on push.
-
-    Logging is intentionally minimal — at-debug-level only — because
-    quota-group expansion can fire many times per cohort. Operators
-    inspect the audit trail via the auth_outcome event's
-    ``quota_group_*`` fields, not via dispatch logs.
-    """
-    try:
-        backend = pool_dispatch.coordinator.backend
-        failing_entry = backend.get_entry(lease.adapter, lease.label)
-    except (KeyError, AttributeError):
-        # Backend doesn't have this entry (rare race) or coordinator is
-        # an older API shape — fall back to single-label exclude
-        # (existing behavior).
-        return
-    failing_group = failing_entry.state.quota_group
-    if failing_group.kind == "unknown":
-        return
-    # Sibling lookup: list all entries for this adapter, exclude the
-    # ones not in the same group, and add (adapter, label) pairs to
-    # the exclude list. The failing label is already there.
-    try:
-        all_entries = backend.list_entries(adapter=lease.adapter)
-    except Exception:  # noqa: BLE001 — defensive: a backend hiccup must not block teardown
-        return
-    already_excluded = set(exclude_list)
-    for entry in all_entries:
-        if (entry.adapter, entry.label) in already_excluded:
-            continue
-        if entry.state.quota_group == failing_group:
-            exclude_list.append((entry.adapter, entry.label))
-            already_excluded.add((entry.adapter, entry.label))
-
-
 def _teardown_pool_slot(
     *,
     pool_dispatch: Any | None,
@@ -299,7 +243,7 @@ def _teardown_pool_slot(
     ``None`` returned when no slot was leased (non-pool dispatch or a
     prior teardown already released it). Otherwise returns the
     :class:`AuthFailureClassification` the coordinator received so the
-    caller can consult :func:`_auth_forces_abort` for retry decisions.
+    caller can consult :func:`auth_forces_abort` for retry decisions.
     """
     if pool_dispatch is None:
         return None
@@ -307,72 +251,16 @@ def _teardown_pool_slot(
     if lease is None:
         return None
 
-    # Deferred so tests can monkeypatch
-    # metaproc.dispatch.pool_dispatch.{classify_failure_for_slot,build_auth_outcome}
-    # at module attribute level; a top-level binding would capture the
-    # pre-patch function and bypass the monkeypatch.
-    from metaproc.dispatch.pool_dispatch import (  # noqa: PLC0415 -- test monkeypatch boundary
-        build_auth_outcome,
-        classify_failure_for_slot,
-    )
-
-    classification: AuthFailureClassification | None = None
     session_log: Path | None = None
     if isinstance(shared.get("log_path"), Path):
         session_log = shared["log_path"]
-    if error_str is not None:
-        classification = classify_failure_for_slot(
-            lease,
-            error_str=error_str,
-            session_log_path=session_log,
-        )
-        # Only accumulate the failed label for retry's fallback walk when the
-        # classification indicates a *label-level* problem (``cooling`` =
-        # rate-limited, ``expired`` = credential expired). Content-level
-        # failures (``invalid_outputs``, malformed YAML, runbook crashes)
-        # classify as ``unknown`` because they are not a credential issue
-        # (see ``claude_code.py:classify_failure`` ``status="unknown"`` path).
-        # Excluding the label on ``unknown`` is wrong: the label is healthy,
-        # the *output* was bad. Two consecutive ``unknown`` failures used to
-        # exhaust the per-item label set permanently, sending the worker
-        # into a "pool exhausted — waiting 60s for slot recovery" loop with
-        # no escape.
-        exclude_list = shared.setdefault("pool_exclude", [])
-        if classification.status in ("cooling", "expired"):
-            exclude_list.append((lease.adapter, lease.label))
-        # ── Phase 4: quota-group walk on 429 cooling ──
-        # When the failure is rate-limit cooling AND the failing label
-        # has a known quota_group (org or account), exclude every
-        # sibling label in the same group from this retry. Anthropic
-        # rate-limits at account level (and per organizationUuid in
-        # some configurations — claude-code#41886), so failing over
-        # from alt1 (org=ABC) to alt2 (also org=ABC) just hits 429
-        # again on the next call. Walking past the whole group
-        # collapses N×429 retries down to one.
-        if classification.status == "cooling" and getattr(pool_dispatch, "cross_quota_group", True):
-            _expand_pool_exclude_by_quota_group(
-                pool_dispatch=pool_dispatch,
-                lease=lease,
-                exclude_list=exclude_list,
-            )
-    # Preserve adapter-declared diagnostic logs (claude-code-debug.log,
-    # …) next to the session log under the run's standard ``.logs/``
-    # tree before teardown rmtree's the slot. Always — both success
-    # and failure runs benefit from having API-level debug output
-    # available next to the captured stream-json for correlation.
-    if session_log is not None:
-        pool_dispatch.coordinator.preserve_diagnostics(lease, session_log)
-    flushed_blob = pool_dispatch.coordinator.teardown(lease, failure=classification)
-
-    # attempt_number is 1-indexed, so the retries *already burned*
-    # before this attempt ran is attempt_number - 1.
-    retry_count = max(0, int(shared.get("attempt_number", 1)) - 1)
-    outcome = build_auth_outcome(
+    classification, outcome = complete_slot(
+        pool_dispatch,
         lease,
-        classification=classification,
-        flushed_blob=flushed_blob,
-        retry_count=retry_count,
-        fallback_policy=pool_dispatch.fallback_policy,
+        error_str=error_str,
+        session_log_path=session_log,
+        retry_count=max(0, int(shared.get("attempt_number", 1)) - 1),
+        retry_exclude=shared.setdefault("pool_exclude", []),
     )
     pool.record_auth_outcome(asdict(outcome))
     return classification
@@ -406,6 +294,7 @@ def _build_pool_dispatch_template(
     run_context: str,
     out: Any,
     auth_policy: str | None = None,
+    run_dir: Path | None = None,
 ) -> Any | None:
     """Construct a :class:`PoolDispatchConfig` from CLI flags, or ``None``.
 
@@ -493,6 +382,14 @@ def _build_pool_dispatch_template(
         exclude=excluded_pairs,
         cross_quota_group=auth_cross_quota_group,
     )
+    try:
+        template = bind_pool_dispatch_scope(
+            template,
+            run_dir=run_dir if run_dir is not None else template.runs_dir / run_context,
+            step="",
+        )
+    except ValueError as exc:
+        raise CLIError(str(exc)) from exc
     priority_repr = list(strategy.labels) or "(any active)"
     out.progress(
         f"Auth pool: adapter={auth_account} backend={resolved_auth_backend} "
@@ -500,6 +397,33 @@ def _build_pool_dispatch_template(
         f"fallback={fallback_policy_enum.value}"
     )
     return template
+
+
+def _filter_pool_dispatch_for_adapter(
+    template: Any | None,
+    *,
+    adapter_type: str,
+    step_id: str,
+    events_path: Path,
+    out: Any,
+) -> Any | None:
+    """Disable a mismatched worker pool with visible and durable evidence."""
+    if template is None or adapter_type == template.adapter:
+        return template
+    message = (
+        f"Step '{step_id}' uses adapter {adapter_type!r}, but the credential pool "
+        f"is configured for {template.adapter!r}; the pool is not applied and the "
+        "step uses its ambient adapter authentication."
+    )
+    out.warning(message)
+    log.warning(message)
+    with EventLogger(events_path) as events:
+        events.auth_skipped(
+            step_id=step_id,
+            step_adapter=adapter_type,
+            configured_adapter=template.adapter,
+        )
+    return None
 
 
 def _resolve_retry_policy(
@@ -690,14 +614,14 @@ def run_parallel(
 
     # `--variant` may name an entry in `spec.defaults.adapters` (e.g.
     # `claude-code-cli`) OR be a synthetic composite the engine derives at
-    # fan-out time from adapter+model (e.g. `pi-cli-glm-5-maas` for a
-    # mine-adhoc step whose spec declares `adapter.type: pi-cli` with
+    # fan-out time from adapter+model (e.g. `pi-cli-managed-model` for an
+    # extract-items step whose spec declares `adapter.type: pi-cli` with
     # config_by_variant.pi-cli.{provider,model}). Mirror run-process: when no
     # explicit `--adapter` is passed and the variant DOES name a known
     # adapter slot, let the variant drive adapter resolution. Otherwise the
     # variant is just a run-dir label and the step's own spec drives adapter
     # selection. Without this branch, a worker invoked with
-    # `--variant pi-cli-glm-5-maas` (the cloud worker leg of mine-adhoc) was
+    # `--variant pi-cli-managed-model` (the cloud worker leg of extract-items) was
     # rejected by build_plan as `unknown adapter override`.
     if adapter:
         effective_adapter_override: str | None = adapter
@@ -1014,7 +938,7 @@ def run_parallel(
                                 step_node_id=step,
                                 item_key=canonical_item_key,
                             ):
-                                handler_fn(dict(item_vars), process_step)
+                                handler_fn(StepContext(dict(item_vars)), process_step)
                         else:
                             assert command_ref is not None
                             resolved_cmd = resolve_templates(command_ref, item_vars)
@@ -1275,6 +1199,14 @@ def run_parallel(
         run_context=variables.get("RUN_ID", ""),
         out=out,
         auth_policy=auth_policy,
+        run_dir=run_dir,
+    )
+    pool_dispatch_template = _filter_pool_dispatch_for_adapter(
+        pool_dispatch_template,
+        adapter_type=adapter_type,
+        step_id=step,
+        events_path=logs_dir / paths_mod.RUNPOOL_EVENTS_FILE,
+        out=out,
     )
 
     all_results_pool = asyncio.run(
@@ -1510,15 +1442,15 @@ def _build_prepare_launch(  # noqa: PLR0913
         # Adapter-type gate: the pool is set per-dispatch (e.g.
         # ``--auth-account claude-code-cli``) and applies cleanly to
         # steps that USE that adapter (process-item, retrieve-precedent).
-        # Steps that use a DIFFERENT adapter — e.g. mine-adhoc with
-        # pi-cli + vertex-maas — must NOT lease a claude slot: the slot
+        # Steps that use a DIFFERENT adapter — e.g. extract-items with
+        # pi-cli + a managed model — must NOT lease a claude slot: the slot
         # path appends adapter-specific debug flags (``claude -d api``) to
         # the cmd, which pi-cli rejects with ``Unknown option: -d`` and
         # exits 1 in <10s; the runpool then classifies this as a crash
         # and cools the underlying Claude credential, eventually
         # exhausting the pool. Skipping the pool path for non-matching
-        # adapter types keeps mine-adhoc on the legacy single-credential
-        # path (or no auth at all for pi-cli/vertex-maas which uses GCP
+        # adapter types keeps extract-items on the legacy single-credential
+        # path (or no auth at all for an adapter that uses cloud
         # access tokens).
         if pool_dispatch is not None and adapter_type == pool_dispatch.adapter:
             from metaproc.adapters.registry import (  # noqa: PLC0415 -- pre-existing local import; needs review
@@ -1864,9 +1796,16 @@ async def _run_agent_pool(  # noqa: PLR0913
             lane_id=pool_config.execution_profile,
             execution_profile=pool_config.execution_profile,
         )
+        if getattr(pool, "shutting_down", False) is True:
+            _cancel_item(shared, "pool shutdown requested")
+            return
+
         try:
             future = pool.submit(config)
         except Exception as exc:
+            if getattr(pool, "shutting_down", False) is True:
+                _cancel_item(shared, "pool shutdown requested")
+                return
             error_str = f"submission failed: {exc}"
             out.progress(f"  {each}={item}: {error_str}")
             state_dir.mkdir(parents=True, exist_ok=True)
@@ -1900,6 +1839,38 @@ async def _run_agent_pool(  # noqa: PLR0913
             shared=shared,
             error_str=error_str,
         )
+
+    def _cancel_item(shared: dict[str, Any], error_str: str) -> None:
+        """Finalize one item cancelled by pool shutdown without retry churn."""
+        item = shared["item"]
+        state_dir = shared["state_dir"]
+        running_record = shared.get("running_record")
+        state_dir.mkdir(parents=True, exist_ok=True)
+        if running_record is None:
+            running_record = mark_failed_synthetic_at(
+                state_dir,
+                run_id=run_id,
+                step_id=step,
+                item=dict(shared["item_context"]),
+                attempt=shared["attempt_number"],
+                item_key=state_dir.name,
+                error=error_str,
+                attempt_disposition=AttemptDisposition.cancelled,
+            )
+        else:
+            mark_failed_at(
+                state_dir,
+                error=error_str,
+                running_record=running_record,
+                attempt_disposition=AttemptDisposition.cancelled,
+            )
+        shared["running_record"] = None
+        try:
+            _pool_teardown(shared, error_str=error_str)
+        except Exception:
+            log.exception("Credential teardown failed for cancelled %s=%s", each, item)
+        all_results.append((item, 1))
+        out.progress(f"  Cancelled {each}={item}: {error_str}")
 
     def _classify_and_maybe_retry(
         shared: dict[str, Any],
@@ -1977,7 +1948,7 @@ async def _run_agent_pool(  # noqa: PLR0913
             except Exception:
                 log.exception("Could not finalize attempt after pool teardown failed")
             raise
-        force_abort = _auth_forces_abort(auth_classification)
+        force_abort = auth_forces_abort(auth_classification)
         # When the item itself hit quota exhaustion with a parsed reset
         # clock, schedule a retry-after-reset rather than burning a normal
         # backoff attempt or permanent-failing. Mirrors the pool-cooling
@@ -2145,6 +2116,9 @@ async def _run_agent_pool(  # noqa: PLR0913
         # Handle future exceptions (launch failures from prepare_launch or backend).
         try:
             result = future.result()
+        except asyncio.CancelledError:
+            _cancel_item(shared, "pool shutdown requested")
+            return
         except Exception as exc:
             error_str = f"launch failed: {exc}"
             out.progress(f"  {each}={item}: {error_str}")
@@ -2335,6 +2309,17 @@ async def _run_agent_pool(  # noqa: PLR0913
                     await asyncio.sleep(sleep_time)
     finally:
         await pool.shutdown()
+        # Shutdown normally resolves or cancels every submitted future. Consume those
+        # terminal futures here when the outer scheduler itself was cancelled, so item
+        # state and credential teardown do not depend on returning to the main loop.
+        for future, shared in list(active.items()):
+            if not future.done():
+                continue
+            active.pop(future, None)
+            try:
+                _process_completion(future, shared)
+            except Exception:
+                log.exception("Could not finalize item after pool shutdown")
 
     return all_results
 

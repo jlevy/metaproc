@@ -328,7 +328,10 @@ process:
 ```
 
 Composite recursion is ordinary dispatch, not a separate execution system.
-The child process receives only the bindings explicitly passed by `with`.
+For compatibility, the child currently inherits the parent variable namespace and `with`
+overlays the bindings that form the authored child interface.
+New processes should treat `with` as the public boundary; narrowing the inherited
+namespace remains a separate compatibility change.
 Operator-supplied scalars are omitted in the example above for brevity.
 
 ## 6.3 Step Modes
@@ -347,6 +350,24 @@ Optional fields:
 
 - `with`
 - `needs`
+- `for_each`
+
+With `for_each`, Metaproc maps one in-process child scope per item under
+`<run>/<step>/<item-key>/`. The mapped parent task remains in
+`<run>/.state/tasks/<step>/<item-key>/`; it completes only after the child process and
+the mapped step’s declared outputs validate.
+The child declares all outputs required for its own completion, while the parent
+declares the subset published downstream.
+Automatic child-port projection is not yet implemented.
+Resume revalidates both boundaries before reusing a completed mapped item.
+
+Mapped scopes share the root `RunExecutionContext`; they do not launch `run-process`,
+acquire child orchestrator leases, or hold an executable-leaf permit while waiting
+between child stages.
+`for_each.max_concurrency` limits active structural scope evaluators, not executable
+leaves. Child leaf retry policies remain available, while a whole-scope `for_each.retry`
+is rejected. Mapped composites are single-host and reject the `gcp-worker` backend until
+a multi-host mapping contract exists.
 
 ### `mode: agent`
 
@@ -369,9 +390,11 @@ Required execution reference (exactly one):
   when process directories are moved or shared across codebases.
 - `command` -- a shell command string, executed as a subprocess.
 
-Handler signature: `def handler(context: dict, step_config: StepConfig) -> None`. The
-context dict contains resolved input variables (same resolution as `mode: agent`). The
-handler writes outputs directly; the engine records `.state/` completion markers.
+Handler signature: `def handler(context: StepContext, step_config: StepConfig) -> None`.
+`StepContext` is a `dict[str, str]` subclass containing resolved input variables (the
+same resolution as `mode: agent`). Long-running handlers should call
+`context.cancel_requested()` at safe checkpoints and return when it becomes true.
+The handler writes outputs directly; the engine records `.state/` completion markers.
 If the handler raises, the step fails with the same state recording as a failed agent
 step.
 
@@ -388,7 +411,10 @@ whole duration, which serializes every sibling item of a fan-out no matter how t
 dispatcher gathers them.
 Handlers therefore need not be thread-safe against themselves, but a fan-out runs
 several concurrently, so a handler sharing mutable process state across items must guard
-it.
+it. Command-backed code steps use the same run-owned executor and concurrency gates.
+Their subprocesses share the process directory, so an authored command that mutates
+shared repository state, lockfiles, or undeclared files must provide its own
+synchronization or write only to per-item paths.
 
 Dry-run mode prints the handler path (or command) and resolved inputs instead of
 executing.
@@ -558,8 +584,11 @@ file.
 
 `with` is explicit parameter binding.
 
-Primary use: bind named child-process inputs for `mode: composite`. That keeps recursion
-explicit and prevents ambient inheritance across process boundaries.
+Primary use: bind named child-process inputs for `mode: composite`. It is the authored
+child interface and new processes should not depend on undeclared parent values.
+For compatibility, the current runtime still starts a child with the parent variable
+namespace and overlays `with`; restricting that inherited namespace is a separate,
+potentially breaking change.
 Leaf steps may also use `with` to rename or document bindings, but the important
 contract is at child-process boundaries.
 
@@ -631,7 +660,7 @@ fan-out dispatch.
 | `prompt_prefix` | agent | optional inline prompt template |
 | `handler` | code | file-relative Python callable (`file.py:function`) |
 | `command` | code | shell command string (subprocess) |
-| `for_each` | agent, code | items-file-driven fan-out declaration |
+| `for_each` | agent, code, composite | items-file-driven fan-out declaration |
 | `inputs` | all | declared input artifact contracts |
 | `outputs` | all | declared output artifact contracts |
 | `output_root` | agent, code, manual | per-step output root override |
@@ -809,7 +838,7 @@ process:
     - id: setup-roster
       mode: code
 
-    - id: mine-adhoc
+    - id: extract-items
       mode: agent
       inputs:
         roster: deps.roster
@@ -826,7 +855,7 @@ process:
 
     - id: validate-records
       mode: code
-      needs: [mine-adhoc]
+      needs: [extract-items]
 
     - id: publish-kb
       mode: code
@@ -1374,13 +1403,21 @@ The framework parses items files generically by extracting the envelope payload�
 `items` list. Domain packages supply typed envelope models; the orchestration layer only
 needs the generic items-file contract.
 
-Fan-out applies to `mode: agent` and `mode: code`. The two share item discovery and
-per-item addressing and diverge in everything else: the agent path carries adapters,
-variants, execution profiles, and auth-pool dispatch, while the code path invokes a
-handler or command.
-`mode: composite` does not fan out, which is why a consumer wanting a
-child spec mapped over a roster expresses it as a code handler that launches one child
-run per item; the shape and its cost are the subject of proposal P8.
+Fan-out applies to `mode: agent`, `mode: code`, and `mode: composite`. All three share
+neutral item discovery, resolved-key validation, per-item addressing, and the
+`run_fan_out` runner.
+Their invocation paths remain distinct: agent work carries adapters, execution profiles,
+and auth-pool dispatch; code work invokes a handler or command; composite work
+recursively evaluates a child spec in-process.
+This closes the need for a consumer code handler that launches a child Metaproc CLI,
+without adding the larger invoker abstraction described in proposal P8.
+
+Duplicate resolved item keys are rejected before execution because they would address
+the same task, log, artifact, and child-scope namespace.
+A mapped composite is local to one orchestration host, writes its child scope under
+`<run>/<step>/<item-key>/`, and shares the root execution context.
+Its optional `max_concurrency` limits active scope evaluators; executable child leaves
+remain governed by the run-level admission authorities.
 
 Every field named in `bind_fields` must be present and non-empty on every item.
 There is no optional dispatch field, so a roster where a field applies to only some
@@ -1404,8 +1441,15 @@ in some contexts and as success in others.
 `require: finished` also governs blocking: a consumer declaring it is not blocked when
 the failure lies at the collected step or anywhere feeding it, since an item dying two
 stages back is exactly why the collection has partial coverage.
-Failures outside that subtree reach the consumer through a different edge, which said
-nothing about accepting terminal outcomes, and still block.
+This tolerance is evaluated over the consumer’s affected direct dependencies.
+An independent required dependency that did not descend from the failure remains
+satisfied, but a second required dependency that did descend from the same failure still
+blocks the consumer; one tolerant collection never rewrites another edge’s contract.
+Two authored clauses that name the identical upstream currently collapse to one
+`ResolvedStep.needs` entry, so Metaproc cannot yet distinguish a tolerant collection and
+a strict requirement on that same upstream.
+Author a distinct intermediate dependency when both contracts are required; widening the
+resolved dependency model remains evidence-triggered work.
 
 Where an item failed a contract, its record carries the structured failure alongside the
 message: the failing `invariant`, its `location` in the document, the `contract` the
@@ -1951,7 +1995,7 @@ test read the filename too, and two outputs missing for the same transient reaso
 opposite verdicts:
 
 ```text
-output validation failed: company-research-schema-manifest.md: file not found   -> FAIL
+output validation failed: schema-manifest.md: file not found                    -> FAIL
 output validation failed: source-snapshot.md: file not found                    -> RETRY
 ```
 
@@ -2522,11 +2566,14 @@ multi-phase workflows.
   failed, pending, retrying), computes timing statistics and optionally system metrics
   (memory pressure, subprocess count).
   Supports text and JSON output.
+  The process execution state is distinct from process definition freshness, and scalar
+  code-step errors are projected from durable task state into process status and events.
 - **`metaproc status --check <condition>`**: programmatic check mode for agent
   orchestration: asserts completion state via exit codes (0=passed, 1=failures,
   2=still-running), replacing ad-hoc `--dry-run | grep` patterns.
 - **`metaproc wait <run-dir>`**: blocks until a run reaches terminal state, then prints
-  final status. Eliminates polling loops in multi-phase playbooks.
+  final status. A terminal process failure returns failure even when no fan-out item
+  records exist. Eliminates polling loops in multi-phase playbooks.
 
 Architecture: core logic in `engine/run_status.py` as a Python API; CLI commands are
 thin wrappers. The `status` command reads `.state/` artifacts (the same ones
@@ -2574,7 +2621,7 @@ Each step routes based on its mode:
 | `code` | Execute `handler` (Python callable) or `command` (shell subprocess) |
 | `agent` (no fan-out) | Build prompt, launch adapter subprocess, validate outputs |
 | `agent` (with `for_each`) | Fan-out via backend (see 19.3) |
-| `composite` | Resolve `uses` spec, apply `with` bindings, recurse into child `_orchestrate()` under `{run_dir}/{step_id}/` |
+| `composite` | Resolve `uses`, apply `with`, and recurse in-process under `{run_dir}/{step_id}/`; with `for_each`, create one child scope under `{run_dir}/{step_id}/{item_key}/` |
 | `manual` | Wait for `.state/manual-ack.yaml`, then validate outputs and publish completion |
 
 Code step stdout/stderr is captured to `{run_dir}/.logs/{step_id}_{ts}.log`.
@@ -2588,8 +2635,40 @@ Fan-out steps dispatch through one of two backends:
 | `local` | `--backend local` (default) | `RunPool` subprocess pool via `run-parallel` |
 | `gcp-worker` | `--backend gcp-worker --cloud` | Submit the orchestrator, which partitions items across N worker VMs via GCP Batch (section 21) |
 
-The local backend uses the RunPool (section 17) with step-scoped `.state/` and `.logs/`
-directories and an optional external semaphore for cross-step concurrency control.
+Local agent fan-out uses RunPool (section 17) with step-scoped `.state/` and `.logs/`
+directories. One run execution context owns the optional semaphore shared by fan-out
+pools, scalar agent launches, and code work across composite scopes.
+For the initial single-profile topology, it also lazily owns one run-scoped RunPool for
+scalar agent leaves.
+Every scalar leaf reached through mapped child scopes submits a prepared launch to that
+pool, so adaptive pressure response, process-tree supervision, status, and events cover
+the whole run rather than one child at a time.
+Its run-owned executor supervises synchronous handlers, commands, and blocking
+credential operations off the event loop.
+That executor defaults to 32 workers and grows to an explicit higher
+`--max-concurrency`, so executor capacity cannot silently reduce the authored run
+ceiling. At terminal cleanup, the context cancels queued executor work and waits for
+started work before the orchestrator releases its run lease.
+A cancelled executor call is drained before its leaf slot is released; if credential
+acquisition returns a late lease, teardown completes first.
+
+Scalar agent launches reuse `LocalBackend` process-group lifecycle through the small
+`launch_and_supervise` helper.
+Cancellation during launch drains any late handle.
+Completion, cancellation, and timeout all close the full process group, escalate
+stubborn descendants to `SIGKILL`, and flush a log-filter thread before returning.
+Shell-backed code steps apply the same process-group ownership rule inside their sampled
+command runner.
+A code command owns its descendants only for the duration of the step; it
+must not daemonize intentional background work because any remaining group member is
+terminated when the command leader exits.
+Cleanup failure is logged and does not replace an already-observed exit-zero result.
+These paths do not add a second adaptive controller.
+The run context supplies the hard leaf ceiling, host admission supplies cross-run
+capacity, and the single run-owned RunPool adapts local scalar-agent concurrency.
+Command-backed code work retains its existing supervised executor path; moving it into
+RunPool requires separate contract evidence.
+A second execution profile in the same run is rejected by this first slice.
 
 **Note on backend abstraction:** `local` is a registered `LaunchBackend` implementation
 (section 21.8) in the backend registry (`runpool/registry.py`). `gcp-worker` is
@@ -2625,7 +2704,7 @@ profile; per-step worker-pool overrides are an additive extension.
 | `--num-workers` | Number of worker VMs for `gcp-worker` backend |
 | `--machine-type` | GCP machine type for workers |
 | `--spot / --no-spot` | Use Spot VMs for workers (default: spot) |
-| `--max-concurrency` | Per-pool concurrency limit for fan-out steps |
+| `--max-concurrency` | Local run-wide executable-leaf limit across fan-out pools, scalar steps, and composite scopes; per-worker ceiling for `gcp-worker` |
 | `--variant` | Override adapter variant |
 | `--adapter-config KEY=VALUE` | Adapter config overrides (repeatable) |
 | `--orchestrator-machine-type` | GCP machine type for orchestrator VM (with `--cloud`) |
@@ -2643,6 +2722,9 @@ migrate with Metaproc is identified.
 `--force` invalidates a step and all its downstream dependents by renaming the relevant
 on-disk `status.yaml` files to `.yaml.stale` (via `_invalidate_downstream()`). This
 covers both the standard step directory and any output-derived item directories.
+The run-wide force policy descends into composite scopes, so their child tasks are
+invalidated rather than immediately reused.
+Root `--skip` selectors are not matched against child step IDs.
 Without `--force`, completed steps are detected via task status files under
 `.state/tasks/...` and skipped automatically.
 Fan-out step completion is determined by `_is_fan_out_completed()`: all items must have
@@ -2835,10 +2917,11 @@ Unified container entrypoint for worker containers:
   and exact `metaproc-run-key=v1-<sha256_prefix>`.
 - Polls in a while-True loop until terminal state.
 
-`OrchestratorDispatchConfig` (frozen dataclass): `gcp`, `process_dir_rel`, `variables`,
-`num_workers`, `worker_machine_type`, `max_concurrency`, `spot_workers`, `variant`,
-`adapter_config`, `skip_steps`, `from_step`, `only_step`, `force`, `continue_on_error`,
-`orchestrator_machine_type`, `max_duration_s` (default 8h), `poll_interval`.
+`OrchestratorDispatchConfig` (frozen dataclass): `gcp`, `process_spec_rel`, `variables`,
+`num_workers`, `worker_machine_type`, `max_concurrency`, `initial_concurrency`,
+`spot_workers`, `variant`, `adapter_config`, `skip_steps`, `from_step`, `only_step`,
+`force`, `continue_on_error`, `orchestrator_machine_type`, `max_duration_s` (default
+8h), `poll_interval`, and the `auth_flags` (`AuthPoolFlags`) transport cohort.
 
 ### 21.6 Orchestrator Entrypoint (`orchestrator_entrypoint.py`)
 
@@ -2988,11 +3071,17 @@ Authoritative live and restart state lives only on the run filesystem -- local d
 full-local runs and Filestore NFS for full-cloud runs.
 
 **`run-config.yaml`** (`{run_dir}/.state/run-config.yaml`): written at run creation time
-with immutable run identity (process name, run_id, backend, variant, git SHA, creation
-timestamp). On resume, validated against current launch parameters -- process identity
-and run directory must match.
-Resume requires the same authoritative run directory.
-Backend metadata does not replace that filesystem identity.
+with the process name, run ID, resolved variables, creation-time backend and variant,
+git SHA, and timestamp.
+On resume, the process identity, run directory, and resolved variables must match.
+Resolved variables include values supplied by optional input defaults; changing such a
+default under an existing run identity is therefore rejected rather than silently
+reusing work produced under the earlier value.
+The two canonical cloud Filestore mount roots normalize to one identity; workstation
+paths do not. No other variable changes are accepted.
+Cross-topology resume (for example, hybrid to full cloud) remains allowed because the
+backend is not part of resume identity and both topologies share the authoritative
+filesystem. Authentication and concurrency changes remain explicit timeline events.
 
 **`orchestrator-lease.yaml`** (`{run_dir}/.state/orchestrator-lease.yaml`): records the
 current orchestrator owner and heartbeat so a second orchestrator will refuse to start
@@ -3080,6 +3169,13 @@ the original future-work backlog.
 * * *
 
 ## Revision History
+
+### rev2o (2026-08-25)
+
+- Documented cancellation-safe ownership for executor work, scalar credentials, local
+  scalar agent process groups, and sampled code commands.
+- Clarified that scalar supervision reuses the launch backend lifecycle without creating
+  another pool or adaptive controller.
 
 ### rev2n (2026-08-24)
 

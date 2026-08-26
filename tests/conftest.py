@@ -11,8 +11,7 @@ from metaproc.config.providers import providers_with_api_keys
 from metaproc.runpool.pool import RunPoolConfig
 
 # Provide a placeholder RUNS_DIR so CLI tests pass the
-# require_runtime_runs_dir guard added in
-# plan-2026-05-20-earnings-run-settings-migration.md. Tests that need a
+# require_runtime_runs_dir guard. Tests that need a
 # specific value (e.g. test_resolve_templates_env_var_fallback) still
 # override via monkeypatch.setenv; tests that just want the CLI to get
 # past the requirement check inherit this default. Dev shells typically

@@ -65,61 +65,71 @@ def _link_cross_source_parents(spans: list[TraceEvent]) -> None:
 def _resolve_cross_source_parent(
     span: TraceEvent,
     *,
-    items_by_key: dict[tuple[str, str], str],
-    steps_by_id: dict[str, str],
-    subprocesses_by_out_path: dict[str, str],
+    items_by_key: dict[tuple[str, str, str], str],
+    steps_by_id: dict[tuple[str, str], str],
+    subprocesses_by_out_path: dict[tuple[str, str], str],
 ) -> str | None:
     """Return a candidate ``parent_span_id`` from cross-source indexes, or ``None``."""
     attrs = span.attributes
+    scope_path = _scope_path(attrs)
     if span.kind == "attempt":
         step_id = attrs.get("step.id")
         item_key = attrs.get("item.key")
         if step_id and item_key:
-            return items_by_key.get((str(step_id), str(item_key)))
+            item_parent = items_by_key.get((scope_path, str(step_id), str(item_key)))
+            if item_parent is not None:
+                return item_parent
+        if step_id:
+            return steps_by_id.get((scope_path, str(step_id)))
     elif span.kind == "subprocess":
         step_id = attrs.get("step.id")
         if step_id:
-            return steps_by_id.get(str(step_id))
+            return steps_by_id.get((scope_path, str(step_id)))
     elif span.kind == "provider_call":
         out_path = attrs.get("subprocess.out_path")
         if out_path:
-            return subprocesses_by_out_path.get(str(out_path))
+            return subprocesses_by_out_path.get((scope_path, str(out_path)))
     return None
 
 
-def _index_items(spans: list[TraceEvent]) -> dict[tuple[str, str], str]:
-    """``(step.id, item.key) → item span_id``.
+def _scope_path(attrs: dict[str, object]) -> str:
+    value = attrs.get("scope.path")
+    return str(value) if value else "."
+
+
+def _index_items(spans: list[TraceEvent]) -> dict[tuple[str, str, str], str]:
+    """``(scope.path, step.id, item.key) → item span_id``.
 
     ``item.key`` is the framework-canonical per-item identifier (set by
     the metaproc engine from ``for_each.key``). Workflows may also add
     domain-specific attributes; the linker only joins on the generic
     key.
     """
-    out: dict[tuple[str, str], str] = {}
+    out: dict[tuple[str, str, str], str] = {}
     for s in spans:
         if s.kind != "item":
             continue
         step_id = s.attributes.get("step.id")
         item_key = s.attributes.get("item.key")
         if step_id and item_key:
-            out[(str(step_id), str(item_key))] = s.span_id
+            out[(_scope_path(s.attributes), str(step_id), str(item_key))] = s.span_id
     return out
 
 
-def _index_steps(spans: list[TraceEvent]) -> dict[str, str]:
-    """``step.id → step span_id``."""
-    out: dict[str, str] = {}
+def _index_steps(spans: list[TraceEvent]) -> dict[tuple[str, str], str]:
+    """``(scope.path, step.id) → step span_id``."""
+    out: dict[tuple[str, str], str] = {}
     for s in spans:
         if s.kind != "step":
             continue
         step_id = s.attributes.get("step.id")
         if step_id:
-            out[str(step_id)] = s.span_id
+            out[(_scope_path(s.attributes), str(step_id))] = s.span_id
     return out
 
 
-def _index_subprocesses_by_out_path(spans: list[TraceEvent]) -> dict[str, str]:
-    """``subprocess.out_path → subprocess span_id``.
+def _index_subprocesses_by_out_path(spans: list[TraceEvent]) -> dict[tuple[str, str], str]:
+    """``(scope.path, subprocess.out_path) → subprocess span_id``.
 
     Used by ``provider_call`` joins: when a subprocess writes its
     output to a specific path and a separate extractor later reads
@@ -127,13 +137,13 @@ def _index_subprocesses_by_out_path(spans: list[TraceEvent]) -> dict[str, str]:
     path is the join key. Generic to any subprocess kind — arena
     tools, build commands, fetchers all use the same convention.
     """
-    out: dict[str, str] = {}
+    out: dict[tuple[str, str], str] = {}
     for s in spans:
         if s.kind != "subprocess":
             continue
         out_path = s.attributes.get("subprocess.out_path")
         if out_path:
-            out[str(out_path)] = s.span_id
+            out[(_scope_path(s.attributes), str(out_path))] = s.span_id
     return out
 
 
@@ -165,6 +175,9 @@ def _propagate_status_upward(spans: list[TraceEvent]) -> None:
         max_status = span.status
         max_sev = SEVERITY_ORDER[max_status]
         for child_id in children.get(span_id, ()):
+            child_span = by_id.get(child_id)
+            if child_span is not None and child_span.attributes.get("error.recovered") is True:
+                continue
             child_worst = worst(child_id)
             child_sev = SEVERITY_ORDER[child_worst]
             if child_sev > max_sev:

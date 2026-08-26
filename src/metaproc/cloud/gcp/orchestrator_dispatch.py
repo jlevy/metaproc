@@ -15,7 +15,7 @@ import logging
 import os
 import secrets as _secrets
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from metaproc.cloud.gcp.batch_backend import (
     GCPBatchConfig,
@@ -69,14 +69,9 @@ class OrchestratorDispatchConfig:
     orchestrator_machine_type: str = DEFAULT_ORCHESTRATOR_MACHINE_TYPE
     max_duration_s: int = DEFAULT_MAX_DURATION_S
     poll_interval: int = 60
-    # Auth-pool dispatch passthrough. Mirrors `run-process --auth-*` flags
-    # so cloud and local execution paths offer the same surface.
-    auth_account: str | None = None
-    auth_backend: str | None = None
-    auth_fallback_policy: str = "none"
-    auth_include_labels: tuple[str, ...] = ()
-    auth_exclude_labels: tuple[str, ...] = ()
-    auth_cross_quota_group: bool = True
+    # Keep the auth configuration in its boundary type so adding a field cannot
+    # silently desynchronize local, orchestrator, and worker dispatch.
+    auth_flags: AuthPoolFlags = field(default_factory=AuthPoolFlags)
 
 
 @dataclass
@@ -143,25 +138,9 @@ async def dispatch_orchestrator(
     # `--auth-*` flags onto the inner `run-process` command. Without them,
     # cloud workers silently fall back to the legacy single-credential path
     # even when operators pass `--auth-account` to the cloud dispatch.
-    # AuthPoolFlags centralizes the env-var names + CSV encoding so this
-    # site does not hardcode "METAPROC_AUTH_*" strings.
-    # OrchestratorDispatchConfig stores `auth_account` / `auth_backend`
-    # as `str | None` (None = unset); AuthPoolFlags uses `""` for the
-    # absent sentinel. Translate at the boundary so the dispatch config
-    # shape does not churn. The legacy "none" string for fallback_policy
-    # is also translated to "" here.
-    auth_flags = AuthPoolFlags(
-        auth_account=config.auth_account or "",
-        auth_backend=config.auth_backend or "",
-        auth_fallback_policy=(
-            config.auth_fallback_policy
-            if config.auth_fallback_policy and config.auth_fallback_policy != "none"
-            else ""
-        ),
-        auth_include_labels=tuple(config.auth_include_labels),
-        auth_exclude_labels=tuple(config.auth_exclude_labels),
-        auth_cross_quota_group=config.auth_cross_quota_group,
-    )
+    # AuthPoolFlags centralizes the env-var names and encodings so this
+    # site cannot omit one field while forwarding the rest of the configuration.
+    auth_flags = config.auth_flags
     env_vars.update(auth_flags.to_env_vars())
 
     # Pool owner: GcpSecretManagerBackend names secrets as
@@ -228,24 +207,18 @@ async def dispatch_orchestrator(
         if resolved:
             env_vars[binding.secret_env] = resolved
 
-    # CLAUDE_CODE_OAUTH_TOKEN for orchestrator-side single-item agent steps
-    # (create-ops-review, create-prediction-summary, create-run-overview).
-    # These run on the orchestrator container via _execute_agent_step (NOT
-    # _execute_fan_out_step → _run_agent_pool), so they don't go through
-    # the per-slot pool acquire path that injects the bearer per-item.
-    # Without an ambient bearer in the orchestrator's env, claude reports
-    # `apiKeySource: "none"` and exits with "Not logged in · Please run
-    # /login". Source from the first include label's SM secret (matches
-    # the pool's priority order; if alt1 cools, single-item steps degrade
-    # but fan-out keeps rotating). Pool user is the same value
-    # propagated to METAPROC_AUTH_POOL above.
-    if config.auth_account == "claude-code-cli" and pool_user and config.auth_include_labels:
-        primary_label = config.auth_include_labels[0]
-        oauth_secret_ref = (
-            f"projects/{config.gcp.project}/secrets/"
-            f"claude-code-auth-{pool_user}-{primary_label}/versions/latest"
+    # A cloud auth pool reads its credential inventory from Secret Manager at
+    # execution time. Require an explicit Batch identity for that access, just as
+    # direct secret hydration does below. Do not also hydrate one pool label as
+    # ambient auth: scalar and fan-out launches both acquire their own slot.
+    cloud_pool_uses_secrets = bool(auth_flags.auth_account) and auth_flags.auth_backend in (
+        "",
+        "gcp-secret-manager",
+    )
+    if cloud_pool_uses_secrets and not config.gcp.service_account_email:
+        raise ValueError(
+            "Set METAPROC_GCP_SERVICE_ACCOUNT before using a GCP Secret Manager auth pool"
         )
-        secret_refs["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_secret_ref
 
     require_secret_service_account(secret_refs, config.gcp.service_account_email)
 
@@ -263,13 +236,10 @@ async def dispatch_orchestrator(
         )
     env_vars.update(bootstrap_env)
 
-    # Diagnostic-only opt-in: METAPROC_SKIP_PREFLIGHT_PROBE=1 lets a cloud
-    # debug dispatch skip the auth pool's pre-fan-out probe so process-item
-    # actually fires and writes its invocation.json sidecar even when alt1+alt2
-    # are cooling. Without this propagation the env var stops at the local
-    # CLI; the orchestrator container would still run the probe, fail, and
-    # never give us the worker-side claude argv we are trying to capture.
-    # See plan-2026-05-01 § Phase 3.5.
+    # Diagnostic-only opt-in: propagate the preflight bypass so a cloud debug
+    # dispatch can reach the worker invocation path when configured credentials
+    # are cooling. Without this, the orchestrator would stop at preflight before
+    # the worker-side command could be inspected.
     skip_probe = os.environ.get("METAPROC_SKIP_PREFLIGHT_PROBE", "")
     if skip_probe:
         env_vars["METAPROC_SKIP_PREFLIGHT_PROBE"] = skip_probe

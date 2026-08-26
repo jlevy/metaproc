@@ -555,6 +555,45 @@ def test_discover_rejects_completed_status_from_another_run(tmp_path):
             )
 
 
+def test_discover_rejects_duplicate_resolved_item_keys_before_state_writes(tmp_path):
+    progress_path = tmp_path / "progress.md"
+    _write_progress(
+        progress_path,
+        """\
+        - ticker: AAPL
+          sector: technology
+          status: pending
+        - ticker: AAPL
+          sector: financials
+          status: pending
+        """,
+    )
+    run_dir = tmp_path / "run"
+    step_def = ProcessStep(
+        id="predict-ticker",
+        mode="agent",
+        for_each=ForEach(
+            over="progress",
+            bind="ticker",
+            bind_fields=["ticker", "sector"],
+            key="{{ticker}}",
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"duplicate for_each\.key 'AAPL'.*items 1 and 2",
+    ):
+        discover_items_from_source(
+            progress_path,
+            step_def,
+            params={},
+            run_dir=run_dir,
+        )
+
+    assert not (run_dir / STATE_DIR / TASKS_SUBDIR).exists()
+
+
 def test_discover_revalidates_completed_with_validated_outputs_policy(tmp_path):
     """reuse_policy=validated_outputs: completed items with missing outputs are demoted to actionable.
 

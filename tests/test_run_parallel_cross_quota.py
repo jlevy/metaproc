@@ -19,11 +19,16 @@ This test asserts the third arrow.
 
 from __future__ import annotations
 
+import json
+import logging
 from unittest.mock import MagicMock
 
 import pytest
 
-from metaproc.commands.run_parallel import _build_pool_dispatch_template
+from metaproc.commands.run_parallel import (
+    _build_pool_dispatch_template,
+    _filter_pool_dispatch_for_adapter,
+)
 from metaproc.errors import CLIError
 
 
@@ -84,3 +89,52 @@ class TestCrossQuotaGroupPropagation:
                 **common_kwargs,
                 auth_cross_quota_group=True,
             )
+
+    def test_run_context_parent_traversal_is_rejected(self, common_kwargs):
+        common_kwargs["run_context"] = "../escape"
+
+        with pytest.raises(CLIError, match="outside credential pool runs directory"):
+            _build_pool_dispatch_template(
+                **common_kwargs,
+                auth_cross_quota_group=True,
+            )
+
+    def test_worker_scope_uses_actual_nested_run_directory(self, common_kwargs, tmp_path):
+        template = _build_pool_dispatch_template(
+            **common_kwargs,
+            auth_cross_quota_group=True,
+            run_dir=tmp_path / "root-run" / "child-scope",
+        )
+
+        assert template is not None
+        assert template.run_id == "root-run/child-scope"
+
+
+def test_worker_adapter_mismatch_records_durable_skip(tmp_path, caplog: pytest.LogCaptureFixture):
+    template = MagicMock(adapter="claude-code-cli")
+    events_path = tmp_path / "events.jsonl"
+    out = MagicMock()
+
+    with caplog.at_level(logging.WARNING, logger="metaproc.commands.run_parallel"):
+        filtered = _filter_pool_dispatch_for_adapter(
+            template,
+            adapter_type="pi-cli",
+            step_id="mine",
+            events_path=events_path,
+            out=out,
+        )
+
+    assert filtered is None
+    message = (
+        "Step 'mine' uses adapter 'pi-cli', but the credential pool is configured for "
+        "'claude-code-cli'; the pool is not applied and the step uses its ambient "
+        "adapter authentication."
+    )
+    out.warning.assert_called_once_with(message)
+    assert message in caplog.messages
+    record = json.loads(events_path.read_text())
+    assert record["event"] == "auth_skipped"
+    assert record["pool_enabled"] is False
+    assert record["step_id"] == "mine"
+    assert record["step_adapter"] == "pi-cli"
+    assert record["configured_adapter"] == "claude-code-cli"

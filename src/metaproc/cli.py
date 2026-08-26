@@ -146,6 +146,7 @@ import metaproc.commands.validate  # noqa: E402, F401
 import metaproc.commands.variants  # noqa: E402, F401
 import metaproc.commands.wait  # noqa: E402, F401
 import metaproc.commands.write_usage  # noqa: E402, F401
+from metaproc.runpool.kill import reap_subprocess_tree  # noqa: E402
 
 
 def main() -> None:
@@ -156,6 +157,10 @@ def main() -> None:
         sys.stderr.write(f"Error: {exc}\n")
         raise SystemExit(exc.exit_code) from exc
     except KeyboardInterrupt:
+        # A second Ctrl-C makes asyncio.Runner raise KeyboardInterrupt immediately,
+        # potentially before cooperative cleanup finishes. Keep a final hard process-
+        # tree backstop at the outermost CLI boundary.
+        reap_subprocess_tree()
         raise SystemExit(130) from None
 
 

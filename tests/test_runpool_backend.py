@@ -3,16 +3,26 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import signal
 import sys
+import threading
+import time
 from pathlib import Path
+from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock
 
+import psutil
 import pytest
 
+import metaproc.runpool.backend as backend_mod
 from metaproc.runpool.backend import (
+    HealthMetrics,
     LaunchHandle,
     LocalBackend,
     PreparedLaunch,
     get_log_size,
+    launch_and_supervise,
     read_log_tail_sync,
 )
 
@@ -75,6 +85,34 @@ class TestLocalBackend:
                 await asyncio.sleep(0.1)
 
         asyncio.run(_run())
+
+    def test_explicit_env_is_the_complete_child_environment(
+        self,
+        backend: LocalBackend,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("METAPROC_TEST_SCRUB_ME", "ambient-secret")
+
+        async def _run() -> None:
+            log_path = tmp_path / "env.log"
+            prepared = PreparedLaunch(
+                command=(
+                    sys.executable,
+                    "-c",
+                    (
+                        "import os; assert 'METAPROC_TEST_SCRUB_ME' not in os.environ; "
+                        "print(os.environ['METAPROC_TEST_KEEP'])"
+                    ),
+                ),
+                env={"METAPROC_TEST_KEEP": "pooled"},
+                log_path=log_path,
+            )
+            assert await launch_and_supervise(backend, prepared, timeout_s=2) == 0
+            assert log_path.read_text() == "pooled\n"
+
+        asyncio.run(_run())
+        assert os.environ["METAPROC_TEST_SCRUB_ME"] == "ambient-secret"
 
     def test_launch_with_cwd(self, backend, tmp_path: Path):
         async def _run():
@@ -142,6 +180,351 @@ class TestLocalBackend:
             # Process exited — health returns None.
             metrics = await backend.health(handle)
             assert metrics is None
+
+        asyncio.run(_run())
+
+    def test_cancel_during_launch_kills_late_handle_before_return(self):
+        class DelayedBackend:
+            name = "delayed"
+
+            def __init__(self) -> None:
+                self.launch_started = asyncio.Event()
+                self.allow_launch = asyncio.Event()
+                self.killed = False
+
+            async def launch(
+                self,
+                prepared: PreparedLaunch,
+                label: str = "",
+            ) -> LaunchHandle:
+                del prepared, label
+                self.launch_started.set()
+                await self.allow_launch.wait()
+                return LaunchHandle(pid=123, backend_name=self.name)
+
+            async def poll(self, handle: LaunchHandle) -> int | None:
+                del handle
+                return 0 if self.killed else None
+
+            async def kill(self, handle: LaunchHandle, sig: int | None = None) -> None:
+                del handle, sig
+                self.killed = True
+
+            async def health(self, handle: LaunchHandle) -> HealthMetrics | None:
+                del handle
+                return None
+
+            async def read_log_tail(self, handle: LaunchHandle, lines: int = 50) -> str:
+                del handle, lines
+                return ""
+
+        async def _run() -> None:
+            delayed = DelayedBackend()
+            task = asyncio.create_task(
+                launch_and_supervise(
+                    delayed,
+                    PreparedLaunch(command=("unused",)),
+                    timeout_s=None,
+                )
+            )
+            await delayed.launch_started.wait()
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+            delayed.allow_launch.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert delayed.killed is True
+
+        asyncio.run(_run())
+
+    def test_exited_handle_does_not_signal_a_recycled_process_group(
+        self,
+        backend: LocalBackend,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        process = MagicMock(returncode=0)
+        handle = LaunchHandle(
+            pid=1234,
+            backend_name="local",
+            _process=cast("Any", process),
+            _leader_create_time=10.0,
+            _observed_descendants={1235: 11.0},
+        )
+        monkeypatch.setattr(backend_mod, "_process_create_time", lambda _pid: 99.0)
+        killpg = MagicMock()
+        monkeypatch.setattr(os, "killpg", killpg)
+
+        asyncio.run(backend.kill(handle))
+
+        killpg.assert_not_called()
+
+    def test_exit_scan_rejects_a_recycled_group_leader(
+        self,
+        backend: LocalBackend,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        process = MagicMock(returncode=0)
+        handle = LaunchHandle(
+            pid=1234,
+            backend_name="local",
+            _process=cast("Any", process),
+            _leader_create_time=10.0,
+        )
+        recycled_leader = MagicMock(pid=1234, info={"pid": 1234, "create_time": 15.0})
+        recycled_child = MagicMock(pid=1235, info={"pid": 1235, "create_time": 16.0})
+        monkeypatch.setattr(
+            psutil, "process_iter", lambda _attrs: [recycled_leader, recycled_child]
+        )
+        monkeypatch.setattr(os, "getpgid", lambda _pid: 1234)
+        monkeypatch.setattr(
+            backend_mod,
+            "_process_create_time",
+            lambda pid: 15.0 if pid == 1234 else 16.0,
+        )
+        killpg = MagicMock()
+        monkeypatch.setattr(os, "killpg", killpg)
+
+        asyncio.run(backend.kill(handle))
+
+        killpg.assert_not_called()
+
+    def test_poll_does_not_create_repeated_process_waiters(self, backend: LocalBackend) -> None:
+        process = MagicMock(returncode=None)
+        handle = LaunchHandle(
+            pid=1234,
+            backend_name="local",
+            _process=cast("Any", process),
+            _leader_create_time=10.0,
+        )
+
+        assert asyncio.run(backend.poll(handle)) is None
+        process.wait.assert_not_called()
+
+    def test_exit_discovers_a_descendant_spawned_after_the_last_health_poll(
+        self,
+        backend: LocalBackend,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        process = MagicMock(returncode=0)
+        handle = LaunchHandle(
+            pid=1234,
+            backend_name="local",
+            _process=cast("Any", process),
+            _leader_create_time=10.0,
+        )
+        child = MagicMock(pid=1235, info={"pid": 1235, "create_time": 11.0})
+        monkeypatch.setattr(psutil, "process_iter", lambda _attrs: [child])
+        monkeypatch.setattr(os, "getpgid", lambda _pid: 1234)
+        monkeypatch.setattr(
+            backend_mod,
+            "_process_create_time",
+            lambda pid: 11.0 if pid == 1235 else None,
+        )
+        monkeypatch.setattr(
+            backend_mod,
+            "_wait_for_owned_processes_exit",
+            AsyncMock(return_value=True),
+        )
+        killpg = MagicMock()
+        monkeypatch.setattr(os, "killpg", killpg)
+
+        assert asyncio.run(backend.poll(handle)) == 0
+        killpg.assert_called_once_with(1234, signal.SIGTERM)
+
+    def test_descendant_history_is_pruned_to_live_owned_members(
+        self,
+        backend: LocalBackend,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        process = MagicMock(returncode=0)
+        handle = LaunchHandle(
+            pid=1234,
+            backend_name="local",
+            _process=cast("Any", process),
+            _leader_create_time=10.0,
+            _observed_descendants={1235: 11.0, 9999: 12.0},
+        )
+        child = MagicMock(pid=1235, info={"pid": 1235, "create_time": 11.0})
+        monkeypatch.setattr(psutil, "process_iter", lambda _attrs: [child])
+        monkeypatch.setattr(os, "getpgid", lambda pid: 1234 if pid == 1235 else 9999)
+        monkeypatch.setattr(
+            backend_mod,
+            "_process_create_time",
+            lambda pid: 11.0 if pid == 1235 else None,
+        )
+        monkeypatch.setattr(
+            backend_mod,
+            "_wait_for_owned_processes_exit",
+            AsyncMock(return_value=True),
+        )
+        monkeypatch.setattr(os, "killpg", MagicMock())
+
+        asyncio.run(backend.kill(handle))
+        assert handle._observed_descendants == {1235: 11.0}  # noqa: SLF001
+
+    def test_health_rejects_a_recycled_leader_pid(
+        self,
+        backend: LocalBackend,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        process = MagicMock(returncode=None)
+        handle = LaunchHandle(
+            pid=1234,
+            backend_name="local",
+            _process=cast("Any", process),
+            _leader_create_time=10.0,
+        )
+        monkeypatch.setattr(backend_mod, "_same_process", lambda _pid, _created: False)
+        psutil_process = MagicMock()
+        monkeypatch.setattr(psutil, "Process", psutil_process)
+
+        assert asyncio.run(backend.health(handle)) is None
+        psutil_process.assert_not_called()
+
+    def test_cleanup_failure_preserves_the_original_timeout(self) -> None:
+        class FailingCleanupBackend:
+            name = "failing-cleanup"
+
+            async def launch(
+                self,
+                prepared: PreparedLaunch,
+                label: str = "",
+            ) -> LaunchHandle:
+                del prepared, label
+                return LaunchHandle(external_id="launch", backend_name=self.name)
+
+            async def poll(self, handle: LaunchHandle) -> int | None:
+                del handle
+                return None
+
+            async def kill(self, handle: LaunchHandle, sig: int | None = None) -> None:
+                del handle, sig
+                raise RuntimeError("cleanup failed")
+
+            async def health(self, handle: LaunchHandle) -> HealthMetrics | None:
+                del handle
+                return None
+
+            async def read_log_tail(self, handle: LaunchHandle, lines: int = 50) -> str:
+                del handle, lines
+                return ""
+
+        async def _run() -> None:
+            with pytest.raises(TimeoutError):
+                await launch_and_supervise(
+                    FailingCleanupBackend(),
+                    PreparedLaunch(command=("unused",)),
+                    timeout_s=0,
+                )
+
+        asyncio.run(_run())
+
+    def test_cleanup_polling_has_a_deadline(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        class NeverTerminalBackend:
+            name = "never-terminal"
+
+            async def launch(
+                self,
+                prepared: PreparedLaunch,
+                label: str = "",
+            ) -> LaunchHandle:
+                del prepared, label
+                return LaunchHandle(external_id="launch", backend_name=self.name)
+
+            async def poll(self, handle: LaunchHandle) -> int | None:
+                del handle
+                return None
+
+            async def kill(self, handle: LaunchHandle, sig: int | None = None) -> None:
+                del handle, sig
+
+            async def health(self, handle: LaunchHandle) -> HealthMetrics | None:
+                del handle
+                return None
+
+            async def read_log_tail(self, handle: LaunchHandle, lines: int = 50) -> str:
+                del handle, lines
+                return ""
+
+        monkeypatch.setattr(backend_mod, "_PROCESS_CANCEL_WAIT_S", 0.01)
+
+        async def _run() -> None:
+            started = time.monotonic()
+            with pytest.raises(TimeoutError):
+                await launch_and_supervise(
+                    NeverTerminalBackend(),
+                    PreparedLaunch(command=("unused",)),
+                    timeout_s=0,
+                )
+            assert time.monotonic() - started < 1
+
+        asyncio.run(_run())
+
+    def test_cancellation_during_filter_flush_is_not_consumed(self) -> None:
+        class BlockingFilterThread:
+            def __init__(self) -> None:
+                self.join_started = threading.Event()
+                self.release_join = threading.Event()
+
+            def join(self, timeout: float | None = None) -> None:
+                del timeout
+                self.join_started.set()
+                self.release_join.wait(timeout=2)
+
+            def is_alive(self) -> bool:
+                return not self.release_join.is_set()
+
+        class ImmediateBackend:
+            name = "immediate"
+
+            def __init__(self, filter_thread: BlockingFilterThread) -> None:
+                self.filter_thread = filter_thread
+
+            async def launch(
+                self,
+                prepared: PreparedLaunch,
+                label: str = "",
+            ) -> LaunchHandle:
+                del prepared, label
+                return LaunchHandle(
+                    external_id="done",
+                    backend_name=self.name,
+                    _filter_thread=cast("Any", self.filter_thread),
+                )
+
+            async def poll(self, handle: LaunchHandle) -> int | None:
+                del handle
+                return 0
+
+            async def kill(self, handle: LaunchHandle, sig: int | None = None) -> None:
+                del handle, sig
+
+            async def health(self, handle: LaunchHandle) -> HealthMetrics | None:
+                del handle
+                return None
+
+            async def read_log_tail(self, handle: LaunchHandle, lines: int = 50) -> str:
+                del handle, lines
+                return ""
+
+        async def _run() -> None:
+            filter_thread = BlockingFilterThread()
+            task = asyncio.create_task(
+                launch_and_supervise(
+                    ImmediateBackend(filter_thread),
+                    PreparedLaunch(command=("unused",)),
+                    timeout_s=None,
+                )
+            )
+            assert await asyncio.to_thread(filter_thread.join_started.wait, 1)
+            task.cancel()
+            filter_thread.release_join.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
 
         asyncio.run(_run())
 

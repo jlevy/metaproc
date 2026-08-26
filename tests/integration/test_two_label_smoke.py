@@ -75,14 +75,14 @@ def lease_kwargs(tmp_path: Path) -> dict[str, Any]:
     runs_dir.mkdir()
     return {
         "runs_dir": runs_dir,
-        "run_id": "tuesday-smoke",
-        "step": "predict-ticker",
-        "item": "AAPL",
+        "run_id": "two-label-smoke",
+        "step": "process-item",
+        "item": "item-1",
     }
 
 
-class TestTuesdayWorkerPoolShape:
-    """Phase 0a baseline: pool should expose alt1+alt2 as eligible."""
+class TestTwoLabelWorkerPoolShape:
+    """The baseline pool exposes both configured labels as eligible."""
 
     def test_two_labels_eligible(self, two_label_pool: LocalFilesystemBackend) -> None:
         entries = two_label_pool.list_entries(adapter="claude-code-cli")
@@ -217,8 +217,8 @@ class TestExhaustionAndRecovery:
         self, coord: SlotCoordinator, lease_kwargs: dict[str, Any]
     ) -> None:
         # Caller deliberately excluded both labels (e.g. inside a retry
-        # walk that already tried each). Returns None so the caller's
-        # RetryLaterPolicy can decide wait vs fail-fast.
+        # walk that already tried each). The dispatch caller decides whether
+        # to fail or reschedule when no lease is returned.
         lease = coord.acquire_slot(
             adapter="claude-code-cli",
             attempt=0,

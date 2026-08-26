@@ -22,7 +22,6 @@ import metaproc.dispatch.pool_dispatch as pd
 from metaproc.adapters.base import AuthFailureClassification, FailureSeverity
 from metaproc.adapters.claude_code import ClaudeApiSignals, ClaudeCodeCliAdapter
 from metaproc.commands.run_parallel import (
-    _auth_forces_abort,
     _build_prepare_launch,
     _compute_pool_cooling_delay,
     _run_agent_pool,
@@ -49,9 +48,13 @@ from metaproc.dispatch.pool_dispatch import (
     build_auth_lease_acquired,
     build_auth_outcome,
     classify_failure_for_slot,
+    complete_slot,
     compose_slot_env,
     pre_fan_out_probe,
     probe_credential,
+)
+from metaproc.dispatch.pool_dispatch import (
+    auth_forces_abort as _auth_forces_abort,
 )
 from metaproc.dispatch.slot_coordinator import (
     SLOT_ACTIVE_ENV_VAR,
@@ -300,6 +303,74 @@ class TestAcquireSlot:
             acquire_slot(config, item="AAPL", attempt=1)
         assert exc_info.value.adapter == "claude-code-cli"
         assert exc_info.value.policy == FallbackPolicy.SAME_PROVIDER
+
+
+class TestCompleteSlot:
+    def test_classifier_failure_still_tears_down_lease(
+        self, pool_and_adapter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pool, _adapter, coordinator, tmp_path = pool_and_adapter
+        config = PoolDispatchConfig(
+            coordinator=coordinator,
+            adapter="claude-code-cli",
+            runs_dir=tmp_path,
+            run_id="r1",
+            step="predict",
+            strategy=SelectionStrategy(SelectionPolicy.PRIORITY_ORDER, ("laptop",)),
+        )
+        lease = acquire_slot(config, item="AAPL", attempt=1)
+
+        def fail_classification(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("classifier crash")
+
+        monkeypatch.setattr(pd, "classify_failure_for_slot", fail_classification)
+
+        with pytest.raises(RuntimeError, match="classifier crash"):
+            complete_slot(
+                config,
+                lease,
+                error_str="exit code 1",
+                session_log_path=None,
+                retry_count=0,
+                retry_exclude=[],
+            )
+
+        assert not lease.slot_dir.exists()
+        assert coordinator.active_counter.snapshot()[(lease.adapter, lease.label)] == 0
+        assert pool.get_entry(lease.adapter, lease.label).state.status == "active"
+
+    def test_diagnostic_failure_still_tears_down_lease(
+        self, pool_and_adapter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pool, _adapter, coordinator, tmp_path = pool_and_adapter
+        config = PoolDispatchConfig(
+            coordinator=coordinator,
+            adapter="claude-code-cli",
+            runs_dir=tmp_path,
+            run_id="r1",
+            step="predict",
+            strategy=SelectionStrategy(SelectionPolicy.PRIORITY_ORDER, ("laptop",)),
+        )
+        lease = acquire_slot(config, item="AAPL", attempt=1)
+
+        def fail_diagnostics(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("diagnostics crash")
+
+        monkeypatch.setattr(coordinator, "preserve_diagnostics", fail_diagnostics)
+
+        with pytest.raises(RuntimeError, match="diagnostics crash"):
+            complete_slot(
+                config,
+                lease,
+                error_str=None,
+                session_log_path=tmp_path / "session.jsonl",
+                retry_count=0,
+                retry_exclude=[],
+            )
+
+        assert not lease.slot_dir.exists()
+        assert coordinator.active_counter.snapshot()[(lease.adapter, lease.label)] == 0
+        assert pool.get_entry(lease.adapter, lease.label).state.status == "active"
 
 
 # ── compose_slot_env ────────────────────────────────────────────
@@ -646,7 +717,7 @@ class TestAuthOutcome:
         assert oc.reason == "invalid_grant"
 
     def test_auth_outcome_schema_version(self):
-        # Schema v2 (plan-2026-05-03) added the run_id/step_id/item/
+        # Schema v2 added the run_id/step_id/item/
         # attempt/session_log_path join keys. Existing v1 readers
         # tolerate the additive change; v2 readers see legacy events
         # with the new fields defaulting to "" / 0 / "".
@@ -861,7 +932,7 @@ class TestAuthOutcome:
 
 
 class TestBuildAuthLeaseAcquired:
-    """Schema-v2 acquisition-time event payload (plan-2026-05-03).
+    """Schema-v2 acquisition-time event payload.
 
     Companion to AuthOutcome — emitted before the subprocess starts so
     post-hoc analysis can pair acquisitions with outcomes by primary
@@ -1400,8 +1471,7 @@ class TestComputePoolCoolingDelay:
 
         # All active, none cooling — this is lease contention (labels
         # healthy, just all leased by other items). Return contention_s
-        # so the next retry grabs a freed slot quickly. Surfaced by the
-        # 2026-04-28 smoke at mine-adhoc.
+        # so the next retry grabs a freed slot quickly.
         dispatch = self._make_dispatch(
             [
                 PoolEntry(

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as distribution_version
+from unittest.mock import MagicMock
 
 import pytest
 from softschema import validate_artifact
 from typer.testing import CliRunner
 
+import metaproc.cli as cli_module
 from metaproc.cli import app
 from metaproc.errors import CLIError
 from metaproc.plugins.discovery import get_plugin_registry
@@ -46,6 +48,20 @@ class TestCLIBasic:
 
         assert result.exit_code == 0
         assert result.output.strip() == "unknown"
+
+    def test_keyboard_interrupt_hard_reaps_before_exit(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        reaper = MagicMock()
+        monkeypatch.setattr(cli_module, "app", MagicMock(side_effect=KeyboardInterrupt))
+        monkeypatch.setattr(cli_module, "reap_subprocess_tree", reaper, raising=False)
+
+        with pytest.raises(SystemExit) as exited:
+            cli_module.main()
+
+        assert exited.value.code == 130
+        reaper.assert_called_once_with()
 
 
 class TestSubcommandRegistration:

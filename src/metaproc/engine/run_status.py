@@ -18,12 +18,14 @@ from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
+from ruamel.yaml import YAMLError
 
 from metaproc.engine.dep_state import (
     compute_step_state,
     fingerprint_step,
     recorded_step_hash,
 )
+from metaproc.io import read_yaml_file
 from metaproc.io.orchestrator_lease import is_orchestrator_alive
 from metaproc.io.state_io import read_status_at
 from metaproc.models.authored import ProgressCounts
@@ -118,6 +120,11 @@ class RunStatus(BaseModel):
     # "current" if every step is current/missing; "stale" if any step is
     # stale or invalidated; None when the plan could not be loaded.
     process_state: Literal["current", "stale"] | None = None
+    # Terminal/runtime state from .state/process-status.yaml. This is
+    # intentionally separate from process_state, which describes whether
+    # the current process definition matches prior completed work.
+    process_execution_state: Literal["running", "completed", "failed", "cancelled"] | None = None
+    process_error: str | None = None
     # Activity sub-flags. ``items_running`` is True iff any fan-out item
     # is currently in-flight; ``orchestrator_alive`` is True iff a
     # parent run-process / composite engine still holds its lease.
@@ -508,13 +515,20 @@ def scan_run_status(
     # pool OR an orchestrator lease is still heartbeating.
     is_active = any_running or (pending_retries > 0 and pool_alive) or orchestrator_alive
 
+    process_execution_state, process_error, step_errors = _read_process_execution(run_dir)
     step_entries: list[StepStatusEntry] = []
     process_state: Literal["current", "stale"] | None = None
     if plan is not None:
         variant_counts_by_step = {v.variant: v.counts for v in variant_statuses}
         for step in plan.steps:
             step_entries.append(
-                _build_step_status_entry(run_dir, plan, step, variant_counts_by_step)
+                _build_step_status_entry(
+                    run_dir,
+                    plan,
+                    step,
+                    variant_counts_by_step,
+                    step_errors,
+                )
             )
         non_current = sum(
             1 for entry in step_entries if entry.state in (StepState.stale, StepState.invalidated)
@@ -532,6 +546,8 @@ def scan_run_status(
         system=system,
         steps=step_entries,
         process_state=process_state,
+        process_execution_state=process_execution_state,
+        process_error=process_error,
         items_running=any_running,
         orchestrator_alive=orchestrator_alive,
     )
@@ -542,6 +558,7 @@ def _build_step_status_entry(
     plan: Plan,
     step: ResolvedStep,
     variant_counts: dict[str, ProgressCounts],
+    step_errors: dict[str, str],
 ) -> StepStatusEntry:
     """Construct one ``StepStatusEntry`` for *step* under *run_dir*.
 
@@ -571,7 +588,10 @@ def _build_step_status_entry(
             }
 
     reason: str | None = None
-    if state == StepState.stale and recorded is not None and current is not None:
+    execution_error = step_errors.get(step.step_id)
+    if execution_error is not None:
+        reason = f"last execution failed: {execution_error}"
+    elif state == StepState.stale and recorded is not None and current is not None:
         reason = f"definition changed (was {recorded}, now {current})"
     elif state == StepState.invalidated:
         reason = "will rerun: marked .stale by --force or fingerprint cascade"
@@ -586,6 +606,52 @@ def _build_step_status_entry(
         item_counts=item_counts,
         reason=reason,
     )
+
+
+def _read_process_execution(
+    run_dir: Path,
+) -> tuple[
+    Literal["running", "completed", "failed", "cancelled"] | None,
+    str | None,
+    dict[str, str],
+]:
+    """Return the execution state, summary error, and per-step errors."""
+    path = run_dir / STATE_DIR / "process-status.yaml"
+    if not path.exists():
+        return None, None, {}
+    try:
+        raw = read_yaml_file(path)
+    except (OSError, YAMLError, ValueError):
+        return None, None, {}
+    if not isinstance(raw, dict):
+        return None, None, {}
+
+    raw_state = raw.get("state")
+    execution_state = (
+        raw_state if raw_state in {"running", "completed", "failed", "cancelled"} else None
+    )
+    step_errors: dict[str, str] = {}
+    steps = raw.get("steps")
+    if isinstance(steps, dict):
+        for step_id, entry in steps.items():
+            if not isinstance(step_id, str) or not isinstance(entry, dict):
+                continue
+            if entry.get("state") != "failed":
+                continue
+            error = entry.get("error")
+            step_errors[step_id] = (
+                error if isinstance(error, str) and error else "error not recorded"
+            )
+
+    process_error = None
+    if execution_state == "failed" and step_errors:
+        step_id, error = next(iter(step_errors.items()))
+        process_error = f"{step_id}: {error}"
+    elif execution_state == "failed":
+        process_error = "process failed without a recorded step error"
+    elif execution_state == "cancelled":
+        process_error = "process was cancelled"
+    return execution_state, process_error, step_errors
 
 
 # ── Wait ─────────────────────────────────────────────────────────
@@ -609,9 +675,17 @@ def wait_for_completion(
         status = scan_run_status(run_dir, variant=variant, include_system=include_system)
         totals = status.totals
 
+        if not status.is_active and status.process_execution_state in ("failed", "cancelled"):
+            return status, 1
+
         # Terminal: nothing running or pending, and not active (which accounts
         # for pending retries with a live pool).
-        if totals.running == 0 and totals.pending == 0 and not status.is_active:
+        if (
+            totals.running == 0
+            and totals.pending == 0
+            and not status.is_active
+            and status.process_execution_state != "running"
+        ):
             exit_code = 1 if totals.failed > 0 else 0
             return status, exit_code
 
@@ -634,7 +708,20 @@ def check_completion(status: RunStatus, condition: str) -> CheckResult:
     """
     totals = status.totals
 
+    if condition not in {"completed", "no-failures"}:
+        msg = f"Unknown check condition: {condition!r}"
+        raise ValueError(msg)
+
+    if not status.is_active and status.process_execution_state in ("failed", "cancelled"):
+        return CheckResult(
+            passed=False,
+            exit_code=1,
+            reason=status.process_error or f"Process {status.process_execution_state}",
+        )
+
     if condition == "completed":
+        if status.is_active or status.process_execution_state == "running":
+            return CheckResult(passed=False, exit_code=2, reason="Run still in progress")
         if totals.running > 0 or totals.pending > 0:
             return CheckResult(passed=False, exit_code=2, reason="Run still in progress")
         if totals.failed > 0:
