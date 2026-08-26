@@ -47,7 +47,7 @@ mode requires. Never commit `.env`.
 | --- | --- |
 | `METAPROC_GCP_PROJECT` | GCP project containing Batch resources |
 | `METAPROC_GCP_REGION` | Batch region |
-| `METAPROC_GCP_SERVICE_ACCOUNT` | Worker/orchestrator service account |
+| `METAPROC_GCP_SERVICE_ACCOUNT` | Explicit Batch identity; required when a run binds Secret Manager secrets |
 | `METAPROC_GCP_CONTAINER_IMAGE` | Image that can run Metaproc and the consumer |
 | `METAPROC_GCS_BUCKET` | Wheel and workspace artifact transport |
 | `METAPROC_GCP_SECRET_GH_TOKEN` | Secret Manager ref used when a private repo must be cloned |
@@ -155,6 +155,8 @@ Useful controls:
   Rebuild the image when that dependency closure changes.
 - `--env K=V` adds non-secret configuration.
 - `--secret K=REF` binds a Secret Manager version.
+  Secret-bearing runs require `METAPROC_GCP_SERVICE_ACCOUNT`; dispatch refuses them
+  before artifact upload when the identity is unset.
 - `--timeout <seconds>` sets the task deadline.
 
 Do not pass credentials through `--env`. Use Secret Manager references.

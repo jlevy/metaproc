@@ -9,6 +9,10 @@ development series.
 
 ### Fixed
 
+- **GCP artifact upload honors the selected project**: `gcp run` now passes its required
+  `METAPROC_GCP_PROJECT` through wheel and workspace uploads, so service-account ADC
+  without an embedded project ID can dispatch normally.
+
 - **Filesystem status fails closed**: `status` and `pool status` reject a nonexistent
   local run directory instead of projecting an empty tree as complete or healthy.
 

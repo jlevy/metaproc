@@ -11,6 +11,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from metaproc.cloud.gcp.dispatch_artifacts import (
+    GCS_UPLOAD_CHUNK_SIZE,
+    GCS_UPLOAD_RETRY,
+    GCS_UPLOAD_TIMEOUT_SECONDS,
     build_wheel,
     find_metaproc_source_dir,
     package_workspace,
@@ -430,26 +433,36 @@ class TestUploadToGcs:
         with patch(
             "metaproc.cloud.gcp.dispatch_artifacts.storage.Client",
             return_value=client,
-        ):
-            uri = upload_to_gcs(local, "gs://my-bucket/gcp-run/jobid/payload.txt")
+        ) as client_factory:
+            uri = upload_to_gcs(
+                local,
+                "gs://my-bucket/gcp-run/jobid/payload.txt",
+                project="explicit-project",
+            )
 
         assert uri == "gs://my-bucket/gcp-run/jobid/payload.txt"
+        client_factory.assert_called_once_with(project="explicit-project")
         client.bucket.assert_called_once_with("my-bucket")
         bucket.blob.assert_called_once_with("gcp-run/jobid/payload.txt")
-        blob.upload_from_filename.assert_called_once_with(str(local))
+        assert blob.chunk_size == GCS_UPLOAD_CHUNK_SIZE
+        blob.upload_from_filename.assert_called_once_with(
+            str(local),
+            timeout=GCS_UPLOAD_TIMEOUT_SECONDS,
+            retry=GCS_UPLOAD_RETRY,
+        )
         assert blob.metadata == {"metaproc-sha256": file_sha256(local)}
 
     def test_rejects_non_gs_uri(self, tmp_path: Path):
         local = tmp_path / "x"
         local.write_text("")
         with pytest.raises(ValueError, match="Expected gs:// URI"):
-            upload_to_gcs(local, "https://example.com/x")
+            upload_to_gcs(local, "https://example.com/x", project="p")
 
     def test_rejects_uri_without_blob_path(self, tmp_path: Path):
         local = tmp_path / "x"
         local.write_text("")
         with pytest.raises(ValueError, match="Missing blob path"):
-            upload_to_gcs(local, "gs://my-bucket")
+            upload_to_gcs(local, "gs://my-bucket", project="p")
 
 
 class TestUploadWheelAndWorkspace:
@@ -467,7 +480,12 @@ class TestUploadWheelAndWorkspace:
             "metaproc.cloud.gcp.dispatch_artifacts.storage.Client",
             return_value=client,
         ):
-            uri = upload_wheel_to_gcs(wheel, bucket="dispatch-bucket", job_id="job-abc-123")
+            uri = upload_wheel_to_gcs(
+                wheel,
+                bucket="dispatch-bucket",
+                job_id="job-abc-123",
+                project="p",
+            )
 
         assert uri == "gs://dispatch-bucket/gcp-run/job-abc-123/metaproc-0.2.0-py3-none-any.whl"
         bucket.blob.assert_called_once_with("gcp-run/job-abc-123/metaproc-0.2.0-py3-none-any.whl")
@@ -485,8 +503,8 @@ class TestUploadWheelAndWorkspace:
             "metaproc.cloud.gcp.dispatch_artifacts.storage.Client",
             return_value=client,
         ):
-            uri_a = upload_wheel_to_gcs(wheel, bucket="b", job_id="job-a")
-            uri_b = upload_wheel_to_gcs(wheel, bucket="b", job_id="job-b")
+            uri_a = upload_wheel_to_gcs(wheel, bucket="b", job_id="job-a", project="p")
+            uri_b = upload_wheel_to_gcs(wheel, bucket="b", job_id="job-b", project="p")
 
         assert uri_a == "gs://b/gcp-run/job-a/metaproc-0.2.0-py3-none-any.whl"
         assert uri_b == "gs://b/gcp-run/job-b/metaproc-0.2.0-py3-none-any.whl"
@@ -506,7 +524,12 @@ class TestUploadWheelAndWorkspace:
             "metaproc.cloud.gcp.dispatch_artifacts.storage.Client",
             return_value=client,
         ):
-            uri = upload_workspace_to_gcs(ws, bucket="dispatch-bucket", job_id="job-abc-123")
+            uri = upload_workspace_to_gcs(
+                ws,
+                bucket="dispatch-bucket",
+                job_id="job-abc-123",
+                project="p",
+            )
 
         assert uri == "gs://dispatch-bucket/gcp-run/job-abc-123/workspace.tar.gz"
         bucket.blob.assert_called_once_with("gcp-run/job-abc-123/workspace.tar.gz")
@@ -521,5 +544,11 @@ class TestUploadWheelAndWorkspace:
             "metaproc.cloud.gcp.dispatch_artifacts.storage.Client",
             return_value=client,
         ):
-            uri = upload_wheel_to_gcs(wheel, bucket="b", job_id="j1", prefix="custom-prefix")
+            uri = upload_wheel_to_gcs(
+                wheel,
+                bucket="b",
+                job_id="j1",
+                project="p",
+                prefix="custom-prefix",
+            )
         assert uri == "gs://b/custom-prefix/j1/w.whl"

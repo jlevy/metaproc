@@ -112,6 +112,26 @@ def _normalize_workspace_package_paths(package_paths: tuple[str, ...]) -> tuple[
     return tuple(normalized)
 
 
+def validate_gcp_run_secret_service_account(
+    config: GCPBatchConfig,
+    extra_secrets: Mapping[str, str],
+) -> dict[str, str]:
+    """Resolve run secrets and require an explicit identity when any are bound.
+
+    GCP Batch otherwise falls back to the project's default Compute Engine service
+    account. That implicit identity may not have Secret Manager access and, more
+    importantly, is not an operator-selected security boundary.
+    """
+    secret_env_vars: dict[str, str] = dict(_build_secret_env_vars())
+    secret_env_vars.update(extra_secrets)
+    if secret_env_vars and not config.service_account_email:
+        raise ValueError(
+            "Set METAPROC_GCP_SERVICE_ACCOUNT before binding Secret Manager secrets "
+            "to a GCP Batch run"
+        )
+    return secret_env_vars
+
+
 def build_gcp_run_job(
     cmd: list[str],
     options: DispatchGcpRunOptions,
@@ -156,8 +176,10 @@ def build_gcp_run_job(
         env_vars["RUNS_DIR"] = container_runs_dir
     env_vars.update(options.extra_env)
 
-    secret_env_vars: dict[str, str] = dict(_build_secret_env_vars())
-    secret_env_vars.update(options.extra_secrets)
+    secret_env_vars = validate_gcp_run_secret_service_account(
+        options.config,
+        options.extra_secrets,
+    )
 
     labels: dict[str, str] = {"metaproc-role": "gcp-run", "metaproc-dispatch": "gcp-run"}
     labels.update(options.job_labels)

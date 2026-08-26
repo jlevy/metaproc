@@ -67,6 +67,18 @@ class TestBuildGcpRunJob:
         with pytest.raises(ValueError, match="cmd argv must be non-empty"):
             build_gcp_run_job([], opts)
 
+    def test_secret_job_requires_explicit_service_account(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(
+            "METAPROC_GCP_SECRET_CLAUDE_CREDS",
+            "projects/p/secrets/claude/versions/latest",
+        )
+        opts = DispatchGcpRunOptions(config=_config(service_account_email=""))
+
+        with pytest.raises(ValueError, match="METAPROC_GCP_SERVICE_ACCOUNT"):
+            build_gcp_run_job(["echo", "x"], opts)
+
     def test_wheel_and_workspace_uris_flow_to_env(self):
         cfg = _config()
         opts = DispatchGcpRunOptions(
@@ -307,6 +319,7 @@ class TestGcpRunCli:
         monkeypatch.setenv("METAPROC_GCP_PROJECT", "p")
         monkeypatch.setenv("METAPROC_GCP_CONTAINER_IMAGE", "us-central1-docker.pkg.dev/p/i:t")
         monkeypatch.setenv("METAPROC_GCS_BUCKET", "test-dispatch-bucket")
+        monkeypatch.setenv("METAPROC_GCP_SERVICE_ACCOUNT", "batch@example.invalid")
         monkeypatch.delenv("METAPROC_GCP_FILESTORE_SERVER", raising=False)
 
         app = typer.Typer()
@@ -322,9 +335,17 @@ class TestGcpRunCli:
         with (
             patch.object(cmd_gcp_run, "build_wheel"),
             patch.object(cmd_gcp_run, "file_sha256", side_effect=["1" * 64, "2" * 64]),
-            patch.object(cmd_gcp_run, "upload_wheel_to_gcs", return_value="gs://b/w.whl"),
+            patch.object(
+                cmd_gcp_run,
+                "upload_wheel_to_gcs",
+                return_value="gs://b/w.whl",
+            ) as wheel_upload,
             patch.object(cmd_gcp_run, "package_workspace"),
-            patch.object(cmd_gcp_run, "upload_workspace_to_gcs", return_value="gs://b/ws.tgz"),
+            patch.object(
+                cmd_gcp_run,
+                "upload_workspace_to_gcs",
+                return_value="gs://b/ws.tgz",
+            ) as workspace_upload,
             patch.object(cmd_gcp_run, "dispatch_gcp_run", side_effect=fake_dispatch),
             patch.object(cmd_gcp_run, "tail_gcp_run_logs", return_value=0),
         ):
@@ -345,6 +366,35 @@ class TestGcpRunCli:
         opts = captured["options"]
         assert opts.extra_secrets["MY"] == "projects/p/secrets/bare-name/versions/latest"
         assert opts.extra_secrets["PINNED"] == "projects/p/secrets/pinned-name/versions/5"
+        assert wheel_upload.call_args.kwargs["project"] == "p"
+        assert workspace_upload.call_args.kwargs["project"] == "p"
+
+    def test_secret_without_service_account_fails_before_artifact_shipping(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("METAPROC_GCP_PROJECT", "p")
+        monkeypatch.setenv("METAPROC_GCP_CONTAINER_IMAGE", "example.invalid/agent:latest")
+        monkeypatch.setenv("METAPROC_GCS_BUCKET", "test-dispatch-bucket")
+        monkeypatch.delenv("METAPROC_GCP_SERVICE_ACCOUNT", raising=False)
+        monkeypatch.delenv("METAPROC_GCP_FILESTORE_SERVER", raising=False)
+        app = typer.Typer()
+        app.command("run")(cmd_gcp_run.run_command)
+
+        with patch.object(cmd_gcp_run, "_ship_artifacts") as ship_artifacts:
+            result = CliRunner().invoke(
+                app,
+                [
+                    "--no-filestore",
+                    "--secret",
+                    "API_TOKEN=api-token",
+                    "echo",
+                    "hi",
+                ],
+            )
+
+        assert result.exit_code != 0
+        assert "METAPROC_GCP_SERVICE_ACCOUNT" in result.output
+        ship_artifacts.assert_not_called()
 
     def test_build_config_requires_project(self, monkeypatch: pytest.MonkeyPatch):
 
@@ -477,6 +527,7 @@ class TestGcpRunCli:
         monkeypatch.setenv("METAPROC_GCP_PROJECT", "p")
         monkeypatch.setenv("METAPROC_GCP_CONTAINER_IMAGE", "us-central1-docker.pkg.dev/p/i:t")
         monkeypatch.setenv("METAPROC_GCS_BUCKET", "test-dispatch-bucket")
+        monkeypatch.setenv("METAPROC_GCP_SERVICE_ACCOUNT", "batch@example.invalid")
         monkeypatch.delenv("METAPROC_GCP_FILESTORE_SERVER", raising=False)
 
         app = typer.Typer()

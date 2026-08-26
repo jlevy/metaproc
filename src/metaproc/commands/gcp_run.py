@@ -46,6 +46,7 @@ from metaproc.cloud.gcp.gcp_run_dispatch import (
     _normalize_workspace_package_paths,
     build_gcp_run_job,
     dispatch_gcp_run,
+    validate_gcp_run_secret_service_account,
 )
 from metaproc.cloud.gcp.gcp_run_logs import build_log_url, tail_gcp_run_logs
 from metaproc.config.env_vars import MetaprocEnv
@@ -210,6 +211,7 @@ def _ship_artifacts(
     sync_only: list[str] | None,
     job_id: str,
     bucket: str,
+    project: str,
     prefix: str,
 ) -> tuple[str, str, str, str]:
     """Build + upload the wheel and workspace tarball as configured.
@@ -222,7 +224,13 @@ def _ship_artifacts(
     if not no_wheel:
         wheel = build_wheel()
         wheel_sha256 = file_sha256(wheel)
-        wheel_uri = upload_wheel_to_gcs(wheel, bucket=bucket, job_id=job_id, prefix=prefix)
+        wheel_uri = upload_wheel_to_gcs(
+            wheel,
+            bucket=bucket,
+            job_id=job_id,
+            project=project,
+            prefix=prefix,
+        )
 
     workspace_uri = ""
     workspace_sha256 = ""
@@ -234,7 +242,11 @@ def _ship_artifacts(
         )
         workspace_sha256 = file_sha256(workspace)
         workspace_uri = upload_workspace_to_gcs(
-            workspace, bucket=bucket, job_id=job_id, prefix=prefix
+            workspace,
+            bucket=bucket,
+            job_id=job_id,
+            project=project,
+            prefix=prefix,
         )
 
     return wheel_uri, wheel_sha256, workspace_uri, workspace_sha256
@@ -294,7 +306,7 @@ def run_command(
         help=(
             "K=REF Secret Manager binding. REF may be a full "
             "``projects/P/secrets/S/versions/V`` path, bare ``S`` (→ versions/latest), "
-            "or ``S:V``. Repeatable."
+            "or ``S:V``. Repeatable; requires METAPROC_GCP_SERVICE_ACCOUNT."
         ),
     ),
     detach: bool = typer.Option(
@@ -345,6 +357,13 @@ def run_command(
     extra_secrets = {
         key: _expand_secret_ref(val, config.project) for key, val in raw_secrets.items()
     }
+    try:
+        validate_gcp_run_secret_service_account(config, extra_secrets)
+    except ValueError as exc:
+        raise typer.BadParameter(
+            str(exc),
+            param_hint="METAPROC_GCP_SERVICE_ACCOUNT",
+        ) from exc
 
     if no_workspace and workspace_package:
         raise typer.BadParameter(
@@ -392,6 +411,7 @@ def run_command(
             sync_only=sync_only,
             job_id=job_id,
             bucket=bucket,
+            project=config.project,
             prefix=DEFAULT_GCS_PREFIX,
         )
 
