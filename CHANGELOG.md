@@ -27,6 +27,11 @@ development series.
 
 ### Fixed
 
+- **GCP runs require explicit storage posture**: `metaproc gcp run` now rejects its
+  default Filestore placement when `METAPROC_GCP_FILESTORE_SERVER` is unset, before
+  uploading artifacts or dispatching a job.
+  Callers that intentionally want ephemeral task storage must pass `--no-filestore`.
+
 - **GCP dispatch artifacts are immutable**: `metaproc gcp run` validates its artifact
   identity before packaging and creates wheel and workspace objects only when their GCS
   names are unused, so a later dispatch cannot replace bytes referenced by an existing

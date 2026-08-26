@@ -171,9 +171,9 @@ def _build_config(
     """Build a :class:`GCPBatchConfig` from CLI flags + env defaults.
 
     ``METAPROC_GCP_PROJECT`` is required. The container image comes from
-    ``--image`` or ``METAPROC_GCP_CONTAINER_IMAGE``. Filestore is enabled
-    iff ``--no-filestore`` is unset and ``METAPROC_GCP_FILESTORE_SERVER``
-    is in the env.
+    ``--image`` or ``METAPROC_GCP_CONTAINER_IMAGE``. Filestore is the
+    default and requires ``METAPROC_GCP_FILESTORE_SERVER``; callers must
+    explicitly select ephemeral storage with ``--no-filestore``.
     """
     project = MetaprocEnv.METAPROC_GCP_PROJECT.read_str(default="")
     if not project:
@@ -192,6 +192,12 @@ def _build_config(
     filestore_server = ""
     if not no_filestore:
         filestore_server = MetaprocEnv.METAPROC_GCP_FILESTORE_SERVER.read_str(default="")
+        if not filestore_server:
+            raise typer.BadParameter(
+                "METAPROC_GCP_FILESTORE_SERVER is required by the default Filestore "
+                "placement; pass --no-filestore to use ephemeral task storage",
+                param_hint="METAPROC_GCP_FILESTORE_SERVER",
+            )
 
     return GCPBatchConfig(
         project=project,
@@ -304,7 +310,9 @@ def run_command(
         DEFAULT_RUNS_DIR, "--runs-dir", help="RUNS_DIR inside the container."
     ),
     no_filestore: bool = typer.Option(
-        False, "--no-filestore", help="Skip the Filestore NFS mount."
+        False,
+        "--no-filestore",
+        help="Use ephemeral task storage instead of the default Filestore NFS mount.",
     ),
     env: list[str] = typer.Option(  # noqa: B008
         None, "--env", help="K=V plaintext env var on the task. Repeatable."

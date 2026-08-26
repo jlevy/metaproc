@@ -51,7 +51,7 @@ mode requires. Never commit `.env`.
 | `METAPROC_GCP_CONTAINER_IMAGE` | Image that can run Metaproc and the consumer |
 | `METAPROC_GCS_BUCKET` | Wheel and workspace artifact transport |
 | `METAPROC_GCP_SECRET_GH_TOKEN` | Secret Manager ref used when a private repo must be cloned |
-| `METAPROC_GCP_FILESTORE_*` | Optional shared live execution and restart storage |
+| `METAPROC_GCP_FILESTORE_*` | Shared live execution and restart storage; `gcp run` requires a server unless `--no-filestore` selects ephemeral storage |
 | `METAPROC_REPO_URL` / `METAPROC_RUN_BRANCH` | Optional repository source for remote bootstrap |
 | `METAPROC_WHEEL_GCS` | Optional exact prebuilt Metaproc wheel |
 | `METAPROC_WHEEL_SHA256` | Required digest when `METAPROC_WHEEL_GCS` is set |
@@ -154,6 +154,9 @@ metaproc gcp run --detach -- python -m my_consumer.batch_task --shard shard-b
 
 Useful controls:
 
+- `--no-filestore` explicitly uses ephemeral task storage.
+  Without it, dispatch requires `METAPROC_GCP_FILESTORE_SERVER` and refuses before
+  artifact upload when the server is unset.
 - `--no-wheel` uses the image-baked Metaproc.
 - `--no-workspace` skips repository transport, so consumer source must already be in the
   image. Nested `uv run` commands use the baked `/opt/venv` without syncing an absent

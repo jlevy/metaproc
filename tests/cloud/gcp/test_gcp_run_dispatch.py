@@ -499,6 +499,37 @@ class TestGcpRunCli:
         assert result.exit_code != 0
         assert "METAPROC_GCS_BUCKET" in result.output
 
+    def test_default_filestore_requires_server_before_artifact_shipping(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("METAPROC_GCP_PROJECT", "p")
+        monkeypatch.setenv("METAPROC_GCP_CONTAINER_IMAGE", "example.invalid/agent:latest")
+        monkeypatch.setenv("METAPROC_GCS_BUCKET", "test-dispatch-bucket")
+        monkeypatch.delenv("METAPROC_GCP_FILESTORE_SERVER", raising=False)
+        app = typer.Typer()
+        app.command("run")(cmd_gcp_run.run_command)
+
+        with (
+            patch.object(
+                cmd_gcp_run,
+                "_ship_artifacts",
+                return_value=("", "", "", ""),
+            ) as ship_artifacts,
+            patch.object(
+                cmd_gcp_run,
+                "dispatch_gcp_run",
+                return_value="projects/p/locations/us-central1/jobs/fake",
+            ) as dispatch,
+            patch.object(cmd_gcp_run, "tail_gcp_run_logs", return_value=0),
+        ):
+            result = CliRunner().invoke(app, ["echo", "hi"])
+
+        assert result.exit_code != 0
+        assert "METAPROC_GCP_FILESTORE_SERVER" in result.output
+        assert "--no-filestore" in result.output
+        ship_artifacts.assert_not_called()
+        dispatch.assert_not_called()
+
     def test_build_config_no_filestore_clears_runs_dir(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("METAPROC_GCP_PROJECT", "p")
         monkeypatch.setenv("METAPROC_GCP_FILESTORE_SERVER", "10.0.0.5")
@@ -622,6 +653,8 @@ class TestGcpRunCli:
         assert opts.workspace_packages == ("packages/example", "workflow")
         assert opts.extra_env == {"FOO": "bar"}
         assert opts.extra_secrets == {"MY": "projects/p/secrets/x/versions/1"}
+        assert opts.config.filestore_server == ""
+        assert opts.config.runs_dir == ""
         # Blocking mode: tail was invoked with the resource name + project.
         tail_mock.assert_called_once()
         kwargs = tail_mock.call_args.kwargs
@@ -671,7 +704,13 @@ class TestGcpRunCli:
         ):
             result = CliRunner().invoke(
                 app,
-                ["--workspace-package", "packages/example", "echo", "hi"],
+                [
+                    "--no-filestore",
+                    "--workspace-package",
+                    "packages/example",
+                    "echo",
+                    "hi",
+                ],
             )
 
         assert result.exit_code != 0
@@ -698,6 +737,7 @@ class TestGcpRunCli:
             result = CliRunner().invoke(
                 app,
                 [
+                    "--no-filestore",
                     "--sync-only",
                     "docs",
                     "--workspace-package",
