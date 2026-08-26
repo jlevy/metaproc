@@ -111,6 +111,10 @@ metaproc run-process <spec> \
   --auth-fallback-policy same-provider
 ```
 
+Cloud dispatch defaults this pool to the GCP Secret Manager backend and therefore
+requires `METAPROC_GCP_SERVICE_ACCOUNT`. Every agent launch acquires its own isolated
+pool slot; no label is exported as an ambient credential for the run.
+
 Cloud dispatch is identical with `--cloud --backend gcp-worker`; the orchestrator and
 worker entrypoints both consume the pool transparently.
 
@@ -398,8 +402,11 @@ For private repo access on Batch VMs, `GH_TOKEN` is injected only via Secret Man
 export METAPROC_GCP_SECRET_GH_TOKEN=projects/exampletool/secrets/gh-token/versions/latest
 ```
 
-`GH_TOKEN` is delivered to workers and orchestrators through Batch `secret_variables` —
-never stored in plaintext in the job spec.
+Dispatch places only the Secret Manager version resource in the Batch job spec.
+The worker or orchestrator fetches the value through the Secret Manager API under its
+attached service account before bootstrap.
+Do not switch this to Batch `secret_variables`: Batch agent logs can expose the expanded
+container environment.
 Submitting a Batch job with `GH_TOKEN` set but `METAPROC_GCP_SECRET_GH_TOKEN` unset is
 refused up front to prevent plaintext leakage.
 

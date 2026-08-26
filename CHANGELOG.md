@@ -7,21 +7,155 @@ development series.
 
 ## [Unreleased][unreleased]
 
+### Added
+
+- **Mapped composite scopes**: a `mode: composite` step may now declare `for_each` and
+  run one child process scope per item in-process under `<run>/<step>/<item-key>/`. All
+  scopes share the parent run execution context and executable-leaf ceiling; each parent
+  item records durable status, attempt history, validated outputs, and a result.
+  Each scope binds one canonical identity to its run directory, template variables, task
+  state, and child event stream, so a fixed child output path remains isolated per item.
+  Dot-only item keys are rejected before path construction.
+  Scope evaluation defaults to a bounded concurrency of 32 and waits for siblings to
+  finish after an ordinary item exception.
+  Cancellation terminally records the affected parent attempt, and mapped items emit
+  start, completion, and failure events.
+  The first implementation is single-host: `gcp-worker` partitioning and whole-scope
+  `for_each.retry` are rejected, while retries remain available on child leaves.
+  Unsupported mapped-worker topology is rejected before any DAG step or cloud dispatch
+  starts.
+
 ### Fixed
+
+- **GCP credentials hydrate inside the container**: Batch job specifications now carry
+  Secret Manager references rather than plaintext-expanded `secret_variables`, require
+  an explicit runtime service account, reject registered credentials passed through
+  `--env` or plugin bootstrap variables, and retry transient startup failures.
+  Roll out the hydration-capable agent image before its dispatcher; a stale image cannot
+  interpret the reference-only contract.
 
 - **GCP artifact upload honors the selected project**: `gcp run` now passes its required
   `METAPROC_GCP_PROJECT` through wheel and workspace uploads, so service-account ADC
   without an embedded project ID can dispatch normally.
 
+- **Fan-in failure propagation across dependency diamonds**: `require: finished` now
+  tolerates failure only for affected direct dependencies collected with that policy.
+  A separate success-requiring path from the same failure still blocks the consumer,
+  while an unaffected required dependency does not erase the tolerant collection.
+
+- **Resume rejects changed resolved inputs**: an existing run now compares the persisted
+  resolved-variable mapping with the new launch before reusing task state.
+  Only known equivalent Filestore aliases for `RUNS_DIR` normalize across local and
+  cloud topology; mismatch errors list field names without exposing their values.
+
+- **Duplicate fan-out keys fail before execution**: item discovery now rejects two
+  source rows that resolve to the same `for_each.key` before either can write the shared
+  task, log, output, or child-scope namespace.
+
+- **Cloud authentication policy propagation**: `run-process --cloud` now carries the
+  complete authentication-pool configuration as one typed value through orchestrator
+  dispatch. Selection policy and future fields can no longer be silently dropped while
+  neighboring authentication flags continue to reach the cloud job.
+
 - **Filesystem status fails closed**: `status` and `pool status` reject a nonexistent
   local run directory instead of projecting an empty tree as complete or healthy.
+
+- **Live ownership outranks carried terminal status**: a resumed run writes a fresh
+  process projection when recursive evaluation begins, and `status`, `wait`, and
+  completion checks no longer report a prior failure or cancellation as terminal while
+  an orchestrator still owns the run.
 
 - **Cloud identity and orchestrator admission remain explicit**: a mounted Filestore
   preserves attached-identity ADC precedence on persistent GCP hosts, and full-cloud
   dispatch now supplies its own `METAPROC_GCP_ORCHESTRATOR` admission marker instead of
   depending only on `BATCH_TASK_INDEX`.
 
+- **Attempt finalization survives auth-pool teardown failure**: a credential teardown
+  exception records the affected attempt as lost before propagating the operational
+  error.
+
+- **Terminal paths retain owned capacity until cleanup finishes**: local scalar agent
+  launches now reuse the local launch backend and drain late launches before returning.
+  On completion, timeout, or cancellation, agent and code-command process groups are
+  terminated, stubborn descendants are killed, and log filters are flushed before run
+  slots or host admission are released.
+  Late credential leases are likewise torn down before credential capacity is released.
+  The local backend now treats an explicit `PreparedLaunch.env` as the complete child
+  environment, so credential variables scrubbed by an adapter cannot leak back in from
+  the Metaproc process.
+  Cleanup after an exited leader is fenced by process identity, cleanup failures are
+  reported without replacing the command result or cancelling the remaining shutdown
+  work. Ctrl-C follows cooperative asyncio cancellation; SIGTERM retains the hard
+  descendant reaper for externally terminated orchestrators.
+  Forced RunPool shutdown gives cancelled futures a terminal attempt and credential
+  outcome, suppresses retry churn, and drains queued and late-launching submissions so
+  work cannot start after the pool has closed.
+  That drain is bounded; final status, events, health state, and log closure still run
+  if backend cleanup wedges.
+  Descendant tracking is pruned to live identities, late group members are discovered
+  after leader exit, and sampled commands fence both leader and group identity before
+  signalling. Active or failed work outranks carried cancellation when deriving process
+  status, so a later partial run does not remain falsely cancelled.
+  Long-running Python handlers can observe that request through
+  `StepContext.cancel_requested()`.
+
 ### Changed
+
+- **Composite output boundaries are enforced**: scalar and mapped composites now
+  validate every declared child-process output before completing.
+  Resume revalidates those child outputs even when the mapped parent publishes only a
+  subset; a missing or invalid child output makes only that item actionable again.
+  Existing composite specs with inaccurate output declarations must correct or remove
+  those declarations.
+
+- **Softschema 0.7 structural diagnostics**: require `softschema>=0.7.0,<0.8` and map
+  structural failures to its stable error `code` instead of a JSON Schema engine
+  keyword. Property-level failures now resolve to the affected field in Metaproc’s
+  existing `location` value.
+  Supported composed and conditional schemas can therefore use `status: enforced`
+  without adding a Metaproc-specific schema layer.
+
+- **Typed cloud authentication transport**: the internal `OrchestratorDispatchConfig`
+  constructor now accepts one `AuthPoolFlags` value instead of separate
+  authentication-policy fields.
+  This keeps the operator-to-orchestrator and orchestrator-to-worker boundaries on the
+  same transport shape.
+
+- **One credential-pool lifecycle for scalar and fan-out agents**: non-fan-out agent
+  steps now lease the configured pool label, apply the same credential scope and scrub
+  rules, classify failures, walk fallback labels on retry, and emit the same
+  `auth_lease_acquired` and `auth_outcome` evidence as RunPool items.
+  Nested leaves bind slots and event join keys to their path-relative child scope, so
+  credential material stays inside the logical run tree even when a run directory is
+  symlinked to another volume.
+  Composite fan-out slot paths and authentication-event `run_id` values now include that
+  child scope; consumers should treat the field as a run-tree path scope rather than a
+  root-only identifier.
+  Blocking credential storage work runs through the run-owned executor.
+  Scalar quota scans run only for the blocking `refuse` posture; admission failures
+  before the first launch create no attempt, while exhaustion after a retry makes the
+  existing task state terminal.
+  Adapter mismatches emit an explicit warning, log record, and `auth_skipped` event
+  before using ambient authentication, including on worker entrypoints.
+
+- **One execution context across recursive scopes**: local `run-process` execution now
+  shares one executable-leaf ceiling across fan-out pools, scalar steps, code work, and
+  composite descendants.
+  Synchronous handlers and code commands use the run-owned executor, while scalar agent
+  processes reuse the local launch backend without blocking the event loop.
+  `--force` reaches composite descendants while root step selectors remain root-scoped.
+  Command-backed code steps at the same DAG level may now run concurrently and acquire
+  the shared run ceiling; fan-out paths retain their step ceilings as well.
+  The executor defaults to 32 workers and grows to an explicit higher run ceiling, so
+  its implementation capacity never silently reduces that ceiling.
+  In the initial single-profile topology, the context also lazily owns one adaptive
+  RunPool. Scalar agent leaves in every mapped child submit prepared launches to that
+  pool, which supplies shared pressure response, process-tree supervision, status, and
+  events. The existing run leaf ceiling and host admission remain the hard run and
+  cross-run boundaries; command-backed code work retains its existing supervised path.
+  Commands share the process directory, so authored steps that mutate shared files,
+  repositories, or lockfiles must declare per-item paths or provide their own
+  synchronization.
 
 - **Full-cloud GCP topology is now enforced**: launching `run-process` with
   `--backend gcp-worker` from an operator host now fails unless `--cloud` is also set,

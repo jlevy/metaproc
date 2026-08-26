@@ -1,12 +1,12 @@
 """Tests for run-parallel's variant_flag → adapter_override coercion.
 
-The cloud worker leg of a fan-out step like ``mine-adhoc`` receives
-``--variant pi-cli-glm-5-maas`` because the engine derives that
+The cloud worker leg of a fan-out step like ``extract-items`` receives
+``--variant pi-cli-managed-model`` because the engine derives that
 synthetic name at run-process time from adapter type + model. Before
 this fix, run-parallel coerced any non-empty ``--variant`` into
 ``adapter_override`` (``effective_adapter_override = adapter or
 variant_flag``), and ``build_plan`` rejected it as ``unknown adapter
-override: 'pi-cli-glm-5-maas'`` because the synthetic name doesn't
+override: 'pi-cli-managed-model'`` because the synthetic name doesn't
 appear in ``spec.defaults.adapters`` or ``ADAPTER_REGISTRY``.
 
 The fix only coerces variant → adapter_override when the variant
@@ -69,11 +69,11 @@ class TestVariantOverrideResolution:
         assert _resolve_override("pi-cli", None, stub_spec) == "pi-cli"
 
     def test_synthetic_composite_variant_not_coerced(self, stub_spec):
-        # `--variant pi-cli-glm-5-maas` is the synthetic name the engine
-        # derives for a mine-adhoc step. It's neither in defaults.adapters
+        # `--variant pi-cli-managed-model` is the synthetic name the engine
+        # derives for an extract-items step. It's neither in defaults.adapters
         # nor ADAPTER_REGISTRY; do NOT coerce — let step spec drive
         # adapter resolution. This is the failure mode.
-        assert _resolve_override("pi-cli-glm-5-maas", None, stub_spec) is None
+        assert _resolve_override("pi-cli-managed-model", None, stub_spec) is None
 
     def test_empty_variant_returns_none(self, stub_spec):
         assert _resolve_override("", None, stub_spec) is None

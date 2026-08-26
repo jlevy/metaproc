@@ -18,7 +18,7 @@ from metaproc.osutils.psutil_sampler import PsutilSampler
 
 
 def _hier() -> HierarchyRef:
-    return HierarchyRef(run_id="run-1", step_node_id="postprocess-adhoc-kb")
+    return HierarchyRef(run_id="run-1", step_node_id="normalize-items")
 
 
 def _src() -> SourceRef:

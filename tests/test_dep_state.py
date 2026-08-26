@@ -24,7 +24,7 @@ from metaproc.io.state_io import (
     write_status_at,
 )
 from metaproc.models.authored import IOSpec, StepStatus
-from metaproc.models.plan import Plan, ResolvedAdapter, ResolvedDep, ResolvedStep
+from metaproc.models.plan import FanOut, Plan, ResolvedAdapter, ResolvedDep, ResolvedStep
 from metaproc.models.runtime import AttemptRecord, ResultRecord, StatusRecord, StepState
 from metaproc.paths import STATE_DIR, STATUS_FILE, TASKS_SUBDIR
 
@@ -409,6 +409,51 @@ class TestFingerprintStep:
         )
         step_b = step_a.model_copy(update={"outputs": {"out": IOSpec(path=f"{tmp_path}/b.md")}})
         assert fingerprint_step(step_a) != fingerprint_step(step_b)
+
+    def test_runtime_fan_out_discovery_does_not_change_hash(self) -> None:
+        before_discovery = ResolvedStep(
+            step_id="mapped",
+            mode="code",
+            adapter=ResolvedAdapter(type="test", config={}),
+            fan_out=FanOut(
+                over="roster",
+                bind="ticker",
+                source="roster.md",
+                bind_fields=["ticker"],
+            ),
+        )
+        assert before_discovery.fan_out is not None
+        after_discovery = before_discovery.model_copy(
+            update={
+                "fan_out": before_discovery.fan_out.model_copy(
+                    update={
+                        "items": [{"ticker": "ALFA"}, {"ticker": "BRVO"}],
+                        "filtered_count": 1,
+                    }
+                )
+            }
+        )
+
+        assert fingerprint_step(before_discovery) == fingerprint_step(after_discovery)
+
+    def test_authored_fan_out_contract_changes_hash(self) -> None:
+        step = ResolvedStep(
+            step_id="mapped",
+            mode="code",
+            adapter=ResolvedAdapter(type="test", config={}),
+            fan_out=FanOut(
+                over="roster",
+                bind="ticker",
+                source="roster.md",
+                bind_fields=["ticker"],
+            ),
+        )
+        assert step.fan_out is not None
+        changed = step.model_copy(
+            update={"fan_out": step.fan_out.model_copy(update={"source": "other.md"})}
+        )
+
+        assert fingerprint_step(step) != fingerprint_step(changed)
 
     def test_composite_uses_path_participates(self, tmp_path: Path) -> None:
         child = tmp_path / "child.process.md"

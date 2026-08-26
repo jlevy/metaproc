@@ -16,7 +16,7 @@ from metaproc.engine.graph import (
     topo_sort,
     validate_step_graph,
 )
-from metaproc.models.authored import ProcessSpec
+from metaproc.models.authored import IOSpec, ProcessSpec
 from metaproc.models.plan import ResolvedAdapter, ResolvedStep
 
 
@@ -24,12 +24,14 @@ def _step(
     id: str,
     needs: list[str] | None = None,
     on_failure: Literal["block", "continue"] = "block",
+    inputs: dict[str, IOSpec] | None = None,
 ) -> ResolvedStep:
     """Minimal ResolvedStep for graph tests."""
     return ResolvedStep(
         step_id=id,
         mode="agent",
         adapter=ResolvedAdapter(type="test", config={}),
+        inputs=inputs or {},
         needs=needs or [],
         on_failure=on_failure,
     )
@@ -43,8 +45,8 @@ def _predict_steps() -> list[ResolvedStep]:
         _step("scaffold-day"),
         _step("generate-base-rates", ["scaffold-day"]),
         _step("generate-research-packet", ["scaffold-day"]),
-        _step("mine-adhoc", ["scaffold-day", "generate-base-rates"]),
-        _step("retrieve-precedent", ["scaffold-day", "generate-base-rates", "mine-adhoc"]),
+        _step("extract-items", ["scaffold-day", "generate-base-rates"]),
+        _step("retrieve-precedent", ["scaffold-day", "generate-base-rates", "extract-items"]),
         _step(
             "predict-ticker",
             [
@@ -55,12 +57,12 @@ def _predict_steps() -> list[ResolvedStep]:
             ],
         ),
         _step("qa-check", ["predict-ticker"]),
-        _step("create-prediction-summary", ["predict-ticker"]),
-        _step("create-ops-review", ["predict-ticker"]),
+        _step("write-result-summary", ["predict-ticker"]),
+        _step("write-operator-review", ["predict-ticker"]),
         _step("generate-usage-report", ["predict-ticker", "qa-check"]),
         _step(
-            "create-run-overview",
-            ["qa-check", "create-prediction-summary", "generate-usage-report"],
+            "write-run-overview",
+            ["qa-check", "write-result-summary", "generate-usage-report"],
         ),
     ]
 
@@ -90,7 +92,7 @@ def _retro_steps() -> list[ResolvedStep]:
         _step("create-integrity-check-summary", ["integrity-check"]),
         _step("generate-usage-report", ["predict-retro"]),
         _step(
-            "create-run-overview",
+            "write-run-overview",
             [
                 "qa-check",
                 "create-retro-summary",
@@ -218,10 +220,10 @@ class TestDownstream:
         result = downstream(steps, "predict-ticker")
         expected = {
             "qa-check",
-            "create-prediction-summary",
-            "create-ops-review",
+            "write-result-summary",
+            "write-operator-review",
             "generate-usage-report",
-            "create-run-overview",
+            "write-run-overview",
         }
         assert set(result) == expected
 
@@ -401,3 +403,84 @@ class TestPropagateFailure:
     def test_failed_step_with_no_dependents_returns_empty(self):
         steps = [_step("leaf")]
         assert propagate_failure(steps, "leaf") == []
+
+    def test_finished_collection_tolerates_direct_failure(self):
+        steps = [
+            _step("collected-work"),
+            _step(
+                "review",
+                ["collected-work"],
+                inputs={
+                    "outcomes": IOSpec(
+                        path="outcomes.yaml",
+                        collect="collected-work",
+                        require="finished",
+                    )
+                },
+            ),
+        ]
+
+        assert propagate_failure(steps, "collected-work") == []
+
+    def test_finished_collection_tolerates_transitive_failure(self):
+        steps = [
+            _step("source"),
+            _step("collected-work", ["source"]),
+            _step(
+                "review",
+                ["collected-work"],
+                inputs={
+                    "outcomes": IOSpec(
+                        path="outcomes.yaml",
+                        collect="collected-work",
+                        require="finished",
+                    )
+                },
+            ),
+        ]
+
+        assert propagate_failure(steps, "source") == ["collected-work"]
+
+    def test_unaffected_required_edge_does_not_cancel_finished_collection(self):
+        steps = [
+            _step("source"),
+            _step("collected-work", ["source"]),
+            _step("independent"),
+            _step(
+                "review",
+                ["collected-work", "independent"],
+                inputs={
+                    "outcomes": IOSpec(
+                        path="outcomes.yaml",
+                        collect="collected-work",
+                        require="finished",
+                    )
+                },
+            ),
+        ]
+
+        assert propagate_failure(steps, "source") == ["collected-work"]
+
+    def test_finished_collector_does_not_override_separate_required_diamond_edge(self):
+        steps = [
+            _step("source"),
+            _step("required-artifact", ["source"]),
+            _step("collected-work", ["source"]),
+            _step(
+                "review",
+                ["required-artifact", "collected-work"],
+                inputs={
+                    "outcomes": IOSpec(
+                        path="outcomes.yaml",
+                        collect="collected-work",
+                        require="finished",
+                    )
+                },
+            ),
+        ]
+
+        assert propagate_failure(steps, "source") == [
+            "required-artifact",
+            "collected-work",
+            "review",
+        ]

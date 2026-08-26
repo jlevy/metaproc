@@ -19,8 +19,11 @@ import shlex
 import subprocess
 import time
 import traceback
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -30,7 +33,8 @@ from ruamel.yaml import YAMLError
 from strif import atomic_output_file
 
 from metaproc import paths as paths_mod
-from metaproc.adapters.registry import derive_variant, get_adapter
+from metaproc.adapters.base import AuthFailureClassification
+from metaproc.adapters.registry import derive_variant, get_adapter, get_auth_capable
 from metaproc.cli import app, get_output
 from metaproc.cloud.gcp.resolve_token import resolve_gcp_token
 from metaproc.cloud.gcp.worker_dispatch import (
@@ -61,13 +65,26 @@ from metaproc.dispatch.credential_pool import (
     gcp_backend,
     local_backend,
 )
-from metaproc.dispatch.pool_dispatch import PoolDispatchConfig
+from metaproc.dispatch.pool_dispatch import (
+    AuthOutcome,
+    PoolAuthOverrideError,
+    PoolDispatchConfig,
+    PoolSlotUnavailableError,
+    acquire_slot,
+    auth_forces_abort,
+    auth_override_refusal_keys,
+    bind_pool_dispatch_scope,
+    build_auth_lease_acquired,
+    complete_slot,
+    compose_slot_env,
+)
 from metaproc.dispatch.preflight import (
     GuardPosture,
     check_dispatch_auth_env,
+    check_step_preflight,
     validate_guard_posture,
 )
-from metaproc.dispatch.slot_coordinator import SlotCoordinator
+from metaproc.dispatch.slot_coordinator import SlotCoordinator, SlotLease
 from metaproc.engine.build_plan import build_plan, merge_defaults
 from metaproc.engine.code_handler import resolve_code_handler
 from metaproc.engine.dep_state import (
@@ -131,7 +148,7 @@ from metaproc.engine.write_boundary import (
     filter_boundary_violations,
     repo_changes_since,
 )
-from metaproc.errors import CLIError, ValidationError
+from metaproc.errors import AttemptTerminalConflictError, CLIError, ValidationError
 from metaproc.io import read_yaml_file, to_yaml_string
 from metaproc.io.orchestrator_lease import LeaseHeartbeat, acquire_lease, release_lease
 from metaproc.io.overrides import (
@@ -155,7 +172,7 @@ from metaproc.io.state_io import (
     write_result_at,
 )
 from metaproc.logutil.compaction import try_compact_log
-from metaproc.models.authored import IOSpec, ProcessSpec, ProcessStep
+from metaproc.models.authored import IOSpec, ProcessSpec, ProcessStep, StepContext
 from metaproc.models.plan import Plan, ResolvedStep
 from metaproc.models.resource_budget import FinalizationState
 from metaproc.models.resource_snapshot import ResourceRunSnapshot
@@ -175,8 +192,12 @@ from metaproc.paths import (
 )
 from metaproc.paths import STATE_DIR as _STATE_DIR
 from metaproc.paths import TASKS_SUBDIR as _TASKS_SUBDIR
+from metaproc.runpool.backend import LocalBackend, PreparedLaunch, launch_and_supervise
+from metaproc.runpool.events import EventLogger
 from metaproc.runpool.kill import install_subprocess_reaper_signal_handlers
 from metaproc.runpool.pool import (
+    ProcessConfig,
+    RunPool,
     RunPoolConfig,
     resolve_estimated_process_rss_bytes,
     resolve_host_max_concurrency,
@@ -185,12 +206,307 @@ from metaproc.runpool.pool import (
 from metaproc.runpool.process_events import ProcessEventLogger
 from metaproc.runpool.registry import get_backend
 from metaproc.runpool.scalar_admission import SCALAR_DEFAULT_HOST_LIMIT, admitted_launch
+from metaproc.settings import POOL_MAX_CONCURRENCY
 from metaproc.viz_loader import load_plan_bundle
 
 log = logging.getLogger(__name__)
 
 MANUAL_ACK_TIMEOUT_S = 24 * 3600
 MANUAL_ACK_HEARTBEAT_S = 15 * 60
+_MIN_SYNC_EXECUTOR_WORKERS = 32
+_DEFAULT_MAPPED_SCOPE_CONCURRENCY = 32
+
+
+def _sync_executor_worker_count(max_concurrency: int | None) -> int:
+    """Size supervision capacity so it never floors an explicit leaf ceiling."""
+    return max(_MIN_SYNC_EXECUTOR_WORKERS, max_concurrency or 0)
+
+
+@dataclasses.dataclass(slots=True)
+class RunPoolOwner:
+    """Lazily construct and close the one adaptive process pool for a run."""
+
+    run_dir: Path
+    backend_name: str
+    max_concurrency: int | None
+    initial_concurrency: int | None
+    pool: RunPool | None = None
+    execution_profile: str | None = None
+
+    def get_pool(
+        self,
+        *,
+        resource_config: Mapping[str, object],
+        execution_profile: str,
+    ) -> RunPool:
+        """Return the run pool, configured from the first executable agent leaf."""
+        if self.pool is not None:
+            if self.execution_profile != execution_profile:
+                raise CLIError(
+                    "one run-owned RunPool currently supports one execution profile; "
+                    f"started with {self.execution_profile!r}, then received "
+                    f"{execution_profile!r}"
+                )
+            return self.pool
+
+        pool_max = self.max_concurrency or POOL_MAX_CONCURRENCY
+        raw_profile_hint = resource_config.get("max_concurrency_hint")
+        profile_hint = int(str(raw_profile_hint)) if raw_profile_hint is not None else None
+        if profile_hint is not None:
+            pool_max = min(pool_max, profile_hint)
+        config = RunPoolConfig(
+            max_concurrency=pool_max,
+            initial_concurrency=self.initial_concurrency or 0,
+            min_concurrency=1,
+            estimated_process_rss_bytes=resolve_estimated_process_rss_bytes(resource_config),
+            initial_memory_budget_fraction=resolve_initial_memory_budget_fraction(resource_config),
+            state_dir=paths_mod.run_state_dir(self.run_dir),
+            logs_dir=paths_mod.runpool_logs_dir(self.run_dir),
+            # Scalar callers already enter the shared run leaf gate and host-admission
+            # scope before submitting. The pool is the adaptive process controller;
+            # reacquiring either outer gate here would deadlock at a ceiling of one.
+            external_semaphore=None,
+            host_admission_enabled=False,
+            execution_profile=execution_profile,
+            cli_max_concurrency=self.max_concurrency,
+            profile_max_concurrency_hint=profile_hint,
+        )
+        self.execution_profile = execution_profile
+        self.pool = RunPool(config, backend=get_backend(self.backend_name))
+        return self.pool
+
+    async def close(self) -> None:
+        """Drain every submission before the parent run releases its lease."""
+        if self.pool is not None:
+            await self.pool.shutdown()
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class RunExecutionContext:
+    """Run-owned policy and execution references shared by every scope.
+
+    `cancellation_event` reflects cooperative asyncio cancellation, including the first
+    SIGINT translated by ``asyncio.Runner``. SIGTERM retains the hard process-tree reaper
+    for externally terminated orchestrators.
+    """
+
+    backend_name: str
+    max_concurrency: int | None
+    initial_concurrency: int | None
+    num_workers: int
+    machine_type: str
+    spot: bool
+    variant_override: str | None
+    profile_files: tuple[Path, ...]
+    skip_steps: frozenset[str]
+    force: bool
+    continue_on_error: bool
+    continue_on_step_failure: bool
+    pool_dispatch_template: PoolDispatchConfig | None
+    auth_flags: AuthPoolFlags
+    preflight_quota_guard: str
+    leaf_semaphore: asyncio.Semaphore | None
+    cancellation_event: asyncio.Event
+    sync_executor: ThreadPoolExecutor
+    run_pool_owner: RunPoolOwner | None
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        backend_name: str = "local",
+        max_concurrency: int | None,
+        initial_concurrency: int | None = None,
+        num_workers: int = 1,
+        machine_type: str = "",
+        spot: bool = False,
+        variant_override: str | None = None,
+        profile_files: Sequence[Path] = (),
+        skip_steps: set[str] | frozenset[str] = frozenset(),
+        force: bool = False,
+        continue_on_error: bool = True,
+        continue_on_step_failure: bool = False,
+        pool_dispatch_template: PoolDispatchConfig | None = None,
+        auth_flags: AuthPoolFlags = AuthPoolFlags(),
+        preflight_quota_guard: str = "warn",
+        run_dir: Path | None = None,
+        enable_run_pool: bool = False,
+    ) -> RunExecutionContext:
+        """Create the references that must remain identical through recursion."""
+        if max_concurrency is not None and max_concurrency < 1:
+            raise CLIError("max_concurrency must be at least 1")
+        leaf_semaphore = asyncio.Semaphore(max_concurrency) if max_concurrency is not None else None
+        return cls(
+            backend_name=backend_name,
+            max_concurrency=max_concurrency,
+            initial_concurrency=initial_concurrency,
+            num_workers=num_workers,
+            machine_type=machine_type,
+            spot=spot,
+            variant_override=variant_override,
+            profile_files=tuple(profile_files),
+            skip_steps=frozenset(skip_steps),
+            force=force,
+            continue_on_error=continue_on_error,
+            continue_on_step_failure=continue_on_step_failure,
+            pool_dispatch_template=pool_dispatch_template,
+            auth_flags=auth_flags,
+            preflight_quota_guard=preflight_quota_guard,
+            leaf_semaphore=leaf_semaphore,
+            cancellation_event=asyncio.Event(),
+            sync_executor=ThreadPoolExecutor(
+                max_workers=_sync_executor_worker_count(max_concurrency),
+                thread_name_prefix="metaproc-run",
+            ),
+            run_pool_owner=(
+                RunPoolOwner(
+                    run_dir=run_dir,
+                    backend_name=backend_name,
+                    max_concurrency=max_concurrency,
+                    initial_concurrency=initial_concurrency,
+                )
+                if enable_run_pool and run_dir is not None
+                else None
+            ),
+        )
+
+    def agent_pool(
+        self,
+        *,
+        resource_config: Mapping[str, object],
+        execution_profile: str,
+    ) -> RunPool | None:
+        """Return the run-owned pool when this command enabled process pooling."""
+        if self.run_pool_owner is None:
+            return None
+        return self.run_pool_owner.get_pool(
+            resource_config=resource_config,
+            execution_profile=execution_profile,
+        )
+
+    def close(self) -> None:
+        """Drain started synchronous work before the run releases its lease."""
+        self.sync_executor.shutdown(wait=True, cancel_futures=True)
+
+    async def aclose(self) -> None:
+        """Drain the adaptive pool, then the run-owned synchronous executor."""
+        try:
+            if self.run_pool_owner is not None:
+                await self.run_pool_owner.close()
+        finally:
+            self.close()
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ScopeIdentity:
+    """The path and durable identity assigned when entering a process scope."""
+
+    record_id: str
+    path_id: str
+    scope_path: tuple[str, ...]
+    run_dir: Path
+
+    @classmethod
+    def child(
+        cls,
+        *,
+        parent_record_id: str,
+        parent_path_id: str,
+        parent_scope_path: tuple[str, ...],
+        parent_run_dir: Path,
+        components: tuple[str, ...],
+    ) -> ScopeIdentity:
+        """Derive every child identity field from the same path components."""
+        return cls(
+            record_id="/".join((parent_record_id, *components)),
+            path_id="/".join((parent_path_id, *components)),
+            scope_path=(*parent_scope_path, *components),
+            run_dir=parent_run_dir.joinpath(*components),
+        )
+
+    def bind_variables(self, variables: dict[str, str]) -> dict[str, str]:
+        """Bind flat and framework run placeholders to this scope."""
+        bound = dict(variables)
+        bound["RUN_ID"] = self.path_id
+        bound["run.id"] = self.path_id
+        bound["run.dir"] = str(self.run_dir.resolve())
+        return bound
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _PreparedCompositeScope:
+    """Resolved child process inputs, plan, and identity for one composite scope."""
+
+    spec: ProcessSpec
+    process_path: Path
+    process_dir: Path
+    plan: Plan
+    variables: dict[str, str]
+    identity: ScopeIdentity
+
+
+async def _run_sync[SyncResult](
+    execution_context: RunExecutionContext | None,
+    function: Callable[[], SyncResult],
+    *,
+    on_cancelled_result: Callable[[SyncResult], object] | None = None,
+) -> SyncResult:
+    """Run synchronous work and retain its ownership through cancellation."""
+    loop = asyncio.get_running_loop()
+    executor = execution_context.sync_executor if execution_context is not None else None
+    future = loop.run_in_executor(executor, function)
+    try:
+        return await asyncio.shield(future)
+    except asyncio.CancelledError as cancelled:
+        if execution_context is not None:
+            execution_context.cancellation_event.set()
+        try:
+            while not future.done():
+                try:
+                    await asyncio.shield(future)
+                except asyncio.CancelledError:
+                    continue
+            result = future.result()
+        except BaseException as cleanup_exc:
+            log.exception(
+                "Run-owned synchronous work failed while cancellation was draining",
+            )
+            raise cancelled from cleanup_exc
+
+        if on_cancelled_result is not None:
+            cleanup = loop.run_in_executor(
+                executor,
+                partial(on_cancelled_result, result),
+            )
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    continue
+            try:
+                cleanup.result()
+            except BaseException as cleanup_exc:
+                log.exception(
+                    "Run-owned cancellation cleanup failed while draining",
+                )
+                raise cancelled from cleanup_exc
+        raise cancelled
+
+
+@asynccontextmanager
+async def _leaf_slot(
+    execution_context: RunExecutionContext | None,
+) -> AsyncGenerator[None]:
+    """Admit one executable leaf through the run-wide concurrency ceiling."""
+    if execution_context is None:
+        yield
+        return
+    semaphore = execution_context.leaf_semaphore
+    if semaphore is None:
+        yield
+        return
+    async with semaphore:
+        yield
 
 
 # ── Helpers ──────────────────────────────────────────────────────
@@ -281,7 +597,7 @@ def _now_iso() -> str:
     return datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%S")
 
 
-StepState = str  # "pending" | "running" | "completed" | "failed" | "skipped" | "blocked"
+StepState = str  # pending | running | completed | failed | cancelled | skipped | blocked
 
 
 def _write_process_status(
@@ -289,6 +605,8 @@ def _write_process_status(
     process_name: str,
     step_states: dict[str, dict[str, Any]],
     started_at: str,
+    *,
+    active_step_ids: set[str] | None = None,
 ) -> Path:
     """Write derived process-status.yaml to {run_dir}/.state/."""
     state_dir = run_dir / STATE_DIR
@@ -302,11 +620,18 @@ def _write_process_status(
     }
 
     # Determine overall state
-    states = {s.get("state", "pending") for s in step_states.values()}
+    states = {
+        state.get("state", "pending")
+        for step_id, state in step_states.items()
+        if active_step_ids is None or step_id in active_step_ids
+    }
     if "running" in states:
         data["state"] = "running"
     elif "failed" in states:
         data["state"] = "failed"
+    elif "cancelled" in states:
+        data["state"] = "cancelled"
+        data["completed_at"] = _now_iso()
     elif all(s in ("completed", "skipped") for s in states):
         data["state"] = "completed"
         data["completed_at"] = _now_iso()
@@ -363,14 +688,19 @@ def _write_run_config(  # noqa: PLR0913
     ``.logs/dispatch-config-changes.jsonl`` rather than mutating the
     original config — preserves the audit trail per spec.
 
-    Returns the path to the config file. Resume calls validate
-    process / run_dir identity (raises CLIError on mismatch) but
-    accept changes to auth / concurrency as recorded events.
+    Returns the path to the config file. Resume calls validate the process,
+    run directory, and resolved immutable variables (raises CLIError on
+    mismatch) but accept changes to auth / concurrency as recorded events.
     """
     config_path = paths_mod.run_config_file(run_dir)
     logs_dir = paths_mod.run_logs_dir(run_dir)
     if config_path.exists():
-        _validate_run_config(config_path, process_name=process_name, run_dir=run_dir)
+        _validate_run_config(
+            config_path,
+            process_name=process_name,
+            run_dir=run_dir,
+            variables=variables,
+        )
         # Compute and record any auth/concurrency diff so the
         # aggregator can render the resume timeline.
         _record_resume_config_change(
@@ -464,7 +794,9 @@ def _preflight_plan_adapters(plan: Plan, *, active_step_ids: set[str]) -> list[s
     """
     messages: list[str] = []
     for adapter_type in dict.fromkeys(
-        step.adapter.type for step in plan.steps if step.step_id in active_step_ids
+        step.adapter.type
+        for step in plan.steps
+        if step.step_id in active_step_ids and step.mode == "agent"
     ):
         preflight = getattr(get_adapter(adapter_type), "preflight", None)
         if preflight is None:
@@ -473,6 +805,28 @@ def _preflight_plan_adapters(plan: Plan, *, active_step_ids: set[str]) -> list[s
         if message:
             messages.append(message)
     return messages
+
+
+def _validate_backend_topology(
+    plan: Plan,
+    *,
+    active_step_ids: set[str],
+    backend_name: str,
+) -> None:
+    """Reject authored combinations the selected backend cannot execute."""
+    if backend_name != "gcp-worker":
+        return
+    unsupported = [
+        step.step_id
+        for step in plan.steps
+        if step.step_id in active_step_ids and step.mode == "composite" and step.fan_out is not None
+    ]
+    if unsupported:
+        raise CLIError(
+            "mapped composite steps do not yet support gcp-worker "
+            f"({', '.join(unsupported)}); run the orchestrator on one host or use "
+            "agent/code fan-out for partitioned work"
+        )
 
 
 def _serialize_plan_profiles(plan: Plan) -> list[dict[str, object]]:
@@ -587,10 +941,13 @@ def _validate_run_config(
     *,
     process_name: str,
     run_dir: Path,
+    variables: Mapping[str, str],
 ) -> None:
-    """Validate existing run-config.yaml matches current launch parameters.
+    """Validate existing run-config.yaml matches immutable launch parameters.
 
-    Raises CLIError on incompatible resume attempts.
+    Backend topology, authentication, and concurrency may change on resume.
+    Process identity, run directory, and resolved variables may not. Raises
+    CLIError on incompatible resume attempts.
     """
     raw = read_yaml_file(config_path)
     if not isinstance(raw, dict):
@@ -616,6 +973,33 @@ def _validate_run_config(
             "resume on the canonical cloud mount or start a new local run."
         )
 
+    # The YAML serializer omits empty mappings, so an absent field is the
+    # persisted representation of no resolved variables in existing run trees.
+    if "variables" not in raw:
+        saved_variables = {}
+    else:
+        saved_variables = raw["variables"]
+    if not isinstance(saved_variables, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in saved_variables.items()
+    ):
+        raise CLIError(
+            f"Corrupt run-config.yaml: {config_path}: variables must be a string-to-string mapping"
+        )
+
+    saved_identity = _resume_variable_identity(cast(dict[str, str], saved_variables))
+    current_identity = _resume_variable_identity(variables)
+    changed_variables = sorted(
+        key
+        for key in set(saved_identity) | set(current_identity)
+        if saved_identity.get(key) != current_identity.get(key)
+    )
+    if changed_variables:
+        changed_names = ", ".join(changed_variables)
+        raise CLIError(
+            "Resume mismatch: run-config.yaml immutable variables changed: "
+            f"{changed_names}. Use the original --var values or a new RUN_ID."
+        )
+
     log.info("Resume validated against run-config.yaml (%s)", config_path)
 
 
@@ -627,16 +1011,30 @@ def _resume_run_dir_identity(run_dir: str) -> str:
     paths keep their full normalized form so workstation directories that happen
     to contain ``mnt/filestore`` cannot impersonate the cloud run tree.
     """
-    normalized = os.path.normpath(run_dir)
-    filestore_markers = (
-        f"{os.sep}mnt{os.sep}disks{os.sep}filestore{os.sep}runs{os.sep}",
-        f"{os.sep}mnt{os.sep}filestore{os.sep}runs{os.sep}",
+    return _normalize_filestore_runs_path(run_dir)
+
+
+def _resume_variable_identity(variables: Mapping[str, str]) -> dict[str, str]:
+    """Return immutable variables with known topology aliases normalized."""
+    identity = dict(variables)
+    if runs_dir := identity.get("RUNS_DIR"):
+        identity["RUNS_DIR"] = _normalize_filestore_runs_path(runs_dir)
+    return identity
+
+
+def _normalize_filestore_runs_path(path: str) -> str:
+    """Normalize known Filestore run-root aliases while preserving descendants."""
+    normalized = os.path.normpath(path)
+    canonical_root = f"{os.sep}mnt{os.sep}filestore{os.sep}runs"
+    aliases = (
+        f"{os.sep}mnt{os.sep}disks{os.sep}filestore{os.sep}runs",
+        canonical_root,
     )
-    for marker in filestore_markers:
-        if normalized.startswith(marker):
-            return (
-                f"{os.sep}mnt{os.sep}filestore{os.sep}runs{os.sep}" + normalized.split(marker, 1)[1]
-            )
+    for alias in aliases:
+        if normalized == alias:
+            return canonical_root
+        if normalized.startswith(alias + os.sep):
+            return canonical_root + normalized[len(alias) :]
     return normalized
 
 
@@ -678,6 +1076,33 @@ def _resolve_step_item_dir(
 def _read_step_status(run_dir: Path, step_id: str) -> StatusRecord | None:
     """Read status.yaml for a step (non-fan-out)."""
     return read_status_at(_step_item_dir(run_dir, step_id))
+
+
+def _read_scalar_code_failure_error(
+    run_dir: Path,
+    target: ResolvedStep,
+) -> str:
+    """Return the durable task error for a failed scalar code step.
+
+    ``_execute_code_step`` owns the detailed failure record. The DAG layer
+    only receives a boolean, so recover that already-persisted detail here
+    rather than introducing a second execution-result type solely for
+    observability.
+    """
+    if target.mode != "code" or target.fan_out is not None:
+        return ""
+    try:
+        record = _read_step_status(run_dir, target.step_id)
+    except Exception:  # noqa: BLE001 -- status projection is best-effort
+        log.warning(
+            "could not read failure detail for scalar code step %r",
+            target.step_id,
+            exc_info=True,
+        )
+        return ""
+    if record is None or record.state != "failed" or not record.error:
+        return ""
+    return record.error
 
 
 def _read_process_status_yaml(run_dir: Path) -> dict[str, Any] | None:
@@ -987,6 +1412,7 @@ async def _execute_code_step(
     process_dir: Path,
     run_dir: Path,
     run_id: str,
+    execution_context: RunExecutionContext | None = None,
     out: Any,
 ) -> bool:
     """Execute a mode:code step. Returns True on success."""
@@ -1032,27 +1458,47 @@ async def _execute_code_step(
                 deep=True,
                 update={"inputs": target.inputs, "outputs": target.outputs},
             )
-            with sample_step_resources(
-                run_dir=run_dir,
-                run_id=run_id,
-                step_node_id=step_id,
-            ):
-                # Off the event loop: a code handler is synchronous, and calling it
-                # inline pins the loop for its whole duration, which serializes every
-                # sibling item of a fan-out no matter how the dispatcher gathers them.
-                await asyncio.to_thread(handler_fn, dict(variables), process_step)
+
+            def _run_handler() -> None:
+                with sample_step_resources(
+                    run_dir=run_dir,
+                    run_id=run_id,
+                    step_node_id=step_id,
+                ):
+                    handler_fn(
+                        StepContext(
+                            dict(variables),
+                            cancel_requested=(
+                                execution_context.cancellation_event.is_set
+                                if execution_context is not None
+                                else None
+                            ),
+                        ),
+                        process_step,
+                    )
+
+            await _run_sync(execution_context, _run_handler)
         elif command_ref is not None:
             resolved_cmd = resolve_templates(command_ref, variables)
             env = dict(os.environ)
             if target.env:
                 env.update({k: resolve_templates(v, variables) for k, v in target.env.items()})
-            result = run_sampled_step_command(
-                shlex.split(resolved_cmd),
-                env=env,
-                cwd=process_dir,
-                run_dir=run_dir,
-                run_id=run_id,
-                step_node_id=step_id,
+            result = await _run_sync(
+                execution_context,
+                partial(
+                    run_sampled_step_command,
+                    shlex.split(resolved_cmd),
+                    env=env,
+                    cwd=process_dir,
+                    run_dir=run_dir,
+                    run_id=run_id,
+                    step_node_id=step_id,
+                    cancel_requested=(
+                        execution_context.cancellation_event.is_set
+                        if execution_context is not None
+                        else None
+                    ),
+                ),
             )
             # Capture stdout/stderr to log file
             output = ""
@@ -1081,6 +1527,15 @@ async def _execute_code_step(
             failure_class=str(classify_failure(command_error)),
         )
         return False
+    except (asyncio.CancelledError, KeyboardInterrupt) as exc:
+        cancellation_error = f"{type(exc).__name__}: {str(exc) or 'code step cancelled'}"
+        mark_failed_at(
+            state_dir,
+            error=cancellation_error,
+            running_record=running_record,
+            attempt_disposition=AttemptDisposition.cancelled,
+        )
+        raise
     except Exception as exc:
         tb = traceback.format_exc()
         with atomic_output_file(log_file) as tmp_path:
@@ -1093,6 +1548,19 @@ async def _execute_code_step(
             failure_class=str(classify_failure(handler_error)),
         )
         return False
+    except BaseException as exc:
+        tb = traceback.format_exc()
+        with atomic_output_file(log_file) as tmp_path:
+            tmp_path.write_text(tb)
+        abort_error = f"{type(exc).__name__}: {str(exc) or 'code step aborted'}"
+        mark_failed_at(
+            state_dir,
+            error=abort_error,
+            running_record=running_record,
+            failure_class=str(classify_failure(abort_error)),
+            attempt_disposition=AttemptDisposition.lost,
+        )
+        raise
 
     if effective_outputs and artifact_dir is not None:
         output_failures = validate_item_outputs_detailed(
@@ -1239,7 +1707,7 @@ async def _execute_code_fan_out_step(
     run_dir: Path,
     run_id: str,
     max_concurrency: int | None,
-    external_semaphore: asyncio.Semaphore | None,
+    execution_context: RunExecutionContext | None = None,
     out: Any,
 ) -> bool:
     """Execute a mode:code step with for_each, one handler invocation per item."""
@@ -1268,6 +1736,7 @@ async def _execute_code_fan_out_step(
             process_dir=process_dir,
             run_dir=run_dir,
             run_id=run_id,
+            execution_context=execution_context,
             out=out,
         )
 
@@ -1283,7 +1752,9 @@ async def _execute_code_fan_out_step(
         step_id=step_id,
         max_concurrency=max_concurrency,
         step_concurrency=target.fan_out.max_concurrency,
-        external_semaphore=external_semaphore,
+        external_semaphore=(
+            execution_context.leaf_semaphore if execution_context is not None else None
+        ),
     )
     if succeeded != total:
         out.progress(f"  Step '{step_id}': {total - succeeded} of {total} items failed")
@@ -1301,7 +1772,7 @@ async def _execute_item_aligned_chain(
     run_dir: Path,
     run_id: str,
     max_concurrency: int | None,
-    external_semaphore: asyncio.Semaphore | None,
+    execution_context: RunExecutionContext,
     out: Any,
 ) -> dict[str, bool]:
     """Run an item-aligned chain once per item, and report success per step."""
@@ -1330,6 +1801,7 @@ async def _execute_item_aligned_chain(
             process_dir=process_dir,
             run_dir=run_dir,
             run_id=run_id,
+            execution_context=execution_context,
             out=out,
         )
 
@@ -1370,7 +1842,7 @@ async def _execute_item_aligned_chain(
         is_done=_is_done,
         max_concurrency=max_concurrency,
         step_concurrency=_step_concurrency,
-        external_semaphore=external_semaphore,
+        external_semaphore=execution_context.leaf_semaphore,
     )
 
     results: dict[str, bool] = {}
@@ -1387,52 +1859,137 @@ async def _run_agent_subprocess(
     env: dict[str, str],
     cwd: Path | None,
     log_path: Path,
-    timeout_s: int | None,
+    timeout_s: float | None,
     use_filter: bool,
+    execution_context: RunExecutionContext | None = None,
 ) -> int:
-    """Run one blocking adapter subprocess without blocking the DAG event loop."""
-
-    def _run() -> int:
-        if use_filter:
-            from metaproc.engine.runtime import (  # noqa: PLC0415 -- optional filter path
-                start_log_filter_thread,
-            )
-
-            log_fh = log_path.open("w")
-            try:
-                fg_proc = subprocess.Popen(
-                    cmd,
-                    env=env,
-                    cwd=cwd,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                )
-                stdout_pipe = fg_proc.stdout
-                if stdout_pipe is None:
-                    msg = "adapter subprocess did not expose the requested stdout pipe"
-                    raise RuntimeError(msg)
-                ft = start_log_filter_thread(stdout_pipe, log_fh)
-                fg_proc.wait(timeout=timeout_s)
-                ft.join(timeout=5.0)
-                return fg_proc.returncode
-            finally:
-                log_fh.close()
-
-        with log_path.open("w") as log_fh:
-            completed = subprocess.run(
-                cmd,
+    """Run one adapter subprocess under the existing local backend supervisor."""
+    backend = LocalBackend()
+    try:
+        return await launch_and_supervise(
+            backend,
+            PreparedLaunch(
+                command=tuple(cmd),
                 env=env,
                 cwd=cwd,
-                stdin=subprocess.DEVNULL,
-                stdout=log_fh,
-                stderr=subprocess.STDOUT,
-                check=False,
-                timeout=timeout_s,
-            )
-        return completed.returncode
+                log_path=log_path,
+                filter_log=use_filter,
+            ),
+            timeout_s=timeout_s,
+            on_cancel=(
+                execution_context.cancellation_event.set if execution_context is not None else None
+            ),
+        )
+    except TimeoutError as exc:
+        if timeout_s is None:
+            raise
+        raise subprocess.TimeoutExpired(cmd, timeout_s) from exc
 
-    return await asyncio.to_thread(_run)
+
+async def _run_scalar_agent_subprocess(  # noqa: PLR0913
+    cmd: list[str],
+    *,
+    env: dict[str, str],
+    cwd: Path | None,
+    log_path: Path,
+    timeout_s: int | None,
+    use_filter: bool,
+    execution_context: RunExecutionContext | None,
+    pool: RunPool | None,
+    run_id: str,
+    step_id: str,
+    execution_profile: str,
+) -> tuple[int, str | None]:
+    """Run one scalar adapter through the run pool, with a legacy fallback."""
+    if pool is None:
+        exit_code = await _run_agent_subprocess(
+            cmd,
+            env=env,
+            cwd=cwd,
+            log_path=log_path,
+            timeout_s=timeout_s,
+            use_filter=use_filter,
+            execution_context=execution_context,
+        )
+        return exit_code, None
+
+    future = pool.submit(
+        ProcessConfig(
+            launch=PreparedLaunch(
+                command=tuple(cmd),
+                env=env,
+                cwd=cwd,
+                log_path=log_path,
+                filter_log=use_filter,
+                metadata={
+                    "run_id": run_id,
+                    "step": step_id,
+                    "execution_profile": execution_profile,
+                },
+            ),
+            timeout_s=timeout_s,
+            label=f"{run_id}/{step_id}",
+            lane_id=execution_profile,
+            execution_profile=execution_profile,
+        )
+    )
+    try:
+        result = await asyncio.shield(future)
+    except asyncio.CancelledError:
+        if execution_context is not None:
+            execution_context.cancellation_event.set()
+        await pool.cancel_submission(future)
+        raise
+    if result.kill_reason == "timeout":
+        raise subprocess.TimeoutExpired(cmd, timeout_s or 0)
+    return result.exit_code if result.exit_code is not None else 1, result.kill_reason
+
+
+def _bind_pool_dispatch(
+    template: PoolDispatchConfig | None,
+    *,
+    adapter_type: str,
+    run_dir: Path,
+    step_id: str,
+    out: Any,
+) -> PoolDispatchConfig | None:
+    """Bind one matching agent step to a path-relative credential scope."""
+    if template is None:
+        return None
+    if adapter_type != template.adapter:
+        message = (
+            f"Step '{step_id}' uses adapter {adapter_type!r}, but the credential pool "
+            f"is configured for {template.adapter!r}; the pool is not applied and the "
+            "step uses its ambient adapter authentication."
+        )
+        out.warning(message)
+        log.warning(message)
+        with EventLogger(paths_mod.runpool_step_events(run_dir, step_id)) as events:
+            events.auth_skipped(
+                step_id=step_id,
+                step_adapter=adapter_type,
+                configured_adapter=template.adapter,
+            )
+        return None
+
+    # Keep containment lexical. Run trees may intentionally be symlinked to larger
+    # volumes, and following the final symlink would reject their logical RUNS_DIR scope.
+    try:
+        return bind_pool_dispatch_scope(template, run_dir=run_dir, step=step_id)
+    except ValueError as exc:
+        raise CLIError(f"step '{step_id}': {exc}") from exc
+
+
+def _mark_scalar_prelaunch_failure_after_retry(state_dir: Path, *, error: str) -> None:
+    """Make a previously launched attempt terminal when its retry cannot launch."""
+    current = read_status_at(state_dir)
+    if current is not None and current.state == "running":
+        mark_failed_at(
+            state_dir,
+            error=error,
+            running_record=current,
+            attempt_disposition=None,
+        )
 
 
 async def _execute_agent_step(
@@ -1447,6 +2004,7 @@ async def _execute_agent_step(
     variant_override: str | None = None,
     peer_allowed_targets: list[WriteTarget] | None = None,
     backend_name: str = "local",
+    execution_context: RunExecutionContext | None = None,
     out: Any,
 ) -> bool:
     """Execute a mode:agent step (no for_each). Returns True on success."""
@@ -1518,6 +2076,17 @@ async def _execute_agent_step(
         [
             WriteTarget(logs_dir, "tree"),
             WriteTarget(run_dir / LOGS_DIR, "tree"),
+            # The run-owned pool updates its own durable controller snapshots while
+            # an agent is active. They are framework state, not writes made by the
+            # agent, and must not fail the agent's process write boundary.
+            WriteTarget(
+                paths_mod.run_state_dir(run_dir) / paths_mod.POOL_STATUS_FILE,
+                "exact",
+            ),
+            WriteTarget(
+                paths_mod.run_state_dir(run_dir) / paths_mod.SCALE_STATE_FILE,
+                "exact",
+            ),
         ]
     )
 
@@ -1543,218 +2112,495 @@ async def _execute_agent_step(
     content_retry_cap = max_retries_for(FailureClass.INVALID_OUTPUT, retry_policy.max_retries)
     attempt = 1
     output_failure_feedback: Sequence[OutputFailure] = ()
-
-    while True:
-        running_record = mark_running_at(
-            state_dir, run_id=run_id, step_id=step_id, item=item_record, attempt=attempt
+    try:
+        pool_dispatch = _bind_pool_dispatch(
+            execution_context.pool_dispatch_template if execution_context is not None else None,
+            adapter_type=adapter_type,
+            run_dir=run_dir,
+            step_id=step_id,
+            out=out,
         )
-        # Each retry keeps its own log, so the attempt that failed its contract stays
-        # readable beside the one that replaced it.
-        attempt_log_path = (
-            log_path
-            if attempt == 1
-            else log_path.with_name(f"{log_path.stem}-attempt{attempt}{log_path.suffix}")
-        )
+    except CLIError as exc:
+        out.warning(str(exc))
+        log.warning("Step %s credential-pool binding failed: %s", step_id, exc)
+        return False
+    auth_events = (
+        EventLogger(paths_mod.runpool_step_events(run_dir, step_id))
+        if pool_dispatch is not None
+        else None
+    )
+    retry_exclude: list[tuple[str, str]] = []
+    if auth_events is not None:
+        auth_events.open()
 
-        # Write the prompt before asking the adapter to build its command. Adapters that
-        # inline prompt contents (notably codex-cli) must receive a real, readable path;
-        # a synthetic placeholder makes the run fail before dispatch.
-        ts = datetime.now(tz=UTC).strftime("%H%M%S")
-        prompt_file = logs_dir / f"prompt-{step_id}-attempt{attempt}-{ts}.txt"
-        attempt_prompt = append_output_failure_feedback(resolved_prompt, output_failure_feedback)
-        with atomic_output_file(prompt_file) as tmp_path:
-            Path(tmp_path).write_text(attempt_prompt)
-
-        cmd = adapter_obj.build_command(prompt_file, runtime_config, step_vars)
-        write_attempt_at(
-            state_dir,
-            AttemptRecord(
-                run_id=run_id,
-                step_id=step_id,
-                item=item_record,
-                params=dict(step_vars),
-                outputs=resolve_record_output_paths(effective_outputs, step_vars),
-                runtime={
-                    "adapter_type": adapter_type,
-                    "execution_profile": effective_execution_profile,
-                    "artifact_namespace": effective_variant,
-                    "variant": effective_variant,
-                    "command": cmd,
-                },
-                step_hash=step_hash,
-            ),
-        )
-
-        boundary_before = capture_repo_snapshot(process_dir, observation_zone=[run_dir])
-
-        env = adapter_obj.prepare_env(dict(os.environ), runtime_config)
-        if target.env:
-            env.update({k: resolve_templates(v, step_vars) for k, v in target.env.items()})
-        cwd = adapter_obj.working_directory(runtime_config)
-        timeout_s = runtime_config.get("timeout_s")
-        timeout_val = int(str(timeout_s)) if timeout_s is not None else None
-
-        use_filter = adapter_type == "pi-cli"
-        # A step without for_each still launches a real agent process, so it takes a host
-        # slot like any pool-launched attempt. Without this, N orchestrators on one machine
-        # cannot see each other's scalar launches at all.
-        scalar_resource_config = target.resources or runtime_config
-        try:
-            async with admitted_launch(
-                enabled=backend_name == "local",
-                limit=resolve_host_max_concurrency(
-                    scalar_resource_config, default=SCALAR_DEFAULT_HOST_LIMIT
-                ),
-                label=f"{run_id}/{step_id}",
-                pool_id=f"run-process:{run_id}",
-                metadata={"backend": backend_name, "step_id": step_id, "mode": "agent"},
-            ):
-                exit_code = await _run_agent_subprocess(
-                    cmd,
-                    env=env,
-                    cwd=cwd,
-                    log_path=attempt_log_path,
-                    timeout_s=timeout_val,
-                    use_filter=use_filter,
-                )
-        except subprocess.TimeoutExpired:
-            mark_failed_at(
-                state_dir,
-                error=f"timeout after {timeout_s}s",
-                running_record=running_record,
-                failure_class=str(FailureClass.TIMEOUT),
-            )
-            return False
-
-        # Read the log before compacting it: the exit code alone says nothing about
-        # why the agent died, and the answer is in the last few lines. A bare
-        # "exit code 1" also classifies as a crash, so without this the transient
-        # failures below are indistinguishable from a prompt that always fails.
-        exit_error: str | None = None
-        if exit_code != 0:
-            exit_error = f"exit code {exit_code}"
-            log_error = extract_log_error(attempt_log_path)
-            if log_error:
-                exit_error = f"{exit_error} (log: {log_error})"
-
-        try_compact_log(attempt_log_path)
-
-        if exit_error is not None:
-            # A response-body timeout returns no tokens at all and is the most
-            # retryable failure an agent produces. classify_error checks the
-            # permanent patterns first, so quota, OOM, and permission failures
-            # still fail on the first attempt.
-            verdict = classify_error(exit_error)
-            cap = max_retries_for(classify_failure(exit_error), retry_policy.max_retries)
-            if verdict == RetryVerdict.RETRY and attempt <= cap:
-                end_status_attempt_at(
-                    state_dir,
-                    running_record,
-                    disposition=AttemptDisposition.retryable,
-                    failure_class=str(classify_failure(exit_error)),
-                    error=exit_error,
-                )
-                backoff = compute_backoff(attempt, retry_policy)
-                out.progress(
-                    f"  Step '{step_id}': retryable ({exit_error}), "
-                    f"retry in {backoff:.0f}s (attempt {attempt}/{cap + 1})"
-                )
-                await asyncio.sleep(backoff)
-                attempt += 1
-                continue
-            mark_failed_at(
-                state_dir,
-                error=exit_error,
-                running_record=running_record,
-                failure_class=str(classify_failure(exit_error)),
-                attempt_disposition=(
-                    AttemptDisposition.retryable
-                    if verdict is RetryVerdict.RETRY
-                    else AttemptDisposition.permanent
+    try:
+        if (
+            pool_dispatch is not None
+            and execution_context is not None
+            and execution_context.preflight_quota_guard == "refuse"
+        ):
+            quota_verdict = await _run_sync(
+                execution_context,
+                partial(
+                    check_step_preflight,
+                    pool_dispatch.coordinator.backend,
+                    adapter=pool_dispatch.adapter,
+                    step_id=step_id,
+                    fan_out_size=1,
+                    posture=cast(GuardPosture, execution_context.preflight_quota_guard),
                 ),
             )
-            return False
-
-        if boundary_before is not None and allowed_targets:
-            boundary_after = capture_repo_snapshot(process_dir, observation_zone=[run_dir])
-            violations = filter_boundary_violations(
-                repo_changes_since(boundary_before, boundary_after),
-                allowed=allowed_targets,
-                ignored=ignored_targets,
-                base_dir=boundary_after.repo_root if boundary_after else None,
-            )
-            if violations:
-                mark_failed_at(
-                    state_dir,
-                    error=(
-                        "write boundary violated: "
-                        f"{_format_boundary_paths(violations, base_dir=boundary_after.repo_root if boundary_after else None)}"
-                    ),
-                    running_record=running_record,
+            if quota_verdict.status == "refuse":
+                out.warning(
+                    f"Step '{step_id}': scalar quota gate refused launch: {quota_verdict.message}"
                 )
                 return False
-
-        if effective_outputs and artifact_dir is not None:
-            # A freshly-emitted LLM artifact is the one input yaml_repair is scoped to:
-            # a single unquoted colon in a note should not cost the whole step.
-            for repaired in repair_declared_outputs(
-                artifact_dir, effective_outputs, variables=step_vars
-            ):
-                out.progress(f"  Step '{step_id}': repaired YAML in {repaired.name}")
-            # Then the question repair cannot ask, because it has no schema: does
-            # each scalar say the type its contract asks for? An agent writing YAML
-            # by hand has no serializer in the path, so a name like `1850` arrives
-            # as an integer.
-            for conformed in conform_declared_outputs(
-                artifact_dir, effective_outputs, variables=step_vars
-            ):
-                out.progress(f"  Step '{step_id}': conformed scalars in {conformed.name}")
-            # step_vars (not variables): only step_vars has VARIANT bound to
-            # effective_variant. Without it, output paths containing {{run.variant}}
-            # render with the literal placeholder and fpath.exists() reports false
-            # even when the agent wrote the artifact at the correct path. A
-            # production smoke exposed this: artifacts existed on disk, but the
-            # unresolved placeholder made the step transition to FAILED.
-            output_failures = validate_item_outputs_detailed(
-                artifact_dir, effective_outputs, variables=step_vars
+        while True:
+            # Each retry keeps its own log, so the attempt that failed its contract stays
+            # readable beside the one that replaced it.
+            attempt_log_path = (
+                log_path
+                if attempt == 1
+                else log_path.with_name(f"{log_path.stem}-attempt{attempt}{log_path.suffix}")
             )
-            if output_failures:
-                output_errors = [f.summary() for f in output_failures]
-                error_str = f"output validation failed: {'; '.join(output_errors)}"
-                verdict = classify_output_failures(output_failures, effective_outputs)
-                if verdict == RetryVerdict.RETRY and attempt <= content_retry_cap:
-                    end_status_attempt_at(
+
+            # Write the prompt before asking the adapter to build its command. Adapters that
+            # inline prompt contents (notably codex-cli) must receive a real, readable path;
+            # a synthetic placeholder makes the run fail before dispatch.
+            ts = datetime.now(tz=UTC).strftime("%H%M%S")
+            prompt_file = logs_dir / f"prompt-{step_id}-attempt{attempt}-{ts}.txt"
+            attempt_prompt = append_output_failure_feedback(
+                resolved_prompt, output_failure_feedback
+            )
+            with atomic_output_file(prompt_file) as tmp_path:
+                Path(tmp_path).write_text(attempt_prompt)
+
+            cmd = adapter_obj.build_command(prompt_file, runtime_config, step_vars)
+            env = adapter_obj.prepare_env(dict(os.environ), runtime_config)
+            if target.env:
+                env.update({k: resolve_templates(v, step_vars) for k, v in target.env.items()})
+            cwd = adapter_obj.working_directory(runtime_config)
+            timeout_s = runtime_config.get("timeout_s")
+            timeout_val = int(str(timeout_s)) if timeout_s is not None else None
+
+            lease = None
+            running_record: StatusRecord | None = None
+
+            async def _complete_auth_attempt(
+                error_str: str | None,
+                session_log_path: Path = attempt_log_path,
+                attempt_number: int = attempt,
+            ) -> AuthFailureClassification | None:
+                nonlocal lease
+                if lease is None or pool_dispatch is None or auth_events is None:
+                    return None
+                completed_lease = lease
+                lease = None
+                event_logger = auth_events
+
+                def _emit_cancelled_outcome(
+                    result: tuple[AuthFailureClassification | None, AuthOutcome],
+                ) -> None:
+                    _classification, cancelled_outcome = result
+                    event_logger.auth_outcome(dataclasses.asdict(cancelled_outcome))
+
+                classification, outcome = await _run_sync(
+                    execution_context,
+                    partial(
+                        complete_slot,
+                        pool_dispatch,
+                        completed_lease,
+                        error_str=error_str,
+                        session_log_path=session_log_path,
+                        retry_count=attempt_number - 1,
+                        retry_exclude=retry_exclude,
+                    ),
+                    on_cancelled_result=_emit_cancelled_outcome,
+                )
+                event_logger.auth_outcome(dataclasses.asdict(outcome))
+                return classification
+
+            try:
+                use_filter = adapter_type == "pi-cli"
+                # A step without for_each still launches a real agent process, so it takes a
+                # host slot like any pool-launched attempt. Without this, N orchestrators on
+                # one machine cannot see each other's scalar launches at all.
+                scalar_resource_config = target.resources or runtime_config
+                scalar_pool = (
+                    execution_context.agent_pool(
+                        resource_config=scalar_resource_config,
+                        execution_profile=effective_execution_profile,
+                    )
+                    if execution_context is not None
+                    else None
+                )
+                pool_kill_reason: str | None = None
+                try:
+                    async with _leaf_slot(execution_context):
+                        async with admitted_launch(
+                            enabled=backend_name == "local",
+                            limit=resolve_host_max_concurrency(
+                                scalar_resource_config, default=SCALAR_DEFAULT_HOST_LIMIT
+                            ),
+                            label=f"{run_id}/{step_id}",
+                            pool_id=f"run-process:{run_id}",
+                            metadata={
+                                "backend": backend_name,
+                                "step_id": step_id,
+                                "mode": "agent",
+                            },
+                        ):
+                            if pool_dispatch is not None and auth_events is not None:
+
+                                def _complete_cancelled_acquisition(
+                                    cancelled_lease: SlotLease,
+                                    *,
+                                    session_log_path: Path = attempt_log_path,
+                                    attempt_number: int = attempt,
+                                ) -> None:
+                                    counts = pool_dispatch.coordinator.active_counter.snapshot()
+                                    active_for_adapter = {
+                                        label: count
+                                        for (adapter, label), count in counts.items()
+                                        if adapter == cancelled_lease.adapter
+                                    }
+                                    acquired_event = build_auth_lease_acquired(
+                                        cancelled_lease,
+                                        policy=str(pool_dispatch.strategy.policy),
+                                        active_lease_count=active_for_adapter,
+                                    )
+                                    _classification, cancelled_outcome = complete_slot(
+                                        pool_dispatch,
+                                        cancelled_lease,
+                                        error_str="CancelledError: cancelled before launch",
+                                        session_log_path=session_log_path,
+                                        retry_count=attempt_number - 1,
+                                        retry_exclude=retry_exclude,
+                                    )
+                                    auth_events.auth_lease_acquired(acquired_event)
+                                    auth_events.auth_outcome(dataclasses.asdict(cancelled_outcome))
+
+                                try:
+                                    lease = await _run_sync(
+                                        execution_context,
+                                        partial(
+                                            acquire_slot,
+                                            pool_dispatch,
+                                            item=state_dir.name,
+                                            attempt=attempt,
+                                            item_exclude=tuple(retry_exclude),
+                                            session_log_path=attempt_log_path,
+                                        ),
+                                        on_cancelled_result=_complete_cancelled_acquisition,
+                                    )
+                                except PoolSlotUnavailableError as exc:
+                                    error = f"Step '{step_id}': {exc}"
+                                    out.warning(error)
+                                    _mark_scalar_prelaunch_failure_after_retry(
+                                        state_dir, error=str(exc)
+                                    )
+                                    return False
+                                counts = pool_dispatch.coordinator.active_counter.snapshot()
+                                active_for_adapter = {
+                                    label: count
+                                    for (adapter, label), count in counts.items()
+                                    if adapter == lease.adapter
+                                }
+                                auth_events.auth_lease_acquired(
+                                    build_auth_lease_acquired(
+                                        lease,
+                                        policy=str(pool_dispatch.strategy.policy),
+                                        active_lease_count=active_for_adapter,
+                                    )
+                                )
+                                try:
+                                    env = compose_slot_env(
+                                        env,
+                                        lease=lease,
+                                        refuse_on_keys=auth_override_refusal_keys(lease.adapter),
+                                    )
+                                except PoolAuthOverrideError as exc:
+                                    await _complete_auth_attempt(str(exc))
+                                    out.warning(f"Step '{step_id}': {exc}")
+                                    _mark_scalar_prelaunch_failure_after_retry(
+                                        state_dir, error=str(exc)
+                                    )
+                                    return False
+                                auth_adapter = get_auth_capable(lease.adapter)
+                                if auth_adapter is not None:
+                                    cmd = [
+                                        *cmd,
+                                        *auth_adapter.debug_capture_args(lease.slot_dir),
+                                    ]
+
+                            # Capacity and credentials can wait or fail before this point.
+                            # Only a launchable attempt becomes durable task history.
+                            running_record = mark_running_at(
+                                state_dir,
+                                run_id=run_id,
+                                step_id=step_id,
+                                item=item_record,
+                                attempt=attempt,
+                            )
+                            write_attempt_at(
+                                state_dir,
+                                AttemptRecord(
+                                    run_id=run_id,
+                                    step_id=step_id,
+                                    item=item_record,
+                                    params=dict(step_vars),
+                                    outputs=resolve_record_output_paths(
+                                        effective_outputs, step_vars
+                                    ),
+                                    runtime={
+                                        "adapter_type": adapter_type,
+                                        "execution_profile": effective_execution_profile,
+                                        "artifact_namespace": effective_variant,
+                                        "variant": effective_variant,
+                                        "command": cmd,
+                                    },
+                                    step_hash=step_hash,
+                                ),
+                            )
+                            boundary_before = capture_repo_snapshot(
+                                process_dir, observation_zone=[run_dir]
+                            )
+                            exit_code, pool_kill_reason = await _run_scalar_agent_subprocess(
+                                cmd,
+                                env=env,
+                                cwd=cwd,
+                                log_path=attempt_log_path,
+                                timeout_s=timeout_val,
+                                use_filter=use_filter,
+                                execution_context=execution_context,
+                                pool=scalar_pool,
+                                run_id=run_id,
+                                step_id=step_id,
+                                execution_profile=effective_execution_profile,
+                            )
+                except subprocess.TimeoutExpired:
+                    timeout_error = f"timeout after {timeout_s}s"
+                    await _complete_auth_attempt(timeout_error)
+                    mark_failed_at(
                         state_dir,
-                        running_record,
-                        disposition=AttemptDisposition.retryable,
-                        failure_class=str(FailureClass.INVALID_OUTPUT),
-                        error=error_str,
-                        output_failures=output_failures,
+                        error=timeout_error,
+                        running_record=running_record,
+                        failure_class=str(FailureClass.TIMEOUT),
                     )
-                    output_failure_feedback = output_failures
-                    backoff = compute_backoff(attempt, retry_policy)
-                    out.progress(
-                        f"  Step '{step_id}': retryable ({error_str}), "
-                        f"retry in {backoff:.0f}s (attempt {attempt}/{content_retry_cap + 1})"
-                    )
-                    await asyncio.sleep(backoff)
-                    attempt += 1
-                    continue
-                mark_failed_at(
-                    state_dir,
-                    error=error_str,
-                    running_record=running_record,
-                    output_failures=output_failures,
-                    failure_class=str(FailureClass.INVALID_OUTPUT),
-                    attempt_disposition=(
-                        AttemptDisposition.retryable
-                        if verdict is RetryVerdict.RETRY
-                        else AttemptDisposition.permanent
-                    ),
-                )
-                return False
+                    return False
 
-        break
+                # Read the log before compacting it: the exit code alone says nothing about
+                # why the agent died, and the answer is in the last few lines. A bare
+                # "exit code 1" also classifies as a crash, so without this the transient
+                # failures below are indistinguishable from a prompt that always fails.
+                exit_error: str | None = None
+                if pool_kill_reason is not None:
+                    exit_error = f"RunPool killed process: {pool_kill_reason}"
+                elif exit_code != 0:
+                    exit_error = f"exit code {exit_code}"
+                    log_error = extract_log_error(attempt_log_path)
+                    if log_error:
+                        exit_error = f"{exit_error} (log: {log_error})"
+
+                if exit_error is not None:
+                    auth_classification = await _complete_auth_attempt(exit_error)
+                    # Credential classification must read the sealed, original log before
+                    # compaction can rewrite or gzip it. Fan-out follows the same ordering.
+                    try_compact_log(attempt_log_path)
+                    # A response-body timeout returns no tokens at all and is the most
+                    # retryable failure an agent produces. classify_error checks the
+                    # permanent patterns first, so quota, OOM, and permission failures
+                    # still fail on the first attempt.
+                    verdict = classify_error(exit_error)
+                    cap = max_retries_for(classify_failure(exit_error), retry_policy.max_retries)
+                    if (
+                        not auth_forces_abort(auth_classification)
+                        and verdict == RetryVerdict.RETRY
+                        and attempt <= cap
+                    ):
+                        end_status_attempt_at(
+                            state_dir,
+                            running_record,
+                            disposition=AttemptDisposition.retryable,
+                            failure_class=str(classify_failure(exit_error)),
+                            error=exit_error,
+                        )
+                        backoff = compute_backoff(attempt, retry_policy)
+                        out.progress(
+                            f"  Step '{step_id}': retryable ({exit_error}), "
+                            f"retry in {backoff:.0f}s (attempt {attempt}/{cap + 1})"
+                        )
+                        await asyncio.sleep(backoff)
+                        attempt += 1
+                        continue
+                    mark_failed_at(
+                        state_dir,
+                        error=exit_error,
+                        running_record=running_record,
+                        failure_class=str(classify_failure(exit_error)),
+                        attempt_disposition=(
+                            AttemptDisposition.retryable
+                            if verdict is RetryVerdict.RETRY
+                            and not auth_forces_abort(auth_classification)
+                            else AttemptDisposition.permanent
+                        ),
+                    )
+                    return False
+
+                if boundary_before is not None and allowed_targets:
+                    boundary_after = capture_repo_snapshot(process_dir, observation_zone=[run_dir])
+                    violations = filter_boundary_violations(
+                        repo_changes_since(boundary_before, boundary_after),
+                        allowed=allowed_targets,
+                        ignored=ignored_targets,
+                        base_dir=boundary_after.repo_root if boundary_after else None,
+                    )
+                    if violations:
+                        boundary_error = (
+                            "write boundary violated: "
+                            f"{_format_boundary_paths(violations, base_dir=boundary_after.repo_root if boundary_after else None)}"
+                        )
+                        await _complete_auth_attempt(boundary_error)
+                        try_compact_log(attempt_log_path)
+                        mark_failed_at(
+                            state_dir,
+                            error=boundary_error,
+                            running_record=running_record,
+                        )
+                        return False
+
+                if effective_outputs and artifact_dir is not None:
+                    # A freshly-emitted LLM artifact is the one input yaml_repair is scoped
+                    # to: a single unquoted colon in a note should not cost the whole step.
+                    for repaired in repair_declared_outputs(
+                        artifact_dir, effective_outputs, variables=step_vars
+                    ):
+                        out.progress(f"  Step '{step_id}': repaired YAML in {repaired.name}")
+                    # Then the question repair cannot ask, because it has no schema: does
+                    # each scalar say the type its contract asks for? An agent writing YAML
+                    # by hand has no serializer in the path, so a name like `1850` arrives
+                    # as an integer.
+                    for conformed in conform_declared_outputs(
+                        artifact_dir, effective_outputs, variables=step_vars
+                    ):
+                        out.progress(f"  Step '{step_id}': conformed scalars in {conformed.name}")
+                    # step_vars (not variables): only step_vars has VARIANT bound to
+                    # effective_variant. Without it, output paths containing
+                    # {{run.variant}} render with the literal placeholder and fpath.exists()
+                    # reports false even when the agent wrote the artifact at the correct
+                    # path.
+                    output_failures = validate_item_outputs_detailed(
+                        artifact_dir, effective_outputs, variables=step_vars
+                    )
+                    if output_failures:
+                        output_errors = [f.summary() for f in output_failures]
+                        error_str = f"output validation failed: {'; '.join(output_errors)}"
+                        auth_classification = await _complete_auth_attempt(error_str)
+                        try_compact_log(attempt_log_path)
+                        verdict = classify_output_failures(output_failures, effective_outputs)
+                        if (
+                            not auth_forces_abort(auth_classification)
+                            and verdict == RetryVerdict.RETRY
+                            and attempt <= content_retry_cap
+                        ):
+                            end_status_attempt_at(
+                                state_dir,
+                                running_record,
+                                disposition=AttemptDisposition.retryable,
+                                failure_class=str(FailureClass.INVALID_OUTPUT),
+                                error=error_str,
+                                output_failures=output_failures,
+                            )
+                            output_failure_feedback = output_failures
+                            backoff = compute_backoff(attempt, retry_policy)
+                            out.progress(
+                                f"  Step '{step_id}': retryable ({error_str}), "
+                                f"retry in {backoff:.0f}s "
+                                f"(attempt {attempt}/{content_retry_cap + 1})"
+                            )
+                            await asyncio.sleep(backoff)
+                            attempt += 1
+                            continue
+                        mark_failed_at(
+                            state_dir,
+                            error=error_str,
+                            running_record=running_record,
+                            output_failures=output_failures,
+                            failure_class=str(FailureClass.INVALID_OUTPUT),
+                            attempt_disposition=(
+                                AttemptDisposition.retryable
+                                if verdict is RetryVerdict.RETRY
+                                and not auth_forces_abort(auth_classification)
+                                else AttemptDisposition.permanent
+                            ),
+                        )
+                        return False
+
+                await _complete_auth_attempt(None)
+                try_compact_log(attempt_log_path)
+                break
+            except BaseException as exc:
+                detail = str(exc) or type(exc).__name__
+                terminal_error = f"{type(exc).__name__}: {detail}"
+                if lease is not None:
+                    try:
+                        await _complete_auth_attempt(terminal_error)
+                    except BaseException as cleanup_exc:
+                        exc.add_note(
+                            "credential teardown also failed: "
+                            f"{type(cleanup_exc).__name__}: {cleanup_exc}"
+                        )
+                        log.exception(
+                            "Credential teardown failed after scalar step failure for %s",
+                            step_id,
+                        )
+                if running_record is not None:
+                    disposition = (
+                        AttemptDisposition.cancelled
+                        if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt))
+                        else AttemptDisposition.lost
+                    )
+                    try:
+                        mark_failed_at(
+                            state_dir,
+                            error=terminal_error,
+                            running_record=running_record,
+                            attempt_disposition=disposition,
+                        )
+                    except AttemptTerminalConflictError:
+                        # A cancellation can arrive during retry backoff, after the
+                        # attempt was already finalized as retryable. Preserve that
+                        # immutable fact while making the mutable status projection
+                        # terminal.
+                        try:
+                            mark_failed_at(
+                                state_dir,
+                                error=terminal_error,
+                                running_record=running_record,
+                                attempt_disposition=None,
+                            )
+                        except BaseException as state_exc:
+                            exc.add_note(
+                                "scalar status finalization also failed: "
+                                f"{type(state_exc).__name__}: {state_exc}"
+                            )
+                            log.exception(
+                                "Scalar status finalization failed for %s",
+                                step_id,
+                            )
+                    except BaseException as state_exc:
+                        exc.add_note(
+                            "scalar attempt finalization also failed: "
+                            f"{type(state_exc).__name__}: {state_exc}"
+                        )
+                        log.exception(
+                            "Scalar attempt finalization failed for %s",
+                            step_id,
+                        )
+                raise
+    finally:
+        if auth_events is not None:
+            auth_events.close()
 
     mark_completed_at(state_dir, running_record=running_record)
     write_result_at(
@@ -1772,39 +2618,20 @@ async def _execute_agent_step(
     return True
 
 
-async def _execute_composite_step(
+def _prepare_composite_scope(
     *,
     step_def: ProcessStep,
     target: ResolvedStep,
     variables: dict[str, str],
-    process_dir: Path,
     run_dir: Path,
     run_id: str,
-    backend_name: str,
-    max_concurrency: int | None,
-    initial_concurrency: int | None = None,
-    num_workers: int,
-    machine_type: str,
-    spot: bool,
-    variant_override: str | None,
-    profile_files: Sequence[Path] = (),
-    external_semaphore: asyncio.Semaphore | None = None,
+    scope_path: tuple[str, ...],
+    execution_context: RunExecutionContext,
+    mapped_item_key: str | None = None,
+    announce: bool,
     out: Any,
-    pool_dispatch_template: PoolDispatchConfig | None = None,
-    auth_flags: AuthPoolFlags = AuthPoolFlags(),
-    preflight_quota_guard: str = "warn",
-    continue_on_step_failure: bool = False,
-) -> bool:
-    """Execute a mode:composite step by loading and running a child process spec.
-
-    Auth-pool config (`pool_dispatch_template`, `auth_flags`,
-    `preflight_quota_guard`) propagates from parent to child. Without this,
-    the child's `run_parallel` invocations get `pool_dispatch=None` and bypass
-    the pool entirely — Claude calls fall back to ambient `~/.claude` creds
-    (the operator's interactive-login session) instead of the pool labels.
-    Surfaced 2026-05-21: large workflow tier1 ran 3 hours of Claude calls but
-    `metaproc auth usage <tier1>` reported 0 invocations on alt1/alt2.
-    """
+) -> _PreparedCompositeScope:
+    """Resolve one child scope through the same identity and planning path."""
     step_id = step_def.id
 
     if not target.uses_path:
@@ -1814,16 +2641,31 @@ async def _execute_composite_step(
     if not child_spec_path.exists():
         raise CLIError(f"step '{step_id}': child spec not found: {child_spec_path}")
 
-    out.progress(f"  Step '{step_id}': loading child spec from {child_spec_path}")
+    if announce:
+        out.progress(f"  Step '{step_id}': loading child spec from {child_spec_path}")
 
     child_spec = load_process_spec(child_spec_path)
     child_process_dir = child_spec_path.parent
 
-    # Build child variables: start with parent variables, overlay with_ mappings
+    # Build child variables: start with parent variables, overlay with_ mappings.
     child_vars = dict(variables)
     if step_def.with_:
         for key, template in step_def.with_.items():
             child_vars[key] = resolve_templates(template, variables)
+
+    if step_def.for_each is not None and mapped_item_key is None:
+        raise CLIError(f"mapped composite step '{step_id}' requires its canonical task item key")
+    item_key = mapped_item_key
+    child_components = (step_id,) if item_key is None else (step_id, item_key)
+    parent_path_id = variables.get("run.id") or variables.get("RUN_ID") or run_dir.name
+    child_identity = ScopeIdentity.child(
+        parent_record_id=run_id,
+        parent_path_id=parent_path_id,
+        parent_scope_path=scope_path,
+        parent_run_dir=run_dir,
+        components=child_components,
+    )
+    child_vars = child_identity.bind_variables(child_vars)
     child_vars = expand_process_vars(child_spec, child_vars, process_dir=child_process_dir)
 
     child_placeholder_errors = validate_spec_placeholders(child_spec, child_vars)
@@ -1843,54 +2685,345 @@ async def _execute_composite_step(
         child_spec,
         child_vars,
         process_path=child_spec_path,
-        adapter_override=variant_override,
+        adapter_override=execution_context.variant_override,
         artifact_namespace=target.artifact_namespace,
-        profile_files=profile_files,
+        profile_files=execution_context.profile_files,
     )
 
-    # Scope child run dir under parent: {parent_run_dir}/{step_id}/
-    child_run_dir = run_dir / step_id
-    child_run_dir.mkdir(parents=True, exist_ok=True)
+    return _PreparedCompositeScope(
+        spec=child_spec,
+        process_path=child_spec_path,
+        process_dir=child_process_dir,
+        plan=child_plan,
+        variables=child_vars,
+        identity=child_identity,
+    )
 
-    child_run_id = f"{run_id}/{step_id}"
+
+async def _execute_composite_step(
+    *,
+    step_def: ProcessStep,
+    target: ResolvedStep,
+    variables: dict[str, str],
+    process_dir: Path,
+    run_dir: Path,
+    run_id: str,
+    scope_path: tuple[str, ...],
+    execution_context: RunExecutionContext,
+    mapped_item_key: str | None = None,
+    out: Any,
+) -> bool:
+    """Execute a composite child in-process under the shared run context."""
+    del process_dir
+    step_id = step_def.id
+    prepared = _prepare_composite_scope(
+        step_def=step_def,
+        target=target,
+        variables=variables,
+        run_dir=run_dir,
+        run_id=run_id,
+        scope_path=scope_path,
+        execution_context=execution_context,
+        mapped_item_key=mapped_item_key,
+        announce=True,
+        out=out,
+    )
+
+    # A scalar composite owns one child scope. A mapped composite owns one child
+    # scope per item, while every child still shares the parent's execution context.
+    prepared.identity.run_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        with ProcessEventLogger(paths_mod.process_events_log(child_run_dir)) as events:
+        with ProcessEventLogger(paths_mod.process_events_log(prepared.identity.run_dir)) as events:
             await _orchestrate(
-                spec=child_spec,
-                plan=child_plan,
-                variables=child_vars,
-                process_path=child_spec_path,
-                process_dir=child_process_dir,
-                run_dir=child_run_dir,
-                run_id=child_run_id,
-                backend_name=backend_name,
-                max_concurrency=max_concurrency,
-                initial_concurrency=initial_concurrency,
-                num_workers=num_workers,
-                machine_type=machine_type,
-                spot=spot,
-                variant_override=variant_override,
-                profile_files=profile_files,
-                skip_steps=set(),
-                force=False,
-                continue_on_error=continue_on_step_failure,
+                spec=prepared.spec,
+                plan=prepared.plan,
+                variables=prepared.variables,
+                process_path=prepared.process_path,
+                process_dir=prepared.process_dir,
+                run_dir=prepared.identity.run_dir,
+                run_id=prepared.identity.record_id,
+                scope_path=prepared.identity.scope_path,
+                execution_context=execution_context,
                 out=out,
                 events=events,
-                pool_dispatch_template=pool_dispatch_template,
-                auth_flags=auth_flags,
-                preflight_quota_guard=preflight_quota_guard,
-                continue_on_step_failure=continue_on_step_failure,
             )
     except CLIError as exc:
-        # Surface the inner failure message — without this the operator
-        # sees `Step '<composite>': FAILED` with no reason. Caught during
-        # 2026-05-13 production rerun where two dispatches died at the
-        # bundle→agent boundary with no visible error.
+        # Surface the inner failure message; otherwise the operator sees only
+        # `Step '<composite>': FAILED` with no actionable reason.
         out.progress(f"  Step '{step_id}': inner CLIError — {exc}")
         return False
 
+    output_errors = validate_process_outputs(
+        prepared.spec,
+        prepared.variables,
+        prepared.process_dir,
+        plan=prepared.plan,
+    )
+    if output_errors:
+        out.progress(
+            f"  Step '{step_id}': child process output validation failed:\n  "
+            + "\n  ".join(output_errors)
+        )
+        return False
+
     return True
+
+
+async def _execute_composite_fan_out_step(
+    *,
+    step_def: ProcessStep,
+    target: ResolvedStep,
+    variables: dict[str, str],
+    process_dir: Path,
+    run_dir: Path,
+    run_id: str,
+    scope_path: tuple[str, ...],
+    execution_context: RunExecutionContext,
+    events: ProcessEventLogger | None = None,
+    out: Any,
+) -> bool:
+    """Map one child process scope per item without launching child orchestrators."""
+    step_id = step_def.id
+    fan_out = target.fan_out
+    assert fan_out is not None
+    for_each = step_def.for_each
+    assert for_each is not None
+    if execution_context.backend_name == "gcp-worker":
+        raise CLIError(
+            f"mapped composite step '{step_id}' does not yet support gcp-worker; "
+            "run the orchestrator on one host or use agent/code fan-out for partitioned work"
+        )
+
+    source_path = Path(fan_out.source)
+    if not source_path.exists():
+        raise CLIError(f"source file not found: {source_path}")
+    try:
+        discovery = discover_items_from_source(
+            source_path,
+            step_def,
+            output_paths=target.outputs or None,
+            params=variables,
+            reuse_policy=target.reuse_policy,
+            run_dir=run_dir,
+            expected_run_id=run_id,
+        )
+    except (TypeError, ValueError) as exc:
+        raise CLIError(str(exc)) from exc
+
+    item_contexts = list(discovery.actionable_contexts)
+    retained_count = len(discovery.filtered_items)
+    for filtered_context in discovery.filtered_items:
+        reason = filtered_context.get("reason")
+        if reason not in {"completed", "cached"}:
+            continue
+        item_context = {key: value for key, value in filtered_context.items() if key != "reason"}
+        item_vars = {**variables, **item_context}
+        state_dir = compute_task_state_dir(run_dir, step_def, item_vars)
+        prepared = _prepare_composite_scope(
+            step_def=step_def,
+            target=target,
+            variables=item_vars,
+            run_dir=run_dir,
+            run_id=run_id,
+            scope_path=scope_path,
+            execution_context=execution_context,
+            mapped_item_key=state_dir.name,
+            announce=False,
+            out=out,
+        )
+        child_output_errors = validate_process_outputs(
+            prepared.spec,
+            prepared.variables,
+            prepared.process_dir,
+            plan=prepared.plan,
+        )
+        if child_output_errors:
+            retained_count -= 1
+            item_contexts.append(item_context)
+            out.progress(
+                f"  Step '{step_id}' item '{state_dir.name}': declared child output "
+                "is no longer valid; rerunning the child scope"
+            )
+
+    if not item_contexts:
+        out.progress(f"  Step '{step_id}': no actionable items ({retained_count} retained)")
+        return True
+
+    try:
+        for item_context in item_contexts:
+            item_vars = {**variables, **item_context}
+            validate_step_inputs_exist(
+                target.inputs,
+                item_vars,
+                context=f"step '{step_id}' for {fan_out.bind}={item_context[fan_out.bind]}",
+            )
+    except ValueError as exc:
+        raise CLIError(str(exc)) from exc
+
+    out.progress(
+        f"  Step '{step_id}': {len(item_contexts)} actionable item scopes "
+        f"({retained_count} retained)"
+    )
+    step_hash = fingerprint_step(target)
+
+    async def _invoke(_step_id: str, item_vars: dict[str, str]) -> bool:
+        item_started = time.monotonic()
+        state_dir = compute_task_state_dir(run_dir, step_def, item_vars)
+        item_key = state_dir.name
+        if events is not None:
+            events.item_start(step_id, item_key, worker_id=_current_worker_id())
+
+        def _emit_terminal(error: str | None = None) -> None:
+            if events is None:
+                return
+            elapsed_s = time.monotonic() - item_started
+            worker_id = _current_worker_id()
+            if error is None:
+                events.item_complete(
+                    step_id,
+                    item_key,
+                    elapsed_s=elapsed_s,
+                    worker_id=worker_id,
+                )
+            else:
+                events.item_fail(
+                    step_id,
+                    item_key,
+                    error=error,
+                    elapsed_s=elapsed_s,
+                    failure_class=str(classify_failure(error)),
+                    worker_id=worker_id,
+                )
+
+        state_dir.mkdir(parents=True, exist_ok=True)
+        item_record = {
+            field: item_vars[field] for field in for_each.bind_fields if field in item_vars
+        }
+        running_record = mark_running_at(
+            state_dir,
+            run_id=run_id,
+            step_id=step_id,
+            item=item_record,
+            item_key=state_dir.name,
+            scope_path=(*scope_path, step_id, state_dir.name),
+        )
+        try:
+            succeeded = await _execute_composite_step(
+                step_def=step_def,
+                target=target,
+                variables=item_vars,
+                process_dir=process_dir,
+                run_dir=run_dir,
+                run_id=run_id,
+                scope_path=scope_path,
+                execution_context=execution_context,
+                mapped_item_key=state_dir.name,
+                out=out,
+            )
+        except asyncio.CancelledError:
+            error = "mapped child process cancelled"
+            mark_failed_at(
+                state_dir,
+                error=error,
+                running_record=running_record,
+                attempt_disposition=AttemptDisposition.cancelled,
+            )
+            _emit_terminal(error)
+            raise
+        except Exception as exc:
+            error = f"child process raised {type(exc).__name__}: {exc}"
+            out.progress(f"  Step '{step_id}' item '{state_dir.name}': {error}")
+            mark_failed_at(
+                state_dir,
+                error=error,
+                running_record=running_record,
+                failure_class=str(classify_failure(error)),
+            )
+            _emit_terminal(error)
+            return False
+        except BaseException as exc:
+            error = f"child process aborted with {type(exc).__name__}: {str(exc) or 'no detail'}"
+            mark_failed_at(
+                state_dir,
+                error=error,
+                running_record=running_record,
+                failure_class=str(classify_failure(error)),
+                attempt_disposition=(
+                    AttemptDisposition.cancelled
+                    if isinstance(exc, KeyboardInterrupt)
+                    else AttemptDisposition.lost
+                ),
+            )
+            _emit_terminal(error)
+            raise
+
+        if not succeeded:
+            error = "child process failed"
+            mark_failed_at(
+                state_dir,
+                error=error,
+                running_record=running_record,
+                failure_class=str(classify_failure(error)),
+            )
+            _emit_terminal(error)
+            return False
+
+        artifact_dir = compute_item_dir(target.outputs, item_vars)
+        if target.outputs and artifact_dir is not None:
+            output_failures = validate_item_outputs_detailed(
+                artifact_dir,
+                target.outputs,
+                variables=item_vars,
+            )
+            if output_failures:
+                mark_failed_at(
+                    state_dir,
+                    error=(
+                        "output validation failed: "
+                        + "; ".join(failure.summary() for failure in output_failures)
+                    ),
+                    running_record=running_record,
+                    output_failures=output_failures,
+                    failure_class=str(FailureClass.INVALID_OUTPUT),
+                )
+                _emit_terminal(
+                    "output validation failed: "
+                    + "; ".join(failure.summary() for failure in output_failures)
+                )
+                return False
+
+        completed = mark_completed_at(state_dir, running_record=running_record)
+        write_result_at(
+            state_dir,
+            ResultRecord(
+                run_id=run_id,
+                step_id=step_id,
+                state="completed",
+                validated=True,
+                outputs=resolve_record_output_paths(target.outputs, item_vars),
+                published_at=completed.completed_at or _now_iso(),
+                step_hash=step_hash,
+            ),
+        )
+        _emit_terminal()
+        return True
+
+    succeeded, total = await run_fan_out(
+        item_contexts=item_contexts,
+        variables=variables,
+        invoke=_invoke,
+        step_id=step_id,
+        # A mapped composite is a cheap structural scope. Executable leaves inside
+        # every scope acquire the run-owned admission authority themselves; making
+        # the scope acquire that capacity would strand a slot while it waits between
+        # child stages and can deadlock at a run limit of one.
+        max_concurrency=_DEFAULT_MAPPED_SCOPE_CONCURRENCY,
+        step_concurrency=fan_out.max_concurrency,
+    )
+    if succeeded != total:
+        out.progress(f"  Step '{step_id}': {total - succeeded} of {total} item scopes failed")
+    return succeeded == total
 
 
 def _current_worker_id() -> str | None:
@@ -2024,8 +3157,7 @@ async def _execute_fan_out_step(
     machine_type: str,
     spot: bool,
     variant_override: str | None,
-    profile_files: Sequence[Path] = (),
-    external_semaphore: asyncio.Semaphore | None = None,
+    execution_context: RunExecutionContext | None = None,
     peer_allowed_targets: list[WriteTarget] | None = None,
     events: ProcessEventLogger | None = None,
     out: Any,
@@ -2225,7 +3357,9 @@ async def _execute_fan_out_step(
         initial_memory_budget_fraction=resolve_initial_memory_budget_fraction(resource_config),
         state_dir=step_state_dir_path,
         logs_dir=step_logs_dir_path,
-        external_semaphore=external_semaphore,
+        external_semaphore=(
+            execution_context.leaf_semaphore if execution_context is not None else None
+        ),
         host_admission_enabled=backend_name == "local",
         host_admission_limit=resolve_host_max_concurrency(resource_config, default=effective_max),
         execution_profile=effective_execution_profile,
@@ -2234,6 +3368,19 @@ async def _execute_fan_out_step(
         profile_max_concurrency_hint=adapter_max_int,
     )
 
+    try:
+        pool_dispatch = _bind_pool_dispatch(
+            pool_dispatch_template,
+            adapter_type=adapter_type,
+            run_dir=run_dir,
+            step_id=step_id,
+            out=out,
+        )
+    except CLIError as exc:
+        out.warning(str(exc))
+        log.warning("Step %s credential-pool binding failed: %s", step_id, exc)
+        return False
+
     if events is not None:
         _emit_fan_out_item_starts(
             events,
@@ -2241,12 +3388,6 @@ async def _execute_fan_out_step(
             each=each,
             item_contexts=item_contexts,
         )
-
-    pool_dispatch = (
-        dataclasses.replace(pool_dispatch_template, step=step_id)
-        if pool_dispatch_template is not None
-        else None
-    )
 
     all_results = await _run_agent_pool(
         spec=spec,
@@ -2538,22 +3679,11 @@ async def _execute_step(
     process_dir: Path,
     run_dir: Path,
     run_id: str,
-    backend_name: str,
-    max_concurrency: int | None,
-    initial_concurrency: int | None = None,
-    num_workers: int,
-    machine_type: str,
-    spot: bool,
-    variant_override: str | None,
-    profile_files: Sequence[Path] = (),
-    external_semaphore: asyncio.Semaphore | None = None,
+    scope_path: tuple[str, ...],
+    execution_context: RunExecutionContext,
     peer_allowed_targets: list[WriteTarget] | None = None,
     events: ProcessEventLogger | None = None,
     out: Any,
-    pool_dispatch_template: PoolDispatchConfig | None = None,
-    auth_flags: AuthPoolFlags = AuthPoolFlags(),
-    preflight_quota_guard: str = "warn",
-    continue_on_step_failure: bool = False,
 ) -> bool:
     """Dispatch a step to the correct execution path. Returns True on success."""
     step_id = target.step_id
@@ -2595,6 +3725,19 @@ async def _execute_step(
         )
 
     if target.mode == "composite":
+        if target.fan_out is not None:
+            return await _execute_composite_fan_out_step(
+                step_def=step_def,
+                target=target,
+                variables=variables,
+                process_dir=process_dir,
+                run_dir=run_dir,
+                run_id=run_id,
+                scope_path=scope_path,
+                execution_context=execution_context,
+                events=events,
+                out=out,
+            )
         return await _execute_composite_step(
             step_def=step_def,
             target=target,
@@ -2602,20 +3745,9 @@ async def _execute_step(
             process_dir=process_dir,
             run_dir=run_dir,
             run_id=run_id,
-            backend_name=backend_name,
-            max_concurrency=max_concurrency,
-            initial_concurrency=initial_concurrency,
-            num_workers=num_workers,
-            machine_type=machine_type,
-            spot=spot,
-            variant_override=variant_override,
-            profile_files=profile_files,
-            external_semaphore=external_semaphore,
+            scope_path=scope_path,
+            execution_context=execution_context,
             out=out,
-            pool_dispatch_template=pool_dispatch_template,
-            auth_flags=auth_flags,
-            preflight_quota_guard=preflight_quota_guard,
-            continue_on_step_failure=continue_on_step_failure,
         )
 
     if target.mode == "manual":
@@ -2639,20 +3771,22 @@ async def _execute_step(
                 process_dir=process_dir,
                 run_dir=run_dir,
                 run_id=run_id,
-                max_concurrency=max_concurrency,
-                external_semaphore=external_semaphore,
+                max_concurrency=execution_context.max_concurrency,
+                execution_context=execution_context,
                 out=out,
             )
-        return await _execute_code_step(
-            spec=spec,
-            step_def=step_def,
-            target=target,
-            variables=variables,
-            process_dir=process_dir,
-            run_dir=run_dir,
-            run_id=run_id,
-            out=out,
-        )
+        async with _leaf_slot(execution_context):
+            return await _execute_code_step(
+                spec=spec,
+                step_def=step_def,
+                target=target,
+                variables=variables,
+                process_dir=process_dir,
+                run_dir=run_dir,
+                run_id=run_id,
+                execution_context=execution_context,
+                out=out,
+            )
 
     if target.mode == "agent":
         if target.fan_out is not None:
@@ -2665,20 +3799,20 @@ async def _execute_step(
                 process_dir=process_dir,
                 run_dir=run_dir,
                 run_id=run_id,
-                backend_name=backend_name,
-                max_concurrency=max_concurrency,
-                initial_concurrency=initial_concurrency,
-                num_workers=num_workers,
-                machine_type=machine_type,
-                spot=spot,
-                variant_override=variant_override,
-                external_semaphore=external_semaphore,
+                backend_name=execution_context.backend_name,
+                max_concurrency=execution_context.max_concurrency,
+                initial_concurrency=execution_context.initial_concurrency,
+                num_workers=execution_context.num_workers,
+                machine_type=execution_context.machine_type,
+                spot=execution_context.spot,
+                variant_override=execution_context.variant_override,
+                execution_context=execution_context,
                 peer_allowed_targets=peer_allowed_targets,
                 events=events,
                 out=out,
-                pool_dispatch_template=pool_dispatch_template,
-                auth_flags=auth_flags,
-                preflight_quota_guard=preflight_quota_guard,
+                pool_dispatch_template=execution_context.pool_dispatch_template,
+                auth_flags=execution_context.auth_flags,
+                preflight_quota_guard=execution_context.preflight_quota_guard,
             )
         return await _execute_agent_step(
             spec=spec,
@@ -2688,9 +3822,10 @@ async def _execute_step(
             process_dir=process_dir,
             run_dir=run_dir,
             run_id=run_id,
-            variant_override=variant_override,
+            variant_override=execution_context.variant_override,
             peer_allowed_targets=peer_allowed_targets,
-            backend_name=backend_name,
+            backend_name=execution_context.backend_name,
+            execution_context=execution_context,
             out=out,
         )
 
@@ -2709,25 +3844,21 @@ async def _orchestrate(
     process_dir: Path,
     run_dir: Path,
     run_id: str,
-    backend_name: str,
-    max_concurrency: int | None,
-    initial_concurrency: int | None = None,
-    num_workers: int,
-    machine_type: str,
-    spot: bool,
-    variant_override: str | None,
-    skip_steps: set[str],
-    force: bool,
-    continue_on_error: bool,
-    continue_on_step_failure: bool = False,
+    scope_path: tuple[str, ...] = (),
+    execution_context: RunExecutionContext,
     out: Any,
     events: ProcessEventLogger,
-    pool_dispatch_template: PoolDispatchConfig | None = None,
-    auth_flags: AuthPoolFlags = AuthPoolFlags(),
-    preflight_quota_guard: str = "warn",
-    profile_files: Sequence[Path] = (),
 ) -> None:
     """Walk the DAG, executing independent steps in parallel via asyncio.gather()."""
+    backend_name = execution_context.backend_name
+    max_concurrency = execution_context.max_concurrency
+    skip_steps = execution_context.skip_steps if not scope_path else frozenset()
+    force = execution_context.force
+    continue_on_error = (
+        execution_context.continue_on_error
+        if not scope_path
+        else execution_context.continue_on_step_failure
+    )
     stale_count = reconcile_stale_running(run_dir)
     if stale_count:
         out.progress(f"Reconciled {stale_count} orphaned task(s)")
@@ -2753,13 +3884,6 @@ async def _orchestrate(
     _absorbed: set[str] = {sid for chain in _chains for sid in chain[1:]}
 
     events.process_start(spec.name, run_id, backend_name, len(step_map))
-
-    # Shared semaphore for global fan-out concurrency cap (RF-4).
-    # When max_concurrency is set, it bounds the total concurrent items
-    # across all parallel fan-out steps at the same topological level.
-    global_semaphore: asyncio.Semaphore | None = None
-    if max_concurrency is not None:
-        global_semaphore = asyncio.Semaphore(max_concurrency)
 
     # Initialize step states for process-status.yaml. For partial resumes
     # (``--from``/``--only``), preserve any prior completion records from a
@@ -2788,6 +3912,17 @@ async def _orchestrate(
         if step_id not in active_ids and isinstance(prior, dict):
             step_states[step_id] = dict(prior)
 
+    # Replace a prior terminal projection as soon as this evaluator takes ownership.
+    # Without this entry write, a monitor racing a resume can observe the old failure
+    # or cancellation while the orchestrator is already executing new work.
+    _write_process_status(
+        run_dir,
+        spec.name,
+        step_states,
+        started_at,
+        active_step_ids=active_ids,
+    )
+
     blocked_steps: set[str] = set()
 
     async def _run_one_step(
@@ -2799,7 +3934,13 @@ async def _orchestrate(
         target = step_map[step_id]
 
         step_states[step_id] = {"state": "running", "started_at": _now_iso()}
-        _write_process_status(run_dir, spec.name, step_states, started_at)
+        _write_process_status(
+            run_dir,
+            spec.name,
+            step_states,
+            started_at,
+            active_step_ids=active_ids,
+        )
 
         step_start = time.monotonic()
         out.progress(f"\n--- Step: {step_id} ({target.mode}) ---")
@@ -2819,7 +3960,7 @@ async def _orchestrate(
                 run_dir=run_dir,
                 run_id=run_id,
                 max_concurrency=max_concurrency,
-                external_semaphore=global_semaphore,
+                execution_context=execution_context,
                 out=out,
             )
             chain_elapsed = time.monotonic() - step_start
@@ -2835,7 +3976,13 @@ async def _orchestrate(
                     events.step_complete(member_id, chain_elapsed)
                 else:
                     events.step_fail(member_id, chain_elapsed)
-            _write_process_status(run_dir, spec.name, step_states, started_at)
+            _write_process_status(
+                run_dir,
+                spec.name,
+                step_states,
+                started_at,
+                active_step_ids=active_ids,
+            )
             failed_members = [m for m, ok in chain_results.items() if not ok]
             for member_id in failed_members:
                 out.progress(f"  Step '{member_id}': FAILED")
@@ -2852,22 +3999,11 @@ async def _orchestrate(
             process_dir=process_dir,
             run_dir=run_dir,
             run_id=run_id,
-            backend_name=backend_name,
-            max_concurrency=max_concurrency,
-            initial_concurrency=initial_concurrency,
-            num_workers=num_workers,
-            machine_type=machine_type,
-            spot=spot,
-            variant_override=variant_override,
-            profile_files=profile_files,
-            external_semaphore=global_semaphore,
+            scope_path=scope_path,
+            execution_context=execution_context,
             peer_allowed_targets=peer_allowed_targets,
             events=events,
             out=out,
-            pool_dispatch_template=pool_dispatch_template,
-            auth_flags=auth_flags,
-            preflight_quota_guard=preflight_quota_guard,
-            continue_on_step_failure=continue_on_step_failure,
         )
 
         elapsed = time.monotonic() - step_start
@@ -2882,14 +4018,18 @@ async def _orchestrate(
             events.step_complete(step_id, elapsed)
             out.progress(f"  Step '{step_id}': completed ({fmt_timedelta(elapsed)})")
         else:
+            error = _read_scalar_code_failure_error(run_dir, target)
             step_states[step_id] = {
                 "state": "failed",
                 "started_at": step_states[step_id].get("started_at"),
                 "completed_at": _now_iso(),
                 "elapsed_s": round(elapsed, 1),
             }
-            events.step_fail(step_id, elapsed)
-            out.progress(f"  Step '{step_id}': FAILED ({fmt_timedelta(elapsed)})")
+            if error:
+                step_states[step_id]["error"] = error
+            events.step_fail(step_id, elapsed, error=error)
+            detail = f": {error}" if error else ""
+            out.progress(f"  Step '{step_id}': FAILED ({fmt_timedelta(elapsed)}){detail}")
 
         return step_id, success
 
@@ -2900,9 +4040,8 @@ async def _orchestrate(
         # the step on bare resume (without --from). Without this, a step with
         # state=failed but a `metaproc override <step> --satisfied` entry was
         # re-run from scratch on whole-DAG resume — the override only fired
-        # on `--from <step>` resumes via _verify_ancestors. Friday 2026-05-01
-        # cohort: bare resume cleaned adhoc-kb-candidates and rebuilt mine-adhoc
-        # despite an earlier `override mine-adhoc --satisfied`.
+        # on `--from <step>` resumes via _verify_ancestors. A bare resume must
+        # preserve an earlier `override extract-items --satisfied` entry.
         level_overrides_doc = _read_overrides_for_verify(run_dir)
 
         # Filter steps: skip blocked, user-skipped, override-satisfied, and already-completed.
@@ -2939,9 +4078,12 @@ async def _orchestrate(
             # The level walk reaches an item-aligned chain only through its head. Even
             # when the head is complete, the chain may contain incomplete tasks; the
             # chain executor's per-task checks decide what resume reuses.
+            # A mapped composite likewise re-enters item discovery so child-process
+            # outputs, not only the parent's published subset, are revalidated.
             if (
                 not force
                 and step_id not in _chain_head_of
+                and not (target.mode == "composite" and target.fan_out is not None)
                 and _is_step_completed(
                     run_dir,
                     step_id,
@@ -3013,15 +4155,32 @@ async def _orchestrate(
 
         # Execute steps at this level in parallel.
         level_start_t = time.monotonic()
-        results = await asyncio.gather(
-            *[
-                _run_one_step(
-                    sid,
-                    peer_allowed_targets=peer_allowed_by_step[sid],
-                )
-                for sid in runnable
-            ]
-        )
+        try:
+            results = await asyncio.gather(
+                *[
+                    _run_one_step(
+                        sid,
+                        peer_allowed_targets=peer_allowed_by_step[sid],
+                    )
+                    for sid in runnable
+                ]
+            )
+        except asyncio.CancelledError:
+            for step_id in runnable:
+                if step_states[step_id].get("state") == "running":
+                    step_states[step_id] = {
+                        "state": "cancelled",
+                        "started_at": step_states[step_id].get("started_at"),
+                        "completed_at": _now_iso(),
+                    }
+            _write_process_status(
+                run_dir,
+                spec.name,
+                step_states,
+                started_at,
+                active_step_ids=active_ids,
+            )
+            raise
         events.level_complete(_level_idx, time.monotonic() - level_start_t)
 
         # Process results: block downstream of failed steps. Steps marked
@@ -3033,16 +4192,37 @@ async def _orchestrate(
                 blocked_steps.update(actually_blocked)
 
                 if not continue_on_error:
-                    _write_process_status(run_dir, spec.name, step_states, started_at)
+                    _write_process_status(
+                        run_dir,
+                        spec.name,
+                        step_states,
+                        started_at,
+                        active_step_ids=active_ids,
+                    )
+                    detail = step_states[step_id].get("error")
+                    detail_text = f" Error: {detail}." if detail else ""
                     raise CLIError(
-                        f"Step '{step_id}' failed (--no-continue-on-error set). "
-                        f"Blocked: {', '.join(actually_blocked) if actually_blocked else 'none'}"
+                        f"Step '{step_id}' failed (--no-continue-on-error set)."
+                        f"{detail_text} Blocked: "
+                        f"{', '.join(actually_blocked) if actually_blocked else 'none'}"
                     )
 
-            _write_process_status(run_dir, spec.name, step_states, started_at)
+            _write_process_status(
+                run_dir,
+                spec.name,
+                step_states,
+                started_at,
+                active_step_ids=active_ids,
+            )
 
     # Final status
-    _write_process_status(run_dir, spec.name, step_states, started_at)
+    _write_process_status(
+        run_dir,
+        spec.name,
+        step_states,
+        started_at,
+        active_step_ids=active_ids,
+    )
 
     completed_count = sum(1 for s in step_states.values() if s.get("state") == "completed")
     failed_steps = [sid for sid, s in step_states.items() if s.get("state") == "failed"]
@@ -3060,8 +4240,12 @@ async def _orchestrate(
     )
 
     if failed_steps:
+        failures = []
+        for step_id in failed_steps:
+            error = step_states[step_id].get("error")
+            failures.append(f"{step_id}: {error}" if error else step_id)
         raise CLIError(
-            f"Process completed with failures: {', '.join(failed_steps)}. "
+            f"Process completed with failures: {'; '.join(failures)}. "
             f"Blocked: {', '.join(blocked_list) if blocked_list else 'none'}"
         )
 
@@ -3093,7 +4277,9 @@ def run_process_command(
         None,
         "--max-concurrency",
         help=(
-            "Per-pool concurrency limit for fan-out steps. "
+            "Local run-wide executable-leaf limit across fan-out pools, scalar "
+            "steps, and leaves inside composite scopes; for gcp-worker, each worker applies the "
+            "limit independently. "
             "Falls back to METAPROC_DEFAULT_MAX_CONCURRENCY env var when unset "
             "(then to no cap). Primary quota-safety knob — change when quotas change."
         ),
@@ -3276,10 +4462,9 @@ def run_process_command(
     # — so operators previewing an upcoming dispatch see the conflict
     # surfaced at the same point a real launch would. The per-item
     # compose_slot_env check only fires when the first matching-adapter
-    # item tries to launch; a long pool-bypass step (e.g. mine-adhoc on
-    # pi-cli) running first can complete before any pooled step's first
-    # item ever calls compose_slot_env, so this gate eliminates the
-    # 30+-minute timing window the 2026-05-10 dispatch hit.
+    # item tries to launch; a long pool-bypass step (e.g. extract-items on
+    # another adapter) can complete before any pooled step's first item
+    # calls compose_slot_env, so this gate reports conflicts at dispatch start.
     if auth_account:
         env_verdict = check_dispatch_auth_env(
             auth_account,
@@ -3299,6 +4484,8 @@ def run_process_command(
         env_max = MetaprocEnv.METAPROC_DEFAULT_MAX_CONCURRENCY.read_int(default=None)
         if env_max is not None:
             max_concurrency = env_max
+    if max_concurrency is not None and max_concurrency < 1:
+        raise CLIError("max_concurrency must be at least 1")
     if num_workers is None:
         num_workers = MetaprocEnv.METAPROC_DEFAULT_NUM_WORKERS.read_int(default=1)
 
@@ -3383,6 +4570,14 @@ def run_process_command(
     levels = topo_sort(plan.steps, step_ids=active_step_ids)
     step_map = {s.step_id: s for s in plan.steps}
     skip_set = set(skip)
+
+    # Topology is a launch precondition, not a late step failure. Validate it before
+    # adapter preflight, cloud dispatch, run-directory mutation, or any DAG level runs.
+    _validate_backend_topology(
+        plan,
+        active_step_ids=active_step_ids - skip_set,
+        backend_name=backend,
+    )
 
     # Surface harness-CLI version drift up front — prominently, but without
     # blocking. A drifted CLI can behave differently from the pin (a common
@@ -3552,12 +4747,17 @@ def run_process_command(
             continue_on_error=continue_on_error,
             orchestrator_machine_type=orchestrator_machine_type,
             max_duration_s=_parse_duration(max_duration),
-            auth_account=auth_account,
-            auth_backend=auth_backend,
-            auth_fallback_policy=auth_fallback_policy,
-            auth_include_labels=tuple(auth_include_labels),
-            auth_exclude_labels=tuple(auth_exclude_labels),
-            auth_cross_quota_group=auth_cross_quota_group,
+            auth_flags=AuthPoolFlags(
+                auth_account=auth_account or "",
+                auth_backend=auth_backend or "",
+                auth_fallback_policy=(
+                    auth_fallback_policy if auth_fallback_policy != "none" else ""
+                ),
+                auth_policy=auth_policy or "",
+                auth_include_labels=tuple(auth_include_labels),
+                auth_exclude_labels=tuple(auth_exclude_labels),
+                auth_cross_quota_group=auth_cross_quota_group,
+            ),
         )
 
         out.progress("run-process --cloud: submitting orchestrator to GCP Batch")
@@ -3627,9 +4827,9 @@ def run_process_command(
     out.progress(f"Backend: {backend}")
 
     # ── Auth-pool dispatch template ────────────────────
-    # Constructed once at top level and threaded through to fan-out steps.
-    # `step` is filled per-step inside _execute_fan_out_step via
-    # dataclasses.replace before passing to _run_agent_pool.
+    # Constructed once at top level and threaded through every agent step.
+    # The shared binder fills the path-relative scope and step for scalar
+    # and fan-out execution before either path acquires a credential.
     #
     # ``auth_flags_resolved`` is the AuthPoolFlags shape the gcp-worker
     # leg consumes. Built alongside pool_dispatch_template
@@ -3714,13 +4914,13 @@ def run_process_command(
             adapter=auth_account,
             runs_dir=runs_dir_for_pool,
             run_id=run_context,
-            step="",  # filled per-step in _execute_fan_out_step
+            step="",  # filled per-step by _bind_pool_dispatch
             strategy=strategy,
             fallback_policy=fallback_policy_enum,
             exclude=excluded_pairs,
             cross_quota_group=auth_cross_quota_group,
         )
-        # Worker-leg shape: the same five fields encoded for inner
+        # Worker-leg shape: the same authentication cohort encoded for inner
         # `run-parallel --auth-*` reconstruction. ``resolved_auth_backend``
         # carries the worker-default plug-in so a cloud worker that the
         # operator did not explicitly point at gcp-secret-manager still
@@ -3760,9 +4960,8 @@ def run_process_command(
                 out.progress(f"  pre-flight probe: {label} → {target} ({note})")
 
         out.progress("Pre-flight probe: validating each pool label before fan-out")
-        # Per-label invocation sidecars land here so we can diff what the
-        # probe actually invoked claude with against the laptop snapshot.
-        # See plan-2026-05-01 § Phase 3.5.
+        # Per-label invocation sidecars land here so operators can inspect
+        # the exact probe invocation during diagnostics.
         preflight_sidecar_dir = run_dir / ".state" / "preflight-probes"
         try:
             pool_dispatch_template = pre_fan_out_probe(
@@ -3823,7 +5022,9 @@ def run_process_command(
         command_summary += f" --initial-concurrency {initial_concurrency}"
     acquire_lease(run_dir, owner_type="local", command_summary=command_summary, force=force)
 
-    install_subprocess_reaper_signal_handlers()
+    # Leave SIGINT at Python's default so asyncio.Runner translates Ctrl-C into
+    # cooperative task cancellation. SIGTERM retains the hard descendant reaper.
+    install_subprocess_reaper_signal_handlers(include_sigint=False)
 
     finalization_state = FinalizationState.COMPLETED
     terminal_error: BaseException | None = None
@@ -3832,15 +5033,9 @@ def run_process_command(
             LeaseHeartbeat(run_dir),
             ProcessEventLogger(paths_mod.process_events_log(run_dir)) as events,
         ):
-            asyncio.run(
-                _orchestrate(
-                    spec=spec,
-                    plan=active_plan,
-                    variables=variables,
-                    process_path=process_path,
-                    process_dir=process_dir,
-                    run_dir=run_dir,
-                    run_id=run_id,
+
+            async def _run_local_process() -> None:
+                execution_context = RunExecutionContext.create(
                     backend_name=backend,
                     max_concurrency=max_concurrency,
                     initial_concurrency=initial_concurrency,
@@ -3853,13 +5048,46 @@ def run_process_command(
                     force=force,
                     continue_on_error=continue_on_error,
                     continue_on_step_failure=continue_on_step_failure,
-                    out=out,
-                    events=events,
                     pool_dispatch_template=pool_dispatch_template,
                     auth_flags=auth_flags_resolved,
                     preflight_quota_guard=auth_preflight_quota_guard,
+                    run_dir=run_dir,
+                    enable_run_pool=backend == "local",
                 )
-            )
+                primary_error: BaseException | None = None
+                try:
+                    await _orchestrate(
+                        spec=spec,
+                        plan=active_plan,
+                        variables=variables,
+                        process_path=process_path,
+                        process_dir=process_dir,
+                        run_dir=run_dir,
+                        run_id=run_id,
+                        execution_context=execution_context,
+                        out=out,
+                        events=events,
+                    )
+                except BaseException as exc:
+                    primary_error = exc
+                    if isinstance(exc, asyncio.CancelledError):
+                        execution_context.cancellation_event.set()
+                    raise
+                finally:
+                    try:
+                        await execution_context.aclose()
+                    except BaseException as cleanup_exc:
+                        if primary_error is None:
+                            raise
+                        primary_error.add_note(
+                            f"run-owned execution cleanup also failed: {cleanup_exc!r}"
+                        )
+                        log.exception(
+                            "run-owned execution cleanup failed after process failure for %s",
+                            run_dir,
+                        )
+
+            asyncio.run(_run_local_process())
 
         output_errors = validate_process_outputs(spec, variables, process_dir, plan=plan)
         if output_errors:

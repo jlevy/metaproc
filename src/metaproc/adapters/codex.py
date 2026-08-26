@@ -126,7 +126,7 @@ def _validate_codex_creds_blob(blob: str) -> None:
 
     API-key blobs (``tokens.auth_mode == "apikey"``) are explicitly
     rejected: API keys are stateless, don't need pooling, and should
-    arrive as ``OPENAI_API_KEY`` via secret_variables rather than a
+    arrive as ``OPENAI_API_KEY`` through container-side secret hydration rather than a
     pool label. This matches ``CodexCliAdapter.bootstrap``'s existing
     guard — the pool's push path shares the same invariant.
     """
@@ -151,7 +151,8 @@ def _validate_codex_creds_blob(blob: str) -> None:
         msg = (
             f"Codex credentials blob has tokens.auth_mode={auth_mode!r}; the pool "
             "only accepts ChatGPT-OAuth payloads. API-key auth is stateless and "
-            "should arrive as OPENAI_API_KEY via secret_variables, not a pool label."
+            "should arrive as OPENAI_API_KEY through cloud secret hydration, "
+            "not a pool label."
         )
         raise RuntimeError(msg)
 

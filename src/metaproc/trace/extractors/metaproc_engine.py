@@ -42,6 +42,7 @@ class MetaprocEngineExtractor:
     """V1 extractor for metaproc engine + runpool event streams."""
 
     source = "metaproc-engine"
+    scope_local = True
 
     def detect(self, run_dir: Path) -> bool:
         if paths_mod.process_events_log(run_dir).is_file():
@@ -228,7 +229,7 @@ class MetaprocEngineExtractor:
                     kind="internal",
                     source=self.source,
                     ts_start=ts,
-                    status="partial" if event_type == "pressure_check" else "ok",
+                    status="ok",
                     attributes={
                         "step.id": step_id,
                         "internal.kind": event_type,

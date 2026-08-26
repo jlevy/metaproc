@@ -18,23 +18,25 @@ from google.cloud.batch_v1.types import JobStatus
 
 from metaproc.cloud.gcp.batch_backend import (
     GCPBatchConfig,
-    _build_secret_env_vars,
     run_identity_label,
 )
 from metaproc.cloud.gcp.orchestrator_dispatch import (
     OrchestratorDispatchConfig,
     dispatch_orchestrator,
 )
+from metaproc.cloud.gcp.secret_hydration import SECRET_REFS_ENV
 from metaproc.cloud.gcp.worker_dispatch import WorkerDispatchConfig, _submit_workers
+from metaproc.dispatch.auth_pool_flags import AuthPoolFlags
+from metaproc.dispatch.secret_refs import SecretRefSet
 
-# ── _build_secret_env_vars helper ────────────────────────────────
+# ── Secret reference registry ────────────────────────────────────
 
 
-class TestBuildSecretEnvVars:
+class TestSecretRefResolution:
     def test_empty_when_no_secret_vars_set(self, monkeypatch):
         monkeypatch.delenv("METAPROC_GCP_SECRET_GH_TOKEN", raising=False)
         monkeypatch.delenv("METAPROC_GCP_SECRET_CLAUDE_CREDS", raising=False)
-        assert _build_secret_env_vars() == {}
+        assert SecretRefSet.all_known().resolve_env_refs() == {}
 
     def test_gh_token_mapping(self, monkeypatch):
         monkeypatch.setenv(
@@ -42,7 +44,7 @@ class TestBuildSecretEnvVars:
             "projects/p/secrets/gh-token/versions/latest",
         )
         monkeypatch.delenv("METAPROC_GCP_SECRET_CLAUDE_CREDS", raising=False)
-        assert _build_secret_env_vars() == {
+        assert SecretRefSet.all_known().resolve_env_refs() == {
             "GH_TOKEN": "projects/p/secrets/gh-token/versions/latest",
         }
 
@@ -52,7 +54,7 @@ class TestBuildSecretEnvVars:
             "METAPROC_GCP_SECRET_CLAUDE_CREDS",
             "projects/p/secrets/claude-code-creds-ryan/versions/latest",
         )
-        assert _build_secret_env_vars() == {
+        assert SecretRefSet.all_known().resolve_env_refs() == {
             "CLAUDE_CODE_CREDS_JSON": "projects/p/secrets/claude-code-creds-ryan/versions/latest",
         }
 
@@ -65,7 +67,7 @@ class TestBuildSecretEnvVars:
             "METAPROC_GCP_SECRET_CLAUDE_CREDS",
             "projects/p/secrets/claude-code-creds-ryan/versions/3",
         )
-        assert _build_secret_env_vars() == {
+        assert SecretRefSet.all_known().resolve_env_refs() == {
             "GH_TOKEN": "projects/p/secrets/gh-token/versions/latest",
             "CLAUDE_CODE_CREDS_JSON": "projects/p/secrets/claude-code-creds-ryan/versions/3",
         }
@@ -137,6 +139,85 @@ class TestWorkerDispatchLabelPropagation:
 
 
 class TestOrchestratorDispatchLabelPropagation:
+    def test_auth_policy_reaches_orchestrator_environment(self, monkeypatch):
+        for binding in SecretRefSet.all_known().refs:
+            monkeypatch.delenv(binding.plaintext_env, raising=False)
+            monkeypatch.delenv(binding.secret_env, raising=False)
+        monkeypatch.setenv("METAPROC_AUTH_POOL", "synthetic-pool")
+        gcp_config = GCPBatchConfig(
+            project="test-project",
+            region="us-central1",
+            container_image="gcr.io/test/agent:latest",
+            filestore_server="10.0.0.1",
+            service_account_email="runner@example.invalid",
+        )
+        config = OrchestratorDispatchConfig(
+            gcp=gcp_config,
+            process_spec_rel="example_plugin",
+            variables={"RUN_ID": "test-run"},
+            poll_interval=0,
+            auth_flags=AuthPoolFlags(
+                auth_account="claude-code-cli",
+                auth_backend="gcp-secret-manager",
+                auth_fallback_policy="same-provider",
+                auth_policy="least-active",
+                auth_include_labels=("primary", "alternate"),
+                auth_cross_quota_group=False,
+            ),
+        )
+        mock_client = MagicMock()
+        mock_job = MagicMock()
+        mock_job.name = "projects/p/locations/r/jobs/j"
+        mock_job.status.state = JobStatus.State.SUCCEEDED
+        mock_client.create_job.return_value = mock_job
+        mock_client.get_job.return_value = mock_job
+
+        with patch("google.cloud.batch_v1.BatchServiceClient", return_value=mock_client):
+            asyncio.run(dispatch_orchestrator(config))
+
+        request = (
+            mock_client.create_job.call_args.kwargs.get("request")
+            or mock_client.create_job.call_args[0][0]
+        )
+        env_vars = request.job.task_groups[0].task_spec.runnables[1].environment.variables
+        assert {
+            name: value
+            for name, value in env_vars.items()
+            if name in AuthPoolFlags.all_env_var_names()
+        } == {
+            "METAPROC_AUTH_ACCOUNT": "claude-code-cli",
+            "METAPROC_AUTH_BACKEND": "gcp-secret-manager",
+            "METAPROC_AUTH_FALLBACK_POLICY": "same-provider",
+            "METAPROC_AUTH_POLICY": "least-active",
+            "METAPROC_AUTH_INCLUDE_LABELS": "primary,alternate",
+            "METAPROC_AUTH_CROSS_QUOTA_GROUP": "false",
+        }
+        assert SECRET_REFS_ENV not in env_vars
+
+    def test_gcp_auth_pool_requires_explicit_service_account(self, monkeypatch):
+        for binding in SecretRefSet.all_known().refs:
+            monkeypatch.delenv(binding.plaintext_env, raising=False)
+            monkeypatch.delenv(binding.secret_env, raising=False)
+        config = OrchestratorDispatchConfig(
+            gcp=GCPBatchConfig(
+                project="test-project",
+                region="us-central1",
+                container_image="gcr.io/test/agent:latest",
+                filestore_server="10.0.0.1",
+            ),
+            process_spec_rel="example_plugin",
+            variables={"RUN_ID": "test-run"},
+            auth_flags=AuthPoolFlags(
+                auth_account="claude-code-cli",
+                auth_backend="gcp-secret-manager",
+                auth_include_labels=("primary",),
+            ),
+        )
+
+        with patch("google.cloud.batch_v1.BatchServiceClient", return_value=MagicMock()):
+            with pytest.raises(ValueError, match="GCP Secret Manager auth pool"):
+                asyncio.run(dispatch_orchestrator(config))
+
     def test_allocation_policy_labels_match_job_labels(self):
 
         gcp_config = GCPBatchConfig(
@@ -420,9 +501,10 @@ class TestOrchestratorDispatchLabelPropagation:
         assert env_vars["METAPROC_GCP_SECRET_GH_TOKEN"] == (
             "projects/test-project/secrets/gh-token/versions/latest"
         )
-        assert environment.secret_variables["GH_TOKEN"] == (
+        assert json.loads(env_vars[SECRET_REFS_ENV])["GH_TOKEN"] == (
             "projects/test-project/secrets/gh-token/versions/latest"
         )
+        assert not environment.secret_variables
 
     def test_orchestrator_forwards_claude_creds_secret(self):
 
@@ -471,9 +553,8 @@ class TestOrchestratorDispatchLabelPropagation:
         # The resource-name var is forwarded as a plain env var so the
         # orchestrator can propagate it when dispatching workers.
         assert env_vars["METAPROC_GCP_SECRET_CLAUDE_CREDS"] == secret_ref
-        # The same ref is bound as a Secret Manager env var on the
-        # orchestrator container itself (harmless if unused).
-        assert environment.secret_variables["CLAUDE_CODE_CREDS_JSON"] == secret_ref
+        assert json.loads(env_vars[SECRET_REFS_ENV])["CLAUDE_CODE_CREDS_JSON"] == secret_ref
+        assert not environment.secret_variables
 
     def test_orchestrator_refuses_plaintext_claude_creds(self):
 
@@ -510,6 +591,7 @@ class TestOrchestratorDispatchLabelPropagation:
             project="test-project",
             region="us-central1",
             container_image="gcr.io/test/agent:latest",
+            service_account_email="user@example.invalid",
             filestore_server="10.0.0.1",
         )
         config = WorkerDispatchConfig(
@@ -552,7 +634,11 @@ class TestOrchestratorDispatchLabelPropagation:
             or mock_client.create_job.call_args[0][0]
         )
         environment = request.job.task_groups[0].task_spec.runnables[1].environment
-        assert environment.secret_variables["CLAUDE_CODE_CREDS_JSON"] == secret_ref
+        assert (
+            json.loads(environment.variables[SECRET_REFS_ENV])["CLAUDE_CODE_CREDS_JSON"]
+            == secret_ref
+        )
+        assert not environment.secret_variables
 
     def test_worker_dispatch_forwards_artifact_env(self):
 

@@ -47,7 +47,7 @@ mode requires. Never commit `.env`.
 | --- | --- |
 | `METAPROC_GCP_PROJECT` | GCP project containing Batch resources |
 | `METAPROC_GCP_REGION` | Batch region |
-| `METAPROC_GCP_SERVICE_ACCOUNT` | Explicit Batch identity; required when a run binds Secret Manager secrets |
+| `METAPROC_GCP_SERVICE_ACCOUNT` | Explicit Batch identity; required when a run binds Secret Manager secrets or uses a Secret Manager auth pool |
 | `METAPROC_GCP_CONTAINER_IMAGE` | Image that can run Metaproc and the consumer |
 | `METAPROC_GCS_BUCKET` | Wheel and workspace artifact transport |
 | `METAPROC_GCP_SECRET_GH_TOKEN` | Secret Manager ref used when a private repo must be cloned |
@@ -146,7 +146,9 @@ metaproc gcp run --detach -- python -m my_consumer.batch_task --shard shard-b
 Useful controls:
 
 - `--no-wheel` uses the image-baked Metaproc.
-- `--no-workspace` skips repository transport.
+- `--no-workspace` skips repository transport, so consumer source must already be in the
+  image. Nested `uv run` commands use the baked `/opt/venv` without syncing an absent
+  project; a shipped Metaproc wheel can still replace the image-baked version.
 - `--sync PATH` and `--sync-only PATH` narrow workspace transport.
 - `--workspace-package PATH` installs a shipped Python package editable into the baked
   environment. Repeat it for multiple packages; it cannot be combined with
@@ -157,9 +159,30 @@ Useful controls:
 - `--secret K=REF` binds a Secret Manager version.
   Secret-bearing runs require `METAPROC_GCP_SERVICE_ACCOUNT`; dispatch refuses them
   before artifact upload when the identity is unset.
+  The Batch spec carries only `REF`; the container fetches its value under that service
+  account before bootstrap.
+  Do not replace this with Batch `secret_variables`, because Batch agent logs can expose
+  their expanded values.
+- A cloud auth pool backed by Secret Manager also requires
+  `METAPROC_GCP_SERVICE_ACCOUNT`. Each scalar or fan-out launch acquires its credential
+  through the shared pool under that identity; the dispatcher does not inject a
+  preferred credential into the container environment.
 - `--timeout <seconds>` sets the task deadline.
 
+Container-side hydration requires the agent image to install `metaproc[gcp-batch]` so
+the Secret Manager client is available before bootstrap.
+When releasing a hydration-contract change, build and canary the new agent image before
+deploying the dispatcher that emits the new contract.
+A new image can still accept an older dispatcher payload; an old image cannot interpret
+the new reference-only payload.
+If `GH_TOKEN` is empty and every Claude task reports that it is not logged in after a
+dispatcher rollout, verify that the selected image includes container-side hydration.
+
 Do not pass credentials through `--env`. Use Secret Manager references.
+For a new identity or secret, first run a harmless canary that tests only for the target
+environment variable’s presence.
+Inspect both task and agent logs and confirm the canary value does not appear before
+dispatching a real provider credential.
 
 ## 6. Monitor Through Metaproc
 

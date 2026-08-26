@@ -117,7 +117,13 @@ async def run_fan_out(
                     return await invoke(step_id, item_vars)
             return await invoke(step_id, item_vars)
 
-    results = await asyncio.gather(*(_one(ctx) for ctx in item_contexts))
+    results = await asyncio.gather(
+        *(_one(ctx) for ctx in item_contexts),
+        return_exceptions=True,
+    )
+    for result in results:
+        if isinstance(result, BaseException):
+            raise result
     return (sum(1 for ok in results if ok), len(results))
 
 

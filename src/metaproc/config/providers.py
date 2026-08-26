@@ -2,7 +2,7 @@
 
 Adding a new direct-API provider should be a one-place change: add a
 `ProviderSpec` entry to `PROVIDERS` and the rest of the codebase
-(`pi_cli.check_auth`, `batch_backend.GCP_SECRET_REFS`,
+(`pi_cli.check_auth`, `dispatch.secret_refs.SecretRefSet`,
 `auth_check._infer_pi_provider`, `test_usage._PROVIDER_LABELS`,
 `settings.PI_VALID_PROVIDERS`, the `pricing.md` block, the
 `pi-models.default.json` block) picks the new entry up automatically or

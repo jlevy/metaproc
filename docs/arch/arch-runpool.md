@@ -6,7 +6,7 @@ status: Approved
 ---
 # RunPool Design
 
-**Date:** 2026-04-06 (last updated 2026-05-23) **Status:** Approved
+**Date:** 2026-04-06 (last updated 2026-08-23) **Status:** Approved
 
 > **Maintenance**: This is a maintained architecture doc.
 > Revise via `tbd shortcut revise-architecture-doc` (which prompts you to verify content
@@ -80,6 +80,36 @@ Metaproc orchestration owns:
 The interface should stay narrow: orchestration prepares `ProcessConfig` values, RunPool
 returns `ProcessResult` values, and operator commands read structured status and event
 streams.
+
+The local launch backend is also the lifecycle primitive for a scalar agent process.
+`run-process` uses `launch_and_supervise` rather than constructing another pool or
+subprocess supervisor.
+This helper does not provide adaptive concurrency, scheduling, or host admission; those
+remain with the run context and the existing RunPool and host-slot layers.
+It only preserves one launch ownership invariant: completion, cancellation, or timeout
+does not return until any late launch has been collected, its process group has exited
+(with `SIGKILL` escalation for stubborn descendants), and its log-filter thread has
+flushed.
+
+`PreparedLaunch.env` is either `None` (inherit the parent environment) or the complete
+child environment. The local backend never merges the parent back into an explicit
+mapping; doing so would undo credential scrubbing.
+Each local handle records the leader identity and a bounded set of live descendants.
+Cleanup also discovers members of the isolated group after leader exit, but accepts only
+members created during that launch.
+It rechecks exact process identities before every signal, preventing a delayed poll from
+signalling a recycled process group.
+
+Backend poll failures become terminal accounting events before the error reaches the
+submitter. Backend kill failures are logged without aborting the rest of shutdown, so
+RunPool continues killing siblings and closes its monitors and logs.
+Log-filter joins run off the orchestration event loop.
+RunPool owns each submission from enqueue through terminal cleanup.
+Forced shutdown cancels and drains work waiting on quota, pool capacity, host admission,
+or backend launch as well as already-running work; a queued submission cannot launch
+after the pool has closed.
+The drain is bounded, and terminal status, events, health state, and log closure still
+run if a backend cleanup task does not return in time.
 
 ## Current Telemetry
 

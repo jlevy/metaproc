@@ -196,6 +196,19 @@ class AuthLeaseAcquiredEvent(BaseModel):
     active_lease_count: dict[str, int] = Field(default_factory=dict)
 
 
+class AuthSkippedEvent(BaseModel):
+    """A configured credential pool was intentionally not applied to one step."""
+
+    event: Literal["auth_skipped"]
+    ts: datetime
+    schema_version: int = 1
+    pool_enabled: bool = False
+    step_id: str
+    step_adapter: str
+    configured_adapter: str
+    reason: str = "adapter_mismatch"
+
+
 RunPoolEvent = Annotated[
     PoolStartEvent
     | PoolShutdownEvent
@@ -209,7 +222,8 @@ RunPoolEvent = Annotated[
     | ResourceTelemetryErrorEvent
     | RetryScheduledEvent
     | AuthOutcomeEvent
-    | AuthLeaseAcquiredEvent,
+    | AuthLeaseAcquiredEvent
+    | AuthSkippedEvent,
     Field(discriminator="event"),
 ]
 """Discriminated union of all runpool event types."""

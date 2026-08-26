@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from metaproc.adapters.base import AuthFailureClassification
-from metaproc.commands.run_parallel import _expand_pool_exclude_by_quota_group, _teardown_pool_slot
+from metaproc.commands.run_parallel import _teardown_pool_slot
 from metaproc.dispatch import pool_dispatch as pd_mod
 from metaproc.dispatch.credential_pool import (
     EntryState,
@@ -40,7 +40,12 @@ from metaproc.dispatch.credential_pool import (
     Vehicle,
 )
 from metaproc.dispatch.credential_pool import FallbackPolicy as _FallbackPolicy
-from metaproc.dispatch.pool_dispatch import PoolDispatchConfig
+from metaproc.dispatch.pool_dispatch import (
+    PoolDispatchConfig,
+)
+from metaproc.dispatch.pool_dispatch import (
+    expand_pool_exclude_by_quota_group as _expand_pool_exclude_by_quota_group,
+)
 from metaproc.dispatch.slot_coordinator import SlotLease
 
 _ORG_A = "org-a-12345678-1234-1234-1234-aaaaaaaaaaaa"

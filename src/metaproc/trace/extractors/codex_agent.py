@@ -60,6 +60,7 @@ class CodexAgentExtractor:
     """V1 extractor for Codex CLI per-attempt JSONL logs."""
 
     source = "codex-agent"
+    scope_local = True
 
     def detect(self, run_dir: Path) -> bool:
         """Detect new codex stream-json (v0.130+) by schema sniff.

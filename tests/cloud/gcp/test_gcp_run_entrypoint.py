@@ -20,16 +20,27 @@ from metaproc.adapters.codex import CODEX_CREDS_ENV_VAR
 from metaproc.adapters.registry import ADAPTER_REGISTRY
 from metaproc.cloud.gcp import container_bootstrap, gcp_run_entrypoint
 from metaproc.cloud.gcp.batch_backend import GCPBatchConfig, create_single_task_job
+from metaproc.cloud.gcp.secret_hydration import SECRET_REFS_ENV
 
 # ── bootstrap_gcp_run ────────────────────────────────────────
 
 
 class TestBootstrapGcpRun:
-    def test_no_env_vars_is_noop(self, tmp_path: Path):
-        with patch.object(container_bootstrap, "_run") as run_mock:
+    def test_no_workspace_uses_baked_uv_environment(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("UV_PROJECT_ENVIRONMENT", raising=False)
+        monkeypatch.delenv("UV_NO_SYNC", raising=False)
+
+        with patch.dict(os.environ), patch.object(container_bootstrap, "_run") as run_mock:
             work_dir = container_bootstrap.bootstrap_gcp_run(home=tmp_path, env={})
+            assert os.environ["UV_PROJECT_ENVIRONMENT"] == "/opt/venv"
+            assert os.environ["UV_NO_SYNC"] == "1"
+
         run_mock.assert_not_called()
         assert work_dir == "/tmp"
+        assert "UV_PROJECT_ENVIRONMENT" not in os.environ
+        assert "UV_NO_SYNC" not in os.environ
 
     def test_wheel_install_downloads_and_uv_installs(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -139,6 +150,8 @@ class TestBootstrapGcpRun:
         monkeypatch.setattr(container_bootstrap, "GCP_RUN_WORKSPACE_DIR", str(workspace_dir))
         monkeypatch.setattr(container_bootstrap, "GCP_RUN_WORKSPACE_ARCHIVE_DIR", str(wheel_dir))
         monkeypatch.setattr(container_bootstrap, "GCP_RUN_WHEEL_DIR", str(wheel_dir))
+        monkeypatch.delenv("UV_PROJECT_ENVIRONMENT", raising=False)
+        monkeypatch.delenv("UV_NO_SYNC", raising=False)
 
         # Stub _download_from_gcs to copy the local tarball to the destination.
         def fake_download(uri: str, dst: str) -> None:
@@ -147,13 +160,16 @@ class TestBootstrapGcpRun:
 
         monkeypatch.setattr(container_bootstrap, "_download_from_gcs", fake_download)
 
-        work_dir = container_bootstrap.bootstrap_gcp_run(
-            home=tmp_path,
-            env={
-                "METAPROC_WORKSPACE_GCS": "gs://b/gcp-run/job/workspace.tar.gz",
-                "METAPROC_WORKSPACE_SHA256": hashlib.sha256(tar_src.read_bytes()).hexdigest(),
-            },
-        )
+        with patch.dict(os.environ):
+            work_dir = container_bootstrap.bootstrap_gcp_run(
+                home=tmp_path,
+                env={
+                    "METAPROC_WORKSPACE_GCS": "gs://b/gcp-run/job/workspace.tar.gz",
+                    "METAPROC_WORKSPACE_SHA256": hashlib.sha256(tar_src.read_bytes()).hexdigest(),
+                },
+            )
+            assert "UV_PROJECT_ENVIRONMENT" not in os.environ
+            assert "UV_NO_SYNC" not in os.environ
         assert work_dir == str(workspace_dir)
         assert (workspace_dir / "file.py").read_text() == "hello"
         # Downloaded tarball is staged outside the destination and removed.
@@ -254,6 +270,19 @@ class TestBootstrapGcpRun:
 
 
 class TestGcpRunEntrypoint:
+    def test_secret_hydration_failure_stops_before_bootstrap(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("METAPROC_GCP_RUN_CMD", json.dumps(["echo", "x"]))
+        with (
+            patch.object(
+                gcp_run_entrypoint,
+                "hydrate_secret_env",
+                side_effect=RuntimeError("denied"),
+            ),
+            patch.object(gcp_run_entrypoint, "bootstrap_gcp_run") as bootstrap,
+        ):
+            assert gcp_run_entrypoint.main() == 1
+        bootstrap.assert_not_called()
+
     def test_missing_cmd_returns_2(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv("METAPROC_GCP_RUN_CMD", raising=False)
         rc = gcp_run_entrypoint.main()
@@ -396,7 +425,7 @@ class TestCreateSingleTaskJob:
         job = create_single_task_job(
             config=cfg,
             env_vars={"FOO": "bar"},
-            secret_env_vars={},
+            secret_refs={},
             container_command=["-m", "metaproc.cloud.gcp.gcp_run_entrypoint"],
         )
         assert job.task_groups[0].task_count == 1
@@ -413,28 +442,29 @@ class TestCreateSingleTaskJob:
         assert dict(runnable.environment.variables) == {"FOO": "bar"}
         assert job.labels["metaproc-role"] == "gcp-run"
 
-    def test_secret_env_vars_attached(self):
+    def test_secret_refs_attached_without_batch_secret_variables(self):
         cfg = self._config()
         job = create_single_task_job(
             config=cfg,
             env_vars={"X": "y"},
-            secret_env_vars={
+            secret_refs={
                 "CLAUDE_CODE_CREDS_JSON": "projects/p/secrets/claude-creds/versions/latest",
             },
             container_command=["-c", "echo hi"],
         )
         runnable = job.task_groups[0].task_spec.runnables[0]
-        secrets = dict(runnable.environment.secret_variables)
+        secrets = json.loads(runnable.environment.variables[SECRET_REFS_ENV])
         assert (
             secrets["CLAUDE_CODE_CREDS_JSON"] == "projects/p/secrets/claude-creds/versions/latest"
         )
+        assert not runnable.environment.secret_variables
 
     def test_filestore_adds_mount_runnable(self):
         cfg = self._config(filestore_server="10.0.0.5")
         job = create_single_task_job(
             config=cfg,
             env_vars={},
-            secret_env_vars={},
+            secret_refs={},
             container_command=["-V"],
         )
         # Two runnables: mount script + container.
@@ -449,7 +479,7 @@ class TestCreateSingleTaskJob:
         job = create_single_task_job(
             config=cfg,
             env_vars={},
-            secret_env_vars={},
+            secret_refs={},
             container_command=["-V"],
         )
         instance = job.allocation_policy.instances[0].policy
@@ -460,7 +490,7 @@ class TestCreateSingleTaskJob:
         job = create_single_task_job(
             config=cfg,
             env_vars={},
-            secret_env_vars={},
+            secret_refs={},
             container_command=["-V"],
             spot=False,
         )
@@ -472,7 +502,7 @@ class TestCreateSingleTaskJob:
         job = create_single_task_job(
             config=cfg,
             env_vars={},
-            secret_env_vars={},
+            secret_refs={},
             container_command=["-V"],
             job_labels={"metaproc-run-id": "run-x", "extra": "v"},
         )

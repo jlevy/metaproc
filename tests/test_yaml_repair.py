@@ -7,6 +7,7 @@ import inspect
 from pathlib import Path
 from types import ModuleType
 
+import pytest
 from typer.testing import CliRunner
 
 from metaproc.cli import app
@@ -130,7 +131,7 @@ class TestRepairFrontmatterFile:
 
         Verify by reading the source: an old version of repair_frontmatter_file
         used PyYAML's yaml.safe_load for both the pre-check and the post-repair
-        verification. The post-2026-05-21 fix uses _ruamel_safe_load. Without
+        verification. The corrected path uses _ruamel_safe_load. Without
         this harmonization, the operator sees \"Repaired YAML\" log lines
         followed by invalid_outputs failures (the document passed PyYAML but
         fails the validator).
@@ -145,7 +146,7 @@ class TestRepairFrontmatterFile:
         # The bare PyYAML self-check is gone — both call sites must use ruamel.
         assert "yaml.safe_load" not in src, (
             "PyYAML's yaml.safe_load should not appear in repair_frontmatter_file — "
-            "parser mismatch with downstream validator caused 2026-05-21 incident."
+            "parser mismatch with the downstream validator must not recur."
         )
 
 
@@ -241,7 +242,7 @@ class TestWhichExecutorsRewriteAgentOutput:
     """
 
     def test_a_code_handlers_unparsable_output_is_left_alone_and_fails(
-        self, tmp_path: Path
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The rule as an operator meets it: the item fails, the document is untouched.
 
@@ -249,6 +250,7 @@ class TestWhichExecutorsRewriteAgentOutput:
         Re-adding either pass to the code branch flips both halves at once — the run
         goes green and the file comes back quoted.
         """
+        monkeypatch.setenv("METAPROC_PREFLIGHT_MIN_DISK_GB", "0.1")
         source_path = tmp_path / "items.md"
         source_path.write_text(
             "---\nprogress:\n  process: code-branch\n  items:\n    - ticker: AAPL\n---\n"

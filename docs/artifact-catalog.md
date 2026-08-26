@@ -28,7 +28,7 @@ not hand-edit them. Atomic writes via `strif.atomic_output_file`.
 
 | Filename | Path | Schema (Pydantic) | Lifecycle | Writer | Primary readers |
 | --- | --- | --- | --- | --- | --- |
-| `run-config.yaml` | `<run>/.state/` | ad-hoc outer dict with typed `ResourceRunSnapshot` resources block | atomic, once at creation | `commands/run_process.py:_write_run_config` | engine resume validation, terminal resource finalizer, metabrowser, `metaproc status` |
+| `run-config.yaml` | `<run>/.state/` | ad-hoc outer dict with typed `ResourceRunSnapshot` resources block | atomic, once at creation; immutable process, run-directory, and resolved-variable identity validated on resume | `commands/run_process.py:_write_run_config` | engine resume validation, terminal resource finalizer, metabrowser, `metaproc status` |
 | `resource-usage-summary.v1.schema.yaml` | `<run>/.state/schemas/` | compiled SoftSchema JSON Schema | atomic, terminal/recovery refresh | `engine/resource_summary.py` | SoftSchema validators, operator audit |
 | `process-status.yaml` | `<run>/.state/` | ad-hoc dict (typed envelope pending) | atomic, rewritten each DAG tick | `commands/run_process.py:_write_process_status` | human, `metaproc status`, metabrowser |
 | `orchestrator-lease.yaml` | `<run>/.state/` | ad-hoc dict | heartbeat-updated every 30s | `io/orchestrator_lease.py:acquire_lease` | engine lease check |

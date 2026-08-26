@@ -393,6 +393,27 @@ class EventLogger:
         event.update(payload)
         self._write(event)
 
+    def auth_skipped(
+        self,
+        *,
+        step_id: str,
+        step_adapter: str,
+        configured_adapter: str,
+        reason: str = "adapter_mismatch",
+    ) -> None:
+        """Record that a configured credential pool was not applied to a step."""
+        self._write(
+            {
+                "event": "auth_skipped",
+                "schema_version": 1,
+                "pool_enabled": False,
+                "step_id": step_id,
+                "step_adapter": step_adapter,
+                "configured_adapter": configured_adapter,
+                "reason": reason,
+            }
+        )
+
     def __enter__(self) -> Self:
         self.open()
         return self

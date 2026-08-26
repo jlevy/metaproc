@@ -135,19 +135,17 @@ def test_subgraph_key_stamped_on_every_event(tmp_path: Path) -> None:
     """Composite-process loggers should pin their subgraph context once at construction."""
     target = tmp_path / "process-events.jsonl"
     with ProcessEventLogger(
-        target, subgraph_key="mine-adhoc", process_node_id="process:mine-adhoc"
+        target, subgraph_key="extract-items", process_node_id="process:extract-items"
     ) as logger:
-        logger.process_start("postprocess-adhoc-kb", "run-1", "local", 1)
-        logger.step_start(
-            "postprocess-adhoc-kb", "code", step_node_id="mine-adhoc::postprocess-adhoc-kb"
-        )
-        logger.item_start("postprocess-adhoc-kb", "AAPL")
+        logger.process_start("normalize-items", "run-1", "local", 1)
+        logger.step_start("normalize-items", "code", step_node_id="extract-items::normalize-items")
+        logger.item_start("normalize-items", "item-1")
 
     lines = [json.loads(line) for line in target.read_text().splitlines()]
     for payload in lines:
-        assert payload["subgraph_key"] == "mine-adhoc"
-        assert payload["process_node_id"] == "process:mine-adhoc"
-    assert lines[1]["step_node_id"] == "mine-adhoc::postprocess-adhoc-kb"
+        assert payload["subgraph_key"] == "extract-items"
+        assert payload["process_node_id"] == "process:extract-items"
+    assert lines[1]["step_node_id"] == "extract-items::normalize-items"
 
 
 # ── Typed read helper ──────────────────────────────────────────────

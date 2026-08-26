@@ -8,7 +8,6 @@ read the Mac Keychain on a Linux CI runner.
 The never-print-payload invariant is enforced in every test path by a
 ``_assert_no_blob`` helper that greps captured stdout.
 
-Plan: plan-2026-04-21-auth-credential-pool.md P1.4 + P1.5.
 """
 
 from __future__ import annotations
@@ -625,8 +624,8 @@ class TestAuthProbe:
         assert fake_pool.entries[("claude-code-cli", "alt")].state.status == "active"
 
     def test_probe_expired_on_oauth_refresh_400(self, runner, fake_pool, monkeypatch):
-        # The actual alt2 fixture pattern from the Tuesday incident:
-        # OAuth refresh returns 400, then API returns 401.
+        # An expired OAuth credential can fail refresh first and then return
+        # an authentication error from the API.
         self._seed(fake_pool, status="active")
         debug_log = (
             "2026-04-27T18:08:18Z [DEBUG] [API:auth] OAuth token check starting\n"

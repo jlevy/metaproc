@@ -15,6 +15,7 @@ from pydantic import TypeAdapter
 from metaproc.runpool.event_models import (
     AuthLeaseAcquiredEvent,
     AuthOutcomeEvent,
+    AuthSkippedEvent,
     ResourceTelemetryErrorEvent,
     RetryScheduledEvent,
     RunPoolEvent,
@@ -95,6 +96,24 @@ class TestAuthLeaseAcquiredEvent:
         assert isinstance(ev, AuthLeaseAcquiredEvent)
         assert ev.policy == ""
         assert ev.active_lease_count == {}
+
+
+class TestAuthSkippedEvent:
+    def test_adapter_mismatch_payload(self):
+        raw = {
+            "event": "auth_skipped",
+            "ts": "2026-08-24T17:00:00+00:00",
+            "schema_version": 1,
+            "pool_enabled": False,
+            "step_id": "mine",
+            "step_adapter": "pi-cli",
+            "configured_adapter": "claude-code-cli",
+            "reason": "adapter_mismatch",
+        }
+        ev = _adapter.validate_python(raw)
+        assert isinstance(ev, AuthSkippedEvent)
+        assert ev.pool_enabled is False
+        assert ev.step_adapter == "pi-cli"
 
 
 class TestRetryScheduledEvent:

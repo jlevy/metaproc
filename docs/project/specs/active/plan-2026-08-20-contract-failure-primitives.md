@@ -55,7 +55,7 @@ Two declared outputs of one real process, each missing for the same transient re
 agent killed before it wrote its file:
 
 ```text
-output validation failed: company-research-schema-manifest.md: file not found   -> FAIL
+output validation failed: schema-manifest.md: file not found                    -> FAIL
 output validation failed: source-snapshot.md: file not found                    -> RETRY
 ```
 

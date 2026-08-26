@@ -685,10 +685,14 @@ def build_plan(
 
     resolved_steps: list[ResolvedStep] = []
     for step in spec.steps:
-        if step.mode == "composite" and step.for_each is not None:
+        if (
+            step.mode == "composite"
+            and step.for_each is not None
+            and step.for_each.retry is not None
+        ):
             raise ValueError(
-                f"step '{step.id}': composite mode does not support for_each; "
-                "push for_each into the child spec's agent steps instead"
+                f"step '{step.id}': mapped composite does not support for_each.retry; "
+                "declare retries on child leaves and resume the failed item scope"
             )
 
         step_profile_override = step_profile_overrides.get(step.id)
@@ -859,7 +863,9 @@ def build_plan(
                 batch_size=step.for_each.batch_size,
                 items=items,
                 filtered_count=filtered_count,
-                retry=step.for_each.retry or spec.defaults.retry,
+                retry=(
+                    None if step.mode == "composite" else step.for_each.retry or spec.defaults.retry
+                ),
                 align=step.for_each.align,
                 max_concurrency=step.for_each.max_concurrency,
             )

@@ -217,6 +217,7 @@ def test_extract_pressure_check_is_internal_span(run_dir: Path):
     spans = list(MetaprocEngineExtractor().extract(run_dir, trace_id="run-x"))
     internal = [s for s in spans if s.kind == "internal"]
     assert len(internal) == 1
+    assert internal[0].status == "ok"
     assert internal[0].attributes["internal.kind"] == "pressure_check"
     assert internal[0].attributes["internal.available_pct"] == 44.0
 

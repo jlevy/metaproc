@@ -316,7 +316,7 @@ def validate_item_outputs_detailed(
 
     Directory-kind outputs must be non-empty — an empty directory indicates
     the step produced zero records and is treated as a silent-success failure
-    (the classic ``mine-adhoc`` mode where an agent reports SUCCESS but wrote
+    (the classic ``extract-items`` mode where an agent reports SUCCESS but wrote
     nothing under the item directory). ``.state/``, ``.logs/``, ``__pycache__``,
     and ``.DS_Store`` are ignored when counting content.
 
@@ -511,14 +511,12 @@ def _artifact_failures(
 
     failures: list[OutputFailure] = []
     for kind, entry in entries:
-        detail = entry.get("kind") or entry.get("type") or "validation_error"
+        detail = entry.get("code") or entry.get("kind") or entry.get("type") or "validation_error"
         message = entry.get("message") or entry.get("msg") or str(entry)
-        # Structural errors report the refusing JSON Schema keyword; semantic
-        # errors are pydantic's, where the error type is the closest thing to
-        # a named invariant.
-        invariant = entry.get("validator") or (
-            entry.get("type") if kind is OutputFailureKind.semantic else None
-        )
+        # Softschema structural codes are stable across JSON Schema engines;
+        # semantic errors are pydantic's, where the error type is the closest
+        # thing to a named invariant.
+        invariant = entry.get("code") if kind is OutputFailureKind.structural else entry.get("type")
         failures.append(
             OutputFailure(
                 output=output_name,
@@ -556,11 +554,16 @@ def _error_location(entry: Mapping[str, object]) -> str | None:
     if loc is None:
         loc = entry.get("loc")
     if loc is None:
-        return None
-    if isinstance(loc, (list, tuple)):
-        return ".".join(str(part) for part in loc) or None
-    text = str(loc)
-    return text or None
+        parts: list[str] = []
+    elif isinstance(loc, (list, tuple)):
+        parts = [str(part) for part in loc]
+    else:
+        text = str(loc)
+        parts = [text] if text else []
+    property_name = entry.get("property")
+    if property_name is not None:
+        parts.append(str(property_name))
+    return ".".join(parts) or None
 
 
 def _check_envelope_schema_match(

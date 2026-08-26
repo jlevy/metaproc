@@ -46,11 +46,13 @@ import json
 import logging
 import os
 import sys
+from collections.abc import MutableMapping
 from pathlib import Path
 from typing import Any
 
 from metaproc.adapters.registry import ADAPTER_REGISTRY
 from metaproc.cloud.gcp.container_bootstrap import _run, bootstrap_container
+from metaproc.cloud.gcp.secret_hydration import hydrate_secret_env
 from metaproc.commands.helpers import seed_runtime_vars
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.dispatch.auth_pool_flags import AuthPoolFlags
@@ -59,7 +61,11 @@ from metaproc.osutils.resource_context import log_resource_context
 log = logging.getLogger(__name__)
 
 
-def arm_legacy_bootstrap_guard(auth_flags: AuthPoolFlags) -> None:
+def arm_legacy_bootstrap_guard(
+    auth_flags: AuthPoolFlags,
+    *,
+    env: MutableMapping[str, str] | None = None,
+) -> None:
     """Set ``METAPROC_AUTH_POOL_RUN=1`` before per-adapter ``bootstrap(home)``.
 
     When auth-pool dispatch is enabled, each adapter's existing
@@ -72,7 +78,8 @@ def arm_legacy_bootstrap_guard(auth_flags: AuthPoolFlags) -> None:
     single-credential bootstrap path stays intact.
     """
     if auth_flags.is_pool_dispatch_enabled():
-        os.environ[MetaprocEnv.METAPROC_AUTH_POOL_RUN.name] = "1"
+        target_env = os.environ if env is None else env
+        target_env[MetaprocEnv.METAPROC_AUTH_POOL_RUN.name] = "1"
 
 
 def main() -> int:
@@ -81,6 +88,14 @@ def main() -> int:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+    try:
+        hydrated = hydrate_secret_env()
+    except RuntimeError as exc:
+        log.error("Secret hydration failed: %s", exc)
+        return 1
+    if hydrated:
+        log.info("Hydrated secret environment variables: %s", ", ".join(hydrated))
 
     # Dump the full resource envelope (host, cgroup, rlimits, runtime, env)
     # before any work. When a worker OOM-kills mid-run, this is the first
@@ -230,13 +245,9 @@ def build_runparallel_cmd(
             # If we let f-string do Python repr on a list, the receiver sees
             # "['Read', 'Write', ...]" and the comma-split coercion ends up
             # with "['Read'", "'Write'", ... — each name wrapped in stray
-            # quote and bracket chars. The CLI then ships those as
-            # `--tools "['Read','Write',...]"`, which claude can't match
-            # against its tool registry, and on Vehicle A in the agent image
-            # falls back to the subagent-only [Monitor, PushNotification,
-            # RemoteTrigger] surface — i.e. no Bash, no arena, hallucinated
-            # predictions. Coerce list/bool here so the round-trip is clean.
-            # See plan-2026-05-01 § Phase 3.5.
+            # quote and bracket chars. The receiving CLI can no longer match
+            # the requested tools and may fall back to an unintended tool
+            # surface. Coerce list/bool here so the round-trip is clean.
             if isinstance(val, list):
                 serialized: str = ",".join(str(t) for t in val)
             elif isinstance(val, bool):

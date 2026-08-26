@@ -20,6 +20,7 @@ from metaproc.cloud.gcp.gcp_run_dispatch import (
     build_gcp_run_job,
     dispatch_gcp_run,
 )
+from metaproc.cloud.gcp.secret_hydration import SECRET_REFS_ENV
 from metaproc.commands import gcp_run as cmd_gcp_run
 
 
@@ -182,6 +183,14 @@ class TestBuildGcpRunJob:
         with pytest.raises(ValueError, match="dispatcher-owned keys"):
             build_gcp_run_job(["echo", "x"], opts)
 
+    def test_extra_env_rejects_registered_plaintext_credentials(self):
+        opts = DispatchGcpRunOptions(
+            config=_config(),
+            extra_env={"GH_TOKEN": "plaintext"},
+        )
+        with pytest.raises(ValueError, match="cannot carry registered credentials"):
+            build_gcp_run_job(["echo", "x"], opts)
+
     def test_extra_env_cannot_override_workspace_packages(self):
         opts = DispatchGcpRunOptions(
             config=_config(),
@@ -191,7 +200,7 @@ class TestBuildGcpRunJob:
             build_gcp_run_job(["echo", "x"], opts)
 
     def test_secrets_resolved_from_env_registry(self, monkeypatch: pytest.MonkeyPatch):
-        # Set the registry-side var so resolve_gcp_secret_ref picks it up.
+        # Set the registry-side var so SecretRefSet resolves it.
         monkeypatch.setenv(
             "METAPROC_GCP_SECRET_CLAUDE_CREDS",
             "projects/p/secrets/claude/versions/latest",
@@ -200,9 +209,11 @@ class TestBuildGcpRunJob:
         cfg = _config()
         opts = DispatchGcpRunOptions(config=cfg)
         _, job = build_gcp_run_job(["echo", "x"], opts)
-        secrets = dict(job.task_groups[0].task_spec.runnables[0].environment.secret_variables)
+        environment = job.task_groups[0].task_spec.runnables[0].environment
+        secrets = json.loads(environment.variables[SECRET_REFS_ENV])
         assert secrets["CLAUDE_CODE_CREDS_JSON"] == "projects/p/secrets/claude/versions/latest"
         assert "GH_TOKEN" not in secrets
+        assert not environment.secret_variables
 
     def test_extra_secrets_override_registry(self, monkeypatch: pytest.MonkeyPatch):
         # Empty registry, caller provides a secret directly.
@@ -216,8 +227,10 @@ class TestBuildGcpRunJob:
             extra_secrets={"MY_SECRET": "projects/p/secrets/foo/versions/1"},
         )
         _, job = build_gcp_run_job(["echo", "x"], opts)
-        secrets = dict(job.task_groups[0].task_spec.runnables[0].environment.secret_variables)
+        environment = job.task_groups[0].task_spec.runnables[0].environment
+        secrets = json.loads(environment.variables[SECRET_REFS_ENV])
         assert secrets["MY_SECRET"] == "projects/p/secrets/foo/versions/1"
+        assert not environment.secret_variables
 
     def test_filestore_volume_present_when_configured(self):
         cfg = _config(filestore_server="10.0.0.5")

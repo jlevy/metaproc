@@ -7,6 +7,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from metaproc.engine.pathing import resolve_item_key
 from metaproc.engine.validation import validate_item_outputs
 from metaproc.io.frontmatter import extract_items_from_envelope, load_frontmatter_typed
 from metaproc.io.state_io import compute_item_dir
@@ -92,15 +93,16 @@ def discover_items_from_source(
         raise TypeError(msg) from exc
 
     for_each = step_def.for_each
-    item_key = for_each.bind.strip() if for_each else ""
-    if not item_key:
+    if for_each is None or not for_each.bind.strip():
         msg = f"{source_path}: fan-out discovery requires step.for_each.bind"
         raise ValueError(msg)
+    item_key = for_each.bind.strip()
 
     item_fields = normalize_item_fields(step_def)
     terminal_statuses = get_terminal_statuses()
     actionable_contexts: list[dict[str, str]] = []
     filtered_items: list[dict[str, str]] = []
+    item_key_rows: dict[str, int] = {}
 
     for index, item in enumerate(items, 1):
         item_label = str(item.get(item_key, f"item#{index}"))
@@ -116,10 +118,18 @@ def discover_items_from_source(
             )
             for f in item_fields
         }
+        item_vars = dict(params or {})
+        item_vars.update(context)
+        resolved_item_key = resolve_item_key(for_each, item_vars, step_def.id)
+        prior_index = item_key_rows.get(resolved_item_key)
+        if prior_index is not None:
+            raise ValueError(
+                f"{source_path}: duplicate for_each.key {resolved_item_key!r} "
+                f"for items {prior_index} and {index}"
+            )
+        item_key_rows[resolved_item_key] = index
 
         if run_dir is not None:
-            item_vars = dict(params or {})
-            item_vars.update(context)
             from metaproc.engine.pathing import (  # noqa: PLC0415 -- pre-existing local import; needs review
                 compute_task_state_dir,
             )
