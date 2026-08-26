@@ -1,4 +1,4 @@
-"""``metaproc gcp run`` — dispatch one command to one GCP Batch task.
+"""Stage exact source artifacts or dispatch one command to one GCP Batch task.
 
 This is a lower-level execution primitive for probes, diagnostics, publishers, and
 applications that already own their outer orchestration. Framework-owned process DAGs
@@ -7,9 +7,10 @@ should use ``metaproc run-process ... --backend gcp-worker --cloud`` instead.
 See ``docs/arch/arch-metaproc-core.md``
 for the full design. This module owns:
 
-- argv parsing for the ``gcp run`` Typer subcommand,
+- argv parsing for the ``gcp stage`` and ``gcp run`` Typer subcommands,
 - artifact build/upload (wheel + workspace tarball) gated by ``--no-wheel`` /
   ``--no-workspace``,
+- machine-readable artifact references for a later full-cloud process dispatch,
 - ``GCPBatchConfig`` assembly from CLI flags + env vars,
 - dispatch via :func:`gcp_run_dispatch.dispatch_gcp_run` (or dry-run rendering).
 
@@ -28,7 +29,7 @@ from pathlib import Path
 import typer
 from google.protobuf.json_format import MessageToDict
 
-from metaproc.cloud.gcp.batch_backend import GCPBatchConfig
+from metaproc.cloud.gcp.batch_backend import GCPBatchConfig, sanitize_label
 from metaproc.cloud.gcp.dispatch_artifacts import (
     DEFAULT_DISPATCH_BUCKET,
     DEFAULT_GCS_PREFIX,
@@ -50,6 +51,7 @@ from metaproc.cloud.gcp.gcp_run_dispatch import (
 )
 from metaproc.cloud.gcp.gcp_run_logs import build_log_url, tail_gcp_run_logs
 from metaproc.config.env_vars import MetaprocEnv
+from metaproc.dispatch.repo_sync_payload import RepoSyncPayload
 from metaproc.dispatch.secret_refs import SecretRefSet
 from metaproc.io.digests import file_sha256
 
@@ -149,6 +151,13 @@ def _validate_workspace_package_sources(
                 f"--sync-only does not ship workspace package {package_path!r}",
                 param_hint="--sync-only",
             )
+
+
+def _validate_artifact_set_id(value: str) -> str:
+    """Require the immutable artifact prefix to also be a valid Batch job ID."""
+    if len(value) > 63 or not value[0].isalpha() or sanitize_label(value) != value:
+        raise typer.BadParameter("Use a lowercase GCP-safe ID", param_hint="--job-name")
+    return value
 
 
 def _build_config(
@@ -251,6 +260,101 @@ def _ship_artifacts(
         )
 
     return wheel_uri, wheel_sha256, workspace_uri, workspace_sha256
+
+
+def stage_command(
+    no_wheel: bool = typer.Option(
+        False, "--no-wheel", help="Skip the Metaproc wheel; stage only the workspace."
+    ),
+    no_workspace: bool = typer.Option(
+        False, "--no-workspace", help="Skip the workspace; stage only the Metaproc wheel."
+    ),
+    sync: list[str] = typer.Option(  # noqa: B008
+        None,
+        "--sync",
+        help="Additional repo-relative path to include, including an explicitly named ignored path.",
+    ),
+    sync_only: list[str] = typer.Option(  # noqa: B008
+        None,
+        "--sync-only",
+        help="Ship only these repo-relative workspace paths instead of the default set.",
+    ),
+    workspace_package: list[str] = typer.Option(  # noqa: B008
+        None,
+        "--workspace-package",
+        help="Repo-relative Python package to install from the staged workspace.",
+    ),
+    job_name: str = typer.Option(
+        "", "--job-name", help="Stable artifact-set identity (default: generated)."
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Print the repo-sync environment shape without building or uploading artifacts.",
+    ),
+    bucket: str = typer.Option(
+        DEFAULT_DISPATCH_BUCKET,
+        "--dispatch-bucket",
+        envvar="METAPROC_GCS_BUCKET",
+        help="GCS bucket for the wheel and workspace artifacts.",
+    ),
+) -> None:
+    """Stage exact source artifacts for a later full-cloud process dispatch."""
+    if no_wheel and no_workspace:
+        raise typer.BadParameter("At least one of the wheel or workspace must be staged")
+    if sync and sync_only:
+        raise typer.BadParameter("--sync and --sync-only are mutually exclusive")
+    if no_workspace and (sync or sync_only or workspace_package):
+        raise typer.BadParameter("Workspace staging is required", param_hint="--no-workspace")
+
+    try:
+        workspace_packages = _normalize_workspace_package_paths(tuple(workspace_package or ()))
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--workspace-package") from exc
+    if workspace_packages:
+        _validate_workspace_package_sources(
+            find_repo_root(),
+            workspace_packages,
+            list(sync_only) if sync_only else None,
+        )
+
+    dispatch_id = _validate_artifact_set_id(job_name or _generate_job_id())
+    if dry_run:
+        wheel_uri = "" if no_wheel else "gs://<dry-run>/wheel.whl"
+        wheel_sha256 = "" if no_wheel else "0" * 64
+        workspace_uri = "" if no_workspace else f"gs://<dry-run>/{WORKSPACE_TARBALL_NAME}"
+        workspace_sha256 = "" if no_workspace else "0" * 64
+    else:
+        project = MetaprocEnv.METAPROC_GCP_PROJECT.read_str(default="").strip()
+        if not project:
+            raise typer.BadParameter(
+                "Set METAPROC_GCP_PROJECT before staging artifacts",
+                param_hint="METAPROC_GCP_PROJECT",
+            )
+        if not bucket:
+            raise typer.BadParameter(
+                "--dispatch-bucket or METAPROC_GCS_BUCKET is required",
+                param_hint="--dispatch-bucket",
+            )
+        wheel_uri, wheel_sha256, workspace_uri, workspace_sha256 = _ship_artifacts(
+            no_wheel=no_wheel,
+            no_workspace=no_workspace,
+            sync=list(sync) if sync else None,
+            sync_only=list(sync_only) if sync_only else None,
+            job_id=dispatch_id,
+            bucket=bucket,
+            project=project,
+            prefix=DEFAULT_GCS_PREFIX,
+        )
+
+    env = RepoSyncPayload(
+        wheel_gcs=wheel_uri,
+        wheel_sha256=wheel_sha256,
+        workspace_gcs=workspace_uri,
+        workspace_sha256=workspace_sha256,
+        workspace_packages=",".join(workspace_packages),
+    ).to_env_vars()
+    typer.echo(json.dumps({"dispatch_id": dispatch_id, "env": env}, indent=2, sort_keys=True))
 
 
 def run_command(
@@ -401,7 +505,7 @@ def run_command(
     # under the right gs://…/<job_id>/ prefix. Use the override if set or
     # the same generator the dispatcher uses, then pass it through as
     # options.job_name so dispatch doesn't generate a different one.
-    job_id = job_name or _generate_job_id()
+    job_id = _validate_artifact_set_id(job_name or _generate_job_id())
 
     # Skip artifact build/upload for --dry-run — the spec just needs
     # placeholder URIs so the env-var shape is visible. Running `uv build`

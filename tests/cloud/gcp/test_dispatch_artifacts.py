@@ -447,6 +447,7 @@ class TestUploadToGcs:
         assert blob.chunk_size == GCS_UPLOAD_CHUNK_SIZE
         blob.upload_from_filename.assert_called_once_with(
             str(local),
+            if_generation_match=0,
             timeout=GCS_UPLOAD_TIMEOUT_SECONDS,
             retry=GCS_UPLOAD_RETRY,
         )

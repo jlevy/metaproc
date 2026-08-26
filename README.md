@@ -160,7 +160,7 @@ monitoring questions to commands.
 | Artifacts | `softschema`, `structure-report`, `check-headers`, `compact-logs`, `gzip-text` | Schema inspection and validation, frontmatter checks, log compaction |
 | Credentials | `auth-check`, `auth push/list/probe/status/enable/disable/rotate/prune` | Operator preflight and labeled credential-pool lifecycle |
 | Pools | `pool status/events/concurrency-timeline/rollup` | RunPool snapshots, event logs, concurrency history, rollups |
-| Cloud | `gcp run/status/scale/logs/cancel/runs/resources/filestore/cleanup` | GCP Batch dispatch, monitoring, and lifecycle (optional extras) |
+| Cloud | `gcp stage/run/status/scale/logs/cancel/runs/resources/filestore/cleanup` | Exact source staging, GCP Batch dispatch, monitoring, and lifecycle (optional extras) |
 | Self-docs | `help`, `skill`, `env --template` | Bundled manuals, Agent Skill generation, environment template |
 
 For an application process, the supported cloud entry point is currently

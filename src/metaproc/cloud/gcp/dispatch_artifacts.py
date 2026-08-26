@@ -1,4 +1,4 @@
-"""Wheel + workspace artifact helpers for ``metaproc gcp run`` dispatch.
+"""Wheel + workspace helpers shared by cloud staging and dispatch.
 
 Two responsibilities:
 
@@ -8,12 +8,11 @@ Two responsibilities:
    (``package_workspace``) and upload it to GCS
    (``upload_workspace_to_gcs``).
 
-Both artifact types ship to ``gs://<bucket>/<prefix>/...`` so a Batch task
+Both artifact types are created immutably under ``gs://<bucket>/<prefix>/...`` so a Batch task
 container can fetch the current-branch metaproc + workspace without
 requiring an agent-image rebuild or a cross-VPC git clone.
 
-The wheel build path is shared by local artifact packaging and the
-``gcp run`` dispatcher.
+The build and upload path is shared by ``gcp stage`` and the ``gcp run`` dispatcher.
 """
 
 from __future__ import annotations
@@ -26,7 +25,11 @@ import tempfile
 from pathlib import Path
 
 from google.cloud import storage
-from google.cloud.storage.retry import DEFAULT_RETRY
+from google.cloud.storage.retry import (
+    DEFAULT_RETRY,
+    ConditionalRetryPolicy,
+    is_generation_specified,
+)
 
 from metaproc.io.digests import file_sha256
 
@@ -46,7 +49,11 @@ WORKSPACE_TARBALL_NAME: str = "workspace.tar.gz"
 # artifact size a per-request latency requirement.
 GCS_UPLOAD_CHUNK_SIZE = 16 * 1024 * 1024
 GCS_UPLOAD_TIMEOUT_SECONDS = 120
-GCS_UPLOAD_RETRY = DEFAULT_RETRY.with_deadline(10 * 60)
+GCS_UPLOAD_RETRY = ConditionalRetryPolicy(
+    DEFAULT_RETRY.with_deadline(10 * 60),
+    is_generation_specified,
+    ["query_params"],
+)
 
 
 def find_metaproc_source_dir(start: Path | None = None) -> Path:
@@ -255,7 +262,7 @@ def package_workspace(
 
 
 def upload_to_gcs(local_path: Path, gs_uri: str, *, project: str) -> str:
-    """Upload a local file to a ``gs://`` URI under the explicit GCP project."""
+    """Create one immutable GCS object under the explicit GCP project."""
     if not gs_uri.startswith("gs://"):
         raise ValueError(f"Expected gs:// URI, got {gs_uri!r}")
     bucket_name, _, blob_path = gs_uri[len("gs://") :].partition("/")
@@ -268,8 +275,10 @@ def upload_to_gcs(local_path: Path, gs_uri: str, *, project: str) -> str:
     blob.metadata = {"metaproc-sha256": file_sha256(local_path)}
     blob.upload_from_filename(
         str(local_path),
+        if_generation_match=0,
         timeout=GCS_UPLOAD_TIMEOUT_SECONDS,
-        retry=GCS_UPLOAD_RETRY,
+        # The storage client accepts this policy even though its annotation names Retry.
+        retry=GCS_UPLOAD_RETRY,  # pyright: ignore[reportArgumentType]
     )
     log.info("Uploaded %s -> %s", local_path, gs_uri)
     return gs_uri

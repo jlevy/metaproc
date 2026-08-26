@@ -698,6 +698,7 @@ path.
 | `gcp logs` | Stream logs from Cloud Logging |
 | `gcp cancel` | Cancel running/queued Batch jobs |
 | `gcp runs` | List all active metaproc runs |
+| `gcp stage` | Upload an immutable wheel/workspace set without submitting a job |
 | `gcp run` | Run one lower-level command in a single Batch task |
 | `gcp resources` | Show GCP resource usage |
 | `gcp filestore` | Manage Filestore NFS |
@@ -721,9 +722,18 @@ path.
 | `cloud/gcp/gcp_run_logs.py` | Blocking log tail and exit-code propagation |
 | `cloud/gcp/billing.py` | Approximate billable hours from machine type and worker runtime spans |
 
-### 3.15 `metaproc gcp run`: Arbitrary Command Dispatch
+### 3.15 `metaproc gcp stage` and `gcp run`
 
-This is the lower-level primitive for running **one arbitrary command in one Batch
+`gcp stage` builds the same wheel and workspace archive as `gcp run`, creates each GCS
+object only if its exact name does not exist, submits no Batch job, and prints the
+digest-pinned `RepoSyncPayload` environment values as JSON. It is the source-preparation
+primitive for a later `run-process --cloud` call when an image or pushed branch does not
+contain the exact candidate bytes.
+It does not create a run, interpret a process, or introduce another orchestration path.
+Artifact-set identities use GCP-safe job IDs and cannot be reused to overwrite existing
+objects.
+
+`gcp run` is the lower-level primitive for running **one arbitrary command in one Batch
 task** with the dispatcher’s current Metaproc and repository state.
 Appropriate uses include probes, diagnostics, terminal publication, and an application
 that already owns its outer orchestration.
@@ -782,7 +792,7 @@ Changes to those entrypoints, secret hydration, or pre-wheel bootstrap require a
 candidate image rebuild.
 
 See
-[Dispatch an Arbitrary Command](../runbooks/cloud-dispatch.runbook.md#5-dispatch-an-arbitrary-command)
+[Dispatch an Arbitrary Command](../runbooks/cloud-dispatch.runbook.md#6-dispatch-an-arbitrary-command)
 for operator recipes and this document for the full design.
 
 ## 4. AWS Implementation

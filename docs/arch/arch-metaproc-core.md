@@ -129,7 +129,7 @@ stats
 write-usage
 resource-report
 pool status / pool events
-gcp run / gcp status / gcp scale / gcp logs / gcp cancel / gcp runs / gcp resources / gcp filestore / gcp cleanup
+gcp stage / gcp run / gcp status / gcp scale / gcp logs / gcp cancel / gcp runs / gcp resources / gcp filestore / gcp cleanup
 tail (log viewer)
 compare / compare-matrix
 
@@ -1032,6 +1032,8 @@ Implemented CLI surface:
 - `gcp cancel <target>` -- cancel running/queued Batch jobs (auto-detect: local run dir
   or run-id)
 - `gcp runs` -- list all active metaproc runs across the project
+- `gcp stage` -- upload one immutable, digest-pinned wheel/workspace set without
+  submitting a Batch job
 - `gcp run` -- run one lower-level command in a single Batch task
 - `gcp resources` -- show metaproc-related GCP assets via Cloud Asset Inventory
 - `gcp filestore` -- inspect Filestore instance status and utilization
