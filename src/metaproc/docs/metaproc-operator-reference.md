@@ -209,6 +209,8 @@ It is not a memory estimate or a replacement for executable-leaf and host admiss
 Retries belong to child leaves; a whole-scope `for_each.retry` is rejected.
 Mapped composites currently run on one host; selecting `gcp-worker` is rejected before
 any active DAG step or cloud dispatch begins.
+To place a mapped process on one GCP Batch VM, use one `gcp run` task whose command is
+`run-process --backend local`; do not chain `gcp run` calls per step or item.
 
 ## Starting Runs
 
@@ -444,12 +446,17 @@ OAuth check because it would override the scoped Codex credential.
 ## Local, Cloud, and Worker Execution
 
 Local runs use the default local backend.
-Cloud fan-out uses `--backend gcp-worker --cloud` or the workflow’s cloud-oriented
-wrapper options. The bare `gcp-worker` backend is reserved for the inner Batch
-orchestrator leg. Use command help for the current flag set:
+For compatible multi-VM fan-out, use `--backend gcp-worker --cloud` or the workflow’s
+cloud-oriented wrapper options.
+The bare `gcp-worker` backend is reserved for the inner Batch orchestrator leg.
+A complete local-backend DAG may instead run as the one command in a `gcp run` Batch
+task. That form keeps one host and is the current cloud placement for mapped composites;
+the nested `run-process` remains the only DAG orchestrator.
+Use command help for the current flag set:
 
 ```bash
 uv run metaproc run-process --help
+uv run metaproc gcp run --help
 uv run metaproc gcp status --help
 uv run metaproc gcp logs --help
 uv run metaproc gcp scale --help

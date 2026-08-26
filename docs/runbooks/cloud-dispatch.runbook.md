@@ -64,31 +64,7 @@ bootstrap fails closed when a URI lacks its digest or the bytes do not match.
 Branch checkout is useful during development but is mutable and must point at a pushed
 commit containing every required file.
 
-## 3. Stage an Exact Development Checkout
-
-Use `gcp stage` when a full-cloud process must run source that is not already baked into
-the image or available from one pushed commit.
-It reuses the same wheel and workspace packagers as `gcp run`, uploads no Batch job, and
-prints one JSON object containing the dispatch identity and the exact repo-sync
-environment pairs:
-
-```bash
-uv --config-file uv.toml run --frozen metaproc gcp stage \
-  --job-name <immutable-source-id> \
-  --sync path/to/explicit-ignored-input.yaml \
-  --workspace-package packages/my-consumer
-```
-
-Set the emitted `env` values for the later `run-process --cloud` invocation.
-The artifact identity must be a lowercase GCP-safe job ID and must be new: uploads are
-create-only, so reusing an identity fails instead of replacing bytes referenced by an
-existing run. Use `--sync` only for an explicitly reviewed ignored or otherwise omitted
-path; ordinary tracked and untracked-nonignored workspace files ship by default.
-Use `--dry-run` to inspect the environment shape without building or uploading.
-Staging prepares source bytes only—it does not create a run, submit a task, or become a
-second orchestration path.
-
-## 4. Render Before Submitting
+## 3. Render Before Submitting
 
 The committed cloud-plan self-test renders a single-task Batch job and exits without a
 network submission or spend:
@@ -105,13 +81,11 @@ uv --config-file uv.toml run --frozen metaproc run-process \
 Inspect the rendered job for the intended project, region, image, service account,
 machine type, secret references, and mounts before removing any `--dry-run` gate.
 
-## 5. Dispatch a Process
+## 4. Dispatch a Multi-VM Process
 
-Use `run-process` for an application workflow.
-It is the orchestration API: the process graph, leases, claims, retries, resume state,
-and worker fan-out remain framework-owned.
-The current supported cloud topology places both the orchestrator and its run-wide
-worker pool in GCP.
+Use direct cloud dispatch when the process supports multi-VM `gcp-worker` fan-out.
+`run-process` remains the orchestration API: the process graph, leases, claims, retries,
+resume state, and worker fan-out remain framework-owned.
 
 ```bash
 uv run metaproc run-process path/to/workflow.process.md \
@@ -141,12 +115,15 @@ Before reclaiming it, the downstream consumer must publish the accepted terminal
 tree to its registered durable object-store contract and verify that publication under
 its own policy.
 
-## 6. Dispatch an Arbitrary Command
+## 5. Dispatch One Task or a Single-Host Process
 
 `metaproc gcp run` is the lower-level single-task Batch primitive.
-Use it when no process graph is needed: for a probe, diagnostic, publication task, or an
-application such as a legacy coordinator that already owns its outer orchestration.
-Do not chain `gcp run` calls to recreate process scheduling; use `run-process` for that.
+Use it for a probe, diagnostic, publication task, or one complete local-backend process
+that must stay on one host.
+Mapped composites require this single-host placement because the `gcp-worker` backend
+does not yet support them.
+Do not chain multiple `gcp run` calls to recreate process scheduling; the one nested
+`run-process` command owns the DAG.
 
 The command sends one command to one Batch task.
 By default it builds and ships the current Metaproc wheel and repository workspace.
@@ -162,6 +139,14 @@ metaproc gcp run -- python -m my_consumer.batch_task --shard shard-a
 metaproc gcp run \
   --workspace-package packages/my-consumer \
   -- uv run --frozen --project packages/my-consumer my-consumer-task
+
+# Place one complete DAG on one Batch VM with the local backend.
+metaproc gcp run \
+  --machine-type <machine-type> \
+  --workspace-package packages/my-consumer \
+  -- metaproc run-process workflows/example.process.md \
+    --backend local \
+    --var RUN_ID=<new-run-id>
 
 # Submit without waiting.
 metaproc gcp run --detach -- python -m my_consumer.batch_task --shard shard-b
@@ -208,7 +193,7 @@ environment variable’s presence.
 Inspect both task and agent logs and confirm the canary value does not appear before
 dispatching a real provider credential.
 
-## 7. Monitor Through Metaproc
+## 6. Monitor Through Metaproc
 
 Use the framework commands rather than hand-parsing run directories or calling raw
 cloud-provider listing/logging commands:
@@ -230,7 +215,7 @@ require an explicit, locally visible run-directory path.
 They do not resolve a cloud run ID through a persistent VM or remote mount.
 Use `metaproc gcp status` and `gcp logs` for Batch-native monitoring.
 
-## 8. Recovery
+## 7. Recovery
 
 1. Read `metaproc gcp status` and `metaproc gcp logs`. If the run tree is already
    available in the current environment, inspect it with `metaproc status <path>`.

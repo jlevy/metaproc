@@ -129,7 +129,7 @@ stats
 write-usage
 resource-report
 pool status / pool events
-gcp stage / gcp run / gcp status / gcp scale / gcp logs / gcp cancel / gcp runs / gcp resources / gcp filestore / gcp cleanup
+gcp run / gcp status / gcp scale / gcp logs / gcp cancel / gcp runs / gcp resources / gcp filestore / gcp cleanup
 tail (log viewer)
 compare / compare-matrix
 
@@ -368,6 +368,9 @@ between child stages.
 leaves. Child leaf retry policies remain available, while a whole-scope `for_each.retry`
 is rejected. Mapped composites are single-host and reject the `gcp-worker` backend until
 a multi-host mapping contract exists.
+To place such a process on GCP today, submit one Batch task with `gcp run` and make that
+task’s single command `run-process --backend local`. The nested `run-process` remains
+the only DAG orchestrator and retains the root execution context on that VM.
 
 ### `mode: agent`
 
@@ -1032,9 +1035,7 @@ Implemented CLI surface:
 - `gcp cancel <target>` -- cancel running/queued Batch jobs (auto-detect: local run dir
   or run-id)
 - `gcp runs` -- list all active metaproc runs across the project
-- `gcp stage` -- upload one immutable, digest-pinned wheel/workspace set without
-  submitting a Batch job
-- `gcp run` -- run one lower-level command in a single Batch task
+- `gcp run` -- run one command or local-backend DAG in a single Batch task
 - `gcp resources` -- show metaproc-related GCP assets via Cloud Asset Inventory
 - `gcp filestore` -- inspect Filestore instance status and utilization
 - `gcp cleanup` -- delete old terminal-state Batch jobs
@@ -2639,6 +2640,12 @@ Fan-out steps dispatch through one of two backends:
 | `local` | `--backend local` (default) | `RunPool` subprocess pool via `run-parallel` |
 | `gcp-worker` | `--backend gcp-worker --cloud` | Submit the orchestrator, which partitions items across N worker VMs via GCP Batch (section 21) |
 
+A local-backend process may itself be the one command submitted through `gcp run`. In
+that single-host cloud placement, `gcp run` owns one Batch task and source bootstrap;
+the nested `run-process` owns the DAG and the root execution context.
+This is the supported cloud placement for mapped composites until they gain a multi-host
+mapping contract.
+
 Local agent fan-out uses RunPool (section 17) with step-scoped `.state/` and `.logs/`
 directories. One run execution context owns the optional semaphore shared by fan-out
 pools, scalar agent launches, and code work across composite scopes.
@@ -3173,6 +3180,13 @@ the original future-work backlog.
 * * *
 
 ## Revision History
+
+### rev2p (2026-08-26)
+
+- Documented the existing single-host cloud placement: one `gcp run` Batch task whose
+  command is a complete local-backend process.
+- Distinguished that placement from multi-VM `gcp-worker` fan-out and recorded it as the
+  supported cloud path for mapped composites.
 
 ### rev2o (2026-08-25)
 

@@ -13,7 +13,6 @@ import typer
 from click import unstyle
 from typer.testing import CliRunner
 
-from metaproc.cli import app as metaproc_app
 from metaproc.cloud.gcp import gcp_run_dispatch
 from metaproc.cloud.gcp.batch_backend import GCPBatchConfig
 from metaproc.cloud.gcp.gcp_run_dispatch import (
@@ -68,6 +67,31 @@ class TestBuildGcpRunJob:
         opts = DispatchGcpRunOptions(config=cfg)
         with pytest.raises(ValueError, match="cmd argv must be non-empty"):
             build_gcp_run_job([], opts)
+
+    def test_single_host_process_dag_remains_one_batch_task(self) -> None:
+        """A local-backend DAG is one command, not a second cloud scheduler."""
+        cfg = _config(machine_type="n2-highmem-8")
+        opts = DispatchGcpRunOptions(config=cfg)
+        argv = [
+            "metaproc",
+            "run-process",
+            "workflows/example.process.md",
+            "--backend",
+            "local",
+            "--var",
+            "RUN_ID=example-run",
+        ]
+
+        _, job = build_gcp_run_job(argv, opts)
+
+        assert len(job.task_groups) == 1
+        task_group = job.task_groups[0]
+        assert task_group.task_count == 1
+        assert task_group.parallelism == 1
+        runnable = task_group.task_spec.runnables[0]
+        env = dict(runnable.environment.variables)
+        assert env["METAPROC_GCP_RUN_CMD"] == json.dumps(argv)
+        assert job.allocation_policy.instances[0].policy.machine_type == "n2-highmem-8"
 
     def test_secret_job_requires_explicit_service_account(
         self, monkeypatch: pytest.MonkeyPatch
@@ -762,129 +786,3 @@ class TestGcpRunCli:
             result = runner.invoke(app, ["--no-filestore", "echo", "hi"])
 
         assert result.exit_code == 130, result.output
-
-
-class TestGcpStageCli:
-    def test_stage_is_registered_on_the_public_cli(self) -> None:
-        result = CliRunner().invoke(metaproc_app, ["gcp", "stage", "--help"])
-
-        assert result.exit_code == 0, result.output
-        assert "Stage exact source artifacts" in result.output
-
-    def test_stage_emits_digest_pinned_repo_sync_environment(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("METAPROC_GCP_PROJECT", "p")
-        monkeypatch.setenv("METAPROC_GCS_BUCKET", "dispatch-bucket")
-        package_dir = tmp_path / "packages" / "example"
-        package_dir.mkdir(parents=True)
-        (package_dir / "pyproject.toml").write_text("[project]\nname = 'example'\n")
-        ignored_input = tmp_path / "launch" / "input.yaml"
-        ignored_input.parent.mkdir()
-        ignored_input.write_text("value: exact\n")
-
-        app = typer.Typer()
-        app.command("stage")(cmd_gcp_run.stage_command)
-        with (
-            patch.object(cmd_gcp_run, "find_repo_root", return_value=tmp_path),
-            patch.object(
-                cmd_gcp_run,
-                "_ship_artifacts",
-                return_value=("gs://b/w.whl", "1" * 64, "gs://b/workspace.tgz", "2" * 64),
-            ) as ship_artifacts,
-        ):
-            result = CliRunner().invoke(
-                app,
-                [
-                    "--job-name",
-                    "exact-source-1",
-                    "--sync",
-                    "launch/input.yaml",
-                    "--workspace-package",
-                    "packages/example",
-                ],
-            )
-
-        assert result.exit_code == 0, result.output
-        payload = json.loads(result.output)
-        assert payload == {
-            "dispatch_id": "exact-source-1",
-            "env": {
-                "METAPROC_WHEEL_GCS": "gs://b/w.whl",
-                "METAPROC_WHEEL_SHA256": "1" * 64,
-                "METAPROC_WORKSPACE_GCS": "gs://b/workspace.tgz",
-                "METAPROC_WORKSPACE_PACKAGES": "packages/example",
-                "METAPROC_WORKSPACE_SHA256": "2" * 64,
-            },
-        }
-        ship_artifacts.assert_called_once_with(
-            no_wheel=False,
-            no_workspace=False,
-            sync=["launch/input.yaml"],
-            sync_only=None,
-            job_id="exact-source-1",
-            bucket="dispatch-bucket",
-            project="p",
-            prefix="gcp-run",
-        )
-
-    def test_stage_dry_run_does_not_build_or_upload(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("METAPROC_GCP_PROJECT", raising=False)
-        monkeypatch.delenv("METAPROC_GCS_BUCKET", raising=False)
-        app = typer.Typer()
-        app.command("stage")(cmd_gcp_run.stage_command)
-
-        with patch.object(cmd_gcp_run, "_ship_artifacts") as ship_artifacts:
-            result = CliRunner().invoke(app, ["--dry-run", "--job-name", "preview-1"])
-
-        assert result.exit_code == 0, result.output
-        payload = json.loads(result.output)
-        assert payload["dispatch_id"] == "preview-1"
-        assert payload["env"]["METAPROC_WHEEL_SHA256"] == "0" * 64
-        assert payload["env"]["METAPROC_WORKSPACE_SHA256"] == "0" * 64
-        ship_artifacts.assert_not_called()
-
-    def test_stage_rejects_workspace_options_when_workspace_is_disabled(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("METAPROC_GCP_PROJECT", "p")
-        monkeypatch.setenv("METAPROC_GCS_BUCKET", "dispatch-bucket")
-        app = typer.Typer()
-        app.command("stage")(cmd_gcp_run.stage_command)
-
-        with patch.object(cmd_gcp_run, "_ship_artifacts") as ship_artifacts:
-            result = CliRunner().invoke(
-                app,
-                ["--no-workspace", "--sync", "launch/input.yaml"],
-            )
-
-        assert result.exit_code != 0
-        assert "Workspace staging is required" in unstyle(result.output)
-        ship_artifacts.assert_not_called()
-
-    def test_stage_propagates_artifact_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("METAPROC_GCP_PROJECT", "p")
-        monkeypatch.setenv("METAPROC_GCS_BUCKET", "dispatch-bucket")
-        app = typer.Typer()
-        app.command("stage")(cmd_gcp_run.stage_command)
-
-        with patch.object(
-            cmd_gcp_run, "_ship_artifacts", side_effect=RuntimeError("upload failed")
-        ):
-            result = CliRunner().invoke(app, ["--job-name", "exact-source-1"])
-
-        assert result.exit_code == 1
-        assert isinstance(result.exception, RuntimeError)
-        assert str(result.exception) == "upload failed"
-
-    @pytest.mark.parametrize("artifact_id", ["../reuse", "Reuse", "9starts-with-digit"])
-    def test_stage_rejects_path_like_or_non_gcp_artifact_identity(self, artifact_id: str) -> None:
-        app = typer.Typer()
-        app.command("stage")(cmd_gcp_run.stage_command)
-
-        with patch.object(cmd_gcp_run, "_ship_artifacts") as ship_artifacts:
-            result = CliRunner().invoke(app, ["--dry-run", "--job-name", artifact_id])
-
-        assert result.exit_code != 0
-        assert "lowercase GCP-safe ID" in unstyle(result.output)
-        ship_artifacts.assert_not_called()

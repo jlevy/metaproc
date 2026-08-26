@@ -1,4 +1,4 @@
-"""Wheel + workspace helpers shared by cloud staging and dispatch.
+"""Wheel + workspace artifact helpers for ``metaproc gcp run`` dispatch.
 
 Two responsibilities:
 
@@ -8,11 +8,12 @@ Two responsibilities:
    (``package_workspace``) and upload it to GCS
    (``upload_workspace_to_gcs``).
 
-Both artifact types are created immutably under ``gs://<bucket>/<prefix>/...`` so a Batch task
-container can fetch the current-branch metaproc + workspace without
-requiring an agent-image rebuild or a cross-VPC git clone.
+Both artifact types are created immutably under ``gs://<bucket>/<prefix>/...`` so a
+Batch task container can fetch the current-branch metaproc + workspace without requiring
+an agent-image rebuild or a cross-VPC git clone.
 
-The build and upload path is shared by ``gcp stage`` and the ``gcp run`` dispatcher.
+The wheel build path is shared by local artifact packaging and the ``gcp run``
+dispatcher.
 """
 
 from __future__ import annotations

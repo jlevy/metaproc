@@ -9,10 +9,6 @@ development series.
 
 ### Added
 
-- **Exact cloud source staging without dispatch**: `metaproc gcp stage` reuses the
-  existing wheel and workspace packagers, uploads no Batch job, and emits the
-  digest-pinned environment values consumed by a later full-cloud process run.
-
 - **Mapped composite scopes**: a `mode: composite` step may now declare `for_each` and
   run one child process scope per item in-process under `<run>/<step>/<item-key>/`. All
   scopes share the parent run execution context and executable-leaf ceiling; each parent
@@ -30,6 +26,11 @@ development series.
   starts.
 
 ### Fixed
+
+- **GCP dispatch artifacts are immutable**: `metaproc gcp run` validates its artifact
+  identity before packaging and creates wheel and workspace objects only when their GCS
+  names are unused, so a later dispatch cannot replace bytes referenced by an existing
+  job.
 
 - **Gemini prompt transport ignores workspace ignore rules**: the Gemini CLI adapter
   keeps its durable audit prompt while streaming those bytes through stdin, so an

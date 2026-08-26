@@ -79,8 +79,7 @@ gcp_app = typer.Typer(
 )
 app.add_typer(gcp_app)
 
-# Register source staging and one-shot dispatch (defined in gcp_run.py to keep this file
-# from growing).
+# Register one-shot dispatch (defined in gcp_run.py to keep this file from growing).
 # Imported after gcp_app is created because gcp_run.py registers via the
 # returned function rather than via decorator.
 # Guarded by try/except so `metaproc.commands.gcp` remains importable in
@@ -89,10 +88,8 @@ app.add_typer(gcp_app)
 # friendly error via _require_gcp_batch() at invocation time.
 try:
     from metaproc.commands.gcp_run import run_command as _gcp_run_command  # noqa: E402
-    from metaproc.commands.gcp_run import stage_command as _gcp_stage_command  # noqa: E402
 
     gcp_app.command("run")(_gcp_run_command)
-    gcp_app.command("stage")(_gcp_stage_command)
 except ImportError as exc:
     # Only swallow the specific "optional extra missing" case. A broken
     # top-level import inside gcp_run.py (typo, renamed symbol) would
