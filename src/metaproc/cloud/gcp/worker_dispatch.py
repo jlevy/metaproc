@@ -634,7 +634,14 @@ async def _submit_workers(
         if pi_models:
             env_vars["METAPROC_PI_MODELS_JSON"] = pi_models
 
-        env_vars.update(get_bootstrap_env_vars())
+        bootstrap_env = get_bootstrap_env_vars()
+        plaintext_conflicts = SecretRefSet.all_known().plaintext_conflicts(bootstrap_env)
+        if plaintext_conflicts:
+            raise CLIError(
+                "Plugin bootstrap env cannot carry registered credentials; bind Secret "
+                f"Manager references instead: {plaintext_conflicts}"
+            )
+        env_vars.update(bootstrap_env)
 
         # Build Batch job.
         attach_secret_refs(env_vars, secret_refs)

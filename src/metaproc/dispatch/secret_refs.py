@@ -78,6 +78,11 @@ class SecretRefSet:
 
     refs: tuple[SecretRef, ...]
 
+    def plaintext_conflicts(self, env: Mapping[str, str]) -> list[str]:
+        """Return registered credential targets carrying plaintext in ``env``."""
+        targets = {ref.plaintext_env for ref in self.refs}
+        return sorted(target for target in targets if env.get(target))
+
     @classmethod
     def all_known(cls) -> SecretRefSet:
         """Construct the canonical full set: static refs + provider refs.

@@ -89,7 +89,7 @@ def main() -> int:
         log.error("Secret hydration failed: %s", exc)
         return 1
     if hydrated:
-        log.info("Hydrated %d secret environment variables", len(hydrated))
+        log.info("Hydrated secret environment variables: %s", ", ".join(hydrated))
 
     # Dump the full resource envelope (host, cgroup, rlimits, runtime, env)
     # before any work. When a worker OOM-kills mid-run, this is the first

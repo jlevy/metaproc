@@ -254,7 +254,14 @@ async def dispatch_orchestrator(
     if pi_models:
         env_vars["METAPROC_PI_MODELS_JSON"] = pi_models
 
-    env_vars.update(get_bootstrap_env_vars())
+    bootstrap_env = get_bootstrap_env_vars()
+    plaintext_conflicts = SecretRefSet.all_known().plaintext_conflicts(bootstrap_env)
+    if plaintext_conflicts:
+        raise ValueError(
+            "Plugin bootstrap env cannot carry registered credentials; bind Secret "
+            f"Manager references instead: {plaintext_conflicts}"
+        )
+    env_vars.update(bootstrap_env)
 
     # Diagnostic-only opt-in: METAPROC_SKIP_PREFLIGHT_PROBE=1 lets a cloud
     # debug dispatch skip the auth pool's pre-fan-out probe so process-item
@@ -267,12 +274,12 @@ async def dispatch_orchestrator(
     if skip_probe:
         env_vars["METAPROC_SKIP_PREFLIGHT_PROBE"] = skip_probe
 
-    # Build Batch job.
-    # Use entrypoint (not commands) to override the Dockerfile's ENTRYPOINT
-    # which defaults to worker_entrypoint.
     attach_secret_refs(env_vars, secret_refs)
     env_kwargs: dict[str, object] = {"variables": env_vars}
 
+    # Build Batch job.
+    # Use entrypoint (not commands) to override the Dockerfile's ENTRYPOINT
+    # which defaults to worker_entrypoint.
     runnables = build_batch_runnables(
         config.gcp,
         container_kwargs={

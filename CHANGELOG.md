@@ -9,6 +9,13 @@ development series.
 
 ### Fixed
 
+- **GCP credentials hydrate inside the container**: Batch job specifications now carry
+  Secret Manager references rather than plaintext-expanded `secret_variables`, require
+  an explicit runtime service account, reject registered credentials passed through
+  `--env` or plugin bootstrap variables, and retry transient startup failures.
+  Roll out the hydration-capable agent image before its dispatcher; a stale image cannot
+  interpret the reference-only contract.
+
 - **GCP artifact upload honors the selected project**: `gcp run` now passes its required
   `METAPROC_GCP_PROJECT` through wheel and workspace uploads, so service-account ADC
   without an embedded project ID can dispatch normally.

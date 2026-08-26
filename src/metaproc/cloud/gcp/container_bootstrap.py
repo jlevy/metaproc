@@ -53,6 +53,14 @@ FALLBACK_WORK_DIR = "/tmp/metaproc/repo"
 GCP_RUN_WORKSPACE_DIR = "/workspace"
 GCP_RUN_WORKSPACE_ARCHIVE_DIR = "/tmp/metaproc-workspace"
 GCP_RUN_WHEEL_DIR = "/tmp/metaproc-wheel"
+BAKED_VENV_DIR = "/opt/venv"
+"""Agent-image environment containing Metaproc and its audited dependency closure."""
+
+
+def _pin_uv_to_baked_env() -> None:
+    """Keep nested uv commands on the complete environment baked into the image."""
+    os.environ.setdefault("UV_PROJECT_ENVIRONMENT", BAKED_VENV_DIR)
+    os.environ.setdefault("UV_NO_SYNC", "1")
 
 
 @dataclass
@@ -97,11 +105,9 @@ def bootstrap_container() -> BootstrapResult:
     workspace_packages = _parse_relative_paths(repo_sync.workspace_packages)
     bundled_repo_dir = repo_sync.bundled_repo_dir
 
-    # Point uv at the baked venv; otherwise `uv run` ignores VIRTUAL_ENV, re-resolves
-    # against the workspace pyproject.toml, and fails because `metaproc/` is not on
-    # disk after a sparse clone.
-    os.environ.setdefault("UV_PROJECT_ENVIRONMENT", "/opt/venv")
-    os.environ.setdefault("UV_NO_SYNC", "1")
+    # A sparse or bundled workspace may omit Metaproc source, so project resolution
+    # cannot replace the complete environment supplied by the agent image.
+    _pin_uv_to_baked_env()
 
     if wheel_gcs:
         _install_wheel_from_gcs(wheel_gcs, wheel_sha256)
@@ -463,11 +469,6 @@ def bootstrap_gcp_run(*, home: Path, env: Mapping[str, str]) -> str:
     if wheel_gcs:
         _install_wheel_from_gcs(wheel_gcs, wheel_sha256)
 
-    if not workspace_gcs:
-        os.environ.setdefault("UV_PROJECT_ENVIRONMENT", "/opt/venv")
-        os.environ.setdefault("UV_NO_SYNC", "1")
-
-    work_dir = "/tmp"
     if workspace_gcs:
         work_dir = _extract_workspace_from_gcs(workspace_gcs, workspace_sha256)
         if workspace_packages:
@@ -475,8 +476,12 @@ def bootstrap_gcp_run(*, home: Path, env: Mapping[str, str]) -> str:
             # Keep nested `uv run` calls on the image environment containing
             # the just-installed packages instead of re-resolving the shipped
             # repository and looking for paths absent from a partial archive.
-            os.environ.setdefault("UV_PROJECT_ENVIRONMENT", "/opt/venv")
-            os.environ.setdefault("UV_NO_SYNC", "1")
+            _pin_uv_to_baked_env()
+    else:
+        work_dir = "/tmp"
+        # No project was shipped, so the baked environment is the only complete
+        # resolution source available to nested `uv run` commands.
+        _pin_uv_to_baked_env()
 
     return work_dir
 

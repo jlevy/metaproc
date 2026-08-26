@@ -151,6 +151,12 @@ def build_gcp_run_job(
     reserved_conflicts = sorted(set(options.extra_env) & RESERVED_ENV_KEYS)
     if reserved_conflicts:
         raise ValueError(f"extra_env cannot override dispatcher-owned keys: {reserved_conflicts}")
+    plaintext_conflicts = SecretRefSet.all_known().plaintext_conflicts(options.extra_env)
+    if plaintext_conflicts:
+        raise ValueError(
+            "extra_env cannot carry registered credentials; bind Secret Manager "
+            f"references instead: {plaintext_conflicts}"
+        )
 
     if bool(options.wheel_gcs_uri) != bool(options.wheel_sha256):
         raise ValueError("wheel_gcs_uri and wheel_sha256 must be provided together")

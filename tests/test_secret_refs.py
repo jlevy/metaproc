@@ -38,6 +38,12 @@ class TestSecretRefSet:
         assert "CLAUDE_CODE_CREDS_JSON" in plaintext_envs
         assert "CODEX_CREDS_JSON" in plaintext_envs
 
+    def test_plaintext_conflicts_returns_only_registered_nonempty_targets(self) -> None:
+        conflicts = SecretRefSet.all_known().plaintext_conflicts(
+            {"GH_TOKEN": "plaintext", "CODEX_CREDS_JSON": "", "VISIBLE": "value"}
+        )
+        assert conflicts == ["GH_TOKEN"]
+
     def test_resolve_env_refs_only_includes_resolved(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Set just GH_TOKEN's SM ref; the others stay unset and are
         # omitted from the resulting mapping.

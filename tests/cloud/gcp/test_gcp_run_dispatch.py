@@ -183,6 +183,14 @@ class TestBuildGcpRunJob:
         with pytest.raises(ValueError, match="dispatcher-owned keys"):
             build_gcp_run_job(["echo", "x"], opts)
 
+    def test_extra_env_rejects_registered_plaintext_credentials(self):
+        opts = DispatchGcpRunOptions(
+            config=_config(),
+            extra_env={"GH_TOKEN": "plaintext"},
+        )
+        with pytest.raises(ValueError, match="cannot carry registered credentials"):
+            build_gcp_run_job(["echo", "x"], opts)
+
     def test_extra_env_cannot_override_workspace_packages(self):
         opts = DispatchGcpRunOptions(
             config=_config(),

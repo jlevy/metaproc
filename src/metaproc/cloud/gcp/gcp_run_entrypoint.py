@@ -70,7 +70,7 @@ def main() -> int:
         log.error("Secret hydration failed: %s", exc)
         return 1
     if hydrated:
-        log.info("Hydrated %d secret environment variables", len(hydrated))
+        log.info("Hydrated secret environment variables: %s", ", ".join(hydrated))
 
     cmd_json = MetaprocEnv.METAPROC_GCP_RUN_CMD.read_str(default="")
     if not cmd_json:

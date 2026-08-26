@@ -165,6 +165,15 @@ Useful controls:
   their expanded values.
 - `--timeout <seconds>` sets the task deadline.
 
+Container-side hydration requires the agent image to install `metaproc[gcp-batch]` so
+the Secret Manager client is available before bootstrap.
+When releasing a hydration-contract change, build and canary the new agent image before
+deploying the dispatcher that emits the new contract.
+A new image can still accept an older dispatcher payload; an old image cannot interpret
+the new reference-only payload.
+If `GH_TOKEN` is empty and every Claude task reports that it is not logged in after a
+dispatcher rollout, verify that the selected image includes container-side hydration.
+
 Do not pass credentials through `--env`. Use Secret Manager references.
 For a new identity or secret, first run a harmless canary that tests only for the target
 environment variable’s presence.

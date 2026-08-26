@@ -154,7 +154,7 @@ def main() -> int:
         log.error("Secret hydration failed: %s", exc)
         return 1
     if hydrated:
-        log.info("Hydrated %d secret environment variables", len(hydrated))
+        log.info("Hydrated secret environment variables: %s", ", ".join(hydrated))
 
     # Dump host + cgroup + rlimits + runtime + env at startup. See
     # metaproc/osutils/resource_context.py for what's collected and why.

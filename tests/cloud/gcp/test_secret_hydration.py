@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -49,7 +50,7 @@ def test_attach_secret_refs_refuses_plaintext_target_in_batch_env() -> None:
 
 
 def test_attach_secret_refs_refuses_self_target() -> None:
-    with pytest.raises(RuntimeError, match="cannot target its own"):
+    with pytest.raises(ValueError, match="cannot target its own"):
         secret_hydration.attach_secret_refs(
             {},
             {secret_hydration.SECRET_REFS_ENV: ("projects/p/secrets/contract/versions/1")},
@@ -103,9 +104,14 @@ def test_hydrate_secret_env_leaves_env_unchanged_when_fetch_fails(monkeypatch) -
     ]
     monkeypatch.setattr(secret_hydration, "_new_secret_manager_client", lambda: client)
 
-    with pytest.raises(RuntimeError, match="failed to hydrate secret env var 'SECOND_TOKEN'"):
+    with pytest.raises(
+        RuntimeError,
+        match="failed to hydrate secret env var 'SECOND_TOKEN'",
+    ) as exc:
         secret_hydration.hydrate_secret_env(env)
 
+    assert "RuntimeError" in str(exc.value)
+    assert "denied" not in str(exc.value)
     assert env == before
     client.close.assert_called_once_with()
 
@@ -126,7 +132,72 @@ def test_hydrate_secret_env_reports_client_initialization_without_provider_detai
 
     with pytest.raises(RuntimeError, match="failed to initialize Secret Manager client") as exc:
         secret_hydration.hydrate_secret_env(env)
+    assert "RuntimeError" in str(exc.value)
     assert "credential body" not in str(exc.value)
+
+
+def test_hydrate_secret_env_reports_missing_gcp_extra(monkeypatch) -> None:
+    env = {
+        secret_hydration.SECRET_REFS_ENV: json.dumps(
+            {"API_TOKEN": "projects/p/secrets/api/versions/1"}
+        )
+    }
+    monkeypatch.setattr(
+        secret_hydration,
+        "_new_secret_manager_client",
+        MagicMock(side_effect=ImportError("provider import body")),
+    )
+
+    with pytest.raises(RuntimeError, match=r"metaproc\[gcp-batch\].*agent image") as exc:
+        secret_hydration.hydrate_secret_env(env)
+    assert "ImportError" in str(exc.value)
+    assert "provider import body" not in str(exc.value)
+
+
+def test_hydrate_secret_env_retries_transient_client_and_fetch_failures(monkeypatch) -> None:
+    env = {
+        secret_hydration.SECRET_REFS_ENV: json.dumps(
+            {"API_TOKEN": "projects/p/secrets/api/versions/1"}
+        )
+    }
+    client = MagicMock()
+    client.access_secret_version.side_effect = [
+        RuntimeError("deadline exceeded"),
+        SimpleNamespace(payload=SimpleNamespace(data=b"value")),
+    ]
+    factory = MagicMock(side_effect=[RuntimeError("metadata transport unavailable"), client])
+    sleep = MagicMock()
+    monkeypatch.setattr(secret_hydration, "_new_secret_manager_client", factory)
+    monkeypatch.setattr("metaproc.cloud.gcp.secret_hydration.time.sleep", sleep)
+
+    assert secret_hydration.hydrate_secret_env(env) == ("API_TOKEN",)
+    assert env["API_TOKEN"] == "value"
+    assert factory.call_count == 2
+    assert client.access_secret_version.call_count == 2
+    assert sleep.call_count == 2
+
+
+def test_hydrate_secret_env_records_close_failure_without_masking_success(
+    monkeypatch,
+    caplog,
+) -> None:
+    env = {
+        secret_hydration.SECRET_REFS_ENV: json.dumps(
+            {"API_TOKEN": "projects/p/secrets/api/versions/1"}
+        )
+    }
+    client = MagicMock()
+    client.access_secret_version.return_value = SimpleNamespace(
+        payload=SimpleNamespace(data=b"value")
+    )
+    client.close.side_effect = RuntimeError("close body")
+    monkeypatch.setattr(secret_hydration, "_new_secret_manager_client", lambda: client)
+
+    with caplog.at_level(logging.DEBUG, logger=secret_hydration.__name__):
+        assert secret_hydration.hydrate_secret_env(env) == ("API_TOKEN",)
+
+    assert "Secret Manager client close failed (RuntimeError)" in caplog.text
+    assert "close body" not in caplog.text
 
 
 def test_hydrate_secret_env_skips_client_for_empty_mapping(monkeypatch) -> None:

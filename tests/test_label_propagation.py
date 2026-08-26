@@ -31,7 +31,7 @@ from metaproc.dispatch.secret_refs import SecretRefSet
 # ── Secret reference registry ────────────────────────────────────
 
 
-class TestBuildSecretEnvVars:
+class TestSecretRefResolution:
     def test_empty_when_no_secret_vars_set(self, monkeypatch):
         monkeypatch.delenv("METAPROC_GCP_SECRET_GH_TOKEN", raising=False)
         monkeypatch.delenv("METAPROC_GCP_SECRET_CLAUDE_CREDS", raising=False)
