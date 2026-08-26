@@ -221,7 +221,7 @@ Mechanical. Every step is `git mv` plus a link sweep, verified by
 
 - [ ] Create `docs/project/design/` and `docs/project/arch/`.
 - [ ] `git mv docs/arch/arch-metaproc-core.md docs/project/design/metaproc-design.md`
-  (97 references across 52 files; the largest sweep in this plan).
+  (101 references across 53 files; the largest sweep in this plan).
 - [ ]
   `git mv docs/metaproc-design-rev3-proposals.md docs/project/design/metaproc-design-proposals.md`
   and drop “rev3” from its title and prose, since a specifically-numbered next revision
