@@ -6,6 +6,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from softschema import Contract, SchemaStatus, compile_model, validate_artifact
 
 from metaproc.commands.run_process import _write_run_config
@@ -87,6 +88,50 @@ def _snapshot() -> ResourceRunSnapshot:
                 }
             )
         ],
+        mapped_composite_step_ids=[],
+    )
+
+
+def _mapped_snapshot() -> ResourceRunSnapshot:
+    return ResourceRunSnapshot(
+        hierarchy=ResourceTopologyNode(
+            node_type="run",
+            node_id="example/run-1",
+            label="example/run-1",
+            children=[
+                ResourceTopologyNode(
+                    node_type="process",
+                    node_id="process:root",
+                    label="root",
+                    parent_id="example/run-1",
+                    children=[
+                        ResourceTopologyNode(
+                            node_type="step",
+                            node_id="map-items",
+                            label="map-items",
+                            parent_id="process:root",
+                            children=[
+                                ResourceTopologyNode(
+                                    node_type="process",
+                                    node_id="process:map-items",
+                                    label="map-items",
+                                    parent_id="map-items",
+                                    children=[
+                                        ResourceTopologyNode(
+                                            node_type="step",
+                                            node_id="map-items::child",
+                                            label="child",
+                                            parent_id="process:map-items",
+                                        )
+                                    ],
+                                )
+                            ],
+                        )
+                    ],
+                )
+            ],
+        ),
+        mapped_composite_step_ids=["map-items"],
     )
 
 
@@ -221,6 +266,120 @@ def test_repeated_finalization_does_not_double_count_ledger(tmp_path: Path) -> N
     assert again.document.finalization.recovered is True
 
 
+@pytest.mark.parametrize("relative_first", [True, False])
+def test_finalization_deduplicates_evidence_across_equivalent_path_forms(
+    tmp_path: Path,
+    *,
+    relative_first: bool,
+) -> None:
+    run_dir = _seed_run(tmp_path, snapshot=_snapshot())
+    (run_dir / ".logs" / "resource-events.jsonl").unlink()
+    log_path = run_dir / ".logs" / "tasks" / "analyze" / "session.jsonl"
+    log_path.parent.mkdir(parents=True)
+    log_path.write_text(
+        "\n".join(
+            json.dumps(record)
+            for record in [
+                {
+                    "type": "system",
+                    "subtype": "init",
+                    "model": "claude-opus-4-7",
+                    "timestamp": "2026-08-03T00:00:00Z",
+                },
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "toolu-1",
+                                "name": "Read",
+                                "input": {},
+                            }
+                        ]
+                    },
+                    "timestamp": "2026-08-03T00:00:00.250000Z",
+                },
+                {
+                    "type": "user",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu-1",
+                                "is_error": False,
+                                "content": "ok",
+                            }
+                        ]
+                    },
+                    "timestamp": "2026-08-03T00:00:00.500000Z",
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "is_error": False,
+                    "total_cost_usd": 0.42,
+                    "num_turns": 1,
+                    "usage": {"input_tokens": 11, "output_tokens": 2},
+                    "timestamp": "2026-08-03T00:00:01Z",
+                },
+            ]
+        )
+        + "\n"
+    )
+
+    relative_run_dir = Path("run-1")
+    absolute_run_dir = run_dir.resolve()
+    if relative_first:
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.chdir(tmp_path)
+            first = finalize_run_resources(
+                relative_run_dir,
+                outcome=FinalizationState.COMPLETED,
+            )
+        again = finalize_run_resources(
+            absolute_run_dir,
+            outcome=FinalizationState.COMPLETED,
+            trigger="recovery",
+        )
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.chdir(tmp_path)
+            final = finalize_run_resources(
+                relative_run_dir,
+                outcome=FinalizationState.COMPLETED,
+                trigger="recovery",
+            )
+    else:
+        first = finalize_run_resources(
+            absolute_run_dir,
+            outcome=FinalizationState.COMPLETED,
+        )
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.chdir(tmp_path)
+            again = finalize_run_resources(
+                relative_run_dir,
+                outcome=FinalizationState.COMPLETED,
+                trigger="recovery",
+            )
+        final = finalize_run_resources(
+            absolute_run_dir,
+            outcome=FinalizationState.COMPLETED,
+            trigger="recovery",
+        )
+
+    assert final.document.finalization is not None
+    assert final.document.finalization.source_event_count == len(first.events)
+    assert len(again.events) == len(first.events)
+    assert len(final.events) == len(first.events)
+    assert final.document.hierarchy_root.total_metrics.input_tokens == 11
+    assert final.document.hierarchy_root.total_metrics.output_tokens == 2
+    assert final.document.hierarchy_root.total_metrics.list_cost_usd == pytest.approx(0.42)
+    assert final.document.hierarchy_root.total_metrics.tool_calls == 1
+    rollups = {rollup.key.meter: rollup for rollup in final.document.meter_rollups}
+    assert rollups["agent_invocations"].actual_quantity == 1
+    assert rollups["model_turns"].actual_quantity == 1
+
+
 def test_legacy_run_uses_root_projection_without_current_budgets(tmp_path: Path) -> None:
     run_dir = _seed_run(tmp_path, snapshot=None)
 
@@ -289,3 +448,58 @@ def test_recovery_parses_raw_task_log_when_spec_and_ledger_are_missing(tmp_path:
     assert analyze.log_summary.source_log_count == 1
     assert result.document.finalization is not None
     assert result.document.finalization.source_event_count > 0
+
+
+def test_finalization_attributes_mapped_child_process_events_to_item(tmp_path: Path) -> None:
+    run_dir = _seed_run(tmp_path, snapshot=_mapped_snapshot())
+    (run_dir / ".logs" / "resource-events.jsonl").unlink()
+    log_path = run_dir / "map-items" / "item-a" / ".logs" / "process-events.jsonl"
+    log_path.parent.mkdir(parents=True)
+    log_path.write_text(
+        json.dumps(
+            {
+                "event": "step_complete",
+                "ts": "2026-08-03T00:00:01Z",
+                "step_id": "child",
+                "elapsed_s": 2.0,
+            }
+        )
+        + "\n"
+    )
+
+    result = finalize_run_resources(run_dir, outcome=FinalizationState.COMPLETED)
+
+    assert len(result.events) == 1
+    assert result.events[0].hierarchy.process_node_id == "process:map-items"
+    assert result.events[0].hierarchy.step_node_id == "map-items::child"
+    assert result.events[0].hierarchy.item_key == "item-a"
+    assert result.document.source_logs[0].owner_node_id == "process:map-items"
+
+
+def test_finalization_preserves_item_key_that_matches_child_step(tmp_path: Path) -> None:
+    run_dir = _seed_run(tmp_path, snapshot=_mapped_snapshot())
+    (run_dir / ".logs" / "resource-events.jsonl").unlink()
+    log_path = run_dir / "map-items" / "child" / ".logs" / "process-events.jsonl"
+    log_path.parent.mkdir(parents=True)
+    log_path.write_text(
+        json.dumps(
+            {
+                "event": "step_complete",
+                "ts": "2026-08-03T00:00:01Z",
+                "step_id": "child",
+                "elapsed_s": 2.0,
+            }
+        )
+        + "\n"
+    )
+
+    result = finalize_run_resources(run_dir, outcome=FinalizationState.COMPLETED)
+
+    assert len(result.events) == 1
+    assert result.events[0].hierarchy.process_node_id == "process:map-items"
+    assert result.events[0].hierarchy.step_node_id == "map-items::child"
+    assert result.events[0].hierarchy.item_key == "child"
+    nested_process = result.document.hierarchy_root.children[0].children[0].children[0]
+    child_step = nested_process.children[0]
+    assert child_step.children[0].node_id == "map-items::child::child"
+    assert child_step.children[0].total_metrics.wall_time_s == 2.0

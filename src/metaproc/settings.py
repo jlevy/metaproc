@@ -260,6 +260,11 @@ PI_VALID_PROVIDERS: set[str] = set(_pi_valid_provider_names())
 # ── Gemini (continued) ──────────────────────────────────────────
 
 GEMINI_DEFAULT_NATIVE_SETTINGS: dict[str, object] = {
+    "context": {
+        "fileFiltering": {
+            "respectGitIgnore": False,
+        },
+    },
     "agents": {
         "overrides": {
             "generalist": {"enabled": False},

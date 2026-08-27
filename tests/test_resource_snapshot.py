@@ -14,7 +14,7 @@ from metaproc.engine.resource_snapshot import (
 )
 from metaproc.io import read_yaml_file, to_yaml_string
 from metaproc.models.authored import ProcessSpec
-from metaproc.models.plan import Plan, ResolvedStep
+from metaproc.models.plan import FanOut, Plan, ResolvedStep
 from metaproc.models.plan_bundle import PlanBundle
 from metaproc.models.resource_budget import (
     BudgetMetric,
@@ -22,7 +22,11 @@ from metaproc.models.resource_budget import (
     BudgetScopeKind,
     ResourceBudgetSpec,
 )
-from metaproc.models.resource_snapshot import ResourceRunSnapshot, ResourceTopologyNode
+from metaproc.models.resource_snapshot import (
+    ResourceRunSnapshot,
+    ResourceRunSnapshotV1,
+    ResourceTopologyNode,
+)
 from metaproc.viz_loader import load_plan_bundle
 
 _PROCESS = """\
@@ -71,6 +75,54 @@ def test_snapshot_contains_lean_topology_and_normalized_budgets(tmp_path: Path) 
     assert "self_metrics" not in str(payload)
 
 
+def test_snapshot_records_qualified_mapped_composite_step_ids() -> None:
+    leaf = PlanBundle(
+        plan=Plan(
+            process="leaf.process.md",
+            steps=[ResolvedStep(step_id="analyze", mode="agent")],
+        ),
+        spec=ProcessSpec(name="leaf"),
+        source_path="leaf.process.md",
+    )
+    child = PlanBundle(
+        plan=Plan(
+            process="child.process.md",
+            steps=[
+                ResolvedStep(
+                    step_id="nested-map",
+                    mode="composite",
+                    fan_out=FanOut(over="items", bind="item", source="items.md"),
+                )
+            ],
+        ),
+        spec=ProcessSpec(name="child"),
+        source_path="child.process.md",
+        children={"nested-map": leaf},
+    )
+    bundle = PlanBundle(
+        plan=Plan(
+            process="root.process.md",
+            steps=[
+                ResolvedStep(
+                    step_id="map-items",
+                    mode="composite",
+                    fan_out=FanOut(over="items", bind="item", source="items.md"),
+                )
+            ],
+        ),
+        spec=ProcessSpec(name="root"),
+        source_path="root.process.md",
+        children={"map-items": child},
+    )
+
+    snapshot = build_resource_run_snapshot(bundle, run_id="root/run-1")
+
+    assert snapshot.mapped_composite_step_ids == [
+        "map-items",
+        "map-items::nested-map",
+    ]
+
+
 def test_first_run_config_snapshot_is_not_replaced_on_resume(tmp_path: Path) -> None:
     process_path, bundle = _bundle(tmp_path)
     run_dir = tmp_path / "runs" / "run-1"
@@ -113,7 +165,71 @@ def test_first_run_config_snapshot_is_not_replaced_on_resume(tmp_path: Path) -> 
     restored = read_resource_run_snapshot(run_dir)
     assert restored == original
     raw = read_yaml_file(run_dir / ".state" / "run-config.yaml")
-    assert raw["resources"]["schema"] == "metaproc.resource-snapshot/v1"
+    assert raw["resources"]["schema"] == "metaproc.resource-snapshot/v2"
+
+
+def test_snapshot_reader_reads_strict_v1_with_legacy_mapping_behavior(tmp_path: Path) -> None:
+    process_path, bundle = _bundle(tmp_path)
+    run_dir = tmp_path / "runs" / "run-1"
+    run_dir.mkdir(parents=True)
+    snapshot = build_resource_run_snapshot(bundle, run_id="snapshot-test/run-1")
+    config_path = _write_run_config(
+        run_dir,
+        process_name="snapshot-test",
+        process_path=process_path,
+        run_id="run-1",
+        variables={"RUN_ID": "run-1"},
+        backend="local",
+        variant=None,
+        resource_snapshot=snapshot,
+    )
+    raw = read_yaml_file(config_path)
+    raw["resources"]["schema"] = "metaproc.resource-snapshot/v1"
+    raw["resources"].pop("mapped_composite_step_ids")
+    config_path.write_text(to_yaml_string(raw))
+
+    restored = read_resource_run_snapshot(run_dir)
+
+    assert restored is not None
+    assert isinstance(restored, ResourceRunSnapshotV1)
+    assert restored.schema_version == "metaproc.resource-snapshot/v1"
+
+
+def test_snapshot_v2_requires_mapped_composite_step_ids() -> None:
+    with pytest.raises(ValidationError, match="mapped_composite_step_ids"):
+        ResourceRunSnapshot.model_validate(
+            {
+                "schema": "metaproc.resource-snapshot/v2",
+                "hierarchy": {
+                    "node_type": "run",
+                    "node_id": "run-1",
+                    "label": "run-1",
+                },
+            }
+        )
+
+
+def test_snapshot_reader_rejects_v2_field_under_v1_token(tmp_path: Path) -> None:
+    process_path, bundle = _bundle(tmp_path)
+    run_dir = tmp_path / "runs" / "run-1"
+    run_dir.mkdir(parents=True)
+    snapshot = build_resource_run_snapshot(bundle, run_id="snapshot-test/run-1")
+    config_path = _write_run_config(
+        run_dir,
+        process_name="snapshot-test",
+        process_path=process_path,
+        run_id="run-1",
+        variables={"RUN_ID": "run-1"},
+        backend="local",
+        variant=None,
+        resource_snapshot=snapshot,
+    )
+    raw = read_yaml_file(config_path)
+    raw["resources"]["schema"] = "metaproc.resource-snapshot/v1"
+    config_path.write_text(to_yaml_string(raw))
+
+    with pytest.raises(ValidationError, match="mapped_composite_step_ids"):
+        read_resource_run_snapshot(run_dir)
 
 
 def test_legacy_run_without_resource_snapshot_returns_none(tmp_path: Path) -> None:
@@ -206,7 +322,8 @@ def test_snapshot_rejects_duplicate_topology_ids() -> None:
                         parent_id="run-1",
                     ),
                 ],
-            )
+            ),
+            mapped_composite_step_ids=[],
         )
 
 
@@ -225,5 +342,38 @@ def test_snapshot_rejects_inconsistent_parent_link() -> None:
                         parent_id="wrong-parent",
                     )
                 ],
-            )
+            ),
+            mapped_composite_step_ids=[],
+        )
+
+
+def test_snapshot_rejects_duplicate_mapped_composite_step_ids() -> None:
+    with pytest.raises(ValidationError, match="mapped composite step IDs must be unique"):
+        ResourceRunSnapshot(
+            hierarchy=ResourceTopologyNode(
+                node_type="run",
+                node_id="run-1",
+                label="run-1",
+                children=[
+                    ResourceTopologyNode(
+                        node_type="step",
+                        node_id="mapped",
+                        label="mapped",
+                        parent_id="run-1",
+                    )
+                ],
+            ),
+            mapped_composite_step_ids=["mapped", "mapped"],
+        )
+
+
+def test_snapshot_rejects_unknown_mapped_composite_step_id() -> None:
+    with pytest.raises(ValidationError, match="must exist in the resource topology"):
+        ResourceRunSnapshot(
+            hierarchy=ResourceTopologyNode(
+                node_type="run",
+                node_id="run-1",
+                label="run-1",
+            ),
+            mapped_composite_step_ids=["missing"],
         )

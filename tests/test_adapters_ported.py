@@ -385,6 +385,7 @@ class TestGeminiCliAdapter:
         assert settings_path.exists()
         written = json.loads(settings_path.read_text())
         assert written == GEMINI_DEFAULT_NATIVE_SETTINGS
+        assert written["context"]["fileFiltering"]["respectGitIgnore"] is False
         assert written["agents"]["overrides"]["generalist"]["enabled"] is False
         second = self.adapter.prepare_env(env, {})
         assert Path(second["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]) == settings_path

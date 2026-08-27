@@ -239,6 +239,35 @@ Every superseded-only test name is accounted for by prerequisite coverage or by 
 domain-neutral rename with the same assertion.
 No executable behavior was silently dropped.
 
+## Current Validation Status
+
+Consumer smoke testing of the consolidated candidate found three generic integration
+defects without changing the runtime design:
+
+- equivalent relative and absolute log paths could assign the same provider evidence to
+  different hierarchy owners during finalization and recovery, which defeated event
+  deduplication; and
+- Gemini’s native file tool continued to honor workspace ignore rules for a declared
+  runtime input, despite the run directory being included in the invocation; and
+- source-spec-free finalization could not distinguish mapped composite item segments
+  from child step names using the original immutable resource snapshot.
+
+The candidate now normalizes both path forms before resource ownership, records the
+qualified mapped-composite step IDs in a strict resource snapshot v2 while retaining a
+strict v1 reader, resolves mapped logs to their executable leaves and item keys during
+recovery, and injects the file-filtering override through Metaproc’s invocation-scoped
+Gemini settings. Regression coverage runs finalization in both path-form orders and
+asserts exact provider meters, tokens, list cost, and tool calls; it also covers mapped
+child process events, item/step-name collisions, and v1 snapshot compatibility.
+The complete framework gate passes with 4,476 tests and the same eight tracked
+credential or infrastructure skips, plus lint, type checking, public-hygiene checks,
+dependency audits, package construction, and installed-wheel smoke.
+
+Two observations remain deliberately outside this correction: trace health should make
+recovered tool errors easier to distinguish (`mp-czm0`), and Gemini tool declarations
+must either become enforceable policy or stop implying confinement (`mp-y1l2`). Neither
+requires another scheduler, ledger, or input-staging abstraction.
+
 ## Deferred Work
 
 - multi-host mapped-composite partitioning;
