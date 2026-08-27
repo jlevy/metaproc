@@ -11,11 +11,11 @@ status: Approved
 Also readable as `metaproc help design`.
 
 Implementation reference for Metaproc, covering how the conceptual model defined in
-[metaproc-concepts-and-principles.md](metaproc-concepts-and-principles.md) is realized
-in code: spec format, runtime artifacts, CLI commands, adapter wire formats, plugin
-protocol, and robustness subsystems.
-Companion architecture documents cover one subsystem each and ship alongside this one:
-[arch-runpool.md](arch-runpool.md), [arch-cloud-execution.md](arch-cloud-execution.md),
+[metaproc-concepts.md](metaproc-concepts.md) is realized in code: spec format, runtime
+artifacts, CLI commands, adapter wire formats, plugin protocol, and robustness
+subsystems. Companion architecture documents cover one subsystem each and ship alongside
+this one: [arch-runpool.md](arch-runpool.md),
+[arch-cloud-execution.md](arch-cloud-execution.md),
 [arch-authentication.md](arch-authentication.md),
 [arch-claude-code-harness.md](arch-claude-code-harness.md),
 [arch-execution-model.md](arch-execution-model.md),
@@ -45,8 +45,7 @@ Almost nobody needs all of them at once, so start from what you are doing:
 
 Two conventions worth knowing before you start.
 Section numbers are stable identifiers, not an outline: numbering begins at 5 because
-the first four sections became
-[metaproc-concepts-and-principles.md](metaproc-concepts-and-principles.md), and a
+the first four sections became [metaproc-concepts.md](metaproc-concepts.md), and a
 section that moves out keeps its number reserved rather than renumbering the rest.
 Subsystems with their own document — the run pool, cloud execution, authentication, the
 Claude Code harness, file IO, the execution model, and testing — are summarized here and
@@ -54,8 +53,7 @@ specified there; where the two differ, the companion document wins.
 
 ## Scope and Imported Concepts
 
-Terminology and principles live in
-[metaproc-concepts-and-principles.md](metaproc-concepts-and-principles.md); read it
+Terminology and principles live in [metaproc-concepts.md](metaproc-concepts.md); read it
 first for the definitions assumed below.
 Section numbers are stable identifiers carried across revisions; numbering starts at 5
 because earlier sections moved into the concepts doc and the companion arch docs.
@@ -101,10 +99,10 @@ See § 19 for orchestrator details, § 21 for cloud execution.
 ## 5. Implementation Inventory
 
 The framework spans three abstraction profiles defined in
-[metaproc-concepts-and-principles.md §3.4](metaproc-concepts-and-principles.md): **core
-model**, **execution profile**, and **application profile**. The conceptual definitions
-live there. The inventory below lists the authored files, package subsystems, plugin
-layer, and emitted runtime artifacts that realize each profile.
+[metaproc-concepts.md §3.4](metaproc-concepts.md): **core model**, **execution
+profile**, and **application profile**. The conceptual definitions live there.
+The inventory below lists the authored files, package subsystems, plugin layer, and
+emitted runtime artifacts that realize each profile.
 For the per-artifact reference (filename, format, schema, lifecycle, writer, readers),
 see [artifact-catalog.md](artifact-catalog.md); for format-selection rules, see
 [conventions.md §File Format Policy](conventions.md#file-format-policy).

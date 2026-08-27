@@ -56,7 +56,7 @@ class Topic:
 TOPIC_REGISTRY: tuple[Topic, ...] = (
     Topic(
         "concepts",
-        "metaproc-concepts-and-principles",
+        "metaproc-concepts",
         "Start here. Vocabulary, ownership boundaries, step modes, optimization loops.",
         7000,
     ),
@@ -68,8 +68,8 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
     ),
     Topic(
         "framework",
-        "process-framework-concepts",
-        "The general execution model beneath any process framework, and Metaproc's mapping.",
+        "process-framework-theory",
+        "Background theory: the general model beneath any process framework, and Metaproc's mapping.",
         7200,
     ),
     Topic(
@@ -180,7 +180,7 @@ class HelpTopics:
 
     operator: str = resource_doc_field(_PACKAGE, "metaproc-operator-reference")
     developer: str = resource_doc_field(_PACKAGE, "metaproc-developer-guide")
-    concepts: str = resource_doc_field(_PACKAGE, "metaproc-concepts-and-principles")
+    concepts: str = resource_doc_field(_PACKAGE, "metaproc-concepts")
 
 
 @cache

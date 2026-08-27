@@ -80,7 +80,7 @@ to contracts from a hand-maintained table, and classifies failures by pattern-ma
 error text.
 
 The design tests in
-[process-framework-concepts.md](../../../../src/metaproc/docs/process-framework-concepts.md)
+[process-framework-theory.md](../../../../src/metaproc/docs/process-framework-theory.md)
 name this outcome:
 
 > A workflow forced to answer “no” by building its own coordinator on top of the
@@ -385,7 +385,7 @@ case.
 
 ## References
 
-- [process-framework-concepts.md](../../../../src/metaproc/docs/process-framework-concepts.md),
+- [process-framework-theory.md](../../../../src/metaproc/docs/process-framework-theory.md),
   for the requirement axis, the two-axis failure model, and the design tests cited here.
 - [metaproc-design.md](../../../../src/metaproc/docs/metaproc-design.md) §13 for the
   layer boundary and §14.1 for the retry chain this makes declarative.

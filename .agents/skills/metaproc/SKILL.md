@@ -84,7 +84,7 @@ Available via `metaproc help <topic>`, in recommended reading order:
 
 - **concepts** (~7.0k words): Start here. Vocabulary, ownership boundaries, step modes, optimization loops.
 - **design** (~16.0k words): How Metaproc is built: spec format, runtime artifacts, adapters, robustness.
-- **framework** (~7.2k words): The general execution model beneath any process framework, and Metaproc's mapping.
+- **framework** (~7.2k words): Background theory: the general model beneath any process framework, and Metaproc's mapping.
 - **operator** (~5.4k words): Runtime CLI reference: running, monitoring, and resuming processes.
 - **developer** (~1.3k words): Extending Metaproc and the 'Metaproc is the right wrapper' policy.
 - **conventions** (~4.5k words): Framework-level naming, structure, and file-format rules.

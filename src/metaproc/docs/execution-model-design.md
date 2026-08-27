@@ -11,8 +11,8 @@ The design decisions beneath task-level scheduling: what an edge means, when a r
 complete, which attempt owns a result, and what a status file is allowed to claim.
 These are the contracts that are expensive to change once process specs depend on them,
 so they are settled here, deliberately, before the production scheduler grows into them.
-[Process Framework Concepts](process-framework-concepts.md) supplies the vocabulary and
-the design tests this instantiates; [arch-execution-model.md](arch-execution-model.md)
+[Process Framework Theory](process-framework-theory.md) supplies the vocabulary and the
+design tests this instantiates; [arch-execution-model.md](arch-execution-model.md)
 covers the executable reference model that implements these decisions in
 `src/metaproc/execution_model/`.
 

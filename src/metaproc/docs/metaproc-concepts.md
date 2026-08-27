@@ -1,13 +1,13 @@
 ---
-title: "Metaproc: Concepts and Principles"
+title: Metaproc Concepts
 description: Concepts and motivation for Metaproc, including vocabulary, architectural planes, optimization loops, and design principles.
 ---
-# Metaproc: Concepts and Principles
+# Metaproc Concepts
 
 > **Scope.** This document is the vocabulary and the principles of Metaproc **as it is
 > built today** — it is the authority on what the shipped system does and what its terms
 > mean in the code. Its companion,
-> [process-framework-concepts.md](process-framework-concepts.md)
+> [process-framework-theory.md](process-framework-theory.md)
 > (`metaproc help framework`), is the general model beneath any process framework and
 > the authority on the target vocabulary; where it names something Metaproc has not
 > built, §4.2b says so explicitly.
@@ -390,9 +390,9 @@ Application examples never leak back into the core schema.
 
   Variant is a **run-level** selector in Metaproc: it is chosen once at invocation and
   applies to the whole run.
-  The general model in [process-framework-concepts.md](process-framework-concepts.md)
-  treats variant as an axis of *task* identity, so that the same step and item can run
-  under two configurations concurrently and be told apart.
+  The general model in [process-framework-theory.md](process-framework-theory.md) treats
+  variant as an axis of *task* identity, so that the same step and item can run under
+  two configurations concurrently and be told apart.
   Metaproc does not do that today — two variants are two runs.
 
 ### 4.2 Items, fan-out, and map
@@ -434,8 +434,8 @@ Steps operate on specific values, or items.
   derives from a step and its roster.
   At the **execution** layer, the task is the unit that state paths, log paths,
   scheduling, failure, and resume are all keyed on — see
-  [process-framework-concepts.md](process-framework-concepts.md), which calls it the
-  pivotal object for exactly that reason.
+  [process-framework-theory.md](process-framework-theory.md), which calls it the pivotal
+  object for exactly that reason.
   A task is never a synonym for an item: one item can have several tasks, one per step
   that maps over it.
 
@@ -444,9 +444,9 @@ more useful in context.
 
 ### 4.2b Modeled but not implemented
 
-[process-framework-concepts.md](process-framework-concepts.md)
-(`metaproc help framework`) is the general model beneath any process framework, and it
-names objects Metaproc models but does not implement as first-class records.
+[process-framework-theory.md](process-framework-theory.md) (`metaproc help framework`)
+is the general model beneath any process framework, and it names objects Metaproc models
+but does not implement as first-class records.
 They are listed here so their absence from this glossary is legible as a deliberate gap
 rather than an omission:
 
@@ -617,8 +617,8 @@ Processes can read, evaluate, and rewrite other processes, including themselves.
 
 This section is about *what* gets improved — the process definition itself, and the
 three shapes that improvement takes.
-The general model’s [§ Loops: Processes That Repeat](process-framework-concepts.md)
-covers the complementary question of *how* an iteration is structured: carried state, a
+The general model’s [§ Loops: Processes That Repeat](process-framework-theory.md) covers
+the complementary question of *how* an iteration is structured: carried state, a
 measurement step, an accept/reject gate, and a termination policy, with the loop sitting
 above the run rather than inside it.
 The two describe the same layer from different sides, and neither is a prerequisite for

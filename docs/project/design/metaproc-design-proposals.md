@@ -171,7 +171,7 @@ Why it is still future work:
 ## P7. Sweep / Ensemble / Experiment Primitives
 
 **Category:** authored, future **Relates to:** the Type A and Type C optimization loops
-in `metaproc-concepts-and-principles.md` §5
+in `metaproc-concepts.md` §5
 
 The concepts doc names three composition primitives over runs — sweep, ensemble,
 experiment — that mechanize the Type A and Type C optimization loops.
@@ -252,8 +252,8 @@ Why it remains future work:
 
 **Category:** execution, partially implemented **Relates to:** section 6.3 (step modes),
 section 11 (`for_each`),
-[process-framework-concepts.md](../../../src/metaproc/docs/process-framework-concepts.md)
-§ Core Objects
+[process-framework-theory.md](../../../src/metaproc/docs/process-framework-theory.md) §
+Core Objects
 
 `_execute_step` forks on all four modes and each branch owns its own execution path, so
 a capability exists wherever someone implemented it rather than wherever it applies.

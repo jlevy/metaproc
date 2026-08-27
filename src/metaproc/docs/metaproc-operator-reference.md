@@ -10,7 +10,7 @@ description: The runtime command and recovery reference for operators (human or 
 > The CLI surfaces this doc via `metaproc help operator`. If you have NOT read § Top
 > mistakes to avoid + § Operating Rules below, stop and read them before touching a run.
 
-Related docs: [concepts](metaproc-concepts-and-principles.md) (first principles) ·
+Related docs: [concepts](metaproc-concepts.md) (first principles) ·
 [developer guide](metaproc-developer-guide.md) (extending metaproc).
 This reference and the other bundled docs are served at runtime via
 `metaproc help <operator|concepts|developer>`.

@@ -1,13 +1,12 @@
-# Process Framework Concepts
+# Process Framework Theory
 
 > **Scope.** This document is the general model — what any process framework must
 > decide, and the vocabulary for saying it precisely.
 > It is the authority on the model, not on Metaproc.
 > Where it describes what Metaproc actually does, its companion
-> [metaproc-concepts-and-principles.md](metaproc-concepts-and-principles.md)
-> (`metaproc help concepts`) wins; that document’s §4.2b lists the objects named here
-> that Metaproc models but has not implemented.
-> Readable as `metaproc help framework`.
+> [metaproc-concepts.md](metaproc-concepts.md) (`metaproc help concepts`) wins; that
+> document’s §4.2b lists the objects named here that Metaproc models but has not
+> implemented. Readable as `metaproc help framework`.
 
 The abstract execution model beneath any process framework: what such a system must
 decide, the vocabulary for talking about it precisely, and the design tests that follow.
@@ -580,7 +579,7 @@ Everything so far describes one pass: plan, execute, finish.
 This section is about the *mechanism* of iteration.
 For what Metaproc iterates *on* — process definitions reading and rewriting other
 process definitions — see
-[§5 Optimization Loops and Self-Improvement](metaproc-concepts-and-principles.md).
+[§5 Optimization Loops and Self-Improvement](metaproc-concepts.md).
 The sweep, ensemble, and experiment primitives named at the end of this section are
 described there as deferred work rather than shipped features.
 There is a further layer, **iterative processes**, where a whole run is the body of a
@@ -793,8 +792,7 @@ original unit of execution and state, and one local orchestrator was the only wr
   and prose everywhere else.
 
 - **Loops (test 14).** Iteration is not first-class.
-  The conceptual frame exists in
-  [metaproc-concepts-and-principles.md §5](metaproc-concepts-and-principles.md),
+  The conceptual frame exists in [metaproc-concepts.md §5](metaproc-concepts.md),
   covering the optimization loops, and sweep, ensemble, and experiment composition is a
   named proposal in
   [metaproc-design-proposals.md P7](https://github.com/jlevy/metaproc/blob/main/docs/project/design/metaproc-design-proposals.md);

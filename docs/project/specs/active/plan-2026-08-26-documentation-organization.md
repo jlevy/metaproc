@@ -95,10 +95,10 @@ into the concepts doc and the companion arch docs.”
 It carries a Revision History running rev2e through rev2o. The seven other `arch-*.md`
 files are focused component references, which is what an architecture doc should be.
 
-**The two concepts docs disagree on vocabulary.** `docs/process-framework-concepts.md`
-(general model) and `src/metaproc/docs/metaproc-concepts-and-principles.md` (shipped in
-the wheel) define overlapping terms differently, and in one case flatly contradict each
-other. Term counts across the pair:
+**The two concepts docs disagree on vocabulary.** `docs/process-framework-theory.md`
+(general model) and `src/metaproc/docs/metaproc-concepts.md` (shipped in the wheel)
+define overlapping terms differently, and in one case flatly contradict each other.
+Term counts across the pair:
 
 | Term | General | Shipped | Status |
 | --- | --- | --- | --- |
@@ -126,11 +126,11 @@ Twelve are new; the three existing topics are unchanged in content by this plan.
 
 | Topic | File in `src/metaproc/docs/` | Words | Status |
 | --- | --- | --- | --- |
-| `concepts` | `metaproc-concepts-and-principles.md` | 6,996 | ships today |
+| `concepts` | `metaproc-concepts.md` | 6,996 | ships today |
 | `operator` | `metaproc-operator-reference.md` | 5,402 | ships today |
 | `developer` | `metaproc-developer-guide.md` | 1,344 | ships today |
 | `design` | `metaproc-design.md` | 19,926 | from `src/metaproc/docs/metaproc-design.md` |
-| `framework` | `process-framework-concepts.md` | 7,214 | from `docs/` |
+| `framework` | `process-framework-theory.md` | 7,214 | from `docs/` |
 | `conventions` | `conventions.md` | 4,515 | from `docs/` |
 | `execution-model` | `execution-model-design.md` | 1,877 | from `docs/` |
 | `artifacts` | `artifact-catalog.md` | 1,363 | from `docs/` |
@@ -264,7 +264,7 @@ Two rules, applied to every table in the Documentation section.
 
 | Document | `metaproc help` | Purpose |
 | --- | --- | --- |
-| `metaproc-concepts-and-principles` — linked to its path | `concepts` | … |
+| `metaproc-concepts` — linked to its path | `concepts` | … |
 
 **Every first-party document appears somewhere.** The audit found six arch docs,
 `docs/releases/`, and `src/metaproc/runpool/README.md` linked from nowhere.
@@ -276,11 +276,11 @@ their topics, and a Project Records section covering `docs/project/` and
 
 ```
 src/metaproc/docs/           the shipped set — 15 topics
-  metaproc-concepts-and-principles.md
+  metaproc-concepts.md
   metaproc-operator-reference.md
   metaproc-developer-guide.md
   metaproc-design.md                  <- docs/arch/arch-metaproc-core.md
-  process-framework-concepts.md       <- docs/
+  process-framework-theory.md       <- docs/
   conventions.md                      <- docs/
   execution-model-design.md           <- docs/
   artifact-catalog.md                 <- docs/
@@ -316,7 +316,7 @@ No prose is edited beyond what a link rewrite requires.
   references across 52 files; the largest sweep in this plan).
 - [ ] `git mv` the seven remaining `docs/arch/arch-*.md` into `src/metaproc/docs/`;
   remove the empty `docs/arch/`.
-- [ ] `git mv` `conventions.md`, `artifact-catalog.md`, `process-framework-concepts.md`,
+- [ ] `git mv` `conventions.md`, `artifact-catalog.md`, `process-framework-theory.md`,
   and `execution-model-design.md` from `docs/` into `src/metaproc/docs/`.
 - [ ] Replace `HelpTopics`/`TOPIC_DESCRIPTIONS` in `src/metaproc/docs/__init__.py` with
   a topic registry carrying topic name, filename, description, and approximate word
@@ -498,9 +498,9 @@ That is worth a CHANGELOG entry under a documentation heading, and worth saying 
   links to it for auth setup and a downstream operator plausibly wants it.
 - Should `docs/project/releases/` merge into `CHANGELOG.md` entirely?
   The two overlap, and the per-release files have almost no inbound links.
-- Is `process-framework-concepts.md` still the right name once it ships next to
-  `metaproc-concepts-and-principles.md`? Two documents named “concepts” in one directory
-  is the naming problem Phase 6 has to answer in prose anyway.
+- Is `process-framework-theory.md` still the right name once it ships next to
+  `metaproc-concepts.md`? Two documents named “concepts” in one directory is the naming
+  problem Phase 6 has to answer in prose anyway.
 - Is 75,844 words the right size for a shipped payload, or does Phase 5 need a target?
   A hard budget would force the cuts; an open-ended tighten may not.
 
@@ -560,6 +560,21 @@ Repository-facing documents moved out of the Documentation section entirely, int
 Project Docs section late in the README next to Development; the CHANGELOG is referenced
 on its own line rather than filed under a category.
 
+**Names and grouping, revised again after a second review pass.** Two shipped documents
+were renamed with repren: `metaproc-concepts-and-principles.md` became
+`metaproc-concepts.md` (title “Metaproc Concepts”) and `process-framework-concepts.md`
+became `process-framework-theory.md` (title “Process Framework Theory”), with all
+references swept, topic names unchanged.
+The README’s Essential Docs grew to four: concepts, design, the operator reference, and
+the developer guide, in reading order.
+Architecture follows immediately so the developer-facing material sits together.
+The two shipped runbooks form an Operator Runbooks group, and the theory doc files under
+Reference Docs as background.
+Main docs carry their real titles in bold; architecture and repository docs keep
+filename slugs.
+Subcommand alternatives in the Commands table use pipe separators so they
+do not read as paths.
+
 ### Follow-ups, closed 2026-08-27
 
 The three beads left open after the six phases are now done, and two of them found real
@@ -586,7 +601,7 @@ not.** A term count finds contradictions in defined vocabulary; it does not read
   link *text*, so documents across the shipped set still read `arch-metaproc-core.md §6`
   as the visible text over a link to `metaproc-design.md` — naming a file that no longer
   exists, while pointing at the one that replaced it.
-  The mapping table in `process-framework-concepts.md` had seven of them.
+  The mapping table in `process-framework-theory.md` had seven of them.
 - *Key space is a deviation, not a gap.* The general model requires each item key to
   belong to a declared identity domain.
   Metaproc declares none — but reaches the same guarantee structurally, because

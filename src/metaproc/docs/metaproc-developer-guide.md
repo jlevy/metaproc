@@ -4,7 +4,7 @@ description: How to use and extend the framework — authoring processes, adding
 ---
 # Metaproc Developer Guide
 
-Related docs: [concepts](metaproc-concepts-and-principles.md) (first principles) ·
+Related docs: [concepts](metaproc-concepts.md) (first principles) ·
 [operator reference](metaproc-operator-reference.md) (runtime CLI).
 
 ## Purpose
@@ -58,8 +58,7 @@ File a bead against metaproc, simplify a CLI shape, or surface the missing primi
 and keep the workflow calling metaproc directly.
 The overarching goal is that both the framework and the workflows on top of it stay
 flexible yet minimally complex.
-See [`metaproc-concepts-and-principles.md`](metaproc-concepts-and-principles.md) for the
-design ethos.
+See [`metaproc-concepts.md`](metaproc-concepts.md) for the design ethos.
 
 ## Launch and Cancellation Contracts
 
