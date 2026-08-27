@@ -1270,12 +1270,15 @@ canonical item key in its nearest accepted parent scope.
 When an upstream step creates a fan-out source during the run, discovery atomically
 refreshes that mapped step’s key set before dispatch; a resume replaces removed keys.
 Runs created before this record existed fall back to the loaded plan bundle.
-The projection validates mutable status against retained attempts.
-Exact snapshots also expose a typed coverage gap when a declared task or composite child
-scope has no corresponding durable state.
-A recorded output enters the consumable set only when its result names the latest
-successful attempt, its step fingerprint matches the loaded plan, its port is declared,
-and its local artifact exists with the declared file or directory kind.
+The projection validates mutable task status against retained attempts.
+Exact snapshots also expose a typed coverage gap when a declared executable scalar task,
+mapped item task, or composite child scope has no corresponding durable state.
+A scalar composite is represented by its child scope rather than a synthetic parent
+task; mapped composites retain parent item tasks because those records own each mapped
+attempt and result. A recorded output enters the consumable set only when its result
+names the latest successful attempt, its step fingerprint matches the loaded plan, its
+port is declared, and its local artifact exists with the declared file or directory
+kind.
 
 The public projection is a narrow, versioned DTO rather than a serialization of the
 complete mutable runtime records.

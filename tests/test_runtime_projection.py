@@ -288,11 +288,6 @@ def test_projection_uses_complete_snapshots_without_authored_bundle(tmp_path: Pa
         item_key="AAA",
     )
     _write_task(
-        run_dir / ".state/tasks/scalar-child",
-        run_id=ROOT_RUN_ID,
-        step_id="scalar-child",
-    )
-    _write_task(
         run_dir / ".state/tasks/mapped-child/BBB",
         run_id=ROOT_RUN_ID,
         step_id="mapped-child",
@@ -319,7 +314,6 @@ def test_projection_uses_complete_snapshots_without_authored_bundle(tmp_path: Pa
         TaskKeyProjection(step_id="mapped-child", item_key="BBB"),
         TaskKeyProjection(step_id="root-map", item_key="AAA"),
         TaskKeyProjection(step_id="root-scalar"),
-        TaskKeyProjection(step_id="scalar-child"),
         TaskKeyProjection(step_id="leaf", scope_path=["mapped-child", "BBB"]),
         TaskKeyProjection(step_id="leaf", scope_path=["scalar-child"]),
     ]
@@ -452,21 +446,53 @@ def test_projection_reports_missing_declared_composite_scope_state(tmp_path: Pat
         plan=plan,
         step_fingerprints={"child": fingerprint_step(plan.steps[0])},
     )
-    _write_task(
-        run_dir / ".state/tasks/child",
-        run_id=ROOT_RUN_ID,
-        step_id="child",
-    )
-
     projection = scan_task_output_projection(run_dir)
 
-    assert [task.key for task in projection.tasks] == [TaskKeyProjection(step_id="child")]
+    assert projection.tasks == []
     assert [gap.model_dump() for gap in projection.coverage_gaps] == [
         {
             "key": {"step_id": "child", "item_key": None, "scope_path": []},
             "reason": "scope-state-missing",
         }
     ]
+
+
+def test_projection_uses_child_scope_as_scalar_composite_state(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    child_dir = run_dir / "scalar-child"
+    _write_run_config(run_dir, original_run_dir=run_dir)
+    root_plan = Plan(
+        process="root.process.md",
+        steps=[ResolvedStep(step_id="scalar-child", mode="composite")],
+    )
+    child_plan = _bundle().children["scalar-child"].plan
+    _write_run_plan(
+        run_dir,
+        run_id=ROOT_RUN_ID,
+        scope_path=(),
+        plan=root_plan,
+        step_fingerprints={"scalar-child": fingerprint_step(root_plan.steps[0])},
+    )
+    _write_run_plan(
+        child_dir,
+        run_id=f"{ROOT_RUN_ID}/scalar-child",
+        scope_path=("scalar-child",),
+        plan=child_plan,
+        step_fingerprints={"leaf": fingerprint_step(child_plan.steps[0])},
+    )
+    _write_task(
+        child_dir / ".state/tasks/leaf",
+        run_id=f"{ROOT_RUN_ID}/scalar-child",
+        step_id="leaf",
+        scope_path=("scalar-child",),
+    )
+
+    projection = scan_task_output_projection(run_dir)
+
+    assert [task.key for task in projection.tasks] == [
+        TaskKeyProjection(step_id="leaf", scope_path=["scalar-child"])
+    ]
+    assert projection.coverage_gaps == []
 
 
 def test_projection_without_bundle_requires_root_snapshot(tmp_path: Path) -> None:

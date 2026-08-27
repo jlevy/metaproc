@@ -383,6 +383,8 @@ def _iter_task_state_dirs(
     tasks_root = scope_dir / STATE_DIR / TASKS_SUBDIR
     for step in sorted(steps, key=lambda entry: entry.step_id):
         step_dir = tasks_root / step.step_id
+        if step.mode == "composite" and step.task_shape == "scalar":
+            continue
         if step.task_shape == "scalar":
             yield step, None, step_dir
             continue

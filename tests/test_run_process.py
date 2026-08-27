@@ -1829,6 +1829,15 @@ class TestCompositeStepExecution:
         first = runner.invoke(app, args)
         assert first.exit_code == 0, first.output
         assert count_path.read_text(encoding="utf-8") == "1\n"
+        projection = scan_task_output_projection(runs_dir / "force-composite")
+        assert [task.key.model_dump() for task in projection.tasks] == [
+            {
+                "step_id": "increment",
+                "item_key": None,
+                "scope_path": ["child"],
+            }
+        ]
+        assert projection.coverage_gaps == []
 
         resume = runner.invoke(app, args)
         assert resume.exit_code == 0, resume.output

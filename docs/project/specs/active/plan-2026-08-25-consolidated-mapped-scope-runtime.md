@@ -185,13 +185,17 @@ atomically refreshes the affected step’s canonical key set before dispatch.
 A later resume replaces the set, so removed items cannot retain authority.
 This keeps execution and artifact bindings reviewable without reconstructing the
 orchestrator’s decisions or adding scheduler state.
-When a recorded plan declares a scalar task, mapped item, or composite child scope but
-the corresponding durable state is absent, the view emits a typed coverage gap instead
-of silently presenting the remaining records as complete.
-Only declared, portable, available outputs of the declared kind enter the accepted set.
-Legacy unbound, stale, undeclared, missing, and external outputs remain explicit
-diagnostics so partial hydration and definition drift cannot masquerade as accepted
-evidence.
+When a recorded plan declares an executable scalar task, mapped item task, or composite
+child scope but the corresponding durable state is absent, the view emits a typed
+coverage gap instead of silently presenting the remaining records as complete.
+Scalar composites are represented by their child scopes rather than synthetic parent
+tasks; mapped composites retain parent item tasks because those records own each mapped
+attempt and result.
+Only declared, portable, available outputs of the declared kind enter
+the accepted set.
+Legacy unbound, stale, undeclared, missing, and external outputs remain
+explicit diagnostics so partial hydration and definition drift cannot masquerade as
+accepted evidence.
 
 ## Consolidated Review Domains
 
