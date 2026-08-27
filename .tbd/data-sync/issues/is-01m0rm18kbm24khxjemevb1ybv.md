@@ -5,7 +5,7 @@ title: Project mapped scopes and artifacts through existing views
 kind: feature
 status: in_progress
 priority: 1
-version: 12
+version: 13
 spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - execution-model
@@ -17,8 +17,9 @@ child_order_hints:
   - is-01m0zs1svbsptksz66728wzdrb
   - is-01m0zswfrt6dcn0qm5t0yftfjd
   - is-01m10mm4vpgbqgrjqx4dbjee41
+  - is-01m10s8ad5wcge6npv5p9g370m
 created_at: 2026-08-24T00:51:54.602Z
-updated_at: 2026-08-27T03:36:08.822Z
+updated_at: 2026-08-27T04:57:04.164Z
 ---
 Extend plan, status, trace, pool rollup, and Metabrowser over mapped source scopes, runtime item instances, child failures, declared outputs, and accepted task results. Add a rebuildable artifact-lineage projection only if these existing views cannot answer the required operator questions.
 
