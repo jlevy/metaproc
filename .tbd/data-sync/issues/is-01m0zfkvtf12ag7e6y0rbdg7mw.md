@@ -3,9 +3,9 @@ type: is
 id: is-01m0zfkvtf12ag7e6y0rbdg7mw
 title: "Documentation organization: project docs, design doc, concepts reconciliation"
 kind: epic
-status: open
+status: closed
 priority: 1
-version: 44
+version: 45
 spec_path: docs/project/specs/active/plan-2026-08-26-documentation-organization.md
 labels:
   - docs
@@ -53,7 +53,11 @@ child_order_hints:
   - is-01m10zav5m1qxns81taqs7m9d8
   - is-01m10zavekbtk3qf7944msf7xr
 created_at: 2026-08-26T16:49:22.254Z
-updated_at: 2026-08-27T15:10:05.228Z
+updated_at: 2026-08-27T17:39:01.830Z
+closed_at: 2026-08-27T17:39:01.830Z
+close_reason: "All 41 children closed. Documentation reorganization complete: 17 metaproc help topics (75,024 words, was 3 and 13,742), two new CI gates, project-internal material separated under docs/project/, concepts vocabularies reconciled."
+resolution: null
+duplicate_of: null
 ---
 Documentation reorganization. Phases 1-6 implemented 2026-08-27; see the spec's Outcome section.
 
