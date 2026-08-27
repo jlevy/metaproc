@@ -1,5 +1,12 @@
 # Metaproc Execution Model
 
+> **This document owns the *contracts*.** What an edge means, when a roster is complete,
+> which attempt owns a result, and what a status file may claim — the decisions that are
+> expensive to change once process specs depend on them.
+> For how they are implemented today, including the reducer, the projection, and
+> item-aligned resume, see [arch-execution-model.md](arch-execution-model.md)
+> (`metaproc help arch-execution`). Readable as `metaproc help execution-contracts`.
+
 The design decisions beneath task-level scheduling: what an edge means, when a roster is
 complete, which attempt owns a result, and what a status file is allowed to claim.
 These are the contracts that are expensive to change once process specs depend on them,

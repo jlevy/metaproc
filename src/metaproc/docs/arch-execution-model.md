@@ -6,6 +6,12 @@ status: Draft
 ---
 # Execution Model Reference Implementation
 
+> **This document owns the *implementation*.** The executable reference model: durable
+> facts, the pure reducer, the status projection, invariant tests, and the scale
+> envelope. For why the contracts are shaped this way, and what was deliberately left
+> out, see [execution-model-design.md](execution-model-design.md)
+> (`metaproc help execution-contracts`). Readable as `metaproc help arch-execution`.
+
 **Date:** 2026-08-16 (last updated 2026-08-23) **Status:** Draft
 
 `src/metaproc/execution_model/` is the executable form of the

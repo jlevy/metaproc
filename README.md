@@ -105,7 +105,7 @@ Then, by what you are doing:
 | [metaproc-developer-guide](src/metaproc/docs/metaproc-developer-guide.md) | `developer` | Extending metaproc and the “metaproc is the right wrapper” policy |
 | [conventions](src/metaproc/docs/conventions.md) | `conventions` | Framework-level naming, structure, and file-format rules (see §File Format Policy) |
 | [artifact-catalog](src/metaproc/docs/artifact-catalog.md) | `artifacts` | Every runtime artifact Metaproc writes or reads: filename, format, schema, lifecycle, writers, readers |
-| [execution-model-design](src/metaproc/docs/execution-model-design.md) | `execution-model` | The durable contracts under task-level scheduling — semantics versioning, dependency clauses, expansion closure, attempt fencing, admission claims — and what is deliberately left out |
+| [execution-model-design](src/metaproc/docs/execution-model-design.md) | `execution-contracts` | The durable contracts under task-level scheduling — semantics versioning, dependency clauses, expansion closure, attempt fencing, admission claims — and what is deliberately left out |
 | [pricing](src/metaproc/data/pricing.md) | — | Per-model token and cache pricing for every provider the framework touches |
 | [CHANGELOG](CHANGELOG.md) | — | Release history and upgrade notes |
 

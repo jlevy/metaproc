@@ -1,5 +1,14 @@
 # Process Framework Concepts
 
+> **Scope.** This document is the general model — what any process framework must
+> decide, and the vocabulary for saying it precisely.
+> It is the authority on the model, not on Metaproc.
+> Where it describes what Metaproc actually does, its companion
+> [metaproc-concepts-and-principles.md](metaproc-concepts-and-principles.md)
+> (`metaproc help concepts`) wins; that document’s §4.2b lists the objects named here
+> that Metaproc models but has not implemented.
+> Readable as `metaproc help framework`.
+
 The abstract execution model beneath any process framework: what such a system must
 decide, the vocabulary for talking about it precisely, and the design tests that follow.
 Nothing in the body is specific to one framework or one domain.

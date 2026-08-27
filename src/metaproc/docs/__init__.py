@@ -64,7 +64,7 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
         "design",
         "metaproc-design",
         "How Metaproc is built: spec format, runtime artifacts, adapters, robustness.",
-        18400,
+        16000,
     ),
     Topic(
         "framework",
@@ -97,9 +97,9 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
         1400,
     ),
     Topic(
-        "execution-model",
+        "execution-contracts",
         "execution-model-design",
-        "Durable contracts under task-level scheduling, and what is deliberately left out.",
+        "The durable contracts under task-level scheduling, and their rationale.",
         1900,
     ),
     Topic(
@@ -141,7 +141,7 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
     Topic(
         "arch-execution",
         "arch-execution-model",
-        "Architecture: how the execution model is implemented today, including resume.",
+        "Architecture: the executable reference model for scheduling, as implemented.",
         2400,
     ),
     Topic(

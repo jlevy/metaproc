@@ -2,13 +2,13 @@
 title: Documentation Organization
 description: Ship every core Metaproc document inside the wheel behind `metaproc help`, index all of them from the README with their CLI equivalents, and move project-internal material — backlog, revision history, maintenance scaffolding — out of the shipped set and into docs/project.
 date: 2026-08-26
-status: Draft
+status: Implemented
 ---
 # Feature: Documentation Organization
 
 **Date:** 2026-08-26
 
-**Status:** Draft
+**Status:** Implemented
 
 ## Overview
 
@@ -503,6 +503,50 @@ That is worth a CHANGELOG entry under a documentation heading, and worth saying 
   is the naming problem Phase 6 has to answer in prose anyway.
 - Is 75,844 words the right size for a shipped payload, or does Phase 5 need a target?
   A hard budget would force the cuts; an open-ended tighten may not.
+
+## Outcome
+
+Implemented 2026-08-27 across phases 1 through 6. Four things landed differently from
+the plan above; each is recorded here rather than edited into the plan, so the reasoning
+stays visible.
+
+**Seventeen topics, not fifteen.** The shipped-link gate showed the architecture docs
+linking to `credential-setup.runbook.md` twelve times and `cloud-dispatch.runbook.md`
+five times. Both are framework-level rather than repository-level — `credential-setup`
+contains no `make`, `uv run`, `devtools/`, or `pytest` reference at all — so they ship
+as the `credentials` and `cloud-dispatch` topics instead of leaving seventeen references
+pointing outside the package.
+
+**The gate checks the package, not the docs directory.** The plan scoped the rule to
+`src/metaproc/docs/`. Everything under `src/metaproc/` ships, at the same relative
+offset in the wheel as in a checkout, so the accurate rule is the package boundary.
+That also let `arch-runpool.md` link `../runpool/README.md`, which fixes the orphan the
+audit found.
+
+**178 violations, not 26.** The plan counted only the three original manuals.
+The architecture docs link into source heavily: 77 of the findings were
+`../../src/metaproc/*.py` references, most carrying `#L` line anchors.
+Those became code spans — a line anchor is wrong the moment the file changes, and a path
+an agent can read is worth more than a link it cannot follow.
+116 became sibling links, 28 absolute URLs.
+
+**`docs/` did not need emptying.** The plan moved `publishing.md`,
+`performance-notes.md`, `memory-accounting-reference.md`, and
+`agent-toolchain-bootstrap.md` under `docs/project/`. Once the framework documentation
+moved into the package, `docs/` was left holding exactly the documents about working on
+this repository, which is a coherent category — and `docs/project/` reads as “how the
+project got here,” which those four are not.
+Only `releases/` moved.
+
+Phase 5 also went further than “cut the duplication”: §7 of the design doc, a downstream
+analysis domain, moved to `docs/project/design/metaproc-analysis-profile.md`. Shipping
+it would have put one consumer’s Predict/Retro/Mine/Learn vocabulary inside the
+framework documentation of every downstream package, which AGENTS.md forbids and the
+doc’s own backlog had already proposed fixing.
+With §21 condensed, the design doc went from 19,926 words to 16,038.
+
+Final shape: 17 topics, 74,812 words, `make verify` green (4,436 passed, 8 skipped),
+both link gates clean, and all 17 documents asserted present in the wheel and the sdist.
 
 ## References
 
