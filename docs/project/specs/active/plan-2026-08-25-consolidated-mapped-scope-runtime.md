@@ -185,6 +185,9 @@ atomically refreshes the affected step’s canonical key set before dispatch.
 A later resume replaces the set, so removed items cannot retain authority.
 This keeps execution and artifact bindings reviewable without reconstructing the
 orchestrator’s decisions or adding scheduler state.
+When a recorded plan declares a scalar task, mapped item, or composite child scope but
+the corresponding durable state is absent, the view emits a typed coverage gap instead
+of silently presenting the remaining records as complete.
 Only declared, portable, available outputs of the declared kind enter the accepted set.
 Legacy unbound, stale, undeclared, missing, and external outputs remain explicit
 diagnostics so partial hydration and definition drift cannot masquerade as accepted
@@ -243,6 +246,7 @@ the local exact-head and public CI gates below remain independent landing requir
 | R28: runtime plan schema fails open | Fixed | The standalone and SoftSchema registries publish the strict pure-YAML `RunPlanSnapshot/0.1` contract, validate real artifacts, and reject unknown versions. |
 | R29: runtime-produced fan-out sources leave empty item authority | Fixed | Agent, code, aligned-chain, and mapped-composite discovery atomically refresh the existing scope snapshot before dispatch. End-to-end producer-to-mapped-leaf and producer-to-mapped-composite tests prove accepted projection, and resume coverage removes a stale item key. |
 | R30: fan-out disposition collides with authored fields | Fixed | Discovery keeps framework disposition separate from authored item context. Canonical key resolution preserves every declared field, retains completed, cached, or running items, and excludes source-terminal items. |
+| R31: missing runtime state appears as complete coverage | Fixed | The projection compares exact plan-declared scalar, mapped-item, and composite-scope coordinates with durable state and emits typed coverage gaps for every absent record. Fully snapshotted synthetic and mapped-composite execution regressions require an empty gap set. |
 
 The superseded retry-later transport is excluded.
 Dormant retry primitives remain under their separate removal-or-justification audit.

@@ -27,6 +27,7 @@ from metaproc.models.viz import (
     AcceptedOutputProjection,
     OutputRejectionReason,
     ResultBinding,
+    RuntimeCoverageGap,
     RuntimeTaskProjection,
     StepBinding,
     TaskKeyProjection,
@@ -73,7 +74,7 @@ def scan_task_output_projection(
             f"loaded plan {bundle.spec.name!r}"
         )
     tasks: list[RuntimeTaskProjection] = []
-    seen_state_dirs: set[Path] = set()
+    coverage_gaps: list[RuntimeCoverageGap] = []
     accepted_scope_steps: dict[tuple[str, ...], tuple[RunPlanStep, ...]] = {}
 
     for scope_dir in iter_composite_run_dirs(run_dir):
@@ -92,19 +93,33 @@ def scan_task_output_projection(
             continue
         scope_steps, snapshot_run_id = runtime_plan
         accepted_scope_steps[scope_path] = scope_steps
+        coverage_gaps.extend(
+            _missing_scope_state(
+                scope_dir,
+                scope_path=scope_path,
+                steps=scope_steps,
+                current_root=current_root,
+            )
+        )
         task_run_id = expected_run_id or snapshot_run_id
         for step, item_key, state_dir in _iter_task_state_dirs(
             scope_dir,
             scope_steps,
             current_root=current_root,
         ):
-            resolved_state_dir = state_dir.resolve()
-            if resolved_state_dir in seen_state_dirs:
+            key = TaskKeyProjection(
+                step_id=step.step_id,
+                item_key=item_key,
+                scope_path=list(scope_path),
+            )
+            status_path = state_dir / STATUS_FILE
+            if not status_path.is_file():
+                coverage_gaps.append(RuntimeCoverageGap(key=key, reason="task-state-missing"))
                 continue
-            seen_state_dirs.add(resolved_state_dir)
             _validate_state_record_containment(state_dir, current_root=current_root)
             status = read_status_at(state_dir)
             if status is None:
+                coverage_gaps.append(RuntimeCoverageGap(key=key, reason="task-state-missing"))
                 continue
             current_task_run_id = task_run_id or status.run_id
             latest_attempt = validate_task_status_identity_at(
@@ -135,11 +150,7 @@ def scan_task_output_projection(
             )
             tasks.append(
                 RuntimeTaskProjection(
-                    key=TaskKeyProjection(
-                        step_id=step.step_id,
-                        item_key=item_key,
-                        scope_path=list(scope_path),
-                    ),
+                    key=key,
                     state=status.state,
                     attempt_id=status.attempt_id,
                     attempt_number=status.attempt,
@@ -169,7 +180,20 @@ def scan_task_output_projection(
             task.key.item_key or "",
         )
     )
-    return TaskOutputProjection(run_dir=str(run_dir), tasks=tasks)
+    coverage_gaps.sort(
+        key=lambda gap: (
+            tuple(gap.key.scope_path),
+            gap.key.step_id,
+            gap.key.item_key is not None,
+            gap.key.item_key or "",
+            gap.reason,
+        )
+    )
+    return TaskOutputProjection(
+        run_dir=str(run_dir),
+        tasks=tasks,
+        coverage_gaps=coverage_gaps,
+    )
 
 
 def _read_run_identity(
@@ -312,6 +336,44 @@ def _scope_run_id(root_run_id: str | None, scope_path: tuple[str, ...]) -> str |
     return "/".join((root_run_id, *scope_path))
 
 
+def _declared_item_keys(step: RunPlanStep) -> tuple[str | None, ...]:
+    if step.task_shape == "scalar":
+        return (None,)
+    if step.item_keys is None:
+        return ()
+    return tuple(sorted(step.item_keys))
+
+
+def _missing_scope_state(
+    scope_dir: Path,
+    *,
+    scope_path: tuple[str, ...],
+    steps: Iterable[RunPlanStep],
+    current_root: Path,
+) -> list[RuntimeCoverageGap]:
+    gaps: list[RuntimeCoverageGap] = []
+    for step in steps:
+        if step.mode != "composite":
+            continue
+        for item_key in _declared_item_keys(step):
+            child_scope = scope_dir / step.step_id
+            if item_key is not None:
+                child_scope /= item_key
+            if _is_contained_directory(child_scope / STATE_DIR, current_root):
+                continue
+            gaps.append(
+                RuntimeCoverageGap(
+                    key=TaskKeyProjection(
+                        step_id=step.step_id,
+                        item_key=item_key,
+                        scope_path=list(scope_path),
+                    ),
+                    reason="scope-state-missing",
+                )
+            )
+    return gaps
+
+
 def _iter_task_state_dirs(
     scope_dir: Path,
     steps: Iterable[RunPlanStep],
@@ -319,15 +381,16 @@ def _iter_task_state_dirs(
     current_root: Path,
 ) -> Iterable[tuple[RunPlanStep, str | None, Path]]:
     tasks_root = scope_dir / STATE_DIR / TASKS_SUBDIR
-    if not _is_contained_directory(tasks_root, current_root):
-        return
     for step in sorted(steps, key=lambda entry: entry.step_id):
         step_dir = tasks_root / step.step_id
-        if not _is_contained_directory(step_dir, current_root):
-            continue
         if step.task_shape == "scalar":
-            if (step_dir / STATUS_FILE).is_file():
-                yield step, None, step_dir
+            yield step, None, step_dir
+            continue
+        if step.item_keys is not None:
+            for item_key in sorted(step.item_keys):
+                yield step, item_key, step_dir / item_key
+            continue
+        if not _is_contained_directory(step_dir, current_root):
             continue
         try:
             item_dirs = sorted(step_dir.iterdir())
@@ -335,8 +398,6 @@ def _iter_task_state_dirs(
             continue
         for item_dir in item_dirs:
             if not is_safe_item_key(item_dir.name):
-                continue
-            if step.item_keys is not None and item_dir.name not in step.item_keys:
                 continue
             if not _is_contained_directory(item_dir, current_root):
                 continue

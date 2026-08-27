@@ -2291,6 +2291,7 @@ class TestCompositeStepExecution:
         assert bundle is not None
         projection = scan_task_output_projection(run_dir, bundle)
         assert projection.tasks
+        assert projection.coverage_gaps == []
         assert all(task.step_binding != "mismatch" for task in projection.tasks)
         assert not [
             output

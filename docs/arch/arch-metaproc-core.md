@@ -1271,6 +1271,8 @@ When an upstream step creates a fan-out source during the run, discovery atomica
 refreshes that mapped step’s key set before dispatch; a resume replaces removed keys.
 Runs created before this record existed fall back to the loaded plan bundle.
 The projection validates mutable status against retained attempts.
+Exact snapshots also expose a typed coverage gap when a declared task or composite child
+scope has no corresponding durable state.
 A recorded output enters the consumable set only when its result names the latest
 successful attempt, its step fingerprint matches the loaded plan, its port is declared,
 and its local artifact exists with the declared file or directory kind.

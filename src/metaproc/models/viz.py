@@ -37,6 +37,7 @@ OutputRejectionReason = Literal[
 ]
 ResultBinding = Literal["none", "exact", "legacy-unbound", "attempt-mismatch"]
 StepBinding = Literal["none", "exact", "legacy-unbound", "mismatch"]
+RuntimeCoverageGapReason = Literal["task-state-missing", "scope-state-missing"]
 
 # ── Leaf / sub-types ────────────────────────────────────────────
 # Embedded in StepDetails / DepDetails / ProcessHeader. These do not carry their
@@ -301,6 +302,15 @@ class RuntimeTaskProjection(BaseModel):
     unaccepted_outputs: list[UnacceptedOutputProjection] = Field(default_factory=list)
 
 
+class RuntimeCoverageGap(BaseModel):
+    """One plan-declared runtime coordinate whose durable state is absent."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    key: TaskKeyProjection
+    reason: RuntimeCoverageGapReason
+
+
 class TaskOutputProjection(BaseModel):
     """Rebuildable task/output view derived from existing runtime records."""
 
@@ -311,6 +321,7 @@ class TaskOutputProjection(BaseModel):
     )
     run_dir: str
     tasks: list[RuntimeTaskProjection] = Field(default_factory=list)
+    coverage_gaps: list[RuntimeCoverageGap] = Field(default_factory=list)
 
 
 # ── Graph structure ─────────────────────────────────────────────

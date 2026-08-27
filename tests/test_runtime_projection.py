@@ -288,6 +288,17 @@ def test_projection_uses_complete_snapshots_without_authored_bundle(tmp_path: Pa
         item_key="AAA",
     )
     _write_task(
+        run_dir / ".state/tasks/scalar-child",
+        run_id=ROOT_RUN_ID,
+        step_id="scalar-child",
+    )
+    _write_task(
+        run_dir / ".state/tasks/mapped-child/BBB",
+        run_id=ROOT_RUN_ID,
+        step_id="mapped-child",
+        item_key="BBB",
+    )
+    _write_task(
         run_dir / "scalar-child/.state/tasks/leaf",
         run_id=f"{ROOT_RUN_ID}/scalar-child",
         step_id="leaf",
@@ -305,14 +316,157 @@ def test_projection_uses_complete_snapshots_without_authored_bundle(tmp_path: Pa
     projection = scan_task_output_projection(run_dir)
 
     assert [task.key for task in projection.tasks] == [
+        TaskKeyProjection(step_id="mapped-child", item_key="BBB"),
         TaskKeyProjection(step_id="root-map", item_key="AAA"),
         TaskKeyProjection(step_id="root-scalar"),
+        TaskKeyProjection(step_id="scalar-child"),
         TaskKeyProjection(step_id="leaf", scope_path=["mapped-child", "BBB"]),
         TaskKeyProjection(step_id="leaf", scope_path=["scalar-child"]),
     ]
+    assert projection.coverage_gaps == []
     scalar_child = projection.tasks[-1]
     assert [output.path for output in scalar_child.accepted_outputs] == [str(artifact)]
     assert scalar_child.unaccepted_outputs == []
+
+
+def test_projection_reports_missing_declared_scalar_state(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    _write_run_config(run_dir, original_run_dir=run_dir)
+    plan = Plan(
+        process="root.process.md",
+        steps=[ResolvedStep(step_id="missing-scalar", mode="code")],
+    )
+    _write_run_plan(
+        run_dir,
+        run_id=ROOT_RUN_ID,
+        scope_path=(),
+        plan=plan,
+        step_fingerprints={"missing-scalar": fingerprint_step(plan.steps[0])},
+    )
+
+    projection = scan_task_output_projection(run_dir)
+
+    assert projection.tasks == []
+    assert [gap.model_dump() for gap in projection.coverage_gaps] == [
+        {
+            "key": {"step_id": "missing-scalar", "item_key": None, "scope_path": []},
+            "reason": "task-state-missing",
+        }
+    ]
+
+
+def test_projection_reports_missing_declared_mapped_item_state(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    _write_run_config(run_dir, original_run_dir=run_dir)
+    plan = Plan(
+        process="root.process.md",
+        steps=[
+            ResolvedStep(
+                step_id="mapped",
+                mode="code",
+                fan_out=FanOut(
+                    over="items",
+                    bind="item",
+                    source="items.md",
+                    items=[{"item": "AAA"}, {"item": "BBB"}],
+                ),
+            )
+        ],
+    )
+    _write_run_plan(
+        run_dir,
+        run_id=ROOT_RUN_ID,
+        scope_path=(),
+        plan=plan,
+        step_fingerprints={"mapped": fingerprint_step(plan.steps[0])},
+    )
+    _write_task(
+        run_dir / ".state/tasks/mapped/AAA",
+        run_id=ROOT_RUN_ID,
+        step_id="mapped",
+        item_key="AAA",
+    )
+
+    projection = scan_task_output_projection(run_dir)
+
+    assert [task.key for task in projection.tasks] == [
+        TaskKeyProjection(step_id="mapped", item_key="AAA")
+    ]
+    assert [gap.model_dump() for gap in projection.coverage_gaps] == [
+        {
+            "key": {"step_id": "mapped", "item_key": "BBB", "scope_path": []},
+            "reason": "task-state-missing",
+        }
+    ]
+
+
+def test_projection_rejects_declared_task_state_alias(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    _write_run_config(run_dir, original_run_dir=run_dir)
+    plan = Plan(
+        process="root.process.md",
+        steps=[
+            ResolvedStep(
+                step_id="mapped",
+                mode="code",
+                fan_out=FanOut(
+                    over="items",
+                    bind="item",
+                    source="items.md",
+                    items=[{"item": "AAA"}, {"item": "BBB"}],
+                ),
+            )
+        ],
+    )
+    _write_run_plan(
+        run_dir,
+        run_id=ROOT_RUN_ID,
+        scope_path=(),
+        plan=plan,
+        step_fingerprints={"mapped": fingerprint_step(plan.steps[0])},
+    )
+    state_root = run_dir / ".state/tasks/mapped"
+    _write_task(
+        state_root / "AAA",
+        run_id=ROOT_RUN_ID,
+        step_id="mapped",
+        item_key="AAA",
+    )
+    (state_root / "BBB").symlink_to(state_root / "AAA", target_is_directory=True)
+
+    with pytest.raises(ValueError, match="does not match expected task fields item_key"):
+        scan_task_output_projection(run_dir)
+
+
+def test_projection_reports_missing_declared_composite_scope_state(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    _write_run_config(run_dir, original_run_dir=run_dir)
+    plan = Plan(
+        process="root.process.md",
+        steps=[ResolvedStep(step_id="child", mode="composite")],
+    )
+    _write_run_plan(
+        run_dir,
+        run_id=ROOT_RUN_ID,
+        scope_path=(),
+        plan=plan,
+        step_fingerprints={"child": fingerprint_step(plan.steps[0])},
+    )
+    _write_task(
+        run_dir / ".state/tasks/child",
+        run_id=ROOT_RUN_ID,
+        step_id="child",
+    )
+
+    projection = scan_task_output_projection(run_dir)
+
+    assert [task.key for task in projection.tasks] == [TaskKeyProjection(step_id="child")]
+    assert [gap.model_dump() for gap in projection.coverage_gaps] == [
+        {
+            "key": {"step_id": "child", "item_key": None, "scope_path": []},
+            "reason": "scope-state-missing",
+        }
+    ]
 
 
 def test_projection_without_bundle_requires_root_snapshot(tmp_path: Path) -> None:
