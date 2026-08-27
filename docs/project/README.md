@@ -2,7 +2,7 @@
 
 This directory keeps implementation plans, design records, and provenance separate from
 the documentation that describes what Metaproc does.
-That documentation ships inside the package — see
+That documentation ships inside the package; see
 [README § Documentation](../../README.md#documentation), or run `metaproc help`.
 
 The rule: a document here explains how the project got where it is, or where it might
@@ -25,12 +25,12 @@ in a completed specification.
 
 ## Design Records
 
-- [Design proposals](design/metaproc-design-proposals.md) — the future-work backlog for
+- [Design proposals](design/metaproc-design-proposals.md): the future-work backlog for
   the design doc. Not implemented; not shipped.
-- [`design/backlog/`](design/backlog/) — per-document future work, one file per shipped
+- [`design/backlog/`](design/backlog/): per-document future work, one file per shipped
   document that has any.
   Extracted so the shipped documents describe the system as it is.
-- Revision histories — the authoring revisions of
+- Revision histories: the authoring revisions of
   [metaproc-design.md](design/metaproc-design-revisions.md) and
   [arch-cloud-execution.md](design/arch-cloud-execution-revisions.md).
   These are authoring revisions, not releases; for what shipped when, see
@@ -53,7 +53,8 @@ changes.
 ## Architecture Docs
 
 The architecture documents ship in the package and are indexed with their
-`metaproc help` topics in [README § Architecture](../../README.md#architecture).
+`metaproc help` topics in
+[README § Developer and Architecture Docs](../../README.md#developer-and-architecture-docs).
 
 ## Releases
 

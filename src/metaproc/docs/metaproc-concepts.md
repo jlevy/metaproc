@@ -5,7 +5,7 @@ description: Concepts and motivation for Metaproc, including vocabulary, archite
 # Metaproc Concepts
 
 > **Scope.** This document is the vocabulary and the principles of Metaproc **as it is
-> built today** — it is the authority on what the shipped system does and what its terms
+> built today**: it is the authority on what the shipped system does and what its terms
 > mean in the code. Its companion,
 > [process-framework-theory.md](process-framework-theory.md)
 > (`metaproc help framework`), is the general model beneath any process framework and
@@ -33,7 +33,7 @@ What’s distinctive:
 - **Boundary-first:** Structure lives at step boundaries (file artifacts); step
   interiors are unconstrained.
 - **Gradual structure and precision:** A process can be as simple and unstructured as an
-  English description or as exact and structured as pure code—or any combination.
+  English description or as exact and structured as pure code, or any combination.
 - **Arbitrarily powerful steps:** Each step can be code, arbitrary coding agents defined
   in code or language, or other processes.
 - **Meta-circularity:** Processes can improve other processes.
@@ -393,7 +393,7 @@ Application examples never leak back into the core schema.
   The general model in [process-framework-theory.md](process-framework-theory.md) treats
   variant as an axis of *task* identity, so that the same step and item can run under
   two configurations concurrently and be told apart.
-  Metaproc does not do that today — two variants are two runs.
+  Metaproc does not do that today: two variants are two runs.
 
 ### 4.2 Items, fan-out, and map
 
@@ -418,7 +418,7 @@ Steps operate on specific values, or items.
 - **Roster:** the list of items a step maps over.
   An items file is how a roster is authored and stored; the roster is the set of keys it
   yields at execution time.
-  The two are not interchangeable — a roster is re-read on resume, and the design doc
+  The two are not interchangeable: a roster is re-read on resume, and the design doc
   treats `roster` as a distinct artifact role.
 
 - **Map:** a step applied to each element of a set of items.
@@ -427,13 +427,13 @@ Steps operate on specific values, or items.
   dispatched by the harness.
 
 - **Task:** the runtime execution unit produced when the harness applies one step to one
-  item — the pair `(step, item)`. Scalar steps have one task for the step.
+  item, the pair `(step, item)`. Scalar steps have one task for the step.
 
   *Which layer you are in matters here.* At the **authoring** layer, `task` is not
   something you write: a process spec declares steps, and tasks are what the harness
   derives from a step and its roster.
   At the **execution** layer, the task is the unit that state paths, log paths,
-  scheduling, failure, and resume are all keyed on — see
+  scheduling, failure, and resume are all keyed on; see
   [process-framework-theory.md](process-framework-theory.md), which calls it the pivotal
   object for exactly that reason.
   A task is never a synonym for an item: one item can have several tasks, one per step
@@ -450,22 +450,22 @@ but does not implement as first-class records.
 They are listed here so their absence from this glossary is legible as a deliberate gap
 rather than an omission:
 
-- **Expansion** — the act of turning a step plus a roster into its set of tasks.
+- **Expansion:** the act of turning a step plus a roster into its set of tasks.
   Metaproc expands at execution time and does not persist the expansion as a record.
-- **Closure** — the point at which a roster is known to be complete, so a fan-in can be
+- **Closure:** the point at which a roster is known to be complete, so a fan-in can be
   trusted. Metaproc reports fan-in against expected keys rather than recording closure.
-- **Generation** — a numbered re-expansion when a roster changes under a running
-  process. `RosterGeneration` exists in `src/metaproc/execution_model/model.py`; the
-  production scheduler does not yet key state on it.
-- **Commit** — one durable record covering every output of a task, published atomically.
+- **Generation:** a numbered re-expansion when a roster changes under a running process.
+  `RosterGeneration` exists in `src/metaproc/execution_model/model.py`; the production
+  scheduler does not yet key state on it.
+- **Commit:** one durable record covering every output of a task, published atomically.
   Metaproc publishes per-output, which the general model’s own deviations list notes.
-- **Fencing** — the rule that only the current attempt may publish, enforced by a
+- **Fencing:** the rule that only the current attempt may publish, enforced by a
   monotonic token. Metaproc uses leases and claims, which cover most but not all of the
   same ground.
 
 One entry is a difference rather than a gap:
 
-- **Key space** — the general model has each item key belong to a declared identity
+- **Key space:** the general model has each item key belong to a declared identity
   domain, so two rosters both containing `ACME` cannot be aligned unless they mean the
   same thing. Metaproc declares no key space.
   It reaches the same guarantee structurally instead: `for_each.align: same_key`
@@ -615,8 +615,8 @@ The Type B loop (improve the measurement) iterates on domain evals with the step
 
 Processes can read, evaluate, and rewrite other processes, including themselves.
 
-This section is about *what* gets improved — the process definition itself, and the
-three shapes that improvement takes.
+This section is about *what* gets improved: the process definition itself, and the three
+shapes that improvement takes.
 The general model’s [§ Loops: Processes That Repeat](process-framework-theory.md) covers
 the complementary question of *how* an iteration is structured: carried state, a
 measurement step, an accept/reject gate, and a termination policy, with the loop sitting

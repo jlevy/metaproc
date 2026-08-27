@@ -1,7 +1,7 @@
 # Process Framework Theory
 
-> **Scope.** This document is the general model — what any process framework must
-> decide, and the vocabulary for saying it precisely.
+> **Scope.** This document is the general model: what any process framework must decide,
+> and the vocabulary for saying it precisely.
 > It is the authority on the model, not on Metaproc.
 > Where it describes what Metaproc actually does, its companion
 > [metaproc-concepts.md](metaproc-concepts.md) (`metaproc help concepts`) wins; that
@@ -577,9 +577,8 @@ does.
 Everything so far describes one pass: plan, execute, finish.
 
 This section is about the *mechanism* of iteration.
-For what Metaproc iterates *on* — process definitions reading and rewriting other
-process definitions — see
-[§5 Optimization Loops and Self-Improvement](metaproc-concepts.md).
+For what Metaproc iterates *on*, process definitions reading and rewriting other process
+definitions, see [§5 Optimization Loops and Self-Improvement](metaproc-concepts.md).
 The sweep, ensemble, and experiment primitives named at the end of this section are
 described there as deferred work rather than shipped features.
 There is a further layer, **iterative processes**, where a whole run is the body of a
@@ -700,8 +699,8 @@ is the signal that the framework, not the workflow, needs the change.
 ## How Metaproc Maps to This Model
 
 Concept by concept, with the authoritative doc for each.
-The contracts Metaproc commits to going forward — dependency clauses, expansion closure,
-attempt fencing, task generations — are decided in
+The contracts Metaproc commits to going forward (dependency clauses, expansion closure,
+attempt fencing, task generations) are decided in
 [execution-model-design.md](execution-model-design.md), which instantiates this general
 model; the rows below describe the implementation as it stands today.
 

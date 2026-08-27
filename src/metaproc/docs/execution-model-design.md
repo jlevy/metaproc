@@ -1,7 +1,7 @@
 # Metaproc Execution Model
 
 > **This document owns the *contracts*.** What an edge means, when a roster is complete,
-> which attempt owns a result, and what a status file may claim — the decisions that are
+> which attempt owns a result, and what a status file may claim: the decisions that are
 > expensive to change once process specs depend on them.
 > For how they are implemented today, including the reducer, the projection, and
 > item-aligned resume, see [arch-execution-model.md](arch-execution-model.md)

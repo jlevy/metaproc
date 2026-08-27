@@ -37,7 +37,7 @@ Almost nobody needs all of them at once, so start from what you are doing:
 
 | You are… | Read |
 | --- | --- |
-| **authoring a process spec** | §6 Authored Process Model — the envelope, step modes, inputs and outputs, `for_each`, template resolution, and the step field reference in §6.13 |
+| **authoring a process spec** | §6 Authored Process Model: the envelope, step modes, inputs and outputs, `for_each`, template resolution, and the step field reference in §6.13 |
 | **running or debugging a run** | §9 Runtime Model (what each artifact means), then §10 Resumability and Publication Semantics (why a step did or did not re-run). [metaproc-operator-reference.md](metaproc-operator-reference.md) is the task-oriented version |
 | **implementing an adapter** | §12 Adapter Contract, then §14 Robustness Subsystems for failure classification, and §15 for usage and cost attribution |
 | **contributing to the framework** | §5 Implementation Inventory for the map, then §8 Resolved Plan Model and §19 Process Orchestration for the execution path |
@@ -47,8 +47,8 @@ Two conventions worth knowing before you start.
 Section numbers are stable identifiers, not an outline: numbering begins at 5 because
 the first four sections became [metaproc-concepts.md](metaproc-concepts.md), and a
 section that moves out keeps its number reserved rather than renumbering the rest.
-Subsystems with their own document — the run pool, cloud execution, authentication, the
-Claude Code harness, file IO, the execution model, and testing — are summarized here and
+Subsystems with their own document (the run pool, cloud execution, authentication, the
+Claude Code harness, file IO, the execution model, and testing) are summarized here and
 specified there; where the two differ, the companion document wins.
 
 ## Scope and Imported Concepts
@@ -681,8 +681,8 @@ fan-out dispatch.
 
 ## 7. Analysis Reference Profile
 
-This section held a worked profile from one downstream analysis domain — the Predict,
-Retro, Mine, and Learn processes — as an illustration of how the authored model above is
+This section held a worked profile from one downstream analysis domain (the Predict,
+Retro, Mine, and Learn processes) as an illustration of how the authored model above is
 used in practice.
 
 It has moved to
@@ -2569,8 +2569,8 @@ leases, claims, and monitoring contracts described above.
 `metaproc gcp run` is a lower-level primitive for one command in one Batch task; it is
 not a second process-orchestration API.
 
-The full design — job construction, container bootstrap, orchestrator and worker
-entrypoints, cross-host coordination, log retrieval, and secret hydration — is in
+The full design (job construction, container bootstrap, orchestrator and worker
+entrypoints, cross-host coordination, log retrieval, and secret hydration) is in
 [arch-cloud-execution.md](arch-cloud-execution.md), also readable as
 `metaproc help arch-cloud`. That document owns cloud execution; this section is
 orientation only, so that the two cannot drift apart.

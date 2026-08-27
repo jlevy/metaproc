@@ -1,6 +1,6 @@
 ---
 title: Documentation Organization
-description: Ship every core Metaproc document inside the wheel behind `metaproc help`, index all of them from the README with their CLI equivalents, and move project-internal material — backlog, revision history, maintenance scaffolding — out of the shipped set and into docs/project.
+description: Ship every core Metaproc document inside the wheel behind `metaproc help`, index all of them from the README with their CLI equivalents, and move project-internal material (backlog, revision history, maintenance scaffolding) out of the shipped set and into docs/project.
 date: 2026-08-26
 status: Implemented
 ---
@@ -25,8 +25,8 @@ vocabularies that contradict each other on at least five terms.
 This plan makes the core documentation set part of the package.
 Every document core to the system ships in the wheel, is served by
 `metaproc help <topic>`, and is listed and linked in the README alongside its CLI
-equivalent. Everything project-internal — implementation plans, provenance, release
-records, revision histories, and future-work backlogs — moves under `docs/project/` and
+equivalent. Everything project-internal (implementation plans, provenance, release
+records, revision histories, and future-work backlogs) moves under `docs/project/` and
 stays out of the wheel.
 
 The reorganization is deliberately phased.
@@ -73,8 +73,8 @@ Five findings drive this plan.
 
 **Core documentation does not reach the people who need it.** `metaproc help` serves
 three topics totaling 13,742 words.
-Everything else — the design document, all eight architecture documents, the
-conventions, the artifact catalog — exists only in the repository.
+Everything else (the design document, all eight architecture documents, the conventions,
+the artifact catalog) exists only in the repository.
 An agent operating Metaproc as a dependency cannot read any of it.
 That is the gap this plan is mainly about, and it inverts the earlier draft of this
 plan, which proposed adding nothing to the wheel.
@@ -151,7 +151,7 @@ and topic prefix, which is what the directory was carrying.
 Shipping the design document alone would leave it linking to documents that are not
 there. It carries 30 repository-relative links, 16 of them to `arch-*.md` siblings.
 `devtools/check_links.py` validates local links against the repository, so those links
-stay green in CI while being dead for every reader of the installed wheel — the failure
+stay green in CI while being dead for every reader of the installed wheel; the failure
 mode is invisible to the gate that exists.
 
 Moving the whole set into one directory converts those 16 links into sibling links that
@@ -220,7 +220,7 @@ Two changes follow from the size of the set.
 
 **The topic listing shows sizes.** `metaproc help` with no topic currently prints name
 and description. At fifteen topics, one of them 19,926 words, an agent choosing a topic
-is choosing how much of its context to spend — roughly 30,000 tokens for `design` alone.
+is choosing how much of its context to spend: roughly 30,000 tokens for `design` alone.
 The listing gains an approximate word count per topic so that choice is informed rather
 than discovered afterward.
 
@@ -242,13 +242,13 @@ working for the three existing topics.
 There is an order in which these documents make sense, and no current index states it.
 Someone arriving at Metaproc should read:
 
-1. **`concepts`** — the vocabulary, the ownership boundaries, the four step modes, the
+1. **`concepts`**: the vocabulary, the ownership boundaries, the four step modes, the
    optimization loops. Everything else assumes it; the design doc says so in its own
    scope section: “read it first for the definitions assumed below.”
-2. **`design`** — how the system is actually built, in detail.
+2. **`design`**: how the system is actually built, in detail.
    This is the document whose §5 numbering exists *because* the first four sections
    became doc 1.
-3. **`framework`** — the general model beneath any process framework, plus the explicit
+3. **`framework`**: the general model beneath any process framework, plus the explicit
    map of how Metaproc instantiates it and where it deviates.
    A reference for readers who want the theory, not a prerequisite.
 
@@ -264,7 +264,7 @@ Two rules, applied to every table in the Documentation section.
 
 | Document | `metaproc help` | Purpose |
 | --- | --- | --- |
-| `metaproc-concepts` — linked to its path | `concepts` | … |
+| `metaproc-concepts`, linked to its path | `concepts` | … |
 
 **Every first-party document appears somewhere.** The audit found six arch docs,
 `docs/releases/`, and `src/metaproc/runpool/README.md` linked from nowhere.
@@ -275,7 +275,7 @@ their topics, and a Project Records section covering `docs/project/` and
 ### Target layout
 
 ```
-src/metaproc/docs/           the shipped set — 15 topics
+src/metaproc/docs/           the shipped set (15 topics)
   metaproc-concepts.md
   metaproc-operator-reference.md
   metaproc-developer-guide.md
@@ -452,7 +452,7 @@ gains an explicit pointer saying the concept is modeled but not implemented.**
 
 - `python -m devtools.check_links` after every move; it already gates `make verify` and
   is the safety net for a 105-reference rename.
-- `python -m devtools.check_shipped_links` — new in Phase 1, and the only gate that can
+- `python -m devtools.check_shipped_links`: new in Phase 1, and the only gate that can
   see a link which is valid in the repository and dead in the wheel.
 - `make verify` at the end of each phase: public hygiene, distribution inspection, and
   the Agent Skill drift test all touch documentation paths.
@@ -461,9 +461,8 @@ gains an explicit pointer saying the concept is modeled but not implemented.**
 - `uv run pytest tests/test_locking_policy.py`, which hardcodes
   `src/metaproc/runpool/README.md`.
 - `devtools/check_distribution.py` must show the twelve new documents present in both
-  the wheel and the sdist — this plan *does* change the distribution payload, from
-  13,742 to 75,844 words, and the check should assert the new set rather than tolerate
-  it.
+  the wheel and the sdist; this plan *does* change the distribution payload, from 13,742
+  to 75,844 words, and the check should assert the new set rather than tolerate it.
 - Install the built wheel into a scratch environment and run `metaproc help` plus one
   moved topic, confirming the doc is served and its sibling links point at files that
   are actually present.
@@ -493,7 +492,7 @@ That is worth a CHANGELOG entry under a documentation heading, and worth saying 
   removes a distinction that may no longer mean anything to a reader.
   Deferred to Phase 3, when the set can be judged as a set.
 - Do the runbooks belong in the wheel?
-  This plan says no — they are procedures for this repository, not framework
+  This plan says no: they are procedures for this repository, not framework
   documentation. `credential-setup.runbook.md` is the awkward case, since the design doc
   links to it for auth setup and a downstream operator plausibly wants it.
 - Should `docs/project/releases/` merge into `CHANGELOG.md` entirely?
@@ -512,8 +511,8 @@ stays visible.
 
 **Seventeen topics, not fifteen.** The shipped-link gate showed the architecture docs
 linking to `credential-setup.runbook.md` twelve times and `cloud-dispatch.runbook.md`
-five times. Both are framework-level rather than repository-level — `credential-setup`
-contains no `make`, `uv run`, `devtools/`, or `pytest` reference at all — so they ship
+five times. Both are framework-level rather than repository-level (`credential-setup`
+contains no `make`, `uv run`, `devtools/`, or `pytest` reference at all), so they ship
 as the `credentials` and `cloud-dispatch` topics instead of leaving seventeen references
 pointing outside the package.
 
@@ -526,7 +525,7 @@ audit found.
 **178 violations, not 26.** The plan counted only the three original manuals.
 The architecture docs link into source heavily: 77 of the findings were
 `../../src/metaproc/*.py` references, most carrying `#L` line anchors.
-Those became code spans — a line anchor is wrong the moment the file changes, and a path
+Those became code spans: a line anchor is wrong the moment the file changes, and a path
 an agent can read is worth more than a link it cannot follow.
 116 became sibling links, 28 absolute URLs.
 
@@ -534,7 +533,7 @@ an agent can read is worth more than a link it cannot follow.
 `performance-notes.md`, `memory-accounting-reference.md`, and
 `agent-toolchain-bootstrap.md` under `docs/project/`. Once the framework documentation
 moved into the package, `docs/` was left holding exactly the documents about working on
-this repository, which is a coherent category — and `docs/project/` reads as “how the
+this repository, which is a coherent category, and `docs/project/` reads as “how the
 project got here,” which those four are not.
 Only `releases/` moved.
 
@@ -554,7 +553,7 @@ Review found that layout mixed kinds of documents, so the section became categor
 lists instead: Essential Docs (the two-document reading path, with the general model as
 background), Operator Docs (the operator reference, the developer guide for people
 building workflows *on* Metaproc, and the two shipped runbooks), Reference Docs
-(conventions, artifact catalog, execution contracts, pricing), and Architecture — each
+(conventions, artifact catalog, execution contracts, pricing), and Architecture, each
 entry carrying the exact `metaproc help` command and a one-line description.
 Repository-facing documents moved out of the Documentation section entirely, into a
 Project Docs section late in the README next to Development; the CHANGELOG is referenced
@@ -565,9 +564,12 @@ were renamed with repren: `metaproc-concepts-and-principles.md` became
 `metaproc-concepts.md` (title “Metaproc Concepts”) and `process-framework-concepts.md`
 became `process-framework-theory.md` (title “Process Framework Theory”), with all
 references swept, topic names unchanged.
-The README’s Essential Docs grew to four: concepts, design, the operator reference, and
-the developer guide, in reading order.
-Architecture follows immediately so the developer-facing material sits together.
+The README’s Essential Docs are three, in reading order: concepts, design, and the
+operator reference. The developer guide and the seven architecture docs share one
+Developer and Architecture Docs section, since both serve people extending Metaproc.
+A final pass applied the documentation guidelines to every file authored in this change;
+em dashes were removed in favor of the punctuation the guidelines prefer, and
+pre-existing prose is tracked as its own sweep.
 The two shipped runbooks form an Operator Runbooks group, and the theory doc files under
 Reference Docs as background.
 Main docs carry their real titles in bold; architecture and repository docs keep
@@ -599,12 +601,12 @@ not.** A term count finds contradictions in defined vocabulary; it does not read
 
 - *24 stale link labels.* The link sweep in Phase 1 fixed every link *target* and no
   link *text*, so documents across the shipped set still read `arch-metaproc-core.md §6`
-  as the visible text over a link to `metaproc-design.md` — naming a file that no longer
+  as the visible text over a link to `metaproc-design.md`, naming a file that no longer
   exists, while pointing at the one that replaced it.
   The mapping table in `process-framework-theory.md` had seven of them.
 - *Key space is a deviation, not a gap.* The general model requires each item key to
   belong to a declared identity domain.
-  Metaproc declares none — but reaches the same guarantee structurally, because
+  Metaproc declares none, but reaches the same guarantee structurally, because
   `for_each.align: same_key` requires a shared source (`src/metaproc/engine/graph.py`).
   That belonged in §4.2b as a difference, distinct from the five genuine absences.
 - *Two sections named “loops” describing different layers.* The concepts doc’s §5 is
@@ -623,7 +625,7 @@ the one a future contributor is most likely to break.
 
 - Documentation audit, 2026-08-26. Figures re-measured against `d17b493`, the base this
   plan merges into.
-- `docs/project/README.md` — the project-records rule this plan applies
-- `devtools/check_links.py` — the gate that makes a rename of this size safe, and the
-  one that cannot see wheel-dead links
-- `src/metaproc/docs/__init__.py` — the topic wiring this plan rebuilds as a registry
+- `docs/project/README.md`: the project-records rule this plan applies
+- `devtools/check_links.py`: the gate that makes a rename of this size safe, and the one
+  that cannot see wheel-dead links
+- `src/metaproc/docs/__init__.py`: the topic wiring this plan rebuilds as a registry

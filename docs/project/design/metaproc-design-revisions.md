@@ -2,7 +2,7 @@
 
 Authoring revisions of
 [metaproc-design.md](../../../src/metaproc/docs/metaproc-design.md), kept as a project
-record. These are not releases — for what shipped when, see
+record. These are not releases; for what shipped when, see
 [CHANGELOG.md](../../../CHANGELOG.md) and [the release notes](../releases/).
 
 Approximate mapping: rev2i and earlier predate v0.2.0; rev2j through rev2l correspond to

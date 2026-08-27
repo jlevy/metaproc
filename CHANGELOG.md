@@ -12,15 +12,15 @@ development series.
 - The core documentation set now ships inside the package.
   `metaproc help` serves 17 topics instead of 3, covering the design doc, the
   conventions, the artifact catalog, the general framework model, the credential and
-  cloud-dispatch runbooks, and all seven architecture documents — so a consumer reading
+  cloud-dispatch runbooks, and all seven architecture documents, so a consumer reading
   from an installed wheel has the same documentation as a reader of the repository.
   `metaproc help` with no topic lists them in reading order with approximate sizes.
 - `metaproc help developer` and the Agent Skill catalog list the full topic set.
   Regenerate committed skill copies with `metaproc skill metaproc --install`.
 - Documentation paths moved: `docs/arch/` is gone, its contents now in
   `src/metaproc/docs/`; `arch-metaproc-core.md` is `metaproc-design.md`;
-  `docs/releases/` is `docs/project/releases/`. Project-internal material — revision
-  histories, future-work backlogs — moved under `docs/project/design/`.
+  `docs/releases/` is `docs/project/releases/`. Project-internal material (revision
+  histories, future-work backlogs) moved under `docs/project/design/`.
 - New `devtools/check_shipped_links.py` gate: a relative link in a shipped document must
   resolve inside `src/metaproc/`, so links that are valid in a checkout but dead in the
   wheel fail CI.
