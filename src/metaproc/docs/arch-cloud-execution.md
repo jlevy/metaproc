@@ -6,11 +6,10 @@ status: Approved
 ---
 # Architecture: Cloud Execution
 
-**Date:** 2026-04-12 (last updated 2026-08-25) **Status:** Approved
+**Date:** 2026-04-12 (last updated 2026-08-27) **Status:** Approved
 
-For the overall metaproc framework design, see
-[arch-metaproc-core.md](metaproc-design.md); for the run pool process management
-subsystem, see [arch-runpool.md](arch-runpool.md).
+For the overall metaproc framework design, see [metaproc-design.md](metaproc-design.md);
+for the run pool process management subsystem, see [arch-runpool.md](arch-runpool.md).
 
 ## 1. Background and Requirements
 

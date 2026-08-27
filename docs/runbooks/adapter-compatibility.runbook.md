@@ -165,7 +165,7 @@ image shipped with a stale `derive_variant` cascade.
 Either way, the emitted stats make the mis-routing visible.
 
 Full contract:
-[`arch-metaproc-core.md §14.7 Tool-use Observability`](../../src/metaproc/docs/metaproc-design.md).
+[`metaproc-design.md §14.7 Tool-use Observability`](../../src/metaproc/docs/metaproc-design.md).
 
 ## 7. Endpoint-shape signals (incidental but useful)
 

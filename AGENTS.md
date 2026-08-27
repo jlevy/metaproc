@@ -93,6 +93,12 @@ Before handoff: review the diff, run `make verify`, update and close the relevan
 issues, run `tbd sync`, commit, push, open or update the pull request, and watch CI to
 completion.
 
+Reviews live on the pull request, not in the repository.
+The `tbd shortcut review-github-pr` offers an in-repo review doc under
+`docs/project/reviews/` as one of its publish channels; this repository retired that
+directory deliberately, along with the rest of its human-facing workflow scaffolding.
+Post the review as PR comments instead, and do not recreate the directory.
+
 <!-- BEGIN TBD INTEGRATION format=f08 surface=agents-md -->
 ## tbd
 

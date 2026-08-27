@@ -85,8 +85,8 @@ smoke roster). In the Recent tab:
 
 If every file shows as its own row (no collapse), the cluster threshold isn’t matching —
 the spread is wider than 5 %, or the single-dir compaction didn’t fold the chain.
-Check `docs/arch/arch-metaproc-core.md` for the spec; constants live in metabrowser’s
-external `settings.py` (`RECENT_CLUSTER_PCT`).
+Check `src/metaproc/docs/metaproc-design.md` for the spec; constants live in
+metabrowser’s external `settings.py` (`RECENT_CLUSTER_PCT`).
 
 ## 5. Active-file badges (active_tracker)
 

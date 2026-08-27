@@ -435,7 +435,7 @@ The values differ per class by design.
 Format, lifecycle, and consumer are each answered by existing signals (filename suffix,
 path prefix, or a step reference like `uses:` / `for_each.over:` / `prompt_paths`), so a
 closed role enum would re-encode three separate questions in one tag.
-See `arch-metaproc-core.md` §11.6 for the full rationale.
+See `metaproc-design.md` §11.6 for the full rationale.
 
 ## YAML and Template Rules
 
@@ -606,7 +606,7 @@ lives where the runs live, not in `/tmp/`.
 ## Observability
 
 Three artifacts carry tool-use observability for every workflow run.
-Full contract in [`arch-metaproc-core.md §14.7`](metaproc-design.md).
+Full contract in [`metaproc-design.md §14.7`](metaproc-design.md).
 
 | Artifact | Scope | Owner | Role |
 | --- | --- | --- | --- |

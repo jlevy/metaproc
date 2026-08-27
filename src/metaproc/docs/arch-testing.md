@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: Testing
 
-**Date:** 2026-04-24 (last updated 2026-07-26) **Status:** Approved
+**Date:** 2026-04-24 (last updated 2026-08-27) **Status:** Approved
 
 Testing is organized into tiers by cost and scope.
 Each tier is a named process spec you run via `metaproc run-process`; the table below

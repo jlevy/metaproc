@@ -6,7 +6,7 @@ status: Draft — partial currency notice below
 ---
 # Architecture: Authentication and Credentials
 
-**Date:** 2026-04-21 (last updated 2026-08-24) **Status:** Draft — partial currency
+**Date:** 2026-04-21 (last updated 2026-08-27) **Status:** Draft — partial currency
 notice below
 
 ## Currency notice (2026-04-28)
@@ -52,7 +52,7 @@ the Claude Code CLI Personal-Plan OAuth two-hop flow, Pi CLI provider auth (incl
 Vertex MaaS token injection), the Secret Manager registry for Batch jobs, and the
 `auth-check` verification command.
 
-Primary sources: [metaproc/docs/arch/arch-metaproc-core.md](metaproc-design.md),
+Primary sources: [metaproc-design.md](metaproc-design.md),
 [metaproc/docs/arch/arch-cloud-execution.md](arch-cloud-execution.md),
 [metaproc/docs/runbooks/credential-setup.runbook.md](credential-setup.runbook.md), and
 the code paths referenced inline.
@@ -785,8 +785,8 @@ No auth is on the per-item hot path.
 
 ## References
 
-- [metaproc/docs/arch/arch-metaproc-core.md](metaproc-design.md) — §12 adapters, §21.14
-  Secret Manager integration.
+- [metaproc-design.md](metaproc-design.md) — §12 adapters, §21.14 Secret Manager
+  integration.
 - [metaproc/docs/arch/arch-cloud-execution.md](arch-cloud-execution.md) — §2.8 container
   bootstrap contract, §3.10 Secret Manager integration, §3.12 Vertex AI MaaS
   integration.

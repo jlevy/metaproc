@@ -44,8 +44,11 @@ def check_shipped_links(
     """Return one finding per relative link that escapes ``package_dir``."""
     findings: list[str] = []
     resolved_dir = package_dir.resolve()
+    # Report paths relative to the repository root the package sits in, so findings
+    # read the same under the real tree and under a test fixture.
+    display_root = package_dir.resolve().parents[1]
     for source in sorted(shipped_dir.glob("*.md")):
-        relative_source = source.relative_to(ROOT)
+        relative_source = source.resolve().relative_to(display_root)
         for line_number, line in enumerate(source.read_text("utf-8").splitlines(), start=1):
             for match in LINK_RE.finditer(line):
                 raw_target = match.group(1).strip()

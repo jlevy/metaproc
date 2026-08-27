@@ -114,8 +114,8 @@ For procedural how-tos, see the runbooks under
 | [`softschema-validation.runbook.md`](https://github.com/jlevy/metaproc/blob/main/docs/runbooks/softschema-validation.runbook.md) | Validating softschema-tagged artifacts. |
 | [`browser-streaming-smoke.runbook.md`](https://github.com/jlevy/metaproc/blob/main/docs/runbooks/browser-streaming-smoke.runbook.md) | Browser streaming smoke procedure. |
 
-For implementation contracts see [`arch/arch-metaproc-core.md`](metaproc-design.md), for
-pool behavior [`arch/arch-runpool.md`](arch-runpool.md), and for naming rules
+For implementation contracts see [`metaproc-design.md`](metaproc-design.md), for pool
+behavior [`arch/arch-runpool.md`](arch-runpool.md), and for naming rules
 [`conventions.md`](conventions.md).
 
 ## Operating Rules
@@ -752,7 +752,7 @@ When runtime paths change, update these documents in the same PR:
 - this operator reference
 - [artifact-catalog.md](artifact-catalog.md)
 - [conventions.md](conventions.md)
-- [arch-metaproc-core.md](metaproc-design.md)
+- [metaproc-design.md](metaproc-design.md)
 - [arch-runpool.md](arch-runpool.md)
 - [../README.md](https://github.com/jlevy/metaproc/blob/main/README.md)
 - active specs that name source log paths

@@ -86,8 +86,8 @@ performance references all sit outside it.
 `docs/project/README.md` also documents a `specs/future/` directory that has never
 existed on disk.
 
-**`arch-metaproc-core.md` is the design doc wearing an architecture doc’s filename.**
-The evidence is in the file.
+**`metaproc-design.md` is the design doc wearing an architecture doc’s filename.** The
+evidence is in the file.
 It carries 19,926 words against 8,792 for the next largest architecture doc.
 It has 56 numbered sections where no other document has more than 4. Its numbering
 starts at §5, and it says why: “numbering starts at 5 because earlier sections moved
@@ -129,7 +129,7 @@ Twelve are new; the three existing topics are unchanged in content by this plan.
 | `concepts` | `metaproc-concepts-and-principles.md` | 6,996 | ships today |
 | `operator` | `metaproc-operator-reference.md` | 5,402 | ships today |
 | `developer` | `metaproc-developer-guide.md` | 1,344 | ships today |
-| `design` | `metaproc-design.md` | 19,926 | from `docs/arch/arch-metaproc-core.md` |
+| `design` | `metaproc-design.md` | 19,926 | from `src/metaproc/docs/metaproc-design.md` |
 | `framework` | `process-framework-concepts.md` | 7,214 | from `docs/` |
 | `conventions` | `conventions.md` | 4,515 | from `docs/` |
 | `execution-model` | `execution-model-design.md` | 1,877 | from `docs/` |
@@ -547,6 +547,50 @@ With §21 condensed, the design doc went from 19,926 words to 16,038.
 
 Final shape: 17 topics, 74,812 words, `make verify` green (4,436 passed, 8 skipped),
 both link gates clean, and all 17 documents asserted present in the wheel and the sdist.
+
+### Follow-ups, closed 2026-08-27
+
+The three beads left open after the six phases are now done, and two of them found real
+problems rather than just closing paperwork.
+
+**The date-drift check (`devtools/check_doc_dates.py`) caught the drift it was written
+for.** `arch-claude-code-harness.md` claimed 2026-05-23 against substantive commits
+three months newer; `arch-testing.md` claimed 2026-07-26; `arch-file-io-utilities.md`
+claimed 2026-08-09. All eight dated documents are now current and the check gates
+`make lint-check`.
+
+Its interesting behavior is what it ignores.
+`git diff -w` was not enough: Flowmark rewraps paragraphs, which moves words *between*
+lines, and `-w` only ignores whitespace within a line.
+Left that way, `make format` would have invalidated every document’s date at once and
+trained people to bump dates without meaning it.
+The check compares whitespace-normalized content between commits instead, and follows
+renames so this reorganization did not reset every document’s history.
+
+**The full concepts re-read found three things the term-frequency comparison could
+not.** A term count finds contradictions in defined vocabulary; it does not read prose.
+
+- *24 stale link labels.* The link sweep in Phase 1 fixed every link *target* and no
+  link *text*, so documents across the shipped set still read `arch-metaproc-core.md §6`
+  as the visible text over a link to `metaproc-design.md` — naming a file that no longer
+  exists, while pointing at the one that replaced it.
+  The mapping table in `process-framework-concepts.md` had seven of them.
+- *Key space is a deviation, not a gap.* The general model requires each item key to
+  belong to a declared identity domain.
+  Metaproc declares none — but reaches the same guarantee structurally, because
+  `for_each.align: same_key` requires a shared source (`src/metaproc/engine/graph.py`).
+  That belonged in §4.2b as a difference, distinct from the five genuine absences.
+- *Two sections named “loops” describing different layers.* The concepts doc’s §5 is
+  about what gets improved (process definitions rewriting process definitions); the
+  general doc’s is about how an iteration is structured (carried state, measurement,
+  gate, termination). Neither contradicts the other and neither said so.
+  Both now cross-reference.
+
+**The retired review directory** is noted in AGENTS.md, outside the generated tbd block
+so `tbd setup` cannot overwrite it.
+
+Both new gates now have their own tests (13 cases), including the reflow case, which is
+the one a future contributor is most likely to break.
 
 ## References
 

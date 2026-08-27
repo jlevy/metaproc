@@ -45,7 +45,7 @@ auto-research loops.
 
 Implementation details, including the `.process.md` format, runtime artifacts, CLI
 commands, adapter wire formats, plugin protocol, run pool internals, cloud execution,
-and robustness subsystems, live in [arch-metaproc-core.md](metaproc-design.md).
+and robustness subsystems, live in [metaproc-design.md](metaproc-design.md).
 
 ## 1. Motivation
 
@@ -463,6 +463,16 @@ rather than an omission:
   monotonic token. Metaproc uses leases and claims, which cover most but not all of the
   same ground.
 
+One entry is a difference rather than a gap:
+
+- **Key space** — the general model has each item key belong to a declared identity
+  domain, so two rosters both containing `ACME` cannot be aligned unless they mean the
+  same thing. Metaproc declares no key space.
+  It reaches the same guarantee structurally instead: `for_each.align: same_key`
+  requires a *shared source*, because matching key strings across unrelated rosters is
+  coincidence rather than identity (`src/metaproc/engine/graph.py`). Equivalent
+  protection for aligned chains, narrower than a declared domain elsewhere.
+
 The general model is the target vocabulary; where it and this document disagree about
 what exists *today*, this document is the one describing the shipped system.
 
@@ -604,6 +614,15 @@ The Type B loop (improve the measurement) iterates on domain evals with the step
 ## 5. Optimization Loops and Self-Improvement
 
 Processes can read, evaluate, and rewrite other processes, including themselves.
+
+This section is about *what* gets improved — the process definition itself, and the
+three shapes that improvement takes.
+The general model’s [§ Loops: Processes That Repeat](process-framework-concepts.md)
+covers the complementary question of *how* an iteration is structured: carried state, a
+measurement step, an accept/reject gate, and a termination policy, with the loop sitting
+above the run rather than inside it.
+The two describe the same layer from different sides, and neither is a prerequisite for
+the other.
 
 ### 5.1 Meta-circularity
 
@@ -1035,7 +1054,7 @@ These are not all solving the same problem:
 
 ## References
 
-- [arch-metaproc-core.md](metaproc-design.md): implementation reference (spec format,
+- [metaproc-design.md](metaproc-design.md): implementation reference (spec format,
   runtime artifacts, CLI, adapters, cloud execution).
 - [metaproc-design-proposals.md](https://github.com/jlevy/metaproc/blob/main/docs/project/design/metaproc-design-proposals.md):
   design proposals not yet implemented, including sweep/ensemble/experiment primitives.

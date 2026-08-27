@@ -118,8 +118,8 @@ so the exposure is broad rather than incidental.
 
 ### Where the Layer Boundary Falls
 
-`arch-metaproc-core.md` §13 already draws it: QA is a domain concern, and check
-taxonomies, severity models, and report formats stay in the domain layer.
+`metaproc-design.md` §13 already draws it: QA is a domain concern, and check taxonomies,
+severity models, and report formats stay in the domain layer.
 Nothing here disturbs that.
 
 The clause worth stating explicitly, because it is what makes this proposal compatible
@@ -264,7 +264,7 @@ The two layers overlap on dates by design.
 They answer different questions -- “is this run fair?”
 and “is this artifact right?”
 -- and only the second outlives the run.
-See `arch-metaproc-core.md` §14.6 for the pipeline and the scoping rule.
+See `metaproc-design.md` §14.6 for the pipeline and the scoping rule.
 
 ### What Falls Out
 
@@ -387,7 +387,7 @@ case.
 
 - [process-framework-concepts.md](../../../../src/metaproc/docs/process-framework-concepts.md),
   for the requirement axis, the two-axis failure model, and the design tests cited here.
-- [arch-metaproc-core.md](../../../../src/metaproc/docs/metaproc-design.md) §13 for the
+- [metaproc-design.md](../../../../src/metaproc/docs/metaproc-design.md) §13 for the
   layer boundary and §14.1 for the retry chain this makes declarative.
 
 <!-- This document follows common-doc-guidelines.md.

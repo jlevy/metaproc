@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: File I/O Utilities (`metaproc.io`)
 
-**Date:** 2026-07-26 (last updated 2026-08-09) **Status:** Approved
+**Date:** 2026-07-26 (last updated 2026-08-27) **Status:** Approved
 
 `metaproc.io` is the curated public import surface for downstream callers and shared
 internal use. Every helper documented here is importable directly from `metaproc.io`:

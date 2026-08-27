@@ -576,6 +576,13 @@ does.
 ## Loops: Processes That Repeat
 
 Everything so far describes one pass: plan, execute, finish.
+
+This section is about the *mechanism* of iteration.
+For what Metaproc iterates *on* — process definitions reading and rewriting other
+process definitions — see
+[§5 Optimization Loops and Self-Improvement](metaproc-concepts-and-principles.md).
+The sweep, ensemble, and experiment primitives named at the end of this section are
+described there as deferred work rather than shipped features.
 There is a further layer, **iterative processes**, where a whole run is the body of a
 loop that repeats until some condition holds.
 An automated research loop is one example: gather sources, synthesize, identify gaps,
@@ -701,15 +708,15 @@ model; the rows below describe the implementation as it stands today.
 
 | Concept | Metaproc today | Where |
 | --- | --- | --- |
-| Process spec, steps, artifacts | Markdown specs with typed `deps`, `inputs`, and `outputs`; four step modes | [arch-metaproc-core.md §6](metaproc-design.md) |
-| Contracts and keys | Declared `as:` and `parse:` shapes on deps; softschema-validated artifacts (`softschema inspect`, `softschema validate`); `for_each` `bind` and `bind_fields` declare the dispatch fields; the item key addresses per-task state | [arch-metaproc-core.md §6.5-6.7, §13](metaproc-design.md) |
-| Static planning | Spec resolved into a `Plan` as data; `plan`, `--dry-run`, validation | [arch-metaproc-core.md §8](metaproc-design.md) |
+| Process spec, steps, artifacts | Markdown specs with typed `deps`, `inputs`, and `outputs`; four step modes | [metaproc-design.md §6](metaproc-design.md) |
+| Contracts and keys | Declared `as:` and `parse:` shapes on deps; softschema-validated artifacts (`softschema inspect`, `softschema validate`); `for_each` `bind` and `bind_fields` declare the dispatch fields; the item key addresses per-task state | [metaproc-design.md §6.5-6.7, §13](metaproc-design.md) |
+| Static planning | Spec resolved into a `Plan` as data; `plan`, `--dry-run`, validation | [metaproc-design.md §8](metaproc-design.md) |
 | Dynamic width | Fan-out rosters re-discovered at execution time, so a mid-run step may write a later step’s roster | `src/metaproc/commands/run_process.py` (execution-time `discover_items_from_source`) |
-| Fan-out | `for_each` over a declared items file, on agent and code steps; per-item retry with backoff on the agent path | [arch-metaproc-core.md §6.7, §11, §14.1](metaproc-design.md) |
-| Dependency clauses | Step-scoped `needs` by default; `for_each.align: same_key` for eligible linear code chains; collected inputs with `require: succeeded \| finished` | [arch-metaproc-core.md §11](metaproc-design.md), [arch-execution-model.md § Adoption Path](arch-execution-model.md#adoption-path) |
-| Task state and resume | Per-item `status.yaml`, `attempt.yaml`, `result.yaml`; stale-marker reconciliation; `--force` invalidation with audit trail | [arch-metaproc-core.md §9-10, §19.5](metaproc-design.md), [artifact-catalog.md](artifact-catalog.md) |
+| Fan-out | `for_each` over a declared items file, on agent and code steps; per-item retry with backoff on the agent path | [metaproc-design.md §6.7, §11, §14.1](metaproc-design.md) |
+| Dependency clauses | Step-scoped `needs` by default; `for_each.align: same_key` for eligible linear code chains; collected inputs with `require: succeeded \| finished` | [metaproc-design.md §11](metaproc-design.md), [arch-execution-model.md § Adoption Path](arch-execution-model.md#adoption-path) |
+| Task state and resume | Per-item `status.yaml`, `attempt.yaml`, `result.yaml`; stale-marker reconciliation; `--force` invalidation with audit trail | [metaproc-design.md §9-10, §19.5](metaproc-design.md), [artifact-catalog.md](artifact-catalog.md) |
 | Admission | RunPool: adaptive memory ceiling, provider ceiling, operator cap, cross-run host admission, health, kill | [arch-runpool.md](arch-runpool.md) |
-| Visibility | `status` (with `--check`), `wait`, `tail`, `pulse`, `stats`, `deps`, `structure-report`, `pool status`, `pool events`, `pool health`, `pool concurrency-timeline`, `pool rollup`, `resource-report`, `trace`; classified `FailureClass` per item; Metabrowser plugin views | [arch-metaproc-core.md §9, §15](metaproc-design.md), [arch-runpool.md § Visibility Contract](arch-runpool.md) |
+| Visibility | `status` (with `--check`), `wait`, `tail`, `pulse`, `stats`, `deps`, `structure-report`, `pool status`, `pool events`, `pool health`, `pool concurrency-timeline`, `pool rollup`, `resource-report`, `trace`; classified `FailureClass` per item; Metabrowser plugin views | [metaproc-design.md §9, §15](metaproc-design.md), [arch-runpool.md § Visibility Contract](arch-runpool.md) |
 | Distribution | Two-tier cloud dispatch running the identical CLI against shared state, partitioned per fan-out step | [arch-cloud-execution.md](arch-cloud-execution.md) |
 
 Known deviations from the model, current as of this writing.

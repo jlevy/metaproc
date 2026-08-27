@@ -12,7 +12,7 @@ status: Draft
 > out, see [execution-model-design.md](execution-model-design.md)
 > (`metaproc help execution-contracts`). Readable as `metaproc help arch-execution`.
 
-**Date:** 2026-08-16 (last updated 2026-08-23) **Status:** Draft
+**Date:** 2026-08-16 (last updated 2026-08-27) **Status:** Draft
 
 `src/metaproc/execution_model/` is the executable form of the
 [execution model design](execution-model-design.md): the durable facts a run is made of,

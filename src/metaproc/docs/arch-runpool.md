@@ -9,7 +9,7 @@ status: Approved
 Module-level notes, including using RunPool as a library, are in
 [`runpool/README.md`](../runpool/README.md).
 
-**Date:** 2026-04-06 (last updated 2026-08-23) **Status:** Approved
+**Date:** 2026-04-06 (last updated 2026-08-27) **Status:** Approved
 
 RunPool is Metaproc’s local agent process manager.
 It owns subprocess lifecycle, adaptive concurrency, host-level coordination, health

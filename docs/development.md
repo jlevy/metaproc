@@ -9,7 +9,7 @@ credentials), see
 
 A generic process framework for running structured multi-step agent workflows.
 Source lives under [`src/metaproc/`](../src/metaproc/); the primary architecture
-reference is [arch-metaproc-core.md](../src/metaproc/docs/metaproc-design.md).
+reference is [metaproc-design.md](../src/metaproc/docs/metaproc-design.md).
 
 Metaproc is intentionally a thin layer above expensive things: agent SDKs, big JSONL log
 streams, GCP Batch, and large repository trees.
@@ -154,7 +154,7 @@ Adding a new adapter is a five-file pattern:
 
 See [credential-setup.runbook.md](../src/metaproc/docs/credential-setup.runbook.md) for
 credential resolution and
-[arch-metaproc-core.md §12](../src/metaproc/docs/metaproc-design.md) for the adapter
+[metaproc-design.md §12](../src/metaproc/docs/metaproc-design.md) for the adapter
 contract.
 
 ## Cloud (GCP) Development

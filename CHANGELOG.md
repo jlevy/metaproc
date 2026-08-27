@@ -24,6 +24,9 @@ development series.
 - New `devtools/check_shipped_links.py` gate: a relative link in a shipped document must
   resolve inside `src/metaproc/`, so links that are valid in a checkout but dead in the
   wheel fail CI.
+- New `devtools/check_doc_dates.py` gate: a shipped document’s `last updated` date must
+  not be older than its most recent substantive commit.
+  Reflows are ignored, so `make format` does not invalidate every date at once.
 
 No runtime behavior, artifact shape, or CLI flag changed.
 

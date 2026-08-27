@@ -1,6 +1,6 @@
 # Metaproc Design Rev3 Proposals
 
-Remaining rev3 candidates on top of `arch-metaproc-core.md` (rev2i).
+Remaining rev3 candidates on top of `metaproc-design.md` (rev2i).
 
 This document intentionally omits proposals that are already implemented on the current
 branch and have been folded into the main design docs.
@@ -33,7 +33,7 @@ That includes:
 
 ## P1. `reduce` CLI Command
 
-**Category:** execution **Modifies:** sections 8.3, 11.4, 20 in `arch-metaproc-core.md`
+**Category:** execution **Modifies:** sections 8.3, 11.4, 20 in `metaproc-design.md`
 
 `needs` is now propagated and enforced by `run-process`, but there is still no command
 that says “start from this completed map step and run its downstream aggregations.”
@@ -146,7 +146,7 @@ Open questions:
 
 ## P6. Declarative Run Source
 
-**Category:** authored, future **Relates to:** sections 6, 11 in `arch-metaproc-core.md`
+**Category:** authored, future **Relates to:** sections 6, 11 in `metaproc-design.md`
 
 The operational problem from early rev2 is mostly gone: production mine runs no longer
 require a manual roster-prep command because `setup-roster` is now an ordinary in-DAG
