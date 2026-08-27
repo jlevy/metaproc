@@ -3,9 +3,9 @@ type: is
 id: is-01m10z8yzxdnmg714n8extpy92
 title: Add a gate for links that are valid in the repo and dead in the wheel
 kind: feature
-status: open
+status: closed
 priority: 1
-version: 2
+version: 3
 spec_path: docs/project/specs/active/plan-2026-08-26-documentation-organization.md
 labels:
   - docs
@@ -14,7 +14,11 @@ dependencies:
     target: is-01m10z8z9aynagg69rfanemcnf
 parent_id: is-01m0zfkvtf12ag7e6y0rbdg7mw
 created_at: 2026-08-27T06:42:16.701Z
-updated_at: 2026-08-27T06:43:40.882Z
+updated_at: 2026-08-27T15:07:48.726Z
+closed_at: 2026-08-27T15:07:48.726Z
+close_reason: Implemented in the documentation reorganization (phases 1-6).
+resolution: null
+duplicate_of: null
 ---
 Phase 1. New devtools/check_shipped_links.py, wired into 'make lint-check'.
 

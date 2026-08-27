@@ -3,16 +3,20 @@ type: is
 id: is-01m0zfmnmjz12f0evrmddyh8az
 title: Reframe metaproc-design.md as a shipped design document
 kind: task
-status: open
+status: closed
 priority: 1
-version: 2
+version: 3
 spec_path: docs/project/specs/active/plan-2026-08-26-documentation-organization.md
 labels:
   - docs
 dependencies: []
 parent_id: is-01m0zfkvtf12ag7e6y0rbdg7mw
 created_at: 2026-08-26T16:49:48.689Z
-updated_at: 2026-08-27T06:41:29.346Z
+updated_at: 2026-08-27T15:07:50.306Z
+closed_at: 2026-08-27T15:07:50.305Z
+close_reason: Implemented in the documentation reorganization (phases 1-6).
+resolution: null
+duplicate_of: null
 ---
 Phase 4. NOTE: this reverses the earlier instruction on this bead, which said to keep the Revision History. The doc now ships in the wheel, so authoring revisions must come out (see the extraction bead).
 

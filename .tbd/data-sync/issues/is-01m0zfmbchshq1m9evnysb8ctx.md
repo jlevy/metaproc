@@ -3,16 +3,20 @@ type: is
 id: is-01m0zfmbchshq1m9evnysb8ctx
 title: Move the remaining repo-internal docs under docs/project
 kind: task
-status: open
+status: closed
 priority: 2
-version: 2
+version: 3
 spec_path: docs/project/specs/active/plan-2026-08-26-documentation-organization.md
 labels:
   - docs
 dependencies: []
 parent_id: is-01m0zfkvtf12ag7e6y0rbdg7mw
 created_at: 2026-08-26T16:49:38.193Z
-updated_at: 2026-08-27T06:41:45.761Z
+updated_at: 2026-08-27T15:07:57.427Z
+closed_at: 2026-08-27T15:07:57.427Z
+close_reason: Superseded. Once the framework docs moved into the package, docs/ held only repository documentation, which is a coherent category; only releases/ moved to docs/project/. Recorded in the spec's Outcome.
+resolution: null
+duplicate_of: null
 ---
 Phase 4. Scope narrowed: conventions.md and artifact-catalog.md are NOT in this bead any more - they ship in the wheel (see the move bead), which settles the Open Question the earlier version of this bead pointed at.
 

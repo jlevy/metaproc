@@ -3,9 +3,9 @@ type: is
 id: is-01m10z8xv335zd4zcknjmnbct8
 title: Replace HelpTopics with a topic registry
 kind: task
-status: open
+status: closed
 priority: 1
-version: 3
+version: 4
 spec_path: docs/project/specs/active/plan-2026-08-26-documentation-organization.md
 labels:
   - docs
@@ -16,7 +16,11 @@ dependencies:
     target: is-01m10z8ydpwg284vkt3p18d4kk
 parent_id: is-01m0zfkvtf12ag7e6y0rbdg7mw
 created_at: 2026-08-27T06:42:15.523Z
-updated_at: 2026-08-27T06:43:40.639Z
+updated_at: 2026-08-27T15:07:47.642Z
+closed_at: 2026-08-27T15:07:47.641Z
+close_reason: Implemented in the documentation reorganization (phases 1-6).
+resolution: null
+duplicate_of: null
 ---
 Phase 1. src/metaproc/docs/__init__.py.
 

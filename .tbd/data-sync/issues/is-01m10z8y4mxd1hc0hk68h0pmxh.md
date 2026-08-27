@@ -3,16 +3,20 @@ type: is
 id: is-01m10z8y4mxd1hc0hk68h0pmxh
 title: Show approximate topic sizes in metaproc help
 kind: task
-status: open
+status: closed
 priority: 1
-version: 1
+version: 2
 spec_path: docs/project/specs/active/plan-2026-08-26-documentation-organization.md
 labels:
   - docs
 dependencies: []
 parent_id: is-01m0zfkvtf12ag7e6y0rbdg7mw
 created_at: 2026-08-27T06:42:15.828Z
-updated_at: 2026-08-27T06:42:15.828Z
+updated_at: 2026-08-27T15:07:47.915Z
+closed_at: 2026-08-27T15:07:47.915Z
+close_reason: Implemented in the documentation reorganization (phases 1-6).
+resolution: null
+duplicate_of: null
 ---
 Phase 1. src/metaproc/commands/help.py, the no-topic listing branch.
 

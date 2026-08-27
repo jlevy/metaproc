@@ -3,9 +3,9 @@ type: is
 id: is-01m10za6g75kbhq91bb8pmfk22
 title: Read the fifteen shipped docs as one set and record the findings
 kind: task
-status: open
+status: closed
 priority: 1
-version: 6
+version: 7
 spec_path: docs/project/specs/active/plan-2026-08-26-documentation-organization.md
 labels:
   - docs
@@ -22,7 +22,11 @@ dependencies:
     target: is-01m10zatw6s0pmrs75p57waq26
 parent_id: is-01m0zfkvtf12ag7e6y0rbdg7mw
 created_at: 2026-08-27T06:42:57.159Z
-updated_at: 2026-08-27T06:43:42.149Z
+updated_at: 2026-08-27T15:07:53.289Z
+closed_at: 2026-08-27T15:07:53.288Z
+close_reason: Implemented in the documentation reorganization (phases 1-6).
+resolution: null
+duplicate_of: null
 ---
 Phase 3. Produces beads, not edits. The set has never been read as a set - it accumulated as three manuals plus a docs/ directory plus an arch/ directory, each maintained on its own.
 

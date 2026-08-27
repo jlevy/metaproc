@@ -5,7 +5,7 @@ title: "Documentation organization: project docs, design doc, concepts reconcili
 kind: epic
 status: open
 priority: 1
-version: 43
+version: 44
 spec_path: docs/project/specs/active/plan-2026-08-26-documentation-organization.md
 labels:
   - docs
@@ -53,18 +53,10 @@ child_order_hints:
   - is-01m10zav5m1qxns81taqs7m9d8
   - is-01m10zavekbtk3qf7944msf7xr
 created_at: 2026-08-26T16:49:22.254Z
-updated_at: 2026-08-27T06:43:59.719Z
+updated_at: 2026-08-27T15:10:05.228Z
 ---
-Umbrella for the 2026-08-26 documentation audit, revised 2026-08-27 after review.
+Documentation reorganization. Phases 1-6 implemented 2026-08-27; see the spec's Outcome section.
 
-The plan changed direction: instead of filing the core documents under docs/project/, they move INTO the wheel. Fifteen 'metaproc help' topics, 75,844 words, so an agent using Metaproc as a dependency has the complete picture without the repository. The README lists and links every first-party document and names its CLI equivalent. Project-internal material - backlog, authoring revision history, repository-maintenance scaffolding - comes out of the shipped docs and moves under docs/project/.
+Shipped: 17 metaproc help topics, 74,812 words (was 3 topics, 13,742). docs/arch/ removed; arch-metaproc-core.md is now src/metaproc/docs/metaproc-design.md. Topic registry replaces the field-per-topic dataclass. New devtools/check_shipped_links.py gate. Project-internal material (revision histories, backlogs, the downstream analysis profile) under docs/project/design/. README lists every first-party document with its CLI equivalent. Concepts vocabularies reconciled.
 
-Six phases, deliberately separated so a large rename stays reviewable:
-1. Move and wire - git mv, topic registry, distribution and shipped-link gates. No prose edits.
-2. README and link direction - every doc listed with its topic.
-3. Cohesion review - read the fifteen as a set; produces beads, not edits.
-4. Externalize internal material - revision history, Future Considerations, maintenance blockquotes out; release versions in.
-5. Tighten - act on the Phase 3 findings; 75,844 words is a large payload to hand an agent.
-6. Reconcile the concepts docs - now higher stakes, because both ship in the same wheel.
-
-Rationale, figures, and the topic table are in the linked spec.
+Remaining children are follow-ups, not part of the reorganization: mp-pw6z (arch-doc date-drift check, an explicit non-goal), mp-m8sp (full concepts re-read), mp-n2r9 (external tbd shortcut).

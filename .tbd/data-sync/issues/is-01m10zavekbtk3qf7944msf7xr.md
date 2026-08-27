@@ -3,16 +3,20 @@ type: is
 id: is-01m10zavekbtk3qf7944msf7xr
 title: Note in AGENTS.md that core docs ship in the wheel
 kind: task
-status: open
+status: closed
 priority: 2
-version: 1
+version: 2
 spec_path: docs/project/specs/active/plan-2026-08-26-documentation-organization.md
 labels:
   - docs
 dependencies: []
 parent_id: is-01m0zfkvtf12ag7e6y0rbdg7mw
 created_at: 2026-08-27T06:43:18.611Z
-updated_at: 2026-08-27T06:43:18.611Z
+updated_at: 2026-08-27T15:07:50.036Z
+closed_at: 2026-08-27T15:07:50.036Z
+close_reason: Implemented in the documentation reorganization (phases 1-6).
+resolution: null
+duplicate_of: null
 ---
 Phase 2. AGENTS.md currently says: 'After changing the skill baseline, spec, or help topics, regenerate the committed copies with metaproc skill metaproc --install (a drift test enforces this).'
 

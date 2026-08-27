@@ -3,9 +3,9 @@ type: is
 id: is-01m10za7vryv4mrqvcq98jqr5c
 title: Extract Future Considerations from the design doc and the seven arch docs
 kind: task
-status: open
+status: closed
 priority: 1
-version: 2
+version: 3
 spec_path: docs/project/specs/active/plan-2026-08-26-documentation-organization.md
 labels:
   - docs
@@ -14,7 +14,11 @@ dependencies:
     target: is-01m10zav5m1qxns81taqs7m9d8
 parent_id: is-01m0zfkvtf12ag7e6y0rbdg7mw
 created_at: 2026-08-27T06:42:58.552Z
-updated_at: 2026-08-27T06:43:42.695Z
+updated_at: 2026-08-27T15:07:50.842Z
+closed_at: 2026-08-27T15:07:50.842Z
+close_reason: Implemented in the documentation reorganization (phases 1-6).
+resolution: null
+duplicate_of: null
 ---
 Phase 4. Every one of the eight moved documents carries a Future Considerations section - the 'revise-architecture-doc' shortcut prompts for one on each revision.
 

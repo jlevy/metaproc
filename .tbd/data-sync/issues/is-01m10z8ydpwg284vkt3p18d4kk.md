@@ -3,16 +3,20 @@ type: is
 id: is-01m10z8ydpwg284vkt3p18d4kk
 title: Enumerate skill topics from the registry and regenerate the skill
 kind: task
-status: open
+status: closed
 priority: 1
-version: 1
+version: 2
 spec_path: docs/project/specs/active/plan-2026-08-26-documentation-organization.md
 labels:
   - docs
 dependencies: []
 parent_id: is-01m0zfkvtf12ag7e6y0rbdg7mw
 created_at: 2026-08-27T06:42:16.117Z
-updated_at: 2026-08-27T06:42:16.117Z
+updated_at: 2026-08-27T15:07:48.187Z
+closed_at: 2026-08-27T15:07:48.186Z
+close_reason: Implemented in the documentation reorganization (phases 1-6).
+resolution: null
+duplicate_of: null
 ---
 Phase 1. src/metaproc/skill/builtin.py.
 
