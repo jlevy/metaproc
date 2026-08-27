@@ -15,8 +15,11 @@ from metabrowser.server import (
     classify_file_kind,
     register_file_kind_detector,
 )
+from pydantic import BaseModel
 
 from metaproc.metabrowser_plugin import sidekick
+from metaproc.plugins import discovery as plugin_discovery
+from metaproc.plugins.registry import PluginRegistryImpl
 
 
 def _write(tmp_path: Path, name: str, content: str) -> Path:
@@ -228,6 +231,84 @@ def test_api_viz_uses_run_config_for_run_only_context(tmp_path: Path, monkeypatc
     assert resp.status_code == 200
     assert payload["viz"]["header"]["name"] == "from-run"
     assert payload["viz"]["task_projection"]["run_dir"] == "runs/current"
+
+
+def test_api_viz_bootstraps_consumer_plugins_before_run_source_discovery(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class ConsumerItem(BaseModel):
+        ticker: str
+
+    class ConsumerRoster(BaseModel):
+        items: list[ConsumerItem]
+
+    class ConsumerRosterEnvelope(BaseModel):
+        consumer_roster: ConsumerRoster
+
+    discovery_calls = 0
+
+    def _discover_consumer_plugin() -> PluginRegistryImpl:
+        nonlocal discovery_calls
+        discovery_calls += 1
+        registry = PluginRegistryImpl()
+        registry.register_envelope("consumer_roster", ConsumerRosterEnvelope)
+        monkeypatch.setattr(plugin_discovery, "_global_registry", registry)
+        return registry
+
+    monkeypatch.setattr(
+        plugin_discovery,
+        "_global_registry",
+        PluginRegistryImpl(),
+    )
+    monkeypatch.setattr(
+        plugin_discovery,
+        "discover_and_load_plugins",
+        _discover_consumer_plugin,
+    )
+    process_path = _write(
+        tmp_path,
+        "test.process.md",
+        "---\nprocess:\n  name: from-run\n  inputs:\n"
+        "    roster:\n      param: ROSTER\n      as: path\n  deps:\n"
+        "    roster:\n      path: '{{roster}}'\n      as: list<string>\n"
+        "      parse:\n        format: yaml\n"
+        "        extract: consumer_roster.items\n  steps:\n"
+        "    - id: inspect\n      mode: code\n"
+        "      handler: metaproc.code_steps.noop\n      for_each:\n"
+        "        over: deps.roster\n        bind: ticker\n"
+        "        bind_fields: [ticker]\n      inputs:\n"
+        "        roster: deps.roster\n---\n",
+    )
+    run_dir = tmp_path / "runs" / "current"
+    (run_dir / ".state").mkdir(parents=True)
+    roster = run_dir / "domain-roster.md"
+    roster.write_text(
+        "---\nconsumer_roster:\n  items:\n    - ticker: AAPL\n---\n",
+        encoding="utf-8",
+    )
+    (run_dir / ".state" / "run-config.yaml").write_text(
+        "process: from-run\n"
+        "process_spec: "
+        + str(process_path)
+        + "\nrun_id: current\nrun_dir: "
+        + str(run_dir)
+        + "\nvariables:\n  ROSTER: "
+        + str(roster)
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(pb, "ROOT_DIR", tmp_path)
+
+    resp = _run_api_viz(pb, {"run_dir": "runs/current"})
+    payload = json.loads(bytes(resp.body))
+
+    assert resp.status_code == 200, payload
+    assert discovery_calls == 1
+    assert payload["viz"]["header"]["name"] == "from-run"
+    assert payload["viz"]["task_projection"]["run_dir"] == "runs/current"
+    step = next(node for node in payload["viz"]["nodes"] if node.get("id") == "inspect")
+    assert step["step"]["fan_out"]["item_count"] == 1
 
 
 def test_api_viz_returns_400_for_non_process_md_suffix(tmp_path: Path, monkeypatch) -> None:

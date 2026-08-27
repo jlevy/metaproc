@@ -259,7 +259,7 @@ No executable behavior was silently dropped.
 
 ## Current Validation Status
 
-Consumer smoke testing of the consolidated candidate found three generic integration
+Consumer smoke testing of the consolidated candidate found four generic integration
 defects without changing the runtime design:
 
 - equivalent relative and absolute log paths could assign the same provider evidence to
@@ -268,7 +268,11 @@ defects without changing the runtime design:
 - Gemini’s native file tool continued to honor workspace ignore rules for a declared
   runtime input, despite the run directory being included in the invocation; and
 - source-spec-free finalization could not distinguish mapped composite item segments
-  from child step names using the original immutable resource snapshot.
+  from child step names using the original immutable resource snapshot; and
+- the Metabrowser CLI loaded the Metaproc browser plugin without running the separate
+  Metaproc CLI bootstrap, so completed-run reconstruction could not recognize
+  consumer-registered softschema envelopes when runtime-produced fan-out sources were
+  present.
 
 The candidate now normalizes both path forms before resource ownership, records the
 qualified mapped-composite step IDs in a strict resource snapshot v2 while retaining a
@@ -277,7 +281,10 @@ recovery, and injects the file-filtering override through Metaproc’s invocatio
 Gemini settings. Regression coverage runs finalization in both path-form orders and
 asserts exact provider meters, tokens, list cost, and tool calls; it also covers mapped
 child process events, item/step-name collisions, and v1 snapshot compatibility.
-The complete framework gate passes with 4,493 tests and the same eight tracked
+The visualization sidekick now loads installed consumer plugins before typed plan
+reconstruction, matching other Metaproc entry points without weakening source validation
+or introducing a consumer-specific parser.
+The complete framework gate passes with 4,494 tests and the same eight tracked
 credential or infrastructure skips, plus lint, type checking, public-hygiene checks,
 dependency audits, package construction, and installed-wheel smoke.
 
