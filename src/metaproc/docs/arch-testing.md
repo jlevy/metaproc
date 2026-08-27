@@ -8,19 +8,6 @@ status: Approved
 
 **Date:** 2026-04-24 (last updated 2026-07-26) **Status:** Approved
 
-> **Maintenance**: This is a maintained architecture doc.
-> Revise via `tbd shortcut revise-architecture-doc` (which prompts you to verify content
-> against current code, then add a “Future Considerations” section).
-> When you make non-trivial changes, bump the **last updated** date above.
-> The full arch-doc index lives in
-> [development.md § Architecture docs](../development.md#architecture-docs).
-> 
-> Companion docs (in `docs/arch/`): [arch-metaproc-core](arch-metaproc-core.md),
-> [arch-runpool](arch-runpool.md), [arch-cloud-execution](arch-cloud-execution.md),
-> [arch-authentication](arch-authentication.md),
-> [arch-claude-code-harness](arch-claude-code-harness.md),
-> [arch-testing](arch-testing.md).
-
 Testing is organized into tiers by cost and scope.
 Each tier is a named process spec you run via `metaproc run-process`; the table below
 maps what to reach for when.
@@ -40,8 +27,8 @@ Only reach for the integration tiers when the smoke tiers are green.
 
 For changes to softschema bindings, process output `schema:` declarations, generated
 frontmatter reports or structure-report rendering, run
-[softschema-validation.runbook.md](../runbooks/softschema-validation.runbook.md) before
-any live adapter smoke.
+[softschema-validation.runbook.md](https://github.com/jlevy/metaproc/blob/main/docs/runbooks/softschema-validation.runbook.md)
+before any live adapter smoke.
 Its default path is no-token and validates the softschema boundary map and a
 negative-control failure.
 
@@ -78,8 +65,8 @@ Credential requirements per adapter:
 | Adapter | Credential | Setup |
 | --- | --- | --- |
 | `claude-code-cli` | macOS Keychain OAuth *or* `ANTHROPIC_API_KEY` | `claude auth` or Claude Desktop login |
-| `codex-cli` | `OPENAI_API_KEY` *or* `~/.codex/auth.json` via `codex login` with `cli_auth_credentials_store = "file"` | See [codex setup](../runbooks/credential-setup.runbook.md) |
-| `gemini-cli` | one of: (a) `GEMINI_API_KEY`, (b) `GOOGLE_GENAI_USE_VERTEXAI=true` + `GOOGLE_API_KEY`, (c) `GOOGLE_GENAI_USE_VERTEXAI=true` + `GOOGLE_CLOUD_PROJECT` + ADC | See [credential-setup.md § Gemini](../runbooks/credential-setup.runbook.md#gemini-cli-gemini-cli). The smoke uses mode (c) against `$METAPROC_GCP_PROJECT` so it runs with no Gemini-specific key. |
+| `codex-cli` | `OPENAI_API_KEY` *or* `~/.codex/auth.json` via `codex login` with `cli_auth_credentials_store = "file"` | See [codex setup](credential-setup.runbook.md) |
+| `gemini-cli` | one of: (a) `GEMINI_API_KEY`, (b) `GOOGLE_GENAI_USE_VERTEXAI=true` + `GOOGLE_API_KEY`, (c) `GOOGLE_GENAI_USE_VERTEXAI=true` + `GOOGLE_CLOUD_PROJECT` + ADC | See [credential-setup.md § Gemini](credential-setup.runbook.md#gemini-cli-gemini-cli). The smoke uses mode (c) against `$METAPROC_GCP_PROJECT` so it runs with no Gemini-specific key. |
 | `pi-cli` | `~/.pi/auth.json` (plus GCP ADC for `vertex-maas`) | `pi login`; `gcloud auth application-default login` for MaaS |
 
 The `pi-cli` smoke pins `vertex-maas` with `glm-5-maas` because that combination is free
@@ -105,7 +92,7 @@ The helper parses the CLI’s JSONL stdout for the identity event that carries `
 For codex, `--assert-model` emits an informational line rather than a hard assertion.
 The codex model guarantee is covered by the separate negative-control smoke (invalid
 `-m <model>` must exit non-zero) — see
-[`smoke-adapters-negative-control.process.md`](../../process/self-test/smoke-adapters-negative-control.process.md).
+[`smoke-adapters-negative-control.process.md`](https://github.com/jlevy/metaproc/blob/main/process/self-test/smoke-adapters-negative-control.process.md).
 
 ### Cloud-dispatch claude credential (Phase 2b)
 
@@ -158,7 +145,7 @@ uv --config-file uv.toml run --frozen metaproc run-process \
 ```
 
 See
-[process/self-test/test-local.process.md](../../process/self-test/test-local.process.md)
+[process/self-test/test-local.process.md](https://github.com/jlevy/metaproc/blob/main/process/self-test/test-local.process.md)
 for step details.
 
 ## Tier 4 — cloud planning (`self-test-cloud-plan`)
@@ -177,7 +164,7 @@ uv --config-file uv.toml run --frozen metaproc run-process \
 ```
 
 See
-[process/self-test/test-cloud.process.md](../../process/self-test/test-cloud.process.md)
+[process/self-test/test-cloud.process.md](https://github.com/jlevy/metaproc/blob/main/process/self-test/test-cloud.process.md)
 for step details.
 
 ## Standalone pytest / lint
@@ -195,9 +182,8 @@ Add `-k <pattern>` to run a subset.
 ## Known harness quirks
 
 - `auth-check --live --variant codex-cli` requires the codex permission-mode default set
-  by the harness. Fixed in
-  [commands/auth_check.py](../../src/metaproc/commands/auth_check.py) — earlier commits
-  raised `ValueError` at dispatch time.
+  by the harness. Fixed in `src/metaproc/commands/auth_check.py` — earlier commits raised
+  `ValueError` at dispatch time.
 - `auth-check --variant <non-claude>` correctly scopes Phase 2b out; setting
   `METAPROC_GCP_SECRET_CLAUDE_CREDS` alongside a non-claude variant no longer pollutes
   the per-adapter signal.
@@ -206,36 +192,6 @@ Add `-k <pattern>` to run a subset.
   flag was accepted (the model guarantee for codex comes from the separate
   negative-control smoke, not from stream parsing).
   See
-  [`smoke-adapters-negative-control.process.md`](../../process/self-test/smoke-adapters-negative-control.process.md).
+  [`smoke-adapters-negative-control.process.md`](https://github.com/jlevy/metaproc/blob/main/process/self-test/smoke-adapters-negative-control.process.md).
 - `--max-concurrency` is not yet honored for sibling code-mode steps.
   Composite children already parallelize, so this only affects code-mode aggregators.
-
-## Future Considerations
-
-### Open Questions
-
-- `--max-concurrency` is not yet honored for sibling code-mode steps in the engine.
-  Does this affect `smoke-core` wall clock when run with `--max-concurrency 4`?
-  (Composite children in `smoke-adapters-all` already parallelize, so only code-mode
-  aggregators are affected.)
-- The codex-cli JSONL stream still does not carry a model ID. If a future codex release
-  adds one, `--assert-model` for codex should move from informational to hard assertion.
-- A live, standalone cloud execution smoke still needs a published image and an
-  operator-provided GCP project.
-  The committed cloud tier intentionally stops at job rendering so repository
-  verification never creates infrastructure or spend.
-
-### Potential Improvements
-
-- Promote the negative-control smoke
-  ([`smoke-adapters-negative-control.process.md`](../../process/self-test/smoke-adapters-negative-control.process.md))
-  into the tier table as its own row, now that it has landed and covers all four
-  adapters.
-- Add a `smoke-softschema` tier that runs the no-token softschema-validation runbook as
-  a process spec, slotting between `smoke-core` and the per-adapter smokes.
-- Track wall-clock actuals in CI (once CI exists) to keep the tier-table estimates
-  honest; current numbers are single-laptop observations.
-
-<!-- This document follows common-doc-guidelines.md.
-See github.com/jlevy/practical-prose and review guidelines before editing.
--->

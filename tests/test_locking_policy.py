@@ -16,7 +16,7 @@ ALLOWED_POLICY_REFERENCES = {
     # Whole-file allowlist: these files either define the mkdir-lock policy or
     # contain explicit negative guidance. metaproc/tests is intentionally not
     # scanned so this test's own forbidden-term literals do not self-trip.
-    Path("docs/arch/arch-runpool.md"),
+    Path("src/metaproc/docs/arch-runpool.md"),
     Path("src/metaproc/dispatch/credential_pool.py"),
     Path("src/metaproc/io/mkdir_lock.py"),
     Path("src/metaproc/runpool/README.md"),

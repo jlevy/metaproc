@@ -1,6 +1,6 @@
 """Unit tests for the hierarchical PathTally helper.
 
-Spec: docs/arch/arch-metaproc-core.md
+Spec: src/metaproc/docs/metaproc-design.md
 §3.4 + §4.4.3.
 """
 

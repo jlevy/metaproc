@@ -1,7 +1,7 @@
 """Tests for the 429-cooling quota-group walk in _teardown_pool_slot.
 
 Phase 4 of the Vehicle A pool redesign (the original design, this regression).
-Spec: docs/arch/arch-metaproc-core.md.
+Spec: src/metaproc/docs/metaproc-design.md.
 
 When the classifier returns ``status=cooling`` (429 rate-limit), the
 retry path should walk past the entire quota group of the failing

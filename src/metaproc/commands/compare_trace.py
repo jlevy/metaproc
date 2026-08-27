@@ -1,7 +1,7 @@
 """metaproc compare-trace — cross-run-dir trace-store comparison matrix.
 
 P4 under spec
-`docs/arch/arch-metaproc-core.md`.
+`src/metaproc/docs/metaproc-design.md`.
 
 Reads `<run-dir>/.logs/derived/trace.jsonl` from N run-dirs and produces
 a row-per-(group) × column-per-run-dir matrix using the same

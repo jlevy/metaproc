@@ -120,7 +120,7 @@ class Vehicle(StrEnum):
     """Credential delivery shape for a pool label.
 
     Added in schema_version 2 (Vehicle A pool redesign — see
-    ``docs/arch/arch-metaproc-core.md``).
+    ``src/metaproc/docs/metaproc-design.md``).
 
     - ``OAUTH_TOKEN`` — static bearer credential injected via the
       ``CLAUDE_CODE_OAUTH_TOKEN`` env var. The pool stores the long-lived

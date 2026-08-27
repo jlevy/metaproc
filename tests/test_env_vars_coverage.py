@@ -1,7 +1,7 @@
 """Enforce that every env-var read goes through a typed registry.
 
 This is the Phase 2 merge gate for
-``docs/arch/arch-metaproc-core.md``.
+``src/metaproc/docs/metaproc-design.md``.
 
 Rule
 ----

@@ -47,7 +47,7 @@ class OutputFailureKind(StrEnum):
     This is the only judgement the framework makes about a contract failure.
     It carries no severity and no ownership: whether a ``structural`` failure is
     worth retrying, or whose fault it is, is the domain's to say (see
-    ``arch-metaproc-core.md`` §13).
+    ``metaproc-design.md`` §13).
 
     Subdivides ``FailureClass.INVALID_OUTPUT``, which aggregates all of these
     into one bucket for operator-facing counts.

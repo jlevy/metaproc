@@ -5,8 +5,8 @@ Remaining rev3 candidates on top of `arch-metaproc-core.md` (rev2i).
 This document intentionally omits proposals that are already implemented on the current
 branch and have been folded into the main design docs.
 The scheduling portions of P1 and P3 are superseded by
-[execution-model-design.md](execution-model-design.md), which owns the task-level
-scheduling contracts.
+[execution-model-design.md](../../../src/metaproc/docs/execution-model-design.md), which
+owns the task-level scheduling contracts.
 That includes:
 
 - promotion of stable production subsystems into the main design
@@ -251,7 +251,8 @@ Why it remains future work:
 ## P8. Mode Selects an Invoker, Not an Execution Path
 
 **Category:** execution, partially implemented **Relates to:** section 6.3 (step modes),
-section 11 (`for_each`), [process-framework-concepts.md](process-framework-concepts.md)
+section 11 (`for_each`),
+[process-framework-concepts.md](../../../src/metaproc/docs/process-framework-concepts.md)
 § Core Objects
 
 `_execute_step` forks on all four modes and each branch owns its own execution path, so

@@ -35,8 +35,7 @@ auto-research loops.
 
 Implementation details, including the `.process.md` format, runtime artifacts, CLI
 commands, adapter wire formats, plugin protocol, run pool internals, cloud execution,
-and robustness subsystems, live in
-[arch-metaproc-core.md](../../../docs/arch/arch-metaproc-core.md).
+and robustness subsystems, live in [arch-metaproc-core.md](metaproc-design.md).
 
 ## 1. Motivation
 
@@ -104,7 +103,7 @@ It helps to think these as three axes:
   validated schemas for all data.
   Add structure as repeated patterns prove they deserve it; relax it when a step needs
   room to explore. The repo’s practical artifact guidance is
-  [conventions.md §File Format Policy](../../../docs/conventions.md#file-format-policy).
+  [conventions.md §File Format Policy](conventions.md#file-format-policy).
 
 ### 1.2 Gradual automation, exactness, and structure
 
@@ -456,7 +455,7 @@ experiment.
 
 - **Run pool:** the adaptive process manager for concurrent agent invocations within a
   fan-out step. Manages concurrency, memory pressure, health monitoring, and subprocess
-  lifecycle. See [arch-runpool.md](../../../docs/arch/arch-runpool.md) for full design.
+  lifecycle. See [arch-runpool.md](arch-runpool.md) for full design.
 - **Step mode:** one of `manual | agent | code | composite`. `manual`: human acts,
   harness validates after the operator acknowledges completion.
   `agent`: coding-agent subprocess via an adapter.
@@ -610,8 +609,9 @@ The choice depends on which dimension is the current bottleneck:
 
 The first-class primitives that mechanize Type A and Type C (sweep, ensemble,
 experiment) are deferred work; see
-[metaproc-design-rev3-proposals.md](../../../docs/metaproc-design-rev3-proposals.md) P7
-for the vocabulary and a grounding example that orchestrates the pattern manually today.
+[metaproc-design-proposals.md](https://github.com/jlevy/metaproc/blob/main/docs/project/design/metaproc-design-proposals.md)
+P7 for the vocabulary and a grounding example that orchestrates the pattern manually
+today.
 
 #### 5.3.1 Type A: improve the step
 
@@ -976,9 +976,9 @@ These are not all solving the same problem:
 
 ## References
 
-- [arch-metaproc-core.md](../../../docs/arch/arch-metaproc-core.md): implementation
-  reference (spec format, runtime artifacts, CLI, adapters, cloud execution).
-- [metaproc-design-rev3-proposals.md](../../../docs/metaproc-design-rev3-proposals.md):
+- [arch-metaproc-core.md](metaproc-design.md): implementation reference (spec format,
+  runtime artifacts, CLI, adapters, cloud execution).
+- [metaproc-design-proposals.md](https://github.com/jlevy/metaproc/blob/main/docs/project/design/metaproc-design-proposals.md):
   design proposals not yet implemented, including sweep/ensemble/experiment primitives.
 - [common-doc-guidelines.md](https://github.com/jlevy/practical-prose): documentation
   conventions used here (loaded via `tbd guidelines common-doc-guidelines`).

@@ -142,7 +142,7 @@ Skills are **self-generated**: the source baseline lives in the tool package and
 `.agents/skills/<name>/` path (cross-agent) and mirrors it to `.claude/skills/<name>/`
 (gitignored, `DO NOT EDIT`); a workflow registers its skill via a `metaproc.skills`
 entry point. See the **Skills and Agent Instruction Files** rules in
-[`AGENTS.md`](../../../AGENTS.md).
+[`AGENTS.md`](https://github.com/jlevy/metaproc/blob/main/AGENTS.md).
 
 ## Suggested Vocabulary for Fan-Out Workflows
 
@@ -164,8 +164,8 @@ Its kickoff skill should call `metaproc run-process` directly with the selected 
 and run variables. The client owns roster selection and reporting; Metaproc owns DAG
 execution, status, retries, traces, and resource controls.
 The deterministic
-[offline example](../../../examples/offline-smoke/offline-smoke.process.md) shows the
-same process/handler boundary without domain-specific policy.
+[offline example](https://github.com/jlevy/metaproc/blob/main/examples/offline-smoke/offline-smoke.process.md)
+shows the same process/handler boundary without domain-specific policy.
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

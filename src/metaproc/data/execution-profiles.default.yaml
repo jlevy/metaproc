@@ -11,7 +11,7 @@ profiles:
       native_web_search: true
       shell: true
     resources:
-      # Per metaproc/docs/arch/arch-runpool.md § "Per-adapter RSS benchmarks
+      # Per metaproc/docs/arch-runpool.md § "Per-adapter RSS benchmarks
       # (macOS, 2026-05-23)": 5,714 health.jsonl samples over 3 days show
       # claude-opus process-tree (root + psutil children) at P50=384 MB,
       # P95=748 MB across all concurrency levels. At active≥3 (the regime
@@ -98,7 +98,7 @@ profiles:
       native_web_search: false
       shell: false
     resources:
-      # Per metaproc/docs/arch/arch-runpool.md § "Per-adapter RSS benchmarks
+      # Per metaproc/docs/arch-runpool.md § "Per-adapter RSS benchmarks
       # (macOS, 2026-05-23)": 3,324 health.jsonl samples show pi-glm5
       # process-tree at P50=176 MB. At active=1 P95 is 1303 MB (a single-
       # process I/O spike); at active≥4 P95 drops to 629-635 MB. 500 MB

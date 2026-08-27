@@ -603,7 +603,7 @@ def push_cmd(
             "static CLAUDE_CODE_OAUTH_TOKEN injected via env var, no .credentials.json "
             "materialized) or 'login-credentials' (Vehicle B — refresh-rotating "
             "OAuth session snapshot, default for back-compat). See "
-            "docs/arch/arch-metaproc-core.md."
+            "src/metaproc/docs/metaproc-design.md."
         ),
     ),
     token_file: Path | None = typer.Option(

@@ -171,7 +171,7 @@ Agents should not edit these files manually.
 For the full list of artifacts (filename, path, format, schema, lifecycle, writer,
 readers), see [artifact-catalog.md](artifact-catalog.md).
 For the operator-facing view (what to look at while watching or reading a run), see
-[metaproc-operator-reference.md §Runtime Layout](../src/metaproc/docs/metaproc-operator-reference.md#runtime-layout).
+[metaproc-operator-reference.md §Runtime Layout](metaproc-operator-reference.md#runtime-layout).
 
 ## Project-Level Docs
 
@@ -302,7 +302,7 @@ Pure-YAML files (no body) are appropriate when there’s no human prose to bundl
 machine-emitted runtime state (`runpool-status.yaml`, `dispatch-manifest.yaml`) or
 schema sidecars produced by `softschema.compile_model`.
 
-See [AGENTS.md](../AGENTS.md) and the
+See [AGENTS.md](https://github.com/jlevy/metaproc/blob/main/AGENTS.md) and the
 [File Format Policy](conventions.md#file-format-policy) for the full rule and examples.
 
 ### Envelope convention
@@ -601,12 +601,12 @@ lives where the runs live, not in `/tmp/`.
 - log filenames should preserve enough context to identify step, item key, and time
 - logs are operational artifacts and should normally be gitignored
 - operator-facing command guidance lives in
-  [metaproc-operator-reference.md](../src/metaproc/docs/metaproc-operator-reference.md)
+  [metaproc-operator-reference.md](metaproc-operator-reference.md)
 
 ## Observability
 
 Three artifacts carry tool-use observability for every workflow run.
-Full contract in [`arch-metaproc-core.md §14.7`](arch/arch-metaproc-core.md).
+Full contract in [`arch-metaproc-core.md §14.7`](metaproc-design.md).
 
 | Artifact | Scope | Owner | Role |
 | --- | --- | --- | --- |
@@ -623,8 +623,8 @@ This presence-only signal is aggregated into `ToolRunProfile.native_web_search_c
 *Native web search* is the provider-neutral term (Vertex grounding, Anthropic
 `web_search_*`, OpenAI `web_search_preview`); reserve *grounding* for Vertex-specific
 references. Per-turn activity is tracked as a known open gap in the
-[tool-use-observability runbook](arch/arch-metaproc-core.md#147-tool-use-observability);
-closing it fully requires per-provider upstream changes outside metaproc scope.
+[tool-use-observability runbook](metaproc-design.md#147-tool-use-observability); closing
+it fully requires per-provider upstream changes outside metaproc scope.
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

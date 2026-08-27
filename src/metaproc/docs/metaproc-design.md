@@ -1,41 +1,30 @@
 ---
-title: "Architecture: Metaproc Core"
-description: Implementation reference for the Metaproc framework core, including the spec format, runtime artifacts, CLI commands, adapter contract, plugin protocol, and robustness subsystems.
+title: Metaproc Design
+description: "How Metaproc is built, in detail: the spec format, the resolved plan, runtime artifacts, resumability, the adapter contract, the plugin protocol, and the robustness subsystems. The second document to read, after the concepts doc."
 author: metaproc team
 status: Approved
 ---
-# Architecture: Metaproc Core
+# Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-08-24) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-08-25) **Status:** Approved
 
-> **Maintenance**: This is a maintained architecture doc.
-> Revise via `tbd shortcut revise-architecture-doc` (which prompts you to verify content
-> against current code, then add a “Future Considerations” section).
-> When you make non-trivial changes, bump the **last updated** date above.
-> The full arch-doc index lives in
-> [development.md § Architecture docs](../development.md#architecture-docs).
-> 
-> Companion docs (in `docs/arch/`): [arch-metaproc-core](arch-metaproc-core.md),
-> [arch-runpool](arch-runpool.md), [arch-cloud-execution](arch-cloud-execution.md),
-> [arch-authentication](arch-authentication.md),
-> [arch-claude-code-harness](arch-claude-code-harness.md),
-> [arch-testing](arch-testing.md).
-
-Revision: rev2m
+Also readable as `metaproc help design`.
 
 Implementation reference for Metaproc, covering how the conceptual model defined in
-[metaproc-concepts-and-principles.md](../../src/metaproc/docs/metaproc-concepts-and-principles.md)
-is realized in code: spec format, runtime artifacts, CLI commands, adapter wire formats,
-plugin protocol, and robustness subsystems.
-Run pool internals and cloud execution have their own arch docs (see companion links
-above).
+[metaproc-concepts-and-principles.md](metaproc-concepts-and-principles.md) is realized
+in code: spec format, runtime artifacts, CLI commands, adapter wire formats, plugin
+protocol, and robustness subsystems.
+Companion architecture documents cover one subsystem each and ship alongside this one:
+[arch-runpool.md](arch-runpool.md), [arch-cloud-execution.md](arch-cloud-execution.md),
+[arch-authentication.md](arch-authentication.md),
+[arch-claude-code-harness.md](arch-claude-code-harness.md),
+[arch-execution-model.md](arch-execution-model.md),
+[arch-file-io-utilities.md](arch-file-io-utilities.md), and
+[arch-testing.md](arch-testing.md).
 
-Additional reference docs: [conventions.md](../conventions.md) (naming rules),
-[credential-setup.runbook.md](../runbooks/credential-setup.runbook.md) (auth),
-[arch-file-io-utilities.md](arch-file-io-utilities.md) (curated `metaproc.io`
-file-utility surface and frontmatter_format gotchas),
-[metaproc-design-rev3-proposals.md](../metaproc-design-rev3-proposals.md) (remaining
-future work).
+Additional reference docs: [conventions.md](conventions.md) (naming rules),
+[credential-setup.runbook.md](credential-setup.runbook.md) (auth), and
+[artifact-catalog.md](artifact-catalog.md) (every runtime artifact).
 
 Examples in this document use the fictitious `example_plugin` namespace to show where
 consumer-owned processes, schemas, handlers, and artifacts belong.
@@ -44,8 +33,8 @@ Metaproc does not ship that package or its domain behavior.
 ## Scope and Imported Concepts
 
 Terminology and principles live in
-[metaproc-concepts-and-principles.md](../../src/metaproc/docs/metaproc-concepts-and-principles.md);
-read it first for the definitions assumed below.
+[metaproc-concepts-and-principles.md](metaproc-concepts-and-principles.md); read it
+first for the definitions assumed below.
 Section numbers are stable identifiers carried across revisions; numbering starts at 5
 because earlier sections moved into the concepts doc and the companion arch docs.
 
@@ -90,14 +79,13 @@ See § 19 for orchestrator details, § 21 for cloud execution.
 ## 5. Implementation Inventory
 
 The framework spans three abstraction profiles defined in
-[metaproc-concepts-and-principles.md §3.4](../../src/metaproc/docs/metaproc-concepts-and-principles.md):
-**core model**, **execution profile**, and **application profile**. The conceptual
-definitions live there.
-The inventory below lists the authored files, package subsystems, plugin layer, and
-emitted runtime artifacts that realize each profile.
+[metaproc-concepts-and-principles.md §3.4](metaproc-concepts-and-principles.md): **core
+model**, **execution profile**, and **application profile**. The conceptual definitions
+live there. The inventory below lists the authored files, package subsystems, plugin
+layer, and emitted runtime artifacts that realize each profile.
 For the per-artifact reference (filename, format, schema, lifecycle, writer, readers),
-see [artifact-catalog.md](../artifact-catalog.md); for format-selection rules, see
-[conventions.md §File Format Policy](../conventions.md#file-format-policy).
+see [artifact-catalog.md](artifact-catalog.md); for format-selection rules, see
+[conventions.md §File Format Policy](conventions.md#file-format-policy).
 
 ### 5.1 File and Subsystem Inventory
 
@@ -1053,7 +1041,7 @@ The emitted runtime model is explicit.
 The four artifact groups (run-level state, per-step state, per-task state, logs)
 populate the `.state/` and `.logs/` branches at every scope root.
 For the per-file reference (filename, format, schema, lifecycle, writer, and readers),
-see [artifact-catalog.md](../artifact-catalog.md).
+see [artifact-catalog.md](artifact-catalog.md).
 Sections 9.2-9.6 below cover the engine’s contract on the load-bearing files
 (`status.yaml`, `attempt.yaml`, `result.yaml`, `.logs/*.jsonl`, `process-events.jsonl`)
 in depth.
@@ -1183,7 +1171,7 @@ Framework-owned JSONL logs include adapter/session logs, `process-events.jsonl`,
 runpool `events.jsonl` streams under `.logs/runpool/`. Workflow-owned tool streams live
 under `.logs/tools/<tool-name>/`. Derived outputs such as trace JSONL live under
 `.logs/derived/`. For the command map and current paths, see
-[metaproc-operator-reference.md](../../src/metaproc/docs/metaproc-operator-reference.md).
+[metaproc-operator-reference.md](metaproc-operator-reference.md).
 
 It is useful for:
 
@@ -2181,7 +2169,7 @@ treating that as cause for caution would hold concurrency down during normal ope
   `kern.memorystatus_level` is read alongside it and carried as `alarm_pct`, never as
   the budget: it counts active pages, so it runs roughly 2x the reclaimable figure.
   Swap comes from `vm.swapusage`. See
-  [memory-accounting-reference.md](../memory-accounting-reference.md).
+  [memory-accounting-reference.md](https://github.com/jlevy/metaproc/blob/main/docs/memory-accounting-reference.md).
 - **Linux**: computes `MemAvailable / MemTotal` from `/proc/meminfo`. Optionally refines
   using PSI (Pressure Stall Information) from `/proc/pressure/memory` -- if
   `psi_some_avg10 > 5`, the PSI-derived percentage replaces the meminfo estimate when
@@ -2514,26 +2502,6 @@ frontmatter envelope and carries the complete SoftSchema contract/schema/envelop
 description. Its Markdown body is explanatory only.
 `metaproc resource-report` and the Metabrowser resource view expose actual cost and list
 estimate separately, along with meters, coverage, budgets, and outcome.
-
-## 16. Optional Workspace/State Surface (Future)
-
-An advanced execution-profile feature, not yet implemented.
-
-```yaml
-workspace:
-  root: .
-  isolation: worktree
-  writable:
-    - train.py
-    - experiments/
-  commit_policy: explicit
-```
-
-Needed for:
-
-- mutation/evaluation loops
-- candidate/incumbent comparisons
-- autoresearch-style workflows
 
 ## 17. Run Pool and Process Management
 
@@ -3126,213 +3094,3 @@ Hydration validates and fetches every binding under the attached service account
 atomically updating the process environment.
 `SecretRef.resolve()` enforces the anti-leakage invariant: setting plaintext without the
 corresponding Secret Manager ref fails dispatch up front.
-
-## Future Considerations
-
-### Open Questions
-
-- The Plan schema is now at `metaproc:Plan/0.6` (adds reporting-only `resource_budgets`;
-  0.5 added `lane_matrix` and `ExecutionLane`). The lane execution model is not yet
-  documented in this arch doc.
-  [unverified] whether lane-based dispatch is fully integrated into `run-process` or
-  still under development.
-- `overrides.yaml` (operator escape hatches via `metaproc override`) is referenced in
-  the runtime state inventory (section 5.1) but not covered in its own subsection.
-  The interaction between overrides and the resume/fingerprint system (section 10) is
-  undocumented.
-- Several newer CLI commands (`liveness-watch`, `resume-daemon`, `run-manifest`,
-  `softschema`, `trace`) lack design-level documentation in this doc.
-  Their operational semantics are only in code docstrings.
-- The `codex-cli` adapter section (§12.2) is thorough but the Codex adapter is
-  relatively new. [unverified] whether all described auth modes have been validated
-  end-to-end in production cloud runs.
-
-### Potential Improvements
-
-- Extract the per-adapter reference (§12.2) into a separate adapter-catalog doc as the
-  adapter count grows, keeping this doc focused on the contract and wire format.
-- The illustrative downstream profile (§7) could move to an application-profile doc,
-  leaving this doc strictly framework-scoped.
-- Add a “Reading Guide” section at the top to help readers navigate the more than 21
-  sections by use case (operator, process author, adapter implementer, framework
-  contributor).
-- Consolidate the cloud execution summary (§21) further: much of its content is now
-  covered in [arch-cloud-execution.md](arch-cloud-execution.md), and the duplication
-  creates maintenance burden.
-- Document the `dispatch` subsystem (slot coordinator, credential pool) which is
-  referenced by the adapter registry but not covered in this doc.
-  See `src/metaproc/dispatch/` for the implementation.
-
-See also [metaproc-design-rev3-proposals.md](../metaproc-design-rev3-proposals.md) for
-the original future-work backlog.
-
-* * *
-
-## Revision History
-
-### rev2o (2026-08-25)
-
-- Documented cancellation-safe ownership for executor work, scalar credentials, local
-  scalar agent process groups, and sampled code commands.
-- Clarified that scalar supervision reuses the launch backend lifecycle without creating
-  another pool or adaptive controller.
-
-### rev2n (2026-08-24)
-
-Defined `run-process --cloud` as the application-level cloud surface and `gcp run` as a
-lower-level single-task primitive.
-Recorded the planned `--orchestrator` and `--worker` placement interface, its immutable
-resolved-topology boundary, a run-wide worker placement for the first implementation,
-and the explicit transport requirement for later split-locus execution.
-
-### rev2m (2026-08-24)
-
-Removed the unsupported laptop-orchestrated GCP worker topology, split-tree validation
-and recovery commands, and the persistent gateway command family.
-The supported cloud surfaces are full-cloud `run-process --cloud`, one-shot `gcp run`,
-and Batch-native monitoring and lifecycle commands; a hydrated run is one locally
-visible tree.
-
-### rev2l (2026-08-09)
-
-Release-readiness synchronization:
-
-- Marked `example_plugin` as a fictitious downstream namespace and removed references
-  that implied its domain implementation ships with Metaproc.
-- Replaced the missing QA-plan reference with the current framework boundary.
-- Applied the common documentation punctuation, conjunction, and terminology rules
-  across the maintained reference.
-
-### rev2k (2026-08-03)
-
-Focused resource observability:
-
-- Documented the reconciled event ledger, exact provider meters, and explicit coverage.
-- Added immutable launch topology/budget snapshots and reporting-only evaluation.
-- Added causal terminal finalization, inactive local recovery, and the self-describing
-  resource usage summary.
-- Clarified that agent-CLI cost is a list estimate and provider-authoritative events are
-  the only actual-cost boundary.
-
-### rev2j (2026-08-02)
-
-Typed run identity and cloud correlation:
-
-- Updated cloud monitoring and dispatch summaries for readable `metaproc-run-id` and
-  exact `metaproc-run-key` labels.
-- Documented exact lookup, hash-verified mixed-generation jobs, the safe fully legacy
-  fallback, and exact run-ID recovery in `gcp runs`.
-- Documented exact local status identity resolution for process-subdirectory layouts.
-- Updated the cloud monitoring-layer summary and Batch utility inventory.
-
-### rev2i (2026-04-20)
-
-Tool-use operational observability (the original design):
-
-- **Section 14.7 (new)**: Tool-use Observability.
-  Documents the three-source triad (tool wrapper invocation logs, pi-cli JSONL logs, and
-  `native_web_search` config flag), the `ToolCallStats` / `ToolRunProfile` /
-  `ProviderRateLimitStats` aggregation contract, the nine-member `FailureKind` taxonomy
-  (`ok` / `malformed_args` / `tool_timeout` / `tool_error` / `help_invocation` /
-  `tool_rejected` / `rate_limit_exhausted` / `adapter_dropped_call` / `unknown`), the
-  cutoff-discipline invariant (runbook gap B, closed), and the native web-search
-  partial-closure invariant (runbook gap A, partial).
-- **Section 12.1**: adapter event-stream item now cross-refs the
-  `tool_execution_start/end` and `rate_limit_event` records consumed by §14.7.
-- **Section 15.1**: `UsageReport` paragraph adds pointer to the new `tool_profiles` and
-  `rate_limit_stats` fields and the §14.7 contract.
-- **Reading Guide**: new “Track tool-use telemetry or diagnose tool-call failures” row.
-
-Validated 2026-04-20 by the regenerated `_mine-tech-mix-100-2026-04-06-c` usage snapshot
-(`tool_profiles` frontmatter and `## Tool-use by Variant` table; see
-[§14.7 Tool-Use Observability](#147-tool-use-observability)).
-
-### rev2h (2026-04-19)
-
-Claude Code CLI Personal-Plan auth on GCP Batch (the original design):
-
-- **Section 12.2**: `claude-code-cli` reference adapter entry now lists three auth modes
-  (API key, interactive login, Personal-Plan OAuth via Secret Manager) and the
-  `strict-mcp-config` flag.
-- **Section 21.2**: container bootstrap now invokes each adapter’s `bootstrap(home)`
-  hook so adapters can materialize credential files (Claude Code CLI writes
-  `~/.claude/.credentials.json` from `CLAUDE_CODE_CREDS_JSON`, then unsets the env var
-  so it does not leak to child processes).
-- **Section 21.14**: generalized from GH_TOKEN-only to the typed `SecretRefSet`
-  registry; documents `SecretRef.resolve()` and the plaintext-refusal policy that
-  applies uniformly to every row.
-  Adding a new credential now means appending one row, with no further dispatch wiring.
-
-Validated 2026-04-19 end-to-end via the `claude-cli-smoke-20260419-114859` single-task
-smoke (5/5 records) and the `phase-2c-opus-gold-2026-04-19` Phase 2c re-dispatch (20/20
-records at `max_concurrency=10`, no 429s, no laptop in the I/O path).
-
-### rev2g (2026-04-17)
-
-Documentation sync refresh for the current branch:
-
-- corrected the runtime artifact model to reflect run-scoped `.logs/`, manual-step
-  acknowledgments, `run-config.yaml`, and orchestrator leases
-- refreshed the CLI surface and command semantics (`plan`, `deps`, `check-headers`,
-  `browse`, `gcp scale`, `pool retry-missing`, `--only`)
-- updated manual-step orchestration to match the implemented acknowledgment flow
-- updated cloud execution sections for bundled/sparse container bootstrap, dispatch
-  manifests, claim registries, scale files, and current GCP operator tooling
-
-### rev2f (2026-04-12)
-
-Documentation accuracy and cloud architecture clarity:
-
-- **Section 5.4**: updated to list all 10 gcp subcommands (was listing only 4).
-- **Section 8.3**: removed duplicate command listings (validate, tail, serve, compare,
-  compare-matrix, write-usage appeared twice); reorganized into primary, plumbing, and
-  utility groups without repetition.
-- **Section 19.3**: added note clarifying that `gcp-worker` is a dispatch mode in
-  `run-process`, not a registered `LaunchBackend` implementation.
-- **Section 21.10**: new section -- Cloud Provider Naming and Extensibility.
-  Documents why the CLI subcommand is `gcp` (not `cloud`) and how future providers would
-  fit.
-- **Section 21.11**: new section -- Persistent Infrastructure Decoupling.
-  Documents the principle that metaproc does not depend on deployment topology.
-  All infrastructure references are configuration, not hardcoded names.
-- **Code**: replaced hardcoded `metaproc-browser` default in `sync-run --host` with
-  `METAPROC_GATEWAY_HOST` env var (required via CLI or env, no hardcoded default).
-
-### rev2e (2026-04-09)
-
-Major revision to document capabilities built since rev2d:
-
-- **Section 3.5**: revised from “No Heavy Orchestration Substrate Yet” to “Lightweight
-  Orchestration Substrate” -- acknowledges DAG orchestrator and cloud execution while
-  preserving the lightweight design philosophy.
-- **Section 5.4**: updated execution layer (added run-process, kill, pool, gcp commands)
-  and engine subsystems (added graph, process_events, cloud/gcp subsystems).
-- **Section 8.1**: reframed around the 2-command execution model (run-process +
-  run-step). run-parallel demoted to plumbing; cloud-dispatch removed.
-- **Section 8.3**: expanded from 16 to 27 CLI entry points, organized into primary,
-  plumbing, utility, GCP, and pool command groups.
-- **Section 9.5**: monitoring surface expanded from 4 to 6 layers (added DAG-level and
-  cloud-level monitoring).
-  Browser section updated for process-log file kind.
-- **Section 9.6**: new section documenting process-events.jsonl runtime artifact and
-  ProcessEventLogger event types.
-- **Section 11.4**: fan-out lifecycle updated with run-process DAG orchestrator path and
-  two backend dispatch options (local, gcp-worker).
-- **Section 14.1**: added FailureClass enum taxonomy (RATE_LIMITED, SERVER_ERROR,
-  TIMEOUT, INVALID_OUTPUT, CRASH, UNKNOWN) and FailureCounts aggregation in
-  RunPoolStatus.
-- **Section 7.3**: mine process updated with cloud execution details (run-process
-  --backend gcp-worker, single run-mine step replacing separate model steps).
-- **Section 19**: new section -- Process Orchestration (run-process).
-  DAG walker, step dispatch, fan-out backends, CLI flags, completion/resumability,
-  process-status.yaml.
-- **Section 20**: new section -- Dependency Graph (engine/graph.py).
-  needs field, validate_step_graph, detect_cycles, downstream, topo_sort with parallel
-  levels.
-- **Section 21**: new section -- Cloud Execution Infrastructure.
-  Two-tier architecture, container bootstrap, worker dispatch, worker/orchestrator
-  entrypoints, GCPBatchConfig, LaunchBackend protocol, cloud monitoring.
-
-<!-- This document follows common-doc-guidelines.md.
-See github.com/jlevy/practical-prose and review guidelines before editing.
--->

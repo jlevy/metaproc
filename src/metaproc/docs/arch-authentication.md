@@ -9,18 +9,6 @@ status: Draft — partial currency notice below
 **Date:** 2026-04-21 (last updated 2026-08-24) **Status:** Draft — partial currency
 notice below
 
-> **Maintenance**: This is a maintained architecture doc.
-> Revise via `tbd shortcut revise-architecture-doc` (which prompts you to verify content
-> against current code, then add a “Future Considerations” section).
-> When you make non-trivial changes, bump the **last updated** date above.
-> The full arch-doc index lives in
-> [development.md § Architecture docs](../development.md#architecture-docs).
-> 
-> Companion docs (in `docs/arch/`): [arch-metaproc-core](arch-metaproc-core.md),
-> [arch-runpool](arch-runpool.md), [arch-cloud-execution](arch-cloud-execution.md),
-> [arch-claude-code-harness](arch-claude-code-harness.md),
-> [arch-testing](arch-testing.md).
-
 ## Currency notice (2026-04-28)
 
 This doc was written 2026-04-21 against the original Vehicle B credential pool design.
@@ -28,7 +16,7 @@ The 2026-04-27 senior engineering review and the resulting Vehicle A pool redesi
 (documented in this architecture) have shipped Phases 1-7, 10, and 11. Vehicle B remains
 as an ongoing backup (no scheduled deprecation).
 Sections **§N.14, §N.15, §N.16** (below) and the operator runbook
-[`metaproc/docs/runbooks/credential-setup.runbook.md` § Claude Code CLI](../runbooks/credential-setup.runbook.md#claude-code-cli-claude-code-cli)
+[`metaproc/docs/runbooks/credential-setup.runbook.md` § Claude Code CLI](credential-setup.runbook.md#claude-code-cli-claude-code-cli)
 reflect the current design.
 
 The bulk of this doc (§1 env-var registry, line numbers throughout, §5 adapter Protocol,
@@ -64,10 +52,10 @@ the Claude Code CLI Personal-Plan OAuth two-hop flow, Pi CLI provider auth (incl
 Vertex MaaS token injection), the Secret Manager registry for Batch jobs, and the
 `auth-check` verification command.
 
-Primary sources: [metaproc/docs/arch/arch-metaproc-core.md](arch-metaproc-core.md),
+Primary sources: [metaproc/docs/arch/arch-metaproc-core.md](metaproc-design.md),
 [metaproc/docs/arch/arch-cloud-execution.md](arch-cloud-execution.md),
-[metaproc/docs/runbooks/credential-setup.runbook.md](../runbooks/credential-setup.runbook.md),
-and the code paths referenced inline.
+[metaproc/docs/runbooks/credential-setup.runbook.md](credential-setup.runbook.md), and
+the code paths referenced inline.
 
 ## Goals and Non-Goals
 
@@ -84,8 +72,8 @@ and the code paths referenced inline.
 ### Non-Goals
 
 - Operator setup walkthroughs — those live in
-  [metaproc/docs/runbooks/credential-setup.runbook.md](../runbooks/credential-setup.runbook.md)
-  and the cloud dispatch runbook.
+  [metaproc/docs/runbooks/credential-setup.runbook.md](credential-setup.runbook.md) and
+  the cloud dispatch runbook.
 - Model cost / routing policy (covered in the runtime-roles memory and research-run
   docs).
 - Non-metaproc auth (the example-tool site, IDE sign-in, etc.).
@@ -95,8 +83,7 @@ and the code paths referenced inline.
 Credentials flow through four surfaces:
 
 1. **Operator shell / `.env` file** — plaintext API keys and a base64 GCP service
-   account key. Loaded at Typer startup by
-   [src/metaproc/cli.py:53](../../src/metaproc/cli.py#L53) (`_load_dotenv`).
+   account key. Loaded at Typer startup by `src/metaproc/cli.py` (`_load_dotenv`).
 2. **macOS Keychain** — the Claude Code Personal-Plan OAuth blob.
    Read by `metaproc claude-auth push` and pushed to GCP Secret Manager.
 3. **GCP Secret Manager** — the source of truth for every credential delivered to a
@@ -137,16 +124,14 @@ Credentials flow through four surfaces:
 
 #### 1. MetaprocEnv — typed env-var registry
 
-**File:** [src/metaproc/config/env_vars.py](../../src/metaproc/config/env_vars.py)
+**File:** `src/metaproc/config/env_vars.py`
 
 Every env var read anywhere in metaproc flows through one enum member declared with a
 factory (`real`, `tunable`, `secret`, `optional`) carrying metadata (kind, description,
 example). Empty strings and the literal `"changeme"` are treated as unset.
-The factories live in
-[src/metaproc/config/env_enum.py](../../src/metaproc/config/env_enum.py).
+The factories live in `src/metaproc/config/env_enum.py`.
 
-**Auth-relevant secret members**
-([env_vars.py:155-186](../../src/metaproc/config/env_vars.py#L155-L186)):
+**Auth-relevant secret members** (`src/metaproc/config/env_vars.py`):
 
 | Env Var | Kind | Consumers |
 | --- | --- | --- |
@@ -166,15 +151,14 @@ The factories live in
 | `METAPROC_GCP_SECRET_CLAUDE_CREDS` | `optional` | Secret Manager ref for `CLAUDE_CODE_CREDS_JSON` |
 | `METAPROC_GCP_SERVICE_ACCOUNT` | `tunable` | SA email attached to Batch VMs (Secret Manager access depends on it) |
 
-`SECRET_VARS` ([env_vars.py:234-247](../../src/metaproc/config/env_vars.py#L234-L247))
-is a `frozenset[MetaprocEnv]` — its members are masked by `metaproc env` and similar
-introspection outputs.
+`SECRET_VARS` (`src/metaproc/config/env_vars.py`) is a `frozenset[MetaprocEnv]` — its
+members are masked by `metaproc env` and similar introspection outputs.
 Membership is explicit (not name-guessed): the `METAPROC_GCP_SECRET_*` refs are included
 because they leak project structure, even though they are not themselves secrets.
 
 #### 2. `.env` loading at CLI startup
 
-**File:** [src/metaproc/cli.py:53](../../src/metaproc/cli.py#L53) (`_load_dotenv`)
+**File:** `src/metaproc/cli.py` (`_load_dotenv`)
 
 Walks upward from the current working directory to locate the nearest `.env`. Injects
 `KEY=VALUE` lines into `os.environ` via `os.environ.setdefault()` — the existing shell
@@ -186,8 +170,7 @@ This is how laptop runs pick up `ANTHROPIC_API_KEY`, `GCP_CREDENTIALS_BASE64`,
 
 #### 3. GCP credential resolution (`gcp_credentials.py`)
 
-**File:**
-[src/metaproc/cloud/gcp/gcp_credentials.py](../../src/metaproc/cloud/gcp/gcp_credentials.py)
+**File:** `src/metaproc/cloud/gcp/gcp_credentials.py`
 
 The module owns initialization of a `google.auth` credentials object with the
 `https://www.googleapis.com/auth/cloud-platform` scope, and provides
@@ -202,13 +185,11 @@ Resolution order (standard `google.auth.default()` chain, with one metaproc pre-
 2. `GCP_CREDENTIALS_BASE64` env var — base64-encoded SA key.
    Decoded to `${TMPDIR}/gcp/keys/sa-key.json` at mode 0600, then
    `GOOGLE_APPLICATION_CREDENTIALS` is set to point at it
-   ([gcp_credentials.py:66](../../src/metaproc/cloud/gcp/gcp_credentials.py#L66)
-   `_bootstrap_credentials_from_base64`).
+   (`src/metaproc/cloud/gcp/gcp_credentials.py` `_bootstrap_credentials_from_base64`).
 3. GCE metadata server — used automatically on GCP VMs.
 4. User ADC from `gcloud auth application-default login` — final fallback.
 
-**Attached-identity suppression**
-([gcp_credentials.py](../../src/metaproc/cloud/gcp/gcp_credentials.py)
+**Attached-identity suppression** (`src/metaproc/cloud/gcp/gcp_credentials.py`
 `_should_prefer_attached_gcp_identity`): the base64 decode path is skipped when either a
 non-empty `BATCH_TASK_INDEX` proves GCP Batch execution or a configured Filestore path
 is an actual mounted filesystem.
@@ -216,22 +197,18 @@ A configured Filestore server alone is insufficient.
 This preserves the attached service account on Batch and persistent GCP hosts instead of
 silently replacing it with a stale base64 credential.
 
-**Token refresh**
-([gcp_credentials.py:109](../../src/metaproc/cloud/gcp/gcp_credentials.py#L109)
-`get_access_token`): refreshes if `not creds.valid` or expiry is within the refresh
-margin.
+**Token refresh** (`src/metaproc/cloud/gcp/gcp_credentials.py` `get_access_token`):
+refreshes if `not creds.valid` or expiry is within the refresh margin.
 Logs the token fingerprint (first 8 hex of SHA-256) to correlate without leaking.
 
-**Related module:**
-[src/metaproc/cloud/gcp/resolve_token.py](../../src/metaproc/cloud/gcp/resolve_token.py)
-exposes `resolve_gcp_token()` — thin wrapper called by pi-cli vertex-maas injection,
+**Related module:** `src/metaproc/cloud/gcp/resolve_token.py` exposes
+`resolve_gcp_token()` — thin wrapper called by pi-cli vertex-maas injection,
 `auth-check`, and `run_parallel` batch boundaries.
 
 #### 4. Secret Manager reference registry and hydration
 
-**Files:**
-[src/metaproc/dispatch/secret_refs.py](../../src/metaproc/dispatch/secret_refs.py) and
-[src/metaproc/cloud/gcp/secret_hydration.py](../../src/metaproc/cloud/gcp/secret_hydration.py)
+**Files:** `src/metaproc/dispatch/secret_refs.py` and
+`src/metaproc/cloud/gcp/secret_hydration.py`
 
 ```python
 known_refs = SecretRefSet.all_known()
@@ -266,7 +243,7 @@ No dispatch or policy wiring is required.
 
 #### 5. Adapter protocol — auth-relevant methods
 
-**File:** [src/metaproc/adapters/base.py:44](../../src/metaproc/adapters/base.py#L44)
+**File:** `src/metaproc/adapters/base.py`
 
 Each adapter implements three auth-relevant methods:
 
@@ -281,46 +258,40 @@ Each adapter implements three auth-relevant methods:
   Called once per container by `worker_entrypoint.py` / `orchestrator_entrypoint.py` /
   `gcp_run_entrypoint.py`.
 
-The adapter registry
-([src/metaproc/adapters/registry.py](../../src/metaproc/adapters/registry.py)) holds
-`claude-code-cli`, `gemini-cli`, and `pi-cli` instances.
+The adapter registry (`src/metaproc/adapters/registry.py`) holds `claude-code-cli`,
+`gemini-cli`, and `pi-cli` instances.
 
 #### 6. `auth-check` command (Phase 1 / 2 / 2b / 3)
 
-**File:**
-[src/metaproc/commands/auth_check.py](../../src/metaproc/commands/auth_check.py)
+**File:** `src/metaproc/commands/auth_check.py`
 
 The single operator-facing verification tool:
 
 - **Phase 1 — environment and credential audit**
-  ([auth_check.py:489](../../src/metaproc/commands/auth_check.py#L489)). Always runs.
+  (`src/metaproc/commands/auth_check.py`). Always runs.
   Checks:
   - Disk space (`engine.preflight.check_disk_space`).
   - `_check_gcloud_token()` — resolves a GCP token via `resolve_gcp_token()` and reports
     length + expiry. Non-fatal when `metaproc[gcp]` extra is not installed.
   - Each registered adapter’s `check_auth()` — binary on PATH + credential
     discoverability. Scoped to one adapter when `--variant` is passed.
-- **Phase 2 — `--live`**
-  ([auth_check.py:514](../../src/metaproc/commands/auth_check.py#L514)). Writes a tiny
-  prompt (`"Respond with exactly: OK"`) to a tempfile and invokes each adapter’s
+- **Phase 2 — `--live`** (`src/metaproc/commands/auth_check.py`). Writes a tiny prompt
+  (`"Respond with exactly: OK"`) to a tempfile and invokes each adapter’s
   `build_command()` under its own `prepare_env()`. For `pi-cli`, injects a fresh GCP
-  token as `--api-key`
-  ([auth_check.py:235](../../src/metaproc/commands/auth_check.py#L235)) so `vertex-maas`
-  is exercised with live auth.
+  token as `--api-key` (`src/metaproc/commands/auth_check.py`) so `vertex-maas` is
+  exercised with live auth.
   Includes a `pi --list-models` registration gate
-  ([auth_check.py:247](../../src/metaproc/commands/auth_check.py#L247)) to prevent
-  pi-cli from silently falling back to its default provider and false-greening the check
-  (the Phase 0c blocker).
+  (`src/metaproc/commands/auth_check.py`) to prevent pi-cli from silently falling back
+  to its default provider and false-greening the check (the Phase 0c blocker).
 - **Phase 2b — `--claude-secret-ref` / `$METAPROC_GCP_SECRET_CLAUDE_CREDS`**
-  ([auth_check.py:538](../../src/metaproc/commands/auth_check.py#L538)). Fetches a
-  Claude Code OAuth blob from Secret Manager, validates the payload shape, writes it to
-  a throwaway `HOME/.claude/.credentials.json`, unsets inherited `ANTHROPIC_API_KEY`,
-  and runs `claude -p` against it.
+  (`src/metaproc/commands/auth_check.py`). Fetches a Claude Code OAuth blob from Secret
+  Manager, validates the payload shape, writes it to a throwaway
+  `HOME/.claude/.credentials.json`, unsets inherited `ANTHROPIC_API_KEY`, and runs
+  `claude -p` against it.
   This is the end-to-end check for the cloud path Batch workers use.
-- **Phase 3 — `--run-dir`**
-  ([auth_check.py:552](../../src/metaproc/commands/auth_check.py#L552)). Confirms the
-  run directory exists, that a `progress.md` with an items list is readable, and that
-  the dir is writable.
+- **Phase 3 — `--run-dir`** (`src/metaproc/commands/auth_check.py`). Confirms the run
+  directory exists, that a `progress.md` with an items list is readable, and that the
+  dir is writable.
 
 Key helpers:
 
@@ -336,8 +307,7 @@ Exit code is `0` on full pass, `1` on any failure.
 
 #### 7. `claude-auth` command — Keychain ↔ Secret Manager
 
-**File:**
-[src/metaproc/commands/claude_auth.py](../../src/metaproc/commands/claude_auth.py)
+**File:** `src/metaproc/commands/claude_auth.py`
 
 Manages the Claude Code Personal-Plan OAuth blob lifecycle on macOS. Three subcommands:
 
@@ -361,9 +331,8 @@ Constants: `KEYCHAIN_SERVICE = "Claude Code-credentials"`,
 
 1. Operator exports `ANTHROPIC_API_KEY=sk-ant-...` (shell or `.env`).
 2. `_load_dotenv()` seeds `os.environ`.
-3. `ClaudeCodeCliAdapter.check_auth()`
-   ([claude_code.py:169](../../src/metaproc/adapters/claude_code.py#L169)) sees the key
-   → reports `auth_mode="api-key"`.
+3. `ClaudeCodeCliAdapter.check_auth()` (`src/metaproc/adapters/claude_code.py`) sees the
+   key → reports `auth_mode="api-key"`.
 4. `claude -p @<prompt> ...` invoked as a subprocess; the Claude Code CLI reads
    `ANTHROPIC_API_KEY` directly from its own env.
 5. `prepare_env` strips `CLAUDECODE` (a harness-inherited var that confuses nested
@@ -386,8 +355,8 @@ On Personal-Plan workers this bypasses the subscription and bills per-token.
 #### UC-3: GCP Batch worker with Personal-Plan Claude (two-hop)
 
 This is the sanctioned production path; see
-[credential-setup.runbook.md](../runbooks/credential-setup.runbook.md) and
-[cloud-dispatch.runbook.md](../runbooks/cloud-dispatch.runbook.md#4a-gcp-batch-personal-plan).
+[credential-setup.runbook.md](credential-setup.runbook.md) and
+[cloud-dispatch.runbook.md](cloud-dispatch.runbook.md#4a-gcp-batch-personal-plan).
 
 ```
 macOS Keychain                                  ┐
@@ -419,9 +388,9 @@ Container bootstrap (once per task):
 Claude Code CLI then reads its credential file normally.
 `ANTHROPIC_API_KEY` must stay unset (dispatch does not inject it).
 
-Reference: [claude_code.py:227](../../src/metaproc/adapters/claude_code.py#L227)
-(`bootstrap()`), [credential-setup.runbook.md](../runbooks/credential-setup.runbook.md)
-§ Claude Code CLI, [arch-cloud-execution.md §3.10](arch-cloud-execution.md).
+Reference: `src/metaproc/adapters/claude_code.py` (`bootstrap()`),
+[credential-setup.runbook.md](credential-setup.runbook.md) § Claude Code CLI,
+[arch-cloud-execution.md §3.10](arch-cloud-execution.md).
 
 #### UC-4: Laptop run with Pi CLI (Anthropic / OpenAI / direct Google)
 
@@ -446,9 +415,8 @@ It requires a **GCP access token** as the bearer credential.
 Auth flow:
 
 1. Pi CLI loads `~/.pi/agent/models.json`. Metaproc dispatch (`build_pi_models_json` at
-   [batch_backend.py:277](../../src/metaproc/cloud/gcp/batch_backend.py#L277)) prefers
-   operator-authored config and falls back to the packaged default
-   [src/metaproc/data/pi-models.default.json](../../src/metaproc/data/pi-models.default.json).
+   `src/metaproc/cloud/gcp/batch_backend.py`) prefers operator-authored config and falls
+   back to the packaged default `src/metaproc/data/pi-models.default.json`.
 
 2. The `vertex-maas` provider is declared with `"apiKey": "<injected-by-metaproc>"` and
    `"authHeader": true` → Pi sends `Authorization: Bearer <apiKey>`.
@@ -470,9 +438,8 @@ Auth flow:
    `provider.startswith("vertex")` and `backend == "local"`.
 
 4. The token is injected into the adapter’s `api_key` merged config and passed to the
-   pi-cli subprocess as `--api-key <token>`
-   ([auth_check.py:235](../../src/metaproc/commands/auth_check.py#L235) follows the same
-   pattern for live checks).
+   pi-cli subprocess as `--api-key <token>` (`src/metaproc/commands/auth_check.py`
+   follows the same pattern for live checks).
 
 5. Tokens auto-refresh via `google.auth` before expiry — no subprocess shell-outs, no
    TTL guessing. Failure raises; there is no degraded fallback.
@@ -485,8 +452,7 @@ chain resolved (laptop: typically `GCP_CREDENTIALS_BASE64`).
 Same logical flow as UC-5, but the source of the GCP token is ADC via the attached SA
 (`METAPROC_GCP_SERVICE_ACCOUNT`, usually `<worker-sa>`), not a base64 blob.
 
-Additional per-container rewrites
-([batch_backend.py:249](../../src/metaproc/cloud/gcp/batch_backend.py#L249)
+Additional per-container rewrites (`src/metaproc/cloud/gcp/batch_backend.py`
 `_rewrite_pi_models_json`):
 
 - `apiKey` values beginning with `!gcloud` (a shell-command token that Pi expands) are
@@ -511,8 +477,7 @@ instead of the OpenAI-compatible path.
 
 #### UC-8: Gemini CLI adapter (`gemini-cli`)
 
-**File:**
-[src/metaproc/adapters/gemini.py:146](../../src/metaproc/adapters/gemini.py#L146)
+**File:** `src/metaproc/adapters/gemini.py`
 
 Modes:
 - `GEMINI_API_KEY` set → direct API mode.
@@ -528,20 +493,19 @@ Used much less than Pi / Claude Code in current runs.
 2. Dispatch puts the version resource in `METAPROC_GCP_SECRET_REFS_JSON` without
    resolving its value.
 3. The container hydrates `GH_TOKEN`, then `bootstrap_container()`
-   ([container_bootstrap.py:101](../../src/metaproc/cloud/gcp/container_bootstrap.py#L101))
-   configures a git credential helper that injects the token into HTTPS clones.
+   (`src/metaproc/cloud/gcp/container_bootstrap.py`) configures a git credential helper
+   that injects the token into HTTPS clones.
 4. No plaintext `GH_TOKEN` ever appears in the Batch job spec.
    Setting `GH_TOKEN` locally without the ref env var → dispatch refuses to submit.
 
 IAM bootstrap: both the Batch SA (`<worker-sa>`) and the Cloud Build builder SA need
 `roles/secretmanager.secretAccessor` on the `gh-token` secret.
 See
-[credential-setup.md § GH_TOKEN via Secret Manager](../runbooks/credential-setup.runbook.md#gh_token-via-secret-manager).
+[credential-setup.md § GH_TOKEN via Secret Manager](credential-setup.runbook.md#gh_token-via-secret-manager).
 
 #### UC-10: `metaproc gcp run` arbitrary commands
 
-**File:**
-[src/metaproc/cloud/gcp/gcp_run_entrypoint.py](../../src/metaproc/cloud/gcp/gcp_run_entrypoint.py)
+**File:** `src/metaproc/cloud/gcp/gcp_run_entrypoint.py`
 
 Submits a Batch job that runs an arbitrary command (e.g., `python -m my_package.task`)
 with the dispatcher’s current metaproc + repo state.
@@ -560,8 +524,7 @@ No orchestrator lease, no claim registry — this path is for one-shot invocatio
 
 #### AuthStatus
 
-**File:** [src/metaproc/adapters/base.py](../../src/metaproc/adapters/base.py)
-(`AuthStatus` dataclass)
+**File:** `src/metaproc/adapters/base.py` (`AuthStatus` dataclass)
 
 ```python
 @dataclass(frozen=True)
@@ -580,8 +543,7 @@ introspection output.
 
 #### GCPBatchConfig
 
-**File:**
-[src/metaproc/cloud/gcp/batch_backend.py](../../src/metaproc/cloud/gcp/batch_backend.py)
+**File:** `src/metaproc/cloud/gcp/batch_backend.py`
 
 Frozen dataclass carrying everything needed to submit a Batch job.
 Auth-relevant fields: `project`, `service_account_email`, and `filestore_*` (NFS
@@ -645,7 +607,7 @@ container-side atomic hydration.
 - Batch `Environment.secret_variables` — rejected: the Batch agent expands secret values
   into its generated container command and those values can reach agent logs.
 - Per-credential handling — rejected: bespoke wiring per secret is what we replaced when
-  generalizing from GH_TOKEN-only (rev3 of cloud-design).
+  generalizing from GH_TOKEN-only.
 
 **Rationale:** one policy, uniformly enforced.
 Adding a secret is one line.
@@ -823,38 +785,33 @@ No auth is on the per-item hot path.
 
 ## References
 
-- [metaproc/docs/arch/arch-metaproc-core.md](arch-metaproc-core.md) — §12 adapters,
-  §21.14 Secret Manager integration.
+- [metaproc/docs/arch/arch-metaproc-core.md](metaproc-design.md) — §12 adapters, §21.14
+  Secret Manager integration.
 - [metaproc/docs/arch/arch-cloud-execution.md](arch-cloud-execution.md) — §2.8 container
   bootstrap contract, §3.10 Secret Manager integration, §3.12 Vertex AI MaaS
   integration.
-- [metaproc/docs/runbooks/credential-setup.runbook.md](../runbooks/credential-setup.runbook.md)
-  — operator setup recipes.
-- [metaproc/docs/runbooks/cloud-dispatch.runbook.md](../runbooks/cloud-dispatch.runbook.md)
-  → *GCP Batch (Personal Plan)*.
-- [src/metaproc/config/env_vars.py](../../src/metaproc/config/env_vars.py) — the typed
-  env-var registry.
-- [src/metaproc/cloud/gcp/gcp_credentials.py](../../src/metaproc/cloud/gcp/gcp_credentials.py)
-  — GCP credential resolution and token refresh.
-- [src/metaproc/cloud/gcp/batch_backend.py](../../src/metaproc/cloud/gcp/batch_backend.py)
-  — `GCPBatchConfig` and shared Batch assembly.
-- [src/metaproc/dispatch/secret_refs.py](../../src/metaproc/dispatch/secret_refs.py) and
-  [src/metaproc/cloud/gcp/secret_hydration.py](../../src/metaproc/cloud/gcp/secret_hydration.py)
-  — typed reference policy and container-side resolution.
-- [src/metaproc/adapters/claude_code.py](../../src/metaproc/adapters/claude_code.py) —
-  `check_auth`, `bootstrap`, Personal-Plan flow.
-- [src/metaproc/adapters/pi_cli.py](../../src/metaproc/adapters/pi_cli.py) —
-  `check_auth`, provider resolution.
-- [src/metaproc/adapters/gemini.py](../../src/metaproc/adapters/gemini.py) — Gemini CLI
-  adapter.
-- [src/metaproc/commands/auth_check.py](../../src/metaproc/commands/auth_check.py) — the
-  multi-phase verification command.
-- [src/metaproc/commands/claude_auth.py](../../src/metaproc/commands/claude_auth.py) —
-  Keychain ↔ Secret Manager push/show/rotate.
-- [src/metaproc/cloud/gcp/worker_dispatch.py](../../src/metaproc/cloud/gcp/worker_dispatch.py),
-  [src/metaproc/cloud/gcp/orchestrator_dispatch.py](../../src/metaproc/cloud/gcp/orchestrator_dispatch.py),
-  [src/metaproc/cloud/gcp/gcp_run_dispatch.py](../../src/metaproc/cloud/gcp/gcp_run_dispatch.py),
-  [src/metaproc/cloud/gcp/container_bootstrap.py](../../src/metaproc/cloud/gcp/container_bootstrap.py).
+- [metaproc/docs/runbooks/credential-setup.runbook.md](credential-setup.runbook.md) —
+  operator setup recipes.
+- [metaproc/docs/runbooks/cloud-dispatch.runbook.md](cloud-dispatch.runbook.md) → *GCP
+  Batch (Personal Plan)*.
+- `src/metaproc/config/env_vars.py` — the typed env-var registry.
+- `src/metaproc/cloud/gcp/gcp_credentials.py` — GCP credential resolution and token
+  refresh.
+- `src/metaproc/cloud/gcp/batch_backend.py` — `GCPBatchConfig` and shared Batch
+  assembly.
+- `src/metaproc/dispatch/secret_refs.py` and
+  `src/metaproc/cloud/gcp/secret_hydration.py` — typed reference policy and
+  container-side resolution.
+- `src/metaproc/adapters/claude_code.py` — `check_auth`, `bootstrap`, Personal-Plan
+  flow.
+- `src/metaproc/adapters/pi_cli.py` — `check_auth`, provider resolution.
+- `src/metaproc/adapters/gemini.py` — Gemini CLI adapter.
+- `src/metaproc/commands/auth_check.py` — the multi-phase verification command.
+- `src/metaproc/commands/claude_auth.py` — Keychain ↔ Secret Manager push/show/rotate.
+- `src/metaproc/cloud/gcp/worker_dispatch.py`,
+  `src/metaproc/cloud/gcp/orchestrator_dispatch.py`,
+  `src/metaproc/cloud/gcp/gcp_run_dispatch.py`,
+  `src/metaproc/cloud/gcp/container_bootstrap.py`.
 
 ## §N. Credential pool (plan-2026-04-21-auth-credential-pool.md)
 
@@ -1343,25 +1300,22 @@ not at the capability layer.
 
 #### `pre_fan_out_probe` is vehicle-aware
 
-`probe_credential` and `pre_fan_out_probe` in
-[`src/metaproc/dispatch/pool_dispatch.py`](../../src/metaproc/dispatch/pool_dispatch.py)
+`probe_credential` and `pre_fan_out_probe` in `src/metaproc/dispatch/pool_dispatch.py`
 threaded the default vehicle (Vehicle B) into materialize / scope / scrub, so a Vehicle
 A label probed at fan-out time got V-B materialization (writes `.credentials.json`,
 omits the bearer token from scope env) and the probe always failed.
 Phase 11.1 adds a `vehicle` kwarg to `probe_credential` defaulting to
 `LOGIN_CREDENTIALS` for back-compat; `pre_fan_out_probe` reads each entry’s
 `state.vehicle` and threads it through.
-Mirrors the operator-facing `auth probe` callsite in
-[`src/metaproc/commands/auth.py`](../../src/metaproc/commands/auth.py).
+Mirrors the operator-facing `auth probe` callsite in `src/metaproc/commands/auth.py`.
 
 #### V-A two-label integration smoke test
 
-[`tests/integration/test_two_label_smoke_vehicle_a.py`](../../tests/integration/test_two_label_smoke_vehicle_a.py)
-covers the Vehicle A end-to-end at the slot coordinator level: `scope_env` injects
-`CLAUDE_CODE_OAUTH_TOKEN` plus the hardening flags
-(`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`, `DISABLE_UPDATES=1`); no `.credentials.json` is
-written into the slot; `scrub_env` strips `ANTHROPIC_AUTH_TOKEN` /
-`CLAUDE_CODE_APIKEY_HELPER` but preserves the bearer-token env var; the failover walk
+`tests/integration/test_two_label_smoke_vehicle_a.py` covers the Vehicle A end-to-end at
+the slot coordinator level: `scope_env` injects `CLAUDE_CODE_OAUTH_TOKEN` plus the
+hardening flags (`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`, `DISABLE_UPDATES=1`); no
+`.credentials.json` is written into the slot; `scrub_env` strips `ANTHROPIC_AUTH_TOKEN`
+/ `CLAUDE_CODE_APIKEY_HELPER` but preserves the bearer-token env var; the failover walk
 between two V-A labels picks the alternate label.
 Sibling of `test_two_label_smoke.py` (which covers the Vehicle B path).
 
@@ -1381,8 +1335,8 @@ against a single account where the expansion would empty the pool.
 Default true preserves the spec-correct behavior.
 
 The flag travels through the dispatch chain via
-[`src/metaproc/dispatch/auth_pool_flags.py`](../../src/metaproc/dispatch/auth_pool_flags.py)
-(`auth_cross_quota_group` field, `METAPROC_AUTH_CROSS_QUOTA_GROUP` env var).
+`src/metaproc/dispatch/auth_pool_flags.py` (`auth_cross_quota_group` field,
+`METAPROC_AUTH_CROSS_QUOTA_GROUP` env var).
 The encoder writes the env var/CLI flag only when the operator opts out — default-true
 dispatches stay free of the new var.
 
@@ -1411,22 +1365,22 @@ needed (V-A is the recommended primary).
 
 ### §N.16 Phase 10 follow-ups — typed payload cohorts
 
-Phase 10 introduced [`AuthPoolFlags`](../../src/metaproc/dispatch/auth_pool_flags.py) —
-a frozen dataclass that wraps the `METAPROC_AUTH_*` env-var cohort with `from_env` /
-`to_env_vars` / `to_cli_flags` and `ClassVar` env-var names sourced from `MetaprocEnv`.
-The pattern eliminates ~25 hardcoded `"METAPROC_AUTH_*"` string literals across the
-dispatch chain and made the implementation worker-leg gap impossible (any rename now
-fails at import-time, not silently at dispatch).
+Phase 10 introduced `src/metaproc/dispatch/auth_pool_flags.py` — a frozen dataclass that
+wraps the `METAPROC_AUTH_*` env-var cohort with `from_env` / `to_env_vars` /
+`to_cli_flags` and `ClassVar` env-var names sourced from `MetaprocEnv`. The pattern
+eliminates ~25 hardcoded `"METAPROC_AUTH_*"` string literals across the dispatch chain
+and made the implementation worker-leg gap impossible (any rename now fails at
+import-time, not silently at dispatch).
 
 Phase 11 closed the four follow-up beads applying the same pattern to other env-var
 cohorts that travel together.
 
 | Module | Cohort |
 | --- | --- |
-| [`metaproc/dispatch/secret_refs.py`](../../src/metaproc/dispatch/secret_refs.py) | `SecretRef` and `SecretRefSet` define target environment variables, operator-side Secret Manager references, and plaintext-refusal policy. `SecretRefSet.all_known()` composes static refs (`GH_TOKEN`, `CLAUDE_CODE_CREDS_JSON`, `CODEX_CREDS_JSON`) with provider-derived refs from `gcp_secret_refs()`. `resolve_env_refs()` produces the reference-only container hydration mapping. |
-| [`metaproc/dispatch/repo_sync_payload.py`](../../src/metaproc/dispatch/repo_sync_payload.py) | `RepoSyncPayload` for the four-field repo-sync cohort: `METAPROC_REPO_URL`, `METAPROC_RUN_BRANCH`, `METAPROC_WHEEL_GCS`, `METAPROC_WORKSPACE_GCS`. Used by `container_bootstrap`, `orchestrator_dispatch`, `worker_dispatch`. |
-| [`metaproc/dispatch/orchestrator_payload.py`](../../src/metaproc/dispatch/orchestrator_payload.py) | `OrchestratorDispatchPayload` for the 13-field operator-CLI-to-orchestrator cohort. Replaces about 50 lines of conditional `env_vars` manipulation with one constructor and `update`. Spot defaults to true (silent emission); `num_workers` always emits both `METAPROC_NUM_WORKERS` and `METAPROC_DEFAULT_NUM_WORKERS` to tolerate code-version drift. |
-| [`metaproc/dispatch/worker_payload.py`](../../src/metaproc/dispatch/worker_payload.py) | `WorkerDispatchPayload` for the 12-field orchestrator-to-worker cohort. Worker identity is load-bearing and always emitted; inline and file item contexts are mutually exclusive, with the file path winning when both are populated. Call-site migration in `worker_dispatch` is deferred because the existing inline construction handles size-gated spill and NFS path resolution; the dataclass is ready for new sites. |
+| `src/metaproc/dispatch/secret_refs.py` | `SecretRef` and `SecretRefSet` define target environment variables, operator-side Secret Manager references, and plaintext-refusal policy. `SecretRefSet.all_known()` composes static refs (`GH_TOKEN`, `CLAUDE_CODE_CREDS_JSON`, `CODEX_CREDS_JSON`) with provider-derived refs from `gcp_secret_refs()`. `resolve_env_refs()` produces the reference-only container hydration mapping. |
+| `src/metaproc/dispatch/repo_sync_payload.py` | `RepoSyncPayload` for the four-field repo-sync cohort: `METAPROC_REPO_URL`, `METAPROC_RUN_BRANCH`, `METAPROC_WHEEL_GCS`, `METAPROC_WORKSPACE_GCS`. Used by `container_bootstrap`, `orchestrator_dispatch`, `worker_dispatch`. |
+| `src/metaproc/dispatch/orchestrator_payload.py` | `OrchestratorDispatchPayload` for the 13-field operator-CLI-to-orchestrator cohort. Replaces about 50 lines of conditional `env_vars` manipulation with one constructor and `update`. Spot defaults to true (silent emission); `num_workers` always emits both `METAPROC_NUM_WORKERS` and `METAPROC_DEFAULT_NUM_WORKERS` to tolerate code-version drift. |
+| `src/metaproc/dispatch/worker_payload.py` | `WorkerDispatchPayload` for the 12-field orchestrator-to-worker cohort. Worker identity is load-bearing and always emitted; inline and file item contexts are mutually exclusive, with the file path winning when both are populated. Call-site migration in `worker_dispatch` is deferred because the existing inline construction handles size-gated spill and NFS path resolution; the dataclass is ready for new sites. |
 
 The pattern is now well-trodden: any new env-var cohort that travels together gets a
 typed module mirroring this shape.

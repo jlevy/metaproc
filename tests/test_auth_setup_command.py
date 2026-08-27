@@ -6,7 +6,7 @@ both with graceful degradation), the never-print-payload invariant on
 the new path, and the token-handling discipline (env-var scoped only
 during inner push, restored on exit).
 
-Spec: docs/arch/arch-metaproc-core.md.
+Spec: src/metaproc/docs/metaproc-design.md.
 """
 
 from __future__ import annotations

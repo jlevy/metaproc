@@ -8,27 +8,15 @@ status: Approved
 
 **Date:** 2026-04-30 (last updated 2026-05-23) **Status:** Approved
 
-> **Maintenance**: This is a maintained architecture doc.
-> Revise via `tbd shortcut revise-architecture-doc` (which prompts you to verify content
-> against current code, then add a “Future Considerations” section).
-> When you make non-trivial changes, bump the **last updated** date above.
-> The full arch-doc index lives in
-> [development.md § Architecture docs](../development.md#architecture-docs).
-> 
-> Companion docs (in `docs/arch/`): [arch-metaproc-core](arch-metaproc-core.md),
-> [arch-runpool](arch-runpool.md), [arch-cloud-execution](arch-cloud-execution.md),
-> [arch-authentication](arch-authentication.md), [arch-testing](arch-testing.md).
-
 ## Overview
 
 metaproc dispatches agent work by spawning the Claude Code CLI (`claude`) as a
 non-interactive subprocess for each unit of work.
-The slot adapter
-([src/metaproc/adapters/claude_code.py](../../src/metaproc/adapters/claude_code.py)) is
-responsible for materializing per-attempt credentials, scoping the inner process’s
-environment so the wrong account can’t be used, and assembling a command line that lets
-the agent actually do its job (write files, run shell tools, search the web) without any
-interactive prompts.
+The slot adapter (`src/metaproc/adapters/claude_code.py`) is responsible for
+materializing per-attempt credentials, scoping the inner process’s environment so the
+wrong account can’t be used, and assembling a command line that lets the agent actually
+do its job (write files, run shell tools, search the web) without any interactive
+prompts.
 
 The CLI’s behavior here is not obvious: several of its defaults assume an interactive
 operator at the keyboard, and several of its hardening features deliberately override
@@ -340,8 +328,7 @@ mid-session and exit with code 1. The harness’s
 debug-log content (which contains diagnostic tokens like `429`, `rate_limit_error`,
 `error`) before the engine error string, then calls the known-bug classifier.
 
-The `claude-startup-exit-1-silent` regex in
-[`src/metaproc/dispatch/known_bugs.py`](../../src/metaproc/dispatch/known_bugs.py) uses
+The `claude-startup-exit-1-silent` regex in `src/metaproc/dispatch/known_bugs.py` uses
 forward-only negative lookaheads `(?!.*\d{3,})` and `(?!.*\berror\b)`. Because the
 diagnostic tokens are prepended *before* the `exit code 1` match position, the
 lookaheads cannot see them, and the regex fires on the rate-limit failure.
@@ -392,10 +379,9 @@ recommended action.
   — ENV_SCRUB / permission-mode coupling (open)
 - [anthropics/claude-code#46260](https://github.com/anthropics/claude-code/issues/46260)
   — confusing override warning (open)
-- [arch-authentication.md](./arch-authentication.md) — Vehicle A vs Vehicle B credential
+- [arch-authentication.md](arch-authentication.md) — Vehicle A vs Vehicle B credential
   redesign and pool architecture.
-- [adapters/claude_code.py](../../src/metaproc/adapters/claude_code.py) — current
-  implementation.
+- `src/metaproc/adapters/claude_code.py` — current implementation.
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

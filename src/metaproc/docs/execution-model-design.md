@@ -5,9 +5,9 @@ complete, which attempt owns a result, and what a status file is allowed to clai
 These are the contracts that are expensive to change once process specs depend on them,
 so they are settled here, deliberately, before the production scheduler grows into them.
 [Process Framework Concepts](process-framework-concepts.md) supplies the vocabulary and
-the design tests this instantiates;
-[arch-execution-model.md](arch/arch-execution-model.md) covers the executable reference
-model that implements these decisions in `src/metaproc/execution_model/`.
+the design tests this instantiates; [arch-execution-model.md](arch-execution-model.md)
+covers the executable reference model that implements these decisions in
+`src/metaproc/execution_model/`.
 
 ## Why an Execution-Model Revision
 
@@ -232,9 +232,8 @@ durable facts, never stored as truth.
   Keyed only by execution profile is likely wrong in both directions: two profiles can
   share one account quota, one profile can span regional quotas.
 - **Scale envelope, durable side.** The in-memory envelope is confirmed and guarded (see
-  the [architecture doc](arch/arch-execution-model.md)); filesystem metadata load,
-  per-task status writes, event-log volume, and resume time at the same envelope are
-  unmeasured.
+  the [architecture doc](arch-execution-model.md)); filesystem metadata load, per-task
+  status writes, event-log volume, and resume time at the same envelope are unmeasured.
 - **Threshold cardinality and `group_by`.** Modeled, not implemented, until a workload
   needs them.
 

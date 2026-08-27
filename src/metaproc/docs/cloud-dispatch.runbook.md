@@ -13,7 +13,7 @@ Metaproc owns job construction, worker/orchestrator dispatch, status, logs, scal
 cancellation, and artifact transport.
 
 Adapter/model routing details live in
-[adapter compatibility](adapter-compatibility.runbook.md).
+[adapter compatibility](https://github.com/jlevy/metaproc/blob/main/docs/runbooks/adapter-compatibility.runbook.md).
 Credential and Secret Manager setup lives in
 [credential setup](credential-setup.runbook.md).
 
@@ -40,8 +40,9 @@ A framework-green result does not validate domain schemas, prompts, handlers, or
 
 ## 2. Required Configuration
 
-Start from [`.env.example`](../../.env.example) and set only what the chosen execution
-mode requires. Never commit `.env`.
+Start from [`.env.example`](https://github.com/jlevy/metaproc/blob/main/.env.example)
+and set only what the chosen execution mode requires.
+Never commit `.env`.
 
 | Variable | Purpose |
 | --- | --- |
@@ -216,7 +217,7 @@ Use `metaproc gcp status` and `gcp logs` for Batch-native monitoring.
 4. Re-run with the same `RUN_ID` when completion fingerprints should preserve valid
    work. Use a new run ID only for an intentional clean duplicate.
 5. Use `override` or `--force` only after reviewing their audit and caching semantics in
-   the [operator reference](../../src/metaproc/docs/metaproc-operator-reference.md).
+   the [operator reference](metaproc-operator-reference.md).
 
 Plaintext `GH_TOKEN`, `CLAUDE_CODE_CREDS_JSON`, and similar credentials are refused on
 cloud dispatch when their registered Secret Manager references are absent.
