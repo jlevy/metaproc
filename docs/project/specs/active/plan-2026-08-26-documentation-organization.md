@@ -548,6 +548,18 @@ With §21 condensed, the design doc went from 19,926 words to 16,038.
 Final shape: 17 topics, 74,812 words, `make verify` green (4,436 passed, 8 skipped),
 both link gates clean, and all 17 documents asserted present in the wheel and the sdist.
 
+**README format, revised after review.** The plan sketched the Documentation section as
+tables with the document as the row and the command as a column.
+Review found that layout mixed kinds of documents, so the section became categorized
+lists instead: Essential Docs (the two-document reading path, with the general model as
+background), Operator Docs (the operator reference, the developer guide for people
+building workflows *on* Metaproc, and the two shipped runbooks), Reference Docs
+(conventions, artifact catalog, execution contracts, pricing), and Architecture — each
+entry carrying the exact `metaproc help` command and a one-line description.
+Repository-facing documents moved out of the Documentation section entirely, into a
+Project Docs section late in the README next to Development; the CHANGELOG is referenced
+on its own line rather than filed under a category.
+
 ### Follow-ups, closed 2026-08-27
 
 The three beads left open after the six phases are now done, and two of them found real
