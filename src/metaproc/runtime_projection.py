@@ -49,22 +49,25 @@ from metaproc.paths import (
 _ACCEPTED_STATES = frozenset({"completed", "cached"})
 
 
-def scan_task_output_projection(run_dir: Path, bundle: PlanBundle) -> TaskOutputProjection:
+def scan_task_output_projection(
+    run_dir: Path,
+    bundle: PlanBundle | None = None,
+) -> TaskOutputProjection:
     """Rebuild task and accepted-output views from one contained run tree.
 
     Nested composite scopes are discovered from their runtime-owned ``.state``
-    branches. New runs supply the exact per-scope resolved plan; older runs fall back
-    to the corresponding child :class:`PlanBundle`. Mutable status is checked against
-    the latest durable attempt before it enters the view. Result paths recorded on
-    another host are rebased from the immutable ``run-config.yaml`` ``run_dir`` onto
-    *run_dir*.
+    branches. New runs supply the exact per-scope resolved plan without requiring
+    authored process files. Older runs may supply *bundle* for compatibility fallback.
+    Mutable status is checked against the latest durable attempt before it enters the
+    view. Result paths recorded on another host are rebased from the immutable
+    ``run-config.yaml`` ``run_dir`` onto *run_dir*.
     """
     current_root = run_dir.resolve()
     original_root, root_run_id, process_name = _read_run_identity(
         run_dir,
         current_root=current_root,
     )
-    if process_name is not None and bundle.spec.name != process_name:
+    if process_name is not None and bundle is not None and bundle.spec.name != process_name:
         raise ValueError(
             f"{run_config_file(run_dir)}: process {process_name!r} does not match "
             f"loaded plan {bundle.spec.name!r}"
@@ -220,7 +223,7 @@ def _bundle_for_scope(bundle: PlanBundle, scope_path: tuple[str, ...]) -> PlanBu
 
 def _runtime_plan_for_scope(
     scope_dir: Path,
-    bundle: PlanBundle,
+    bundle: PlanBundle | None,
     *,
     scope_path: tuple[str, ...],
     expected_run_id: str | None,
@@ -245,6 +248,8 @@ def _runtime_plan_for_scope(
             )
         return tuple(snapshot.steps), snapshot.run_id
 
+    if bundle is None:
+        raise ValueError(f"{snapshot_path}: exact run plan snapshot required without a plan bundle")
     scope_bundle = _bundle_for_scope(bundle, scope_path)
     if scope_bundle is None:
         return None

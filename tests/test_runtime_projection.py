@@ -251,6 +251,104 @@ def test_projection_indexes_scalar_mapped_and_recursive_scopes(tmp_path: Path) -
     assert all(task.attempt_id is not None for task in projection.tasks)
 
 
+def test_projection_uses_complete_snapshots_without_authored_bundle(tmp_path: Path) -> None:
+    original_run_dir = Path("/mnt/shared/runs/run-1")
+    run_dir = tmp_path / "hydrated" / "run-1"
+    artifact = run_dir / "scalar-child" / "report.md"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text("report", encoding="utf-8")
+    _write_run_config(run_dir, original_run_dir=original_run_dir)
+
+    bundle = _bundle()
+    _write_run_plan(
+        run_dir,
+        run_id=ROOT_RUN_ID,
+        scope_path=(),
+        plan=bundle.plan,
+        step_fingerprints={step.step_id: fingerprint_step(step) for step in bundle.plan.steps},
+    )
+    for scope_path, child_name in (
+        (("scalar-child",), "scalar-child"),
+        (("mapped-child", "BBB"), "mapped-child"),
+    ):
+        child = bundle.children[child_name]
+        _write_run_plan(
+            run_dir.joinpath(*scope_path),
+            run_id="/".join((ROOT_RUN_ID, *scope_path)),
+            scope_path=scope_path,
+            plan=child.plan,
+            step_fingerprints={step.step_id: fingerprint_step(step) for step in child.plan.steps},
+        )
+
+    _write_task(run_dir / ".state/tasks/root-scalar", run_id=ROOT_RUN_ID, step_id="root-scalar")
+    _write_task(
+        run_dir / ".state/tasks/root-map/AAA",
+        run_id=ROOT_RUN_ID,
+        step_id="root-map",
+        item_key="AAA",
+    )
+    _write_task(
+        run_dir / "scalar-child/.state/tasks/leaf",
+        run_id=f"{ROOT_RUN_ID}/scalar-child",
+        step_id="leaf",
+        scope_path=("scalar-child",),
+        outputs={"report": "/mnt/shared/runs/run-1/scalar-child/report.md"},
+        step_hash=fingerprint_step(_leaf_step()),
+    )
+    _write_task(
+        run_dir / "mapped-child/BBB/.state/tasks/leaf",
+        run_id=f"{ROOT_RUN_ID}/mapped-child/BBB",
+        step_id="leaf",
+        scope_path=("mapped-child", "BBB"),
+    )
+
+    projection = scan_task_output_projection(run_dir)
+
+    assert [task.key for task in projection.tasks] == [
+        TaskKeyProjection(step_id="root-map", item_key="AAA"),
+        TaskKeyProjection(step_id="root-scalar"),
+        TaskKeyProjection(step_id="leaf", scope_path=["mapped-child", "BBB"]),
+        TaskKeyProjection(step_id="leaf", scope_path=["scalar-child"]),
+    ]
+    scalar_child = projection.tasks[-1]
+    assert [output.path for output in scalar_child.accepted_outputs] == [str(artifact)]
+    assert scalar_child.unaccepted_outputs == []
+
+
+def test_projection_without_bundle_requires_root_snapshot(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    _write_run_config(run_dir, original_run_dir=run_dir)
+
+    with pytest.raises(ValueError, match="run-plan.yaml.*required without a plan bundle"):
+        scan_task_output_projection(run_dir)
+
+
+def test_projection_without_bundle_requires_declared_child_snapshot(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    child_dir = run_dir / "scalar-child"
+    _write_run_config(run_dir, original_run_dir=run_dir)
+    root_plan = Plan(
+        process="root.process.md",
+        steps=[ResolvedStep(step_id="scalar-child", mode="composite")],
+    )
+    _write_run_plan(
+        run_dir,
+        run_id=ROOT_RUN_ID,
+        scope_path=(),
+        plan=root_plan,
+        step_fingerprints={"scalar-child": fingerprint_step(root_plan.steps[0])},
+    )
+    _write_task(
+        child_dir / ".state/tasks/leaf",
+        run_id=f"{ROOT_RUN_ID}/scalar-child",
+        step_id="leaf",
+        scope_path=("scalar-child",),
+    )
+
+    with pytest.raises(ValueError, match="scalar-child.*run-plan.yaml.*required"):
+        scan_task_output_projection(run_dir)
+
+
 def test_projection_uses_real_run_process_identity_shape(tmp_path: Path) -> None:
     run_dir = tmp_path / "run-1"
     _write_run_config(run_dir, original_run_dir=run_dir, run_context="r1")
