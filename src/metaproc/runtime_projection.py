@@ -15,11 +15,12 @@ from metaproc.io import read_yaml_file
 from metaproc.io.gz_io import artifact_exists, resolve_existing_artifact
 from metaproc.io.state_io import (
     read_result_at,
+    read_run_plan,
     read_status_at,
     validate_task_status_identity_at,
 )
 from metaproc.models.authored import IOSpec
-from metaproc.models.plan import ResolvedStep
+from metaproc.models.plan import Plan, RunPlanStep
 from metaproc.models.plan_bundle import PlanBundle
 from metaproc.models.runtime import ResultRecord, StatusRecord
 from metaproc.models.viz import (
@@ -36,6 +37,7 @@ from metaproc.paths import (
     ATTEMPT_FILE,
     ATTEMPTS_SUBDIR,
     RESULT_FILE,
+    RUN_PLAN_FILE,
     STATE_DIR,
     STATUS_FILE,
     TASKS_SUBDIR,
@@ -51,10 +53,11 @@ def scan_task_output_projection(run_dir: Path, bundle: PlanBundle) -> TaskOutput
     """Rebuild task and accepted-output views from one contained run tree.
 
     Nested composite scopes are discovered from their runtime-owned ``.state``
-    branches, then matched back to the corresponding child :class:`PlanBundle`.
-    Mutable status is checked against the latest durable attempt before it enters the
-    view. Result paths recorded on another host are rebased from the immutable
-    ``run-config.yaml`` ``run_dir`` onto *run_dir*.
+    branches. New runs supply the exact per-scope resolved plan; older runs fall back
+    to the corresponding child :class:`PlanBundle`. Mutable status is checked against
+    the latest durable attempt before it enters the view. Result paths recorded on
+    another host are rebased from the immutable ``run-config.yaml`` ``run_dir`` onto
+    *run_dir*.
     """
     current_root = run_dir.resolve()
     original_root, root_run_id, process_name = _read_run_identity(
@@ -68,16 +71,28 @@ def scan_task_output_projection(run_dir: Path, bundle: PlanBundle) -> TaskOutput
         )
     tasks: list[RuntimeTaskProjection] = []
     seen_state_dirs: set[Path] = set()
+    accepted_scope_steps: dict[tuple[str, ...], tuple[RunPlanStep, ...]] = {}
 
     for scope_dir in iter_composite_run_dirs(run_dir):
         scope_path = _scope_path(run_dir, scope_dir)
-        scope_bundle = _bundle_for_scope(bundle, scope_path)
-        if scope_bundle is None:
+        if scope_path and not _scope_is_declared(scope_path, accepted_scope_steps):
             continue
         expected_run_id = _scope_run_id(root_run_id, scope_path)
+        runtime_plan = _runtime_plan_for_scope(
+            scope_dir,
+            bundle,
+            scope_path=scope_path,
+            expected_run_id=expected_run_id,
+            current_root=current_root,
+        )
+        if runtime_plan is None:
+            continue
+        scope_steps, snapshot_run_id = runtime_plan
+        accepted_scope_steps[scope_path] = scope_steps
+        task_run_id = expected_run_id or snapshot_run_id
         for step, item_key, state_dir in _iter_task_state_dirs(
             scope_dir,
-            scope_bundle,
+            scope_steps,
             current_root=current_root,
         ):
             resolved_state_dir = state_dir.resolve()
@@ -88,11 +103,11 @@ def scan_task_output_projection(run_dir: Path, bundle: PlanBundle) -> TaskOutput
             status = read_status_at(state_dir)
             if status is None:
                 continue
-            task_run_id = expected_run_id or status.run_id
+            current_task_run_id = task_run_id or status.run_id
             latest_attempt = validate_task_status_identity_at(
                 state_dir,
                 status,
-                run_id=task_run_id,
+                run_id=current_task_run_id,
                 step_id=step.step_id,
                 item_key=item_key,
             )
@@ -100,11 +115,11 @@ def scan_task_output_projection(run_dir: Path, bundle: PlanBundle) -> TaskOutput
             _validate_result_identity(
                 state_dir,
                 result,
-                run_id=task_run_id,
+                run_id=current_task_run_id,
                 step_id=step.step_id,
             )
             result_binding = _result_binding(status, result)
-            current_step_hash = fingerprint_step(step) if result is not None else None
+            current_step_hash = step.fingerprint if result is not None else None
             step_binding = _step_binding(result, current_step_hash=current_step_hash)
             accepted_outputs, unaccepted_outputs = _project_outputs(
                 status,
@@ -203,6 +218,89 @@ def _bundle_for_scope(bundle: PlanBundle, scope_path: tuple[str, ...]) -> PlanBu
     return current
 
 
+def _runtime_plan_for_scope(
+    scope_dir: Path,
+    bundle: PlanBundle,
+    *,
+    scope_path: tuple[str, ...],
+    expected_run_id: str | None,
+    current_root: Path,
+) -> tuple[tuple[RunPlanStep, ...], str | None] | None:
+    """Load the exact recorded scope projection, with a legacy bundle fallback."""
+    snapshot_path = scope_dir / STATE_DIR / RUN_PLAN_FILE
+    if snapshot_path.exists() or snapshot_path.is_symlink():
+        _require_contained_file(snapshot_path, current_root)
+        snapshot = read_run_plan(scope_dir)
+        if snapshot is None:  # pragma: no cover - existence was checked above
+            raise ValueError(f"{snapshot_path}: run plan disappeared while being read")
+        if tuple(snapshot.scope_path) != scope_path:
+            raise ValueError(
+                f"{snapshot_path}: scope path {snapshot.scope_path!r} does not match "
+                f"runtime path {list(scope_path)!r}"
+            )
+        if expected_run_id is not None and snapshot.run_id != expected_run_id:
+            raise ValueError(
+                f"{snapshot_path}: run id {snapshot.run_id!r} does not match "
+                f"runtime identity {expected_run_id!r}"
+            )
+        return tuple(snapshot.steps), snapshot.run_id
+
+    scope_bundle = _bundle_for_scope(bundle, scope_path)
+    if scope_bundle is None:
+        return None
+    return _project_plan_steps(scope_bundle.plan), None
+
+
+def _project_plan_steps(plan: Plan) -> tuple[RunPlanStep, ...]:
+    """Project a legacy loaded plan through the narrow runtime contract.
+
+    Historical plans do not retain canonical ``for_each.key`` resolutions. ``None``
+    marks that compatibility fallback; recorded snapshots reject incomplete key sets.
+    """
+    return tuple(
+        RunPlanStep(
+            step_id=step.step_id,
+            mode=step.mode,
+            task_shape="mapped" if step.fan_out is not None else "scalar",
+            item_keys=None,
+            outputs=step.outputs,
+            fingerprint=fingerprint_step(step),
+        )
+        for step in plan.steps
+    )
+
+
+def _scope_is_declared(
+    scope_path: tuple[str, ...],
+    accepted_scope_steps: Mapping[tuple[str, ...], tuple[RunPlanStep, ...]],
+) -> bool:
+    """Require a child runtime scope to match its nearest accepted parent plan."""
+    parent_paths = [
+        path
+        for path in accepted_scope_steps
+        if len(path) < len(scope_path) and scope_path[: len(path)] == path
+    ]
+    if not parent_paths:
+        return False
+    parent_path = max(parent_paths, key=len)
+    child_parts = scope_path[len(parent_path) :]
+    if len(child_parts) not in {1, 2}:
+        return False
+    step = next(
+        (entry for entry in accepted_scope_steps[parent_path] if entry.step_id == child_parts[0]),
+        None,
+    )
+    if step is None or step.mode != "composite":
+        return False
+    if step.task_shape == "scalar":
+        return len(child_parts) == 1
+    return (
+        len(child_parts) == 2
+        and is_safe_item_key(child_parts[1])
+        and (step.item_keys is None or child_parts[1] in step.item_keys)
+    )
+
+
 def _scope_run_id(root_run_id: str | None, scope_path: tuple[str, ...]) -> str | None:
     if root_run_id is None:
         return None
@@ -211,18 +309,18 @@ def _scope_run_id(root_run_id: str | None, scope_path: tuple[str, ...]) -> str |
 
 def _iter_task_state_dirs(
     scope_dir: Path,
-    bundle: PlanBundle,
+    steps: Iterable[RunPlanStep],
     *,
     current_root: Path,
-) -> Iterable[tuple[ResolvedStep, str | None, Path]]:
+) -> Iterable[tuple[RunPlanStep, str | None, Path]]:
     tasks_root = scope_dir / STATE_DIR / TASKS_SUBDIR
     if not _is_contained_directory(tasks_root, current_root):
         return
-    for step in sorted(bundle.plan.steps, key=lambda entry: entry.step_id):
+    for step in sorted(steps, key=lambda entry: entry.step_id):
         step_dir = tasks_root / step.step_id
         if not _is_contained_directory(step_dir, current_root):
             continue
-        if step.fan_out is None:
+        if step.task_shape == "scalar":
             if (step_dir / STATUS_FILE).is_file():
                 yield step, None, step_dir
             continue
@@ -232,6 +330,8 @@ def _iter_task_state_dirs(
             continue
         for item_dir in item_dirs:
             if not is_safe_item_key(item_dir.name):
+                continue
+            if step.item_keys is not None and item_dir.name not in step.item_keys:
                 continue
             if not _is_contained_directory(item_dir, current_root):
                 continue

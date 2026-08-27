@@ -188,6 +188,7 @@ Runtime terms in this layer:
 Run-level state files (under {run_dir}/.state/):
   process-status.yaml
   run-config.yaml
+  run-plan.yaml
   orchestrator-lease.yaml
   overrides.yaml             (operator escape hatches via `metaproc override`)
 
@@ -1068,6 +1069,7 @@ in depth.
 runs/local/example-workflow/doc-sync-demo/
   .state/
     run-config.yaml
+    run-plan.yaml
     process-status.yaml
     orchestrator-lease.yaml
     steps/
@@ -1256,7 +1258,19 @@ visualization plane, and remote tunnel, lives in
 When the `viz-model` route receives a run directory, Metaproc adds a rebuildable task
 and output projection to `VizModel`. The projection walks contained scalar and mapped
 composite scopes and reconstructs qualified task identities from the immutable run
-configuration. It validates mutable status against retained attempts.
+configuration. Each evaluated scope records a narrow projection of the exact resolved
+`Plan` in `.state/run-plan.yaml`: step identity, execution shape, canonical mapped item
+keys, output declarations, and fingerprints.
+Opaque adapter configuration, environment, parameters, prompts, and fan-out item
+payloads stay out of the record.
+The projection uses that authority instead of trying to reconstruct item-specific paths,
+profiles, or adapter resolution from the authored process.
+Each nested record must also match a composite declaration, scalar-or-mapped shape, and
+canonical item key in its nearest accepted parent scope.
+When an upstream step creates a fan-out source during the run, discovery atomically
+refreshes that mapped step’s key set before dispatch; a resume replaces removed keys.
+Runs created before this record existed fall back to the loaded plan bundle.
+The projection validates mutable status against retained attempts.
 A recorded output enters the consumable set only when its result names the latest
 successful attempt, its step fingerprint matches the loaded plan, its port is declared,
 and its local artifact exists with the declared file or directory kind.
@@ -2620,8 +2634,8 @@ steps in parallel at each level.
 2. Resolve the spec into a `Plan` via `build_plan()` (variable resolution, fan-out
    expansion, adapter config merges).
 3. Validate step references (`--skip`, `--from`, `--only`) against known step IDs.
-4. Compute the run directory, write or validate `.state/run-config.yaml`, and acquire
-   `.state/orchestrator-lease.yaml`.
+4. Compute the run directory, write or validate `.state/run-config.yaml`, acquire
+   `.state/orchestrator-lease.yaml`, and publish the exact root `.state/run-plan.yaml`.
 5. Compute the active subgraph: if `--from` is set, use `downstream()` to select the
    target step and its transitive dependents; if `--only` is set, restrict execution to
    that single step. Otherwise all steps are active.
@@ -3111,6 +3125,21 @@ paths do not. No other variable changes are accepted.
 Cross-topology resume (for example, hybrid to full cloud) remains allowed because the
 backend is not part of resume identity and both topologies share the authoritative
 filesystem. Authentication and concurrency changes remain explicit timeline events.
+
+**`run-plan.yaml`** (`{scope_dir}/.state/run-plan.yaml`): records the exact step
+identity, scalar-or-mapped shape, canonical mapped item keys, output declarations, and
+fingerprints used for the root process or one nested composite scope.
+It is refreshed atomically before that scope is evaluated.
+Mapped steps refresh their canonical key set again after runtime discovery when an
+upstream-produced source did not exist at initial plan time.
+Old results become step mismatches when an evaluated scope resumes under changed
+definitions. Hydrated readers do not need to guess the original item bindings or
+execution profile, and child records cannot authorize scopes absent from their nearest
+parent record. Opaque execution configuration and discovered fan-out item payloads are
+deliberately excluded; canonical keys remain because they are the scope addresses that
+the parent actually authorized.
+This is a declarative projection derived from the existing plan, not a second scheduler,
+expansion graph, or artifact-lineage authority.
 
 **`orchestrator-lease.yaml`** (`{run_dir}/.state/orchestrator-lease.yaml`): records the
 current orchestrator owner and heartbeat so a second orchestrator will refuse to start

@@ -11,6 +11,7 @@ from metaproc.engine.dep_state import fingerprint_step
 from metaproc.io import to_yaml_string
 from metaproc.io.state_io import (
     end_attempt_at,
+    read_run_plan,
     start_attempt_at,
     write_result_at,
     write_status_at,
@@ -54,13 +55,23 @@ def _bundle() -> PlanBundle:
                 ResolvedStep(
                     step_id="root-map",
                     mode="code",
-                    fan_out=FanOut(over="items", bind="item", source="items.md"),
+                    fan_out=FanOut(
+                        over="items",
+                        bind="item",
+                        source="items.md",
+                        items=[{"item": "AAA"}],
+                    ),
                 ),
                 ResolvedStep(step_id="scalar-child", mode="composite"),
                 ResolvedStep(
                     step_id="mapped-child",
                     mode="composite",
-                    fan_out=FanOut(over="items", bind="item", source="items.md"),
+                    fan_out=FanOut(
+                        over="items",
+                        bind="item",
+                        source="items.md",
+                        items=[{"item": "BBB"}],
+                    ),
                 ),
             ],
         ),
@@ -89,6 +100,50 @@ def _write_run_config(
                 "run_dir": str(original_run_dir),
                 "variables": {},
                 "backend": "local",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_run_plan(
+    scope_dir: Path,
+    *,
+    run_id: str,
+    scope_path: tuple[str, ...],
+    plan: Plan,
+    step_fingerprints: dict[str, str],
+) -> None:
+    path = scope_dir / ".state" / "run-plan.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        to_yaml_string(
+            {
+                "run_plan": {
+                    "schema": "metaproc:RunPlanSnapshot/0.1",
+                    "run_id": run_id,
+                    "scope_path": list(scope_path),
+                    "steps": [
+                        {
+                            "step_id": step.step_id,
+                            "mode": step.mode,
+                            "task_shape": ("mapped" if step.fan_out is not None else "scalar"),
+                            "item_keys": (
+                                [item[step.fan_out.bind] for item in step.fan_out.items]
+                                if step.fan_out is not None
+                                else []
+                            ),
+                            "outputs": {
+                                name: declaration.model_dump(
+                                    mode="json", by_alias=True, exclude_none=True
+                                )
+                                for name, declaration in step.outputs.items()
+                            },
+                            "fingerprint": step_fingerprints[step.step_id],
+                        }
+                        for step in plan.steps
+                    ],
+                }
             }
         ),
         encoding="utf-8",
@@ -264,6 +319,222 @@ def test_accepted_output_requires_exact_bindings_and_available_artifact(tmp_path
         contract="example:Report/v1",
     )
     assert task.unaccepted_outputs == []
+
+
+def test_scope_run_plan_binds_outputs_without_rebuilding_the_executed_step(tmp_path: Path) -> None:
+    run_dir = tmp_path / "hydrated" / "run-1"
+    scope_dir = run_dir / "scalar-child"
+    artifact = scope_dir / "report.md"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text("report", encoding="utf-8")
+    _write_run_config(run_dir, original_run_dir=run_dir)
+    _write_run_plan(
+        scope_dir,
+        run_id=f"{ROOT_RUN_ID}/scalar-child",
+        scope_path=("scalar-child",),
+        plan=_bundle().children["scalar-child"].plan,
+        step_fingerprints={"leaf": "0123456789abcdef"},
+    )
+    _write_task(
+        scope_dir / ".state/tasks/leaf",
+        run_id=f"{ROOT_RUN_ID}/scalar-child",
+        step_id="leaf",
+        scope_path=("scalar-child",),
+        outputs={"report": str(artifact)},
+        step_hash="0123456789abcdef",
+    )
+
+    task = scan_task_output_projection(run_dir, _bundle()).tasks[0]
+
+    assert task.step_binding == "exact"
+    assert [output.name for output in task.accepted_outputs] == ["report"]
+    assert task.unaccepted_outputs == []
+
+
+def test_scope_run_plan_must_match_runtime_scope_identity(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    scope_dir = run_dir / "scalar-child"
+    _write_run_config(run_dir, original_run_dir=run_dir)
+    _write_run_plan(
+        scope_dir,
+        run_id=f"{ROOT_RUN_ID}/scalar-child",
+        scope_path=("another-child",),
+        plan=_bundle().children["scalar-child"].plan,
+        step_fingerprints={"leaf": fingerprint_step(_leaf_step())},
+    )
+
+    with pytest.raises(ValueError, match="scope path .* does not match runtime path"):
+        scan_task_output_projection(run_dir, _bundle())
+
+
+def test_scope_run_plan_must_match_runtime_run_identity(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    scope_dir = run_dir / "scalar-child"
+    _write_run_config(run_dir, original_run_dir=run_dir)
+    _write_run_plan(
+        scope_dir,
+        run_id="another/run/scalar-child",
+        scope_path=("scalar-child",),
+        plan=_bundle().children["scalar-child"].plan,
+        step_fingerprints={"leaf": fingerprint_step(_leaf_step())},
+    )
+
+    with pytest.raises(ValueError, match="run id .* does not match runtime identity"):
+        scan_task_output_projection(run_dir, _bundle())
+
+
+def test_run_plan_snapshot_rejects_unknown_schema_version(tmp_path: Path) -> None:
+    plan = _bundle().plan
+    _write_run_plan(
+        tmp_path,
+        run_id=ROOT_RUN_ID,
+        scope_path=(),
+        plan=plan,
+        step_fingerprints={step.step_id: fingerprint_step(step) for step in plan.steps},
+    )
+    path = tmp_path / ".state/run-plan.yaml"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("RunPlanSnapshot/0.1", "RunPlanSnapshot/9.9"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="RunPlanSnapshot/0.1"):
+        read_run_plan(tmp_path)
+
+
+def test_scope_run_plan_cannot_authorize_undeclared_child(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    ghost_dir = run_dir / "ghost"
+    _write_run_config(run_dir, original_run_dir=run_dir)
+    _write_run_plan(
+        ghost_dir,
+        run_id=f"{ROOT_RUN_ID}/ghost",
+        scope_path=("ghost",),
+        plan=_bundle().children["scalar-child"].plan,
+        step_fingerprints={"leaf": fingerprint_step(_leaf_step())},
+    )
+    _write_task(
+        ghost_dir / ".state/tasks/leaf",
+        run_id=f"{ROOT_RUN_ID}/ghost",
+        step_id="leaf",
+        scope_path=("ghost",),
+    )
+
+    assert scan_task_output_projection(run_dir, _bundle()).tasks == []
+
+
+def test_parent_run_plan_can_remove_a_stale_child_scope(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    child_dir = run_dir / "scalar-child"
+    _write_run_config(run_dir, original_run_dir=run_dir)
+    root_plan = Plan(
+        process="root.process.md",
+        steps=[ResolvedStep(step_id="root-scalar", mode="code")],
+    )
+    _write_run_plan(
+        run_dir,
+        run_id=ROOT_RUN_ID,
+        scope_path=(),
+        plan=root_plan,
+        step_fingerprints={"root-scalar": fingerprint_step(root_plan.steps[0])},
+    )
+    _write_run_plan(
+        child_dir,
+        run_id=f"{ROOT_RUN_ID}/scalar-child",
+        scope_path=("scalar-child",),
+        plan=_bundle().children["scalar-child"].plan,
+        step_fingerprints={"leaf": fingerprint_step(_leaf_step())},
+    )
+    _write_task(
+        child_dir / ".state/tasks/leaf",
+        run_id=f"{ROOT_RUN_ID}/scalar-child",
+        step_id="leaf",
+        scope_path=("scalar-child",),
+    )
+
+    assert scan_task_output_projection(run_dir, _bundle()).tasks == []
+
+
+def test_parent_run_plan_rejects_scalar_mapped_scope_shape_drift(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    child_dir = run_dir / "mapped-child" / "AAA"
+    _write_run_config(run_dir, original_run_dir=run_dir)
+    root_plan = Plan(
+        process="root.process.md",
+        steps=[ResolvedStep(step_id="mapped-child", mode="composite")],
+    )
+    _write_run_plan(
+        run_dir,
+        run_id=ROOT_RUN_ID,
+        scope_path=(),
+        plan=root_plan,
+        step_fingerprints={"mapped-child": fingerprint_step(root_plan.steps[0])},
+    )
+    _write_run_plan(
+        child_dir,
+        run_id=f"{ROOT_RUN_ID}/mapped-child/AAA",
+        scope_path=("mapped-child", "AAA"),
+        plan=_bundle().children["mapped-child"].plan,
+        step_fingerprints={"leaf": fingerprint_step(_leaf_step())},
+    )
+    _write_task(
+        child_dir / ".state/tasks/leaf",
+        run_id=f"{ROOT_RUN_ID}/mapped-child/AAA",
+        step_id="leaf",
+        scope_path=("mapped-child", "AAA"),
+    )
+
+    assert scan_task_output_projection(run_dir, _bundle()).tasks == []
+
+
+def test_parent_run_plan_rejects_removed_mapped_child_item(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    ghost_dir = run_dir / "mapped-child" / "GHOST"
+    _write_run_config(run_dir, original_run_dir=run_dir)
+    root_plan = _bundle().plan
+    _write_run_plan(
+        run_dir,
+        run_id=ROOT_RUN_ID,
+        scope_path=(),
+        plan=root_plan,
+        step_fingerprints={step.step_id: fingerprint_step(step) for step in root_plan.steps},
+    )
+    _write_run_plan(
+        ghost_dir,
+        run_id=f"{ROOT_RUN_ID}/mapped-child/GHOST",
+        scope_path=("mapped-child", "GHOST"),
+        plan=_bundle().children["mapped-child"].plan,
+        step_fingerprints={"leaf": fingerprint_step(_leaf_step())},
+    )
+    _write_task(
+        ghost_dir / ".state/tasks/leaf",
+        run_id=f"{ROOT_RUN_ID}/mapped-child/GHOST",
+        step_id="leaf",
+        scope_path=("mapped-child", "GHOST"),
+    )
+
+    assert scan_task_output_projection(run_dir, _bundle()).tasks == []
+
+
+def test_scope_run_plan_rejects_removed_mapped_task_item(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    _write_run_config(run_dir, original_run_dir=run_dir)
+    root_plan = _bundle().plan
+    _write_run_plan(
+        run_dir,
+        run_id=ROOT_RUN_ID,
+        scope_path=(),
+        plan=root_plan,
+        step_fingerprints={step.step_id: fingerprint_step(step) for step in root_plan.steps},
+    )
+    _write_task(
+        run_dir / ".state/tasks/root-map/GHOST",
+        run_id=ROOT_RUN_ID,
+        step_id="root-map",
+        item_key="GHOST",
+    )
+
+    assert scan_task_output_projection(run_dir, _bundle()).tasks == []
 
 
 def test_stale_prior_result_is_visible_but_not_accepted_for_latest_attempt(tmp_path: Path) -> None:
@@ -485,6 +756,26 @@ def test_projection_rejects_symlinked_state_record_escape(tmp_path: Path) -> Non
     )
     state_dir.mkdir(parents=True)
     (state_dir / "status.yaml").symlink_to(outside)
+
+    with pytest.raises(ValueError, match="runtime state path .* escapes run tree"):
+        scan_task_output_projection(run_dir, _bundle())
+
+
+def test_projection_rejects_symlinked_run_plan_escape(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    scope_dir = run_dir / "scalar-child"
+    _write_run_config(run_dir, original_run_dir=run_dir)
+    outside_scope = tmp_path / "outside-scope"
+    _write_run_plan(
+        outside_scope,
+        run_id=f"{ROOT_RUN_ID}/scalar-child",
+        scope_path=("scalar-child",),
+        plan=_bundle().children["scalar-child"].plan,
+        step_fingerprints={"leaf": fingerprint_step(_leaf_step())},
+    )
+    state_dir = scope_dir / ".state"
+    state_dir.mkdir(parents=True)
+    (state_dir / "run-plan.yaml").symlink_to(outside_scope / ".state/run-plan.yaml")
 
     with pytest.raises(ValueError, match="runtime state path .* escapes run tree"):
         scan_task_output_projection(run_dir, _bundle())

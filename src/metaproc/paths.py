@@ -138,6 +138,9 @@ PROCESS_STATUS_FILE = "process-status.yaml"
 RUN_CONFIG_FILE = "run-config.yaml"
 """Immutable run identity written at creation, validated on resume."""
 
+RUN_PLAN_FILE = "run-plan.yaml"
+"""Current exact resolved plan for one root or nested process scope."""
+
 ORCHESTRATOR_LEASE_FILE = "orchestrator-lease.yaml"
 """Active orchestrator lease — heartbeat, owner identity, stale takeover."""
 

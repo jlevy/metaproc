@@ -111,6 +111,7 @@ from metaproc.engine.pathing import (
     compute_run_dir,
     compute_task_logs_dir,
     compute_task_state_dir,
+    resolve_item_key,
 )
 from metaproc.engine.placeholders import (
     collect_step_runtime_placeholders,
@@ -165,15 +166,17 @@ from metaproc.io.state_io import (
     mark_failed_at,
     mark_running_at,
     read_manual_ack_at,
+    read_run_plan,
     read_status_at,
     reconcile_stale_running,
     validate_task_status_identity_at,
     write_attempt_at,
     write_result_at,
+    write_run_plan,
 )
 from metaproc.logutil.compaction import try_compact_log
 from metaproc.models.authored import IOSpec, ProcessSpec, ProcessStep, StepContext
-from metaproc.models.plan import Plan, ResolvedStep
+from metaproc.models.plan import Plan, ResolvedStep, RunPlanSnapshot, RunPlanStep
 from metaproc.models.resource_budget import FinalizationState
 from metaproc.models.resource_snapshot import ResourceRunSnapshot
 from metaproc.models.runtime import (
@@ -754,6 +757,109 @@ def _write_run_config(  # noqa: PLR0913
         Path(tmp_path).write_text(to_yaml_string(data))
     log.info("Wrote run-config.yaml: %s", config_path)
     return config_path
+
+
+def _publish_run_plan(
+    run_dir: Path,
+    *,
+    run_id: str,
+    scope_path: tuple[str, ...],
+    plan: Plan,
+    spec: ProcessSpec,
+    variables: Mapping[str, str],
+) -> Path:
+    """Publish the minimal exact plan projection used by one runtime scope."""
+    step_defs = {step.id: step for step in spec.steps}
+    return write_run_plan(
+        run_dir,
+        RunPlanSnapshot(
+            run_id=run_id,
+            scope_path=list(scope_path),
+            steps=[
+                RunPlanStep(
+                    step_id=step.step_id,
+                    mode=step.mode,
+                    task_shape="mapped" if step.fan_out is not None else "scalar",
+                    item_keys=_resolved_run_plan_item_keys(
+                        step,
+                        step_def=step_defs.get(step.step_id),
+                        variables=variables,
+                    ),
+                    outputs=step.outputs,
+                    fingerprint=fingerprint_step(step),
+                )
+                for step in plan.steps
+            ],
+        ),
+    )
+
+
+def _resolved_run_plan_item_keys(
+    step: ResolvedStep,
+    *,
+    step_def: ProcessStep | None,
+    variables: Mapping[str, str],
+) -> list[str]:
+    """Return the canonical task keys for one resolved mapped step."""
+    if step.fan_out is None:
+        return []
+    if step_def is None or step_def.for_each is None:
+        raise ValueError(f"resolved mapped step {step.step_id!r} has no authored for_each")
+    item_keys: list[str] = []
+    for item in step.fan_out.items:
+        item_variables = dict(variables)
+        item_variables.update(item)
+        item_keys.append(resolve_item_key(step_def.for_each, item_variables, step.step_id))
+    return item_keys
+
+
+def _refresh_run_plan_item_keys(
+    run_dir: Path,
+    *,
+    target: ResolvedStep,
+    step_def: ProcessStep,
+    variables: Mapping[str, str],
+    item_contexts: Sequence[Mapping[str, str]],
+) -> None:
+    """Refresh one mapped step after its runtime source becomes available.
+
+    ``build_plan`` can run before an upstream-produced roster exists. Runtime
+    discovery is therefore the first exact authority for that step's canonical item
+    keys. The single orchestrator performs this synchronous atomic replacement before
+    dispatch, under its existing lease.
+    """
+    snapshot = read_run_plan(run_dir)
+    if snapshot is None:
+        return
+    if target.fan_out is None:
+        raise ValueError(f"cannot refresh scalar step {target.step_id!r} item keys")
+    resolved_contexts = [dict(context) for context in item_contexts]
+    target.fan_out.items = resolved_contexts
+    item_keys = _resolved_run_plan_item_keys(
+        target,
+        step_def=step_def,
+        variables=variables,
+    )
+    matched = False
+    updated_steps: list[RunPlanStep] = []
+    for step in snapshot.steps:
+        if step.step_id == target.step_id:
+            matched = True
+            updated_steps.append(step.model_copy(update={"item_keys": item_keys}))
+        else:
+            updated_steps.append(step)
+    if not matched:
+        raise ValueError(
+            f"run-plan snapshot for {run_dir} does not declare step {target.step_id!r}"
+        )
+    write_run_plan(
+        run_dir,
+        RunPlanSnapshot(
+            run_id=snapshot.run_id,
+            scope_path=snapshot.scope_path,
+            steps=updated_steps,
+        ),
+    )
 
 
 def _serialize_auth_flags(flags: AuthPoolFlags) -> dict[str, object]:
@@ -1695,7 +1801,7 @@ def _discover_chain_items(
         )
     except ValueError as exc:
         raise CLIError(str(exc)) from exc
-    return [*discovery.actionable_contexts, *discovery.filtered_items]
+    return discovery.nonterminal_contexts()
 
 
 async def _execute_code_fan_out_step(
@@ -1721,6 +1827,13 @@ async def _execute_code_fan_out_step(
         variables=variables,
         run_dir=run_dir,
         run_id=run_id,
+    )
+    _refresh_run_plan_item_keys(
+        run_dir,
+        target=target,
+        step_def=step_def,
+        variables=variables,
+        item_contexts=item_contexts,
     )
     if not item_contexts:
         out.progress(f"  Step '{step_id}': no actionable items (all completed)")
@@ -1787,6 +1900,14 @@ async def _execute_item_aligned_chain(
         run_dir=run_dir,
         run_id=run_id,
     )
+    for step_id in chain:
+        _refresh_run_plan_item_keys(
+            run_dir,
+            target=step_map[step_id],
+            step_def=step_def_map[step_id],
+            variables=variables,
+            item_contexts=item_contexts,
+        )
     if not item_contexts:
         out.progress(f"  Chain '{' -> '.join(chain)}': no items")
         return dict.fromkeys(chain, True)
@@ -2691,6 +2812,14 @@ def _prepare_composite_scope(
         artifact_namespace=target.artifact_namespace,
         profile_files=execution_context.profile_files,
     )
+    _publish_run_plan(
+        child_identity.run_dir,
+        run_id=child_identity.record_id,
+        scope_path=child_identity.scope_path,
+        plan=child_plan,
+        spec=child_spec,
+        variables=child_vars,
+    )
 
     return _PreparedCompositeScope(
         spec=child_spec,
@@ -2813,13 +2942,20 @@ async def _execute_composite_fan_out_step(
     except (TypeError, ValueError) as exc:
         raise CLIError(str(exc)) from exc
 
+    _refresh_run_plan_item_keys(
+        run_dir,
+        target=target,
+        step_def=step_def,
+        variables=variables,
+        item_contexts=discovery.nonterminal_contexts(),
+    )
+
     item_contexts = list(discovery.actionable_contexts)
-    retained_count = len(discovery.filtered_items)
-    for filtered_context in discovery.filtered_items:
-        reason = filtered_context.get("reason")
-        if reason not in {"completed", "cached"}:
+    retained_count = sum(item.reason != "terminal" for item in discovery.filtered_items)
+    for filtered_item in discovery.filtered_items:
+        if filtered_item.reason not in {"completed", "cached"}:
             continue
-        item_context = {key: value for key, value in filtered_context.items() if key != "reason"}
+        item_context = filtered_item.context
         item_vars = {**variables, **item_context}
         state_dir = compute_task_state_dir(run_dir, step_def, item_vars)
         prepared = _prepare_composite_scope(
@@ -3222,6 +3358,13 @@ async def _execute_fan_out_step(
         reuse_policy=target.reuse_policy,
         run_dir=run_dir,
         expected_run_id=run_id,
+    )
+    _refresh_run_plan_item_keys(
+        run_dir,
+        target=target,
+        step_def=step_def,
+        variables=step_vars,
+        item_contexts=discovery.nonterminal_contexts(),
     )
     item_contexts = discovery.actionable_contexts
     if not item_contexts:
@@ -5034,6 +5177,14 @@ def run_process_command(
     finalization_state = FinalizationState.COMPLETED
     terminal_error: BaseException | None = None
     try:
+        _publish_run_plan(
+            run_dir,
+            run_id=run_id,
+            scope_path=(),
+            plan=plan,
+            spec=spec,
+            variables=variables,
+        )
         with (
             LeaseHeartbeat(run_dir),
             ProcessEventLogger(paths_mod.process_events_log(run_dir)) as events,

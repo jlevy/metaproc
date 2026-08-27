@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from pydantic import ValidationError
 
@@ -14,6 +15,16 @@ from metaproc.io.state_io import compute_item_dir
 from metaproc.models.authored import IOSpec, ProcessStep
 from metaproc.models.runtime import get_terminal_statuses
 
+type FilteredFanOutReason = Literal["completed", "cached", "running", "terminal"]
+
+
+@dataclass(frozen=True)
+class FilteredFanOutItem:
+    """An authored item context paired with its framework disposition."""
+
+    context: dict[str, str]
+    reason: FilteredFanOutReason
+
 
 @dataclass
 class FanOutDiscovery:
@@ -21,7 +32,14 @@ class FanOutDiscovery:
     item_key: str
     item_fields: list[str]
     actionable_contexts: list[dict[str, str]] = field(default_factory=list)
-    filtered_items: list[dict[str, str]] = field(default_factory=list)
+    filtered_items: list[FilteredFanOutItem] = field(default_factory=list)
+
+    def nonterminal_contexts(self) -> list[dict[str, str]]:
+        """Return source-authorized contexts, including reusable in-run items."""
+        return [
+            *self.actionable_contexts,
+            *(item.context for item in self.filtered_items if item.reason != "terminal"),
+        ]
 
 
 def normalize_item_fields(step_def: ProcessStep) -> list[str]:
@@ -101,7 +119,7 @@ def discover_items_from_source(
     item_fields = normalize_item_fields(step_def)
     terminal_statuses = get_terminal_statuses()
     actionable_contexts: list[dict[str, str]] = []
-    filtered_items: list[dict[str, str]] = []
+    filtered_items: list[FilteredFanOutItem] = []
     item_key_rows: dict[str, int] = {}
 
     for index, item in enumerate(items, 1):
@@ -166,9 +184,7 @@ def discover_items_from_source(
                         if output_errors:
                             actionable_contexts.append(context)
                             continue
-                    filtered_entry = dict(context)
-                    filtered_entry["reason"] = state
-                    filtered_items.append(filtered_entry)
+                    filtered_items.append(FilteredFanOutItem(context=dict(context), reason=state))
                     continue
                 if state == "failed":
                     # "failed" → retry on next run
@@ -178,16 +194,14 @@ def discover_items_from_source(
                     # Skip running items — orphaned markers from dead pools
                     # are reconciled to "failed" before discovery runs
                     # (see reconcile_stale_running in state_io.py).
-                    filtered_entry = dict(context)
-                    filtered_entry["reason"] = "running"
-                    filtered_items.append(filtered_entry)
+                    filtered_items.append(
+                        FilteredFanOutItem(context=dict(context), reason="running")
+                    )
                     continue
 
         status = str(item.get("status", "")).strip().lower()
         if status and status in terminal_statuses:
-            filtered_entry = dict(context)
-            filtered_entry["reason"] = "terminal"
-            filtered_items.append(filtered_entry)
+            filtered_items.append(FilteredFanOutItem(context=dict(context), reason="terminal"))
             continue
 
         actionable_contexts.append(context)

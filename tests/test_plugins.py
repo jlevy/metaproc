@@ -6,10 +6,12 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from pydantic import BaseModel
-from softschema import Contract, SchemaStatus
+from softschema import Contract, SchemaProfile, SchemaStatus, validate_artifact
 
+from metaproc.io import to_yaml_string
 from metaproc.io.frontmatter import ENVELOPE_MAP
 from metaproc.models.authored import ProcessStep
+from metaproc.models.plan import RUN_PLAN_SNAPSHOT_CONTRACT, RunPlanSnapshot
 from metaproc.models.resources import HierarchyRef, ResourceEvent
 from metaproc.models.runtime import get_terminal_statuses
 from metaproc.models.usage import ToolRunProfile
@@ -19,6 +21,37 @@ from metaproc.plugins.registry import PluginRegistryImpl
 
 
 class TestPluginRegistry:
+    def test_builtin_run_plan_snapshot_contract(self):
+        binding = PluginRegistryImpl().softschemas.resolve(RUN_PLAN_SNAPSHOT_CONTRACT)
+
+        assert binding is not None
+        assert binding.model is RunPlanSnapshot
+        assert binding.envelope_key == "run_plan"
+        assert binding.profile is SchemaProfile.pure_yaml
+        assert binding.status == SchemaStatus.enforced
+
+    def test_builtin_run_plan_snapshot_validates_real_yaml_artifact(self, tmp_path: Path):
+        path = tmp_path / "run-plan.yaml"
+        path.write_text(
+            to_yaml_string(
+                {
+                    "run_plan": RunPlanSnapshot(
+                        run_id="example/run-1",
+                    ).model_dump(mode="json", by_alias=True)
+                }
+            ),
+            encoding="utf-8",
+        )
+        registry = PluginRegistryImpl().softschemas
+
+        validation = validate_artifact(
+            path,
+            contract_id=RUN_PLAN_SNAPSHOT_CONTRACT,
+            registry=registry,
+        )
+
+        assert validation.ok
+
     def test_register_envelope(self):
         reg = PluginRegistryImpl()
 

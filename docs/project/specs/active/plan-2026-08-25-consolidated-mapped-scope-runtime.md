@@ -170,9 +170,21 @@ Operator views rebuild lineage from declarations and accepted results rather tha
 introducing another artifact authority.
 
 The runtime task/output view is therefore a rebuildable projection, not another durable
-record. It qualifies scalar and mapped tasks by scope, validates each mutable status
-against retained attempts, and binds a consumable result to the exact successful attempt
-and current step fingerprint.
+result or lineage record.
+Each evaluated process scope persists a narrow projection of its exact resolved `Plan`
+in `run-plan.yaml`: step identity, scalar-or-mapped shape, canonical mapped item keys,
+output declarations, and fingerprints.
+Opaque adapter configuration, environment, parameters, prompts, and fan-out item
+payloads stay out of the record.
+The view qualifies scalar and mapped tasks by scope, requires every child to match its
+nearest parent composite declaration, validates mutable status against retained
+attempts, and binds a consumable result to the exact successful attempt and recorded
+current fingerprint.
+If an upstream step creates the fan-out source after initial planning, runtime discovery
+atomically refreshes the affected step’s canonical key set before dispatch.
+A later resume replaces the set, so removed items cannot retain authority.
+This keeps execution and artifact bindings reviewable without reconstructing the
+orchestrator’s decisions or adding scheduler state.
 Only declared, portable, available outputs of the declared kind enter the accepted set.
 Legacy unbound, stale, undeclared, missing, and external outputs remain explicit
 diagnostics so partial hydration and definition drift cannot masquerade as accepted
@@ -225,6 +237,12 @@ the local exact-head and public CI gates below remain independent landing requir
 | R22: cross-scope task sorting is partial | Fixed | Task projection uses an explicit total ordering over scope, step, and optional item key. |
 | R23: public projection embeds mutable runtime models | Fixed | A strict, narrow DTO carries only stable task, binding, and output facts; historical `VizModel/0.3` remains readable. |
 | R24: external outputs abort hydrated views | Fixed | Nonportable output paths are retained as diagnostics and never treated as hydrated artifacts. |
+| R25: rebuilt nested plans reject valid mapped outputs | Fixed | Every evaluated runtime scope atomically records its exact step projection and fingerprints; hydrated projection consumes that record and retains a bundle fallback for older runs. |
+| R26: nested snapshots self-authorize stale scopes | Fixed | A child scope is visible only when its path matches a composite declaration, scalar-or-mapped shape, and canonical item key in the nearest accepted parent scope. Exact snapshots also exclude stale mapped task keys. |
+| R27: full plans persist sensitive or unbounded fields | Fixed | The runtime record excludes params, environment, prompts, opaque adapter config, and fan-out item payloads. Only canonical scope keys remain; regression coverage proves that a 500-item expansion omits private payload fields. |
+| R28: runtime plan schema fails open | Fixed | The standalone and SoftSchema registries publish the strict pure-YAML `RunPlanSnapshot/0.1` contract, validate real artifacts, and reject unknown versions. |
+| R29: runtime-produced fan-out sources leave empty item authority | Fixed | Agent, code, aligned-chain, and mapped-composite discovery atomically refresh the existing scope snapshot before dispatch. End-to-end producer-to-mapped-leaf and producer-to-mapped-composite tests prove accepted projection, and resume coverage removes a stale item key. |
+| R30: fan-out disposition collides with authored fields | Fixed | Discovery keeps framework disposition separate from authored item context. Canonical key resolution preserves every declared field, retains completed, cached, or running items, and excludes source-terminal items. |
 
 The superseded retry-later transport is excluded.
 Dormant retry primitives remain under their separate removal-or-justification audit.
@@ -259,7 +277,7 @@ recovery, and injects the file-filtering override through Metaproc’s invocatio
 Gemini settings. Regression coverage runs finalization in both path-form orders and
 asserts exact provider meters, tokens, list cost, and tool calls; it also covers mapped
 child process events, item/step-name collisions, and v1 snapshot compatibility.
-The complete framework gate passes with 4,476 tests and the same eight tracked
+The complete framework gate passes with 4,493 tests and the same eight tracked
 credential or infrastructure skips, plus lint, type checking, public-hygiene checks,
 dependency audits, package construction, and installed-wheel smoke.
 
@@ -312,6 +330,10 @@ The consolidated exact head must pass:
 - real RunPool mapped-agent integration with the direct scalar launcher made fatal;
 - status, event, pool-rollup, and nested-trace regression coverage;
 - compatibility tests for existing scalar composites and agent or code fan-out; and
+- exact root and mapped-scope plan projections, parent item-key authorization, secret
+  and fan-out-payload omission, pure-YAML schema validation and rejection, identity
+  rejection, containment, legacy fallback, runtime-produced fan-out refresh and removal,
+  and hydrated output binding; and
 - complete `make verify` plus exact-head GitHub CI.
 
 ### Successive smoke ladder

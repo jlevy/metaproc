@@ -705,7 +705,7 @@ def test_discover_trust_state_skips_revalidation(tmp_path):
     # AAPL filtered even though output missing — trust_state skips re-validation
     assert len(discovery.actionable_contexts) == 0
     assert len(discovery.filtered_items) == 1
-    assert discovery.filtered_items[0]["ticker"] == "AAPL"
+    assert discovery.filtered_items[0].context["ticker"] == "AAPL"
 
 
 def test_discover_validated_outputs_passes_when_output_exists(tmp_path):
@@ -760,7 +760,7 @@ def test_discover_validated_outputs_passes_when_output_exists(tmp_path):
     )
     assert len(discovery.actionable_contexts) == 0
     assert len(discovery.filtered_items) == 1
-    assert discovery.filtered_items[0]["ticker"] == "AAPL"
+    assert discovery.filtered_items[0].context["ticker"] == "AAPL"
 
 
 def test_discover_joins_state_running_filters_item(tmp_path):
@@ -818,8 +818,8 @@ def test_discover_joins_state_running_filters_item(tmp_path):
     assert len(discovery.actionable_contexts) == 1
     assert discovery.actionable_contexts[0]["ticker"] == "NVDA"
     assert len(discovery.filtered_items) == 1
-    assert discovery.filtered_items[0]["ticker"] == "AAPL"
-    assert discovery.filtered_items[0]["reason"] == "running"
+    assert discovery.filtered_items[0].context["ticker"] == "AAPL"
+    assert discovery.filtered_items[0].reason == "running"
 
 
 def test_discover_backward_compat_no_output_paths(tmp_path):
@@ -848,6 +848,8 @@ def test_discover_backward_compat_no_output_paths(tmp_path):
     discovery = discover_items_from_source(progress_path, step_def)
     assert len(discovery.actionable_contexts) == 1  # AAPL
     assert len(discovery.filtered_items) == 1  # NVDA (done)
+    assert discovery.filtered_items[0].reason == "terminal"
+    assert discovery.nonterminal_contexts() == [{"ticker": "AAPL", "sector": "technology"}]
 
 
 def test_discover_state_overrides_progress_status(tmp_path):
