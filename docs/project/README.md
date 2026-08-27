@@ -53,8 +53,7 @@ changes.
 ## Architecture Docs
 
 The architecture documents ship in the package and are indexed with their
-`metaproc help` topics in
-[README § Developer and Architecture Docs](../../README.md#developer-and-architecture-docs).
+`metaproc help` topics in [README § Architecture](../../README.md#architecture).
 
 ## Releases
 

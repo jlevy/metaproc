@@ -191,7 +191,7 @@ The architecture documents ship inside the package, in `src/metaproc/docs/`, alo
 the design doc and the other framework documentation.
 Each is also a `metaproc help` topic.
 The indexed list, with topics and what each one owns, is
-[README § Developer and Architecture Docs](../README.md#developer-and-architecture-docs).
+[README § Architecture](../README.md#architecture).
 
 They follow the `arch-*.md` naming convention and carry frontmatter (title, description,
 author, status) plus a Date line with `(last updated ...)`. To revise one:

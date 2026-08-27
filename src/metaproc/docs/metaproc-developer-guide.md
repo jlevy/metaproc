@@ -1,6 +1,6 @@
 ---
 title: Metaproc Developer Guide
-description: How to use and extend the framework — authoring processes, adding steps and adapters, and testing changes.
+description: "For developers building workflows on Metaproc: authoring process specs, adding steps and adapters, and testing changes."
 ---
 # Metaproc Developer Guide
 
@@ -9,10 +9,14 @@ Related docs: [concepts](metaproc-concepts.md) (first principles) ·
 
 ## Purpose
 
-For engineers extending metaproc or building a workflow on top of it.
-Read this before adding a CLI command, a process-spec feature, or — especially — before
-writing a script that wraps metaproc.
+For developers building workflows on top of metaproc: process specs, handlers, adapters,
+and plugins. Read it before writing a script that wraps metaproc, which is the mistake
+this guide exists to prevent.
 It is generic to metaproc, not specific to any one workflow.
+
+Running an existing workflow is the [operator reference](metaproc-operator-reference.md)
+instead. Working on metaproc itself is covered by the architecture docs and the
+repository’s own contributor documentation.
 
 ## The Core Principle: Metaproc Is the Right Wrapper
 

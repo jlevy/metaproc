@@ -564,12 +564,18 @@ were renamed with repren: `metaproc-concepts-and-principles.md` became
 `metaproc-concepts.md` (title “Metaproc Concepts”) and `process-framework-concepts.md`
 became `process-framework-theory.md` (title “Process Framework Theory”), with all
 references swept, topic names unchanged.
-The README’s Essential Docs are three, in reading order: concepts, design, and the
-operator reference. The developer guide and the seven architecture docs share one
-Developer and Architecture Docs section, since both serve people extending Metaproc.
-A final pass applied the documentation guidelines to every file authored in this change;
-em dashes were removed in favor of the punctuation the guidelines prefer, and
-pre-existing prose is tracked as its own sweep.
+The README’s Essential Docs are four, in reading order: concepts, design, the operator
+reference, and the developer guide.
+The last two are both user documentation, split by task: the operator reference is for
+running an existing workflow, the developer guide for building a new one.
+The architecture docs are their own section, for people working on Metaproc itself.
+The guide’s own Purpose section said “for engineers extending metaproc or building a
+workflow on top of it,” which reads as contributor documentation and is what put it in
+the wrong group during review.
+It now names workflow developers and points running and framework work at the documents
+that own them. A final pass applied the documentation guidelines to every file authored
+in this change; em dashes were removed in favor of the punctuation the guidelines
+prefer, and pre-existing prose is tracked as its own sweep.
 The two shipped runbooks form an Operator Runbooks group, and the theory doc files under
 Reference Docs as background.
 Main docs carry their real titles in bold; architecture and repository docs keep

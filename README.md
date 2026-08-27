@@ -97,41 +97,33 @@ Read these in order:
    how the system is built, covering the spec format, resolved plans, runtime artifacts,
    resumability, the adapter contract, and the robustness subsystems.
 3. **[Metaproc Operator Reference](src/metaproc/docs/metaproc-operator-reference.md)**
-   (`metaproc help operator`): the runtime CLI reference for starting, monitoring,
-   resuming, and stopping runs.
+   (`metaproc help operator`): for running an existing workflow.
+   The runtime CLI reference for starting, monitoring, resuming, and stopping runs.
+4. **[Metaproc Developer Guide](src/metaproc/docs/metaproc-developer-guide.md)**
+   (`metaproc help developer`): for building new workflows on Metaproc, with process
+   specs, handlers, and plugins, and the “Metaproc is the right wrapper” policy.
 
-### Developer and Architecture Docs
+### Architecture
 
-For developers extending Metaproc, from building workflows on it to its subsystem
-internals. All of these ship in the package:
-
-- **[Metaproc Developer Guide](src/metaproc/docs/metaproc-developer-guide.md)**
-  (`metaproc help developer`): for developers building workflows *on* Metaproc with
-  process specs, handlers, and plugins, and the “Metaproc is the right wrapper” policy.
-  Working on Metaproc itself is covered under [Project Docs](#project-docs) instead.
+Deeper component references, one subsystem each.
+These are for people working on Metaproc itself; all of them ship in the package:
 
 - [arch-authentication](src/metaproc/docs/arch-authentication.md)
   (`metaproc help arch-auth`): credential pools, adapter auth modes, secret refs, and
   Secret Manager hydration.
-
 - [arch-cloud-execution](src/metaproc/docs/arch-cloud-execution.md)
   (`metaproc help arch-cloud`): GCP Batch dispatch, orchestrator and worker placement,
   logs, and recovery.
-
 - [arch-runpool](src/metaproc/docs/arch-runpool.md) (`metaproc help arch-runpool`): the
   local agent process manager, covering adaptive concurrency, memory pressure, and host
   coordination.
-
 - [arch-claude-code-harness](src/metaproc/docs/arch-claude-code-harness.md)
   (`metaproc help arch-harness`): the Claude Code adapter harness and its wire format.
-
 - [arch-execution-model](src/metaproc/docs/arch-execution-model.md)
   (`metaproc help arch-execution`): how the execution model is implemented today,
   including item-aligned resume.
-
 - [arch-testing](src/metaproc/docs/arch-testing.md) (`metaproc help arch-testing`): the
   test tiers, when to use each, and per-adapter credential setup.
-
 - [arch-file-io-utilities](src/metaproc/docs/arch-file-io-utilities.md)
   (`metaproc help arch-file-io`): the curated `metaproc.io` surface and
   frontmatter_format gotchas.
