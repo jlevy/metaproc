@@ -1,6 +1,6 @@
 """Tests for the fix: auth preflight CLI + query_quota_usage wiring.
 
-Spec: docs/arch/arch-metaproc-core.md
+Spec: src/metaproc/docs/metaproc-design.md
 """
 
 from __future__ import annotations

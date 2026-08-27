@@ -1,6 +1,6 @@
 """Contract failure primitives: structured records, representation, retry verdicts.
 
-What a contract failure records and what it costs, per ``arch-metaproc-core.md``
+What a contract failure records and what it costs, per ``metaproc-design.md``
 §6 (the `contract` and `on_invalid` declarations) and §14.1 (the retry chain).
 """
 

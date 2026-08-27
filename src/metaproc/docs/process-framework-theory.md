@@ -1,4 +1,12 @@
-# Process Framework Concepts
+# Process Framework Theory
+
+> **Scope.** This document is the general model: what any process framework must decide,
+> and the vocabulary for saying it precisely.
+> It is the authority on the model, not on Metaproc.
+> Where it describes what Metaproc actually does, its companion
+> [metaproc-concepts.md](metaproc-concepts.md) (`metaproc help concepts`) wins; that
+> document’s §4.2b lists the objects named here that Metaproc models but has not
+> implemented. Readable as `metaproc help framework`.
 
 The abstract execution model beneath any process framework: what such a system must
 decide, the vocabulary for talking about it precisely, and the design tests that follow.
@@ -567,6 +575,12 @@ does.
 ## Loops: Processes That Repeat
 
 Everything so far describes one pass: plan, execute, finish.
+
+This section is about the *mechanism* of iteration.
+For what Metaproc iterates *on*, process definitions reading and rewriting other process
+definitions, see [§5 Optimization Loops and Self-Improvement](metaproc-concepts.md).
+The sweep, ensemble, and experiment primitives named at the end of this section are
+described there as deferred work rather than shipped features.
 There is a further layer, **iterative processes**, where a whole run is the body of a
 loop that repeats until some condition holds.
 An automated research loop is one example: gather sources, synthesize, identify gaps,
@@ -685,23 +699,23 @@ is the signal that the framework, not the workflow, needs the change.
 ## How Metaproc Maps to This Model
 
 Concept by concept, with the authoritative doc for each.
-The contracts Metaproc commits to going forward — dependency clauses, expansion closure,
-attempt fencing, task generations — are decided in
+The contracts Metaproc commits to going forward (dependency clauses, expansion closure,
+attempt fencing, task generations) are decided in
 [execution-model-design.md](execution-model-design.md), which instantiates this general
 model; the rows below describe the implementation as it stands today.
 
 | Concept | Metaproc today | Where |
 | --- | --- | --- |
-| Process spec, steps, artifacts | Markdown specs with typed `deps`, `inputs`, and `outputs`; four step modes | [arch-metaproc-core.md §6](arch/arch-metaproc-core.md) |
-| Contracts and keys | Declared `as:` and `parse:` shapes on deps; softschema-validated artifacts (`softschema inspect`, `softschema validate`); `for_each` `bind` and `bind_fields` declare the dispatch fields; the item key addresses per-task state | [arch-metaproc-core.md §6.5-6.7, §13](arch/arch-metaproc-core.md) |
-| Static planning | Spec resolved into a `Plan` as data; `plan`, `--dry-run`, validation | [arch-metaproc-core.md §8](arch/arch-metaproc-core.md) |
-| Dynamic width | Fan-out rosters re-discovered at execution time, so a mid-run step may write a later step’s roster | [run_process.py](../src/metaproc/commands/run_process.py) (execution-time `discover_items_from_source`) |
-| Fan-out | `for_each` over a declared items file, on agent and code steps; per-item retry with backoff on the agent path | [arch-metaproc-core.md §6.7, §11, §14.1](arch/arch-metaproc-core.md) |
-| Dependency clauses | Step-scoped `needs` by default; `for_each.align: same_key` for eligible linear code chains; collected inputs with `require: succeeded \| finished` | [arch-metaproc-core.md §11](arch/arch-metaproc-core.md), [arch-execution-model.md § Adoption Path](arch/arch-execution-model.md#adoption-path) |
-| Task state and resume | Per-item `status.yaml`, `attempt.yaml`, `result.yaml`; stale-marker reconciliation; `--force` invalidation with audit trail | [arch-metaproc-core.md §9-10, §19.5](arch/arch-metaproc-core.md), [artifact-catalog.md](artifact-catalog.md) |
-| Admission | RunPool: adaptive memory ceiling, provider ceiling, operator cap, cross-run host admission, health, kill | [arch-runpool.md](arch/arch-runpool.md) |
-| Visibility | `status` (with `--check`), `wait`, `tail`, `pulse`, `stats`, `deps`, `structure-report`, `pool status`, `pool events`, `pool health`, `pool concurrency-timeline`, `pool rollup`, `resource-report`, `trace`; classified `FailureClass` per item; Metabrowser plugin views | [arch-metaproc-core.md §9, §15](arch/arch-metaproc-core.md), [arch-runpool.md § Visibility Contract](arch/arch-runpool.md) |
-| Distribution | Two-tier cloud dispatch running the identical CLI against shared state, partitioned per fan-out step | [arch-cloud-execution.md](arch/arch-cloud-execution.md) |
+| Process spec, steps, artifacts | Markdown specs with typed `deps`, `inputs`, and `outputs`; four step modes | [metaproc-design.md §6](metaproc-design.md) |
+| Contracts and keys | Declared `as:` and `parse:` shapes on deps; softschema-validated artifacts (`softschema inspect`, `softschema validate`); `for_each` `bind` and `bind_fields` declare the dispatch fields; the item key addresses per-task state | [metaproc-design.md §6.5-6.7, §13](metaproc-design.md) |
+| Static planning | Spec resolved into a `Plan` as data; `plan`, `--dry-run`, validation | [metaproc-design.md §8](metaproc-design.md) |
+| Dynamic width | Fan-out rosters re-discovered at execution time, so a mid-run step may write a later step’s roster | `src/metaproc/commands/run_process.py` (execution-time `discover_items_from_source`) |
+| Fan-out | `for_each` over a declared items file, on agent and code steps; per-item retry with backoff on the agent path | [metaproc-design.md §6.7, §11, §14.1](metaproc-design.md) |
+| Dependency clauses | Step-scoped `needs` by default; `for_each.align: same_key` for eligible linear code chains; collected inputs with `require: succeeded \| finished` | [metaproc-design.md §11](metaproc-design.md), [arch-execution-model.md § Adoption Path](arch-execution-model.md#adoption-path) |
+| Task state and resume | Per-item `status.yaml`, `attempt.yaml`, `result.yaml`; stale-marker reconciliation; `--force` invalidation with audit trail | [metaproc-design.md §9-10, §19.5](metaproc-design.md), [artifact-catalog.md](artifact-catalog.md) |
+| Admission | RunPool: adaptive memory ceiling, provider ceiling, operator cap, cross-run host admission, health, kill | [arch-runpool.md](arch-runpool.md) |
+| Visibility | `status` (with `--check`), `wait`, `tail`, `pulse`, `stats`, `deps`, `structure-report`, `pool status`, `pool events`, `pool health`, `pool concurrency-timeline`, `pool rollup`, `resource-report`, `trace`; classified `FailureClass` per item; Metabrowser plugin views | [metaproc-design.md §9, §15](metaproc-design.md), [arch-runpool.md § Visibility Contract](arch-runpool.md) |
+| Distribution | Two-tier cloud dispatch running the identical CLI against shared state, partitioned per fan-out step | [arch-cloud-execution.md](arch-cloud-execution.md) |
 
 Known deviations from the model, current as of this writing.
 These are the active design surface, not permanent properties.
@@ -723,7 +737,9 @@ original unit of execution and state, and one local orchestrator was the only wr
   code handler that launches child Metaproc commands.
   Admission, retry, lifecycle, and placement are not yet one mode-neutral invoker
   contract, and manual steps remain scalar.
-  See [P8](metaproc-design-rev3-proposals.md) for the remaining decomposition.
+  See
+  [P8](https://github.com/jlevy/metaproc/blob/main/docs/project/design/metaproc-design-proposals.md)
+  for the remaining decomposition.
 
 - **Dependency clauses (test 5, partially).** Eligible code chains expose `same_key`
   mapping. Collected inputs expose `collect_all` with `succeeded` or `finished`
@@ -775,12 +791,11 @@ original unit of execution and state, and one local orchestrator was the only wr
   and prose everywhere else.
 
 - **Loops (test 14).** Iteration is not first-class.
-  The conceptual frame exists in
-  [metaproc-concepts-and-principles.md §5](../src/metaproc/docs/metaproc-concepts-and-principles.md),
+  The conceptual frame exists in [metaproc-concepts.md §5](metaproc-concepts.md),
   covering the optimization loops, and sweep, ensemble, and experiment composition is a
   named proposal in
-  [metaproc-design-rev3-proposals.md P7](metaproc-design-rev3-proposals.md); today a
-  loop driver lives outside the framework.
+  [metaproc-design-proposals.md P7](https://github.com/jlevy/metaproc/blob/main/docs/project/design/metaproc-design-proposals.md);
+  today a loop driver lives outside the framework.
 
 - **Failure placement, aggregate half (test 17).** Per-item records carry a classified
   failure reason and pool events carry it in real time, but no aggregate view buckets a
@@ -790,9 +805,9 @@ original unit of execution and state, and one local orchestrator was the only wr
 Design work addressing the scheduling and state items, meaning task-level ready-set
 scheduling over dependency clauses, expansion closure, attempt fencing with single
 commits, and admission authorities at their true scopes, is under active consideration.
-See [TODO.md](../TODO.md) and
-[metaproc-design-rev3-proposals.md](metaproc-design-rev3-proposals.md) for current
-status.
+See [TODO.md](https://github.com/jlevy/metaproc/blob/main/TODO.md) and
+[metaproc-design-proposals.md](https://github.com/jlevy/metaproc/blob/main/docs/project/design/metaproc-design-proposals.md)
+for current status.
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

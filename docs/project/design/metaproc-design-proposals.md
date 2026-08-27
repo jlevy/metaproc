@@ -1,12 +1,12 @@
 # Metaproc Design Rev3 Proposals
 
-Remaining rev3 candidates on top of `arch-metaproc-core.md` (rev2i).
+Remaining rev3 candidates on top of `metaproc-design.md` (rev2i).
 
 This document intentionally omits proposals that are already implemented on the current
 branch and have been folded into the main design docs.
 The scheduling portions of P1 and P3 are superseded by
-[execution-model-design.md](execution-model-design.md), which owns the task-level
-scheduling contracts.
+[execution-model-design.md](../../../src/metaproc/docs/execution-model-design.md), which
+owns the task-level scheduling contracts.
 That includes:
 
 - promotion of stable production subsystems into the main design
@@ -33,7 +33,7 @@ That includes:
 
 ## P1. `reduce` CLI Command
 
-**Category:** execution **Modifies:** sections 8.3, 11.4, 20 in `arch-metaproc-core.md`
+**Category:** execution **Modifies:** sections 8.3, 11.4, 20 in `metaproc-design.md`
 
 `needs` is now propagated and enforced by `run-process`, but there is still no command
 that says “start from this completed map step and run its downstream aggregations.”
@@ -146,7 +146,7 @@ Open questions:
 
 ## P6. Declarative Run Source
 
-**Category:** authored, future **Relates to:** sections 6, 11 in `arch-metaproc-core.md`
+**Category:** authored, future **Relates to:** sections 6, 11 in `metaproc-design.md`
 
 The operational problem from early rev2 is mostly gone: production mine runs no longer
 require a manual roster-prep command because `setup-roster` is now an ordinary in-DAG
@@ -171,7 +171,7 @@ Why it is still future work:
 ## P7. Sweep / Ensemble / Experiment Primitives
 
 **Category:** authored, future **Relates to:** the Type A and Type C optimization loops
-in `metaproc-concepts-and-principles.md` §5
+in `metaproc-concepts.md` §5
 
 The concepts doc names three composition primitives over runs — sweep, ensemble,
 experiment — that mechanize the Type A and Type C optimization loops.
@@ -251,8 +251,9 @@ Why it remains future work:
 ## P8. Mode Selects an Invoker, Not an Execution Path
 
 **Category:** execution, partially implemented **Relates to:** section 6.3 (step modes),
-section 11 (`for_each`), [process-framework-concepts.md](process-framework-concepts.md)
-§ Core Objects
+section 11 (`for_each`),
+[process-framework-theory.md](../../../src/metaproc/docs/process-framework-theory.md) §
+Core Objects
 
 `_execute_step` forks on all four modes and each branch owns its own execution path, so
 a capability exists wherever someone implemented it rather than wherever it applies.

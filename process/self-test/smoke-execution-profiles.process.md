@@ -119,7 +119,7 @@ For now it is hand-maintained.)
 ## Credential requirements
 
 Union of what each cell needs — see
-[`credential-setup.runbook.md`](../../docs/runbooks/credential-setup.runbook.md):
+[`credential-setup.runbook.md`](../../src/metaproc/docs/credential-setup.runbook.md):
 
 | Cell | Credential |
 | --- | --- |

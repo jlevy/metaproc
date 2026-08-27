@@ -8,8 +8,8 @@ run-directory layout is described in
 [conventions.md §Harness-Owned Runtime Artifacts](conventions.md#harness-owned-runtime-artifacts).
 
 Use this catalog when adding a new artifact, renaming one, or auditing format
-consistency. The companion programmatic registry is
-[`metaproc.paths`](../src/metaproc/paths.py), which holds the filename constants.
+consistency. The companion programmatic registry is `src/metaproc/paths.py`, which holds
+the filename constants.
 
 ## Summary by format
 
@@ -136,11 +136,10 @@ Pending envelope/schema hygiene (separate plan, listed for completeness):
   which format.
 - [conventions.md §Harness-Owned Runtime Artifacts](conventions.md#harness-owned-runtime-artifacts)
   — the three-branch run-directory layout.
-- [`metaproc.paths`](../src/metaproc/paths.py) — programmatic filename registry.
-- [`metaproc.io.frontmatter`](../src/metaproc/io/frontmatter.py) — `ENVELOPE_MAP` and
-  softschema auto-detection.
-- [metaproc-operator-reference.md](../src/metaproc/docs/metaproc-operator-reference.md)
-  — operator-facing commands.
+- `src/metaproc/paths.py` — programmatic filename registry.
+- `src/metaproc/io/frontmatter.py` — `ENVELOPE_MAP` and softschema auto-detection.
+- [metaproc-operator-reference.md](metaproc-operator-reference.md) — operator-facing
+  commands.
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

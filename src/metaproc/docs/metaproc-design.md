@@ -1,51 +1,60 @@
 ---
-title: "Architecture: Metaproc Core"
-description: Implementation reference for the Metaproc framework core, including the spec format, runtime artifacts, CLI commands, adapter contract, plugin protocol, and robustness subsystems.
+title: Metaproc Design
+description: "How Metaproc is built, in detail: the spec format, the resolved plan, runtime artifacts, resumability, the adapter contract, the plugin protocol, and the robustness subsystems. The second document to read, after the concepts doc."
 author: metaproc team
 status: Approved
 ---
-# Architecture: Metaproc Core
+# Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-08-24) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-08-27) **Status:** Approved
 
-> **Maintenance**: This is a maintained architecture doc.
-> Revise via `tbd shortcut revise-architecture-doc` (which prompts you to verify content
-> against current code, then add a “Future Considerations” section).
-> When you make non-trivial changes, bump the **last updated** date above.
-> The full arch-doc index lives in
-> [development.md § Architecture docs](../development.md#architecture-docs).
-> 
-> Companion docs (in `docs/arch/`): [arch-metaproc-core](arch-metaproc-core.md),
-> [arch-runpool](arch-runpool.md), [arch-cloud-execution](arch-cloud-execution.md),
-> [arch-authentication](arch-authentication.md),
-> [arch-claude-code-harness](arch-claude-code-harness.md),
-> [arch-testing](arch-testing.md).
-
-Revision: rev2m
+Also readable as `metaproc help design`.
 
 Implementation reference for Metaproc, covering how the conceptual model defined in
-[metaproc-concepts-and-principles.md](../../src/metaproc/docs/metaproc-concepts-and-principles.md)
-is realized in code: spec format, runtime artifacts, CLI commands, adapter wire formats,
-plugin protocol, and robustness subsystems.
-Run pool internals and cloud execution have their own arch docs (see companion links
-above).
+[metaproc-concepts.md](metaproc-concepts.md) is realized in code: spec format, runtime
+artifacts, CLI commands, adapter wire formats, plugin protocol, and robustness
+subsystems. Companion architecture documents cover one subsystem each and ship alongside
+this one: [arch-runpool.md](arch-runpool.md),
+[arch-cloud-execution.md](arch-cloud-execution.md),
+[arch-authentication.md](arch-authentication.md),
+[arch-claude-code-harness.md](arch-claude-code-harness.md),
+[arch-execution-model.md](arch-execution-model.md),
+[arch-file-io-utilities.md](arch-file-io-utilities.md), and
+[arch-testing.md](arch-testing.md).
 
-Additional reference docs: [conventions.md](../conventions.md) (naming rules),
-[credential-setup.runbook.md](../runbooks/credential-setup.runbook.md) (auth),
-[arch-file-io-utilities.md](arch-file-io-utilities.md) (curated `metaproc.io`
-file-utility surface and frontmatter_format gotchas),
-[metaproc-design-rev3-proposals.md](../metaproc-design-rev3-proposals.md) (remaining
-future work).
+Additional reference docs: [conventions.md](conventions.md) (naming rules),
+[credential-setup.runbook.md](credential-setup.runbook.md) (auth), and
+[artifact-catalog.md](artifact-catalog.md) (every runtime artifact).
 
 Examples in this document use the fictitious `example_plugin` namespace to show where
 consumer-owned processes, schemas, handlers, and artifacts belong.
 Metaproc does not ship that package or its domain behavior.
 
+## Reading Guide
+
+This document has more than twenty numbered sections.
+Almost nobody needs all of them at once, so start from what you are doing:
+
+| You are… | Read |
+| --- | --- |
+| **authoring a process spec** | §6 Authored Process Model: the envelope, step modes, inputs and outputs, `for_each`, template resolution, and the step field reference in §6.13 |
+| **running or debugging a run** | §9 Runtime Model (what each artifact means), then §10 Resumability and Publication Semantics (why a step did or did not re-run). [metaproc-operator-reference.md](metaproc-operator-reference.md) is the task-oriented version |
+| **implementing an adapter** | §12 Adapter Contract, then §14 Robustness Subsystems for failure classification, and §15 for usage and cost attribution |
+| **contributing to the framework** | §5 Implementation Inventory for the map, then §8 Resolved Plan Model and §19 Process Orchestration for the execution path |
+| **reviewing a design decision** | §8.1 Why the Plan Is Data, §10 Resumability, and §11.1 on why an items file is a candidate source rather than completion state |
+
+Two conventions worth knowing before you start.
+Section numbers are stable identifiers, not an outline: numbering begins at 5 because
+the first four sections became [metaproc-concepts.md](metaproc-concepts.md), and a
+section that moves out keeps its number reserved rather than renumbering the rest.
+Subsystems with their own document (the run pool, cloud execution, authentication, the
+Claude Code harness, file IO, the execution model, and testing) are summarized here and
+specified there; where the two differ, the companion document wins.
+
 ## Scope and Imported Concepts
 
-Terminology and principles live in
-[metaproc-concepts-and-principles.md](../../src/metaproc/docs/metaproc-concepts-and-principles.md);
-read it first for the definitions assumed below.
+Terminology and principles live in [metaproc-concepts.md](metaproc-concepts.md); read it
+first for the definitions assumed below.
 Section numbers are stable identifiers carried across revisions; numbering starts at 5
 because earlier sections moved into the concepts doc and the companion arch docs.
 
@@ -90,14 +99,13 @@ See § 19 for orchestrator details, § 21 for cloud execution.
 ## 5. Implementation Inventory
 
 The framework spans three abstraction profiles defined in
-[metaproc-concepts-and-principles.md §3.4](../../src/metaproc/docs/metaproc-concepts-and-principles.md):
-**core model**, **execution profile**, and **application profile**. The conceptual
-definitions live there.
+[metaproc-concepts.md §3.4](metaproc-concepts.md): **core model**, **execution
+profile**, and **application profile**. The conceptual definitions live there.
 The inventory below lists the authored files, package subsystems, plugin layer, and
 emitted runtime artifacts that realize each profile.
 For the per-artifact reference (filename, format, schema, lifecycle, writer, readers),
-see [artifact-catalog.md](../artifact-catalog.md); for format-selection rules, see
-[conventions.md §File Format Policy](../conventions.md#file-format-policy).
+see [artifact-catalog.md](artifact-catalog.md); for format-selection rules, see
+[conventions.md §File Format Policy](conventions.md#file-format-policy).
 
 ### 5.1 File and Subsystem Inventory
 
@@ -673,217 +681,15 @@ fan-out dispatch.
 
 ## 7. Analysis Reference Profile
 
-The analysis workflow is the proving ground for the framework and serves as the primary
-application profile.
+This section held a worked profile from one downstream analysis domain (the Predict,
+Retro, Mine, and Learn processes) as an illustration of how the authored model above is
+used in practice.
 
-## 7.1 Predict Process
-
-```yaml
----
-process:
-  name: predict
-  description: Pre-analysis packet generation and per-item prediction
-
-  defaults:
-    default_adapter: claude-code-cli
-    adapters:
-      claude-code-cli:
-        type: claude-code-cli
-        config:
-          model: sonnet
-          tools: [Read, Write, Edit, Bash, Grep, Glob, WebSearch, WebFetch]
-          timeout_s: 900
-          output_format: stream-json
-          permission_mode: bypassPermissions
-
-  deps:
-    packet_manifest:
-      path: "process/predict/{{form_version}}/packet.yaml"
-      as: path
-    predict_runbook:
-      path: "process/predict/predict-item.runbook.md"
-      as: path
-    items:
-      path: "{{run.dir}}/predict/items.md"
-      as: list<map<string, string>>
-      parse: {format: frontmatter-md, extract: items}
-      produced_by: scaffold-day
-    research_packets:
-      path: "{{run.dir}}/predict/research-packets/"
-      as: path
-      produced_by: generate-research-packet
-    precedent:
-      path: "{{run.dir}}/predict/precedent/"
-      as: path
-      produced_by: retrieve-precedent
-
-  steps:
-    - id: scaffold-day
-      mode: code
-      handler: "scaffold_day.py:scaffold_day"
-      description: Materialize the shared item roster
-
-    - id: generate-research-packet
-      mode: code
-      needs: [scaffold-day]
-      inputs:
-        items: deps.items
-
-    - id: predict-item
-      mode: agent
-      needs: [scaffold-day, generate-research-packet, retrieve-precedent]
-      inputs:
-        items: deps.items
-        packet_manifest: deps.packet_manifest
-        research_packets: deps.research_packets
-        precedent: deps.precedent
-      for_each:
-        over: items
-        bind: item
-        bind_fields: [item, category, event_date, report_session, cutoff_date]
-        batch_size: 5
-      prompt_paths:
-        - deps.predict_runbook
-      description: Run the full prediction packet for one item
-      prompt_prefix: |
-        Follow the runbook at {{step.prompt_path}}.
-        item={{item}}
-        event_date={{event_date}}
-        cutoff_date={{cutoff_date}}
-        packet={{packet_manifest}}
-      outputs:
-        prediction:
-          path: "{{run.dir}}/predict/{{run.variant}}/{{item}}/prediction.md"
-
-    - id: qa-check
-      mode: code
-      needs: [predict-item]
-      handler: "example_plugin.qa.handler:check"
----
-```
-
-Notes:
-
-- `FORM_VERSION` selects a packet manifest on disk; the process spec no longer embeds
-  packet-selection metadata in frontmatter
-- packet ordering and required forms are read from `packet.yaml`, not duplicated in
-  `predict-item.runbook.md`
-- the roster is a shared process-level dep; per-item outputs stay variant-scoped
-
-## 7.2 Retro Process
-
-Retro uses the same run-id and variant layout as predict, but its static templates are
-declared as named deps instead of living in a prose convention table.
-
-```yaml
-deps:
-  retro_template:
-    path: "process/retro/{{form_version}}/retro.template.md"
-    as: path
-  integrity_template:
-    path: "process/retro/{{form_version}}/integrity.template.md"
-    as: path
-  items:
-    path: "{{run.dir}}/retro/items.md"
-    as: list<map<string, string>>
-    parse: {format: frontmatter-md, extract: items}
-    produced_by: scaffold-retro
-  prediction:
-    path: "{{run.dir}}/predict/{{run.variant}}/{{item}}/prediction.md"
-    as: path
-    produced_by: predict.predict-item
-
-steps:
-  - id: predict-retro
-    mode: agent
-    inputs:
-      items: deps.items
-      retro_template: deps.retro_template
-      integrity_template: deps.integrity_template
-      prediction: deps.prediction
-    for_each:
-      over: deps.items
-      bind: item
-      bind_fields: [item, category, event_date]
-```
-
-Version bumps become packet/template changes on disk, not edits to process frontmatter.
-
-## 7.3 Mine Process
-
-Mine is the reference workload for fan-out, validation, publication, and cloud/local
-topology parity. The important target-state rule is that agent steps do not write
-directly into shared mutable KB state.
-
-```yaml
----
-process:
-  name: mine
-  description: Historic precedent research with stage / validate / publish
-
-  deps:
-    roster:
-      path: "{{run.dir}}/mine/events.md"
-      as: list<map<string, string>>
-      parse: {format: frontmatter-md, extract: items}
-      produced_by: setup-roster
-    kb_index:
-      path: "knowledge-base/kb-index.yaml"
-      as: path
-    generate_record_runbook:
-      path: "process/mine/generate-record.runbook.md"
-      as: path
-
-  steps:
-    - id: setup-roster
-      mode: code
-
-    - id: extract-items
-      mode: agent
-      inputs:
-        roster: deps.roster
-      for_each:
-        over: roster
-        bind: event_id
-        bind_fields: [event_id, item, period, event_date, category]
-        batch_size: 50
-      prompt_paths:
-        - "{{deps.generate_record_runbook.path}}"
-      outputs:
-        candidate_record:
-          path: "{{run.dir}}/mine/staged/{{event_id}}/"
-
-    - id: validate-records
-      mode: code
-      needs: [extract-items]
-
-    - id: publish-kb
-      mode: code
-      needs: [validate-records]
----
-```
-
-The per-item agent stage writes only into its own declared run output.
-Validation and publication are separate harness-owned steps.
-That keeps shared KB state deterministic and makes cloud/local execution equivalent.
-
-## 7.4 Learn Process
-
-Learn consumes run outputs and packet manifests, then emits a candidate next packet
-version. Its approval gate is explicit in the DAG rather than hidden in prose.
-
-Representative shape:
-
-1. aggregate retros into learn
-2. sample deep retros for mechanism review
-3. update the current packet performance checkpoint
-4. propose form improvements
-5. `manual` approval gate
-6. materialize a new `packet.yaml` plus templates for the candidate version
-7. compare baseline versus candidate packet
-
-This keeps “change the form” as an authored file change on disk, not a mutation of
-process frontmatter.
+It has moved to
+[the analysis reference profile](https://github.com/jlevy/metaproc/blob/main/docs/project/design/metaproc-analysis-profile.md).
+Metaproc core is consumer-agnostic: domain process specs, schemas, handlers, and
+fixtures belong to the packages that own them, and this document ships to all of them.
+The section numbering is kept so cross-references from other documents stay valid.
 
 ## 8. Resolved Plan Model
 
@@ -1053,7 +859,7 @@ The emitted runtime model is explicit.
 The four artifact groups (run-level state, per-step state, per-task state, logs)
 populate the `.state/` and `.logs/` branches at every scope root.
 For the per-file reference (filename, format, schema, lifecycle, writer, and readers),
-see [artifact-catalog.md](../artifact-catalog.md).
+see [artifact-catalog.md](artifact-catalog.md).
 Sections 9.2-9.6 below cover the engine’s contract on the load-bearing files
 (`status.yaml`, `attempt.yaml`, `result.yaml`, `.logs/*.jsonl`, `process-events.jsonl`)
 in depth.
@@ -1183,7 +989,7 @@ Framework-owned JSONL logs include adapter/session logs, `process-events.jsonl`,
 runpool `events.jsonl` streams under `.logs/runpool/`. Workflow-owned tool streams live
 under `.logs/tools/<tool-name>/`. Derived outputs such as trace JSONL live under
 `.logs/derived/`. For the command map and current paths, see
-[metaproc-operator-reference.md](../../src/metaproc/docs/metaproc-operator-reference.md).
+[metaproc-operator-reference.md](metaproc-operator-reference.md).
 
 It is useful for:
 
@@ -2181,7 +1987,7 @@ treating that as cause for caution would hold concurrency down during normal ope
   `kern.memorystatus_level` is read alongside it and carried as `alarm_pct`, never as
   the budget: it counts active pages, so it runs roughly 2x the reclaimable figure.
   Swap comes from `vm.swapusage`. See
-  [memory-accounting-reference.md](../memory-accounting-reference.md).
+  [memory-accounting-reference.md](https://github.com/jlevy/metaproc/blob/main/docs/memory-accounting-reference.md).
 - **Linux**: computes `MemAvailable / MemTotal` from `/proc/meminfo`. Optionally refines
   using PSI (Pressure Stall Information) from `/proc/pressure/memory` -- if
   `psi_some_avg10 > 5`, the PSI-derived percentage replaces the meminfo estimate when
@@ -2515,26 +2321,6 @@ description. Its Markdown body is explanatory only.
 `metaproc resource-report` and the Metabrowser resource view expose actual cost and list
 estimate separately, along with meters, coverage, budgets, and outcome.
 
-## 16. Optional Workspace/State Surface (Future)
-
-An advanced execution-profile feature, not yet implemented.
-
-```yaml
-workspace:
-  root: .
-  isolation: worktree
-  writable:
-    - train.py
-    - experiments/
-  commit_policy: explicit
-```
-
-Needed for:
-
-- mutation/evaluation loops
-- candidate/incumbent comparisons
-- autoresearch-style workflows
-
 ## 17. Run Pool and Process Management
 
 The `run-parallel` command uses an adaptive, asyncio-based process pool
@@ -2776,563 +2562,20 @@ Each level is sorted alphabetically for deterministic execution order.
 
 ## 21. Cloud Execution Infrastructure
 
-For the full cloud execution architecture, see
-[arch-cloud-execution.md](arch-cloud-execution.md); the integration surface relevant to
-the core framework is summarized below.
-
-The cloud execution layer runs metaproc processes on GCP infrastructure using Batch API
-for compute and Filestore NFS for shared live execution and restart state.
-The design uses the same CLI commands in containers -- no cloud-specific execution logic
-exists outside of the dispatch and bootstrap layers.
-
-### 21.1 Architecture
-
-Two-tier execution model:
-
-```text
-run-process --cloud
-  └── Orchestrator VM (STANDARD, non-Spot)
-        └── run-process --backend gcp-worker (no --cloud, avoids recursion)
-              ├── Code steps: execute locally on orchestrator
-              └── Fan-out steps: dispatch to worker VMs
-                    ├── Worker VM 0 (Spot) → run-parallel --backend local
-                    ├── Worker VM 1 (Spot) → run-parallel --backend local
-                    └── Worker VM N (Spot) → run-parallel --backend local
-```
-
-All VMs share a Filestore NFS mount for run outputs, state files, and progress while the
-run is executing or remains restartable.
-Metaproc does not claim terminal NFS durability.
-Before reclaiming that scratch storage, the downstream consumer must publish the
-accepted terminal run tree to its registered durable object-store contract and verify
-that publication under its own policy.
-The orchestrator uses a STANDARD VM (not Spot) to avoid preemption killing the DAG
-coordinator. Workers default to Spot VMs for cost efficiency.
-
-Orchestrator and worker placement are independent axes even though the current
-full-cloud command selects both at once.
-The target public flags are `--orchestrator` and `--worker`:
-
-| Orchestrator | Worker | Topology |
-| --- | --- | --- |
-| `local` | `colocated` | Ordinary local execution |
-| `gcp` | `gcp` | Current distributed full-cloud execution |
-| `gcp` | `colocated` | Planned single-environment cloud execution |
-| `local` | `gcp` | Planned locally supervised cloud workers |
-
-The first implementation resolves one worker placement and one resource profile for the
-entire run.
-That placement may be `colocated` or `gcp`. That pool may span multiple Batch
-VMs; the workers share a placement and profile, not necessarily the orchestrator host.
-The resolver produces an immutable topology containing orchestrator placement, worker
-placement, resources, and state transport.
-The process engine consumes that type; provider dispatchers translate it into GCP Batch
-jobs, and the internal `LaunchBackend` remains a separate subprocess abstraction.
-This boundary permits later per-step adapter or harness pools without changing the
-process engine or the public placement axes.
-
-Same-locus execution can retain the filesystem state transport.
-Local-orchestrator/cloud-worker execution remains unsupported until a bidirectional
-transport owns dispatch inputs, leases, claims, events, results, cancellation, and
-resume; path aliases, SSHFS, and laptop-mounted Filestore are rejected substitutes.
-
-### 21.2 Container Bootstrap (`container_bootstrap.py`)
-
-Shared by worker and orchestrator entrypoints via
-`bootstrap_container() -> BootstrapResult`:
-
-1. Read `GH_TOKEN` once, remove it from the environment, and expose it only through a
-   temporary askpass helper when a sparse clone needs authentication.
-2. Install a current-branch metaproc wheel from `METAPROC_WHEEL_GCS` when set with its
-   required `METAPROC_WHEEL_SHA256`, overriding any image-baked metaproc.
-3. Acquire the consumer workspace: a `METAPROC_WORKSPACE_GCS` tarball when set, verified
-   against its required `METAPROC_WORKSPACE_SHA256`; otherwise a sparse clone of
-   `METAPROC_RUN_BRANCH` and `METAPROC_REPO_URL`, falling back to the workspace bundled
-   into the image.
-4. Editable-install the workspace packages named in the repo-sync payload so consumer
-   plugin entry points resolve inside the container.
-5. Run each `metaproc.container_bootstrap` entry-point hook so downstream images can
-   bootstrap their own tooling.
-6. Ensure `RUNS_DIR` exists.
-7. Write `~/.pi/agent/models.json` from `METAPROC_PI_MODELS_JSON` if set.
-8. Back in the worker and orchestrator entrypoints, invoke each registered adapter’s
-   `bootstrap(home)` hook so adapters can materialize any credential files they need
-   before the first invocation.
-   The `ClaudeCodeCliAdapter` uses this to write `~/.claude/.credentials.json` from
-   `CLAUDE_CODE_CREDS_JSON` (bound via Secret Manager; see §21.14), then unsets the env
-   var so the OAuth payload does not leak to child processes.
-   Adapters that don’t need a credential file leave `bootstrap()` as the default no-op.
-
-### 21.3 Worker Dispatch (`worker_dispatch.py`)
-
-`dispatch_to_workers()` partitions fan-out items across N worker VMs:
-
-- **Partitioning**: round-robin distribution via `partition_items()`.
-  `min(num_workers, total_items)` workers are created.
-- **Job submission**: one GCP Batch job per worker, each running `worker_entrypoint.py`.
-  Items are passed via `METAPROC_WORKER_ITEMS` (comma-separated) and
-  `METAPROC_ITEM_CONTEXTS` (JSON array) env vars.
-  Large payloads spill to
-  `{run_dir}/.state/steps/{step_id}/worker_payloads/worker-<id>-item-contexts.json` on
-  Filestore and are loaded via `METAPROC_ITEM_CONTEXTS_FILE`.
-- **Resume/adoption**: writes `{run_dir}/.state/steps/{step_id}/dispatch-manifest.yaml`
-  after submission so resumes can adopt live workers instead of blindly redispatching.
-- **Scaling/reconcile**: uses step-level `scale-state.yaml` plus per-worker
-  `claimed-items.yaml` registries during live scale-up.
-- **Polling**: async poll loop with configurable interval.
-  On failure, reads NFS `runpool-status.yaml` for error detail (failure counts, kill
-  reasons). During polling, reads NFS pool status for live progress
-  (completed/failed/active counts).
-- **Labels**: `metaproc-role=worker`, `metaproc-worker-id=N`, `metaproc-step=<step_id>`,
-  plus readable `metaproc-run-id=<sanitized_run_id>` and exact
-  `metaproc-run-key=v1-<sha256_prefix>` run identity.
-- **Defaults**: `n2-highmem-8` machine type, 50 concurrency per worker, Spot VMs.
-
-`WorkerDispatchConfig` (frozen dataclass): `gcp`, `num_workers`, `max_concurrency`,
-`max_retries`, `poll_interval`, `spot`, `variant`, `adapter_config_json`.
-
-### 21.4 Worker Entrypoint (`worker_entrypoint.py`)
-
-Unified container entrypoint for worker containers:
-
-1. Read env vars (`METAPROC_WORKER_ITEMS`, `METAPROC_PROCESS_DIR`, `METAPROC_STEP`,
-   etc.).
-2. Call `bootstrap_container()`.
-3. Build and run:
-   `python -m metaproc run-parallel <process_dir> --step <step> --items <items> --backend local [flags]`.
-4. Exit with `run-parallel`’s exit code.
-   Outputs land on NFS.
-
-### 21.5 Orchestrator Dispatch (`orchestrator_dispatch.py`)
-
-`dispatch_orchestrator()` submits the entire process DAG as a single GCP Batch job:
-
-- Container overrides the Dockerfile ENTRYPOINT to run `orchestrator_entrypoint.py`.
-- Uses a STANDARD VM (not Spot) to avoid preemption.
-- Forwards all GCP config so the orchestrator can dispatch worker Batch jobs.
-- `RUNS_DIR` is set to `<filestore_mount_path>/runs` (e.g., `/mnt/filestore/runs`) when
-  Filestore is configured.
-  This is the run root, not the bare NFS mount point.
-- Labels: `metaproc-role=orchestrator`, readable `metaproc-run-id=<sanitized_run_id>`,
-  and exact `metaproc-run-key=v1-<sha256_prefix>`.
-- Polls in a while-True loop until terminal state.
-
-`OrchestratorDispatchConfig` (frozen dataclass): `gcp`, `process_spec_rel`, `variables`,
-`num_workers`, `worker_machine_type`, `max_concurrency`, `initial_concurrency`,
-`spot_workers`, `variant`, `adapter_config`, `skip_steps`, `from_step`, `only_step`,
-`force`, `continue_on_error`, `orchestrator_machine_type`, `max_duration_s` (default
-8h), `poll_interval`, and the `auth_flags` (`AuthPoolFlags`) transport cohort.
-
-### 21.6 Orchestrator Entrypoint (`orchestrator_entrypoint.py`)
-
-1. Read orchestrator env vars.
-2. Call `bootstrap_container()`.
-3. Let the process DAG materialize any items-file/run inputs on NFS via ordinary in-DAG
-   code steps.
-4. Build and run:
-   `python -m metaproc run-process <process_dir> --backend gcp-worker [all forwarded flags]`.
-5. Does **not** pass `--cloud` to avoid infinite recursion.
-6. Exit with `run-process`’s exit code.
-
-### 21.7 GCP Batch Shared Utilities (`batch_backend.py`)
-
-`batch_backend.py` provides shared configuration and helpers used by both
-`worker_dispatch.py` and `orchestrator_dispatch.py` for submitting GCP Batch jobs.
-
-`GCPBatchConfig` (frozen dataclass): `project`, `region`, `container_image`,
-`machine_type`, `spot`, `boot_disk_gb`, `max_run_duration_s`, `service_account_email`,
-`network`/`subnetwork`, `labels`, `runs_dir`,
-`filestore_server`/`filestore_share`/`filestore_mount_path`, `queue_timeout_s`.
-
-Utility functions: `sanitize_label()` (GCP-safe resource names and readable labels),
-`run_identity_label()` / `run_identity_labels()` (fixed-width exact run locator plus
-readable compatibility label), `build_pi_models_json()` (rewrite pi CLI config for
-cloud), `is_transient_api_error()` (retry classification).
-
-### 21.8 LaunchBackend Protocol
-
-The `LaunchBackend` protocol (`runpool/backend.py`) abstracts subprocess lifecycle
-within a single machine or VM. Multi-VM cloud dispatch (e.g., `gcp-worker`) is a
-separate concern handled in `run-process` (see section 21.3).
-
-```python
-class LaunchBackend(Protocol):
-    name: str
-    async def launch(prepared: PreparedLaunch, label: str) -> LaunchHandle
-    async def poll(handle: LaunchHandle) -> int | None
-    async def kill(handle: LaunchHandle, sig: int) -> None
-    async def health(handle: LaunchHandle) -> HealthMetrics | None
-    async def read_log_tail(handle: LaunchHandle, lines: int) -> str
-```
-
-Supporting types:
-
-- `PreparedLaunch` (frozen dataclass): `command`, `env`, `cwd`, `log_path`,
-  `filter_log`, `metadata` (backend-specific context).
-- `LaunchHandle` (frozen dataclass): `pid`, `external_id`, `backend_name`, `metadata`.
-- `HealthMetrics` (frozen dataclass): `rss_bytes`, `descendants`, `log_bytes`.
-
-Production implementation: `LocalBackend` (subprocess-based, with RSS/descendant
-tracking). `MockBackend` is available for testing.
-
-### 21.9 Monitoring Cloud Runs
-
-- **`gcp status <target>`**: auto-detects local run directory or run-id string.
-  Queries Batch API by job name (local) or both exact `metaproc-run-key` and readable
-  `metaproc-run-id` (run-id).
-  Local display resolves the immutable ID from `run-config.yaml`, then hash-verified job
-  metadata, before a path fallback.
-  When exact jobs exist, it adds only unkeyed legacy jobs whose structured `RUN_ID`
-  verifies as the same run; fully legacy runs retain the readable-label fallback.
-  Shows orchestrator and worker jobs with role, state, step, and worker_id.
-- **`gcp scale <target> --step <step>`**: updates desired worker topology for an active
-  fan-out step by writing `scale-state.yaml` and, when possible, reconciling new worker
-  jobs immediately.
-- **`gcp logs <target>`**: streams logs from Cloud Logging.
-  Auto-detects local dir or run-id and uses the same exact-first job resolution.
-- **`gcp cancel <target>`**: cancels all running/queued Batch jobs.
-  Auto-detects local dir or run-id and uses the same exact-first job resolution.
-  Writes pool kill sentinel if local dir exists.
-- **`gcp runs`**: lists metaproc runs across the project.
-  Modern jobs group by `metaproc-run-key`; the command recovers `RUN_ID` from
-  hash-verified structured `METAPROC_VARS` metadata so exact IDs survive display and
-  JSON output. Legacy jobs continue to group by readable label.
-- **`gcp resources` / `gcp filestore` / `gcp cleanup`**: operator tools for cloud
-  inventory, Filestore utilization, and terminal-job cleanup.
-- **NFS progress polling**: during worker dispatch, the orchestrator reads
-  `runpool-status.yaml` from NFS to report live progress (completed/failed/active).
-- **NFS error extraction**: on worker failure, reads `runpool-status.yaml` for failure
-  counts and per-process kill reasons.
-- Filesystem-oriented commands such as `status`, `pulse`, and `pool status` require an
-  explicit, locally visible run-directory path.
-  They do not route through a persistent gateway VM.
-
-### 21.10 Cloud Provider Naming and Extensibility
-
-The cloud layer uses provider-specific names rather than a generic `cloud` abstraction.
-
-**CLI subcommand:** `metaproc gcp` (not `metaproc cloud`). The commands under `gcp` are
-inherently GCP-API-specific -- they query GCP Batch API, stream from Cloud Logging,
-manage Filestore NFS, etc.
-A second cloud provider (e.g., AWS) would get its own subcommand (`metaproc aws`) with
-provider-appropriate commands, rather than a single `cloud` subcommand that papers over
-real operational differences.
-
-**Framework-level abstraction:** The `LaunchBackend` protocol (section 21.8) and the
-backend registry (entry-point group `metaproc.backends`) are fully provider-agnostic.
-Adding a new local backend means implementing the 5-method protocol and registering it
--- no changes to `engine/`, `runpool/`, or `models/` are required.
-
-Cloud execution uses a different model: `gcp-worker` is a multi-VM dispatch mode handled
-directly in `run-process`, not a `LaunchBackend`. Each worker VM runs
-`run-parallel --backend local` internally, so the `LaunchBackend` protocol operates at
-the subprocess level within each VM.
-
-The planned placement resolver sits above both mechanisms.
-It selects the orchestrator locus, one run-wide worker locus and resource profile, and
-the compatible state transport.
-Provider-specific dispatch remains below that boundary.
-
-The naming hierarchy:
-
-| Layer | Example | Scope |
-| --- | --- | --- |
-| Framework protocol | `LaunchBackend` | provider-agnostic subprocess lifecycle |
-| Backend name | `local` | registered `LaunchBackend` implementation |
-| CLI subgroup | `metaproc gcp` | provider-specific operational commands |
-| Dispatch mode | `gcp-worker` | provider-specific multi-VM dispatch |
-
-### 21.11 Persistent Infrastructure Decoupling
-
-The framework does not depend on any specific deployment topology.
-Persistent infrastructure such as NFS shares, object-storage buckets, and container
-registries is external to metaproc.
-Batch compute is ephemeral; the framework has no required persistent gateway VM.
-
-Design principles for infrastructure dependencies:
-
-- **No infra assumptions in the framework.** The framework never imports or depends on
-  knowledge of specific VMs, Filestore instances, or persistent deployments.
-  All infrastructure references are configuration, not code.
-- **Configuration via environment variables.** All GCP infrastructure parameters
-  (`METAPROC_GCP_PROJECT`, `METAPROC_GCP_FILESTORE_SERVER`, and related values) are
-  configurable via env vars and overridable via CLI flags.
-  No infrastructure names are hardcoded.
-- **The browser is a read-only local tool.** The `serve` command reads filesystem
-  artifacts and can be deployed anywhere (local, GCE, Cloud Run, a container on any
-  provider) without metaproc caring about the hosting.
-- **Cloud commands are operational tools, not control plane.** The `gcp` subcommands
-  query and manage cloud resources but do not constitute a required control plane.
-  A local `run-process` produces the same results as a cloud one.
-
-### 21.12 Filesystem-First Resume Contract
-
-Authoritative live and restart state lives only on the run filesystem -- local disk for
-full-local runs and Filestore NFS for full-cloud runs.
-
-**`run-config.yaml`** (`{run_dir}/.state/run-config.yaml`): written at run creation time
-with the process name, run ID, resolved variables, creation-time backend and variant,
-git SHA, and timestamp.
-On resume, the process identity, run directory, and resolved variables must match.
-Resolved variables include values supplied by optional input defaults; changing such a
-default under an existing run identity is therefore rejected rather than silently
-reusing work produced under the earlier value.
-The two canonical cloud Filestore mount roots normalize to one identity; workstation
-paths do not. No other variable changes are accepted.
-Cross-topology resume (for example, hybrid to full cloud) remains allowed because the
-backend is not part of resume identity and both topologies share the authoritative
-filesystem. Authentication and concurrency changes remain explicit timeline events.
-
-**`orchestrator-lease.yaml`** (`{run_dir}/.state/orchestrator-lease.yaml`): records the
-current orchestrator owner and heartbeat so a second orchestrator will refuse to start
-unless the lease is stale or explicitly taken over.
-
-**Cloud fan-out state** also lives on the run filesystem:
-
-- `{run_dir}/.state/steps/{step_id}/dispatch-manifest.yaml` for worker-job adoption on
-  resume
-- `{run_dir}/.state/steps/{step_id}/worker-<id>/claimed-items.yaml` for live scale-up
-  item ownership
-- `{run_dir}/.state/steps/{step_id}/scale-state.yaml` and `scale-override.yaml` for
-  desired topology and operator caps
-
-Resume behavior: re-running `run-process` with the same `RUN_ID` skips completed steps
-and items based on on-disk status records.
-`run-config.yaml` prevents accidental collision between unrelated runs sharing a
-directory.
-
-### 21.13 Mount Path Standardization
-
-Batch worker and orchestrator VMs mount the Filestore NFS share at `/mnt/filestore` by
-default. `RUNS_DIR` resolves to `<mount_path>/runs`, not the bare share root, so run
-trees live at `/mnt/filestore/runs/{run_id}/`. The mount path is a container-level
-Volume mount point set via the Batch API Volume spec, not subject to COS host-level path
-restrictions.
-
-### 21.14 Secret Manager Integration
-
-**Design rationale (authoritative mechanism in
-[arch-cloud-execution.md §3.10](arch-cloud-execution.md) and
-[arch-authentication.md](arch-authentication.md), Secret Manager registry / UC-9 /
-UC-10):** any credential delivered to a Batch job is injected via Secret Manager rather
-than as a plaintext env var, because `gcloud batch jobs describe` would otherwise return
-the plaintext value as part of the job spec.
-`SecretRefSet` centralizes the typed bindings.
-Dispatch serializes version resource names only into `METAPROC_GCP_SECRET_REFS_JSON`; it
-does not use Batch `Environment.secret_variables`, whose expanded values can reach Batch
-agent logs. The generic-run, orchestrator, and worker entrypoints call
-`hydrate_secret_env()` before bootstrap.
-Hydration validates and fetches every binding under the attached service account before
-atomically updating the process environment.
-`SecretRef.resolve()` enforces the anti-leakage invariant: setting plaintext without the
-corresponding Secret Manager ref fails dispatch up front.
-
-## Future Considerations
-
-### Open Questions
-
-- The Plan schema is now at `metaproc:Plan/0.6` (adds reporting-only `resource_budgets`;
-  0.5 added `lane_matrix` and `ExecutionLane`). The lane execution model is not yet
-  documented in this arch doc.
-  [unverified] whether lane-based dispatch is fully integrated into `run-process` or
-  still under development.
-- `overrides.yaml` (operator escape hatches via `metaproc override`) is referenced in
-  the runtime state inventory (section 5.1) but not covered in its own subsection.
-  The interaction between overrides and the resume/fingerprint system (section 10) is
-  undocumented.
-- Several newer CLI commands (`liveness-watch`, `resume-daemon`, `run-manifest`,
-  `softschema`, `trace`) lack design-level documentation in this doc.
-  Their operational semantics are only in code docstrings.
-- The `codex-cli` adapter section (§12.2) is thorough but the Codex adapter is
-  relatively new. [unverified] whether all described auth modes have been validated
-  end-to-end in production cloud runs.
-
-### Potential Improvements
-
-- Extract the per-adapter reference (§12.2) into a separate adapter-catalog doc as the
-  adapter count grows, keeping this doc focused on the contract and wire format.
-- The illustrative downstream profile (§7) could move to an application-profile doc,
-  leaving this doc strictly framework-scoped.
-- Add a “Reading Guide” section at the top to help readers navigate the more than 21
-  sections by use case (operator, process author, adapter implementer, framework
-  contributor).
-- Consolidate the cloud execution summary (§21) further: much of its content is now
-  covered in [arch-cloud-execution.md](arch-cloud-execution.md), and the duplication
-  creates maintenance burden.
-- Document the `dispatch` subsystem (slot coordinator, credential pool) which is
-  referenced by the adapter registry but not covered in this doc.
-  See `src/metaproc/dispatch/` for the implementation.
-
-See also [metaproc-design-rev3-proposals.md](../metaproc-design-rev3-proposals.md) for
-the original future-work backlog.
-
-* * *
-
-## Revision History
-
-### rev2o (2026-08-25)
-
-- Documented cancellation-safe ownership for executor work, scalar credentials, local
-  scalar agent process groups, and sampled code commands.
-- Clarified that scalar supervision reuses the launch backend lifecycle without creating
-  another pool or adaptive controller.
-
-### rev2n (2026-08-24)
-
-Defined `run-process --cloud` as the application-level cloud surface and `gcp run` as a
-lower-level single-task primitive.
-Recorded the planned `--orchestrator` and `--worker` placement interface, its immutable
-resolved-topology boundary, a run-wide worker placement for the first implementation,
-and the explicit transport requirement for later split-locus execution.
-
-### rev2m (2026-08-24)
-
-Removed the unsupported laptop-orchestrated GCP worker topology, split-tree validation
-and recovery commands, and the persistent gateway command family.
-The supported cloud surfaces are full-cloud `run-process --cloud`, one-shot `gcp run`,
-and Batch-native monitoring and lifecycle commands; a hydrated run is one locally
-visible tree.
-
-### rev2l (2026-08-09)
-
-Release-readiness synchronization:
-
-- Marked `example_plugin` as a fictitious downstream namespace and removed references
-  that implied its domain implementation ships with Metaproc.
-- Replaced the missing QA-plan reference with the current framework boundary.
-- Applied the common documentation punctuation, conjunction, and terminology rules
-  across the maintained reference.
-
-### rev2k (2026-08-03)
-
-Focused resource observability:
-
-- Documented the reconciled event ledger, exact provider meters, and explicit coverage.
-- Added immutable launch topology/budget snapshots and reporting-only evaluation.
-- Added causal terminal finalization, inactive local recovery, and the self-describing
-  resource usage summary.
-- Clarified that agent-CLI cost is a list estimate and provider-authoritative events are
-  the only actual-cost boundary.
-
-### rev2j (2026-08-02)
-
-Typed run identity and cloud correlation:
-
-- Updated cloud monitoring and dispatch summaries for readable `metaproc-run-id` and
-  exact `metaproc-run-key` labels.
-- Documented exact lookup, hash-verified mixed-generation jobs, the safe fully legacy
-  fallback, and exact run-ID recovery in `gcp runs`.
-- Documented exact local status identity resolution for process-subdirectory layouts.
-- Updated the cloud monitoring-layer summary and Batch utility inventory.
-
-### rev2i (2026-04-20)
-
-Tool-use operational observability (the original design):
-
-- **Section 14.7 (new)**: Tool-use Observability.
-  Documents the three-source triad (tool wrapper invocation logs, pi-cli JSONL logs, and
-  `native_web_search` config flag), the `ToolCallStats` / `ToolRunProfile` /
-  `ProviderRateLimitStats` aggregation contract, the nine-member `FailureKind` taxonomy
-  (`ok` / `malformed_args` / `tool_timeout` / `tool_error` / `help_invocation` /
-  `tool_rejected` / `rate_limit_exhausted` / `adapter_dropped_call` / `unknown`), the
-  cutoff-discipline invariant (runbook gap B, closed), and the native web-search
-  partial-closure invariant (runbook gap A, partial).
-- **Section 12.1**: adapter event-stream item now cross-refs the
-  `tool_execution_start/end` and `rate_limit_event` records consumed by §14.7.
-- **Section 15.1**: `UsageReport` paragraph adds pointer to the new `tool_profiles` and
-  `rate_limit_stats` fields and the §14.7 contract.
-- **Reading Guide**: new “Track tool-use telemetry or diagnose tool-call failures” row.
-
-Validated 2026-04-20 by the regenerated `_mine-tech-mix-100-2026-04-06-c` usage snapshot
-(`tool_profiles` frontmatter and `## Tool-use by Variant` table; see
-[§14.7 Tool-Use Observability](#147-tool-use-observability)).
-
-### rev2h (2026-04-19)
-
-Claude Code CLI Personal-Plan auth on GCP Batch (the original design):
-
-- **Section 12.2**: `claude-code-cli` reference adapter entry now lists three auth modes
-  (API key, interactive login, Personal-Plan OAuth via Secret Manager) and the
-  `strict-mcp-config` flag.
-- **Section 21.2**: container bootstrap now invokes each adapter’s `bootstrap(home)`
-  hook so adapters can materialize credential files (Claude Code CLI writes
-  `~/.claude/.credentials.json` from `CLAUDE_CODE_CREDS_JSON`, then unsets the env var
-  so it does not leak to child processes).
-- **Section 21.14**: generalized from GH_TOKEN-only to the typed `SecretRefSet`
-  registry; documents `SecretRef.resolve()` and the plaintext-refusal policy that
-  applies uniformly to every row.
-  Adding a new credential now means appending one row, with no further dispatch wiring.
-
-Validated 2026-04-19 end-to-end via the `claude-cli-smoke-20260419-114859` single-task
-smoke (5/5 records) and the `phase-2c-opus-gold-2026-04-19` Phase 2c re-dispatch (20/20
-records at `max_concurrency=10`, no 429s, no laptop in the I/O path).
-
-### rev2g (2026-04-17)
-
-Documentation sync refresh for the current branch:
-
-- corrected the runtime artifact model to reflect run-scoped `.logs/`, manual-step
-  acknowledgments, `run-config.yaml`, and orchestrator leases
-- refreshed the CLI surface and command semantics (`plan`, `deps`, `check-headers`,
-  `browse`, `gcp scale`, `pool retry-missing`, `--only`)
-- updated manual-step orchestration to match the implemented acknowledgment flow
-- updated cloud execution sections for bundled/sparse container bootstrap, dispatch
-  manifests, claim registries, scale files, and current GCP operator tooling
-
-### rev2f (2026-04-12)
-
-Documentation accuracy and cloud architecture clarity:
-
-- **Section 5.4**: updated to list all 10 gcp subcommands (was listing only 4).
-- **Section 8.3**: removed duplicate command listings (validate, tail, serve, compare,
-  compare-matrix, write-usage appeared twice); reorganized into primary, plumbing, and
-  utility groups without repetition.
-- **Section 19.3**: added note clarifying that `gcp-worker` is a dispatch mode in
-  `run-process`, not a registered `LaunchBackend` implementation.
-- **Section 21.10**: new section -- Cloud Provider Naming and Extensibility.
-  Documents why the CLI subcommand is `gcp` (not `cloud`) and how future providers would
-  fit.
-- **Section 21.11**: new section -- Persistent Infrastructure Decoupling.
-  Documents the principle that metaproc does not depend on deployment topology.
-  All infrastructure references are configuration, not hardcoded names.
-- **Code**: replaced hardcoded `metaproc-browser` default in `sync-run --host` with
-  `METAPROC_GATEWAY_HOST` env var (required via CLI or env, no hardcoded default).
-
-### rev2e (2026-04-09)
-
-Major revision to document capabilities built since rev2d:
-
-- **Section 3.5**: revised from “No Heavy Orchestration Substrate Yet” to “Lightweight
-  Orchestration Substrate” -- acknowledges DAG orchestrator and cloud execution while
-  preserving the lightweight design philosophy.
-- **Section 5.4**: updated execution layer (added run-process, kill, pool, gcp commands)
-  and engine subsystems (added graph, process_events, cloud/gcp subsystems).
-- **Section 8.1**: reframed around the 2-command execution model (run-process +
-  run-step). run-parallel demoted to plumbing; cloud-dispatch removed.
-- **Section 8.3**: expanded from 16 to 27 CLI entry points, organized into primary,
-  plumbing, utility, GCP, and pool command groups.
-- **Section 9.5**: monitoring surface expanded from 4 to 6 layers (added DAG-level and
-  cloud-level monitoring).
-  Browser section updated for process-log file kind.
-- **Section 9.6**: new section documenting process-events.jsonl runtime artifact and
-  ProcessEventLogger event types.
-- **Section 11.4**: fan-out lifecycle updated with run-process DAG orchestrator path and
-  two backend dispatch options (local, gcp-worker).
-- **Section 14.1**: added FailureClass enum taxonomy (RATE_LIMITED, SERVER_ERROR,
-  TIMEOUT, INVALID_OUTPUT, CRASH, UNKNOWN) and FailureCounts aggregation in
-  RunPoolStatus.
-- **Section 7.3**: mine process updated with cloud execution details (run-process
-  --backend gcp-worker, single run-mine step replacing separate model steps).
-- **Section 19**: new section -- Process Orchestration (run-process).
-  DAG walker, step dispatch, fan-out backends, CLI flags, completion/resumability,
-  process-status.yaml.
-- **Section 20**: new section -- Dependency Graph (engine/graph.py).
-  needs field, validate_step_graph, detect_cycles, downstream, topo_sort with parallel
-  levels.
-- **Section 21**: new section -- Cloud Execution Infrastructure.
-  Two-tier architecture, container bootstrap, worker dispatch, worker/orchestrator
-  entrypoints, GCPBatchConfig, LaunchBackend protocol, cloud monitoring.
-
-<!-- This document follows common-doc-guidelines.md.
-See github.com/jlevy/practical-prose and review guidelines before editing.
--->
+Metaproc runs a process on GCP Batch through
+`metaproc run-process <spec> --backend gcp-worker --cloud`, which submits the process
+orchestrator and its fan-out workers while preserving the process graph, resume state,
+leases, claims, and monitoring contracts described above.
+`metaproc gcp run` is a lower-level primitive for one command in one Batch task; it is
+not a second process-orchestration API.
+
+The full design (job construction, container bootstrap, orchestrator and worker
+entrypoints, cross-host coordination, log retrieval, and secret hydration) is in
+[arch-cloud-execution.md](arch-cloud-execution.md), also readable as
+`metaproc help arch-cloud`. That document owns cloud execution; this section is
+orientation only, so that the two cannot drift apart.
+
+Authentication across the cloud boundary is in
+[arch-authentication.md](arch-authentication.md) (`metaproc help arch-auth`), and the
+operator procedure is [cloud-dispatch.runbook.md](cloud-dispatch.runbook.md)
+(`metaproc help cloud-dispatch`).

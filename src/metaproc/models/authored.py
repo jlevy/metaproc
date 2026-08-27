@@ -93,7 +93,7 @@ class ParamDef(BaseModel):
 # ── Core Model value types ──────────────────────────────────────
 #
 # Closed value type set for process-level inputs/outputs (Phase 2A).
-# Spec: docs/arch/arch-metaproc-core.md
+# Spec: src/metaproc/docs/metaproc-design.md
 # The authored surface accepts the short string form (e.g. ``list<map>``);
 # ``ValueType.parse`` turns it into a structured tree the engine can consume.
 

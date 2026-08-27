@@ -526,7 +526,7 @@ def _build_claude_flags(
     #   2. --add-dir <cwd> grants tool access to the entire project tree
     #      (cwd is the project root for orchestrator-spawned subprocesses).
     if str(permission_mode) == "bypassPermissions":
-        # See metaproc/docs/arch/arch-claude-code-harness.md for the full design
+        # See metaproc/docs/arch-claude-code-harness.md for the full design
         # (env / settings / permissions surface, ENV_SCRUB interaction, why
         # the wide --allowedTools list is the right tradeoff, and why
         # --setting-sources=user isolates the slot from project settings).
@@ -1235,7 +1235,7 @@ class ClaudeCodeCliAdapter:
         (anthropic/claude-code#19456). When that happens this method
         returns the bootstrap blob unchanged, the pool never observes
         the rotation, and the stored refresh token drifts stale. See
-        ``docs/arch/arch-authentication.md`` §N.11 for the full failure
+        ``src/metaproc/docs/arch-authentication.md`` §N.11 for the full failure
         mode + mitigations (pre-flight probe gate, refresh-race
         retry-via-failover). Phase 10's centralized OAuth refresh
         sidesteps this entirely.

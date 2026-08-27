@@ -7,7 +7,7 @@ a slot, and assert the per-lease invariants — token in scope_env, no
 ``.credentials.json`` written, scrub_env contents reflect the V-A
 variant.
 
-Spec: ``docs/arch/arch-metaproc-core.md``
+Spec: ``src/metaproc/docs/metaproc-design.md``
 §Phase 11 Band A.
 """
 

@@ -9,7 +9,7 @@ credentials), see
 
 A generic process framework for running structured multi-step agent workflows.
 Source lives under [`src/metaproc/`](../src/metaproc/); the primary architecture
-reference is [arch-metaproc-core.md](arch/arch-metaproc-core.md).
+reference is [metaproc-design.md](../src/metaproc/docs/metaproc-design.md).
 
 Metaproc is intentionally a thin layer above expensive things: agent SDKs, big JSONL log
 streams, GCP Batch, and large repository trees.
@@ -83,12 +83,14 @@ retains historical framework [performance notes](performance-notes.md).
 
 ## Conventions
 
-- **Naming, structure, and file-format rules:** [conventions.md](conventions.md).
+- **Naming, structure, and file-format rules:**
+  [conventions.md](../src/metaproc/docs/conventions.md).
   Read this before adding a new module, command, or env var.
   Format-selection rules live in
-  [§File Format Policy](conventions.md#file-format-policy).
-- **Runtime artifacts:** [artifact-catalog.md](artifact-catalog.md) lists every file
-  metaproc writes or reads, with format, schema, lifecycle, and writer/readers.
+  [§File Format Policy](../src/metaproc/docs/conventions.md#file-format-policy).
+- **Runtime artifacts:** [artifact-catalog.md](../src/metaproc/docs/artifact-catalog.md)
+  lists every file metaproc writes or reads, with format, schema, lifecycle, and
+  writer/readers.
 - **No engine → viz coupling.** The projection layer is pure on `metaproc.models`; the
   engine never imports `metaproc.viz`.
 - **Pydantic at every cross-module boundary.** If two modules talk via a dict, lift it
@@ -98,10 +100,11 @@ retains historical framework [performance notes](performance-notes.md).
   Render tables through the shared Markdown-table utility; never assemble pipes,
   separator rows, or escaped cells inline, and never parse structured state back out of
   body text. This is the repo-wide rule in [AGENTS.md](../AGENTS.md); document templates
-  follow [conventions.md](conventions.md) § Template files and format status (one
-  `*.template.md` suffix, `{{ }}` placeholders, `template.status` ladder).
+  follow [conventions.md](../src/metaproc/docs/conventions.md) § Template files and
+  format status (one `*.template.md` suffix, `{{ }}` placeholders, `template.status`
+  ladder).
 - **Schema tokens version every persisted artifact.** See
-  [conventions.md](conventions.md) §schema-tokens.
+  [conventions.md](../src/metaproc/docs/conventions.md) §schema-tokens.
 - **One bead per significant change.** [`tbd`](https://github.com/jlevy/tbd) is the
   issue tracker; agents create beads, not the human.
 
@@ -112,7 +115,7 @@ retains historical framework [performance notes](performance-notes.md).
 - Smaller per-module runs:
   `uv --config-file uv.toml run --frozen pytest tests/test_<module>.py -q`.
 - Golden tests live under `tests/golden/`; regenerate with the snapshot helpers
-  documented in [arch-testing.md](arch/arch-testing.md).
+  documented in [arch-testing.md](../src/metaproc/docs/arch-testing.md).
 - Live integration tests under `tests/integration/` and `tests/cloud/` require their
   documented credentials or infrastructure and otherwise skip.
 
@@ -149,8 +152,9 @@ Adding a new adapter is a five-file pattern:
 4. `tests/test_adapters_<name>.py`: happy path and failure modes.
 5. `tests/test_log_parsing.py`: adapter detection and event shape.
 
-See [credential-setup.runbook.md](runbooks/credential-setup.runbook.md) for credential
-resolution and [arch-metaproc-core.md §12](arch/arch-metaproc-core.md) for the adapter
+See [credential-setup.runbook.md](../src/metaproc/docs/credential-setup.runbook.md) for
+credential resolution and
+[metaproc-design.md §12](../src/metaproc/docs/metaproc-design.md) for the adapter
 contract.
 
 ## Cloud (GCP) Development
@@ -158,12 +162,13 @@ contract.
 Most metaproc development is local.
 When you do need GCP:
 
-- Container image: see [arch-cloud-execution.md](arch/arch-cloud-execution.md) for the
+- Container image: see
+  [arch-cloud-execution.md](../src/metaproc/docs/arch-cloud-execution.md) for the
   rebuild path.
 - Dispatch contracts: see
-  [cloud-dispatch.runbook.md](runbooks/cloud-dispatch.runbook.md).
+  [cloud-dispatch.runbook.md](../src/metaproc/docs/cloud-dispatch.runbook.md).
 - Credentials and adapter auth: see
-  [credential-setup.runbook.md](runbooks/credential-setup.runbook.md).
+  [credential-setup.runbook.md](../src/metaproc/docs/credential-setup.runbook.md).
 - End-to-end run setup (gcloud install, preflight, real mine command): see
   [environment-bootstrap.runbook.md](runbooks/environment-bootstrap.runbook.md).
 
@@ -177,56 +182,35 @@ process. Rebuild a candidate image for changes to `gcp_run_entrypoint.py`,
 `worker_entrypoint.py`, `orchestrator_entrypoint.py`, secret hydration, or any code
 needed before wheel installation.
 See
-[Required Configuration](runbooks/cloud-dispatch.runbook.md#2-required-configuration)
+[Required Configuration](../src/metaproc/docs/cloud-dispatch.runbook.md#2-required-configuration)
 for details.
 
 ## Architecture Docs
 
-All architecture docs live in `docs/arch/` and follow the `arch-*.md` naming convention.
-They carry frontmatter (title, description, author, status), a Date line with
-`(last updated ...)`, a Maintenance blockquote pointing at
-`tbd shortcut revise-architecture-doc`, and current implementation evidence.
-The revision workflow verifies the document against code and records applicable open
-questions and potential improvements.
-To revise one:
+The architecture documents ship inside the package, in `src/metaproc/docs/`, alongside
+the design doc and the other framework documentation.
+Each is also a `metaproc help` topic.
+The indexed list, with topics and what each one owns, is
+[README § Architecture](../README.md#architecture).
+
+They follow the `arch-*.md` naming convention and carry frontmatter (title, description,
+author, status) plus a Date line with `(last updated ...)`. To revise one:
 
 ```bash
 tbd shortcut revise-architecture-doc
 ```
 
-Keep this maintained index in sync with the files on disk.
+Two rules that shortcut does not know about, both because these documents ship:
 
-| Doc | Owns | Status |
-| --- | --- | --- |
-| [arch-metaproc-core.md](arch/arch-metaproc-core.md) | The framework itself: spec format, runtime artifacts, CLI commands, adapter wire formats, and plugin protocol. Cross-references RunPool and cloud execution, which have their own documents. | Approved |
-| [arch-runpool.md](arch/arch-runpool.md) | Local agent process manager: subprocess lifecycle, adaptive concurrency, host coordination, health telemetry, kill protocol. | Approved |
-| [arch-cloud-execution.md](arch/arch-cloud-execution.md) | GCP Batch dispatch, container bootstrap, worker entrypoints, cross-host coordination, secret handling. | Approved |
-| [arch-authentication.md](arch/arch-authentication.md) | Credential vehicles (A and B), per-attempt slot lifecycle, the auth-pool, cross-account leakage prevention. | Draft (currency notice) |
-| [arch-claude-code-harness.md](arch/arch-claude-code-harness.md) | The non-interactive Claude Code CLI subprocess wrapper: environment scoping, settings hierarchy, permission mode and `ENV_SCRUB` hardening, and the version compatibility matrix. | Approved |
-| [arch-testing.md](arch/arch-testing.md) | Test tiers (smoke-core, smoke-adapter-*, smoke-adapters-all, self-test-local, self-test-cloud) and the process specs that implement them. | Approved |
-| [arch-file-io-utilities.md](arch/arch-file-io-utilities.md) | The `metaproc.io` public surface: atomic writes, gzip-transparent reads, frontmatter helpers, templates, and artifact paths. | Approved |
-| [arch-execution-model.md](arch/arch-execution-model.md) | Executable reference model for task-level scheduling: durable facts, the pure reducer, the status projection, invariant tests, and the scale envelope. Design rationale lives in [execution-model-design.md](execution-model-design.md). | Draft |
+- Future work goes in [`docs/project/design/backlog/`](project/design/backlog/), not
+  into the document. A shipped document describes the system as it is.
+- A relative link in `src/metaproc/docs/` must resolve inside that directory.
+  Anything else is dead for a reader of the installed package even though
+  `devtools/check_links.py` resolves it happily against a checkout.
+  `devtools/check_shipped_links.py` enforces this.
 
-Companion conceptual and reference docs that are not architecture but are commonly
-cross-linked from the arch docs:
-
-- [metaproc-concepts-and-principles.md](../src/metaproc/docs/metaproc-concepts-and-principles.md):
-  the conceptual model (vocabulary, architectural planes, optimization loops, design
-  principles). The arch docs operationalize these concepts.
-- [process-framework-concepts.md](process-framework-concepts.md): the general execution
-  model beneath any process framework (planning, tasks, edge granularity, join policies,
-  admission), with design tests and a closing map onto Metaproc.
-  Framework-agnostic by design; its mapping section cites the arch doc that owns each
-  concept, and its known-deviations list is where the gaps between model and
-  implementation are tracked.
-- [execution-model-design.md](execution-model-design.md): the durable execution
-  contracts (clauses, closure, fencing, generations) and their rationale; the general
-  model it instantiates is
-  [process-framework-concepts.md](process-framework-concepts.md).
-- [conventions.md](conventions.md): naming, structure, and file-format rules.
-- [artifact-catalog.md](artifact-catalog.md): every file Metaproc writes and reads.
-- [performance-notes.md](performance-notes.md): performance principles and worked
-  examples.
+See [docs/project/README.md](project/README.md) for the design records, revision
+histories, and backlogs these documents were separated from.
 
 ## Cross-References
 
@@ -237,8 +221,8 @@ cross-linked from the arch docs:
   Metaproc-owned views, data hooks, assets, and validation.
 - [environment-bootstrap.runbook.md](runbooks/environment-bootstrap.runbook.md):
   end-to-end setup for running real metaproc workloads.
-- [credential-setup.runbook.md](runbooks/credential-setup.runbook.md): adapter
-  credential configuration.
+- [credential-setup.runbook.md](../src/metaproc/docs/credential-setup.runbook.md):
+  adapter credential configuration.
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

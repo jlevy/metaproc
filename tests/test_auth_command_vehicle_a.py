@@ -1,6 +1,6 @@
 """Tests for the Vehicle A operator surface on ``metaproc auth``.
 
-Spec: docs/arch/arch-metaproc-core.md
+Spec: src/metaproc/docs/metaproc-design.md
 Regression coverage (Phase 2 of the original design).
 
 Exercises the new flags on ``auth push`` (``--vehicle``, ``--token-file``,

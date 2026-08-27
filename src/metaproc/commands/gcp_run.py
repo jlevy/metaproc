@@ -4,7 +4,7 @@ This is a lower-level execution primitive for probes, diagnostics, publishers, a
 applications that already own their outer orchestration. Framework-owned process DAGs
 should use ``metaproc run-process ... --backend gcp-worker --cloud`` instead.
 
-See ``docs/arch/arch-metaproc-core.md``
+See ``src/metaproc/docs/metaproc-design.md``
 for the full design. This module owns:
 
 - argv parsing for the ``gcp run`` Typer subcommand,

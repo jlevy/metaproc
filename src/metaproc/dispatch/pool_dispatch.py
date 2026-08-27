@@ -300,7 +300,7 @@ class AuthOutcome:
       see legacy events with the new fields defaulting to ``""`` /
       ``0`` / ``None``.
 
-    Spec: docs/arch/arch-metaproc-core.md
+    Spec: src/metaproc/docs/metaproc-design.md
     """
 
     schema_version: int = 2
