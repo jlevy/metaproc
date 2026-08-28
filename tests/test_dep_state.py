@@ -367,6 +367,69 @@ class TestFingerprintStep:
         with pytest.raises(FileNotFoundError, match="referenced runbook"):
             fingerprint_step(step)
 
+    def test_planning_mode_tolerates_a_not_yet_produced_runbook(self, tmp_path: Path) -> None:
+        """Planning happens before the run, so a step may reference a file an
+        earlier step in the same process has not written yet. Raising there fails
+        the whole graph at plan publication for a file the run is about to create."""
+        not_yet = tmp_path / "written-by-an-earlier-step.md"
+        step = ResolvedStep(
+            step_id="s1",
+            mode="agent",
+            adapter=ResolvedAdapter(type="test", config={}),
+            prompt_paths=[str(not_yet)],
+            outputs={"out": IOSpec(path=f"{tmp_path}/out.md")},
+        )
+
+        with pytest.raises(FileNotFoundError):
+            fingerprint_step(step)
+
+        relaxed = fingerprint_step(step, require_referenced_files=False)
+        assert relaxed
+        assert relaxed == fingerprint_step(step, require_referenced_files=False), (
+            "the relaxed fingerprint must be stable across calls"
+        )
+
+    def test_planning_mode_still_hashes_the_files_that_do_exist(self, tmp_path: Path) -> None:
+        """Relaxing the check skips only the absent file. A present sibling is
+        still hashed, so an edit to it flips the plan fingerprint."""
+        present = tmp_path / "present.md"
+        present.write_text("# Present\n")
+        absent = tmp_path / "absent.md"
+        step = ResolvedStep(
+            step_id="s1",
+            mode="agent",
+            adapter=ResolvedAdapter(type="test", config={}),
+            prompt_paths=[str(present), str(absent)],
+            outputs={"out": IOSpec(path=f"{tmp_path}/out.md")},
+        )
+
+        before = fingerprint_step(step, require_referenced_files=False)
+        present.write_text("# Present, edited\n")
+        after = fingerprint_step(step, require_referenced_files=False)
+
+        assert before != after, "an existing referenced file must still be hashed"
+
+    def test_relaxed_and_strict_diverge_once_the_file_lands(self, tmp_path: Path) -> None:
+        """The plan-time hash omits a file the execution-time hash includes, so the
+        two are NOT interchangeable. This is safe only because the relaxed value is
+        used exclusively by the plan projection and publication; every recorded and
+        compared hash uses the strict default. If a future caller relaxes the check
+        on a reuse or staleness path, this test is the tripwire for why not."""
+        runbook = tmp_path / "produced.md"
+        step = ResolvedStep(
+            step_id="s1",
+            mode="agent",
+            adapter=ResolvedAdapter(type="test", config={}),
+            prompt_paths=[str(runbook)],
+            outputs={"out": IOSpec(path=f"{tmp_path}/out.md")},
+        )
+
+        at_plan_time = fingerprint_step(step, require_referenced_files=False)
+        runbook.write_text("# Produced by an earlier step\n")
+        at_execution_time = fingerprint_step(step)
+
+        assert at_plan_time != at_execution_time
+
     def test_missing_relative_runbook_warns_and_skips(
         self,
         tmp_path: Path,
