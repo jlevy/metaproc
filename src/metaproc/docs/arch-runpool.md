@@ -6,20 +6,10 @@ status: Approved
 ---
 # RunPool Design
 
-**Date:** 2026-04-06 (last updated 2026-08-23) **Status:** Approved
+Module-level notes, including using RunPool as a library, are in
+[`runpool/README.md`](../runpool/README.md).
 
-> **Maintenance**: This is a maintained architecture doc.
-> Revise via `tbd shortcut revise-architecture-doc` (which prompts you to verify content
-> against current code, then add a “Future Considerations” section).
-> When you make non-trivial changes, bump the **last updated** date above.
-> The full arch-doc index lives in
-> [development.md § Architecture docs](../development.md#architecture-docs).
-> 
-> Companion docs (in `docs/arch/`): [arch-metaproc-core](arch-metaproc-core.md),
-> [arch-runpool](arch-runpool.md), [arch-cloud-execution](arch-cloud-execution.md),
-> [arch-authentication](arch-authentication.md),
-> [arch-claude-code-harness](arch-claude-code-harness.md),
-> [arch-testing](arch-testing.md).
+**Date:** 2026-04-06 (last updated 2026-08-27) **Status:** Approved
 
 RunPool is Metaproc’s local agent process manager.
 It owns subprocess lifecycle, adaptive concurrency, host-level coordination, health
@@ -64,7 +54,7 @@ RunPool owns:
 - host admission for aggregate local agent process slots
 - system-health sampling for memory, swap growth, and disk headroom
 - `runpool-status.yaml`, `events.jsonl`, and `health.jsonl` (full schemas in
-  [artifact-catalog.md](../artifact-catalog.md))
+  [artifact-catalog.md](artifact-catalog.md))
 - scale overrides and kill/drain sentinels
 
 Metaproc orchestration owns:
@@ -139,7 +129,8 @@ That matches the design rule here: current memory pressure and active swap growt
 more than absolute swap already allocated.
 
 The counters behind this section, with kernel citations and reproduction commands, are
-in [memory-accounting-reference.md](../memory-accounting-reference.md).
+in
+[memory-accounting-reference.md](https://github.com/jlevy/metaproc/blob/main/docs/memory-accounting-reference.md).
 
 RunPool budgets from `vm_stat` reclaimable pages, free plus inactive plus purgeable,
 scaled by the page size that `vm_stat` reports rather than an assumed one.
@@ -468,16 +459,16 @@ Silicon, 32 GB RAM. Methodology: read `active_rss_bytes` from
 `runpool/steps/*/health.jsonl` and divide by `active_count` to get per-process-tree RSS
 at 10s sample intervals.
 This includes all `psutil.children(recursive=True)` per
-[backend.py](../../src/metaproc/runpool/backend.py) lines 350-358.
+`src/metaproc/runpool/backend.py` lines 350-358.
 
 **These are RSS figures, and RSS is the wrong metric on this platform.** It errs in both
 directions at once: it excludes compressed pages, so it understates each process, and it
 counts shared binary and library text once per process, so summing it across a fan-out
 overstates. The two errors are independent, so a correction factor does not exist.
 A live process measured while writing
-[memory-accounting-reference.md](../memory-accounting-reference.md) read 58.4 MB RSS
-against a 91 MB `phys_footprint`, and its peak footprint was 361 MB against a 91 MB
-steady state.
+[memory-accounting-reference.md](https://github.com/jlevy/metaproc/blob/main/docs/memory-accounting-reference.md)
+read 58.4 MB RSS against a 91 MB `phys_footprint`, and its peak footprint was 361 MB
+against a 91 MB steady state.
 
 Treat the recommended values below as a floor rather than a measurement.
 They are almost certainly low for the compression reason, and by an amount that grows
@@ -524,31 +515,6 @@ tracked with the per-process cost row in the reference.
 This closes the prior Open Design Item “Build a stable benchmark for Codex and Claude
 RSS by profile and model” for the Claude and pi-cli adapters on macOS. The `codex-gpt55`
 and Linux benchmarks remain open.
-
-## Future Considerations
-
-### Open Questions
-
-- Should disk level continue influencing the aggregate capacity level, or become purely
-  diagnostic except at near-full disk?
-- How should the auth-pool-aware classifier interaction be resolved?
-  When N parallel orchestrators share a 2-label OAuth pool, the resulting 429 failures
-  get misclassified by the `claude-startup-exit-1-silent` known-bug regex due to
-  debug-log prepend ordering in
-  `metaproc.dispatch.pool_dispatch.classify_failure_for_slot`. See
-  [arch-claude-code-harness.md § False-positive classifier pitfall](arch-claude-code-harness.md)
-  for the diagnostic checklist and fix candidates.
-  Cost: 16 items permanent-failed on 2026-05-23 batch; ABORT severity prevented retry.
-
-### Potential Improvements
-
-- Add cgroup-aware Linux telemetry for containerized workers.
-- Add a pressure-shedding policy for sustained critical memory pressure.
-- Build a stable RSS benchmark for `codex-gpt55` and for Linux hosts (Claude and pi-cli
-  on macOS are now sampled; see § Per-adapter RSS benchmarks).
-- Revisit `codex-gpt55` host cap using observed RSS and swap-growth data from clean
-  runs.
-- Add Windows support only after a clear telemetry and process-tree design exists.
 
 ## References
 

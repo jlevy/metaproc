@@ -1,6 +1,6 @@
 """Reference model for the execution model: the kernel of durable execution contracts.
 
-This package is the executable form of ``docs/execution-model-design.md``: the durable
+This package is the executable form of ``src/metaproc/docs/execution-model-design.md``: the durable
 facts a run is made of, and a pure reducer over them. It deliberately performs no I/O
 and reads no clock, so scheduler semantics can be tested without processes, files, or
 timing. The production engine is checked against it; it does not replace the engine.

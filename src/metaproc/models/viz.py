@@ -12,7 +12,7 @@ The projection from a resolved :class:`metaproc.models.plan.Plan` to a
 :class:`VizModel` lives in ``metaproc/src/metaproc/viz/project.py``. This file
 defines shapes only — no projection or rendering logic.
 
-See ``metaproc/docs/arch/arch-metaproc-core.md`` for the surrounding architecture.
+See ``metaproc/docs/metaproc-design.md`` for the surrounding architecture.
 """
 
 from __future__ import annotations

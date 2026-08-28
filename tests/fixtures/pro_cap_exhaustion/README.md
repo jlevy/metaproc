@@ -14,7 +14,7 @@ Each subdirectory contains:
   May be empty.
 - `metadata.yaml` — `cap_type | date | cli_version | label | notes`.
 
-Background: [authentication architecture](../../../../docs/arch/arch-authentication.md).
+Background: [authentication architecture](../../../src/metaproc/docs/arch-authentication.md).
 
 Tracking bead: the fix (5.5a, research).
 

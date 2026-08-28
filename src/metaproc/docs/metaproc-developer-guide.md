@@ -1,18 +1,22 @@
 ---
 title: Metaproc Developer Guide
-description: How to use and extend the framework — authoring processes, adding steps and adapters, and testing changes.
+description: "For developers building workflows on Metaproc: authoring process specs, adding steps and adapters, and testing changes."
 ---
 # Metaproc Developer Guide
 
-Related docs: [concepts](metaproc-concepts-and-principles.md) (first principles) ·
+Related docs: [concepts](metaproc-concepts.md) (first principles) ·
 [operator reference](metaproc-operator-reference.md) (runtime CLI).
 
 ## Purpose
 
-For engineers extending metaproc or building a workflow on top of it.
-Read this before adding a CLI command, a process-spec feature, or — especially — before
-writing a script that wraps metaproc.
+For developers building workflows on top of metaproc: process specs, handlers, adapters,
+and plugins. Read it before writing a script that wraps metaproc, which is the mistake
+this guide exists to prevent.
 It is generic to metaproc, not specific to any one workflow.
+
+Running an existing workflow is the [operator reference](metaproc-operator-reference.md)
+instead. Working on metaproc itself is covered by the architecture docs and the
+repository’s own contributor documentation.
 
 ## The Core Principle: Metaproc Is the Right Wrapper
 
@@ -58,8 +62,7 @@ File a bead against metaproc, simplify a CLI shape, or surface the missing primi
 and keep the workflow calling metaproc directly.
 The overarching goal is that both the framework and the workflows on top of it stay
 flexible yet minimally complex.
-See [`metaproc-concepts-and-principles.md`](metaproc-concepts-and-principles.md) for the
-design ethos.
+See [`metaproc-concepts.md`](metaproc-concepts.md) for the design ethos.
 
 ## Launch and Cancellation Contracts
 
@@ -142,7 +145,7 @@ Skills are **self-generated**: the source baseline lives in the tool package and
 `.agents/skills/<name>/` path (cross-agent) and mirrors it to `.claude/skills/<name>/`
 (gitignored, `DO NOT EDIT`); a workflow registers its skill via a `metaproc.skills`
 entry point. See the **Skills and Agent Instruction Files** rules in
-[`AGENTS.md`](../../../AGENTS.md).
+[`AGENTS.md`](https://github.com/jlevy/metaproc/blob/main/AGENTS.md).
 
 ## Suggested Vocabulary for Fan-Out Workflows
 
@@ -164,8 +167,8 @@ Its kickoff skill should call `metaproc run-process` directly with the selected 
 and run variables. The client owns roster selection and reporting; Metaproc owns DAG
 execution, status, retries, traces, and resource controls.
 The deterministic
-[offline example](../../../examples/offline-smoke/offline-smoke.process.md) shows the
-same process/handler boundary without domain-specific policy.
+[offline example](https://github.com/jlevy/metaproc/blob/main/examples/offline-smoke/offline-smoke.process.md)
+shows the same process/handler boundary without domain-specific policy.
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

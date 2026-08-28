@@ -1,6 +1,6 @@
 """Text + JSON rendering for ``metaproc auth usage`` / ``auth doctor``.
 
-Spec: ``docs/arch/arch-metaproc-core.md``
+Spec: ``src/metaproc/docs/metaproc-design.md``
 
 
 Pure functions over the :class:`metaproc.dispatch.auth_usage.LabelUsage`

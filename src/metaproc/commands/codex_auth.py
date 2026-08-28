@@ -3,9 +3,9 @@
 Reads ``~/.codex/auth.json`` (the file-on-disk OAuth blob managed by
 ``codex login``) and ships it to a per-user Secret Manager secret that
 Batch workers bind at runtime. Phase 2 of the codex-adapter spec; see
-``docs/arch/arch-metaproc-core.md``
+``src/metaproc/docs/metaproc-design.md``
 and the auth research brief at
-``docs/arch/arch-metaproc-core.md``.
+``src/metaproc/docs/metaproc-design.md``.
 
 Zero plaintext on disk: the payload is piped from the auth.json blob
 via stdin to ``gcloud secrets versions add --data-file=-``.

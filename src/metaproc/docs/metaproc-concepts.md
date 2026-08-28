@@ -1,8 +1,18 @@
 ---
-title: "Metaproc: Concepts and Principles"
+title: Metaproc Concepts
 description: Concepts and motivation for Metaproc, including vocabulary, architectural planes, optimization loops, and design principles.
 ---
-# Metaproc: Concepts and Principles
+# Metaproc Concepts
+
+> **Scope.** This document is the vocabulary and the principles of Metaproc **as it is
+> built today**: it is the authority on what the shipped system does and what its terms
+> mean in the code. Its companion,
+> [process-framework-theory.md](process-framework-theory.md)
+> (`metaproc help framework`), is the general model beneath any process framework and
+> the authority on the target vocabulary; where it names something Metaproc has not
+> built, §4.2b says so explicitly.
+> Read this one first: everything else in the package assumes it.
+> Readable as `metaproc help concepts`.
 
 Related docs: [developer guide](metaproc-developer-guide.md) (extending metaproc) ·
 [operator reference](metaproc-operator-reference.md) (runtime CLI). Served at runtime
@@ -23,7 +33,7 @@ What’s distinctive:
 - **Boundary-first:** Structure lives at step boundaries (file artifacts); step
   interiors are unconstrained.
 - **Gradual structure and precision:** A process can be as simple and unstructured as an
-  English description or as exact and structured as pure code—or any combination.
+  English description or as exact and structured as pure code, or any combination.
 - **Arbitrarily powerful steps:** Each step can be code, arbitrary coding agents defined
   in code or language, or other processes.
 - **Meta-circularity:** Processes can improve other processes.
@@ -35,8 +45,7 @@ auto-research loops.
 
 Implementation details, including the `.process.md` format, runtime artifacts, CLI
 commands, adapter wire formats, plugin protocol, run pool internals, cloud execution,
-and robustness subsystems, live in
-[arch-metaproc-core.md](../../../docs/arch/arch-metaproc-core.md).
+and robustness subsystems, live in [metaproc-design.md](metaproc-design.md).
 
 ## 1. Motivation
 
@@ -104,7 +113,7 @@ It helps to think these as three axes:
   validated schemas for all data.
   Add structure as repeated patterns prove they deserve it; relax it when a step needs
   room to explore. The repo’s practical artifact guidance is
-  [conventions.md §File Format Policy](../../../docs/conventions.md#file-format-policy).
+  [conventions.md §File Format Policy](conventions.md#file-format-policy).
 
 ### 1.2 Gradual automation, exactness, and structure
 
@@ -379,6 +388,13 @@ Application examples never leak back into the core schema.
   `{{run.variant}}` template variable resolves to the adapter name, so runs with
   different models or coding agents have different output filenames.
 
+  Variant is a **run-level** selector in Metaproc: it is chosen once at invocation and
+  applies to the whole run.
+  The general model in [process-framework-theory.md](process-framework-theory.md) treats
+  variant as an axis of *task* identity, so that the same step and item can run under
+  two configurations concurrently and be told apart.
+  Metaproc does not do that today: two variants are two runs.
+
 ### 4.2 Items, fan-out, and map
 
 Steps operate on specific values, or items.
@@ -389,24 +405,76 @@ Steps operate on specific values, or items.
   Items live at or inside artifact boundaries.
   Use “item” by default; context (the `inputs:` block, `outputs:` block, or `for_each`
   binding) tells you whether the item is inbound, outbound, or being iterated over.
+
 - **Map item:** a structured item, typically a record (YAML map) with named fields, that
   drives one iteration of a fan-out step.
   Structurally a map; functionally the element being mapped over.
   The type `list<map_item>` is the binding type for an items file.
+
 - **Items file:** a list-typed dep whose contents are `list<map_item>`, driving a
   fan-out step (e.g., `items.md`, `events.md`). The items file is the *candidate
   source*; per-item completion state lives separately.
-  Analysis-domain code uses *roster* as a synonym; the framework does not.
+
+- **Roster:** the list of items a step maps over.
+  An items file is how a roster is authored and stored; the roster is the set of keys it
+  yields at execution time.
+  The two are not interchangeable: a roster is re-read on resume, and the design doc
+  treats `roster` as a distinct artifact role.
+
 - **Map:** a step applied to each element of a set of items.
+
 - **Fan-out:** the operation of running a map using parallel workers across input items,
   dispatched by the harness.
+
 - **Task:** the runtime execution unit produced when the harness applies one step to one
-  item. Scalar steps have one task for the step.
-  `task` is a runtime term used by state and log paths; it is not an authored process
-  object or a synonym for item.
+  item, the pair `(step, item)`. Scalar steps have one task for the step.
+
+  *Which layer you are in matters here.* At the **authoring** layer, `task` is not
+  something you write: a process spec declares steps, and tasks are what the harness
+  derives from a step and its roster.
+  At the **execution** layer, the task is the unit that state paths, log paths,
+  scheduling, failure, and resume are all keyed on; see
+  [process-framework-theory.md](process-framework-theory.md), which calls it the pivotal
+  object for exactly that reason.
+  A task is never a synonym for an item: one item can have several tasks, one per step
+  that maps over it.
 
 Code keeps `fan-out`; design conversations may use either depending on which framing is
 more useful in context.
+
+### 4.2b Modeled but not implemented
+
+[process-framework-theory.md](process-framework-theory.md) (`metaproc help framework`)
+is the general model beneath any process framework, and it names objects Metaproc models
+but does not implement as first-class records.
+They are listed here so their absence from this glossary is legible as a deliberate gap
+rather than an omission:
+
+- **Expansion:** the act of turning a step plus a roster into its set of tasks.
+  Metaproc expands at execution time and does not persist the expansion as a record.
+- **Closure:** the point at which a roster is known to be complete, so a fan-in can be
+  trusted. Metaproc reports fan-in against expected keys rather than recording closure.
+- **Generation:** a numbered re-expansion when a roster changes under a running process.
+  `RosterGeneration` exists in `src/metaproc/execution_model/model.py`; the production
+  scheduler does not yet key state on it.
+- **Commit:** one durable record covering every output of a task, published atomically.
+  Metaproc publishes per-output, which the general model’s own deviations list notes.
+- **Fencing:** the rule that only the current attempt may publish, enforced by a
+  monotonic token. Metaproc uses leases and claims, which cover most but not all of the
+  same ground.
+
+One entry is a difference rather than a gap:
+
+- **Key space:** the general model has each item key belong to a declared identity
+  domain, so two rosters both containing `ACME` cannot be aligned unless they mean the
+  same thing. Metaproc declares no key space.
+  It reaches the same guarantee structurally instead: `for_each.align: same_key`
+  requires a *shared source*, because matching key strings across unrelated rosters is
+  coincidence rather than identity (`src/metaproc/engine/graph.py`). Equivalent
+  protection for aligned chains, narrower than a declared domain elsewhere.
+
+The general model is the target vocabulary; where it and this document disagree about
+what exists *today*, this document is the one describing the shipped system.
 
 ### 4.3 Core data model
 
@@ -456,7 +524,7 @@ experiment.
 
 - **Run pool:** the adaptive process manager for concurrent agent invocations within a
   fan-out step. Manages concurrency, memory pressure, health monitoring, and subprocess
-  lifecycle. See [arch-runpool.md](../../../docs/arch/arch-runpool.md) for full design.
+  lifecycle. See [arch-runpool.md](arch-runpool.md) for full design.
 - **Step mode:** one of `manual | agent | code | composite`. `manual`: human acts,
   harness validates after the operator acknowledges completion.
   `agent`: coding-agent subprocess via an adapter.
@@ -547,6 +615,15 @@ The Type B loop (improve the measurement) iterates on domain evals with the step
 
 Processes can read, evaluate, and rewrite other processes, including themselves.
 
+This section is about *what* gets improved: the process definition itself, and the three
+shapes that improvement takes.
+The general model’s [§ Loops: Processes That Repeat](process-framework-theory.md) covers
+the complementary question of *how* an iteration is structured: carried state, a
+measurement step, an accept/reject gate, and a termination policy, with the loop sitting
+above the run rather than inside it.
+The two describe the same layer from different sides, and neither is a prerequisite for
+the other.
+
 ### 5.1 Meta-circularity
 
 A process definition is itself a file.
@@ -610,8 +687,9 @@ The choice depends on which dimension is the current bottleneck:
 
 The first-class primitives that mechanize Type A and Type C (sweep, ensemble,
 experiment) are deferred work; see
-[metaproc-design-rev3-proposals.md](../../../docs/metaproc-design-rev3-proposals.md) P7
-for the vocabulary and a grounding example that orchestrates the pattern manually today.
+[metaproc-design-proposals.md](https://github.com/jlevy/metaproc/blob/main/docs/project/design/metaproc-design-proposals.md)
+P7 for the vocabulary and a grounding example that orchestrates the pattern manually
+today.
 
 #### 5.3.1 Type A: improve the step
 
@@ -976,9 +1054,9 @@ These are not all solving the same problem:
 
 ## References
 
-- [arch-metaproc-core.md](../../../docs/arch/arch-metaproc-core.md): implementation
-  reference (spec format, runtime artifacts, CLI, adapters, cloud execution).
-- [metaproc-design-rev3-proposals.md](../../../docs/metaproc-design-rev3-proposals.md):
+- [metaproc-design.md](metaproc-design.md): implementation reference (spec format,
+  runtime artifacts, CLI, adapters, cloud execution).
+- [metaproc-design-proposals.md](https://github.com/jlevy/metaproc/blob/main/docs/project/design/metaproc-design-proposals.md):
   design proposals not yet implemented, including sweep/ensemble/experiment primitives.
 - [common-doc-guidelines.md](https://github.com/jlevy/practical-prose): documentation
   conventions used here (loaded via `tbd guidelines common-doc-guidelines`).

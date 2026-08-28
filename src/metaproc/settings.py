@@ -133,7 +133,7 @@ GEMINI_VALID_MODELS: set[str] = {
 #
 # codex-cli (OpenAI Codex CLI, npm @openai/codex) defaults. The adapter
 # dispatches through `codex exec --json`; see
-# docs/arch/arch-metaproc-core.md
+# src/metaproc/docs/metaproc-design.md
 # for design context and the empirical 0.124.0 surface.
 
 CODEX_DEFAULT_MODEL = "gpt-5.5"
@@ -238,7 +238,7 @@ PI_VALID_MODELS: set[str] = {
     # DeepSeek first-party API (V4 family). Released 2026-04-24.
     # Both IDs support 1M context and dual mode (thinking /
     # non-thinking) on the same model ID. See
-    # docs/arch/arch-metaproc-core.md.
+    # src/metaproc/docs/metaproc-design.md.
     "deepseek-v4-pro",
     "deepseek-v4-flash",
     # Moonshot first-party API (Kimi K2.6). GA April 2026,

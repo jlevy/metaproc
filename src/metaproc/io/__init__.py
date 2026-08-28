@@ -1,6 +1,6 @@
 """Curated public surface for metaproc file utilities.
 
-See ``docs/arch/arch-file-io-utilities.md`` in the source repository for the public
+See ``src/metaproc/docs/arch-file-io-utilities.md`` in the source repository for the public
 surface and non-obvious ``frontmatter_format`` behavior.
 """
 

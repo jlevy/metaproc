@@ -1,6 +1,6 @@
 """Single-source-of-truth aggregator for credential-pool usage signals.
 
-Spec: ``docs/arch/arch-metaproc-core.md``
+Spec: ``src/metaproc/docs/metaproc-design.md``
 
 
 Pulls every signal an operator needs to answer "which accounts are

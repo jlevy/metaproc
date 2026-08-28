@@ -34,7 +34,7 @@ from metaproc.settings import (
 )
 
 # Env var carrying the ChatGPT-OAuth ~/.codex/auth.json payload to Batch workers.
-# See docs/arch/arch-metaproc-core.md.
+# See src/metaproc/docs/metaproc-design.md.
 CODEX_CREDS_ENV_VAR = "CODEX_CREDS_JSON"
 
 # Minimal config.toml emitted alongside auth.json in a pool slot. The two

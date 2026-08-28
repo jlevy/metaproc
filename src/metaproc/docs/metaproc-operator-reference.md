@@ -10,7 +10,7 @@ description: The runtime command and recovery reference for operators (human or 
 > The CLI surfaces this doc via `metaproc help operator`. If you have NOT read § Top
 > mistakes to avoid + § Operating Rules below, stop and read them before touching a run.
 
-Related docs: [concepts](metaproc-concepts-and-principles.md) (first principles) ·
+Related docs: [concepts](metaproc-concepts.md) (first principles) ·
 [developer guide](metaproc-developer-guide.md) (extending metaproc).
 This reference and the other bundled docs are served at runtime via
 `metaproc help <operator|concepts|developer>`.
@@ -101,22 +101,22 @@ uv run metaproc auth --help
 uv run metaproc gcp --help
 ```
 
-For procedural how-tos, see the runbooks under [`runbooks/`](../../../docs/runbooks/):
+For procedural how-tos, see the runbooks under
+[`runbooks/`](https://github.com/jlevy/metaproc/blob/main/docs/runbooks):
 
 | Runbook | Use when |
 | --- | --- |
-| [`environment-bootstrap.runbook.md`](../../../docs/runbooks/environment-bootstrap.runbook.md) | First-time setup on a new machine or fresh shell; tool installs; `auth-check` preflight. |
-| [`credential-setup.runbook.md`](../../../docs/runbooks/credential-setup.runbook.md) | Wiring per-adapter credentials (Claude OAuth pool, Codex ChatGPT-plan, Gemini modes, GCP infra + Secret Manager). |
-| [`cloud-dispatch.runbook.md`](../../../docs/runbooks/cloud-dispatch.runbook.md) | Running, monitoring, and recovering jobs on GCP Batch (`--backend gcp-worker`). |
-| [`adapter-compatibility.runbook.md`](../../../docs/runbooks/adapter-compatibility.runbook.md) | Adapter-routing pitfalls (pi-cli API matrix, Gemini 3 `thought_signature`, ADC on Batch, `derive_variant` cascade). |
-| [`adding-a-new-llm-provider.runbook.md`](../../../docs/runbooks/adding-a-new-llm-provider.runbook.md) | Onboarding a new model or provider into the dispatch matrix. |
-| [`softschema-validation.runbook.md`](../../../docs/runbooks/softschema-validation.runbook.md) | Validating softschema-tagged artifacts. |
-| [`browser-streaming-smoke.runbook.md`](../../../docs/runbooks/browser-streaming-smoke.runbook.md) | Browser streaming smoke procedure. |
+| [`environment-bootstrap.runbook.md`](https://github.com/jlevy/metaproc/blob/main/docs/runbooks/environment-bootstrap.runbook.md) | First-time setup on a new machine or fresh shell; tool installs; `auth-check` preflight. |
+| [`credential-setup.runbook.md`](credential-setup.runbook.md) | Wiring per-adapter credentials (Claude OAuth pool, Codex ChatGPT-plan, Gemini modes, GCP infra + Secret Manager). |
+| [`cloud-dispatch.runbook.md`](cloud-dispatch.runbook.md) | Running, monitoring, and recovering jobs on GCP Batch (`--backend gcp-worker`). |
+| [`adapter-compatibility.runbook.md`](https://github.com/jlevy/metaproc/blob/main/docs/runbooks/adapter-compatibility.runbook.md) | Adapter-routing pitfalls (pi-cli API matrix, Gemini 3 `thought_signature`, ADC on Batch, `derive_variant` cascade). |
+| [`adding-a-new-llm-provider.runbook.md`](https://github.com/jlevy/metaproc/blob/main/docs/runbooks/adding-a-new-llm-provider.runbook.md) | Onboarding a new model or provider into the dispatch matrix. |
+| [`softschema-validation.runbook.md`](https://github.com/jlevy/metaproc/blob/main/docs/runbooks/softschema-validation.runbook.md) | Validating softschema-tagged artifacts. |
+| [`browser-streaming-smoke.runbook.md`](https://github.com/jlevy/metaproc/blob/main/docs/runbooks/browser-streaming-smoke.runbook.md) | Browser streaming smoke procedure. |
 
-For implementation contracts see
-[`arch/arch-metaproc-core.md`](../../../docs/arch/arch-metaproc-core.md), for pool
-behavior [`arch/arch-runpool.md`](../../../docs/arch/arch-runpool.md), and for naming
-rules [`conventions.md`](../../../docs/conventions.md).
+For implementation contracts see [`metaproc-design.md`](metaproc-design.md), for pool
+behavior [`arch/arch-runpool.md`](arch-runpool.md), and for naming rules
+[`conventions.md`](conventions.md).
 
 ## Operating Rules
 
@@ -160,9 +160,9 @@ rules [`conventions.md`](../../../docs/conventions.md).
    it tighter silently caps
    `effective_target = min(memory_ceiling, provider_ceiling, operator_cap)` with no
    warning, even when the host could safely run more.
-   See [`arch-runpool.md`](../../../docs/arch/arch-runpool.md) § “Operator cap floor”
-   for the full rationale and why per-adapter memory profiles are not yet stable enough
-   to tune the cap tightly.
+   See [`arch-runpool.md`](arch-runpool.md) § “Operator cap floor” for the full
+   rationale and why per-adapter memory profiles are not yet stable enough to tune the
+   cap tightly.
 8. Treat `mode: code` work as owned by the step.
    A command-backed step owns its complete process group.
    Metaproc terminates surviving descendants and flushes the command log before
@@ -659,7 +659,7 @@ status file exists if the run stopped before fan-out started.
 
 Operator-facing summary of where to look for a running or completed run.
 For the full per-artifact reference (schema, lifecycle, writer, readers), see
-[artifact-catalog.md](../../../docs/artifact-catalog.md).
+[artifact-catalog.md](artifact-catalog.md).
 
 Each scope root has two reserved runtime branches and any number of workflow artifact
 branches:
@@ -757,11 +757,11 @@ reader rather than adding a one-off parser.
 When runtime paths change, update these documents in the same PR:
 
 - this operator reference
-- [artifact-catalog.md](../../../docs/artifact-catalog.md)
-- [conventions.md](../../../docs/conventions.md)
-- [arch-metaproc-core.md](../../../docs/arch/arch-metaproc-core.md)
-- [arch-runpool.md](../../../docs/arch/arch-runpool.md)
-- [../README.md](../../../README.md)
+- [artifact-catalog.md](artifact-catalog.md)
+- [conventions.md](conventions.md)
+- [metaproc-design.md](metaproc-design.md)
+- [arch-runpool.md](arch-runpool.md)
+- [../README.md](https://github.com/jlevy/metaproc/blob/main/README.md)
 - active specs that name source log paths
 - workflow runbooks or process specs that pin tool-specific environment variables
 

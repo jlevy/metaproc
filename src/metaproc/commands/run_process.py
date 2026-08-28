@@ -4765,7 +4765,7 @@ def run_process_command(
             "the other lanes. For multi-lane comparisons today, compile a "
             "dispatch plan with --execution-profiles (one sibling run per "
             "lane) — see "
-            "docs/arch/arch-metaproc-core.md "
+            "src/metaproc/docs/metaproc-design.md "
             "§ Phase 2 follow-up."
         )
 
