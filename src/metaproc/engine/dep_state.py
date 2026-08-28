@@ -47,7 +47,7 @@ class StepRuntimeSummary:
     result_step_hash: str | None = None
 
 
-def fingerprint_step(step: ResolvedStep) -> str:
+def fingerprint_step(step: ResolvedStep, *, require_referenced_files: bool = True) -> str:
     """Return a stable fingerprint covering both the step contract and the
     bytes of any runbook/prompt file the step references.
 
@@ -63,7 +63,12 @@ def fingerprint_step(step: ResolvedStep) -> str:
     template string is already in the model payload.
 
     An absolute path that does not exist on disk is a real misconfiguration
-    and raises ``FileNotFoundError`` loudly. A relative path that cannot be
+    and raises ``FileNotFoundError`` loudly, unless the caller passes
+    ``require_referenced_files=False``. A step may reference a file an earlier
+    step in the same process produces, so before the run starts that file is
+    legitimately absent; the plan projection fingerprints what exists and the
+    execution-time callers keep the strict check, where a missing file really
+    is a misconfiguration. A relative path that cannot be
     resolved from the caller's CWD logs a warning and is skipped from the
     content hash — ``fingerprint_step`` runs in many contexts (dry-run,
     deps inspection, runtime) and not all of them know the process_dir
@@ -89,11 +94,13 @@ def fingerprint_step(step: ResolvedStep) -> str:
         try:
             content = path.read_bytes()
         except FileNotFoundError as err:
-            if path.is_absolute():
+            if path.is_absolute() and require_referenced_files:
                 raise FileNotFoundError(
                     f"step '{step.step_id}': referenced runbook {path_str!r} does not "
                     f"exist — cannot compute step fingerprint"
                 ) from err
+            if path.is_absolute():
+                continue
             log.warning(
                 "step %r: relative runbook path %r not readable from cwd %s; "
                 "skipping its content from the fingerprint (contract part still hashed)",

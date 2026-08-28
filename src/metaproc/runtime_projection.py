@@ -293,7 +293,7 @@ def _project_plan_steps(plan: Plan) -> tuple[RunPlanStep, ...]:
             task_shape="mapped" if step.fan_out is not None else "scalar",
             item_keys=None,
             outputs=step.outputs,
-            fingerprint=fingerprint_step(step),
+            fingerprint=fingerprint_step(step, require_referenced_files=False),
         )
         for step in plan.steps
     )
