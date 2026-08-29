@@ -259,7 +259,7 @@ def enrich_single_item(
     discovery = discover_items_from_source(source_path, step_def, params=variables)
     # Search all items (actionable + filtered) since user explicitly chose this item.
     all_item_contexts = discovery.actionable_contexts + [
-        {k: v for k, v in ctx.items() if k != "reason"} for ctx in discovery.filtered_items
+        item.context for item in discovery.filtered_items
     ]
     matched = [ctx for ctx in all_item_contexts if ctx.get(each) == item_value]
     if not matched:

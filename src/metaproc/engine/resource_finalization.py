@@ -29,6 +29,7 @@ from metaproc.models.resource_budget import (
     FinalizationState,
     ResourceFinalization,
 )
+from metaproc.models.resource_snapshot import ResourceRunSnapshot
 from metaproc.models.resources import (
     Node,
     ResourceEvent,
@@ -113,6 +114,11 @@ def finalize_run_resources(
     extracted = build_resource_artifacts(
         bundle=None if snapshot is not None else bundle,
         hierarchy_root=hierarchy,
+        mapped_composite_step_ids=(
+            snapshot.mapped_composite_step_ids
+            if isinstance(snapshot, ResourceRunSnapshot)
+            else None
+        ),
         run_dir=run_dir,
         run_id=resolved_run_id,
         write=False,

@@ -1,8 +1,9 @@
 """``metaproc gcp run`` — dispatch one command to one GCP Batch task.
 
-This is a lower-level execution primitive for probes, diagnostics, publishers, and
-applications that already own their outer orchestration. Framework-owned process DAGs
-should use ``metaproc run-process ... --backend gcp-worker --cloud`` instead.
+This is a lower-level placement primitive for probes, diagnostics, publishers, and
+applications that already own their orchestration. The one command may be a complete
+``metaproc run-process ... --backend local`` DAG on one Batch VM. Compatible multi-VM
+processes use ``metaproc run-process ... --backend gcp-worker --cloud`` instead.
 
 See ``src/metaproc/docs/metaproc-design.md``
 for the full design. This module owns:
@@ -28,7 +29,7 @@ from pathlib import Path
 import typer
 from google.protobuf.json_format import MessageToDict
 
-from metaproc.cloud.gcp.batch_backend import GCPBatchConfig
+from metaproc.cloud.gcp.batch_backend import GCPBatchConfig, sanitize_label
 from metaproc.cloud.gcp.dispatch_artifacts import (
     DEFAULT_DISPATCH_BUCKET,
     DEFAULT_GCS_PREFIX,
@@ -151,6 +152,13 @@ def _validate_workspace_package_sources(
             )
 
 
+def _validate_artifact_set_id(value: str) -> str:
+    """Require the immutable artifact prefix to also be a valid Batch job ID."""
+    if len(value) > 63 or not value[0].isalpha() or sanitize_label(value) != value:
+        raise typer.BadParameter("Use a lowercase GCP-safe ID", param_hint="--job-name")
+    return value
+
+
 def _build_config(
     *,
     image: str,
@@ -163,9 +171,9 @@ def _build_config(
     """Build a :class:`GCPBatchConfig` from CLI flags + env defaults.
 
     ``METAPROC_GCP_PROJECT`` is required. The container image comes from
-    ``--image`` or ``METAPROC_GCP_CONTAINER_IMAGE``. Filestore is enabled
-    iff ``--no-filestore`` is unset and ``METAPROC_GCP_FILESTORE_SERVER``
-    is in the env.
+    ``--image`` or ``METAPROC_GCP_CONTAINER_IMAGE``. Filestore is the
+    default and requires ``METAPROC_GCP_FILESTORE_SERVER``; callers must
+    explicitly select ephemeral storage with ``--no-filestore``.
     """
     project = MetaprocEnv.METAPROC_GCP_PROJECT.read_str(default="")
     if not project:
@@ -184,6 +192,12 @@ def _build_config(
     filestore_server = ""
     if not no_filestore:
         filestore_server = MetaprocEnv.METAPROC_GCP_FILESTORE_SERVER.read_str(default="")
+        if not filestore_server:
+            raise typer.BadParameter(
+                "METAPROC_GCP_FILESTORE_SERVER is required by the default Filestore "
+                "placement; pass --no-filestore to use ephemeral task storage",
+                param_hint="METAPROC_GCP_FILESTORE_SERVER",
+            )
 
     return GCPBatchConfig(
         project=project,
@@ -296,7 +310,9 @@ def run_command(
         DEFAULT_RUNS_DIR, "--runs-dir", help="RUNS_DIR inside the container."
     ),
     no_filestore: bool = typer.Option(
-        False, "--no-filestore", help="Skip the Filestore NFS mount."
+        False,
+        "--no-filestore",
+        help="Use ephemeral task storage instead of the default Filestore NFS mount.",
     ),
     env: list[str] = typer.Option(  # noqa: B008
         None, "--env", help="K=V plaintext env var on the task. Repeatable."
@@ -328,10 +344,11 @@ def run_command(
         help="Required GCS bucket for wheel + workspace artifacts.",
     ),
 ) -> None:
-    """Run one lower-level command in one GCP Batch task.
+    """Run one command in one GCP Batch task.
 
-    Use `metaproc run-process <spec> --backend gcp-worker --cloud` for a Metaproc
-    process DAG.
+    The command may be a complete `metaproc run-process <spec> --backend local`
+    single-host DAG. Use `run-process <spec> --backend gcp-worker --cloud` for a
+    compatible multi-VM process.
     Default behaviour here ships a fresh-built wheel from the local source tree
     plus a tarball of the current repo working tree, mounts Filestore at
     `/mnt/filestore` (with `RUNS_DIR=/mnt/filestore/runs`), resolves
@@ -401,7 +418,7 @@ def run_command(
     # under the right gs://…/<job_id>/ prefix. Use the override if set or
     # the same generator the dispatcher uses, then pass it through as
     # options.job_name so dispatch doesn't generate a different one.
-    job_id = job_name or _generate_job_id()
+    job_id = _validate_artifact_set_id(job_name or _generate_job_id())
 
     # Skip artifact build/upload for --dry-run — the spec just needs
     # placeholder URIs so the env-var shape is visible. Running `uv build`

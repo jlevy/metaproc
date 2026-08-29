@@ -10,6 +10,27 @@ v0.2.1; rev2m and rev2n to v0.3.0; rev2o was unreleased when the history was mov
 
 ## Revisions
 
+### rev2q (2026-08-28)
+
+- Gave the run-plan snapshot a first-class home as §9.7, alongside the other
+  load-bearing runtime files.
+  It had been introduced only as a line in the directory listings and a prose block
+  inside the MetaBrowser section, which framed a runtime contract as a browser feature.
+- Recorded why the snapshot exists rather than persisting the resolved plan or
+  reconstructing from the authored spec, and documented its exactness validators,
+  publication and refresh points, and the parent-authorizes-child scope chain.
+- Added §10.6 for consumable outputs: the ordered acceptance gates, the rejection-reason
+  taxonomy, why the attempt and fingerprint gates exist, path rebasing, and typed
+  coverage gaps.
+- Reduced the MetaBrowser section to a consumer of that contract.
+
+### rev2p (2026-08-26)
+
+- Documented the existing single-host cloud placement: one `gcp run` Batch task whose
+  command is a complete local-backend process.
+- Distinguished that placement from multi-VM `gcp-worker` fan-out and recorded it as the
+  supported cloud path for mapped composites.
+
 ### rev2o (2026-08-25)
 
 - Documented cancellation-safe ownership for executor work, scalar credentials, local

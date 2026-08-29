@@ -17,12 +17,21 @@ from metabrowser import server as proc_browser
 
 from metaproc.metabrowser_plugin import plugin_dir as metaproc_plugin_dir
 from metaproc.metabrowser_plugin import sidekick
+from metaproc.models.authored import IOSpec
 from metaproc.models.viz import (
+    AcceptedOutputProjection,
     DepDetails,
+    FanOutDetails,
+    InputSpec,
     NodeProgress,
+    OutputSpec,
     ProcessHeader,
     ProgressSnapshot,
+    RuntimeTaskProjection,
     StepDetails,
+    TaskKeyProjection,
+    TaskOutputProjection,
+    UnacceptedOutputProjection,
     VizModel,
     VizNode,
 )
@@ -141,6 +150,23 @@ def test_relativize_viz_paths_walks_every_path_field(tmp_path: Path) -> None:
         name="p",
         process_schema_token="metaproc:ProcessSpec/0.1",
         source_path=root + "/p/process.md",
+        process_inputs={
+            "roster": InputSpec(
+                name="roster",
+                path=root + "/p/data/roster.md",
+                as_type="path",
+                default=root + "/p/data/default-roster.md",
+            )
+        },
+        process_outputs={
+            "report": OutputSpec(
+                name="report",
+                path=root + "/p/out/report.md",
+                as_type="path",
+                template=root + "/p/templates/report.md",
+            ),
+            "summary": OutputSpec(name="summary", ref="s.report", as_type="path"),
+        },
     )
     step = StepDetails(
         step_id="s",
@@ -150,6 +176,17 @@ def test_relativize_viz_paths_walks_every_path_field(tmp_path: Path) -> None:
         uses_path=root + "/p/child/process.md",
         prompt_paths=[root + "/p/prompts/a.md", root + "/p/prompts/b.md"],
         output_root=root + "/p/out",
+        inputs={"source": IOSpec(path=root + "/p/data/source.md")},
+        outputs={
+            "report": IOSpec(
+                path=root + "/p/out/report.md",
+                template=root + "/p/templates/report.md",
+            )
+        },
+        fan_out=FanOutDetails(
+            over="roster",
+            source=root + "/p/data/roster.md",
+        ),
     )
     dep = DepDetails(
         dep_name="d",
@@ -170,22 +207,69 @@ def test_relativize_viz_paths_walks_every_path_field(tmp_path: Path) -> None:
             run_dir=root + "/runs/2026-04-23",
             nodes={"s": NodeProgress(state="running")},
         ),
+        task_projection=TaskOutputProjection(
+            run_dir=root + "/runs/2026-04-23",
+            tasks=[
+                RuntimeTaskProjection(
+                    key=TaskKeyProjection(step_id="s"),
+                    state="completed",
+                    accepted_outputs=[
+                        AcceptedOutputProjection(
+                            name="report",
+                            path=root + "/runs/2026-04-23/report.md",
+                            recorded_path=root + "/runs/2026-04-23/report.md",
+                            declaration=IOSpec(path="{{run.dir}}/report.md"),
+                        )
+                    ],
+                    unaccepted_outputs=[
+                        UnacceptedOutputProjection(
+                            name="draft",
+                            path=root + "/runs/2026-04-23/draft.md",
+                            recorded_path=root + "/runs/2026-04-23/draft.md",
+                            reason="result-not-validated",
+                        ),
+                        UnacceptedOutputProjection(
+                            name="external",
+                            recorded_path="/external/report.md",
+                            reason="external",
+                        ),
+                    ],
+                )
+            ],
+        ),
     )
 
     sidekick._relativize_viz_paths(model)  # noqa: SLF001
 
     assert model.root_process == "p/process.md"
     assert model.header.source_path == "p/process.md"
+    assert model.header.process_inputs["roster"].path == "p/data/roster.md"
+    assert model.header.process_inputs["roster"].default == "p/data/default-roster.md"
+    assert model.header.process_outputs["report"].path == "p/out/report.md"
+    assert model.header.process_outputs["report"].template == "p/templates/report.md"
+    assert model.header.process_outputs["summary"].ref == "s.report"
     assert model.nodes[0].path == "p/s.md"
     assert model.nodes[0].step is not None
     assert model.nodes[0].step.source_path == "p/process.md"
     assert model.nodes[0].step.uses_path == "p/child/process.md"
     assert model.nodes[0].step.prompt_paths == ["p/prompts/a.md", "p/prompts/b.md"]
     assert model.nodes[0].step.output_root == "p/out"
+    assert model.nodes[0].step.inputs["source"].path == "p/data/source.md"
+    assert model.nodes[0].step.outputs["report"].path == "p/out/report.md"
+    assert model.nodes[0].step.outputs["report"].template == "p/templates/report.md"
+    assert model.nodes[0].step.fan_out is not None
+    assert model.nodes[0].step.fan_out.source == "p/data/roster.md"
     assert model.nodes[1].dep is not None
     assert model.nodes[1].dep.path == "p/data/d.yaml"
     assert model.nodes[1].dep.source_path == "p/process.md"
     assert model.nodes[2].process is not None
     assert model.nodes[2].process.source_path == "p/process.md"
+    assert model.nodes[2].process.process_inputs["roster"].path == "p/data/roster.md"
+    assert model.nodes[2].process.process_outputs["report"].path == "p/out/report.md"
     assert model.progress is not None
     assert model.progress.run_dir == "runs/2026-04-23"
+    assert model.task_projection is not None
+    assert model.task_projection.run_dir == "runs/2026-04-23"
+    assert model.task_projection.tasks[0].accepted_outputs[0].path == ("runs/2026-04-23/report.md")
+    assert model.task_projection.tasks[0].unaccepted_outputs[0].path == ("runs/2026-04-23/draft.md")
+    assert model.task_projection.tasks[0].unaccepted_outputs[1].path is None

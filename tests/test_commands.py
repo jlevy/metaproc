@@ -287,6 +287,40 @@ class TestCheckHeadersCommand:
         assert result.exit_code != 0
         assert "MISSING  template" in result.output
 
+    def test_default_backed_dependency_path(self, tmp_path):
+        child = tmp_path / "children" / "live.process.md"
+        child.parent.mkdir()
+        child.write_text(
+            "---\nprocess:\n  name: child\n  steps: []\n---\n# child\n",
+            encoding="utf-8",
+        )
+        top = tmp_path / "top.process.md"
+        top.write_text(
+            "---\n"
+            "process:\n"
+            "  name: top\n"
+            "  inputs:\n"
+            "    child_name:\n"
+            "      param: CHILD_NAME\n"
+            "      as: string\n"
+            "      required: false\n"
+            "      default: live.process.md\n"
+            "  deps:\n"
+            '    child: { path: "./children/{{child_name}}", as: path }\n'
+            "  steps:\n"
+            "    - id: child\n"
+            "      mode: composite\n"
+            "      uses: deps.child\n"
+            "---\n"
+            "# top\n",
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(app, ["check-headers", str(top)])
+
+        assert result.exit_code == 0, result.output
+        assert "0 error(s)" in result.output
+
 
 class TestCompareCommand:
     def test_missing_dir(self, tmp_path):

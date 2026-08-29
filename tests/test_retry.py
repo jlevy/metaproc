@@ -505,6 +505,44 @@ class TestExtractLogError:
         assert result is not None
         assert "gcloud auth" in result
 
+    def test_multiline_json_error_preserves_message_for_classification(
+        self, tmp_path: Path
+    ) -> None:
+        """A terminal error event wins over its pretty-printed stderr block."""
+        log = tmp_path / "test.jsonl"
+        log.write_text(
+            "\n".join(
+                [
+                    '{"type":"message_end"}',
+                    "API request failed:",
+                    "{",
+                    '  "error": {',
+                    '    "code": 403,',
+                    '    "message": "Permission denied for the requested operation",',
+                    '    "status": "PERMISSION_DENIED"',
+                    "  }",
+                    "}",
+                    json.dumps(
+                        {
+                            "type": "result",
+                            "status": "error",
+                            "error": {
+                                "message": (
+                                    "API error 403: Permission denied for the requested operation"
+                                )
+                            },
+                        }
+                    ),
+                ]
+            )
+        )
+
+        result = extract_log_error(log)
+
+        assert result is not None
+        assert "Permission denied" in result
+        assert classify_error(result) is RetryVerdict.FAIL
+
     def test_no_error_returns_none(self, tmp_path: Path) -> None:
         """Returns None when log has no error signal."""
 

@@ -284,7 +284,8 @@ def test_snapshot_refresh_rejects_active_run(
                 node_type="run",
                 node_id="parent/2026-04-21",
                 label="parent/2026-04-21",
-            )
+            ),
+            mapped_composite_step_ids=[],
         ),
     )
     monkeypatch.setattr(

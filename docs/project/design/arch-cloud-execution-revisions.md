@@ -10,6 +10,12 @@ v0.2.1; rev2m and rev2n to v0.3.0; rev2o was unreleased when the history was mov
 
 ## Revisions
 
+### rev11 (2026-08-26)
+
+Documented `gcp run` as single-task placement for either an arbitrary command or one
+complete local-backend DAG. Distinguished that topology from multi-VM `gcp-worker`
+fan-out and recorded the single-host placement required by mapped composites.
+
 ### rev10 (2026-08-24)
 
 Replaced duplicated authentication-pool fields on `OrchestratorDispatchConfig` with the

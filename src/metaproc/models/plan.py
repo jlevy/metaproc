@@ -6,13 +6,15 @@ and fan-out items discovered. These models represent that resolved state.
 
 from __future__ import annotations
 
-from typing import ClassVar, Literal
+from typing import ClassVar, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from metaproc.models.authored import IOSpec, ParseConfig, RetryPolicy, ValueType
 from metaproc.models.lane import ExecutionLane, LaneMatrix
 from metaproc.models.resource_budget import ResourceBudgetSpec
+
+RUN_PLAN_SNAPSHOT_CONTRACT = "metaproc:RunPlanSnapshot/0.1"
 
 
 class ResolvedAdapter(BaseModel):
@@ -69,6 +71,16 @@ class ResolvedStep(BaseModel):
     needs: list[str] = Field(default_factory=list)
     on_failure: Literal["block", "continue"] = "block"
     uses_path: str | None = None
+    produced_refs: list[str] = Field(default_factory=list)
+    """Referenced runbook paths that another step in this plan writes during the run.
+
+    Resolved by ``build_plan`` from the deps a ``prompt_paths`` or ``uses`` entry
+    points at, and read by ``fingerprint_step``, which excludes their bytes from
+    the step fingerprint. Carrying the set on the resolved step rather than
+    passing it per call is what keeps every fingerprint of a given step equal:
+    the plan-time and execution-time hashes must be comparable, and two callers
+    disagreeing about the set would silently produce two different hashes.
+    """
     execution_profile: str | None = None
     artifact_namespace: str | None = None
     variant: str | None = None
@@ -128,3 +140,54 @@ class PlanEnvelope(BaseModel):
     """Envelope for resolved plan documents (``plan:`` key)."""
 
     plan: Plan
+
+
+class RunPlanStep(BaseModel):
+    """Non-sensitive projection authority for one resolved runtime step."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    step_id: str = Field(min_length=1)
+    mode: Literal["code", "agent", "composite", "manual"]
+    task_shape: Literal["scalar", "mapped"]
+    item_keys: list[str] | None
+    outputs: dict[str, IOSpec] = Field(default_factory=dict)
+    fingerprint: str = Field(pattern=r"^[0-9a-f]{16}$")
+
+    @model_validator(mode="after")
+    def _valid_item_key_set(self) -> Self:
+        if self.item_keys is None:
+            return self
+        if self.task_shape == "scalar" and self.item_keys:
+            raise ValueError("scalar run-plan steps cannot declare item keys")
+        if len(self.item_keys) != len(set(self.item_keys)):
+            raise ValueError("run-plan item keys must be unique")
+        from metaproc.paths import (  # noqa: PLC0415 -- avoids the models/paths import cycle
+            is_safe_item_key,
+        )
+
+        if invalid := [key for key in self.item_keys if not is_safe_item_key(key)]:
+            raise ValueError(f"run-plan item keys must be safe path components: {invalid!r}")
+        return self
+
+
+class RunPlanSnapshot(BaseModel):
+    """Minimal exact plan projection for one runtime scope."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(populate_by_name=True, extra="forbid")
+
+    schema_: Literal["metaproc:RunPlanSnapshot/0.1"] = Field(
+        default=RUN_PLAN_SNAPSHOT_CONTRACT, alias="schema"
+    )
+    run_id: str = Field(min_length=1)
+    scope_path: list[str] = Field(default_factory=list)
+    steps: list[RunPlanStep] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _exact_step_set(self) -> Self:
+        step_ids = [step.step_id for step in self.steps]
+        if len(step_ids) != len(set(step_ids)):
+            raise ValueError("run-plan steps must have unique step IDs")
+        if any(step.item_keys is None for step in self.steps):
+            raise ValueError("recorded run-plan steps must declare exact item keys")
+        return self

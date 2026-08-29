@@ -201,6 +201,7 @@ class ResultRecord(BaseModel):
 
     run_id: str
     step_id: str
+    attempt_id: str | None = Field(default=None, pattern=typed_id_pattern("att"))
     state: StepStatus
     validated: bool
     outputs: dict[str, str] = Field(default_factory=dict)

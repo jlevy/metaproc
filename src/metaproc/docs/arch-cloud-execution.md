@@ -188,6 +188,21 @@ Cross-topology resume (for example, hybrid to full cloud) remains allowed becaus
 backend is not part of resume identity and both topologies share the authoritative
 filesystem. Authentication and concurrency changes remain explicit timeline events.
 
+**`run-plan.yaml`** (`{scope_dir}/.state/run-plan.yaml`): records the exact step
+identity, scalar-or-mapped shape, canonical mapped item keys, output declarations, and
+fingerprints used for the root process or one nested composite scope.
+It is refreshed atomically before that scope is evaluated.
+Mapped steps refresh their canonical key set again after runtime discovery when an
+upstream-produced source did not exist at initial plan time.
+Old results become step mismatches when an evaluated scope resumes under changed
+definitions. Hydrated readers do not need to guess the original item bindings or
+execution profile, and child records cannot authorize scopes absent from their nearest
+parent record. Opaque execution configuration and discovered fan-out item payloads are
+deliberately excluded; canonical keys remain because they are the scope addresses that
+the parent actually authorized.
+This is a declarative projection derived from the existing plan, not a second scheduler,
+expansion graph, or artifact-lineage authority.
+
 **`orchestrator-lease.yaml`** (`{run_dir}/.state/orchestrator-lease.yaml`): prevents two
 orchestrators from walking the same DAG at once.
 The lease records owner identity and a heartbeat; stale leases can be taken over
@@ -683,7 +698,7 @@ path.
 | `gcp logs` | Stream logs from Cloud Logging |
 | `gcp cancel` | Cancel running/queued Batch jobs |
 | `gcp runs` | List all active metaproc runs |
-| `gcp run` | Run one lower-level command in a single Batch task |
+| `gcp run` | Run one command or local-backend DAG in a single Batch task |
 | `gcp resources` | Show GCP resource usage |
 | `gcp filestore` | Manage Filestore NFS |
 | `gcp cleanup` | Clean up cloud resources |
@@ -706,15 +721,24 @@ path.
 | `cloud/gcp/gcp_run_logs.py` | Blocking log tail and exit-code propagation |
 | `cloud/gcp/billing.py` | Approximate billable hours from machine type and worker runtime spans |
 
-### 3.15 `metaproc gcp run`: Arbitrary Command Dispatch
+### 3.15 `metaproc gcp run`: Single-Task Placement
 
-This is the lower-level primitive for running **one arbitrary command in one Batch
-task** with the dispatcher’s current Metaproc and repository state.
+`gcp run` is the lower-level primitive for running **one command in one Batch task**
+with the dispatcher’s current Metaproc and repository state.
 Appropriate uses include probes, diagnostics, terminal publication, and an application
 that already owns its outer orchestration.
-An application process should normally use `run-process --cloud`, which preserves the
-framework’s graph, lease, claim, retry, resume, and worker-fan-out contracts.
-Scripts must not construct a process by chaining `gcp run` calls.
+That command may be a complete `run-process --backend local` DAG. This gives Metaproc
+two cloud placements without creating a second process orchestrator:
+
+- Direct `run-process --backend gcp-worker --cloud` runs the orchestrator and compatible
+  fan-out work across multiple Batch VMs.
+- One `gcp run -- metaproc run-process <spec> --backend local` task places the complete
+  DAG on one Batch VM. The nested `run-process` alone owns the graph, leases, retries,
+  resume state, mapped scopes, and run-wide local admission.
+
+Mapped composites use the single-host form because the `gcp-worker` backend rejects them
+until a multi-host mapping contract exists.
+Scripts must not construct a process by chaining multiple `gcp run` calls.
 
 **Pipeline.** `commands/gcp_run.py` parses CLI flags, builds a `GCPBatchConfig`, ships
 artifacts (`build_wheel` and `package_workspace` under `dispatch_artifacts.py`, gated by
@@ -746,12 +770,14 @@ prefixed `[gcp-run]` until the job hits a terminal state, then exits with
 skips the tail entirely and prints the job name and console URL.
 
 **Why a separate primitive.** Worker dispatch (§3.3) is shaped around per-item
-partitioning and resume contracts; that machinery is overkill for “run `echo` once” or
-“run a package-specific analyzer against a fixed input file.”
-The two paths share `batch_backend.py`, `container_bootstrap.py`, `SecretRefSet`,
-`secret_hydration.py`, and the Filestore mount script, but `metaproc gcp run` carries no
-orchestrator lease, no claim registry, no per-item dispatch manifest.
-That absence is its boundary, not an invitation to grow a second orchestration layer.
+partitioning and resume contracts; that machinery is unnecessary for “run `echo` once,”
+“run a package-specific analyzer against a fixed input file,” or place one complete
+local-backend DAG on one VM. The two paths share `batch_backend.py`,
+`container_bootstrap.py`, `SecretRefSet`, `secret_hydration.py`, and the Filestore mount
+script, but `metaproc gcp run` carries no orchestrator lease, no claim registry, no
+per-item dispatch manifest.
+When its command is `run-process`, that nested command owns those contracts.
+This boundary is not an invitation to grow a second orchestration layer.
 
 **Wheel and workspace overrides apply to both paths.** The URI variables and their
 required `METAPROC_WHEEL_SHA256` and `METAPROC_WORKSPACE_SHA256` digests are not
@@ -767,7 +793,7 @@ Changes to those entrypoints, secret hydration, or pre-wheel bootstrap require a
 candidate image rebuild.
 
 See
-[Dispatch an Arbitrary Command](cloud-dispatch.runbook.md#5-dispatch-an-arbitrary-command)
+[Dispatch One Task or a Single-Host Process](cloud-dispatch.runbook.md#5-dispatch-one-task-or-a-single-host-process)
 for operator recipes and this document for the full design.
 
 ## 4. AWS Implementation

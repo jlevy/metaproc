@@ -494,6 +494,7 @@ class TestRunPool:
 
             def __init__(self) -> None:
                 self.launched = asyncio.Event()
+                self.kill_started = asyncio.Event()
                 self.release_kill = asyncio.Event()
 
             async def launch(
@@ -511,6 +512,7 @@ class TestRunPool:
 
             async def kill(self, handle: LaunchHandle, sig: int | None = None) -> None:
                 del handle, sig
+                self.kill_started.set()
                 await self.release_kill.wait()
 
             async def health(self, handle: LaunchHandle) -> HealthMetrics | None:
@@ -541,7 +543,10 @@ class TestRunPool:
             await backend.launched.wait()
             shutdown = asyncio.create_task(pool.shutdown(timeout_s=0))
             try:
-                await asyncio.wait_for(asyncio.shield(shutdown), timeout=0.25)
+                # Start the deadlock guard only after cleanup is demonstrably wedged;
+                # the production cleanup timeout remains the bound under test.
+                await asyncio.wait_for(backend.kill_started.wait(), timeout=1)
+                await asyncio.wait_for(asyncio.shield(shutdown), timeout=1)
                 events = [
                     json.loads(line)
                     for line in (tmp_path / "logs" / "events.jsonl").read_text().splitlines()

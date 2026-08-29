@@ -6,7 +6,7 @@ status: Approved
 ---
 # Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-08-27) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-08-29) **Status:** Approved
 
 Also readable as `metaproc help design`.
 
@@ -38,7 +38,7 @@ Almost nobody needs all of them at once, so start from what you are doing:
 | You are… | Read |
 | --- | --- |
 | **authoring a process spec** | §6 Authored Process Model: the envelope, step modes, inputs and outputs, `for_each`, template resolution, and the step field reference in §6.13 |
-| **running or debugging a run** | §9 Runtime Model (what each artifact means), then §10 Resumability and Publication Semantics (why a step did or did not re-run). [metaproc-operator-reference.md](metaproc-operator-reference.md) is the task-oriented version |
+| **running or debugging a run** | §9 Runtime Model (what each artifact means), then §10 Resumability and Publication Semantics (why a step did or did not re-run, and in §10.6 why an output was or was not accepted). [metaproc-operator-reference.md](metaproc-operator-reference.md) is the task-oriented version |
 | **implementing an adapter** | §12 Adapter Contract, then §14 Robustness Subsystems for failure classification, and §15 for usage and cost attribution |
 | **contributing to the framework** | §5 Implementation Inventory for the map, then §8 Resolved Plan Model and §19 Process Orchestration for the execution path |
 | **reviewing a design decision** | §8.1 Why the Plan Is Data, §10 Resumability, and §11.1 on why an items file is a candidate source rather than completion state |
@@ -155,6 +155,7 @@ discovery (resume-safe item filtering)
 usage (extraction, pricing, aggregation)
 process_events (structured DAG event logging)
 viz (pure projection of Plan -> VizModel; browser and static SVG/HTML renderers; see MetaBrowser architecture)
+runtime_projection (read-only task and accepted-output projection from existing runtime records)
 
 Cloud subsystems (cloud/gcp/)
 -----------------------------
@@ -195,6 +196,7 @@ Runtime terms in this layer:
 Run-level state files (under {run_dir}/.state/):
   process-status.yaml
   run-config.yaml
+  run-plan.yaml
   orchestrator-lease.yaml
   overrides.yaml             (operator escape hatches via `metaproc override`)
 
@@ -376,6 +378,9 @@ between child stages.
 leaves. Child leaf retry policies remain available, while a whole-scope `for_each.retry`
 is rejected. Mapped composites are single-host and reject the `gcp-worker` backend until
 a multi-host mapping contract exists.
+To place such a process on GCP today, submit one Batch task with `gcp run` and make that
+task’s single command `run-process --backend local`. The nested `run-process` remains
+the only DAG orchestrator and retains the root execution context on that VM.
 
 ### `mode: agent`
 
@@ -838,7 +843,7 @@ Implemented CLI surface:
 - `gcp cancel <target>` -- cancel running/queued Batch jobs (auto-detect: local run dir
   or run-id)
 - `gcp runs` -- list all active metaproc runs across the project
-- `gcp run` -- run one lower-level command in a single Batch task
+- `gcp run` -- run one command or local-backend DAG in a single Batch task
 - `gcp resources` -- show metaproc-related GCP assets via Cloud Asset Inventory
 - `gcp filestore` -- inspect Filestore instance status and utilization
 - `gcp cleanup` -- delete old terminal-state Batch jobs
@@ -860,9 +865,9 @@ The four artifact groups (run-level state, per-step state, per-task state, logs)
 populate the `.state/` and `.logs/` branches at every scope root.
 For the per-file reference (filename, format, schema, lifecycle, writer, and readers),
 see [artifact-catalog.md](artifact-catalog.md).
-Sections 9.2-9.6 below cover the engine’s contract on the load-bearing files
-(`status.yaml`, `attempt.yaml`, `result.yaml`, `.logs/*.jsonl`, `process-events.jsonl`)
-in depth.
+Sections 9.2-9.7 below cover the engine’s contract on the load-bearing files
+(`status.yaml`, `attempt.yaml`, `result.yaml`, `.logs/*.jsonl`, `process-events.jsonl`,
+`run-plan.yaml`) in depth.
 
 ## 9.1 Example Runtime Layout
 
@@ -870,6 +875,7 @@ in depth.
 runs/local/example-workflow/doc-sync-demo/
   .state/
     run-config.yaml
+    run-plan.yaml
     process-status.yaml
     orchestrator-lease.yaml
     steps/
@@ -1055,6 +1061,16 @@ The complete architecture, including the file-kind registry, view registry, char
 visualization plane, and remote tunnel, lives in
 [MetaBrowser architecture](https://github.com/jlevy/metabrowser/blob/main/docs/architecture.md).
 
+When the `viz-model` route receives a run directory, Metaproc attaches a rebuildable
+task and output projection to `VizModel`. The browser is a consumer of that projection,
+not its owner: the projection is defined by §9.7 (`run-plan.yaml`, the record it reads)
+and §10.6 (which outputs are consumable and why), and it is callable without a browser.
+What the route adds is presentation — the task table, accepted and unaccepted outputs,
+coverage gaps, and warnings — over a narrow, versioned DTO rather than a serialization
+of the mutable runtime records.
+
+The projection writes no artifact index, lineage ledger, or scheduler state.
+
 The browser classifies files into a **file kind** taxonomy (`agent-log`, `runpool-log`,
 `process-log`, `markdown`, `text`, etc.)
 and offers kind-appropriate **view tabs** (Charts, Log, Raw JSON, Rendered, Source) via
@@ -1109,6 +1125,57 @@ Event types (13 total):
 
 All events include an auto-injected `ts` timestamp.
 The format is compatible with RunPool events for unified browser display.
+
+## 9.7 `run-plan.yaml`
+
+The files above record what *happened*. `run-plan.yaml` records what the run was
+supposed to contain, so a later reader can tell the difference between a task that
+succeeded, a task that is missing, and a task that was never declared.
+
+One record is written per scope, at `<scope>/.state/run-plan.yaml`, carrying the schema
+token `metaproc:RunPlanSnapshot/0.1`. Per step it holds step identity, execution shape
+(`scalar` or `mapped`), the canonical mapped item keys, the output declarations, and the
+step fingerprint.
+
+**Why a separate record rather than the resolved plan.** Two obvious alternatives were
+rejected. Persisting the full resolved `Plan` would put opaque adapter configuration,
+environment, parameters, prompt text, and fan-out item payloads into every run tree —
+unbounded, and sensitive enough that a run directory could not be shared or inspected
+freely. Reconstructing from the authored process is not possible either: a mapped step’s
+roster may be discovered at runtime from an artifact an earlier step produced, so it
+does not exist in the spec, and the spec may have been edited since the run started.
+The snapshot is the narrow middle: enough to describe the declared runtime surface, with
+execution configuration deliberately excluded.
+
+**Exactness.** Both models forbid unknown fields.
+A recorded snapshot must declare unique step IDs and an exact item-key set for every
+step; keys must be unique and must be safe path components.
+A scalar step cannot declare item keys.
+`item_keys: null` is reserved for the compatibility fallback below and is rejected in a
+recorded snapshot.
+
+**Lifecycle.** The root record is published when `run-process` starts, after the run
+directory and lease are established.
+Each composite child scope publishes its own record when that scope is prepared.
+When runtime discovery resolves a mapped step’s roster from an upstream-produced source,
+that step’s key set is refreshed in place — atomically, under the orchestrator’s lease,
+before dispatch — because discovery is the first exact authority for those keys.
+The refresh replaces that step’s recorded set wholesale, so a resume drops keys that no
+longer resolve.
+
+**Scope authority.** A nested record does not authorize itself.
+Traversal walks parent-first, and each child scope is accepted only if its nearest
+already-accepted parent declares a matching composite step, the scalar-or-mapped shape
+agrees, and (for a mapped composite) the item key is safe and appears in the parent’s
+canonical key set.
+Every read is contained: a `.state` path that resolves outside the run
+tree is rejected rather than followed.
+Without this chain a run tree could describe arbitrary structure and have it believed.
+
+**Compatibility.** Runs created before this record existed have no snapshot.
+Those fall back to a projection of the loaded plan bundle, which cannot supply canonical
+mapped keys — that is what `item_keys: null` marks.
+The fallback is read-only and never written back.
 
 ## 10. Resumability and Publication Semantics
 
@@ -1166,6 +1233,18 @@ via `_invalidate_downstream`, so editing a step’s `prompt_paths` runbook (or c
 descendants. Runs whose completion records carry no `recorded_step_hash` are treated as
 legacy completions and are not re-executed on resume.
 
+One class of referenced file is deliberately outside the hash: a runbook the run itself
+produces, reached through a dep that declares `produced_by`. `build_plan` records those
+on `ResolvedStep.produced_refs` and `fingerprint_step` skips their bytes.
+The reason is that such a file does not exist when the plan is built and does exist by
+the time the step runs, so hashing it would give one step two different fingerprints —
+and §9.7 and §10.6 both depend on the plan-time and execution-time values being
+comparable.
+Nothing is lost: the producing step’s own fingerprint covers that content and
+cascades downstream through the dep graph.
+The visible consequence is that hand-editing a generated runbook does not re-run its
+consumer; `--from <step>` forces that.
+
 ## 10.4 Recovery Rules
 
 Recovery semantics are explicit:
@@ -1196,6 +1275,71 @@ For each item in the fan-out source file:
 The result is a `FanOutDiscovery` with `actionable_contexts` (items to process) and
 `filtered_items` (items skipped with reason).
 This makes resume a normal code path, not a special recovery mode.
+
+## 10.6 Consumable Outputs
+
+§10.1 defines when the harness *publishes* an output.
+This section defines when a later reader may *consume* one.
+The two are different questions: publication happens once, inside the run; consumption
+happens afterwards, against a run tree that may have been resumed, partially
+re-executed, edited, or copied from another host.
+
+`runtime_projection.scan_task_output_projection` answers the second question.
+It reads the existing status, attempt, result, run-config, and run-plan records and
+rebuilds a task and output view as `metaproc:TaskOutputProjection/0.1`. It writes no
+runtime state and is not an execution or lineage authority — nothing downstream of it
+decides what to run.
+
+A recorded output enters the consumable set only if every gate below holds.
+They are evaluated in order, and the first failure is the reported reason:
+
+| # | Gate | Reason when it fails |
+| --- | --- | --- |
+| 1 | Task status is `completed` or `cached` | `task-not-successful` |
+| 2 | Result is validated and itself terminal-successful | `result-not-validated` |
+| 3 | Result names an attempt | `legacy-unbound-result` |
+| 4 | That attempt is the task’s latest | `attempt-mismatch` |
+| 5 | Result carries a step fingerprint | `legacy-unbound-step` |
+| 6 | That fingerprint matches the scope’s `run-plan.yaml` record | `step-mismatch` |
+| 7 | The port is declared in the step’s outputs | `undeclared` |
+| 8 | The recorded path rebases inside the local run tree | `external` |
+| 9 | The artifact exists | `missing` |
+| 10 | It matches its declared `kind` (file or directory) | `kind-mismatch` |
+
+Everything else is reported as an unaccepted output carrying its reason, rather than
+being dropped: a reader that sees no entry for a port learns nothing, whereas one that
+sees `step-mismatch` knows the artifact is real but stale.
+
+Gates 3-6 are the load-bearing ones and exist for a specific failure.
+Without them a *current* plan can relabel an *old or unknown* output as its own — the
+run tree still holds the artifact a previous fingerprint produced, and nothing in the
+file itself says which step definition wrote it.
+Requiring the exact latest attempt and an exact fingerprint match is what binds a
+recorded artifact to the step that actually produced it.
+(§10.3 covers what the fingerprint is computed over; here it functions only as an
+identity to compare.)
+
+Gate 8 handles a run tree hydrated at a different path than it was written at.
+The immutable `run_dir` in `run-config.yaml` anchors the rebase, so a path recorded on
+another host resolves into the local tree; a path that genuinely points outside it stays
+unaccepted rather than being silently rewritten.
+
+**Coverage gaps.** Missing state must not read as complete coverage.
+When a snapshot declares an executable scalar task, a mapped item task, or a composite
+child scope that has no durable state at all, the projection emits a typed
+`RuntimeCoverageGap` (`task-state-missing` or `scope-state-missing`) instead of simply
+omitting it. A run where half the declared work never started otherwise looks exactly
+like a run where it all succeeded.
+
+Two shape rules follow from where records actually live.
+A scalar composite is represented by its child scope rather than a synthetic parent
+task, because no parent task record exists.
+A mapped composite keeps its parent item tasks, because those records do own each mapped
+attempt and result.
+
+Validation failures inside the projection surface as view warnings rather than hiding
+the structural process graph; the graph is most wanted precisely when a run is
+inconsistent.
 
 ## 11. Fan-Out and Items Files
 
@@ -1586,7 +1730,13 @@ Registered adapters (in `ADAPTER_REGISTRY`):
      Log compaction strips `item.started` / `item.updated` / intermediate `error`; keeps
      `item.completed` (agent_message / reasoning / command_execution / file_change /
      mcp_tool_call / web_search / todo_list) and both terminal events.
-- `gemini-cli` -- invokes `gemini -p <prompt_text>` (reads prompt file inline).
+- `gemini-cli` -- invokes `gemini` in headless mode with the durable audit prompt
+  streamed through stdin.
+  The prompt path is not exposed to the model, so workspace ignore rules cannot block
+  prompt delivery. The default native settings also set `respectGitIgnore: false`, so the
+  agent’s own file tools can read ignored files anywhere in the workspace, not only
+  declared runtime inputs; operators should treat the workspace, including files such as
+  `.env`, as readable by a Gemini step.
   Supports model, permission-mode (yolo), output-format, sandbox.
   Injects system prompt and native settings (thinking config, agent overrides) via temp
   files and env vars. Auth via `GEMINI_API_KEY`, Vertex AI, or OAuth.
@@ -2383,8 +2533,8 @@ steps in parallel at each level.
 2. Resolve the spec into a `Plan` via `build_plan()` (variable resolution, fan-out
    expansion, adapter config merges).
 3. Validate step references (`--skip`, `--from`, `--only`) against known step IDs.
-4. Compute the run directory, write or validate `.state/run-config.yaml`, and acquire
-   `.state/orchestrator-lease.yaml`.
+4. Compute the run directory, write or validate `.state/run-config.yaml`, acquire
+   `.state/orchestrator-lease.yaml`, and publish the exact root `.state/run-plan.yaml`.
 5. Compute the active subgraph: if `--from` is set, use `downstream()` to select the
    target step and its transitive dependents; if `--only` is set, restrict execution to
    that single step. Otherwise all steps are active.
@@ -2420,6 +2570,12 @@ Fan-out steps dispatch through one of two backends:
 | --- | --- | --- |
 | `local` | `--backend local` (default) | `RunPool` subprocess pool via `run-parallel` |
 | `gcp-worker` | `--backend gcp-worker --cloud` | Submit the orchestrator, which partitions items across N worker VMs via GCP Batch (section 21) |
+
+A local-backend process may itself be the one command submitted through `gcp run`. In
+that single-host cloud placement, `gcp run` owns one Batch task and source bootstrap;
+the nested `run-process` owns the DAG and the root execution context.
+This is the supported cloud placement for mapped composites until they gain a multi-host
+mapping contract.
 
 Local agent fan-out uses RunPool (section 17) with step-scoped `.state/` and `.logs/`
 directories. One run execution context owns the optional semaphore shared by fan-out

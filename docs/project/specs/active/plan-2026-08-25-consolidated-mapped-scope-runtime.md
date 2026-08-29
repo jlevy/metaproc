@@ -6,7 +6,7 @@ description: >-
   primitives.
 author: Joshua Levy (github.com/jlevy) with LLM assistance
 date: 2026-08-25
-last_updated: 2026-08-25
+last_updated: 2026-08-26
 status: Draft — Consolidated Review
 category: plan
 tracking_bead: mp-1c19
@@ -169,6 +169,34 @@ Automatic port projection, aliases, and a second composite I/O language are defe
 Operator views rebuild lineage from declarations and accepted results rather than
 introducing another artifact authority.
 
+The runtime task/output view is therefore a rebuildable projection, not another durable
+result or lineage record.
+Each evaluated process scope persists a narrow projection of its exact resolved `Plan`
+in `run-plan.yaml`: step identity, scalar-or-mapped shape, canonical mapped item keys,
+output declarations, and fingerprints.
+Opaque adapter configuration, environment, parameters, prompts, and fan-out item
+payloads stay out of the record.
+The view qualifies scalar and mapped tasks by scope, requires every child to match its
+nearest parent composite declaration, validates mutable status against retained
+attempts, and binds a consumable result to the exact successful attempt and recorded
+current fingerprint.
+If an upstream step creates the fan-out source after initial planning, runtime discovery
+atomically refreshes the affected step’s canonical key set before dispatch.
+A later resume replaces the set, so removed items cannot retain authority.
+This keeps execution and artifact bindings reviewable without reconstructing the
+orchestrator’s decisions or adding scheduler state.
+When a recorded plan declares an executable scalar task, mapped item task, or composite
+child scope but the corresponding durable state is absent, the view emits a typed
+coverage gap instead of silently presenting the remaining records as complete.
+Scalar composites are represented by their child scopes rather than synthetic parent
+tasks; mapped composites retain parent item tasks because those records own each mapped
+attempt and result.
+Only declared, portable, available outputs of the declared kind enter
+the accepted set.
+Legacy unbound, stale, undeclared, missing, and external outputs remain
+explicit diagnostics so partial hydration and definition drift cannot masquerade as
+accepted evidence.
+
 ## Consolidated Review Domains
 
 The pull request is one review surface, but its failure domains remain explicit:
@@ -207,6 +235,22 @@ the local exact-head and public CI gates below remain independent landing requir
 | R13: code and mapped abort state | Fixed | Code cancellation and mapped nonstandard aborts now terminalize durable attempts before propagation. |
 | R14: ambient auth in pooled cloud orchestration | Fixed | Cloud scalar and fan-out leaves both acquire pool slots; the dispatcher no longer hydrates one label as ambient auth and requires an explicit Batch identity for pool access. |
 | R15: worker bootstrap guard test isolation | Fixed | Guard tests use an injected environment mapping, so the one-shot worker mutation cannot leak into later entrypoint tests. |
+| R16: runtime run identity reconstruction | Fixed | The projection derives the task-record root from the persisted process name and run context, matching `run-process`. |
+| R17: stale result accepted after retry | Fixed | New results name the exact successful attempt; legacy or mismatched results remain unaccepted diagnostics. |
+| R18: current declarations relabel stale outputs | Fixed | Acceptance requires the current step fingerprint and an exact declared output port. |
+| R19: missing or wrong-kind artifacts look consumable | Fixed | Availability and declared kind are checked before an output enters the accepted set. |
+| R20: projection errors hide structural visualization | Fixed | Expected scan failures become typed warnings while the process graph remains available. |
+| R21: runtime projection is not exposed in the browser | Fixed | The browser supplies its active run context and renders task and output facts. Cross-host process-spec portability is tracked separately as `mp-e3mg`. |
+| R22: cross-scope task sorting is partial | Fixed | Task projection uses an explicit total ordering over scope, step, and optional item key. |
+| R23: public projection embeds mutable runtime models | Fixed | A strict, narrow DTO carries only stable task, binding, and output facts; historical `VizModel/0.3` remains readable. |
+| R24: external outputs abort hydrated views | Fixed | Nonportable output paths are retained as diagnostics and never treated as hydrated artifacts. |
+| R25: rebuilt nested plans reject valid mapped outputs | Fixed | Every evaluated runtime scope atomically records its exact step projection and fingerprints; hydrated projection consumes that record and retains a bundle fallback for older runs. |
+| R26: nested snapshots self-authorize stale scopes | Fixed | A child scope is visible only when its path matches a composite declaration, scalar-or-mapped shape, and canonical item key in the nearest accepted parent scope. Exact snapshots also exclude stale mapped task keys. |
+| R27: full plans persist sensitive or unbounded fields | Fixed | The runtime record excludes params, environment, prompts, opaque adapter config, and fan-out item payloads. Only canonical scope keys remain; regression coverage proves that a 500-item expansion omits private payload fields. |
+| R28: runtime plan schema fails open | Fixed | The standalone and SoftSchema registries publish the strict pure-YAML `RunPlanSnapshot/0.1` contract, validate real artifacts, and reject unknown versions. |
+| R29: runtime-produced fan-out sources leave empty item authority | Fixed | Agent, code, aligned-chain, and mapped-composite discovery atomically refresh the existing scope snapshot before dispatch. End-to-end producer-to-mapped-leaf and producer-to-mapped-composite tests prove accepted projection, and resume coverage removes a stale item key. |
+| R30: fan-out disposition collides with authored fields | Fixed | Discovery keeps framework disposition separate from authored item context. Canonical key resolution preserves every declared field, retains completed, cached, or running items, and excludes source-terminal items. |
+| R31: missing runtime state appears as complete coverage | Fixed | The projection compares exact plan-declared scalar, mapped-item, and composite-scope coordinates with durable state and emits typed coverage gaps for every absent record. Fully snapshotted synthetic and mapped-composite execution regressions require an empty gap set. |
 
 The superseded retry-later transport is excluded.
 Dormant retry primitives remain under their separate removal-or-justification audit.
@@ -221,12 +265,49 @@ Every superseded-only test name is accounted for by prerequisite coverage or by 
 domain-neutral rename with the same assertion.
 No executable behavior was silently dropped.
 
+## Current Validation Status
+
+Consumer smoke testing of the consolidated candidate found four generic integration
+defects without changing the runtime design:
+
+- equivalent relative and absolute log paths could assign the same provider evidence to
+  different hierarchy owners during finalization and recovery, which defeated event
+  deduplication; and
+- Gemini’s native file tool continued to honor workspace ignore rules for a declared
+  runtime input, despite the run directory being included in the invocation; and
+- source-spec-free finalization could not distinguish mapped composite item segments
+  from child step names using the original immutable resource snapshot; and
+- the Metabrowser CLI loaded the Metaproc browser plugin without running the separate
+  Metaproc CLI bootstrap, so completed-run reconstruction could not recognize
+  consumer-registered softschema envelopes when runtime-produced fan-out sources were
+  present.
+
+The candidate now normalizes both path forms before resource ownership, records the
+qualified mapped-composite step IDs in a strict resource snapshot v2 while retaining a
+strict v1 reader, resolves mapped logs to their executable leaves and item keys during
+recovery, and injects the file-filtering override through Metaproc’s invocation-scoped
+Gemini settings. Regression coverage runs finalization in both path-form orders and
+asserts exact provider meters, tokens, list cost, and tool calls; it also covers mapped
+child process events, item/step-name collisions, and v1 snapshot compatibility.
+The visualization sidekick now loads installed consumer plugins before typed plan
+reconstruction, matching other Metaproc entry points without weakening source validation
+or introducing a consumer-specific parser.
+The complete framework gate passes with 4,494 tests and the same eight tracked
+credential or infrastructure skips, plus lint, type checking, public-hygiene checks,
+dependency audits, package construction, and installed-wheel smoke.
+
+Two observations remain deliberately outside this correction: trace health should make
+recovered tool errors easier to distinguish (`mp-czm0`), and Gemini tool declarations
+must either become enforceable policy or stop implying confinement (`mp-y1l2`). Neither
+requires another scheduler, ledger, or input-staging abstraction.
+
 ## Deferred Work
 
 - multi-host mapped-composite partitioning;
+- portable process-spec identity for cross-host hydrated browser views (`mp-e3mg`);
 - a general ready-task scheduler or persisted dynamic expansion graph;
 - weighted host claims and mixed-profile placement;
-- automatic child-output projection;
+- automatic child-output declaration synthesis or aliasing;
 - successful-item targeted force;
 - scoped child-variable restriction beyond declared bindings;
 - same-upstream mixed tolerant/strict dependency clauses;
@@ -264,6 +345,10 @@ The consolidated exact head must pass:
 - real RunPool mapped-agent integration with the direct scalar launcher made fatal;
 - status, event, pool-rollup, and nested-trace regression coverage;
 - compatibility tests for existing scalar composites and agent or code fan-out; and
+- exact root and mapped-scope plan projections, parent item-key authorization, secret
+  and fan-out-payload omission, pure-YAML schema validation and rejection, identity
+  rejection, containment, legacy fallback, runtime-produced fan-out refresh and removal,
+  and hydrated output binding; and
 - complete `make verify` plus exact-head GitHub CI.
 
 ### Successive smoke ladder

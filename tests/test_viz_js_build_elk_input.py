@@ -399,9 +399,13 @@ def test_render_side_panel_includes_step_adapter_and_io_tables() -> None:
             "fan_out": {
                 "over": "deps.tickers",
                 "bind": "ticker",
+                "source": "data/tickers.yaml",
                 "item_count": 3,
+                "filtered_count": 2,
                 "bind_fields": [],
                 "batch_size": None,
+                "align": "same_key",
+                "max_concurrency": 4,
                 "retry": {
                     "max_retries": 3,
                     "initial_backoff_s": 2.0,
@@ -425,6 +429,10 @@ def test_render_side_panel_includes_step_adapter_and_io_tables() -> None:
             "token_budget": None,
             "reuse_policy": None,
             "variant": None,
+            "resources": {"memory": "large"},
+            "on_failure": "continue",
+            "execution_profile": "pi-fast",
+            "artifact_namespace": "pi-fast",
         },
     }
     script = (
@@ -441,8 +449,16 @@ def test_render_side_panel_includes_step_adapter_and_io_tables() -> None:
     assert "sonnet" in html
     # Fan-out section present, including retry policy (retry-policy coverage gap).
     assert "deps.tickers" in html
+    assert "data/tickers.yaml" in html
+    assert "filtered_count" in html
+    assert "same_key" in html
+    assert "max_concurrency" in html
     assert "max=3" in html
     assert "init=2s" in html
+    assert "pi-fast" in html
+    assert "continue" in html
+    assert "memory" in html
+    assert "large" in html
     # IO tables present and now carry the raw authored path column.
     assert "tickers" in html
     assert "prediction" in html
@@ -466,9 +482,34 @@ def test_render_side_panel_process_shows_defaults_and_schemas_and_body() -> None
             "description": "End-to-end earnings lifecycle.",
             "process_schema_token": "metaproc:ProcessSpec/0.1",
             "source_path": "example_plugin/main.process.md",
-            "process_inputs": {},
+            "process_inputs": {
+                "roster": {
+                    "name": "roster",
+                    "path": "data/roster.md",
+                    "param": None,
+                    "as_type": "path",
+                    "parse": {"format": "frontmatter-md", "extract": "items"},
+                    "required": True,
+                    "default": "data/default-roster.md",
+                    "description": "Mapped work roster.",
+                }
+            },
+            "process_outputs": {
+                "report": {
+                    "name": "report",
+                    "ref": "work.report",
+                    "as_type": "path",
+                    "format": "frontmatter-md",
+                    "template": "templates/report.md",
+                    "condition": "RUN_MODE == smoke",
+                    "description": "Accepted report.",
+                }
+            },
             "defaults": {
                 "default_adapter": "main",
+                "default_execution_profile": "pi-fast",
+                "recommended_execution_profiles": ["pi-fast", "gemini-flash"],
+                "reuse_policy": "exact_inputs",
                 "adapters": {
                     "main": {"type": "pi-cli", "model": "sonnet", "provider": "anthropic"}
                 },
@@ -492,7 +533,20 @@ def test_render_side_panel_process_shows_defaults_and_schemas_and_body() -> None
     assert "viz-kind-icon-process" in html
     assert "Defaults" in html
     assert "main" in html
+    assert "pi-fast" in html
+    assert "gemini-flash" in html
+    assert "exact_inputs" in html
     assert "max=5" in html  # defaults.retry
+    assert "Operator inputs" in html
+    assert "data/roster.md" in html
+    assert "frontmatter-md:items" in html
+    assert "data/default-roster.md" in html
+    assert "Public outputs" in html
+    assert "work.report" in html
+    assert 'data-path="work.report"' not in html
+    assert "frontmatter-md" in html
+    assert "templates/report.md" in html
+    assert "RUN_MODE == smoke" in html
     assert "metaproc:Prediction/0.1" in html
     assert "metaproc:Items/0.2" in html
     # Body markdown in a collapsible details block, not dumped as plain text.

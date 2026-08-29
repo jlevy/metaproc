@@ -26,9 +26,11 @@ from metaproc.io.state_io import (
     mark_failed_synthetic_at,
     mark_running_at,
     read_attempt_history_at,
+    read_result_at,
     read_status_at,
     reconcile_stale_running,
     start_attempt_at,
+    validate_result_attempt_identity_at,
     write_attempt_at,
     write_result_at,
     write_status_at,
@@ -154,6 +156,69 @@ class TestStateIO:
         record = ResultRecord(run_id="r1", step_id="s1", state="completed", validated=True)
         path = write_result_at(tmp_path, record)
         assert path.exists()
+
+    def test_reads_legacy_result_without_attempt_identity(self, tmp_path):
+        (tmp_path / "result.yaml").write_text(
+            "run_id: r1\nstep_id: s1\nstate: completed\nvalidated: true\n"
+        )
+        result = read_result_at(tmp_path)
+        assert result is not None
+        assert result.attempt_id is None
+
+    def test_result_persists_exact_attempt_and_rejects_stale_retry(self, tmp_path):
+        first = mark_running_at(
+            tmp_path,
+            run_id="r1",
+            step_id="s1",
+            item={"ticker": "AAPL"},
+        )
+        first_completed = mark_completed_at(tmp_path, running_record=first)
+        assert first_completed.attempt_id is not None
+        with pytest.raises(ValueError, match="does not name latest attempt"):
+            write_result_at(
+                tmp_path,
+                ResultRecord(
+                    run_id="r1",
+                    step_id="s1",
+                    state="completed",
+                    validated=True,
+                ),
+            )
+        write_result_at(
+            tmp_path,
+            ResultRecord(
+                run_id="r1",
+                step_id="s1",
+                state="completed",
+                validated=True,
+                attempt_id=first_completed.attempt_id,
+            ),
+        )
+        first_result = read_result_at(tmp_path)
+        assert first_result is not None
+        assert first_result.attempt_id == first_completed.attempt_id
+
+        second = mark_running_at(
+            tmp_path,
+            run_id="r1",
+            step_id="s1",
+            item={"ticker": "AAPL"},
+        )
+        second_completed = mark_completed_at(tmp_path, running_record=second)
+        assert second_completed.attempt_id is not None
+        with pytest.raises(ValueError, match="does not name latest attempt"):
+            validate_result_attempt_identity_at(tmp_path, first_result)
+        with pytest.raises(ValueError, match="does not name latest attempt"):
+            write_result_at(
+                tmp_path,
+                ResultRecord(
+                    run_id="r1",
+                    step_id="s1",
+                    state="completed",
+                    validated=True,
+                    attempt_id=first_completed.attempt_id,
+                ),
+            )
 
 
 class TestMarkTransitions:

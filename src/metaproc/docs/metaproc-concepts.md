@@ -489,6 +489,14 @@ what exists *today*, this document is the one describing the shipped system.
 - **Attempt:** the record of what was actually launched for a given task: params,
   inputs, outputs, runtime details.
 - **Result:** the final validated outcome for a task.
+- **Consumable artifact:** an artifact a later reader may actually use.
+  Recorded is not the same as consumable: a run tree can be resumed, partially
+  re-executed, edited, or copied, so it may hold an artifact from a superseded attempt
+  or from a step definition that has since changed.
+  An artifact becomes consumable only when it is bound to the task’s latest attempt and
+  to the step definition that produced it.
+  Without that binding a current plan could relabel an old or unknown file as its own
+  output.
 - **Event:** a structured runtime log entry.
 
 ### 4.4 Run context and parameters

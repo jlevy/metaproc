@@ -200,6 +200,69 @@ async function main() {
   freshChartRequests[1].resolve(ok({ name: "fresh-pool" }));
   await freshChartsRender;
 
+  const resources = sandbox.metabrowser.getRegisteredView("resource-report", "resources");
+  const resourceContainer = { name: "resources", innerHTML: "" };
+  const resourceRender = resources.render(resourceContainer, {
+    path: "runs/current/resources.json",
+    raw: {
+      content: JSON.stringify({
+        schema: "metaproc:ResourcesDocument/0.1",
+        run_id: "current",
+        hierarchy_root: {
+          node_id: "current",
+          node_type: "run",
+          label: "current",
+          self_metrics: {},
+          total_metrics: {},
+          source_refs: [],
+          log_summary: {},
+          children: [],
+        },
+        source_logs: [],
+        taxonomy_rollups: {},
+      }),
+    },
+  });
+  const runtimeRequests = matchingRequests("viz-model?run_dir=runs%2Fcurrent");
+  if (runtimeRequests.length !== 1) {
+    throw new Error(`expected one run-context viz-model request, got ${runtimeRequests.length}`);
+  }
+  runtimeRequests[0].resolve(
+    ok({
+      viz: {
+        task_projection: {
+          run_dir: "runs/current",
+          tasks: [
+            {
+              key: { step_id: "collect", item_key: "alpha", scope_path: ["batch"] },
+              state: "completed",
+              attempt_id: "attempt-1",
+              accepted_outputs: [{ name: "report", path: "runs/current/report.md" }],
+              unaccepted_outputs: [
+                {
+                  name: "draft",
+                  path: "runs/current/draft.md",
+                  reason: "result-not-validated",
+                },
+              ],
+            },
+          ],
+          coverage_gaps: [
+            {
+              key: { step_id: "publish", item_key: null, scope_path: ["batch"] },
+              reason: "task-state-missing",
+            },
+            {
+              key: { step_id: "review", item_key: null, scope_path: ["batch"] },
+              reason: "scope-state-missing",
+            },
+          ],
+        },
+      },
+    }),
+  );
+  await resourceRender;
+
   process.stdout.write(
     JSON.stringify({
       firstHtml: first.innerHTML,
@@ -221,6 +284,10 @@ async function main() {
       statsRequestCount: requestCounts.get("/api/plugin/metaproc/stats?path=run"),
       chartDisposeCalls: chartLifecycle.disposeCalls,
       chartRenderCalls: chartLifecycle.renderCalls,
+      resourceHtml: resourceContainer.innerHTML,
+      runtimeRequestCount: requestCounts.get(
+        "/api/plugin/metaproc/viz-model?run_dir=runs%2Fcurrent",
+      ),
     }),
   );
 }

@@ -162,6 +162,12 @@ Non-fan-out steps write per-task state directly under `<run>/.state/tasks/<step_
 Composite child processes get the same three-branch shape recursively at
 `<run>/<composite_step_id>/`.
 
+Each scope root also carries `.state/run-plan.yaml`, the one record of what that scope
+*declared* rather than what happened: step identity, execution shape, canonical mapped
+item keys, output ports, and fingerprints.
+Every other file under `.state/` is a record of execution, which is why a reader can
+distinguish a task that failed from one that was never declared.
+
 Large completed log files may be compacted and stored as `.jsonl.gz` or `.log.gz`. The
 logical file type remains `.jsonl` or `.log`; use metaproc commands and metabrowser
 instead of hand-written file readers so gzip passthrough works consistently.

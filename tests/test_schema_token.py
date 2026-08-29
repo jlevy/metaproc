@@ -12,7 +12,7 @@ from metaproc.io.schema_token import (
     parse_schema_token,
     resolve_schema,
 )
-from metaproc.models.plan import Plan
+from metaproc.models.plan import RUN_PLAN_SNAPSHOT_CONTRACT, Plan, RunPlanSnapshot
 from metaproc.models.resources import RESOURCES_DOCUMENT_CONTRACT, ResourcesDocument
 from metaproc.models.runtime import StatusRecord, TaskAttemptRecord
 from metaproc.models.usage import UsageReport
@@ -164,6 +164,10 @@ class TestResolveSchema:
     def test_resolve_standalone_task_attempt_record(self) -> None:
         cls = resolve_schema("metaproc:TaskAttemptRecord/0.1")
         assert cls is TaskAttemptRecord
+
+    def test_resolve_run_plan_snapshot(self) -> None:
+        cls = resolve_schema(RUN_PLAN_SNAPSHOT_CONTRACT)
+        assert cls is RunPlanSnapshot
 
     def test_task_attempt_contract_rejects_untyped_identity(self) -> None:
         with pytest.raises(ValueError, match="attempt_id"):

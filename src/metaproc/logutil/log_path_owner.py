@@ -26,6 +26,7 @@ derive — callers know to leave the corresponding `UsageBucket` field
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -95,7 +96,13 @@ def derive_owner_for_bundle(log_path: Path, run_dir: Path, bundle: PlanBundle) -
     )
 
 
-def derive_owner_for_hierarchy(log_path: Path, run_dir: Path, hierarchy: Node) -> LogOwner:
+def derive_owner_for_hierarchy(
+    log_path: Path,
+    run_dir: Path,
+    hierarchy: Node,
+    *,
+    mapped_composite_step_ids: Collection[str] | None = None,
+) -> LogOwner:
     """Resolve ownership from the immutable hierarchy when source specs are unavailable."""
     relative = _relative_to_run(log_path, run_dir)
     if relative is None:
@@ -108,15 +115,25 @@ def derive_owner_for_hierarchy(log_path: Path, run_dir: Path, hierarchy: Node) -
         parts,
         process,
         is_process_events_file=relative.name == PROCESS_EVENTS_FILENAME,
+        mapped_composite_step_ids=(
+            frozenset(mapped_composite_step_ids) if mapped_composite_step_ids is not None else None
+        ),
     )
 
 
 def _relative_to_run(log_path: Path, run_dir: Path) -> Path | None:
-    candidate = log_path if log_path.is_absolute() else run_dir / log_path
     try:
-        return candidate.resolve().relative_to(run_dir.resolve())
-    except (ValueError, OSError):
+        resolved_run = run_dir.resolve()
+    except OSError:
         return None
+
+    candidates = [log_path] if log_path.is_absolute() else [log_path, run_dir / log_path]
+    for candidate in candidates:
+        try:
+            return candidate.resolve().relative_to(resolved_run)
+        except (ValueError, OSError):
+            continue
+    return None
 
 
 def _structural_parts(relative: Path) -> list[str]:
@@ -184,12 +201,14 @@ def _owner_from_bundle_parts(
     if step.mode == "composite" and step_id in bundle.children:
         child_key = child_subgraph_key(subgraph_key, step_id)
         if tail:
-            return _owner_from_bundle_parts(
-                tail,
+            child_parts = tail[1:] if step.fan_out is not None else tail
+            owner = _owner_from_bundle_parts(
+                child_parts,
                 bundle.children[step_id],
                 subgraph_key=child_key,
                 is_process_events_file=is_process_events_file,
             )
+            return _prefix_item_key(owner, tail[0]) if step.fan_out is not None else owner
         if is_process_events_file:
             return LogOwner(
                 process_node_id=process_node_id(child_key),
@@ -212,6 +231,7 @@ def _owner_from_hierarchy_parts(
     process: Node,
     *,
     is_process_events_file: bool,
+    mapped_composite_step_ids: frozenset[str] | None,
 ) -> LogOwner:
     subgraph_key = process.node_id.removeprefix("process:")
     if not parts:
@@ -241,11 +261,33 @@ def _owner_from_hierarchy_parts(
     nested = next((child for child in step.children if child.node_type == "process"), None)
     tail = parts[1:]
     if nested is not None and (tail or is_process_events_file):
-        return _owner_from_hierarchy_parts(
-            tail,
+        child_step_ids = {
+            value
+            for child in nested.children
+            if child.node_type == "step"
+            for value in (child.label, child.node_id)
+        }
+        mapped_item_key: str | None = None
+        child_parts = tail
+        if mapped_composite_step_ids is not None and step.node_id in mapped_composite_step_ids:
+            if tail:
+                mapped_item_key = tail[0]
+                child_parts = tail[1:]
+        elif (
+            mapped_composite_step_ids is None
+            and len(tail) >= 2
+            and tail[0] not in child_step_ids
+            and tail[1] in child_step_ids
+        ):
+            mapped_item_key = tail[0]
+            child_parts = tail[1:]
+        owner = _owner_from_hierarchy_parts(
+            child_parts,
             nested,
             is_process_events_file=is_process_events_file,
+            mapped_composite_step_ids=mapped_composite_step_ids,
         )
+        return _prefix_item_key(owner, mapped_item_key) if mapped_item_key is not None else owner
 
     item_key = "/".join(tail) if tail else None
     variant = tail[0] if len(tail) >= 2 else None
@@ -255,4 +297,15 @@ def _owner_from_hierarchy_parts(
         item_key=item_key,
         subgraph_key=subgraph_key,
         variant=variant,
+    )
+
+
+def _prefix_item_key(owner: LogOwner, prefix: str) -> LogOwner:
+    item_key = f"{prefix}/{owner.item_key}" if owner.item_key else prefix
+    return LogOwner(
+        process_node_id=owner.process_node_id,
+        step_node_id=owner.step_node_id,
+        item_key=item_key,
+        subgraph_key=owner.subgraph_key,
+        variant=owner.variant,
     )

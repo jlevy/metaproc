@@ -31,6 +31,17 @@ def is_safe_item_key(key: str) -> bool:
     return key not in {".", ".."} and bool(ITEM_KEY_RE.fullmatch(key))
 
 
+def normalize_path_key(path: str) -> str:
+    """Return *path* in the canonical form used to compare two authored paths.
+
+    Plan building matches a dep's path against its producer's declared output
+    path, and fingerprinting matches a step's referenced runbook against those
+    same dep paths. Both comparisons must agree or a produced runbook is only
+    recognized on one side of the chain, so they share this one definition.
+    """
+    return str(Path(path))
+
+
 # ── Runtime directories (under each item or run dir) ────────────
 
 STATE_DIR = ".state"
@@ -137,6 +148,9 @@ PROCESS_STATUS_FILE = "process-status.yaml"
 
 RUN_CONFIG_FILE = "run-config.yaml"
 """Immutable run identity written at creation, validated on resume."""
+
+RUN_PLAN_FILE = "run-plan.yaml"
+"""Current exact resolved plan for one root or nested process scope."""
 
 ORCHESTRATOR_LEASE_FILE = "orchestrator-lease.yaml"
 """Active orchestrator lease — heartbeat, owner identity, stale takeover."""

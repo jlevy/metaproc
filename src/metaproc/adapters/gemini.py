@@ -148,7 +148,7 @@ def _build_gemini_flags(
     merged_config: dict[str, object],
     variables: dict[str, str],
 ) -> list[str]:
-    """Build CLI flags for ``gemini -p`` from merged config."""
+    """Build CLI flags for the stdin-streamed headless ``gemini`` invocation."""
     flags: list[str] = []
 
     model = merged_config.get("model") or GEMINI_DEFAULT_MODEL
@@ -215,7 +215,18 @@ class GeminiCliAdapter:
     ) -> list[str]:
         _gemini_version_drift()
         flags = _build_gemini_flags(merged_config, variables)
-        return ["gemini", "-p", f"@{prompt_file}", *flags]
+        # Gemini treats `@path` as a model-facing read request, where workspace ignore
+        # rules apply. Its headless mode natively accepts piped input, so keep the
+        # durable prompt file for audit while streaming that content into the CLI.
+        return [
+            "/bin/sh",
+            "-c",
+            'prompt_file=$1; shift; exec "$@" < "$prompt_file"',
+            "metaproc-gemini",
+            str(prompt_file),
+            "gemini",
+            *flags,
+        ]
 
     def validate_config(self, merged_config: dict[str, object]) -> list[ConfigRejection]:
         rejections: list[ConfigRejection] = []

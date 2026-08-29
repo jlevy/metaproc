@@ -63,8 +63,10 @@ from metaproc.commands.run_process import (
     _maybe_cascade_for_fingerprint,
     _orchestrate,
     _preflight_plan_adapters,
+    _publish_run_plan,
     _read_recorded_step_hash,
     _read_step_status,
+    _refresh_run_plan_item_keys,
     _run_agent_subprocess,
     _validate_backend_topology,
     _verify_ancestors,
@@ -79,12 +81,21 @@ from metaproc.io.state_io import (
     mark_running_at,
     read_attempt_history_at,
     read_manual_ack_at,
+    read_run_plan,
     read_status_at,
     write_manual_ack_at,
+    write_run_plan,
     write_status_at,
 )
 from metaproc.models.authored import ForEach, IOSpec, ProcessSpec, ProcessStep
-from metaproc.models.plan import FanOut, Plan, ResolvedAdapter, ResolvedStep
+from metaproc.models.plan import (
+    FanOut,
+    Plan,
+    ResolvedAdapter,
+    ResolvedStep,
+    RunPlanSnapshot,
+    RunPlanStep,
+)
 from metaproc.models.runtime import (
     AttemptDisposition,
     ManualAckRecord,
@@ -94,6 +105,8 @@ from metaproc.paths import LOGS_DIR, ORCHESTRATOR_LEASE_FILE, STATE_DIR, STATUS_
 from metaproc.paths import STATE_DIR as _STATE_DIR
 from metaproc.paths import TASKS_SUBDIR as _TASKS_SUBDIR
 from metaproc.runpool.process_events import ProcessEventLogger
+from metaproc.runtime_projection import scan_task_output_projection
+from metaproc.viz_loader import load_plan_bundle_from_run
 
 
 class FakeOut:
@@ -1580,6 +1593,129 @@ class TestFanOutExecution:
 # ── Composite step execution ────────────────────────────────────
 
 
+def test_run_plan_snapshot_omits_sensitive_config_and_fan_out_items(tmp_path: Path) -> None:
+    sentinel = "must-not-enter-run-plan"
+    plan = Plan(
+        process="sensitive.process.md",
+        params={"PRIVATE_PARAM": sentinel},
+        steps=[
+            ResolvedStep(
+                step_id="mapped-agent",
+                mode="agent",
+                adapter=ResolvedAdapter(
+                    type="example-adapter",
+                    config={"credential": sentinel},
+                ),
+                prompt_prefix=sentinel,
+                fan_out=FanOut(
+                    over="items",
+                    bind="item",
+                    source="items.md",
+                    items=[{"item": f"item-{index}", "private": sentinel} for index in range(500)],
+                ),
+                env={"PRIVATE_ENV": sentinel},
+                outputs={"report": IOSpec(path="report.md", kind="file")},
+            )
+        ],
+    )
+
+    spec = ProcessSpec(
+        name="sensitive",
+        steps=[
+            ProcessStep(
+                id="mapped-agent",
+                mode="agent",
+                for_each=ForEach(
+                    over="items",
+                    bind="item",
+                    bind_fields=["item", "private"],
+                    key="scope-{{item}}",
+                ),
+            )
+        ],
+    )
+    path = _publish_run_plan(
+        tmp_path,
+        run_id="process/run",
+        scope_path=(),
+        plan=plan,
+        spec=spec,
+        variables={},
+    )
+    raw = path.read_text(encoding="utf-8")
+    document = read_yaml_file(path)
+
+    assert sentinel not in raw
+    assert "private" not in raw
+    assert len(raw) < 15_000
+    assert set(document["run_plan"]) == {"schema", "run_id", "scope_path", "steps"}
+    assert set(document["run_plan"]["steps"][0]) == {
+        "fingerprint",
+        "item_keys",
+        "mode",
+        "outputs",
+        "step_id",
+        "task_shape",
+    }
+    assert document["run_plan"]["steps"][0]["item_keys"][:2] == [
+        "scope-item-0",
+        "scope-item-1",
+    ]
+
+
+def test_run_plan_refresh_preserves_authored_reason_key(tmp_path: Path) -> None:
+    """Framework disposition metadata must not consume an authored bind field."""
+    step_def = ProcessStep(
+        id="mapped-agent",
+        mode="agent",
+        for_each=ForEach(
+            over="items",
+            bind="reason",
+            bind_fields=["reason"],
+            key="{{reason}}",
+        ),
+    )
+    target = ResolvedStep(
+        step_id="mapped-agent",
+        mode="agent",
+        fan_out=FanOut(
+            over="items",
+            bind="reason",
+            source="items.md",
+            bind_fields=["reason"],
+        ),
+    )
+    write_run_plan(
+        tmp_path,
+        RunPlanSnapshot(
+            run_id="example/run-1",
+            steps=[
+                RunPlanStep(
+                    step_id="mapped-agent",
+                    mode="agent",
+                    task_shape="mapped",
+                    item_keys=[],
+                    fingerprint="0123456789abcdef",
+                )
+            ],
+        ),
+    )
+
+    _refresh_run_plan_item_keys(
+        tmp_path,
+        target=target,
+        step_def=step_def,
+        variables={},
+        item_contexts=[{"reason": "R1"}],
+    )
+
+    snapshot = read_run_plan(tmp_path)
+    assert snapshot is not None
+    assert snapshot.steps[0].item_keys == ["R1"]
+    assert target.fan_out is not None
+    assert target.fan_out.items == [{"reason": "R1"}]
+
+
 class TestCompositeStepExecution:
     def test_composite_loads_child_spec(self, tmp_path: Path) -> None:
         """Composite step resolves uses path and loads child spec."""
@@ -1627,6 +1763,12 @@ class TestCompositeStepExecution:
 
         # Child run dir should be scoped under parent
         assert (tmp_path / "run" / "preflight").exists()
+        snapshot = read_run_plan(tmp_path / "run" / "preflight")
+        assert snapshot is not None
+        assert snapshot.run_id == "test/run/preflight"
+        assert snapshot.scope_path == ["preflight"]
+        assert [step.step_id for step in snapshot.steps] == ["noop"]
+        assert snapshot.steps[0].task_shape == "scalar"
 
     def test_force_reexecutes_a_real_composite_child(self, tmp_path: Path) -> None:
         process_dir = tmp_path / "process"
@@ -1687,6 +1829,15 @@ class TestCompositeStepExecution:
         first = runner.invoke(app, args)
         assert first.exit_code == 0, first.output
         assert count_path.read_text(encoding="utf-8") == "1\n"
+        projection = scan_task_output_projection(runs_dir / "force-composite")
+        assert [task.key.model_dump() for task in projection.tasks] == [
+            {
+                "step_id": "increment",
+                "item_key": None,
+                "scope_path": ["child"],
+            }
+        ]
+        assert projection.coverage_gaps == []
 
         resume = runner.invoke(app, args)
         assert resume.exit_code == 0, resume.output
@@ -1990,27 +2141,6 @@ class TestCompositeStepExecution:
 
         process_dir = tmp_path / "process"
         process_dir.mkdir()
-        roster_path = process_dir / "roster.md"
-        roster_path.write_text(
-            textwrap.dedent(
-                """\
-                ---
-                progress:
-                  schema: metaproc:ProgressSpec/0.1
-                  process: mapped-composite-smoke
-                  items:
-                    - ticker: alfa
-                      should_fail: false
-                    - ticker: brvo
-                      should_fail: true
-                    - ticker: chrl
-                      should_fail: false
-                ---
-                Three synthetic items.
-                """
-            ),
-            encoding="utf-8",
-        )
         fail_marker = tmp_path / "fail-brvo"
         fail_marker.touch()
         (process_dir / "child.process.md").write_text(
@@ -2061,15 +2191,27 @@ class TestCompositeStepExecution:
                     fail_marker: { param: FAIL_MARKER, as: path }
                   deps:
                     roster:
-                      path: ./roster.md
+                      path: "{{run.dir}}/roster.md"
                       as: path
+                      produced_by: write-roster.roster
                     child:
                       path: ./child.process.md
                       as: path
                   steps:
+                    - id: write-roster
+                      mode: code
+                      outputs:
+                        roster:
+                          path: "{{run.dir}}/roster.md"
+                          kind: file
+                          format: frontmatter-md
+                      command: >-
+                        /bin/sh -c 'mkdir -p "{{run.dir}}";
+                        printf "%s\\n" "---" "progress:" "  schema: metaproc:ProgressSpec/0.1" "  process: mapped-composite-smoke" "  items:" "    - ticker: alfa" "      should_fail: false" "    - ticker: brvo" "      should_fail: true" "    - ticker: chrl" "      should_fail: false" "---" "Three synthetic items." > "{{run.dir}}/roster.md"'
                     - id: ticker-flow
                       mode: composite
                       uses: deps.child
+                      needs: [write-roster]
                       for_each:
                         over: deps.roster
                         bind: ticker
@@ -2119,6 +2261,22 @@ class TestCompositeStepExecution:
         assert (run_dir / "ticker-flow" / "alfa" / STATE_DIR / "process-status.yaml").exists()
         assert (run_dir / "ticker-flow" / "brvo" / STATE_DIR / "process-status.yaml").exists()
         assert (run_dir / "ticker-flow" / "chrl" / STATE_DIR / "process-status.yaml").exists()
+        root_snapshot = read_run_plan(run_dir)
+        assert root_snapshot is not None
+        assert root_snapshot.run_id == "mapped-composite-smoke/mapped-composite-m0"
+        assert root_snapshot.scope_path == []
+        mapped_snapshot = next(
+            step for step in root_snapshot.steps if step.step_id == "ticker-flow"
+        )
+        assert mapped_snapshot.item_keys == ["alfa", "brvo", "chrl"]
+        for item_key in ("alfa", "brvo", "chrl"):
+            child_snapshot = read_run_plan(run_dir / "ticker-flow" / item_key)
+            assert child_snapshot is not None
+            assert child_snapshot.run_id == (
+                f"mapped-composite-smoke/mapped-composite-m0/ticker-flow/{item_key}"
+            )
+            assert child_snapshot.scope_path == ["ticker-flow", item_key]
+            assert [step.step_id for step in child_snapshot.steps] == ["write-report"]
         assert not list((run_dir / "ticker-flow").rglob(ORCHESTRATOR_LEASE_FILE))
         process_events_path = run_dir / LOGS_DIR / "process-events.jsonl"
         first_events = [
@@ -2138,6 +2296,18 @@ class TestCompositeStepExecution:
         fail_marker.unlink()
         second = runner.invoke(app, args)
         assert second.exit_code == 0, second.output
+        bundle = load_plan_bundle_from_run(run_dir)
+        assert bundle is not None
+        projection = scan_task_output_projection(run_dir, bundle)
+        assert projection.tasks
+        assert projection.coverage_gaps == []
+        assert all(task.step_binding != "mismatch" for task in projection.tasks)
+        assert not [
+            output
+            for task in projection.tasks
+            for output in task.unaccepted_outputs
+            if output.reason == "step-mismatch"
+        ]
         assert [record.disposition for record in read_attempt_history_at(state_root / "alfa")] == [
             AttemptDisposition.succeeded
         ]
@@ -2292,7 +2462,7 @@ class TestCompositeStepExecution:
                     "--var",
                     "RUN_ID=mapped-composite-pool-m0",
                     "--max-concurrency",
-                    "2",
+                    "1",
                 ],
             )
 
@@ -2300,6 +2470,7 @@ class TestCompositeStepExecution:
         assert direct_launch.await_count == 0
         run_dir = runs_dir / "mapped-composite-pool-m0"
         status = read_yaml_file(run_dir / STATE_DIR / "runpool-status.yaml")
+        assert status["max_concurrency"] == 1
         assert status["completed_count"] == 2
         assert status["failed_count"] == 0
         assert status["lanes"][0]["completed_count"] == 2
@@ -2312,6 +2483,11 @@ class TestCompositeStepExecution:
         assert sum(event["event"] == "pool_start" for event in pool_events) == 1
         assert sum(event["event"] == "process_start" for event in pool_events) == 2
         assert sum(event["event"] == "process_exit" for event in pool_events) == 2
+        assert [
+            event["event"]
+            for event in pool_events
+            if event["event"] in {"process_start", "process_exit"}
+        ] == ["process_start", "process_exit", "process_start", "process_exit"]
 
 
 class TestCodeStepLogs:
@@ -3886,7 +4062,7 @@ class TestCompositePoolDispatchPropagation:
             ),
             patch(
                 "metaproc.commands.run_process.build_plan",
-                return_value=MagicMock(steps=[]),
+                return_value=Plan(process=str(child_spec_path), steps=[]),
             ),
             patch(
                 "metaproc.commands.run_process._orchestrate",

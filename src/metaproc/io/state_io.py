@@ -18,6 +18,7 @@ from metaproc.engine.placeholders import resolve_templates
 from metaproc.errors import AttemptTerminalConflictError
 from metaproc.ids import new_timestamped_typed_id, require_typed_id
 from metaproc.models.authored import IOSpec
+from metaproc.models.plan import RunPlanSnapshot
 from metaproc.models.runtime import (
     AttemptDisposition,
     AttemptRecord,
@@ -33,6 +34,7 @@ from metaproc.paths import (
     MANUAL_ACK_FILE,
     POOL_STATUS_FILE,
     RESULT_FILE,
+    RUN_PLAN_FILE,
     STATE_DIR,
     STATUS_FILE,
     TASKS_SUBDIR,
@@ -74,11 +76,21 @@ def write_attempt_at(state_dir: Path, record: AttemptRecord) -> Path:
 
 
 def write_result_at(state_dir: Path, record: ResultRecord) -> Path:
+    validate_result_attempt_identity_at(state_dir, record)
     return _write_record_at(state_dir, RESULT_FILE, record.model_dump(exclude_none=True))
 
 
 def write_manual_ack_at(state_dir: Path, record: ManualAckRecord) -> Path:
     return _write_record_at(state_dir, MANUAL_ACK_FILE, record.model_dump())
+
+
+def write_run_plan(run_dir: Path, record: RunPlanSnapshot) -> Path:
+    """Publish the exact non-sensitive plan projection for one process scope."""
+    return _write_record_at(
+        run_dir / STATE_DIR,
+        RUN_PLAN_FILE,
+        {"run_plan": record.model_dump(mode="json", by_alias=True)},
+    )
 
 
 def read_status_at(state_dir: Path) -> StatusRecord | None:
@@ -88,6 +100,17 @@ def read_status_at(state_dir: Path) -> StatusRecord | None:
         return None
     raw: object = read_yaml_file(status_path)
     return StatusRecord.model_validate(raw)
+
+
+def read_run_plan(run_dir: Path) -> RunPlanSnapshot | None:
+    """Read one scope's resolved plan snapshot when the run recorded it."""
+    path = run_dir / STATE_DIR / RUN_PLAN_FILE
+    if not path.exists():
+        return None
+    raw: object = read_yaml_file(path)
+    if not isinstance(raw, dict) or "run_plan" not in raw:
+        raise ValueError(f"{path}: expected a run_plan envelope")
+    return RunPlanSnapshot.model_validate(raw["run_plan"])
 
 
 def read_attempt_at(state_dir: Path) -> AttemptRecord | None:
@@ -135,6 +158,40 @@ def read_attempt_history_at(state_dir: Path) -> tuple[TaskAttemptRecord, ...]:
                 f"{previous.attempt_id!r} and {current.attempt_id!r}"
             )
     return tuple(ordered)
+
+
+def validate_result_attempt_identity_at(
+    state_dir: Path,
+    result: ResultRecord,
+) -> TaskAttemptRecord | None:
+    """Require a result to name the latest successful durable attempt, when present."""
+    history = read_attempt_history_at(state_dir)
+    if not history:
+        if result.attempt_id is not None:
+            raise ValueError(f"{state_dir}: result names missing attempt {result.attempt_id!r}")
+        return None
+
+    latest = history[-1]
+    if result.attempt_id != latest.attempt_id:
+        raise ValueError(f"{state_dir}: result does not name latest attempt {latest.attempt_id!r}")
+    mismatches = [
+        field_name
+        for field_name, result_value, attempt_value in (
+            ("run_id", result.run_id, latest.run_id),
+            ("step_id", result.step_id, latest.step_id),
+        )
+        if result_value != attempt_value
+    ]
+    if mismatches:
+        raise ValueError(
+            f"{state_dir}: result does not match latest attempt fields {', '.join(mismatches)}"
+        )
+    if latest.disposition is not AttemptDisposition.succeeded:
+        raise ValueError(
+            f"{state_dir}: result points to {latest.disposition or 'live'} attempt "
+            f"{latest.attempt_id!r}"
+        )
+    return latest
 
 
 def _write_task_attempt_at(state_dir: Path, record: TaskAttemptRecord) -> Path:

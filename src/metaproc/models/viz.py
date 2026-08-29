@@ -21,7 +21,23 @@ from typing import ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from metaproc.models.authored import IOSpec, RetryPolicy
+from metaproc.models.authored import IOSpec, ParseConfig, RetryPolicy
+
+OutputRejectionReason = Literal[
+    "task-not-successful",
+    "result-not-validated",
+    "legacy-unbound-result",
+    "attempt-mismatch",
+    "legacy-unbound-step",
+    "step-mismatch",
+    "undeclared",
+    "external",
+    "missing",
+    "kind-mismatch",
+]
+ResultBinding = Literal["none", "exact", "legacy-unbound", "attempt-mismatch"]
+StepBinding = Literal["none", "exact", "legacy-unbound", "mismatch"]
+RuntimeCoverageGapReason = Literal["task-state-missing", "scope-state-missing"]
 
 # ── Leaf / sub-types ────────────────────────────────────────────
 # Embedded in StepDetails / DepDetails / ProcessHeader. These do not carry their
@@ -48,19 +64,39 @@ class FanOutDetails(BaseModel):
 
     over: str
     bind: str | None = None
+    source: str | None = None
     bind_fields: list[str] = Field(default_factory=list)
     batch_size: int | None = None
     retry: RetryPolicy | None = None
     item_count: int | None = None
+    filtered_count: int = 0
+    align: Literal["same_key"] | None = None
+    max_concurrency: int | None = None
 
 
 class InputSpec(BaseModel):
     """One entry of ``process.inputs`` (operator binding)."""
 
     name: str
+    path: str | None = None
     param: str | None = None
     as_type: str
+    parse: ParseConfig | None = None
+    required: bool = True
     default: str | int | float | bool | None = None
+    description: str | None = None
+
+
+class OutputSpec(BaseModel):
+    """One entry of ``process.outputs`` (public process artifact)."""
+
+    name: str
+    path: str | None = None
+    ref: str | None = None
+    as_type: str
+    format: str | None = None
+    template: str | None = None
+    condition: str | None = None
     description: str | None = None
 
 
@@ -69,6 +105,9 @@ class DefaultsBlock(BaseModel):
 
     default_adapter: str | None = None
     adapters: dict[str, AdapterSummary] = Field(default_factory=dict)
+    default_execution_profile: str | None = None
+    recommended_execution_profiles: list[str] = Field(default_factory=list)
+    reuse_policy: str = "validated_outputs"
     retry: RetryPolicy | None = None
 
 
@@ -90,11 +129,11 @@ class IOSummaryEntry(BaseModel):
 
 
 class StepDetails(BaseModel):
-    """Exhaustive step payload — one slot per authored step field."""
+    """Exhaustive step payload — one slot per resolved step field."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(populate_by_name=True)
 
-    schema_: str = Field(default="metaproc:StepDetails/0.1", alias="schema")
+    schema_: str = Field(default="metaproc:StepDetails/0.2", alias="schema")
 
     step_id: str
     mode: Literal["code", "agent", "composite", "manual"]
@@ -111,6 +150,12 @@ class StepDetails(BaseModel):
     command: str | None = None
     uses_path: str | None = None
     prompt_paths: list[str] = Field(default_factory=list)
+    produced_refs: list[str] = Field(default_factory=list)
+    """Which of this step's referenced paths the run itself writes.
+
+    Surfaced so a reader can tell why an edit to one referenced runbook re-runs
+    the step and an edit to another does not; see ``fingerprint_step``.
+    """
     prompt_prefix: str | None = None
 
     inputs: dict[str, IOSpec] = Field(default_factory=dict)
@@ -119,11 +164,15 @@ class StepDetails(BaseModel):
     with_: dict[str, str] = Field(default_factory=dict, alias="with")
 
     adapter: AdapterSummary | None = None
+    resources: dict[str, object] = Field(default_factory=dict)
     variant: str | None = None
     env: dict[str, str] = Field(default_factory=dict)
     max_budget_usd: float | None = None
     token_budget: int | None = None
     reuse_policy: Literal["validated_outputs", "exact_inputs", "never"] | None = None
+    on_failure: Literal["block", "continue"] = "block"
+    execution_profile: str | None = None
+    artifact_namespace: str | None = None
 
     fan_out: FanOutDetails | None = None
 
@@ -158,13 +207,14 @@ class ProcessHeader(BaseModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(populate_by_name=True)
 
-    schema_: str = Field(default="metaproc:ProcessHeader/0.1", alias="schema")
+    schema_: str = Field(default="metaproc:ProcessHeader/0.2", alias="schema")
 
     name: str
     description: str | None = None
     process_schema_token: str
     source_path: str
     process_inputs: dict[str, InputSpec] = Field(default_factory=dict)
+    process_outputs: dict[str, OutputSpec] = Field(default_factory=dict)
     defaults: DefaultsBlock = Field(default_factory=DefaultsBlock)
     registered_schemas: list[str] = Field(default_factory=list)
     body_markdown: str = ""
@@ -199,6 +249,91 @@ class ProgressSnapshot(BaseModel):
     run_dir: str
     generated_at: str = ""
     nodes: dict[str, NodeProgress] = Field(default_factory=dict)
+
+
+class AcceptedOutputProjection(BaseModel):
+    """One currently available result joined to its exact output declaration."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    name: str
+    path: str
+    recorded_path: str
+    declaration: IOSpec
+
+
+class UnacceptedOutputProjection(BaseModel):
+    """One recorded output that the current view must not treat as consumable."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    name: str
+    recorded_path: str
+    reason: OutputRejectionReason
+    path: str | None = None
+    declaration: IOSpec | None = None
+
+
+class TaskKeyProjection(BaseModel):
+    """Stable serialized address for one scalar or mapped runtime task."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    step_id: str
+    item_key: str | None = None
+    scope_path: list[str] = Field(default_factory=list)
+
+
+class RuntimeTaskProjection(BaseModel):
+    """Narrow public view of one runtime task and its recorded outputs."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    key: TaskKeyProjection
+    state: Literal["pending", "running", "completed", "failed", "cached", "deferred"]
+    attempt_id: str | None = None
+    attempt_number: int = 0
+    generation: int = 1
+    fence_epoch: int = 0
+    attempt_disposition: (
+        Literal["succeeded", "retryable", "permanent", "cancelled", "lost"] | None
+    ) = None
+    started_at: str | None = None
+    completed_at: str | None = None
+    failure_class: str | None = None
+    error: str | None = None
+    result_binding: ResultBinding = "none"
+    step_binding: StepBinding = "none"
+    accepted_outputs: list[AcceptedOutputProjection] = Field(default_factory=list)
+    unaccepted_outputs: list[UnacceptedOutputProjection] = Field(default_factory=list)
+
+
+class RuntimeCoverageGap(BaseModel):
+    """One plan-declared runtime coordinate whose durable state is absent.
+
+    A gap states only that no durable record exists at this coordinate; it does not
+    distinguish "not started yet" from "lost". On a run that is still executing, every
+    declared task ahead of the frontier is a gap, and that is faithful. Readers
+    rendering a live run should present gaps as pending rather than as breakage.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    key: TaskKeyProjection
+    reason: RuntimeCoverageGapReason
+
+
+class TaskOutputProjection(BaseModel):
+    """Rebuildable task/output view derived from existing runtime records."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(populate_by_name=True, extra="forbid")
+
+    schema_: Literal["metaproc:TaskOutputProjection/0.1"] = Field(
+        default="metaproc:TaskOutputProjection/0.1", alias="schema"
+    )
+    run_dir: str
+    tasks: list[RuntimeTaskProjection] = Field(default_factory=list)
+    coverage_gaps: list[RuntimeCoverageGap] = Field(default_factory=list)
 
 
 # ── Graph structure ─────────────────────────────────────────────
@@ -250,7 +385,7 @@ class VizModel(BaseModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(populate_by_name=True)
 
-    schema_: str = Field(default="metaproc:VizModel/0.2", alias="schema")
+    schema_: str = Field(default="metaproc:VizModel/0.4", alias="schema")
 
     root_process: str
     header: ProcessHeader
@@ -260,6 +395,7 @@ class VizModel(BaseModel):
     subgraphs: dict[str, list[str]] = Field(default_factory=dict)
     root_process_node: str | None = None
     progress: ProgressSnapshot | None = None
+    task_projection: TaskOutputProjection | None = None
 
 
 # ── Layout + rendering ──────────────────────────────────────────

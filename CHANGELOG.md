@@ -28,7 +28,7 @@ development series.
   not be older than its most recent substantive commit.
   Reflows are ignored, so `make format` does not invalidate every date at once.
 
-No runtime behavior, artifact shape, or CLI flag changed.
+These documentation changes altered no runtime behavior, artifact shape, or CLI flag.
 
 ### Added
 
@@ -49,6 +49,41 @@ No runtime behavior, artifact shape, or CLI flag changed.
   starts.
 
 ### Fixed
+
+- **GCP runs require explicit storage posture**: `metaproc gcp run` now rejects its
+  default Filestore placement when `METAPROC_GCP_FILESTORE_SERVER` is unset, before
+  uploading artifacts or dispatching a job.
+  Callers that intentionally want ephemeral task storage must pass `--no-filestore`.
+
+- **GCP dispatch artifacts are immutable**: `metaproc gcp run` validates its artifact
+  identity before packaging and creates wheel and workspace objects only when their GCS
+  names are unused, so a later dispatch cannot replace bytes referenced by an existing
+  job. Re-running a dispatch that failed after uploading stays possible: an existing
+  object with an identical digest is accepted as already uploaded, while one with
+  different content fails with the object name and the instruction to pick a new
+  `--job-name`.
+
+- **Gemini prompt transport ignores workspace ignore rules**: the Gemini CLI adapter
+  keeps its durable audit prompt while streaming those bytes through stdin, so an
+  ignored prompt path cannot block or distort prompt delivery.
+
+- **Static validation resolves defaulted process inputs**: handler and header checks now
+  resolve declared process-input defaults instead of reporting false missing-input
+  failures.
+
+- **Visualization projections preserve authored and resolved fields**: `VizModel` now
+  includes public process outputs, complete process-input and default declarations, and
+  the resource, failure, execution-profile, namespace, and fan-out fields carried by a
+  resolved plan. The MetaBrowser process and step panels render these fields, and
+  projection tests enforce field parity with the authored and resolved source models.
+  When a run directory is supplied, the same model includes a rebuildable view of
+  scalar, mapped, and nested task records.
+  A result is consumable only when it names the latest successful attempt, matches the
+  current step fingerprint and declared output port, and resolves to an available
+  artifact of the declared kind.
+  Historical unbound, stale, missing, undeclared, and external outputs remain visible as
+  diagnostics. Hydrated runs safely rebase portable paths to the local run root; no
+  additional runtime ledger is written.
 
 - **GCP credentials hydrate inside the container**: Batch job specifications now carry
   Secret Manager references rather than plaintext-expanded `secret_variables`, require

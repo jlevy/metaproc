@@ -198,6 +198,7 @@ class TestCodeModeOutputValidationRetry:
     ) -> None:
         """Successful completion writes a ResultRecord with the resolved step hash."""
         mock_validate.return_value = []
+        mock_mark_completed.return_value = SimpleNamespace(attempt_id="att-current")
 
         item_dir = tmp_path / "AAPL"
         item_dir.mkdir()
@@ -238,6 +239,7 @@ class TestCodeModeOutputValidationRetry:
         mock_mark_completed.assert_called_once_with(item_dir, running_record=None)
         assert mock_write_result.call_count == 1
         written_record = mock_write_result.call_args.args[1]
+        assert written_record.attempt_id == "att-current"
         assert written_record.step_hash == "step-hash-123"
 
 

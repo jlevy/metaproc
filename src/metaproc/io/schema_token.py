@@ -163,6 +163,9 @@ def _build_schema_registry() -> dict[str, type[BaseModel]]:
 
     # Standalone artifacts do not belong in the frontmatter envelope map, but their
     # canonical tokens must still resolve to their typed model.
+    from metaproc.models.plan import (  # noqa: PLC0415 -- registry construction avoids model import cycles
+        RunPlanSnapshot,
+    )
     from metaproc.models.resources import (  # noqa: PLC0415 -- registry construction avoids model import cycles
         ResourcesDocument,
     )
@@ -171,6 +174,7 @@ def _build_schema_registry() -> dict[str, type[BaseModel]]:
     )
 
     _register(ResourcesDocument)
+    _register(RunPlanSnapshot)
     _register(TaskAttemptRecord)
     return registry
 

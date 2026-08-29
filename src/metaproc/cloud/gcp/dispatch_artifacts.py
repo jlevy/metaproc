@@ -8,12 +8,12 @@ Two responsibilities:
    (``package_workspace``) and upload it to GCS
    (``upload_workspace_to_gcs``).
 
-Both artifact types ship to ``gs://<bucket>/<prefix>/...`` so a Batch task
-container can fetch the current-branch metaproc + workspace without
-requiring an agent-image rebuild or a cross-VPC git clone.
+Both artifact types are created immutably under ``gs://<bucket>/<prefix>/...`` so a
+Batch task container can fetch the current-branch metaproc + workspace without requiring
+an agent-image rebuild or a cross-VPC git clone.
 
-The wheel build path is shared by local artifact packaging and the
-``gcp run`` dispatcher.
+The wheel build path is shared by local artifact packaging and the ``gcp run``
+dispatcher.
 """
 
 from __future__ import annotations
@@ -25,9 +25,15 @@ import tarfile
 import tempfile
 from pathlib import Path
 
+from google.api_core.exceptions import GoogleAPIError, PreconditionFailed
 from google.cloud import storage
-from google.cloud.storage.retry import DEFAULT_RETRY
+from google.cloud.storage.retry import (
+    DEFAULT_RETRY,
+    ConditionalRetryPolicy,
+    is_generation_specified,
+)
 
+from metaproc.errors import CLIError
 from metaproc.io.digests import file_sha256
 
 log = logging.getLogger(__name__)
@@ -46,7 +52,11 @@ WORKSPACE_TARBALL_NAME: str = "workspace.tar.gz"
 # artifact size a per-request latency requirement.
 GCS_UPLOAD_CHUNK_SIZE = 16 * 1024 * 1024
 GCS_UPLOAD_TIMEOUT_SECONDS = 120
-GCS_UPLOAD_RETRY = DEFAULT_RETRY.with_deadline(10 * 60)
+GCS_UPLOAD_RETRY = ConditionalRetryPolicy(
+    DEFAULT_RETRY.with_deadline(10 * 60),
+    is_generation_specified,
+    ["query_params"],
+)
 
 
 def find_metaproc_source_dir(start: Path | None = None) -> Path:
@@ -255,7 +265,7 @@ def package_workspace(
 
 
 def upload_to_gcs(local_path: Path, gs_uri: str, *, project: str) -> str:
-    """Upload a local file to a ``gs://`` URI under the explicit GCP project."""
+    """Create one immutable GCS object under the explicit GCP project."""
     if not gs_uri.startswith("gs://"):
         raise ValueError(f"Expected gs:// URI, got {gs_uri!r}")
     bucket_name, _, blob_path = gs_uri[len("gs://") :].partition("/")
@@ -265,14 +275,49 @@ def upload_to_gcs(local_path: Path, gs_uri: str, *, project: str) -> str:
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(blob_path)
     blob.chunk_size = GCS_UPLOAD_CHUNK_SIZE
-    blob.metadata = {"metaproc-sha256": file_sha256(local_path)}
-    blob.upload_from_filename(
-        str(local_path),
-        timeout=GCS_UPLOAD_TIMEOUT_SECONDS,
-        retry=GCS_UPLOAD_RETRY,
-    )
+    digest = file_sha256(local_path)
+    blob.metadata = {"metaproc-sha256": digest}
+    try:
+        blob.upload_from_filename(
+            str(local_path),
+            if_generation_match=0,
+            timeout=GCS_UPLOAD_TIMEOUT_SECONDS,
+            # The storage client accepts this policy even though its annotation names Retry.
+            retry=GCS_UPLOAD_RETRY,  # pyright: ignore[reportArgumentType]
+        )
+    except PreconditionFailed as exc:
+        return _accept_existing_object(blob, gs_uri, digest, exc)
     log.info("Uploaded %s -> %s", local_path, gs_uri)
     return gs_uri
+
+
+def _accept_existing_object(
+    blob: storage.Blob, gs_uri: str, digest: str, cause: PreconditionFailed
+) -> str:
+    """Resolve an ``if_generation_match=0`` collision without losing retriability.
+
+    Immutability is the point of the generation precondition, but a dispatch that
+    uploaded the wheel and then failed while packaging the workspace must stay
+    retriable under the same ``--job-name``. Identical bytes are therefore treated as
+    the upload already having succeeded; different bytes remain a hard error, because
+    a queued Batch task may already be pinned to the object under this URI.
+    """
+    try:
+        blob.reload()
+    except GoogleAPIError as exc:
+        raise CLIError(
+            f"{gs_uri} already exists and its metadata could not be read ({exc}). "
+            "Re-run the dispatch with a new --job-name."
+        ) from exc
+    existing = (blob.metadata or {}).get("metaproc-sha256")
+    if existing == digest:
+        log.info("Reusing identical existing object %s (sha256 %s)", gs_uri, digest)
+        return gs_uri
+    raise CLIError(
+        f"{gs_uri} already exists with different content "
+        f"(existing sha256 {existing or 'unknown'}, local {digest}). "
+        "Dispatch artifacts are immutable; re-run the dispatch with a new --job-name."
+    ) from cause
 
 
 def upload_wheel_to_gcs(

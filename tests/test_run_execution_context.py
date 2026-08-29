@@ -43,6 +43,8 @@ from metaproc.models.plan import FanOut, Plan, ResolvedAdapter, ResolvedStep
 from metaproc.models.runtime import AttemptDisposition
 from metaproc.runpool.pool import ProcessConfig
 
+_PROCESS_TREE_TEST_TIMEOUT_S = 2.0
+
 
 class _Out:
     def progress(self, _message: str) -> None:
@@ -1053,7 +1055,7 @@ def test_agent_subprocess_timeout_kills_its_process_tree(tmp_path: Path) -> None
                 env={},
                 cwd=tmp_path,
                 log_path=tmp_path / "timeout.log",
-                timeout_s=0.2,
+                timeout_s=_PROCESS_TREE_TEST_TIMEOUT_S,
                 use_filter=False,
             )
         )

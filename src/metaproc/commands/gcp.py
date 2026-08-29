@@ -79,7 +79,7 @@ gcp_app = typer.Typer(
 )
 app.add_typer(gcp_app)
 
-# Register `gcp run` (defined in gcp_run.py to keep this file from growing).
+# Register one-shot dispatch (defined in gcp_run.py to keep this file from growing).
 # Imported after gcp_app is created because gcp_run.py registers via the
 # returned function rather than via decorator.
 # Guarded by try/except so `metaproc.commands.gcp` remains importable in

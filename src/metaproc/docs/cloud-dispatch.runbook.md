@@ -52,7 +52,7 @@ Never commit `.env`.
 | `METAPROC_GCP_CONTAINER_IMAGE` | Image that can run Metaproc and the consumer |
 | `METAPROC_GCS_BUCKET` | Wheel and workspace artifact transport |
 | `METAPROC_GCP_SECRET_GH_TOKEN` | Secret Manager ref used when a private repo must be cloned |
-| `METAPROC_GCP_FILESTORE_*` | Optional shared live execution and restart storage |
+| `METAPROC_GCP_FILESTORE_*` | Shared live execution and restart storage; `gcp run` requires a server unless `--no-filestore` selects ephemeral storage |
 | `METAPROC_REPO_URL` / `METAPROC_RUN_BRANCH` | Optional repository source for remote bootstrap |
 | `METAPROC_WHEEL_GCS` | Optional exact prebuilt Metaproc wheel |
 | `METAPROC_WHEEL_SHA256` | Required digest when `METAPROC_WHEEL_GCS` is set |
@@ -82,13 +82,11 @@ uv --config-file uv.toml run --frozen metaproc run-process \
 Inspect the rendered job for the intended project, region, image, service account,
 machine type, secret references, and mounts before removing any `--dry-run` gate.
 
-## 4. Dispatch a Process
+## 4. Dispatch a Multi-VM Process
 
-Use `run-process` for an application workflow.
-It is the orchestration API: the process graph, leases, claims, retries, resume state,
-and worker fan-out remain framework-owned.
-The current supported cloud topology places both the orchestrator and its run-wide
-worker pool in GCP.
+Use direct cloud dispatch when the process supports multi-VM `gcp-worker` fan-out.
+`run-process` remains the orchestration API: the process graph, leases, claims, retries,
+resume state, and worker fan-out remain framework-owned.
 
 ```bash
 uv run metaproc run-process path/to/workflow.process.md \
@@ -118,12 +116,15 @@ Before reclaiming it, the downstream consumer must publish the accepted terminal
 tree to its registered durable object-store contract and verify that publication under
 its own policy.
 
-## 5. Dispatch an Arbitrary Command
+## 5. Dispatch One Task or a Single-Host Process
 
 `metaproc gcp run` is the lower-level single-task Batch primitive.
-Use it when no process graph is needed: for a probe, diagnostic, publication task, or an
-application such as a legacy coordinator that already owns its outer orchestration.
-Do not chain `gcp run` calls to recreate process scheduling; use `run-process` for that.
+Use it for a probe, diagnostic, publication task, or one complete local-backend process
+that must stay on one host.
+Mapped composites require this single-host placement because the `gcp-worker` backend
+does not yet support them.
+Do not chain multiple `gcp run` calls to recreate process scheduling; the one nested
+`run-process` command owns the DAG.
 
 The command sends one command to one Batch task.
 By default it builds and ships the current Metaproc wheel and repository workspace.
@@ -140,12 +141,23 @@ metaproc gcp run \
   --workspace-package packages/my-consumer \
   -- uv run --frozen --project packages/my-consumer my-consumer-task
 
+# Place one complete DAG on one Batch VM with the local backend.
+metaproc gcp run \
+  --machine-type <machine-type> \
+  --workspace-package packages/my-consumer \
+  -- metaproc run-process workflows/example.process.md \
+    --backend local \
+    --var RUN_ID=<new-run-id>
+
 # Submit without waiting.
 metaproc gcp run --detach -- python -m my_consumer.batch_task --shard shard-b
 ```
 
 Useful controls:
 
+- `--no-filestore` explicitly uses ephemeral task storage.
+  Without it, dispatch requires `METAPROC_GCP_FILESTORE_SERVER` and refuses before
+  artifact upload when the server is unset.
 - `--no-wheel` uses the image-baked Metaproc.
 - `--no-workspace` skips repository transport, so consumer source must already be in the
   image. Nested `uv run` commands use the baked `/opt/venv` without syncing an absent
