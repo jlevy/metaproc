@@ -786,7 +786,7 @@ def _publish_run_plan(
                         variables=variables,
                     ),
                     outputs=step.outputs,
-                    fingerprint=fingerprint_step(step, require_referenced_files=False),
+                    fingerprint=fingerprint_step(step),
                 )
                 for step in plan.steps
             ],

@@ -17,7 +17,7 @@ from metaproc.io import read_yaml_file
 from metaproc.io.state_io import read_attempt_at, read_result_at, read_status_at
 from metaproc.models.plan import Plan, ResolvedDep, ResolvedStep
 from metaproc.models.runtime import StepState
-from metaproc.paths import STATE_DIR, STATUS_FILE
+from metaproc.paths import STATE_DIR, STATUS_FILE, normalize_path_key
 
 _PROCESS_STATUS_FILE = "process-status.yaml"
 _STALE_SUFFIX = ".yaml.stale"
@@ -47,7 +47,7 @@ class StepRuntimeSummary:
     result_step_hash: str | None = None
 
 
-def fingerprint_step(step: ResolvedStep, *, require_referenced_files: bool = True) -> str:
+def fingerprint_step(step: ResolvedStep) -> str:
     """Return a stable fingerprint covering both the step contract and the
     bytes of any runbook/prompt file the step references.
 
@@ -62,30 +62,38 @@ def fingerprint_step(step: ResolvedStep, *, require_referenced_files: bool = Tru
     (``{{ }}``) are skipped: they cannot be opened, and the literal
     template string is already in the model payload.
 
-    An absolute path that does not exist on disk is a real misconfiguration
-    and raises ``FileNotFoundError`` loudly, unless the caller passes
-    ``require_referenced_files=False``. A step may reference a file an earlier
-    step in the same process produces, so before the run starts that file is
-    legitimately absent; the plan projection fingerprints what exists and the
-    execution-time callers keep the strict check, where a missing file really
-    is a misconfiguration. A relative path that cannot be
-    resolved from the caller's CWD logs a warning and is skipped from the
-    content hash — ``fingerprint_step`` runs in many contexts (dry-run,
-    deps inspection, runtime) and not all of them know the process_dir
-    needed to canonicalize a relative path. The contract part of the
-    fingerprint still participates so the step id, I/O, and adapter
-    changes are still detected; only the content-edit sensitivity is lost
-    for that one entry.
+    A step's ``produced_refs`` — referenced files another step in the same plan
+    writes during the run — are excluded from the content hash. A step may load
+    a runbook an earlier step produces, so before the run starts that file is
+    legitimately absent and the same authored step would otherwise hash
+    differently before and after it lands. Those two hashes are compared: the
+    run plan is published at launch and the runtime projection checks a recorded
+    result against it, so a step whose hash moves on its own is reported as a
+    mismatch and its outputs are rejected. Excluding these files loses no
+    invalidation coverage — the producing step's own fingerprint covers the
+    content, and the dep graph cascades downstream from there.
+
+    An absolute path that does not exist on disk is a real misconfiguration and
+    raises ``FileNotFoundError`` loudly. A relative path that cannot be resolved
+    from the caller's CWD logs a warning and is skipped from the content hash —
+    ``fingerprint_step`` runs in many contexts (dry-run, deps inspection,
+    runtime) and not all of them know the process_dir needed to canonicalize a
+    relative path. The contract part of the fingerprint still participates so
+    the step id, I/O, and adapter changes are still detected; only the
+    content-edit sensitivity is lost for that one entry.
 
     Runtime-discovered fan-out items and their filtered count are excluded.
     The same authored step may be fingerprinted before and after a generated
     roster exists, and discovery results are execution state rather than part
     of the step definition.
     """
+    # ``produced_refs`` is derived from the plan's deps rather than authored, and
+    # excluding it keeps the contract hash of every step that has none exactly
+    # what it was before the field existed.
     payload = step.model_dump(
         mode="json",
         exclude_none=True,
-        exclude={"fan_out": {"items", "filtered_count"}},
+        exclude={"fan_out": {"items", "filtered_count"}, "produced_refs": True},
     )
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     hasher = hashlib.sha256(encoded)
@@ -94,13 +102,11 @@ def fingerprint_step(step: ResolvedStep, *, require_referenced_files: bool = Tru
         try:
             content = path.read_bytes()
         except FileNotFoundError as err:
-            if path.is_absolute() and require_referenced_files:
+            if path.is_absolute():
                 raise FileNotFoundError(
                     f"step '{step.step_id}': referenced runbook {path_str!r} does not "
                     f"exist — cannot compute step fingerprint"
                 ) from err
-            if path.is_absolute():
-                continue
             log.warning(
                 "step %r: relative runbook path %r not readable from cwd %s; "
                 "skipping its content from the fingerprint (contract part still hashed)",
@@ -118,12 +124,27 @@ def _referenced_runbook_paths(step: ResolvedStep) -> list[str]:
     """File-path fields on a ``ResolvedStep`` whose bytes participate in the
     fingerprint. Unresolved-template entries (containing ``{{ }}``) are
     filtered out — they cannot be opened, and their literal form is already
-    captured by the model payload.
+    captured by the model payload. Files the run itself produces are filtered
+    out too; see ``fingerprint_step``.
     """
     candidates: list[str] = list(step.prompt_paths or [])
     if step.uses_path:
         candidates.append(step.uses_path)
-    return [p for p in candidates if p and "{{" not in p and "}}" not in p]
+    produced = {normalize_path_key(p) for p in step.produced_refs}
+    referenced: list[str] = []
+    for path_str in candidates:
+        if not path_str or "{{" in path_str or "}}" in path_str:
+            continue
+        if normalize_path_key(path_str) in produced:
+            log.debug(
+                "step %r: referenced runbook %r is produced by this run; "
+                "excluding its content from the fingerprint",
+                step.step_id,
+                path_str,
+            )
+            continue
+        referenced.append(path_str)
+    return referenced
 
 
 def infer_dep_states(plan: Plan, run_dir: Path | None = None) -> dict[str, str]:

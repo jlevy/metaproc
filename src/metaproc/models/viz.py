@@ -150,6 +150,12 @@ class StepDetails(BaseModel):
     command: str | None = None
     uses_path: str | None = None
     prompt_paths: list[str] = Field(default_factory=list)
+    produced_refs: list[str] = Field(default_factory=list)
+    """Which of this step's referenced paths the run itself writes.
+
+    Surfaced so a reader can tell why an edit to one referenced runbook re-runs
+    the step and an edit to another does not; see ``fingerprint_step``.
+    """
     prompt_prefix: str | None = None
 
     inputs: dict[str, IOSpec] = Field(default_factory=dict)

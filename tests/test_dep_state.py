@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import textwrap
 from pathlib import Path
 from typing import cast
 
@@ -10,6 +11,8 @@ import pytest
 from typer.testing import CliRunner
 
 from metaproc.cli import app
+from metaproc.commands.helpers import load_process_spec
+from metaproc.engine.build_plan import build_plan
 from metaproc.engine.dep_state import (
     build_dep_report,
     compute_step_state,
@@ -367,68 +370,117 @@ class TestFingerprintStep:
         with pytest.raises(FileNotFoundError, match="referenced runbook"):
             fingerprint_step(step)
 
-    def test_planning_mode_tolerates_a_not_yet_produced_runbook(self, tmp_path: Path) -> None:
+    def test_a_produced_runbook_does_not_have_to_exist_yet(self, tmp_path: Path) -> None:
         """Planning happens before the run, so a step may reference a file an
-        earlier step in the same process has not written yet. Raising there fails
-        the whole graph at plan publication for a file the run is about to create."""
+        earlier step in the same process has not written yet. Raising there failed
+        the whole graph at plan publication for a file the run was about to create."""
         not_yet = tmp_path / "written-by-an-earlier-step.md"
         step = ResolvedStep(
             step_id="s1",
             mode="agent",
             adapter=ResolvedAdapter(type="test", config={}),
             prompt_paths=[str(not_yet)],
+            produced_refs=[str(not_yet)],
             outputs={"out": IOSpec(path=f"{tmp_path}/out.md")},
         )
 
-        with pytest.raises(FileNotFoundError):
-            fingerprint_step(step)
+        fingerprint = fingerprint_step(step)
+        assert fingerprint
+        assert fingerprint == fingerprint_step(step), "the fingerprint must be stable across calls"
 
-        relaxed = fingerprint_step(step, require_referenced_files=False)
-        assert relaxed
-        assert relaxed == fingerprint_step(step, require_referenced_files=False), (
-            "the relaxed fingerprint must be stable across calls"
-        )
+    def test_a_produced_runbook_hashes_the_same_before_and_after_it_lands(
+        self, tmp_path: Path
+    ) -> None:
+        """The invariant the whole design rests on.
 
-    def test_planning_mode_still_hashes_the_files_that_do_exist(self, tmp_path: Path) -> None:
-        """Relaxing the check skips only the absent file. A present sibling is
-        still hashed, so an edit to it flips the plan fingerprint."""
-        present = tmp_path / "present.md"
-        present.write_text("# Present\n")
-        absent = tmp_path / "absent.md"
-        step = ResolvedStep(
-            step_id="s1",
-            mode="agent",
-            adapter=ResolvedAdapter(type="test", config={}),
-            prompt_paths=[str(present), str(absent)],
-            outputs={"out": IOSpec(path=f"{tmp_path}/out.md")},
-        )
-
-        before = fingerprint_step(step, require_referenced_files=False)
-        present.write_text("# Present, edited\n")
-        after = fingerprint_step(step, require_referenced_files=False)
-
-        assert before != after, "an existing referenced file must still be hashed"
-
-    def test_relaxed_and_strict_diverge_once_the_file_lands(self, tmp_path: Path) -> None:
-        """The plan-time hash omits a file the execution-time hash includes, so the
-        two are NOT interchangeable. This is safe only because the relaxed value is
-        used exclusively by the plan projection and publication; every recorded and
-        compared hash uses the strict default. If a future caller relaxes the check
-        on a reuse or staleness path, this test is the tripwire for why not."""
+        The run plan is published at launch, when a produced runbook is still
+        absent; the result record is written at execution time, when it exists.
+        ``runtime_projection`` compares those two hashes, so a step whose hash
+        moves on its own is reported as ``step-mismatch`` and its completed
+        outputs are rejected. Excluding produced files keeps them equal.
+        """
         runbook = tmp_path / "produced.md"
         step = ResolvedStep(
             step_id="s1",
             mode="agent",
             adapter=ResolvedAdapter(type="test", config={}),
             prompt_paths=[str(runbook)],
+            produced_refs=[str(runbook)],
             outputs={"out": IOSpec(path=f"{tmp_path}/out.md")},
         )
 
-        at_plan_time = fingerprint_step(step, require_referenced_files=False)
+        at_plan_time = fingerprint_step(step)
         runbook.write_text("# Produced by an earlier step\n")
         at_execution_time = fingerprint_step(step)
 
-        assert at_plan_time != at_execution_time
+        assert at_plan_time == at_execution_time
+
+        runbook.write_text("# Produced again, different bytes\n")
+        assert fingerprint_step(step) == at_plan_time, (
+            "a produced runbook's bytes must never move the consumer's fingerprint; "
+            "the producing step's own fingerprint covers that content"
+        )
+
+    def test_only_the_produced_reference_is_excluded(self, tmp_path: Path) -> None:
+        """Excluding a produced runbook must not stop tracking authored ones.
+
+        An authored sibling is still hashed, so editing it still flips the
+        fingerprint and still re-runs the step.
+        """
+        authored = tmp_path / "authored.md"
+        authored.write_text("# Authored\n")
+        produced = tmp_path / "produced.md"
+        step = ResolvedStep(
+            step_id="s1",
+            mode="agent",
+            adapter=ResolvedAdapter(type="test", config={}),
+            prompt_paths=[str(authored), str(produced)],
+            produced_refs=[str(produced)],
+            outputs={"out": IOSpec(path=f"{tmp_path}/out.md")},
+        )
+
+        before = fingerprint_step(step)
+        authored.write_text("# Authored, edited\n")
+
+        assert fingerprint_step(step) != before, "an authored referenced file must still be hashed"
+
+    def test_an_unproduced_missing_runbook_still_raises(self, tmp_path: Path) -> None:
+        """Only files the run produces are exempt. An absolute path nothing in the
+        plan writes is still a misconfiguration and must still fail loudly, rather
+        than being silently dropped from the hash."""
+        missing = tmp_path / "nobody-writes-this.md"
+        produced = tmp_path / "produced.md"
+        step = ResolvedStep(
+            step_id="s1",
+            mode="agent",
+            adapter=ResolvedAdapter(type="test", config={}),
+            prompt_paths=[str(missing)],
+            produced_refs=[str(produced)],
+            outputs={"out": IOSpec(path=f"{tmp_path}/out.md")},
+        )
+
+        with pytest.raises(FileNotFoundError, match="referenced runbook"):
+            fingerprint_step(step)
+
+    def test_produced_refs_do_not_shift_the_contract_hash(self, tmp_path: Path) -> None:
+        """``produced_refs`` is derived from the plan's deps, not authored, so it is
+        excluded from the payload. A step that references nothing produced must hash
+        exactly as it did before the field existed — otherwise adding the field would
+        invalidate every completed step in every in-flight run on upgrade."""
+        authored = tmp_path / "authored.md"
+        authored.write_text("# Authored\n")
+
+        def _step(produced_refs: list[str]) -> ResolvedStep:
+            return ResolvedStep(
+                step_id="s1",
+                mode="agent",
+                adapter=ResolvedAdapter(type="test", config={}),
+                prompt_paths=[str(authored)],
+                produced_refs=produced_refs,
+                outputs={"out": IOSpec(path=f"{tmp_path}/out.md")},
+            )
+
+        assert fingerprint_step(_step([])) == fingerprint_step(_step([str(tmp_path / "other.md")]))
 
     def test_missing_relative_runbook_warns_and_skips(
         self,
@@ -580,6 +632,88 @@ def _write_process_status_mirror(
         "state: completed\n"
     )
     (sd / "process-status.yaml").write_text(body)
+
+
+class TestProducedRefsFromBuildPlan:
+    """The resolution half of the produced-runbook contract.
+
+    ``fingerprint_step`` trusts ``ResolvedStep.produced_refs``; these prove
+    ``build_plan`` actually fills it from the deps a step references, so the
+    exclusion is real end to end and not just an argument the unit tests pass in.
+    """
+
+    @staticmethod
+    def _spec_with_a_produced_runbook(tmp_path: Path) -> Path:
+        process_path = tmp_path / "test.process.md"
+        process_path.write_text(
+            textwrap.dedent("""\
+                ---
+                process:
+                  name: produced-runbook
+                  deps:
+                    runbook:
+                      path: "{{run.dir}}/runbook.md"
+                      as: path
+                      produced_by: make.out
+                    authored:
+                      path: ./authored.md
+                      as: path
+                  steps:
+                    - id: make
+                      mode: code
+                      handler: handler.py:noop
+                      outputs:
+                        out:
+                          path: "{{run.dir}}/runbook.md"
+                    - id: use
+                      mode: agent
+                      needs: [make]
+                      prompt_paths: [deps.runbook, deps.authored]
+                      outputs:
+                        report:
+                          path: "{{run.dir}}/report.md"
+                ---
+                """),
+            encoding="utf-8",
+        )
+        (tmp_path / "authored.md").write_text("# Authored\n", encoding="utf-8")
+        return process_path
+
+    def _plan(self, tmp_path: Path) -> Plan:
+        process_path = self._spec_with_a_produced_runbook(tmp_path)
+        run_dir = tmp_path / "run"
+        run_dir.mkdir(exist_ok=True)
+        return build_plan(
+            load_process_spec(process_path),
+            {"run.dir": str(run_dir)},
+            process_path=process_path,
+        )
+
+    def test_build_plan_marks_only_the_produced_reference(self, tmp_path: Path) -> None:
+        plan = self._plan(tmp_path)
+        use = next(step for step in plan.steps if step.step_id == "use")
+
+        assert use.produced_refs == [str(tmp_path / "run" / "runbook.md")], (
+            "only the dep carrying produced_by belongs in produced_refs; "
+            f"prompt_paths were {use.prompt_paths}"
+        )
+        assert next(s for s in plan.steps if s.step_id == "make").produced_refs == []
+
+    def test_a_real_plan_hashes_identically_before_and_after_the_run(self, tmp_path: Path) -> None:
+        """The end-to-end invariant, through the real resolution path.
+
+        Plan publication happens with the runbook absent and the result record is
+        written with it present; ``runtime_projection`` compares those two values.
+        """
+        plan = self._plan(tmp_path)
+        use = next(step for step in plan.steps if step.step_id == "use")
+        runbook = tmp_path / "run" / "runbook.md"
+
+        assert not runbook.exists()
+        at_plan_time = fingerprint_step(use)
+
+        runbook.write_text("# Produced by make\n", encoding="utf-8")
+        assert fingerprint_step(use) == at_plan_time
 
 
 class TestRecordedStepHash:
