@@ -71,6 +71,16 @@ class ResolvedStep(BaseModel):
     needs: list[str] = Field(default_factory=list)
     on_failure: Literal["block", "continue"] = "block"
     uses_path: str | None = None
+    produced_refs: list[str] = Field(default_factory=list)
+    """Referenced runbook paths that another step in this plan writes during the run.
+
+    Resolved by ``build_plan`` from the deps a ``prompt_paths`` or ``uses`` entry
+    points at, and read by ``fingerprint_step``, which excludes their bytes from
+    the step fingerprint. Carrying the set on the resolved step rather than
+    passing it per call is what keeps every fingerprint of a given step equal:
+    the plan-time and execution-time hashes must be comparable, and two callers
+    disagreeing about the set would silently produce two different hashes.
+    """
     execution_profile: str | None = None
     artifact_namespace: str | None = None
     variant: str | None = None

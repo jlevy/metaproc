@@ -41,6 +41,7 @@ from metaproc.models.execution_profile import (
     ResolvedExecutionProfile,
 )
 from metaproc.models.plan import FanOut, Plan, ResolvedAdapter, ResolvedDep, ResolvedStep
+from metaproc.paths import normalize_path_key
 from metaproc.plugins.discovery import get_plugin_registry
 
 log = logging.getLogger(__name__)
@@ -231,10 +232,6 @@ def _parse_symbolic_ref(ref: str, *, context: str) -> tuple[str, str]:
         msg = f"{context}: invalid ref {ref!r} (expected '<step-id>.<output-name>')"
         raise ValueError(msg)
     return step_id, output_name
-
-
-def _normalize_path_key(path: str) -> str:
-    return str(Path(path))
 
 
 def _parse_produced_by(ref: str, *, context: str) -> tuple[str, str | None]:
@@ -466,9 +463,9 @@ def _resolve_process_deps(
             else:
                 candidate_outputs = list(producer_outputs.items())
 
-            dep_key = _normalize_path_key(dep_path)
+            dep_key = normalize_path_key(dep_path)
             if not any(
-                output.path and _normalize_path_key(output.path) == dep_key
+                output.path and normalize_path_key(output.path) == dep_key
                 for _, output in candidate_outputs
             ):
                 available = ", ".join(
@@ -509,6 +506,28 @@ def _resolve_prompt_paths(
             continue
         resolved_paths.append(resolve_templates(prompt_path, params))
     return resolved_paths
+
+
+def _resolve_produced_refs(
+    step: ProcessStep,
+    *,
+    resolved_deps: dict[str, ResolvedDep],
+) -> list[str]:
+    """Return the referenced paths this run produces, for ``produced_refs``.
+
+    Only a dep-ref reference can name a produced file, because the ``produced_by``
+    that says a step writes it lives on the dep. A raw authored path is an input
+    the run does not write, so its bytes stay in the step fingerprint.
+    """
+    produced: list[str] = []
+    for candidate in (*step.prompt_paths, step.uses):
+        if not candidate or not is_dep_ref(candidate):
+            continue
+        dep_name = parse_dep_ref(candidate, context=f"step '{step.id}' produced refs")
+        dep = resolved_deps.get(dep_name)
+        if dep is not None and dep.produced_by and dep.path:
+            produced.append(dep.path)
+    return list(dict.fromkeys(produced))
 
 
 def _validate_raw_path_dataflow(
@@ -918,6 +937,7 @@ def build_plan(
                 needs=list(dict.fromkeys([*step.needs, *ref_needs])),
                 on_failure=step.on_failure,
                 uses_path=uses_path,
+                produced_refs=_resolve_produced_refs(step, resolved_deps=resolved_deps),
                 execution_profile=step_execution_profile,
                 artifact_namespace=step_artifact_namespace,
                 variant=step.variant,

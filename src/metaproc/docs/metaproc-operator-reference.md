@@ -339,6 +339,15 @@ The cascade only fires when the recorded fingerprint disagrees with the current 
 Runs whose completion records carry no `recorded_step_hash` (legacy completions) are
 kept as completed and are *not* re-executed.
 
+One class of runbook is deliberately outside the fingerprint: a file the run itself
+produces, referenced through a dep that declares `produced_by`. A step may load a
+runbook an earlier step generates, and that file does not exist yet when the plan is
+built, so hashing its bytes would give the same step two different fingerprints — one at
+planning and one at execution — and nothing could be compared against a recorded value.
+Editing such a file by hand therefore does not re-run its consumer; changing the step
+that *produces* it does, and the cascade carries that downstream.
+Use `--from <step>` to force a rerun after editing a generated runbook in place.
+
 ### When to reach for a flag
 
 The fingerprint covers runbook bytes and the declared step contract.

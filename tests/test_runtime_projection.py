@@ -1057,3 +1057,60 @@ def test_projection_rejects_symlinked_run_plan_escape(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="runtime state path .* escapes run tree"):
         scan_task_output_projection(run_dir, _bundle())
+
+
+def test_a_produced_runbook_step_keeps_its_outputs_accepted(tmp_path: Path) -> None:
+    """Regression for the plan-time/execution-time fingerprint split.
+
+    ``_publish_run_plan`` writes the run plan at launch, when a runbook an earlier
+    step produces does not exist yet; the result record is written at execution
+    time, when it does. If those two hashes disagree, a completed and validated
+    step is projected as ``step-mismatch`` and every one of its outputs is
+    rejected — silently, for the entire class of step that loads a generated
+    runbook. Nothing above this level catches it: the fixtures elsewhere in this
+    file seed the snapshot with a hash taken at the same moment as the result.
+    """
+    run_dir = tmp_path / "hydrated" / "run-1"
+    runbook = tmp_path / "written-by-an-earlier-step.md"
+
+    step = ResolvedStep(
+        step_id="consumer",
+        mode="agent",
+        prompt_paths=[str(runbook)],
+        produced_refs=[str(runbook)],
+        outputs={"report": IOSpec(path="{{run.dir}}/report.md")},
+    )
+    plan = Plan(process="root.process.md", steps=[step])
+    bundle = PlanBundle(plan=plan, spec=ProcessSpec(name="root"), source_path="root.process.md")
+
+    # Launch: the producing step has not run, so the runbook is absent.
+    assert not runbook.exists()
+    _write_run_config(run_dir, original_run_dir=run_dir)
+    _write_run_plan(
+        run_dir,
+        run_id=ROOT_RUN_ID,
+        scope_path=(),
+        plan=plan,
+        step_fingerprints={"consumer": fingerprint_step(step)},
+    )
+
+    # The earlier step runs and writes the runbook; the consumer then executes.
+    runbook.write_text("# Runbook produced by an earlier step\n")
+    report = run_dir / "report.md"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text("# Report\n")
+    _write_task(
+        run_dir / ".state/tasks/consumer",
+        run_id=ROOT_RUN_ID,
+        step_id="consumer",
+        outputs={"report": str(report)},
+        step_hash=fingerprint_step(step),
+    )
+
+    task = scan_task_output_projection(run_dir, bundle).tasks[0]
+
+    assert task.state == "completed"
+    assert task.step_binding == "exact", (
+        f"outputs rejected as {[(o.name, o.reason) for o in task.unaccepted_outputs]}"
+    )
+    assert [output.name for output in task.accepted_outputs] == ["report"]
