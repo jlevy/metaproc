@@ -6,14 +6,7 @@ status: Approved
 ---
 # Architecture: File I/O Utilities (`metaproc.io`)
 
-**Date:** 2026-07-26 (last updated 2026-08-09) **Status:** Approved
-
-> **Maintenance**: This is a maintained architecture document.
-> Revise it with `tbd shortcut revise-architecture-doc` and verify the public table
-> against `metaproc.io.__all__` and current dependency behavior.
-> Update the **last updated** date after non-trivial changes.
-> The architecture index lives in
-> [development.md § Architecture Docs](../development.md#architecture-docs).
+**Date:** 2026-07-26 (last updated 2026-08-27) **Status:** Approved
 
 `metaproc.io` is the curated public import surface for downstream callers and shared
 internal use. Every helper documented here is importable directly from `metaproc.io`:
@@ -138,29 +131,12 @@ these. The longer version:
 If a specific call site relies on any of these behaviors in a non-obvious way, add a
 concise `# NOTE:` that explains why the behavior matters there.
 
-## Future Considerations
-
-### Open Questions
-
-- Should the typed envelope loaders join the top-level public surface, or should their
-  model and plugin dependencies remain explicit through `metaproc.io.frontmatter`?
-- Does the append-only JSONL contract need a dedicated single-writer helper, or are
-  direct append operations clearer at the event-log boundaries that own them?
-
-### Potential Improvements
-
-- Add a documentation contract check that compares the Public Surface table with
-  `metaproc.io.__all__` so new exports cannot land without a deliberate documentation
-  decision.
-- Add focused examples for template rendering and gzip-transparent artifact lookup if
-  downstream adoption shows that signatures alone are insufficient.
-
 ## References
 
-- [`metaproc.io`](../../src/metaproc/io/__init__.py)
-- [`metaproc.io.frontmatter`](../../src/metaproc/io/frontmatter.py)
-- [`metaproc.io.gz_io`](../../src/metaproc/io/gz_io.py)
-- [`metaproc.io.templating`](../../src/metaproc/io/templating.py)
+- `src/metaproc/io/__init__.py`
+- `src/metaproc/io/frontmatter.py`
+- `src/metaproc/io/gz_io.py`
+- `src/metaproc/io/templating.py`
 - [`frontmatter-format`](https://github.com/jlevy/frontmatter-format)
 - [`strif`](https://github.com/jlevy/strif)
 

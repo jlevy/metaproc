@@ -148,7 +148,7 @@ def _build_gemini_flags(
     merged_config: dict[str, object],
     variables: dict[str, str],
 ) -> list[str]:
-    """Build CLI flags for ``gemini -p`` from merged config."""
+    """Build CLI flags for the stdin-streamed headless ``gemini`` invocation."""
     flags: list[str] = []
 
     model = merged_config.get("model") or GEMINI_DEFAULT_MODEL
@@ -330,7 +330,7 @@ class GeminiCliAdapter:
                 "(1) export GEMINI_API_KEY=AIza... for the direct API, or "
                 "(2) export GOOGLE_GENAI_USE_VERTEXAI=true GOOGLE_CLOUD_PROJECT=<project> "
                 "for Vertex AI + ADC (reuses `gcloud auth application-default login`). "
-                "See docs/runbooks/credential-setup.runbook.md#gemini-cli for all three modes."
+                "See src/metaproc/docs/credential-setup.runbook.md#gemini-cli for all three modes."
             ),
         )
 

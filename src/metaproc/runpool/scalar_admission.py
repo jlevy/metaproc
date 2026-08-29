@@ -8,7 +8,7 @@ starting N agents simultaneously.
 
 This closes that gap for the scalar path without pulling in the rest of RunPool. The
 enforceable rule is design test 7 of
-``docs/process-framework-concepts.md`` ("Is every launch admitted?"):
+``src/metaproc/docs/process-framework-theory.md`` ("Is every launch admitted?"):
 
     Every independently scheduled task attempt is admitted through the applicable
     resource authorities, and its full process tree is charged to that attempt.

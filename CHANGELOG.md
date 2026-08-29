@@ -7,6 +7,29 @@ development series.
 
 ## [Unreleased][unreleased]
 
+### Documentation
+
+- The core documentation set now ships inside the package.
+  `metaproc help` serves 17 topics instead of 3, covering the design doc, the
+  conventions, the artifact catalog, the general framework model, the credential and
+  cloud-dispatch runbooks, and all seven architecture documents, so a consumer reading
+  from an installed wheel has the same documentation as a reader of the repository.
+  `metaproc help` with no topic lists them in reading order with approximate sizes.
+- `metaproc help developer` and the Agent Skill catalog list the full topic set.
+  Regenerate committed skill copies with `metaproc skill metaproc --install`.
+- Documentation paths moved: `docs/arch/` is gone, its contents now in
+  `src/metaproc/docs/`; `arch-metaproc-core.md` is `metaproc-design.md`;
+  `docs/releases/` is `docs/project/releases/`. Project-internal material (revision
+  histories, future-work backlogs) moved under `docs/project/design/`.
+- New `devtools/check_shipped_links.py` gate: a relative link in a shipped document must
+  resolve inside `src/metaproc/`, so links that are valid in a checkout but dead in the
+  wheel fail CI.
+- New `devtools/check_doc_dates.py` gate: a shipped document’s `last updated` date must
+  not be older than its most recent substantive commit.
+  Reflows are ignored, so `make format` does not invalidate every date at once.
+
+These documentation changes altered no runtime behavior, artifact shape, or CLI flag.
+
 ### Added
 
 - **Mapped composite scopes**: a `mode: composite` step may now declare `for_each` and
@@ -35,7 +58,10 @@ development series.
 - **GCP dispatch artifacts are immutable**: `metaproc gcp run` validates its artifact
   identity before packaging and creates wheel and workspace objects only when their GCS
   names are unused, so a later dispatch cannot replace bytes referenced by an existing
-  job.
+  job. Re-running a dispatch that failed after uploading stays possible: an existing
+  object with an identical digest is accepted as already uploaded, while one with
+  different content fails with the object name and the instruction to pick a new
+  `--job-name`.
 
 - **Gemini prompt transport ignores workspace ignore rules**: the Gemini CLI adapter
   keeps its durable audit prompt while streaming those bytes through stdin, so an

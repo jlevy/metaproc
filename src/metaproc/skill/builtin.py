@@ -1,40 +1,36 @@
 """Built-in metaproc skill spec, registered via the ``metaproc.skills`` entry-point group.
 
 The catalog callable generates a help-topic listing from
-:class:`metaproc.docs.HelpTopics` so the skill file stays in sync with the
+:data:`metaproc.docs.TOPIC_REGISTRY` so the skill file stays in sync with the
 actual bundled docs without manual updates.
 """
 
 from __future__ import annotations
 
-from dataclasses import fields as dc_fields
-
-from metaproc.docs import TOPIC_DESCRIPTIONS as _HELP_TOPIC_DESCRIPTIONS
-from metaproc.docs import HelpTopics
+from metaproc.docs import TOPIC_REGISTRY as _TOPIC_REGISTRY
 from metaproc.skill.spec import SkillSpec
 
 
 def _help_topic_catalog() -> str:
     """Generate a catalog section listing ``metaproc help`` topics.
 
-    Sources the actual topic names from :class:`metaproc.docs.HelpTopics` fields
-    so the list never goes stale.
+    Sources the topics from :data:`metaproc.docs.TOPIC_REGISTRY` so the list never
+    goes stale. Registry order is preserved rather than sorted: it is the
+    recommended reading order, and alphabetical order would interleave the
+    component architecture references with the documents an agent should read
+    first. Each entry carries its approximate size, so an agent can judge what a
+    topic costs before spending context on it.
     """
 
     lines: list[str] = []
     lines.append("## Help Topics")
     lines.append("")
-    lines.append("Available via `metaproc help <topic>`:")
+    lines.append("Available via `metaproc help <topic>`, in recommended reading order:")
     lines.append("")
 
-    # Use the dataclass fields to enumerate actual topics
-    topic_names = [f.name for f in dc_fields(HelpTopics)]
-    for name in sorted(topic_names):
-        desc = _HELP_TOPIC_DESCRIPTIONS.get(name, "")
-        if desc:
-            lines.append(f"- **{name}:** {desc}")
-        else:
-            lines.append(f"- **{name}**")
+    for topic in _TOPIC_REGISTRY:
+        size = f"~{topic.words / 1000:.1f}k words"
+        lines.append(f"- **{topic.name}** ({size}): {topic.description}")
 
     return "\n".join(lines)
 

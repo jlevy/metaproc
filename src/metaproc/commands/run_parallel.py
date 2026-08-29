@@ -1001,7 +1001,7 @@ def run_parallel(
                     if artifact_dir is not None and effective_outputs:
                         # Neither rewriting pass runs here. This is the mode:code
                         # branch, and repair and conform are both scoped to
-                        # agent-authored output: `arch-metaproc-core.md` §14.6 for
+                        # agent-authored output: `metaproc-design.md` §14.6 for
                         # why, `TestWhichExecutorsRewriteAgentOutput` for the guard.
                         output_failures = validate_item_outputs_detailed(
                             artifact_dir, effective_outputs, variables=item_vars
@@ -1183,7 +1183,7 @@ def run_parallel(
 
     # ── Auth-pool dispatch template (Phase 6) ────────
     # Construct the same PoolDispatchConfig run-process builds at
-    # docs/arch/arch-metaproc-core.md
+    # src/metaproc/docs/metaproc-design.md
     # Phase 6. Without this, run-parallel as a worker entrypoint
     # ignores --auth-* flags and falls back to the legacy
     # single-credential bootstrap, which is exactly the cloud

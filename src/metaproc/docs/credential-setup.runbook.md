@@ -9,9 +9,9 @@ runbook:
 How to configure credentials for each metaproc adapter.
 
 Bootstrap context (tool installs, gcloud, first-time `auth-check`):
-[`environment-bootstrap.runbook.md`](environment-bootstrap.runbook.md).
+[`environment-bootstrap.runbook.md`](https://github.com/jlevy/metaproc/blob/main/docs/runbooks/environment-bootstrap.runbook.md).
 Routine command surface (`run-process`, `auth status`, `status`, `pool`, `trace`):
-[`metaproc-operator-reference.md`](../../src/metaproc/docs/metaproc-operator-reference.md).
+[`metaproc-operator-reference.md`](metaproc-operator-reference.md).
 
 ## Quick verification
 
@@ -43,7 +43,7 @@ Static long-lived OAuth token (~1 year per Anthropic).
 The token is the credential — slot bootstrap injects it via env var; no
 `.credentials.json` is materialized into the slot.
 Eliminates the snapshot-staleness failure mode that affected Vehicle B fan-out; see
-[the authentication architecture](../arch/arch-authentication.md) for the design.
+[the authentication architecture](arch-authentication.md) for the design.
 
 **Per-account, once per token rotation (~yearly):**
 
@@ -183,7 +183,7 @@ if all are present, so a stray inherited value bypasses the pool and bills per-t
 | Backwards compat with pre-pool deploys | Vehicle B via legacy `claude-auth` push |
 | Pay-per-token (subscription not in use) | `ANTHROPIC_API_KEY` |
 
-Architecture: [arch-authentication.md](../arch/arch-authentication.md).
+Architecture: [arch-authentication.md](arch-authentication.md).
 Operator runbook for full dispatch:
 [`metaproc/docs/runbooks/cloud-dispatch.runbook.md`](cloud-dispatch.runbook.md) → *GCP
 Batch (Personal Plan)*.
@@ -287,13 +287,13 @@ The adapter’s `bootstrap(home)` hook reads `CODEX_CREDS_JSON`, validates that
 `tokens.auth_mode == "chatgpt"` (rejecting `apikey` blobs — those should arrive as
 `OPENAI_API_KEY` directly), writes `{home}/.codex/auth.json` (mode 0600, parent 0700),
 and pops the env var so it does not leak to child processes.
-See [arch-authentication.md](../arch/arch-authentication.md) for the design context.
+See [arch-authentication.md](arch-authentication.md) for the design context.
 
 ### Gemini CLI (`gemini-cli`)
 
 Three auth modes, pick one.
 The adapter checks them in this order and uses the first it finds; detection logic lives
-in [src/metaproc/adapters/gemini.py:146](../../src/metaproc/adapters/gemini.py#L146).
+in `src/metaproc/adapters/gemini.py`.
 
 **Mode 1 — Direct Gemini API (personal key).** One env var, no GCP needed.
 
@@ -330,7 +330,7 @@ No Gemini-specific key needed.
 
 ADC itself comes from one of (in order): `GOOGLE_APPLICATION_CREDENTIALS` pointing at a
 service-account key file, `GCP_CREDENTIALS_BASE64` (decoded at metaproc startup by
-[gcp_credentials.py](../../src/metaproc/cloud/gcp/gcp_credentials.py)), or
+`src/metaproc/cloud/gcp/gcp_credentials.py`), or
 `gcloud auth application-default login`.
 
 ```bash
@@ -341,8 +341,8 @@ export GOOGLE_CLOUD_PROJECT="$METAPROC_GCP_PROJECT"
 
 The `smoke-adapter-gemini` process uses Mode 3 so the smoke is green on any operator
 laptop already set up for Batch dispatch — see
-[docs/arch/arch-testing.md](../arch/arch-testing.md) and
-[process/self-test/smoke-adapter-gemini.process.md](../../process/self-test/smoke-adapter-gemini.process.md).
+[docs/arch/arch-testing.md](arch-testing.md) and
+[process/self-test/smoke-adapter-gemini.process.md](https://github.com/jlevy/metaproc/blob/main/process/self-test/smoke-adapter-gemini.process.md).
 
 ## GCP Cloud Infrastructure
 

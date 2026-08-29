@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from google.api_core.exceptions import GoogleAPIError, PreconditionFailed
 
 from metaproc.cloud.gcp.dispatch_artifacts import (
     GCS_UPLOAD_CHUNK_SIZE,
@@ -21,6 +22,7 @@ from metaproc.cloud.gcp.dispatch_artifacts import (
     upload_wheel_to_gcs,
     upload_workspace_to_gcs,
 )
+from metaproc.errors import CLIError
 from metaproc.io.digests import file_sha256, verify_file_sha256
 
 
@@ -452,6 +454,83 @@ class TestUploadToGcs:
             retry=GCS_UPLOAD_RETRY,
         )
         assert blob.metadata == {"metaproc-sha256": file_sha256(local)}
+
+    def test_identical_existing_object_makes_retry_idempotent(self, tmp_path: Path):
+        """R32: a dispatch that failed after uploading must stay retriable.
+
+        ``if_generation_match=0`` raises 412 on the second attempt. Same bytes means
+        the upload already succeeded, so the URI is returned rather than dead-ending
+        the operator on a re-run with the same ``--job-name``.
+        """
+        local = tmp_path / "payload.txt"
+        local.write_text("hi")
+
+        blob = MagicMock()
+        blob.upload_from_filename.side_effect = PreconditionFailed("412")
+        # reload() is what fetches the *server's* metadata; the uploader has already
+        # overwritten blob.metadata locally with the digest it was about to write.
+        blob.reload.side_effect = lambda: setattr(
+            blob, "metadata", {"metaproc-sha256": file_sha256(local)}
+        )
+        bucket = MagicMock()
+        bucket.blob.return_value = blob
+        client = MagicMock()
+        client.bucket.return_value = bucket
+
+        with patch(
+            "metaproc.cloud.gcp.dispatch_artifacts.storage.Client",
+            return_value=client,
+        ):
+            uri = upload_to_gcs(local, "gs://my-bucket/gcp-run/j/payload.txt", project="p")
+
+        assert uri == "gs://my-bucket/gcp-run/j/payload.txt"
+        blob.reload.assert_called_once()
+
+    def test_conflicting_existing_object_raises_actionable_cli_error(self, tmp_path: Path):
+        """Different bytes under the same URI stay a hard error, with remediation."""
+        local = tmp_path / "payload.txt"
+        local.write_text("hi")
+
+        blob = MagicMock()
+        blob.upload_from_filename.side_effect = PreconditionFailed("412")
+        blob.reload.side_effect = lambda: setattr(
+            blob, "metadata", {"metaproc-sha256": "some-other-digest"}
+        )
+        bucket = MagicMock()
+        bucket.blob.return_value = blob
+        client = MagicMock()
+        client.bucket.return_value = bucket
+
+        with (
+            patch(
+                "metaproc.cloud.gcp.dispatch_artifacts.storage.Client",
+                return_value=client,
+            ),
+            pytest.raises(CLIError, match="already exists with different content"),
+        ):
+            upload_to_gcs(local, "gs://my-bucket/gcp-run/j/payload.txt", project="p")
+
+    def test_unreadable_existing_object_raises_cli_error(self, tmp_path: Path):
+        """A 412 whose metadata cannot be read must not surface as a raw traceback."""
+        local = tmp_path / "payload.txt"
+        local.write_text("hi")
+
+        blob = MagicMock()
+        blob.upload_from_filename.side_effect = PreconditionFailed("412")
+        blob.reload.side_effect = GoogleAPIError("no access")
+        bucket = MagicMock()
+        bucket.blob.return_value = blob
+        client = MagicMock()
+        client.bucket.return_value = bucket
+
+        with (
+            patch(
+                "metaproc.cloud.gcp.dispatch_artifacts.storage.Client",
+                return_value=client,
+            ),
+            pytest.raises(CLIError, match="metadata could not be read"),
+        ):
+            upload_to_gcs(local, "gs://my-bucket/gcp-run/j/payload.txt", project="p")
 
     def test_rejects_non_gs_uri(self, tmp_path: Path):
         local = tmp_path / "x"

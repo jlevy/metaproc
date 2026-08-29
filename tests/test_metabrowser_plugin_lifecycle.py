@@ -68,3 +68,9 @@ def test_async_views_ignore_stale_responses_and_share_requests_until_dispose() -
     assert "batch / collect / alpha" in payload["resourceHtml"]
     assert "runs/current/report.md" in payload["resourceHtml"]
     assert "result-not-validated" in payload["resourceHtml"]
+    # R33: a run with absent declared state must not render like a fully covered run.
+    assert "Missing runtime coverage (2)" in payload["resourceHtml"]
+    assert "batch / publish" in payload["resourceHtml"]
+    assert "declared task has no durable state" in payload["resourceHtml"]
+    assert "batch / review" in payload["resourceHtml"]
+    assert "declared child scope has no durable state" in payload["resourceHtml"]

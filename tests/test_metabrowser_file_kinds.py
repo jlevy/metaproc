@@ -263,7 +263,7 @@ def test_api_viz_bootstraps_consumer_plugins_before_run_source_discovery(
     )
     monkeypatch.setattr(
         plugin_discovery,
-        "discover_and_load_plugins",
+        "ensure_plugins_loaded",
         _discover_consumer_plugin,
     )
     process_path = _write(

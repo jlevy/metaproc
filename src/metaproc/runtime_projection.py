@@ -479,7 +479,7 @@ def _result_binding(
 ) -> ResultBinding:
     if result is None:
         return "none"
-    result_attempt_id = getattr(result, "attempt_id", None)
+    result_attempt_id = result.attempt_id
     if result_attempt_id is None:
         return "legacy-unbound"
     if result_attempt_id != status.attempt_id:

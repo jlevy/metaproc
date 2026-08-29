@@ -49,6 +49,8 @@ format-markdown:
 lint:
 	$(UV_RUN) python -m devtools.lint
 	$(UV_RUN) python -m devtools.check_links
+	$(UV_RUN) python -m devtools.check_shipped_links
+	$(UV_RUN) python -m devtools.check_doc_dates
 	$(UV_RUN) python -m devtools.public_hygiene
 	$(UV_RUN) python -m devtools.check_supply_chain
 	npm run check:browser
@@ -56,6 +58,8 @@ lint:
 lint-check:
 	$(UV_RUN) python -m devtools.lint --check
 	$(UV_RUN) python -m devtools.check_links
+	$(UV_RUN) python -m devtools.check_shipped_links
+	$(UV_RUN) python -m devtools.check_doc_dates
 	$(UV_RUN) python -m devtools.public_hygiene
 	$(UV_RUN) python -m devtools.check_supply_chain
 	npm run check:browser

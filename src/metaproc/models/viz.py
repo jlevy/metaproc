@@ -12,7 +12,7 @@ The projection from a resolved :class:`metaproc.models.plan.Plan` to a
 :class:`VizModel` lives in ``metaproc/src/metaproc/viz/project.py``. This file
 defines shapes only — no projection or rendering logic.
 
-See ``metaproc/docs/arch/arch-metaproc-core.md`` for the surrounding architecture.
+See ``metaproc/docs/metaproc-design.md`` for the surrounding architecture.
 """
 
 from __future__ import annotations
@@ -309,7 +309,13 @@ class RuntimeTaskProjection(BaseModel):
 
 
 class RuntimeCoverageGap(BaseModel):
-    """One plan-declared runtime coordinate whose durable state is absent."""
+    """One plan-declared runtime coordinate whose durable state is absent.
+
+    A gap states only that no durable record exists at this coordinate; it does not
+    distinguish "not started yet" from "lost". On a run that is still executing, every
+    declared task ahead of the frontier is a gap, and that is faithful. Readers
+    rendering a live run should present gaps as pending rather than as breakage.
+    """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 

@@ -77,7 +77,7 @@ def materialize_execution_lanes(
                 "every lane currently runs with the run-level adapter config. "
                 "Remove the 'overrides' block until same-runpool multi-lane "
                 "drive lands. See "
-                "docs/arch/arch-metaproc-core.md "
+                "src/metaproc/docs/metaproc-design.md "
                 "§ Phase 2 follow-up."
             )
         resolved = _resolve_lane_profile(registry, spec)

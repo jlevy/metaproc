@@ -11,9 +11,24 @@ Metaproc documents itself.
 Before running, monitoring, or debugging any metaproc process, read
 `metaproc help operator`; `metaproc help developer` and `metaproc help concepts` cover
 extension policy and the process model.
+Run `metaproc help` for the full topic list with sizes.
 The generated Agent Skill in `.agents/skills/metaproc/` routes to the same manuals.
 After changing the skill baseline, spec, or help topics, regenerate the committed copies
 with `metaproc skill metaproc --install` (a drift test enforces this).
+
+Every `.md` file in `src/metaproc/docs/` ships in the wheel and is a `metaproc help`
+topic, so editing one changes the distribution.
+Two rules follow:
+
+- **Shipped documents describe the system as it is.** Future work, authoring revision
+  histories, and instructions for maintaining this repository belong in
+  [`docs/project/`](docs/project/README.md).
+  Where shipped prose dates something, it names a release, not an internal revision.
+- **A relative link in `src/metaproc/docs/` must resolve inside that directory.**
+  Anything else is dead for a reader of the installed package, even though
+  `devtools/check_links.py` resolves it against a checkout.
+  `devtools/check_shipped_links.py` enforces this; link outside the package with an
+  absolute URL, or rewrite the reference.
 
 ## Build and Test
 
@@ -77,6 +92,12 @@ Keep changes focused and preserve unrelated work.
 Before handoff: review the diff, run `make verify`, update and close the relevant tbd
 issues, run `tbd sync`, commit, push, open or update the pull request, and watch CI to
 completion.
+
+Reviews live on the pull request, not in the repository.
+The `tbd shortcut review-github-pr` offers an in-repo review doc under
+`docs/project/reviews/` as one of its publish channels; this repository retired that
+directory deliberately, along with the rest of its human-facing workflow scaffolding.
+Post the review as PR comments instead, and do not recreate the directory.
 
 <!-- BEGIN TBD INTEGRATION format=f08 surface=agents-md -->
 ## tbd

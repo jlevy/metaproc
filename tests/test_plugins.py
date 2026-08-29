@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.metadata
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
@@ -16,7 +17,12 @@ from metaproc.models.resources import HierarchyRef, ResourceEvent
 from metaproc.models.runtime import get_terminal_statuses
 from metaproc.models.usage import ToolRunProfile
 from metaproc.models.viz import NodeDecoration, StepDetails, VizNode
-from metaproc.plugins.discovery import discover_and_load_plugins
+from metaproc.plugins.discovery import (
+    discover_and_load_plugins,
+    ensure_plugins_loaded,
+    get_plugin_registry,
+    reset_plugin_discovery,
+)
 from metaproc.plugins.registry import PluginRegistryImpl
 
 
@@ -220,6 +226,45 @@ class TestPluginDiscovery:
         reg = PluginRegistryImpl()
         result = discover_and_load_plugins(reg)
         assert result is reg
+
+    def test_ensure_scans_once_then_reuses_the_registry(self, monkeypatch):
+        """Repeat calls must not rescan: the viz-model route is polled per render."""
+        scans = 0
+        real_entry_points = importlib.metadata.entry_points
+
+        def _counting_entry_points(**kwargs):
+            nonlocal scans
+            scans += 1
+            return real_entry_points(**kwargs)
+
+        monkeypatch.setattr(importlib.metadata, "entry_points", _counting_entry_points)
+        reset_plugin_discovery()
+
+        first = ensure_plugins_loaded()
+        second = ensure_plugins_loaded()
+
+        assert scans == 1
+        assert second is first
+        assert first is get_plugin_registry()
+
+    def test_ensure_rescans_after_reset(self, monkeypatch):
+        """`reset_plugin_discovery` is the seam tests use to install entry points."""
+        reset_plugin_discovery()
+        ensure_plugins_loaded()
+        reset_plugin_discovery()
+
+        scans = 0
+        real_entry_points = importlib.metadata.entry_points
+
+        def _counting_entry_points(**kwargs):
+            nonlocal scans
+            scans += 1
+            return real_entry_points(**kwargs)
+
+        monkeypatch.setattr(importlib.metadata, "entry_points", _counting_entry_points)
+        ensure_plugins_loaded()
+
+        assert scans == 1
 
 
 class TestFakePlugin:

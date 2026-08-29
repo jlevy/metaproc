@@ -1,7 +1,7 @@
 # Memory Accounting Reference
 
 Background for anyone changing how Metaproc sizes concurrency, and the citations behind
-the choices in [arch-runpool.md](arch/arch-runpool.md).
+the choices in [arch-runpool.md](../src/metaproc/docs/arch-runpool.md).
 
 Memory is the binding constraint on agent fan-out.
 A single agent step is not a single process, the per-process cost is not what the
@@ -224,7 +224,8 @@ signal lags.
   [proc filesystem](https://www.kernel.org/doc/html/latest/filesystems/proc.html),
   [PSI](https://www.kernel.org/doc/html/latest/accounting/psi.html)
 - Commands: `vm_stat(1)`, `footprint(1)`, `memory_pressure(1)`, `sysctl(8)`
-- [arch-runpool.md](arch/arch-runpool.md) for how these feed the adaptive controller
+- [arch-runpool.md](../src/metaproc/docs/arch-runpool.md) for how these feed the
+  adaptive controller
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

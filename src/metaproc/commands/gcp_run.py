@@ -5,7 +5,7 @@ applications that already own their orchestration. The one command may be a comp
 ``metaproc run-process ... --backend local`` DAG on one Batch VM. Compatible multi-VM
 processes use ``metaproc run-process ... --backend gcp-worker --cloud`` instead.
 
-See ``docs/arch/arch-metaproc-core.md``
+See ``src/metaproc/docs/metaproc-design.md``
 for the full design. This module owns:
 
 - argv parsing for the ``gcp run`` Typer subcommand,

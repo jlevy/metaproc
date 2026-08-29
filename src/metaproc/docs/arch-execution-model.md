@@ -6,24 +6,17 @@ status: Draft
 ---
 # Execution Model Reference Implementation
 
-**Date:** 2026-08-16 (last updated 2026-08-23) **Status:** Draft
+> **This document owns the *implementation*.** The executable reference model: durable
+> facts, the pure reducer, the status projection, invariant tests, and the scale
+> envelope. For why the contracts are shaped this way, and what was deliberately left
+> out, see [execution-model-design.md](execution-model-design.md)
+> (`metaproc help execution-contracts`). Readable as `metaproc help arch-execution`.
 
-> **Maintenance**: This is a maintained architecture doc.
-> Revise via `tbd shortcut revise-architecture-doc` (which prompts you to verify content
-> against current code, then add a “Future Considerations” section).
-> When you make non-trivial changes, bump the **last updated** date above.
-> The full arch-doc index lives in
-> [development.md § Architecture docs](../development.md#architecture-docs).
-> 
-> Companion docs (in `docs/arch/`): [arch-metaproc-core](arch-metaproc-core.md),
-> [arch-runpool](arch-runpool.md), [arch-cloud-execution](arch-cloud-execution.md),
-> [arch-testing](arch-testing.md).
-> Design rationale: [execution-model-design.md](../execution-model-design.md); general
-> model: [process-framework-concepts.md](../process-framework-concepts.md).
+**Date:** 2026-08-16 (last updated 2026-08-27) **Status:** Draft
 
 `src/metaproc/execution_model/` is the executable form of the
-[execution model design](../execution-model-design.md): the durable facts a run is made
-of, and a pure reducer over them.
+[execution model design](execution-model-design.md): the durable facts a run is made of,
+and a pure reducer over them.
 It performs no I/O and reads no clock, so scheduler semantics are testable without
 processes, files, or timing.
 The production engine is checked against it; it does not replace the engine, and the
@@ -158,7 +151,7 @@ schedules them.
 
 **What is live today.** Some item-scoped semantics from this design already run in the
 engine, bridged into the level walk rather than managed by a task-level scheduler:
-[item-aligned chains](arch-metaproc-core.md#item-aligned-chains)
+[item-aligned chains](metaproc-design.md#item-aligned-chains)
 (`graph.item_aligned_chains` plus `engine/item_runner.py`), fan-in collections with
 `require: finished`, per-step ceilings, declared retry on the code path, and a
 content-failure retry loop on the non-fan-out agent path.
@@ -300,28 +293,3 @@ That is correct while the projection is in-memory only: the registry indexes art
 that reach disk. The durability step, which makes the projection durable, is also what
 gives it a Pydantic model and a registry entry, and the token is chosen now so that step
 is a registration rather than a rename.
-
-## Future Considerations
-
-### Open Questions
-
-The reducer does not model admission and budget reservation, finalization and effects,
-`group_by`, threshold cardinality, or the legacy barrier semantics of `needs`. The
-design specifies admission claims and authorities, while RunPool remains the local
-implementation.
-
-Retry policy is data on `StepTemplate` rather than a scheduler constant, so the model
-can replay a spec whose policy differs from the defaults.
-The semantics version belongs to the resolved plan and must be enforced by the compiler;
-storing it in scheduler state would not enforce anything.
-
-### Potential Improvements
-
-The two implementation increments in the adoption path remain the relevant improvements:
-persist attempts and task generations as durable facts, then replace the level walk and
-its aligned-chain bridge with an incremental task-level scheduler.
-The trigger table above defines when the second increment is warranted.
-
-<!-- This document follows common-doc-guidelines.md.
-See github.com/jlevy/practical-prose and review guidelines before editing.
--->
