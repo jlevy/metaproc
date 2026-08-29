@@ -38,7 +38,7 @@ Almost nobody needs all of them at once, so start from what you are doing:
 | You are… | Read |
 | --- | --- |
 | **authoring a process spec** | §6 Authored Process Model: the envelope, step modes, inputs and outputs, `for_each`, template resolution, and the step field reference in §6.13 |
-| **running or debugging a run** | §9 Runtime Model (what each artifact means), then §10 Resumability and Publication Semantics (why a step did or did not re-run). [metaproc-operator-reference.md](metaproc-operator-reference.md) is the task-oriented version |
+| **running or debugging a run** | §9 Runtime Model (what each artifact means), then §10 Resumability and Publication Semantics (why a step did or did not re-run, and in §10.6 why an output was or was not accepted). [metaproc-operator-reference.md](metaproc-operator-reference.md) is the task-oriented version |
 | **implementing an adapter** | §12 Adapter Contract, then §14 Robustness Subsystems for failure classification, and §15 for usage and cost attribution |
 | **contributing to the framework** | §5 Implementation Inventory for the map, then §8 Resolved Plan Model and §19 Process Orchestration for the execution path |
 | **reviewing a design decision** | §8.1 Why the Plan Is Data, §10 Resumability, and §11.1 on why an items file is a candidate source rather than completion state |
@@ -865,9 +865,9 @@ The four artifact groups (run-level state, per-step state, per-task state, logs)
 populate the `.state/` and `.logs/` branches at every scope root.
 For the per-file reference (filename, format, schema, lifecycle, writer, and readers),
 see [artifact-catalog.md](artifact-catalog.md).
-Sections 9.2-9.6 below cover the engine’s contract on the load-bearing files
-(`status.yaml`, `attempt.yaml`, `result.yaml`, `.logs/*.jsonl`, `process-events.jsonl`)
-in depth.
+Sections 9.2-9.7 below cover the engine’s contract on the load-bearing files
+(`status.yaml`, `attempt.yaml`, `result.yaml`, `.logs/*.jsonl`, `process-events.jsonl`,
+`run-plan.yaml`) in depth.
 
 ## 9.1 Example Runtime Layout
 
@@ -1061,38 +1061,14 @@ The complete architecture, including the file-kind registry, view registry, char
 visualization plane, and remote tunnel, lives in
 [MetaBrowser architecture](https://github.com/jlevy/metabrowser/blob/main/docs/architecture.md).
 
-When the `viz-model` route receives a run directory, Metaproc adds a rebuildable task
-and output projection to `VizModel`. The projection walks contained scalar and mapped
-composite scopes and reconstructs qualified task identities from the immutable run
-configuration. Each evaluated scope records a narrow projection of the exact resolved
-`Plan` in `.state/run-plan.yaml`: step identity, execution shape, canonical mapped item
-keys, output declarations, and fingerprints.
-Opaque adapter configuration, environment, parameters, prompts, and fan-out item
-payloads stay out of the record.
-The projection uses that authority instead of trying to reconstruct item-specific paths,
-profiles, or adapter resolution from the authored process.
-Each nested record must also match a composite declaration, scalar-or-mapped shape, and
-canonical item key in its nearest accepted parent scope.
-When an upstream step creates a fan-out source during the run, discovery atomically
-refreshes that mapped step’s key set before dispatch; a resume replaces removed keys.
-Runs created before this record existed fall back to the loaded plan bundle.
-The projection validates mutable task status against retained attempts.
-Exact snapshots also expose a typed coverage gap when a declared executable scalar task,
-mapped item task, or composite child scope has no corresponding durable state.
-A scalar composite is represented by its child scope rather than a synthetic parent
-task; mapped composites retain parent item tasks because those records own each mapped
-attempt and result. A recorded output enters the consumable set only when its result
-names the latest successful attempt, its step fingerprint matches the loaded plan, its
-port is declared, and its local artifact exists with the declared file or directory
-kind.
+When the `viz-model` route receives a run directory, Metaproc attaches a rebuildable
+task and output projection to `VizModel`. The browser is a consumer of that projection,
+not its owner: the projection is defined by §9.7 (`run-plan.yaml`, the record it reads)
+and §10.6 (which outputs are consumable and why), and it is callable without a browser.
+What the route adds is presentation — the task table, accepted and unaccepted outputs,
+coverage gaps, and warnings — over a narrow, versioned DTO rather than a serialization
+of the mutable runtime records.
 
-The public projection is a narrow, versioned DTO rather than a serialization of the
-complete mutable runtime records.
-Historical results without attempt or step identity, stale results, undeclared ports,
-missing artifacts, and nonportable external paths are reported as unaccepted
-diagnostics. If a run was hydrated at a different path, the immutable `run-config.yaml`
-`run_dir` anchors safe rebasing into the local run tree.
-Projection errors become view warnings rather than hiding the structural process graph.
 The projection writes no artifact index, lineage ledger, or scheduler state.
 
 The browser classifies files into a **file kind** taxonomy (`agent-log`, `runpool-log`,
@@ -1149,6 +1125,57 @@ Event types (13 total):
 
 All events include an auto-injected `ts` timestamp.
 The format is compatible with RunPool events for unified browser display.
+
+## 9.7 `run-plan.yaml`
+
+The files above record what *happened*. `run-plan.yaml` records what the run was
+supposed to contain, so a later reader can tell the difference between a task that
+succeeded, a task that is missing, and a task that was never declared.
+
+One record is written per scope, at `<scope>/.state/run-plan.yaml`, carrying the schema
+token `metaproc:RunPlanSnapshot/0.1`. Per step it holds step identity, execution shape
+(`scalar` or `mapped`), the canonical mapped item keys, the output declarations, and the
+step fingerprint.
+
+**Why a separate record rather than the resolved plan.** Two obvious alternatives were
+rejected. Persisting the full resolved `Plan` would put opaque adapter configuration,
+environment, parameters, prompt text, and fan-out item payloads into every run tree —
+unbounded, and sensitive enough that a run directory could not be shared or inspected
+freely. Reconstructing from the authored process is not possible either: a mapped step’s
+roster may be discovered at runtime from an artifact an earlier step produced, so it
+does not exist in the spec, and the spec may have been edited since the run started.
+The snapshot is the narrow middle: enough to describe the declared runtime surface, with
+execution configuration deliberately excluded.
+
+**Exactness.** Both models forbid unknown fields.
+A recorded snapshot must declare unique step IDs and an exact item-key set for every
+step; keys must be unique and must be safe path components.
+A scalar step cannot declare item keys.
+`item_keys: null` is reserved for the compatibility fallback below and is rejected in a
+recorded snapshot.
+
+**Lifecycle.** The root record is published when `run-process` starts, after the run
+directory and lease are established.
+Each composite child scope publishes its own record when that scope is prepared.
+When runtime discovery resolves a mapped step’s roster from an upstream-produced source,
+that step’s key set is refreshed in place — atomically, under the orchestrator’s lease,
+before dispatch — because discovery is the first exact authority for those keys.
+The refresh replaces that step’s recorded set wholesale, so a resume drops keys that no
+longer resolve.
+
+**Scope authority.** A nested record does not authorize itself.
+Traversal walks parent-first, and each child scope is accepted only if its nearest
+already-accepted parent declares a matching composite step, the scalar-or-mapped shape
+agrees, and (for a mapped composite) the item key is safe and appears in the parent’s
+canonical key set.
+Every read is contained: a `.state` path that resolves outside the run
+tree is rejected rather than followed.
+Without this chain a run tree could describe arbitrary structure and have it believed.
+
+**Compatibility.** Runs created before this record existed have no snapshot.
+Those fall back to a projection of the loaded plan bundle, which cannot supply canonical
+mapped keys — that is what `item_keys: null` marks.
+The fallback is read-only and never written back.
 
 ## 10. Resumability and Publication Semantics
 
@@ -1236,6 +1263,71 @@ For each item in the fan-out source file:
 The result is a `FanOutDiscovery` with `actionable_contexts` (items to process) and
 `filtered_items` (items skipped with reason).
 This makes resume a normal code path, not a special recovery mode.
+
+## 10.6 Consumable Outputs
+
+§10.1 defines when the harness *publishes* an output.
+This section defines when a later reader may *consume* one.
+The two are different questions: publication happens once, inside the run; consumption
+happens afterwards, against a run tree that may have been resumed, partially
+re-executed, edited, or copied from another host.
+
+`runtime_projection.scan_task_output_projection` answers the second question.
+It reads the existing status, attempt, result, run-config, and run-plan records and
+rebuilds a task and output view.
+It writes no runtime state and is not an execution or lineage authority — nothing
+downstream of it decides what to run.
+
+A recorded output enters the consumable set only if every gate below holds.
+They are evaluated in order, and the first failure is the reported reason:
+
+| # | Gate | Reason when it fails |
+| --- | --- | --- |
+| 1 | Task status is `completed` or `cached` | `task-not-successful` |
+| 2 | Result is validated and itself terminal-successful | `result-not-validated` |
+| 3 | Result names an attempt | `legacy-unbound-result` |
+| 4 | That attempt is the task’s latest | `attempt-mismatch` |
+| 5 | Result carries a step fingerprint | `legacy-unbound-step` |
+| 6 | That fingerprint matches the scope’s `run-plan.yaml` record | `step-mismatch` |
+| 7 | The port is declared in the step’s outputs | `undeclared` |
+| 8 | The recorded path rebases inside the local run tree | `external` |
+| 9 | The artifact exists | `missing` |
+| 10 | It matches its declared `kind` (file or directory) | `kind-mismatch` |
+
+Everything else is reported as an unaccepted output carrying its reason, rather than
+being dropped: a reader that sees no entry for a port learns nothing, whereas one that
+sees `step-mismatch` knows the artifact is real but stale.
+
+Gates 3-6 are the load-bearing ones and exist for a specific failure.
+Without them a *current* plan can relabel an *old or unknown* output as its own — the
+run tree still holds the artifact a previous fingerprint produced, and nothing in the
+file itself says which step definition wrote it.
+Requiring the exact latest attempt and an exact fingerprint match is what binds a
+recorded artifact to the step that actually produced it.
+(§10.3 covers what the fingerprint is computed over; here it functions only as an
+identity to compare.)
+
+Gate 8 handles a run tree hydrated at a different path than it was written at.
+The immutable `run_dir` in `run-config.yaml` anchors the rebase, so a path recorded on
+another host resolves into the local tree; a path that genuinely points outside it stays
+unaccepted rather than being silently rewritten.
+
+**Coverage gaps.** Missing state must not read as complete coverage.
+When a snapshot declares an executable scalar task, a mapped item task, or a composite
+child scope that has no durable state at all, the projection emits a typed
+`RuntimeCoverageGap` (`task-state-missing` or `scope-state-missing`) instead of simply
+omitting it. A run where half the declared work never started otherwise looks exactly
+like a run where it all succeeded.
+
+Two shape rules follow from where records actually live.
+A scalar composite is represented by its child scope rather than a synthetic parent
+task, because no parent task record exists.
+A mapped composite keeps its parent item tasks, because those records do own each mapped
+attempt and result.
+
+Validation failures inside the projection surface as view warnings rather than hiding
+the structural process graph; the graph is most wanted precisely when a run is
+inconsistent.
 
 ## 11. Fan-Out and Items Files
 
