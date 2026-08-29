@@ -6,7 +6,7 @@ status: Approved
 ---
 # Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-08-28) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-08-29) **Status:** Approved
 
 Also readable as `metaproc help design`.
 
@@ -1274,9 +1274,9 @@ re-executed, edited, or copied from another host.
 
 `runtime_projection.scan_task_output_projection` answers the second question.
 It reads the existing status, attempt, result, run-config, and run-plan records and
-rebuilds a task and output view.
-It writes no runtime state and is not an execution or lineage authority — nothing
-downstream of it decides what to run.
+rebuilds a task and output view as `metaproc:TaskOutputProjection/0.1`. It writes no
+runtime state and is not an execution or lineage authority — nothing downstream of it
+decides what to run.
 
 A recorded output enters the consumable set only if every gate below holds.
 They are evaluated in order, and the first failure is the reported reason:

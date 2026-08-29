@@ -15,7 +15,7 @@ the filename constants.
 
 | Format | Count | Where it lives |
 | --- | --- | --- |
-| YAML | ~17 | `<run>/.state/` |
+| YAML | ~18 | `<run>/.state/` |
 | JSONL | ~9 | `<run>/.logs/` |
 | JSON | 3 writers | `<run>/.state/` sidecars, `<run>/resources.json`, arena cache |
 | Softschema MD | 5 | `<run>/` and `<run>/<artifact-tree>/` (post-run human reports) |

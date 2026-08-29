@@ -680,6 +680,7 @@ for unmarked old runs.
 | Artifact | Current path | Meaning |
 | --- | --- | --- |
 | Run config | `<run>/.state/run-config.yaml` | Frozen run identity, variables, and layout marker |
+| Run plan | `<scope>/.state/run-plan.yaml` | What this scope declared: step identity, shape, canonical mapped item keys, output ports, fingerprints |
 | Orchestrator lease | `<run>/.state/orchestrator-lease.yaml` | Owner and heartbeat for cross-host safety |
 | Process status | `<run>/.state/process-status.yaml` | Aggregated DAG state for status display |
 | Overrides | `<run>/.state/overrides.yaml` | Operator dependency overrides |
@@ -711,6 +712,35 @@ scraping console output.
 `tools/<tool-name>/` marks workflow ownership even though the file is operationally a
 log. `derived/` marks extractor output; trace extractors should not treat it as source
 input.
+
+### Reading Accepted and Unaccepted Outputs
+
+The browser’s run view splits a task’s recorded outputs into **accepted** and
+**unaccepted**. Accepted means the artifact is safe to consume: the task succeeded, the
+result belongs to the task’s latest attempt, the step fingerprint still matches
+`run-plan.yaml`, the port is declared, and the file or directory is present locally.
+
+An unaccepted output carries a reason, and the reason is the diagnosis:
+
+| Reason | What to do |
+| --- | --- |
+| `task-not-successful`, `result-not-validated` | The step did not finish cleanly. Read the task’s status and logs. |
+| `attempt-mismatch` | The artifact belongs to an earlier attempt. A later attempt superseded it; the current attempt’s result is what counts. |
+| `step-mismatch` | The artifact is real but stale: the step definition changed after it was written. Rerun the step (§Iterating on a Single Step) or accept it as historical. |
+| `legacy-unbound-result`, `legacy-unbound-step` | Written before attempt or fingerprint binding existed. Old run, not a fault. |
+| `undeclared` | The step wrote a port its spec does not declare. Fix the spec’s `outputs`. |
+| `external` | The recorded path lies outside the run tree, so it cannot be rebased onto this host. |
+| `missing` | The recorded path is gone. The artifact tree was moved, cleaned, or partially copied. |
+| `kind-mismatch` | A port declared `kind: file` is a directory on disk, or the reverse. |
+
+A **coverage gap** is different from an unaccepted output: the gap means a task or child
+scope the plan declared has no durable state at all, so nothing ran or the state was
+lost. On a run still in progress, not-yet-started work appears here too.
+
+None of this is an execution authority — it describes an existing run tree and never
+decides what runs next.
+For the full rule set see [metaproc-design.md](metaproc-design.md) §10.6 Consumable
+Outputs.
 
 ## Trace Workflow
 

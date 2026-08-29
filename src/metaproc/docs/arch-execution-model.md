@@ -12,7 +12,7 @@ status: Draft
 > out, see [execution-model-design.md](execution-model-design.md)
 > (`metaproc help execution-contracts`). Readable as `metaproc help arch-execution`.
 
-**Date:** 2026-08-16 (last updated 2026-08-27) **Status:** Draft
+**Date:** 2026-08-16 (last updated 2026-08-29) **Status:** Draft
 
 `src/metaproc/execution_model/` is the executable form of the
 [execution model design](execution-model-design.md): the durable facts a run is made of,
@@ -85,6 +85,16 @@ related set is vacuous success for `all` and failure for `any`; `broadcast` over
 roster that closed with other than exactly one key is deterministically dead.
 
 ## The Projection
+
+Two things in Metaproc are called a projection, and they are not the same one.
+This section is the execution model’s `project(state)`, which answers *what should run
+next* from the reducer’s in-memory state.
+The other is `runtime_projection.scan_task_output_projection`, which answers *what an
+existing run tree contains and which of its outputs are consumable* by reading durable
+`.state/` records (design §10.6). Both are rebuildable and neither is authoritative, but
+they have different inputs, different schema tokens (`metaproc:ProcessStatus/0.1` versus
+`metaproc:TaskOutputProjection/0.1`), and different readers.
+Where this document says “the projection” unqualified, it means `project(state)`.
 
 `project(state)` builds `metaproc:ProcessStatus/0.1` as a pure function of durable
 facts, so “rebuildable, never authoritative” holds by construction.
