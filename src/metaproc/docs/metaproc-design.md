@@ -1233,6 +1233,18 @@ via `_invalidate_downstream`, so editing a step’s `prompt_paths` runbook (or c
 descendants. Runs whose completion records carry no `recorded_step_hash` are treated as
 legacy completions and are not re-executed on resume.
 
+One class of referenced file is deliberately outside the hash: a runbook the run itself
+produces, reached through a dep that declares `produced_by`. `build_plan` records those
+on `ResolvedStep.produced_refs` and `fingerprint_step` skips their bytes.
+The reason is that such a file does not exist when the plan is built and does exist by
+the time the step runs, so hashing it would give one step two different fingerprints —
+and §9.7 and §10.6 both depend on the plan-time and execution-time values being
+comparable.
+Nothing is lost: the producing step’s own fingerprint covers that content and
+cascades downstream through the dep graph.
+The visible consequence is that hand-editing a generated runbook does not re-run its
+consumer; `--from <step>` forces that.
+
 ## 10.4 Recovery Rules
 
 Recovery semantics are explicit:
