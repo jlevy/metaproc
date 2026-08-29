@@ -247,6 +247,16 @@ async function main() {
               ],
             },
           ],
+          coverage_gaps: [
+            {
+              key: { step_id: "publish", item_key: null, scope_path: ["batch"] },
+              reason: "task-state-missing",
+            },
+            {
+              key: { step_id: "review", item_key: null, scope_path: ["batch"] },
+              reason: "scope-state-missing",
+            },
+          ],
         },
       },
     }),

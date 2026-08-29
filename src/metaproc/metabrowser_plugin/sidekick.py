@@ -187,10 +187,10 @@ def _load_run_bundle(run_dir: Path) -> PlanBundle:
 def viz_model_handler(request: Request) -> JSONResponse:
     """Return a VizModel envelope for the given process path."""
     from metaproc.plugins.discovery import (  # noqa: PLC0415 -- Metabrowser has a separate CLI bootstrap
-        discover_and_load_plugins,
+        ensure_plugins_loaded,
     )
 
-    discover_and_load_plugins()
+    ensure_plugins_loaded()
     process = request.query_params.get("process", "")
     run_dir_param = request.query_params.get("run_dir")
     run_dir_path = resolve_directory(run_dir_param) if run_dir_param is not None else None
@@ -546,14 +546,14 @@ def structure_report_handler(request: Request) -> JSONResponse:
             load_process_spec,
         )
         from metaproc.plugins.discovery import (  # noqa: PLC0415 -- guarded import (optional dep / circular)
-            discover_and_load_plugins,
+            ensure_plugins_loaded,
             get_plugin_registry,
         )
         from metaproc.structure_report import (  # noqa: PLC0415 -- guarded import (optional dep / circular)
             build_structure_report,
         )
 
-        discover_and_load_plugins()
+        ensure_plugins_loaded()
         spec = load_process_spec(target)
         report = build_structure_report(
             process_path=target,

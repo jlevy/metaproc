@@ -58,7 +58,10 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
 - **GCP dispatch artifacts are immutable**: `metaproc gcp run` validates its artifact
   identity before packaging and creates wheel and workspace objects only when their GCS
   names are unused, so a later dispatch cannot replace bytes referenced by an existing
-  job.
+  job. Re-running a dispatch that failed after uploading stays possible: an existing
+  object with an identical digest is accepted as already uploaded, while one with
+  different content fails with the object name and the instruction to pick a new
+  `--job-name`.
 
 - **Gemini prompt transport ignores workspace ignore rules**: the Gemini CLI adapter
   keeps its durable audit prompt while streaming those bytes through stdin, so an

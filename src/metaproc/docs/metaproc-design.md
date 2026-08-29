@@ -6,7 +6,7 @@ status: Approved
 ---
 # Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-08-27) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-08-28) **Status:** Approved
 
 Also readable as `metaproc help design`.
 
@@ -1629,7 +1629,11 @@ Registered adapters (in `ADAPTER_REGISTRY`):
 - `gemini-cli` -- invokes `gemini` in headless mode with the durable audit prompt
   streamed through stdin.
   The prompt path is not exposed to the model, so workspace ignore rules cannot block
-  prompt delivery. Supports model, permission-mode (yolo), output-format, sandbox.
+  prompt delivery. The default native settings also set `respectGitIgnore: false`, so the
+  agent’s own file tools can read ignored files anywhere in the workspace, not only
+  declared runtime inputs; operators should treat the workspace, including files such as
+  `.env`, as readable by a Gemini step.
+  Supports model, permission-mode (yolo), output-format, sandbox.
   Injects system prompt and native settings (thinking config, agent overrides) via temp
   files and env vars. Auth via `GEMINI_API_KEY`, Vertex AI, or OAuth.
 - `pi-cli` -- invokes `pi -p @<prompt> --no-session`. Supports `--provider` (anthropic,

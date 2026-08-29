@@ -401,6 +401,47 @@ function renderRuntimeOutput(output, disposition) {
   );
 }
 
+function taskKeyLabel(key) {
+  var parts = Array.isArray(key.scope_path) ? key.scope_path.slice() : [];
+  parts.push(key.step_id || "unknown-step");
+  if (key.item_key) {
+    parts.push(key.item_key);
+  }
+  return parts.join(" / ");
+}
+
+var COVERAGE_GAP_REASONS = {
+  "task-state-missing": "declared task has no durable state",
+  "scope-state-missing": "declared child scope has no durable state",
+};
+
+function renderCoverageGaps(gaps) {
+  if (!gaps.length) {
+    return "";
+  }
+  var html =
+    '<div class="viz-warning-banner"><div class="viz-warning-content">' +
+    '<div class="viz-warning-title">Missing runtime coverage (' +
+    esc(String(gaps.length)) +
+    ")</div>" +
+    '<div class="viz-warning-detail">Plan-declared coordinates with no durable state. ' +
+    "On a run that is still executing, these are normally tasks that have not started yet." +
+    "</div></div></div>";
+  html +=
+    '<table class="resource-table"><thead><tr><th>Declared task</th><th>Reason</th></tr></thead><tbody>';
+  for (var i = 0; i < gaps.length; i++) {
+    var gap = gaps[i] || {};
+    var reason = gap.reason || "unknown";
+    html +=
+      "<tr><td>" +
+      esc(taskKeyLabel(gap.key || {})) +
+      "</td><td>" +
+      esc(COVERAGE_GAP_REASONS[reason] || reason) +
+      "</td></tr>";
+  }
+  return html + "</tbody></table>";
+}
+
 function renderRuntimeTaskProjection(projection, warnings) {
   if (!projection && !warnings.length) {
     return "";
@@ -419,20 +460,19 @@ function renderRuntimeTaskProjection(projection, warnings) {
     return html;
   }
   var tasks = Array.isArray(projection.tasks) ? projection.tasks : [];
+  var gaps = Array.isArray(projection.coverage_gaps) ? projection.coverage_gaps : [];
   html += '<div class="resource-subtitle">Run: ' + esc(projection.run_dir || "") + "</div>";
   if (!tasks.length) {
-    return html + '<div class="preview-empty">No runtime task records</div>';
+    // Gaps still render: a run whose declared state is entirely absent is exactly the
+    // case this contract exists to distinguish from a run that legitimately has no tasks.
+    return (
+      html + '<div class="preview-empty">No runtime task records</div>' + renderCoverageGaps(gaps)
+    );
   }
   html +=
     '<table class="resource-table"><thead><tr><th>Task</th><th>State</th><th>Attempt</th><th>Outputs</th></tr></thead><tbody>';
   for (var i = 0; i < tasks.length; i++) {
     var task = tasks[i] || {};
-    var key = task.key || {};
-    var parts = Array.isArray(key.scope_path) ? key.scope_path.slice() : [];
-    parts.push(key.step_id || "unknown-step");
-    if (key.item_key) {
-      parts.push(key.item_key);
-    }
     var outputs = [];
     for (var accepted of task.accepted_outputs || []) {
       outputs.push(renderRuntimeOutput(accepted, "accepted"));
@@ -441,13 +481,13 @@ function renderRuntimeTaskProjection(projection, warnings) {
       outputs.push(renderRuntimeOutput(unaccepted, "unaccepted"));
     }
     html += "<tr>";
-    html += "<td>" + esc(parts.join(" / ")) + "</td>";
+    html += "<td>" + esc(taskKeyLabel(task.key || {})) + "</td>";
     html += "<td>" + esc(task.state || "unknown") + "</td>";
     html += "<td>" + esc(task.attempt_id || "-") + "</td>";
     html += "<td>" + (outputs.length ? "<ul>" + outputs.join("") + "</ul>" : "-") + "</td>";
     html += "</tr>";
   }
-  return html + "</tbody></table>";
+  return html + "</tbody></table>" + renderCoverageGaps(gaps);
 }
 
 function resourceSummaryCell(label, value) {

@@ -303,7 +303,13 @@ class RuntimeTaskProjection(BaseModel):
 
 
 class RuntimeCoverageGap(BaseModel):
-    """One plan-declared runtime coordinate whose durable state is absent."""
+    """One plan-declared runtime coordinate whose durable state is absent.
+
+    A gap states only that no durable record exists at this coordinate; it does not
+    distinguish "not started yet" from "lost". On a run that is still executing, every
+    declared task ahead of the frontier is a gap, and that is faithful. Readers
+    rendering a live run should present gaps as pending rather than as breakage.
+    """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
