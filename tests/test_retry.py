@@ -13,6 +13,7 @@ from metaproc.engine.retry import (
     MAX_OUTPUT_FAILURE_FEEDBACK_CHARS,
     FailureClass,
     RetryVerdict,
+    agent_reported_success,
     append_output_failure_feedback,
     classify_error,
     classify_failure,
@@ -505,6 +506,56 @@ class TestExtractLogError:
         assert result is not None
         assert "gcloud auth" in result
 
+    def test_startup_banner_is_not_reported_as_the_failure(self, tmp_path: Path) -> None:
+        """A line the CLI prints on every run cannot be the reason this run failed.
+
+        gemini-cli emits terminal-capability and mode notices before any JSON. Taking the
+        last non-JSON line from anywhere in the tail reported one of those as the cause of
+        every gemini failure -- the same warning appears in transcripts that succeeded --
+        and classify_error/classify_failure then judged retryability from it.
+        """
+        log = tmp_path / "test.jsonl"
+        log.write_text(
+            "Warning: 256-color support not detected. Using a terminal with at least 256-color\n"
+            "YOLO mode is enabled. All tool calls will be automatically approved.\n"
+            '{"type":"init","session_id":"abc"}\n'
+            '{"type":"message","role":"assistant","content":"done"}\n'
+        )
+        assert extract_log_error(log) is None
+
+    def test_terminal_result_success_reports_no_error(self, tmp_path: Path) -> None:
+        """An adapter whose own verdict is success did not report an error."""
+        log = tmp_path / "test.jsonl"
+        log.write_text(
+            "Warning: 256-color support not detected.\n"
+            '{"type":"init"}\n'
+            '{"type":"result","status":"success","stats":{"total_tokens":64589}}\n'
+        )
+        assert extract_log_error(log) is None
+
+    def test_terminal_result_failure_reports_its_own_message(self, tmp_path: Path) -> None:
+        """When the adapter does report a failure, that message is the diagnosis."""
+        log = tmp_path / "test.jsonl"
+        log.write_text(
+            "Warning: 256-color support not detected.\n"
+            '{"type":"result","status":"error","error":"quota exceeded for project"}\n'
+        )
+        result = extract_log_error(log)
+        assert result is not None
+        assert "quota exceeded" in result
+
+    def test_trailing_stderr_after_the_stream_is_still_reported(self, tmp_path: Path) -> None:
+        """A real crash writes last, and must survive the banner exclusion."""
+        log = tmp_path / "test.jsonl"
+        log.write_text(
+            "Warning: 256-color support not detected.\n"
+            '{"type":"init"}\n'
+            "FATAL: out of memory while allocating heap\n"
+        )
+        result = extract_log_error(log)
+        assert result is not None
+        assert "out of memory" in result
+
     def test_multiline_json_error_preserves_message_for_classification(
         self, tmp_path: Path
     ) -> None:
@@ -600,3 +651,33 @@ class TestMaxRetriesFor:
     def test_quota_exhausted_uses_default(self) -> None:
         """QUOTA_EXHAUSTED uses the operator's full budget (waits for reset)."""
         assert max_retries_for(FailureClass.QUOTA_EXHAUSTED, 12) == 12
+
+
+# ── agent_reported_success ────────────────────────────────────
+
+
+class TestAgentReportedSuccess:
+    """What the agent claimed, as distinct from what its exit code said."""
+
+    def test_terminal_success_record_is_recognised(self, tmp_path: Path) -> None:
+        log = tmp_path / "t.jsonl"
+        log.write_text(
+            "Warning: 256-color support not detected.\n"
+            '{"type":"message","role":"assistant","content":"wrote the draft"}\n'
+            '{"type":"result","status":"success","stats":{"total_tokens":64589}}\n'
+        )
+        assert agent_reported_success(log) is True
+
+    def test_a_killed_run_reports_nothing(self, tmp_path: Path) -> None:
+        """A transcript that stops mid-conversation never claimed success."""
+        log = tmp_path / "t.jsonl"
+        log.write_text('{"type":"init"}\n{"type":"message","role":"user","content":"go"}\n')
+        assert agent_reported_success(log) is False
+
+    def test_a_failed_verdict_is_not_success(self, tmp_path: Path) -> None:
+        log = tmp_path / "t.jsonl"
+        log.write_text('{"type":"result","status":"error","error":"quota exceeded"}\n')
+        assert agent_reported_success(log) is False
+
+    def test_missing_log_is_not_success(self, tmp_path: Path) -> None:
+        assert agent_reported_success(tmp_path / "absent.jsonl") is False
