@@ -8,6 +8,8 @@ flowmark-rs = "2026-07-16T00:00:00Z"
 frontmatter-format = "2026-08-01T01:27:00Z"
 kpress = "2026-07-16T00:00:00Z"
 metabrowser = "2026-07-18T00:00:00Z"
-# softschema 0.7.0 published 2026-08-25T07:31:06Z. It is an audited first-party
-# exception for stable structural error codes and enforced composed schemas.
-softschema = "2026-08-25T07:32:00Z"
+# softschema 0.8.0 published 2026-08-30T20:11:42Z. It is an audited first-party
+# exception, carrying the `repair` subcommand (conform an artifact to its declared types,
+# write it, then validate, reporting every change) and an explicit `--profile` override
+# for the frontmatter-md / pure-yaml distinction that was previously left to inference.
+softschema = "2026-08-30T20:12:00Z"
