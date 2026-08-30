@@ -469,6 +469,39 @@ def max_retries_for(failure_class: FailureClass, default_max_retries: int) -> in
 # ── Log error extraction ──────────────────────────────────────
 
 
+def agent_reported_success(log_path: Path, tail_lines: int = 30) -> bool:
+    """Whether the agent's own terminal record says the run succeeded.
+
+    Some adapters end their stream with ``{"type":"result","status":"success"}`` and then
+    exit non-zero anyway, during shutdown rather than during the work. Treating the exit
+    code as the verdict discards finished work: across one week-36 night, 45 attempts
+    reported success and wrote every declared output, and 37 steps then failed
+    permanently with their completed artifacts on disk.
+
+    This answers only what the agent claimed. Callers must still confirm the outputs
+    validate before overriding an exit code, so a lying adapter cannot manufacture a pass.
+    """
+    log_path = resolve_existing_artifact(log_path)
+    if not log_path.is_file():
+        return False
+    try:
+        lines = [line for _line_no, line in iter_text_lines(log_path)][-tail_lines:]
+    except Exception:
+        log.debug("Failed to read log tail from %s", log_path, exc_info=True)
+        return False
+    for line in reversed(lines):
+        stripped = line.strip()
+        if not stripped.startswith("{"):
+            continue
+        try:
+            event = json.loads(stripped)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if event.get("type") == "result":
+            return str(event.get("status", "")) == "success"
+    return False
+
+
 def extract_log_error(log_path: Path, tail_lines: int = 30) -> str | None:
     """Extract the terminal error from a subprocess log file.
 
@@ -519,19 +552,61 @@ def extract_log_error(log_path: Path, tail_lines: int = 30) -> str | None:
                 if msg:
                     return str(msg)[:200]
 
-    # Priority 2: raw stderr lines (non-JSON) — last meaningful line from the tail.
-    # Pretty-printed errors commonly end with a bare delimiter; never let that
-    # hide the preceding diagnostic.
-    delimiters = {"{", "}", "[", "]", "},", "],"}
+    # Priority 2: a terminal ``result`` record, which is the only verdict some adapters
+    # emit. gemini-cli produces neither ``agent_end`` nor ``turn.failed``, so Priority 1
+    # never fires for it; it ends its stream with ``{"type":"result","status":...}``.
+    # When that verdict is success the run reported no error, and saying so is what stops
+    # the fallback below from attaching unrelated text to a run that did not fail.
     for line in reversed(lines):
         stripped = line.strip()
-        if not stripped or stripped in delimiters:
+        if not stripped.startswith("{"):
+            continue
+        try:
+            event = json.loads(stripped)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if event.get("type") != "result":
+            continue
+        status = str(event.get("status", ""))
+        if status and status != "success":
+            for key in ("error", "message", "errorMessage"):
+                value = event.get(key)
+                if value:
+                    return str(value)[:200]
+            return f"agent reported status {status}"[:200]
+        return None
+
+    # Priority 3: raw stderr lines (non-JSON), but only ones written AFTER the last
+    # structured record. Pretty-printed errors commonly end with a bare delimiter; never
+    # let that hide the preceding diagnostic.
+    #
+    # An agent CLI prints startup banners before emitting any JSON -- terminal
+    # capability, mode, and tool-availability notices -- and those appear whether the run
+    # succeeds or fails. Taking the last non-JSON line from anywhere in the tail therefore
+    # reported a banner as the cause of every gemini failure: one such warning was present
+    # in 367 of 367 transcripts ending in success and 33 of 33 that did not. Since
+    # classify_error and classify_failure both pattern-match this string, a quota
+    # exhaustion and a benign shutdown exit read identically to them.
+    #
+    # A genuine terminal error is written last, so requiring the line to follow the final
+    # structured record keeps real stderr failures: a log that is pure stderr still
+    # qualifies, having no structured record to precede.
+    delimiters = {"{", "}", "[", "]", "},", "],"}
+    last_structured = -1
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.startswith("{"):
             continue
         try:
             json.loads(stripped)
         except (json.JSONDecodeError, ValueError):
-            if not stripped.startswith("{"):
-                return stripped[:200]
+            continue
+        last_structured = index
+    for index in range(len(lines) - 1, last_structured, -1):
+        stripped = lines[index].strip()
+        if not stripped or stripped in delimiters or stripped.startswith("{"):
+            continue
+        return stripped[:200]
 
     return None
 

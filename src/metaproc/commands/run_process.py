@@ -127,6 +127,7 @@ from metaproc.engine.resource_snapshot import build_resource_run_snapshot
 from metaproc.engine.retry import (
     FailureClass,
     RetryVerdict,
+    agent_reported_success,
     append_output_failure_feedback,
     classify_error,
     classify_failure,
@@ -2523,6 +2524,31 @@ async def _execute_agent_step(
                     log_error = extract_log_error(attempt_log_path)
                     if log_error:
                         exit_error = f"{exit_error} (log: {log_error})"
+
+                # An exit code is one signal among three, and the least trustworthy of
+                # them. Some adapters emit a terminal success record, write every declared
+                # output, and then exit non-zero while shutting down; failing the step on
+                # that discards finished work. Measured over one week-36 night: 45 attempts
+                # reported success with all outputs present, and 37 steps failed
+                # permanently with their completed artifacts on disk, each retry also
+                # consuming a durable agent-call reservation.
+                #
+                # The override is deliberately narrow. The agent must claim success AND
+                # the step's declared outputs must validate, so a lying adapter cannot
+                # manufacture a pass, and a step with no declared outputs is never
+                # rescued -- there would be nothing to check the claim against. The exit
+                # code is preserved as a warning so the signal is not lost.
+                if exit_error is not None and effective_outputs and artifact_dir is not None:
+                    if agent_reported_success(attempt_log_path) and not (
+                        validate_item_outputs_detailed(
+                            artifact_dir, effective_outputs, variables=variables
+                        )
+                    ):
+                        out.progress(
+                            f"  Step '{step_id}': agent reported success and all declared "
+                            f"outputs validate; treating {exit_error} as a shutdown warning"
+                        )
+                        exit_error = None
 
                 if exit_error is not None:
                     auth_classification = await _complete_auth_attempt(exit_error)
