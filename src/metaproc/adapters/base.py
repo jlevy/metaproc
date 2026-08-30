@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, Literal, Protocol, cast, runtime_checkable
+from typing import Any, ClassVar, Final, Literal, Protocol, cast, runtime_checkable
 
 
 @dataclass
@@ -38,6 +39,40 @@ def resolve_templates(text: str, variables: dict[str, str]) -> str:
         return variables.get(key, match.group(0))
 
     return re.sub(r"\{\{(\w+)\}\}", _replace, text)
+
+
+#: Forced into every agent child's seed environment, overriding operator settings.
+#: An agent CLI here runs headless and writes a JSONL transcript that machines read
+#: back -- `extract_log_error` mines it for failure causes and retry classification
+#: acts on what it finds -- so terminal styling has no reader and is not harmless:
+#: a terminal-capability warning one CLI printed at startup was repeatedly surfaced
+#: as the "cause" of step failures whose real causes lay elsewhere. The keys cover
+#: the conventions the ecosystem actually checks: ``NO_COLOR`` (informal standard,
+#: presence means off), ``FORCE_COLOR=0`` (Node/chalk; an explicit 0 beats an
+#: operator shell exporting it on), ``CLICOLOR``/``CLICOLOR_FORCE`` (BSD), and
+#: ``TERM=dumb`` so terminfo-driven tools never negotiate capabilities at all.
+AGENT_ENV_OVERRIDES: Final[dict[str, str]] = {
+    "NO_COLOR": "1",
+    "FORCE_COLOR": "0",
+    "CLICOLOR": "0",
+    "CLICOLOR_FORCE": "0",
+    "TERM": "dumb",
+}
+
+
+def agent_seed_env() -> dict[str, str]:
+    """Return the environment an agent child's env is built from.
+
+    A copy of the process environment with terminal styling forced off, handed to
+    :meth:`Adapter.prepare_env` in place of a bare ``os.environ`` copy. Everything
+    else (credentials, PATH, metaproc settings) is inherited unchanged, and a step's
+    authored ``env`` block is applied after ``prepare_env``, so an author who
+    deliberately sets one of these keys still wins; only the ambient operator
+    environment loses.
+    """
+    env = dict(os.environ)
+    env.update(AGENT_ENV_OVERRIDES)
+    return env
 
 
 @runtime_checkable

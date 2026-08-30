@@ -6,7 +6,7 @@ status: Approved
 ---
 # Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-08-29) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-08-30) **Status:** Approved
 
 Also readable as `metaproc help design`.
 
@@ -1677,6 +1677,13 @@ The adapter contract describes:
 - final adapter metadata
 
 ## 12.2 Reference Adapters
+
+Every adapter builds its child environment from `agent_seed_env()`, a copy of the
+process environment with terminal styling forced off (`NO_COLOR`, `FORCE_COLOR=0`,
+`CLICOLOR`/`CLICOLOR_FORCE` off, `TERM=dumb`): an agent’s transcript is machine-read
+output, and a styling banner has been misread as a step’s failure cause.
+A step’s authored `env` block is applied afterward, so deliberate configuration still
+wins; only the ambient operator environment loses.
 
 Registered adapters (in `ADAPTER_REGISTRY`):
 

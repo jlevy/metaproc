@@ -16,11 +16,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from metaproc.adapters.base import (
+    AGENT_ENV_OVERRIDES,
     Adapter,
     AuthCapableCliAdapter,
     AuthFailureClassification,
     AuthStatus,
     QuotaUsage,
+    agent_seed_env,
     resolve_templates,
 )
 from metaproc.adapters.claude_code import CLAUDE_CREDS_ENV_VAR, ClaudeCodeCliAdapter
@@ -46,6 +48,49 @@ class TestResolveTemplates:
     def test_keeps_unknown_vars(self):
         result = resolve_templates("{{UNKNOWN}}", {})
         assert result == "{{UNKNOWN}}"
+
+
+class TestAgentSeedEnv:
+    """The seed environment agent children are built from forces styling off."""
+
+    def test_styling_is_off_even_when_the_operator_forces_it_on(self, monkeypatch):
+        """An operator shell exporting color-on must not reach an agent transcript."""
+        monkeypatch.setenv("FORCE_COLOR", "3")
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        monkeypatch.setenv("TERM", "xterm-256color")
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        env = agent_seed_env()
+        assert env["NO_COLOR"] == "1"
+        assert env["FORCE_COLOR"] == "0"
+        assert env["CLICOLOR"] == "0"
+        assert env["CLICOLOR_FORCE"] == "0"
+        assert env["TERM"] == "dumb"
+
+    def test_everything_else_is_inherited(self, monkeypatch):
+        """Credentials and settings pass through; only the styling keys are rewritten."""
+        monkeypatch.setenv("GEMINI_API_KEY", "inherit-me")
+        env = agent_seed_env()
+        assert env["GEMINI_API_KEY"] == "inherit-me"
+        assert set(AGENT_ENV_OVERRIDES) == {
+            "NO_COLOR",
+            "FORCE_COLOR",
+            "CLICOLOR",
+            "CLICOLOR_FORCE",
+            "TERM",
+        }
+
+    def test_adapters_preserve_the_policy_through_prepare_env(self, monkeypatch):
+        """prepare_env receives the scrubbed seed and returns it intact.
+
+        The launch paths hand adapters agent_seed_env() rather than a bare
+        os.environ copy; an adapter that dropped the keys would silently reopen
+        the styling leak, so pin that the shipped adapters pass them through.
+        """
+        monkeypatch.setenv("TERM", "xterm-256color")
+        for adapter in (GeminiCliAdapter(), ClaudeCodeCliAdapter()):
+            env = adapter.prepare_env(agent_seed_env(), {})
+            assert env["NO_COLOR"] == "1", adapter.adapter_type
+            assert env["TERM"] == "dumb", adapter.adapter_type
 
 
 class TestAuthStatus:
