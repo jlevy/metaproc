@@ -705,9 +705,7 @@ def _write_run_plan(run_dir: Path, steps: list[tuple[str, list[str]]]) -> None:
 class TestReadPlanItemTotal:
     """A run-process fan-out has no progress.md, so the plan is the only total."""
 
-    def test_a_started_item_count_is_not_mistaken_for_the_planned_one(
-        self, tmp_path: Path
-    ) -> None:
+    def test_a_started_item_count_is_not_mistaken_for_the_planned_one(self, tmp_path: Path) -> None:
         """The bug this guards: total that grows as the run dispatches.
 
         Falling back to the scanned count reports `done/started` with `pending`

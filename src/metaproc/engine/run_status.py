@@ -462,9 +462,7 @@ def scan_run_status(
     # figure by the variant count, because variants of one run legitimately differ.
     # A fan-out over the names that authored cleanly is smaller than the fan-out
     # that authored them, and multiplying would overstate the smaller one.
-    overall_total = (
-        sum(v.counts.total for v in variant_statuses) if variant_statuses else None
-    )
+    overall_total = sum(v.counts.total for v in variant_statuses) if variant_statuses else None
     totals = compute_progress(all_statuses, total=overall_total)
 
     # Determine earliest start
