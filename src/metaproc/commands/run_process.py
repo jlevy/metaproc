@@ -33,7 +33,7 @@ from ruamel.yaml import YAMLError
 from strif import atomic_output_file
 
 from metaproc import paths as paths_mod
-from metaproc.adapters.base import AuthFailureClassification
+from metaproc.adapters.base import AuthFailureClassification, agent_seed_env
 from metaproc.adapters.registry import derive_variant, get_adapter, get_auth_capable
 from metaproc.cli import app, get_output
 from metaproc.cloud.gcp.resolve_token import resolve_gcp_token
@@ -2299,7 +2299,7 @@ async def _execute_agent_step(
                 Path(tmp_path).write_text(attempt_prompt)
 
             cmd = adapter_obj.build_command(prompt_file, runtime_config, step_vars)
-            env = adapter_obj.prepare_env(dict(os.environ), runtime_config)
+            env = adapter_obj.prepare_env(agent_seed_env(), runtime_config)
             if target.env:
                 env.update({k: resolve_templates(v, step_vars) for k, v in target.env.items()})
             cwd = adapter_obj.working_directory(runtime_config)

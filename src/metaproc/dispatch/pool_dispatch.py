@@ -22,7 +22,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from metaproc.adapters.base import AuthFailureClassification, FailureSeverity
+from metaproc.adapters.base import AuthFailureClassification, FailureSeverity, agent_seed_env
 from metaproc.adapters.claude_code import parse_claude_api_signals
 from metaproc.adapters.registry import get_auth_capable
 from metaproc.dispatch.credential_pool import (
@@ -603,7 +603,7 @@ def probe_credential(
             **{key: "" for key in auth_override_refusal_keys(adapter_name)},
         }
         probe_env = apply_slot_env(
-            dict(os.environ),
+            agent_seed_env(),
             scope_env=adapter_impl.credential_scope_env(slot_dir, vehicle=vehicle, blob=blob),
             scrub_env=scrub_env,
         )

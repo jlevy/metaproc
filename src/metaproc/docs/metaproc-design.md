@@ -6,7 +6,7 @@ status: Approved
 ---
 # Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-08-29) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-08-30) **Status:** Approved
 
 Also readable as `metaproc help design`.
 
@@ -1677,6 +1677,22 @@ The adapter contract describes:
 - final adapter metadata
 
 ## 12.2 Reference Adapters
+
+Every path that launches an agent seeds `Adapter.prepare_env` with `agent_seed_env()`
+rather than a bare copy of the process environment: `run-process`, `run-parallel`, and
+both `run-step` modes, plus the credential and tool-use probes that parse an agent’s
+output. The seed forces terminal styling off (`NO_COLOR`, `FORCE_COLOR=0`,
+`CLICOLOR`/`CLICOLOR_FORCE` off, `TERM=dumb`), because an agent’s transcript is
+machine-read output and a styling banner has been misread as a step’s failure cause.
+Adapters do not apply this policy themselves; they receive the seeded environment and
+add their own keys to it.
+A step’s authored `env` block is applied after `prepare_env`, so deliberate
+configuration still wins; only the ambient operator environment loses.
+
+`command:` steps are deliberately excluded.
+They run author-controlled programs rather than agent CLIs, and those programs may be
+tuned to the ambient environment, so forcing `TERM=dumb` on them would be a broader
+behavioral change than the transcript contract requires.
 
 Registered adapters (in `ADAPTER_REGISTRY`):
 

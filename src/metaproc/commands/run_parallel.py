@@ -54,7 +54,7 @@ _POOL_FILL_POLL_INTERVAL_S = 5.0
 
 
 from metaproc import paths as paths_mod
-from metaproc.adapters.base import Adapter, AuthFailureClassification
+from metaproc.adapters.base import Adapter, AuthFailureClassification, agent_seed_env
 from metaproc.adapters.registry import (
     ADAPTER_REGISTRY,
     adapter_provider,
@@ -1417,7 +1417,7 @@ def _build_prepare_launch(  # noqa: PLR0913
             item_runtime_config,
             resolve_vars,
         )
-        env: dict[str, str] = adapter.prepare_env(dict(os.environ), item_runtime_config)
+        env: dict[str, str] = adapter.prepare_env(agent_seed_env(), item_runtime_config)
         env.update(_resolve_env(target_env, resolve_vars))
         if pool_status_path is not None:
             env["METAPROC_POOL_STATUS"] = str(pool_status_path)

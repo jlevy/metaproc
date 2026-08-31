@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-import os
 import subprocess
 import threading
 import time
@@ -16,6 +15,7 @@ from typing import IO
 
 from strif import atomic_output_file
 
+from metaproc.adapters.base import agent_seed_env
 from metaproc.adapters.registry import get_adapter
 from metaproc.engine.pathing import compute_log_filename, compute_logs_dir, compute_task_logs_dir
 from metaproc.engine.placeholders import (
@@ -260,7 +260,7 @@ def launch_step(
     with atomic_output_file(prompt_file) as tmp_path:
         Path(tmp_path).write_text(resolved_prompt)
 
-    env = adapter.prepare_env(dict(os.environ), merged_config)
+    env = adapter.prepare_env(agent_seed_env(), merged_config)
     if step_env:
         env.update(step_env)
     cmd = adapter.build_command(prompt_file, merged_config, variables)

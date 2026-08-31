@@ -16,11 +16,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from metaproc.adapters.base import (
+    AGENT_ENV_OVERRIDES,
     Adapter,
     AuthCapableCliAdapter,
     AuthFailureClassification,
     AuthStatus,
     QuotaUsage,
+    agent_seed_env,
     resolve_templates,
 )
 from metaproc.adapters.claude_code import CLAUDE_CREDS_ENV_VAR, ClaudeCodeCliAdapter
@@ -46,6 +48,81 @@ class TestResolveTemplates:
     def test_keeps_unknown_vars(self):
         result = resolve_templates("{{UNKNOWN}}", {})
         assert result == "{{UNKNOWN}}"
+
+
+class TestAgentSeedEnv:
+    """The seed environment agent children are built from forces styling off."""
+
+    def test_styling_is_off_even_when_the_operator_forces_it_on(self, monkeypatch):
+        """An operator shell exporting color-on must not reach an agent transcript."""
+        monkeypatch.setenv("FORCE_COLOR", "3")
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        monkeypatch.setenv("TERM", "xterm-256color")
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        env = agent_seed_env()
+        assert env["NO_COLOR"] == "1"
+        assert env["FORCE_COLOR"] == "0"
+        assert env["CLICOLOR"] == "0"
+        assert env["CLICOLOR_FORCE"] == "0"
+        assert env["TERM"] == "dumb"
+
+    def test_everything_else_is_inherited(self, monkeypatch):
+        """Credentials and settings pass through; only the styling keys are rewritten.
+
+        The set-equality assertion is a deliberate tripwire rather than a restatement
+        of the constant: every key here is written into every agent child, so adding
+        one should be a considered two-file change, not a one-line edit that rides
+        along in an unrelated commit.
+        """
+        monkeypatch.setenv("GEMINI_API_KEY", "inherit-me")
+        env = agent_seed_env()
+        assert env["GEMINI_API_KEY"] == "inherit-me"
+        assert set(AGENT_ENV_OVERRIDES) == {
+            "NO_COLOR",
+            "FORCE_COLOR",
+            "CLICOLOR",
+            "CLICOLOR_FORCE",
+            "TERM",
+        }
+
+    def test_every_registered_adapter_preserves_the_policy(self, monkeypatch):
+        """prepare_env receives the scrubbed seed and returns it intact.
+
+        The launch paths hand adapters agent_seed_env() rather than a bare
+        os.environ copy; an adapter that dropped the keys would silently reopen
+        the styling leak. Iterating the registry rather than a hand-picked pair
+        means a newly registered adapter is covered the day it is added.
+        """
+        monkeypatch.setenv("TERM", "xterm-256color")
+        assert ADAPTER_REGISTRY, "registry is empty; this test would vacuously pass"
+        for adapter_type, adapter in ADAPTER_REGISTRY.items():
+            env = adapter.prepare_env(agent_seed_env(), {})
+            for key, value in AGENT_ENV_OVERRIDES.items():
+                assert env[key] == value, f"{adapter_type} dropped {key}"
+
+
+class TestAgentSeedEnvIsUsedEverywhere:
+    """No launch path may build an agent's environment from a bare os.environ.
+
+    The policy is enforced at each call site, and a review of this change found two
+    launch paths that had been missed, so the gap this guards against is the one that
+    actually happened rather than a hypothetical. Reading the source is crude but it
+    catches the whole class at once, including paths a unit test would never reach
+    (detached launches, credential probes) and any path added later.
+    """
+
+    def test_no_call_site_passes_a_bare_environ_to_prepare_env(self):
+        src = _Path(__file__).resolve().parent.parent / "src" / "metaproc"
+        offenders = [
+            f"{path.relative_to(src)}:{number}"
+            for path in sorted(src.rglob("*.py"))
+            for number, line in enumerate(path.read_text().splitlines(), start=1)
+            if "prepare_env(dict(os.environ)" in line.replace(" ", "")
+        ]
+        assert not offenders, (
+            "these launch paths bypass agent_seed_env(), so an operator's FORCE_COLOR "
+            f"would reach an agent transcript: {offenders}"
+        )
 
 
 class TestAuthStatus:

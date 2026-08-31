@@ -12,7 +12,7 @@ from typing import cast
 import typer
 from strif import atomic_output_file
 
-from metaproc.adapters.base import Adapter
+from metaproc.adapters.base import Adapter, agent_seed_env
 from metaproc.adapters.registry import derive_variant, get_adapter
 from metaproc.cli import app, get_output
 from metaproc.commands.helpers import (
@@ -535,7 +535,7 @@ def run_step(
             item_key=state_dir.name if for_each is not None else None,
         )
 
-        env = adapter_obj.prepare_env(dict(os.environ), runtime_config)
+        env = adapter_obj.prepare_env(agent_seed_env(), runtime_config)
         if target.env:
             env.update(
                 {key: resolve_templates(value, variables) for key, value in target.env.items()}
