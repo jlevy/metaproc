@@ -298,6 +298,36 @@ def _extract_retrying_items(statuses: list[StatusRecord]) -> list[RetryingItem]:
 _PROGRESS_FILENAME = "progress.md"
 
 
+def read_plan_item_total(run_dir: Path, variant: str) -> int | None:
+    """How many items the recorded plan declares for *variant*.
+
+    ``progress.md`` is a ``run-parallel`` artifact, so a ``run-process`` fan-out has
+    no items file and :func:`read_items_total` returns None for it. Falling back to
+    the number of items *observed* would make the total grow as the run proceeds and
+    report ``pending`` as zero throughout, which reads exactly like a roster that was
+    silently truncated. The recorded plan knows the real figure before the first item
+    starts, and knows it per step, which an items file never did.
+    """
+    from metaproc.io.state_io import (  # noqa: PLC0415 -- guarded import (circular)
+        read_run_plan,
+    )
+
+    try:
+        snapshot = read_run_plan(run_dir)
+    except (OSError, ValueError, YAMLError):
+        log.warning("Failed to read the run plan from %s", run_dir, exc_info=True)
+        return None
+    if snapshot is None:
+        return None
+    for step in snapshot.steps:
+        # A scalar step records an empty key list rather than None, and an empty
+        # fan-out has no total worth reporting, so both fall through to None
+        # rather than claiming a total of zero.
+        if step.step_id == variant and step.item_keys:
+            return len(step.item_keys)
+    return None
+
+
 def read_items_total(run_dir: Path) -> int | None:
     """Read progress.md in the run directory and return the total item count.
 
@@ -391,7 +421,8 @@ def scan_run_status(
     if variant:
         variant_dirs = [v for v in variant_dirs if v.name == variant]
 
-    # Read items total from progress.md for accurate pending counts
+    # Read items total from progress.md for accurate pending counts. Absent one,
+    # each variant falls back to what the recorded plan declares for its own step.
     items_total = read_items_total(run_dir)
 
     variant_statuses: list[VariantStatus] = []
@@ -406,7 +437,10 @@ def scan_run_status(
         statuses = scan_variant_states(vdir)
         all_statuses.extend(statuses)
 
-        counts = compute_progress(statuses, total=per_variant_total)
+        variant_total = per_variant_total
+        if variant_total is None:
+            variant_total = read_plan_item_total(run_dir, vdir.name)
+        counts = compute_progress(statuses, total=variant_total)
         timing = compute_timing(statuses)
         failed = _extract_failed_items(statuses)
         retrying = _extract_retrying_items(statuses)
@@ -424,8 +458,13 @@ def scan_run_status(
             )
         )
 
-    # Overall totals: if items_total known, multiply by number of variants
-    overall_total = items_total * len(variant_statuses) if items_total is not None else None
+    # Overall totals: sum what each variant resolved rather than multiplying one
+    # figure by the variant count, because variants of one run legitimately differ.
+    # A fan-out over the names that authored cleanly is smaller than the fan-out
+    # that authored them, and multiplying would overstate the smaller one.
+    overall_total = (
+        sum(v.counts.total for v in variant_statuses) if variant_statuses else None
+    )
     totals = compute_progress(all_statuses, total=overall_total)
 
     # Determine earliest start

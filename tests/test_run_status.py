@@ -21,6 +21,7 @@ from metaproc.engine.run_status import (
     compute_timing,
     detect_variants,
     read_items_total,
+    read_plan_item_total,
     scan_run_status,
     scan_variant_states,
     wait_for_completion,
@@ -674,6 +675,92 @@ class TestReadItemsTotal:
         assert result.variants[0].counts.total == 5
         assert result.variants[0].counts.completed == 2
         assert result.variants[0].counts.pending == 3
+
+
+# ── read_plan_item_total ─────────────────────────────────────────
+
+
+def _write_run_plan(run_dir: Path, steps: list[tuple[str, list[str]]]) -> None:
+    state = run_dir / ".state"
+    state.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "run_plan:",
+        "  schema: metaproc:RunPlanSnapshot/0.1",
+        "  run_id: r-1",
+        "  steps:",
+    ]
+    for index, (step_id, keys) in enumerate(steps):
+        shape = "mapped" if keys else "scalar"
+        lines += [
+            f"    - step_id: {step_id}",
+            "      mode: composite",
+            f"      task_shape: {shape}",
+            f'      fingerprint: "{index:016x}"',
+            "      item_keys:" + (" []" if not keys else ""),
+        ]
+        lines += [f"        - {key}" for key in keys]
+    (state / "run-plan.yaml").write_text("\n".join(lines) + "\n")
+
+
+class TestReadPlanItemTotal:
+    """A run-process fan-out has no progress.md, so the plan is the only total."""
+
+    def test_a_started_item_count_is_not_mistaken_for_the_planned_one(
+        self, tmp_path: Path
+    ) -> None:
+        """The bug this guards: total that grows as the run dispatches.
+
+        Falling back to the scanned count reports `done/started` with `pending`
+        stuck at zero, which is indistinguishable from a roster silently truncated
+        to the names that happen to have started.
+        """
+        run_dir = tmp_path / "my-run"
+        run_dir.mkdir()
+        _write_run_plan(run_dir, [("authoring", [f"T{n}" for n in range(40)])])
+        variant = run_dir / "authoring"
+        _write_item(variant, "T0", state="completed")
+        _write_item(variant, "T1", state="running")
+
+        result = scan_run_status(run_dir, include_system=False)
+        counts = result.variants[0].counts
+
+        assert counts.total == 40, "the total is what the plan declared, not what started"
+        assert counts.pending == 38
+
+    def test_variants_of_one_run_may_declare_different_totals(self, tmp_path: Path) -> None:
+        """A downstream fan-out covers only the names that authored cleanly.
+
+        The overall total sums what each variant resolved; multiplying one figure by
+        the variant count would overstate the smaller one.
+        """
+        run_dir = tmp_path / "my-run"
+        run_dir.mkdir()
+        _write_run_plan(
+            run_dir,
+            [("authoring", ["A", "B", "C"]), ("scan", ["A", "B"])],
+        )
+        _write_item(run_dir / "authoring", "A", state="completed")
+        _write_item(run_dir / "scan", "A", state="completed")
+
+        result = scan_run_status(run_dir, include_system=False)
+        totals = {v.variant: v.counts.total for v in result.variants}
+
+        assert totals == {"authoring": 3, "scan": 2}
+        assert result.totals.total == 5
+
+    def test_a_scalar_step_reports_no_total_rather_than_zero(self, tmp_path: Path) -> None:
+        """A scalar step records an empty key list, which is not a total of zero."""
+        run_dir = tmp_path / "my-run"
+        run_dir.mkdir()
+        _write_run_plan(run_dir, [("intake", [])])
+
+        assert read_plan_item_total(run_dir, "intake") is None
+
+    def test_an_absent_plan_is_not_an_error(self, tmp_path: Path) -> None:
+        run_dir = tmp_path / "my-run"
+        run_dir.mkdir()
+
+        assert read_plan_item_total(run_dir, "authoring") is None
 
 
 # ── _measure_subprocesses ────────────────────────────────────────
