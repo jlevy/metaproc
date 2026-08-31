@@ -1678,12 +1678,21 @@ The adapter contract describes:
 
 ## 12.2 Reference Adapters
 
-Every adapter builds its child environment from `agent_seed_env()`, a copy of the
-process environment with terminal styling forced off (`NO_COLOR`, `FORCE_COLOR=0`,
-`CLICOLOR`/`CLICOLOR_FORCE` off, `TERM=dumb`): an agent’s transcript is machine-read
-output, and a styling banner has been misread as a step’s failure cause.
-A step’s authored `env` block is applied afterward, so deliberate configuration still
-wins; only the ambient operator environment loses.
+Every path that launches an agent seeds `Adapter.prepare_env` with `agent_seed_env()`
+rather than a bare copy of the process environment: `run-process`, `run-parallel`, and
+both `run-step` modes, plus the credential and tool-use probes that parse an agent’s
+output. The seed forces terminal styling off (`NO_COLOR`, `FORCE_COLOR=0`,
+`CLICOLOR`/`CLICOLOR_FORCE` off, `TERM=dumb`), because an agent’s transcript is
+machine-read output and a styling banner has been misread as a step’s failure cause.
+Adapters do not apply this policy themselves; they receive the seeded environment and
+add their own keys to it.
+A step’s authored `env` block is applied after `prepare_env`, so deliberate
+configuration still wins; only the ambient operator environment loses.
+
+`command:` steps are deliberately excluded.
+They run author-controlled programs rather than agent CLIs, and those programs may be
+tuned to the ambient environment, so forcing `TERM=dumb` on them would be a broader
+behavioral change than the transcript contract requires.
 
 Registered adapters (in `ADAPTER_REGISTRY`):
 

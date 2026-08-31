@@ -323,8 +323,13 @@ class TestPoolPrepareEnv:
         # Current behavior: prepare_env IS called
         mock_adapter.prepare_env.assert_called_once()
         call_args = mock_adapter.prepare_env.call_args
-        # First arg is a dict (os.environ copy), second is the item_runtime_config
+        # First arg is the seeded environment (see adapters.base.agent_seed_env),
+        # second is the item_runtime_config. The styling keys are asserted here
+        # because reverting this call site to a bare os.environ copy would
+        # otherwise leave the suite green.
         assert isinstance(call_args[0][0], dict)
+        assert call_args[0][0]["NO_COLOR"] == "1"
+        assert call_args[0][0]["TERM"] == "dumb"
 
         # The env from prepare_env should be included in the result
         assert result.env is not None

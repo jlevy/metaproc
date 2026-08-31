@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import subprocess
 import tempfile
 import time
@@ -20,6 +19,7 @@ from pathlib import Path
 
 import typer
 
+from metaproc.adapters.base import agent_seed_env
 from metaproc.adapters.pi_cli import resolve_pi_binary
 from metaproc.adapters.registry import ADAPTER_REGISTRY
 from metaproc.cli import app, get_output
@@ -352,7 +352,7 @@ def _run_live_check(
                 except Exception:
                     log.warning("Failed to inject GCP token for live check", exc_info=True)
 
-        env = adapter.prepare_env(dict(os.environ), merged_config)
+        env = adapter.prepare_env(agent_seed_env(), merged_config)
 
         # Pre-flight: confirm pi-cli actually knows the requested provider/model
         # before we dispatch a trivial prompt. Without this gate, pi-cli
@@ -618,7 +618,7 @@ def _run_claude_secret_live_check(
                 merged_config=merged_config,
                 variables={},
             )
-            env = adapter.prepare_env(dict(os.environ), merged_config)
+            env = adapter.prepare_env(agent_seed_env(), merged_config)
             env.pop("ANTHROPIC_API_KEY", None)
             env["HOME"] = str(tmp_home)
 

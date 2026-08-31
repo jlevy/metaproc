@@ -381,7 +381,11 @@ class MetaprocEnv(EnvEnum):
     USERNAME = optional("Windows username. Read as a fallback for METAPROC_OPERATOR.")
     VIRTUAL_ENV = optional("Path to the active virtualenv (set by the venv activator).")
     BATCH_TASK_INDEX = optional("GCP Batch task index. Set by the Batch runtime.")
-    NO_COLOR = optional("Standard convention: when set, disables colored terminal output.")
+    NO_COLOR = optional(
+        "Standard convention: when set, disables colored terminal output. This is the "
+        "read side, governing metaproc's own output; the write side that puts NO_COLOR "
+        "into every agent child is adapters.base.AGENT_ENV_OVERRIDES."
+    )
     CI = optional("Standard convention: set by CI systems; triggers non-interactive defaults.")
 
 
