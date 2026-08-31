@@ -512,21 +512,57 @@ def _resolve_produced_refs(
     step: ProcessStep,
     *,
     resolved_deps: dict[str, ResolvedDep],
+    step_outputs: dict[str, dict[str, IOSpec]],
+    params: dict[str, str],
 ) -> list[str]:
     """Return the referenced paths this run produces, for ``produced_refs``.
 
-    Only a dep-ref reference can name a produced file, because the ``produced_by``
-    that says a step writes it lives on the dep. A raw authored path is an input
-    the run does not write, so its bytes stay in the step fingerprint.
+    Two ways a reference can name a file the run writes rather than an authored input.
+
+    A dep-ref carries ``produced_by``, which says outright that a step writes it.
+
+    A raw path is produced when another step in the same plan declares that exact path
+    as an output. The plan holds both facts, so whether the run writes it is decided
+    rather than assumed, and a released spec that wires a produced file as a raw path
+    is as correct as one that wires it through a dep. This is the common shape: a step
+    that stages a source snapshot, then a later step that reads it by path.
+
+    Anything else is an authored input the run does not write, so its bytes stay in the
+    fingerprint and a missing file is still the misconfiguration it has always been.
+
+    This takes the opposite position to ``_validate_raw_path_dataflow`` below, which
+    rejects the same wiring on ``inputs``. The asymmetry is deliberate and is about what
+    released specs already contain: a raw-path ``inputs`` duplicate has always been an
+    error, so no spec carries one and the rule can stay strict, while a raw-path
+    ``prompt_paths`` duplicate has always been accepted, so specs do carry them and
+    rejecting them now would break released processes.
     """
+    # Keyed the way every other authored-path comparison in this module is keyed. A
+    # doubled slash or a `./` segment must not decide whether a file is produced, and
+    # `normalize_path_key` is the one definition those comparisons share.
+    produced_keys: set[str] = set()
+    for producer_id, outputs in step_outputs.items():
+        if producer_id == step.id:
+            # A step's own outputs are not inputs to itself; excluding them here keeps a
+            # step that reads and rewrites one path from dropping it from its fingerprint.
+            continue
+        for output_spec in outputs.values():
+            if output_spec.path:
+                produced_keys.add(normalize_path_key(output_spec.path))
+
     produced: list[str] = []
     for candidate in (*step.prompt_paths, step.uses):
-        if not candidate or not is_dep_ref(candidate):
+        if not candidate:
             continue
-        dep_name = parse_dep_ref(candidate, context=f"step '{step.id}' produced refs")
-        dep = resolved_deps.get(dep_name)
-        if dep is not None and dep.produced_by and dep.path:
-            produced.append(dep.path)
+        if is_dep_ref(candidate):
+            dep_name = parse_dep_ref(candidate, context=f"step '{step.id}' produced refs")
+            dep = resolved_deps.get(dep_name)
+            if dep is not None and dep.produced_by and dep.path:
+                produced.append(dep.path)
+            continue
+        resolved = resolve_templates(candidate, params)
+        if normalize_path_key(resolved) in produced_keys:
+            produced.append(resolved)
     return list(dict.fromkeys(produced))
 
 
@@ -536,7 +572,11 @@ def _validate_raw_path_dataflow(
     resolved_inputs: dict[str, IOSpec],
     step_outputs: dict[str, dict[str, IOSpec]],
 ) -> None:
-    """Reject authored raw-path wiring when a symbolic ref is available."""
+    """Reject authored raw-path wiring when a symbolic ref is available.
+
+    Only for ``inputs``. ``prompt_paths`` takes the opposite position in
+    ``_resolve_produced_refs`` above, and that docstring explains why.
+    """
     output_index: dict[str, list[str]] = {}
     for producer_step_id, outputs in step_outputs.items():
         for output_name, output_spec in outputs.items():
@@ -937,7 +977,12 @@ def build_plan(
                 needs=list(dict.fromkeys([*step.needs, *ref_needs])),
                 on_failure=step.on_failure,
                 uses_path=uses_path,
-                produced_refs=_resolve_produced_refs(step, resolved_deps=resolved_deps),
+                produced_refs=_resolve_produced_refs(
+                    step,
+                    resolved_deps=resolved_deps,
+                    step_outputs=step_outputs,
+                    params=params,
+                ),
                 execution_profile=step_execution_profile,
                 artifact_namespace=step_artifact_namespace,
                 variant=step.variant,
