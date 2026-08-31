@@ -40,6 +40,22 @@ def test_an_authored_input_is_not_produced(tmp_path: Path) -> None:
 
 
 def test_a_producer_does_not_exclude_its_own_output(tmp_path: Path) -> None:
-    """A step's own outputs are not inputs to itself; excluding them would let a step that
-    reads and rewrites one path drop it from its fingerprint."""
+    """A step that reads and rewrites one path keeps it in its own fingerprint.
+
+    The fixture's producer lists its own declared output in `prompt_paths`, so the
+    self-exclusion branch is consulted. Without that the assertion passes whether or not
+    the branch exists, which is what the first version of this test did.
+    """
     assert _step(_plan(tmp_path), "stage-source-snapshot").produced_refs == []
+
+
+def test_the_match_is_keyed_not_string_compared(tmp_path: Path) -> None:
+    """A doubled slash on one side must not decide whether a file is produced.
+
+    `stage-oddly-spelled` declares `{{run.dir}}//segment-note.md` and the reader spells it
+    plainly. Same file. Comparing the raw strings makes it unproduced, which reinstates the
+    plan-time FileNotFoundError this whole change exists to remove, and does so only for
+    spellings `normalize_path_key` exists to absorb.
+    """
+    produced = _step(_plan(tmp_path), "decompose").produced_refs
+    assert any(ref.endswith("segment-note.md") for ref in produced)

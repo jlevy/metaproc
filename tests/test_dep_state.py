@@ -463,7 +463,7 @@ class TestFingerprintStep:
             fingerprint_step(step)
 
     def test_produced_refs_do_not_shift_the_contract_hash(self, tmp_path: Path) -> None:
-        """``produced_refs`` is derived from the plan's deps, not authored, so it is
+        """``produced_refs`` is derived from the plan, not authored, so it is
         excluded from the payload. A step that references nothing produced must hash
         exactly as it did before the field existed — otherwise adding the field would
         invalidate every completed step in every in-flight run on upgrade."""
@@ -694,7 +694,7 @@ class TestProducedRefsFromBuildPlan:
         use = next(step for step in plan.steps if step.step_id == "use")
 
         assert use.produced_refs == [str(tmp_path / "run" / "runbook.md")], (
-            "only the dep carrying produced_by belongs in produced_refs; "
+            "only a reference the plan says this run writes belongs in produced_refs; "
             f"prompt_paths were {use.prompt_paths}"
         )
         assert next(s for s in plan.steps if s.step_id == "make").produced_refs == []

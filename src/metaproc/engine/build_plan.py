@@ -529,8 +529,18 @@ def _resolve_produced_refs(
 
     Anything else is an authored input the run does not write, so its bytes stay in the
     fingerprint and a missing file is still the misconfiguration it has always been.
+
+    This takes the opposite position to ``_validate_raw_path_dataflow`` below, which
+    rejects the same wiring on ``inputs``. The asymmetry is deliberate and is about what
+    released specs already contain: a raw-path ``inputs`` duplicate has always been an
+    error, so no spec carries one and the rule can stay strict, while a raw-path
+    ``prompt_paths`` duplicate has always been accepted, so specs do carry them and
+    rejecting them now would break released processes.
     """
-    produced_by_path: dict[str, str] = {}
+    # Keyed the way every other authored-path comparison in this module is keyed. A
+    # doubled slash or a `./` segment must not decide whether a file is produced, and
+    # `normalize_path_key` is the one definition those comparisons share.
+    produced_keys: set[str] = set()
     for producer_id, outputs in step_outputs.items():
         if producer_id == step.id:
             # A step's own outputs are not inputs to itself; excluding them here keeps a
@@ -538,7 +548,7 @@ def _resolve_produced_refs(
             continue
         for output_spec in outputs.values():
             if output_spec.path:
-                produced_by_path.setdefault(output_spec.path, producer_id)
+                produced_keys.add(normalize_path_key(output_spec.path))
 
     produced: list[str] = []
     for candidate in (*step.prompt_paths, step.uses):
@@ -551,7 +561,7 @@ def _resolve_produced_refs(
                 produced.append(dep.path)
             continue
         resolved = resolve_templates(candidate, params)
-        if resolved in produced_by_path:
+        if normalize_path_key(resolved) in produced_keys:
             produced.append(resolved)
     return list(dict.fromkeys(produced))
 
@@ -562,7 +572,11 @@ def _validate_raw_path_dataflow(
     resolved_inputs: dict[str, IOSpec],
     step_outputs: dict[str, dict[str, IOSpec]],
 ) -> None:
-    """Reject authored raw-path wiring when a symbolic ref is available."""
+    """Reject authored raw-path wiring when a symbolic ref is available.
+
+    Only for ``inputs``. ``prompt_paths`` takes the opposite position in
+    ``_resolve_produced_refs`` above, and that docstring explains why.
+    """
     output_index: dict[str, list[str]] = {}
     for producer_step_id, outputs in step_outputs.items():
         for output_name, output_spec in outputs.items():
