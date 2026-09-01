@@ -639,6 +639,13 @@ class TestGeminiCliAdapter:
         result = self.adapter.prepare_env(env, {})
         assert "GEMINI_CLI_SYSTEM_SETTINGS_PATH" in result
 
+    def test_working_directory_absent(self):
+        assert self.adapter.working_directory({}) is None
+
+    def test_working_directory_present(self, tmp_path):
+        assert self.adapter.working_directory({"working_directory": str(tmp_path)}) == tmp_path
+        assert self.adapter.validate_config({"working_directory": str(tmp_path)}) == []
+
     def test_parse_result_event(self):
         assert self.adapter.parse_result_event('{"type": "result"}') == {"type": "result"}
         assert self.adapter.parse_result_event("garbage") is None
