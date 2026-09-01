@@ -2279,6 +2279,9 @@ async def _execute_agent_step(
                 )
                 return False
         while True:
+            # Reset per attempt: an anomaly accepted on an attempt that went on to fail
+            # describes that attempt, not the retry that replaced it.
+            accepted_anomalies: list[str] = []
             # Each retry keeps its own log, so the attempt that failed its contract stays
             # readable beside the one that replaced it.
             attempt_log_path = (
@@ -2537,17 +2540,49 @@ async def _execute_agent_step(
                 # the step's declared outputs must validate, so a lying adapter cannot
                 # manufacture a pass, and a step with no declared outputs is never
                 # rescued -- there would be nothing to check the claim against. The exit
-                # code is preserved as a warning so the signal is not lost.
-                if exit_error is not None and effective_outputs and artifact_dir is not None:
-                    if agent_reported_success(attempt_log_path) and not (
-                        validate_item_outputs_detailed(
-                            artifact_dir, effective_outputs, variables=variables
-                        )
+                # code is preserved as a durable anomaly so the signal is not lost.
+                #
+                # A supervisor kill is never rescued. The evidence above is about exit
+                # codes an adapter produces while shutting itself down, and says nothing
+                # about a process this harness decided to terminate. RunPool kills for
+                # reasons the agent does not get a vote on -- capacity, cancellation, a
+                # breached ceiling -- and a killed process that happens to have written
+                # its outputs first is still a step the harness stopped on purpose.
+                # Overriding that would let the pool lose an argument with the thing it
+                # supervises.
+                if (
+                    exit_error is not None
+                    and pool_kill_reason is None
+                    and effective_outputs
+                    and artifact_dir is not None
+                    and agent_reported_success(attempt_log_path)
+                ):
+                    # Same sequence and same bindings as the ordinary completion path
+                    # below -- repair, then conform, then validate, all against
+                    # step_vars. A precheck that asked a different question than the
+                    # check it stands in for would answer for a different step: only
+                    # step_vars binds VARIANT and the artifact namespace, so with the
+                    # parent variables an output path containing {{run.variant}} renders
+                    # with the literal placeholder and validates against a path nothing
+                    # writes. That misreads both ways -- it fails a rescue the evidence
+                    # supports, and passes one on a file that is not the step's output.
+                    for repaired in repair_declared_outputs(
+                        artifact_dir, effective_outputs, variables=step_vars
                     ):
-                        out.progress(
-                            f"  Step '{step_id}': agent reported success and all declared "
-                            f"outputs validate; treating {exit_error} as a shutdown warning"
+                        out.progress(f"  Step '{step_id}': repaired YAML in {repaired.name}")
+                    for conformed in conform_declared_outputs(
+                        artifact_dir, effective_outputs, variables=step_vars
+                    ):
+                        out.progress(f"  Step '{step_id}': conformed scalars in {conformed.name}")
+                    if not validate_item_outputs_detailed(
+                        artifact_dir, effective_outputs, variables=step_vars
+                    ):
+                        anomaly = (
+                            f"agent reported success and all declared outputs validate; "
+                            f"accepted {exit_error} as a shutdown warning"
                         )
+                        out.progress(f"  Step '{step_id}': {anomaly}")
+                        accepted_anomalies.append(anomaly)
                         exit_error = None
 
                 if exit_error is not None:
@@ -2750,7 +2785,9 @@ async def _execute_agent_step(
         if auth_events is not None:
             auth_events.close()
 
-    completed = mark_completed_at(state_dir, running_record=running_record)
+    completed = mark_completed_at(
+        state_dir, running_record=running_record, anomalies=accepted_anomalies
+    )
     write_result_at(
         state_dir,
         ResultRecord(

@@ -183,6 +183,20 @@ class TaskAttemptRecord(BaseModel):
     failure_class: str | None = None
     error: str | None = None
     output_failures: list[OutputFailure] = Field(default_factory=list)
+    anomalies: list[str] = Field(default_factory=list)
+    """Accepted irregularities: the attempt succeeded, but not cleanly.
+
+    Distinct from every other terminal field here, all of which describe an attempt that
+    failed. An anomaly is the record of a judgment call the harness made in the
+    attempt's favor — an agent whose declared outputs all validate but whose process
+    exited nonzero is the case this exists for.
+
+    It has to be durable rather than progress output. Progress is suppressible and
+    unaddressable, so the one signal that a step passed only because a rule was relaxed
+    would be missing from exactly the artifact an operator reads after the fact, and
+    replay would show a clean success. A succeeded attempt may carry these; they are not
+    failure fields and do not make one.
+    """
 
     @model_validator(mode="after")
     def _terminal_fields_move_together(self) -> Self:
@@ -191,6 +205,8 @@ class TaskAttemptRecord(BaseModel):
         has_failure = bool(self.failure_class or self.error or self.output_failures)
         if self.disposition is None and has_failure:
             raise ValueError("live attempt cannot carry terminal failure fields")
+        if self.disposition is None and self.anomalies:
+            raise ValueError("live attempt cannot carry accepted anomalies")
         if self.disposition is AttemptDisposition.succeeded and has_failure:
             raise ValueError("succeeded attempt cannot carry terminal failure fields")
         return self

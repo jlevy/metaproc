@@ -18,7 +18,10 @@ MAX_ARCHIVE_MEMBERS = 100_000
 MAX_MEMBER_BYTES = 64 * 1024 * 1024
 MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
 MAX_ARCHIVE_DEPTH = 3
-SKIP_PARTS = {".git", ".venv", "dist", "node_modules", "__pycache__"}
+# "attic" is where `tbd shortcut checkout-third-party-repo` clones a dependency's
+# source. It is gitignored and never published, so scanning it reports another
+# project's contents as this one's.
+SKIP_PARTS = {".git", ".venv", "attic", "dist", "node_modules", "__pycache__"}
 SKIP_ROOTS = (ROOT / ".tbd" / "docs",)
 TOKEN_PATTERN = re.compile(r"[a-z][a-z0-9_-]*", re.IGNORECASE)
 TOKEN_COMPONENT_PATTERN = re.compile(r"[a-z][a-z0-9]*", re.IGNORECASE)
