@@ -157,6 +157,36 @@ The same experiment found that host-wide reclaimable memory and kernel pressure
 distinguish dangerous states more reliably than summed RSS, and that a watchdog which
 forks to sample can itself become starved under severe pressure.
 
+### Lessons From Procguard
+
+A static source review of
+[Procguard v1.5.1](https://github.com/denispol/procguard/tree/v1.5.1) provides a useful
+implementation and test reference for the owned-process layer.
+Procguard is a small macOS supervisor for one command, not a host-wide admission
+controller or concurrent pool.
+Its strongest choices are an atomic `posix_spawn` launch into a new process group,
+`kqueue` exit and timer events, separate continuous and active clocks,
+physical-footprint sampling through `proc_pid_rusage`, terminal usage from `wait4`, a
+versioned JSON result, and explicit tests for fast-exit and signalling races.
+
+The review also exposes boundaries that the standalone runtime must handle differently:
+
+| Procguard behavior | Lesson for the standalone runtime |
+| --- | --- |
+| The ordinary path uses `posix_spawn`, but enabling a resource limit switches to `fork`. On macOS the attempted `RLIMIT_AS` memory limit is rejected, so memory enforcement still comes from a later 100 ms poll. | Safety options must not make launch less safe under memory pressure. Keep the supervising process on a nonforking path; if a limit must be applied before the target starts, spawn a minimal wrapper that applies it and then calls `exec`. |
+| Memory and CPU polling read only the root PID, even though timeout signals normally target its process group. | Every metric must declare `root`, `tree`, `cgroup`, or `host` scope. Root physical footprint is useful evidence but cannot be presented as process-group memory or used alone for group victim sizing. |
+| Wall time uses `mach_continuous_time`, while active time excludes system sleep. | Every lease, grace period, startup window, and timeout needs an explicit clock domain. A startup reservation must not expire merely because the Mac slept while the target could not finish starting. |
+| A v1.5.1 regression fix was needed because a zero wall timeout bypassed memory, throttle, heartbeat, and stdin monitors. | Governors compose independently. Disabling or zeroing one deadline must never bypass another configured monitor or the host authority. |
+| Signal forwarding is a process-global self-pipe. Its cleanup contract forbids concurrent runs and resets handlers rather than restoring an application-owned signal configuration. | `SafeProcess` must support many concurrent instances and must not take implicit per-run ownership of process-global signals. Use one application-level signal router or an explicit caller-owned forwarding policy. |
+| The raw child handle has no terminal cleanup guard, so an internal monitor error can return without a demonstrated child-reap or ownership-transfer path. | Every post-spawn exit path must either reap and clean the group or atomically transfer it to the broker or sentinel before returning. Supervisor failure cannot orphan the workload it was meant to contain. |
+| The CLI and Rust library share one runner, and results are nonexhaustive and schema-versioned. The public configuration remains experimental and has accumulated timeout hooks, retries, file waiting, heartbeat, and throttling. | Keep one implementation behind the CLI and Python surfaces, use additive typed contracts, and resist moving orchestration conveniences into the safety boundary. Shell hooks, retry policy, and dependency waiting remain above it. |
+| The test suite stresses immediate exits, `ESRCH` registration races, process-group signalling, zero-duration combinations, `SIGSTOP` cleanup, parsers, and timing arithmetic. Its Kani scope excludes the runner loop, FFI, and signal handler, and several proofs model simplified state rather than the implementation itself. | Reuse the failure corpus and layered test methods. State formal or model-checking coverage narrowly and require proofs to exercise shared production functions where possible. |
+
+Procguard is therefore a reference, not a dependency candidate or replacement for the
+proposed runtime. It validates the small native-supervisor shape and the CLI-and-library
+seam, while its macOS-only, root-process, single-command contract reinforces the need
+for separate host admission, cross-client identity, tree accounting, and Linux backends.
+
 ### Safety Principles
 
 The design follows five rules.
@@ -200,6 +230,17 @@ The implementation must make these properties testable:
     without importing the owned-process or pool layers.
 14. Metaproc has one queue and one adaptive-capacity controller in either approved
     integration shape; no migration phase becomes a permanent double-scheduling layer.
+15. Every deadline and persisted timestamp declares its clock semantics; system sleep
+    alone cannot age a live process out of its startup reservation or identity claim.
+16. Disabling one timeout or governor does not disable any other configured monitor,
+    claim, heartbeat, or containment rule.
+17. Concurrent `SafeProcess` instances share no mutable per-run global signal state, and
+    the library never replaces application signal handlers without an explicit contract.
+18. Every post-spawn error path either performs bounded process-group cleanup or proves
+    that the broker or sentinel accepted ownership before the caller receives the error.
+19. Every resource observation declares whether it represents one PID, an owned tree, a
+    cgroup, or the host; lower-scope evidence is never silently promoted to a wider
+    scope.
 
 ### One Host Resource Authority
 
@@ -522,6 +563,11 @@ stdio file descriptors, and other launch state.
 It obtains a host claim, creates a new session and process group, records its PID,
 create time, and process-group identity with the broker, and only then replaces itself
 with the target command.
+The supervisor should create that wrapper and its process group atomically with a
+`posix_spawn`-class primitive rather than forking the memory-heavy parent or using a
+Python `preexec_fn`. When a platform requires per-child setup before the target starts,
+the minimal spawned wrapper performs the setup and calls `exec`; enabling a safety
+option must not silently select a higher-risk parent launch path.
 The long-lived broker does not need to receive or persist credential-bearing environment
 values. If the wrapper or client dies during the handshake, identity-based stale
 reclamation keeps the reservation conservative until it can prove that no target
@@ -560,6 +606,13 @@ The primary Python abstraction should be one owned process, not a scheduler: a p
 launch and resource request enter; typed lifecycle events and a terminal result leave.
 That boundary directly owns the safety invariants and is useful to Metaproc even if no
 generic pool is extracted.
+Requests should be keyword-only and make destructive policy, deadline clock, metric
+scope, and ownership mode explicit.
+Results and events should be additive and nonexhaustive so new terminal reasons do not
+break older clients.
+The API must support many simultaneous owned processes without installing per-run global
+signal handlers; signal forwarding belongs to an explicit caller policy or one shared
+application-level router.
 
 `SafeRunPool` should begin as a provisional layer over the owned-process API. The
 standalone `pool` command may use it to run a finite manifest or bounded command stream
@@ -677,6 +730,11 @@ Platform providers supply measurements and optional containment.
   `kern.memorystatus_level` as a budget
 - read host statistics, swap, and per-process physical footprint without forking in the
   critical sampling path
+- use a sleep-aware continuous clock for operator wall deadlines and an active monotonic
+  clock for startup work that cannot progress while the host sleeps; persist the clock
+  domain with each deadline
+- capture terminal CPU time and peak RSS from the child wait result for calibration,
+  normalizing platform units before writing portable records
 - track compressor growth and the distance to swap-volume exhaustion separately from
   ordinary disk pressure
 - use process-group termination because macOS provides no cgroup-equivalent containment
@@ -741,6 +799,7 @@ admission.
 | Set a low static concurrency | Easy emergency brake | It wastes steady-state capacity, cannot represent startup peaks, and composes poorly across runs. |
 | Add a fixed sleep before launch | Directly smooths a known transient | A per-process or per-coordinator delay is not host-wide and cannot react to outside load or mixed profiles. |
 | Publish the current memory guard unchanged | Proven last-resort evidence, policy, and intervention | Its attached-tree contract acts after launch, is macOS-only, and cannot provide authoritative cross-client admission. It should become one mode of the broader runtime. |
+| Adopt Procguard directly | Small native macOS supervisor with strong owned-launch primitives and a valuable failure corpus | It governs one root process after launch, has no host-wide reservation or cross-client broker, uses process-global signal state, and has no Linux backend. Its code is a reference for the owned-process layer, not the required abstraction. |
 | Publish separate guard and pool projects | Keeps each repository superficially small | Telemetry, pressure policy, process identity, signalling, and journal replay would either be duplicated or require a third shared package. One layered distribution keeps the guard small without splitting its safety semantics. |
 | Delegate to GNU Parallel | Mature command queue with launch delay, memory admission, suspension, and retry | Its generic free-memory rules do not provide the required macOS pressure accounting, startup-phase claims, cross-client identity registry, or independent sentinel. |
 | Publish Metaproc’s current RunPool unchanged | Reuses a capable scheduler and local process manager | The module mixes a potentially reusable pool core with Metaproc paths, lanes, events, status, provider policy, and artifact compatibility. Prove a neutral slice before deciding whether to extract it. |
@@ -764,6 +823,9 @@ decision.
   Protocol compatibility is independent of Metaproc and package versions.
 - Define narrow `SafeProcess`, `ProcessRequest`, `ProcessResult`, lifecycle-event, and
   broker-client interfaces in the standalone package.
+  The request declares ownership, clock, resource scopes, and cleanup policy; the result
+  uses distinct reasons for workload exit, timeout, resource pressure, external signal,
+  cancellation, and supervisor failure.
 - Define `SafeRunPool`, `PoolSubmission`, and generic capacity and pause inputs as a
   provisional surface until the extraction gate passes.
 - Add a Metaproc integration adapter at the owned-process boundary.
@@ -773,6 +835,7 @@ decision.
 - Give the standalone runtime its own generic JSONL journal and status schema.
   Metaproc consumes and projects those records; the dependency never writes
   `runpool-status.yaml`, Metaproc trace events, or other run artifacts directly.
+  Records are additive, versioned, and explicit about clock domain and metric scope.
 - Add an optional typed `resources.memory` shape and platform overrides to execution
   profiles, with a schema migration that accepts released `ExecutionProfile/0.1` files.
 - Version the host admission lease from count slot v1 to resource claim v2. Do not
@@ -799,15 +862,26 @@ decision.
 - [ ] Specify neutral process request, result, lifecycle event, resource,
   process-identity, host-sample, journal, and client-broker protocol models without
   importing Metaproc types.
+- [ ] Define a platform capability matrix for launch, root, tree, cgroup, and host
+  measurements; clock domains; event-driven exit observation; and containment.
+  Unsupported scope must be reported rather than approximated without a label.
 - [ ] Split the current guard into pure policy and replay code, process ownership and
   signalling, journaling, and platform providers while preserving its macOS behavior and
   failure corpus.
+- [ ] Translate the Procguard v1.5.1 immediate-exit, `ESRCH`, process-group,
+  zero-timeout, sleep-aware clock, and suspended-process cleanup cases into
+  implementation-independent contract tests.
+  Record provenance rather than copying source or overstating its formal verification
+  coverage.
 - [ ] Add a Linux provider using `MemAvailable`, PSI, PSS, and optional cgroup v2
   capabilities; keep one shared policy state machine above both providers.
 - [ ] Build daemonless `watch` and offline `replay` first, with import-boundary tests
   proving that neither loads the broker, pool, optional integrations, or Metaproc.
 - [ ] Build the broker/sentinel and owned-process API, then expose thin `run` and
   `status` commands over those services.
+- [ ] Prove that the owned launch path uses a nonforking parent primitive even when
+  resource controls are enabled, supports concurrent instances, and either cleans up or
+  transfers ownership on every injected internal error.
 - [ ] Build a provisional finite-batch `SafeRunPool` and `pool` command over the
   owned-process API without durable jobs, retries, lanes, or provider policy.
 - [ ] Choose the standalone project’s license and document provenance for guard-derived
@@ -896,7 +970,8 @@ expanding the subprocess-safety contract.
   capabilities and malformed or stale inputs.
 - Claim tests cover atomic races, partial writes, mixed profile limits, timeout
   behavior, owner death before child registration, surviving children after owner death,
-  PID reuse, clock changes, and corrupt state.
+  PID reuse, clock changes, sleep and wake, and corrupt state.
+  Startup reservations use an active clock and cannot expire solely during system sleep.
 - Protocol tests cover compatible and incompatible client-broker versions, broker
   replacement, two installed package versions racing for one namespace, and fail-closed
   behavior during upgrades.
@@ -909,7 +984,21 @@ expanding the subprocess-safety contract.
   submission can launch after close.
 - Owned-launch tests prove that the wrapper obtains admission before target execution,
   preserves working directory and file descriptors, creates an isolated process group,
-  registers exact identity, and leaves no surviving descendants after terminal cleanup.
+  registers exact identity, does not fork the supervising parent, and leaves no
+  surviving descendants after success, cancellation, timeout, or injected monitor
+  failure.
+- Monitor-composition tests disable or zero each deadline and governor in turn while
+  proving that every other configured monitor, heartbeat, claim, and cleanup path
+  remains active.
+- Concurrency tests run many `SafeProcess` instances in one application process while
+  delivering termination signals; no instance may consume another instance’s event or
+  replace the caller’s signal handlers.
+- Exit-observation tests cover a target that exits before watcher registration, `ESRCH`
+  and `ECHILD` races, process-group signalling fallback, and immediate exit codes
+  without misclassifying completion as timeout.
+- Accounting tests distinguish root physical footprint, tree totals, cgroup usage, host
+  headroom, and terminal peak RSS. Portable records preserve scope and normalize the
+  macOS and Linux `ru_maxrss` unit difference.
 - Redaction tests prove that environment credentials, prompt text, and unredacted
   command arguments never enter broker state or the portable journal.
 - CLI and Python contract tests drive the same owned-process and policy services and
@@ -925,6 +1014,11 @@ expanding the subprocess-safety contract.
   misclassification.
 - Attribution tests prove that outside pressure closes admission but does not authorize
   a destructive Metaproc action that cannot recover enough memory.
+- Property tests and fuzz targets cover parsers, protocol records, time arithmetic, and
+  pure policy transitions.
+  Model checking is optional and reports only the production functions and bounded state
+  it actually exercises; it is not evidence that the FFI, signal, or process-monitoring
+  system is formally verified.
 
 ### Replay and Live Tests
 
@@ -941,6 +1035,9 @@ expanding the subprocess-safety contract.
   throttling and OOM containment only where delegation is available.
 - Run the standalone packaged artifact on macOS and Linux, including one standalone
   client and one Metaproc client sharing the same broker and launch timeline.
+- Publish a compile-and-execute matrix that distinguishes native tests from
+  cross-builds; both macOS and Linux backends must run their process-lifecycle suites on
+  the supported architectures before a stable release.
 - Run packaged `watch --pid` on macOS and Linux with no broker state and no Metaproc
   installation, and measure startup time, resident memory, and sampling cadence.
 - Run representative adapter soaks from small working directories and large
@@ -968,6 +1065,13 @@ expanding the subprocess-safety contract.
   modifying Metaproc scheduling code.
 - Owned-launch mode never signals an unregistered process identity; attached mode is
   visibly weaker and cannot perform an argv-pattern-authorized kill by default.
+- The supervising parent does not call `fork` on the authoritative launch or sampling
+  path, including when per-process limits are enabled.
+- Many concurrent owned processes can share one Python process without global
+  signal-handler interference, and every injected post-spawn supervisor failure leaves
+  the process group reaped or visibly owned by the broker or sentinel.
+- Every journaled deadline names its clock, every memory value names its scope, and a
+  system sleep cannot release a startup claim for a still-live process.
 - Healthy workload replays produce no preemptions or sentinel terminations.
 - Critical replays take at most one proportional shedding action per settle interval and
   recover without unrelated process signals.
@@ -1047,6 +1151,7 @@ expanding the subprocess-safety contract.
 - [Process framework theory: readiness versus admission](../../../../src/metaproc/docs/process-framework-theory.md#resources-readiness-versus-admission)
 - [RunPool design backlog](../../design/backlog/arch-runpool-backlog.md)
 - [Standalone macOS memory guard](https://gist.github.com/jlevy/5b43e0d44166b9c7fe8157ee938cb0d5)
+- [Procguard v1.5.1 source](https://github.com/denispol/procguard/tree/v1.5.1)
 - [GNU Parallel memory and launch controls](https://www.gnu.org/software/parallel/parallel.html)
 - [Apple Activity Monitor memory accounting](https://support.apple.com/guide/activity-monitor/view-memory-usage-actmntr1004/mac)
 - [XNU memorystatus notifications](https://github.com/apple-oss-distributions/xnu/blob/main/doc/vm/memorystatus_notify.md)
