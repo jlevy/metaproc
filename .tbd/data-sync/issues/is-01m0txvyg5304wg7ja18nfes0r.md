@@ -5,12 +5,12 @@ title: "Metabrowser extra-plugins-dir e2e test is permanently skipped: sample_pl
 kind: bug
 status: open
 priority: 2
-version: 1
+version: 2
 labels:
   - testing,metabrowser
 dependencies: []
 created_at: 2026-08-24T22:22:15.044Z
-updated_at: 2026-08-24T22:22:15.044Z
+updated_at: 2026-09-01T06:10:18.220Z
 ---
 ## Finding
 
@@ -39,3 +39,24 @@ Add `tests/fixtures/sample_plugin/index.js` with a minimal `registerView` call, 
 ## Not a 0.3.0 blocker
 
 Filed as ordinary follow-up. It is a pre-existing coverage gap, not a regression introduced since v0.2.1.
+
+## Notes
+
+Answered while migrating to browser SDK 0.5 (mp-g7l4): metabrowser 0.9.0 does NOT supply
+this fixture, so the upgrade does not retire these beads.
+
+Metabrowser does have a `sample_plugin`, but only at `tests/fixtures/sample_plugin` inside
+its own repository, which the wheel does not ship. The skip at
+`tests/test_metabrowser_plugin_e2e.py:189` guards on
+`tests/fixtures/sample_plugin/index.js` under *this* repository, and that path has never
+existed here. The fixture is this repository's to write.
+
+What it needs is small: a directory under `tests/fixtures/sample_plugin` with a
+`manifest.toml` declaring at least one kind and view, and an `index.js` calling
+`registerView`, sufficient to exercise the extra-plugins-dir discovery path the loader
+shim already supports through its `extraDirs` argument. Metabrowser's own copy is a
+reasonable model to read while writing one.
+
+Note for whoever takes this: the shim now evaluates an ES module entry point as well as a
+classic script, so the fixture may be written in either shape, and writing it as ESM would
+also cover that path for an external plugin.

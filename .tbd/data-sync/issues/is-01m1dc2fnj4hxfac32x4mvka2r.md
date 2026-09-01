@@ -3,15 +3,19 @@ type: is
 id: is-01m1dc2fnj4hxfac32x4mvka2r
 title: Migrate the Metabrowser plugin to browser SDK 0.5 (metabrowser 0.9.x)
 kind: task
-status: open
+status: closed
 priority: 2
-version: 1
+version: 2
 labels:
   - supply-chain
   - plugin
 dependencies: []
 created_at: 2026-09-01T02:16:49.061Z
-updated_at: 2026-09-01T02:16:49.061Z
+updated_at: 2026-09-01T06:10:17.567Z
+closed_at: 2026-09-01T06:10:17.566Z
+close_reason: "Migrated in PR #60 (stacked on #59). metabrowser 0.1.0 to 0.9.0, kpress 0.2.2 to 0.3.5, manifest sdk_version 0.1 to 0.5. Three contract changes carried: mb.openPath to mb.navigation.open (removed with no shim at SDK 0.2), the markdown built-in's renderRendered to mountRendered (a live break, not a test artifact - the Document view would have registered undefined as its renderer), and selected-kind plugin asset loading at SDK 0.5, which needed no plugin change but invalidated the test asserting eager asset tags. The DOM shims now load the shell's own script order and evaluate ES modules via vm.SourceTextModule, since half of metabrowser's built-ins are ESM including the markdown one this plugin borrows from. make verify green: 4,571 passed, 8 skipped."
+resolution: null
+duplicate_of: null
 ---
 Attempted as a version bump on 2026-08-31 and reverted: it is an SDK migration, and
 Metabrowser says so itself. Discovery under 0.9.0 refuses the plugin outright:
