@@ -11,7 +11,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import ClassVar, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from metaproc.ids import typed_id_pattern
 from metaproc.models.authored import StepStatus
@@ -154,6 +154,18 @@ class AttemptDisposition(StrEnum):
     lost = "lost"
 
 
+class TaskAttemptAnomaliesRecord(BaseModel):
+    """Accepted irregularities stored beside one backward-compatible attempt fact."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", populate_by_name=True)
+
+    schema_: Literal["metaproc:TaskAttemptAnomalies/0.1"] = Field(
+        default="metaproc:TaskAttemptAnomalies/0.1", alias="schema"
+    )
+    attempt_id: str = Field(pattern=typed_id_pattern("att"))
+    anomalies: list[str] = Field(min_length=1)
+
+
 class TaskAttemptRecord(BaseModel):
     """One durable attempt, retained after later attempts start.
 
@@ -183,6 +195,20 @@ class TaskAttemptRecord(BaseModel):
     failure_class: str | None = None
     error: str | None = None
     output_failures: list[OutputFailure] = Field(default_factory=list)
+    _anomalies: list[str] = PrivateAttr(default_factory=list)
+    """Accepted irregularities: the attempt succeeded, but not cleanly.
+
+    Distinct from every other terminal field here, all of which describe an attempt that
+    failed. An anomaly is the record of a judgment call the harness made in the
+    attempt's favor — an agent whose declared outputs all validate but whose process
+    exited nonzero is the case this exists for.
+
+    It has to be durable rather than progress output. Progress is suppressible and
+    unaddressable, so the one signal that a step passed only because a rule was relaxed
+    would be missing from exactly the artifact an operator reads after the fact, and
+    replay would show a clean success. A succeeded attempt may carry these; they are not
+    failure fields and do not make one.
+    """
 
     @model_validator(mode="after")
     def _terminal_fields_move_together(self) -> Self:
@@ -194,6 +220,17 @@ class TaskAttemptRecord(BaseModel):
         if self.disposition is AttemptDisposition.succeeded and has_failure:
             raise ValueError("succeeded attempt cannot carry terminal failure fields")
         return self
+
+    @property
+    def anomalies(self) -> list[str]:
+        """Accepted irregularities loaded from the attempt-owned sidecar."""
+        return list(self._anomalies)
+
+    def with_anomalies(self, anomalies: list[str]) -> Self:
+        """Return an in-memory projection carrying its separately stored anomalies."""
+        projected = self.model_copy(deep=True)
+        projected._anomalies = list(anomalies)
+        return projected
 
 
 class ResultRecord(BaseModel):

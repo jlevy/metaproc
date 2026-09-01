@@ -16,7 +16,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
-const { loadPluginScripts } = require("./plugin_test_utils.js");
+const { loadPluginScripts, loadShell } = require("./plugin_test_utils.js");
 
 /** @returns {never} */
 function fail(msg) {
@@ -108,57 +108,59 @@ function load(filepath, label) {
   vm.runInContext(src, sandbox, { filename: label });
 }
 
-load(path.join(metabrowserRoot, "static", "plugin_sdk.js"), "plugin_sdk.js");
-load(path.join(metabrowserRoot, "static", "icons.js"), "icons.js");
+loadShell(metabrowserRoot, load);
 
+// Joined here rather than inside main(): the argument checks above narrow these away from
+// `string | undefined`, and that narrowing does not reach into a function body.
 const builtinRoot = path.join(metabrowserRoot, "builtin_plugins");
-const builtinNames = fs
-  .readdirSync(builtinRoot)
-  .filter((n) => fs.statSync(path.join(builtinRoot, n)).isDirectory() && !n.startsWith("_"))
-  .sort();
-for (const name of builtinNames) {
-  const indexPath = path.join(builtinRoot, name, "index.js");
-  if (fs.existsSync(indexPath)) {
-    const pluginRoot = path.join(builtinRoot, name);
-    loadPluginScripts(
-      pluginRoot,
-      manifestContract(pluginRoot).extra_scripts,
+const metaprocIndex = path.join(metaprocPluginRoot, "index.js");
+
+async function main() {
+  const builtinNames = fs
+    .readdirSync(builtinRoot)
+    .filter((n) => fs.statSync(path.join(builtinRoot, n)).isDirectory() && !n.startsWith("_"))
+    .sort();
+  for (const name of builtinNames) {
+    const indexPath = path.join(builtinRoot, name, "index.js");
+    if (fs.existsSync(indexPath)) {
+      const pluginRoot = path.join(builtinRoot, name);
+      await loadPluginScripts(
+        pluginRoot,
+        manifestContract(pluginRoot).extra_scripts,
+        load,
+        `builtin/${name}`,
+        sandbox,
+      );
+    }
+  }
+
+  if (fs.existsSync(metaprocIndex)) {
+    await loadPluginScripts(
+      metaprocPluginRoot,
+      manifestContract(metaprocPluginRoot).extra_scripts,
       load,
-      `builtin/${name}`,
+      "metaproc",
+      sandbox,
     );
   }
-}
 
-const metaprocIndex = path.join(metaprocPluginRoot, "index.js");
-if (fs.existsSync(metaprocIndex)) {
-  loadPluginScripts(
-    metaprocPluginRoot,
-    manifestContract(metaprocPluginRoot).extra_scripts,
-    load,
-    "metaproc",
-  );
-}
+  const view = sandbox.metabrowser.getRegisteredView(kind, viewId);
+  if (!view) {
+    fail(`no view registered for (${kind}, ${viewId})`);
+  }
 
-const view = sandbox.metabrowser.getRegisteredView(kind, viewId);
-if (!view) {
-  fail(`no view registered for (${kind}, ${viewId})`);
-}
+  const ctx = {
+    path: payload.path || "",
+    kind: payload.kind || kind,
+    ext: payload.ext || "",
+    size: payload.size || 0,
+    frontmatter: payload.frontmatter || {},
+    body: payload.content || "",
+    raw: payload,
+  };
 
-const ctx = {
-  path: payload.path || "",
-  kind: payload.kind || kind,
-  ext: payload.ext || "",
-  size: payload.size || 0,
-  frontmatter: payload.frontmatter || {},
-  body: payload.content || "",
-  raw: payload,
-};
-
-const result = view.render(fakeContainer, ctx);
-if (result && typeof result.then === "function") {
-  result
-    .then(() => process.stdout.write(fakeContainer.innerHTML))
-    .catch((err) => fail(`render error: ${err instanceof Error ? err.message : String(err)}`));
-} else {
+  await view.render(fakeContainer, ctx);
   process.stdout.write(fakeContainer.innerHTML);
 }
+
+main().catch((err) => fail(`render error: ${err instanceof Error ? err.message : String(err)}`));

@@ -7,7 +7,8 @@
       "src/metaproc/metabrowser_plugin/plugin/**",
       "tests/dom/**",
       "tsconfig.json",
-      "!src/metaproc/metabrowser_plugin/plugin/elk.bundled.js"
+      "!src/metaproc/metabrowser_plugin/plugin/elk.bundled.js",
+      "!attic"
     ]
   },
   "formatter": {

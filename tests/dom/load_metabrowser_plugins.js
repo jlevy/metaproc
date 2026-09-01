@@ -19,7 +19,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
-const { loadPluginScripts } = require("./plugin_test_utils.js");
+const { loadPluginScripts, loadShell } = require("./plugin_test_utils.js");
 
 /** @returns {never} */
 function fail(msg) {
@@ -110,11 +110,10 @@ function load(filepath, label) {
 
 // ── 1. Plugin SDK ─────────────────────────────────────────────────
 
-load(path.join(metabrowserRoot, "static", "plugin_sdk.js"), "plugin_sdk.js");
-load(path.join(metabrowserRoot, "static", "icons.js"), "icons.js");
+loadShell(metabrowserRoot, load);
 
 if (!sandbox.metabrowser) {
-  fail("plugin_sdk.js did not set window.metabrowser");
+  fail("the plugin SDK did not set window.metabrowser");
 }
 
 // ── 1b. Install a tracking Proxy on mb.builtins ───────────────────
@@ -164,128 +163,137 @@ function loadPlugin(filepath, label, pluginName) {
   }
 }
 
-// ── 2. Built-in plugins (alphabetical, matching discovery order) ──
+async function main() {
+  // ── 2. Built-in plugins (alphabetical, matching discovery order) ──
 
-const builtinRoot = path.join(metabrowserRoot, "builtin_plugins");
-const builtinNames = fs
-  .readdirSync(builtinRoot)
-  .filter((name) => {
-    const stat = fs.statSync(path.join(builtinRoot, name));
-    return stat.isDirectory() && !name.startsWith("_") && !name.startsWith(".");
-  })
-  .sort();
+  const builtinRoot = path.join(metabrowserRoot, "builtin_plugins");
+  const builtinNames = fs
+    .readdirSync(builtinRoot)
+    .filter((name) => {
+      const stat = fs.statSync(path.join(builtinRoot, name));
+      return stat.isDirectory() && !name.startsWith("_") && !name.startsWith(".");
+    })
+    .sort();
 
-const loadedPlugins = [];
-const loadedPluginRoots = [];
+  const loadedPlugins = [];
+  const loadedPluginRoots = [];
 
-for (const name of builtinNames) {
-  const indexPath = path.join(builtinRoot, name, "index.js");
-  const manifestPath = path.join(builtinRoot, name, "manifest.toml");
-  if (!fs.existsSync(indexPath) || !fs.existsSync(manifestPath)) {
-    continue;
-  }
-  loadPluginScripts(
-    path.join(builtinRoot, name),
-    manifestContract(path.join(builtinRoot, name)).extra_scripts,
-    (file, label) => loadPlugin(file, label, name),
-    `builtin/${name}`,
-  );
-  loadedPlugins.push(name);
-  loadedPluginRoots.push(path.join(builtinRoot, name));
-}
-
-// ── 3. Entry-point plugins (just metaproc) ────────────────────────
-
-const metaprocPluginIndex = path.join(metaprocPluginRoot, "index.js");
-if (fs.existsSync(metaprocPluginIndex)) {
-  loadPluginScripts(
-    metaprocPluginRoot,
-    manifestContract(metaprocPluginRoot).extra_scripts,
-    (file, label) => loadPlugin(file, label, "metaproc"),
-    "metaproc",
-  );
-  loadedPlugins.push("metaproc");
-  loadedPluginRoots.push(metaprocPluginRoot);
-}
-
-// ── 4. Extra dirs (--plugins-dir / METABROWSER_PLUGINS_DIRS) ──────
-
-for (const dir of extraDirs) {
-  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
-    continue;
-  }
-  const subdirs = fs.readdirSync(dir).sort();
-  for (const sub of subdirs) {
-    const subPath = path.join(dir, sub);
-    if (!fs.statSync(subPath).isDirectory()) {
-      continue;
-    }
-    const indexPath = path.join(subPath, "index.js");
-    const manifestPath = path.join(subPath, "manifest.toml");
+  for (const name of builtinNames) {
+    const indexPath = path.join(builtinRoot, name, "index.js");
+    const manifestPath = path.join(builtinRoot, name, "manifest.toml");
     if (!fs.existsSync(indexPath) || !fs.existsSync(manifestPath)) {
       continue;
     }
-    loadPluginScripts(
-      subPath,
-      manifestContract(subPath).extra_scripts,
-      (file, label) => loadPlugin(file, label, sub),
-      `extra/${sub}`,
+    await loadPluginScripts(
+      path.join(builtinRoot, name),
+      manifestContract(path.join(builtinRoot, name)).extra_scripts,
+      (file, label) => loadPlugin(file, label, name),
+      `builtin/${name}`,
+      sandbox,
     );
-    loadedPlugins.push(sub);
-    loadedPluginRoots.push(subPath);
+    loadedPlugins.push(name);
+    loadedPluginRoots.push(path.join(builtinRoot, name));
   }
+
+  // ── 3. Entry-point plugins (just metaproc) ────────────────────────
+
+  const metaprocPluginIndex = path.join(metaprocPluginRoot, "index.js");
+  if (fs.existsSync(metaprocPluginIndex)) {
+    await loadPluginScripts(
+      metaprocPluginRoot,
+      manifestContract(metaprocPluginRoot).extra_scripts,
+      (file, label) => loadPlugin(file, label, "metaproc"),
+      "metaproc",
+      sandbox,
+    );
+    loadedPlugins.push("metaproc");
+    loadedPluginRoots.push(metaprocPluginRoot);
+  }
+
+  // ── 4. Extra dirs (--plugins-dir / METABROWSER_PLUGINS_DIRS) ──────
+
+  for (const dir of extraDirs) {
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
+      continue;
+    }
+    const subdirs = fs.readdirSync(dir).sort();
+    for (const sub of subdirs) {
+      const subPath = path.join(dir, sub);
+      if (!fs.statSync(subPath).isDirectory()) {
+        continue;
+      }
+      const indexPath = path.join(subPath, "index.js");
+      const manifestPath = path.join(subPath, "manifest.toml");
+      if (!fs.existsSync(indexPath) || !fs.existsSync(manifestPath)) {
+        continue;
+      }
+      await loadPluginScripts(
+        subPath,
+        manifestContract(subPath).extra_scripts,
+        (file, label) => loadPlugin(file, label, sub),
+        `extra/${sub}`,
+        sandbox,
+      );
+      loadedPlugins.push(sub);
+      loadedPluginRoots.push(subPath);
+    }
+  }
+
+  // ── 5. Inspect the view registry ──────────────────────────────────
+
+  const mb = sandbox.metabrowser;
+  const registrations = [];
+  // listViewsForKind iterates per-kind; we don't have the kind list,
+  // The registry is private to the SDK closure. Python parses TOML with
+  // `tomllib` and supplies the declared view contract to this shim.
+  const declaredViews = loadedPluginRoots.flatMap(
+    (pluginRoot) => manifestContract(pluginRoot).views,
+  );
+  for (const v of declaredViews) {
+    const reg = mb.getRegisteredView(v.kind, v.id);
+    registrations.push({
+      kind: v.kind,
+      view: v.id,
+      registered: !!reg,
+    });
+  }
+
+  // Violations of the render-time-only namespace rule: a plugin's top-level
+  // IIFE read mb.builtins.<key> and got undefined. Anything that resolved
+  // to a real value (e.g. unknown_jsonl reading agentLog after agent_log
+  // loaded) is fine — load-order happens to satisfy the read. The foot-gun
+  // is the undefined case, so flag only that.
+  const namespaceViolations = _builtinReads
+    .filter((r) => !r.hadValue)
+    .map((r) => ({ plugin: r.plugin, key: r.key }));
+  const metaprocVisualView = mb.getRegisteredView("process-spec", "visual");
+  const metaprocChartsView = mb.getRegisteredView("runpool-log", "charts");
+  const metaprocDomainViewHandlers = [
+    "attachVisualResources",
+    "copyResourceTableAs",
+    "detachVisualResources",
+    "loadResourcesForRunDir",
+    "resourceMetricChanged",
+    "resourceNodeClicked",
+    "resourceTreemapMetricChanged",
+    "resourceTreemapTileClicked",
+  ];
+
+  process.stdout.write(
+    `${JSON.stringify({
+      plugins: loadedPlugins,
+      registrations: registrations,
+      errors: errors,
+      namespace_violations: namespaceViolations,
+      metaproc_viz_loaded: Boolean(sandbox.MetaprocViz?.renderViz),
+      metaproc_domain_views_loaded: Boolean(sandbox.MetaprocDomainViews),
+      metaproc_domain_view_handlers_loaded: metaprocDomainViewHandlers.every(
+        (name) => typeof sandbox.MetaprocDomainViews?.[name] === "function",
+      ),
+      metaproc_visual_has_dispose: Boolean(metaprocVisualView?.dispose),
+      metaproc_charts_has_dispose: Boolean(metaprocChartsView?.dispose),
+    })}\n`,
+  );
 }
 
-// ── 5. Inspect the view registry ──────────────────────────────────
-
-const mb = sandbox.metabrowser;
-const registrations = [];
-// listViewsForKind iterates per-kind; we don't have the kind list,
-// The registry is private to the SDK closure. Python parses TOML with
-// `tomllib` and supplies the declared view contract to this shim.
-const declaredViews = loadedPluginRoots.flatMap((pluginRoot) => manifestContract(pluginRoot).views);
-for (const v of declaredViews) {
-  const reg = mb.getRegisteredView(v.kind, v.id);
-  registrations.push({
-    kind: v.kind,
-    view: v.id,
-    registered: !!reg,
-  });
-}
-
-// Violations of the render-time-only namespace rule: a plugin's top-level
-// IIFE read mb.builtins.<key> and got undefined. Anything that resolved
-// to a real value (e.g. unknown_jsonl reading agentLog after agent_log
-// loaded) is fine — load-order happens to satisfy the read. The foot-gun
-// is the undefined case, so flag only that.
-const namespaceViolations = _builtinReads
-  .filter((r) => !r.hadValue)
-  .map((r) => ({ plugin: r.plugin, key: r.key }));
-const metaprocVisualView = mb.getRegisteredView("process-spec", "visual");
-const metaprocChartsView = mb.getRegisteredView("runpool-log", "charts");
-const metaprocDomainViewHandlers = [
-  "attachVisualResources",
-  "copyResourceTableAs",
-  "detachVisualResources",
-  "loadResourcesForRunDir",
-  "resourceMetricChanged",
-  "resourceNodeClicked",
-  "resourceTreemapMetricChanged",
-  "resourceTreemapTileClicked",
-];
-
-process.stdout.write(
-  `${JSON.stringify({
-    plugins: loadedPlugins,
-    registrations: registrations,
-    errors: errors,
-    namespace_violations: namespaceViolations,
-    metaproc_viz_loaded: Boolean(sandbox.MetaprocViz?.renderViz),
-    metaproc_domain_views_loaded: Boolean(sandbox.MetaprocDomainViews),
-    metaproc_domain_view_handlers_loaded: metaprocDomainViewHandlers.every(
-      (name) => typeof sandbox.MetaprocDomainViews?.[name] === "function",
-    ),
-    metaproc_visual_has_dispose: Boolean(metaprocVisualView?.dispose),
-    metaproc_charts_has_dispose: Boolean(metaprocChartsView?.dispose),
-  })}\n`,
-);
+main().catch((err) => fail(err instanceof Error ? err.message : String(err)));

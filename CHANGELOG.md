@@ -50,6 +50,53 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
 
 ### Fixed
 
+- **An agent’s own verdict outranks its exit code**: some adapters write every declared
+  output, emit a terminal success record, and then exit nonzero while shutting down.
+  A scalar agent step whose agent reported success and whose declared outputs all
+  validate now completes instead of failing, and the exit code is retained as an
+  accepted anomaly as attempt-owned, versioned evidence rather than discarding it.
+  The in-memory attempt projection exposes that evidence through `anomalies`, while the
+  existing strict `metaproc:TaskAttemptRecord/0.1` payload stays readable by prior
+  releases. Readers accept the short-lived pre-release inline form so those runs remain
+  usable. The override is narrow by design: it never applies to a step with no declared
+  outputs, to an agent that did not claim success, or to a process the supervising
+  RunPool killed. Startup banners are also no longer mistaken for failure causes — a
+  terminal `result` record is consulted before the last-non-JSON-line fallback, and that
+  fallback now only considers lines written after the last structured record, so a
+  terminal-capability notice printed at startup can no longer be reported as the reason
+  a step failed.
+
+- **Agent transcripts are free of terminal styling**: all four agent launch paths, and
+  the probe paths that launch an adapter CLI and parse its output, now seed the child
+  environment with `NO_COLOR`, `FORCE_COLOR=0`, `CLICOLOR`/`CLICOLOR_FORCE` off, and
+  `TERM=dumb`. A step’s authored `env` block is still applied afterward, so an explicit
+  override remains possible.
+  ANSI sequences in a JSONL transcript have no reader and were corrupting failure
+  classification and tool-use probes.
+
+- **A raw path an upstream step writes is execution state, not authored input**:
+  `produced_refs` now covers a raw `prompt_paths` or `uses` entry whose exact path a
+  step this one depends on declares as an output, so its bytes leave the step
+  fingerprint the way a dep-ref’s already did and the plan can be published before the
+  run produces the file.
+  The match is keyed through `normalize_path_key`, so a doubled slash or a `./` segment
+  no longer decides the question.
+  Only transitive dependency ancestors count: a step that declares the same output path
+  while running independently or downstream supplies nothing to the reader, and a path
+  two upstream steps both declare is refused at plan time rather than resolved
+  arbitrarily.
+
+- **Fan-out status totals come from the recorded plan**: `run-process` fan-outs have no
+  `progress.md`, which belongs to the legacy `run-parallel` surface, so `status` treated
+  the number of tasks observed so far as the total and reported `pending` as zero while
+  dispatch was still in progress.
+  It now reads the per-step item roster from the recorded run plan when no legacy items
+  file exists.
+
+- **The Gemini adapter honors a configured working directory**: `working_directory` is
+  now an accepted config key and is returned to the launcher instead of `None`, so a
+  Gemini step runs where its process configuration says it should.
+
 - **GCP runs require explicit storage posture**: `metaproc gcp run` now rejects its
   default Filestore placement when `METAPROC_GCP_FILESTORE_SERVER` is unset, before
   uploading artifacts or dispatching a job.
@@ -159,6 +206,18 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
 
 ### Changed
 
+- **Metabrowser 0.9 and browser plugin SDK 0.5**: the optional `browser` extra now
+  requires `metabrowser==0.9.0`, and the bundled Metabrowser plugin targets browser SDK
+  0.5 instead of 0.1. Plugin discovery refuses a manifest declaring the wrong SDK, so
+  the two move together.
+  Three contract changes were carried: navigation goes through
+  `mb.navigation.open({ path })` rather than the removed `mb.openPath`; the Document
+  view reuses the markdown built-in’s `mountRendered`, which is what `renderRendered`
+  became; and plugin assets are no longer eager tags in the page — Metabrowser loads
+  them per selected kind from a declared descriptor, preserving manifest script order.
+  Metaproc’s views, kinds, data hooks, and sidekick routes are unchanged, and the
+  `MetaprocDomainViews.openPath` re-export, which nothing consumed, is gone.
+
 - **Composite output boundaries are enforced**: scalar and mapped composites now
   validate every declared child-process output before completing.
   Resume revalidates those child outputs even when the mapped parent publishes only a
@@ -166,12 +225,15 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
   Existing composite specs with inaccurate output declarations must correct or remove
   those declarations.
 
-- **Softschema 0.7 structural diagnostics**: require `softschema>=0.7.0,<0.8` and map
+- **SoftSchema 0.8 structural diagnostics**: require `softschema>=0.8.0,<0.9` and map
   structural failures to its stable error `code` instead of a JSON Schema engine
   keyword. Property-level failures now resolve to the affected field in Metaproc’s
   existing `location` value.
-  Supported composed and conditional schemas can therefore use `status: enforced`
-  without adding a Metaproc-specific schema layer.
+  SoftSchema 0.8 adds a `repair` subcommand and its supporting API upstream, and always
+  reports a `repairs` list on a validate result; ordinary schema verdicts are unchanged.
+  `metaproc softschema repair` is unaffected and keeps routing through Metaproc’s own
+  YAML repair. Supported composed and conditional schemas can therefore use
+  `status: enforced` without adding a Metaproc-specific schema layer.
 
 - **Typed cloud authentication transport**: the internal `OrchestratorDispatchConfig`
   constructor now accepts one `AuthPoolFlags` value instead of separate

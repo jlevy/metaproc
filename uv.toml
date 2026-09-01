@@ -6,8 +6,8 @@ exclude-newer = "14 days"
 [exclude-newer-package]
 flowmark-rs = "2026-07-16T00:00:00Z"
 frontmatter-format = "2026-08-01T01:27:00Z"
-kpress = "2026-07-16T00:00:00Z"
-metabrowser = "2026-07-18T00:00:00Z"
+kpress = "2026-08-31T00:55:00Z"
+metabrowser = "2026-08-31T06:32:00Z"
 # softschema 0.8.0 published 2026-08-30T20:11:42Z. It is an audited first-party
 # exception, carrying the `repair` subcommand (conform an artifact to its declared types,
 # write it, then validate, reporting every change) and an explicit `--profile` override

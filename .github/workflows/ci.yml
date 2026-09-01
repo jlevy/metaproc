@@ -3,8 +3,12 @@ name: CI
 on:
   push:
     branches: ["main"]
+  # Deliberately unfiltered by base branch. Filtering on `main` meant a pull request
+  # stacked on another pull request reported no checks at all -- not a failure, just
+  # silence, which reads exactly like a gate that has not run yet. The gate should
+  # answer for every proposed change, and the branch a change is proposed against is
+  # not a reason to skip it.
   pull_request:
-    branches: ["main"]
 
 permissions:
   contents: read
