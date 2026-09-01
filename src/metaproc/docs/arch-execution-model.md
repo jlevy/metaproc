@@ -12,7 +12,7 @@ status: Draft
 > out, see [execution-model-design.md](execution-model-design.md)
 > (`metaproc help execution-contracts`). Readable as `metaproc help arch-execution`.
 
-**Date:** 2026-08-16 (last updated 2026-08-29) **Status:** Draft
+**Date:** 2026-08-16 (last updated 2026-09-01) **Status:** Draft
 
 `src/metaproc/execution_model/` is the executable form of the
 [execution model design](execution-model-design.md): the durable facts a run is made of,
@@ -234,6 +234,14 @@ is landing as independent reviewable slices.
 The first slice is live on orchestrated and waited task paths: each launch creates a
 typed `TaskAttemptRecord` under the task’s `attempts/` subtree before execution and
 finalizes it once with the disposition and failure class.
+The `metaproc:TaskAttemptRecord/0.1` payload remains readable by the release that first
+wrote it: additive attempt evidence cannot be placed inside that strict, versioned
+model. Accepted anomalies use a separately versioned `accepted-anomalies.yaml` in the
+same attempt directory and project onto `TaskAttemptRecord.anomalies` in memory.
+The sidecar is published before a successful terminal attempt fact and ignored while the
+attempt is live, so an interrupted write remains recoverable without reporting a false
+success. The reader also migrates the short-lived pre-release payload that placed the
+field inline, without rewriting its source artifact.
 `status.yaml` points to the current attempt, replay prefers the exact history, and
 historical runs fall back to the legacy status and latest-launch records.
 Success is terminal only after the validators owned by that execution path have run.
@@ -303,3 +311,7 @@ That is correct while the projection is in-memory only: the registry indexes art
 that reach disk. The durability step, which makes the projection durable, is also what
 gives it a Pydantic model and a registry entry, and the token is chosen now so that step
 is a registration rather than a rename.
+
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
+-->

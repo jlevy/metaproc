@@ -54,12 +54,15 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
   output, emit a terminal success record, and then exit nonzero while shutting down.
   A scalar agent step whose agent reported success and whose declared outputs all
   validate now completes instead of failing, and the exit code is retained as an
-  accepted anomaly on the attempt record rather than discarded.
-  The override is narrow by design: it never applies to a step with no declared outputs,
-  to an agent that did not claim success, or to a process the supervising RunPool
-  killed. Startup banners are also no longer mistaken for failure causes — a terminal
-  `result` record is consulted before the last-non-JSON-line fallback, and that fallback
-  now only considers lines written after the last structured record, so a
+  accepted anomaly as attempt-owned, versioned evidence rather than discarding it.
+  The in-memory attempt projection exposes that evidence through `anomalies`, while the
+  existing strict `metaproc:TaskAttemptRecord/0.1` payload stays readable by prior
+  releases. Readers accept the short-lived pre-release inline form so those runs remain
+  usable. The override is narrow by design: it never applies to a step with no declared
+  outputs, to an agent that did not claim success, or to a process the supervising
+  RunPool killed. Startup banners are also no longer mistaken for failure causes — a
+  terminal `result` record is consulted before the last-non-JSON-line fallback, and that
+  fallback now only considers lines written after the last structured record, so a
   terminal-capability notice printed at startup can no longer be reported as the reason
   a step failed.
 

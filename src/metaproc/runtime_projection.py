@@ -35,6 +35,7 @@ from metaproc.models.viz import (
     UnacceptedOutputProjection,
 )
 from metaproc.paths import (
+    ATTEMPT_ANOMALIES_FILE,
     ATTEMPT_FILE,
     ATTEMPTS_SUBDIR,
     RESULT_FILE,
@@ -438,6 +439,9 @@ def _validate_state_record_containment(state_dir: Path, *, current_root: Path) -
         attempt_path = attempt_dir / ATTEMPT_FILE
         if attempt_path.exists() or attempt_path.is_symlink():
             _require_contained_file(attempt_path, current_root)
+        anomalies_path = attempt_dir / ATTEMPT_ANOMALIES_FILE
+        if anomalies_path.exists() or anomalies_path.is_symlink():
+            _require_contained_file(anomalies_path, current_root)
 
 
 def _require_contained_file(candidate: Path, root: Path) -> None:
