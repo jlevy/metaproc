@@ -127,8 +127,10 @@ cross a repository and release boundary.
   problem.
 - Make a fixed low `--max-concurrency` the default safety mechanism.
 - Promise that an adapter has one universal memory cost.
-  CLI version, model, platform, prompt, tools, and effective working directory can all
-  change its shape.
+  CLI version, model, platform, prompt, tools, adapter-local state, and configuration
+  can all change its shape.
+  A working directory matters when the client maps it to a project-scoped state bucket;
+  it is not itself a causal memory variable.
 - Add Windows support without a reliable telemetry and process-containment design.
 - Publish Metaproc’s task scheduler, retry engine, execution lanes, adapters, or run
   artifacts as part of the host-safety library.
@@ -175,6 +177,26 @@ the same eight lets the host sustain the same steady-state concurrency.
 The same experiment found that host-wide reclaimable memory and kernel pressure
 distinguish dangerous states more reliably than summed RSS, and that a watchdog which
 forks to sample can itself become starved under severe pressure.
+
+Follow-up controls isolated the largest observed Gemini CLI 0.40.1 startup transient.
+The same short prompt peaked at 0.25 GB with clean project state and 5.15 GB after a 3.4
+GB project-history bucket was copied into otherwise clean state.
+Disabling Gemini’s session-retention cleanup against the copied state reduced the peak
+to 0.26 GB. Official source shows that startup cleanup enumerates the current project’s
+session files and concurrently parses every JSONL record, including in metadata-only
+mode.
+The apparent working-directory effect came from selecting a fresh state bucket, not
+from avoiding a repository scan.
+The
+[agent CLI startup-memory research](../../research/research-2026-09-01-agent-cli-memory-usage.md)
+preserves the measurements and source path; the
+[host memory-accounting research](../../research/research-2026-09-01-host-memory-accounting-and-control.md)
+preserves the platform gauge semantics.
+
+This causal mitigation should reduce demand for supported Gemini versions, but it does
+not replace host admission.
+Client behavior, state layout, or defaults may change, and other clients still have
+startup transients of their own.
 
 ### Lessons From Procguard
 
@@ -372,17 +394,25 @@ Compatibility rules:
   selected at runtime.
 
 Tested built-in profiles should carry measured shapes.
-The first Gemini correction should seed a conservative Darwin startup profile from the
-published 4.6 GB and 71-second observations, rounded upward, then remeasure against the
-supported Gemini CLI version and the effective configured working directory before
-declaring the values stable.
+The first Gemini correction should distinguish clean or retention-disabled state from
+retention-enabled accumulated project state.
+Controlled Gemini CLI 0.40.1 measurements put the former near 0.25-0.26 GB and the
+latter at 5.15 GB; production-shaped observations reached 4.6 GB for as long as 71
+seconds. Until the adapter can prove that startup cleanup is disabled or state is
+isolated and bounded, it must use a conservative high-spike Darwin profile rounded
+upward. A supported headless adapter should prevent the known scan when compatible, then
+remeasure the exact supported version and state regime.
+A V8 heap cap is not a lower memory profile: the controlled cap converted the spike into
+an out-of-memory crash after a multi-gigabyte allocation.
 A global 500 MB startup assumption must not remain the tested Gemini default.
 
 An unknown or materially changed profile enters **cold-start calibration**: the host
 serializes its first start, observes its peak through a bounded window, and uses the
 observed high-water mark with a safety margin for the rest of that host session.
 Runtime learning is visible and scoped to the exact adapter version, platform, model,
-and working directory context.
+and relevant adapter-state and configuration fingerprint.
+Record the working directory as diagnostic context when it selects client state, but do
+not use a raw path as the causal profile identity.
 It is never silently promoted into a durable cross-version default.
 
 ### Admission and Launch Pacing
@@ -1007,8 +1037,16 @@ decision.
   Remove the queue and adaptive controller only on a pool-extraction go decision.
 - [ ] Change local agent admission to block or fail closed on timeout and state I/O
   failure. Retain only an explicit unsafe development override.
-- [ ] Seed and revalidate the built-in Darwin Gemini startup profile; record the
-  effective working directory and CLI version with every measurement.
+- [ ] Define a redacted, bounded adapter-state fingerprint for calibration without
+  persisting conversation content, credentials, or arbitrary absolute paths.
+- [ ] In Metaproc’s adapters for supported Gemini versions, disable automatic startup
+  session cleanup or use isolated, bounded project state when compatible with the
+  adapter contract. Test the mitigation against accumulated history, retain the
+  conservative high-spike profile whenever the state regime cannot be proved, and never
+  treat a V8 heap cap as admission control.
+- [ ] Seed and revalidate the built-in Darwin Gemini profiles; record the CLI version,
+  effective state and configuration regime, and diagnostic working-directory context
+  with every measurement.
 - [ ] Add the host-admission plan, status view, event types, migrations, and operator
   documentation.
 - [ ] Prove with separate OS processes that standalone clients and many concurrent
@@ -1102,12 +1140,18 @@ expanding the subprocess-safety contract.
 - CLI and Python contract tests drive the same owned-process, attached-process, and
   policy services and produce equivalent lifecycle and journal records for equivalent
   requests.
+- Passive-profiling tests prove that observation never pauses or signals a producer and
+  remains distinct from a dry-run intervention mode that may simulate producer control.
 - Cross-mode policy tests feed the same host evidence through owned and attached
   supervision. They require identical pressure classification and journal vocabulary,
   then verify that only owned mode reports pre-execution admission and authoritative
   process-group containment.
 - A scaled spike worker allocates quickly, holds, settles, and exits so startup
   reservations and global spacing can be tested without multi-gigabyte CI allocations.
+- Adapter-profile fixtures distinguish clean state, accumulated project history, and
+  retention-disabled state.
+  Gated Gemini tests verify that the supported version’s mitigation prevents the known
+  startup scan before selecting the low profile.
 - Multi-process tests start independent Metaproc parents, not merely two RunPool objects
   in one event loop.
 - Failure injection blocks a RunPool monitor, backend launch, backend kill, and claim
@@ -1143,8 +1187,9 @@ expanding the subprocess-safety contract.
   the supported architectures before a stable release.
 - Run packaged `watch --pid` on macOS and Linux with no broker state and no Metaproc
   installation, and measure startup time, resident memory, and sampling cadence.
-- Run representative adapter soaks from small working directories and large
-  repositories, including fresh launches and bursty resumes.
+- Run representative adapter soaks across clean, accumulated, and mitigated client-state
+  regimes. Hold client state constant across small and large repositories to detect false
+  working-directory explanations, and include fresh launches and bursty resumes.
 
 ### Acceptance Criteria
 
@@ -1192,6 +1237,10 @@ expanding the subprocess-safety contract.
   change that merely serializes every adapter does not pass.
 - A Gemini-class spike workload can sustain its intended steady fan-out on the
   calibration host without entering catastrophic pressure.
+- A supported Gemini profile may use the low startup regime only after the configured
+  state mitigation is verified.
+  Unknown or unverified state uses the conservative high-spike profile and host pacing;
+  a heap cap does not satisfy this criterion.
 - `make verify` and installed-wheel macOS and Linux smoke tests pass at the exact
   landing commit.
 
@@ -1237,8 +1286,9 @@ expanding the subprocess-safety contract.
   Choose them through trace replay and live calibration, not from one workstation.
 - Should a reliable attributable footprint release part of a startup reservation early,
   or is the declared startup window cheap enough to keep the first version simpler?
-- What exact adapter-version and working-directory identity is sufficient for session
-  calibration without creating a high-cardinality persistent cache?
+- What redacted adapter-version, state, and configuration fingerprint is sufficient for
+  session calibration without creating a high-cardinality persistent cache or treating
+  an absolute working-directory path as the cause?
 - At what validated boundary should catastrophic sentinel termination become default
   rather than opt-in?
 - Should the authoritative launch handshake remain a short-lived wrapper that inherits
@@ -1263,6 +1313,8 @@ expanding the subprocess-safety contract.
 - [RunPool architecture](../../../../src/metaproc/docs/arch-runpool.md)
 - [Process framework theory: readiness versus admission](../../../../src/metaproc/docs/process-framework-theory.md#resources-readiness-versus-admission)
 - [RunPool design backlog](../../design/backlog/arch-runpool-backlog.md)
+- [Agent CLI startup-memory research](../../research/research-2026-09-01-agent-cli-memory-usage.md)
+- [Host memory-accounting research](../../research/research-2026-09-01-host-memory-accounting-and-control.md)
 - [Standalone macOS memory guard](https://gist.github.com/jlevy/5b43e0d44166b9c7fe8157ee938cb0d5)
 - [Procguard v1.5.1 source](https://github.com/denispol/procguard/tree/v1.5.1)
 - [GNU Parallel memory and launch controls](https://www.gnu.org/software/parallel/parallel.html)

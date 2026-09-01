@@ -23,6 +23,11 @@ When implementation finishes, update the plan’s status and evidence before mov
 from `active` to `done`. Open follow-up work belongs in the roadmap or a new plan, not
 in a completed specification.
 
+## Research
+
+[Research records](research/) preserve measurements, source analysis, and other evidence
+used by plans without presenting proposed behavior as part of the shipped system.
+
 ## Design Records
 
 - [Design proposals](design/metaproc-design-proposals.md): the future-work backlog for
