@@ -3,17 +3,21 @@ type: is
 id: is-01m1d4p5b1gsjsa6kbws4hxevw
 title: Reconcile post-v0.3.0 release records for a v0.4 candidate
 kind: task
-status: open
+status: closed
 priority: 1
-version: 3
+version: 5
 labels:
   - release
   - supply-chain
   - release-blocker
 dependencies: []
-parent_id: is-01m1d3zgc5kwnxvarym7ebgsyk
+parent_id: is-01m1dbcer80nak10tnbg1jyq52
 created_at: 2026-09-01T00:07:45.248Z
-updated_at: 2026-09-01T02:00:09.844Z
+updated_at: 2026-09-01T05:26:11.611Z
+closed_at: 2026-09-01T05:26:11.610Z
+close_reason: "Records reconciled against the tree. CHANGELOG: softschema range corrected to >=0.8.0,<0.9 and entries added for the five merged PRs it omitted (53, 55, 56, 57, 58) plus this change's two fixes. SUPPLY-CHAIN-SECURITY: softschema exception rewritten against 0.7.0, get-tbd moved to 0.8.1, the standing first-party currency rule stated outright, and the metabrowser/kpress hold documented as a deliberate carve-out with its reason. TODO: mapped-scope work moved to Completed Workstreams and its plan moved to specs/done with final evidence; Active Development now names the v0.4.0 epic. Stale tracking dispositioned under mp-vavu. v0.4.0 confirmed as the SemVer target: the delta removes public CLI surface and changes output and transport contracts. Remaining at tag time: retitle the Unreleased heading with the version and date."
+resolution: null
+duplicate_of: null
 ---
 The release-facing records disagree with the current candidate. CHANGELOG still describes the SoftSchema 0.7 range and omits later user-visible fixes, while pyproject requires 0.8; the audited first-party exception policy still records 0.7 although uv.toml grants 0.8, contrary to the policy's version-change rule; the roadmap and active consolidation plan still describe merged work as pending; and several superseded review beads remain in progress. Reconcile the aggregate post-release delta, update the audited exception rationale, choose the SemVer minor implied by public removals and contract changes, move the completed plan to done with final evidence, and disposition stale tracking before tagging.
 
