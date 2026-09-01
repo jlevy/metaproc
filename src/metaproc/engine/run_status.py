@@ -27,7 +27,7 @@ from metaproc.engine.dep_state import (
 )
 from metaproc.io import read_yaml_file
 from metaproc.io.orchestrator_lease import is_orchestrator_alive
-from metaproc.io.state_io import read_status_at
+from metaproc.io.state_io import read_run_plan, read_status_at
 from metaproc.models.authored import ProgressCounts
 from metaproc.models.plan import Plan, ResolvedStep
 from metaproc.models.runtime import StatusRecord, StepState
@@ -298,6 +298,25 @@ def _extract_retrying_items(statuses: list[StatusRecord]) -> list[RetryingItem]:
 _PROGRESS_FILENAME = "progress.md"
 
 
+def _read_plan_item_totals(run_dir: Path) -> dict[str, int]:
+    """Return non-empty per-step item totals from the recorded run plan.
+
+    ``progress.md`` belongs to the legacy ``run-parallel`` surface, so a
+    ``run-process`` fan-out has no items file. Its recorded plan still knows the exact
+    roster before the first item starts. Reading that projection avoids treating the
+    number of tasks observed so far as the total, which would keep ``pending`` at zero
+    while dispatch is still in progress.
+    """
+    try:
+        snapshot = read_run_plan(run_dir)
+    except (OSError, ValueError, YAMLError):
+        log.warning("Failed to read the run plan from %s", run_dir, exc_info=True)
+        return {}
+    if snapshot is None:
+        return {}
+    return {step.step_id: len(step.item_keys) for step in snapshot.steps if step.item_keys}
+
+
 def read_items_total(run_dir: Path) -> int | None:
     """Read progress.md in the run directory and return the total item count.
 
@@ -391,8 +410,10 @@ def scan_run_status(
     if variant:
         variant_dirs = [v for v in variant_dirs if v.name == variant]
 
-    # Read items total from progress.md for accurate pending counts
+    # Read the legacy items total for accurate pending counts. Without one, use
+    # the recorded plan's per-step rosters for run-process fan-outs.
     items_total = read_items_total(run_dir)
+    plan_item_totals = _read_plan_item_totals(run_dir) if items_total is None else {}
 
     variant_statuses: list[VariantStatus] = []
     all_statuses: list[StatusRecord] = []
@@ -406,7 +427,10 @@ def scan_run_status(
         statuses = scan_variant_states(vdir)
         all_statuses.extend(statuses)
 
-        counts = compute_progress(statuses, total=per_variant_total)
+        variant_total = per_variant_total
+        if variant_total is None:
+            variant_total = plan_item_totals.get(vdir.name)
+        counts = compute_progress(statuses, total=variant_total)
         timing = compute_timing(statuses)
         failed = _extract_failed_items(statuses)
         retrying = _extract_retrying_items(statuses)
@@ -424,8 +448,9 @@ def scan_run_status(
             )
         )
 
-    # Overall totals: if items_total known, multiply by number of variants
-    overall_total = items_total * len(variant_statuses) if items_total is not None else None
+    # Sum the total each variant resolved. Recorded plan rosters can legitimately
+    # differ between steps, so multiplying one shared figure can overstate the run.
+    overall_total = sum(status.counts.total for status in variant_statuses)
     totals = compute_progress(all_statuses, total=overall_total)
 
     # Determine earliest start

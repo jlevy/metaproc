@@ -16,6 +16,7 @@ from metaproc.engine.run_status import (
     RunStatus,
     TimingStats,
     _measure_subprocesses,
+    _read_plan_item_totals,
     check_completion,
     compute_progress,
     compute_timing,
@@ -25,9 +26,9 @@ from metaproc.engine.run_status import (
     scan_variant_states,
     wait_for_completion,
 )
-from metaproc.io.state_io import write_status_at
+from metaproc.io.state_io import write_run_plan, write_status_at
 from metaproc.models.authored import IOSpec, ProgressCounts, StepStatus
-from metaproc.models.plan import Plan, ResolvedAdapter, ResolvedStep
+from metaproc.models.plan import Plan, ResolvedAdapter, ResolvedStep, RunPlanSnapshot, RunPlanStep
 from metaproc.models.runtime import StatusRecord, StepState
 from metaproc.paths import STATE_DIR, TASKS_SUBDIR
 
@@ -674,6 +675,77 @@ class TestReadItemsTotal:
         assert result.variants[0].counts.total == 5
         assert result.variants[0].counts.completed == 2
         assert result.variants[0].counts.pending == 3
+
+
+# ── _read_plan_item_totals ──────────────────────────────────────
+
+
+def _write_status_run_plan(run_dir: Path, steps: list[tuple[str, list[str]]]) -> None:
+    write_run_plan(
+        run_dir,
+        RunPlanSnapshot(
+            run_id="r-1",
+            steps=[
+                RunPlanStep(
+                    step_id=step_id,
+                    mode="composite",
+                    task_shape="mapped" if keys else "scalar",
+                    item_keys=keys,
+                    fingerprint=f"{index:016x}",
+                )
+                for index, (step_id, keys) in enumerate(steps)
+            ],
+        ),
+    )
+
+
+class TestReadPlanItemTotals:
+    """A run-process fan-out has no progress.md, so the plan is its total."""
+
+    def test_a_started_item_count_is_not_mistaken_for_the_planned_one(self, tmp_path: Path) -> None:
+        run_dir = tmp_path / "my-run"
+        run_dir.mkdir()
+        _write_status_run_plan(run_dir, [("authoring", [f"T{n}" for n in range(40)])])
+        variant = run_dir / "authoring"
+        _write_item(variant, "T0", state="completed")
+        _write_item(variant, "T1", state="running")
+
+        result = scan_run_status(run_dir, include_system=False)
+        counts = result.variants[0].counts
+
+        assert counts.total == 40
+        assert counts.pending == 38
+
+    def test_variants_of_one_run_may_declare_different_totals(self, tmp_path: Path) -> None:
+        run_dir = tmp_path / "my-run"
+        run_dir.mkdir()
+        _write_status_run_plan(
+            run_dir,
+            [("authoring", ["A", "B", "C"]), ("scan", ["A", "B"])],
+        )
+        _write_item(run_dir / "authoring", "A", state="completed")
+        _write_item(run_dir / "scan", "A", state="completed")
+
+        result = scan_run_status(run_dir, include_system=False)
+
+        assert {status.variant: status.counts.total for status in result.variants} == {
+            "authoring": 3,
+            "scan": 2,
+        }
+        assert result.totals.total == 5
+
+    def test_scalar_steps_do_not_claim_a_zero_total(self, tmp_path: Path) -> None:
+        run_dir = tmp_path / "my-run"
+        run_dir.mkdir()
+        _write_status_run_plan(run_dir, [("intake", [])])
+
+        assert _read_plan_item_totals(run_dir) == {}
+
+    def test_an_absent_plan_is_not_an_error(self, tmp_path: Path) -> None:
+        run_dir = tmp_path / "my-run"
+        run_dir.mkdir()
+
+        assert _read_plan_item_totals(run_dir) == {}
 
 
 # ── _measure_subprocesses ────────────────────────────────────────
