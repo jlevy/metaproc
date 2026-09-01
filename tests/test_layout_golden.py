@@ -96,6 +96,58 @@ class _LayoutSmokeMockAdapter:
         return ""
 
 
+def test_fan_out_agent_rejects_terminal_result_contract_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RejectingAdapter(_LayoutSmokeMockAdapter):
+        def build_command(self, prompt_file, merged_config, variables):  # noqa: ARG002
+            command = super().build_command(prompt_file, merged_config, variables)
+            command[-1] += (
+                "; import json; print(json.dumps({'type': 'result', 'status': 'success'}))"
+            )
+            return command
+
+        def parse_result_event(self, line):
+            import json  # noqa: PLC0415 -- test adapter mirrors a JSONL CLI
+
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                return None
+            return event if event.get("type") == "result" else None
+
+        def validate_result_event(self, event, merged_config):  # noqa: ARG002
+            return "synthetic fan-out terminal result contract failure"
+
+    monkeypatch.setenv("METAPROC_PREFLIGHT_MIN_DISK_GB", "0.1")
+    monkeypatch.setitem(ADAPTER_REGISTRY, "layout-smoke-mock", RejectingAdapter())
+    monkeypatch.setitem(ENVELOPE_MAP, "items", _TickersEnvelope)
+    runs_dir = tmp_path / "runs"
+    run_id = "terminal-contract-fan-out"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-process",
+            str(_FIXTURE_DIR / "layout-smoke.process.md"),
+            "--var",
+            f"RUNS_DIR={runs_dir}",
+            "--var",
+            f"RUN_ID={run_id}",
+            "--backend",
+            "local",
+        ],
+    )
+
+    assert result.exit_code != 0
+    for item in ("AAA", "BBB"):
+        status = read_status_at(runs_dir / run_id / STATE_DIR / "tasks" / "write-artifact" / item)
+        assert status is not None
+        assert status.state == "failed"
+        assert status.error == "synthetic fan-out terminal result contract failure"
+
+
 @pytest.fixture(scope="module")
 def smoke_run(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
     """Run the layout-smoke fixture once and return the run dir."""

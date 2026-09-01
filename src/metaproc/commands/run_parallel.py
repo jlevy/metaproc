@@ -54,7 +54,12 @@ _POOL_FILL_POLL_INTERVAL_S = 5.0
 
 
 from metaproc import paths as paths_mod
-from metaproc.adapters.base import Adapter, AuthFailureClassification, agent_seed_env
+from metaproc.adapters.base import (
+    Adapter,
+    AuthFailureClassification,
+    agent_seed_env,
+    validate_terminal_result_log,
+)
 from metaproc.adapters.registry import (
     ADAPTER_REGISTRY,
     adapter_provider,
@@ -2149,6 +2154,27 @@ async def _run_agent_pool(  # noqa: PLR0913
                 )
             _classify_and_maybe_retry(shared, error_str)
             return
+
+        if result.kill_reason is None and log_path is not None:
+            item_runtime_config = cast(
+                "dict[str, object]",
+                resolve_runtime_config(merged_config, shared["item_vars"]),
+            )
+            terminal_contract_error = validate_terminal_result_log(
+                get_adapter(adapter_type),
+                log_path,
+                item_runtime_config,
+            )
+            if terminal_contract_error is not None:
+                out.progress(
+                    f"  Done step={step} {each}={item} "
+                    f"attempt={shared.get('attempt_number', 1)} "
+                    "status=result_contract_failed "
+                    f"({fmt_timedelta(result.elapsed_s)})"
+                )
+                _classify_and_maybe_retry(shared, terminal_contract_error)
+                try_compact_log(log_path)
+                return
 
         if result.kill_reason is not None:
             error_str = result.kill_reason

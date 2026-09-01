@@ -33,7 +33,11 @@ from ruamel.yaml import YAMLError
 from strif import atomic_output_file
 
 from metaproc import paths as paths_mod
-from metaproc.adapters.base import AuthFailureClassification, agent_seed_env
+from metaproc.adapters.base import (
+    AuthFailureClassification,
+    agent_seed_env,
+    validate_terminal_result_log,
+)
 from metaproc.adapters.registry import derive_variant, get_adapter, get_auth_capable
 from metaproc.cli import app, get_output
 from metaproc.cloud.gcp.resolve_token import resolve_gcp_token
@@ -2528,6 +2532,14 @@ async def _execute_agent_step(
                     if log_error:
                         exit_error = f"{exit_error} (log: {log_error})"
 
+                terminal_contract_error = validate_terminal_result_log(
+                    adapter_obj,
+                    attempt_log_path,
+                    runtime_config,
+                )
+                if terminal_contract_error is not None:
+                    exit_error = terminal_contract_error
+
                 # An exit code is one signal among three, and the least trustworthy of
                 # them. Some adapters emit a terminal success record, write every declared
                 # output, and then exit non-zero while shutting down; failing the step on
@@ -2552,6 +2564,7 @@ async def _execute_agent_step(
                 # supervises.
                 if (
                     exit_error is not None
+                    and terminal_contract_error is None
                     and pool_kill_reason is None
                     and effective_outputs
                     and artifact_dir is not None
