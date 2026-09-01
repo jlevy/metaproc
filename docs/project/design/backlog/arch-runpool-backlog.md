@@ -4,6 +4,14 @@ Backlog extracted from [arch-runpool.md](../../../../src/metaproc/docs/arch-runp
 which ships in the wheel and describes the system as it is.
 Where it might go is a project record and lives here.
 
+## Active Design
+
+The
+[RunPool host-safety plan](../../specs/active/plan-2026-09-01-runpool-host-safety.md)
+owns startup-aware host admission, owned and attached process-tree supervision,
+cross-client containment, macOS and Linux telemetry, and the conditional extraction of a
+standalone pool. Those decisions are not duplicated here.
+
 ## Future Considerations
 
 ### Open Questions
@@ -21,8 +29,6 @@ Where it might go is a project record and lives here.
 
 ### Potential Improvements
 
-- Add cgroup-aware Linux telemetry for containerized workers.
-- Add a pressure-shedding policy for sustained critical memory pressure.
 - Build a stable RSS benchmark for `codex-gpt55` and for Linux hosts (Claude and pi-cli
   on macOS are now sampled; see § Per-adapter RSS benchmarks).
 - Revisit `codex-gpt55` host cap using observed RSS and swap-growth data from clean

@@ -11,6 +11,11 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
 
 ## Active Development
 
+- **Process-tree and host safety** (`mp-qigc`): build one cross-platform safety core
+  with owned pre-execution supervision and brokerless attachment to existing process
+  trees; add host-wide startup admission and containment, then use a vertical slice to
+  decide whether the optional standalone pool should replace Metaproc’s RunPool core
+  ([plan](docs/project/specs/active/plan-2026-09-01-runpool-host-safety.md)).
 - **Native mapped composite scopes** (`mp-0iy8`): consolidate the reviewed runtime
   corrections on released `main`, route mapped local leaves through one run-owned
   RunPool, and pass the exact-head verification gate `mp-nxs9` before downstream smoke
@@ -35,3 +40,7 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
 - [Focused resource observability](docs/project/specs/done/plan-2026-08-03-focused-resource-observability.md):
   ledger-backed metrics, compatibility reads, budgets, terminal reporting, recovery, and
   browser and CLI projections.
+
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
+-->
