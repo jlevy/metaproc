@@ -3,15 +3,22 @@ type: is
 id: is-01m1dc2fnj4hxfac32x4mvka2r
 title: Migrate the Metabrowser plugin to browser SDK 0.5 (metabrowser 0.9.x)
 kind: task
-status: open
+status: closed
 priority: 2
-version: 1
+version: 5
 labels:
   - supply-chain
   - plugin
-dependencies: []
+dependencies:
+  - type: blocks
+    target: is-01m1f8xgv4zycvj17qc7g9x1d0
+parent_id: is-01m1f8xgv4zycvj17qc7g9x1d0
 created_at: 2026-09-01T02:16:49.061Z
-updated_at: 2026-09-01T02:16:49.061Z
+updated_at: 2026-09-01T20:20:43.715Z
+closed_at: 2026-09-01T20:20:43.715Z
+close_reason: "Metaproc PR #64 merged as 10f51859c6b09ca41cddb9384c7ee0f549de984f after the full local gate and all hosted CI passed; disposition comments were posted on PRs #59 and #60."
+resolution: null
+duplicate_of: null
 ---
 Attempted as a version bump on 2026-08-31 and reverted: it is an SDK migration, and
 Metabrowser says so itself. Discovery under 0.9.0 refuses the plugin outright:
@@ -48,3 +55,7 @@ absence permanently skips `tests/test_metabrowser_plugin_e2e.py:187` (mp-vtpx, m
 
 The audited exception entry in SUPPLY-CHAIN-SECURITY.md must be rewritten against 0.1.0
 as part of this, not edited to a new version number.
+
+## Notes
+
+PR #60 merged the initial SDK 0.5 migration. Independent post-merge review R60-1 reproduced a real lazy-load failure: selecting a Metaproc-owned kind does not load foreign built-ins whose renderers it embeds. Follow-up on codex/downstream-safe-latest now awaits ensureKindAssets for both markdown (process-spec and structure-report views) and agent-log (runpool/process log views), with an isolated host test that begins with empty builtins, loads each dependency on demand, verifies registration, and exercises the delegated log renderers. Focused lifecycle, Biome, and TypeScript checks pass; the preceding full make verify was green before the agent-log extension and will be rerun on the final tree.
