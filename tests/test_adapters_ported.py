@@ -416,8 +416,11 @@ class TestGeminiCliAdapter:
         result = self.adapter.prepare_env(env, {})
         assert result["GEMINI_API_KEY"] == "gemini-key"
 
-    def test_working_directory_returns_none(self) -> None:
+    def test_working_directory_absent(self) -> None:
         assert self.adapter.working_directory({}) is None
+
+    def test_working_directory_present(self, tmp_path: Path) -> None:
+        assert self.adapter.working_directory({"working_directory": str(tmp_path)}) == tmp_path
 
     def test_parse_result_event_valid(self) -> None:
         line = '{"type": "result", "status": "success"}'
