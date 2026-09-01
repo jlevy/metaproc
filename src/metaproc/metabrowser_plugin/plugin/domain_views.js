@@ -76,7 +76,7 @@ function handleResourceAction(event) {
   } else if (event.type === "click" && action === "open-path") {
     var path = actionTarget.getAttribute("data-path");
     if (path) {
-      mb.openPath(path);
+      void mb.navigation.open({ path: path });
     }
   } else if (event.type === "click" && action === "resource-treemap-tile") {
     resourceTreemapTileClicked(actionTarget.getAttribute("data-node-id") || "");
@@ -1322,7 +1322,7 @@ async function renderVizPayload(container, payload) {
       }
       await window.MetaprocViz.renderViz(container, viz, {
         onOpenFile: (p) => {
-          mb.openPath(p);
+          void mb.navigation.open({ path: p });
         },
         decorators: decorators,
         warnings: payload.validation_warnings || [],
@@ -1897,5 +1897,4 @@ window.MetaprocDomainViews = {
   renderRuntimeTaskProjection: renderRuntimeTaskProjection,
   renderResourceTreemapPayload: renderResourceTreemapPayload,
   setCurrentResourceReportPayload: setCurrentResourceReportPayload,
-  openPath: mb.openPath,
 };

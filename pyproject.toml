@@ -50,7 +50,7 @@ Changelog = "https://github.com/jlevy/metaproc/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 browser = [
-    "metabrowser==0.1.0",
+    "metabrowser==0.9.1",
     "starlette>=1.3.1",
     "uvicorn>=0.44.0",
     "watchfiles>=1.1.1",

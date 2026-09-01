@@ -1,7 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
-const { loadPluginScripts } = require("./plugin_test_utils.js");
+const { loadPluginScripts, loadShell } = require("./plugin_test_utils.js");
 
 const args = process.argv.slice(2);
 if (args.length !== 3) {
@@ -84,15 +84,40 @@ function ok(payload) {
   };
 }
 
-load(path.join(metabrowserRoot, "static", "plugin_sdk.js"), "plugin_sdk.js");
-load(path.join(metabrowserRoot, "static", "icons.js"), "icons.js");
-sandbox.metabrowser.builtins = {
-  markdown: { renderRendered: () => {}, renderSource: () => {} },
-  agentLog: { renderLog: () => {}, renderRaw: () => {} },
-};
-loadPluginScripts(metaprocPluginRoot, metaprocContract.extra_scripts, load, "metaproc");
-
 async function main() {
+  loadShell(metabrowserRoot, load);
+  // The real SDK 0.5 host loads plugin assets by selected kind. A Metaproc selection
+  // starts with neither foreign built-in, so Metaproc has to request both before
+  // borrowing their renderers. Supplying the namespaces up front would reproduce the
+  // eager 0.1 host and hide a missing lazy dependency.
+  const ensureKindCalls = [];
+  sandbox.metabrowser.builtins = {};
+  sandbox.metabrowser.ensureKindAssets = async (kind) => {
+    ensureKindCalls.push(kind);
+    if (kind === "markdown") {
+      sandbox.metabrowser.builtins.markdown = {
+        mountRendered: () => {},
+        renderSource: () => {},
+      };
+    } else if (kind === "agent-log") {
+      sandbox.metabrowser.builtins.agentLog = {
+        renderLog: (container) => {
+          container.innerHTML = "agent-log:rendered";
+        },
+        renderRaw: (container) => {
+          container.innerHTML = "agent-log:raw";
+        },
+      };
+    }
+  };
+  await loadPluginScripts(
+    metaprocPluginRoot,
+    metaprocContract.extra_scripts,
+    load,
+    "metaproc",
+    sandbox,
+  );
+
   const renderCalls = [];
   sandbox.MetaprocViz.renderViz = async (container, viz) => {
     renderCalls.push({ container: container.name, viz });
@@ -163,6 +188,10 @@ async function main() {
   await retryVisualRender;
 
   const charts = sandbox.metabrowser.getRegisteredView("runpool-log", "charts");
+  const logContainer = { name: "log", innerHTML: "" };
+  sandbox.metabrowser.getRegisteredView("runpool-log", "log").render(logContainer, {});
+  const rawLogContainer = { name: "raw-log", innerHTML: "" };
+  sandbox.metabrowser.getRegisteredView("process-log", "raw").render(rawLogContainer, {});
   const firstCharts = { name: "first-charts", innerHTML: "" };
   const secondCharts = { name: "second-charts", innerHTML: "" };
   const firstChartsRender = charts.render(firstCharts, { path: "run/.logs/pool.jsonl" });
@@ -272,6 +301,8 @@ async function main() {
       failedVisualHtml: failedVisual.innerHTML,
       retryVisualHtml: retryVisual.innerHTML,
       secondChartsHtml: secondCharts.innerHTML,
+      logHtml: logContainer.innerHTML,
+      rawLogHtml: rawLogContainer.innerHTML,
       secondStatsHtml: secondStats.innerHTML,
       freshChartsHtml: freshCharts.innerHTML,
       vizModelRequestCount: requestCounts.get("/api/plugin/metaproc/viz-model?process=shared.md"),
@@ -287,6 +318,13 @@ async function main() {
       resourceHtml: resourceContainer.innerHTML,
       runtimeRequestCount: requestCounts.get(
         "/api/plugin/metaproc/viz-model?run_dir=runs%2Fcurrent",
+      ),
+      ensureKindCalls,
+      renderedViewRegistered: Boolean(
+        sandbox.metabrowser.getRegisteredView("process-spec", "rendered"),
+      ),
+      sourceViewRegistered: Boolean(
+        sandbox.metabrowser.getRegisteredView("process-spec", "source"),
       ),
     }),
   );

@@ -21,6 +21,7 @@ from metaproc.models.plan import FanOut, Plan, ResolvedStep
 from metaproc.models.plan_bundle import PlanBundle
 from metaproc.models.runtime import AttemptDisposition, ResultRecord, StatusRecord
 from metaproc.models.viz import TaskKeyProjection
+from metaproc.paths import ATTEMPT_ANOMALIES_FILE, ATTEMPTS_SUBDIR
 from metaproc.runtime_projection import scan_task_output_projection
 
 ROOT_RUN_ID = "root/run-1"
@@ -1034,6 +1035,19 @@ def test_projection_rejects_symlinked_state_record_escape(tmp_path: Path) -> Non
     )
     state_dir.mkdir(parents=True)
     (state_dir / "status.yaml").symlink_to(outside)
+
+    with pytest.raises(ValueError, match="runtime state path .* escapes run tree"):
+        scan_task_output_projection(run_dir, _bundle())
+
+
+def test_projection_rejects_symlinked_attempt_anomaly_escape(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    _write_run_config(run_dir, original_run_dir=run_dir)
+    state_dir = run_dir / ".state/tasks/root-scalar"
+    attempt_id = _write_task(state_dir, run_id=ROOT_RUN_ID, step_id="root-scalar")
+    outside = tmp_path / ATTEMPT_ANOMALIES_FILE
+    outside.write_text("outside", encoding="utf-8")
+    (state_dir / ATTEMPTS_SUBDIR / attempt_id / ATTEMPT_ANOMALIES_FILE).symlink_to(outside)
 
     with pytest.raises(ValueError, match="runtime state path .* escapes run tree"):
         scan_task_output_projection(run_dir, _bundle())

@@ -15,7 +15,7 @@ the filename constants.
 
 | Format | Count | Where it lives |
 | --- | --- | --- |
-| YAML | ~18 | `<run>/.state/` |
+| YAML | ~19 | `<run>/.state/` |
 | JSONL | ~9 | `<run>/.logs/` |
 | JSON | 3 writers | `<run>/.state/` sidecars, `<run>/resources.json`, arena cache |
 | Softschema MD | 5 | `<run>/` and `<run>/<artifact-tree>/` (post-run human reports) |
@@ -37,6 +37,7 @@ not hand-edit them. Atomic writes via `strif.atomic_output_file`.
 | `status.yaml` (per-task) | `<run>/.state/tasks/<step>/<item>/` | `StatusRecord` | atomic, on each transition | `io/state_io.py:write_status_at` | engine, CLI status, metabrowser |
 | `attempt.yaml` (legacy latest-launch snapshot) | `<run>/.state/tasks/<step>/<item>/` | `AttemptRecord` | atomic, replaced on launch | `io/state_io.py:write_attempt_at` | compatibility readers, operator inspection |
 | `attempt.yaml` (per-attempt fact) | `<run>/.state/tasks/<step>/<item>/attempts/<attempt-id>/` | `TaskAttemptRecord` (`metaproc:TaskAttemptRecord/0.1`) | atomic before launch; one terminal update after attempt-owned validation | `io/state_io.py:start_attempt_at`, transition helpers | replay, scheduler, operator inspection |
+| `accepted-anomalies.yaml` (per-attempt evidence) | `<run>/.state/tasks/<step>/<item>/attempts/<attempt-id>/` | `TaskAttemptAnomaliesRecord` (`metaproc:TaskAttemptAnomalies/0.1`) | atomic before the successful terminal attempt update; absent for clean and unsuccessful attempts | `io/state_io.py:end_attempt_at` | attempt-history projection, replay, operator inspection |
 | `result.yaml` (per-task) | `<run>/.state/tasks/<step>/<item>/` | `ResultRecord` | atomic, once at completion | `io/state_io.py:write_result_at` | engine, downstream steps |
 | `manual-ack.yaml` (per-task) | `<run>/.state/tasks/<step>/<item>/` | `ManualAckRecord` | atomic, on operator command | `io/state_io.py:write_manual_ack_at` | engine |
 | `runpool-status.yaml` | `<run>/.state/steps/<step>/` | `RunPoolStatus` | atomic, rewritten each tick | `runpool/status.py:write_status` | human, `metaproc pool`, metabrowser |

@@ -26,9 +26,11 @@ from metaproc.models.runtime import (
     OutputFailure,
     ResultRecord,
     StatusRecord,
+    TaskAttemptAnomaliesRecord,
     TaskAttemptRecord,
 )
 from metaproc.paths import (
+    ATTEMPT_ANOMALIES_FILE,
     ATTEMPT_FILE,
     ATTEMPTS_SUBDIR,
     MANUAL_ACK_FILE,
@@ -128,12 +130,50 @@ def read_task_attempt_at(state_dir: Path, attempt_id: str) -> TaskAttemptRecord 
     if not attempt_path.exists():
         return None
     raw: object = read_yaml_file(attempt_path)
+    inline_anomalies: list[str] | None = None
+    if isinstance(raw, dict) and "anomalies" in raw:
+        # A short-lived pre-release revision wrote this additive field under the
+        # unchanged strict 0.1 token. Stop emitting that incompatible shape, but migrate
+        # it on read so runs produced by that revision remain usable after upgrade.
+        raw = dict(raw)
+        inline_value: object = raw.pop("anomalies")
+        if not isinstance(inline_value, list) or not all(
+            isinstance(value, str) for value in inline_value
+        ):
+            raise ValueError(f"{attempt_path}: anomalies must be a list of strings")
+        inline_anomalies = list(inline_value)
     record = TaskAttemptRecord.model_validate(raw)
     require_typed_id(record.attempt_id, "att")
     if record.attempt_id != attempt_id:
         raise ValueError(
             f"attempt directory {attempt_id!r} contains record for {record.attempt_id!r}"
         )
+    if inline_anomalies:
+        if record.disposition is not AttemptDisposition.succeeded:
+            raise ValueError(
+                f"attempt {attempt_id!r} is {record.disposition} but carries accepted anomalies"
+            )
+        record = record.with_anomalies(inline_anomalies)
+
+    anomalies_path = attempt_path.with_name(ATTEMPT_ANOMALIES_FILE)
+    if anomalies_path.exists() and record.disposition is not None:
+        raw_anomalies: object = read_yaml_file(anomalies_path)
+        anomaly_record = TaskAttemptAnomaliesRecord.model_validate(raw_anomalies)
+        require_typed_id(anomaly_record.attempt_id, "att")
+        if anomaly_record.attempt_id != attempt_id:
+            raise ValueError(
+                f"attempt directory {attempt_id!r} contains anomaly record for "
+                f"{anomaly_record.attempt_id!r}"
+            )
+        if record.disposition is not AttemptDisposition.succeeded:
+            raise ValueError(
+                f"attempt {attempt_id!r} is {record.disposition} but carries accepted anomalies"
+            )
+        if inline_anomalies is not None and inline_anomalies != anomaly_record.anomalies:
+            raise ValueError(
+                f"attempt {attempt_id!r} carries conflicting inline and sidecar anomalies"
+            )
+        record = record.with_anomalies(anomaly_record.anomalies)
     return record
 
 
@@ -202,6 +242,29 @@ def _write_task_attempt_at(state_dir: Path, record: TaskAttemptRecord) -> Path:
     )
 
 
+def _write_task_attempt_anomalies_at(
+    state_dir: Path,
+    *,
+    attempt_id: str,
+    anomalies: list[str],
+) -> Path:
+    return _write_record_at(
+        attempt_state_dir(state_dir, attempt_id),
+        ATTEMPT_ANOMALIES_FILE,
+        TaskAttemptAnomaliesRecord(
+            attempt_id=attempt_id,
+            anomalies=anomalies,
+        ).model_dump(mode="json", by_alias=True),
+    )
+
+
+def _clear_task_attempt_anomalies_at(state_dir: Path, attempt_id: str) -> None:
+    """Remove a staged sidecar before finalizing an attempt without anomalies."""
+    attempt_state_dir(state_dir, attempt_id).joinpath(ATTEMPT_ANOMALIES_FILE).unlink(
+        missing_ok=True
+    )
+
+
 def start_attempt_at(
     state_dir: Path,
     *,
@@ -265,8 +328,12 @@ def end_attempt_at(
     failure_class: str | None = None,
     error: str | None = None,
     output_failures: Sequence[OutputFailure] | None = None,
+    anomalies: Sequence[str] | None = None,
 ) -> TaskAttemptRecord:
     """Finalize one attempt exactly once."""
+    accepted_anomalies = list(anomalies or [])
+    if accepted_anomalies and disposition is not AttemptDisposition.succeeded:
+        raise ValueError("only a succeeded attempt can carry accepted anomalies")
     current = read_task_attempt_at(state_dir, attempt_id)
     if current is None:
         raise ValueError(f"{state_dir}: attempt {attempt_id!r} does not exist")
@@ -276,6 +343,7 @@ def end_attempt_at(
             and current.failure_class == failure_class
             and current.error == error
             and current.output_failures == list(output_failures or [])
+            and current.anomalies == accepted_anomalies
         )
         if same_terminal_fact:
             return current
@@ -292,8 +360,19 @@ def end_attempt_at(
             "output_failures": list(output_failures or []),
         }
     )
+    if accepted_anomalies:
+        # Stage the separately versioned evidence before publishing the terminal fact.
+        # A reader ignores the sidecar while attempt.yaml is still live, so a crash in
+        # between leaves a recoverable live attempt rather than a false success.
+        _write_task_attempt_anomalies_at(
+            state_dir,
+            attempt_id=attempt_id,
+            anomalies=accepted_anomalies,
+        )
+    else:
+        _clear_task_attempt_anomalies_at(state_dir, attempt_id)
     _write_task_attempt_at(state_dir, terminal)
-    return terminal
+    return terminal.with_anomalies(accepted_anomalies)
 
 
 def end_status_attempt_at(
@@ -304,6 +383,7 @@ def end_status_attempt_at(
     failure_class: str | None = None,
     error: str | None = None,
     output_failures: Sequence[OutputFailure] | None = None,
+    anomalies: Sequence[str] | None = None,
 ) -> TaskAttemptRecord | None:
     """Finalize the durable attempt named by a status record, if it has one."""
     if status.attempt_id is None:
@@ -319,6 +399,7 @@ def end_status_attempt_at(
         failure_class=failure_class,
         error=error,
         output_failures=output_failures,
+        anomalies=anomalies,
     )
 
 
@@ -568,8 +649,14 @@ def mark_completed_at(
     state_dir: Path,
     *,
     running_record: StatusRecord | None = None,
+    anomalies: Sequence[str] | None = None,
 ) -> StatusRecord:
-    """Transition ``state_dir/status.yaml`` from running to completed."""
+    """Transition ``state_dir/status.yaml`` from running to completed.
+
+    *anomalies* records irregularities the harness accepted on the way to this success,
+    so a step that passed only because a rule was relaxed says so in its attempt history
+    rather than only in progress output.
+    """
     current = _read_or_use_at(state_dir, running_record)
     record = StatusRecord(
         run_id=current.run_id,
@@ -583,7 +670,9 @@ def mark_completed_at(
         started_at=current.started_at,
         completed_at=_now_iso(),
     )
-    end_status_attempt_at(state_dir, current, disposition=AttemptDisposition.succeeded)
+    end_status_attempt_at(
+        state_dir, current, disposition=AttemptDisposition.succeeded, anomalies=anomalies
+    )
     write_status_at(state_dir, record)
     return record
 

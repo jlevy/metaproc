@@ -6,12 +6,19 @@ description: >-
   primitives.
 author: Joshua Levy (github.com/jlevy) with LLM assistance
 date: 2026-08-25
-last_updated: 2026-08-26
-status: Draft — Consolidated Review
+last_updated: 2026-08-31
+status: Done — Shipped
 category: plan
 tracking_bead: mp-1c19
 ---
 # Feature: Consolidated Mapped-Scope Runtime
+
+> **Status: shipped.** Landed on `main` across pull requests 41, 42, 44, 48, 49, 51, 53,
+> 55, 56, 57, and 58, and released in v0.4.0. The verification gate `mp-nxs9` passed at
+> the consolidated head, and exact-head `make verify` on `main` at 72ae119 passed with
+> 4,556 tests and 8 environment-gated skips.
+> The prose below is the plan as written and is kept as the design record; it describes
+> intent, not remaining work.
 
 ## Overview
 

@@ -11,11 +11,11 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
 
 ## Active Development
 
-- **Native mapped composite scopes** (`mp-0iy8`): consolidate the reviewed runtime
-  corrections on released `main`, route mapped local leaves through one run-owned
-  RunPool, and pass the exact-head verification gate `mp-nxs9` before downstream smoke
-  testing
-  ([plan](docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md)).
+- **v0.4.0 release** (`mp-1n2a`): close the remaining loose ends between `main` and a
+  tag — two correctness defects in silent paths, release records that disagree with the
+  tree, first-party dependency currency, and stale tracking.
+  The release is a minor, not a patch: the delta since v0.3.0 removes public CLI surface
+  and changes output and transport contracts.
 
 ## Deferred Quality Ratchets
 
@@ -35,3 +35,7 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
 - [Focused resource observability](docs/project/specs/done/plan-2026-08-03-focused-resource-observability.md):
   ledger-backed metrics, compatibility reads, budgets, terminal reporting, recovery, and
   browser and CLI projections.
+- [Consolidated mapped-scope runtime](docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md)
+  (`mp-0iy8`): `for_each` on a composite step, one recursive execution context, one
+  run-owned RunPool for local mapped leaves, and mapped scopes projected through the
+  existing plan, status, trace, and pool views.

@@ -37,35 +37,68 @@ Confirm:
 
 ## Audited First-Party Exceptions
 
+First-party libraries track their latest release.
+The 14-day cool-off exists to let a compromised third-party publish be caught by someone
+else before it reaches this build; that argument does not apply to code published from a
+repository maintained alongside this one, where the diff is reviewable directly.
+Holding a first-party dependency back therefore buys no supply-chain safety and costs
+currency, so an exception names the current release rather than whichever one happened
+to be current when the exception was written.
+
+Each exception is still audited: an entry below records the release it was reviewed
+against and what changed, and a version bump requires a fresh review, not an edited
+version number.
+
 Seven exact first-party releases are exempt from the ordinary cool-off for this release:
 
-- `softschema==0.7.0`, adopted inside the cool-off as a first-party release.
-  Reviewed against `0.6.0`: it keeps the same package source, package-root exports,
-  Python floor, and five direct dependencies.
-  It adds enforced validation for supported composed schemas and replaces engine-keyword
-  matching with stable structural error codes and property-specific diagnostics.
-  Metaproc’s contract-failure adapter and tests migrate that deliberate record-shape
-  change;
+- `softschema==0.8.0`, the current release, adopted inside the cool-off as a first-party
+  release. Reviewed against `0.7.0`: same MIT license, same `jlevy/softschema` source
+  repository, same Python floor of `>=3.11,<4.0`, and the same five direct dependencies
+  (`frontmatter-format`, `jsonschema`, `pydantic`, `ruamel-yaml`, `strif`), so it adds
+  no transitive surface.
+  It adds a `repair` subcommand and the corresponding public API (`load_artifact`,
+  `repair_artifact`, `conform_artifact`, `repair_and_validate_artifact`, and
+  `resolve_bound_schema`), leaves every existing subcommand’s flags unchanged, and
+  leaves ordinary schema verdicts unchanged.
+  Two result-shape additions matter to a consumer reading results against a closed
+  schema: `repairs` is now always present on a validate result, and TypeScript semantic
+  error records may carry `expected`. Metaproc’s contract-failure adapter tolerates
+  both, and the full suite runs against this exact release.
+  Metaproc keeps its own `metaproc softschema repair`, which routes through
+  `metaproc.engine.yaml_repair`, so the new upstream subcommand is not yet on Metaproc’s
+  execution path;
 - `frontmatter-format==0.4.0`, required by SoftSchema 0.4.0 and used directly for
   deterministic alias-free Metaproc artifact writes;
-- `metabrowser==0.1.0`, used only by the development and plugin test group;
-- `kpress==0.2.2`, pulled by the exact Metabrowser development dependency and reviewed
-  as a compatible first-party maintenance update with no added dependencies;
+- `metabrowser==0.9.0`, the current release, used by the development and plugin test
+  group and by the optional `browser` extra.
+  Reviewed against `0.1.0`: same AGPL-3.0-or-later license and `jlevy/metabrowser`
+  source repository, and relocking changed exactly two packages while adding and
+  removing no transitive ones.
+  Its Python floor rises from 3.11 to 3.12, which this project already requires.
+  It advances the browser plugin SDK from 0.1 to 0.5, which is a contract change rather
+  than a version bump: plugin discovery refuses a manifest targeting the wrong SDK, so
+  this release was adopted together with the plugin migration that answers it;
+- `kpress==0.3.5`, the current release, pinned exactly by `metabrowser==0.9.0` and so
+  adopted with it rather than chosen separately.
+  Reviewed as a compatible first-party maintenance update: same source repository and
+  license, and no added dependencies;
 - `flowmark-rs==0.3.2`, used to format and verify Markdown.
   This first-party release was reviewed against `0.3.1`; its formatting output is
   unchanged, while its skill, publishing, and Markdown-parser configuration are more
   reliable;
-- `get-tbd==0.8.0`, the issue-tracking and agent-integration CLI, adopted inside the
-  cool-off as a first-party release.
-  Reviewed against the `0.6.5` this repository ran previously: same MIT license and
-  `jlevy/tbd` source repository, same twelve direct dependencies, and no lockfile
-  effect, since the CLI is installed globally or run through `npx` rather than declared
-  in `package.json`. It migrated this repository’s tbd format from f07 to f08 through
-  the supported `tbd setup --auto` path, regenerating the hooks, skill files, and
-  `AGENTS.md` block together, and it is the first release to ship the
-  `agent-session-bootstrap` guideline that generalizes this repository’s own toolchain
-  bootstrap. The generated hooks read one configured fallback version rather than
-  hardcoding it in each script;
+- `get-tbd==0.8.1`, the current release of the issue-tracking and agent-integration CLI,
+  adopted inside the cool-off as a first-party release.
+  Reviewed against the `0.8.0` recorded here previously: same MIT license, same
+  `jlevy/tbd` source repository, same twelve direct dependencies, same npm publisher
+  (GitHub Actions OIDC), and the same `f08` tbd format, so it carries no data migration.
+  It has no lockfile effect, since the CLI is installed globally or run through `npx`
+  rather than declared in `package.json`. Adopted through the supported
+  `tbd setup --auto` path, which regenerates the hooks, skill files, `AGENTS.md` block,
+  and the recorded fallback version together; the generated hooks read that one
+  configured fallback rather than hardcoding a version in each script.
+  The 0.8.0 entry this replaces recorded the f07-to-f08 format migration and the first
+  release of the `agent-session-bootstrap` guideline that generalizes this repository’s
+  own toolchain bootstrap; both remain in effect;
 - `simple-modern-uv==v0.5.0`, the Copier template this repository is generated from,
   applied inside the cool-off as a first-party release.
   Reviewed against the `v0.4.0` recorded previously in `.copier-answers.yml`: same MIT
@@ -79,6 +112,8 @@ Seven exact first-party releases are exempt from the ordinary cool-off for this 
 
 The exceptions are package-scoped in configuration and do not weaken the global gate.
 Changing any version requires a new review and an updated rationale.
+An entry naming a release older than the current first-party release is drift: bring the
+pin forward and rewrite the rationale together, in one reviewed change.
 
 The generated agent-integration scripts read one exact release from
 `tbd_fallback_version` in `.tbd/config.yml` rather than repeating it per script.

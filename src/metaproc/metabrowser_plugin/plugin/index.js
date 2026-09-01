@@ -4,12 +4,27 @@
 // process-log). The "Steps" view (process-spec) is implemented entirely in
 // this file as a Mustache template + shared plugin-data request. The
 // "Document" and "Source" views (process-spec) reuse the renderers exported by the
-// markdown built-in plugin's index.js (mb.builtins.markdown.*) — built-ins
-// discover before entry-point plugins, so the namespace is set before
-// this script runs.
+// markdown built-in plugin's index.js (mb.builtins.markdown.*). SDK 0.5 loads plugin
+// assets by selected kind, so this entry point explicitly loads every foreign kind
+// whose renderer it embeds before reading the corresponding namespace.
 //
 // New views can be added by adding a [[view]] block to manifest.toml and
 // a registerView() call here. No metabrowser core changes needed.
+
+const metaprocSdk = window.metabrowser;
+if (metaprocSdk) {
+  // `process-spec`, `runpool-log`, and `process-log` all select this plugin rather than
+  // the foreign renderer they embed. Top-level await keeps the host's plugin-load
+  // promise open until those dependencies have registered their namespaces. Load each
+  // independently so one unavailable renderer does not suppress the other.
+  for (const kind of ["markdown", "agent-log"]) {
+    try {
+      await metaprocSdk.ensureKindAssets(kind);
+    } catch (error) {
+      console.warn(`metaproc plugin: ${kind} built-in could not be loaded`, error);
+    }
+  }
+}
 
 (() => {
   const mb = window.metabrowser;
@@ -27,7 +42,11 @@
 
   if (mb.builtins?.markdown) {
     mb.registerView("process-spec", "rendered", {
-      render: mb.builtins.markdown.renderRendered,
+      // `mountRendered` was `renderRendered` before Metabrowser 0.9. It is what the
+      // markdown built-in passes to its own registerView for this view, so registering
+      // it here keeps the Document tab identical to a plain .md file, which is the whole
+      // reason this plugin borrows the renderer instead of owning one.
+      render: mb.builtins.markdown.mountRendered,
     });
     mb.registerView("process-spec", "source", {
       render: mb.builtins.markdown.renderSource,
@@ -368,3 +387,5 @@
   mb.registerView("structure-report", "artifacts", { render: renderStructureArtifacts });
   mb.registerView("structure-report", "graph", { render: renderStructureGraph });
 })();
+
+export {};
