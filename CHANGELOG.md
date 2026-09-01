@@ -203,6 +203,18 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
 
 ### Changed
 
+- **Metabrowser 0.9 and browser plugin SDK 0.5**: the optional `browser` extra now
+  requires `metabrowser==0.9.0`, and the bundled Metabrowser plugin targets browser SDK
+  0.5 instead of 0.1. Plugin discovery refuses a manifest declaring the wrong SDK, so
+  the two move together.
+  Three contract changes were carried: navigation goes through
+  `mb.navigation.open({ path })` rather than the removed `mb.openPath`; the Document
+  view reuses the markdown built-in’s `mountRendered`, which is what `renderRendered`
+  became; and plugin assets are no longer eager tags in the page — Metabrowser loads
+  them per selected kind from a declared descriptor, preserving manifest script order.
+  Metaproc’s views, kinds, data hooks, and sidekick routes are unchanged, and the
+  `MetaprocDomainViews.openPath` re-export, which nothing consumed, is gone.
+
 - **Composite output boundaries are enforced**: scalar and mapped composites now
   validate every declared child-process output before completing.
   Resume revalidates those child outputs even when the mapped parent publishes only a

@@ -17,12 +17,6 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
   The release is a minor, not a patch: the delta since v0.3.0 removes public CLI surface
   and changes output and transport contracts.
 
-## Deferred Follow-Ups
-
-- **Metabrowser plugin SDK migration** (`mp-g7l4`): `metabrowser` is held at `0.1.0`
-  against a current `0.9.0` because the plugin targets browser SDK 0.1 and 0.9.x
-  provides 0.5. It is the optional `browser` extra, so it gates no core command.
-
 ## Deferred Quality Ratchets
 
 - **Post-release hardening** (`mp-7kwn`): add PyPI attestations after the reviewed

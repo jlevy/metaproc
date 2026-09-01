@@ -28,6 +28,7 @@ def test_async_views_ignore_stale_responses_and_share_requests_until_dispose() -
     result = subprocess.run(
         [
             "node",
+            "--experimental-vm-modules",
             str(SHIM),
             str(METABROWSER_PACKAGE_ROOT),
             str(plugin_dir()),

@@ -1,7 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
-const { loadPluginScripts } = require("./plugin_test_utils.js");
+const { loadPluginScripts, loadShell } = require("./plugin_test_utils.js");
 
 const args = process.argv.slice(2);
 if (args.length !== 3) {
@@ -84,15 +84,24 @@ function ok(payload) {
   };
 }
 
-load(path.join(metabrowserRoot, "static", "plugin_sdk.js"), "plugin_sdk.js");
-load(path.join(metabrowserRoot, "static", "icons.js"), "icons.js");
-sandbox.metabrowser.builtins = {
-  markdown: { renderRendered: () => {}, renderSource: () => {} },
-  agentLog: { renderLog: () => {}, renderRaw: () => {} },
-};
-loadPluginScripts(metaprocPluginRoot, metaprocContract.extra_scripts, load, "metaproc");
-
 async function main() {
+  loadShell(metabrowserRoot, load);
+  // Stubbed rather than loaded: this test is about the metaproc views' own lifecycle, so
+  // the built-ins it borrows from are stand-ins. `mountRendered` is the Metabrowser 0.9
+  // name for what was `renderRendered`; keeping the old name here would let the real
+  // rename pass unnoticed in the one place that pins this contract.
+  sandbox.metabrowser.builtins = {
+    markdown: { mountRendered: () => {}, renderSource: () => {} },
+    agentLog: { renderLog: () => {}, renderRaw: () => {} },
+  };
+  await loadPluginScripts(
+    metaprocPluginRoot,
+    metaprocContract.extra_scripts,
+    load,
+    "metaproc",
+    sandbox,
+  );
+
   const renderCalls = [];
   sandbox.MetaprocViz.renderViz = async (container, viz) => {
     renderCalls.push({ container: container.name, viz });
