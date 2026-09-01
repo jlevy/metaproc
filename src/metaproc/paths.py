@@ -104,6 +104,7 @@ RUN_LAYOUT_VERSION = "metaproc-run-layout/2"
 
 STATUS_FILE = "status.yaml"
 ATTEMPT_FILE = "attempt.yaml"
+ATTEMPT_ANOMALIES_FILE = "accepted-anomalies.yaml"
 RESULT_FILE = "result.yaml"
 MANUAL_ACK_FILE = "manual-ack.yaml"
 

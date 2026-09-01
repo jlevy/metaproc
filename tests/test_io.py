@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from frontmatter_format import read_yaml_file
 from pydantic import BaseModel
 
 from metaproc.io import to_yaml_string
@@ -28,6 +29,7 @@ from metaproc.io.state_io import (
     read_attempt_history_at,
     read_result_at,
     read_status_at,
+    read_task_attempt_at,
     reconcile_stale_running,
     start_attempt_at,
     validate_result_attempt_identity_at,
@@ -44,7 +46,14 @@ from metaproc.models.runtime import (
     StatusRecord,
     TaskAttemptRecord,
 )
-from metaproc.paths import ATTEMPT_FILE, ATTEMPTS_SUBDIR, STATE_DIR, TASKS_SUBDIR
+from metaproc.paths import (
+    ATTEMPT_ANOMALIES_FILE,
+    ATTEMPT_FILE,
+    ATTEMPTS_SUBDIR,
+    STATE_DIR,
+    TASKS_SUBDIR,
+    attempt_state_dir,
+)
 
 # ── Frontmatter tests ───────────────────────────────────────────
 
@@ -236,6 +245,138 @@ class TestMarkTransitions:
         completed = mark_completed_at(tmp_path, running_record=running)
         assert completed.state == "completed"
         assert completed.completed_at is not None
+
+    def test_task_attempt_v01_shape_stays_readable_by_the_previous_release(self, tmp_path):
+        """An additive Pydantic field is a format break when the old model forbids extras."""
+        running = mark_running_at(tmp_path, run_id="r1", step_id="s1", item={"ticker": "AAPL"})
+        assert running.attempt_id is not None
+        mark_completed_at(tmp_path, running_record=running)
+
+        attempt_dir = attempt_state_dir(tmp_path, running.attempt_id)
+        payload = read_yaml_file(attempt_dir / ATTEMPT_FILE)
+
+        assert isinstance(payload, dict)
+        assert payload["schema"] == "metaproc:TaskAttemptRecord/0.1"
+        assert "anomalies" not in payload
+        assert not (attempt_dir / ATTEMPT_ANOMALIES_FILE).exists()
+
+    def test_accepted_anomalies_use_an_attempt_owned_versioned_sidecar(self, tmp_path):
+        running = mark_running_at(tmp_path, run_id="r1", step_id="s1", item={"ticker": "AAPL"})
+        assert running.attempt_id is not None
+        mark_completed_at(
+            tmp_path,
+            running_record=running,
+            anomalies=["accepted exit code 1 as a shutdown warning"],
+        )
+
+        attempt_dir = attempt_state_dir(tmp_path, running.attempt_id)
+        attempt_payload = read_yaml_file(attempt_dir / ATTEMPT_FILE)
+        anomaly_payload = read_yaml_file(attempt_dir / ATTEMPT_ANOMALIES_FILE)
+
+        assert isinstance(attempt_payload, dict)
+        assert "anomalies" not in attempt_payload
+        assert anomaly_payload == {
+            "schema": "metaproc:TaskAttemptAnomalies/0.1",
+            "attempt_id": running.attempt_id,
+            "anomalies": ["accepted exit code 1 as a shutdown warning"],
+        }
+        assert read_attempt_history_at(tmp_path)[0].anomalies == [
+            "accepted exit code 1 as a shutdown warning"
+        ]
+
+    def test_live_attempt_ignores_and_then_clears_a_staged_anomaly_sidecar(self, tmp_path):
+        running = mark_running_at(tmp_path, run_id="r1", step_id="s1", item={"ticker": "AAPL"})
+        assert running.attempt_id is not None
+        attempt_dir = attempt_state_dir(tmp_path, running.attempt_id)
+        sidecar = attempt_dir / ATTEMPT_ANOMALIES_FILE
+        sidecar.write_text(
+            to_yaml_string(
+                {
+                    "schema": "metaproc:TaskAttemptAnomalies/0.1",
+                    "attempt_id": running.attempt_id,
+                    "anomalies": ["staged before the terminal fact"],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        attempt = read_task_attempt_at(tmp_path, running.attempt_id)
+        assert attempt is not None
+        assert attempt.disposition is None
+        assert attempt.anomalies == []
+
+        mark_completed_at(tmp_path, running_record=running)
+        assert not sidecar.exists()
+
+    def test_anomaly_sidecar_must_address_a_succeeded_attempt(self, tmp_path):
+        running = mark_running_at(tmp_path, run_id="r1", step_id="s1", item={"ticker": "AAPL"})
+        failed = mark_failed_at(tmp_path, error="failed", running_record=running)
+        assert failed.attempt_id is not None
+        sidecar = attempt_state_dir(tmp_path, failed.attempt_id) / ATTEMPT_ANOMALIES_FILE
+        sidecar.write_text(
+            to_yaml_string(
+                {
+                    "schema": "metaproc:TaskAttemptAnomalies/0.1",
+                    "attempt_id": failed.attempt_id,
+                    "anomalies": ["contradicts the terminal disposition"],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="carries accepted anomalies"):
+            read_task_attempt_at(tmp_path, failed.attempt_id)
+
+    def test_anomaly_sidecar_must_match_its_attempt_directory(self, tmp_path):
+        running = mark_running_at(tmp_path, run_id="r1", step_id="s1", item={"ticker": "AAPL"})
+        completed = mark_completed_at(tmp_path, running_record=running)
+        assert completed.attempt_id is not None
+        sidecar = attempt_state_dir(tmp_path, completed.attempt_id) / ATTEMPT_ANOMALIES_FILE
+        sidecar.write_text(
+            to_yaml_string(
+                {
+                    "schema": "metaproc:TaskAttemptAnomalies/0.1",
+                    "attempt_id": "att-another",
+                    "anomalies": ["misaddressed"],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="contains anomaly record for 'att-another'"):
+            read_task_attempt_at(tmp_path, completed.attempt_id)
+
+    def test_reader_migrates_the_short_lived_inline_anomaly_shape(self, tmp_path):
+        running = mark_running_at(tmp_path, run_id="r1", step_id="s1", item={"ticker": "AAPL"})
+        completed = mark_completed_at(tmp_path, running_record=running)
+        assert completed.attempt_id is not None
+        attempt_path = attempt_state_dir(tmp_path, completed.attempt_id) / ATTEMPT_FILE
+        payload = read_yaml_file(attempt_path)
+        assert isinstance(payload, dict)
+        payload["anomalies"] = ["written by the short-lived pre-release shape"]
+        attempt_path.write_text(to_yaml_string(payload), encoding="utf-8")
+
+        loaded = read_task_attempt_at(tmp_path, completed.attempt_id)
+        assert loaded is not None
+        assert loaded.anomalies == ["written by the short-lived pre-release shape"]
+        assert "anomalies" in read_yaml_file(attempt_path)
+
+    def test_reader_rejects_conflicting_inline_and_sidecar_anomalies(self, tmp_path):
+        running = mark_running_at(tmp_path, run_id="r1", step_id="s1", item={"ticker": "AAPL"})
+        completed = mark_completed_at(
+            tmp_path,
+            running_record=running,
+            anomalies=["versioned sidecar"],
+        )
+        assert completed.attempt_id is not None
+        attempt_path = attempt_state_dir(tmp_path, completed.attempt_id) / ATTEMPT_FILE
+        payload = read_yaml_file(attempt_path)
+        assert isinstance(payload, dict)
+        payload["anomalies"] = ["conflicting interim payload"]
+        attempt_path.write_text(to_yaml_string(payload), encoding="utf-8")
+
+        with pytest.raises(ValueError, match="conflicting inline and sidecar anomalies"):
+            read_task_attempt_at(tmp_path, completed.attempt_id)
 
     def test_mark_failed(self, tmp_path):
         running = mark_running_at(tmp_path, run_id="r1", step_id="s1", item={"ticker": "AAPL"})

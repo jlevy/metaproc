@@ -35,6 +35,8 @@ type MetabrowserSdk = {
     parameters: Record<string, unknown>,
   ): Promise<unknown>;
   formatSize(value: number): string;
+  /** Load plugins that declare support for a kind before borrowing their renderers. */
+  ensureKindAssets(kind: string): Promise<void>;
   /**
    * Browser SDK 0.2 replaced `openPath` and the `metabrowser:open-path` event with this
    * namespace, and removed both with no shim.

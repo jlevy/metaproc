@@ -170,11 +170,13 @@ def _build_schema_registry() -> dict[str, type[BaseModel]]:
         ResourcesDocument,
     )
     from metaproc.models.runtime import (  # noqa: PLC0415 -- registry construction avoids model import cycles
+        TaskAttemptAnomaliesRecord,
         TaskAttemptRecord,
     )
 
     _register(ResourcesDocument)
     _register(RunPlanSnapshot)
+    _register(TaskAttemptAnomaliesRecord)
     _register(TaskAttemptRecord)
     return registry
 
