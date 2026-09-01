@@ -9,6 +9,13 @@ type MetabrowserPerf = {
 
 type MetabrowserRenderer = (container: HTMLElement, context: object) => unknown;
 
+/** Served-root-relative path, `/` separators, no leading slash; empty selects the root. */
+type MetabrowserNavigationTarget = {
+  fragment?: string;
+  path: string;
+  query?: Record<string, string>;
+};
+
 type MetabrowserSdk = {
   builtins: {
     agentLog?: {
@@ -16,7 +23,8 @@ type MetabrowserSdk = {
       renderRaw: MetabrowserRenderer;
     };
     markdown?: {
-      renderRendered: MetabrowserRenderer;
+      /** `renderRendered` before Metabrowser 0.9. */
+      mountRendered: MetabrowserRenderer;
       renderSource: MetabrowserRenderer;
     };
   };
@@ -27,7 +35,15 @@ type MetabrowserSdk = {
     parameters: Record<string, unknown>,
   ): Promise<unknown>;
   formatSize(value: number): string;
-  openPath(path: string): void;
+  /**
+   * Browser SDK 0.2 replaced `openPath` and the `metabrowser:open-path` event with this
+   * namespace, and removed both with no shim.
+   */
+  navigation: {
+    current(): MetabrowserNavigationTarget | null;
+    href(target: MetabrowserNavigationTarget): string;
+    open(target: MetabrowserNavigationTarget, options?: { viewId?: string }): Promise<void>;
+  };
   perf: MetabrowserPerf;
   registerView(
     kind: string,

@@ -27,7 +27,11 @@
 
   if (mb.builtins?.markdown) {
     mb.registerView("process-spec", "rendered", {
-      render: mb.builtins.markdown.renderRendered,
+      // `mountRendered` was `renderRendered` before Metabrowser 0.9. It is what the
+      // markdown built-in passes to its own registerView for this view, so registering
+      // it here keeps the Document tab identical to a plain .md file, which is the whole
+      // reason this plugin borrows the renderer instead of owning one.
+      render: mb.builtins.markdown.mountRendered,
     });
     mb.registerView("process-spec", "source", {
       render: mb.builtins.markdown.renderSource,

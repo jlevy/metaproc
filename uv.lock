@@ -14,8 +14,8 @@ exclude-newer-span = "P14D"
 [options.exclude-newer-package]
 flowmark-rs = "2026-07-16T00:00:00Z"
 frontmatter-format = "2026-08-01T01:27:00Z"
-kpress = "2026-07-16T00:00:00Z"
-metabrowser = "2026-07-18T00:00:00Z"
+kpress = "2026-08-31T00:55:00Z"
+metabrowser = "2026-08-31T06:32:00Z"
 softschema = "2026-08-30T20:12:00Z"
 
 [[package]]
@@ -966,7 +966,7 @@ wheels = [
 
 [[package]]
 name = "kpress"
-version = "0.2.2"
+version = "0.3.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "frontmatter-format" },
@@ -978,9 +978,9 @@ dependencies = [
     { name = "pygments" },
     { name = "strif" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/bf/4a/fbe3c61c7a9359a1cfcd919728967ce8ce32c69193bcf4ff4cbb5019b0a1/kpress-0.2.2.tar.gz", hash = "sha256:475f78dde2cd762f40add1351e3ca49b6c186182b2ef6fe1f8069182e14fb2cc", size = 976001, upload-time = "2026-07-15T02:14:50.512Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a9/84/4c18b4048b1932168835042353ccda54fb0ad6eb0c7828a2be26bfecc2ab/kpress-0.3.5.tar.gz", hash = "sha256:9a33e0af8b97c7b6ac136f55ab3a88fce2a00dca4ae8b22c7284c80c4a377913", size = 1138836, upload-time = "2026-08-31T00:54:43.649Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9c/ab/f678cbeed015b675cccf4f9d1512c95eb989cf04e58637058d38c4a3c1d0/kpress-0.2.2-py3-none-any.whl", hash = "sha256:46c3e9f0496f30d7e5c19c08c38a96634bee257af15124da0795fa267e9698e1", size = 726113, upload-time = "2026-07-15T02:14:49.336Z" },
+    { url = "https://files.pythonhosted.org/packages/98/a9/5ea25822da1f91660341e8dc19b2f1aa7f8753392cfda40fbbd504a21709/kpress-0.3.5-py3-none-any.whl", hash = "sha256:8e2907cda0f17e380109d08c63d920255e89b480dc6a308515ee791c3486c8e5", size = 762336, upload-time = "2026-08-31T00:54:42.439Z" },
 ]
 
 [[package]]
@@ -1090,7 +1090,7 @@ wheels = [
 
 [[package]]
 name = "metabrowser"
-version = "0.1.0"
+version = "0.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cachetools" },
@@ -1112,9 +1112,9 @@ dependencies = [
     { name = "uvicorn" },
     { name = "watchfiles" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c7/d8/9db44c434f73a49c36bb13c04ad84f7d1adde2d27114ce4f6aff05ef0aee/metabrowser-0.1.0.tar.gz", hash = "sha256:3895aaea4f17ef73d430cf2e3aa47deb343621c6760f1f89f9919cc1caa60e40", size = 641518, upload-time = "2026-07-17T20:13:30.291Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/22/38/7325e64f7bba1d050257c48c51a8a13bd8b4d452396bdfab32bac2ca58dc/metabrowser-0.9.0.tar.gz", hash = "sha256:dd32fdcca45a86f564fa0cafdf6c226cf7ae3230311b5827cc9a351bf69c1ecc", size = 2606105, upload-time = "2026-08-31T06:31:57.576Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c5/23/2a2b2410936ffa035ec627d9ded508be82c307b8264f000dfa4c2c2e1a55/metabrowser-0.1.0-py3-none-any.whl", hash = "sha256:a5ccd8612e5ddd2bb4464ba1ecf66d733a9e72ff24fa1aeeb78bce3d32fd9bc0", size = 302615, upload-time = "2026-07-17T20:13:28.826Z" },
+    { url = "https://files.pythonhosted.org/packages/ff/9e/e8145767bae503f615c8d2ce667cf7e4fa3db763d78a89b219395335e222/metabrowser-0.9.0-py3-none-any.whl", hash = "sha256:e0d86fba0c7061819bd798c716eee18b4c946f992d67898d508edd44bd74b0ca", size = 1028909, upload-time = "2026-08-31T06:31:55.977Z" },
 ]
 
 [[package]]
@@ -1193,7 +1193,7 @@ requires-dist = [
     { name = "google-cloud-secret-manager", marker = "extra == 'gcp-batch'", specifier = ">=2.20" },
     { name = "google-cloud-storage", marker = "extra == 'gcp-batch'", specifier = ">=2.18" },
     { name = "jsonschema", specifier = ">=4.26.0" },
-    { name = "metabrowser", marker = "extra == 'browser'", specifier = "==0.1.0" },
+    { name = "metabrowser", marker = "extra == 'browser'", specifier = "==0.9.0" },
     { name = "pathspec", specifier = ">=1.0.4" },
     { name = "prettyfmt", specifier = ">=0.4.1" },
     { name = "psutil", specifier = ">=7.2.2" },

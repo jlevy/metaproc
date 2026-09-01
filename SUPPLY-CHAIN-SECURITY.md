@@ -69,16 +69,19 @@ Seven exact first-party releases are exempt from the ordinary cool-off for this 
   execution path;
 - `frontmatter-format==0.4.0`, required by SoftSchema 0.4.0 and used directly for
   deterministic alias-free Metaproc artifact writes;
-- `metabrowser==0.1.0`, the optional `browser` extra, used by the development and plugin
-  test group. A deliberate exception to the currency rule above, not drift: the current
-  release is `0.9.0`, which provides browser SDK 0.5 while this repository’s plugin
-  targets 0.1, so plugin discovery refuses the manifest outright.
-  Bringing it current is an SDK migration rather than a version bump and is tracked
-  separately; until then this pin is held knowingly, and it gates no core command;
-- `kpress==0.2.2`, pulled by the exact Metabrowser development dependency, and held at
-  this release for the same reason: `metabrowser==0.9.0` pins `kpress==0.3.5`, so the
-  two move together. Reviewed as a compatible first-party maintenance update with no
-  added dependencies;
+- `metabrowser==0.9.0`, the current release, used by the development and plugin test
+  group and by the optional `browser` extra.
+  Reviewed against `0.1.0`: same AGPL-3.0-or-later license and `jlevy/metabrowser`
+  source repository, and relocking changed exactly two packages while adding and
+  removing no transitive ones.
+  Its Python floor rises from 3.11 to 3.12, which this project already requires.
+  It advances the browser plugin SDK from 0.1 to 0.5, which is a contract change rather
+  than a version bump: plugin discovery refuses a manifest targeting the wrong SDK, so
+  this release was adopted together with the plugin migration that answers it;
+- `kpress==0.3.5`, the current release, pinned exactly by `metabrowser==0.9.0` and so
+  adopted with it rather than chosen separately.
+  Reviewed as a compatible first-party maintenance update: same source repository and
+  license, and no added dependencies;
 - `flowmark-rs==0.3.2`, used to format and verify Markdown.
   This first-party release was reviewed against `0.3.1`; its formatting output is
   unchanged, while its skill, publishing, and Markdown-parser configuration are more
