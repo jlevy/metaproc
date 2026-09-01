@@ -159,6 +159,10 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
 
 ### Changed
 
+- **Gemini CLI runtime pin**: the local adapter, agent image, and supply-chain policy
+  now agree on Gemini CLI 0.55.1, the newest stable release outside the repository's
+  14-day package cool-off at the time of review.
+
 - **Composite output boundaries are enforced**: scalar and mapped composites now
   validate every declared child-process output before completing.
   Resume revalidates those child outputs even when the mapped parent publishes only a
