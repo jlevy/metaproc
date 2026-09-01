@@ -5,15 +5,18 @@ title: Migrate the Metabrowser plugin to browser SDK 0.5 (metabrowser 0.9.x)
 kind: task
 status: closed
 priority: 2
-version: 2
+version: 5
 labels:
   - supply-chain
   - plugin
-dependencies: []
+dependencies:
+  - type: blocks
+    target: is-01m1f8xgv4zycvj17qc7g9x1d0
+parent_id: is-01m1f8xgv4zycvj17qc7g9x1d0
 created_at: 2026-09-01T02:16:49.061Z
-updated_at: 2026-09-01T06:10:17.567Z
-closed_at: 2026-09-01T06:10:17.566Z
-close_reason: "Migrated in PR #60 (stacked on #59). metabrowser 0.1.0 to 0.9.0, kpress 0.2.2 to 0.3.5, manifest sdk_version 0.1 to 0.5. Three contract changes carried: mb.openPath to mb.navigation.open (removed with no shim at SDK 0.2), the markdown built-in's renderRendered to mountRendered (a live break, not a test artifact - the Document view would have registered undefined as its renderer), and selected-kind plugin asset loading at SDK 0.5, which needed no plugin change but invalidated the test asserting eager asset tags. The DOM shims now load the shell's own script order and evaluate ES modules via vm.SourceTextModule, since half of metabrowser's built-ins are ESM including the markdown one this plugin borrows from. make verify green: 4,571 passed, 8 skipped."
+updated_at: 2026-09-01T20:20:43.715Z
+closed_at: 2026-09-01T20:20:43.715Z
+close_reason: "Metaproc PR #64 merged as 10f51859c6b09ca41cddb9384c7ee0f549de984f after the full local gate and all hosted CI passed; disposition comments were posted on PRs #59 and #60."
 resolution: null
 duplicate_of: null
 ---
@@ -52,3 +55,7 @@ absence permanently skips `tests/test_metabrowser_plugin_e2e.py:187` (mp-vtpx, m
 
 The audited exception entry in SUPPLY-CHAIN-SECURITY.md must be rewritten against 0.1.0
 as part of this, not edited to a new version number.
+
+## Notes
+
+PR #60 merged the initial SDK 0.5 migration. Independent post-merge review R60-1 reproduced a real lazy-load failure: selecting a Metaproc-owned kind does not load foreign built-ins whose renderers it embeds. Follow-up on codex/downstream-safe-latest now awaits ensureKindAssets for both markdown (process-spec and structure-report views) and agent-log (runpool/process log views), with an isolated host test that begins with empty builtins, loads each dependency on demand, verifies registration, and exercises the delegated log renderers. Focused lifecycle, Biome, and TypeScript checks pass; the preceding full make verify was green before the agent-log extension and will be rerun on the final tree.
