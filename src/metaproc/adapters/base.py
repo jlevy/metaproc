@@ -116,6 +116,54 @@ class Adapter(Protocol):
         ...
 
 
+@runtime_checkable
+class TerminalResultValidator(Protocol):
+    """Optional adapter hook for semantic checks on a terminal result event.
+
+    Process exit status only proves that the CLI completed. Adapters whose
+    terminal record carries stronger provenance can implement this hook to
+    reject a result that violates the invocation contract.
+    """
+
+    def validate_result_event(
+        self,
+        event: dict[str, object],
+        merged_config: dict[str, object],
+    ) -> str | None: ...
+
+
+class ResultEventParser(Protocol):
+    """The adapter surface needed to locate terminal events in a JSONL log."""
+
+    def parse_result_event(self, line: str) -> dict[str, object] | None: ...
+
+
+def validate_terminal_result_log(
+    adapter: ResultEventParser,
+    log_path: Path,
+    merged_config: dict[str, object],
+) -> str | None:
+    """Return an adapter-owned terminal-result contract failure, if any."""
+    if not isinstance(adapter, TerminalResultValidator):
+        return None
+
+    terminal_event: dict[str, object] | None = None
+    try:
+        with log_path.open(encoding="utf-8", errors="replace") as log_file:
+            for line in log_file:
+                parsed = adapter.parse_result_event(line)
+                if parsed is not None:
+                    terminal_event = parsed
+    except OSError:
+        # Existing process/output checks own unreadable or missing logs. This hook
+        # only strengthens a terminal event that the adapter actually emitted.
+        return None
+
+    if terminal_event is None:
+        return None
+    return adapter.validate_result_event(terminal_event, merged_config)
+
+
 def parse_jsonl_event(line: str, event_type: str) -> dict[str, object] | None:
     """Parse a JSONL line and return it if its ``type`` matches *event_type*."""
     try:

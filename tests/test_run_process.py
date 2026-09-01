@@ -3636,6 +3636,106 @@ class TestProcessContractValidation:
         assert result.exit_code == 0, result.stdout
         assert output_path.read_text() == "ok"
 
+    def test_scalar_agent_rejects_terminal_result_contract_failure(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        repo_dir = tmp_path / "terminal-contract-repo"
+        process_dir = repo_dir / "terminal-contract-process"
+        process_dir.mkdir(parents=True)
+        subprocess.run(
+            ["git", "init"],
+            cwd=repo_dir,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        output_path = repo_dir / "runs" / "test-run" / "artifact.md"
+        spec = process_dir / "test.process.md"
+        spec.write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: terminal-contract
+                  defaults:
+                    default_adapter: terminal-contract-test
+                    adapters:
+                      terminal-contract-test:
+                        type: terminal-contract-test
+                  inputs:
+                    output_path: { param: OUTPUT_PATH, as: path }
+                  steps:
+                    - id: agent-step
+                      mode: agent
+                      prompt_prefix: write the declared output
+                      outputs:
+                        main:
+                          path: "{{OUTPUT_PATH}}"
+                          kind: file
+                ---
+                """
+            )
+        )
+
+        class RejectingAdapter:
+            adapter_type = "terminal-contract-test"
+            short_name = "terminal-contract-test"
+            default_model = None
+
+            def build_command(self, prompt_file, merged_config, variables):  # noqa: ARG002
+                script = (
+                    "import json; from pathlib import Path; "
+                    f"target = Path({variables['OUTPUT_PATH']!r}); "
+                    "target.parent.mkdir(parents=True, exist_ok=True); "
+                    "target.write_text('complete output'); "
+                    "print(json.dumps({'type': 'result', 'status': 'success'}))"
+                )
+                return [sys.executable, "-c", script]
+
+            def prepare_env(self, env, merged_config):  # noqa: ARG002
+                return env
+
+            def working_directory(self, merged_config):  # noqa: ARG002
+                return None
+
+            def parse_result_event(self, line):
+                event = json.loads(line)
+                return event if event.get("type") == "result" else None
+
+            def validate_result_event(self, event, merged_config):  # noqa: ARG002
+                return "synthetic terminal result contract failure"
+
+            def check_auth(self):
+                raise NotImplementedError
+
+            def auth_info(self):
+                return ""
+
+        monkeypatch.setitem(ADAPTER_REGISTRY, "terminal-contract-test", RejectingAdapter())
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "run-process",
+                str(spec),
+                "--var",
+                f"RUNS_DIR={repo_dir / 'runs'}",
+                "--var",
+                "RUN_ID=test-run",
+                "--var",
+                f"OUTPUT_PATH={output_path}",
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert output_path.read_text() == "complete output"
+        status = read_status_at(_task_state_dir_for(repo_dir / "runs" / "test-run", "agent-step"))
+        assert status is not None
+        assert status.state == "failed"
+        assert status.error == "synthetic terminal result contract failure"
+
     def test_boundary_check_accepts_relative_runs_dir(
         self,
         tmp_path: Path,
