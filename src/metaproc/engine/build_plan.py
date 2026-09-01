@@ -508,12 +508,31 @@ def _resolve_prompt_paths(
     return resolved_paths
 
 
+def _transitive_ancestors(step_id: str, needs_by_step: dict[str, list[str]]) -> set[str]:
+    """Return every step *step_id* depends on, directly or transitively.
+
+    Carries its own visited set rather than trusting the graph to be acyclic:
+    ``validate_step_graph`` is what rejects a cycle, and it runs after this. A spec that
+    is about to be rejected for a cycle must not hang the planner first.
+    """
+    ancestors: set[str] = set()
+    frontier = list(needs_by_step.get(step_id, ()))
+    while frontier:
+        current = frontier.pop()
+        if current in ancestors or current == step_id:
+            continue
+        ancestors.add(current)
+        frontier.extend(needs_by_step.get(current, ()))
+    return ancestors
+
+
 def _resolve_produced_refs(
     step: ProcessStep,
     *,
     resolved_deps: dict[str, ResolvedDep],
     step_outputs: dict[str, dict[str, IOSpec]],
     params: dict[str, str],
+    ancestor_ids: set[str],
 ) -> list[str]:
     """Return the referenced paths this run produces, for ``produced_refs``.
 
@@ -521,14 +540,28 @@ def _resolve_produced_refs(
 
     A dep-ref carries ``produced_by``, which says outright that a step writes it.
 
-    A raw path is produced when another step in the same plan declares that exact path
-    as an output. The plan holds both facts, so whether the run writes it is decided
-    rather than assumed, and a released spec that wires a produced file as a raw path
-    is as correct as one that wires it through a dep. This is the common shape: a step
-    that stages a source snapshot, then a later step that reads it by path.
+    A raw path is produced when a step this one depends on, directly or transitively,
+    declares that exact path as an output. The plan holds both facts, so whether the run
+    writes it is decided rather than assumed, and a released spec that wires a produced
+    file as a raw path is as correct as one that wires it through a dep. This is the
+    common shape: a step that stages a source snapshot, then a later step that reads it
+    by path.
+
+    Ancestry is the whole point of the test, not a detail of it. Only an upstream
+    producer is ordered before this step, so only an upstream producer is guaranteed to
+    have written the file by the time this step reads it. A step that declares the same
+    output path while running independently or downstream supplies nothing to this
+    reader, and treating its declaration as proof would drop a real authored file out of
+    both the existence check and the content fingerprint — the file then goes stale
+    without invalidating anything, or the step fails at runtime on a file the plan
+    promised.
 
     Anything else is an authored input the run does not write, so its bytes stay in the
     fingerprint and a missing file is still the misconfiguration it has always been.
+
+    Two upstream producers of one path is refused rather than resolved. The set of bytes
+    this reader will see is then a race between them, and no fingerprint can describe
+    a race.
 
     This takes the opposite position to ``_validate_raw_path_dataflow`` below, which
     rejects the same wiring on ``inputs``. The asymmetry is deliberate and is about what
@@ -540,15 +573,17 @@ def _resolve_produced_refs(
     # Keyed the way every other authored-path comparison in this module is keyed. A
     # doubled slash or a `./` segment must not decide whether a file is produced, and
     # `normalize_path_key` is the one definition those comparisons share.
-    produced_keys: set[str] = set()
-    for producer_id, outputs in step_outputs.items():
-        if producer_id == step.id:
-            # A step's own outputs are not inputs to itself; excluding them here keeps a
-            # step that reads and rewrites one path from dropping it from its fingerprint.
-            continue
-        for output_spec in outputs.values():
+    #
+    # A step's own outputs are absent because a step is never its own ancestor, which
+    # keeps a step that reads and rewrites one path from dropping it from its
+    # fingerprint.
+    producers_by_key: dict[str, set[str]] = {}
+    for producer_id in ancestor_ids:
+        for output_spec in step_outputs.get(producer_id, {}).values():
             if output_spec.path:
-                produced_keys.add(normalize_path_key(output_spec.path))
+                producers_by_key.setdefault(normalize_path_key(output_spec.path), set()).add(
+                    producer_id
+                )
 
     produced: list[str] = []
     for candidate in (*step.prompt_paths, step.uses):
@@ -561,8 +596,16 @@ def _resolve_produced_refs(
                 produced.append(dep.path)
             continue
         resolved = resolve_templates(candidate, params)
-        if normalize_path_key(resolved) in produced_keys:
-            produced.append(resolved)
+        producers = producers_by_key.get(normalize_path_key(resolved))
+        if not producers:
+            continue
+        if len(producers) > 1:
+            names = ", ".join(sorted(producers))
+            raise ValueError(
+                f"step '{step.id}': referenced path {resolved!r} is declared as an output "
+                f"by more than one upstream step ({names}); one producer must own it"
+            )
+        produced.append(resolved)
     return list(dict.fromkeys(produced))
 
 
@@ -977,12 +1020,10 @@ def build_plan(
                 needs=list(dict.fromkeys([*step.needs, *ref_needs])),
                 on_failure=step.on_failure,
                 uses_path=uses_path,
-                produced_refs=_resolve_produced_refs(
-                    step,
-                    resolved_deps=resolved_deps,
-                    step_outputs=step_outputs,
-                    params=params,
-                ),
+                # Filled in after the loop: whether a raw path is produced depends on
+                # this step's transitive ancestors, and a step's `needs` is only final
+                # once every step has resolved its ref-derived edges.
+                produced_refs=[],
                 execution_profile=step_execution_profile,
                 artifact_namespace=step_artifact_namespace,
                 variant=step.variant,
@@ -990,6 +1031,23 @@ def build_plan(
                 max_budget_usd=step.max_budget_usd,
                 token_budget=step.token_budget,
             )
+        )
+
+    # `needs` here is the authored edges plus the ones `_resolve_step_inputs` derived
+    # from symbolic refs, which is the same relation the scheduler orders steps by. Any
+    # narrower view would call a path unproduced that the run does in fact write first.
+    needs_by_step = {resolved.step_id: resolved.needs for resolved in resolved_steps}
+    steps_by_id = {authored.id: authored for authored in spec.steps}
+    for resolved in resolved_steps:
+        authored_step = steps_by_id.get(resolved.step_id)
+        if authored_step is None:
+            continue
+        resolved.produced_refs = _resolve_produced_refs(
+            authored_step,
+            resolved_deps=resolved_deps,
+            step_outputs=step_outputs,
+            params=params,
+            ancestor_ids=_transitive_ancestors(resolved.step_id, needs_by_step),
         )
 
     graph_errors = validate_step_graph(resolved_steps)

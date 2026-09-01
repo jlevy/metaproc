@@ -265,6 +265,7 @@ def end_attempt_at(
     failure_class: str | None = None,
     error: str | None = None,
     output_failures: Sequence[OutputFailure] | None = None,
+    anomalies: Sequence[str] | None = None,
 ) -> TaskAttemptRecord:
     """Finalize one attempt exactly once."""
     current = read_task_attempt_at(state_dir, attempt_id)
@@ -276,6 +277,7 @@ def end_attempt_at(
             and current.failure_class == failure_class
             and current.error == error
             and current.output_failures == list(output_failures or [])
+            and current.anomalies == list(anomalies or [])
         )
         if same_terminal_fact:
             return current
@@ -290,6 +292,7 @@ def end_attempt_at(
             "failure_class": failure_class,
             "error": error,
             "output_failures": list(output_failures or []),
+            "anomalies": list(anomalies or []),
         }
     )
     _write_task_attempt_at(state_dir, terminal)
@@ -304,6 +307,7 @@ def end_status_attempt_at(
     failure_class: str | None = None,
     error: str | None = None,
     output_failures: Sequence[OutputFailure] | None = None,
+    anomalies: Sequence[str] | None = None,
 ) -> TaskAttemptRecord | None:
     """Finalize the durable attempt named by a status record, if it has one."""
     if status.attempt_id is None:
@@ -319,6 +323,7 @@ def end_status_attempt_at(
         failure_class=failure_class,
         error=error,
         output_failures=output_failures,
+        anomalies=anomalies,
     )
 
 
@@ -568,8 +573,14 @@ def mark_completed_at(
     state_dir: Path,
     *,
     running_record: StatusRecord | None = None,
+    anomalies: Sequence[str] | None = None,
 ) -> StatusRecord:
-    """Transition ``state_dir/status.yaml`` from running to completed."""
+    """Transition ``state_dir/status.yaml`` from running to completed.
+
+    *anomalies* records irregularities the harness accepted on the way to this success,
+    so a step that passed only because a rule was relaxed says so in its attempt history
+    rather than only in progress output.
+    """
     current = _read_or_use_at(state_dir, running_record)
     record = StatusRecord(
         run_id=current.run_id,
@@ -583,7 +594,9 @@ def mark_completed_at(
         started_at=current.started_at,
         completed_at=_now_iso(),
     )
-    end_status_attempt_at(state_dir, current, disposition=AttemptDisposition.succeeded)
+    end_status_attempt_at(
+        state_dir, current, disposition=AttemptDisposition.succeeded, anomalies=anomalies
+    )
     write_status_at(state_dir, record)
     return record
 
