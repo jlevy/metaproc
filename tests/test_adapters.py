@@ -910,6 +910,9 @@ class TestPiCliAdapter:
         status = self.adapter.check_auth()
         assert status.cli_found is False
         assert status.credentials_found is False
+        assert status.setup_hint == (
+            "Install: npm install -g @earendil-works/pi-coding-agent@0.84.2"
+        )
 
     def test_check_auth_with_anthropic_key(self, monkeypatch, tmp_path):
         monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/pi")

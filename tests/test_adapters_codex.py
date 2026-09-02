@@ -80,7 +80,7 @@ class TestCodexBuildCommand:
         # build_command must still produce a command so the run proceeds.
         monkeypatch.setattr(
             "metaproc.adapters.codex._codex_version_drift",
-            lambda: "Codex CLI version mismatch: pinned='0.144.1', actual='0.135.0'",
+            lambda: "Codex CLI version mismatch: pinned='0.147.0', actual='0.135.0'",
         )
         cmd = self._cmd(tmp_path, {"permission_mode": "default"})
         assert cmd, "build_command must still build a command despite version drift"
@@ -561,7 +561,7 @@ def test_verify_codex_version_rejects_different_version(monkeypatch):
 
     with pytest.raises(
         CodexCliVersionMismatch,
-        match=r"pinned='0\.144\.1', actual='0\.146\.0-alpha\.3\.1'",
+        match=r"pinned='0\.147\.0', actual='0\.146\.0-alpha\.3\.1'",
     ):
         verify_codex_version()
 

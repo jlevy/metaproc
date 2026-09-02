@@ -51,7 +51,7 @@ CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials"
 #   2. install the matching version locally (`claude` self-updates; verify
 #      `claude --version` matches)
 #   3. rebuild any deployment images and run an adapter smoke test
-PINNED_CLAUDE_CODE_CLI_VERSION = "2.1.207"
+PINNED_CLAUDE_CODE_CLI_VERSION = "2.1.234"
 CLAUDE_CODE_INSTALL_HINT = (
     f"Install: npm install -g @anthropic-ai/claude-code@{PINNED_CLAUDE_CODE_CLI_VERSION}"
 )

@@ -206,6 +206,12 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
 
 ### Changed
 
+- **Agent CLI runtime pins**: the exact adapter contracts now target Claude Code
+  2.1.234, Codex 0.147.0, and Pi 0.84.2. Each was the newest stable release outside the
+  14-day package cool-off at the time of review.
+  Pi’s installation hint now uses the active `@earendil-works/pi-coding-agent` package
+  scope.
+
 - **Gemini CLI runtime pin**: the local adapter, agent image, and supply-chain policy
   now agree on Gemini CLI 0.55.1, the newest stable release outside the repository’s
   14-day package cool-off at the time of review.
