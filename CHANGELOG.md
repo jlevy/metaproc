@@ -206,6 +206,10 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
 
 ### Changed
 
+- **Gemini CLI runtime pin**: the local adapter, agent image, and supply-chain policy
+  now agree on Gemini CLI 0.55.1, the newest stable release outside the repository’s
+  14-day package cool-off at the time of review.
+
 - **Metabrowser 0.9 and browser plugin SDK 0.5**: the optional `browser` extra now
   requires `metabrowser==0.9.0`, and the bundled Metabrowser plugin targets browser SDK
   0.5 instead of 0.1. Plugin discovery refuses a manifest declaring the wrong SDK, so
