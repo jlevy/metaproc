@@ -125,11 +125,13 @@ Those are stop conditions, not future cleanup items.
 
 ## Consolidated Research Boundary
 
-Metaproc should retain two canonical research records for this work:
+Metaproc should retain three authoritative research records for this work:
 
 - [Agent CLI Startup Memory](../../research/research-2026-09-01-agent-cli-memory-usage.md)
-  owns measured client behavior, including Gemini’s project-history transient and the
-  cross-client controls.
+  owns cross-client controls, measured demand, profile identity, and the benchmark gaps.
+- [Gemini CLI Project-State Startup Memory](../../research/research-2026-09-01-gemini-cli-project-state-memory.md)
+  owns the controlled project-history transient, source path, state semantics, and
+  isolation contract.
 - [Host Memory Accounting and Control](../../research/research-2026-09-01-host-memory-accounting-and-control.md)
   owns macOS and Linux gauges, process-tree attribution, admission, launch pacing, and
   emergency-containment semantics.
@@ -148,11 +150,11 @@ project; Metaproc carries the reusable findings rather than a second copy of tha
 The resulting documentation hierarchy is:
 
 ```text
-measured client behavior ─┐
-                          ├── RunPool Host Safety Envelope ── Metaproc rollout
-host accounting/control ──┘                 │
-                                            └── Safeproc Local Incubation
-                                                package, gates, extraction
+measured client profiles ─────┐
+Gemini state/source cause ────┼── RunPool Host Safety Envelope ── Metaproc rollout
+host accounting and control ──┘                 │
+                                                └── Safeproc Local Incubation
+                                                    package, gates, extraction
 ```
 
 ## Project and Template Baseline
@@ -854,6 +856,7 @@ Stop or narrow the package if any of these occur:
 
 - [RunPool Host Safety Envelope](plan-2026-09-01-runpool-host-safety.md)
 - [Agent CLI Startup Memory](../../research/research-2026-09-01-agent-cli-memory-usage.md)
+- [Gemini CLI Project-State Startup Memory](../../research/research-2026-09-01-gemini-cli-project-state-memory.md)
 - [Host Memory Accounting and Control](../../research/research-2026-09-01-host-memory-accounting-and-control.md)
 - [simple-modern-uv v0.5.0](https://github.com/jlevy/simple-modern-uv/tree/v0.5.0)
 - [uv workspaces](https://docs.astral.sh/uv/concepts/projects/workspaces/)

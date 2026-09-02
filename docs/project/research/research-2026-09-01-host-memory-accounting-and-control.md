@@ -67,11 +67,33 @@ a monitor of an existing process must rediscover and identity-fence a changing t
 
 ### Memorystatus Is an Alarm, Not a Byte Budget
 
-`memory_pressure` reports `kern.memorystatus_level`. XNU’s
+`memory_pressure` labels `kern.memorystatus_level` as
+`System-wide memory free percentage`. XNU’s
 [`AVAILABLE_NON_COMPRESSED_MEMORY`](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/vm/vm_page.h)
 includes active pages, so other processes’ hot working sets may still count toward the
 reported level. A rapid allocation wave can therefore leave the percentage looking
 healthy until compression and reclaim are already active.
+
+The relevant XNU definitions are:
+
+```c
+#define AVAILABLE_NON_COMPRESSED_MEMORY \
+    (vm_page_active_count + vm_page_inactive_count + \
+     vm_page_free_count + vm_page_speculative_count)
+
+#define VM_CHECK_MEMORYSTATUS \
+    memorystatus_update_available_page_count(AVAILABLE_NON_COMPRESSED_MEMORY)
+```
+
+The first term is the trap: active pages are in-use working sets, not headroom for a new
+allocation wave. On two recorded crash days the gauge still read 87 to 90 percent while
+the host failed, because new allocations initially remained active pages.
+In a same-moment cross-check on the measurement host, the level reported 49 percent of
+34.36 GB, or 16.84 GB, while VM counters showed only 0.49 GB free, 8.47 GB
+free-plus-inactive-plus-purgeable, and 11.58 GB held by the compressor.
+Total memory minus compressed and wired memory reconciled to the reported percentage:
+34.36 GB minus 11.58 GB compressed and about 5.9 GB wired is about 16.9 GB. The
+arithmetic was consistent and the budget interpretation was wrong.
 
 Use free, inactive, and purgeable pages for admission headroom.
 Use the kernel
@@ -86,10 +108,24 @@ includes internal compressed memory, I/O mappings, nonvolatile purgeable memory,
 page-table cost. RSS omits compressed pages, while summing RSS across related processes
 can count shared file-backed pages repeatedly.
 
+More precisely, the ledger adds internal anonymous memory after alternate-accounting
+adjustments, internal compressed memory after the equivalent adjustments, I/O mappings,
+nonvolatile purgeable and compressed-purgeable pages, and page tables.
+The binary API is `task_info(task, TASK_VM_INFO, ...)`, whose `task_vm_info` result
+contains `phys_footprint`; `footprint(1)` exposes the same concept at the command line.
+One live process measured 58 MB RSS and 91 MB physical footprint while the host
+compressor held 11.58 GB, demonstrating the compressed-memory difference directly.
+
 This makes RSS wrong in both directions during fan-out.
 `phys_footprint`, summed over a verified tree, is the preferred estimate for attribution
 and victim sizing. RSS remains a fallback and terminal calibration field, not the
 authoritative macOS crisis metric.
+
+Host counters come from `host_statistics64(HOST_VM_INFO64)` and `vm_statistics64`, the
+same family printed by `vm_stat(1)`. Its `free_count` already includes speculative
+pages; `compressor_page_count` describes the compressed pager; and `swapins` and
+`swapouts` are lifetime totals.
+A degradation detector must use swap deltas, not the absolute counters.
 
 ### Compression Can Invert the Apparent Trend
 
@@ -116,6 +152,11 @@ subtracts reserves and adds conservative portions of file cache and reclaimable 
 memory. The rationale is recorded in
 [the introducing commit](https://github.com/torvalds/linux/commit/34e431b0ae398fc54ea69ff85ec700722c9da773).
 
+The calculation begins with free pages minus zone reserves, then adds file-cache and
+reclaimable-kernel estimates after subtracting up to half of each component, bounded by
+low watermarks. This is why `free + cached` is not an equivalent user-space formula:
+cache can include unreclaimable tmpfs or shared memory and omit reclaimable slab.
+
 Use `MemAvailable` for host admission.
 In a delegated cgroup v2 environment, also use `memory.current`, `memory.events`, and
 `memory.pressure` for the narrower containment scope.
@@ -128,15 +169,31 @@ map it. This is the preferred process-tree cost when a cgroup total is unavailab
 RSS decomposes into anonymous, file-backed, and shared-memory residents, while swapped
 or compressed pages may remain outside the process RSS figure.
 
+For example, a process with 1,000 private pages and 1,000 pages shared with one other
+process has a PSS of 1,500 pages.
+`/proc/<pid>/smaps_rollup` also exposes `Pss_Anon`, `Pss_File`, and `Pss_Shmem`; the
+implementation lives in `fs/proc/task_mmu.c`. `VmRSS` is the sum of anonymous, file, and
+shared-memory residents, while `VmSwap` records process pages swapped out of RSS. Under
+zram or zswap, process RSS excludes swapped pages even though their compressed
+representation still consumes physical RAM elsewhere, which is analogous to the macOS
+compressor problem.
+
 ### PSI Measures Lost Time
 
-[Pressure Stall Information](https://docs.kernel.org/accounting/psi.html) reports the
+[Pressure Stall Information](https://docs.kernel.org/accounting/psi.html), exposed
+host-wide at `/proc/pressure/memory` and per cgroup at `memory.pressure`, reports the
 share of time at least one task (`some`) or all non-idle tasks (`full`) are stalled on a
 resource.
 This distinguishes a host that is full but reclaiming efficiently from one that
 is losing useful work to memory contention.
 PSI is a degradation and load-shedding signal; it is not a replacement for byte
 reservations.
+
+Burst shape matters even when total work is unchanged.
+In one recorded resume event, available pages fell from 342,417 to 276,077 in two
+seconds because every in-flight unit relaunched at once.
+A paced restart would perform the same work with a different stall and compression
+curve.
 
 PSI is not always present and not always writable.
 `/proc/pressure` is absent when the kernel was built without `CONFIG_PSI`, when `psi=0`
@@ -257,6 +314,8 @@ inventing safe headroom.
 A downstream macOS guard supplied operating evidence that is useful beyond its original
 script:
 
+- one 15-unit fan-out drove a 34 GB host to its highest recorded pressure state and a
+  `vm-compressor-space-shortage` event while individual agent trees reached 3.6-5.3 GB;
 - a strictly passive complete-tree observer ran for 4,896 one-second samples beside a
   healthy fan-out, survived a sleep and wake cycle, and took no action;
 - a synthetic tree established that a small launcher PID may not own the memory and that
@@ -269,6 +328,10 @@ script:
   victims in the wrong order;
 - observation and intervention simulation must remain different modes: a command that
   pauses producers, even if it suppresses termination, is not a passive profiler.
+
+In the source guard, `--observe-only` was the passive mode and `--dry-run` still
+simulated intervention.
+The names are not a portable API requirement, but the authority distinction is.
 
 The script’s zero-dependency, plain-argument-parser shape is worth retaining in the
 standalone safety path.
@@ -383,6 +446,29 @@ wrapper exits nonzero.
 Metaproc should reconcile those higher-level facts with the generic supervisor result
 instead of converting every nonzero exit into the same retry or prompt diagnosis.
 
+The distinction changed an actual incident diagnosis.
+Among 189 failed authoring attempts, 69 aligned with guard kills and 45 contained a
+successful final transcript result and declared output followed by a nonzero client
+exit.
+The same five work items that failed under resource constraint later completed five
+for five with better headroom and no sheds.
+Resource preemption, exit-fidelity defects, and invalid model output require different
+remedies and retry policy.
+
+## Primary Evidence
+
+| Claim | Source | Evidence status |
+| --- | --- | --- |
+| macOS available-noncompressed memory includes active pages | [XNU VM page accounting](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/vm/vm_page.h) | Source definition checked |
+| `kern.memorystatus_level` is the percentage exposed by `memory_pressure` | [XNU memorystatus implementation](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_memorystatus.c) and same-moment local comparison | Source and measurement checked |
+| Physical footprint includes compressed internal memory and page-table cost | [XNU task ledgers](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/task.c) and SDK `mach/task_info.h` | Source and local API checked |
+| VM free, compressor, and lifetime swap counters | SDK `mach/vm_statistics.h` and `vm_stat(1)` | Source and command output checked |
+| `MemAvailable` subtracts reserves and estimates reclaimable cache and slab | [Linux implementation](https://github.com/torvalds/linux/blob/master/mm/show_mem.c) and [introducing commit](https://github.com/torvalds/linux/commit/34e431b0ae398fc54ea69ff85ec700722c9da773) | Source and rationale checked |
+| PSS divides shared pages and RSS excludes swapped pages | [Linux proc documentation](https://www.kernel.org/doc/html/latest/filesystems/proc.html) | Kernel documentation checked |
+| PSI reports time lost to resource stalls | [Linux PSI documentation](https://docs.kernel.org/accounting/psi.html) | Kernel documentation checked |
+| Gemini startup demand changes with project-state access | [Gemini project-state research](research-2026-09-01-gemini-cli-project-state-memory.md) | Controlled cause established |
+| Four-client startup scale and profile requirements | [Agent CLI startup research](research-2026-09-01-agent-cli-memory-usage.md) | One-shot comparison complete; distributions open |
+
 ## Recommendations
 
 1. Implement one normalized host-sample model with platform-specific evidence and
@@ -415,6 +501,7 @@ instead of converting every nonzero exit into the same retry or prompt diagnosis
 - [Procguard v1.5.1](https://github.com/denispol/procguard/tree/v1.5.1)
 - [GNU Parallel memory and launch controls](https://www.gnu.org/software/parallel/parallel.html)
 - [Agent CLI Startup Memory](research-2026-09-01-agent-cli-memory-usage.md)
+- [Gemini CLI Project-State Startup Memory](research-2026-09-01-gemini-cli-project-state-memory.md)
 - [RunPool host-safety plan](../specs/active/plan-2026-09-01-runpool-host-safety.md)
 - [Safeproc local-incubation plan](../specs/active/plan-2026-09-01-safeproc-local-incubation.md)
 - [Standalone macOS memory guard](https://gist.github.com/jlevy/5b43e0d44166b9c7fe8157ee938cb0d5)
