@@ -28,10 +28,13 @@ in a completed specification.
 [Research records](research/) preserve measurements, source analysis, and other evidence
 used by plans without presenting proposed behavior as part of the shipped system.
 
-The host-safety record set is intentionally small:
+The host-safety record set is divided by subject and update cadence:
 
 - [Agent CLI Startup Memory](research/research-2026-09-01-agent-cli-memory-usage.md)
-  owns measured client demand and adapter-state effects.
+  owns comparative measurement, client demand, and profile identity.
+- [Gemini CLI Project-State Startup Memory](research/research-2026-09-01-gemini-cli-project-state-memory.md)
+  owns the controlled session-retention cause, source path, and state-isolation
+  contract.
 - [Host Memory Accounting and Control](research/research-2026-09-01-host-memory-accounting-and-control.md)
   owns platform gauges and the admission, pacing, and containment model.
 

@@ -197,8 +197,10 @@ mode.
 The apparent working-directory effect came from selecting a fresh state bucket, not
 from avoiding a repository scan.
 The
+[Gemini project-state memory research](../../research/research-2026-09-01-gemini-cli-project-state-memory.md)
+preserves the controlled cause, source path, and state-isolation contract; the
 [agent CLI startup-memory research](../../research/research-2026-09-01-agent-cli-memory-usage.md)
-preserves the measurements and source path; the
+preserves the comparative measurements and profile requirements; and the
 [host memory-accounting research](../../research/research-2026-09-01-host-memory-accounting-and-control.md)
 preserves the platform gauge semantics.
 
@@ -1348,6 +1350,7 @@ A durable job server, retry database, or workflow queue is outside this plan.
 - [Process framework theory: readiness versus admission](../../../../src/metaproc/docs/process-framework-theory.md#resources-readiness-versus-admission)
 - [RunPool design backlog](../../design/backlog/arch-runpool-backlog.md)
 - [Agent CLI startup-memory research](../../research/research-2026-09-01-agent-cli-memory-usage.md)
+- [Gemini CLI project-state memory research](../../research/research-2026-09-01-gemini-cli-project-state-memory.md)
 - [Host memory-accounting research](../../research/research-2026-09-01-host-memory-accounting-and-control.md)
 - [Safeproc Local Incubation](plan-2026-09-01-safeproc-local-incubation.md)
 - [Standalone macOS memory guard](https://gist.github.com/jlevy/5b43e0d44166b9c7fe8157ee938cb0d5)
