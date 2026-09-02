@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from metaproc.adapters.codex import resolve_codex_home
+from metaproc.adapters.codex_cli import resolve_codex_home
 from metaproc.commands import codex_auth
 
 _VALID_AUTH_JSON = json.dumps(

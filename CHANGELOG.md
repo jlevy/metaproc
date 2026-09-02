@@ -206,6 +206,10 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
 
 ### Changed
 
+- **Agent CLI adapter module names**: the four source modules now follow one
+  executable-based convention: `claude_cli.py`, `codex_cli.py`, `gemini_cli.py`, and
+  `pi_cli.py`. Adapter type strings and adapter class names are unchanged.
+
 - **Agent CLI runtime pins**: the exact adapter contracts now target Claude Code
   2.1.234, Codex 0.147.0, and Pi 0.84.2. Each was the newest stable release outside the
   14-day package cool-off at the time of review.

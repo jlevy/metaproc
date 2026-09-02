@@ -6,13 +6,13 @@ status: Approved
 ---
 # Architecture: Claude Code Harness
 
-**Date:** 2026-04-30 (last updated 2026-08-27) **Status:** Approved
+**Date:** 2026-04-30 (last updated 2026-09-01) **Status:** Approved
 
 ## Overview
 
 metaproc dispatches agent work by spawning the Claude Code CLI (`claude`) as a
 non-interactive subprocess for each unit of work.
-The slot adapter (`src/metaproc/adapters/claude_code.py`) is responsible for
+The slot adapter (`src/metaproc/adapters/claude_cli.py`) is responsible for
 materializing per-attempt credentials, scoping the inner process’s environment so the
 wrong account can’t be used, and assembling a command line that lets the agent actually
 do its job (write files, run shell tools, search the web) without any interactive
@@ -142,7 +142,7 @@ Purpose: reduce credential exfiltration risk via prompt injection.
 Per the docs, the GitHub Action `claude-code-action` auto-injects this when
 `allowed_non_write_users` is configured.
 **It is not auto-injected by an outer interactive Claude session.** Our harness sets it
-deliberately for Vehicle A: see `credential_scope_env` in claude_code.py — for the
+deliberately for Vehicle A: see `credential_scope_env` in claude_cli.py — for the
 OAuth-token vehicle the slot exports `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` alongside
 `CLAUDE_CODE_OAUTH_TOKEN` so the static-bearer credential cannot leak into Bash
 subprocesses or MCP children.
@@ -205,14 +205,14 @@ set it up:
    explicit operator choice; silently masking it would hide an intentional config from
    the operator. Instead, the slot coordinator refuses slot acquisition when it sees
    `ANTHROPIC_API_KEY` set in the ambient env and emits an explicit warning naming the
-   conflict (see `claude_code.py:_compose_slot_env` and the `_refuse_on_ambient_api_key`
+   conflict (see `claude_cli.py:_compose_slot_env` and the `_refuse_on_ambient_api_key`
    path). This is a separate defense-in-depth mechanism from `scrub_env`: *scrub* removes
    vars that the harness can safely silently override; *refuse* halts the dispatch on
    vars where silent override would mask operator intent.
 
 ### Command line construction
 
-`build_command` (the `_build_claude_flags` helper in claude_code.py) assembles the CLI
+`build_command` (the `_build_claude_flags` helper in claude_cli.py) assembles the CLI
 invocation. The interesting flags for non-interactive runs:
 
 - **`--permission-mode bypassPermissions`** is required to be set in the adapter config.
@@ -290,8 +290,8 @@ For incident triage, the three classes of failure rooted in this surface:
 ## Version Compatibility Matrix (Claude Code CLI 2.1.x)
 
 Compiled 2026-05-23 from upstream release notes and arch validation against the metaproc
-claude_code adapter.
-Only versions with relevant changes to non-interactive subprocess invocation are listed.
+claude_cli adapter. Only versions with relevant changes to non-interactive subprocess
+invocation are listed.
 Citations: GitHub
 [anthropics/claude-code/releases](https://github.com/anthropics/claude-code/releases).
 
@@ -381,7 +381,7 @@ recommended action.
   — confusing override warning (open)
 - [arch-authentication.md](arch-authentication.md) — Vehicle A vs Vehicle B credential
   redesign and pool architecture.
-- `src/metaproc/adapters/claude_code.py` — current implementation.
+- `src/metaproc/adapters/claude_cli.py` — current implementation.
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

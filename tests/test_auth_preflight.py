@@ -13,7 +13,7 @@ import pytest
 from typer.testing import CliRunner
 
 import metaproc.commands.auth as auth_mod
-from metaproc.adapters.claude_code import ClaudeCodeCliAdapter
+from metaproc.adapters.claude_cli import ClaudeCodeCliAdapter
 from metaproc.cli import app
 from metaproc.dispatch.auth_usage import query_label_headroom
 from metaproc.dispatch.credential_pool import (
@@ -147,7 +147,7 @@ class TestQueryLabelHeadroom:
         assert five is None
 
 
-# ── claude_code.query_quota_usage ───────────────────────────────
+# ── claude_cli.query_quota_usage ───────────────────────────────
 
 
 class TestClaudeCodeQueryQuotaUsage:

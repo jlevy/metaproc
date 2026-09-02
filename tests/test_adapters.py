@@ -26,9 +26,9 @@ from metaproc.adapters.base import (
     resolve_templates,
     validate_terminal_result_log,
 )
-from metaproc.adapters.claude_code import CLAUDE_CREDS_ENV_VAR, ClaudeCodeCliAdapter
-from metaproc.adapters.gemini import GeminiCliAdapter
-from metaproc.adapters.pi_cli import PiCliAdapter, _build_pi_flags
+from metaproc.adapters.claude_cli import CLAUDE_CREDS_ENV_VAR, ClaudeCodeCliAdapter
+from metaproc.adapters.gemini_cli import GeminiCliAdapter
+from metaproc.adapters.pi_cli import PI_CLI_INSTALL_HINT, PiCliAdapter, _build_pi_flags
 from metaproc.adapters.registry import (
     ADAPTER_REGISTRY,
     derive_variant,
@@ -910,9 +910,7 @@ class TestPiCliAdapter:
         status = self.adapter.check_auth()
         assert status.cli_found is False
         assert status.credentials_found is False
-        assert status.setup_hint == (
-            "Install: npm install -g @earendil-works/pi-coding-agent@0.84.2"
-        )
+        assert status.setup_hint == PI_CLI_INSTALL_HINT
 
     def test_check_auth_with_anthropic_key(self, monkeypatch, tmp_path):
         monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/pi")

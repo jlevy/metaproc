@@ -30,7 +30,7 @@ import typer
 from typer.testing import CliRunner
 
 import metaproc.commands.auth as auth_mod
-from metaproc.adapters.claude_code import ClaudeCodeCliAdapter
+from metaproc.adapters.claude_cli import ClaudeCodeCliAdapter
 from metaproc.cli import app
 from metaproc.dispatch.credential_pool import (
     ConcurrentModificationError,

@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from metaproc.adapters import claude_code
+from metaproc.adapters import claude_cli
 from metaproc.adapters.base import QuotaUsage
 from metaproc.dispatch.credential_pool import Vehicle
 
@@ -33,23 +33,23 @@ def test_extract_access_token_happy_path(tmp_path: Path) -> None:
             }
         )
     )
-    assert claude_code._extract_oauth_access_token(creds) == "sk-ant-oat-secret-token"
+    assert claude_cli._extract_oauth_access_token(creds) == "sk-ant-oat-secret-token"
 
 
 def test_extract_access_token_missing_file(tmp_path: Path) -> None:
-    assert claude_code._extract_oauth_access_token(tmp_path / "no-such") is None
+    assert claude_cli._extract_oauth_access_token(tmp_path / "no-such") is None
 
 
 def test_extract_access_token_malformed_json(tmp_path: Path) -> None:
     creds = tmp_path / ".credentials.json"
     creds.write_text("{this is not json")
-    assert claude_code._extract_oauth_access_token(creds) is None
+    assert claude_cli._extract_oauth_access_token(creds) is None
 
 
 def test_extract_access_token_missing_oauth_envelope(tmp_path: Path) -> None:
     creds = tmp_path / ".credentials.json"
     creds.write_text(json.dumps({"someOtherKey": "value"}))
-    assert claude_code._extract_oauth_access_token(creds) is None
+    assert claude_cli._extract_oauth_access_token(creds) is None
 
 
 def test_normalize_oauth_usage_ratio_scale() -> None:
@@ -58,7 +58,7 @@ def test_normalize_oauth_usage_ratio_scale() -> None:
         "five_hour": {"utilization": 0.67, "resets_at": "2026-05-13T10:10:00Z"},
         "seven_day": {"utilization": 0.30, "resets_at": "2026-05-20T00:00:00Z"},
     }
-    q = claude_code._normalize_oauth_usage(payload)
+    q = claude_cli._normalize_oauth_usage(payload)
     assert q is not None
     # 5h is more-binding at 67% utilization, so 33% remaining.
     assert q.remaining_ratio == pytest.approx(0.33, abs=0.001)
@@ -73,7 +73,7 @@ def test_normalize_oauth_usage_percent_scale() -> None:
         "five_hour": {"utilization": 35.0, "resets_at": "2026-05-13T10:10:00Z"},
         "seven_day": {"utilization": 6.0, "resets_at": "2026-05-20T00:00:00Z"},
     }
-    q = claude_code._normalize_oauth_usage(payload)
+    q = claude_cli._normalize_oauth_usage(payload)
     assert q is not None
     # 35% util → 65% remaining.
     assert q.remaining_ratio == pytest.approx(0.65, abs=0.001)
@@ -85,7 +85,7 @@ def test_normalize_oauth_usage_picks_more_binding_window() -> None:
         "five_hour": {"utilization": 0.20, "resets_at": "2026-05-13T10:10:00Z"},
         "seven_day": {"utilization": 0.85, "resets_at": "2026-05-20T00:00:00Z"},
     }
-    q = claude_code._normalize_oauth_usage(payload)
+    q = claude_cli._normalize_oauth_usage(payload)
     assert q is not None
     assert q.remaining_ratio == pytest.approx(0.15, abs=0.001)
 
@@ -95,20 +95,20 @@ def test_normalize_oauth_usage_clamps_overflow() -> None:
     Values 1.0 < x ≤ 100.0 are treated as percents per the scale heuristic;
     values > 100.0 still clamp to 1.0 ratio (fully exhausted)."""
     payload = {"five_hour": {"utilization": 110.0, "resets_at": "2026-05-13T10:10:00Z"}}
-    q = claude_code._normalize_oauth_usage(payload)
+    q = claude_cli._normalize_oauth_usage(payload)
     assert q is not None
     assert q.remaining_ratio == 0.0
 
 
 def test_normalize_oauth_usage_missing_windows() -> None:
-    assert claude_code._normalize_oauth_usage({}) is None
-    assert claude_code._normalize_oauth_usage({"five_hour": "not a dict"}) is None
-    assert claude_code._normalize_oauth_usage(None) is None
+    assert claude_cli._normalize_oauth_usage({}) is None
+    assert claude_cli._normalize_oauth_usage({"five_hour": "not a dict"}) is None
+    assert claude_cli._normalize_oauth_usage(None) is None
 
 
 def test_normalize_oauth_usage_resets_at_parses_iso_to_epoch() -> None:
     payload = {"five_hour": {"utilization": 0.5, "resets_at": "2026-05-13T10:10:00Z"}}
-    q = claude_code._normalize_oauth_usage(payload)
+    q = claude_cli._normalize_oauth_usage(payload)
     assert q is not None
     assert q.resets_at is not None
 
@@ -123,7 +123,7 @@ def test_query_anthropic_oauth_usage_swallows_network_errors(monkeypatch) -> Non
         raise urllib.error.URLError("connection refused")
 
     monkeypatch.setattr("urllib.request.urlopen", _boom)
-    assert claude_code._query_anthropic_oauth_usage("token") is None
+    assert claude_cli._query_anthropic_oauth_usage("token") is None
 
 
 def test_query_anthropic_oauth_usage_scope_error_is_actionable(monkeypatch) -> None:
@@ -144,7 +144,7 @@ def test_query_anthropic_oauth_usage_scope_error_is_actionable(monkeypatch) -> N
         )
 
     monkeypatch.setattr("urllib.request.urlopen", _boom)
-    q = claude_code._query_anthropic_oauth_usage("token")
+    q = claude_cli._query_anthropic_oauth_usage("token")
     assert q is not None
     assert q.remaining_ratio is None
     assert q.unit_kind == "unavailable"
@@ -165,7 +165,7 @@ def test_query_anthropic_oauth_usage_rate_limit_is_actionable(monkeypatch) -> No
         )
 
     monkeypatch.setattr("urllib.request.urlopen", _boom)
-    q = claude_code._query_anthropic_oauth_usage("token")
+    q = claude_cli._query_anthropic_oauth_usage("token")
     assert q is not None
     assert q.remaining_ratio is None
     assert q.unit_kind == "unavailable"
@@ -203,7 +203,7 @@ def test_query_anthropic_oauth_usage_happy_path(monkeypatch) -> None:
         return _FakeResp(payload_str)
 
     monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
-    q = claude_code._query_anthropic_oauth_usage("test-token")
+    q = claude_cli._query_anthropic_oauth_usage("test-token")
     assert q is not None
     assert isinstance(q, QuotaUsage)
     assert q.remaining_ratio == pytest.approx(0.50, abs=0.001)
@@ -211,7 +211,7 @@ def test_query_anthropic_oauth_usage_happy_path(monkeypatch) -> None:
 
 def test_query_live_quota_returns_none_without_credentials(tmp_path: Path) -> None:
     """If the slot has no .credentials.json, return None silently."""
-    adapter = claude_code.ClaudeCodeCliAdapter()
+    adapter = claude_cli.ClaudeCodeCliAdapter()
     assert adapter.query_live_quota(tmp_path) is None
 
 
@@ -242,7 +242,7 @@ def test_query_live_quota_e2e(monkeypatch, tmp_path: Path) -> None:
         return _FakeResp(payload_str)
 
     monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
-    adapter = claude_code.ClaudeCodeCliAdapter()
+    adapter = claude_cli.ClaudeCodeCliAdapter()
     q = adapter.query_live_quota(tmp_path)
     assert q is not None
     assert q.remaining_ratio == pytest.approx(0.90, abs=0.001)
@@ -264,9 +264,9 @@ def test_query_live_quota_vehicle_a_uses_pool_blob(monkeypatch, tmp_path: Path) 
             detail="fake",
         )
 
-    monkeypatch.setattr(claude_code, "_query_anthropic_oauth_usage", _fake_query)
+    monkeypatch.setattr(claude_cli, "_query_anthropic_oauth_usage", _fake_query)
 
-    adapter = claude_code.ClaudeCodeCliAdapter()
+    adapter = claude_cli.ClaudeCodeCliAdapter()
     q = adapter.query_live_quota(
         tmp_path,
         vehicle=Vehicle.OAUTH_TOKEN,

@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from metaproc.adapters.claude_code import ClaudeCodeCliAdapter
+from metaproc.adapters.claude_cli import ClaudeCodeCliAdapter
 from metaproc.dispatch.credential_pool import (
     ConcurrentModificationError,
     EntryState,

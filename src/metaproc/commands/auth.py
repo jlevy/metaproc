@@ -174,12 +174,12 @@ def _format_ts(ts: int | None) -> str:
 
 # ── auth probe helpers ─────────────────────────────────────────────────
 #
-# The HTTP-signal parser lives in ``adapters.claude_code`` so the
+# The HTTP-signal parser lives in ``adapters.claude_cli`` so the
 # dispatch-time classifier and the operator probe share one set of regexes.
 
 from dataclasses import dataclass as _dataclass  # noqa: E402
 
-from metaproc.adapters.claude_code import (  # noqa: E402
+from metaproc.adapters.claude_cli import (  # noqa: E402
     ClaudeApiSignals,
     parse_claude_api_signals,
 )
@@ -2054,7 +2054,7 @@ def preflight_cmd(
     :func:`check_step_preflight` so operators can ask "can I dispatch
     N items right now?" before kicking off the run. Uses the synthesized
     ``QuotaUsage`` synthesized by
-    ``claude_code.query_quota_usage`` from recent
+    ``claude_cli.query_quota_usage`` from recent
     rate_limit_event records under $RUNS_DIR).
 
     Aligns with the future-command reference in

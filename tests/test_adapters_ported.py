@@ -16,8 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from metaproc.adapters.claude_code import ClaudeCodeCliAdapter
-from metaproc.adapters.gemini import GeminiCliAdapter
+from metaproc.adapters.claude_cli import ClaudeCodeCliAdapter
+from metaproc.adapters.gemini_cli import GeminiCliAdapter
 from metaproc.adapters.pi_cli import PiCliAdapter
 from metaproc.adapters.registry import (
     ADAPTER_REGISTRY,
@@ -96,7 +96,7 @@ class TestClaudeCodeCliAdapter:
     def test_permission_mode_flag(self) -> None:
         # bypassPermissions stays as-is, but pairs with
         # --dangerously-skip-permissions and --add-dir <cwd> for Claude Code
-        # 2.1.123+ compatibility (see claude_code.py comment).
+        # 2.1.123+ compatibility (see claude_cli.py comment).
         cmd = self.adapter.build_command(
             self.prompt_file, self._cfg(permission_mode="bypassPermissions"), {}
         )

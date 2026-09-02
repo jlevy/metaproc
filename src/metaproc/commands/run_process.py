@@ -4662,7 +4662,7 @@ def run_process_command(
             "Pre-fan-out per-step quota gate posture: off|warn|refuse. "
             "Defaults to warn. refuse blocks dispatch when projected demand "
             "exceeds 80% of pool headroom (computed via "
-            "claude_code.query_quota_usage's recent rate_limit_event "
+            "claude_cli.query_quota_usage's recent rate_limit_event "
             "synthesis); off skips the gate."
         ),
     ),
