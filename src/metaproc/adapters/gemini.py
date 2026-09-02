@@ -26,7 +26,7 @@ from metaproc.settings import (
 
 log = logging.getLogger(__name__)
 
-PINNED_GEMINI_CLI_VERSION = "0.40.1"
+PINNED_GEMINI_CLI_VERSION = "0.55.1"
 GEMINI_CLI_INSTALL_HINT = f"Install: npm install -g @google/gemini-cli@{PINNED_GEMINI_CLI_VERSION}"
 
 
@@ -152,17 +152,8 @@ def _build_gemini_flags(
     """Build CLI flags for the stdin-streamed headless ``gemini`` invocation."""
     flags: list[str] = []
 
-    model = merged_config.get("model") or GEMINI_DEFAULT_MODEL
-    model_str = str(model)
-    if model_str in GEMINI_VALID_MODELS:
-        flags.extend(["-m", model_str])
-    else:
-        log.warning(
-            "gemini-cli: ignoring unknown model name %r; falling back to default %r",
-            model_str,
-            GEMINI_DEFAULT_MODEL,
-        )
-        flags.extend(["-m", GEMINI_DEFAULT_MODEL])
+    model_str = _resolved_gemini_model(merged_config)
+    flags.extend(["-m", model_str])
 
     permission_mode = merged_config.get("permission_mode")
     if permission_mode == "bypassPermissions":
@@ -194,6 +185,19 @@ def _build_gemini_flags(
         flags.extend(["-s", str(sandbox)])
 
     return flags
+
+
+def _resolved_gemini_model(merged_config: dict[str, object]) -> str:
+    """Return the exact model name the adapter will pass to Gemini CLI."""
+    model = str(merged_config.get("model") or GEMINI_DEFAULT_MODEL)
+    if model in GEMINI_VALID_MODELS:
+        return model
+    log.warning(
+        "gemini-cli: ignoring unknown model name %r; falling back to default %r",
+        model,
+        GEMINI_DEFAULT_MODEL,
+    )
+    return GEMINI_DEFAULT_MODEL
 
 
 class GeminiCliAdapter:
@@ -279,6 +283,29 @@ class GeminiCliAdapter:
 
     def parse_result_event(self, line: str) -> dict[str, object] | None:
         return parse_jsonl_event(line, "result")
+
+    def validate_result_event(
+        self,
+        event: dict[str, object],
+        merged_config: dict[str, object],
+    ) -> str | None:
+        """Reject a successful result that does not account for the requested model."""
+        if event.get("status") != "success":
+            return None
+
+        expected = _resolved_gemini_model(merged_config)
+        stats = event.get("stats")
+        models = stats.get("models") if isinstance(stats, dict) else None
+        observed = sorted(str(name) for name in models) if isinstance(models, dict) else []
+        if expected in observed:
+            return None
+
+        reported = ", ".join(observed) if observed else "none"
+        return (
+            "Gemini terminal result contract violation: "
+            f"requested model {expected!r}, but result.stats.models reported {reported}. "
+            "Refusing the result because model substitution makes its provenance invalid."
+        )
 
     def check_auth(self) -> AuthStatus:
         cli_path = shutil.which("gemini")

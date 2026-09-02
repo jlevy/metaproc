@@ -24,6 +24,7 @@ from metaproc.adapters.base import (
     QuotaUsage,
     agent_seed_env,
     resolve_templates,
+    validate_terminal_result_log,
 )
 from metaproc.adapters.claude_code import CLAUDE_CREDS_ENV_VAR, ClaudeCodeCliAdapter
 from metaproc.adapters.gemini import GeminiCliAdapter
@@ -99,6 +100,60 @@ class TestAgentSeedEnv:
             env = adapter.prepare_env(agent_seed_env(), {})
             for key, value in AGENT_ENV_OVERRIDES.items():
                 assert env[key] == value, f"{adapter_type} dropped {key}"
+
+
+class TestTerminalResultValidation:
+    def test_adapter_can_reject_the_last_terminal_event(self, tmp_path):
+        class ValidatingAdapter:
+            adapter_type = "validating"
+            short_name = "validating"
+            default_model = None
+
+            def parse_result_event(self, line):
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    return None
+                return event if event.get("type") == "result" else None
+
+            def validate_result_event(self, event, merged_config):
+                return f"rejected {event['model']} for {merged_config['model']}"
+
+        log_path = tmp_path / "attempt.jsonl"
+        log_path.write_text(
+            "warning before JSON\n"
+            '{"type":"result","model":"first"}\n'
+            '{"type":"result","model":"actual"}\n'
+        )
+
+        error = validate_terminal_result_log(
+            ValidatingAdapter(),
+            log_path,
+            {"model": "expected"},
+        )
+
+        assert error == "rejected actual for expected"
+
+    def test_adapter_without_validator_preserves_existing_behavior(self, tmp_path):
+        class ParsingOnlyAdapter:
+            adapter_type = "parsing-only"
+            short_name = "parsing-only"
+            default_model = None
+
+            def parse_result_event(self, line: str) -> dict[str, object] | None:  # noqa: ARG002
+                return {"type": "result"}
+
+        log_path = tmp_path / "attempt.jsonl"
+        log_path.write_text('{"type":"result"}\n')
+
+        assert (
+            validate_terminal_result_log(
+                ParsingOnlyAdapter(),
+                log_path,
+                {},
+            )
+            is None
+        )
 
 
 class TestAgentSeedEnvIsUsedEverywhere:
@@ -649,6 +704,43 @@ class TestGeminiCliAdapter:
     def test_parse_result_event(self):
         assert self.adapter.parse_result_event('{"type": "result"}') == {"type": "result"}
         assert self.adapter.parse_result_event("garbage") is None
+
+    def test_successful_result_must_report_the_requested_model(self):
+        event: dict[str, object] = {
+            "type": "result",
+            "status": "success",
+            "stats": {"models": {"gemini-3.5-flash": {"input_tokens": 1}}},
+        }
+
+        error = self.adapter.validate_result_event(event, {"model": "gemini-3.6-flash"})
+
+        assert error is not None
+        assert "requested model 'gemini-3.6-flash'" in error
+        assert "gemini-3.5-flash" in error
+        assert "provenance invalid" in error
+
+    def test_successful_result_accepts_multi_model_usage_when_requested_model_is_present(self):
+        event: dict[str, object] = {
+            "type": "result",
+            "status": "success",
+            "stats": {
+                "models": {
+                    "gemini-3.6-flash": {"input_tokens": 1},
+                    "gemini-utility": {"input_tokens": 2},
+                }
+            },
+        }
+
+        assert self.adapter.validate_result_event(event, {"model": "gemini-3.6-flash"}) is None
+
+    def test_unsuccessful_result_keeps_its_original_failure(self):
+        event: dict[str, object] = {
+            "type": "result",
+            "status": "error",
+            "stats": {"models": {}},
+        }
+
+        assert self.adapter.validate_result_event(event, {"model": "gemini-3.6-flash"}) is None
 
 
 # ── Pi CLI adapter ──────────────────────────────────────────────

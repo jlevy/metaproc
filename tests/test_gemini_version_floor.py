@@ -13,6 +13,7 @@ import pytest
 from metaproc.adapters import gemini
 from metaproc.adapters.gemini import (
     MIN_GEMINI_CLI_VERSION,
+    PINNED_GEMINI_CLI_VERSION,
     GeminiCliVersionMismatch,
     _below_minimum,
     _gemini_version_drift,
@@ -23,7 +24,8 @@ from metaproc.adapters.gemini import (
 def _drift_message(actual: str) -> str:
     """A drift string shaped like the one check_cli_version returns."""
     return (
-        f"Gemini CLI version mismatch: expected='0.40.1' actual={actual!r} "
+        f"Gemini CLI version mismatch: expected={PINNED_GEMINI_CLI_VERSION!r} "
+        f"actual={actual!r} "
         "(`gemini --version` -> '...'). Align the installed version."
     )
 

@@ -15,7 +15,7 @@ exclude-newer-span = "P14D"
 flowmark-rs = "2026-07-16T00:00:00Z"
 frontmatter-format = "2026-08-01T01:27:00Z"
 kpress = "2026-08-31T00:55:00Z"
-metabrowser = "2026-08-31T06:32:00Z"
+metabrowser = "2026-09-01T21:49:00Z"
 softschema = "2026-08-30T20:12:00Z"
 
 [[package]]
@@ -1090,7 +1090,7 @@ wheels = [
 
 [[package]]
 name = "metabrowser"
-version = "0.9.0"
+version = "0.9.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cachetools" },
@@ -1112,9 +1112,9 @@ dependencies = [
     { name = "uvicorn" },
     { name = "watchfiles" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/22/38/7325e64f7bba1d050257c48c51a8a13bd8b4d452396bdfab32bac2ca58dc/metabrowser-0.9.0.tar.gz", hash = "sha256:dd32fdcca45a86f564fa0cafdf6c226cf7ae3230311b5827cc9a351bf69c1ecc", size = 2606105, upload-time = "2026-08-31T06:31:57.576Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2a/0d/8655f20990bceec21d357be33ff765343f7ac91634624a8defc92663a7a1/metabrowser-0.9.1.tar.gz", hash = "sha256:00e0028979438a49729ba7294d762083cd1439d341b220cd9fde30bc1f52fcf5", size = 2617818, upload-time = "2026-09-01T21:48:08.215Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ff/9e/e8145767bae503f615c8d2ce667cf7e4fa3db763d78a89b219395335e222/metabrowser-0.9.0-py3-none-any.whl", hash = "sha256:e0d86fba0c7061819bd798c716eee18b4c946f992d67898d508edd44bd74b0ca", size = 1028909, upload-time = "2026-08-31T06:31:55.977Z" },
+    { url = "https://files.pythonhosted.org/packages/77/e9/76219fa4e8e3ad79ddbe8a179e9367ef6a56cee9e9674215fb418c68c765/metabrowser-0.9.1-py3-none-any.whl", hash = "sha256:6406b3970f8da533f49dfa7c0b561ded5446531e3b8ea02cc3704bd37b0cb6bc", size = 1028934, upload-time = "2026-09-01T21:48:06.712Z" },
 ]
 
 [[package]]
@@ -1193,7 +1193,7 @@ requires-dist = [
     { name = "google-cloud-secret-manager", marker = "extra == 'gcp-batch'", specifier = ">=2.20" },
     { name = "google-cloud-storage", marker = "extra == 'gcp-batch'", specifier = ">=2.18" },
     { name = "jsonschema", specifier = ">=4.26.0" },
-    { name = "metabrowser", marker = "extra == 'browser'", specifier = "==0.9.0" },
+    { name = "metabrowser", marker = "extra == 'browser'", specifier = "==0.9.1" },
     { name = "pathspec", specifier = ">=1.0.4" },
     { name = "prettyfmt", specifier = ">=0.4.1" },
     { name = "psutil", specifier = ">=7.2.2" },
