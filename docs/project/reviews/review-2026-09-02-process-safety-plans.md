@@ -511,6 +511,48 @@ PR facts were read through the GitHub API: head
 `10f51859c6b09ca41cddb9384c7ee0f549de984f`, CI run 33583159906 with five successful jobs
 (lint, distribution, Python 3.12, 3.13, 3.14).
 
+## Status Addendum (2026-09-02)
+
+Addressed on the pull request branch in `1333fd5`, merged with the concurrent upstream
+research commit in `3be422d`. Tracking: parent bead `mp-yajq` with one child per
+finding; follow-up beads `mp-t9u5` (launch-primitive spike, blocks `mp-3c0g`), `mp-sfc0`
+(Linux calibration soak, blocks `mp-c225`), `mp-4ksz` (Windows capability record, after
+`mp-3i22`), and `mp-v0ka` (Gemini `no_session_persistence`).
+
+- F1: fixed. Both plans open with a document-ownership statement; the system plan drops
+  its duplicated layer, Python-surface, and alternatives tables and links to their
+  owners; the package plan’s phase numbering is canonical and the system plan’s rollout
+  phases are named integration stages.
+- F2: fixed. The package plan has a Launch Primitive section covering the `posix_spawn`
+  call, the exit waiter, descriptor hygiene, and the wrapper handshake; the system
+  plan’s owned-launch section points to it; spike `mp-t9u5` blocks the broker work.
+- F3a: fixed. Invariant 24, the sentinel’s duty-cycle bullets with the guard defaults,
+  and a producer-pause test group.
+- F3b: fixed. Invariant 25 and the sentinel bullet.
+- F3c: fixed. Invariant 26 and the `critical` exit rule under the state machine.
+- F3d: fixed. The disk non-goal is reworded; the `critical` row names the swap-volume
+  suspension distance and the red-line ratio; the macOS provider records them.
+- F3e: fixed. A sentinel self-health paragraph, the macOS provider bullet, and a test.
+- F3f: fixed. Invariant 28, the shedding text, the accounting tests, and the package
+  corpus.
+- F3g: fixed. A termination-mechanics paragraph under shedding and a test group.
+- F3h: fixed. Invariant 27 and the `catastrophic` row and exit-rule text.
+- F3i: fixed. A supply-chain bullet specifies the sanitizing export, its location, and
+  its relation to the hygiene rule; Phase 1 references it.
+- F4: fixed in the documents; calibration deferred.
+  The Linux provider is rewritten as requirements, the capability table gains Linux
+  rows, the research record gains Linux findings, and tests cover each item; Linux
+  defaults wait on `mp-sfc0`.
+- F5: fixed. Windows is recorded as deferred, not declined, with a starting capability
+  record; `mp-4ksz` writes the provider design after the macOS and Linux providers.
+- F6: fixed. The research record owns the control model and links to
+  `docs/memory-accounting-reference.md` for gauge citations; the Procguard and
+  alternatives tables moved there with verified source locations; both plans carry
+  `author`, `category`, and `tracking_bead`; rollout step 8 names `arch-runpool.md`.
+- F7: fixed. CLI migration note, socket path limit, exact pressure sysctl, and the CI
+  build gate on `packages/` pull requests are in the plans; the Gemini setting is
+  tracked as `mp-v0ka`.
+
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.
 -->
