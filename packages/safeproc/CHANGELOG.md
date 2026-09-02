@@ -18,5 +18,7 @@ tag after extraction.
   by memory; fault attribution before any victim; and the two-condition abort rule.
 - Deterministic replay of a journal through the engine.
 - A Linux procfs provider and a macOS provider ported from the memory guard.
+- The owned-launch primitive: `posix_spawn` with a new session, the wrapper handshake,
+  and `pidfd` or `kqueue` exit observation under `asyncio`.
 - `ProcessMonitor` with observation as the default and an explicit guard policy, plus
   the `safeproc watch` and `safeproc replay` commands.

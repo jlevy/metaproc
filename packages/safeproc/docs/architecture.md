@@ -33,6 +33,8 @@ never on a concrete provider; the CLI selects the provider at run time.
 | `journal.py` | Versioned JSONL records, redaction, the tally and summary |
 | `replay.py` | A journal back through a fresh engine, with drift detection |
 | `monitor.py` | `ProcessMonitor` and `MonitoredProcess`, the producer pause, tree termination |
+| `launch.py` | The owned-launch primitive: `posix_spawn` into a new session, the wrapper handshake, exit observation through `pidfd` or `kqueue` |
+| `_launch_wrapper.py` | The minimal wrapper that registers, handshakes, and `exec`s the target |
 | `_platform/base.py` | The provider protocol and capability record |
 | `_platform/linux.py` | procfs and cgroup v2 evidence, no helper commands |
 | `_platform/darwin.py` | libSystem evidence ported from the memory guard, with its helper fallbacks |
@@ -49,8 +51,12 @@ failing and shedding is exhausted.
 `--dry-run` decides and journals without signalling.
 
 Owned launch, the broker, and the sentinel are later phases.
-The launch primitive they need is specified in the incubation plan and proved by bead
-`mp-t9u5`.
+The launch primitive they need is in `launch.py` and proved on Linux by
+`tests/unit/test_launch.py` (bead `mp-t9u5`): `os.posix_spawn` with a new session and no
+fork of the supervisor, a handshake pipe that distinguishes a wrapper death from a
+target exit, and exit observed through a `pidfd` reader on the event loop with twelve
+concurrent launches sharing one loop.
+The `kqueue` path is the macOS equivalent and is part of the handoff below.
 
 ## Platform capabilities
 
@@ -95,7 +101,9 @@ agent should, in order:
 4. Confirm `harden_scheduling()` reports `hardened` and that measured thread priority is
    63, as the guard measured.
 5. Run the live tests in `tests/integration/test_live_processes.py`, which exercise
-   pause, resume, and deepest-first termination on a real subtree.
+   pause, resume, and deepest-first termination on a real subtree, and
+   `tests/unit/test_launch.py`, which exercises the `kqueue` exit path and
+   `POSIX_SPAWN_SETSID` on Darwin.
 6. Replay the guard’s sanitized journal corpus once it is exported (incubation plan,
    Supply Chain section) and confirm zero destructive actions on the runs that
    completed.

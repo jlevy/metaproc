@@ -25,6 +25,10 @@ this repository.
 - A Linux provider built on procfs: `MemAvailable`, the caller’s own cgroup headroom,
   Pressure Stall Information as a three-state capability, swap-in rate, and proportional
   set size behind an accuracy gate.
+- The owned-launch primitive (`safeproc.launch`): `posix_spawn` into a new session
+  without forking the supervisor, a wrapper handshake, and exit observed through a
+  `pidfd` or `kqueue` reader on the event loop.
+  This is the proven seam the later `SafeProcess` builds on.
 - A macOS provider ported from the memory guard: `host_statistics64`, `proc_pid_rusage`,
   `vm.swapusage`, the swap-volume suspension distance, and the kernel pressure alarm,
   read through `ctypes` without forking.
