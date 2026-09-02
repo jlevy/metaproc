@@ -8,9 +8,11 @@ Where it might go is a project record and lives here.
 
 The
 [RunPool host-safety plan](../../specs/active/plan-2026-09-01-runpool-host-safety.md)
-owns startup-aware host admission, owned and attached process-tree supervision,
-cross-client containment, macOS and Linux telemetry, and the conditional extraction of a
-standalone pool. Those decisions are not duplicated here.
+owns startup-aware host admission, owned launch, existing-process monitoring,
+cross-client containment, macOS and Linux telemetry, and the decision to ship the first
+process-safety package without a standalone pool.
+Any later pool-extraction evaluation also remains in that plan.
+Those decisions are not duplicated here.
 
 ## Future Considerations
 

@@ -1,6 +1,6 @@
 ---
 title: RunPool Host Safety Envelope
-description: Design owned and attached process-safety modes and evaluate whether an optional pool should become Metaproc's RunPool core.
+description: Design owned launch and existing-process monitoring, ship them without a standalone pool, and defer any RunPool extraction decision.
 date: 2026-09-01
 status: Draft
 ---
@@ -53,39 +53,40 @@ These layers should sit behind a publishable component boundary.
 The strongest candidate is a **standalone process-safety runtime** with one shared core,
 two first-class supervision modes, a per-user broker/sentinel, and thin command-line
 interfaces. Owned mode admits and contains a process tree before the target executes.
-Attached mode observes an existing tree and may apply explicitly authorized guard
-actions without claiming retroactive ownership.
+Monitoring mode observes an existing tree and may apply explicitly authorized guard
+actions without claiming retroactive ownership or an operating-system attachment.
 The two modes share host evidence, pressure policy, identity records, journals, and
 platform backends; they differ in lifecycle authority and containment guarantees.
 
-Owned mode is not merely an attached monitor started at approximately the same time as
-the target. Its guarantee begins before the memory-heavy command executes: admission is
-granted, an isolated process group is created, and identity and cleanup ownership are
-established before control passes to the target.
-Attached mode remains useful precisely because it requires none of that integration.
+Owned mode is not merely a monitor started at approximately the same time as the target.
+Its guarantee begins before the memory-heavy command executes: admission is granted, an
+isolated process group is created, and identity and cleanup ownership are established
+before control passes to the target.
+Monitoring mode remains useful precisely because it requires none of that integration.
 It can protect or profile builds, test suites, agent CLIs, and existing orchestration
 that the runtime did not launch.
 
-The runtime is more capable than a tree-attached memory guard and narrower than Metaproc
-itself. The stable abstraction is safety for one process tree, whether owned from launch
-or attached later. An in-memory command pool is a useful layer above the owned boundary,
-but its extraction from Metaproc remains a decision to prove rather than an assumption.
+The runtime is more capable than a process-tree memory monitor and narrower than
+Metaproc itself. The stable abstraction is safety for one process tree, whether owned
+from launch or monitored later.
+A command pool is a possible later layer above the owned boundary, not part of the first
+package release.
 
 The public
 [memory guard](https://gist.github.com/jlevy/5b43e0d44166b9c7fe8157ee938cb0d5) supplies
 the first macOS backend, decision policy, journal, and failure corpus.
-Its attached-tree interface should remain a first-class product mode that works without
-a pool, broker, daemon, or Metaproc installation.
+Its process-tree monitoring interface should remain a first-class product mode that
+works without a broker, daemon, or Metaproc installation.
 Owned launch remains the stronger path because it can admit work before spawn and prove
 process-group ownership.
 
 Metaproc should build on the owned-process and host-authority layers.
-A Phase 0 coding spike decides whether Metaproc should also delegate its in-memory queue
-and adaptive controller to a standalone `SafeRunPool`, or retain that scheduling layer
-while using the standalone `SafeProcess` boundary.
-Either result is acceptable.
-The design must not stack two queues or require routine Metaproc scheduler changes to
-cross a repository and release boundary.
+The first package release should not contain `SafeRunPool`, a submission queue, or a
+`pool` CLI. Metaproc retains its in-memory queue and adaptive controller while using the
+standalone `SafeProcess` boundary.
+Only after that package and integration seam have stabilized should a separate spike
+evaluate whether extracting the pool would reduce duplication without imposing a second
+queue or lockstep releases.
 
 ## Goals
 
@@ -101,15 +102,16 @@ cross a repository and release boundary.
   safety layer.
 - Make the host-safety substrate reusable by non-Metaproc launchers without requiring
   them to adopt Metaproc’s process model.
-- Expose owned and attached supervision as separate, typed modes over one safety core,
-  with their different authority and guarantees visible in every request, event, and
-  result.
-- Preserve a small attached `watch` guard for arbitrary existing process trees without
-  requiring the pool, broker, background service, or Metaproc.
+- Expose owned launch and existing-process monitoring as separate, typed modes over one
+  safety core, with their different authority and guarantees visible in every request,
+  event, and result.
+- Preserve a small brokerless `ProcessMonitor` and `watch` guard for arbitrary existing
+  process trees without requiring the broker, background service, or Metaproc.
 - Establish an owned-process abstraction that the standalone `run` CLI and Metaproc can
   both build on.
-- Decide from a working extraction spike whether the generic in-memory pool belongs in
-  the standalone project; never add a second subprocess scheduler beneath Metaproc.
+- Ship the reusable process-safety package before evaluating pool extraction.
+  The first package has no submission queue or `pool` CLI, and Metaproc retains one
+  subprocess scheduler.
 - Keep ordinary Metaproc work on DAGs, lanes, adapters, retries, artifacts, and provider
   policy independent of standalone-runtime releases.
 - Keep every admission, wait, pressure transition, preemption, and sentinel action
@@ -120,8 +122,8 @@ cross a repository and release boundary.
 ## Non-Goals
 
 - Automatically discover or control arbitrary processes that no user explicitly launched
-  through the runtime or attached with `watch`. The host controller may identify outside
-  pressure, but it must not kill unrelated applications.
+  through the runtime or selected for monitoring with `watch`. The host controller may
+  identify outside pressure, but it must not kill unrelated applications.
 - Turn a general disk-space warning into a memory kill trigger.
   Swap headroom is relevant on macOS; ordinary low disk remains a separate operational
   problem.
@@ -134,10 +136,12 @@ cross a repository and release boundary.
 - Add Windows support without a reliable telemetry and process-containment design.
 - Publish Metaproc’s task scheduler, retry engine, execution lanes, adapters, or run
   artifacts as part of the host-safety library.
+- Include a standalone pool, submission queue, or `pool` CLI in the first package
+  release.
 - Build a durable job server, workflow scheduler, retry database, or distributed queue
-  as part of the standalone pool.
-- Require `watch` mode to start or contact a broker, create a pool, or import Metaproc.
-- Present an attached target as safely owned merely because its monitor started near the
+  as part of the process-safety package.
+- Require `watch` mode to start or contact a broker, run a daemon, or import Metaproc.
+- Present a monitored target as safely owned merely because its monitor started near the
   same time. Pre-execution admission, isolated process-group creation, identity
   registration, and cleanup ownership are required for the owned guarantee.
 - Move Metaproc scheduling code across the package boundary merely to reduce line count.
@@ -241,9 +245,9 @@ The design follows six rules.
    Only a measured critical state may take work away.
 4. **A safety failure fails closed.** A corrupt lease namespace, timeout, or unavailable
    required gauge cannot authorize an otherwise prohibited launch.
-5. **Observation is not ownership.** Owned and attached modes may reach the same host
-   diagnosis from the same evidence, but only pre-execution control can establish an
-   authoritative process group and admission guarantee.
+5. **Observation is not ownership.** Owned and monitored-process modes may reach the
+   same host diagnosis from the same evidence, but only pre-execution control can
+   establish an authoritative process group and admission guarantee.
 6. **The final guard is independent.** An in-process assertion cannot protect against
    the process containing that assertion hanging or spawning incorrectly.
 
@@ -262,8 +266,9 @@ The implementation must make these properties testable:
 6. Predictive signals never kill active work.
 7. At most one controller performs a shedding round for one host-pressure episode.
 8. An owned pressure kill targets only a recorded process identity and its isolated
-   process group. An attached intervention targets only identity-fenced enumerated
-   descendants and never assumes that an inherited process group is safe to signal.
+   process group. A monitored-process intervention targets only identity-fenced
+   enumerated descendants and never assumes that an inherited process group is safe to
+   signal.
 9. A host-pressure preemption is durable, distinguishable from an adapter failure, and
    resumable without being misclassified as a deterministic workload error.
 10. The independent sentinel can act when all RunPool event loops are unresponsive, and
@@ -272,12 +277,12 @@ The implementation must make these properties testable:
     or unredacted command arguments.
 12. An absent or protocol-incompatible standalone runtime cannot silently downgrade an
     authoritative launch to unsupervised execution.
-13. Attached `watch` mode remains usable with the broker disabled or unavailable and
-    without importing the owned-process or pool layers.
+13. Monitored `watch` mode remains usable with the broker disabled or unavailable and
+    without importing the owned-process or broker layers.
     Observation and journaling are its default authority; signalling requires explicit
     operator policy.
-14. Metaproc has one queue and one adaptive-capacity controller in either approved
-    integration shape; no migration phase becomes a permanent double-scheduling layer.
+14. At every phase, Metaproc has one queue and one adaptive-capacity controller; no
+    migration becomes a permanent double-scheduling layer.
 15. Every deadline and persisted timestamp declares its clock semantics; system sleep
     alone cannot age a live process out of its startup reservation or identity claim.
 16. Disabling one timeout or governor does not disable any other configured monitor,
@@ -289,19 +294,20 @@ The implementation must make these properties testable:
 19. Every resource observation declares whether it represents one PID, an owned tree, a
     cgroup, or the host; lower-scope evidence is never silently promoted to a wider
     scope.
-20. Every target record declares an immutable `owned` or `attached` mode.
-    No boolean, fallback, reconnect, or pattern match silently upgrades an attached
+20. Every target record declares an immutable `owned` or `monitored` mode.
+    No boolean, fallback, reconnect, or pattern match silently upgrades a monitored
     target to owned.
 21. Owned authority is established before the target command executes.
     There is no interval in which an admitted target can allocate while its
     process-group identity or cleanup owner is unknown.
-22. An attached target and every descendant selected for intervention are fenced by PID
+22. A monitored target and every descendant selected for intervention are fenced by PID
     plus create time immediately before signalling.
     An argv pattern may locate a candidate for observation, but it never authorizes a
     signal or substitutes for revalidating tree membership.
 23. Equivalent normalized host samples produce the same pressure classification in owned
-    and attached modes. Mode changes the actions that are safe and the guarantees that
-    can be stated, not the interpretation of host evidence.
+    and monitored-process modes.
+    Mode changes the actions that are safe and the guarantees that can be stated, not
+    the interpretation of host evidence.
 
 ### One Host Resource Authority
 
@@ -569,17 +575,18 @@ The assessment is therefore deliberately asymmetric:
 
 | Candidate boundary | Assessment | Reason |
 | --- | --- | --- |
-| One repository for the safety core, owned `run`, attached `watch`, broker, replay, and platform backends | Strong fit | These surfaces must agree on pressure evidence, process identity, intervention policy, and journal semantics. Splitting them invites safety-policy drift. |
+| One repository for the safety core, owned `run`, monitored `watch`, broker, replay, and platform backends | Strong fit | These surfaces must agree on pressure evidence, process identity, intervention policy, and journal semantics. Splitting them invites safety-policy drift. |
 | Both a CLI and a Python API over that core | Strong fit, if the CLI remains an adapter | Shell users need a side guard and launch wrapper; Metaproc needs typed in-process calls and events. This is one implementation with two entry points, not two products. |
-| A finite standalone `pool` command | Useful and low risk if it is a thin bounded-batch client | It broadens reuse without adding durable jobs, retries, or workflow semantics. |
+| A finite standalone `pool` command | Possible later feature, outside the first package | It may broaden reuse, but it adds queue, ordering, cancellation, drain, and result contracts before the process boundary has operating evidence. |
 | Moving Metaproc’s complete in-memory RunPool core into the repository | Plausible but unproven | It could remove duplicate lifecycle code, but the current pool is substantially coupled to lanes, provider control, paths, and artifacts. A premature split would turn ordinary Metaproc work into coordinated cross-repository releases. |
 | A durable run-pool daemon or job service | Poor fit | Persistence, retry, workflow state, and remote job management would duplicate Metaproc and enlarge the trusted failure boundary. |
 
-The recommendation is to proceed with the standalone safety core, attached-process and
-owned-process APIs, guard, and broker because those form a useful product and a coherent
-failure boundary on their own.
-The recommendation is only conditional for full `SafeRunPool` extraction.
-That decision follows the vertical slice and may legitimately be no-go.
+The recommendation is to proceed with the standalone safety core, `ProcessMonitor`,
+`MonitoredProcess`, `SafeProcess`, guard, and broker because those form a useful product
+and a coherent failure boundary on their own.
+The first package stops there.
+Full `SafeRunPool` extraction is a later, optional decision after Metaproc has operated
+against the owned-process boundary; it may legitimately be no-go.
 
 #### One Repository, Layered Surfaces
 
@@ -588,43 +595,43 @@ One standalone repository should contain concentric layers with one-way dependen
 | Layer | Responsibility | May Depend On |
 | --- | --- | --- |
 | Safety core | Host samples, pure pressure policy, process identity, tree accounting, signalling, journal records, and replay | Python standard library and platform primitives |
-| Attached-process API | Existing-target identity, tree observation, cadence loop, and explicitly authorized guard actions | Safety core only |
+| Process-monitor API | Existing-target identity, tree observation, cadence loop, and explicitly authorized guard actions | Safety core only |
 | Broker/sentinel | Cross-client claims, launch pacing, embargoes, incidents, and independent containment | Safety core |
 | Owned-process API | Admission handshake, process-group creation, identity registration, wait, cancellation, and cleanup | Safety core and broker client |
-| Optional in-memory pool | Bounded submission, ordering, concurrency, drain, and result collection | Owned-process API |
-| CLI adapters | `watch`, `run`, `pool`, `status`, and `replay` argument parsing and rendering | Corresponding library services |
-| Metaproc adapter | Profile translation, lifecycle hooks, and event projection | Owned-process API, and optionally the in-memory pool if the extraction gate passes |
+| CLI adapters | `watch`, `run`, `status`, and `replay` argument parsing and rendering | Corresponding library services |
+| Metaproc adapter | Profile translation, lifecycle hooks, and event projection | Owned-process API |
+| Later optional pool | Bounded submission, ordering, concurrency, drain, and result collection | Owned-process API, only after the later extraction gate passes |
 
 Dependency direction is an enforceable contract.
-The safety core and attached-process API must not import the broker, pool, CLI adapters,
-or Metaproc. `watch` must start immediately and remain useful when no broker socket
-exists. The base guard path should retain the current standard-library-only hot path;
-optional packaging or integration dependencies must not be imported by that path.
+The safety core and process-monitor API must not import the broker, owned-process API,
+CLI adapters, or Metaproc.
+`watch` must start immediately and remain useful when no broker socket exists.
+The base guard path should retain the current standard-library-only hot path; optional
+packaging or integration dependencies must not be imported by that path.
 
 This produces one implementation with several deliberately small interfaces:
 
 ```text
-watch CLI ── attached-process API ───┐
+watch CLI ── ProcessMonitor ─────────┐
 replay and status CLI ───────────────┤
 broker/sentinel ─────────────────────┼── safety core ── macOS/Linux backends
-run CLI ── owned-process API ────────┤
-pool CLI ── optional SafeRunPool ────┤
+run CLI ── SafeProcess ──────────────┤
 Metaproc adapter ────────────────────┘
 ```
 
 The diagram shows code reuse, not runtime requirements.
 `watch` and offline `replay` do not start the broker.
-Owned `run`, standalone `pool`, and authoritative Metaproc launches use the broker for
-host-wide coordination unless the operator selects an explicit unsafe mode.
+Owned `run` and authoritative Metaproc launches use the broker for host-wide
+coordination unless the operator selects an explicit unsafe mode.
 There is no install-time daemon; the first authoritative client elects the per-user
 broker, and it exits after an idle period.
 
-#### Owned and Attached Supervision Modes
+#### Owned Launch and Existing-Process Monitoring
 
-Owned and attached supervision are peer product modes over one policy core, not a
-primary implementation plus a compatibility utility:
+Owned launch and existing-process monitoring are peer product modes over one policy
+core, not a primary implementation plus a compatibility utility:
 
-| Contract | Owned `run` | Attached `watch` |
+| Contract | Owned `run` | Monitored `watch` |
 | --- | --- | --- |
 | Target lifecycle | The runtime prepares and launches the target | The target already exists |
 | Host admission | Claim granted before target execution | Cannot be applied retroactively |
@@ -636,7 +643,7 @@ primary implementation plus a compatibility utility:
 Both modes use the same normalized host samples, pressure state machine, metric-scope
 labels, event vocabulary, journal schema, and replay engine.
 They use distinct request and handle types so a caller cannot accidentally acquire
-owned-only operations by toggling a flag on an attached target.
+owned-only operations by toggling a flag on a monitored target.
 
 Owned mode provides the authoritative safety guarantee because it controls the launch
 before the memory-heavy command executes.
@@ -664,14 +671,14 @@ values. If the wrapper or client dies during the handshake, identity-based stale
 reclamation keeps the reservation conservative until it can prove that no target
 survived.
 
-Metaproc builds on this owned-process boundary beneath `LocalBackend` whether or not the
-pool extraction proceeds.
+Metaproc builds on this owned-process boundary beneath `LocalBackend`; a later pool
+decision does not change that seam.
 Its log redirection and credential scrubbing remain Metaproc responsibilities; the
 safety runtime receives only the neutral resource request, redacted labels, client
 hooks, and process identity required for admission and containment.
 
-Attached mode remains an independent, first-class use case for a program that did not
-launch through the runtime:
+Existing-process monitoring remains an independent, first-class use case for a program
+that did not launch through the runtime:
 
 ```text
 host-safety watch --pid <pid>
@@ -680,56 +687,60 @@ host-safety watch --pid <pid>
 By default, this command observes and journals without sending signals.
 An explicit guard policy may authorize producer pauses, proportional shedding, or
 last-resort tree termination.
-It runs its own small monitoring loop and journal with no broker or pool requirement.
+It runs its own small monitoring loop and journal with no broker requirement.
 It may optionally publish observations to a compatible broker, but broker absence must
 not change its local guard behavior.
 This preserves the memory guard’s usefulness for builds, test suites, compilers, agent
 CLIs, data jobs, and other arbitrary process trees.
 
-Attached mode carries weaker guarantees.
+Monitoring mode carries weaker guarantees.
 It cannot retroactively prevent a startup burst or prove that an inherited process group
 contains only the target tree.
 Pattern-based discovery is a convenience for observation, not sufficient ownership
 evidence for an authoritative kill.
-After discovery, attached mode must fence the target by PID and create time; it must
+After discovery, `ProcessMonitor` must fence the target by PID and create time; it must
 stop if that identity no longer matches rather than following a recycled PID. The CLI
-and journal must distinguish `owned` launches from `attached` trees, and destructive
-attached-tree behavior should require explicit operator authorization.
+and journal must distinguish `owned` launches from `monitored` trees, and destructive
+monitored-tree behavior should require explicit operator authorization.
 
-#### Python Process APIs and Pool Extraction Gate
+The word *monitor* is intentional.
+The runtime does not use `ptrace`, become the target’s parent, prevent the target from
+exiting, or otherwise establish an operating-system attachment.
 
-The Python surface should expose two related but non-substitutable process contracts:
+#### Python Process APIs and Later Pool Evaluation
+
+The Python surface should expose related but non-substitutable process contracts:
 
 | Boundary name | Contract |
 | --- | --- |
 | `SafeProcess` | Accepts a prepared launch and resource request, establishes admission and containment before target execution, and returns typed lifecycle events and a terminal result |
-| `AttachedProcess` | Accepts an existing identity, observes its changing tree, and exposes only the intervention authority explicitly granted by the caller |
+| `ProcessTarget` | Identifies an existing root by PID and create time without implying ownership or attachment |
+| `ProcessMonitor` | Accepts a `ProcessTarget`, runs the observation and journal loop, and returns a `MonitoredProcess` handle |
+| `MonitoredProcess` | Represents the fenced existing target and exposes observation plus only those interventions explicitly authorized by the caller |
 
-These names remain subject to the Phase 0 naming decision, but the type separation is a
-design requirement.
-The two contracts share value types and policy services rather than a
-broad base class whose methods imply equal authority.
+The services share value types and policy services rather than a broad base class whose
+methods imply equal authority.
 Requests should be keyword-only and make destructive policy, deadline clock, and metric
 scope explicit; the request type and persisted target record declare the supervision
 mode. Results and events should be additive and nonexhaustive so new terminal reasons do
 not break older clients.
-The API must support many simultaneous owned and attached processes without installing
+The API must support many simultaneous owned and monitored processes without installing
 per-run global signal handlers; signal forwarding belongs to an explicit caller policy
 or one shared application-level router.
 
 Metaproc must use `SafeProcess` for launches it controls rather than launch normally and
-attach afterward. `AttachedProcess` serves standalone integrations, diagnostics, and
-legacy workloads that cannot yet adopt owned launch.
-An attached handle cannot be promoted to owned after the target exists.
+start a monitor afterward.
+`ProcessMonitor` serves standalone integrations, diagnostics, and legacy workloads that
+cannot yet adopt owned launch.
+A `MonitoredProcess` cannot be promoted to owned after the target exists.
 
-`SafeRunPool` should begin as a provisional layer over `SafeProcess`. The standalone
-`pool` command may use it to run a finite manifest or bounded command stream and then
-exit. It does not persist a job database, traverse dependencies, retry after restart,
-discover adapters, validate outputs, or decide whether a preempted command should run
-again.
+The first package does not define `SafeRunPool`, submission, queue, or pool-result
+types, and it does not ship a `pool` CLI. Metaproc retains its RunPool and calls
+`SafeProcess` at the launch boundary.
 
-Before Metaproc delegates its queue and adaptive controller to `SafeRunPool`, a vertical
-slice must prove all of these conditions:
+After the package and the Metaproc integration have stabilized, a separate vertical
+slice may evaluate whether Metaproc should delegate its queue and adaptive controller.
+Before any public pool API is designed, that slice must prove all of these conditions:
 
 1. The standalone pool imports no Metaproc model, path, event, status, adapter,
    credential, or artifact module.
@@ -748,16 +759,16 @@ slice must prove all of these conditions:
 7. Installed-package and cross-version tests demonstrate a tolerable release workflow,
    including one older compatible broker and an explicit incompatible-version failure.
 
-If the gate passes, `metaproc.runpool` becomes a compatibility facade over the
-standalone `SafeRunPool`, and the in-tree queue and adaptive controller are removed.
+If the gate passes, a later plan may introduce `SafeRunPool`, an optional finite-batch
+`pool` CLI, and a migration in which `metaproc.runpool` becomes a compatibility facade
+over the standalone pool.
 If it fails, Metaproc retains one scheduling queue and builds directly on the standalone
-owned-process API. The standalone `pool` command remains a modest finite-batch
-convenience and does not copy Metaproc’s lane or provider controller.
-The rejected outcome is a permanent Metaproc queue feeding a second full-featured queue.
+owned-process API. The rejected outcome is a permanent Metaproc queue feeding a second
+full-featured queue.
 
 This gate makes the abstraction falsifiable.
-The standalone project is justified by process stability and the daemonless guard even
-if extracting the entire pool proves too costly.
+The standalone project is justified by process stability and the daemonless monitor;
+pool extraction is not part of its initial success criteria.
 
 Development velocity is part of the contract, not an informal preference.
 Metaproc pins a compatible released runtime and talks through versioned neutral models;
@@ -773,35 +784,36 @@ The runtime owns only generic local process-management and safety facts:
 
 - phase-aware resource requests, admission waiters, reservations, and launch spacing
 - macOS and Linux telemetry, normalized pressure state, and policy evaluation
-- attached-target identity, changing-tree observation, and explicitly authorized
+- monitored-target identity, changing-tree observation, and explicitly authorized
   intervention
 - process identity, session and process-group creation, descendant cleanup, and
   identity-fenced signalling
 - generic host claims, incidents, journals, status, and protocol compatibility
-- optional in-memory command submission, cancellation, drain, and result collection if
-  the pool extraction gate passes
 
 Metaproc continues to own:
 
 - DAG readiness, execution lanes, adapter and credential selection, and prompt creation
 - task priority and restartability as authored policy; it passes the resolved values to
   the safety request
-- provider- and credential-pressure policy; it supplies external pause or capacity
-  inputs if the standalone pool is selected
+- provider- and credential-pressure policy
 - retries, resume semantics, output validation, failure classification, and run
   artifacts
 - Metaproc-specific events and operator projections
 
 The standalone runtime must not read a Metaproc run directory or import Metaproc models.
-Metaproc maps its execution profile and `ProcessConfig` into neutral process or pool
-requests, then projects generic events into its existing event and status surfaces.
+Metaproc maps its execution profile and `ProcessConfig` into neutral process requests,
+then projects generic events into its existing event and status surfaces.
 This avoids making either project’s persisted artifacts an accidental public API of the
 other.
+
+Submission, ordering, adaptive capacity, cancellation, drain, and pool-result collection
+remain Metaproc responsibilities in the first package integration.
+They move only if the later extraction gate passes.
 
 #### Distribution and Compatibility
 
 One repository and distribution should ship the shared core and thin CLI and Python
-surfaces so attached `watch`, owned `run`, the broker, and replay cannot drift onto
+surfaces so monitored `watch`, owned `run`, the broker, and replay cannot drift onto
 different safety policies.
 This does not make every component mandatory at runtime.
 The base `watch` installation and launch path must stay small, have no
@@ -815,11 +827,11 @@ Client and broker version skew must negotiate a compatible protocol or fail clos
 Only one compatible broker may own a per-user namespace; two installed package versions
 must not run competing pressure policies on the same processes.
 
-Publication should begin as a `0.x` standalone CLI and library with both macOS and Linux
-CI, replay fixtures, packaged-artifact smoke tests, and destructive actions disabled by
-default outside owned-launch mode.
+Publication should begin as a `0.x` standalone CLI and library without a pool API or
+`pool` command, with both macOS and Linux CI, replay fixtures, packaged-artifact smoke
+tests, and destructive actions disabled by default outside owned-launch mode.
 The project may incubate as a neutral package beside Metaproc while the dependency and
-extraction gates are tested, but should move to an independent repository only after the
+packaging gates are tested, but should move to an independent repository only after the
 core contracts are stable enough to avoid lockstep edits.
 Metaproc then consumes a versioned release under its supply-chain policy, not a vendored
 copy, submodule, or permanent relative-path dependency.
@@ -909,9 +921,9 @@ admission.
 | Fix one downstream coordinator | Removes one incorrect fan-out | Other consumers and multiple independent runs can recreate the same host-wide burst. |
 | Set a low static concurrency | Easy emergency brake | It wastes steady-state capacity, cannot represent startup peaks, and composes poorly across runs. |
 | Add a fixed sleep before launch | Directly smooths a known transient | A per-process or per-coordinator delay is not host-wide and cannot react to outside load or mixed profiles. |
-| Publish the current memory guard unchanged | Proven last-resort evidence, policy, and intervention | Its attached-tree contract acts after launch, is macOS-only, and cannot provide authoritative cross-client admission. It should become one mode of the broader runtime. |
+| Publish the current memory guard unchanged | Proven last-resort evidence, policy, and intervention | Its monitored-tree contract acts after launch, is macOS-only, and cannot provide authoritative cross-client admission. It should become one mode of the broader runtime. |
 | Adopt Procguard directly | Small native macOS supervisor with strong owned-launch primitives and a valuable failure corpus | It governs one root process after launch, has no host-wide reservation or cross-client broker, uses process-global signal state, and has no Linux backend. Its code is a reference for the owned-process layer, not the required abstraction. |
-| Publish separate guard and pool projects | Keeps each repository superficially small | Telemetry, pressure policy, process identity, signalling, and journal replay would either be duplicated or require a third shared package. One layered distribution keeps the guard small without splitting its safety semantics. |
+| Publish a guard package and a separate pool before the process seam stabilizes | Keeps each repository superficially small | It creates two new boundaries before either has operating evidence and risks duplicating telemetry, identity, signalling, and journal policy. Ship the process-safety package first. |
 | Delegate to GNU Parallel | Mature command queue with launch delay, memory admission, suspension, and retry | Its generic free-memory rules do not provide the required macOS pressure accounting, startup-phase claims, cross-client identity registry, or independent sentinel. |
 | Publish Metaproc’s current RunPool unchanged | Reuses a capable scheduler and local process manager | The module mixes a potentially reusable pool core with Metaproc paths, lanes, events, status, provider policy, and artifact compatibility. Prove a neutral slice before deciding whether to extract it. |
 | Extract the full pool before proving the process seam | Creates a clean-looking package boundary early | It risks lockstep releases and callback abstractions that mirror Metaproc internals. Extract the core and owned-process boundary first, then apply the pool gate. |
@@ -926,32 +938,33 @@ The proposed layers reuse the working parts of these approaches at their correct
 
 ## API and Artifact Changes
 
-The names below describe boundaries; package and public type naming remain a Phase 0
-decision.
+The process types below are design decisions.
+The package and executable names remain a Phase 0 decision.
 
 - Define a versioned, project-neutral broker protocol for resource requests, launch
   identity registration, heartbeats, release, host samples, embargoes, and incidents.
   Protocol compatibility is independent of Metaproc and package versions.
-- Define separate narrow owned-process and attached-process interfaces in the standalone
-  package, provisionally named `SafeProcess` and `AttachedProcess`. They share process
-  identity, host sample, pressure decision, lifecycle event, and journal models, but use
-  distinct requests, results, and available operations.
+- Define separate narrow owned-process and process-monitor interfaces in the standalone
+  package. `SafeProcess` owns launch.
+  `ProcessMonitor` accepts a `ProcessTarget` and produces a `MonitoredProcess` handle.
+  They share process identity, host sample, pressure decision, lifecycle event, and
+  journal models, but use distinct requests, results, and available operations.
   The owned request declares launch, clock, resource scopes, and cleanup policy; its
   result distinguishes workload exit, timeout, resource pressure, external signal,
   cancellation, and supervisor failure.
-  The attached request declares identity and observation or intervention authority; it
-  never implies admission or process-group ownership.
-- Define `SafeRunPool`, `PoolSubmission`, and generic capacity and pause inputs as a
-  provisional surface until the extraction gate passes.
+  The monitor request declares identity and observation or intervention authority; it
+  never implies admission, operating-system attachment, or process-group ownership.
+- Do not define `SafeRunPool`, `PoolSubmission`, or a `pool` CLI in the first package.
+  Any later pool surface requires the deferred extraction gate and a separate API
+  review.
 - Add a Metaproc integration adapter at the owned-process boundary.
-  If the pool gate passes, make `metaproc.runpool` a compatibility facade over
-  `SafeRunPool`; otherwise preserve its scheduler while removing its duplicated launch,
-  admission, telemetry, and process-cleanup code.
+  Preserve its scheduler while removing duplicated launch, admission, telemetry, and
+  process-cleanup code.
 - Give the standalone runtime its own generic JSONL journal and status schema.
   Metaproc consumes and projects those records; the dependency never writes
   `runpool-status.yaml`, Metaproc trace events, or other run artifacts directly.
   Records are additive, versioned, and explicit about clock domain, metric scope,
-  supervision mode, identity confidence, and action authority.
+  `owned` or `monitored` mode, identity confidence, and action authority.
 - Add an optional typed `resources.memory` shape and platform overrides to execution
   profiles, with a schema migration that accepts released `ExecutionProfile/0.1` files.
 - Version the host admission lease from count slot v1 to resource claim v2. Do not
@@ -969,7 +982,7 @@ decision.
   values in broker state or journals.
 - Preserve existing CLI flags.
   New unsafe bypass or sentinel controls must be explicit and discoverable through
-  command help. Attached `watch` sends no signals unless the operator selects an
+  command help. Monitored `watch` sends no signals unless the operator selects an
   intervention policy explicitly.
 
 ## Implementation Plan
@@ -992,9 +1005,9 @@ decision.
   coverage.
 - [ ] Add a Linux provider using `MemAvailable`, PSI, PSS, and optional cgroup v2
   capabilities; keep one shared policy state machine above both providers.
-- [ ] Build the attached-process API, daemonless `watch`, and offline `replay` first,
-  with import-boundary tests proving that they do not load the broker, pool, optional
-  integrations, or Metaproc.
+- [ ] Build `ProcessMonitor`, `MonitoredProcess`, daemonless `watch`, and offline
+  `replay` first, with import-boundary tests proving that they do not load the broker,
+  owned-process API, optional integrations, or Metaproc.
   Make observation the `watch` default and require an explicit policy for pause,
   shedding, or termination.
 - [ ] Build the broker/sentinel and owned-process API, then expose thin `run` and
@@ -1005,22 +1018,14 @@ decision.
 - [ ] Prove that the owned launch path uses a nonforking parent primitive even when
   resource controls are enabled, supports concurrent instances, and either cleans up or
   transfers ownership on every injected internal error.
-- [ ] Build a provisional finite-batch `SafeRunPool` and `pool` command over the
-  owned-process API without durable jobs, retries, lanes, or provider policy.
 - [ ] Choose the standalone project’s license and document provenance for guard-derived
   code, tests, and replay fixtures before publishing them outside their current homes.
 - [ ] Implement one vertical Metaproc integration slice at the owned-process boundary
   and run its admission and telemetry decisions in shadow against the current pool.
-- [ ] Prototype neutral extraction of submission, cancellation, adaptive capacity,
-  drain, and terminal cleanup; exercise the seven pool-extraction gates with
-  representative Metaproc-only and platform-only changes.
-- [ ] Record the pool go/no-go decision before broad migration.
-  On go, preserve direct `metaproc.runpool` consumers through compatibility re-exports;
-  on no-go, keep one Metaproc scheduler and delete only the safety and lifecycle logic
-  now owned by `SafeProcess`.
 - [ ] Publish an experimental `0.x` distribution only after macOS and Linux package
   smoke, brokerless `watch`, journal replay, secret-redaction, and client-broker
   version-skew tests pass.
+  The published surface must contain no pool API or `pool` CLI.
 
 ### Phase 1: Startup-Aware Admission
 
@@ -1030,11 +1035,12 @@ decision.
   inspectable waiters, stale identity reclamation, startup reservations, global launch
   spacing, and coherent count caps.
 - [ ] Route scalar agents, fan-out agents, mapped scopes, `run-parallel`, retries, and
-  every other local adapter spawn through the owned-process API, directly or through
-  `SafeRunPool` if the extraction gate passed.
+  every other local adapter spawn through the owned-process API while retaining
+  Metaproc’s existing RunPool as the only queue and adaptive-capacity controller.
 - [ ] Remove the superseded in-tree lifecycle, telemetry, and host-admission
   implementations once behavior and artifact projections reach parity.
-  Remove the queue and adaptive controller only on a pool-extraction go decision.
+  Do not remove or wrap the queue and adaptive controller during the initial package
+  integration.
 - [ ] Change local agent admission to block or fail closed on timeout and state I/O
   failure. Retain only an explicit unsafe development override.
 - [ ] Define a redacted, bounded adapter-state fingerprint for calibration without
@@ -1084,11 +1090,26 @@ decision.
 - [ ] Remove downstream launch-stagger workarounds only after their workloads prove that
   the host-scoped controller produces equivalent or better pacing and throughput.
 
-The standalone finite-batch pool is part of these phases as a reusable convenience.
-Its adoption as Metaproc’s pool core is conditional on the Phase 0 gate.
-A durable job server, retry database, or workflow queue is not part of this work; any
-such product should consume the owned-process API or completed safe pool without
-expanding the subprocess-safety contract.
+### Phase 4: Evaluate Pool Extraction After Stabilization
+
+- [ ] Confirm that Metaproc has consumed a versioned process-safety package through its
+  retained RunPool, representative scheduler-only changes required no package release,
+  and representative platform-safety changes required no scheduler redesign before
+  beginning a pool spike.
+- [ ] Prototype neutral extraction of submission, cancellation, adaptive capacity,
+  drain, and terminal cleanup without publishing those types.
+- [ ] Exercise the seven pool-extraction gates with representative Metaproc-only and
+  platform-only changes.
+- [ ] Record a pool go/no-go decision.
+  On go, write a separate API and migration plan that preserves direct
+  `metaproc.runpool` consumers through compatibility re-exports.
+  On no-go, keep one Metaproc scheduler over `SafeProcess` permanently.
+- [ ] If a public finite-batch pool is still useful independently of Metaproc, specify
+  and review it as a separate feature rather than treating it as part of process safety.
+
+Phases 0 through 3 deliberately ship no standalone pool.
+Phase 4 is optional follow-up work and does not block the process-safety package.
+A durable job server, retry database, or workflow queue is outside this plan.
 
 ## Testing Strategy
 
@@ -1107,17 +1128,14 @@ expanding the subprocess-safety contract.
   replacement, two installed package versions racing for one namespace, and fail-closed
   behavior during upgrades.
 - Import-boundary tests prove that core, `watch`, and replay do not import Metaproc, the
-  pool, the broker client, or optional integration dependencies.
+  owned-process API, the broker client, or optional integration dependencies.
 - Brokerless guard tests start `watch --pid` with no broker namespace and prove that it
   observes and journals without signalling by default, intervenes only under an explicit
   policy, resumes every process it paused, and exits cleanly.
-- Attached-process tests cover PID reuse, target exit during attachment, ambiguous
+- Process-monitor tests cover PID reuse, target exit during monitoring, ambiguous
   pattern discovery, descendants born during enumeration, reparenting, permission
   failure, and explicit deepest-first subtree termination without signalling an
   inherited process group.
-- Pool tests cover fair ordering, priority aging, external capacity changes,
-  cancellation while queued and launching, bounded shutdown, and the rule that no
-  submission can launch after close.
 - Owned-launch tests prove that the wrapper obtains admission before target execution,
   preserves working directory and file descriptors, creates an isolated process group,
   registers exact identity, does not fork the supervising parent, and leaves no
@@ -1137,15 +1155,16 @@ expanding the subprocess-safety contract.
   macOS and Linux `ru_maxrss` unit difference.
 - Redaction tests prove that environment credentials, prompt text, and unredacted
   command arguments never enter broker state or the portable journal.
-- CLI and Python contract tests drive the same owned-process, attached-process, and
+- CLI and Python contract tests drive the same owned-process, process-monitor, and
   policy services and produce equivalent lifecycle and journal records for equivalent
   requests.
 - Passive-profiling tests prove that observation never pauses or signals a producer and
   remains distinct from a dry-run intervention mode that may simulate producer control.
-- Cross-mode policy tests feed the same host evidence through owned and attached
-  supervision. They require identical pressure classification and journal vocabulary,
-  then verify that only owned mode reports pre-execution admission and authoritative
-  process-group containment.
+- Cross-mode policy tests feed the same host evidence through owned launch and
+  existing-process monitoring.
+  They require identical pressure classification and journal vocabulary, then verify
+  that only owned mode reports pre-execution admission and authoritative process-group
+  containment.
 - A scaled spike worker allocates quickly, holds, settles, and exits so startup
   reservations and global spacing can be tested without multi-gigabyte CI allocations.
 - Adapter-profile fixtures distinguish clean state, accumulated project history, and
@@ -1166,6 +1185,10 @@ expanding the subprocess-safety contract.
   Model checking is optional and reports only the production functions and bounded state
   it actually exercises; it is not evidence that the FFI, signal, or process-monitoring
   system is formally verified.
+- Phase 4 adds pool tests for fair ordering, priority aging, external capacity changes,
+  cancellation while queued and launching, bounded shutdown, and the rule that no
+  submission can launch after close.
+  These tests are not part of the initial package contract.
 
 ### Replay and Live Tests
 
@@ -1200,14 +1223,16 @@ expanding the subprocess-safety contract.
 - A blocked or crashed RunPool does not make host admission fail open.
 - The broker and sentinel continue sampling and enforcing an embargo while a Metaproc
   event loop is blocked, and incompatible or missing clients fail closed.
-- `watch --pid` remains independently usable with no broker, pool, daemon, or Metaproc
-  import. It observes without signalling by default, exposes explicit attached guard
+- `watch --pid` remains independently usable with no broker, daemon, or Metaproc import.
+  It observes without signalling by default, exposes explicit monitored-process guard
   policies when requested, and the CLI and Python surfaces use the same policy and
   journal implementation.
-- The pool extraction gate has a recorded go/no-go result backed by its vertical slice.
-  After migration, Metaproc has one local subprocess queue and adaptive controller:
-  either its compatibility module delegates to `SafeRunPool`, or its retained scheduler
+- The first published package contains no pool API, submission queue, pool-result type,
+  or `pool` CLI. Metaproc retains one local subprocess queue and adaptive controller and
   launches through `SafeProcess` without feeding another queue.
+- Phase 4 cannot alter the first-package acceptance decision.
+  If a later pool extraction proceeds, its vertical slice must record a go/no-go result
+  before any public pool type or compatibility facade is published.
 - Metaproc’s ordinary unit-test path uses deterministic fakes and never requires a live
   broker, destructive pressure action, or separate repository checkout.
 - A change confined to Metaproc lanes, provider backoff, retries, or artifacts can ship
@@ -1217,12 +1242,12 @@ expanding the subprocess-safety contract.
   authority before the target command executes; starting a monitor after an ordinary
   spawn does not satisfy this criterion.
 - Owned mode never signals an unregistered process identity.
-  Attached mode is visibly weaker, revalidates PID plus create time before destructive
+  Monitoring mode is visibly weaker, revalidates PID plus create time before destructive
   actions, never signals an inherited process group, and cannot perform an
   argv-pattern-authorized kill.
 - The same normalized host evidence produces the same pressure classification and
-  journal vocabulary in owned and attached modes; their differences are confined to
-  lifecycle authority, safe actions, and stated guarantees.
+  journal vocabulary in owned and monitored-process modes; their differences are
+  confined to lifecycle authority, safe actions, and stated guarantees.
 - The supervising parent does not call `fork` on the authoritative launch or sampling
   path, including when per-process limits are enabled.
 - Many concurrent owned processes can share one Python process without global
@@ -1247,38 +1272,37 @@ expanding the subprocess-safety contract.
 ## Rollout Plan
 
 1. Define the neutral records, extract the guard policy and Darwin provider, add the
-   Linux provider, and package the attached-process API, brokerless `watch`, and offline
+   Linux provider, and package `ProcessMonitor`, brokerless `watch`, and offline
    `replay`. This first vertical slice must be useful without Metaproc; observation is
-   the default and attached destructive behavior remains explicitly gated.
-2. Add the broker/sentinel, owned-process API, `run`, `status`, and a provisional
-   finite-batch pool, then publish the standalone runtime as an experimental `0.x`
-   package after the package and version-skew gates pass.
-3. Add the Metaproc client at the owned-process boundary in shadow mode and complete the
-   `SafeRunPool` extraction spike.
+   the default and destructive monitored-process behavior remains explicitly gated.
+2. Add the broker/sentinel, `SafeProcess`, `run`, and `status`, then publish the
+   standalone runtime as an experimental `0.x` package with no pool surface after the
+   package and version-skew gates pass.
+3. Add the Metaproc client at the owned-process boundary in shadow mode while retaining
+   Metaproc’s existing RunPool.
    Existing count admission remains enforceable while the external runtime records host
    claim v2 decisions and Metaproc compares both event streams.
-4. Record the pool go/no-go decision.
-   On go, migrate the generic queue and adaptive controller and retain compatibility
-   re-exports. On no-go, retain the Metaproc scheduler and remove only the lifecycle and
-   safety code now supplied by `SafeProcess`.
-5. Enable startup-aware admission for built-in Gemini profiles, then for all tested
+4. Enable startup-aware admission for built-in Gemini profiles, then for all tested
    local profiles. Unknown profiles use cold-start serialization and a prominent status
    reason.
-6. Make the standalone broker’s claim v2 authority the default, remove scalar fail-open
+5. Make the standalone broker’s claim v2 authority the default, remove scalar fail-open
    behavior, and adopt the package as a required local-runtime dependency only after
    protocol, release, and supply-chain gates pass.
    Retain the count-only namespace only for released-run compatibility and inspection.
-7. Enable the host pressure embargo after replay validation.
+6. Enable the host pressure embargo after replay validation.
    Enable preemption separately after live macOS and Linux smoke.
-8. Start the sentinel in shadow mode by default, promote cooperative actions after soak,
+7. Start the sentinel in shadow mode by default, promote cooperative actions after soak,
    and promote catastrophic containment only with the zero-destructive-false-positive
    gate satisfied.
-9. Update the shipped RunPool architecture, operator reference, process-framework
+8. Update the shipped RunPool architecture, operator reference, process-framework
    theory, artifact catalog, execution-profile docs, and downstream migration guidance
    in the same release as each behavior change.
-10. Consider a separate durable job-service facade only after an independent consumer
-    needs persistence, retry, or workflow semantics that the safe subprocess pool does
-    not provide.
+9. Gather maintenance and operating evidence from the standalone package and the
+   retained-RunPool integration before beginning the optional Phase 4 pool extraction
+   spike.
+10. If Phase 4 passes, plan the pool API and migration separately.
+    Consider a durable job-service facade only after an independent consumer needs
+    persistence, retry, or workflow semantics beyond a safe subprocess pool.
 
 ## Open Questions
 
@@ -1298,10 +1322,10 @@ expanding the subprocess-safety contract.
   long must Metaproc support an older broker during rolling upgrades?
 - Should the base distribution have no third-party runtime dependencies, or is it enough
   to guarantee that `watch` and the sentinel hot path import only the standard library?
-- Should `SafeRunPool` remain a supported public API if the extraction gate concludes
-  that Metaproc should retain its own scheduler?
-- What project and executable names describe both the standalone guard and the optional
-  pool without promising workflow semantics?
+- If the later extraction gate passes, should `SafeRunPool` be public or remain an
+  internal compatibility layer for Metaproc?
+- What project and executable names describe owned launch and existing-process
+  monitoring without implying a workflow scheduler?
 - Which current RunPool configuration and event fields are generic enough to move, and
   which remain Metaproc projections or compatibility shims?
 - Where cgroup delegation exists, should one cgroup contain each run, each execution

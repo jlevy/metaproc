@@ -12,9 +12,10 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
 ## Active Development
 
 - **Process-tree and host safety** (`mp-qigc`): build one cross-platform safety core
-  with owned pre-execution supervision and brokerless attachment to existing process
-  trees; add host-wide startup admission and containment, then use a vertical slice to
-  decide whether the optional standalone pool should replace Metaproc’s RunPool core
+  with owned pre-execution supervision and brokerless monitoring of existing process
+  trees; add host-wide startup admission and containment without a standalone pool,
+  integrate Metaproc’s retained RunPool through the safe-process boundary, and defer any
+  pool-extraction spike until that seam has operating evidence
   ([plan](docs/project/specs/active/plan-2026-09-01-runpool-host-safety.md)).
 - **v0.4.0 release** (`mp-1n2a`): close the remaining loose ends between `main` and a
   tag — two correctness defects in silent paths, release records that disagree with the

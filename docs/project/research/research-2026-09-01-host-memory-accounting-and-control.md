@@ -42,7 +42,7 @@ owns implementation.
 Every observation needs an explicit scope: `root`, `tree`, `cgroup`, or `host`. Evidence
 at one scope must not be promoted silently to another.
 An owned-process launch can establish authoritative process-group or cgroup membership;
-an attached monitor must rediscover and identity-fence a changing tree.
+a monitor of an existing process must rediscover and identity-fence a changing tree.
 
 | Platform and purpose | Preferred evidence | Misleading substitute |
 | --- | --- | --- |
@@ -147,17 +147,17 @@ admission. They must not authorize destructive action.
 Shedding requires sustained measured danger, attribution confidence, and one elected
 responder so independent pools do not kill simultaneously.
 
-## Owned and Attached Implications
+## Owned Launch and Existing-Process Monitoring
 
 Owned launch can establish admission, isolated group identity, and cleanup authority
 before the target executes.
 It can signal the owned group and make a strong containment claim.
 
-Attached monitoring cannot apply admission retroactively and cannot trust an inherited
-process group. It remains useful for profiling and exceptional protection, but every
-target selected for intervention must be revalidated by PID and creation time as part of
-the currently observed tree.
-Observation and journaling should be its default authority.
+Existing-process monitoring cannot apply admission retroactively and cannot trust an
+inherited process group.
+It remains useful for profiling and exceptional protection, but every target selected
+for intervention must be revalidated by PID and creation time as part of the currently
+observed tree. Observation and journaling should be its default authority.
 
 Both modes should normalize the same host evidence and reach the same pressure state.
 They differ in which actions are safe and which guarantees they can state.
@@ -182,7 +182,7 @@ instead of converting every nonzero exit into the same retry or prompt diagnosis
 3. Admit every executable leaf against current headroom plus outstanding startup
    reservations; missing required evidence fails closed.
 4. Pace compatible startups across all local clients, not per pool or parent process.
-5. Keep attached passive profiling separate from intervention simulation.
+5. Keep passive existing-process profiling separate from intervention simulation.
 6. Keep emergency containment small, independent, identity-fenced, and exceptional.
 7. Persist enough evidence to replay pressure decisions and distinguish preemption from
    workload failure.
