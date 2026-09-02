@@ -1,16 +1,22 @@
 ---
 title: Safeproc Local Incubation
 description: Incubate an independently buildable process-safety package under packages/safeproc, prove its CLI and Python boundaries, and prepare extraction without adding a standalone pool.
+author: Joshua Levy (github.com/jlevy) with LLM assistance
 date: 2026-09-01
+last_updated: 2026-09-02
 status: Draft
+category: plan
+tracking_bead: mp-bd6v
 ---
 # Feature: Safeproc Local Incubation
 
-**Date:** 2026-09-01
+**Date:** 2026-09-01 (last updated 2026-09-02)
 
-**Author:** Metaproc team
+**Author:** Joshua Levy (github.com/jlevy) with LLM assistance
 
-**Status:** Draft; this pull request changes plans and research only
+**Status:** Draft; this pull request changes plans and research only.
+Revised on 2026-09-02 against the review tracked as `mp-sbue`, with each finding’s
+disposition under `mp-yajq`.
 
 ## Overview
 
@@ -42,10 +48,16 @@ Its deliverable is the implementation map, consolidated research, and a tbd task
 Keeping that boundary lets the current design pull request merge before package
 implementation begins.
 
-The broader [RunPool Host Safety Envelope](plan-2026-09-01-runpool-host-safety.md)
-specifies the resource model, pressure policy, Metaproc integration, and eventual
-rollout. This plan owns the local package layout, toolchain, testing bar, repository
-integration, and extraction gate.
+Two plans describe this work, and each owns one job.
+The [RunPool Host Safety Envelope](plan-2026-09-01-runpool-host-safety.md) owns policy:
+safety invariants, the resource model, the pressure state machine, shedding and
+containment rules, the sentinel, platform evidence requirements, Metaproc integration,
+and rollout gates.
+This plan owns the package: layers and import direction, public Python
+types, the CLI, the platform capability table, the launch primitive, quality gates, uv
+workspace mechanics, extraction, and the phase list that the tbd beads implement.
+Where both could describe the same thing, the owner’s text is normative and the other
+links to it. The phase numbering in this plan is canonical.
 
 ## Decision
 
@@ -98,8 +110,10 @@ Those are stop conditions, not future cleanup items.
 - Publish Safeproc from the Metaproc repository.
 - Make Metaproc depend at runtime on a workspace-only distribution.
 - Preserve a public Safeproc API before its first external release.
-- Promise Windows support without a platform-specific identity, measurement, and
-  containment design.
+- Promise Windows support in the first release.
+  Windows is deferred, not declined; the system plan records the decision and the
+  starting capability record, and bead `mp-4ksz` writes the provider design after the
+  macOS and Linux providers exist.
 - Copy Procguard source.
   Its edge cases inform contract tests; its implementation and formal claims are not
   Safeproc provenance.
@@ -119,6 +133,11 @@ Metaproc should retain two canonical research records for this work:
 - [Host Memory Accounting and Control](../../research/research-2026-09-01-host-memory-accounting-and-control.md)
   owns macOS and Linux gauges, process-tree attribution, admission, launch pacing, and
   emergency-containment semantics.
+
+The gauge citations themselves, with the kernel sources and reproduction commands, live
+in the repository’s
+[memory accounting reference](../../../memory-accounting-reference.md); the research
+record owns the control model and links there for the numbers.
 
 Recent downstream research has been adapted into those records.
 Consumer-specific paths, issue identifiers, operational receipts, pipeline runbooks, and
@@ -315,12 +334,21 @@ The shared core consumes capabilities rather than platform guesses:
 
 | Capability | macOS | Linux |
 | --- | --- | --- |
-| Host admission budget | `host_statistics64` free, inactive, and purgeable pages | `/proc/meminfo` `MemAvailable` |
-| Degradation | pressure notification, compressor and swap deltas | PSI `some` and `full`; cgroup events when available |
-| Process cost | complete-tree `phys_footprint` | cgroup `memory.current` or complete-tree PSS |
-| Identity | PID plus creation time from native process APIs | PID plus `/proc/<pid>/stat` start time |
-| Owned containment | new session and process group | new session and process group; optional delegated cgroup v2 |
+| Host admission budget | `host_statistics64` free, inactive, and purgeable pages | the smaller of `/proc/meminfo` `MemAvailable` and the caller’s own cgroup headroom, `memory.max` minus `memory.current` |
+| Measured danger | `kern.memorystatus_vm_pressure_level` 4; reclaimable below the floor under pressure; swap-volume suspension distance below its line; red-line ratio under pressure | sustained PSI `full`; reclaimable below the floor |
+| Predictive warning | compressor growth, reclaimable slope, projected time to floor | PSI `some` rising, `MemAvailable` slope, swap-in rate from `/proc/vmstat` |
+| PSI capability | not applicable | three states: absent; readable averages; pollable triggers (`CAP_SYS_RESOURCE` before 6.5, unprivileged two-second multiples since); cgroup-local `memory.pressure` preferred |
+| Process cost | complete-tree `phys_footprint` via `proc_pid_rusage`, about 0.2 ms for a 60-process tree | cgroup `memory.current` in constant time; complete-tree PSS from `smaps_rollup` behind an accuracy gate, because it walks page tables |
+| Identity | PID plus creation time from native process APIs | `pidfd_open` on 5.3 and later; PID plus `/proc/<pid>/stat` start time otherwise |
+| Owned containment | new session and process group | new session and process group; `PR_SET_CHILD_SUBREAPER` on the wrapper; delegated cgroup v2 with `cgroup.kill` on 5.14 and later when available, via `systemd-run --user --scope` on systemd hosts |
+| Kernel safety net | none; `CONFIG_JETSAM` is not compiled in | OOM killer; leaves launch with raised `oom_score_adj`, and an OOM kill is reconciled as a preemption |
 | Existing tree | repeated identity-fenced descendant discovery | repeated identity-fenced descendant discovery |
+| Sleep-aware clock | `mach_continuous_time`; active time from the monotonic clock | `CLOCK_BOOTTIME`; active time from `CLOCK_MONOTONIC` |
+| Sentinel scheduling | `THREAD_PRECEDENCE_POLICY` 63 plus timeshare off | none available unprivileged; rely on not forking |
+| Exit observation | `kqueue` `EVFILT_PROC` with `NOTE_EXIT` | `pidfd` readable on exit |
+
+Windows is not a column because it is not a first-release platform; the system plan
+records the deferral and its starting capability record.
 
 Unsupported evidence is explicit in the capability record.
 A backend may expose an RSS fallback for diagnostics but may not label it footprint or
@@ -330,6 +358,55 @@ The authoritative launch and sampling path must not fork a memory-heavy Python p
 spawn helper commands.
 Use `posix_spawn`-class launch, a minimal child wrapper when pre-exec setup is
 unavoidable, `ctypes` for stable macOS APIs, and procfs on Linux.
+
+### Launch Primitive
+
+CPython’s `subprocess` cannot provide the nonforking launch the system plan requires.
+In Python 3.12, `subprocess.py` uses `posix_spawn` only when there is no `preexec_fn`,
+`close_fds` is false, there are no `pass_fds`, no `cwd`, stdio is not redirected to a
+low descriptor, `start_new_session` is false, no process group is requested, no uid or
+gid changes, and no umask.
+Metaproc’s `LocalBackend` sets `start_new_session=True` and keeps the default
+`close_fds=True`, so every launch today goes through `_posixsubprocess.fork_exec`; on
+Linux that path can use `vfork`, and on macOS it is a `fork` of the parent.
+`asyncio.create_subprocess_exec` wraps the same `Popen`.
+
+The owned launch path therefore uses four pieces, all standard library:
+
+1. **The spawn call.** `os.posix_spawn` with `setsid=True`, which maps to
+   `POSIX_SPAWN_SETSID` on macOS and glibc 2.26 and later, and with `setpgroup` where a
+   group without a new session is wanted.
+   It creates the isolated session and process group without forking the supervisor.
+   It has no `close_fds`; descriptor hygiene comes from PEP 446, under which Python
+   creates descriptors non-inheritable by default, plus explicit `file_actions` for the
+   descriptors the child must receive.
+   macOS `POSIX_SPAWN_CLOEXEC_DEFAULT` is not reachable from Python and is not relied
+   on.
+2. **Exit observation without `SIGCHLD`.** `asyncio` child watchers assume `Popen`. The
+   owned path registers its own waiter: on Linux 5.3 and later, `pidfd_open` and the
+   event loop’s reader; on macOS, `select.kqueue` with `EVFILT_PROC` and `NOTE_EXIT`;
+   where neither exists, a waiter thread calling `waitpid`. The waiter is created before
+   the spawn returns control to the caller, so a target that exits immediately is
+   observed rather than lost.
+3. **The wrapper handshake.** The spawned process is a minimal wrapper that obtains the
+   host claim, creates the session and group if the spawn flags could not, records its
+   PID, create time, and group with the broker, applies any per-child setup, and then
+   `exec`s the target. The supervisor holds one end of a pipe that the wrapper closes on
+   `exec`; the supervisor treats the launch as owned only when the broker has
+   acknowledged the registration and the pipe has closed.
+   If the wrapper dies between spawn and `exec`, the pipe closes without an
+   acknowledgment, the supervisor reports a supervisor failure rather than a workload
+   exit, and identity-based stale reclamation releases the reservation once it can prove
+   that no target survived.
+4. **Sampling.** The same rule forbids helper subprocesses on the sampling path.
+   `host_statistics64` and `proc_pid_rusage` through `ctypes` replace `vm_stat` and
+   `sysctl`; the guard measured them at 24 microseconds and 0.2 milliseconds for a
+   60-process tree against 313 milliseconds for the helper commands.
+   Metaproc’s existing `osutils/memory_pressure.py` is replaced by the provider, not
+   wrapped by it.
+
+Bead `mp-t9u5` proves these four pieces together on macOS and Linux under `asyncio`
+before the broker and owned launch are built; `mp-3c0g` depends on it.
 
 ### Broker and Sentinel
 
@@ -407,6 +484,10 @@ Inspect the sdist and wheel, install the wheel into an isolated environment
 with the source tree unavailable, import `safeproc`, run `safeproc --help`, and execute
 brokerless `watch` and replay smoke tests.
 
+The build gate runs in CI on every pull request that touches `packages/`, not only at
+handoff, so a workspace-only source leak is caught when it is introduced rather than at
+release time.
+
 No publish job accepts `safeproc-v*` tags in the Metaproc repository.
 On extraction, choose whether to retain the prefixed tag history or reset the
 unpublished package to the new repository’s ordinary `vX.Y.Z` release convention before
@@ -480,6 +561,19 @@ The deterministic corpus includes:
 - simultaneous pressure responders and settle-window enforcement;
 - outside-tree pressure where killing the registered tree cannot recover the host;
 - monitored mode refusing owned-only actions;
+- zombies present in the tree, excluded from cost, victims, and grace waits;
+- a producer pause reaching its cap while danger persists, the minimum service window
+  before the next pause, and spawners born during a pause frozen on the next sample;
+- a critical platform alarm with adequate headroom, which must not read as recovered;
+- shedding rounds exhausted with the host short of the failure boundary, which must hold
+  rather than abort;
+- a monitored victim root that forks during enumeration, which the pre-enumeration stop
+  must defeat;
+- an OOM kill on Linux reconciled as a host-pressure preemption;
+- each PSI capability state, and a memory-limited cgroup whose headroom is below host
+  `MemAvailable`;
+- a `pidfd` outliving a recycled PID, and subreaper reparenting of an orphaned
+  grandchild;
 - replay producing the same decision sequence as live policy evaluation.
 
 Procguard’s immediate-exit, `ESRCH`, process-group, zero-timeout, sleep-aware-clock, and
@@ -515,6 +609,16 @@ containment with explicit ownership.
 - Keep a provenance record for code, test cases, and replay fixtures derived from the
   memory guard. Translate Procguard behaviors independently and record only the public
   version reviewed.
+- The replay corpus is the guard’s journals, nineteen runs from one downstream
+  calibration host. It enters this repository only through a sanitizing export that the
+  guard’s author runs at the source: hostnames, user names, absolute paths, argv,
+  environment values, and process command lines are dropped or replaced with stable
+  labels, PIDs are remapped, and numeric samples, timings, pressure levels, and events
+  are kept. The result lives under `packages/safeproc/tests/fixtures/replay/` with a
+  `PROVENANCE.md` naming the export script and date.
+  A sanitized numeric journal is a test fixture, not a copied operational artifact, and
+  it must pass the public-hygiene check like any other file; the repository rule against
+  operational artifacts is about the unsanitized originals, which stay downstream.
 - While Safeproc lives here, do not declare a license inconsistent with the repository
   without an explicit copyright-holder decision.
   Before extraction, choose whether the standalone project retains AGPL-3.0-or-later or
@@ -555,6 +659,9 @@ has passed the normal dependency gate.
 
 ## Implementation Plan
 
+These phases are the canonical numbering for the work and the order of the tbd beads.
+The system plan’s integration stages begin after Phase 3 and are named, not numbered.
+
 ### Phase 0: Land the Design and Research
 
 - [x] Consolidate agent startup-memory and host-accounting research in Metaproc.
@@ -577,8 +684,9 @@ has passed the normal dependency gate.
   actions, results, and versioned journal records.
 - [ ] Implement pure admission, pressure, settle, and intervention state machines plus
   deterministic replay.
-- [ ] Import the sanitized memory-guard replay corpus and independently translated
-  Procguard contract cases with provenance.
+- [ ] Import the sanitized memory-guard replay corpus, exported as described under
+  Supply Chain, and independently translated Procguard contract cases, each with
+  provenance.
 
 ### Phase 2: Brokerless Monitoring on macOS and Linux
 
@@ -597,6 +705,9 @@ If it cannot, the package boundary is too coupled and extraction should stop.
 
 ### Phase 3: Owned Launch and Host Broker
 
+- [ ] Complete the launch-primitive spike (`mp-t9u5`): `os.posix_spawn` with a new
+  session, a stdlib exit waiter, descriptor hygiene, and the wrapper handshake, on both
+  platforms under `asyncio`.
 - [ ] Implement the versioned broker protocol, per-user election, identity-fenced stale
   recovery, claim registry, launch pacing, embargo, and idle exit.
 - [ ] Implement a nonforking owned launch wrapper that establishes admission and an
@@ -661,8 +772,12 @@ monitored and owned work into one oversized change:
 | `mp-lsve` | Implement safety models, policy, journal, and replay | `mp-bu84` |
 | `mp-3i22` | Implement native macOS and Linux providers | `mp-lsve` |
 | `mp-je1b` | Ship brokerless `ProcessMonitor`, `watch`, and replay | `mp-3i22` |
-| `mp-3c0g` | Implement broker, sentinel, and owned launch | `mp-3i22` |
-| `mp-c225` | Complete cross-platform safety and distribution gates | `mp-je1b`, `mp-3c0g` |
+| `mp-t9u5` | Spike the nonforking launch primitive under `asyncio` | none; may run early |
+| `mp-3c0g` | Implement broker, sentinel, and owned launch | `mp-3i22`, `mp-t9u5` |
+| `mp-sfc0` | Calibrate Linux defaults on a dedicated host | none; before Linux defaults ship |
+| `mp-c225` | Complete cross-platform safety and distribution gates | `mp-je1b`, `mp-3c0g`, `mp-sfc0` |
+| `mp-4ksz` | Write the Windows capability record and provider design | `mp-3i22`; no first-release promise |
+| `mp-v0ka` | Gemini adapter honors or rejects `no_session_persistence` | none; independent of Safeproc |
 | `mp-0e2g` | Prove the Metaproc shadow contract and extraction readiness | `mp-c225` |
 | `mp-mlet` | Extract and publish the first standalone release | `mp-0e2g`; explicit approval |
 | `mp-g3si` | Adopt the released package beneath Metaproc’s RunPool | `mp-mlet` |

@@ -1,16 +1,21 @@
 ---
 title: RunPool Host Safety Envelope
 description: Design owned launch and existing-process monitoring, ship them without a standalone pool, and defer any RunPool extraction decision.
+author: Joshua Levy (github.com/jlevy) with LLM assistance
 date: 2026-09-01
+last_updated: 2026-09-02
 status: Draft
+category: plan
+tracking_bead: mp-qigc
 ---
 # Feature: RunPool Host Safety Envelope
 
-**Date:** 2026-09-01
+**Date:** 2026-09-01 (last updated 2026-09-02)
 
-**Author:** Metaproc team
+**Author:** Joshua Levy (github.com/jlevy) with LLM assistance
 
-**Status:** Draft
+**Status:** Draft; revised on 2026-09-02 against the review tracked as `mp-sbue`, with
+each finding’s disposition under `mp-yajq`
 
 ## Overview
 
@@ -88,10 +93,23 @@ Only after that package and integration seam have stabilized should a separate s
 evaluate whether extracting the pool would reduce duplication without imposing a second
 queue or lockstep releases.
 
-The [Safeproc Local Incubation](plan-2026-09-01-safeproc-local-incubation.md) plan owns
-the package layout, uv workspace, quality gates, versioning, and history-preserving
-extraction mechanics.
-This plan remains authoritative for host policy and Metaproc rollout.
+### Document Ownership
+
+Two plans describe this work, and each owns one job:
+
+- **This plan owns policy:** the safety invariants, the resource model, the host
+  pressure state machine, shedding and containment rules, the sentinel, platform
+  evidence requirements, Metaproc integration, and the Metaproc rollout gates.
+- **The [Safeproc Local Incubation](plan-2026-09-01-safeproc-local-incubation.md) plan
+  owns the package:** layers and import direction, public Python types, the CLI, the
+  platform capability table, the launch primitive, quality gates, uv workspace
+  mechanics, extraction, and the phase list that the tbd beads implement.
+
+Where both documents could describe the same thing, the owner’s text is normative and
+the other links to it.
+The package plan’s Phases 0 through 5 are the canonical phase numbering; the integration
+stages in this plan sit after package Phase 3 and are named, not numbered, so they
+cannot be confused with package phases.
 
 ## Goals
 
@@ -129,16 +147,20 @@ This plan remains authoritative for host policy and Metaproc rollout.
 - Automatically discover or control arbitrary processes that no user explicitly launched
   through the runtime or selected for monitoring with `watch`. The host controller may
   identify outside pressure, but it must not kill unrelated applications.
-- Turn a general disk-space warning into a memory kill trigger.
-  Swap headroom is relevant on macOS; ordinary low disk remains a separate operational
-  problem.
+- Turn ordinary low disk on a volume that does not hold swap into a memory trigger.
+  On macOS the distance to swap-volume exhaustion is a measured danger signal, because
+  the kernel suspends applications when it cannot create another swapfile; that signal
+  is part of the pressure state machine below.
+  Low disk anywhere else remains a separate operational problem.
 - Make a fixed low `--max-concurrency` the default safety mechanism.
 - Promise that an adapter has one universal memory cost.
   CLI version, model, platform, prompt, tools, adapter-local state, and configuration
   can all change its shape.
   A working directory matters when the client maps it to a project-scoped state bucket;
   it is not itself a causal memory variable.
-- Add Windows support without a reliable telemetry and process-containment design.
+- Promise Windows support in the first release.
+  Windows is deferred, not declined; the decision and the starting capability record are
+  under Platform Backends below.
 - Publish Metaproc’s task scheduler, retry engine, execution lanes, adapters, or run
   artifacts as part of the host-safety library.
 - Include a standalone pool, submission queue, or `pool` CLI in the first package
@@ -207,10 +229,21 @@ not replace host admission.
 Client behavior, state layout, or defaults may change, and other clients still have
 startup transients of their own.
 
-### Lessons From Procguard
+### Lessons From the Memory Guard and Procguard
+
+The public memory guard is the fifth version of a script whose earlier versions each
+watched a host die. Its README records the mechanism that each failure produced, and the
+[host memory-accounting research](../../research/research-2026-09-01-host-memory-accounting-and-control.md#guard-lessons-carried-into-the-design)
+lists which of those mechanisms this plan carries.
+The ones that shape policy here: measured evidence may take work away and predictive
+evidence may only hold it back; the producer is paused before any harvest, as a bounded
+duty cycle across every spawner in the tree; a critical platform alarm never counts as
+recovered; fault is attributed before any victim is taken; the guard neither forks to
+sample nor treats its own lateness as a trigger; and a full swap volume presents as a
+memory failure.
 
 A static source review of
-[Procguard v1.5.1](https://github.com/denispol/procguard/tree/v1.5.1) provides a useful
+[Procguard v1.5.1](https://github.com/denispol/procguard/tree/v1.5.1) provides the
 implementation and test reference for the owned-process layer.
 Procguard is a small macOS supervisor for one command, not a host-wide admission
 controller or concurrent pool.
@@ -218,19 +251,11 @@ Its strongest choices are an atomic `posix_spawn` launch into a new process grou
 `kqueue` exit and timer events, separate continuous and active clocks,
 physical-footprint sampling through `proc_pid_rusage`, terminal usage from `wait4`, a
 versioned JSON result, and explicit tests for fast-exit and signalling races.
-
-The review also exposes boundaries that the standalone runtime must handle differently:
-
-| Procguard behavior | Lesson for the standalone runtime |
-| --- | --- |
-| The ordinary path uses `posix_spawn`, but enabling a resource limit switches to `fork`. On macOS the attempted `RLIMIT_AS` memory limit is rejected, so memory enforcement still comes from a later 100 ms poll. | Safety options must not make launch less safe under memory pressure. Keep the supervising process on a nonforking path; if a limit must be applied before the target starts, spawn a minimal wrapper that applies it and then calls `exec`. |
-| Memory and CPU polling read only the root PID, even though timeout signals normally target its process group. | Every metric must declare `root`, `tree`, `cgroup`, or `host` scope. Root physical footprint is useful evidence but cannot be presented as process-group memory or used alone for group victim sizing. |
-| Wall time uses `mach_continuous_time`, while active time excludes system sleep. | Every lease, grace period, startup window, and timeout needs an explicit clock domain. A startup reservation must not expire merely because the Mac slept while the target could not finish starting. |
-| A v1.5.1 regression fix was needed because a zero wall timeout bypassed memory, throttle, heartbeat, and stdin monitors. | Governors compose independently. Disabling or zeroing one deadline must never bypass another configured monitor or the host authority. |
-| Signal forwarding is a process-global self-pipe. Its cleanup contract forbids concurrent runs and resets handlers rather than restoring an application-owned signal configuration. | `SafeProcess` must support many concurrent instances and must not take implicit per-run ownership of process-global signals. Use one application-level signal router or an explicit caller-owned forwarding policy. |
-| The raw child handle has no terminal cleanup guard, so an internal monitor error can return without a demonstrated child-reap or ownership-transfer path. | Every post-spawn exit path must either reap and clean the group or atomically transfer it to the broker or sentinel before returning. Supervisor failure cannot orphan the workload it was meant to contain. |
-| The CLI and Rust library share one runner, and results are nonexhaustive and schema-versioned. The public configuration remains experimental and has accumulated timeout hooks, retries, file waiting, heartbeat, and throttling. | Keep one implementation behind the CLI and Python surfaces, use additive typed contracts, and resist moving orchestration conveniences into the safety boundary. Shell hooks, retry policy, and dependency waiting remain above it. |
-| The test suite stresses immediate exits, `ESRCH` registration races, process-group signalling, zero-duration combinations, `SIGSTOP` cleanup, parsers, and timing arithmetic. Its Kani scope excludes the runner loop, FFI, and signal handler, and several proofs model simplified state rather than the implementation itself. | Reuse the failure corpus and layered test methods. State formal or model-checking coverage narrowly and require proofs to exercise shared production functions where possible. |
+The
+[research record](../../research/research-2026-09-01-host-memory-accounting-and-control.md#lessons-from-procguard-v151)
+tabulates the behaviors that the standalone runtime must handle differently, with the
+source locations that were verified.
+Invariants 16 through 19 and 21 below are the policy consequences.
 
 Procguard is therefore a reference, not a dependency candidate or replacement for the
 proposed runtime. It validates the small native-supervisor shape and the CLI-and-library
@@ -313,6 +338,24 @@ The implementation must make these properties testable:
     and monitored-process modes.
     Mode changes the actions that are safe and the guarantees that can be stated, not
     the interpretation of host evidence.
+24. A producer pause is a bounded duty cycle, never a latch.
+    Every pause has a wall-clock cap and is followed by a minimum service window before
+    the producer may be paused again; both values are persisted policy.
+    A supervisor frozen past its children’s deadlines loses work it was meant to save.
+25. A pause freezes every spawner, not the root alone.
+    In owned mode the spawners are the registered producer PIDs; in monitored mode they
+    are every non-leaf process in the fenced tree, re-frozen as intermediates are born.
+26. A critical platform alarm never counts as recovered.
+    The `critical` state exits only when the alarm has cleared and headroom has held for
+    a confirmation window.
+27. Exhausted shedding rounds alone never authorize taking a tree.
+    Abort requires a measured failing host and no narrower action that can recover it.
+28. Zombies hold no address space.
+    They are excluded from tree cost, never selected as victims, and never delay a grace
+    period.
+29. The sentinel’s own lateness is diagnosis, never a trigger.
+    Sampling lag may change how the sentinel measures; it may not change whom it
+    signals.
 
 ### One Host Resource Authority
 
@@ -337,6 +380,9 @@ replacement can reject PID reuse.
 The broker serializes admission decisions in one event loop and publishes every state
 transition atomically.
 Clients communicate through a protected local socket and never mutate live claim files.
+The state root must be short: macOS limits a Unix-domain socket path to 104 bytes and
+Linux to 108, so a root under a long per-user application-support directory needs a
+short real location with the long path as a symlink, not the reverse.
 If the broker dies, existing subprocesses continue under their recorded claims, new
 starts fail closed, and a replacement reconstructs live ownership before reopening
 admission.
@@ -478,13 +524,35 @@ evidence separate:
 | `healthy` | Headroom above reserve, no active stall or dangerous growth | Admit by claims and pacing; local pools may ramp | Continue |
 | `watch` | Stable moderate pressure or a single predictive warning | Do not ramp; admit only if the full startup projection remains safe | Continue |
 | `embargo` | Predicted floor crossing, fast compressor or swap growth, or platform warning requiring confirmation | Freeze new starts host-wide | Continue and sample faster |
-| `critical` | Sustained measured critical pressure, unsafe reclaimable headroom, or Linux full-stall evidence | Freeze starts; broker opens one incident | Shed only after confirmation and fault attribution |
-| `catastrophic` | Critical state is worsening, no cooperative response is observed, and the host is near the calibrated failure boundary | Freeze producers | Broker/sentinel may terminate owned groups |
+| `critical` | Measured: the platform critical alarm; reclaimable headroom below the effective floor while under pressure; on macOS, swap-volume suspension distance below its danger line, or the kernel red-line ratio crossed while under pressure; on Linux, sustained `full` stall | Freeze starts; broker opens one incident | Shed only after confirmation and fault attribution |
+| `catastrophic` | Critical state is worsening, no cooperative response is observed, the host is near the calibrated failure boundary, and no narrower action remains | Freeze producers | Broker/sentinel may terminate owned groups |
 
-Predictive evidence includes reclaimable-memory slope, compressor growth, and projected
-time to a reserve. It may move the host into `embargo`; it cannot authorize shedding.
+Predictive evidence includes reclaimable-memory slope, compressor growth, projected time
+to the floor, and, on Linux, rising `some` stall.
+It may move the host into `embargo`; it cannot authorize shedding.
 The guard experiment produced predictive warnings during healthy runs, which makes this
 separation a correctness requirement rather than a tuning preference.
+
+Measured evidence is platform-specific and the macOS list is longer because the guard
+corpus calibrated it.
+The swap-volume suspension distance is disk free on the swap volume plus unused
+allocated swap; the kernel suspends one application every few seconds once it cannot
+create another swapfile, so crossing that line is user-visible harm regardless of the
+memory gauges. The red-line ratio is the share of non-wired memory that is active plus
+compressed, which the kernel uses to declare pressure red; the guard triggers at the
+hysteresis edge of that ratio while already under pressure.
+Both are measured states, not projections, and both authorize shedding.
+
+Exit from `critical` requires the platform critical alarm to have cleared and headroom
+to have held above the floor for a confirmation window.
+A host that oscillates just above the floor while the alarm stays critical has not
+recovered; an earlier guard build resumed a producer into that state four times in one
+run. Exhausting shedding rounds does not by itself promote `critical` to `catastrophic`.
+The host must be measurably failing, below half the floor or critical under the floor or
+below the suspension line’s abort distance, and shedding must have nothing left to take
+or have taken a full set of rounds without recovery.
+Short of that, holding with producers paused is strictly better than an abort, because
+it stops the growth without losing the run.
 
 Pressure transitions use wall-clock confirmation rather than a fixed number of samples,
 because sampling cadence itself can degrade.
@@ -517,7 +585,25 @@ Use physical footprint when available and combine it with claim phase, age,
 restartability, and declared peak.
 If most pressure is outside registered workloads, keep admission closed and report the
 outside consumers; do not destroy registered work that cannot recover enough memory to
-help.
+help. Fault is assessed before any victim is taken and is recomputed on every danger
+sample, because the process that opened an episode can exit while pressure persists.
+The operator is told once per episode; the decision is re-evaluated every sample.
+Zombies are excluded from tree cost and from victim selection: they hold no address
+space, and waiting out a grace period for one wastes a round.
+
+Termination mechanics differ by mode.
+In owned mode the runtime created the session and process group, so it signals the group
+and reaps it; that is the authoritative path.
+In monitored mode the inherited group is untrusted, and the guard corpus fixed four
+rules for walking a tree instead: `SIGSTOP` the victim root before enumerating its
+descendants, because a running parent forks faster than the walk; signal deepest-first
+so no kill orphans a process a later kill needs; share one grace deadline across the
+whole batch rather than paying it per victim; and `SIGCONT` a stopped process after
+`SIGTERM`, because a stopped process cannot run its handler.
+Procguard resumes before signalling for the same reason.
+A round is sized by memory, not count: the largest victims whose combined cost reaches a
+fraction of the tree, capped at a small batch, so one rule covers both many equal
+workers and one hog.
 
 A shed attempt receives a generic durable preemption event.
 Metaproc projects it as `kill_reason: host_pressure_preempted` with a retry disposition
@@ -541,9 +627,21 @@ The sentinel has a deliberately narrower job than RunPool:
 - record cadence and host-state transitions in one host journal
 - maintain the host launch embargo when in-process monitors are late or dead
 - own incident pacing and verify that cooperative clients are making progress
-- at the catastrophic boundary, stop registered producer PIDs before they can create
-  more work, then terminate only registered, identity-fenced process groups
-- always resume any producer it stopped during normal exit or failed intervention
+- at the danger boundary, stop registered producer PIDs before they can create more
+  work, as a bounded duty cycle: each pause is capped, is followed by a minimum service
+  window, and is re-applied only while the episode persists
+- at the catastrophic boundary, terminate only registered, identity-fenced process
+  groups
+- always resume any producer it stopped, guaranteed on normal exit, on failed
+  intervention, and on receipt of a termination signal
+
+The pause cap exists because a producer frozen past its children’s deadlines gets those
+children reaped by their own supervisor; the guard lost four work units to one
+thirty-second pause.
+A pause costs latency and buys convergence for one harvest, which takes seconds; it must
+not be held for the minutes a host may need to recover.
+The guard defaults, an eight-second cap and a 1.5-second service window, are the
+starting policy until replay shows otherwise.
 
 It does not schedule tasks, parse run directories, retry work, select adapters, scan by
 argv pattern, or kill unrelated processes.
@@ -555,6 +653,23 @@ sampling in its hot path.
 A separate Python entry point using `ctypes` and existing stdlib facilities is
 acceptable for the first implementation; a native helper is not justified unless latency
 and starvation tests show the Python process cannot meet the cadence contract.
+
+**Sentinel self-health.** The sentinel competes for CPU with the work it sheds and
+loses: the guard once configured a one-second interval, saw a 37-second gap, and was
+blind for 46 percent of one run at load average 347. Three rules follow.
+It does not fork to measure, because `fork` is the operation that waits under memory
+pressure; the native calls cost microseconds where the helper commands cost hundreds of
+milliseconds.
+On macOS it raises its own thread to the maximum unprivileged priority with
+`THREAD_PRECEDENCE_POLICY` and `THREAD_EXTENDED_POLICY` with timeshare off; QoS classes
+are clamped by a per-task ceiling and `setpriority` cannot be undone without root, so
+neither is used. Priority buys run-queue position and nothing more: the kernel’s
+free-page wait queue is first-in first-out below real-time priority, so a sentinel
+blocked on pages is helped only by not needing them.
+Linux offers no unprivileged priority raise; the sentinel relies on not forking and on a
+small resident footprint.
+Every sample records its actual interval and lag, a late sample is journaled and
+tallied, and lateness may buy a more accurate measurement but never a signal.
 
 ### Standalone Process-Safety Boundary
 
@@ -595,36 +710,20 @@ against the owned-process boundary; it may legitimately be no-go.
 
 #### One Repository, Layered Surfaces
 
-One standalone repository should contain concentric layers with one-way dependencies:
+One standalone repository contains concentric layers with one-way dependencies.
+The layer list, import diagram, and module layout are owned by the package plan’s
+[Dependency Direction](plan-2026-09-01-safeproc-local-incubation.md#dependency-direction)
+section. The policy this plan requires of them:
 
-| Layer | Responsibility | May Depend On |
-| --- | --- | --- |
-| Safety core | Host samples, pure pressure policy, process identity, tree accounting, signalling, journal records, and replay | Python standard library and platform primitives |
-| Process-monitor API | Existing-target identity, tree observation, cadence loop, and explicitly authorized guard actions | Safety core only |
-| Broker/sentinel | Cross-client claims, launch pacing, embargoes, incidents, and independent containment | Safety core |
-| Owned-process API | Admission handshake, process-group creation, identity registration, wait, cancellation, and cleanup | Safety core and broker client |
-| CLI adapters | `watch`, `run`, `status`, and `replay` argument parsing and rendering | Corresponding library services |
-| Metaproc adapter | Profile translation, lifecycle hooks, and event projection | Owned-process API |
-| Later optional pool | Bounded submission, ordering, concurrency, drain, and result collection | Owned-process API, only after the later extraction gate passes |
+- The safety core and process-monitor API must not import the broker, owned-process API,
+  CLI adapters, or Metaproc.
+- `watch` must start immediately and remain useful when no broker socket exists.
+- The base guard path retains a standard-library-only hot path; optional packaging or
+  integration dependencies must not be imported by that path.
+- The Metaproc adapter depends on the owned-process API and nothing below it.
+- A later pool, if the extraction gate passes, depends on the owned-process API only.
 
-Dependency direction is an enforceable contract.
-The safety core and process-monitor API must not import the broker, owned-process API,
-CLI adapters, or Metaproc.
-`watch` must start immediately and remain useful when no broker socket exists.
-The base guard path should retain the current standard-library-only hot path; optional
-packaging or integration dependencies must not be imported by that path.
-
-This produces one implementation with several deliberately small interfaces:
-
-```text
-watch CLI ── ProcessMonitor ─────────┐
-replay and status CLI ───────────────┤
-broker/sentinel ─────────────────────┼── safety core ── macOS/Linux backends
-run CLI ── SafeProcess ──────────────┤
-Metaproc adapter ────────────────────┘
-```
-
-The diagram shows code reuse, not runtime requirements.
+Code reuse is not a runtime requirement.
 `watch` and offline `replay` do not start the broker.
 Owned `run` and authoritative Metaproc launches use the broker for host-wide
 coordination unless the operator selects an explicit unsafe mode.
@@ -676,6 +775,15 @@ values. If the wrapper or client dies during the handshake, identity-based stale
 reclamation keeps the reservation conservative until it can prove that no target
 survived.
 
+The primitive that satisfies this on CPython is not `subprocess`: with
+`start_new_session=True` or `close_fds=True`, which Metaproc’s backend uses today,
+CPython falls back to `fork_exec`, and on macOS that is a real `fork` of the parent.
+The package plan’s
+[Launch Primitive](plan-2026-09-01-safeproc-local-incubation.md#launch-primitive)
+section specifies the `os.posix_spawn` path, the exit waiter that replaces `SIGCHLD`,
+descriptor hygiene, and the registration handshake; bead `mp-t9u5` proves it before
+owned launch is built.
+
 Metaproc builds on this owned-process boundary beneath `LocalBackend`; a later pool
 decision does not change that seam.
 Its log redirection and credential scrubbing remain Metaproc responsibilities; the
@@ -714,14 +822,12 @@ exiting, or otherwise establish an operating-system attachment.
 
 #### Python Process APIs and Later Pool Evaluation
 
-The Python surface should expose related but non-substitutable process contracts:
-
-| Boundary name | Contract |
-| --- | --- |
-| `SafeProcess` | Accepts a prepared launch and resource request, establishes admission and containment before target execution, and returns typed lifecycle events and a terminal result |
-| `ProcessTarget` | Identifies an existing root by PID and create time without implying ownership or attachment |
-| `ProcessMonitor` | Accepts a `ProcessTarget`, runs the observation and journal loop, and returns a `MonitoredProcess` handle |
-| `MonitoredProcess` | Represents the fenced existing target and exposes observation plus only those interventions explicitly authorized by the caller |
+The Python surface exposes related but non-substitutable process contracts:
+`SafeProcess` for owned launch, and `ProcessTarget`, `ProcessMonitor`, and
+`MonitoredProcess` for an existing tree.
+The type table is owned by the package plan’s
+[Python Surface](plan-2026-09-01-safeproc-local-incubation.md#python-surface) section;
+this plan states the authority each type may claim.
 
 The services share value types and policy services rather than a broad base class whose
 methods imply equal authority.
@@ -850,23 +956,40 @@ unsafe override.
 The policy and artifact schemas are cross-platform.
 Platform providers supply measurements and optional containment.
 
+The capability table that pairs each requirement with its platform primitive is owned by
+the package plan’s
+[Platform Boundary](plan-2026-09-01-safeproc-local-incubation.md#platform-boundary)
+section. The
+[research record](../../research/research-2026-09-01-host-memory-accounting-and-control.md)
+holds the gauge semantics and the platform facts cited here.
+This section states what each provider must do.
+
 **macOS provider:**
 
-- budget from free, inactive, and purgeable pages, preserving the current reclaimable
-  definition
-- consume the kernel VM-pressure state exposed to userspace rather than treating
-  `kern.memorystatus_level` as a budget
-- read host statistics, swap, and per-process physical footprint without forking in the
-  critical sampling path
+- budget from free, inactive, and purgeable pages through `host_statistics64`,
+  preserving the current reclaimable definition
+- read the kernel pressure alarm from `kern.memorystatus_vm_pressure_level`, whose
+  values 1, 2, and 4 are normal, warning, and critical; `kern.memorystatus_level`, the
+  percentage Metaproc reads today, counts other processes’ working sets and is not used
+- read host statistics, swap, and per-process physical footprint through
+  `proc_pid_rusage` without forking in the critical sampling path
 - use a sleep-aware continuous clock for operator wall deadlines and an active monotonic
   clock for startup work that cannot progress while the host sleeps; persist the clock
   domain with each deadline
 - capture terminal CPU time and peak RSS from the child wait result for calibration,
   normalizing platform units before writing portable records
-- track compressor growth and the distance to swap-volume exhaustion separately from
-  ordinary disk pressure
+- track compressor growth as predictive evidence, and the swap-volume suspension
+  distance and the red-line ratio as measured evidence, separately from ordinary disk
+  pressure; derive the swap volume from `vm.swapfileprefix` rather than assuming it, and
+  record free disk, swap totals, and the suspension distance on every sample so a
+  journal can say whether the disk filled or swap grew
+- check the swap volume at startup and say plainly when the host’s binding resource is
+  disk rather than memory
+- raise the sentinel thread’s scheduling priority as described under the sentinel’s
+  self-health
 - use process-group termination because macOS provides no cgroup-equivalent containment
-  boundary for this workload
+  boundary and no kernel safety net for this workload: `CONFIG_JETSAM` is not compiled
+  into the macOS kernel, so the only fallback is the “out of application memory” dialog
 
 Apple describes memory pressure as a composite of free memory, swap rate, wired memory,
 and file cache. The XNU
@@ -875,15 +998,50 @@ documents the kernel pressure states and userspace notification surface.
 
 **Linux provider:**
 
-- retain `MemAvailable` as required headroom
-- consume both `some` and `full` Pressure Stall Information, preferably through pollable
-  threshold triggers rather than only ten-second averages
-- use cgroup-level `memory.current`, `memory.events`, and `memory.pressure` when a
-  delegated cgroup v2 hierarchy is available
-- optionally place a local run in a cgroup with `memory.high` for throttled reclaim and
-  a deliberately looser `memory.max` as hard containment
-- fall back to identity-fenced process-group action when cgroup delegation is
-  unavailable
+- budget from the smaller of host `MemAvailable` and the caller’s own cgroup headroom,
+  `memory.max` minus `memory.current`, whenever the process runs under a memory-limited
+  cgroup; cloud workers, containers, and GCP Batch run under limits far below the host
+  figure, and `MemAvailable` alone would admit against memory the cgroup cannot use.
+  `osutils/resource_context.py` already parses those files and is the starting point.
+- treat Pressure Stall Information as a three-state capability: absent, because
+  `CONFIG_PSI` is off, `psi=0` was booted, or the container hides `/proc/pressure`;
+  readable averages only; or pollable triggers.
+  Creating a trigger required `CAP_SYS_RESOURCE` before kernel 6.5, and unprivileged
+  triggers since 6.5 are limited to multiples of two-second windows.
+  The cgroup-local `memory.pressure` file in the caller’s own cgroup is readable without
+  privilege and is preferred when it exists.
+- use `some` stall and `MemAvailable` slope as predictive evidence and sustained `full`
+  stall as measured evidence.
+  There is no compressor to watch unless zswap or zram is configured; the degradation
+  signal beside PSI is swap-in rate from `/proc/vmstat` (`pswpin`), not swap used.
+- account for the kernel OOM killer, which macOS lacks.
+  It is a safety net that may kill the orchestrator, the broker, or an unrelated
+  process. Raise `oom_score_adj` on agent leaves at launch, which is unprivileged, so the
+  kernel prefers the right victim; lowering it on the broker needs `CAP_SYS_RESOURCE`
+  and is done only when available.
+  Recognize an OOM kill, exit by `SIGKILL` together with an `oom_kill` count in
+  `memory.events`, as a host-pressure preemption rather than an adapter failure.
+- identify owned children by `pidfd_open` on kernel 5.3 and later, which cannot be
+  recycled and is pollable for exit, and signal them with `pidfd_send_signal`; fall back
+  to PID plus `/proc/<pid>/stat` start time
+- contain owned trees with a new session and process group everywhere, plus
+  `PR_SET_CHILD_SUBREAPER` on the launch wrapper so orphaned grandchildren reparent to
+  the wrapper rather than `init` and the tree stays findable without cgroups
+- where cgroup v2 delegation exists, place the owned tree in a cgroup and use
+  `cgroup.kill` on kernel 5.14 and later for atomic termination, `memory.high` for
+  throttled reclaim, a deliberately looser `memory.max` as hard containment, and
+  `memory.events` and `memory.pressure` for scope-correct evidence.
+  `clone3` with `CLONE_INTO_CGROUP` is not reachable from Python, so the wrapper writes
+  its own PID to `cgroup.procs` before `exec`. On systemd hosts
+  `systemd-run --user --scope` provides an unprivileged delegated cgroup; without it,
+  fall back to identity-fenced process-group action.
+- budget the cost of process-cost sampling.
+  `smaps_rollup` walks page tables and can cost tens of milliseconds per read on a
+  multi-gigabyte process, while cgroup `memory.current` is constant time.
+  Prefer the cgroup total, use an accuracy gate before paying for PSS across a tree, and
+  record the sampling cost.
+- use `CLOCK_BOOTTIME` for sleep-aware deadlines and `CLOCK_MONOTONIC` for active work,
+  mirroring the macOS clock domains
 
 The Linux kernel explicitly describes PSI as a signal for dynamic load shedding and
 distinguishes partial from full workload stalls.
@@ -891,6 +1049,25 @@ It describes `memory.high` as a throttle boundary intended for an external manag
 `memory.max` as the hard cgroup limit.
 These are stronger containment tools than macOS offers, but they remain capability-gated
 and must not make systemd or privileged cgroup delegation a baseline dependency.
+Linux has no failure corpus yet; reserve fraction, stall thresholds, and settle windows
+are calibrated on a dedicated host under bead `mp-sfc0` before Linux defaults ship.
+
+**Windows:** deferred, not declined.
+The first release supports macOS and Linux.
+Windows has a stronger containment primitive than either: a Job Object with
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` contains a tree, `TerminateJobObject` ends it
+atomically, `QueryInformationJobObject` reports exact tree memory, and
+`JOB_OBJECT_LIMIT_JOB_MEMORY` enforces a commit limit.
+Placement is atomic without a wrapper: `CreateProcess` with `CREATE_SUSPENDED`,
+`AssignProcessToJobObject`, then `ResumeThread`, or `PROC_THREAD_ATTRIBUTE_JOB_LIST`.
+Identity is PID plus `GetProcessTimes` creation time; the host budget is
+`GlobalMemoryStatusEx` with commit charge as the pagefile-backed analogue of swap;
+process cost is `GetProcessMemoryInfo` `PrivateUsage`, not working set, which is RSS
+with the same double counting; degradation is commit charge approaching the commit
+limit, with no stall-time equivalent.
+There is no safe pause primitive, so a Windows policy runs without producer pauses.
+Bead `mp-4ksz` writes the capability record and provider design after the macOS and
+Linux providers exist; no Windows work is promised for the first release.
 
 ### Visibility and Operator Control
 
@@ -921,25 +1098,17 @@ admission.
 
 ### Why the Other Approaches Are Insufficient
 
-| Approach | Useful part | Why it is not the primary design |
-| --- | --- | --- |
-| Fix one downstream coordinator | Removes one incorrect fan-out | Other consumers and multiple independent runs can recreate the same host-wide burst. |
-| Set a low static concurrency | Easy emergency brake | It wastes steady-state capacity, cannot represent startup peaks, and composes poorly across runs. |
-| Add a fixed sleep before launch | Directly smooths a known transient | A per-process or per-coordinator delay is not host-wide and cannot react to outside load or mixed profiles. |
-| Publish the current memory guard unchanged | Proven last-resort evidence, policy, and intervention | Its monitored-tree contract acts after launch, is macOS-only, and cannot provide authoritative cross-client admission. It should become one mode of the broader runtime. |
-| Adopt Procguard directly | Small native macOS supervisor with strong owned-launch primitives and a valuable failure corpus | It governs one root process after launch, has no host-wide reservation or cross-client broker, uses process-global signal state, and has no Linux backend. Its code is a reference for the owned-process layer, not the required abstraction. |
-| Publish a guard package and a separate pool before the process seam stabilizes | Keeps each repository superficially small | It creates two new boundaries before either has operating evidence and risks duplicating telemetry, identity, signalling, and journal policy. Ship the process-safety package first. |
-| Delegate to GNU Parallel | Mature command queue with launch delay, memory admission, suspension, and retry | Its generic free-memory rules do not provide the required macOS pressure accounting, startup-phase claims, cross-client identity registry, or independent sentinel. |
-| Publish Metaproc’s current RunPool unchanged | Reuses a capable scheduler and local process manager | The module mixes a potentially reusable pool core with Metaproc paths, lanes, events, status, provider policy, and artifact compatibility. Prove a neutral slice before deciding whether to extract it. |
-| Extract the full pool before proving the process seam | Creates a clean-looking package boundary early | It risks lockstep releases and callback abstractions that mirror Metaproc internals. Extract the core and owned-process boundary first, then apply the pool gate. |
-| Use only OS hard limits | Strong Linux containment | macOS has no equivalent local cgroup boundary, and a hard byte ceiling alone can kill healthy startup transients. |
-| Keep the current adaptive semaphore | Good local throughput controller | Every pool sees only its own capacity, reduction is non-preemptive, and the scalar memory estimate misses the burst shape. |
-
-GNU Parallel demonstrates that a standalone command pool can use both
-[launch spacing and memory-aware admission](https://www.gnu.org/software/parallel/parallel.html).
-The standalone process-safety runtime keeps those useful mechanics while adding the
-platform-specific evidence, cross-client ownership, and failure isolation required here.
-The proposed layers reuse the working parts of these approaches at their correct scopes.
+Eleven alternatives were weighed, from fixing one downstream coordinator through a
+static concurrency cap, a fixed launch sleep, publishing the guard or Procguard
+unchanged, GNU Parallel, publishing RunPool unchanged, extracting the pool first, OS
+hard limits alone, and keeping the adaptive semaphore.
+Each has a useful part and each fails as the primary design for one of three reasons: it
+is not host-wide, it cannot represent the startup shape, or it creates a boundary before
+that boundary has operating evidence.
+The
+[research record](../../research/research-2026-09-01-host-memory-accounting-and-control.md#alternatives-considered)
+tabulates them. The proposed layers reuse the working parts of these approaches at their
+correct scopes.
 
 ## API and Artifact Changes
 
@@ -990,54 +1159,32 @@ external naming remain extraction gates.
   New unsafe bypass or sentinel controls must be explicit and discoverable through
   command help. Monitored `watch` sends no signals unless the operator selects an
   intervention policy explicitly.
+  The `metaproc pool host-admission`, `pool events`, and `pool health` views are
+  additive public CLI surface: no existing flag changes meaning, and each ships with
+  operator documentation and a changelog entry in the release that adds it.
 
 ## Implementation Plan
 
-### Phase 0: Prove the Reusable Boundary
+### Package Phases
 
-Implement the repository and package mechanics through the
-[Safeproc Local Incubation](plan-2026-09-01-safeproc-local-incubation.md) plan.
-The checklist below defines the architectural outcomes that package work must satisfy.
+The package is built through the
+[Safeproc Local Incubation](plan-2026-09-01-safeproc-local-incubation.md#implementation-plan)
+plan’s Phases 0 through 5, which are the canonical phase numbering and the order of the
+tbd beads.
+The architectural outcomes this plan requires of that work, each tested by the
+strategy below, are: neutral models that import no Metaproc type; a platform capability
+record that reports unsupported scope rather than approximating it; the guard split into
+pure policy, ownership and signalling, journaling, and providers with its corpus intact;
+Procguard’s edge cases as implementation-independent contract tests; one policy state
+machine above both providers; `watch` and `replay` shipped first with import-boundary
+proof; a nonforking owned launch proved by bead `mp-t9u5` before the broker is built;
+one conformance suite through both modes; license and provenance settled before anything
+leaves this repository; and a published `0.x` surface with no pool API.
 
-- [ ] Specify neutral process request, result, lifecycle event, resource,
-  process-identity, host-sample, journal, and client-broker protocol models without
-  importing Metaproc types.
-- [ ] Define a platform capability matrix for launch, root, tree, cgroup, and host
-  measurements; clock domains; event-driven exit observation; and containment.
-  Unsupported scope must be reported rather than approximated without a label.
-- [ ] Split the current guard into pure policy and replay code, process ownership and
-  signalling, journaling, and platform providers while preserving its macOS telemetry,
-  explicitly selected intervention policy, and failure corpus.
-- [ ] Translate the Procguard v1.5.1 immediate-exit, `ESRCH`, process-group,
-  zero-timeout, sleep-aware clock, and suspended-process cleanup cases into
-  implementation-independent contract tests.
-  Record provenance rather than copying source or overstating its formal verification
-  coverage.
-- [ ] Add a Linux provider using `MemAvailable`, PSI, PSS, and optional cgroup v2
-  capabilities; keep one shared policy state machine above both providers.
-- [ ] Build `ProcessMonitor`, `MonitoredProcess`, daemonless `watch`, and offline
-  `replay` first, with import-boundary tests proving that they do not load the broker,
-  owned-process API, optional integrations, or Metaproc.
-  Make observation the `watch` default and require an explicit policy for pause,
-  shedding, or termination.
-- [ ] Build the broker/sentinel and owned-process API, then expose thin `run` and
-  `status` commands over those services.
-- [ ] Run one policy and journal conformance suite through both process APIs.
-  Equivalent normalized evidence must yield the same host classification while the mode
-  capability matrix permits different actions.
-- [ ] Prove that the owned launch path uses a nonforking parent primitive even when
-  resource controls are enabled, supports concurrent instances, and either cleans up or
-  transfers ownership on every injected internal error.
-- [ ] Choose the standalone project’s license and document provenance for guard-derived
-  code, tests, and replay fixtures before publishing them outside their current homes.
-- [ ] Implement one vertical Metaproc integration slice at the owned-process boundary
-  and run its admission and telemetry decisions in shadow against the current pool.
-- [ ] Publish an experimental `0.x` distribution only after macOS and Linux package
-  smoke, brokerless `watch`, journal replay, secret-redaction, and client-broker
-  version-skew tests pass.
-  The published surface must contain no pool API or `pool` CLI.
+The integration stages below begin once package Phase 3 has delivered `SafeProcess`.
+They are Metaproc rollout work and are named rather than numbered.
 
-### Phase 1: Startup-Aware Admission
+### Integration Stage: Startup-Aware Admission
 
 - [ ] Add the versioned memory-shape model and backward-compatible execution-profile
   parsing.
@@ -1069,7 +1216,7 @@ The checklist below defines the architectural outcomes that package work must sa
   `run-process` parents share one namespace and cannot overlap more startup reservations
   or launches than the host authority allows.
 
-### Phase 2: Responsive Pressure Control
+### Integration Stage: Responsive Pressure Control
 
 - [ ] Promote the standalone runtime’s low-overhead macOS and Linux providers to the
   authoritative telemetry source, with adaptive sampling cadence, sample-lag recording,
@@ -1083,7 +1230,7 @@ The checklist below defines the architectural outcomes that package work must sa
 - [ ] Update `pool`, `pulse`, `stats`, trace, and Metabrowser projections for claims,
   embargoes, preemptions, and recovery.
 
-### Phase 3: Independent Containment and Rollout
+### Integration Stage: Independent Containment and Rollout
 
 - [ ] Complete the automatically elected standalone broker/sentinel with nonforking
   hot-path telemetry, early registration, cadence health, claim-registry ownership, and
@@ -1100,7 +1247,7 @@ The checklist below defines the architectural outcomes that package work must sa
 - [ ] Remove downstream launch-stagger workarounds only after their workloads prove that
   the host-scoped controller produces equivalent or better pacing and throughput.
 
-### Phase 4: Evaluate Pool Extraction After Stabilization
+### Deferred Stage: Evaluate Pool Extraction After Stabilization
 
 - [ ] Confirm that Metaproc has consumed a versioned process-safety package through its
   retained RunPool, representative scheduler-only changes required no package release,
@@ -1117,16 +1264,28 @@ The checklist below defines the architectural outcomes that package work must sa
 - [ ] If a public finite-batch pool is still useful independently of Metaproc, specify
   and review it as a separate feature rather than treating it as part of process safety.
 
-Phases 0 through 3 deliberately ship no standalone pool.
-Phase 4 is optional follow-up work and does not block the process-safety package.
-A durable job server, retry database, or workflow queue is outside this plan.
+The package phases and the three integration stages deliberately ship no standalone
+pool.
+The deferred stage is optional follow-up work and does not block the process-safety
+package. A durable job server, retry database, or workflow queue is outside this plan.
 
 ## Testing Strategy
 
 ### Deterministic Tests
 
 - State-machine tests cover every pressure transition, hysteresis, stale-sample rule,
-  predictive-versus-measured intervention boundary, and recovery path.
+  predictive-versus-measured intervention boundary, and recovery path, including that a
+  critical platform alarm never reads as recovered, that the swap-volume suspension line
+  and red-line ratio are measured triggers, and that exhausted shedding rounds alone
+  never promote `critical` to `catastrophic`.
+- Producer-pause tests prove the duty cycle: a pause ends at its cap whether or not
+  danger has cleared, a minimum service window follows before the next pause, every
+  spawner in the tree is frozen and intermediates born during a pause are frozen on the
+  next sample, and resume is guaranteed on normal exit, failed intervention, and
+  termination signal.
+- Sentinel self-health tests prove that a late sample is journaled and tallied and
+  changes measurement accuracy but never authorizes a signal, and that the macOS
+  priority raise is applied and reported honestly when it fails.
 - A shared platform-provider conformance suite feeds synthetic and recorded macOS and
   Linux measurements through the same normalized host-sample contract, including missing
   capabilities and malformed or stale inputs.
@@ -1163,6 +1322,15 @@ A durable job server, retry database, or workflow queue is outside this plan.
 - Accounting tests distinguish root physical footprint, tree totals, cgroup usage, host
   headroom, and terminal peak RSS. Portable records preserve scope and normalize the
   macOS and Linux `ru_maxrss` unit difference.
+  Zombies are excluded from tree cost, never offered as victims, and never extend a
+  grace wait.
+- Linux provider tests cover each PSI capability state, the cgroup-limited budget, an
+  OOM kill reconciled as a preemption, `pidfd` identity with a recycled PID, subreaper
+  reparenting, `cgroup.kill` where delegation exists, and the sampling-cost gate for
+  PSS.
+- Termination-mechanics tests prove that a monitored victim root is stopped before its
+  descendants are enumerated, that signalling is deepest-first, that one grace deadline
+  covers a batch, and that a stopped process receives `SIGCONT` after `SIGTERM`.
 - Redaction tests prove that environment credentials, prompt text, and unredacted
   command arguments never enter broker state or the portable journal.
 - CLI and Python contract tests drive the same owned-process, process-monitor, and
@@ -1195,9 +1363,9 @@ A durable job server, retry database, or workflow queue is outside this plan.
   Model checking is optional and reports only the production functions and bounded state
   it actually exercises; it is not evidence that the FFI, signal, or process-monitoring
   system is formally verified.
-- Phase 4 adds pool tests for fair ordering, priority aging, external capacity changes,
-  cancellation while queued and launching, bounded shutdown, and the rule that no
-  submission can launch after close.
+- The deferred pool stage adds pool tests for fair ordering, priority aging, external
+  capacity changes, cancellation while queued and launching, bounded shutdown, and the
+  rule that no submission can launch after close.
   These tests are not part of the initial package contract.
 
 ### Replay and Live Tests
@@ -1240,7 +1408,7 @@ A durable job server, retry database, or workflow queue is outside this plan.
 - The first published package contains no pool API, submission queue, pool-result type,
   or `pool` CLI. Metaproc retains one local subprocess queue and adaptive controller and
   launches through `SafeProcess` without feeding another queue.
-- Phase 4 cannot alter the first-package acceptance decision.
+- The deferred pool stage cannot alter the first-package acceptance decision.
   If a later pool extraction proceeds, its vertical slice must record a go/no-go result
   before any public pool type or compatibility facade is published.
 - Metaproc’s ordinary unit-test path uses deterministic fakes and never requires a live
@@ -1307,10 +1475,12 @@ A durable job server, retry database, or workflow queue is outside this plan.
 8. Update the shipped RunPool architecture, operator reference, process-framework
    theory, artifact catalog, execution-profile docs, and downstream migration guidance
    in the same release as each behavior change.
+   `arch-runpool.md` still describes cgroup-aware Linux readings as future work and
+   names Windows as unsupported; both statements change in the release that changes the
+   behavior, not before.
 9. Gather maintenance and operating evidence from the standalone package and the
-   retained-RunPool integration before beginning the optional Phase 4 pool extraction
-   spike.
-10. If Phase 4 passes, plan the pool API and migration separately.
+   retained-RunPool integration before beginning the optional pool extraction spike.
+10. If the deferred stage passes, plan the pool API and migration separately.
     Consider a durable job-service facade only after an independent consumer needs
     persistence, retry, or workflow semantics beyond a safe subprocess pool.
 

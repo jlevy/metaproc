@@ -2,13 +2,21 @@
 title: Host Memory Accounting and Control
 description: macOS and Linux memory gauges, process-tree cost attribution, and the distinct roles of admission, launch pacing, and emergency containment.
 date: 2026-09-01
+last_updated: 2026-09-02
 status: Complete
 ---
 # Research: Host Memory Accounting and Control
 
-**Date:** 2026-09-01
+**Date:** 2026-09-01 (last updated 2026-09-02)
 
 **Status:** Complete; implementation gaps remain in the active plan
+
+This record owns the control model: what admission, pacing, and containment may each
+decide, and which evidence each may use.
+The gauge semantics behind it, with kernel citations and reproduction commands, are
+owned by the repository’s
+[memory accounting reference](../../memory-accounting-reference.md); the sections below
+summarize those facts and link there rather than restating the measurements.
 
 ## Overview
 
@@ -130,6 +138,79 @@ is losing useful work to memory contention.
 PSI is a degradation and load-shedding signal; it is not a replacement for byte
 reservations.
 
+PSI is not always present and not always writable.
+`/proc/pressure` is absent when the kernel was built without `CONFIG_PSI`, when `psi=0`
+was passed at boot, and often inside containers.
+Creating a trigger, a write to the file followed by `poll`, required `CAP_SYS_RESOURCE`
+before kernel 6.5; since 6.5 unprivileged users may create triggers whose window is a
+multiple of two seconds.
+The cgroup-local `memory.pressure` file in a process’s own cgroup is readable without
+privilege.
+A provider therefore reports PSI as one of three capability states rather than
+as present or absent.
+
+### `MemAvailable` Inside a Limited Cgroup
+
+`MemAvailable` is a host figure.
+Inside a cgroup with `memory.max` set, which is the normal condition for containers,
+cloud workers, and GCP Batch tasks, the host figure can exceed what the cgroup may use
+by an order of magnitude.
+The usable budget is the smaller of host `MemAvailable` and the cgroup’s own headroom,
+`memory.max` minus `memory.current`, read from the cgroup the process belongs to.
+Metaproc’s `osutils/resource_context.py` already reads these files for diagnostics.
+
+### No Compressor, and a Kernel Safety Net
+
+Linux has no compressor unless zswap or zram is configured, so the compressor-slope
+predictor that the macOS guard corpus validated has no Linux analogue.
+The predictive signals are `some` stall and `MemAvailable` slope; the measured
+degradation signal beside `full` stall is swap-in rate, `pswpin` in `/proc/vmstat`,
+because swap used remains high after an episode ends.
+
+Linux also has what macOS lacks: a kernel OOM killer.
+It is a safety net that may kill the orchestrator, the broker, or an unrelated process,
+and it chooses by `oom_score`. Raising `oom_score_adj` is unprivileged, so a launcher
+can mark agent leaves as preferred victims; lowering it below the inherited value
+requires `CAP_SYS_RESOURCE`. An OOM kill is visible as an exit by `SIGKILL` together
+with an `oom_kill` count in the cgroup’s `memory.events`, and a supervisor should
+classify it as host-pressure preemption, not adapter failure.
+
+### Identity and Containment Primitives
+
+`pidfd_open`, kernel 5.3 and later, returns a descriptor that refers to one process
+incarnation, cannot be recycled, and becomes readable when the process exits;
+`pidfd_send_signal` signals that identity.
+For owned children this is strictly stronger than PID plus start time.
+
+`cgroup.kill`, kernel 5.14 and later, terminates every process in a cgroup atomically,
+which removes the enumeration race that deepest-first tree walks exist to mitigate.
+`clone3` with `CLONE_INTO_CGROUP` places a child in a cgroup at creation but is not
+reachable from Python; a launch wrapper instead writes its own PID to `cgroup.procs`
+before `exec`. Delegation is the gating condition: on systemd hosts
+`systemd-run --user --scope` gives an unprivileged user a delegated cgroup, and without
+delegation a supervisor falls back to process groups.
+
+`PR_SET_CHILD_SUBREAPER` makes a process the reparenting target for its orphaned
+descendants, so grandchildren whose parent died reparent to the wrapper rather than to
+`init` and remain findable by a tree walk.
+
+### Sampling Cost and Clocks
+
+`smaps_rollup` walks page tables to compute PSS; on a multi-gigabyte process one read
+costs tens of milliseconds, and a tree is sampled every interval.
+Cgroup `memory.current` is constant time.
+The macOS guard’s finding that a reading is nearly free, 24 microseconds for host
+statistics and 0.2 milliseconds for a 60-process tree, does not carry to Linux PSS, so a
+Linux provider needs a sampling-cost budget and an accuracy gate.
+
+`CLOCK_MONOTONIC` stops during system suspend on Linux; `CLOCK_BOOTTIME` does not.
+They are the Linux counterparts of the macOS active and continuous clocks, and a
+deadline must name which one it uses.
+
+No Linux failure corpus exists yet.
+Every Linux threshold in the plans is a design choice awaiting calibration on a
+dedicated host.
+
 ## Control Responsibilities
 
 | Mechanism | Decision scope | Safe authority | Failure meaning |
@@ -196,6 +277,85 @@ evidence inputs rather than a library API to preserve.
 The reusable design should port the contracts and replay corpus to macOS and Linux, then
 validate one shared policy over normalized evidence.
 
+## Guard Lessons Carried Into the Design
+
+The [memory guard](https://gist.github.com/jlevy/5b43e0d44166b9c7fe8157ee938cb0d5) is
+the fifth version of its script; its README records the failure that produced each
+mechanism. The mechanisms below are carried into the plans as invariants or provider
+requirements, with the guard evidence that justifies each:
+
+| Mechanism | Guard evidence | Where the plan carries it |
+| --- | --- | --- |
+| Measured evidence may take work away; predictive evidence may only hold it back | Replayed over every journal, the projection opened danger episodes on five runs that completed and the compressor slope on four healthy runs; one build shed 75 workers aged 11–16 s inside their healthy startup spike | Safety principle 3; the `embargo` and `critical` states |
+| Pause the producer before harvesting | Over 217 s one workload added 52 processes while the guard removed 5 | Sentinel duty; shedding order |
+| Pause every spawner, not the root | In seven of nine pause windows the tree grew while the root was stopped, up to +10.9 GB in one window, because the producer was three levels deep | Invariant 25 |
+| A pause is a capped duty cycle | A 30 s pause left four work units reaped by their own supervisor one second before resume | Invariant 24; defaults 8 s cap, 1.5 s service window |
+| A critical alarm never counts as recovered | An earlier build resumed a producer into pressure 4 four times in one run | Invariant 26; `critical` exit rule |
+| Fault is attributed before any victim is taken, and recomputed every sample | One build killed a 40-unit batch after correctly naming unrelated processes as the cause; another shed its own workers first and asked whose fault it was once nothing was left | Shedding section |
+| Abort needs a failing host and exhausted shedding, together | Aborting on exhausted rounds alone killed four consecutive runs with 6 GB reclaimable; not aborting at all ended in a kernel panic after 93 s without watchdog check-ins | Invariant 27 |
+| The swap volume is a memory trigger | `no_paging_space_action` suspends one application every 5 s when the boot volume cannot hold another swapfile; a host sat at 12 GB of swap flapping into red with 6 GB of disk left | `critical` evidence; macOS provider |
+| Kill the tree, not the PID, and stop before you walk | A compute-bound child holding 300 MB survived indefinitely at ppid 1 after its parent died; a running parent forks faster than an enumeration | Shedding mechanics |
+| `killpg` is unsafe from outside | A parent, its grandchild, and the shell that started them shared one process group | Monitored-mode containment |
+| Zombies hold no memory | Counting one inflates the tree and offering it as a victim wastes a round | Invariant 28 |
+| Do not fork to measure | `host_statistics64` and `proc_pid_rusage` cost 24 µs and 0.2 ms against 313 ms for the helper commands; `fork` is the call that waits under pressure | Sentinel self-health; launch primitive |
+| Raise the sentinel’s own priority, and know its limit | `THREAD_PRECEDENCE_POLICY` reaches 63; QoS is clamped by a per-task ceiling; the free-page wait queue is FIFO below priority 96 | Sentinel self-health |
+| Lateness is diagnosis, never a trigger | A build that promoted lag to a trigger fed itself and shed four times at pressure 1 with 12 GB free | Invariant 29 |
+| Size rounds by memory, not count | Fifty equal workers lose five; fifty where one holds a quarter lose only that one | Shedding mechanics |
+
+## Lessons From Procguard v1.5.1
+
+A static source review of
+[Procguard v1.5.1](https://github.com/denispol/procguard/tree/v1.5.1) at commit
+`36a16da` provides an implementation and test reference for the owned-process layer.
+Procguard is a small macOS supervisor for one command, not a host-wide admission
+controller or concurrent pool.
+Its strongest choices are an atomic `posix_spawn` launch into a new process group,
+`kqueue` exit and timer events, separate continuous and active clocks,
+physical-footprint sampling through `proc_pid_rusage`, terminal usage from `wait4`, a
+versioned JSON result, and explicit tests for fast-exit and signalling races.
+The source locations were verified during the 2026-09-02 review; the project was read
+statically and neither built nor executed.
+
+| Procguard behavior | Source | Lesson for the standalone runtime |
+| --- | --- | --- |
+| The ordinary path uses `posix_spawnp`, but enabling a resource limit switches to `fork`. On macOS the attempted `RLIMIT_AS` limit returns `EINVAL`, which is swallowed, so memory enforcement still comes from a 100 ms poll. | `process.rs:346-465`, `rlimit.rs:91-110` | Safety options must not make launch less safe under memory pressure. Keep the supervising process on a nonforking path; if a limit must be applied before the target starts, spawn a minimal wrapper that applies it and then calls `exec`. |
+| Memory and CPU polling read only the root PID, even though timeout signals target its process group. | `runner.rs:1797` | Every metric must declare `root`, `tree`, `cgroup`, or `host` scope. Root physical footprint is useful evidence but cannot be presented as process-group memory or used alone for group victim sizing. |
+| Wall time uses `mach_continuous_time`, while active time excludes system sleep. | `runner.rs:296-330`, `wait.rs:61-95` | Every lease, grace period, startup window, and timeout needs an explicit clock domain. A startup reservation must not expire merely because the Mac slept while the target could not finish starting. |
+| A v1.5.1 fix was needed because a zero wall timeout bypassed memory, throttle, heartbeat, and stdin monitors. | `runner.rs:812-829` | Governors compose independently. Disabling or zeroing one deadline must never bypass another configured monitor or the host authority. |
+| The memory limit is not enforced during the `--kill-after` grace period. | `runner.rs:1106`, `runner.rs:1216` | Sampling continues through grace and settle windows; the guard keeps sampling through its settle interval for the same reason. |
+| A `SIGSTOP`ped child is resumed before `SIGTERM` because a stopped process cannot run its handler. | `runner.rs:1194-1200` | Order the resume around the signal; the guard signals first and resumes after, and either order is acceptable as long as one is chosen. |
+| Signal forwarding is a process-global self-pipe. Its cleanup contract forbids concurrent runs and resets handlers to `SIG_DFL` rather than restoring the application’s configuration. | `runner.rs:63-216` | `SafeProcess` must support many concurrent instances and must not take implicit per-run ownership of process-global signals. Use one application-level signal router or an explicit caller-owned forwarding policy. |
+| The raw child handle has no terminal cleanup guard; only the spawn-attribute wrappers implement `Drop`. | `process.rs` | Every post-spawn exit path must either reap and clean the group or atomically transfer it to the broker or sentinel before returning. Supervisor failure cannot orphan the workload it was meant to contain. |
+| The CLI and Rust library share one runner, and results are nonexhaustive and schema-versioned. The public configuration remains experimental and has accumulated timeout hooks, retries, file waiting, heartbeat, and throttling. | `runner.rs`, `lib.rs` | Keep one implementation behind the CLI and Python surfaces, use additive typed contracts, and resist moving orchestration conveniences into the safety boundary. Shell hooks, retry policy, and dependency waiting remain above it. |
+| The test suite stresses immediate exits, `ESRCH` registration races, process-group signalling, zero-duration combinations, `SIGSTOP` cleanup, parsers, and timing arithmetic. Its 19 Kani proofs cover buffer bounds, time arithmetic, exit-status extraction, a once-cell, and throttle bookkeeping; they exclude the runner loop, FFI, and signal handler. | `tests/integration.rs`, `proc_info.rs`, `time_math.rs`, `process.rs`, `sync.rs`, `throttle.rs` | Reuse the failure corpus and layered test methods. State formal or model-checking coverage narrowly and require proofs to exercise shared production functions where possible. |
+
+Procguard is therefore a reference, not a dependency candidate or replacement for the
+proposed runtime. It validates the small native-supervisor shape and the CLI-and-library
+seam, while its macOS-only, root-process, single-command contract reinforces the need
+for separate host admission, cross-client identity, tree accounting, and Linux backends.
+
+## Alternatives Considered
+
+| Approach | Useful part | Why it is not the primary design |
+| --- | --- | --- |
+| Fix one downstream coordinator | Removes one incorrect fan-out | Other consumers and multiple independent runs can recreate the same host-wide burst. |
+| Set a low static concurrency | Easy emergency brake | It wastes steady-state capacity, cannot represent startup peaks, and composes poorly across runs. |
+| Add a fixed sleep before launch | Directly smooths a known transient | A per-process or per-coordinator delay is not host-wide and cannot react to outside load or mixed profiles. |
+| Publish the current memory guard unchanged | Proven last-resort evidence, policy, and intervention | Its monitored-tree contract acts after launch, is macOS-only, and cannot provide authoritative cross-client admission. It should become one mode of the broader runtime. |
+| Adopt Procguard directly | Small native macOS supervisor with strong owned-launch primitives and a valuable failure corpus | It governs one root process after launch, has no host-wide reservation or cross-client broker, uses process-global signal state, and has no Linux backend. Its code is a reference for the owned-process layer, not the required abstraction. |
+| Publish a guard package and a separate pool before the process seam stabilizes | Keeps each repository superficially small | It creates two new boundaries before either has operating evidence and risks duplicating telemetry, identity, signalling, and journal policy. Ship the process-safety package first. |
+| Delegate to GNU Parallel | Mature command queue with launch delay, memory admission, suspension, and retry | Its generic free-memory rules do not provide the required macOS pressure accounting, startup-phase claims, cross-client identity registry, or independent sentinel. |
+| Publish Metaproc’s current RunPool unchanged | Reuses a capable scheduler and local process manager | The module mixes a potentially reusable pool core with Metaproc paths, lanes, events, status, provider policy, and artifact compatibility. Prove a neutral slice before deciding whether to extract it. |
+| Extract the full pool before proving the process seam | Creates a clean-looking package boundary early | It risks lockstep releases and callback abstractions that mirror Metaproc internals. Extract the core and owned-process boundary first, then apply the pool gate. |
+| Use only OS hard limits | Strong Linux containment | macOS has no equivalent local cgroup boundary, and a hard byte ceiling alone can kill healthy startup transients. |
+| Keep the current adaptive semaphore | Good local throughput controller | Every pool sees only its own capacity, reduction is non-preemptive, and the scalar memory estimate misses the burst shape. |
+
+GNU Parallel demonstrates that a standalone command pool can use both
+[launch spacing and memory-aware admission](https://www.gnu.org/software/parallel/parallel.html).
+The standalone process-safety runtime keeps those useful mechanics while adding the
+platform-specific evidence, cross-client ownership, and failure isolation required
+there.
+
 ## Owned Launch and Existing-Process Monitoring
 
 Owned launch can establish admission, isolated group identity, and cleanup authority
@@ -249,6 +409,11 @@ instead of converting every nonzero exit into the same retry or prompt diagnosis
 - [Linux proc filesystem memory fields](https://www.kernel.org/doc/html/latest/filesystems/proc.html)
 - [Linux Pressure Stall Information](https://docs.kernel.org/accounting/psi.html)
 - [Linux cgroup v2 memory controller](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory)
+- [Linux `pidfd_open`](https://man7.org/linux/man-pages/man2/pidfd_open.2.html)
+- [Linux `prctl` subreaper](https://man7.org/linux/man-pages/man2/prctl.2.html)
+- [Memory accounting reference](../../memory-accounting-reference.md)
+- [Procguard v1.5.1](https://github.com/denispol/procguard/tree/v1.5.1)
+- [GNU Parallel memory and launch controls](https://www.gnu.org/software/parallel/parallel.html)
 - [Agent CLI Startup Memory](research-2026-09-01-agent-cli-memory-usage.md)
 - [RunPool host-safety plan](../specs/active/plan-2026-09-01-runpool-host-safety.md)
 - [Safeproc local-incubation plan](../specs/active/plan-2026-09-01-safeproc-local-incubation.md)
