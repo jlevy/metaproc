@@ -3,9 +3,9 @@ type: is
 id: is-01m1fyjty6mtw6ye2tsd4tdavc
 title: Incubate the safeproc workspace and quality gates
 kind: task
-status: open
+status: closed
 priority: 1
-version: 2
+version: 4
 spec_path: docs/project/specs/active/plan-2026-09-01-safeproc-local-incubation.md
 labels: []
 dependencies:
@@ -13,6 +13,10 @@ dependencies:
     target: is-01m1fyjvadnyfrx1cbvtsmmar0
 parent_id: is-01m1fxnwnyqvq1gg8ak7317kyc
 created_at: 2026-09-02T02:18:48.133Z
-updated_at: 2026-09-02T02:18:48.524Z
+updated_at: 2026-09-02T04:12:20.166Z
+closed_at: 2026-09-02T04:12:20.166Z
+close_reason: packages/safeproc is a uv workspace member with one root lockfile, strict typing, enforced import boundary, safeproc-* Make targets, verify-safeproc, Ubuntu and macOS CI jobs, and a source-free build gate. Branch claude/safeproc-incubation.
+resolution: null
+duplicate_of: null
 ---
 Add packages/safeproc as an independently buildable uv workspace member with package metadata, no runtime dependencies, targeted Make and CI gates, strict package-local lint and typing, one root lockfile, source-free builds, and no publication path.
