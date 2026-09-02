@@ -81,6 +81,29 @@ The browser is a standalone package with its own
 Metaproc owns the [domain plugin](../src/metaproc/metabrowser_plugin/README.md) and
 retains historical framework [performance notes](performance-notes.md).
 
+## The safeproc Workspace Member
+
+`packages/safeproc` is a separate distribution incubating in this repository as a uv
+workspace member: process-tree monitoring and host-safety coordination, with no runtime
+dependencies and no imports from Metaproc.
+It shares the root lockfile and supply-chain policy but keeps its own strict typing,
+lint rules, tests, and source-free build.
+
+```shell
+make safeproc-format
+make safeproc-lint-check
+make safeproc-test
+make safeproc-build
+```
+
+`make verify` includes all of them; ordinary Metaproc edit loops may skip them.
+The package README and `packages/safeproc/docs/architecture.md` describe what exists,
+and the
+[incubation plan](project/specs/active/plan-2026-09-01-safeproc-local-incubation.md)
+owns its phases and extraction gates.
+Metaproc does not depend on it at runtime, and no release of it is published from this
+repository.
+
 ## Conventions
 
 - **Naming, structure, and file-format rules:**

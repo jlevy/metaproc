@@ -68,6 +68,9 @@ pre-push gates.
   Domain process specs, schemas, handlers, fixtures, commands, and configuration belong
   in downstream packages.
 - Keep cloud support behind optional extras and import guards.
+- `packages/safeproc` is a separate workspace distribution: it must not import
+  `metaproc`, and Metaproc must not depend on it until an external release passes the
+  dependency gates. Run the `safeproc-*` Make targets after changing it.
 - Preserve public CLI flags, process-file fields, runtime artifact shapes, plugin entry
   points, and Agent Skill behavior unless the change includes a migration plan.
 - The Metabrowser plugin owns Metaproc-specific views and uses the public Metabrowser

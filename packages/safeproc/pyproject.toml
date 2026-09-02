@@ -1,0 +1,133 @@
+[project]
+name = "safeproc"
+dynamic = ["version"]
+description = "Process-tree monitoring, owned launch, and host-safety coordination for macOS and Linux"
+authors = [
+    { name = "Joshua Levy", email = "joshua@cal.berkeley.edu" },
+]
+maintainers = [
+    { name = "Joshua Levy", email = "joshua@cal.berkeley.edu" },
+]
+readme = "README.md"
+# The repository license during incubation. The standalone license is an explicit
+# extraction decision; see the incubation plan under Supply Chain, Licensing, and
+# Publication.
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.12,<4.0"
+classifiers = [
+    # Makes an accidental upload from this repository fail visibly. Removed only by the
+    # extraction plan, in the standalone repository.
+    "Private :: Do Not Upload",
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+    "Topic :: System :: Monitoring",
+]
+keywords = ["memory", "monitoring", "process", "supervisor"]
+# Empty by design: the rescue path must import and start under host pressure without a
+# resolver, a wheel build, or a third-party import. A package test enforces this.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/jlevy/metaproc/tree/main/packages/safeproc"
+Repository = "https://github.com/jlevy/metaproc"
+
+[project.scripts]
+safeproc = "safeproc.cli:main"
+
+[dependency-groups]
+# Same specifiers as the repository root so the shared lockfile resolves each tool once.
+dev = [
+    "pytest>=9.1.1",
+    "pytest-timeout>=2.4.0",
+    "ruff>=0.16.1",
+    "basedpyright>=1.39.9",
+    "codespell>=2.4.3",
+]
+
+# ---- Build system ----
+
+[build-system]
+requires = ["hatchling==1.31.0", "uv-dynamic-versioning==0.14.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+exclude = ["/dist/", "/.pytest_cache/", "/.ruff_cache/"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/safeproc"]
+
+[tool.hatch.version]
+source = "uv-dynamic-versioning"
+
+[tool.uv-dynamic-versioning]
+vcs = "git"
+style = "pep440"
+# Package tags are `safeproc-vX.Y.Z` so they cannot collide with Metaproc's `vX.Y.Z`
+# tags while both live in one repository. Untagged builds get a clearly non-release
+# fallback.
+pattern-prefix = "safeproc-"
+fallback-version = "0.0.0"
+bump = true
+
+# ---- Ruff ----
+
+[tool.ruff]
+extend = "../../pyproject.toml"
+line-length = 100
+
+[tool.ruff.lint]
+# The repository floor plus the failure-state rules the incubation plan asks for: async
+# mistakes, pathlib over os.path, blind excepts, and simplifications.
+extend-select = ["ASYNC", "PTH", "SIM", "BLE", "TRY"]
+extend-ignore = [
+    "TRY003",  # long exception messages are the point of a diagnostic error
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["safeproc"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+# The import boundary, enforced at lint time as well as by the package test.
+"metaproc".msg = "safeproc must not import metaproc; see docs/architecture.md"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["BLE001", "PTH"]
+
+# ---- Pytest ----
+
+[tool.pytest.ini_options]
+python_files = ["*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+testpaths = ["tests"]
+pythonpath = ["."]
+timeout = 60
+timeout_method = "thread"
+
+# ---- Codespell ----
+
+[tool.codespell]
+ignore-words-list = "ue,fo"
+
+# ---- Type checking ----
+
+[tool.basedpyright]
+include = ["src", "tests"]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+reportMissingTypeStubs = false
+reportImplicitOverride = false
+reportUnusedCallResult = false
+reportImplicitStringConcatenation = false
+# Platform providers wrap ctypes and procfs, whose values arrive untyped and are
+# narrowed at the boundary; the strict families for unknown members stay on.
+reportUnnecessaryIsInstance = false

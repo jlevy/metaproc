@@ -21,6 +21,7 @@ REPOSITORY_ONLY_PARTS = {
     ".venv",
     "dist",
     "node_modules",
+    "packages",
 }
 REPOSITORY_ONLY_NAMES = {".copier-answers.yml", "AGENTS.md", "CLAUDE.md", "skills-lock.json"}
 EXPECTED_LICENSE_METADATA = {

@@ -121,6 +121,7 @@ exclude = [
     "/.venv/",
     "/dist/",
     "/node_modules/",
+    "/packages/",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -133,6 +134,14 @@ source = "uv-dynamic-versioning"
 vcs = "git"
 style = "pep440"
 bump = true
+
+# ---- Workspace ----
+#
+# packages/safeproc incubates as an independently buildable member with one root lockfile.
+# It is not a Metaproc dependency; see docs/project/specs/active/plan-2026-09-01-safeproc-local-incubation.md.
+
+[tool.uv.workspace]
+members = ["packages/*"]
 
 # ---- Ruff ----
 

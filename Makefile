@@ -25,12 +25,12 @@ unexport NPM_CONFIG_FROZEN_LOCKFILE
 unexport NPM_CONFIG_MINIMUM_RELEASE_AGE
 unexport NPM_CONFIG_BEFORE
 
-.PHONY: default install hooks-install format format-markdown lint lint-check test audit lock upgrade build verify clean
+.PHONY: default install hooks-install format format-markdown lint lint-check test audit lock upgrade build verify clean safeproc-install safeproc-format safeproc-lint-check safeproc-test safeproc-build verify-safeproc
 
 default: install format lint test
 
 install:
-	$(UV) sync --all-extras --all-groups --locked
+	$(UV) sync --all-extras --all-groups --all-packages --locked
 	npm ci
 
 hooks-install: install
@@ -86,16 +86,52 @@ lock:
 
 upgrade:
 	$(UV) lock --upgrade
-	$(UV) sync --all-extras --all-groups --frozen
+	$(UV) sync --all-extras --all-groups --all-packages --frozen
 
 build:
 	$(UV) build --clear --no-build-isolation
 	$(UV_RUN) python -m devtools.check_distribution
 
-verify: install lint-check test audit build
+verify: install lint-check test audit build verify-safeproc
+
+# ---- safeproc workspace member ----
+#
+# Targeted gates that pass the nested pyproject.toml explicitly so the package keeps an
+# extractable configuration. `verify` includes them; unrelated edit loops may skip them.
+
+SAFEPROC := packages/safeproc
+SAFEPROC_CFG := $(SAFEPROC)/pyproject.toml
+SAFEPROC_PATHS := $(SAFEPROC)/src $(SAFEPROC)/tests
+
+# Installs only the member and its dev group, without pruning the root environment, so
+# a macOS runner needs neither Node nor the Metaproc extras.
+safeproc-install:
+	$(UV) sync --package safeproc --group dev --locked --inexact
+
+safeproc-format: | safeproc-install
+	$(UV_RUN) codespell --write-changes --toml $(SAFEPROC_CFG) $(SAFEPROC_PATHS) $(SAFEPROC)/README.md
+	$(UV_RUN) ruff check --fix --config $(SAFEPROC_CFG) $(SAFEPROC_PATHS)
+	$(UV_RUN) ruff format --config $(SAFEPROC_CFG) $(SAFEPROC_PATHS)
+
+safeproc-lint-check: | safeproc-install
+	$(UV_RUN) codespell --toml $(SAFEPROC_CFG) $(SAFEPROC_PATHS) $(SAFEPROC)/README.md
+	$(UV_RUN) ruff check --config $(SAFEPROC_CFG) $(SAFEPROC_PATHS)
+	$(UV_RUN) ruff format --check --config $(SAFEPROC_CFG) $(SAFEPROC_PATHS)
+	$(UV_RUN) basedpyright --project $(SAFEPROC_CFG)
+	$(UV_RUN) python -m devtools.check_safeproc_boundary
+
+safeproc-test: | safeproc-install
+	$(UV_RUN) pytest -c $(SAFEPROC_CFG) --rootdir $(SAFEPROC) $(SAFEPROC)/tests
+
+safeproc-build: | safeproc-install
+	$(UV) build --package safeproc --no-sources --clear --no-build-isolation -o $(SAFEPROC)/dist
+	$(UV_RUN) python -m devtools.check_safeproc_distribution
+
+verify-safeproc: safeproc-lint-check safeproc-test safeproc-build
 
 clean:
 	-rm -rf dist/
+	-rm -rf packages/safeproc/dist/
 	-rm -rf *.egg-info/
 	-rm -rf .pytest_cache/
 	-rm -rf .ruff_cache/

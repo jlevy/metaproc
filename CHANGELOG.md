@@ -7,6 +7,17 @@ development series.
 
 ## [Unreleased][unreleased]
 
+### Added
+
+- `packages/safeproc`, a uv workspace member incubating the process-safety runtime:
+  brokerless monitoring of an existing process tree with observation as the default, a
+  pure pressure engine carrying the memory guard’s calibrated policy, deterministic
+  journal replay, a Linux procfs provider, and a macOS provider ported from the guard
+  and awaiting native validation.
+  It has no runtime dependencies, is not a Metaproc dependency, and is not published
+  from this repository.
+  `make verify` now includes its gates; CI runs its tests on Ubuntu and macOS.
+
 ### Documentation
 
 - The core documentation set now ships inside the package.

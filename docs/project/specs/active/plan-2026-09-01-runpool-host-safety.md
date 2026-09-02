@@ -159,7 +159,7 @@ cannot be confused with package phases.
   A working directory matters when the client maps it to a project-scoped state bucket;
   it is not itself a causal memory variable.
 - Promise Windows support in the first release.
-  Windows is deferred, not declined; the decision and the starting capability record are
+  Windows is deferred indefinitely as a future phase; the starting capability record is
   under Platform Backends below.
 - Publish Metaproc’s task scheduler, retry engine, execution lanes, adapters, or run
   artifacts as part of the host-safety library.
@@ -1054,8 +1054,9 @@ and must not make systemd or privileged cgroup delegation a baseline dependency.
 Linux has no failure corpus yet; reserve fraction, stall thresholds, and settle windows
 are calibrated on a dedicated host under bead `mp-sfc0` before Linux defaults ship.
 
-**Windows:** deferred, not declined.
-The first release supports macOS and Linux.
+**Windows:** deferred indefinitely as a future phase.
+The first release supports macOS and Linux, and no later release is scheduled to add
+Windows; the record below exists so that a future decision starts from facts.
 Windows has a stronger containment primitive than either: a Job Object with
 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` contains a tree, `TerminateJobObject` ends it
 atomically, `QueryInformationJobObject` reports exact tree memory, and
@@ -1068,8 +1069,8 @@ process cost is `GetProcessMemoryInfo` `PrivateUsage`, not working set, which is
 with the same double counting; degradation is commit charge approaching the commit
 limit, with no stall-time equivalent.
 There is no safe pause primitive, so a Windows policy runs without producer pauses.
-Bead `mp-4ksz` writes the capability record and provider design after the macOS and
-Linux providers exist; no Windows work is promised for the first release.
+Bead `mp-4ksz` holds the capability record and provider design, unscheduled; no Windows
+work is promised for any release until that decision is reopened.
 
 ### Visibility and Operator Control
 

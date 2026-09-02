@@ -111,9 +111,9 @@ Those are stop conditions, not future cleanup items.
 - Make Metaproc depend at runtime on a workspace-only distribution.
 - Preserve a public Safeproc API before its first external release.
 - Promise Windows support in the first release.
-  Windows is deferred, not declined; the system plan records the decision and the
-  starting capability record, and bead `mp-4ksz` writes the provider design after the
-  macOS and Linux providers exist.
+  Windows is deferred indefinitely as a future phase.
+  The system plan keeps the starting capability record; bead `mp-4ksz` holds the
+  provider design unscheduled until a decision reopens it.
 - Copy Procguard source.
   Its edge cases inform contract tests; its implementation and formal claims are not
   Safeproc provenance.
@@ -672,7 +672,7 @@ The system plan’s integration stages begin after Phase 3 and are named, not nu
 - [x] Defer every pool API and extraction decision.
 - [x] Inspect the latest simple-modern-uv template and select local adaptation mode.
 - [x] Specify the uv workspace, package tree, quality gates, and extraction boundary.
-- [ ] Merge this docs-only pull request before beginning package implementation.
+- [x] Merge this docs-only pull request before beginning package implementation.
 
 ### Phase 1: Workspace and Pure Core
 
