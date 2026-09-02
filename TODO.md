@@ -11,12 +11,14 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
 
 ## Active Development
 
-- **Process-tree and host safety** (`mp-qigc`): build one cross-platform safety core
-  with owned pre-execution supervision and brokerless monitoring of existing process
-  trees; add host-wide startup admission and containment without a standalone pool,
-  integrate Metaproc’s retained RunPool through the safe-process boundary, and defer any
-  pool-extraction spike until that seam has operating evidence
-  ([plan](docs/project/specs/active/plan-2026-09-01-runpool-host-safety.md)).
+- **Process-tree and host safety** (`mp-bd6v`; umbrella feature `mp-qigc`): incubate a
+  standalone `safeproc` package with owned pre-execution supervision and brokerless
+  monitoring of existing process trees; add cross-platform host admission and
+  containment without a standalone pool; integrate Metaproc’s retained RunPool through
+  that boundary; and defer any pool-extraction spike until the seam has operating
+  evidence
+  ([system plan](docs/project/specs/active/plan-2026-09-01-runpool-host-safety.md),
+  [package plan](docs/project/specs/active/plan-2026-09-01-safeproc-local-incubation.md)).
 - **v0.4.0 release** (`mp-1n2a`): close the remaining loose ends between `main` and a
   tag — two correctness defects in silent paths, release records that disagree with the
   tree, first-party dependency currency, and stale tracking.

@@ -88,6 +88,11 @@ Only after that package and integration seam have stabilized should a separate s
 evaluate whether extracting the pool would reduce duplication without imposing a second
 queue or lockstep releases.
 
+The [Safeproc Local Incubation](plan-2026-09-01-safeproc-local-incubation.md) plan owns
+the package layout, uv workspace, quality gates, versioning, and history-preserving
+extraction mechanics.
+This plan remains authoritative for host policy and Metaproc rollout.
+
 ## Goals
 
 - Keep macOS and Linux hosts responsive when one or several local Metaproc runs launch
@@ -317,7 +322,7 @@ Its state root must be host-local, private to the effective user, and neutral ra
 than living permanently under `.metaproc`:
 
 ```text
-<host-safety-state>/<host-instance>/local-agents/
+<safeproc-state>/<host-instance>/local-agents/
   broker-lock/lease.json
   broker.sock
   host-state.json
@@ -650,7 +655,7 @@ before the memory-heavy command executes.
 Its standalone interface is conceptually:
 
 ```text
-host-safety run <resource-profile> -- <command> [args...]
+safeproc run --profile <resource-profile> -- <command> [args...]
 ```
 
 A short-lived launch wrapper may inherit the caller’s environment, working directory,
@@ -681,7 +686,7 @@ Existing-process monitoring remains an independent, first-class use case for a p
 that did not launch through the runtime:
 
 ```text
-host-safety watch --pid <pid>
+safeproc watch --pid <pid>
 ```
 
 By default, this command observes and journals without sending signals.
@@ -939,7 +944,8 @@ The proposed layers reuse the working parts of these approaches at their correct
 ## API and Artifact Changes
 
 The process types below are design decisions.
-The package and executable names remain a Phase 0 decision.
+`safeproc` is the working package and executable name; registry availability and final
+external naming remain extraction gates.
 
 - Define a versioned, project-neutral broker protocol for resource requests, launch
   identity registration, heartbeats, release, host samples, embargoes, and incidents.
@@ -988,6 +994,10 @@ The package and executable names remain a Phase 0 decision.
 ## Implementation Plan
 
 ### Phase 0: Prove the Reusable Boundary
+
+Implement the repository and package mechanics through the
+[Safeproc Local Incubation](plan-2026-09-01-safeproc-local-incubation.md) plan.
+The checklist below defines the architectural outcomes that package work must satisfy.
 
 - [ ] Specify neutral process request, result, lifecycle event, resource,
   process-identity, host-sample, journal, and client-broker protocol models without
@@ -1324,8 +1334,8 @@ A durable job server, retry database, or workflow queue is outside this plan.
   to guarantee that `watch` and the sentinel hot path import only the standard library?
 - If the later extraction gate passes, should `SafeRunPool` be public or remain an
   internal compatibility layer for Metaproc?
-- What project and executable names describe owned launch and existing-process
-  monitoring without implying a workflow scheduler?
+- Does the working `safeproc` project and executable name remain available and clear at
+  extraction time? Recheck both package and repository registries before creation.
 - Which current RunPool configuration and event fields are generic enough to move, and
   which remain Metaproc projections or compatibility shims?
 - Where cgroup delegation exists, should one cgroup contain each run, each execution
@@ -1339,6 +1349,7 @@ A durable job server, retry database, or workflow queue is outside this plan.
 - [RunPool design backlog](../../design/backlog/arch-runpool-backlog.md)
 - [Agent CLI startup-memory research](../../research/research-2026-09-01-agent-cli-memory-usage.md)
 - [Host memory-accounting research](../../research/research-2026-09-01-host-memory-accounting-and-control.md)
+- [Safeproc Local Incubation](plan-2026-09-01-safeproc-local-incubation.md)
 - [Standalone macOS memory guard](https://gist.github.com/jlevy/5b43e0d44166b9c7fe8157ee938cb0d5)
 - [Procguard v1.5.1 source](https://github.com/denispol/procguard/tree/v1.5.1)
 - [GNU Parallel memory and launch controls](https://www.gnu.org/software/parallel/parallel.html)

@@ -28,6 +28,20 @@ in a completed specification.
 [Research records](research/) preserve measurements, source analysis, and other evidence
 used by plans without presenting proposed behavior as part of the shipped system.
 
+The host-safety record set is intentionally small:
+
+- [Agent CLI Startup Memory](research/research-2026-09-01-agent-cli-memory-usage.md)
+  owns measured client demand and adapter-state effects.
+- [Host Memory Accounting and Control](research/research-2026-09-01-host-memory-accounting-and-control.md)
+  owns platform gauges and the admission, pacing, and containment model.
+
+Those records feed the
+[RunPool Host Safety Envelope](specs/active/plan-2026-09-01-runpool-host-safety.md) and
+the narrower
+[Safeproc Local Incubation](specs/active/plan-2026-09-01-safeproc-local-incubation.md)
+package plan. Consumer-specific incident records and deployment runbooks remain in the
+consumer that owns them.
+
 ## Design Records
 
 - [Design proposals](design/metaproc-design-proposals.md): the future-work backlog for

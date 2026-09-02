@@ -8,8 +8,8 @@ status: Complete
 
 **Date:** 2026-09-01
 
-**Status:** Gemini cause established for version 0.40.1; repeated and workload-matched
-comparisons remain open
+**Status:** Gemini cause reproduced on versions 0.40.1 and 0.55.1 and confirmed in
+0.58.0 source; repeated and workload-matched comparisons remain open
 
 ## Overview
 
@@ -17,13 +17,21 @@ An agent CLI does not have one stable memory cost.
 Startup state, client version, configuration, prompt, tools, and model can change the
 complete process tree by several gigabytes before it settles.
 
-The most important measured case is Gemini CLI 0.40.1. The same short prompt and model
-peaked near 0.25 GB with clean project state and 5.15 GB with an accumulated 3.4 GB
-project-history bucket.
-Disabling Gemini’s built-in session-retention cleanup against that same copied state
-returned the peak to 0.26 GB. Changing the working directory had appeared to fix the
-spike because it selected a different project-state bucket, not because Gemini was
-scanning fewer repository files.
+The most important measured case is Gemini CLI. The same short prompt, model, flags,
+repository, and host peaked near 0.25 GB with clean project state and 5.15 GB with an
+accumulated 3.4 GiB project-history bucket on version 0.40.1. Version 0.55.1 reproduced
+the split at 0.39 GB and 5.07 GB. Disabling Gemini’s built-in session-retention cleanup
+against the same copied state returned the peaks to 0.26 GB and 0.40 GB respectively.
+Changing the working directory had appeared to fix the spike because it selected a
+different project-state bucket, not because Gemini was scanning fewer repository files.
+
+The accumulated bucket was durable session state, not an API cache.
+It contained about 12,300 JSONL conversation files, 2.9 GiB of chat history, 517 MiB of
+offloaded tool output, and a negligible project-memory file.
+Gemini uses this state for resume, search, rewind, checkpoints, tool-output recovery,
+and optional memory mining.
+A fresh headless run may isolate it only when its process contract supplies the
+settings, authentication, instructions, and artifacts it still needs.
 
 This result changes the safety model in two ways:
 
@@ -35,7 +43,9 @@ The companion
 [Host Memory Accounting and Control](research-2026-09-01-host-memory-accounting-and-control.md)
 defines the platform gauges and control model.
 The [RunPool host-safety plan](../specs/active/plan-2026-09-01-runpool-host-safety.md)
-owns implementation.
+owns the system design, and the
+[Safeproc local-incubation plan](../specs/active/plan-2026-09-01-safeproc-local-incubation.md)
+owns the standalone package boundary.
 
 ## Questions
 
@@ -59,7 +69,7 @@ These are startup controls, not representative production workloads.
 
 | Client | Version | Probe mode |
 | --- | --- | --- |
-| Gemini CLI | 0.40.1 | Vertex AI, Flash model, noninteractive stream output |
+| Gemini CLI | 0.40.1 and 0.55.1 | Vertex AI, Flash model, noninteractive stream output |
 | Claude Code | 2.1.233 | Haiku, print mode, no tools or session persistence |
 | Codex CLI | 0.135.0 | `gpt-5.5`, ephemeral exec, read-only sandbox |
 | Pi | 0.62.0 | Configured Vertex model, print mode, no tools or session |
@@ -89,23 +99,63 @@ The clean-home large-checkout arm rules out checkout size as the cause.
 The copied-state and retention-disabled pair holds the history constant and isolates
 automatic session cleanup as the cause.
 
-### Source Path in Gemini CLI 0.40.1
+The upgraded release preserved the causal result:
 
-The official 0.40.1 source matches the experiment:
+| Gemini 0.55.1 arm | Peak footprint | Peak RSS | Observed duration | Outcome |
+| --- | ---: | ---: | ---: | --- |
+| Clean isolated home | 0.39 GB | 0.47 GB | 3.1 s | success |
+| Clean home plus copied 3.4 GiB project history | **5.07 GB** | **4.68 GB** | 21.7 s | success |
+| Same copied history, session retention disabled | **0.40 GB** | **0.48 GB** | 5.3 s | success |
+
+The two state-bearing 0.55.1 arms used independent filesystem clones so the first
+cleanup could not alter the second arm’s input.
+
+### Cross-Version Source Confirmation
+
+The official 0.40.1 source matches the experiment.
+A 2026-09-01 review of 0.55.1, 0.58.0, and upstream commit
+`4963a4456a886bb6af7dcfb807ad6e3e46ce46fc` found the same memory-critical path:
 
 1. Session cleanup is enabled by default through
-   [`general.sessionRetention.enabled`](https://github.com/google-gemini/gemini-cli/blob/v0.40.1/docs/cli/settings.md).
-2. Startup calls
-   [`cleanupExpiredSessions`](https://github.com/google-gemini/gemini-cli/blob/v0.40.1/packages/cli/src/utils/sessionCleanup.ts),
-   which enumerates the current project’s chat directory.
-3. [`getAllSessionFiles`](https://github.com/google-gemini/gemini-cli/blob/v0.40.1/packages/cli/src/utils/sessionUtils.ts)
-   creates one promise per session and waits on `Promise.all`.
-4. [`loadConversationRecord`](https://github.com/google-gemini/gemini-cli/blob/v0.40.1/packages/core/src/services/chatRecordingService.ts)
-   still streams and parses every JSONL line in metadata-only mode.
+   [`general.sessionRetention.enabled`](https://github.com/google-gemini/gemini-cli/blob/v0.58.0/docs/cli/settings.md).
+2. Startup launches
+   [`cleanupExpiredSessions`](https://github.com/google-gemini/gemini-cli/blob/v0.58.0/packages/cli/src/utils/sessionCleanup.ts)
+   without awaiting it, so cleanup overlaps authentication and model work.
+3. [`getAllSessionFiles`](https://github.com/google-gemini/gemini-cli/blob/v0.58.0/packages/cli/src/utils/sessionUtils.ts)
+   creates one asynchronous load per session and waits on an unbounded `Promise.all`.
+4. [`loadConversationRecord`](https://github.com/google-gemini/gemini-cli/blob/v0.58.0/packages/core/src/services/chatRecordingService.ts)
+   opens each file, decodes and parses every JSONL line, and reconstructs session
+   metadata even in metadata-only mode.
+
+The relevant files were unchanged between 0.55.1 and 0.58.0, and the reviewed upstream
+commit retained the unbounded enumeration and full-line parsing.
+Newer releases had improved corrupt-session handling and related cleanup, but had not
+introduced a metadata index or bounded concurrency at the reviewed commit.
 
 The behavior is version-specific.
 A supported Gemini upgrade must recheck both source and measurements before retaining
 this explanation or its calibration.
+
+### Project State and Headless Isolation
+
+Current Gemini versions map a normalized project root to a project-scoped directory
+under the Gemini home.
+Changing the working directory can therefore select a fresh state bucket, but the
+directory itself is not the causal memory input.
+
+`GEMINI_CLI_HOME` is broader than a session-directory override.
+Gemini also resolves settings, credentials, instructions, commands, skills, policies,
+the project registry, and project state relative to that home.
+A launcher that selects an isolated home must re-supply every required part of that
+contract rather than assuming host authentication and policy remain visible.
+
+For a fresh invocation that does not resume, search, rewind, or recover a prior session,
+the old chat transcripts and their matching offloaded tool-output files need not be
+shared with the new run.
+Required repository inputs, explicit prompts, authentication, settings, policies, and
+intended project memory remain independent inputs and must be preserved deliberately.
+Disabling automatic retention prevents the startup cleanup scan; it does not delete
+accumulated history or provide an external retention policy.
 
 ### Heap Caps Do Not Solve the Problem
 
@@ -125,8 +175,10 @@ CLI effect:
 
 | Client and state | Peak footprint | Peak RSS | Process count | Observed duration |
 | --- | ---: | ---: | ---: | ---: |
-| Gemini, clean or retention disabled | 0.25-0.26 GB | 0.33-0.35 GB | 4 | 2.2-2.5 s |
-| Gemini, copied 3.4 GB project history | **5.15 GB** | **4.89 GB** | 4 | 19.6 s |
+| Gemini 0.40.1, clean or retention disabled | 0.25-0.26 GB | 0.33-0.35 GB | 4 | 2.2-2.5 s |
+| Gemini 0.40.1, copied 3.4 GiB project history | **5.15 GB** | **4.89 GB** | 4 | 19.6 s |
+| Gemini 0.55.1, clean or retention disabled | 0.39-0.40 GB | 0.47-0.48 GB | 4 | 3.1-5.3 s |
+| Gemini 0.55.1, copied 3.4 GiB project history | **5.07 GB** | **4.68 GB** | 3 | 21.7 s |
 | Claude Code 2.1.233 | 0.59 GB | 0.91 GB | 11 | 4.7 s |
 | Codex CLI 0.135.0, `gpt-5.5` | 0.86 GB | 0.96 GB | 14 | 7.1 s |
 | Pi 0.62.0 | 0.21 GB | 0.21 GB | 2 | 2.3 s |
@@ -160,11 +212,16 @@ agent leaves.
 - Profile identity must include client version, platform, model, and the relevant
   adapter-state regime.
   Working directory matters only when it selects different state.
-- Headless Gemini 0.40.1 runs should disable automatic session cleanup or use isolated,
-  bounded state. Disabling cleanup does not delete old history, so retention remains a
-  separate maintenance operation.
+- Headless Gemini runs on the measured versions should disable automatic session cleanup
+  or use isolated, bounded state.
+  Disabling cleanup does not delete old history, so retention remains a separate
+  maintenance operation.
 - Per-run working directories remain useful isolation, but documentation must not call
   the result repository-scan avoidance.
+- At this repository commit, the Gemini adapter accepts `no_session_persistence` as a
+  configuration key but does not consume it in command or environment construction.
+  The implementation plan must either give that setting a tested Gemini-native contract
+  or reject it rather than treating its presence as mitigation.
 - Known adapter mitigations reduce demand; they do not replace fail-closed host
   admission, startup reservations, or cross-client pacing.
 - Passive profiling must be distinct from a dry-run intervention mode.
@@ -178,7 +235,8 @@ agent leaves.
 - Repeat every client across cold and warm starts.
 - Sweep Gemini session count and bytes independently.
 - Run a common tool-using workload and record complete startup curves.
-- Revalidate the retention implementation and setting on each supported Gemini release.
+- Revalidate the retention implementation, native setting, and isolated-home contract on
+  each supported Gemini release.
 - Align the Codex client and model catalog before treating its one-shot result as a
   formal default.
 - Establish equivalent Linux profiles with PSS or cgroup accounting.
@@ -186,9 +244,14 @@ agent leaves.
 ## References
 
 - [Gemini CLI 0.40.1](https://github.com/google-gemini/gemini-cli/tree/v0.40.1)
-- [Gemini CLI settings](https://github.com/google-gemini/gemini-cli/blob/v0.40.1/docs/cli/settings.md)
+- [Gemini CLI 0.58.0](https://github.com/google-gemini/gemini-cli/tree/v0.58.0)
+- [Gemini CLI settings](https://github.com/google-gemini/gemini-cli/blob/v0.58.0/docs/cli/settings.md)
+- [Gemini CLI session management](https://github.com/google-gemini/gemini-cli/blob/v0.58.0/docs/cli/session-management.md)
+- [Gemini CLI shared-environment isolation](https://github.com/google-gemini/gemini-cli/blob/v0.58.0/docs/cli/enterprise.md#user-isolation-in-shared-environments)
+- [Metaproc Gemini adapter](../../../src/metaproc/adapters/gemini.py)
 - [Host Memory Accounting and Control](research-2026-09-01-host-memory-accounting-and-control.md)
 - [RunPool host-safety plan](../specs/active/plan-2026-09-01-runpool-host-safety.md)
+- [Safeproc local-incubation plan](../specs/active/plan-2026-09-01-safeproc-local-incubation.md)
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

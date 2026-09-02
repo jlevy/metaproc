@@ -27,7 +27,9 @@ The durable control model has three separate mechanisms:
 The [agent CLI research](research-2026-09-01-agent-cli-memory-usage.md) supplies
 measured startup curves.
 The [RunPool host-safety plan](../specs/active/plan-2026-09-01-runpool-host-safety.md)
-owns implementation.
+owns the system design, and the
+[Safeproc local-incubation plan](../specs/active/plan-2026-09-01-safeproc-local-incubation.md)
+owns the standalone package boundary and repository mechanics.
 
 ## Questions
 
@@ -147,6 +149,53 @@ admission. They must not authorize destructive action.
 Shedding requires sustained measured danger, attribution confidence, and one elected
 responder so independent pools do not kill simultaneously.
 
+## Metaproc Implementation Snapshot
+
+The 2026-09-01 code audit found useful foundations and several gaps.
+This table records the state at that commit; implementation must recheck it rather than
+treating an open plan as evidence that the code is unchanged.
+
+| Concern | Current behavior | Required change |
+| --- | --- | --- |
+| macOS host budget | `memory_pressure.py` uses free, inactive, and purgeable `vm_stat` pages and reads memorystatus only as an alarm | Preserve the semantics while replacing subprocess sampling on the crisis path with native calls |
+| Linux host budget | The provider uses `MemAvailable` and optionally refines degradation with host PSI | Preserve the byte budget; model PSI as stall evidence rather than an inverted capacity percentage |
+| Cross-process admission | `HostAdmissionGate` serializes a count-only slot lease across independent Metaproc parents | Introduce versioned resource claims and host-wide launch pacing without rewriting live v1 leases |
+| Direct scalar launch | A timeout or slot-directory `OSError` logs a warning and launches without a claim | Fail closed for ordinary operation; retain only an explicit unsafe development override |
+| Process profile | Initial concurrency uses one `estimated_process_rss_bytes` value | Represent startup peak, startup duration, steady cost, state regime, and launch spacing |
+| Failure domain | Scheduling, telemetry, and response remain inside Metaproc processes | Add an elected broker or sentinel that can embargo launches if one RunPool stalls |
+
+The current macOS measurement uses helper commands for `vm_stat` and `sysctl`. That is
+acceptable for ordinary pool telemetry but not a demonstrated crisis-path guarantee: a
+memory-starved host may be unable to fork the very helper required to decide whether it
+is safe. The independent sentinel should use native host and task APIs, record actual
+cadence and lag, and treat a missing or stale sample as a capability failure rather than
+inventing safe headroom.
+
+## Reusable Guard Evidence
+
+A downstream macOS guard supplied operating evidence that is useful beyond its original
+script:
+
+- a strictly passive complete-tree observer ran for 4,896 one-second samples beside a
+  healthy fan-out, survived a sleep and wake cycle, and took no action;
+- a synthetic tree established that a small launcher PID may not own the memory and that
+  cleanup has to cover descendants rather than the root alone;
+- incident use later recorded 352 worker sheds across 22 workload legs when the guard
+  was configured as a throughput governor, consuming completed model work and proving
+  that routine intervention belongs in admission and pacing instead;
+- during one compressed-memory episode, tree RSS fell from 6.17 GB to 1.24 GB while host
+  compressed memory rose from 17.6 GB to 26.1 GB, confirming that RSS can rank emergency
+  victims in the wrong order;
+- observation and intervention simulation must remain different modes: a command that
+  pauses producers, even if it suppresses termination, is not a passive profiler.
+
+The script’s zero-dependency, plain-argument-parser shape is worth retaining in the
+standalone safety path.
+Its macOS-only gauges, helper-process sampling, and incident-calibrated policy are
+evidence inputs rather than a library API to preserve.
+The reusable design should port the contracts and replay corpus to macOS and Linux, then
+validate one shared policy over normalized evidence.
+
 ## Owned Launch and Existing-Process Monitoring
 
 Owned launch can establish admission, isolated group identity, and cleanup authority
@@ -187,6 +236,9 @@ instead of converting every nonzero exit into the same retry or prompt diagnosis
 7. Persist enough evidence to replay pressure decisions and distinguish preemption from
    workload failure.
 8. Recalibrate adapter profiles by version, platform, model, and relevant state regime.
+9. Keep the first Safeproc release narrower than a pool: brokerless passive monitoring,
+   owned launch, a small broker or sentinel, and deterministic replay over one safety
+   core.
 
 ## References
 
@@ -199,6 +251,8 @@ instead of converting every nonzero exit into the same retry or prompt diagnosis
 - [Linux cgroup v2 memory controller](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory)
 - [Agent CLI Startup Memory](research-2026-09-01-agent-cli-memory-usage.md)
 - [RunPool host-safety plan](../specs/active/plan-2026-09-01-runpool-host-safety.md)
+- [Safeproc local-incubation plan](../specs/active/plan-2026-09-01-safeproc-local-incubation.md)
+- [Standalone macOS memory guard](https://gist.github.com/jlevy/5b43e0d44166b9c7fe8157ee938cb0d5)
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.
