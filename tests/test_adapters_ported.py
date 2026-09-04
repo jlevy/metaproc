@@ -512,15 +512,6 @@ class TestPiCliAdapter:
         assert "--provider" in cmd
         assert "--model" in cmd
 
-    def test_no_session_flag_when_persistence_requested(self) -> None:
-        """An explicit `false` keeps sessions instead of being silently overridden."""
-        cmd = self.adapter.build_command(self.prompt_file, {"no_session_persistence": False}, {})
-        assert "--no-session" not in cmd
-
-    def test_no_session_flag_present_when_persistence_disabled(self) -> None:
-        cmd = self.adapter.build_command(self.prompt_file, {"no_session_persistence": True}, {})
-        assert "--no-session" in cmd
-
     def test_full_config_golden(self) -> None:
         """Golden test: Pi with all relevant config keys."""
         config: dict[str, object] = {

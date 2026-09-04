@@ -273,15 +273,7 @@ class PiCliAdapter:
         _pi_version_drift()
         flags = _build_pi_flags(merged_config, variables)
         pi_binary = _resolve_pi_binary()
-        # `no_session_persistence` is honoured here rather than ignored. The flag
-        # was previously unconditional, so a spec asking for session persistence
-        # was silently overridden -- the same shape that made the key misleading
-        # on the Gemini adapter. Default stays stateless: only an explicit
-        # `false` keeps sessions.
-        session_flags = (
-            [] if merged_config.get("no_session_persistence") is False else ["--no-session"]
-        )
-        return [pi_binary, "--mode", "json", "-p", f"@{prompt_file}", *session_flags, *flags]
+        return [pi_binary, "--mode", "json", "-p", f"@{prompt_file}", "--no-session", *flags]
 
     def validate_config(self, merged_config: dict[str, object]) -> list[ConfigRejection]:
         rejections: list[ConfigRejection] = []
