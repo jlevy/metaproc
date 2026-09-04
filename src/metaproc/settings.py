@@ -259,7 +259,42 @@ PI_VALID_PROVIDERS: set[str] = set(_pi_valid_provider_names())
 
 # ── Gemini (continued) ──────────────────────────────────────────
 
+# Gemini CLI runs session-retention cleanup at startup as an un-awaited
+# background task. Before it knows which sessions are expired, cleanup
+# enumerates the project's `chats/` directory and parses every saved session
+# JSONL through an unbounded `Promise.all`. On an accumulated project bucket
+# that turns a ~0.4 GB process tree into 5+ GB for the same short prompt, which
+# is why the key below is a host-safety setting and not a preference.
+#
+# Controlled arms (gemini-cli 0.55.1, same prompt, model, repo, and host; only
+# the project-state regime varied): 0.39 GB clean, 5.07 GB with a copied
+# 3.4 GiB bucket, 0.40 GB with that same bucket and retention disabled.
+#
+# `cleanupExpiredSessions()` early-exits on a falsy
+# `general.sessionRetention.enabled` *before* enumerating, so this setting
+# prevents the scan rather than merely bounding it. Verified in the pinned
+# 0.55.1 (upstream 41327e407) and still required at v0.60.0-nightly.20260904,
+# where the unbounded `Promise.all` remains -- upgrading does not fix it.
+#
+# Tradeoff: the same switch also gates `cleanupToolOutputFiles`, so Gemini no
+# longer prunes its own `chats/` and `tool-outputs/`. Bounded retention becomes
+# an external operation.
+#
+# See docs/project/research/research-2026-09-01-gemini-cli-project-state-memory.md
+GEMINI_SESSION_RETENTION_SETTINGS: dict[str, object] = {
+    "general": {
+        "sessionRetention": {
+            "enabled": False,
+        },
+    },
+}
+
 GEMINI_DEFAULT_NATIVE_SETTINGS: dict[str, object] = {
+    "general": {
+        "sessionRetention": {
+            "enabled": False,
+        },
+    },
     "context": {
         "fileFiltering": {
             "respectGitIgnore": False,

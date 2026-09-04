@@ -10,6 +10,7 @@ import tempfile
 import threading
 from hashlib import sha256
 from pathlib import Path
+from typing import cast
 
 from metaproc.adapters.base import AuthStatus, ConfigRejection, parse_jsonl_event
 from metaproc.adapters.cli_version import (
@@ -21,6 +22,7 @@ from metaproc.config.env_vars import MetaprocEnv
 from metaproc.settings import (
     GEMINI_DEFAULT_MODEL,
     GEMINI_DEFAULT_NATIVE_SETTINGS,
+    GEMINI_SESSION_RETENTION_SETTINGS,
     GEMINI_VALID_MODELS,
 )
 
@@ -116,7 +118,6 @@ _GEMINI_ALLOWED_KEYS = frozenset(
         "max_budget_usd",
         "model",
         "native_settings",
-        "no_session_persistence",
         "output_format",
         "permission_mode",
         "sandbox",
@@ -143,6 +144,32 @@ def _materialize_temp_file(*, prefix: str, suffix: str, content: str) -> Path:
             path.write_text(content, encoding="utf-8")
             path.chmod(0o600)
     return path
+
+
+def _deep_merge_settings(
+    base: dict[str, object],
+    override: dict[str, object],
+) -> dict[str, object]:
+    """Return ``base`` with ``override`` layered on top, recursing into dicts.
+
+    Gemini native settings are merged rather than replaced so that a
+    profile-supplied ``native_settings`` block cannot silently drop a default
+    it never mentioned. That matters most for
+    ``general.sessionRetention.enabled``, which is a host-safety setting: see
+    ``GEMINI_SESSION_RETENTION_SETTINGS``. An operator who deliberately sets
+    the key still wins, because an explicit override is layered last.
+    """
+    merged = dict(base)
+    for key, value in override.items():
+        existing = merged.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            merged[key] = _deep_merge_settings(
+                cast("dict[str, object]", existing),
+                cast("dict[str, object]", value),
+            )
+        else:
+            merged[key] = value
+    return merged
 
 
 def _build_gemini_flags(
@@ -236,6 +263,23 @@ class GeminiCliAdapter:
     def validate_config(self, merged_config: dict[str, object]) -> list[ConfigRejection]:
         rejections: list[ConfigRejection] = []
         for key, value in merged_config.items():
+            if key == "no_session_persistence":
+                # Previously accepted and silently ignored: gemini-cli has no
+                # headless flag that disables session recording, so the key
+                # promised isolation the adapter never delivered. Reject it
+                # rather than let a process spec believe it took effect.
+                rejections.append(
+                    ConfigRejection(
+                        key=key,
+                        reason=(
+                            "'no_session_persistence' is not supported by gemini-cli: it "
+                            "has no flag that disables session recording. Metaproc always "
+                            "disables Gemini's startup session-retention scan via native "
+                            "settings; remove this key"
+                        ),
+                    )
+                )
+                continue
             if key not in _GEMINI_ALLOWED_KEYS:
                 rejections.append(
                     ConfigRejection(key=key, reason=f"{key!r} is not supported by gemini-cli")
@@ -265,7 +309,21 @@ class GeminiCliAdapter:
                     content=str(append_system_prompt),
                 )
             )
-        native_settings = merged_config.get("native_settings", GEMINI_DEFAULT_NATIVE_SETTINGS)
+        # Layer any profile-supplied block over the defaults rather than
+        # replacing them, so an override that never mentions session retention
+        # keeps the startup-scan mitigation. Re-assert the safety key beneath
+        # the defaults so it survives even a caller that passes an empty or
+        # partial `general` block.
+        override = merged_config.get("native_settings")
+        native_settings: dict[str, object] = _deep_merge_settings(
+            GEMINI_SESSION_RETENTION_SETTINGS,
+            GEMINI_DEFAULT_NATIVE_SETTINGS,
+        )
+        if isinstance(override, dict):
+            native_settings = _deep_merge_settings(
+                native_settings,
+                cast("dict[str, object]", override),
+            )
         if native_settings:
             content = json.dumps(native_settings, sort_keys=True, separators=(",", ":"))
             env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = str(
