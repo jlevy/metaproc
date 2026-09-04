@@ -23,6 +23,28 @@ When implementation finishes, update the plan’s status and evidence before mov
 from `active` to `done`. Open follow-up work belongs in the roadmap or a new plan, not
 in a completed specification.
 
+## Research
+
+[Research records](research/) preserve measurements, source analysis, and other evidence
+used by plans without presenting proposed behavior as part of the shipped system.
+
+The host-safety record set is divided by subject and update cadence:
+
+- [Agent CLI Startup Memory](research/research-2026-09-01-agent-cli-memory-usage.md)
+  owns comparative measurement, client demand, and profile identity.
+- [Gemini CLI Project-State Startup Memory](research/research-2026-09-01-gemini-cli-project-state-memory.md)
+  owns the controlled session-retention cause, source path, and state-isolation
+  contract.
+- [Host Memory Accounting and Control](research/research-2026-09-01-host-memory-accounting-and-control.md)
+  owns platform gauges and the admission, pacing, and containment model.
+
+Those records feed the
+[RunPool Host Safety Envelope](specs/active/plan-2026-09-01-runpool-host-safety.md) and
+the narrower
+[Safeproc Local Incubation](specs/active/plan-2026-09-01-safeproc-local-incubation.md)
+package plan. Consumer-specific incident records and deployment runbooks remain in the
+consumer that owns them.
+
 ## Design Records
 
 - [Design proposals](design/metaproc-design-proposals.md): the future-work backlog for
