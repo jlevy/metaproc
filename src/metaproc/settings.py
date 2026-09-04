@@ -289,7 +289,23 @@ GEMINI_SESSION_RETENTION_SETTINGS: dict[str, object] = {
     },
 }
 
+# gemini-cli resolves an unrecognized model id ending in "flash" to its own default
+# flash model instead of sending it, so a request for a model the CLI predates is
+# silently answered by a different one. 0.55.1 has no knowledge of gemini-3.6-flash
+# and rewrites it to gemini-3.5-flash before any network call; 0.58.0 and the 0.60.0
+# nightly do the same, so upgrading is not a fix. This flag routes model resolution
+# through the dynamic path, which passes an unrecognized id through untouched.
+# Vertex serves gemini-3.6-flash correctly, so the id only ever needed to reach it.
+GEMINI_DYNAMIC_MODEL_SETTINGS: dict[str, object] = {
+    "experimental": {
+        "dynamicModelConfiguration": True,
+    },
+}
+
 GEMINI_DEFAULT_NATIVE_SETTINGS: dict[str, object] = {
+    "experimental": {
+        "dynamicModelConfiguration": True,
+    },
     "general": {
         "sessionRetention": {
             "enabled": False,

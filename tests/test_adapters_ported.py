@@ -451,6 +451,18 @@ class TestGeminiCliAdapter:
         written = json.loads(Path(result["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text())
         assert written["general"]["sessionRetention"]["enabled"] is False
 
+    def test_dynamic_model_configuration_is_asserted_by_default(self) -> None:
+        """gemini-cli rewrites an unknown *flash id to its own default without it."""
+        env = self.adapter.prepare_env({}, {})
+        emitted = json.loads(Path(env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text())
+        assert emitted["experimental"]["dynamicModelConfiguration"] is True
+
+    def test_dynamic_model_configuration_survives_a_partial_override(self) -> None:
+        env = self.adapter.prepare_env({}, {"native_settings": {"tools": {"core": ["read_file"]}}})
+        emitted = json.loads(Path(env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text())
+        assert emitted["experimental"]["dynamicModelConfiguration"] is True
+        assert emitted["tools"] == {"core": ["read_file"]}
+
     def test_validate_config_rejects_no_session_persistence(self) -> None:
         """The key was accepted and silently ignored; it must now be rejected."""
         rejections = self.adapter.validate_config({"no_session_persistence": True})

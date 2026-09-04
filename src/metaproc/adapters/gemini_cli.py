@@ -22,6 +22,7 @@ from metaproc.config.env_vars import MetaprocEnv
 from metaproc.settings import (
     GEMINI_DEFAULT_MODEL,
     GEMINI_DEFAULT_NATIVE_SETTINGS,
+    GEMINI_DYNAMIC_MODEL_SETTINGS,
     GEMINI_SESSION_RETENTION_SETTINGS,
     GEMINI_VALID_MODELS,
 )
@@ -316,7 +317,10 @@ class GeminiCliAdapter:
         # partial `general` block.
         override = merged_config.get("native_settings")
         native_settings: dict[str, object] = _deep_merge_settings(
-            GEMINI_SESSION_RETENTION_SETTINGS,
+            _deep_merge_settings(
+                GEMINI_SESSION_RETENTION_SETTINGS,
+                GEMINI_DYNAMIC_MODEL_SETTINGS,
+            ),
             GEMINI_DEFAULT_NATIVE_SETTINGS,
         )
         if isinstance(override, dict):
