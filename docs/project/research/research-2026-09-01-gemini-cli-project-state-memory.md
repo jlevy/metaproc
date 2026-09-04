@@ -315,7 +315,7 @@ causal controls, source analysis, and orchestration conclusions.
 - [Gemini CLI settings](https://github.com/google-gemini/gemini-cli/blob/v0.58.0/docs/cli/settings.md)
 - [Gemini CLI session management](https://github.com/google-gemini/gemini-cli/blob/v0.58.0/docs/cli/session-management.md)
 - [Gemini CLI shared-environment isolation](https://github.com/google-gemini/gemini-cli/blob/v0.58.0/docs/cli/enterprise.md#user-isolation-in-shared-environments)
-- [Metaproc Gemini adapter](../../../src/metaproc/adapters/gemini.py)
+- [Metaproc Gemini adapter](../../../src/metaproc/adapters/gemini_cli.py)
 - [Agent CLI Startup Memory](research-2026-09-01-agent-cli-memory-usage.md)
 - [Host Memory Accounting and Control](research-2026-09-01-host-memory-accounting-and-control.md)
 - [RunPool Host Safety Envelope](../specs/active/plan-2026-09-01-runpool-host-safety.md)
