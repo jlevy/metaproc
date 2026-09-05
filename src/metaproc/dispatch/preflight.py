@@ -391,7 +391,7 @@ def check_step_preflight(  # noqa: PLR0913
     # case). Refuse when the binding window has < 20% remaining,
     # mirroring the 80%-of-headroom risk threshold the unit path
     # bakes in. This is the path that fires when
-    # claude_code.query_quota_usage synthesizes
+    # claude_cli.query_quota_usage synthesizes
     # from rate_limit_event records.
     if headroom.min_remaining_ratio is not None:
         if headroom.min_remaining_ratio < _REFUSE_REMAINING_RATIO:

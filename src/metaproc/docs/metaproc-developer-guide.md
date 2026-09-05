@@ -107,14 +107,14 @@ The contract:
 | HTTP 5xx, network errors, connection reset, stream-idle timeout (host suspend) | `severity=FailureSeverity.RETRY_NOW` | Transient; immediate retry usually works. |
 | Nothing matched | `AuthFailureClassification(status="unknown", reason="generic")` — the generic retry classifier wins | Fail open (less destructive). |
 
-Reference implementations: `src/metaproc/adapters/claude_code.py` and
-`src/metaproc/adapters/codex.py`. When adding a new adapter or filling a gap, mirror the
-structure: check terminal signals first, then `known_bugs.py`, then soft rate-limit
+Reference implementations: `src/metaproc/adapters/claude_cli.py` and
+`src/metaproc/adapters/codex_cli.py`. When adding a new adapter or filling a gap, mirror
+the structure: check terminal signals first, then `known_bugs.py`, then soft rate-limit
 family, then return `unknown`.
 
 **Current adapter gaps:**
 
-- `src/metaproc/adapters/gemini.py` — no `classify_failure`. 401 from Vertex
+- `src/metaproc/adapters/gemini_cli.py` — no `classify_failure`. 401 from Vertex
   (`Expected OAuth2 access token` because `GOOGLE_API_KEY` conflicts with
   `GOOGLE_GENAI_USE_VERTEXAI=true`) falls through to generic retry.
   Repeated retries can waste an entire attempt budget.

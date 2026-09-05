@@ -106,8 +106,14 @@ GEMINI_DEFAULT_MODEL = "gemini-3.1-pro-preview-customtools"
 GEMINI_DEFAULT_THINKING_LEVEL = "HIGH"
 
 GEMINI_VALID_MODELS: set[str] = {
-    # Gemini 3.6 — GA July 2026. Current stable Flash model for agentic
-    # workflows, with lower output pricing than 3.5 Flash.
+    # Gemini 3.8 — GA 2026-09-02. Newest Flash model.
+    "gemini-3.8-flash",
+    # Gemini 3.7 — GA 2026-08-13.
+    "gemini-3.7-flash",
+    # Gemini 3.6 — GA July 2026, with lower output pricing than 3.5 Flash.
+    # 3.6, 3.7 and 3.8 Flash sit in Google's short-term-availability class,
+    # which retires a model 45 days after its replacement ships, so the newest
+    # of them is also the one with the longest remaining life.
     "gemini-3.6-flash",
     # Gemini 3.5 — GA May 2026. 3.5 Flash is positioned by Google as
     # "shifting Flash from speed to autonomy" (better at agentic / tool-use
@@ -259,7 +265,58 @@ PI_VALID_PROVIDERS: set[str] = set(_pi_valid_provider_names())
 
 # ── Gemini (continued) ──────────────────────────────────────────
 
+# Gemini CLI runs session-retention cleanup at startup as an un-awaited
+# background task. Before it knows which sessions are expired, cleanup
+# enumerates the project's `chats/` directory and parses every saved session
+# JSONL through an unbounded `Promise.all`. On an accumulated project bucket
+# that turns a ~0.4 GB process tree into 5+ GB for the same short prompt, which
+# is why the key below is a host-safety setting and not a preference.
+#
+# Controlled arms (gemini-cli 0.55.1, same prompt, model, repo, and host; only
+# the project-state regime varied): 0.39 GB clean, 5.07 GB with a copied
+# 3.4 GiB bucket, 0.40 GB with that same bucket and retention disabled.
+#
+# `cleanupExpiredSessions()` early-exits on a falsy
+# `general.sessionRetention.enabled` *before* enumerating, so this setting
+# prevents the scan rather than merely bounding it. Verified in the pinned
+# 0.55.1 (upstream 41327e407) and still required at v0.60.0-nightly.20260904,
+# where the unbounded `Promise.all` remains -- upgrading does not fix it.
+#
+# Tradeoff: the same switch also gates `cleanupToolOutputFiles`, so Gemini no
+# longer prunes its own `chats/` and `tool-outputs/`. Bounded retention becomes
+# an external operation.
+#
+# See docs/project/research/research-2026-09-01-gemini-cli-project-state-memory.md
+GEMINI_SESSION_RETENTION_SETTINGS: dict[str, object] = {
+    "general": {
+        "sessionRetention": {
+            "enabled": False,
+        },
+    },
+}
+
+# gemini-cli resolves an unrecognized model id ending in "flash" to its own default
+# flash model instead of sending it, so a request for a model the CLI predates is
+# silently answered by a different one. 0.55.1 has no knowledge of gemini-3.6-flash
+# and rewrites it to gemini-3.5-flash before any network call; 0.58.0 and the 0.60.0
+# nightly do the same, so upgrading is not a fix. This flag routes model resolution
+# through the dynamic path, which passes an unrecognized id through untouched.
+# Vertex serves gemini-3.6-flash correctly, so the id only ever needed to reach it.
+GEMINI_DYNAMIC_MODEL_SETTINGS: dict[str, object] = {
+    "experimental": {
+        "dynamicModelConfiguration": True,
+    },
+}
+
 GEMINI_DEFAULT_NATIVE_SETTINGS: dict[str, object] = {
+    "experimental": {
+        "dynamicModelConfiguration": True,
+    },
+    "general": {
+        "sessionRetention": {
+            "enabled": False,
+        },
+    },
     "context": {
         "fileFiltering": {
             "respectGitIgnore": False,

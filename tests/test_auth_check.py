@@ -14,7 +14,7 @@ import pytest
 from typer.testing import CliRunner
 
 from metaproc.adapters.base import AuthStatus
-from metaproc.adapters.codex import CodexCliAdapter
+from metaproc.adapters.codex_cli import CodexCliAdapter
 from metaproc.adapters.registry import ADAPTER_REGISTRY
 from metaproc.cli import app
 from metaproc.commands.auth_check import (

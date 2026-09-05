@@ -293,7 +293,7 @@ See [arch-authentication.md](arch-authentication.md) for the design context.
 
 Three auth modes, pick one.
 The adapter checks them in this order and uses the first it finds; detection logic lives
-in `src/metaproc/adapters/gemini.py`.
+in `src/metaproc/adapters/gemini_cli.py`.
 
 **Mode 1 — Direct Gemini API (personal key).** One env var, no GCP needed.
 

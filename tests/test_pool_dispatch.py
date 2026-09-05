@@ -20,7 +20,7 @@ import pytest
 import metaproc.adapters.registry as reg
 import metaproc.dispatch.pool_dispatch as pd
 from metaproc.adapters.base import AuthFailureClassification, FailureSeverity
-from metaproc.adapters.claude_code import ClaudeApiSignals, ClaudeCodeCliAdapter
+from metaproc.adapters.claude_cli import ClaudeApiSignals, ClaudeCodeCliAdapter
 from metaproc.commands.run_parallel import (
     _build_prepare_launch,
     _compute_pool_cooling_delay,

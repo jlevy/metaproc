@@ -6,7 +6,7 @@ status: Draft — partial currency notice below
 ---
 # Architecture: Authentication and Credentials
 
-**Date:** 2026-04-21 (last updated 2026-08-27) **Status:** Draft — partial currency
+**Date:** 2026-04-21 (last updated 2026-09-01) **Status:** Draft — partial currency
 notice below
 
 ## Currency notice (2026-04-28)
@@ -331,7 +331,7 @@ Constants: `KEYCHAIN_SERVICE = "Claude Code-credentials"`,
 
 1. Operator exports `ANTHROPIC_API_KEY=sk-ant-...` (shell or `.env`).
 2. `_load_dotenv()` seeds `os.environ`.
-3. `ClaudeCodeCliAdapter.check_auth()` (`src/metaproc/adapters/claude_code.py`) sees the
+3. `ClaudeCodeCliAdapter.check_auth()` (`src/metaproc/adapters/claude_cli.py`) sees the
    key → reports `auth_mode="api-key"`.
 4. `claude -p @<prompt> ...` invoked as a subprocess; the Claude Code CLI reads
    `ANTHROPIC_API_KEY` directly from its own env.
@@ -388,7 +388,7 @@ Container bootstrap (once per task):
 Claude Code CLI then reads its credential file normally.
 `ANTHROPIC_API_KEY` must stay unset (dispatch does not inject it).
 
-Reference: `src/metaproc/adapters/claude_code.py` (`bootstrap()`),
+Reference: `src/metaproc/adapters/claude_cli.py` (`bootstrap()`),
 [credential-setup.runbook.md](credential-setup.runbook.md) § Claude Code CLI,
 [arch-cloud-execution.md §3.10](arch-cloud-execution.md).
 
@@ -477,7 +477,7 @@ instead of the OpenAI-compatible path.
 
 #### UC-8: Gemini CLI adapter (`gemini-cli`)
 
-**File:** `src/metaproc/adapters/gemini.py`
+**File:** `src/metaproc/adapters/gemini_cli.py`
 
 Modes:
 - `GEMINI_API_KEY` set → direct API mode.
@@ -802,10 +802,9 @@ No auth is on the per-item hot path.
 - `src/metaproc/dispatch/secret_refs.py` and
   `src/metaproc/cloud/gcp/secret_hydration.py` — typed reference policy and
   container-side resolution.
-- `src/metaproc/adapters/claude_code.py` — `check_auth`, `bootstrap`, Personal-Plan
-  flow.
+- `src/metaproc/adapters/claude_cli.py` — `check_auth`, `bootstrap`, Personal-Plan flow.
 - `src/metaproc/adapters/pi_cli.py` — `check_auth`, provider resolution.
-- `src/metaproc/adapters/gemini.py` — Gemini CLI adapter.
+- `src/metaproc/adapters/gemini_cli.py` — Gemini CLI adapter.
 - `src/metaproc/commands/auth_check.py` — the multi-phase verification command.
 - `src/metaproc/commands/claude_auth.py` — Keychain ↔ Secret Manager push/show/rotate.
 - `src/metaproc/cloud/gcp/worker_dispatch.py`,
