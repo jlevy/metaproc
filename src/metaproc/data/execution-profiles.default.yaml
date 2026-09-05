@@ -113,6 +113,31 @@ profiles:
       model: glm-5-maas
       no_session_persistence: true
 
+  gemini-flash-38:
+    schema: metaproc:ExecutionProfile/0.1
+    status: tested
+    adapter: gemini-cli
+    provider: google-vertex
+    model: gemini-3.8-flash
+    notes: |
+      Gemini 3.8 Flash (GA 2026-09-02) via gemini-cli through Vertex AI.
+      Newest Flash model, and the one with the longest remaining life: 3.6,
+      3.7 and 3.8 are all in Google's short-term-availability class, which
+      retires a model 45 days after its replacement ships. Reaching it needs
+      the dynamic model-resolution setting, because gemini-cli rewrites any
+      flash id it does not recognize.
+    capabilities:
+      native_tools: [Read, Write, Edit, Bash, WebSearch, Glob, Grep, LS]
+      native_web_search: true
+      shell: true
+    resources:
+      estimated_process_rss_mb: 500
+      initial_memory_budget_fraction: 0.25
+    config:
+      model: gemini-3.8-flash
+      permission_mode: bypassPermissions
+      output_format: stream-json
+
   gemini-flash-36:
     schema: metaproc:ExecutionProfile/0.1
     status: tested

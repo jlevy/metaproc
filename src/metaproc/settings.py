@@ -106,8 +106,14 @@ GEMINI_DEFAULT_MODEL = "gemini-3.1-pro-preview-customtools"
 GEMINI_DEFAULT_THINKING_LEVEL = "HIGH"
 
 GEMINI_VALID_MODELS: set[str] = {
-    # Gemini 3.6 — GA July 2026. Current stable Flash model for agentic
-    # workflows, with lower output pricing than 3.5 Flash.
+    # Gemini 3.8 — GA 2026-09-02. Newest Flash model.
+    "gemini-3.8-flash",
+    # Gemini 3.7 — GA 2026-08-13.
+    "gemini-3.7-flash",
+    # Gemini 3.6 — GA July 2026, with lower output pricing than 3.5 Flash.
+    # 3.6, 3.7 and 3.8 Flash sit in Google's short-term-availability class,
+    # which retires a model 45 days after its replacement ships, so the newest
+    # of them is also the one with the longest remaining life.
     "gemini-3.6-flash",
     # Gemini 3.5 — GA May 2026. 3.5 Flash is positioned by Google as
     # "shifting Flash from speed to autonomy" (better at agentic / tool-use
