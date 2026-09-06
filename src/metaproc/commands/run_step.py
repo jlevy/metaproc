@@ -106,13 +106,14 @@ def run_step(
     require_runtime_runs_dir(variables, command="run-step")
     config_overrides = parse_adapter_config(adapter_config)
 
+    # Validation exit code (2), not the general failure code (1): nothing has run.
     placeholder_errors = validate_spec_placeholders(spec, variables)
     if placeholder_errors:
         msg = (
             "unresolved placeholders in process spec (pass via --var or set env var):\n  "
             + "\n  ".join(placeholder_errors)
         )
-        raise CLIError(msg)
+        raise ValidationError(msg)
 
     if not no_validate:
         input_errors = validate_process_inputs(spec, variables, process_dir)
@@ -120,7 +121,7 @@ def run_step(
             msg = "process input validation failed (pass --no-validate to skip):\n  " + "\n  ".join(
                 input_errors
             )
-            raise CLIError(msg)
+            raise ValidationError(msg)
 
     try:
         resolved = build_plan(

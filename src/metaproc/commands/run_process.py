@@ -4735,18 +4735,22 @@ def run_process_command(
     variables = expand_process_vars(spec, variables, process_dir=process_dir)
     require_runtime_runs_dir(variables, command="run-process")
 
+    # Launch validation runs before any step, so it carries the validation exit
+    # code (2) rather than the general failure code (1) an executed-and-failed
+    # run reports. Retry automation reads the difference: 2 needs an operator to
+    # fix the invocation, 1 may be worth retrying.
     placeholder_errors = validate_spec_placeholders(spec, variables)
     if placeholder_errors:
         msg = (
             "unresolved placeholders in process spec (pass via --var or set env var):\n  "
             + "\n  ".join(placeholder_errors)
         )
-        raise CLIError(msg)
+        raise ValidationError(msg)
 
     input_errors = validate_process_inputs(spec, variables, process_dir)
     if input_errors:
         msg = "process input validation failed:\n  " + "\n  ".join(input_errors)
-        raise CLIError(msg)
+        raise ValidationError(msg)
 
     try:
         plan = build_plan(
