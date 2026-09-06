@@ -131,8 +131,8 @@ profiles:
       native_web_search: true
       shell: true
     resources:
-      estimated_process_rss_mb: 500
-      initial_memory_budget_fraction: 0.25
+      estimated_process_rss_mb: 250
+      initial_memory_budget_fraction: 0.5
     config:
       model: gemini-3.8-flash
       permission_mode: bypassPermissions
@@ -154,8 +154,8 @@ profiles:
       native_web_search: true
       shell: true
     resources:
-      estimated_process_rss_mb: 500
-      initial_memory_budget_fraction: 0.25
+      estimated_process_rss_mb: 250
+      initial_memory_budget_fraction: 0.5
     config:
       model: gemini-3.6-flash
       permission_mode: bypassPermissions
@@ -181,8 +181,8 @@ profiles:
       # of health.jsonl samples are collected under large workflow load; refine per
       # the arch-runpool RSS-benchmark methodology in the same way as
       # claude-opus / pi-glm5.
-      estimated_process_rss_mb: 500
-      initial_memory_budget_fraction: 0.25
+      estimated_process_rss_mb: 250
+      initial_memory_budget_fraction: 0.5
     config:
       model: gemini-3.5-flash
       permission_mode: bypassPermissions
@@ -203,8 +203,8 @@ profiles:
       native_web_search: false
       shell: true
     resources:
-      estimated_process_rss_mb: 500
-      initial_memory_budget_fraction: 0.25
+      estimated_process_rss_mb: 250
+      initial_memory_budget_fraction: 0.5
     config:
       model: gemini-3.1-pro-preview
       permission_mode: bypassPermissions
