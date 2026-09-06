@@ -16,6 +16,11 @@ from metaproc.io import FmFormatError, fmf_read_frontmatter
 from metaproc.models.authored import ProcessInput, ProcessOutput, ProcessSpec
 from metaproc.models.plan import Plan
 
+#: An input the operator supplies on the command line, e.g. ``--var TICKER=AAPL``.
+INPUT_CLASS_PARAM = "param"
+#: An input backed by a file on disk, which may be missing, unparsable, or the wrong shape.
+INPUT_CLASS_FILE = "file"
+
 
 def validate_process_inputs(
     spec: ProcessSpec,
@@ -26,7 +31,24 @@ def validate_process_inputs(
 
     *variables* must be pre-expanded via ``expand_process_vars``.
     """
-    errors: list[str] = []
+    return [
+        message
+        for _input_class, message in classify_process_input_errors(spec, variables, process_dir)
+    ]
+
+
+def classify_process_input_errors(
+    spec: ProcessSpec,
+    variables: dict[str, str],
+    process_dir: Path,
+) -> list[tuple[str, str]]:
+    """Return ``(input class, message)`` pairs in spec declaration order.
+
+    Launch validation reports operator-supplied parameters and file-backed
+    inputs as separate classes: one is fixed by adding a ``--var``, the other by
+    producing a file, and an operator hitting both should see both.
+    """
+    errors: list[tuple[str, str]] = []
     for name, decl in spec.inputs.items():
         errors.extend(_check_input(name, decl, variables, process_dir))
     return errors
@@ -37,12 +59,18 @@ def _check_input(
     decl: ProcessInput,
     variables: dict[str, str],
     process_dir: Path,
-) -> list[str]:
+) -> list[tuple[str, str]]:
     if decl.param is not None:
-        return _check_param(name, decl.param, variables, required=decl.required)
+        return [
+            (INPUT_CLASS_PARAM, message)
+            for message in _check_param(name, decl.param, variables, required=decl.required)
+        ]
     if decl.path is not None:
-        return _check_file(name, decl, variables, process_dir)
-    return [f"input {name!r}: must declare either 'param:' or 'path:'"]
+        return [
+            (INPUT_CLASS_FILE, message)
+            for message in _check_file(name, decl, variables, process_dir)
+        ]
+    return [(INPUT_CLASS_FILE, f"input {name!r}: must declare either 'param:' or 'path:'")]
 
 
 def _check_param(

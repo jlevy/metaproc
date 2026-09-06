@@ -535,8 +535,9 @@ process:
 
     assert result.exit_code != 0
     error_text = result.output or str(result.exception)
-    assert "process input validation failed" in error_text
+    assert "unresolved operator parameters" in error_text
     assert "TICKER" in error_text
+    assert "(pass --no-validate to skip process input validation)" in error_text
 
 
 def test_run_step_no_validate_skips_process_input_contract(tmp_path: Path) -> None:
