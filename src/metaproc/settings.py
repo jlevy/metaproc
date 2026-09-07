@@ -91,6 +91,9 @@ CLAUDE_DEFAULT_MODEL = "opus"
 CLAUDE_DEFAULT_EFFORT = "high"
 
 CLAUDE_VALID_MODELS: set[str] = {
+    "claude-fable-5-1",
+    "claude-opus-5",
+    "claude-sonnet-5",
     "opus",
     "sonnet",
     "haiku",
@@ -106,6 +109,8 @@ GEMINI_DEFAULT_MODEL = "gemini-3.1-pro-preview-customtools"
 GEMINI_DEFAULT_THINKING_LEVEL = "HIGH"
 
 GEMINI_VALID_MODELS: set[str] = {
+    "gemini-3.8-flash",
+    "gemini-3.5-flash-lite",
     # Gemini 3.6 — GA July 2026. Current stable Flash model for agentic
     # workflows, with lower output pricing than 3.5 Flash.
     "gemini-3.6-flash",
@@ -139,14 +144,13 @@ GEMINI_VALID_MODELS: set[str] = {
 CODEX_DEFAULT_MODEL = "gpt-5.5"
 CODEX_DEFAULT_EFFORT = "medium"
 
-# Whitelist for the Codex adapter. Per OpenAI's Codex CLI docs as of
-# 2026-04-27: codex CLI uses `gpt-5.5` (primary), `gpt-5.4` (fallback for
-# accounts without 5.5 access), and `gpt-5.4-mini` (light tasks / subagents).
-# `gpt-5.5-pro` is included for high-reasoning runs. Older IDs (gpt-5.2,
-# gpt-5.2-codex, gpt-5.3-codex, o3, o4-mini) were trimmed per `only support
-# latest`. Restore from git history if a historical run requires
-# re-validation.
+# Explicit model IDs verified against provider catalogs on 2026-09-06.
+# Preserve previous IDs for pinned workflows and historical run validation.
 CODEX_VALID_MODELS: set[str] = {
+    "gpt-6-astra",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
     "gpt-5.5",
     "gpt-5.5-pro",
     "gpt-5.4",
