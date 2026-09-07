@@ -31,13 +31,17 @@ from metaproc.config.env_vars import MetaprocEnv
 from metaproc.engine.build_plan import build_plan, merge_defaults
 from metaproc.engine.code_handler import resolve_code_handler
 from metaproc.engine.dep_state import fingerprint_step
-from metaproc.engine.input_validation import validate_process_inputs
+from metaproc.engine.launch_validation import (
+    INPUT_FILE_GROUP,
+    PARAM_GROUP,
+    collect_launch_errors,
+    format_launch_errors,
+)
 from metaproc.engine.pathing import compute_run_dir, compute_task_state_dir
 from metaproc.engine.placeholders import (
     collect_step_runtime_placeholders,
     resolve_runtime_config,
     resolve_templates,
-    validate_spec_placeholders,
 )
 from metaproc.engine.process_scope import expand_process_vars
 from metaproc.engine.resource_sampling import run_sampled_step_command, sample_step_resources
@@ -106,21 +110,25 @@ def run_step(
     require_runtime_runs_dir(variables, command="run-step")
     config_overrides = parse_adapter_config(adapter_config)
 
-    placeholder_errors = validate_spec_placeholders(spec, variables)
-    if placeholder_errors:
-        msg = (
-            "unresolved placeholders in process spec (pass via --var or set env var):\n  "
-            + "\n  ".join(placeholder_errors)
+    # Validation exit code (2), not the general failure code (1): nothing has run.
+    # Every class of missing input is reported together, so fixing a launch
+    # takes one more launch rather than one per class.
+    launch_errors = collect_launch_errors(
+        spec,
+        variables,
+        process_dir,
+        process_path=process_path,
+        adapter_override=adapter,
+        validate_inputs=not no_validate,
+    )
+    if launch_errors:
+        skippable = {PARAM_GROUP, INPUT_FILE_GROUP}
+        hint = (
+            "(pass --no-validate to skip process input validation)"
+            if any(header in skippable for header, _messages in launch_errors)
+            else ""
         )
-        raise CLIError(msg)
-
-    if not no_validate:
-        input_errors = validate_process_inputs(spec, variables, process_dir)
-        if input_errors:
-            msg = "process input validation failed (pass --no-validate to skip):\n  " + "\n  ".join(
-                input_errors
-            )
-            raise CLIError(msg)
+        raise ValidationError(format_launch_errors(launch_errors, hint=hint))
 
     try:
         resolved = build_plan(

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from metaproc.adapters.claude_code import parse_claude_api_signals
+from metaproc.adapters.claude_cli import parse_claude_api_signals
 
 FIXTURES = Path(__file__).parent / "fixtures" / "claude_api_signals"
 

@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import pytest
 
-from metaproc.adapters import gemini
-from metaproc.adapters.gemini import (
+from metaproc.adapters import gemini_cli
+from metaproc.adapters.gemini_cli import (
     MIN_GEMINI_CLI_VERSION,
     PINNED_GEMINI_CLI_VERSION,
     GeminiCliVersionMismatch,
@@ -83,7 +83,7 @@ def test_an_unreadable_version_is_never_below_the_floor(version: str) -> None:
 
 
 def test_a_cli_below_the_minimum_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(gemini, "check_cli_version", lambda _spec: _drift_message("0.34.0"))
+    monkeypatch.setattr(gemini_cli, "check_cli_version", lambda _spec: _drift_message("0.34.0"))
     with pytest.raises(GeminiCliVersionMismatch) as excinfo:
         _gemini_version_drift()
     message = str(excinfo.value)
@@ -97,7 +97,7 @@ def test_a_cli_at_the_minimum_warns_but_does_not_raise(
 ) -> None:
     """The boundary is inclusive: 0.40.0 has the flag, so the run can succeed."""
     drift = _drift_message(MIN_GEMINI_CLI_VERSION)
-    monkeypatch.setattr(gemini, "check_cli_version", lambda _spec: drift)
+    monkeypatch.setattr(gemini_cli, "check_cli_version", lambda _spec: drift)
     assert _gemini_version_drift() == drift
 
 
@@ -105,12 +105,12 @@ def test_drift_above_the_minimum_is_returned_not_raised(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     drift = _drift_message("0.41.0")
-    monkeypatch.setattr(gemini, "check_cli_version", lambda _spec: drift)
+    monkeypatch.setattr(gemini_cli, "check_cli_version", lambda _spec: drift)
     assert _gemini_version_drift() == drift
 
 
 def test_no_drift_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(gemini, "check_cli_version", lambda _spec: None)
+    monkeypatch.setattr(gemini_cli, "check_cli_version", lambda _spec: None)
     assert _gemini_version_drift() is None
 
 
@@ -123,7 +123,7 @@ def test_an_unparsable_actual_version_does_not_raise(
     output into an outage, so the gate degrades to the pre-existing warning.
     """
     drift = "Gemini CLI version mismatch: could not determine the installed version"
-    monkeypatch.setattr(gemini, "check_cli_version", lambda _spec: drift)
+    monkeypatch.setattr(gemini_cli, "check_cli_version", lambda _spec: drift)
     assert _gemini_version_drift() == drift
 
 
@@ -137,5 +137,5 @@ def test_the_skip_env_var_bypasses_the_gate_entirely(
     def _unreachable(_spec: object) -> str:
         raise AssertionError("the version check ran despite the skip flag")
 
-    monkeypatch.setattr(gemini, "check_cli_version", _unreachable)
+    monkeypatch.setattr(gemini_cli, "check_cli_version", _unreachable)
     assert _gemini_version_drift() is None

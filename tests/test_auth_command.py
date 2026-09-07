@@ -23,7 +23,7 @@ from typer.testing import CliRunner
 
 import metaproc.commands.auth as auth_mod
 from metaproc.adapters.base import AuthStatus, QuotaUsage
-from metaproc.adapters.claude_code import ClaudeCodeCliAdapter
+from metaproc.adapters.claude_cli import ClaudeCodeCliAdapter
 from metaproc.cli import app
 from metaproc.dispatch.credential_pool import (
     ConcurrentModificationError,
@@ -485,7 +485,7 @@ class TestAuthCheck:
     ):
         self._seed(fake_pool, status="cooling")
         monkeypatch.setattr(
-            "metaproc.adapters.claude_code.shutil.which",
+            "metaproc.adapters.claude_cli.shutil.which",
             lambda _: "/usr/bin/claude",
         )
         monkeypatch.setattr(Path, "home", lambda: tmp_path / "empty-home")

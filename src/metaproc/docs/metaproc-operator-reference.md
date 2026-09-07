@@ -63,12 +63,13 @@ contract):
 - Base class `Adapter.classify_failure` exists in `src/metaproc/adapters/base.py`. The
   default returns `unknown` (→ generic retry).
   Override is currently OPTIONAL — that is the gap that allowed mistake #5 above.
-- `claude_code.py` and `codex.py` implement it; `gemini.py` and `pi_cli.py` do NOT.
+- `claude_cli.py` and `codex_cli.py` implement it; `gemini_cli.py` and `pi_cli.py` do
+  NOT.
 - Open work: make `classify_failure` REQUIRED (no default fallback to generic retry);
-  add the missing implementations for both `gemini.py` and `pi_cli.py`; surface ABORT
-  events to the wrapper log with the actual error message (not just `status=exit_N`);
-  cascade-abort the whole step after N consecutive ABORTs in one fan-out (suggested
-  threshold N=3).
+  add the missing implementations for both `gemini_cli.py` and `pi_cli.py`; surface
+  ABORT events to the wrapper log with the actual error message (not just
+  `status=exit_N`); cascade-abort the whole step after N consecutive ABORTs in one
+  fan-out (suggested threshold N=3).
 
 **Operator surfacing**: when ABORT fires, the wrapper log MUST emit the actual error
 message in the alternation pattern, not the opaque exit code:

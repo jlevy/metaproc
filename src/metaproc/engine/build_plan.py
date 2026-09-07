@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -106,6 +106,58 @@ def _resolve_required_profile(
     except ValueError as exc:
         msg = f"{context}: {exc}"
         raise ValueError(msg) from exc
+
+
+def validate_execution_profiles(
+    spec: ProcessSpec,
+    *,
+    process_path: Path,
+    profile_files: Sequence[Path] = (),
+    adapter_override: str | None = None,
+    step_profile_overrides: Mapping[str, str] | None = None,
+) -> list[str]:
+    """Return every execution-profile request in *spec* that will not resolve.
+
+    ``build_plan`` resolves profiles as it walks the spec and raises on the
+    first bad one. Launch validation needs the whole set at once, so this walks
+    the same requests in the same order through the same resolver and collects
+    the messages instead.
+    """
+    registry = _load_profile_registry(process_path, profile_files)
+    overrides = step_profile_overrides or {}
+
+    requests: list[tuple[str, str]] = []
+    if adapter_override is None and spec.defaults.default_execution_profile:
+        requests.append(
+            (spec.defaults.default_execution_profile, "defaults.default_execution_profile")
+        )
+    for step in spec.steps:
+        step_override = overrides.get(step.id)
+        if step_override:
+            requests.append((step_override, f"--step-variant {step.id}"))
+        elif step.execution_profile:
+            requests.append((step.execution_profile, f"step {step.id!r} execution_profile"))
+
+    errors: list[str] = []
+    for profile_name, context in requests:
+        try:
+            _resolve_required_profile(registry, profile_name, context=context)
+        except ValueError as exc:
+            errors.append(str(exc))
+
+    # An --variant/--profile value that names neither a registry profile, a
+    # spec-declared adapter config, nor a raw adapter type is the same refusal
+    # build_plan makes once the run profile comes back unresolved.
+    if (
+        adapter_override is not None
+        and _resolve_profile(registry, adapter_override) is None
+        and adapter_override not in spec.defaults.adapters
+        and adapter_override not in ADAPTER_REGISTRY
+    ):
+        supported = ", ".join(sorted(ADAPTER_REGISTRY))
+        errors.append(f"unknown adapter override: {adapter_override!r} (supported: {supported})")
+
+    return errors
 
 
 def _apply_run_namespace_params(

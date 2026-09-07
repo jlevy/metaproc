@@ -29,7 +29,7 @@ from typing import Any, cast
 
 import typer
 
-from metaproc.adapters.codex import resolve_codex_home
+from metaproc.adapters.codex_cli import resolve_codex_home
 from metaproc.cli import app, get_output
 from metaproc.config.env_vars import MetaprocEnv
 

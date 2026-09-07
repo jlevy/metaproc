@@ -5,7 +5,7 @@ Used by:
 - :mod:`metaproc.trace.extractors.claude_agent` to populate span
   ``error.code`` / ``error.message`` from the ``result.result`` text on
   failed attempts.
-- :mod:`metaproc.adapters.claude_code` to raise typed exceptions (e.g.
+- :mod:`metaproc.adapters.claude_cli` to raise typed exceptions (e.g.
   ``QuotaExhaustedError``) so the runpool can pause-and-resume at the
   pool level instead of crashing every queued item.
 

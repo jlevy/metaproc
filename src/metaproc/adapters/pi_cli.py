@@ -37,9 +37,9 @@ from metaproc.settings import (
 
 log = logging.getLogger(__name__)
 
-PINNED_PI_CODING_AGENT_VERSION = "0.72.1"
+PINNED_PI_CODING_AGENT_VERSION = "0.84.2"
 PI_CLI_INSTALL_HINT = (
-    f"Install: npm install -g @mariozechner/pi-coding-agent@{PINNED_PI_CODING_AGENT_VERSION}"
+    f"Install: npm install -g @earendil-works/pi-coding-agent@{PINNED_PI_CODING_AGENT_VERSION}"
 )
 
 

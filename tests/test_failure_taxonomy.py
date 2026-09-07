@@ -21,8 +21,8 @@ from metaproc.adapters.base import (
     FailureSeverity,
     default_severity_for_status,
 )
-from metaproc.adapters.claude_code import ClaudeCodeCliAdapter
-from metaproc.adapters.codex import CodexCliAdapter
+from metaproc.adapters.claude_cli import ClaudeCodeCliAdapter
+from metaproc.adapters.codex_cli import CodexCliAdapter
 from metaproc.dispatch.known_bugs import (
     KNOWN_BUG_REGISTRY,
     detect_known_bug,

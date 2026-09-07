@@ -1,4 +1,4 @@
-"""Tests for metaproc.adapters.codex — CodexCliAdapter."""
+"""Tests for metaproc.adapters.codex_cli — CodexCliAdapter."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from metaproc.adapters.base import Adapter, AuthCapableCliAdapter
-from metaproc.adapters.codex import (
+from metaproc.adapters.codex_cli import (
     CODEX_CREDS_ENV_VAR,
     PINNED_CODEX_CLI_VERSION,
     CodexCliAdapter,
@@ -79,8 +79,8 @@ class TestCodexBuildCommand:
         # Version drift is surfaced as a prominent warning, not a hard error:
         # build_command must still produce a command so the run proceeds.
         monkeypatch.setattr(
-            "metaproc.adapters.codex._codex_version_drift",
-            lambda: "Codex CLI version mismatch: pinned='0.144.1', actual='0.135.0'",
+            "metaproc.adapters.codex_cli._codex_version_drift",
+            lambda: "simulated version drift",
         )
         cmd = self._cmd(tmp_path, {"permission_mode": "default"})
         assert cmd, "build_command must still build a command despite version drift"
@@ -422,19 +422,19 @@ class TestCodexCheckAuth:
     @pytest.fixture(autouse=True)
     def _working_version_probe(self, monkeypatch):
         monkeypatch.setattr(
-            "metaproc.adapters.codex.verify_codex_version",
+            "metaproc.adapters.codex_cli.verify_codex_version",
             lambda **_kwargs: PINNED_CODEX_CLI_VERSION,
         )
 
     def test_no_cli_reports_none(self, monkeypatch):
-        monkeypatch.setattr("metaproc.adapters.codex.shutil.which", lambda _: None)
+        monkeypatch.setattr("metaproc.adapters.codex_cli.shutil.which", lambda _: None)
         status = self.adapter.check_auth()
         assert status.cli_found is False
         assert status.auth_mode == "none"
         assert "not found" in status.details.lower()
 
     def test_openai_api_key_wins(self, monkeypatch):
-        monkeypatch.setattr("metaproc.adapters.codex.shutil.which", lambda _: "/usr/bin/codex")
+        monkeypatch.setattr("metaproc.adapters.codex_cli.shutil.which", lambda _: "/usr/bin/codex")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-fake")
         status = self.adapter.check_auth()
         assert status.auth_mode == "api-key"
@@ -442,7 +442,7 @@ class TestCodexCheckAuth:
         assert "OPENAI_API_KEY" in status.details
 
     def test_chatgpt_oauth_session(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("metaproc.adapters.codex.shutil.which", lambda _: "/usr/bin/codex")
+        monkeypatch.setattr("metaproc.adapters.codex_cli.shutil.which", lambda _: "/usr/bin/codex")
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         codex_dir = tmp_path / ".codex"
@@ -454,7 +454,7 @@ class TestCodexCheckAuth:
         assert status.credentials_found is True
 
     def test_apikey_auth_json_classified_as_api_key(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("metaproc.adapters.codex.shutil.which", lambda _: "/usr/bin/codex")
+        monkeypatch.setattr("metaproc.adapters.codex_cli.shutil.which", lambda _: "/usr/bin/codex")
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         codex_dir = tmp_path / ".codex"
@@ -467,7 +467,7 @@ class TestCodexCheckAuth:
         assert status.auth_mode == "api-key"
 
     def test_no_creds_reports_none_with_setup_hint(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("metaproc.adapters.codex.shutil.which", lambda _: "/usr/bin/codex")
+        monkeypatch.setattr("metaproc.adapters.codex_cli.shutil.which", lambda _: "/usr/bin/codex")
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
@@ -484,7 +484,7 @@ class TestCodexCheckAuth:
         codex-auth (which now delegates to the same helper) would disagree
         with the adapter's check_auth about whether a session exists.
         """
-        monkeypatch.setattr("metaproc.adapters.codex.shutil.which", lambda _: "/usr/bin/codex")
+        monkeypatch.setattr("metaproc.adapters.codex_cli.shutil.which", lambda _: "/usr/bin/codex")
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         # $HOME points at a tmp_path with NO ~/.codex; the adapter should
         # NOT find a session there.
@@ -503,14 +503,14 @@ class TestCodexCheckAuth:
 
     def test_unusable_cli_reports_not_found(self, monkeypatch):
         monkeypatch.setattr(
-            "metaproc.adapters.codex.shutil.which",
+            "metaproc.adapters.codex_cli.shutil.which",
             lambda _: "/usr/local/bin/codex",
         )
 
         def fail_probe(**_kwargs):
             raise CodexCliVersionMismatch("launcher child executable is missing: ENOENT")
 
-        monkeypatch.setattr("metaproc.adapters.codex.verify_codex_version", fail_probe)
+        monkeypatch.setattr("metaproc.adapters.codex_cli.verify_codex_version", fail_probe)
 
         status = self.adapter.check_auth()
 
@@ -528,7 +528,7 @@ def test_verify_codex_version_preserves_launcher_failure(monkeypatch):
             stderr="spawn vendor/codex ENOENT",
         )
 
-    monkeypatch.setattr("metaproc.adapters.codex.subprocess.run", failed_run)
+    monkeypatch.setattr("metaproc.adapters.codex_cli.subprocess.run", failed_run)
 
     with pytest.raises(CodexCliVersionMismatch, match="ENOENT"):
         verify_codex_version()
@@ -543,7 +543,7 @@ def test_verify_codex_version_accepts_repository_pin(monkeypatch):
             stderr="",
         )
 
-    monkeypatch.setattr("metaproc.adapters.codex.subprocess.run", successful_run)
+    monkeypatch.setattr("metaproc.adapters.codex_cli.subprocess.run", successful_run)
 
     assert verify_codex_version() == PINNED_CODEX_CLI_VERSION
 
@@ -557,13 +557,13 @@ def test_verify_codex_version_rejects_different_version(monkeypatch):
             stderr="",
         )
 
-    monkeypatch.setattr("metaproc.adapters.codex.subprocess.run", mismatched_run)
+    monkeypatch.setattr("metaproc.adapters.codex_cli.subprocess.run", mismatched_run)
 
-    with pytest.raises(
-        CodexCliVersionMismatch,
-        match=r"pinned='0\.144\.1', actual='0\.146\.0-alpha\.3\.1'",
-    ):
+    with pytest.raises(CodexCliVersionMismatch) as excinfo:
         verify_codex_version()
+    message = str(excinfo.value)
+    assert f"pinned={PINNED_CODEX_CLI_VERSION!r}" in message
+    assert "actual='0.146.0-alpha.3.1'" in message
 
 
 class TestCodexAuthCapableSubprotocol:

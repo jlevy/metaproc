@@ -243,7 +243,7 @@ The controlled profiles used the corrected parser and complete-tree observer.
 - [Host Memory Accounting and Control](research-2026-09-01-host-memory-accounting-and-control.md)
 - [RunPool Host Safety Envelope](../specs/active/plan-2026-09-01-runpool-host-safety.md)
 - [Safeproc Local Incubation](../specs/active/plan-2026-09-01-safeproc-local-incubation.md)
-- [Metaproc Gemini adapter](../../../src/metaproc/adapters/gemini.py)
+- [Metaproc Gemini adapter](../../../src/metaproc/adapters/gemini_cli.py)
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

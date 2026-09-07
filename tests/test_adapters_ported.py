@@ -16,8 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from metaproc.adapters.claude_code import ClaudeCodeCliAdapter
-from metaproc.adapters.gemini import GeminiCliAdapter
+from metaproc.adapters.claude_cli import ClaudeCodeCliAdapter
+from metaproc.adapters.gemini_cli import GeminiCliAdapter
 from metaproc.adapters.pi_cli import PiCliAdapter
 from metaproc.adapters.registry import (
     ADAPTER_REGISTRY,
@@ -96,7 +96,7 @@ class TestClaudeCodeCliAdapter:
     def test_permission_mode_flag(self) -> None:
         # bypassPermissions stays as-is, but pairs with
         # --dangerously-skip-permissions and --add-dir <cwd> for Claude Code
-        # 2.1.123+ compatibility (see claude_code.py comment).
+        # 2.1.123+ compatibility (see claude_cli.py comment).
         cmd = self.adapter.build_command(
             self.prompt_file, self._cfg(permission_mode="bypassPermissions"), {}
         )
@@ -399,11 +399,75 @@ class TestGeminiCliAdapter:
         written = json.loads(settings_path.read_text())
         assert written["agents"]["overrides"]["generalist"]["enabled"] is True
 
-    def test_prepare_env_native_settings_null_skips_injection(self) -> None:
-        """native_settings: null (None) skips injection entirely."""
-        env = {"PATH": "/usr/bin"}
-        result = self.adapter.prepare_env(env, {"native_settings": None})
-        assert "GEMINI_CLI_SYSTEM_SETTINGS_PATH" not in result
+    def test_prepare_env_default_disables_session_retention(self) -> None:
+        """The default settings disable Gemini's startup session-retention scan.
+
+        Cleanup enumerates and parses every saved session before it knows which
+        are expired, which turns a ~0.4 GB process tree into 5+ GB on an
+        accumulated project bucket. See mp-858m.
+        """
+        result = self.adapter.prepare_env({"PATH": "/usr/bin"}, {})
+        written = json.loads(Path(result["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text())
+        assert written["general"]["sessionRetention"]["enabled"] is False
+
+    def test_prepare_env_partial_override_keeps_retention_guard(self) -> None:
+        """A native_settings block that never mentions retention keeps the guard.
+
+        Settings are merged, not replaced, so a profile cannot silently drop a
+        host-safety default it did not intend to touch.
+        """
+        custom = {"agents": {"overrides": {"generalist": {"enabled": True}}}}
+        result = self.adapter.prepare_env({"PATH": "/usr/bin"}, {"native_settings": custom})
+        written = json.loads(Path(result["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text())
+        assert written["general"]["sessionRetention"]["enabled"] is False
+        assert written["agents"]["overrides"]["generalist"]["enabled"] is True
+        # Untouched defaults survive the override.
+        assert written["context"]["fileFiltering"]["respectGitIgnore"] is False
+
+    def test_prepare_env_sibling_general_key_keeps_retention_guard(self) -> None:
+        """Setting an unrelated `general` key does not displace the guard."""
+        custom = {"general": {"vimMode": True}}
+        result = self.adapter.prepare_env({"PATH": "/usr/bin"}, {"native_settings": custom})
+        written = json.loads(Path(result["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text())
+        assert written["general"]["sessionRetention"]["enabled"] is False
+        assert written["general"]["vimMode"] is True
+
+    def test_prepare_env_explicit_retention_opt_in_wins(self) -> None:
+        """An operator who deliberately re-enables retention still wins."""
+        custom = {"general": {"sessionRetention": {"enabled": True}}}
+        result = self.adapter.prepare_env({"PATH": "/usr/bin"}, {"native_settings": custom})
+        written = json.loads(Path(result["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text())
+        assert written["general"]["sessionRetention"]["enabled"] is True
+
+    def test_prepare_env_native_settings_null_still_guards_retention(self) -> None:
+        """`native_settings: null` no longer suppresses the retention guard.
+
+        Nulling the block previously skipped injection entirely, which silently
+        removed the startup-scan mitigation. The guard is host safety, so it is
+        re-asserted beneath the defaults.
+        """
+        result = self.adapter.prepare_env({"PATH": "/usr/bin"}, {"native_settings": None})
+        assert "GEMINI_CLI_SYSTEM_SETTINGS_PATH" in result
+        written = json.loads(Path(result["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text())
+        assert written["general"]["sessionRetention"]["enabled"] is False
+
+    def test_dynamic_model_configuration_is_asserted_by_default(self) -> None:
+        """gemini-cli rewrites an unknown *flash id to its own default without it."""
+        env = self.adapter.prepare_env({}, {})
+        emitted = json.loads(Path(env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text())
+        assert emitted["experimental"]["dynamicModelConfiguration"] is True
+
+    def test_dynamic_model_configuration_survives_a_partial_override(self) -> None:
+        env = self.adapter.prepare_env({}, {"native_settings": {"tools": {"core": ["read_file"]}}})
+        emitted = json.loads(Path(env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text())
+        assert emitted["experimental"]["dynamicModelConfiguration"] is True
+        assert emitted["tools"] == {"core": ["read_file"]}
+
+    def test_validate_config_rejects_no_session_persistence(self) -> None:
+        """The key was accepted and silently ignored; it must now be rejected."""
+        rejections = self.adapter.validate_config({"no_session_persistence": True})
+        assert [r.key for r in rejections] == ["no_session_persistence"]
+        assert "no flag that disables session recording" in rejections[0].reason
 
     def test_prepare_env_does_not_inject_gemini_api_key(self) -> None:
         """GOOGLE_API_KEY is for Vertex AI Express; adapter should not remap it."""

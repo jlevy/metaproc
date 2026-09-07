@@ -50,6 +50,30 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
 
 ### Fixed
 
+- **Gemini no longer scans its whole project history at startup**: Gemini CLI runs
+  session-retention cleanup as an un-awaited background task during startup.
+  Before it knows which sessions are expired, cleanup enumerates the project’s saved
+  conversations and parses every one of them through a single unbounded `Promise.all`.
+  On an accumulated project bucket that turns a roughly 0.4 GB process tree into 5 GB or
+  more for the same short prompt, which is enough to destabilize a host running several
+  agents at once. The adapter now ships `general.sessionRetention.enabled: false` in its
+  native settings, which makes cleanup return before it enumerates anything.
+  Gemini native settings are also merged rather than replaced, so a profile-supplied
+  `native_settings` block cannot silently drop a host-safety default it never mentioned.
+  Two consequences worth knowing: Gemini no longer prunes its own `chats/` and
+  `tool-outputs/` directories, so bounded retention becomes an external operation; and
+  `native_settings: null` no longer suppresses settings injection entirely, because the
+  retention guard is re-asserted beneath the defaults.
+  An operator who deliberately sets the key still wins.
+
+- **The Gemini adapter no longer accepts `no_session_persistence`**: the key was in the
+  allow-list but was never read, so a process spec could ask for session isolation and
+  silently not get it.
+  Gemini CLI has no headless flag that disables session recording, so the key is now
+  rejected with an explanation rather than accepted as a no-op.
+  No built-in Gemini profile set it.
+  The equivalent no-op in the Pi adapter is tracked separately and unchanged here.
+
 - **An agent’s own verdict outranks its exit code**: some adapters write every declared
   output, emit a terminal success record, and then exit nonzero while shutting down.
   A scalar agent step whose agent reported success and whose declared outputs all
@@ -205,6 +229,16 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
   `StepContext.cancel_requested()`.
 
 ### Changed
+
+- **Agent CLI adapter module names**: the four source modules now follow one
+  executable-based convention: `claude_cli.py`, `codex_cli.py`, `gemini_cli.py`, and
+  `pi_cli.py`. Adapter type strings and adapter class names are unchanged.
+
+- **Agent CLI runtime pins**: the exact adapter contracts now target Claude Code
+  2.1.234, Codex 0.147.0, and Pi 0.84.2. Each was the newest stable release outside the
+  14-day package cool-off at the time of review.
+  Pi’s installation hint now uses the active `@earendil-works/pi-coding-agent` package
+  scope.
 
 - **Gemini CLI runtime pin**: the local adapter, agent image, and supply-chain policy
   now agree on Gemini CLI 0.55.1, the newest stable release outside the repository’s

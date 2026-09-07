@@ -22,7 +22,7 @@ Contract: all configuration uses env vars set by ``gcp_run_dispatch``:
                                Python package paths installed editable after
                                workspace extraction.
     CLAUDE_CODE_CREDS_JSON     (optional) Personal-Plan OAuth blob; the
-                               claude_code adapter's ``bootstrap()`` hook
+                               claude_cli adapter's ``bootstrap()`` hook
                                materializes it to ``~/.claude/.credentials.json``.
     CODEX_CREDS_JSON           (optional) ChatGPT-OAuth blob (Vehicle B); the
                                codex adapter's ``bootstrap()`` hook
@@ -97,7 +97,7 @@ def main() -> int:
         return 1
 
     # Adapter bootstrap hooks materialize per-task filesystem state
-    # (e.g. claude_code's ~/.claude/.credentials.json from
+    # (e.g. claude_cli's ~/.claude/.credentials.json from
     # CLAUDE_CODE_CREDS_JSON) before exec.
     home = Path.home()
     for adapter in ADAPTER_REGISTRY.values():

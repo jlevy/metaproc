@@ -110,6 +110,7 @@ from metaproc.engine.item_runner import (
     run_fan_out,
     with_retry,
 )
+from metaproc.engine.launch_validation import collect_launch_errors, format_launch_errors
 from metaproc.engine.pathing import (
     compute_logs_dir,
     compute_run_dir,
@@ -4662,7 +4663,7 @@ def run_process_command(
             "Pre-fan-out per-step quota gate posture: off|warn|refuse. "
             "Defaults to warn. refuse blocks dispatch when projected demand "
             "exceeds 80% of pool headroom (computed via "
-            "claude_code.query_quota_usage's recent rate_limit_event "
+            "claude_cli.query_quota_usage's recent rate_limit_event "
             "synthesis); off skips the gate."
         ),
     ),
@@ -4735,18 +4736,23 @@ def run_process_command(
     variables = expand_process_vars(spec, variables, process_dir=process_dir)
     require_runtime_runs_dir(variables, command="run-process")
 
-    placeholder_errors = validate_spec_placeholders(spec, variables)
-    if placeholder_errors:
-        msg = (
-            "unresolved placeholders in process spec (pass via --var or set env var):\n  "
-            + "\n  ".join(placeholder_errors)
-        )
-        raise CLIError(msg)
-
-    input_errors = validate_process_inputs(spec, variables, process_dir)
-    if input_errors:
-        msg = "process input validation failed:\n  " + "\n  ".join(input_errors)
-        raise CLIError(msg)
+    # Launch validation runs before any step, so it carries the validation exit
+    # code (2) rather than the general failure code (1) an executed-and-failed
+    # run reports. Retry automation reads the difference: 2 needs an operator to
+    # fix the invocation, 1 may be worth retrying. Every class of missing input
+    # is reported together — an operator fixing a launch should need one more
+    # launch, not one per class.
+    launch_errors = collect_launch_errors(
+        spec,
+        variables,
+        process_dir,
+        process_path=process_path,
+        profile_files=profile_files,
+        adapter_override=variant or None,
+        step_profile_overrides=step_profile_overrides,
+    )
+    if launch_errors:
+        raise ValidationError(format_launch_errors(launch_errors))
 
     try:
         plan = build_plan(

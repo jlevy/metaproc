@@ -211,7 +211,7 @@ def _parse_session_rate_limits(
     timestamp alongside the window so the aggregator can merge across
     sessions deterministically. Records without a ``ts`` field stay
     last-write-wins within their own session (matches today's
-    ``claude_code.py:1124`` logic).
+    ``claude_cli.py:1124`` logic).
 
     Returns ``({}, None)`` for missing / unreadable files —
     operationally common (a session that never tripped a rate-limit
@@ -680,7 +680,7 @@ def query_label_headroom(
     rate-limit event for the label can be found — operationally
     common for fresh labels.
 
-    Used by :func:`metaproc.adapters.claude_code.ClaudeCodeCliAdapter.
+    Used by :func:`metaproc.adapters.claude_cli.ClaudeCodeCliAdapter.
     query_quota_usage` so the existing
     :mod:`metaproc.dispatch.preflight` ``summarize_headroom`` lights
     up without a native Anthropic quota endpoint.

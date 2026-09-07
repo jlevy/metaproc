@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
-from metaproc.adapters.claude_code import CLAUDE_CREDS_ENV_VAR
+from metaproc.adapters.claude_cli import CLAUDE_CREDS_ENV_VAR
 from metaproc.cloud.gcp import container_bootstrap
 from metaproc.cloud.gcp.container_bootstrap import (
     BootstrapResult,

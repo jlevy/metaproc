@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from google.cloud.batch_v1.types import AllocationPolicy
 
-from metaproc.adapters.codex import CODEX_CREDS_ENV_VAR
+from metaproc.adapters.codex_cli import CODEX_CREDS_ENV_VAR
 from metaproc.adapters.registry import ADAPTER_REGISTRY
 from metaproc.cloud.gcp import container_bootstrap, gcp_run_entrypoint
 from metaproc.cloud.gcp.batch_backend import GCPBatchConfig, create_single_task_job

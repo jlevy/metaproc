@@ -46,7 +46,7 @@ _CODEX_SLOT_CONFIG_TOML = 'cli_auth_credentials_store = "file"\nforced_login_met
 
 log = logging.getLogger(__name__)
 
-PINNED_CODEX_CLI_VERSION = "0.144.1"
+PINNED_CODEX_CLI_VERSION = "0.147.0"
 CODEX_CLI_INSTALL_HINT = f"Install: npm install -g @openai/codex@{PINNED_CODEX_CLI_VERSION}"
 # Keep a broken launcher from blocking agent dispatch indefinitely.
 _CODEX_VERSION_CHECK_TIMEOUT_SECONDS = 10

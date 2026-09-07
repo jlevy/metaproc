@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from metaproc.adapters.base import AuthFailureClassification, FailureSeverity, agent_seed_env
-from metaproc.adapters.claude_code import parse_claude_api_signals
+from metaproc.adapters.claude_cli import parse_claude_api_signals
 from metaproc.adapters.registry import get_auth_capable
 from metaproc.dispatch.credential_pool import (
     FallbackPolicy,
@@ -43,7 +43,7 @@ from metaproc.dispatch.slot_coordinator import (
 )
 
 if TYPE_CHECKING:
-    from metaproc.adapters.claude_code import ClaudeApiSignals
+    from metaproc.adapters.claude_cli import ClaudeApiSignals
 
 log = logging.getLogger(__name__)
 

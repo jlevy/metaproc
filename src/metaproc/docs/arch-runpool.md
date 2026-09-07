@@ -9,7 +9,7 @@ status: Approved
 Module-level notes, including using RunPool as a library, are in
 [`runpool/README.md`](../runpool/README.md).
 
-**Date:** 2026-04-06 (last updated 2026-08-27) **Status:** Approved
+**Date:** 2026-04-06 (last updated 2026-09-04) **Status:** Approved
 
 RunPool is Metaproc’s local agent process manager.
 It owns subprocess lifecycle, adaptive concurrency, host-level coordination, health
@@ -272,6 +272,36 @@ wall-clock just stretches by 2-8×. Per-adapter memory profiles still shift with
 version, model, and active-count (see § “Per-adapter RSS benchmarks”), so a tight cap is
 the wrong knob: keep the operator cap as a floor (≥20 for local large workflow-class
 workloads) and treat `--cap N` with `N < 20` as a documented incident-time exception.
+
+### Client State Is Part of a Memory Profile
+
+An agent CLI does not have one memory cost.
+The same client, prompt, model, and repository can differ by gigabytes depending on how
+much local state the client reads at startup, so a per-adapter estimate is only valid
+for a stated state regime.
+
+Gemini is the case that forced this distinction.
+Gemini CLI runs session-retention cleanup as an un-awaited background task during
+startup, and before it knows which sessions are expired it enumerates the project’s
+saved conversations and parses every one of them through a single unbounded
+`Promise.all`. Against an accumulated project bucket that turns a roughly 0.4 GB process
+tree into 5 GB or more for the same short prompt.
+Several agents starting together multiply it, which is how a host becomes unstable
+during the startup phase rather than at steady state.
+
+The adapter therefore ships `general.sessionRetention.enabled: false` in its Gemini
+native settings, which makes cleanup return before it enumerates anything.
+Two consequences follow.
+Gemini no longer prunes its own `chats/` and `tool-outputs/` directories, so bounded
+retention is an external operation and those directories grow until something else trims
+them. And the low Gemini memory estimate is only meaningful while the guard is in place:
+an operator who re-enables retention through `native_settings` is choosing the
+high-spike regime and should raise the profile’s estimate to match.
+
+Two mitigations that look plausible are not.
+A V8 heap cap converts the spike into a startup crash after the host has already
+absorbed the allocation, and a per-run working directory only selects a fresh state
+bucket that then accumulates in turn.
 
 ### What Survives a Resume
 
