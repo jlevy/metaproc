@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +51,7 @@ class GeminiAgentExtractor:
     """V1 extractor for Gemini CLI per-attempt JSONL logs."""
 
     source = "gemini-agent"
+    scope_local = True
 
     def detect(self, run_dir: Path) -> bool:
         """Detect gemini stream-json by schema sniff.
@@ -88,10 +90,9 @@ class GeminiAgentExtractor:
         sidecar_path = artifact_sidecar_path(jsonl_path, ".jsonl.invocation.json")
         invocation = _load_sidecar(sidecar_path)
 
-        ts_first = _first_timestamp(events)
-        ts_last = _last_timestamp(events)
         result_event = next((e for e in events if e.get("type") == "result"), None)
         init_event = next((e for e in events if e.get("type") == "init"), None)
+        ts_first, ts_last = _attempt_timestamp_bounds(events, result_event)
 
         attempt_span_id = compute_span_id(self.source, str(jsonl_path), "attempt")
         attempt_attrs: dict[str, Any] = {
@@ -187,6 +188,7 @@ class GeminiAgentExtractor:
             jsonl_path=jsonl_path,
             step_id=step_id,
             item_key=item_key,
+            recovered_errors=status == "ok",
         )
 
         # Internal spans (compaction).
@@ -220,6 +222,7 @@ class GeminiAgentExtractor:
         jsonl_path: Path,
         step_id: str,
         item_key: str,
+        recovered_errors: bool,
     ) -> Iterable[TraceEvent]:
         """Pair tool_use + tool_result by tool_id and emit tool_call spans.
 
@@ -250,7 +253,7 @@ class GeminiAgentExtractor:
                 tool_id = ev.get("tool_result_id") or ev.get("tool_id")
                 if isinstance(tool_id, str) and tool_id and tool_id in pending_by_id:
                     use_ev, use_ts = pending_by_id.pop(tool_id)
-                    yield _make_tool_span(
+                    span = _make_tool_span(
                         use_ev=use_ev,
                         use_ts=use_ts,
                         result_ev=ev,
@@ -263,11 +266,13 @@ class GeminiAgentExtractor:
                         item_key=item_key,
                         idx=tool_idx,
                     )
+                    _mark_recovered_tool_error(span, recovered_errors=recovered_errors)
+                    yield span
                     tool_idx += 1
                 elif fifo_queue:
                     # FIFO fallback for legacy logs without tool_id
                     use_ev, use_ts = fifo_queue.pop(0)
-                    yield _make_tool_span(
+                    span = _make_tool_span(
                         use_ev=use_ev,
                         use_ts=use_ts,
                         result_ev=ev,
@@ -280,11 +285,13 @@ class GeminiAgentExtractor:
                         item_key=item_key,
                         idx=tool_idx,
                     )
+                    _mark_recovered_tool_error(span, recovered_errors=recovered_errors)
+                    yield span
                     tool_idx += 1
 
         # Unpaired tool_use events (no matching result): status=unknown
         for use_ev, use_ts in pending_by_id.values():
-            yield _make_tool_span(
+            span = _make_tool_span(
                 use_ev=use_ev,
                 use_ts=use_ts,
                 result_ev=None,
@@ -297,10 +304,12 @@ class GeminiAgentExtractor:
                 item_key=item_key,
                 idx=tool_idx,
             )
+            _mark_recovered_tool_error(span, recovered_errors=recovered_errors)
+            yield span
             tool_idx += 1
 
         for use_ev, use_ts in fifo_queue:
-            yield _make_tool_span(
+            span = _make_tool_span(
                 use_ev=use_ev,
                 use_ts=use_ts,
                 result_ev=None,
@@ -313,6 +322,8 @@ class GeminiAgentExtractor:
                 item_key=item_key,
                 idx=tool_idx,
             )
+            _mark_recovered_tool_error(span, recovered_errors=recovered_errors)
+            yield span
             tool_idx += 1
 
 
@@ -395,6 +406,12 @@ def _make_tool_span(
     )
 
 
+def _mark_recovered_tool_error(span: TraceEvent, *, recovered_errors: bool) -> None:
+    """Mark a failed tool call recovered when the terminal agent result succeeded."""
+    if recovered_errors and span.status == "error":
+        span.attributes["error.recovered"] = True
+
+
 def _parse_step_and_item_key(jsonl_path: Path, *, run_dir: Path) -> tuple[str, str]:
     try:
         rel = jsonl_path.relative_to(run_dir / ".logs" / "tasks")
@@ -468,20 +485,41 @@ def _duration_ms(result_event: dict[str, Any] | None) -> float | None:
     return None
 
 
-def _first_timestamp(events: list[dict[str, Any]]) -> str:
-    for e in events:
-        ts = e.get("timestamp")
-        if isinstance(ts, str):
-            return ts
-    return ""
+def _attempt_timestamp_bounds(
+    events: list[dict[str, Any]],
+    result_event: dict[str, Any] | None,
+) -> tuple[str, str | None]:
+    """Return ordered attempt bounds despite Gemini's compacted-history order."""
+    result_ts = result_event.get("timestamp") if result_event is not None else None
+    ts_end = result_ts if isinstance(result_ts, str) else _timestamp_extreme(events, latest=True)
+    duration_ms = _duration_ms(result_event)
+    if ts_end is not None and duration_ms is not None:
+        try:
+            end = datetime.fromisoformat(ts_end)
+        except ValueError:
+            pass
+        else:
+            return (end - timedelta(milliseconds=duration_ms)).isoformat(), ts_end
+    return _timestamp_extreme(events, latest=False) or "", ts_end
 
 
-def _last_timestamp(events: list[dict[str, Any]]) -> str | None:
-    for e in reversed(events):
-        ts = e.get("timestamp")
-        if isinstance(ts, str):
-            return ts
-    return None
+def _timestamp_extreme(events: list[dict[str, Any]], *, latest: bool) -> str | None:
+    parsed: list[tuple[datetime, str]] = []
+    for event in events:
+        raw = event.get("timestamp")
+        if not isinstance(raw, str):
+            continue
+        try:
+            value = datetime.fromisoformat(raw)
+        except ValueError:
+            continue
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=UTC)
+        parsed.append((value, raw))
+    if not parsed:
+        return None
+    selector = max if latest else min
+    return selector(parsed, key=lambda item: item[0])[1]
 
 
 def _looks_like_gemini(jsonl_path: Path) -> bool:

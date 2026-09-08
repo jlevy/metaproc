@@ -32,14 +32,14 @@ class MetaprocEnv(EnvEnum):
     pass-through values when they show up in `os.environ`.
     """
 
-    # ── GCP infrastructure (required for `metaproc --backend gcp-worker`) ──
+    # ── GCP infrastructure (required for full-cloud Batch execution) ──
     METAPROC_GCP_PROJECT = tunable(
         "GCP project ID for Batch / Compute operations.",
         "<your-gcp-project-id>",
     )
     METAPROC_GCP_SERVICE_ACCOUNT = tunable(
-        "Custom service account for Batch VMs. Required in practice — the default "
-        "compute SA lacks Secret Manager access, so Batch jobs fail silently without it.",
+        "Explicit service account for Batch VMs. Required for every job that binds "
+        "Secret Manager values or uses a Secret Manager auth pool.",
         "<worker-sa>@<your-gcp-project-id>.iam.gserviceaccount.com",
     )
     METAPROC_GCP_CONTAINER_IMAGE = tunable(
@@ -62,20 +62,19 @@ class MetaprocEnv(EnvEnum):
     METAPROC_GCP_FILESTORE_MOUNT_PATH = tunable(
         "Local mount point for the Filestore share on worker VMs.", "/mnt/filestore"
     )
-    METAPROC_GCP_FILESTORE_REMOTE_RUNS_DIR = tunable(
-        "Runs directory on the Filestore mount, used by remote monitoring commands.",
-        "/mnt/filestore/runs",
-    )
     METAPROC_GCP_BOOT_DISK_GB = tunable("Boot disk size (GB) for worker VMs.", "50")
     METAPROC_GCP_MAX_RUN_DURATION_S = tunable("Max run duration (seconds) per Batch task.", "28800")
     METAPROC_GCP_TASK_CPU_MILLI = optional("Override CPU milli-cores per Batch task.")
     METAPROC_GCP_TASK_MEMORY_MIB = optional("Override memory MiB per Batch task.")
     METAPROC_GCS_BUCKET = tunable(
-        "GCS bucket for run artifact sync and wheel / workspace uploads.",
+        "GCS bucket for wheel and workspace uploads used by cloud dispatch.",
         "<your-gcs-bucket>",
     )
     METAPROC_GCP_RUN_CMD = optional(
         "Serialized JSON command used by the `gcp-run` entrypoint. Set by the dispatcher."
+    )
+    METAPROC_GCP_SECRET_REFS_JSON = optional(
+        "Dispatcher-owned JSON mapping of runtime env names to Secret Manager version refs."
     )
 
     # ── Repo resolution for cloud workers ──
@@ -124,6 +123,9 @@ class MetaprocEnv(EnvEnum):
     )
 
     # ── Worker / orchestrator entrypoint vars (set by dispatcher) ──
+    METAPROC_GCP_ORCHESTRATOR = optional(
+        "Dispatcher-owned admission marker for the inner full-cloud orchestrator process."
+    )
     METAPROC_WORKER_ITEMS = optional("Serialized JSON list of items this worker should process.")
     METAPROC_WORKER_ID = optional("Identifier of the current worker instance (runtime-injected).")
     METAPROC_PROCESS_SPEC = optional(
@@ -150,9 +152,8 @@ class MetaprocEnv(EnvEnum):
         "GCE machine type for orchestrator-launched worker VMs.", "e2-standard-4"
     )
     METAPROC_GCP_MACHINE_TYPE = optional(
-        "GCE machine type override for `run-process --backend gcp-worker` fan-out "
-        "workers. Distinct from METAPROC_MACHINE_TYPE, which scopes the "
-        "orchestrator-launched worker VMs.",
+        "GCE machine type override for full-cloud fan-out workers. Distinct from "
+        "METAPROC_MACHINE_TYPE, which scopes the orchestrator VM.",
         "e2-highmem-8",
     )
     METAPROC_SPOT = optional(
@@ -166,11 +167,6 @@ class MetaprocEnv(EnvEnum):
     METAPROC_ITEM_CONTEXTS = optional("Inline JSON item-context map.")
     METAPROC_ITEM_CONTEXTS_FILE = optional(
         "Path to a file containing item contexts (alternative to inline JSON)."
-    )
-
-    # ── Remote monitoring ──
-    METAPROC_GATEWAY_HOST = optional(
-        "SSH gateway host for `metaproc gcp remote` commands.", "<your-gateway-host>"
     )
 
     # ── Secrets (.env-backed or Secret Manager) ──
@@ -385,7 +381,11 @@ class MetaprocEnv(EnvEnum):
     USERNAME = optional("Windows username. Read as a fallback for METAPROC_OPERATOR.")
     VIRTUAL_ENV = optional("Path to the active virtualenv (set by the venv activator).")
     BATCH_TASK_INDEX = optional("GCP Batch task index. Set by the Batch runtime.")
-    NO_COLOR = optional("Standard convention: when set, disables colored terminal output.")
+    NO_COLOR = optional(
+        "Standard convention: when set, disables colored terminal output. This is the "
+        "read side, governing metaproc's own output; the write side that puts NO_COLOR "
+        "into every agent child is adapters.base.AGENT_ENV_OVERRIDES."
+    )
     CI = optional("Standard convention: set by CI systems; triggers non-interactive defaults.")
 
 

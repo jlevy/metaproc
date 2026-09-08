@@ -9,7 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from metaproc.models.resource_budget import ResourceBudgetSpec
 from metaproc.models.resources import Node, NodeType
 
-RESOURCE_SNAPSHOT_SCHEMA = "metaproc.resource-snapshot/v1"
+RESOURCE_SNAPSHOT_SCHEMA_V1 = "metaproc.resource-snapshot/v1"
+RESOURCE_SNAPSHOT_SCHEMA = "metaproc.resource-snapshot/v2"
 
 
 class ResourceTopologyNode(BaseModel):
@@ -43,13 +44,13 @@ class ResourceTopologyNode(BaseModel):
         )
 
 
-class ResourceRunSnapshot(BaseModel):
-    """Versioned resource contract frozen into ``run-config.yaml`` once."""
+class ResourceRunSnapshotV1(BaseModel):
+    """Original resource contract retained for strict persisted-data reads."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
     schema_version: Literal["metaproc.resource-snapshot/v1"] = Field(
-        default=RESOURCE_SNAPSHOT_SCHEMA,
+        default=RESOURCE_SNAPSHOT_SCHEMA_V1,
         alias="schema",
     )
     hierarchy: ResourceTopologyNode
@@ -57,25 +58,65 @@ class ResourceRunSnapshot(BaseModel):
 
     @model_validator(mode="after")
     def _validate_snapshot(self) -> Self:
-        seen: set[str] = set()
-
-        def walk(node: ResourceTopologyNode, expected_parent: str | None) -> None:
-            if node.node_id in seen:
-                raise ValueError(f"duplicate resource topology node ID {node.node_id!r}")
-            if node.parent_id != expected_parent:
-                raise ValueError(
-                    f"resource topology node {node.node_id!r} has parent {node.parent_id!r}; "
-                    f"expected {expected_parent!r}"
-                )
-            seen.add(node.node_id)
-            for child in node.children:
-                walk(child, node.node_id)
-
-        walk(self.hierarchy, None)
-        budget_ids = [budget.budget_id for budget in self.budgets]
-        if len(budget_ids) != len(set(budget_ids)):
-            raise ValueError("resource snapshot budget IDs must be unique")
+        _validate_snapshot_topology_and_budgets(self.hierarchy, self.budgets)
         return self
 
     def hierarchy_node(self) -> Node:
         return self.hierarchy.to_node()
+
+
+class ResourceRunSnapshot(BaseModel):
+    """Current resource contract frozen into ``run-config.yaml`` once."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    schema_version: Literal["metaproc.resource-snapshot/v2"] = Field(
+        default=RESOURCE_SNAPSHOT_SCHEMA,
+        alias="schema",
+    )
+    hierarchy: ResourceTopologyNode
+    budgets: list[ResourceBudgetSpec] = Field(default_factory=list)
+    mapped_composite_step_ids: list[str] = Field(
+        description="Qualified mapped-composite step IDs used for exact recovered path ownership",
+    )
+
+    @model_validator(mode="after")
+    def _validate_snapshot(self) -> Self:
+        seen = _validate_snapshot_topology_and_budgets(self.hierarchy, self.budgets)
+        if len(self.mapped_composite_step_ids) != len(set(self.mapped_composite_step_ids)):
+            raise ValueError("mapped composite step IDs must be unique")
+        unknown = set(self.mapped_composite_step_ids).difference(seen)
+        if unknown:
+            raise ValueError(
+                "mapped composite step IDs must exist in the resource topology: "
+                f"{sorted(unknown)!r}"
+            )
+        return self
+
+    def hierarchy_node(self) -> Node:
+        return self.hierarchy.to_node()
+
+
+def _validate_snapshot_topology_and_budgets(
+    hierarchy: ResourceTopologyNode,
+    budgets: list[ResourceBudgetSpec],
+) -> set[str]:
+    seen: set[str] = set()
+
+    def walk(node: ResourceTopologyNode, expected_parent: str | None) -> None:
+        if node.node_id in seen:
+            raise ValueError(f"duplicate resource topology node ID {node.node_id!r}")
+        if node.parent_id != expected_parent:
+            raise ValueError(
+                f"resource topology node {node.node_id!r} has parent {node.parent_id!r}; "
+                f"expected {expected_parent!r}"
+            )
+        seen.add(node.node_id)
+        for child in node.children:
+            walk(child, node.node_id)
+
+    walk(hierarchy, None)
+    budget_ids = [budget.budget_id for budget in budgets]
+    if len(budget_ids) != len(set(budget_ids)):
+        raise ValueError("resource snapshot budget IDs must be unique")
+    return seen

@@ -23,7 +23,9 @@ from metaproc.models.resource_budget import (
 )
 from metaproc.models.resource_snapshot import (
     RESOURCE_SNAPSHOT_SCHEMA,
+    RESOURCE_SNAPSHOT_SCHEMA_V1,
     ResourceRunSnapshot,
+    ResourceRunSnapshotV1,
     ResourceTopologyNode,
 )
 from metaproc.paths import run_config_file
@@ -39,10 +41,16 @@ def build_resource_run_snapshot(bundle: PlanBundle, *, run_id: str) -> ResourceR
     return ResourceRunSnapshot(
         hierarchy=ResourceTopologyNode.from_node(hierarchy),
         budgets=budgets,
+        mapped_composite_step_ids=_collect_mapped_composite_step_ids(
+            bundle,
+            subgraph_key=ROOT_SUBGRAPH_KEY,
+        ),
     )
 
 
-def read_resource_run_snapshot(run_dir: Path) -> ResourceRunSnapshot | None:
+def read_resource_run_snapshot(
+    run_dir: Path,
+) -> ResourceRunSnapshot | ResourceRunSnapshotV1 | None:
     """Read the immutable snapshot, or ``None`` for a legacy run."""
     path = run_config_file(run_dir)
     if not path.exists():
@@ -53,10 +61,12 @@ def read_resource_run_snapshot(run_dir: Path) -> ResourceRunSnapshot | None:
     resources = raw.get("resources")
     if resources is None:
         return None
-    if not isinstance(resources, Mapping) or resources.get("schema") != RESOURCE_SNAPSHOT_SCHEMA:
-        schema = resources.get("schema") if isinstance(resources, Mapping) else None
-        raise ValueError(f"unsupported or missing resource snapshot schema token: {schema!r}")
-    return ResourceRunSnapshot.model_validate(resources)
+    schema = resources.get("schema") if isinstance(resources, Mapping) else None
+    if schema == RESOURCE_SNAPSHOT_SCHEMA:
+        return ResourceRunSnapshot.model_validate(resources)
+    if schema == RESOURCE_SNAPSHOT_SCHEMA_V1:
+        return ResourceRunSnapshotV1.model_validate(resources)
+    raise ValueError(f"unsupported or missing resource snapshot schema token: {schema!r}")
 
 
 def _collect_bundle_budgets(
@@ -79,6 +89,26 @@ def _collect_bundle_budgets(
             )
         )
     return budgets
+
+
+def _collect_mapped_composite_step_ids(
+    bundle: PlanBundle,
+    *,
+    subgraph_key: str,
+) -> list[str]:
+    step_ids: list[str] = []
+    for step in bundle.plan.steps:
+        if step.mode == "composite" and step.fan_out is not None:
+            step_ids.append(step_node_id(subgraph_key, step.step_id))
+        child = bundle.children.get(step.step_id)
+        if child is not None:
+            step_ids.extend(
+                _collect_mapped_composite_step_ids(
+                    child,
+                    subgraph_key=child_subgraph_key(subgraph_key, step.step_id),
+                )
+            )
+    return sorted(step_ids)
 
 
 def _qualify_budget(

@@ -9,7 +9,7 @@ then derived from that reconciled ledger; cached projections are never inputs.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -177,6 +177,7 @@ def build_resource_artifacts(
     run_dir: Path,
     run_id: str,
     hierarchy_root: Node | None = None,
+    mapped_composite_step_ids: Collection[str] | None = None,
     extra_source_logs: Iterable[Path] | None = None,
     source_events_path: str = ".logs/resource-events.jsonl",
     write: bool = False,
@@ -219,7 +220,13 @@ def build_resource_artifacts(
     resource_events: list[ResourceEvent] = []
 
     for log_path in discovered:
-        owner = _derive_log_owner(log_path, run_dir, bundle=bundle, hierarchy=root)
+        owner = _derive_log_owner(
+            log_path,
+            run_dir,
+            bundle=bundle,
+            hierarchy=root,
+            mapped_composite_step_ids=mapped_composite_step_ids,
+        )
         log_file, events = _parse_file(log_path)
         if log_file is None:
             continue
@@ -276,7 +283,13 @@ def build_resource_artifacts(
 
     for source in resource_sources:
         for source_path in source.discover(run_dir):
-            owner = _derive_log_owner(source_path, run_dir, bundle=bundle, hierarchy=root)
+            owner = _derive_log_owner(
+                source_path,
+                run_dir,
+                bundle=bundle,
+                hierarchy=root,
+                mapped_composite_step_ids=mapped_composite_step_ids,
+            )
             owner_node_id = _resolve_owner_node_id(owner, nodes_by_id)
             owner_node = nodes_by_id.get(owner_node_id) if owner_node_id else None
             try:
@@ -341,11 +354,17 @@ def _derive_log_owner(
     *,
     bundle: PlanBundle | None,
     hierarchy: Node,
+    mapped_composite_step_ids: Collection[str] | None,
 ) -> LogOwner:
     if bundle is not None:
         return derive_owner_for_bundle(log_path, run_dir, bundle)
     if _root_process_node(hierarchy) is not None:
-        return derive_owner_for_hierarchy(log_path, run_dir, hierarchy)
+        return derive_owner_for_hierarchy(
+            log_path,
+            run_dir,
+            hierarchy,
+            mapped_composite_step_ids=mapped_composite_step_ids,
+        )
     return derive_owner(log_path, run_dir)
 
 

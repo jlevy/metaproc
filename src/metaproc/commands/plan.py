@@ -16,8 +16,7 @@ from metaproc.commands.helpers import (
     seed_runtime_vars,
 )
 from metaproc.engine.build_plan import build_plan
-from metaproc.engine.input_validation import validate_process_inputs
-from metaproc.engine.placeholders import validate_spec_placeholders
+from metaproc.engine.launch_validation import collect_launch_errors, format_launch_errors
 from metaproc.engine.process_scope import expand_process_vars
 from metaproc.errors import ValidationError
 from metaproc.io import to_yaml_string
@@ -93,17 +92,16 @@ def plan(
     variables = expand_process_vars(spec, variables, process_dir=process_dir)
     config_overrides = parse_adapter_config(adapter_config)
 
-    placeholder_errors = validate_spec_placeholders(spec, variables)
-    if placeholder_errors:
-        msg = (
-            "unresolved placeholders in process spec (pass via --var or set env var):\n  "
-            + "\n  ".join(placeholder_errors)
-        )
-        raise ValidationError(msg)
-
-    input_errors = validate_process_inputs(spec, variables, process_dir)
-    if input_errors:
-        raise ValidationError("process input validation failed:\n  " + "\n  ".join(input_errors))
+    launch_errors = collect_launch_errors(
+        spec,
+        variables,
+        process_dir,
+        process_path=process_path,
+        profile_files=[*variant_file, *profile_file],
+        adapter_override=variant or adapter,
+    )
+    if launch_errors:
+        raise ValidationError(format_launch_errors(launch_errors))
 
     try:
         resolved_plan = build_plan(

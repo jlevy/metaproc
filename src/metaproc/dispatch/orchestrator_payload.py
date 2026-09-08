@@ -1,6 +1,6 @@
 """Typed wrapper for the orchestrator-dispatch env-var cohort.
 
-Carries the operator-CLI to orchestrator Batch job env-var cohort:
+Carries the operator-CLI to orchestrator Batch job environment fields:
 ``METAPROC_PROCESS_SPEC``, ``_VARS``, ``_NUM_WORKERS``,
 ``_DEFAULT_NUM_WORKERS``, ``_MACHINE_TYPE``, ``_MAX_CONCURRENCY``,
 ``_INITIAL_CONCURRENCY``, ``_SPOT``, ``_VARIANT``, ``_ADAPTER_CONFIG``,

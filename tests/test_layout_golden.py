@@ -19,6 +19,7 @@ artifact tree at ``<run>/<step_id>/.state/`` or
 
 from __future__ import annotations
 
+import re
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -30,7 +31,7 @@ from typer.testing import CliRunner
 from metaproc.adapters.registry import ADAPTER_REGISTRY
 from metaproc.cli import app
 from metaproc.io.frontmatter import ENVELOPE_MAP
-from metaproc.io.state_io import read_status_at
+from metaproc.io.state_io import read_run_plan, read_status_at
 from metaproc.models.runtime import MapItem
 from metaproc.paths import (
     LOGS_DIR,
@@ -42,6 +43,8 @@ from metaproc.paths import (
     step_state_dir,
     task_state_dir,
 )
+from metaproc.runtime_projection import scan_task_output_projection
+from metaproc.viz_loader import load_plan_bundle_from_run
 
 
 class _TickersFrontmatter(BaseModel):
@@ -93,10 +96,63 @@ class _LayoutSmokeMockAdapter:
         return ""
 
 
+def test_fan_out_agent_rejects_terminal_result_contract_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RejectingAdapter(_LayoutSmokeMockAdapter):
+        def build_command(self, prompt_file, merged_config, variables):  # noqa: ARG002
+            command = super().build_command(prompt_file, merged_config, variables)
+            command[-1] += (
+                "; import json; print(json.dumps({'type': 'result', 'status': 'success'}))"
+            )
+            return command
+
+        def parse_result_event(self, line):
+            import json  # noqa: PLC0415 -- test adapter mirrors a JSONL CLI
+
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                return None
+            return event if event.get("type") == "result" else None
+
+        def validate_result_event(self, event, merged_config):  # noqa: ARG002
+            return "synthetic fan-out terminal result contract failure"
+
+    monkeypatch.setenv("METAPROC_PREFLIGHT_MIN_DISK_GB", "0.1")
+    monkeypatch.setitem(ADAPTER_REGISTRY, "layout-smoke-mock", RejectingAdapter())
+    monkeypatch.setitem(ENVELOPE_MAP, "items", _TickersEnvelope)
+    runs_dir = tmp_path / "runs"
+    run_id = "terminal-contract-fan-out"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-process",
+            str(_FIXTURE_DIR / "layout-smoke.process.md"),
+            "--var",
+            f"RUNS_DIR={runs_dir}",
+            "--var",
+            f"RUN_ID={run_id}",
+            "--backend",
+            "local",
+        ],
+    )
+
+    assert result.exit_code != 0
+    for item in ("AAA", "BBB"):
+        status = read_status_at(runs_dir / run_id / STATE_DIR / "tasks" / "write-artifact" / item)
+        assert status is not None
+        assert status.state == "failed"
+        assert status.error == "synthetic fan-out terminal result contract failure"
+
+
 @pytest.fixture(scope="module")
 def smoke_run(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
     """Run the layout-smoke fixture once and return the run dir."""
     with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setenv("METAPROC_PREFLIGHT_MIN_DISK_GB", "0.1")
         monkeypatch.setitem(ADAPTER_REGISTRY, "layout-smoke-mock", _LayoutSmokeMockAdapter())
         monkeypatch.setitem(ENVELOPE_MAP, "items", _TickersEnvelope)
 
@@ -226,6 +282,7 @@ def test_run_level_state_files_are_present(smoke_run: Path) -> None:
     run_state = smoke_run / STATE_DIR
 
     assert (run_state / "run-config.yaml").exists(), "run-config.yaml missing"
+    assert (run_state / "run-plan.yaml").exists(), "run-plan.yaml missing"
     assert (run_state / "process-status.yaml").exists(), "process-status.yaml missing"
     assert f"metaproc_layout: {RUN_LAYOUT_VERSION}" in (run_state / "run-config.yaml").read_text()
 
@@ -236,6 +293,73 @@ def test_run_level_state_files_are_present(smoke_run: Path) -> None:
     )
     assert (run_state / "steps").is_dir(), "expected .state/steps/ namespace"
     assert (run_state / "tasks").is_dir(), "expected .state/tasks/ namespace"
+
+
+def test_runtime_generated_roster_refreshes_exact_projection(smoke_run: Path) -> None:
+    """Runtime discovery must replace the empty pre-roster mapped key set."""
+    snapshot = read_run_plan(smoke_run)
+    assert snapshot is not None
+    mapped_step = next(step for step in snapshot.steps if step.step_id == "write-artifact")
+    assert mapped_step.item_keys == ["AAA", "BBB"]
+
+    bundle = load_plan_bundle_from_run(smoke_run)
+    assert bundle is not None
+    projection = scan_task_output_projection(smoke_run, bundle)
+    mapped_tasks = [task for task in projection.tasks if task.key.step_id == "write-artifact"]
+
+    assert [task.key.item_key for task in mapped_tasks] == ["AAA", "BBB"]
+    assert [[output.name for output in task.accepted_outputs] for task in mapped_tasks] == [
+        ["artifact"],
+        ["artifact"],
+    ]
+
+
+def test_resume_removes_stale_runtime_generated_item_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("METAPROC_PREFLIGHT_MIN_DISK_GB", "0.1")
+    monkeypatch.setitem(ADAPTER_REGISTRY, "layout-smoke-mock", _LayoutSmokeMockAdapter())
+    monkeypatch.setitem(ENVELOPE_MAP, "items", _TickersEnvelope)
+    runs_dir = tmp_path / "runs"
+    args = [
+        "run-process",
+        str(_FIXTURE_DIR / "layout-smoke.process.md"),
+        "--var",
+        f"RUNS_DIR={runs_dir}",
+        "--var",
+        "RUN_ID=removal-run",
+        "--backend",
+        "local",
+    ]
+    runner = CliRunner()
+    first = runner.invoke(app, args)
+    assert first.exit_code == 0, first.output
+    run_dir = runs_dir / "removal-run"
+    (run_dir / "items.md").write_text(
+        "---\n"
+        "items:\n"
+        "  date: '2026-05-10'\n"
+        "  process: predict\n"
+        "  items:\n"
+        "    - item: AAA\n"
+        "---\n"
+        "one retained item\n",
+        encoding="utf-8",
+    )
+
+    second = runner.invoke(app, args)
+    assert second.exit_code == 0, second.output
+    snapshot = read_run_plan(run_dir)
+    assert snapshot is not None
+    mapped_step = next(step for step in snapshot.steps if step.step_id == "write-artifact")
+    assert mapped_step.item_keys == ["AAA"]
+
+    bundle = load_plan_bundle_from_run(run_dir)
+    assert bundle is not None
+    projection = scan_task_output_projection(run_dir, bundle)
+    mapped_tasks = [task for task in projection.tasks if task.key.step_id == "write-artifact"]
+    assert [task.key.item_key for task in mapped_tasks] == ["AAA"]
 
 
 def test_no_phantom_inferred_parent_dir(smoke_run: Path) -> None:
@@ -259,30 +383,41 @@ def test_state_tree_snapshot_matches_expected_shape(smoke_run: Path) -> None:
     """Snapshot of every state file under <run>/.state/ — locks the layout in place."""
     state_root = smoke_run / STATE_DIR
     state_files = sorted(
-        str(p.relative_to(state_root)) for p in state_root.rglob("*") if p.is_file()
+        re.sub(
+            r"/attempts/att-[^/]+/attempt\.yaml$",
+            "/attempts/<attempt-id>/attempt.yaml",
+            str(path.relative_to(state_root)),
+        )
+        for path in state_root.rglob("*")
+        if path.is_file()
     )
 
     expected = {
         # Run-level
         "process-status.yaml",
         "run-config.yaml",
+        "run-plan.yaml",
         "schemas/resource-usage-summary.v1.schema.yaml",
         # Per-step (fan-out runner pool)
         "steps/write-artifact/runpool-status.yaml",
         "steps/write-artifact/scale-state.yaml",
         # Per-task — fan-out items each get their own subdir
         "tasks/write-artifact/AAA/attempt.yaml",
+        "tasks/write-artifact/AAA/attempts/<attempt-id>/attempt.yaml",
         "tasks/write-artifact/AAA/result.yaml",
         "tasks/write-artifact/AAA/status.yaml",
         "tasks/write-artifact/BBB/attempt.yaml",
+        "tasks/write-artifact/BBB/attempts/<attempt-id>/attempt.yaml",
         "tasks/write-artifact/BBB/result.yaml",
         "tasks/write-artifact/BBB/status.yaml",
         # Per-task — non-fan-out steps write status.yaml directly under
         # tasks/<step_id>/
         "tasks/scaffold/result.yaml",
         "tasks/scaffold/status.yaml",
+        "tasks/scaffold/attempts/<attempt-id>/attempt.yaml",
         "tasks/summarize/result.yaml",
         "tasks/summarize/status.yaml",
+        "tasks/summarize/attempts/<attempt-id>/attempt.yaml",
     }
 
     actual = set(state_files)

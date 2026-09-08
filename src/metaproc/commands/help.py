@@ -15,8 +15,9 @@ import typer
 
 from metaproc.cli import app
 from metaproc.console import console_pager, get_console, is_tty
-from metaproc.docs import TOPIC_DESCRIPTIONS as _TOPIC_DESCRIPTIONS
-from metaproc.docs import load_help_topics
+from metaproc.docs import TOPIC_BY_NAME as _TOPIC_BY_NAME
+from metaproc.docs import TOPIC_REGISTRY as _TOPIC_REGISTRY
+from metaproc.docs import topic_markdown as _topic_markdown
 
 
 def _should_render(*, raw: bool, pager: bool, tty: bool) -> bool:
@@ -31,26 +32,36 @@ def _should_render(*, raw: bool, pager: bool, tty: bool) -> bool:
     return tty
 
 
-def _topic_markdown(topic: str) -> str:
-    return str(getattr(load_help_topics(), topic))
+def _approx_size(words: int) -> str:
+    """Render an approximate topic size for the listing.
+
+    Reading a topic costs the caller its whole document — roughly 30k tokens for
+    the largest one. Agents in particular choose a topic before they can see what
+    it costs, so the listing says up front.
+    """
+    return f"~{words / 1000:.1f}k words" if words >= 1000 else f"~{words} words"
 
 
 @app.command("help")
 def help_topic(
-    topic: str | None = typer.Argument(None, help=f"One of: {', '.join(_TOPIC_DESCRIPTIONS)}"),
+    topic: str | None = typer.Argument(None, help=f"One of: {', '.join(_TOPIC_BY_NAME)}"),
     raw: bool = typer.Option(False, "--raw", help="Raw markdown to stdout, even on a TTY."),
     pager: bool = typer.Option(False, "--pager", help="Paged rendered output, even off a TTY."),
 ) -> None:
     """Print a bundled metaproc doc, or list topics when none is given."""
     if not topic:
-        typer.echo("Topics (metaproc help <topic>):")
-        for name, desc in _TOPIC_DESCRIPTIONS.items():
-            typer.echo(f"  {name:<10} {desc}")
+        typer.echo("Topics (metaproc help <topic>), in recommended reading order:")
+        sizes = {entry.name: _approx_size(entry.words) for entry in _TOPIC_REGISTRY}
+        name_width = max(len(name) for name in sizes)
+        size_width = max(len(size) for size in sizes.values())
+        for entry in _TOPIC_REGISTRY:
+            size = sizes[entry.name]
+            typer.echo(f"  {entry.name:<{name_width}}  {size:>{size_width}}  {entry.description}")
         raise typer.Exit(0)
 
-    if topic not in _TOPIC_DESCRIPTIONS:
+    if topic not in _TOPIC_BY_NAME:
         typer.echo(
-            f"Unknown topic: {topic!r}. Available: {', '.join(_TOPIC_DESCRIPTIONS)}.",
+            f"Unknown topic: {topic!r}. Available: {', '.join(_TOPIC_BY_NAME)}.",
             err=True,
         )
         raise typer.Exit(2)

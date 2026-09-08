@@ -8,7 +8,6 @@ import uuid
 from collections.abc import Mapping
 from pathlib import Path
 
-from frontmatter_format import read_yaml_file
 from pydantic import BaseModel
 from ruamel.yaml import YAMLError
 from softschema import (
@@ -26,7 +25,8 @@ from metaproc.engine.placeholders import (
     validate_framework_placeholder,
 )
 from metaproc.engine.process_scope import is_dep_ref
-from metaproc.io import FmFormatError, artifact_exists, resolve_existing_artifact
+from metaproc.engine.yaml_repair import repair_frontmatter_file
+from metaproc.io import FmFormatError, artifact_exists, read_yaml_file, resolve_existing_artifact
 from metaproc.io.frontmatter import fmf_read_frontmatter_artifact
 from metaproc.models.authored import IOSpec, ProcessSpec
 from metaproc.models.runtime import OutputFailure, OutputFailureKind
@@ -230,18 +230,52 @@ def normalize_for_structural_pass(value: object) -> object:
             return value
 
 
-def _resolve_output_fpath(rendered_path: str, item_dir: Path) -> Path:
+def resolve_output_fpath(rendered_path: str, item_dir: Path) -> Path:
     """Resolve a rendered output path against ``item_dir``.
 
     Absolute paths and multi-component relative paths (e.g.
     ``artifacts/index.yaml``) resolve as-is — repo-relative paths fall
     through to the process's cwd. Single-component names (e.g.
     ``prediction.md`` from a fan-out step) resolve under ``item_dir``.
+
+    Public because more than one module now depends on this resolution being
+    *identical* rather than merely similar: validation, the YAML repair pass and
+    the schema conform pass must all name the same file for a declared output,
+    or a pass silently fixes a file the next one does not read. ``TestOutputResolution``
+    in ``tests/test_output_failures.py`` pins the cases that made them diverge before.
     """
     p = Path(rendered_path)
     if p.is_absolute() or len(p.parts) > 1:
         return p
     return item_dir / p
+
+
+def repair_declared_outputs(
+    item_dir: Path,
+    outputs: dict[str, IOSpec],
+    *,
+    variables: Mapping[str, object] | None = None,
+) -> list[Path]:
+    """Repair YAML frontmatter in declared file outputs before validating them.
+
+    Resolves each output path exactly as :func:`validate_item_outputs_detailed`
+    does — templates rendered, absolute and multi-part paths taken as-is — so
+    the file the repair probes is the file validation is about to read.
+    Directory outputs and files that do not exist are skipped. Repair is scoped
+    to freshly-emitted LLM artifacts; see the ``engine.yaml_repair`` module
+    docstring before adding a call site.
+
+    Returns the paths actually repaired, for progress reporting.
+    """
+    repaired: list[Path] = []
+    for io_spec in outputs.values():
+        if not io_spec.path or io_spec.kind == "directory":
+            continue
+        rendered = resolve_templates(io_spec.path, variables) if variables else io_spec.path
+        fpath = resolve_output_fpath(rendered, item_dir)
+        if fpath.is_file() and repair_frontmatter_file(fpath):
+            repaired.append(fpath)
+    return repaired
 
 
 def validate_item_outputs(
@@ -282,7 +316,7 @@ def validate_item_outputs_detailed(
 
     Directory-kind outputs must be non-empty — an empty directory indicates
     the step produced zero records and is treated as a silent-success failure
-    (the classic ``mine-adhoc`` mode where an agent reports SUCCESS but wrote
+    (the classic ``extract-items`` mode where an agent reports SUCCESS but wrote
     nothing under the item directory). ``.state/``, ``.logs/``, ``__pycache__``,
     and ``.DS_Store`` are ignored when counting content.
 
@@ -323,7 +357,7 @@ def validate_item_outputs_detailed(
             )
 
         if io_spec.kind == "directory":
-            fpath = _resolve_output_fpath(rendered, item_dir)
+            fpath = resolve_output_fpath(rendered, item_dir)
             # Preserve the fan-out convenience where a directory output's
             # rendered basename equals item_dir.name (e.g. output path
             # ``{{run.dir}}/.../{{item}}/`` against item_dir
@@ -337,7 +371,7 @@ def validate_item_outputs_detailed(
                 fail(OutputFailureKind.empty, "directory is empty (no output files produced)")
             continue
 
-        fpath = _resolve_output_fpath(rendered, item_dir)
+        fpath = resolve_output_fpath(rendered, item_dir)
         if not fpath.exists() and not artifact_exists(fpath):
             fail(OutputFailureKind.missing, "file not found")
             continue
@@ -477,14 +511,12 @@ def _artifact_failures(
 
     failures: list[OutputFailure] = []
     for kind, entry in entries:
-        detail = entry.get("kind") or entry.get("type") or "validation_error"
+        detail = entry.get("code") or entry.get("kind") or entry.get("type") or "validation_error"
         message = entry.get("message") or entry.get("msg") or str(entry)
-        # Structural errors report the refusing JSON Schema keyword; semantic
-        # errors are pydantic's, where the error type is the closest thing to
-        # a named invariant.
-        invariant = entry.get("validator") or (
-            entry.get("type") if kind is OutputFailureKind.semantic else None
-        )
+        # Softschema structural codes are stable across JSON Schema engines;
+        # semantic errors are pydantic's, where the error type is the closest
+        # thing to a named invariant.
+        invariant = entry.get("code") if kind is OutputFailureKind.structural else entry.get("type")
         failures.append(
             OutputFailure(
                 output=output_name,
@@ -522,11 +554,16 @@ def _error_location(entry: Mapping[str, object]) -> str | None:
     if loc is None:
         loc = entry.get("loc")
     if loc is None:
-        return None
-    if isinstance(loc, (list, tuple)):
-        return ".".join(str(part) for part in loc) or None
-    text = str(loc)
-    return text or None
+        parts: list[str] = []
+    elif isinstance(loc, (list, tuple)):
+        parts = [str(part) for part in loc]
+    else:
+        text = str(loc)
+        parts = [text] if text else []
+    property_name = entry.get("property")
+    if property_name is not None:
+        parts.append(str(property_name))
+    return ".".join(parts) or None
 
 
 def _check_envelope_schema_match(

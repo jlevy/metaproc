@@ -1,6 +1,6 @@
 """Tests for the Vehicle A operator surface on ``metaproc auth``.
 
-Spec: docs/arch/arch-metaproc-core.md
+Spec: src/metaproc/docs/metaproc-design.md
 Regression coverage (Phase 2 of the original design).
 
 Exercises the new flags on ``auth push`` (``--vehicle``, ``--token-file``,
@@ -30,7 +30,7 @@ import typer
 from typer.testing import CliRunner
 
 import metaproc.commands.auth as auth_mod
-from metaproc.adapters.claude_code import ClaudeCodeCliAdapter
+from metaproc.adapters.claude_cli import ClaudeCodeCliAdapter
 from metaproc.cli import app
 from metaproc.dispatch.credential_pool import (
     ConcurrentModificationError,

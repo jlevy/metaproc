@@ -161,11 +161,23 @@ def _build_schema_registry() -> dict[str, type[BaseModel]]:
                 continue
             _register(inner_type)  # pyright: ignore[reportArgumentType]
 
-    # Whole-document JSON artifacts do not belong in the frontmatter envelope
-    # map, but their canonical tokens must still resolve to their typed model.
-    from metaproc.models.resources import ResourcesDocument  # noqa: PLC0415
+    # Standalone artifacts do not belong in the frontmatter envelope map, but their
+    # canonical tokens must still resolve to their typed model.
+    from metaproc.models.plan import (  # noqa: PLC0415 -- registry construction avoids model import cycles
+        RunPlanSnapshot,
+    )
+    from metaproc.models.resources import (  # noqa: PLC0415 -- registry construction avoids model import cycles
+        ResourcesDocument,
+    )
+    from metaproc.models.runtime import (  # noqa: PLC0415 -- registry construction avoids model import cycles
+        TaskAttemptAnomaliesRecord,
+        TaskAttemptRecord,
+    )
 
     _register(ResourcesDocument)
+    _register(RunPlanSnapshot)
+    _register(TaskAttemptAnomaliesRecord)
+    _register(TaskAttemptRecord)
     return registry
 
 

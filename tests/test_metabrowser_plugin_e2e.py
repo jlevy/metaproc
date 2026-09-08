@@ -53,6 +53,7 @@ def shim_output() -> dict[str, Any]:
     result = subprocess.run(
         [
             "node",
+            "--experimental-vm-modules",
             str(LOADER_JS),
             str(METABROWSER_PACKAGE_ROOT),
             str(METAPROC_PLUGIN_ROOT),
@@ -153,6 +154,7 @@ def test_namespace_rule_is_enforced(tmp_path: Path) -> None:
     result = subprocess.run(
         [
             "node",
+            "--experimental-vm-modules",
             str(LOADER_JS),
             str(METABROWSER_PACKAGE_ROOT),
             str(METAPROC_PLUGIN_ROOT),
@@ -188,6 +190,7 @@ def test_extra_plugins_dir_is_loaded() -> None:
     result = subprocess.run(
         [
             "node",
+            "--experimental-vm-modules",
             str(LOADER_JS),
             str(METABROWSER_PACKAGE_ROOT),
             str(METAPROC_PLUGIN_ROOT),

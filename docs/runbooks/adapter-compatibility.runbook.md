@@ -12,7 +12,7 @@ Read this once, then refer back when adding a model, debugging a 400-storm, or w
 new step.
 
 Operational dispatch checklist lives in
-[`cloud-dispatch.runbook.md`](cloud-dispatch.runbook.md).
+[`cloud-dispatch.runbook.md`](../../src/metaproc/docs/cloud-dispatch.runbook.md).
 
 ## 1. pi-cli (pi-mono) API-path matrix
 
@@ -95,7 +95,8 @@ files across sibling dirs, causing QA to report `FAIL 15/2` on every record.
 faster model for finalization) must also pin `variant:` explicitly.
 
 Lock this rule into each downstream package’s execution-profile consistency tests.
-The framework test strategy is documented in [arch-testing](../arch/arch-testing.md).
+The framework test strategy is documented in
+[arch-testing](../../src/metaproc/docs/arch-testing.md).
 
 Helper for verifying a single step’s resolution:
 
@@ -164,7 +165,7 @@ image shipped with a stale `derive_variant` cascade.
 Either way, the emitted stats make the mis-routing visible.
 
 Full contract:
-[`arch-metaproc-core.md §14.7 Tool-use Observability`](../arch/arch-metaproc-core.md).
+[`metaproc-design.md §14.7 Tool-use Observability`](../../src/metaproc/docs/metaproc-design.md).
 
 ## 7. Endpoint-shape signals (incidental but useful)
 
@@ -244,10 +245,10 @@ The wording is otherwise harness-agnostic.
 
 ## See also
 
-- [`cloud-dispatch.runbook.md`](cloud-dispatch.runbook.md) — pre-launch gates, required
-  env, dispatch command shape.
-- [`credential-setup.runbook.md`](credential-setup.runbook.md) — per-adapter credential
-  wiring.
+- [`cloud-dispatch.runbook.md`](../../src/metaproc/docs/cloud-dispatch.runbook.md) —
+  pre-launch gates, required env, dispatch command shape.
+- [`credential-setup.runbook.md`](../../src/metaproc/docs/credential-setup.runbook.md) —
+  per-adapter credential wiring.
 - [pi-mono source](https://github.com/mariozechner/pi): check out the external
   repository when adapter internals need review via the `checkout-third-party-repo`
   shortcut.

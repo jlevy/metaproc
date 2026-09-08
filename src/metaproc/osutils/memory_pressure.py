@@ -4,8 +4,12 @@
 Provides a single ``measure()`` call that returns a normalized pressure
 reading on supported macOS and Linux hosts without external dependencies.
 
-macOS: reads ``kern.memorystatus_level`` via sysctl — the kernel's own
-percentage of "free" memory (matches ``memory_pressure`` output).
+macOS: budgets from ``vm_stat`` reclaimable pages (free + inactive +
+purgeable). ``kern.memorystatus_level`` is read alongside it as an alarm
+only: it counts every other process's resident working set as available
+(the XNU ``AVAILABLE_NON_COMPRESSED_MEMORY`` macro is active + inactive +
+free + speculative), so it runs about 2x the reclaimable figure and stays
+high until pressure is already bad.
 
 Linux: computes ``MemAvailable / MemTotal`` from ``/proc/meminfo``.
 Optionally reads PSI from ``/proc/pressure/memory`` when available.
@@ -54,6 +58,7 @@ class MemoryPressure:
     total_memory_gb: float  # physical or usable system RAM in GB
     level: PressureLevel  # derived threshold level
     source: str  # diagnostic: which backend was used
+    alarm_pct: float | None = None  # kernel pressure gauge; an alarm, never a budget
 
     def __str__(self) -> str:
         return (
@@ -159,6 +164,44 @@ def _macos_total_memory_bytes() -> int:
     return value
 
 
+_VM_STAT_PAGE_SIZE_RE = re.compile(r"page size of (\d+) bytes")
+_VM_STAT_RECLAIMABLE_KEYS = ("Pages free", "Pages inactive", "Pages purgeable")
+
+
+def _parse_macos_reclaimable_bytes(text: str) -> int:
+    """Sum the vm_stat page buckets that can be handed to a new process.
+
+    Free, inactive and purgeable are what the operating runbook budgets
+    against. Active pages are deliberately excluded: they are other
+    processes' live working sets, and counting them is what makes
+    ``memorystatus_level`` unusable as a budget.
+    """
+    page_match = _VM_STAT_PAGE_SIZE_RE.search(text)
+    if not page_match:
+        raise UnsupportedTelemetryPlatformError(
+            f"failed to parse page size from macOS vm_stat: {text[:120]!r}"
+        )
+    page_size = int(page_match.group(1))
+    if page_size <= 0:
+        raise UnsupportedTelemetryPlatformError(
+            f"macOS vm_stat reported a non-positive page size: {page_size}"
+        )
+
+    pages = 0
+    for key in _VM_STAT_RECLAIMABLE_KEYS:
+        match = re.search(rf"^{key}:\s+(\d+)\.", text, re.MULTILINE)
+        if not match:
+            raise UnsupportedTelemetryPlatformError(
+                f"macOS vm_stat missing required bucket {key!r}"
+            )
+        pages += int(match.group(1))
+    return pages * page_size
+
+
+def _macos_reclaimable_bytes() -> int:
+    return _parse_macos_reclaimable_bytes(_read_command_stdout(["vm_stat"]))
+
+
 def _parse_macos_swap_used_gb(text: str) -> float:
     m = re.search(r"used\s*=\s*([\d.]+)M", text)
     if not m:
@@ -171,22 +214,24 @@ def _macos_swap_used_gb() -> float:
 
 
 def _measure_macos() -> MemoryPressure:
-    level = float(_read_command_stdout(["sysctl", "-n", "kern.memorystatus_level"]))
-    if not 0 <= level <= 100:
+    alarm_pct = float(_read_command_stdout(["sysctl", "-n", "kern.memorystatus_level"]))
+    if not 0 <= alarm_pct <= 100:
         raise UnsupportedTelemetryPlatformError(
-            f"macOS kern.memorystatus_level out of range: {level}"
+            f"macOS kern.memorystatus_level out of range: {alarm_pct}"
         )
 
     swap_gb = _macos_swap_used_gb()
     total_bytes = _macos_total_memory_bytes()
     total_gb = total_bytes / (1024**3)
+    available_pct = _macos_reclaimable_bytes() / total_bytes * 100
 
     return MemoryPressure(
-        available_pct=level,
+        available_pct=available_pct,
         swap_used_gb=swap_gb,
         total_memory_gb=total_gb,
-        level=_classify(level, total_memory_gb=total_gb),
-        source="macos-memorystatus",
+        level=_classify(available_pct, total_memory_gb=total_gb),
+        source="macos-vm-stat",
+        alarm_pct=alarm_pct,
     )
 
 
@@ -265,7 +310,7 @@ def _measure_linux() -> MemoryPressure:
 def available_memory_bytes() -> int:
     """Return current free/available memory in bytes.
 
-    macOS: total × memorystatus_level%.
+    macOS: vm_stat free + inactive + purgeable.
     Linux: MemAvailable from /proc/meminfo.
     """
     pressure = measure()
@@ -363,8 +408,8 @@ def validate_supported_platform() -> MemoryPressure:
 
     Supported hosts must provide:
 
-    - macOS: ``hw.memsize``, ``kern.memorystatus_level``, and ``vm.swapusage`` via
-      ``sysctl``
+    - macOS: ``hw.memsize``, ``kern.memorystatus_level`` and ``vm.swapusage`` via
+      ``sysctl``, plus the free, inactive and purgeable buckets from ``vm_stat``
     - Linux: ``MemTotal``, ``MemAvailable``, ``SwapTotal``, and ``SwapFree`` via
       ``/proc/meminfo``
 

@@ -3,9 +3,9 @@
 Reads ``~/.codex/auth.json`` (the file-on-disk OAuth blob managed by
 ``codex login``) and ships it to a per-user Secret Manager secret that
 Batch workers bind at runtime. Phase 2 of the codex-adapter spec; see
-``docs/arch/arch-metaproc-core.md``
+``src/metaproc/docs/metaproc-design.md``
 and the auth research brief at
-``docs/arch/arch-metaproc-core.md``.
+``src/metaproc/docs/metaproc-design.md``.
 
 Zero plaintext on disk: the payload is piped from the auth.json blob
 via stdin to ``gcloud secrets versions add --data-file=-``.
@@ -29,7 +29,7 @@ from typing import Any, cast
 
 import typer
 
-from metaproc.adapters.codex import resolve_codex_home
+from metaproc.adapters.codex_cli import resolve_codex_home
 from metaproc.cli import app, get_output
 from metaproc.config.env_vars import MetaprocEnv
 

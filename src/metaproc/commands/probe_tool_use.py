@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import secrets
 import shutil
 import subprocess
@@ -25,6 +24,7 @@ from pathlib import Path
 
 import typer
 
+from metaproc.adapters.base import agent_seed_env
 from metaproc.adapters.registry import ADAPTER_REGISTRY
 from metaproc.cli import app, get_output
 from metaproc.config.providers import infer_provider
@@ -166,7 +166,7 @@ def _run_probe(
             merged_config=merged_config,
             variables={},
         )
-        env = adapter.prepare_env(dict(os.environ), merged_config)
+        env = adapter.prepare_env(agent_seed_env(), merged_config)
     except Exception as exc:  # noqa: BLE001
         return False, f"build_command/prepare_env failed: {exc}", ""
 

@@ -39,6 +39,7 @@ class ClaudeAgentExtractor:
     """V1 extractor for Claude per-attempt JSONL logs."""
 
     source = "claude-agent"
+    scope_local = True
 
     def detect(self, run_dir: Path) -> bool:
         tasks_dir = run_dir / ".logs" / "tasks"

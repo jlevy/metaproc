@@ -22,7 +22,6 @@ import typer
 from prettyfmt import fmt_timedelta
 from strif import atomic_output_file
 
-from metaproc.adapters.base import FailureSeverity
 from metaproc.cloud.gcp.resolve_token import resolve_gcp_token
 from metaproc.dispatch.credential_pool import (
     FallbackPolicy,
@@ -31,9 +30,15 @@ from metaproc.dispatch.credential_pool import (
     gcp_backend,
     local_backend,
 )
-from metaproc.dispatch.pool_dispatch import PoolDispatchConfig
+from metaproc.dispatch.pool_dispatch import (
+    PoolDispatchConfig,
+    auth_forces_abort,
+    bind_pool_dispatch_scope,
+    complete_slot,
+)
 from metaproc.dispatch.preflight import validate_guard_posture
 from metaproc.dispatch.slot_coordinator import SlotCoordinator
+from metaproc.runpool.events import EventLogger
 from metaproc.runpool.pool import resolve_min_concurrency
 from metaproc.settings import POOL_MIN_CONCURRENCY
 
@@ -49,7 +54,12 @@ _POOL_FILL_POLL_INTERVAL_S = 5.0
 
 
 from metaproc import paths as paths_mod
-from metaproc.adapters.base import Adapter, AuthFailureClassification
+from metaproc.adapters.base import (
+    Adapter,
+    AuthFailureClassification,
+    agent_seed_env,
+    validate_terminal_result_log,
+)
 from metaproc.adapters.registry import (
     ADAPTER_REGISTRY,
     adapter_provider,
@@ -67,9 +77,11 @@ from metaproc.commands.helpers import (
     parse_adapter_config,
     parse_var_args,
     require_runtime_runs_dir,
+    resolve_gcp_worker_runs_dir,
     resolve_process_path,
     resolve_record_output_paths,
     seed_runtime_vars,
+    validate_gcp_worker_topology,
 )
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.engine.build_plan import build_plan, merge_defaults
@@ -88,6 +100,7 @@ from metaproc.engine.resource_sampling import run_sampled_step_command, sample_s
 from metaproc.engine.retry import (
     FailureClass,
     RetryVerdict,
+    append_output_failure_feedback,
     classify_error,
     classify_failure,
     classify_output_failures,
@@ -101,24 +114,43 @@ from metaproc.engine.runtime import (
     resolve_batch_size,
     validate_step_inputs_exist,
 )
-from metaproc.engine.validation import validate_item_outputs, validate_item_outputs_detailed
-from metaproc.engine.yaml_repair import repair_frontmatter_file
-from metaproc.errors import CLIError, ValidationError
+from metaproc.engine.schema_conform import conform_declared_outputs
+from metaproc.engine.validation import (
+    repair_declared_outputs,
+    validate_item_outputs,
+    validate_item_outputs_detailed,
+)
+from metaproc.errors import AttemptTerminalConflictError, CLIError, ValidationError
 from metaproc.io.claimed_items import claim_item
 from metaproc.io.state_io import (
     compute_item_dir,
+    end_status_attempt_at,
     mark_completed_at,
     mark_failed_at,
     mark_failed_synthetic_at,
     mark_running_at,
     read_status_at,
     reconcile_stale_running,
+    validate_task_status_identity_at,
     write_attempt_at,
     write_result_at,
 )
 from metaproc.logutil.compaction import try_compact_log
-from metaproc.models.authored import IOSpec, ProcessDefaults, ProcessSpec, ProcessStep, RetryPolicy
-from metaproc.models.runtime import AttemptRecord, OutputFailure, ResultRecord
+from metaproc.models.authored import (
+    IOSpec,
+    ProcessDefaults,
+    ProcessSpec,
+    ProcessStep,
+    RetryPolicy,
+    StepContext,
+)
+from metaproc.models.runtime import (
+    AttemptDisposition,
+    AttemptRecord,
+    OutputFailure,
+    ResultRecord,
+    StatusRecord,
+)
 from metaproc.runpool.backend import LaunchBackend, PreparedLaunch
 from metaproc.runpool.pool import (
     ProcessConfig,
@@ -130,23 +162,6 @@ from metaproc.runpool.pool import (
 )
 from metaproc.runpool.registry import get_backend
 from metaproc.settings import POOL_STALL_TIMEOUT_MINUTES
-
-
-def _auth_forces_abort(classification: AuthFailureClassification | None) -> bool:
-    """Return True when a pool auth classification demands skipping retry.
-
-    Plan §Phase 5: the pool adapter's ``effective_severity()`` takes
-    precedence over the generic retry classifier. ABORT means retrying
-    won't help — dead refresh token, expired credential, matched known
-    bug — so the dispatch must fail fast instead of burning attempts.
-
-    ``None`` (non-pool dispatch or success teardown) returns ``False``
-    so the generic retry path is untouched.
-    """
-
-    if classification is None:
-        return False
-    return classification.effective_severity() == FailureSeverity.ABORT
 
 
 def _compute_pool_cooling_delay(
@@ -172,8 +187,7 @@ def _compute_pool_cooling_delay(
 
     Without this distinction, a fan-out with 10 items and 2 labels would
     stall items 3-10 by ``ceiling_s`` each (30 min) under the cooling
-    interpretation, even though the labels are healthy. Surfaced by the
-    Tuesday 2026-04-28 smoke (mine-adhoc step) — see plan progress log.
+    interpretation, even though the labels are healthy.
 
     Returns ``ceiling_s`` defensively when the pool peek fails.
     """
@@ -212,56 +226,6 @@ def _compute_pool_cooling_delay(
         return ceiling_s
 
 
-def _expand_pool_exclude_by_quota_group(
-    *,
-    pool_dispatch: Any,
-    lease: Any,
-    exclude_list: list[tuple[str, str]],
-) -> None:
-    """Add every sibling label sharing the failing label's quota_group to
-    *exclude_list*.
-
-    Phase 4: on a 429 cooling classification, the next
-    retry should skip the entire quota group, not just the failing
-    label. Otherwise a same-org alt label gets a wasted 429 in lockstep.
-
-    Treats unknown-quota-group labels conservatively — if the failing
-    label's group is ``unknown``, we don't expand (we don't know what
-    else shares quota). Operators can resolve this by setting
-    ``--quota-group org:<uuid>`` or ``account:<hex>`` on push.
-
-    Logging is intentionally minimal — at-debug-level only — because
-    quota-group expansion can fire many times per cohort. Operators
-    inspect the audit trail via the auth_outcome event's
-    ``quota_group_*`` fields, not via dispatch logs.
-    """
-    try:
-        backend = pool_dispatch.coordinator.backend
-        failing_entry = backend.get_entry(lease.adapter, lease.label)
-    except (KeyError, AttributeError):
-        # Backend doesn't have this entry (rare race) or coordinator is
-        # an older API shape — fall back to single-label exclude
-        # (existing behavior).
-        return
-    failing_group = failing_entry.state.quota_group
-    if failing_group.kind == "unknown":
-        return
-    # Sibling lookup: list all entries for this adapter, exclude the
-    # ones not in the same group, and add (adapter, label) pairs to
-    # the exclude list. The failing label is already there.
-    try:
-        all_entries = backend.list_entries(adapter=lease.adapter)
-    except Exception:  # noqa: BLE001 — defensive: a backend hiccup must not block teardown
-        return
-    already_excluded = set(exclude_list)
-    for entry in all_entries:
-        if (entry.adapter, entry.label) in already_excluded:
-            continue
-        if entry.state.quota_group == failing_group:
-            exclude_list.append((entry.adapter, entry.label))
-            already_excluded.add((entry.adapter, entry.label))
-
-
 def _teardown_pool_slot(
     *,
     pool_dispatch: Any | None,
@@ -284,7 +248,7 @@ def _teardown_pool_slot(
     ``None`` returned when no slot was leased (non-pool dispatch or a
     prior teardown already released it). Otherwise returns the
     :class:`AuthFailureClassification` the coordinator received so the
-    caller can consult :func:`_auth_forces_abort` for retry decisions.
+    caller can consult :func:`auth_forces_abort` for retry decisions.
     """
     if pool_dispatch is None:
         return None
@@ -292,72 +256,16 @@ def _teardown_pool_slot(
     if lease is None:
         return None
 
-    # Deferred so tests can monkeypatch
-    # metaproc.dispatch.pool_dispatch.{classify_failure_for_slot,build_auth_outcome}
-    # at module attribute level; a top-level binding would capture the
-    # pre-patch function and bypass the monkeypatch.
-    from metaproc.dispatch.pool_dispatch import (  # noqa: PLC0415 -- test monkeypatch boundary
-        build_auth_outcome,
-        classify_failure_for_slot,
-    )
-
-    classification: AuthFailureClassification | None = None
     session_log: Path | None = None
     if isinstance(shared.get("log_path"), Path):
         session_log = shared["log_path"]
-    if error_str is not None:
-        classification = classify_failure_for_slot(
-            lease,
-            error_str=error_str,
-            session_log_path=session_log,
-        )
-        # Only accumulate the failed label for retry's fallback walk when the
-        # classification indicates a *label-level* problem (``cooling`` =
-        # rate-limited, ``expired`` = credential expired). Content-level
-        # failures (``invalid_outputs``, malformed YAML, runbook crashes)
-        # classify as ``unknown`` because they are not a credential issue
-        # (see ``claude_code.py:classify_failure`` ``status="unknown"`` path).
-        # Excluding the label on ``unknown`` is wrong: the label is healthy,
-        # the *output* was bad. Two consecutive ``unknown`` failures used to
-        # exhaust the per-item label set permanently, sending the worker
-        # into a "pool exhausted — waiting 60s for slot recovery" loop with
-        # no escape.
-        exclude_list = shared.setdefault("pool_exclude", [])
-        if classification.status in ("cooling", "expired"):
-            exclude_list.append((lease.adapter, lease.label))
-        # ── Phase 4: quota-group walk on 429 cooling ──
-        # When the failure is rate-limit cooling AND the failing label
-        # has a known quota_group (org or account), exclude every
-        # sibling label in the same group from this retry. Anthropic
-        # rate-limits at account level (and per organizationUuid in
-        # some configurations — claude-code#41886), so failing over
-        # from alt1 (org=ABC) to alt2 (also org=ABC) just hits 429
-        # again on the next call. Walking past the whole group
-        # collapses N×429 retries down to one.
-        if classification.status == "cooling" and getattr(pool_dispatch, "cross_quota_group", True):
-            _expand_pool_exclude_by_quota_group(
-                pool_dispatch=pool_dispatch,
-                lease=lease,
-                exclude_list=exclude_list,
-            )
-    # Preserve adapter-declared diagnostic logs (claude-code-debug.log,
-    # …) next to the session log under the run's standard ``.logs/``
-    # tree before teardown rmtree's the slot. Always — both success
-    # and failure runs benefit from having API-level debug output
-    # available next to the captured stream-json for correlation.
-    if session_log is not None:
-        pool_dispatch.coordinator.preserve_diagnostics(lease, session_log)
-    flushed_blob = pool_dispatch.coordinator.teardown(lease, failure=classification)
-
-    # attempt_number is 1-indexed, so the retries *already burned*
-    # before this attempt ran is attempt_number - 1.
-    retry_count = max(0, int(shared.get("attempt_number", 1)) - 1)
-    outcome = build_auth_outcome(
+    classification, outcome = complete_slot(
+        pool_dispatch,
         lease,
-        classification=classification,
-        flushed_blob=flushed_blob,
-        retry_count=retry_count,
-        fallback_policy=pool_dispatch.fallback_policy,
+        error_str=error_str,
+        session_log_path=session_log,
+        retry_count=max(0, int(shared.get("attempt_number", 1)) - 1),
+        retry_exclude=shared.setdefault("pool_exclude", []),
     )
     pool.record_auth_outcome(asdict(outcome))
     return classification
@@ -391,6 +299,7 @@ def _build_pool_dispatch_template(
     run_context: str,
     out: Any,
     auth_policy: str | None = None,
+    run_dir: Path | None = None,
 ) -> Any | None:
     """Construct a :class:`PoolDispatchConfig` from CLI flags, or ``None``.
 
@@ -478,6 +387,14 @@ def _build_pool_dispatch_template(
         exclude=excluded_pairs,
         cross_quota_group=auth_cross_quota_group,
     )
+    try:
+        template = bind_pool_dispatch_scope(
+            template,
+            run_dir=run_dir if run_dir is not None else template.runs_dir / run_context,
+            step="",
+        )
+    except ValueError as exc:
+        raise CLIError(str(exc)) from exc
     priority_repr = list(strategy.labels) or "(any active)"
     out.progress(
         f"Auth pool: adapter={auth_account} backend={resolved_auth_backend} "
@@ -485,6 +402,33 @@ def _build_pool_dispatch_template(
         f"fallback={fallback_policy_enum.value}"
     )
     return template
+
+
+def _filter_pool_dispatch_for_adapter(
+    template: Any | None,
+    *,
+    adapter_type: str,
+    step_id: str,
+    events_path: Path,
+    out: Any,
+) -> Any | None:
+    """Disable a mismatched worker pool with visible and durable evidence."""
+    if template is None or adapter_type == template.adapter:
+        return template
+    message = (
+        f"Step '{step_id}' uses adapter {adapter_type!r}, but the credential pool "
+        f"is configured for {template.adapter!r}; the pool is not applied and the "
+        "step uses its ambient adapter authentication."
+    )
+    out.warning(message)
+    log.warning(message)
+    with EventLogger(events_path) as events:
+        events.auth_skipped(
+            step_id=step_id,
+            step_adapter=adapter_type,
+            configured_adapter=template.adapter,
+        )
+    return None
 
 
 def _resolve_retry_policy(
@@ -539,7 +483,11 @@ def run_parallel(
     limit: int | None = typer.Option(
         None, "--limit", help="Max number of items to process (for pre-checks)"
     ),  # noqa: UP007
-    backend: str = typer.Option("local", "--backend", help="Launch backend (e.g. local, mock)"),
+    backend: str = typer.Option(
+        "local",
+        "--backend",
+        help="Launch backend; gcp-worker is internal to GCP Batch",
+    ),
     max_concurrency: int | None = typer.Option(
         None, "--max-concurrency", help="Max concurrent processes (pool mode)"
     ),  # noqa: UP007
@@ -643,6 +591,14 @@ def run_parallel(
     except ValueError as exc:
         raise CLIError(str(exc)) from exc
 
+    validate_gcp_worker_topology(
+        backend,
+        dry_run=dry_run,
+        batch_task_index=MetaprocEnv.BATCH_TASK_INDEX.read_str(default=None),
+        orchestrator_marker=MetaprocEnv.METAPROC_GCP_ORCHESTRATOR.read_str(default=None),
+        command="run-parallel",
+    )
+
     process_path = resolve_process_path(process_spec)
     process_dir = process_path.parent
 
@@ -663,14 +619,14 @@ def run_parallel(
 
     # `--variant` may name an entry in `spec.defaults.adapters` (e.g.
     # `claude-code-cli`) OR be a synthetic composite the engine derives at
-    # fan-out time from adapter+model (e.g. `pi-cli-glm-5-maas` for a
-    # mine-adhoc step whose spec declares `adapter.type: pi-cli` with
+    # fan-out time from adapter+model (e.g. `pi-cli-managed-model` for an
+    # extract-items step whose spec declares `adapter.type: pi-cli` with
     # config_by_variant.pi-cli.{provider,model}). Mirror run-process: when no
     # explicit `--adapter` is passed and the variant DOES name a known
     # adapter slot, let the variant drive adapter resolution. Otherwise the
     # variant is just a run-dir label and the step's own spec drives adapter
     # selection. Without this branch, a worker invoked with
-    # `--variant pi-cli-glm-5-maas` (the cloud worker leg of mine-adhoc) was
+    # `--variant pi-cli-managed-model` (the cloud worker leg of extract-items) was
     # rejected by build_plan as `unknown adapter override`.
     if adapter:
         effective_adapter_override: str | None = adapter
@@ -740,6 +696,8 @@ def run_parallel(
     # skipped by discovery forever.  Reset them to "failed" so they're
     # retried.
     run_dir = compute_run_dir(spec, variables)
+    run_context = variables.get("RUN_ID", variables.get("DATE", variables.get("SCOPE", "")))
+    run_id = f"{spec.name}/{run_context}"
     stale_count = reconcile_stale_running(run_dir)
     if stale_count:
         out.progress(f"Reconciled {stale_count} stale running item(s) from dead pool")
@@ -767,6 +725,7 @@ def run_parallel(
                     params=variables,
                     reuse_policy=target.reuse_policy,
                     run_dir=run_dir,
+                    expected_run_id=run_id,
                 )
             except (ValueError, TypeError) as exc:
                 raise ValidationError(str(exc)) from exc
@@ -829,6 +788,7 @@ def run_parallel(
                     params=variables,
                     reuse_policy=target.reuse_policy,
                     run_dir=run_dir,
+                    expected_run_id=run_id,
                 )
                 item_contexts = [
                     ctx for ctx in discovery.actionable_contexts if ctx.get(each) in item_set
@@ -927,8 +887,6 @@ def run_parallel(
                 out.data(f"\nBatch {bi}/{n_batches}: {', '.join(c[each] for c in batch)}")
             return
 
-        run_context = variables.get("RUN_ID", variables.get("DATE", variables.get("SCOPE", "")))
-        run_id = f"{spec.name}/{run_context}"
         all_results: list[tuple[str, int]] = []
 
         for bi, batch in enumerate(batches, 1):
@@ -954,12 +912,13 @@ def run_parallel(
                 attempt = 1
                 while True:
                     state_dir.mkdir(parents=True, exist_ok=True)
-                    mark_running_at(
+                    running_record = mark_running_at(
                         state_dir,
                         run_id=run_id,
                         step_id=step,
                         item=dict(item_context),
                         attempt=attempt,
+                        item_key=canonical_item_key,
                     )
                     write_attempt_at(
                         state_dir,
@@ -984,7 +943,7 @@ def run_parallel(
                                 step_node_id=step,
                                 item_key=canonical_item_key,
                             ):
-                                handler_fn(dict(item_vars), process_step)
+                                handler_fn(StepContext(dict(item_vars)), process_step)
                         else:
                             assert command_ref is not None
                             resolved_cmd = resolve_templates(command_ref, item_vars)
@@ -1013,6 +972,13 @@ def run_parallel(
                         verdict = classify_error(error_str)
                         cap = max_retries_for(classify_failure(error_str), retry_policy.max_retries)
                         if verdict == RetryVerdict.RETRY and attempt <= cap:
+                            end_status_attempt_at(
+                                state_dir,
+                                running_record,
+                                disposition=AttemptDisposition.retryable,
+                                failure_class=str(classify_failure(error_str)),
+                                error=error_str,
+                            )
                             backoff = compute_backoff(attempt, retry_policy)
                             out.progress(
                                 f"  {each}={item}: retryable ({error_str}), "
@@ -1023,17 +989,25 @@ def run_parallel(
                             continue
                         # Permanent failure or retries exhausted
                         out.progress(f"  {each}={item}: failed ({error_str})")
-                        mark_failed_at(state_dir, error=error_str)
+                        mark_failed_at(
+                            state_dir,
+                            error=error_str,
+                            running_record=running_record,
+                            failure_class=str(classify_failure(error_str)),
+                            attempt_disposition=(
+                                AttemptDisposition.retryable
+                                if verdict is RetryVerdict.RETRY
+                                else AttemptDisposition.permanent
+                            ),
+                        )
                         all_results.append((item, 1))
                         break
 
                     if artifact_dir is not None and effective_outputs:
-                        # Attempt YAML repair before validation
-                        for io_spec in effective_outputs.values():
-                            if io_spec.path:
-                                out_file = artifact_dir / Path(io_spec.path).name
-                                if out_file.exists() and repair_frontmatter_file(out_file):
-                                    out.progress(f"  Repaired YAML in {out_file.name} for {item}")
+                        # Neither rewriting pass runs here. This is the mode:code
+                        # branch, and repair and conform are both scoped to
+                        # agent-authored output: `metaproc-design.md` §14.6 for
+                        # why, `TestWhichExecutorsRewriteAgentOutput` for the guard.
                         output_failures = validate_item_outputs_detailed(
                             artifact_dir, effective_outputs, variables=item_vars
                         )
@@ -1045,6 +1019,14 @@ def run_parallel(
                                 FailureClass.INVALID_OUTPUT, retry_policy.max_retries
                             )
                             if verdict == RetryVerdict.RETRY and attempt <= cap:
+                                end_status_attempt_at(
+                                    state_dir,
+                                    running_record,
+                                    disposition=AttemptDisposition.retryable,
+                                    failure_class=str(FailureClass.INVALID_OUTPUT),
+                                    error=error_str,
+                                    output_failures=output_failures,
+                                )
                                 backoff = compute_backoff(attempt, retry_policy)
                                 out.progress(
                                     f"  {each}={item}: retryable ({error_str}), "
@@ -1054,16 +1036,29 @@ def run_parallel(
                                 attempt += 1
                                 continue
                             mark_failed_at(
-                                state_dir, error=error_str, output_failures=output_failures
+                                state_dir,
+                                error=error_str,
+                                running_record=running_record,
+                                output_failures=output_failures,
+                                failure_class=str(FailureClass.INVALID_OUTPUT),
+                                attempt_disposition=(
+                                    AttemptDisposition.retryable
+                                    if verdict is RetryVerdict.RETRY
+                                    else AttemptDisposition.permanent
+                                ),
                             )
                             exit_code = 1
                         else:
-                            mark_completed_at(state_dir)
+                            completed = mark_completed_at(
+                                state_dir,
+                                running_record=running_record,
+                            )
                             write_result_at(
                                 state_dir,
                                 ResultRecord(
                                     run_id=run_id,
                                     step_id=step,
+                                    attempt_id=completed.attempt_id,
                                     state="completed",
                                     validated=True,
                                     outputs=resolve_record_output_paths(
@@ -1074,7 +1069,7 @@ def run_parallel(
                                 ),
                             )
                     else:
-                        mark_completed_at(state_dir)
+                        mark_completed_at(state_dir, running_record=running_record)
                     all_results.append((item, exit_code))
                     status = "ok" if exit_code == 0 else "failed"
                     out.progress(f"  {each}={item}: {status}")
@@ -1086,18 +1081,11 @@ def run_parallel(
 
     # ── mode: agent branch (parallel) ──────────────────────────────
 
-    # For cloud backends with Filestore NFS, determine the cloud-side RUNS_DIR
+    # For the GCP worker backend with Filestore NFS, determine the cloud-side RUNS_DIR
     # so template resolution in prompts/output paths uses the NFS mount path
     # instead of the orchestrator's local RUNS_DIR.
     # RUNS_DIR = <mount_path>/runs (runs/ subdirectory, not share root).
-    cloud_runs_dir = ""
-    if backend != "local":
-        _fs_server = MetaprocEnv.METAPROC_GCP_FILESTORE_SERVER.read_str(default="")
-        if _fs_server:
-            _fs_mount = MetaprocEnv.METAPROC_GCP_FILESTORE_MOUNT_PATH.read_str(
-                default="/mnt/filestore"
-            )
-            cloud_runs_dir = _fs_mount + "/runs"
+    cloud_runs_dir = resolve_gcp_worker_runs_dir(backend)
 
     if dry_run:
         assert adapter_obj is not None
@@ -1200,7 +1188,7 @@ def run_parallel(
 
     # ── Auth-pool dispatch template (Phase 6) ────────
     # Construct the same PoolDispatchConfig run-process builds at
-    # docs/arch/arch-metaproc-core.md
+    # src/metaproc/docs/metaproc-design.md
     # Phase 6. Without this, run-parallel as a worker entrypoint
     # ignores --auth-* flags and falls back to the legacy
     # single-credential bootstrap, which is exactly the cloud
@@ -1220,6 +1208,14 @@ def run_parallel(
         run_context=variables.get("RUN_ID", ""),
         out=out,
         auth_policy=auth_policy,
+        run_dir=run_dir,
+    )
+    pool_dispatch_template = _filter_pool_dispatch_for_adapter(
+        pool_dispatch_template,
+        adapter_type=adapter_type,
+        step_id=step,
+        events_path=logs_dir / paths_mod.RUNPOOL_EVENTS_FILE,
+        out=out,
     )
 
     all_results_pool = asyncio.run(
@@ -1301,7 +1297,7 @@ def _build_prepare_launch(  # noqa: PLR0913
         if refresh_token_fn is not None and callable(refresh_token_fn):
             refresh_token_fn()
 
-        # For cloud backends with Filestore, override RUNS_DIR so template
+        # For the GCP worker backend with Filestore, override RUNS_DIR so template
         # resolution in the prompt and output paths uses the NFS mount path
         # instead of the orchestrator's local RUNS_DIR.
         resolve_vars = dict(item_vars)
@@ -1339,6 +1335,10 @@ def _build_prepare_launch(  # noqa: PLR0913
             context=f"step '{step}' prompt for {each}={shared['item']}",
             allowed=allowed_runtime,
         )
+        output_failure_feedback = cast(
+            "Sequence[OutputFailure]", shared.get("output_failure_feedback", ())
+        )
+        resolved_prompt = append_output_failure_feedback(resolved_prompt, output_failure_feedback)
         shared["log_path"] = Path(log_path)
 
         # Clean stale output files before retry so the agent starts fresh.
@@ -1397,6 +1397,7 @@ def _build_prepare_launch(  # noqa: PLR0913
             step_id=step,
             item=dict(item_context),
             attempt=attempt,
+            item_key=state_dir.name,
         )
         write_attempt_at(
             state_dir,
@@ -1412,7 +1413,8 @@ def _build_prepare_launch(  # noqa: PLR0913
         )
 
         adapter = get_adapter(adapter_type)
-        prompt_file = Path(log_path).with_suffix(".prompt.md")
+        log_path_obj = Path(log_path)
+        prompt_file = log_path_obj.with_name(f"{log_path_obj.stem}-attempt{attempt}.prompt.md")
         with atomic_output_file(prompt_file) as tmp_path:
             Path(tmp_path).write_text(resolved_prompt)
         cmd = adapter.build_command(
@@ -1420,7 +1422,7 @@ def _build_prepare_launch(  # noqa: PLR0913
             item_runtime_config,
             resolve_vars,
         )
-        env: dict[str, str] = adapter.prepare_env(dict(os.environ), item_runtime_config)
+        env: dict[str, str] = adapter.prepare_env(agent_seed_env(), item_runtime_config)
         env.update(_resolve_env(target_env, resolve_vars))
         if pool_status_path is not None:
             env["METAPROC_POOL_STATUS"] = str(pool_status_path)
@@ -1449,15 +1451,15 @@ def _build_prepare_launch(  # noqa: PLR0913
         # Adapter-type gate: the pool is set per-dispatch (e.g.
         # ``--auth-account claude-code-cli``) and applies cleanly to
         # steps that USE that adapter (process-item, retrieve-precedent).
-        # Steps that use a DIFFERENT adapter — e.g. mine-adhoc with
-        # pi-cli + vertex-maas — must NOT lease a claude slot: the slot
+        # Steps that use a DIFFERENT adapter — e.g. extract-items with
+        # pi-cli + a managed model — must NOT lease a claude slot: the slot
         # path appends adapter-specific debug flags (``claude -d api``) to
         # the cmd, which pi-cli rejects with ``Unknown option: -d`` and
         # exits 1 in <10s; the runpool then classifies this as a crash
         # and cools the underlying Claude credential, eventually
         # exhausting the pool. Skipping the pool path for non-matching
-        # adapter types keeps mine-adhoc on the legacy single-credential
-        # path (or no auth at all for pi-cli/vertex-maas which uses GCP
+        # adapter types keeps extract-items on the legacy single-credential
+        # path (or no auth at all for an adapter that uses cloud
         # access tokens).
         if pool_dispatch is not None and adapter_type == pool_dispatch.adapter:
             from metaproc.adapters.registry import (  # noqa: PLC0415 -- pre-existing local import; needs review
@@ -1581,6 +1583,7 @@ async def _run_agent_pool(  # noqa: PLR0913
     cloud_runs_dir: str = "",
     pool_dispatch: Any | None = None,
     preflight_quota_guard: str = "warn",
+    defer_success_transition: bool = False,
 ) -> list[tuple[str, int]]:
     """Run agent-mode items through RunPool with adaptive concurrency.
 
@@ -1681,18 +1684,78 @@ async def _run_agent_pool(  # noqa: PLR0913
             except Exception as _exc:
                 pre_existing_errors = [f"validation raised: {_exc}"]
             if not pre_existing_errors:
-                log.info(
-                    "Pre-spawn outputs validate for %s=%s; promoting to completed "
-                    "and skipping agent invocation (recovery from misclassified failure)",
-                    each,
-                    item,
-                )
-                mark_completed_at(state_dir)
-                all_results.append((item, 0))
-                out.progress(
-                    f"  Skipped {each}={item} (outputs already valid; promoted to completed)"
-                )
-                return
+                current_status = read_status_at(state_dir)
+                recompute_unaccepted_outputs = current_status is None
+                if current_status is None:
+                    log.info(
+                        "Valid outputs for %s=%s have no task state; recomputing "
+                        "instead of implicitly adopting them",
+                        each,
+                        item,
+                    )
+                else:
+                    try:
+                        current_attempt = validate_task_status_identity_at(
+                            state_dir,
+                            current_status,
+                            run_id=run_id,
+                            step_id=step,
+                            item_key=state_dir.name,
+                        )
+                    except ValueError as exc:
+                        log.warning("Invalid attempt history for %s=%s: %s", each, item, exc)
+                        all_results.append((item, 1))
+                        out.progress(f"  Refused {each}={item} (invalid attempt history)")
+                        return
+                    try:
+                        mark_completed_at(state_dir, running_record=current_status)
+                    except AttemptTerminalConflictError:
+                        current_disposition = (
+                            current_attempt.disposition if current_attempt is not None else None
+                        )
+                        if current_disposition is AttemptDisposition.lost or (
+                            current_disposition is AttemptDisposition.retryable
+                        ):
+                            recompute_unaccepted_outputs = True
+                            log.info(
+                                "Valid outputs for %s=%s came from an unaccepted %s "
+                                "attempt; recomputing",
+                                each,
+                                item,
+                                current_disposition.value,
+                            )
+                        else:
+                            # A terminal attempt cannot be silently revised just because a
+                            # later scan finds a valid file. The commit/adoption layer must
+                            # establish provenance before such output can satisfy the task.
+                            log.warning(
+                                "Valid outputs for %s=%s conflict with its terminal "
+                                "attempt; refusing implicit adoption",
+                                each,
+                                item,
+                            )
+                            all_results.append((item, 1))
+                            out.progress(
+                                f"  Refused {each}={item} (valid outputs have no accepted "
+                                "attempt or adoption fact)"
+                            )
+                            return
+                    except ValueError as exc:
+                        log.warning(
+                            "Valid outputs for %s=%s cannot be tied to their task: %s",
+                            each,
+                            item,
+                            exc,
+                        )
+                        all_results.append((item, 1))
+                        out.progress(f"  Refused {each}={item} (invalid task provenance)")
+                        return
+                if not recompute_unaccepted_outputs:
+                    all_results.append((item, 0))
+                    out.progress(
+                        f"  Skipped {each}={item} (outputs already valid; promoted to completed)"
+                    )
+                    return
 
         prepare_fn = _build_prepare_launch(
             shared=shared,
@@ -1742,19 +1805,28 @@ async def _run_agent_pool(  # noqa: PLR0913
             lane_id=pool_config.execution_profile,
             execution_profile=pool_config.execution_profile,
         )
+        if getattr(pool, "shutting_down", False) is True:
+            _cancel_item(shared, "pool shutdown requested")
+            return
+
         try:
             future = pool.submit(config)
         except Exception as exc:
+            if getattr(pool, "shutting_down", False) is True:
+                _cancel_item(shared, "pool shutdown requested")
+                return
             error_str = f"submission failed: {exc}"
             out.progress(f"  {each}={item}: {error_str}")
             state_dir.mkdir(parents=True, exist_ok=True)
-            mark_failed_synthetic_at(
+            shared["running_record"] = mark_failed_synthetic_at(
                 state_dir,
                 run_id=run_id,
                 step_id=step,
                 item=dict(item_context),
                 attempt=shared["attempt_number"],
+                item_key=state_dir.name,
                 error=error_str,
+                attempt_disposition=None,
             )
             _classify_and_maybe_retry(shared, error_str)
             return
@@ -1776,6 +1848,38 @@ async def _run_agent_pool(  # noqa: PLR0913
             shared=shared,
             error_str=error_str,
         )
+
+    def _cancel_item(shared: dict[str, Any], error_str: str) -> None:
+        """Finalize one item cancelled by pool shutdown without retry churn."""
+        item = shared["item"]
+        state_dir = shared["state_dir"]
+        running_record = shared.get("running_record")
+        state_dir.mkdir(parents=True, exist_ok=True)
+        if running_record is None:
+            running_record = mark_failed_synthetic_at(
+                state_dir,
+                run_id=run_id,
+                step_id=step,
+                item=dict(shared["item_context"]),
+                attempt=shared["attempt_number"],
+                item_key=state_dir.name,
+                error=error_str,
+                attempt_disposition=AttemptDisposition.cancelled,
+            )
+        else:
+            mark_failed_at(
+                state_dir,
+                error=error_str,
+                running_record=running_record,
+                attempt_disposition=AttemptDisposition.cancelled,
+            )
+        shared["running_record"] = None
+        try:
+            _pool_teardown(shared, error_str=error_str)
+        except Exception:
+            log.exception("Credential teardown failed for cancelled %s=%s", each, item)
+        all_results.append((item, 1))
+        out.progress(f"  Cancelled {each}={item}: {error_str}")
 
     def _classify_and_maybe_retry(
         shared: dict[str, Any],
@@ -1810,6 +1914,21 @@ async def _run_agent_pool(  # noqa: PLR0913
         nonlocal retry_seq
         item = shared["item"]
         fc = classify_failure(error_str)
+
+        def _finish_attempt(disposition: AttemptDisposition) -> None:
+            running_record = cast("StatusRecord | None", shared.get("running_record"))
+            if running_record is None:
+                return
+            mark_failed_at(
+                shared["state_dir"],
+                running_record=running_record,
+                attempt_disposition=disposition,
+                failure_class=str(fc),
+                error=error_str,
+                output_failures=output_failures,
+            )
+            shared["running_record"] = None
+
         # When the error is a Claude quota exhaustion ("out of extra usage ·
         # resets 3:10am"), parse the reset clock so the pool can pause the
         # whole cohort until the named window passes — replaces the 2026-05-13
@@ -1827,8 +1946,18 @@ async def _run_agent_pool(  # noqa: PLR0913
         # Tear down pool slot (if any) BEFORE we schedule the retry —
         # the retry's prepare_launch will lease a fresh slot against
         # the failed attempt's excluded label set (P2.6).
-        auth_classification = _pool_teardown(shared, error_str=error_str)
-        force_abort = _auth_forces_abort(auth_classification)
+        try:
+            auth_classification = _pool_teardown(shared, error_str=error_str)
+        except Exception:
+            # Teardown is operational bookkeeping after the process result is known.
+            # Preserve that attempt as lost even when credential cleanup prevents the
+            # scheduler from reaching a normal retry decision.
+            try:
+                _finish_attempt(AttemptDisposition.lost)
+            except Exception:
+                log.exception("Could not finalize attempt after pool teardown failed")
+            raise
+        force_abort = auth_forces_abort(auth_classification)
         # When the item itself hit quota exhaustion with a parsed reset
         # clock, schedule a retry-after-reset rather than burning a normal
         # backoff attempt or permanent-failing. Mirrors the pool-cooling
@@ -1841,6 +1970,7 @@ async def _run_agent_pool(  # noqa: PLR0913
         is_quota_exhausted_retry = quota_reset_at is not None and not force_abort
         if is_quota_exhausted_retry:
             assert quota_reset_at is not None  # noqa: S101 — narrow the type for mypy/basedpyright
+            _finish_attempt(AttemptDisposition.retryable)
             now_local = datetime.now(quota_reset_at.tzinfo)
             quota_delay = max(
                 0.0, (quota_reset_at - now_local).total_seconds() + _QUOTA_RESET_BUFFER_S
@@ -1861,6 +1991,7 @@ async def _run_agent_pool(  # noqa: PLR0913
         # eligible pool label for adapter=..." (see PoolSlotUnavailableError).
         is_pool_exhausted = pool_dispatch is not None and "no eligible pool label" in error_str
         if is_pool_exhausted and not force_abort:
+            _finish_attempt(AttemptDisposition.lost)
             cooling_delay = _compute_pool_cooling_delay(pool_dispatch)
             retry_seq += 1
             heapq.heappush(
@@ -1882,6 +2013,9 @@ async def _run_agent_pool(  # noqa: PLR0913
             and verdict == RetryVerdict.RETRY
             and shared["attempt_number"] <= max_retries_for(fc, retry_policy.max_retries)
         ):
+            _finish_attempt(AttemptDisposition.retryable)
+            if output_failures:
+                shared["output_failure_feedback"] = tuple(output_failures)
             shared["attempt_number"] += 1
             retry_index = shared["attempt_number"] - 1
             delay = compute_backoff(retry_index, retry_policy)
@@ -1896,6 +2030,11 @@ async def _run_agent_pool(  # noqa: PLR0913
                 f"(attempt {shared['attempt_number']}, backoff {delay:.0f}s)"
             )
         else:
+            _finish_attempt(
+                AttemptDisposition.retryable
+                if not force_abort and verdict is RetryVerdict.RETRY
+                else AttemptDisposition.permanent
+            )
             all_results.append((item, 1))
             if force_abort and auth_classification is not None:
                 known_bug = auth_classification.known_bug_signature
@@ -1916,50 +2055,26 @@ async def _run_agent_pool(  # noqa: PLR0913
         running_record = shared["running_record"]
         item_context = shared["item_context"]
 
-        # Handle future exceptions (launch failures from prepare_launch or backend).
-        try:
-            result = future.result()
-        except Exception as exc:
-            error_str = f"launch failed: {exc}"
-            out.progress(f"  {each}={item}: {error_str}")
-            state_dir.mkdir(parents=True, exist_ok=True)
-            if running_record is None:
-                # prepare_launch raised before mark_running — write synthetic status.
-                mark_failed_synthetic_at(
-                    state_dir,
-                    run_id=run_id,
-                    step_id=step,
-                    item=dict(item_context),
-                    attempt=shared["attempt_number"],
-                    error=error_str,
+        def _declared_outputs_validate() -> bool:
+            if item_dir is None or not effective_outputs:
+                return False
+            check_dir = (
+                Path(cloud_runs_dir) / item_dir.parent.name / item_dir.name
+                if cloud_runs_dir
+                else item_dir
+            )
+            try:
+                return not validate_item_outputs(
+                    check_dir,
+                    effective_outputs,
+                    variables={**variables, **item_context},
                 )
-            else:
-                mark_failed_at(state_dir, error=error_str, running_record=running_record)
-            _classify_and_maybe_retry(shared, error_str)
-            return
+            except Exception as exc:
+                log.warning("Could not validate outputs after process failure: %s", exc)
+                return False
 
-        if result.kill_reason is not None:
-            error_str = result.kill_reason
-            if result.kill_reason == "timeout":
-                error_str = f"timeout after {result.elapsed_s:.0f}s"
-            elif result.kill_reason == "stalled":
-                error_str = f"stalled (no log output for {stall_timeout_s:.0f}s)"
-            out.progress(f"  Killed {each}={item}: {error_str} ({fmt_timedelta(result.elapsed_s)})")
-            mark_failed_at(state_dir, error=error_str, running_record=running_record)
-            # Classify BEFORE compacting. ``try_compact_log`` rewrites the
-            # log via ``atomic_output_file``, which has a documented brief
-            # window where the original path is absent (between rename to
-            # ``.bak`` and rename of the temp file into place). The 2026-04-27
-            # multi-label mis-classification was the failure mode: classifier
-            # ran during that window, saw no session log, and fell through
-            # to the bug-regex on stderr "exit code 1".
-            _classify_and_maybe_retry(shared, error_str)
-            if log_path is not None:
-                try_compact_log(log_path)
-        elif result.exit_code == 0:
-            # _handle_success may call _classify_and_maybe_retry via batch_failed
-            # for output validation failures. We pass a local list for it.
-            success_failed: list[tuple[dict[str, Any], str, list[OutputFailure]]] = []
+        def _record_declared_outputs() -> None:
+            failures: list[tuple[dict[str, Any], str, list[OutputFailure]]] = []
             _handle_success(
                 each,
                 item,
@@ -1975,29 +2090,139 @@ async def _run_agent_pool(  # noqa: PLR0913
                 result,
                 out,
                 all_results,
-                success_failed,
+                failures,
                 shared,
                 step_hash=step_hash,
                 cloud_runs_dir=cloud_runs_dir,
+                defer_completion=defer_success_transition,
             )
-            # Handle output validation failures from _handle_success.
-            if success_failed:
-                for failed_shared, failed_error, failed_outputs in success_failed:
+            if failures:
+                for failed_shared, failed_error, failed_outputs in failures:
                     _classify_and_maybe_retry(
                         failed_shared, failed_error, output_failures=failed_outputs
                     )
             else:
-                # Pure-success path: tear down the pool slot with
-                # ok semantics so adapter.flush_refreshed_credential
-                # can write back a rotated blob if the CLI refreshed.
-                _pool_teardown(shared, error_str=None)
+                try:
+                    _pool_teardown(shared, error_str=None)
+                except Exception as exc:
+                    if defer_success_transition and running_record is not None:
+                        teardown_error = f"pool teardown failed after output validation: {exc}"
+                        try:
+                            mark_failed_at(
+                                state_dir,
+                                error=teardown_error,
+                                running_record=running_record,
+                                failure_class=str(FailureClass.UNKNOWN),
+                                attempt_disposition=AttemptDisposition.lost,
+                            )
+                            shared["running_record"] = None
+                        except Exception:
+                            log.exception(
+                                "Could not finalize deferred attempt after pool teardown failed"
+                            )
+                    raise
+
+        # Handle future exceptions (launch failures from prepare_launch or backend).
+        try:
+            result = future.result()
+        except asyncio.CancelledError:
+            _cancel_item(shared, "pool shutdown requested")
+            return
+        except Exception as exc:
+            error_str = f"launch failed: {exc}"
+            out.progress(f"  {each}={item}: {error_str}")
+            state_dir.mkdir(parents=True, exist_ok=True)
+            if running_record is None:
+                # prepare_launch raised before mark_running — write synthetic status.
+                running_record = mark_failed_synthetic_at(
+                    state_dir,
+                    run_id=run_id,
+                    step_id=step,
+                    item=dict(item_context),
+                    attempt=shared["attempt_number"],
+                    item_key=state_dir.name,
+                    error=error_str,
+                    attempt_disposition=None,
+                )
+                shared["running_record"] = running_record
+            else:
+                mark_failed_at(
+                    state_dir,
+                    error=error_str,
+                    running_record=running_record,
+                    attempt_disposition=None,
+                )
+            _classify_and_maybe_retry(shared, error_str)
+            return
+
+        if result.kill_reason is None and log_path is not None:
+            item_runtime_config = cast(
+                "dict[str, object]",
+                resolve_runtime_config(merged_config, shared["item_vars"]),
+            )
+            terminal_contract_error = validate_terminal_result_log(
+                get_adapter(adapter_type),
+                log_path,
+                item_runtime_config,
+            )
+            if terminal_contract_error is not None:
+                out.progress(
+                    f"  Done step={step} {each}={item} "
+                    f"attempt={shared.get('attempt_number', 1)} "
+                    "status=result_contract_failed "
+                    f"({fmt_timedelta(result.elapsed_s)})"
+                )
+                _classify_and_maybe_retry(shared, terminal_contract_error)
+                try_compact_log(log_path)
+                return
+
+        if result.kill_reason is not None:
+            error_str = result.kill_reason
+            if result.kill_reason == "timeout":
+                error_str = f"timeout after {result.elapsed_s:.0f}s"
+            elif result.kill_reason == "stalled":
+                error_str = f"stalled (no log output for {stall_timeout_s:.0f}s)"
+            out.progress(f"  Killed {each}={item}: {error_str} ({fmt_timedelta(result.elapsed_s)})")
+            if _declared_outputs_validate():
+                _record_declared_outputs()
+                return
+            mark_failed_at(
+                state_dir,
+                error=error_str,
+                running_record=running_record,
+                attempt_disposition=None,
+            )
+            # Classify BEFORE compacting. ``try_compact_log`` rewrites the
+            # log via ``atomic_output_file``, which has a documented brief
+            # window where the original path is absent (between rename to
+            # ``.bak`` and rename of the temp file into place). The 2026-04-27
+            # multi-label mis-classification was the failure mode: classifier
+            # ran during that window, saw no session log, and fell through
+            # to the bug-regex on stderr "exit code 1".
+            _classify_and_maybe_retry(shared, error_str)
+            if log_path is not None:
+                try_compact_log(log_path)
+        elif result.exit_code == 0:
+            _record_declared_outputs()
         else:
+            # Declared, valid outputs are authoritative even when the adapter exits
+            # nonzero (for example, a cosmetic shutdown error after publication).
+            # Validate them while the originating attempt is still live so recovery
+            # never has to rewrite an immutable terminal fact on the next dispatch.
+            if _declared_outputs_validate():
+                _record_declared_outputs()
+                return
             error_str = f"exit code {result.exit_code}"
             if log_path is not None:
                 log_error = extract_log_error(log_path)
                 if log_error:
                     error_str = f"{error_str} (log: {log_error})"
-            mark_failed_at(state_dir, error=error_str, running_record=running_record)
+            mark_failed_at(
+                state_dir,
+                error=error_str,
+                running_record=running_record,
+                attempt_disposition=None,
+            )
             out.progress(
                 f"  Done step={step} {each}={item} "
                 f"attempt={shared.get('attempt_number', 1)} "
@@ -2053,6 +2278,7 @@ async def _run_agent_pool(  # noqa: PLR0913
                     "running_record": None,
                     "log_path": None,
                     "attempt_number": 1,
+                    "output_failure_feedback": (),
                     "lane_id": pool_config.execution_profile,
                 }
                 current_status = read_status_at(state_dir)
@@ -2061,6 +2287,13 @@ async def _run_agent_pool(  # noqa: PLR0913
                     and current_status.state == "completed"
                     and current_status.step_id == step
                 ):
+                    validate_task_status_identity_at(
+                        state_dir,
+                        current_status,
+                        run_id=run_id,
+                        step_id=step,
+                        item_key=state_dir.name,
+                    )
                     out.progress(f"  {each}={item}: already completed — skipping")
                     all_results.append((item, 0))
                     continue
@@ -2106,6 +2339,17 @@ async def _run_agent_pool(  # noqa: PLR0913
                     await asyncio.sleep(sleep_time)
     finally:
         await pool.shutdown()
+        # Shutdown normally resolves or cancels every submitted future. Consume those
+        # terminal futures here when the outer scheduler itself was cancelled, so item
+        # state and credential teardown do not depend on returning to the main loop.
+        for future, shared in list(active.items()):
+            if not future.done():
+                continue
+            active.pop(future, None)
+            try:
+                _process_completion(future, shared)
+            except Exception:
+                log.exception("Could not finalize item after pool shutdown")
 
     return all_results
 
@@ -2129,8 +2373,10 @@ def _handle_success(  # noqa: PLR0913
     shared: dict[str, Any],
     step_hash: str | None = None,
     cloud_runs_dir: str = "",
+    defer_completion: bool = False,
 ) -> None:
     """Handle a successful process exit — validate outputs, record state."""
+    validated = True
     if item_dir is not None and effective_outputs:
         if cloud_runs_dir:
             check_dir = Path(cloud_runs_dir) / item_dir.parent.name / item_dir.name
@@ -2138,11 +2384,12 @@ def _handle_success(  # noqa: PLR0913
             check_dir = item_dir
 
         item_vars = {**variables, **item_context}
-        for io_spec in effective_outputs.values():
-            if hasattr(io_spec, "path") and io_spec.path:
-                out_file = check_dir / Path(io_spec.path).name
-                if out_file.exists() and repair_frontmatter_file(out_file):
-                    out.progress(f"  Repaired YAML in {out_file.name} for {item}")
+        for repaired in repair_declared_outputs(check_dir, effective_outputs, variables=item_vars):
+            out.progress(f"  Repaired YAML in {repaired.name} for {item}")
+        for conformed in conform_declared_outputs(
+            check_dir, effective_outputs, variables=item_vars
+        ):
+            out.progress(f"  Conformed scalars in {conformed.name} for {item}")
         output_failures = validate_item_outputs_detailed(
             check_dir, effective_outputs, variables=item_vars
         )
@@ -2159,6 +2406,7 @@ def _handle_success(  # noqa: PLR0913
                 error=error_str,
                 running_record=running_record,
                 output_failures=output_failures,
+                attempt_disposition=None,
             )
             out.progress(
                 f"  Done step={step} {each}={item} "
@@ -2171,18 +2419,20 @@ def _handle_success(  # noqa: PLR0913
                 try_compact_log(log_path)
             return
 
+    if not defer_completion:
         completion_vars = dict(variables)
         completion_vars.update(item_context)
         state_dir.mkdir(parents=True, exist_ok=True)
-        mark_completed_at(state_dir, running_record=running_record)
+        completed = mark_completed_at(state_dir, running_record=running_record)
         write_result_at(
             state_dir,
             ResultRecord(
                 run_id=run_id,
                 step_id=step,
+                attempt_id=completed.attempt_id,
                 state="completed",
                 validated=validated,
-                outputs=resolve_record_output_paths(effective_outputs, completion_vars),
+                outputs=resolve_record_output_paths(effective_outputs or {}, completion_vars),
                 published_at=datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%S"),
                 step_hash=step_hash,
             ),

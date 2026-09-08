@@ -17,7 +17,7 @@ pytest.importorskip("google.auth", reason="google-auth not installed (install me
 
 from metaproc.cloud.gcp.gcp_credentials import (  # noqa: E402
     _bootstrap_credentials_from_base64,
-    _is_on_cloud_vm,
+    _is_in_gcp_batch,
     get_access_token,
     get_token_expiry,
     reset,
@@ -131,50 +131,37 @@ class TestGetTokenExpiry:
             assert result.tzinfo == UTC
 
 
-class TestIsOnCloudVM:
-    """Tests for _is_on_cloud_vm — GCE/Batch environment detection."""
+class TestIsInGCPBatch:
+    """Tests for _is_in_gcp_batch."""
 
     def test_detects_batch_task_index(self):
 
         with patch.dict("os.environ", {"BATCH_TASK_INDEX": "0"}):
-            assert _is_on_cloud_vm() is True
+            assert _is_in_gcp_batch() is True
 
     def test_not_on_cloud_locally(self):
 
         with patch.dict("os.environ", {}, clear=True):
-            assert _is_on_cloud_vm() is False
+            assert _is_in_gcp_batch() is False
 
-    def test_detects_mounted_filestore(self):
+    def test_empty_batch_task_index_is_not_batch(self):
+        with patch.dict("os.environ", {"BATCH_TASK_INDEX": ""}, clear=True):
+            assert _is_in_gcp_batch() is False
 
-        with (
-            patch.dict(
-                "os.environ",
-                {
-                    "METAPROC_GCP_FILESTORE_SERVER": "10.0.0.1",
-                    "METAPROC_GCP_FILESTORE_MOUNT_PATH": "/mnt/fs",
-                },
-            ),
-            patch("pathlib.Path.is_mount", return_value=True),
+    def test_filestore_configuration_does_not_impersonate_batch(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "METAPROC_GCP_FILESTORE_SERVER": "10.0.0.1",
+                "METAPROC_GCP_FILESTORE_MOUNT_PATH": "/mnt/filestore",
+            },
+            clear=True,
         ):
-            assert _is_on_cloud_vm() is True
-
-    def test_filestore_env_but_not_mounted(self):
-
-        with (
-            patch.dict(
-                "os.environ",
-                {
-                    "METAPROC_GCP_FILESTORE_SERVER": "10.0.0.1",
-                    "METAPROC_GCP_FILESTORE_MOUNT_PATH": "/mnt/fs",
-                },
-            ),
-            patch("pathlib.Path.is_mount", return_value=False),
-        ):
-            assert _is_on_cloud_vm() is False
+            assert _is_in_gcp_batch() is False
 
 
-class TestBootstrapSkipsOnCloudVM:
-    """Tests that _bootstrap_credentials_from_base64 skips on cloud VMs."""
+class TestBootstrapSkipsInGCPBatch:
+    """Tests that _bootstrap_credentials_from_base64 skips in GCP Batch."""
 
     def test_skips_base64_on_batch_vm(self, tmp_path):
 
@@ -187,6 +174,27 @@ class TestBootstrapSkipsOnCloudVM:
             _bootstrap_credentials_from_base64()
             # Should NOT have set GOOGLE_APPLICATION_CREDENTIALS
             assert "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ
+
+    def test_skips_base64_when_filestore_mount_proves_attached_identity(
+        self, tmp_path: Path
+    ) -> None:
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "GCP_CREDENTIALS_BASE64": "dGVzdA==",
+                    "METAPROC_GCP_FILESTORE_SERVER": "10.0.0.1",
+                    "METAPROC_GCP_FILESTORE_MOUNT_PATH": "/mnt/filestore",
+                },
+                clear=True,
+            ),
+            patch("pathlib.Path.is_mount", return_value=True),
+            patch("tempfile.gettempdir", return_value=str(tmp_path)),
+        ):
+            _bootstrap_credentials_from_base64()
+
+            assert "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ
+            assert list(tmp_path.iterdir()) == []
 
     def test_uses_base64_locally(self, tmp_path):
         fake_key = json.dumps({"type": "service_account", "project_id": "test"})

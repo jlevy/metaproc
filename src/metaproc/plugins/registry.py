@@ -9,7 +9,7 @@ from softschema import Contract, Contracts, SchemaProfile, SchemaStatus
 
 from metaproc.io.frontmatter import ProgressSpec
 from metaproc.models.authored import ProcessSpec
-from metaproc.models.plan import Plan
+from metaproc.models.plan import RUN_PLAN_SNAPSHOT_CONTRACT, Plan, RunPlanSnapshot
 from metaproc.models.qa import QaReport, QaSummary
 from metaproc.models.resource_summary import (
     RESOURCE_USAGE_SUMMARY_CONTRACT,
@@ -106,6 +106,16 @@ class PluginRegistryImpl:
             Contract(
                 id=RESOURCES_DOCUMENT_CONTRACT,
                 model=ResourcesDocument,
+                profile=SchemaProfile.pure_yaml,
+                status=SchemaStatus.enforced,
+            )
+        )
+
+        self.register_softschema(
+            Contract(
+                id=RUN_PLAN_SNAPSHOT_CONTRACT,
+                model=RunPlanSnapshot,
+                envelope_key="run_plan",
                 profile=SchemaProfile.pure_yaml,
                 status=SchemaStatus.enforced,
             )

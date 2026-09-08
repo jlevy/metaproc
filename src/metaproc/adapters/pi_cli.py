@@ -37,9 +37,9 @@ from metaproc.settings import (
 
 log = logging.getLogger(__name__)
 
-PINNED_PI_CODING_AGENT_VERSION = "0.72.1"
+PINNED_PI_CODING_AGENT_VERSION = "0.84.2"
 PI_CLI_INSTALL_HINT = (
-    f"Install: npm install -g @mariozechner/pi-coding-agent@{PINNED_PI_CODING_AGENT_VERSION}"
+    f"Install: npm install -g @earendil-works/pi-coding-agent@{PINNED_PI_CODING_AGENT_VERSION}"
 )
 
 
@@ -92,7 +92,7 @@ _PI_ALLOWED_KEYS = frozenset(
 # (fs.read, fs.write, shell, web.search, etc.) as proposed in rev3 design
 # Section 13.1. Process specs should declare capabilities; adapters declare
 # which capabilities they support and how they map to vendor tool names.
-# See: docs/arch/arch-metaproc-core.md
+# See: src/metaproc/docs/metaproc-design.md
 
 # Map canonical (Claude-style) tool names to Pi equivalents.
 # Tools without a Pi equivalent are silently dropped.

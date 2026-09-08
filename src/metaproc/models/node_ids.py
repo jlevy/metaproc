@@ -25,7 +25,7 @@ def step_node_id(subgraph_key: str, step_id: str) -> str:
     Root-level steps keep their bare ``step_id`` so single-process specs
     look the same as they always have. Composite descendants are
     namespaced ``parent::child`` so a composite step named ``leaf``
-    inside ``mine-adhoc`` resolves to ``mine-adhoc::leaf`` — never
+    inside ``extract-items`` resolves to ``extract-items::leaf`` — never
     colliding with a root-level ``leaf``.
     """
     return f"{subgraph_key}::{step_id}" if subgraph_key != ROOT_SUBGRAPH_KEY else step_id

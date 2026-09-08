@@ -4,10 +4,26 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
 
 ## Current Release
 
-- **v0.2.1** (`mp-eq0b`): audit the aggregate delta from v0.2.0, ship the tracked CLI
-  version option, prepare [release notes](docs/releases/v0.2.1.md), pass the complete
-  local and hosted gates, publish through trusted publishing, and verify the installed
-  package.
+- **[v0.3.0](https://github.com/jlevy/metaproc/releases/tag/v0.3.0)** (`mp-wg5f`):
+  published from tag `4d518d8`. Pull request 38 merged immediately above the tag at
+  `6ac9c65`, so co-development work pins that post-release main commit rather than
+  assuming the published wheel contains pull request 38.
+
+## Active Development
+
+- **Process-tree and host safety** (`mp-bd6v`; umbrella feature `mp-qigc`): incubate a
+  standalone `safeproc` package with owned pre-execution supervision and brokerless
+  monitoring of existing process trees; add cross-platform host admission and
+  containment without a standalone pool; integrate Metaproc’s retained RunPool through
+  that boundary; and defer any pool-extraction spike until the seam has operating
+  evidence
+  ([system plan](docs/project/specs/active/plan-2026-09-01-runpool-host-safety.md),
+  [package plan](docs/project/specs/active/plan-2026-09-01-safeproc-local-incubation.md)).
+- **v0.4.0 release** (`mp-1n2a`): close the remaining loose ends between `main` and a
+  tag — two correctness defects in silent paths, release records that disagree with the
+  tree, first-party dependency currency, and stale tracking.
+  The release is a minor, not a patch: the delta since v0.3.0 removes public CLI surface
+  and changes output and transport contracts.
 
 ## Deferred Quality Ratchets
 
@@ -27,3 +43,11 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
 - [Focused resource observability](docs/project/specs/done/plan-2026-08-03-focused-resource-observability.md):
   ledger-backed metrics, compatibility reads, budgets, terminal reporting, recovery, and
   browser and CLI projections.
+- [Consolidated mapped-scope runtime](docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md)
+  (`mp-0iy8`): `for_each` on a composite step, one recursive execution context, one
+  run-owned RunPool for local mapped leaves, and mapped scopes projected through the
+  existing plan, status, trace, and pool views.
+
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
+-->

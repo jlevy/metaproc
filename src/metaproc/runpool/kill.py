@@ -283,8 +283,8 @@ def reap_subprocess_tree(parent_pid: int | None = None) -> dict[str, int]:
     return counts
 
 
-def install_subprocess_reaper_signal_handlers() -> None:
-    """Install SIGTERM + SIGINT handlers that reap the subprocess tree on exit.
+def install_subprocess_reaper_signal_handlers(*, include_sigint: bool = True) -> None:
+    """Install hard-reaper signal handlers for uncooperative process exit.
 
     Without this, when an operator runs ``kill -TERM <orchestrator_pid>``,
     Python's default SIGTERM behavior is to exit immediately without running
@@ -295,6 +295,10 @@ def install_subprocess_reaper_signal_handlers() -> None:
     This handler:
     1. Reaps the subprocess tree synchronously (SIGKILL all descendants).
     2. Re-raises the default signal so the orchestrator exits normally.
+
+    ``run-process`` passes ``include_sigint=False`` so ``asyncio.Runner`` owns Ctrl-C
+    and can drain run-owned resources cooperatively. SIGTERM remains the hard-stop
+    backstop for environments that terminate the orchestrator externally.
 
     Idempotent — calling twice is a no-op (signal handlers are replaced,
     not stacked).
@@ -320,4 +324,5 @@ def install_subprocess_reaper_signal_handlers() -> None:
         os.kill(os.getpid(), signum)
 
     signal.signal(signal.SIGTERM, _handler)
-    signal.signal(signal.SIGINT, _handler)
+    if include_sigint:
+        signal.signal(signal.SIGINT, _handler)

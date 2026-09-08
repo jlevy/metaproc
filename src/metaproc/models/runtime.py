@@ -9,10 +9,11 @@ from __future__ import annotations
 
 from enum import StrEnum
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
+from metaproc.ids import typed_id_pattern
 from metaproc.models.authored import StepStatus
 
 
@@ -46,7 +47,7 @@ class OutputFailureKind(StrEnum):
     This is the only judgement the framework makes about a contract failure.
     It carries no severity and no ownership: whether a ``structural`` failure is
     worth retrying, or whose fault it is, is the domain's to say (see
-    ``arch-metaproc-core.md`` §13).
+    ``metaproc-design.md`` §13).
 
     Subdivides ``FailureClass.INVALID_OUTPUT``, which aggregates all of these
     into one bucket for operator-facing counts.
@@ -71,9 +72,10 @@ class OutputFailureKind(StrEnum):
 class OutputFailure(BaseModel):
     """One declared output that failed validation, with what refused it.
 
-    Carries softschema's own vocabulary through unchanged rather than renaming
-    it: ``invariant`` is the failing validator, ``location`` is the path within
-    the document, and ``message`` is the text softschema produced.
+    Carries softschema's stable vocabulary through Metaproc's existing fields:
+    ``invariant`` is the structural error code or semantic validator,
+    ``location`` is the complete affected path, and ``message`` is the text
+    softschema produced.
     """
 
     output: str
@@ -104,11 +106,24 @@ class StatusRecord(BaseModel):
     item: dict[str, str]
     state: StepStatus
     attempt: int = 1
+    attempt_id: str | None = Field(default=None, pattern=typed_id_pattern("att"))
+    generation: int = Field(default=1, ge=1)
+    fence_epoch: int = Field(default=0, ge=0)
     started_at: str = ""
     completed_at: str | None = None
     last_heartbeat_at: str | None = None
     error: str | None = None
+    failure_class: str | None = None
+    """Operational class of the failure, when there is one.
+
+    A contract failure is placed by ``output_failures``; an operational one has no
+    structured record, so without this the durable record can only offer the message.
+    Design test 17 asks that every failed attempt name its layer and class, and this is
+    the half of that answer the per-item record owes.
+    """
+
     output_failures: list[OutputFailure] = Field(default_factory=list)
+
     """Structured form of a contract failure, when ``error`` describes one.
 
     ``error`` stays as written so existing readers keep working; this is what
@@ -129,11 +144,101 @@ class AttemptRecord(BaseModel):
     step_hash: str | None = None
 
 
+class AttemptDisposition(StrEnum):
+    """Scheduler meaning of one completed execution attempt."""
+
+    succeeded = "succeeded"
+    retryable = "retryable"
+    permanent = "permanent"
+    cancelled = "cancelled"
+    lost = "lost"
+
+
+class TaskAttemptAnomaliesRecord(BaseModel):
+    """Accepted irregularities stored beside one backward-compatible attempt fact."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", populate_by_name=True)
+
+    schema_: Literal["metaproc:TaskAttemptAnomalies/0.1"] = Field(
+        default="metaproc:TaskAttemptAnomalies/0.1", alias="schema"
+    )
+    attempt_id: str = Field(pattern=typed_id_pattern("att"))
+    anomalies: list[str] = Field(min_length=1)
+
+
+class TaskAttemptRecord(BaseModel):
+    """One durable attempt, retained after later attempts start.
+
+    The record is created before launch and may be rewritten exactly once to add its
+    terminal disposition. A terminal record is immutable. The direct ``attempt.yaml``
+    beside it remains the legacy latest-launch snapshot; this record is the attempt
+    history used by replay and the task scheduler.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", populate_by_name=True)
+
+    schema_: Literal["metaproc:TaskAttemptRecord/0.1"] = Field(
+        default="metaproc:TaskAttemptRecord/0.1", alias="schema"
+    )
+    attempt_id: str = Field(pattern=typed_id_pattern("att"))
+    run_id: str
+    step_id: str
+    item_key: str | None = None
+    item: dict[str, str] = Field(default_factory=dict)
+    scope_path: list[str] = Field(default_factory=list)
+    generation: int = Field(default=1, ge=1)
+    fence_epoch: int = Field(default=0, ge=0)
+    attempt_number: int = Field(ge=1)
+    started_at: str
+    disposition: AttemptDisposition | None = None
+    ended_at: str | None = None
+    failure_class: str | None = None
+    error: str | None = None
+    output_failures: list[OutputFailure] = Field(default_factory=list)
+    _anomalies: list[str] = PrivateAttr(default_factory=list)
+    """Accepted irregularities: the attempt succeeded, but not cleanly.
+
+    Distinct from every other terminal field here, all of which describe an attempt that
+    failed. An anomaly is the record of a judgment call the harness made in the
+    attempt's favor — an agent whose declared outputs all validate but whose process
+    exited nonzero is the case this exists for.
+
+    It has to be durable rather than progress output. Progress is suppressible and
+    unaddressable, so the one signal that a step passed only because a rule was relaxed
+    would be missing from exactly the artifact an operator reads after the fact, and
+    replay would show a clean success. A succeeded attempt may carry these; they are not
+    failure fields and do not make one.
+    """
+
+    @model_validator(mode="after")
+    def _terminal_fields_move_together(self) -> Self:
+        if (self.disposition is None) != (self.ended_at is None):
+            raise ValueError("disposition and ended_at must either both be set or both be absent")
+        has_failure = bool(self.failure_class or self.error or self.output_failures)
+        if self.disposition is None and has_failure:
+            raise ValueError("live attempt cannot carry terminal failure fields")
+        if self.disposition is AttemptDisposition.succeeded and has_failure:
+            raise ValueError("succeeded attempt cannot carry terminal failure fields")
+        return self
+
+    @property
+    def anomalies(self) -> list[str]:
+        """Accepted irregularities loaded from the attempt-owned sidecar."""
+        return list(self._anomalies)
+
+    def with_anomalies(self, anomalies: list[str]) -> Self:
+        """Return an in-memory projection carrying its separately stored anomalies."""
+        projected = self.model_copy(deep=True)
+        projected._anomalies = list(anomalies)
+        return projected
+
+
 class ResultRecord(BaseModel):
     """Validated outcome — written to .state/result.yaml after output check."""
 
     run_id: str
     step_id: str
+    attempt_id: str | None = Field(default=None, pattern=typed_id_pattern("att"))
     state: StepStatus
     validated: bool
     outputs: dict[str, str] = Field(default_factory=dict)

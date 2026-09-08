@@ -1,11 +1,8 @@
-"""Typed wrapper for the GCP_SECRET_REFS cohort.
+"""Typed registry for cloud-runtime Secret Manager references.
 
-The GCP secret-refs cohort (plaintext env var, Secret Manager ref env
-var, human description) used to be a ``tuple[tuple[str, str, str], ...]``,
-unpacked positionally at every call site. This module wraps the same
-data with named-attribute access so call sites read (and lint) better,
-without changing the underlying registry composition (provider-specific
-refs still flow through :func:`metaproc.config.providers.gcp_secret_refs`).
+Provider-specific references flow through
+:func:`metaproc.config.providers.gcp_secret_refs`; infrastructure and CLI
+credentials are declared alongside them in :class:`SecretRefSet`.
 
 Usage:
 
@@ -14,7 +11,7 @@ Usage:
     from metaproc.dispatch.secret_refs import SecretRefSet
 
     refs = SecretRefSet.all_known()
-    secrets = refs.to_secret_variables()  # plaintext_env -> SM resource name
+    secrets = refs.resolve_env_refs()  # plaintext_env -> SM resource name
 """
 
 from __future__ import annotations
@@ -28,7 +25,7 @@ from metaproc.config.providers import gcp_secret_refs
 
 @dataclass(frozen=True)
 class SecretRef:
-    """One GCP Secret Manager binding for a Batch job env var.
+    """One GCP Secret Manager binding for a container runtime env var.
 
     ``plaintext_env`` is the env var the worker subprocess reads (e.g.
     ``GH_TOKEN``). ``secret_env`` is the operator-side ref env var (e.g.
@@ -46,7 +43,7 @@ class SecretRef:
 
         Refuses plaintext leakage: if ``plaintext_env`` is set without
         ``secret_env``, raises ``RuntimeError`` so the dispatch chain
-        fails fast rather than silently submitting a Batch job whose
+        fails fast rather than silently submitting a cloud job whose
         env vars contain a plaintext credential. Returns ``""`` when
         neither is set (the credential simply isn't in scope for this
         dispatch).
@@ -75,13 +72,16 @@ class SecretRefSet:
 
     - :meth:`all_known` composes the static non-provider refs with the
       provider-derived ones (model API keys whose Batch path is SM-backed).
-    - :meth:`to_secret_variables` returns ``plaintext_env → SM resource
-      name`` for the Batch API's ``secret_variables`` field.
-    - :meth:`as_tuples` is the back-compat shape for legacy call sites
-      that still iterate ``(plaintext, secret, description)`` triples.
+    - :meth:`resolve_env_refs` returns ``plaintext_env → SM resource
+      name`` for the container-side hydration contract.
     """
 
     refs: tuple[SecretRef, ...]
+
+    def plaintext_conflicts(self, env: Mapping[str, str]) -> list[str]:
+        """Return registered credential targets carrying plaintext in ``env``."""
+        targets = {ref.plaintext_env for ref in self.refs}
+        return sorted(target for target in targets if env.get(target))
 
     @classmethod
     def all_known(cls) -> SecretRefSet:
@@ -116,13 +116,13 @@ class SecretRefSet:
         )
         return cls(refs=static + provider_refs)
 
-    def to_secret_variables(self, env: Mapping[str, str] | None = None) -> dict[str, str]:
+    def resolve_env_refs(self, env: Mapping[str, str] | None = None) -> dict[str, str]:
         """Return ``plaintext_env → SM resource name`` for refs that resolve.
 
         Skips refs whose ``secret_env`` isn't set (and whose
         ``plaintext_env`` also isn't — those raise via
-        :meth:`SecretRef.resolve`). The returned dict is suitable for
-        the GCP Batch API's ``Environment.secret_variables`` field.
+        :meth:`SecretRef.resolve`). The returned dict contains resource
+        references only; the container fetches their values after startup.
         """
         out: dict[str, str] = {}
         for ref in self.refs:
@@ -130,16 +130,6 @@ class SecretRefSet:
             if resolved:
                 out[ref.plaintext_env] = resolved
         return out
-
-    def as_tuples(self) -> tuple[tuple[str, str, str], ...]:
-        """Back-compat: return the legacy tuple-of-tuples shape.
-
-        Kept so call sites still using positional unpacking can read
-        through this set without converting in two places. New call
-        sites should use the typed surface (:meth:`to_secret_variables`,
-        iterating ``SecretRef`` instances).
-        """
-        return tuple((r.plaintext_env, r.secret_env, r.description) for r in self.refs)
 
 
 __all__ = ["SecretRef", "SecretRefSet"]

@@ -36,8 +36,8 @@ def _ts() -> datetime:
 def _root_with_one_step() -> Node:
     step = Node(
         node_type="step",
-        node_id="postprocess-adhoc-kb",
-        label="postprocess-adhoc-kb",
+        node_id="normalize-items",
+        label="normalize-items",
         parent_id="process:root",
         self_metrics=Metrics(wall_time_s=0.0, actual_cost_usd=0.0),
         total_metrics=Metrics(wall_time_s=42.5, actual_cost_usd=6.10),
@@ -164,8 +164,8 @@ def test_node_tree_is_recursive() -> None:
     process = root.children[0]
     step = process.children[0]
     assert step.parent_id == "process:root"
-    assert step.node_id == "postprocess-adhoc-kb"
-    assert root.children[0].children[0].label == "postprocess-adhoc-kb"
+    assert step.node_id == "normalize-items"
+    assert root.children[0].children[0].label == "normalize-items"
 
 
 def test_self_and_total_metrics_are_separate_fields() -> None:

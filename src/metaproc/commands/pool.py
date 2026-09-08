@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -14,28 +14,19 @@ from prettyfmt import fmt_timedelta
 
 from metaproc import paths as paths_mod
 from metaproc.cli import app, get_output
+from metaproc.errors import CLIError
 from metaproc.io import (
     artifact_exists,
     iter_artifact_paths,
     iter_jsonl_objects,
     resolve_existing_artifact,
 )
-from metaproc.io.state_io import read_status_at, write_status_at
-from metaproc.models.runtime import StatusRecord
-from metaproc.paths import LOGS_DIR, POOL_STATUS_FILE, SCALE_OVERRIDE_FILE, STATE_DIR
+from metaproc.paths import POOL_STATUS_FILE, SCALE_OVERRIDE_FILE, STATE_DIR
 from metaproc.runpool.host_admission import (
     DEFAULT_HOST_ADMISSION_NAMESPACE,
     list_host_admission_slots,
 )
 from metaproc.runpool.status import ScaleOverride, is_pool_alive, read_status, write_scale_override
-
-_COMPOSITE_WALK_MAX_DEPTH = 4
-"""Cap how deep `_iter_composite_run_dirs` recurses.
-
-Composite nesting in production is one or two levels (e.g. a dispatch parent
-runs a child process, which in turn fans out per-item). Four levels gives
-headroom for nested composites without scanning unrelated subtrees.
-"""
 
 pool_app = typer.Typer(
     name="pool",
@@ -110,6 +101,11 @@ def pool_status(
     pool anywhere under the composite run".
     """
     out = get_output()
+    if not run_dir.is_dir():
+        raise CLIError(
+            f"pool status: locally visible run directory not found: {run_dir}. "
+            "Hydrate the run tree or execute the command where its files are mounted."
+        )
 
     entries = _composite_pool_status_files(run_dir)
 
@@ -788,69 +784,6 @@ def _resolve_event_path(*, is_v2: bool, v2_path: Path, legacy_path: Path) -> Pat
     return resolve_existing_artifact(legacy_path)
 
 
-def _iter_composite_run_dirs(run_dir: Path) -> Iterable[Path]:
-    """Yield ``run_dir`` and every composite child run directory beneath it.
-
-    A composite child run directory is any nested directory that owns its own
-    ``.state/`` branch. A dispatch parent that fans out to a child process is
-    the canonical case: the parent has a ``.state/`` and
-    a ``.logs/`` at the top, and each child step that runs through a
-    sub-process gets ``<parent>/<step_id>/.state/`` of its own.
-
-    The walk:
-
-    - always yields ``run_dir`` first (even if it has no ``.state/``), so
-      callers preserve the existing single-run path when there is no
-      composite nesting;
-    - is depth-capped at :data:`_COMPOSITE_WALK_MAX_DEPTH` to avoid scanning
-      unbounded subtrees;
-    - never descends into ``.state/``, ``.logs/``, or ``worker-*`` /
-      ``slot-*`` directories (those are runpool internals, not nested runs);
-    - dedupes by resolved path so symlinked composite mounts don't double-up.
-
-    This shared discovery helper keeps pool events, pool health, and pool rollup
-    on one source of truth.
-    """
-    yield run_dir
-    if not run_dir.is_dir():
-        return
-    seen: set[Path] = set()
-    try:
-        seen.add(run_dir.resolve())
-    except OSError:
-        return
-
-    def _walk(parent: Path, depth: int) -> Iterable[Path]:
-        if depth > _COMPOSITE_WALK_MAX_DEPTH:
-            return
-        try:
-            children = sorted(parent.iterdir())
-        except OSError:
-            return
-        for child in children:
-            if not child.is_dir():
-                continue
-            name = child.name
-            if name in {STATE_DIR, LOGS_DIR}:
-                continue
-            if name.startswith(("worker-", "slot-")):
-                continue
-            if name.startswith("."):
-                continue
-            try:
-                resolved = child.resolve()
-            except OSError:
-                continue
-            if resolved in seen:
-                continue
-            seen.add(resolved)
-            if (child / STATE_DIR).is_dir():
-                yield child
-            yield from _walk(child, depth + 1)
-
-    yield from _walk(run_dir, depth=1)
-
-
 def _composite_pool_status_files(run_dir: Path) -> list[dict[str, Any]]:
     """Return one entry per ``runpool-status.yaml`` discovered under ``run_dir``.
 
@@ -861,7 +794,7 @@ def _composite_pool_status_files(run_dir: Path) -> list[dict[str, Any]]:
     message — matches the shape consumed by both the JSON and text renderers.
 
     Discovery walks two levels for each run directory found by
-    :func:`_iter_composite_run_dirs`:
+    :func:`metaproc.paths.iter_composite_run_dirs`:
 
     1. **Run-level pool**: ``<run>/.state/runpool-status.yaml``
     2. **Per-step pools**: ``<run>/.state/steps/<step>/runpool-status.yaml``
@@ -902,7 +835,7 @@ def _composite_pool_status_files(run_dir: Path) -> list[dict[str, Any]]:
             }
         )
 
-    for sub_run in _iter_composite_run_dirs(run_dir):
+    for sub_run in paths_mod.iter_composite_run_dirs(run_dir):
         # 1. Run-level pool.
         _try_add(sub_run, paths_mod.run_state_dir(sub_run) / POOL_STATUS_FILE)
         # 2. Per-step pools under .state/steps/<step_id>/.
@@ -994,11 +927,11 @@ def _runpool_event_files_for_read(run_dir: Path) -> list[Path]:
     """Composite-aware: return event streams across ``run_dir`` and every
     nested composite child run directory.
 
-    See :func:`_iter_composite_run_dirs` for the discovery rules.
+    See :func:`metaproc.paths.iter_composite_run_dirs` for the discovery rules.
     """
     seen: set[Path] = set()
     files: list[Path] = []
-    for sub_run in _iter_composite_run_dirs(run_dir):
+    for sub_run in paths_mod.iter_composite_run_dirs(run_dir):
         for candidate in _runpool_event_files_for_one_run(sub_run):
             if candidate in seen:
                 continue
@@ -1036,7 +969,7 @@ def _runpool_health_files_for_read(run_dir: Path) -> list[Path]:
     nested composite child run directory."""
     seen: set[Path] = set()
     files: list[Path] = []
-    for sub_run in _iter_composite_run_dirs(run_dir):
+    for sub_run in paths_mod.iter_composite_run_dirs(run_dir):
         for candidate in _runpool_health_files_for_one_run(sub_run):
             if candidate in seen:
                 continue
@@ -1191,7 +1124,7 @@ def _render_concurrency_timeline(timeline: dict[str, Any], *, out: Any) -> None:
 def pool_rollup(
     run_dir: Path = typer.Argument(
         ...,
-        help="Run / process directory (walks down to find every sub-step pool)",
+        help="Run / process directory (walks down to find every run-owned and step pool)",
     ),
     as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
     auth_outcomes: bool = typer.Option(
@@ -1200,10 +1133,10 @@ def pool_rollup(
         help="Also aggregate auth_outcome events across every sub-pool (per-label/per-classification/per-step rollup)",
     ),
 ) -> None:
-    """Roll up pool status (and optionally auth_outcome events) across every sub-step pool.
+    """Roll up status and optional auth outcomes across every discovered pool.
 
     Each fan-out step in a multi-step run gets its own RunPool instance
-    (mine-adhoc, process-item, qa-check, ...). ``pool status`` only
+    (extract-items, process-item, qa-check, ...). ``pool status`` only
     inspects one. Cloud workers add another axis: each Batch worker
     writes its own per-step pool dir on Filestore. To answer
     "is the pool actually rotating across the whole run?" — the local
@@ -1213,7 +1146,7 @@ def pool_rollup(
 
     sub_pools = _collect_sub_pools(run_dir, with_auth_outcomes=auth_outcomes)
     if not sub_pools:
-        out.progress(f"No sub-step pool dirs found under {run_dir}")
+        out.progress(f"No pool dirs found under {run_dir}")
         raise typer.Exit(code=0)
 
     rollup = _build_rollup(sub_pools, with_auth_outcomes=auth_outcomes)
@@ -1228,12 +1161,14 @@ def _collect_sub_pools(
     *,
     with_auth_outcomes: bool,
 ) -> list[dict[str, Any]]:
-    """Walk *run_dir* and collect one entry per sub-step pool.
+    """Walk *run_dir* and collect one entry per run-owned or step pool.
 
-    Status files live at ``<run>/.state/steps/<step_id>/runpool-status.yaml``
-    with matching events at ``<run>/.logs/runpool/steps/<step_id>/events.jsonl``.
+    A run-owned pool lives at ``<run>/.state/runpool-status.yaml`` with events
+    under ``<run>/.logs/runpool/events.jsonl``. Step-owned pools live below
+    the corresponding ``steps/<step_id>`` branches.
     Composite parent runs (e.g. large workflow dispatch) also discover pools nested under
-    ``<parent>/<step_id>/.state/steps/...`` via :func:`_iter_composite_run_dirs`,
+    ``<parent>/<step_id>/.state/steps/...`` via
+    :func:`metaproc.paths.iter_composite_run_dirs`,
     so a rollup invoked on the parent answers "every sub-pool below this
     composite run" rather than only the parent's own steps.
 
@@ -1247,14 +1182,26 @@ def _collect_sub_pools(
     candidates: list[tuple[Path, Path, str]] = []
     seen_status_files: set[Path] = set()
 
-    for sub_run in _iter_composite_run_dirs(run_dir):
-        steps_state_root = paths_mod.run_state_dir(sub_run) / paths_mod.STEPS_SUBDIR
-        if not steps_state_root.exists():
-            continue
+    for sub_run in paths_mod.iter_composite_run_dirs(run_dir):
         try:
             sub_run_rel = sub_run.relative_to(run_dir)
         except ValueError:
             sub_run_rel = Path(sub_run.name)
+        root_rel = "." if sub_run == run_dir else sub_run_rel.as_posix()
+        root_status_file = paths_mod.run_state_dir(sub_run) / POOL_STATUS_FILE
+        if root_status_file.exists() and root_status_file not in seen_status_files:
+            seen_status_files.add(root_status_file)
+            candidates.append(
+                (
+                    root_status_file,
+                    paths_mod.runpool_events_for_read(sub_run),
+                    root_rel,
+                )
+            )
+
+        steps_state_root = paths_mod.run_state_dir(sub_run) / paths_mod.STEPS_SUBDIR
+        if not steps_state_root.exists():
+            continue
         rel_prefix = "" if sub_run == run_dir else f"{sub_run_rel.as_posix()}/"
         for step_state in sorted(steps_state_root.iterdir()):
             if not step_state.is_dir():
@@ -1474,112 +1421,6 @@ def _render_rollup(rollup: dict[str, Any], *, out: Any, with_auth_outcomes: bool
         for step, by_label in auth["by_step_label"].items():
             out.data(f"    {step}: {by_label}")
     out.data(f"\n  Rotations: {auth.get('rotated', 0)}")
-
-
-@pool_app.command("retry-missing")
-def retry_missing(
-    run_dir: Path = typer.Argument(..., help="Local run directory"),
-    cloud_runs_dir: str = typer.Option(
-        ..., "--cloud-runs-dir", help="Cloud storage path to check output existence"
-    ),
-    variant: str | None = typer.Option(None, "--variant", help="Filter to a specific variant"),  # noqa: UP007
-    expected_files: str = typer.Option(
-        "", "--expected-files", help="Comma-separated output filenames to check"
-    ),
-    dry_run: bool = typer.Option(
-        False, "--dry-run", help="Show what would be reset without changing state"
-    ),
-) -> None:
-    """Reset completion markers for items where cloud output is missing.
-
-    Scans the local run directory for items marked "completed", checks if
-    expected output files exist at the cloud path, and resets missing items
-    to "failed" so run-parallel will retry them.
-    """
-    out = get_output()
-    cloud_base = Path(cloud_runs_dir)
-
-    if not run_dir.is_dir():
-        out.data(f"Run directory not found: {run_dir}")
-        raise typer.Exit(code=1)
-
-    expected = [f.strip() for f in expected_files.split(",") if f.strip()] if expected_files else []
-
-    # Discover per-step task state roots at <run>/.state/tasks/<step_id>/.
-    # --variant filters by step_id.
-    tasks_root = run_dir / STATE_DIR / "tasks"
-    variant_dirs: list[Path] = []
-    if tasks_root.exists():
-        for candidate in sorted(tasks_root.iterdir()):
-            if not candidate.is_dir():
-                continue
-            if variant and candidate.name != variant:
-                continue
-            has_items = any(
-                (item / "status.yaml").exists() for item in candidate.iterdir() if item.is_dir()
-            )
-            if has_items:
-                variant_dirs.append(candidate)
-
-    if not variant_dirs:
-        out.data("No variant directories found")
-        raise typer.Exit(code=1)
-
-    total_reset = 0
-    total_checked = 0
-
-    for vdir in variant_dirs:
-        variant_name = vdir.name
-        cloud_variant_dir = cloud_base / variant_name
-
-        for item_d in sorted(vdir.iterdir()):
-            if not item_d.is_dir():
-                continue
-            # item_d is the per-task state dir; status.yaml lives directly inside.
-            record = read_status_at(item_d)
-            if record is None or record.state != "completed":
-                continue
-
-            total_checked += 1
-            item_name = item_d.name
-            cloud_item_dir = cloud_variant_dir / item_name
-
-            # Check output existence on cloud
-            missing: list[str] = []
-            if expected:
-                for fname in expected:
-                    if not (cloud_item_dir / fname).exists():
-                        missing.append(fname)
-            elif not cloud_item_dir.is_dir():
-                missing.append("<directory>")
-            else:
-                # No expected files specified — check dir is non-empty (has files, not just subdirs)
-                has_output = any(f.is_file() for f in cloud_item_dir.iterdir())
-                if not has_output:
-                    missing.append("<no output files>")
-
-            if missing:
-                total_reset += 1
-                if dry_run:
-                    out.data(
-                        f"  would reset  {variant_name}/{item_name}: missing {', '.join(missing)}"
-                    )
-                else:
-                    # Reset to failed so run-parallel retries it
-                    reset_record = StatusRecord(
-                        run_id=record.run_id,
-                        step_id=record.step_id,
-                        item=record.item,
-                        state="failed",
-                        attempt=record.attempt,
-                        started_at=record.started_at,
-                        error=f"cloud output missing: {', '.join(missing)}",
-                    )
-                    write_status_at(item_d, reset_record)
-                    out.data(f"  reset  {variant_name}/{item_name}: missing {', '.join(missing)}")
-
-    action = "Would reset" if dry_run else "Reset"
-    out.data(f"\n{action}: {total_reset}/{total_checked} completed items missing cloud output")
 
 
 @pool_app.command("override")

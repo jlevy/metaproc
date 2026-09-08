@@ -14,13 +14,16 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
+import shlex
 import subprocess
 import sys
 import textwrap
-import threading
+from collections.abc import Generator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Literal, cast
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from typer.testing import CliRunner
@@ -28,50 +31,82 @@ from typer.testing import CliRunner
 from metaproc.adapters.registry import ADAPTER_REGISTRY
 from metaproc.cli import app
 from metaproc.commands.run_process import run_process_command
+from metaproc.dispatch.auth_pool_flags import AuthPoolFlags
 from metaproc.dispatch.pool_dispatch import PoolDispatchConfig
 from metaproc.engine.dep_state import fingerprint_step
 from metaproc.errors import CLIError
+from metaproc.io import read_yaml_file
 from metaproc.io.state_io import write_result_at
 from metaproc.logutil.resource_events import read_events
 from metaproc.models.resource_budget import FinalizationState
 from metaproc.models.resources import ResourcesDocument, SampleEvent, read_resources_document
 from metaproc.models.runtime import ResultRecord
+from metaproc.runpool.backend import LaunchBackend
+from metaproc.runpool.pool import RunPool, RunPoolConfig
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SYNTHETIC_PROCESS = str(
     _REPO_ROOT / "tests" / "fixtures" / "fingerprint_smoke" / "fingerprint-smoke.process.md"
 )
 
+from metaproc.commands.helpers import validate_gcp_worker_topology
 from metaproc.commands.run_process import (
+    RunExecutionContext,
     _execute_code_step,
     _execute_composite_step,
     _execute_fan_out_step,
     _execute_gcp_worker_dispatch,
     _execute_manual_step,
+    _finish_deferred_fan_out_attempts,
     _invalidate_downstream,
     _is_step_completed,
     _maybe_cascade_for_fingerprint,
+    _orchestrate,
+    _preflight_plan_adapters,
+    _publish_run_plan,
     _read_recorded_step_hash,
     _read_step_status,
+    _refresh_run_plan_item_keys,
     _run_agent_subprocess,
+    _validate_backend_topology,
     _verify_ancestors,
     _write_process_status,
 )
 from metaproc.engine.discovery import FanOutDiscovery
 from metaproc.engine.graph import topo_sort
+from metaproc.engine.pathing import compute_task_state_dir
+from metaproc.engine.write_boundary import RepoSnapshot, WriteTarget
 from metaproc.io.state_io import (
+    mark_completed_at,
+    mark_running_at,
+    read_attempt_history_at,
     read_manual_ack_at,
+    read_run_plan,
     read_status_at,
     write_manual_ack_at,
+    write_run_plan,
     write_status_at,
 )
 from metaproc.models.authored import ForEach, IOSpec, ProcessSpec, ProcessStep
-from metaproc.models.plan import FanOut, Plan, ResolvedAdapter, ResolvedStep
-from metaproc.models.runtime import ManualAckRecord, StatusRecord
-from metaproc.paths import LOGS_DIR, STATE_DIR, STATUS_FILE
+from metaproc.models.plan import (
+    FanOut,
+    Plan,
+    ResolvedAdapter,
+    ResolvedStep,
+    RunPlanSnapshot,
+    RunPlanStep,
+)
+from metaproc.models.runtime import (
+    AttemptDisposition,
+    ManualAckRecord,
+    StatusRecord,
+)
+from metaproc.paths import LOGS_DIR, ORCHESTRATOR_LEASE_FILE, STATE_DIR, STATUS_FILE
 from metaproc.paths import STATE_DIR as _STATE_DIR
 from metaproc.paths import TASKS_SUBDIR as _TASKS_SUBDIR
 from metaproc.runpool.process_events import ProcessEventLogger
+from metaproc.runtime_projection import scan_task_output_projection
+from metaproc.viz_loader import load_plan_bundle_from_run
 
 
 class FakeOut:
@@ -79,9 +114,155 @@ class FakeOut:
 
     def __init__(self) -> None:
         self.messages: list[str] = []
+        self.warnings: list[str] = []
 
     def progress(self, msg: str) -> None:
         self.messages.append(msg)
+
+    def warning(self, msg: str) -> None:
+        self.warnings.append(msg)
+
+
+def test_adapter_preflight_skips_active_steps_without_agent_leaves() -> None:
+    adapter = MagicMock()
+    adapter.preflight.return_value = "unexpected drift warning"
+    plan = Plan(
+        process="adapterless",
+        steps=[
+            ResolvedStep(step_id="prepare", mode="code"),
+            ResolvedStep(step_id="scope", mode="composite"),
+        ],
+    )
+
+    with patch("metaproc.commands.run_process.get_adapter", return_value=adapter):
+        messages = _preflight_plan_adapters(
+            plan,
+            active_step_ids={"prepare", "scope"},
+        )
+
+    assert messages == []
+    adapter.preflight.assert_not_called()
+
+
+def test_gcp_worker_rejects_mapped_composite_before_running_upstream(tmp_path: Path) -> None:
+    process_dir = tmp_path / "process"
+    process_dir.mkdir()
+    marker = tmp_path / "upstream-ran"
+    (process_dir / "roster.md").write_text(
+        "---\nprogress:\n  items:\n    - item: one\n---\n",
+        encoding="utf-8",
+    )
+    (process_dir / "child.process.md").write_text(
+        "---\nprocess:\n  name: child\n  steps: []\n---\n",
+        encoding="utf-8",
+    )
+    process_path = process_dir / "parent.process.md"
+    process_path.write_text(
+        textwrap.dedent(
+            f"""\
+            ---
+            process:
+              name: unsupported-worker-map
+              deps:
+                roster: {{ path: ./roster.md, as: path }}
+                child: {{ path: ./child.process.md, as: path }}
+              steps:
+                - id: prepare
+                  mode: code
+                  command: touch {marker}
+                - id: mapped
+                  mode: composite
+                  uses: deps.child
+                  needs: [prepare]
+                  for_each:
+                    over: deps.roster
+                    bind: item
+                    bind_fields: [item]
+                    key: "{{{{item}}}}"
+            ---
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-process",
+            str(process_path),
+            "--var",
+            f"RUNS_DIR={tmp_path / 'runs'}",
+            "--var",
+            "RUN_ID=unsupported-worker-map",
+            "--backend",
+            "gcp-worker",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "mapped composite steps do not yet support gcp-worker" in str(result.exception)
+    assert not marker.exists()
+
+
+def test_backend_topology_allows_local_mapped_composites() -> None:
+    plan = Plan(
+        process="local-map",
+        steps=[
+            ResolvedStep(
+                step_id="mapped",
+                mode="composite",
+                fan_out=FanOut(over="deps.items", bind="item", source="items.md"),
+            )
+        ],
+    )
+
+    _validate_backend_topology(
+        plan,
+        active_step_ids={"mapped"},
+        backend_name="local",
+    )
+
+
+def test_adapter_preflight_checks_each_active_agent_adapter_once() -> None:
+    adapter = MagicMock()
+    adapter.preflight.return_value = "agent drift warning"
+    plan = Plan(
+        process="agents",
+        steps=[
+            ResolvedStep(step_id="first", mode="agent"),
+            ResolvedStep(step_id="second", mode="agent"),
+            ResolvedStep(step_id="inactive", mode="agent"),
+        ],
+    )
+
+    with patch("metaproc.commands.run_process.get_adapter", return_value=adapter):
+        messages = _preflight_plan_adapters(
+            plan,
+            active_step_ids={"first", "second"},
+        )
+
+    assert messages == ["agent drift warning"]
+    adapter.preflight.assert_called_once_with()
+
+
+@contextmanager
+def _test_execution_context(
+    *,
+    max_concurrency: int | None = None,
+    variant_override: str | None = None,
+    profile_files: Sequence[Path] = (),
+    pool_dispatch_template: PoolDispatchConfig | None = None,
+) -> Generator[RunExecutionContext, None, None]:
+    context = RunExecutionContext.create(
+        max_concurrency=max_concurrency,
+        variant_override=variant_override,
+        profile_files=profile_files,
+        pool_dispatch_template=pool_dispatch_template,
+    )
+    try:
+        yield context
+    finally:
+        context.close()
 
 
 @pytest.mark.parametrize(
@@ -172,38 +353,95 @@ def test_run_process_preserves_original_failure_and_releases_lease_when_finalize
     assert released == [tmp_path / "runs" / "run-1"]
 
 
-def test_agent_subprocesses_do_not_block_the_dag_event_loop(
+def test_run_process_preserves_original_failure_when_pool_shutdown_also_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    process_path = tmp_path / "causal.process.md"
+    process_path.write_text(
+        "---\nprocess:\n  name: causal\n  steps:\n    - id: noop\n"
+        "      mode: code\n      command: 'true'\n---\n"
+    )
+    original_error = RuntimeError("orchestration failed")
+
+    async def fail_orchestration(**_kwargs: object) -> None:
+        raise original_error
+
+    context = RunExecutionContext.create(
+        max_concurrency=None,
+        run_dir=tmp_path / "runs" / "run-1",
+        enable_run_pool=True,
+    )
+    assert context.run_pool_owner is not None
+    pool = MagicMock()
+    pool.shutdown = AsyncMock(side_effect=OSError("pool shutdown failed"))
+    context.run_pool_owner.pool = pool
+
+    monkeypatch.setattr("metaproc.commands.run_process._orchestrate", fail_orchestration)
+    monkeypatch.setattr(
+        "metaproc.commands.run_process.RunExecutionContext.create",
+        lambda **_kwargs: context,
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-process",
+            str(process_path),
+            "--var",
+            f"RUNS_DIR={tmp_path / 'runs'}",
+            "--var",
+            "RUN_ID=run-1",
+        ],
+    )
+
+    assert result.exception is original_error
+    assert getattr(original_error, "__notes__", []) == [
+        "run-owned execution cleanup also failed: OSError('pool shutdown failed')"
+    ]
+    pool.shutdown.assert_awaited_once()
+
+
+def test_agent_subprocesses_do_not_block_the_dag_event_loop(tmp_path: Path) -> None:
     """Independent non-fan-out agent steps can occupy the same DAG level."""
-    barrier = threading.Barrier(2)
+    barrier_script = tmp_path / "barrier.py"
+    barrier_script.write_text(
+        textwrap.dedent(
+            """
+            import sys
+            import time
+            from pathlib import Path
 
-    def fake_run(
-        *_args: object,
-        **_kwargs: object,
-    ) -> subprocess.CompletedProcess[bytes]:
-        barrier.wait(timeout=1.0)
-        return subprocess.CompletedProcess(args=[], returncode=0)
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
+            mine = Path(sys.argv[1])
+            other = Path(sys.argv[2])
+            mine.write_text("ready")
+            deadline = time.monotonic() + 1
+            while not other.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            raise SystemExit(0 if other.exists() else 1)
+            """
+        ).lstrip(),
+        encoding="utf-8",
+    )
+    one_ready = tmp_path / "one.ready"
+    two_ready = tmp_path / "two.ready"
 
     async def run_both() -> tuple[int, int]:
         return await asyncio.gather(
             _run_agent_subprocess(
-                ["adapter", "one"],
+                [sys.executable, str(barrier_script), str(one_ready), str(two_ready)],
                 env={},
                 cwd=tmp_path,
                 log_path=tmp_path / "one.log",
-                timeout_s=1,
+                timeout_s=2,
                 use_filter=False,
             ),
             _run_agent_subprocess(
-                ["adapter", "two"],
+                [sys.executable, str(barrier_script), str(two_ready), str(one_ready)],
                 env={},
                 cwd=tmp_path,
                 log_path=tmp_path / "two.log",
-                timeout_s=1,
+                timeout_s=2,
                 use_filter=False,
             ),
         )
@@ -330,6 +568,11 @@ class TestCompletionDetection:
     def test_completed_step(self, tmp_path: Path) -> None:
         _write_completed_status(tmp_path, "step-a")
         assert _is_step_completed(tmp_path, "step-a")
+
+    def test_completed_step_from_another_run_is_rejected(self, tmp_path: Path) -> None:
+        _write_completed_status(tmp_path, "step-a")
+        with pytest.raises(ValueError, match="run_id"):
+            _is_step_completed(tmp_path, "step-a", expected_run_id="test/run2")
 
     def test_failed_step_not_complete(self, tmp_path: Path) -> None:
         _write_failed_status(tmp_path, "step-a")
@@ -869,6 +1112,123 @@ class TestAncestorVerification:
 
 
 class TestProcessStatusFile:
+    @pytest.mark.parametrize(
+        ("suffix", "extra_args", "expected_publish_state"),
+        [
+            ("only", ["--only", "intake", "--no-continue-on-error"], None),
+            ("full", [], "blocked"),
+        ],
+    )
+    def test_code_handler_failure_is_projected_to_run_status_and_events(
+        self,
+        tmp_path: Path,
+        suffix: str,
+        extra_args: list[str],
+        expected_publish_state: str | None,
+    ) -> None:
+        process_dir = tmp_path / "failing-process"
+        process_dir.mkdir()
+        (process_dir / "handlers.py").write_text(
+            "def fail(_context, _step):\n    raise RuntimeError('source attestation mismatch')\n",
+            encoding="utf-8",
+        )
+        process_path = process_dir / "test.process.md"
+        process_path.write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: failing-process
+                  steps:
+                    - id: intake
+                      mode: code
+                      handler: handlers.py:fail
+                    - id: publish
+                      mode: code
+                      command: "true"
+                      needs: [intake]
+                ---
+                """
+            ),
+            encoding="utf-8",
+        )
+        runs_dir = tmp_path / "runs"
+        run_id = f"failed-code-handler-{suffix}"
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "run-process",
+                str(process_path),
+                "--var",
+                f"RUNS_DIR={runs_dir}",
+                "--var",
+                f"RUN_ID={run_id}",
+                *extra_args,
+            ],
+        )
+
+        assert result.exit_code == 1
+        expected_error = "RuntimeError: source attestation mismatch"
+        assert expected_error in result.output
+        assert result.exception is not None
+        assert expected_error in str(result.exception)
+
+        run_dir = runs_dir / run_id
+        process_status = read_yaml_file(run_dir / STATE_DIR / "process-status.yaml")
+        assert process_status["state"] == "failed"
+        assert expected_error in process_status["steps"]["intake"]["error"]
+        if expected_publish_state is None:
+            assert "publish" not in process_status["steps"]
+        else:
+            assert process_status["steps"]["publish"]["state"] == expected_publish_state
+
+        events = [
+            json.loads(line)
+            for line in (run_dir / LOGS_DIR / "process-events.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        failure = next(event for event in events if event["event"] == "step_fail")
+        assert expected_error in failure["error"]
+
+        status = CliRunner().invoke(app, ["status", str(run_dir)])
+        assert status.exit_code == 0, status.output
+        assert "Status: FAILED" in status.output
+        assert expected_error in status.output
+        assert "Process: current" not in status.output
+
+    def test_orchestrator_reconciles_tasks_before_topology_walk(self, tmp_path: Path) -> None:
+        out = FakeOut()
+        reconcile = MagicMock(return_value=2)
+
+        with (
+            _test_execution_context() as execution_context,
+            patch("metaproc.commands.run_process.reconcile_stale_running", reconcile),
+            patch(
+                "metaproc.commands.run_process.topo_sort",
+                side_effect=RuntimeError("stop after reconciliation"),
+            ),
+            pytest.raises(RuntimeError, match="stop after reconciliation"),
+        ):
+            asyncio.run(
+                _orchestrate(
+                    spec=ProcessSpec(name="test"),
+                    plan=_make_plan(),
+                    variables={},
+                    process_path=tmp_path / "test.process.md",
+                    process_dir=tmp_path,
+                    run_dir=tmp_path / "run",
+                    run_id="test/run",
+                    execution_context=execution_context,
+                    out=out,
+                    events=MagicMock(),
+                )
+            )
+
+        reconcile.assert_called_once_with(tmp_path / "run")
+        assert out.messages == ["Reconciled 2 orphaned task(s)"]
+
     def test_write_running_status(self, tmp_path: Path) -> None:
         step_states = {
             "step-a": {"state": "completed"},
@@ -899,11 +1259,277 @@ class TestProcessStatusFile:
         content = path.read_text()
         assert "state: failed" in content
 
+    @pytest.mark.parametrize(
+        ("other_state", "expected"),
+        [("running", "running"), ("failed", "failed")],
+    )
+    def test_current_work_outranks_carried_cancelled_state(
+        self,
+        tmp_path: Path,
+        other_state: str,
+        expected: str,
+    ) -> None:
+        path = _write_process_status(
+            tmp_path,
+            "test",
+            {
+                "prior-step": {"state": "cancelled"},
+                "active-step": {"state": other_state},
+            },
+            "2026-04-09T00:00:00",
+        )
+
+        assert read_yaml_file(path)["state"] == expected
+
+    def test_partial_success_ignores_carried_cancelled_state(self, tmp_path: Path) -> None:
+        path = _write_process_status(
+            tmp_path,
+            "test",
+            {
+                "prior-step": {"state": "cancelled"},
+                "active-step": {"state": "completed"},
+            },
+            "2026-04-09T00:00:00",
+            active_step_ids={"active-step"},
+        )
+
+        assert read_yaml_file(path)["state"] == "completed"
+
+    def test_partial_cancellation_uses_the_active_step_state(self, tmp_path: Path) -> None:
+        path = _write_process_status(
+            tmp_path,
+            "test",
+            {
+                "prior-step": {"state": "completed"},
+                "active-step": {"state": "cancelled"},
+            },
+            "2026-04-09T00:00:00",
+            active_step_ids={"active-step"},
+        )
+
+        assert read_yaml_file(path)["state"] == "cancelled"
+
 
 # ── Fan-out execution ────────────────────────────────────────────
 
 
 class TestFanOutExecution:
+    @pytest.mark.parametrize(
+        (
+            "adapter_type",
+            "pool_root_name",
+            "expected_success",
+            "expected_scope",
+            "warning_fragment",
+        ),
+        [
+            ("claude-code-cli", "runs", True, "2026-08-24/research/AAPL", None),
+            ("pi-cli", "runs", True, None, "pool is configured for 'claude-code-cli'"),
+            (
+                "claude-code-cli",
+                "other-runs",
+                False,
+                None,
+                "outside credential pool runs directory",
+            ),
+        ],
+    )
+    def test_binds_matching_fan_out_pool_and_warns_on_mismatch(
+        self,
+        tmp_path: Path,
+        adapter_type: str,
+        pool_root_name: str,
+        expected_success: bool,
+        expected_scope: str | None,
+        warning_fragment: str | None,
+    ) -> None:
+        runs_dir = tmp_path / "runs"
+        run_dir = runs_dir / "2026-08-24" / "research" / "AAPL"
+        source_path = tmp_path / "tickers.md"
+        source_path.write_text("---\nitems: []\n---\n")
+        step_def = ProcessStep(
+            id="predict",
+            mode="agent",
+            for_each=ForEach(
+                over="deps.tickers",
+                bind="ticker",
+                bind_fields=["ticker"],
+                key="{{ticker}}",
+            ),
+        )
+        target = ResolvedStep(
+            step_id="predict",
+            mode="agent",
+            adapter=ResolvedAdapter(type=adapter_type, config={}),
+            fan_out=FanOut(
+                over="deps.tickers",
+                bind="ticker",
+                source=str(source_path),
+                bind_fields=["ticker"],
+            ),
+        )
+        discovery = FanOutDiscovery(
+            source_path=source_path,
+            item_key="ticker",
+            item_fields=["ticker"],
+            actionable_contexts=[{"ticker": "AAPL"}],
+        )
+        template = PoolDispatchConfig(
+            coordinator=MagicMock(),
+            adapter="claude-code-cli",
+            runs_dir=tmp_path / pool_root_name,
+            run_id="2026-08-24",
+            step="",
+        )
+        run_pool = AsyncMock(return_value=[("AAPL", 0)])
+        out = FakeOut()
+
+        with (
+            patch("metaproc.commands.run_process.derive_variant", return_value="test"),
+            patch(
+                "metaproc.commands.run_process.discover_items_from_source",
+                return_value=discovery,
+            ),
+            patch("metaproc.commands.run_process.reconcile_stale_running", return_value=0),
+            patch("metaproc.commands.run_process.run_preflight", return_value=[]),
+            patch("metaproc.commands.run_process.get_backend", return_value=MagicMock()),
+            patch("metaproc.commands.run_process.capture_repo_snapshot", return_value=None),
+            patch("metaproc.commands.run_parallel._run_agent_pool", new=run_pool),
+        ):
+            succeeded = asyncio.run(
+                _execute_fan_out_step(
+                    spec=ProcessSpec(name="mapped-fixture"),
+                    step_def=step_def,
+                    target=target,
+                    variables={},
+                    process_path=tmp_path / "test.process.md",
+                    process_dir=tmp_path,
+                    run_dir=run_dir,
+                    run_id="mapped-fixture/2026-08-24/items/AAPL",
+                    backend_name="local",
+                    max_concurrency=1,
+                    num_workers=1,
+                    machine_type="e2-standard-4",
+                    spot=False,
+                    variant_override=None,
+                    out=out,
+                    pool_dispatch_template=template,
+                )
+            )
+
+        assert succeeded is expected_success
+        call = run_pool.await_args
+        if expected_success:
+            assert call is not None
+            bound = call.kwargs["pool_dispatch"]
+            if expected_scope is None:
+                assert bound is None
+            else:
+                assert bound.run_id == expected_scope
+                assert (bound.runs_dir / bound.run_id).resolve() == run_dir.resolve()
+        else:
+            assert call is None
+        if warning_fragment is None:
+            assert out.warnings == []
+        else:
+            assert any(warning_fragment in warning for warning in out.warnings)
+
+    def test_write_boundary_still_runs_when_another_item_failed(self, tmp_path: Path) -> None:
+        source_path = tmp_path / "tickers.md"
+        source_path.write_text("---\nitems: []\n---\n")
+        run_dir = tmp_path / "run"
+        step_def = ProcessStep(
+            id="predict",
+            mode="agent",
+            for_each=ForEach(
+                over="deps.tickers",
+                bind="ticker",
+                bind_fields=["ticker"],
+                key="{{ticker}}",
+            ),
+        )
+        target = ResolvedStep(
+            step_id="predict",
+            mode="agent",
+            adapter=ResolvedAdapter(type="claude-code-cli", config={}),
+            outputs={"report": IOSpec(path=str(run_dir / "reports" / "{{ticker}}.md"))},
+            fan_out=FanOut(
+                over="deps.tickers",
+                bind="ticker",
+                source=str(source_path),
+                bind_fields=["ticker"],
+            ),
+        )
+        item_contexts = [{"ticker": "AAPL"}, {"ticker": "MSFT"}]
+        discovery = FanOutDiscovery(
+            source_path=source_path,
+            item_key="ticker",
+            item_fields=["ticker"],
+            actionable_contexts=item_contexts,
+        )
+        snapshot = RepoSnapshot(repo_root=tmp_path, statuses={}, dirty_stats={})
+        pool_results = [("AAPL", 1), ("MSFT", 0)]
+        finalize = MagicMock(return_value=pool_results)
+
+        with (
+            patch("metaproc.commands.run_process.derive_variant", return_value="test"),
+            patch(
+                "metaproc.commands.run_process.discover_items_from_source",
+                return_value=discovery,
+            ),
+            patch("metaproc.commands.run_process.reconcile_stale_running", return_value=0),
+            patch("metaproc.commands.run_process.run_preflight", return_value=[]),
+            patch("metaproc.commands.run_process.get_backend", return_value=MagicMock()),
+            patch(
+                "metaproc.commands.run_process.collect_write_targets",
+                return_value=[WriteTarget(run_dir / "reports", "tree")],
+            ),
+            patch(
+                "metaproc.commands.run_process.capture_repo_snapshot",
+                side_effect=[snapshot, snapshot],
+            ),
+            patch(
+                "metaproc.commands.run_process.repo_changes_since",
+                return_value=[tmp_path / "stray.md"],
+            ),
+            patch(
+                "metaproc.commands.run_process.filter_boundary_violations",
+                return_value=[tmp_path / "stray.md"],
+            ),
+            patch(
+                "metaproc.commands.run_parallel._run_agent_pool",
+                new=AsyncMock(return_value=pool_results),
+            ),
+            patch(
+                "metaproc.commands.run_process._finish_deferred_fan_out_attempts",
+                finalize,
+            ),
+        ):
+            result = asyncio.run(
+                _execute_fan_out_step(
+                    spec=ProcessSpec(name="test"),
+                    step_def=step_def,
+                    target=target,
+                    variables={},
+                    process_path=tmp_path / "test.process.md",
+                    process_dir=tmp_path,
+                    run_dir=run_dir,
+                    run_id="test/run",
+                    backend_name="local",
+                    max_concurrency=None,
+                    num_workers=1,
+                    machine_type="e2-standard-4",
+                    spot=False,
+                    variant_override=None,
+                    out=FakeOut(),
+                )
+            )
+
+        assert result is False
+        boundary_error = finalize.call_args.kwargs["boundary_error"]
+        assert boundary_error is not None
+        assert "stray.md" in boundary_error
+
     def test_uses_resolved_fan_out_source(self, tmp_path: Path) -> None:
         source_path = tmp_path / "tickers.md"
         source_path.write_text("---\nitems: []\n---\n")
@@ -967,6 +1593,129 @@ class TestFanOutExecution:
 # ── Composite step execution ────────────────────────────────────
 
 
+def test_run_plan_snapshot_omits_sensitive_config_and_fan_out_items(tmp_path: Path) -> None:
+    sentinel = "must-not-enter-run-plan"
+    plan = Plan(
+        process="sensitive.process.md",
+        params={"PRIVATE_PARAM": sentinel},
+        steps=[
+            ResolvedStep(
+                step_id="mapped-agent",
+                mode="agent",
+                adapter=ResolvedAdapter(
+                    type="example-adapter",
+                    config={"credential": sentinel},
+                ),
+                prompt_prefix=sentinel,
+                fan_out=FanOut(
+                    over="items",
+                    bind="item",
+                    source="items.md",
+                    items=[{"item": f"item-{index}", "private": sentinel} for index in range(500)],
+                ),
+                env={"PRIVATE_ENV": sentinel},
+                outputs={"report": IOSpec(path="report.md", kind="file")},
+            )
+        ],
+    )
+
+    spec = ProcessSpec(
+        name="sensitive",
+        steps=[
+            ProcessStep(
+                id="mapped-agent",
+                mode="agent",
+                for_each=ForEach(
+                    over="items",
+                    bind="item",
+                    bind_fields=["item", "private"],
+                    key="scope-{{item}}",
+                ),
+            )
+        ],
+    )
+    path = _publish_run_plan(
+        tmp_path,
+        run_id="process/run",
+        scope_path=(),
+        plan=plan,
+        spec=spec,
+        variables={},
+    )
+    raw = path.read_text(encoding="utf-8")
+    document = read_yaml_file(path)
+
+    assert sentinel not in raw
+    assert "private" not in raw
+    assert len(raw) < 15_000
+    assert set(document["run_plan"]) == {"schema", "run_id", "scope_path", "steps"}
+    assert set(document["run_plan"]["steps"][0]) == {
+        "fingerprint",
+        "item_keys",
+        "mode",
+        "outputs",
+        "step_id",
+        "task_shape",
+    }
+    assert document["run_plan"]["steps"][0]["item_keys"][:2] == [
+        "scope-item-0",
+        "scope-item-1",
+    ]
+
+
+def test_run_plan_refresh_preserves_authored_reason_key(tmp_path: Path) -> None:
+    """Framework disposition metadata must not consume an authored bind field."""
+    step_def = ProcessStep(
+        id="mapped-agent",
+        mode="agent",
+        for_each=ForEach(
+            over="items",
+            bind="reason",
+            bind_fields=["reason"],
+            key="{{reason}}",
+        ),
+    )
+    target = ResolvedStep(
+        step_id="mapped-agent",
+        mode="agent",
+        fan_out=FanOut(
+            over="items",
+            bind="reason",
+            source="items.md",
+            bind_fields=["reason"],
+        ),
+    )
+    write_run_plan(
+        tmp_path,
+        RunPlanSnapshot(
+            run_id="example/run-1",
+            steps=[
+                RunPlanStep(
+                    step_id="mapped-agent",
+                    mode="agent",
+                    task_shape="mapped",
+                    item_keys=[],
+                    fingerprint="0123456789abcdef",
+                )
+            ],
+        ),
+    )
+
+    _refresh_run_plan_item_keys(
+        tmp_path,
+        target=target,
+        step_def=step_def,
+        variables={},
+        item_contexts=[{"reason": "R1"}],
+    )
+
+    snapshot = read_run_plan(tmp_path)
+    assert snapshot is not None
+    assert snapshot.steps[0].item_keys == ["R1"]
+    assert target.fan_out is not None
+    assert target.fan_out.items == [{"reason": "R1"}]
+
+
 class TestCompositeStepExecution:
     def test_composite_loads_child_spec(self, tmp_path: Path) -> None:
         """Composite step resolves uses path and loads child spec."""
@@ -996,27 +1745,107 @@ class TestCompositeStepExecution:
             uses_path=str(child_dir / "test.process.md"),
         )
 
-        result = asyncio.run(
-            _execute_composite_step(
-                step_def=step_def,
-                target=target,
-                variables={"RUN_ID": "test-run"},
-                process_dir=tmp_path,
-                run_dir=tmp_path / "run",
-                run_id="test/run",
-                backend_name="local",
-                max_concurrency=None,
-                num_workers=1,
-                machine_type="e2-standard-4",
-                spot=False,
-                variant_override=None,
-                out=FakeOut(),
+        with _test_execution_context() as execution_context:
+            result = asyncio.run(
+                _execute_composite_step(
+                    step_def=step_def,
+                    target=target,
+                    variables={"RUN_ID": "test-run"},
+                    process_dir=tmp_path,
+                    run_dir=tmp_path / "run",
+                    run_id="test/run",
+                    scope_path=(),
+                    execution_context=execution_context,
+                    out=FakeOut(),
+                )
             )
-        )
         assert result is True
 
         # Child run dir should be scoped under parent
         assert (tmp_path / "run" / "preflight").exists()
+        snapshot = read_run_plan(tmp_path / "run" / "preflight")
+        assert snapshot is not None
+        assert snapshot.run_id == "test/run/preflight"
+        assert snapshot.scope_path == ["preflight"]
+        assert [step.step_id for step in snapshot.steps] == ["noop"]
+        assert snapshot.steps[0].task_shape == "scalar"
+
+    def test_force_reexecutes_a_real_composite_child(self, tmp_path: Path) -> None:
+        process_dir = tmp_path / "process"
+        process_dir.mkdir()
+        (process_dir / "child.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: force-child
+                  outputs:
+                    count: { path: "{{run.dir}}/count.txt", as: path }
+                  steps:
+                    - id: increment
+                      mode: code
+                      outputs:
+                        count: { path: "{{run.dir}}/count.txt", kind: file }
+                      command: >-
+                        /bin/sh -c 'value=0; test ! -f "{{run.dir}}/count.txt" || value=$(cat "{{run.dir}}/count.txt");
+                        printf "%s\\n" "$((value + 1))" > "{{run.dir}}/count.txt"'
+                ---
+                Deterministic child used to prove force propagation.
+                """
+            ),
+            encoding="utf-8",
+        )
+        parent_path = process_dir / "parent.process.md"
+        parent_path.write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: force-parent
+                  deps:
+                    child: { path: ./child.process.md, as: path }
+                  steps:
+                    - id: child
+                      mode: composite
+                      uses: deps.child
+                ---
+                Parent used to prove force reaches a real child evaluator.
+                """
+            ),
+            encoding="utf-8",
+        )
+        runs_dir = tmp_path / "runs"
+        args = [
+            "run-process",
+            str(parent_path),
+            "--var",
+            f"RUNS_DIR={runs_dir}",
+            "--var",
+            "RUN_ID=force-composite",
+        ]
+        runner = CliRunner()
+        count_path = runs_dir / "force-composite" / "child" / "count.txt"
+
+        first = runner.invoke(app, args)
+        assert first.exit_code == 0, first.output
+        assert count_path.read_text(encoding="utf-8") == "1\n"
+        projection = scan_task_output_projection(runs_dir / "force-composite")
+        assert [task.key.model_dump() for task in projection.tasks] == [
+            {
+                "step_id": "increment",
+                "item_key": None,
+                "scope_path": ["child"],
+            }
+        ]
+        assert projection.coverage_gaps == []
+
+        resume = runner.invoke(app, args)
+        assert resume.exit_code == 0, resume.output
+        assert count_path.read_text(encoding="utf-8") == "1\n"
+
+        forced = runner.invoke(app, [*args, "--force"])
+        assert forced.exit_code == 0, forced.output
+        assert count_path.read_text(encoding="utf-8") == "2\n"
 
     def test_composite_propagates_variant_override_to_child_plan(self, tmp_path: Path) -> None:
         """Composite child plans must honor the top-level adapter override."""
@@ -1073,7 +1902,10 @@ class TestCompositeStepExecution:
         async def fake_orchestrate(**kwargs: object) -> None:
             captured["plan"] = cast(Plan, kwargs["plan"])
 
-        with patch("metaproc.commands.run_process._orchestrate", fake_orchestrate):
+        with (
+            _test_execution_context(variant_override="codex-cli") as execution_context,
+            patch("metaproc.commands.run_process._orchestrate", fake_orchestrate),
+        ):
             result = asyncio.run(
                 _execute_composite_step(
                     step_def=step_def,
@@ -1082,12 +1914,8 @@ class TestCompositeStepExecution:
                     process_dir=tmp_path,
                     run_dir=tmp_path / "run",
                     run_id="test/run",
-                    backend_name="local",
-                    max_concurrency=None,
-                    num_workers=1,
-                    machine_type="e2-standard-4",
-                    spot=False,
-                    variant_override="codex-cli",
+                    scope_path=(),
+                    execution_context=execution_context,
                     out=FakeOut(),
                 )
             )
@@ -1156,7 +1984,13 @@ class TestCompositeStepExecution:
         async def fake_orchestrate(**kwargs: object) -> None:
             captured["plan"] = cast(Plan, kwargs["plan"])
 
-        with patch("metaproc.commands.run_process._orchestrate", fake_orchestrate):
+        with (
+            _test_execution_context(
+                variant_override="local-codex",
+                profile_files=[profile_file],
+            ) as execution_context,
+            patch("metaproc.commands.run_process._orchestrate", fake_orchestrate),
+        ):
             result = asyncio.run(
                 _execute_composite_step(
                     step_def=step_def,
@@ -1165,13 +1999,8 @@ class TestCompositeStepExecution:
                     process_dir=tmp_path,
                     run_dir=tmp_path / "run",
                     run_id="test/run",
-                    backend_name="local",
-                    max_concurrency=None,
-                    num_workers=1,
-                    machine_type="e2-standard-4",
-                    spot=False,
-                    variant_override="local-codex",
-                    profile_files=[profile_file],
+                    scope_path=(),
+                    execution_context=execution_context,
                     out=FakeOut(),
                 )
             )
@@ -1208,7 +2037,10 @@ class TestCompositeStepExecution:
             events = cast(ProcessEventLogger, kwargs["events"])
             events.process_start("child-test", "test/run/preflight", "local", 1)
 
-        with patch("metaproc.commands.run_process._orchestrate", fake_orchestrate):
+        with (
+            _test_execution_context() as execution_context,
+            patch("metaproc.commands.run_process._orchestrate", fake_orchestrate),
+        ):
             result = asyncio.run(
                 _execute_composite_step(
                     step_def=step_def,
@@ -1217,12 +2049,8 @@ class TestCompositeStepExecution:
                     process_dir=tmp_path,
                     run_dir=tmp_path / "run",
                     run_id="test/run",
-                    backend_name="local",
-                    max_concurrency=None,
-                    num_workers=1,
-                    machine_type="e2-standard-4",
-                    spot=False,
-                    variant_override=None,
+                    scope_path=(),
+                    execution_context=execution_context,
                     out=FakeOut(),
                 )
             )
@@ -1237,7 +2065,10 @@ class TestCompositeStepExecution:
         step_def = ProcessStep(id="bad", mode="composite", uses="deps.child_process")
         target = ResolvedStep(step_id="bad", mode="composite")
 
-        with pytest.raises(CLIError, match="requires a resolved child process"):
+        with (
+            _test_execution_context() as execution_context,
+            pytest.raises(CLIError, match="requires a resolved child process"),
+        ):
             asyncio.run(
                 _execute_composite_step(
                     step_def=step_def,
@@ -1246,15 +2077,417 @@ class TestCompositeStepExecution:
                     process_dir=tmp_path,
                     run_dir=tmp_path / "run",
                     run_id="test/run",
-                    backend_name="local",
-                    max_concurrency=None,
-                    num_workers=1,
-                    machine_type="e2-standard-4",
-                    spot=False,
-                    variant_override=None,
+                    scope_path=(),
+                    execution_context=execution_context,
                     out=FakeOut(),
                 )
             )
+
+    def test_composite_validates_declared_child_process_outputs(self, tmp_path: Path) -> None:
+        """A composite succeeds only after its child's declared output ports validate."""
+
+        child_spec_path = tmp_path / "child.process.md"
+        child_spec_path.write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: child
+                  outputs:
+                    report:
+                      path: "{{run.dir}}/missing.md"
+                      as: path
+                  steps:
+                    - id: noop
+                      mode: code
+                      command: "true"
+                ---
+                Child process with an intentionally missing declared output.
+                """
+            ),
+            encoding="utf-8",
+        )
+        step_def = ProcessStep(id="child", mode="composite", uses="deps.child")
+        target = ResolvedStep(
+            step_id="child",
+            mode="composite",
+            uses_path=str(child_spec_path),
+        )
+        out = FakeOut()
+
+        with _test_execution_context() as execution_context:
+            result = asyncio.run(
+                _execute_composite_step(
+                    step_def=step_def,
+                    target=target,
+                    variables={"RUNS_DIR": str(tmp_path), "RUN_ID": "run"},
+                    process_dir=tmp_path,
+                    run_dir=tmp_path / "run",
+                    run_id="run",
+                    scope_path=(),
+                    execution_context=execution_context,
+                    out=out,
+                )
+            )
+
+        assert result is False
+        assert any("child process output validation failed" in message for message in out.messages)
+
+    def test_mapped_composite_isolates_failure_and_resumes_only_failed_item(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """One parent run maps child scopes; resume retains successful siblings."""
+
+        process_dir = tmp_path / "process"
+        process_dir.mkdir()
+        fail_marker = tmp_path / "fail-brvo"
+        fail_marker.touch()
+        (process_dir / "child.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: ticker-child
+                  inputs:
+                    ticker: { param: TICKER, as: string }
+                    should_fail: { param: SHOULD_FAIL, as: string }
+                    fail_marker: { param: FAIL_MARKER, as: path }
+                  outputs:
+                    report:
+                      path: "{{run.dir}}/report.txt"
+                      as: path
+                    internal-index:
+                      path: "{{run.dir}}/internal-index.txt"
+                      as: path
+                  steps:
+                    - id: write-report
+                      mode: code
+                      outputs:
+                        report:
+                          path: "{{run.dir}}/report.txt"
+                          kind: file
+                        internal-index:
+                          path: "{{run.dir}}/internal-index.txt"
+                          kind: file
+                      command: >-
+                        /bin/sh -c 'if [ "{{SHOULD_FAIL}}" = "true" ] && [ -f "{{FAIL_MARKER}}" ]; then exit 7; fi;
+                        mkdir -p "{{run.dir}}";
+                        printf "%s\\n" "{{TICKER}}" > "{{run.dir}}/report.txt";
+                        printf "indexed %s\\n" "{{TICKER}}" > "{{run.dir}}/internal-index.txt"'
+                ---
+                One deterministic child scope per item.
+                """
+            ),
+            encoding="utf-8",
+        )
+        (process_dir / "parent.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: mapped-composite-smoke
+                  inputs:
+                    fail_marker: { param: FAIL_MARKER, as: path }
+                  deps:
+                    roster:
+                      path: "{{run.dir}}/roster.md"
+                      as: path
+                      produced_by: write-roster.roster
+                    child:
+                      path: ./child.process.md
+                      as: path
+                  steps:
+                    - id: write-roster
+                      mode: code
+                      outputs:
+                        roster:
+                          path: "{{run.dir}}/roster.md"
+                          kind: file
+                          format: frontmatter-md
+                      command: >-
+                        /bin/sh -c 'mkdir -p "{{run.dir}}";
+                        printf "%s\\n" "---" "progress:" "  schema: metaproc:ProgressSpec/0.1" "  process: mapped-composite-smoke" "  items:" "    - ticker: alfa" "      should_fail: false" "    - ticker: brvo" "      should_fail: true" "    - ticker: chrl" "      should_fail: false" "---" "Three synthetic items." > "{{run.dir}}/roster.md"'
+                    - id: ticker-flow
+                      mode: composite
+                      uses: deps.child
+                      needs: [write-roster]
+                      for_each:
+                        over: deps.roster
+                        bind: ticker
+                        bind_fields: [ticker, should_fail]
+                        key: "{{ticker}}"
+                        max_concurrency: 3
+                      with:
+                        TICKER: "{{ticker}}"
+                        SHOULD_FAIL: "{{should_fail}}"
+                        FAIL_MARKER: "{{FAIL_MARKER}}"
+                      outputs:
+                        report:
+                          path: "{{run.dir}}/ticker-flow/{{ticker}}/report.txt"
+                          kind: file
+                ---
+                Minimal mapped-composite parent.
+                """
+            ),
+            encoding="utf-8",
+        )
+
+        runs_dir = tmp_path / "runs"
+        args = [
+            "run-process",
+            str(process_dir / "parent.process.md"),
+            "--var",
+            f"RUNS_DIR={runs_dir}",
+            "--var",
+            "RUN_ID=mapped-composite-m0",
+            "--var",
+            f"FAIL_MARKER={fail_marker}",
+            "--max-concurrency",
+            "2",
+        ]
+        runner = CliRunner()
+
+        first = runner.invoke(app, args)
+        assert first.exit_code != 0
+        run_dir = runs_dir / "mapped-composite-m0"
+        state_root = run_dir / STATE_DIR / "tasks" / "ticker-flow"
+        alfa_status = read_status_at(state_root / "alfa")
+        brvo_status = read_status_at(state_root / "brvo")
+        chrl_status = read_status_at(state_root / "chrl")
+        assert alfa_status is not None and alfa_status.state == "completed"
+        assert brvo_status is not None and brvo_status.state == "failed"
+        assert chrl_status is not None and chrl_status.state == "completed"
+        assert (run_dir / "ticker-flow" / "alfa" / STATE_DIR / "process-status.yaml").exists()
+        assert (run_dir / "ticker-flow" / "brvo" / STATE_DIR / "process-status.yaml").exists()
+        assert (run_dir / "ticker-flow" / "chrl" / STATE_DIR / "process-status.yaml").exists()
+        root_snapshot = read_run_plan(run_dir)
+        assert root_snapshot is not None
+        assert root_snapshot.run_id == "mapped-composite-smoke/mapped-composite-m0"
+        assert root_snapshot.scope_path == []
+        mapped_snapshot = next(
+            step for step in root_snapshot.steps if step.step_id == "ticker-flow"
+        )
+        assert mapped_snapshot.item_keys == ["alfa", "brvo", "chrl"]
+        for item_key in ("alfa", "brvo", "chrl"):
+            child_snapshot = read_run_plan(run_dir / "ticker-flow" / item_key)
+            assert child_snapshot is not None
+            assert child_snapshot.run_id == (
+                f"mapped-composite-smoke/mapped-composite-m0/ticker-flow/{item_key}"
+            )
+            assert child_snapshot.scope_path == ["ticker-flow", item_key]
+            assert [step.step_id for step in child_snapshot.steps] == ["write-report"]
+        assert not list((run_dir / "ticker-flow").rglob(ORCHESTRATOR_LEASE_FILE))
+        process_events_path = run_dir / LOGS_DIR / "process-events.jsonl"
+        first_events = [
+            json.loads(line)
+            for line in process_events_path.read_text(encoding="utf-8").splitlines()
+        ]
+        assert sorted(
+            event["item_key"] for event in first_events if event["event"] == "item_start"
+        ) == ["alfa", "brvo", "chrl"]
+        assert sorted(
+            event["item_key"] for event in first_events if event["event"] == "item_complete"
+        ) == ["alfa", "chrl"]
+        assert [event["item_key"] for event in first_events if event["event"] == "item_fail"] == [
+            "brvo"
+        ]
+
+        fail_marker.unlink()
+        second = runner.invoke(app, args)
+        assert second.exit_code == 0, second.output
+        bundle = load_plan_bundle_from_run(run_dir)
+        assert bundle is not None
+        projection = scan_task_output_projection(run_dir, bundle)
+        assert projection.tasks
+        assert projection.coverage_gaps == []
+        assert all(task.step_binding != "mismatch" for task in projection.tasks)
+        assert not [
+            output
+            for task in projection.tasks
+            for output in task.unaccepted_outputs
+            if output.reason == "step-mismatch"
+        ]
+        assert [record.disposition for record in read_attempt_history_at(state_root / "alfa")] == [
+            AttemptDisposition.succeeded
+        ]
+        assert [record.disposition for record in read_attempt_history_at(state_root / "brvo")] == [
+            AttemptDisposition.permanent,
+            AttemptDisposition.succeeded,
+        ]
+        assert [record.disposition for record in read_attempt_history_at(state_root / "chrl")] == [
+            AttemptDisposition.succeeded
+        ]
+        assert {
+            child_dir.name: (child_dir / "report.txt").read_text(encoding="utf-8").strip()
+            for child_dir in (run_dir / "ticker-flow").iterdir()
+            if child_dir.is_dir()
+        } == {"alfa": "alfa", "brvo": "brvo", "chrl": "chrl"}
+        all_events = [
+            json.loads(line)
+            for line in process_events_path.read_text(encoding="utf-8").splitlines()
+        ]
+        assert [event["item_key"] for event in all_events if event["event"] == "item_start"].count(
+            "brvo"
+        ) == 2
+        assert [
+            event["item_key"] for event in all_events if event["event"] == "item_complete"
+        ].count("brvo") == 1
+
+        # The parent deliberately publishes only report.txt. Resume must still
+        # revalidate every declared child-process output before reusing the parent
+        # item, so deleting an internal child output reruns only that scope.
+        (run_dir / "ticker-flow" / "alfa" / "internal-index.txt").unlink()
+        third = runner.invoke(app, args)
+        assert third.exit_code == 0, third.output
+        assert (run_dir / "ticker-flow" / "alfa" / "internal-index.txt").exists()
+        assert [record.disposition for record in read_attempt_history_at(state_root / "alfa")] == [
+            AttemptDisposition.succeeded,
+            AttemptDisposition.succeeded,
+        ]
+        assert [record.disposition for record in read_attempt_history_at(state_root / "brvo")] == [
+            AttemptDisposition.permanent,
+            AttemptDisposition.succeeded,
+        ]
+        assert [record.disposition for record in read_attempt_history_at(state_root / "chrl")] == [
+            AttemptDisposition.succeeded
+        ]
+
+    def test_mapped_scalar_agents_share_one_real_run_pool(self, tmp_path: Path) -> None:
+        process_dir = tmp_path / "process"
+        process_dir.mkdir()
+        (process_dir / "roster.md").write_text(
+            "---\nprogress:\n  items:\n    - ticker: alfa\n    - ticker: brvo\n---\n",
+            encoding="utf-8",
+        )
+        (process_dir / "child.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: agent-child
+                  inputs:
+                    ticker: { param: TICKER, as: string }
+                  outputs:
+                    analysis: { path: "{{run.dir}}/analysis.txt", as: path }
+                  steps:
+                    - id: analyze
+                      mode: agent
+                      prompt_prefix: "Analyze {{TICKER}}."
+                      outputs:
+                        analysis: { path: "{{run.dir}}/analysis.txt", kind: file }
+                ---
+                One scalar agent leaf.
+                """
+            ),
+            encoding="utf-8",
+        )
+        (process_dir / "parent.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: mapped-agent-pool-smoke
+                  deps:
+                    roster: { path: ./roster.md, as: path }
+                    child: { path: ./child.process.md, as: path }
+                  steps:
+                    - id: ticker-flow
+                      mode: composite
+                      uses: deps.child
+                      for_each:
+                        over: deps.roster
+                        bind: ticker
+                        bind_fields: [ticker]
+                        key: "{{ticker}}"
+                      with:
+                        TICKER: "{{ticker}}"
+                      outputs:
+                        analysis:
+                          path: "{{run.dir}}/ticker-flow/{{ticker}}/analysis.txt"
+                          kind: file
+                ---
+                Two mapped scalar leaves.
+                """
+            ),
+            encoding="utf-8",
+        )
+        adapter = MagicMock()
+        adapter.preflight.return_value = None
+
+        def build_command(
+            _prompt_file: Path,
+            _config: dict[str, object],
+            variables: dict[str, str],
+        ) -> list[str]:
+            output_path = Path(variables["run.dir"]) / "analysis.txt"
+            command = (
+                f"sleep 0.05; mkdir -p {shlex.quote(str(output_path.parent))}; "
+                f"printf done > {shlex.quote(str(output_path))}"
+            )
+            return ["/bin/sh", "-c", command]
+
+        adapter.build_command.side_effect = build_command
+        adapter.prepare_env.side_effect = lambda env, _config: env
+        adapter.working_directory.return_value = None
+        real_run_pool = RunPool
+
+        def fast_run_pool(
+            pool_config: RunPoolConfig | None = None,
+            backend: LaunchBackend | None = None,
+        ) -> RunPool:
+            assert pool_config is not None
+            return real_run_pool(
+                pool_config.model_copy(update={"monitor_interval_s": 0.01}),
+                backend=backend,
+            )
+
+        runs_dir = tmp_path / "runs"
+        direct_launch = AsyncMock(side_effect=AssertionError("direct scalar launch used"))
+        with (
+            patch("metaproc.commands.run_process.get_adapter", return_value=adapter),
+            patch("metaproc.commands.run_process.RunPool", side_effect=fast_run_pool),
+            patch(
+                "metaproc.commands.run_process._run_agent_subprocess",
+                direct_launch,
+            ),
+        ):
+            result = CliRunner().invoke(
+                app,
+                [
+                    "run-process",
+                    str(process_dir / "parent.process.md"),
+                    "--var",
+                    f"RUNS_DIR={runs_dir}",
+                    "--var",
+                    "RUN_ID=mapped-composite-pool-m0",
+                    "--max-concurrency",
+                    "1",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert direct_launch.await_count == 0
+        run_dir = runs_dir / "mapped-composite-pool-m0"
+        status = read_yaml_file(run_dir / STATE_DIR / "runpool-status.yaml")
+        assert status["max_concurrency"] == 1
+        assert status["completed_count"] == 2
+        assert status["failed_count"] == 0
+        assert status["lanes"][0]["completed_count"] == 2
+        pool_events = [
+            json.loads(line)
+            for line in (run_dir / LOGS_DIR / "runpool" / "events.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        assert sum(event["event"] == "pool_start" for event in pool_events) == 1
+        assert sum(event["event"] == "process_start" for event in pool_events) == 2
+        assert sum(event["event"] == "process_exit" for event in pool_events) == 2
+        assert [
+            event["event"]
+            for event in pool_events
+            if event["event"] in {"process_start", "process_exit"}
+        ] == ["process_start", "process_exit", "process_start", "process_exit"]
 
 
 class TestCodeStepLogs:
@@ -1295,6 +2528,38 @@ class TestCodeStepLogs:
 
 class TestCLIDryRun:
     """Test --dry-run via the CLI runner."""
+
+    @pytest.mark.parametrize(
+        ("extra_args", "env_value"),
+        [
+            (["--max-concurrency", "0"], None),
+            ([], "0"),
+        ],
+    )
+    def test_invalid_leaf_ceiling_fails_before_process_resolution(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        extra_args: list[str],
+        env_value: str | None,
+    ) -> None:
+        monkeypatch.delenv("METAPROC_DEFAULT_MAX_CONCURRENCY", raising=False)
+        if env_value is not None:
+            monkeypatch.setenv("METAPROC_DEFAULT_MAX_CONCURRENCY", env_value)
+        resolver = MagicMock()
+
+        with patch(
+            "metaproc.commands.run_process.resolve_process_path",
+            resolver,
+        ):
+            result = CliRunner().invoke(
+                app,
+                ["run-process", "missing.process.md", "--dry-run", *extra_args],
+            )
+
+        assert result.exit_code != 0
+        assert result.exception is not None
+        assert "max_concurrency must be at least 1" in str(result.exception)
+        resolver.assert_not_called()
 
     def test_dry_run_synthetic_process(self) -> None:
         """Dry-run on the checked-in synthetic process spec."""
@@ -1392,11 +2657,75 @@ class TestCLIDryRun:
         assert "not found" in str(result.exception)
 
 
+class TestCloudAuthDispatch:
+    def test_cli_carries_complete_auth_cohort_to_orchestrator(self) -> None:
+        dispatch_result = MagicMock(job_id="test-job", state="SUCCEEDED", exit_code=0)
+        dispatch_orchestrator = AsyncMock(return_value=dispatch_result)
+
+        with (
+            patch(
+                "metaproc.engine.preflight.run_cloud_preflight_warnings",
+                return_value=[],
+            ),
+            patch("metaproc.engine.preflight.run_cloud_preflight", return_value=[]),
+            patch(
+                "metaproc.cloud.gcp.worker_dispatch.build_gcp_config_from_env",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "metaproc.cloud.gcp.orchestrator_dispatch.dispatch_orchestrator",
+                dispatch_orchestrator,
+            ),
+        ):
+            result = CliRunner().invoke(
+                app,
+                [
+                    "run-process",
+                    _SYNTHETIC_PROCESS,
+                    "--var",
+                    "RUNS_DIR=/tmp/metaproc-test-runs",
+                    "--var",
+                    "RUN_ID=test-cloud-auth",
+                    "--backend",
+                    "gcp-worker",
+                    "--cloud",
+                    "--auth-account",
+                    "claude-code-cli",
+                    "--auth-backend",
+                    "gcp-secret-manager",
+                    "--auth-fallback-policy",
+                    "same-provider",
+                    "--auth-policy",
+                    "least-active",
+                    "--auth-include-labels",
+                    "primary",
+                    "--auth-include-labels",
+                    "alternate",
+                    "--no-auth-cross-quota-group",
+                    "--auth-preflight-quota-guard",
+                    "off",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        await_args = dispatch_orchestrator.await_args
+        assert await_args is not None
+        dispatch_config = await_args.args[0]
+        assert dispatch_config.auth_flags == AuthPoolFlags(
+            auth_account="claude-code-cli",
+            auth_backend="gcp-secret-manager",
+            auth_fallback_policy="same-provider",
+            auth_policy="least-active",
+            auth_include_labels=("primary", "alternate"),
+            auth_cross_quota_group=False,
+        )
+
+
 class TestCLIStaleMetaprocWarning:
-    """The stale-metaproc-wheel warning must fire on both --cloud and hybrid
-    gcp-worker dispatches, not just the full-cloud path. Uses --dry-run so
-    no Batch job is actually submitted; the warning is hoisted above dry-run
-    so operators see it during invocation iteration.
+    """The stale-wheel warning must fire for GCP worker launch previews.
+
+    Uses --dry-run so no Batch job is submitted; the warning is hoisted above
+    dry-run so operators see it while iterating on an invocation.
     """
 
     def _invoke(self, *extra_args: str) -> tuple[int, str]:
@@ -1405,9 +2734,11 @@ class TestCLIStaleMetaprocWarning:
         # Pretend the tracked branch has metaproc/ edits and no wheel override.
         warning_tuple = (
             False,
-            "Metaproc artifact: tracked branch has 1 commit(s) ahead of "
-            "origin/main under metaproc/ but METAPROC_WHEEL_GCS is not set — "
-            "Batch will run the image-baked metaproc code.",
+            (
+                "Metaproc artifact: tracked branch has 1 commit(s) ahead of "
+                "origin/main under metaproc/ but METAPROC_WHEEL_GCS is not set — "
+                "Batch will run the image-baked metaproc code."
+            ),
         )
         with patch(
             "metaproc.engine.preflight.run_cloud_preflight_warnings",
@@ -1429,7 +2760,7 @@ class TestCLIStaleMetaprocWarning:
         # CliRunner merges stdout + stderr into result.output.
         return result.exit_code, result.output
 
-    def test_hybrid_gcp_worker_emits_warning(self) -> None:
+    def test_gcp_worker_dry_run_emits_warning(self) -> None:
         exit_code, output = self._invoke("--backend", "gcp-worker")
         assert exit_code == 0, output
         assert "Cloud preflight warning" in output
@@ -1677,8 +3008,158 @@ class TestGCPWorkerBackendFlags:
             f"exit={result.exit_code}, output={result.output}, exc={result.exception}"
         )
 
+    def test_laptop_orchestrator_is_rejected(self) -> None:
+        for task_index in (None, "", "  "):
+            with pytest.raises(CLIError, match="without --cloud"):
+                validate_gcp_worker_topology(
+                    "gcp-worker",
+                    cloud=False,
+                    batch_task_index=task_index,
+                )
+
+    def test_batch_orchestrator_inner_leg_is_allowed(self) -> None:
+        validate_gcp_worker_topology(
+            "gcp-worker",
+            cloud=False,
+            batch_task_index="0",
+        )
+
+    def test_cli_rejects_laptop_orchestrator_before_creating_run_dir(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        runs_dir = tmp_path / "runs"
+        monkeypatch.delenv("BATCH_TASK_INDEX", raising=False)
+        with (
+            patch("metaproc.commands.run_process._preflight_plan_adapters", return_value=[]),
+            patch("metaproc.engine.preflight.run_cloud_preflight_warnings", return_value=[]),
+        ):
+            result = CliRunner().invoke(
+                app,
+                [
+                    "run-process",
+                    _SYNTHETIC_PROCESS,
+                    "--var",
+                    f"RUNS_DIR={runs_dir}",
+                    "--var",
+                    "RUN_ID=unsupported-laptop-orchestrator",
+                    "--backend",
+                    "gcp-worker",
+                ],
+            )
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, CLIError)
+        assert "without --cloud" in str(result.exception)
+        assert not runs_dir.exists()
+
 
 class TestProcessContractValidation:
+    def test_deferred_fan_out_keeps_already_accepted_resume_item(self, tmp_path: Path) -> None:
+        step = ProcessStep(
+            id="predict",
+            mode="agent",
+            for_each=ForEach(
+                over="deps.tickers",
+                bind="ticker",
+                bind_fields=["ticker"],
+                key="{{ticker}}",
+            ),
+        )
+        item_context = {"ticker": "AAPL"}
+        state_dir = compute_task_state_dir(tmp_path, step, item_context)
+        running = mark_running_at(
+            state_dir,
+            run_id="process/run",
+            step_id="predict",
+            item=item_context,
+            item_key="AAPL",
+        )
+        mark_completed_at(state_dir, running_record=running)
+
+        results = _finish_deferred_fan_out_attempts(
+            results=[("AAPL", 0)],
+            item_contexts=[item_context],
+            each="ticker",
+            variables={},
+            step_def=step,
+            step_id="predict",
+            run_dir=tmp_path,
+            run_id="process/run",
+            outputs={},
+            boundary_error="write boundary violated: current-attempt-stray.md",
+            step_hash=None,
+        )
+
+        assert results == [("AAPL", 0)]
+        status = read_status_at(state_dir)
+        assert status is not None
+        assert status.state == "completed"
+        history = read_attempt_history_at(state_dir)
+        assert [record.disposition for record in history] == [AttemptDisposition.succeeded]
+
+    @pytest.mark.parametrize(
+        ("boundary_error", "expected_state", "expected_disposition", "expected_code"),
+        [
+            (None, "completed", AttemptDisposition.succeeded, 0),
+            (
+                "write boundary violated: stray.md",
+                "failed",
+                AttemptDisposition.permanent,
+                1,
+            ),
+        ],
+    )
+    def test_deferred_fan_out_attempt_finishes_after_boundary_validation(
+        self,
+        tmp_path: Path,
+        boundary_error: str | None,
+        expected_state: str,
+        expected_disposition: AttemptDisposition,
+        expected_code: int,
+    ) -> None:
+        step = ProcessStep(
+            id="predict",
+            mode="agent",
+            for_each=ForEach(
+                over="deps.tickers",
+                bind="ticker",
+                bind_fields=["ticker"],
+                key="{{ticker}}",
+            ),
+        )
+        item_context = {"ticker": "AAPL"}
+        state_dir = compute_task_state_dir(tmp_path, step, item_context)
+        mark_running_at(
+            state_dir,
+            run_id="process/run",
+            step_id="predict",
+            item=item_context,
+            item_key="AAPL",
+        )
+
+        results = _finish_deferred_fan_out_attempts(
+            results=[("AAPL", 0)],
+            item_contexts=[item_context],
+            each="ticker",
+            variables={},
+            step_def=step,
+            step_id="predict",
+            run_dir=tmp_path,
+            run_id="process/run",
+            outputs={},
+            boundary_error=boundary_error,
+            step_hash=None,
+        )
+
+        assert results == [("AAPL", expected_code)]
+        status = read_status_at(state_dir)
+        assert status is not None
+        assert status.state == expected_state
+        history = read_attempt_history_at(state_dir)
+        assert [record.disposition for record in history] == [expected_disposition]
+
     def test_process_output_ref_reexport_resolves_step_output(self, tmp_path: Path) -> None:
 
         process_dir = tmp_path / "output-ref-contract"
@@ -2155,6 +3636,106 @@ class TestProcessContractValidation:
         assert result.exit_code == 0, result.stdout
         assert output_path.read_text() == "ok"
 
+    def test_scalar_agent_rejects_terminal_result_contract_failure(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        repo_dir = tmp_path / "terminal-contract-repo"
+        process_dir = repo_dir / "terminal-contract-process"
+        process_dir.mkdir(parents=True)
+        subprocess.run(
+            ["git", "init"],
+            cwd=repo_dir,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        output_path = repo_dir / "runs" / "test-run" / "artifact.md"
+        spec = process_dir / "test.process.md"
+        spec.write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: terminal-contract
+                  defaults:
+                    default_adapter: terminal-contract-test
+                    adapters:
+                      terminal-contract-test:
+                        type: terminal-contract-test
+                  inputs:
+                    output_path: { param: OUTPUT_PATH, as: path }
+                  steps:
+                    - id: agent-step
+                      mode: agent
+                      prompt_prefix: write the declared output
+                      outputs:
+                        main:
+                          path: "{{OUTPUT_PATH}}"
+                          kind: file
+                ---
+                """
+            )
+        )
+
+        class RejectingAdapter:
+            adapter_type = "terminal-contract-test"
+            short_name = "terminal-contract-test"
+            default_model = None
+
+            def build_command(self, prompt_file, merged_config, variables):  # noqa: ARG002
+                script = (
+                    "import json; from pathlib import Path; "
+                    f"target = Path({variables['OUTPUT_PATH']!r}); "
+                    "target.parent.mkdir(parents=True, exist_ok=True); "
+                    "target.write_text('complete output'); "
+                    "print(json.dumps({'type': 'result', 'status': 'success'}))"
+                )
+                return [sys.executable, "-c", script]
+
+            def prepare_env(self, env, merged_config):  # noqa: ARG002
+                return env
+
+            def working_directory(self, merged_config):  # noqa: ARG002
+                return None
+
+            def parse_result_event(self, line):
+                event = json.loads(line)
+                return event if event.get("type") == "result" else None
+
+            def validate_result_event(self, event, merged_config):  # noqa: ARG002
+                return "synthetic terminal result contract failure"
+
+            def check_auth(self):
+                raise NotImplementedError
+
+            def auth_info(self):
+                return ""
+
+        monkeypatch.setitem(ADAPTER_REGISTRY, "terminal-contract-test", RejectingAdapter())
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "run-process",
+                str(spec),
+                "--var",
+                f"RUNS_DIR={repo_dir / 'runs'}",
+                "--var",
+                "RUN_ID=test-run",
+                "--var",
+                f"OUTPUT_PATH={output_path}",
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert output_path.read_text() == "complete output"
+        status = read_status_at(_task_state_dir_for(repo_dir / "runs" / "test-run", "agent-step"))
+        assert status is not None
+        assert status.state == "failed"
+        assert status.error == "synthetic terminal result contract failure"
+
     def test_boundary_check_accepts_relative_runs_dir(
         self,
         tmp_path: Path,
@@ -2512,34 +4093,28 @@ class TestGCPWorkerResumeAdoption:
 
 
 class TestCompositePoolDispatchPropagation:
-    """Regression test for the fix — pool_dispatch_template must propagate
-    from parent _orchestrate → _execute_composite_step → child _orchestrate.
+    """Regression tests for recursive auth-pool policy propagation.
 
-    Without this, every composite-child fan-out step
-    gets pool_dispatch=None and bypasses the auth pool — Claude calls fall back
-    to ambient ~/.claude creds, defeating the pool's load-balancing intent.
+    The parent and child must use the same execution context. Otherwise, a
+    composite-child fan-out can lose its pool dispatch policy and fall back to ambient
+    credentials instead of the pool's load-balancing policy.
 
     The failure mode discovered 2026-05-21: tier1 ran 3 hours of Claude work but
     `metaproc auth usage <tier1>` reported 0 invocations on alt1/alt2.
     """
 
-    def test_execute_composite_step_signature_accepts_pool_dispatch_template(self):
-        """The function MUST accept the three auth-pool kwargs so the dispatcher
-        can pass them; without these the call site is invalid Python."""
+    def test_execute_composite_step_accepts_one_execution_context(self) -> None:
+        """Recursive auth policy travels through the shared run context."""
 
         sig = inspect.signature(_execute_composite_step)
         params = sig.parameters
-        assert "pool_dispatch_template" in params, (
-            "_execute_composite_step must accept pool_dispatch_template — "
-            "without it the parent dispatcher cannot propagate auth-pool config "
-            "to composite children. See the fix."
-        )
-        assert "auth_flags" in params
-        assert "preflight_quota_guard" in params
+        assert "execution_context" in params
+        assert "pool_dispatch_template" not in params
+        assert "auth_flags" not in params
+        assert "preflight_quota_guard" not in params
 
     def test_execute_composite_step_passes_pool_dispatch_to_child_orchestrate(self, tmp_path: Path):
-        """When pool_dispatch_template is provided to _execute_composite_step,
-        it must appear in the kwargs passed to the child _orchestrate call."""
+        """The child orchestrator receives the parent's pool dispatch policy."""
 
         # Build a minimal composite step definition + target
         # The function early-returns if child_spec_path doesn't exist.
@@ -2549,6 +4124,7 @@ class TestCompositePoolDispatchPropagation:
         step_def = MagicMock()
         step_def.id = "analysis-research"
         step_def.with_ = None
+        step_def.for_each = None
 
         target = MagicMock()
         target.uses_path = str(child_spec_path)
@@ -2560,15 +4136,14 @@ class TestCompositePoolDispatchPropagation:
 
         captured: dict[str, object] = {}
 
-        async def fake_orchestrate(
-            *, pool_dispatch_template=None, auth_flags=None, preflight_quota_guard=None, **kwargs
-        ):
-            captured["pool_dispatch_template"] = pool_dispatch_template
-            captured["auth_flags"] = auth_flags
-            captured["preflight_quota_guard"] = preflight_quota_guard
-            return
+        async def fake_orchestrate(**kwargs: object) -> None:
+            captured["execution_context"] = kwargs["execution_context"]
 
         with (
+            _test_execution_context(
+                max_concurrency=4,
+                pool_dispatch_template=sentinel_pool,
+            ) as execution_context,
             patch(
                 "metaproc.commands.run_process.load_process_spec",
                 return_value=MagicMock(steps=[]),
@@ -2587,7 +4162,7 @@ class TestCompositePoolDispatchPropagation:
             ),
             patch(
                 "metaproc.commands.run_process.build_plan",
-                return_value=MagicMock(steps=[]),
+                return_value=Plan(process=str(child_spec_path), steps=[]),
             ),
             patch(
                 "metaproc.commands.run_process._orchestrate",
@@ -2603,21 +4178,452 @@ class TestCompositePoolDispatchPropagation:
                     process_dir=tmp_path,
                     run_dir=tmp_path,
                     run_id="test-run",
-                    backend_name="local",
-                    max_concurrency=4,
-                    initial_concurrency=None,
-                    num_workers=1,
-                    machine_type="n2-standard-4",
-                    spot=False,
-                    variant_override=None,
+                    scope_path=(),
+                    execution_context=execution_context,
                     out=out,
-                    pool_dispatch_template=sentinel_pool,
                 )
             )
 
-        # The sentinel pool config must have been threaded through to the child.
-        assert captured["pool_dispatch_template"] is sentinel_pool, (
+        child_context = cast(RunExecutionContext, captured["execution_context"])
+        assert child_context.pool_dispatch_template is sentinel_pool, (
             "pool_dispatch_template was DROPPED at the composite-child boundary — "
             "this is this regression: child run_parallel calls "
             "will see pool_dispatch=None and bypass the auth pool."
         )
+
+
+class TestNonFanOutContentRetry:
+    """A non-fan-out agent step recovers from a content failure the way a fan-out item does.
+
+    ``on_invalid`` is declared on the output, so it has to be honored wherever the
+    output is produced. Reading it on only one execution path makes the same
+    declaration mean different things depending on whether the step happens to fan
+    out, which is what these tests pin down.
+    """
+
+    @staticmethod
+    def _write_process(
+        process_dir: Path,
+        on_invalid: str,
+        *,
+        max_retries: int = 3,
+        output_extra: str = "",
+    ) -> Path:
+        """Write the spec. ``on_invalid`` and ``output_extra`` are YAML nested under
+        the output, or empty."""
+        body = textwrap.dedent("""\
+            ---
+            process:
+              name: flaky
+              defaults:
+                default_adapter: flaky-test
+                adapters:
+                  flaky-test:
+                    type: flaky-test
+                retry:
+                  max_retries: 3
+                  initial_backoff_s: 0
+              inputs:
+                target_path: { param: TARGET_PATH, as: path }
+              steps:
+                - id: write-thing
+                  mode: agent
+                  prompt_prefix: write the thing
+                  outputs:
+                    main:
+                      path: "{{TARGET_PATH}}"
+                      kind: file
+            ---
+            """)
+        assert "max_retries: 3" in body
+        body = body.replace("max_retries: 3", f"max_retries: {max_retries}")
+        extra = "\n".join(part for part in (output_extra, on_invalid) if part)
+        if extra:
+            # Sit beside `path:`/`kind:` under the output, at the dedented indent.
+            anchor = " " * 10 + "kind: file\n"
+            assert anchor in body
+            clause = textwrap.indent(textwrap.dedent(extra).strip("\n"), " " * 10)
+            body = body.replace(anchor, f"{anchor}{clause}\n")
+        spec = process_dir / "test.process.md"
+        spec.write_text(body)
+        return spec
+
+    @staticmethod
+    def _register_adapter(
+        monkeypatch: pytest.MonkeyPatch,
+        counter: Path,
+        *,
+        succeed_after: int = 1,
+        invalid_content: str | None = None,
+        require_prompt_fragment: str | None = None,
+        observed_prompts: list[str] | None = None,
+    ) -> None:
+        """An adapter whose first ``succeed_after`` calls write ``invalid_content``
+        (or nothing when ``None``), and whose later calls write a valid artifact."""
+
+        class FlakyAdapter:
+            adapter_type = "flaky-test"
+            short_name = "flaky-test"
+            default_model = None
+
+            def build_command(self, prompt_file, merged_config, variables):  # noqa: ANN001, ARG002
+                prompt = Path(prompt_file).read_text()
+                if observed_prompts is not None:
+                    observed_prompts.append(prompt)
+                prompt_allows_success = (
+                    require_prompt_fragment is None or require_prompt_fragment in prompt
+                )
+                target_path = variables["TARGET_PATH"]
+                bad_write = (
+                    f"target.write_text({invalid_content!r})"
+                    if invalid_content is not None
+                    else "None"
+                )
+                script = (
+                    "from pathlib import Path; "
+                    f"counter = Path({str(counter)!r}); "
+                    "n = len(counter.read_text()) if counter.exists() else 0; "
+                    "counter.write_text('x' * (n + 1)); "
+                    f"target = Path({target_path!r}); "
+                    "target.parent.mkdir(parents=True, exist_ok=True); "
+                    "target.write_text('---\\nstatus: ok\\n---\\n') "
+                    f"if n >= {succeed_after} and {prompt_allows_success!r} else {bad_write}"
+                )
+                return [sys.executable, "-c", script]
+
+            def prepare_env(self, env, merged_config):  # noqa: ANN001, ARG002
+                return env
+
+            def working_directory(self, merged_config):  # noqa: ANN001, ARG002
+                return None
+
+            def parse_result_event(self, line):  # noqa: ANN001, ARG002
+                return None
+
+            def check_auth(self):
+                raise NotImplementedError
+
+            def auth_info(self):
+                return ""
+
+        monkeypatch.setitem(ADAPTER_REGISTRY, "flaky-test", FlakyAdapter())
+
+    def _run(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        on_invalid: str,
+        run_id: str,
+        *,
+        max_retries: int = 3,
+        output_extra: str = "",
+        succeed_after: int = 1,
+        invalid_content: str | None = None,
+        require_prompt_fragment: str | None = None,
+    ):
+        """Run the spec once. ``run_id`` also keys the scalar-admission pool, so two
+        tests sharing one would contend for the same host slots."""
+        repo_dir = tmp_path / "flaky-repo"
+        process_dir = repo_dir / "flaky-process"
+        process_dir.mkdir(parents=True)
+        subprocess.run(["git", "init"], cwd=repo_dir, check=True, capture_output=True, text=True)
+
+        target = repo_dir / "runs" / run_id / "thing.md"
+        counter = repo_dir / "counter.txt"
+        spec = self._write_process(
+            process_dir, on_invalid, max_retries=max_retries, output_extra=output_extra
+        )
+        observed_prompts: list[str] = []
+        self._register_adapter(
+            monkeypatch,
+            counter,
+            succeed_after=succeed_after,
+            invalid_content=invalid_content,
+            require_prompt_fragment=require_prompt_fragment,
+            observed_prompts=observed_prompts,
+        )
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "run-process",
+                str(spec),
+                "--var",
+                f"RUNS_DIR={repo_dir / 'runs'}",
+                "--var",
+                f"RUN_ID={run_id}",
+                "--var",
+                f"TARGET_PATH={target}",
+            ],
+        )
+        status = read_status_at(_task_state_dir_for(repo_dir / "runs" / run_id, "write-thing"))
+        calls = len(counter.read_text()) if counter.exists() else 0
+        return result, status, calls, target, observed_prompts
+
+    def test_missing_output_is_retried_and_the_second_attempt_succeeds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result, status, calls, target, _prompts = self._run(
+            tmp_path, monkeypatch, on_invalid="", run_id="retry-run"
+        )
+
+        assert result.exit_code == 0, result.stdout
+        assert calls == 2, f"the adapter ran {calls}x; a missing output should be retried once"
+        assert target.exists()
+        assert status is not None
+        assert status.state == "completed"
+        assert status.attempt == 2, "the recovering attempt should be recorded, not hidden"
+        history = read_attempt_history_at(_task_state_dir_for(target.parent, "write-thing"))
+        assert [record.disposition for record in history] == [
+            AttemptDisposition.retryable,
+            AttemptDisposition.succeeded,
+        ]
+
+    def test_on_invalid_fail_makes_the_same_failure_terminal(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result, status, calls, _, _prompts = self._run(
+            tmp_path,
+            monkeypatch,
+            on_invalid="on_invalid:\n  missing: fail",
+            run_id="no-retry-run",
+        )
+
+        assert result.exit_code != 0
+        assert calls == 1, f"the adapter ran {calls}x; `missing: fail` must not retry"
+        assert status is not None
+        assert status.state == "failed"
+        assert status.attempt == 1
+
+    def test_retries_stop_at_the_content_cap(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result, status, calls, target, _prompts = self._run(
+            tmp_path,
+            monkeypatch,
+            on_invalid="",
+            run_id="exhaust-run",
+            max_retries=1,
+            succeed_after=99,
+        )
+
+        assert result.exit_code != 0
+        assert calls == 2, f"the adapter ran {calls}x; max_retries=1 allows exactly one retry"
+        assert not target.exists()
+        assert status is not None
+        assert status.state == "failed"
+        assert status.attempt == 2, "the exhausted attempt should be the one recorded"
+        history = read_attempt_history_at(_task_state_dir_for(target.parent, "write-thing"))
+        assert [record.disposition for record in history] == [
+            AttemptDisposition.retryable,
+            AttemptDisposition.retryable,
+        ]
+
+    def test_repair_saves_the_attempt_instead_of_burning_a_retry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A repairable frontmatter defect is fixed in place, with no second call.
+
+        The adapter here never produces a clean artifact on its own, so this passes
+        only if the repair pass actually ran before validation on the scalar path.
+        """
+        broken = "---\nrecord:\n  detail: Strong beat (Note: actually Q1 not Q2)\n---\nbody\n"
+        result, status, calls, target, _prompts = self._run(
+            tmp_path,
+            monkeypatch,
+            on_invalid="",
+            run_id="repair-run",
+            output_extra="format: frontmatter-md",
+            succeed_after=99,
+            invalid_content=broken,
+        )
+
+        assert result.exit_code == 0, result.stdout
+        assert calls == 1, f"the adapter ran {calls}x; repair should save the first attempt"
+        assert '"Strong beat (Note: actually Q1 not Q2)"' in target.read_text()
+        assert status is not None
+        assert status.state == "completed"
+        assert status.attempt == 1
+
+    def test_invalid_output_retry_tells_the_second_attempt_what_to_correct(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        feedback_header = "The prior attempt's declared output failed validation."
+        result, status, calls, target, prompts = self._run(
+            tmp_path,
+            monkeypatch,
+            on_invalid="",
+            run_id="feedback-run",
+            max_retries=1,
+            require_prompt_fragment=feedback_header,
+        )
+
+        assert result.exit_code == 0, result.stdout
+        assert calls == 2
+        assert target.exists()
+        assert status is not None
+        assert status.state == "completed"
+        assert feedback_header not in prompts[0]
+        assert feedback_header in prompts[1]
+        assert 'output: "main"' in prompts[1]
+        assert 'kind: "missing"' in prompts[1]
+        assert "path:" in prompts[1]
+        prompt_files = sorted(
+            (target.parent / ".logs" / "tasks" / "write-thing").glob("prompt-*.txt")
+        )
+        assert len(prompt_files) == 2
+        assert sorted(feedback_header in path.read_text() for path in prompt_files) == [False, True]
+
+
+class TestNonFanOutTransientRetry:
+    """A non-fan-out agent step survives a transient failure the way a fan-out item does.
+
+    `UND_ERR_BODY_TIMEOUT` means undici gave up waiting for the response body;
+    the CLI can exit 1 having produced nothing. `run_parallel` retries exactly
+    this. These tests pin both halves of the behavior, because a retry
+    that cannot tell a body timeout from an exhausted quota is worse than none.
+    """
+
+    @staticmethod
+    def _write_process(process_dir: Path) -> Path:
+        body = textwrap.dedent("""\
+            ---
+            process:
+              name: flaky-exit
+              defaults:
+                default_adapter: exit-test
+                adapters:
+                  exit-test:
+                    type: exit-test
+                retry:
+                  max_retries: 3
+                  initial_backoff_s: 0
+              inputs:
+                target_path: { param: TARGET_PATH, as: path }
+              steps:
+                - id: write-thing
+                  mode: agent
+                  prompt_prefix: write the thing
+                  outputs:
+                    main:
+                      path: "{{TARGET_PATH}}"
+                      kind: file
+            ---
+            """)
+        spec = process_dir / "test.process.md"
+        spec.write_text(body)
+        return spec
+
+    @staticmethod
+    def _register_adapter(
+        monkeypatch: pytest.MonkeyPatch,
+        counter: Path,
+        message: str,
+        observed_prompts: list[str],
+    ) -> None:
+        """An adapter that dies with *message* the first time and succeeds the second."""
+
+        class ExitAdapter:
+            adapter_type = "exit-test"
+            short_name = "exit-test"
+            default_model = None
+
+            def build_command(self, prompt_file, merged_config, variables):  # noqa: ANN001, ARG002
+                observed_prompts.append(Path(prompt_file).read_text())
+                target_path = variables["TARGET_PATH"]
+                script = (
+                    "import sys; from pathlib import Path; "
+                    f"counter = Path({str(counter)!r}); "
+                    "n = len(counter.read_text()) if counter.exists() else 0; "
+                    "counter.write_text('x' * (n + 1)); "
+                    f"print({message!r}) or sys.exit(1) if n < 1 else None; "
+                    f"target = Path({target_path!r}); "
+                    "target.parent.mkdir(parents=True, exist_ok=True); "
+                    "target.write_text('---\\nstatus: ok\\n---\\n')"
+                )
+                return [sys.executable, "-c", script]
+
+            def prepare_env(self, env, merged_config):  # noqa: ANN001, ARG002
+                return env
+
+            def working_directory(self, merged_config):  # noqa: ANN001, ARG002
+                return None
+
+            def parse_result_event(self, line):  # noqa: ANN001, ARG002
+                return None
+
+            def check_auth(self):
+                raise NotImplementedError
+
+            def auth_info(self):
+                return ""
+
+        monkeypatch.setitem(ADAPTER_REGISTRY, "exit-test", ExitAdapter())
+
+    def _run(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, message: str, run_id: str):
+        repo_dir = tmp_path / "exit-repo"
+        process_dir = repo_dir / "exit-process"
+        process_dir.mkdir(parents=True)
+        subprocess.run(["git", "init"], cwd=repo_dir, check=True, capture_output=True, text=True)
+
+        target = repo_dir / "runs" / run_id / "thing.md"
+        counter = repo_dir / "counter.txt"
+        spec = self._write_process(process_dir)
+        observed_prompts: list[str] = []
+        self._register_adapter(monkeypatch, counter, message, observed_prompts)
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "run-process",
+                str(spec),
+                "--var",
+                f"RUNS_DIR={repo_dir / 'runs'}",
+                "--var",
+                f"RUN_ID={run_id}",
+                "--var",
+                f"TARGET_PATH={target}",
+            ],
+        )
+        status = read_status_at(_task_state_dir_for(repo_dir / "runs" / run_id, "write-thing"))
+        calls = len(counter.read_text()) if counter.exists() else 0
+        return result, status, calls, target, observed_prompts
+
+    def test_a_body_timeout_is_retried_and_the_second_attempt_succeeds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result, status, calls, target, prompts = self._run(
+            tmp_path, monkeypatch, message="UND_ERR_BODY_TIMEOUT", run_id="transient-run"
+        )
+
+        assert result.exit_code == 0, result.stdout
+        assert calls == 2, f"the adapter ran {calls}x; a body timeout should be retried once"
+        assert target.exists()
+        assert status is not None
+        assert status.state == "completed"
+        assert status.attempt == 2
+        history = read_attempt_history_at(_task_state_dir_for(target.parent, "write-thing"))
+        assert [record.disposition for record in history] == [
+            AttemptDisposition.retryable,
+            AttemptDisposition.succeeded,
+        ]
+        assert all(
+            "The prior attempt's declared output failed validation." not in prompt
+            for prompt in prompts
+        )
+
+    def test_an_exhausted_quota_is_not_retried(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result, status, calls, _, _prompts = self._run(
+            tmp_path, monkeypatch, message="quota exceeded for this project", run_id="quota-run"
+        )
+
+        assert result.exit_code != 0
+        assert calls == 1, f"the adapter ran {calls}x; an exhausted quota must not be retried"
+        assert status is not None
+        assert status.state == "failed"
+        assert status.attempt == 1
+        # The recorded error carries the log line, not a bare exit code: diagnosing
+        # week 35 cost hours precisely because `exit code 1` said nothing.
+        assert "quota" in (status.error or "")

@@ -1,6 +1,6 @@
 """Curated public surface for metaproc file utilities.
 
-See ``docs/arch/arch-file-io-utilities.md`` in the source repository for the public
+See ``src/metaproc/docs/arch-file-io-utilities.md`` in the source repository for the public
 surface and non-obvious ``frontmatter_format`` behavior.
 """
 
@@ -11,6 +11,7 @@ from frontmatter_format import (
     YamlSerializationError,
     fmf_read,
     fmf_read_frontmatter,
+    fmf_split_frontmatter,
     fmf_write,
     from_yaml_string,
     new_yaml,
@@ -52,6 +53,7 @@ __all__ = [
     "fmf_read_artifact",
     "fmf_read_frontmatter",
     "fmf_read_frontmatter_artifact",
+    "fmf_split_frontmatter",
     "fmf_write",
     "from_yaml_string",
     "iter_artifact_paths",

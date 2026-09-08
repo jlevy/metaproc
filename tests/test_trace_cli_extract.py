@@ -236,6 +236,48 @@ def test_extract_includes_extractor_sources(run_dir: Path):
     assert {"metaproc-engine", "claude-agent"}.issubset(sources)
 
 
+def test_parent_extract_includes_nested_composite_scope_logs(run_dir: Path) -> None:
+    child = run_dir / "query-plan" / "UI"
+    (child / ".state").mkdir(parents=True)
+    child_log = child / ".logs" / "tasks" / "generate" / "UI" / "nested.jsonl"
+    child_log.parent.mkdir(parents=True)
+    child_log.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {"content": []},
+                        "session_id": "nested-session",
+                        "timestamp": "2026-05-12T00:00:02Z",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "result",
+                        "total_cost_usd": 0.1,
+                        "num_turns": 1,
+                        "duration_ms": 1000,
+                        "session_id": "nested-session",
+                        "is_error": False,
+                        "timestamp": "2026-05-12T00:00:03Z",
+                    }
+                ),
+            ]
+        )
+        + "\n"
+    )
+
+    spans = extract_trace(run_dir)
+    nested = [span for span in spans if span.attributes.get("scope.path") == "query-plan/UI"]
+
+    assert {span.kind for span in nested} >= {"attempt", "agent_session"}
+    assert len({span.span_id for span in spans}) == len(spans)
+    by_id = {span.span_id: span for span in nested}
+    session = next(span for span in nested if span.kind == "agent_session")
+    assert session.parent_span_id in by_id
+
+
 def test_extract_then_cli_loads_same_spans(run_dir: Path):
     spans_runtime = extract_trace(run_dir)
     runner = CliRunner()

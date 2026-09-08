@@ -108,7 +108,7 @@ shelling out through a second `metaproc run-process` process.
 
 Sum of what each child needs.
 None are installed by this process; see
-[`../../docs/runbooks/credential-setup.runbook.md`](../../docs/runbooks/credential-setup.runbook.md).
+[`../../docs/runbooks/credential-setup.runbook.md`](../../src/metaproc/docs/credential-setup.runbook.md).
 
 | Adapter | Credential |
 | --- | --- |

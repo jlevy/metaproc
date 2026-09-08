@@ -382,7 +382,7 @@ class EventLogger:
         lease with the eventual ``auth_outcome`` at teardown by primary
         key (run_id/step_id/item/attempt/session_log_path) instead of
         timestamp inference. Spec:
-        ``docs/arch/arch-metaproc-core.md``.
+        ``src/metaproc/docs/metaproc-design.md``.
 
         *payload* is the dict produced by
         :func:`metaproc.dispatch.pool_dispatch.build_auth_lease_acquired`.
@@ -392,6 +392,27 @@ class EventLogger:
         event: dict[str, object] = {"event": "auth_lease_acquired"}
         event.update(payload)
         self._write(event)
+
+    def auth_skipped(
+        self,
+        *,
+        step_id: str,
+        step_adapter: str,
+        configured_adapter: str,
+        reason: str = "adapter_mismatch",
+    ) -> None:
+        """Record that a configured credential pool was not applied to a step."""
+        self._write(
+            {
+                "event": "auth_skipped",
+                "schema_version": 1,
+                "pool_enabled": False,
+                "step_id": step_id,
+                "step_adapter": step_adapter,
+                "configured_adapter": configured_adapter,
+                "reason": reason,
+            }
+        )
 
     def __enter__(self) -> Self:
         self.open()

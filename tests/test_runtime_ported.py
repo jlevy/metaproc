@@ -504,6 +504,96 @@ def test_discover_joins_state_failed_retries_item(tmp_path):
     assert len(discovery.filtered_items) == 0
 
 
+def test_discover_rejects_completed_status_from_another_run(tmp_path):
+    """A valid file cannot make a task record from another run reusable."""
+
+    progress_path = tmp_path / "progress.md"
+    _write_progress(
+        progress_path,
+        """\
+        - ticker: AAPL
+          sector: technology
+          status: pending
+        """,
+    )
+    state_dir = tmp_path / STATE_DIR / TASKS_SUBDIR / "predict-ticker" / "AAPL"
+    state_dir.mkdir(parents=True)
+    write_status_at(
+        state_dir,
+        StatusRecord(
+            run_id="predict/another-run",
+            step_id="predict-ticker",
+            item={"ticker": "AAPL", "sector": "technology"},
+            state="completed",
+        ),
+    )
+    step_outputs = {
+        "prediction": IOSpec(path=f"{tmp_path}/{{{{sector}}}}/{{{{ticker}}}}/prediction.yaml"),
+    }
+    step_def = ProcessStep(
+        id="predict-ticker",
+        mode="agent",
+        for_each=ForEach(
+            over="progress",
+            bind="ticker",
+            bind_fields=["ticker", "sector"],
+            key="{{ticker}}",
+        ),
+        outputs=step_outputs,
+    )
+
+    for output_paths in (step_outputs, None):
+        with pytest.raises(ValueError, match="run_id"):
+            discover_items_from_source(
+                progress_path,
+                step_def,
+                output_paths=output_paths,
+                params={},
+                reuse_policy="trust_state",
+                run_dir=tmp_path,
+                expected_run_id="predict/current-run",
+            )
+
+
+def test_discover_rejects_duplicate_resolved_item_keys_before_state_writes(tmp_path):
+    progress_path = tmp_path / "progress.md"
+    _write_progress(
+        progress_path,
+        """\
+        - ticker: AAPL
+          sector: technology
+          status: pending
+        - ticker: AAPL
+          sector: financials
+          status: pending
+        """,
+    )
+    run_dir = tmp_path / "run"
+    step_def = ProcessStep(
+        id="predict-ticker",
+        mode="agent",
+        for_each=ForEach(
+            over="progress",
+            bind="ticker",
+            bind_fields=["ticker", "sector"],
+            key="{{ticker}}",
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"duplicate for_each\.key 'AAPL'.*items 1 and 2",
+    ):
+        discover_items_from_source(
+            progress_path,
+            step_def,
+            params={},
+            run_dir=run_dir,
+        )
+
+    assert not (run_dir / STATE_DIR / TASKS_SUBDIR).exists()
+
+
 def test_discover_revalidates_completed_with_validated_outputs_policy(tmp_path):
     """reuse_policy=validated_outputs: completed items with missing outputs are demoted to actionable.
 
@@ -615,7 +705,7 @@ def test_discover_trust_state_skips_revalidation(tmp_path):
     # AAPL filtered even though output missing — trust_state skips re-validation
     assert len(discovery.actionable_contexts) == 0
     assert len(discovery.filtered_items) == 1
-    assert discovery.filtered_items[0]["ticker"] == "AAPL"
+    assert discovery.filtered_items[0].context["ticker"] == "AAPL"
 
 
 def test_discover_validated_outputs_passes_when_output_exists(tmp_path):
@@ -670,7 +760,7 @@ def test_discover_validated_outputs_passes_when_output_exists(tmp_path):
     )
     assert len(discovery.actionable_contexts) == 0
     assert len(discovery.filtered_items) == 1
-    assert discovery.filtered_items[0]["ticker"] == "AAPL"
+    assert discovery.filtered_items[0].context["ticker"] == "AAPL"
 
 
 def test_discover_joins_state_running_filters_item(tmp_path):
@@ -728,8 +818,8 @@ def test_discover_joins_state_running_filters_item(tmp_path):
     assert len(discovery.actionable_contexts) == 1
     assert discovery.actionable_contexts[0]["ticker"] == "NVDA"
     assert len(discovery.filtered_items) == 1
-    assert discovery.filtered_items[0]["ticker"] == "AAPL"
-    assert discovery.filtered_items[0]["reason"] == "running"
+    assert discovery.filtered_items[0].context["ticker"] == "AAPL"
+    assert discovery.filtered_items[0].reason == "running"
 
 
 def test_discover_backward_compat_no_output_paths(tmp_path):
@@ -758,6 +848,8 @@ def test_discover_backward_compat_no_output_paths(tmp_path):
     discovery = discover_items_from_source(progress_path, step_def)
     assert len(discovery.actionable_contexts) == 1  # AAPL
     assert len(discovery.filtered_items) == 1  # NVDA (done)
+    assert discovery.filtered_items[0].reason == "terminal"
+    assert discovery.nonterminal_contexts() == [{"ticker": "AAPL", "sector": "technology"}]
 
 
 def test_discover_state_overrides_progress_status(tmp_path):

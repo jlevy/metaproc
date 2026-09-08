@@ -2,7 +2,7 @@
 name = "metaproc"
 display_name = "Metaproc views"
 version = "0.0.1"
-sdk_version = "0.1"
+sdk_version = "0.5"
 
 # Extra scripts load before the plugin entry point. The packaged ELK bundle must load
 # before `viz.js`; `domain_views.js` owns process, resource, chart, and stats views.

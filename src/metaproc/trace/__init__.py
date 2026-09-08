@@ -1,6 +1,6 @@
 """Unified workflow event trace.
 
-See ``docs/arch/arch-metaproc-core.md``
+See ``src/metaproc/docs/metaproc-design.md``
 for the design. Public surface:
 
 - :class:`TraceEvent` — the ``TraceEvent/0.1`` span model.

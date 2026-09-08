@@ -24,6 +24,15 @@ DOCKER_DIGEST = re.compile(r"^docker://[^@\s]+@sha256:[0-9a-fA-F]{64}$")
 NPM_REGISTRY_PREFIX = "https://registry.npmjs.org/"
 SHA512_PREFIX = "sha512-"
 UV_COOL_OFF = "14 days"
+TOOLCHAIN_SCRIPT = "devtools/ensure-toolchain.sh"
+AGENT_HOOK_CONFIGS = (".claude/settings.json", ".codex/hooks.json")
+# tbd generates each of these hook scripts once per agent, writing byte-identical
+# copies. Nothing but this check keeps a hand edit to one copy from drifting.
+AGENT_SCRIPT_PAIRS = (
+    (".claude/scripts/ensure-gh-cli.sh", ".codex/ensure-gh-cli.sh"),
+    (".claude/scripts/tbd-session.sh", ".codex/tbd-session.sh"),
+    (".claude/hooks/tbd-closing-reminder.sh", ".codex/tbd-closing-reminder.sh"),
+)
 
 
 def _read_json(path: Path) -> dict[str, object]:
@@ -94,6 +103,137 @@ def _check_uv(root: Path, errors: list[str]) -> None:
         errors.append(f"uv.toml must set exclude-newer to {UV_COOL_OFF}")
 
 
+def _version_key(version: str) -> tuple[int, ...]:
+    """Numeric release tuple for comparison, ignoring any pre-release suffix."""
+    release = re.match(r"[0-9]+(?:\.[0-9]+)*", version.strip())
+    return tuple(int(part) for part in release.group(0).split(".")) if release else ()
+
+
+def _satisfies(version: str, specifier: str) -> bool:
+    """Check a concrete version against a comma-separated specifier set.
+
+    The pin is deliberately allowed to sit anywhere inside the declared range rather
+    than being forced to equal its floor: the range says which uv line the lockfile is
+    valid for, while the pin selects the newest release in that line that has cleared
+    the cool-off. Supports the operators uv.toml actually uses.
+    """
+    got = _version_key(version)
+    for clause in (part.strip() for part in specifier.split(",")):
+        if not clause:
+            continue
+        op_match = re.match(r"(>=|<=|==|!=|>|<)\s*(.+)", clause)
+        if op_match is None:
+            return False
+        op, want_text = op_match.group(1), op_match.group(2)
+        want = _version_key(want_text)
+        # Compare on equal length so "0.12.3" < "0.13" rather than the reverse.
+        width = max(len(got), len(want))
+        left = got + (0,) * (width - len(got))
+        right = want + (0,) * (width - len(want))
+        ok = {
+            ">=": left >= right,
+            "<=": left <= right,
+            "==": left == right,
+            "!=": left != right,
+            ">": left > right,
+            "<": left < right,
+        }[op]
+        if not ok:
+            return False
+    return True
+
+
+def _check_toolchain_bootstrap(root: Path, errors: list[str]) -> None:
+    """Keep the session bootstrap pinned to the same toolchain as the repository.
+
+    The bootstrap carries its own version constants because it also carries the
+    matching download checksums. Asserting them against the canonical pins turns a
+    half-finished version bump into a failed gate instead of an agent session that
+    silently installs the wrong toolchain.
+    """
+    script = root / TOOLCHAIN_SCRIPT
+    if not script.is_file():
+        errors.append(f"{TOOLCHAIN_SCRIPT} must exist")
+        return
+    text = script.read_text(encoding="utf-8")
+
+    node_pin = (root / ".node-version").read_text(encoding="utf-8").strip()
+    declared_node = re.search(r'^NODE_VERSION="([^"]+)"', text, re.MULTILINE)
+    if declared_node is None:
+        errors.append(f"{TOOLCHAIN_SCRIPT} must declare NODE_VERSION")
+    elif declared_node.group(1) != node_pin:
+        errors.append(
+            f"{TOOLCHAIN_SCRIPT} NODE_VERSION {declared_node.group(1)} must match "
+            f".node-version {node_pin} (update the pinned checksums too)"
+        )
+
+    uv_config = tomllib.loads((root / "uv.toml").read_text(encoding="utf-8"))
+    uv_required = str(uv_config.get("required-version", "")).strip()
+    declared_uv = re.search(r'^UV_VERSION="([^"]+)"', text, re.MULTILINE)
+    if declared_uv is None:
+        errors.append(f"{TOOLCHAIN_SCRIPT} must declare UV_VERSION")
+    elif uv_required and not _satisfies(declared_uv.group(1), uv_required):
+        errors.append(
+            f"{TOOLCHAIN_SCRIPT} UV_VERSION {declared_uv.group(1)} must satisfy the "
+            f"uv.toml required-version {uv_required} (update the pinned checksums too)"
+        )
+
+    # Every supported agent must run the same bootstrap first, or one agent's
+    # sessions start without a toolchain. Order is part of the contract: the tbd
+    # hook that follows needs the npx this bootstrap installs, so a regeneration
+    # that reinstalls the agent hooks ahead of it has to fail the gate.
+    for config_path in AGENT_HOOK_CONFIGS:
+        path = root / config_path
+        if not path.is_file():
+            errors.append(f"{config_path} must exist")
+            continue
+        commands = _session_start_commands(path)
+        if not any(TOOLCHAIN_SCRIPT in command for command in commands):
+            errors.append(f"{config_path} must run {TOOLCHAIN_SCRIPT} on SessionStart")
+        elif TOOLCHAIN_SCRIPT not in commands[0]:
+            errors.append(
+                f"{config_path} must run {TOOLCHAIN_SCRIPT} as its first SessionStart "
+                f"hook; the hooks that follow need the toolchain it installs"
+            )
+
+
+def _check_agent_script_copies(root: Path, errors: list[str]) -> None:
+    """Keep each agent's copy of a generated hook script identical to its twin.
+
+    `tbd setup --auto` regenerates both copies together, so they agree as generated.
+    A hand edit to one is the case this catches: it would leave the two agents running
+    different code from files that are supposed to be the same, and nothing else in the
+    repository compares them. The fix for a real difference is to re-run
+    `tbd setup --auto` rather than to copy one file over the other by hand.
+    """
+    for left, right in AGENT_SCRIPT_PAIRS:
+        left_path, right_path = root / left, root / right
+        missing = [name for name, p in ((left, left_path), (right, right_path)) if not p.is_file()]
+        if missing:
+            errors.extend(f"{name} must exist" for name in missing)
+            continue
+        if left_path.read_bytes() != right_path.read_bytes():
+            errors.append(
+                f"{left} and {right} must be byte-identical; regenerate both with "
+                f"`tbd setup --auto` instead of editing one copy"
+            )
+
+
+def _session_start_commands(path: Path) -> list[str]:
+    """The SessionStart hook commands of an agent config, in the order they run."""
+    matchers = _read_json(path).get("hooks", {})
+    if not isinstance(matchers, dict):
+        return []
+    commands: list[str] = []
+    for matcher in matchers.get("SessionStart", []) or []:
+        if not isinstance(matcher, dict):
+            continue
+        for hook in matcher.get("hooks", []) or []:
+            if isinstance(hook, dict) and isinstance(hook.get("command"), str):
+                commands.append(hook["command"])
+    return commands
+
+
 def _check_workflows(root: Path, errors: list[str]) -> None:
     for path in sorted((root / ".github" / "workflows").glob("*.y*ml")):
         text = path.read_text(encoding="utf-8")
@@ -129,6 +269,8 @@ def verify_supply_chain(root: Path = ROOT) -> None:
     errors: list[str] = []
     _check_npm(root, errors)
     _check_uv(root, errors)
+    _check_toolchain_bootstrap(root, errors)
+    _check_agent_script_copies(root, errors)
     _check_workflows(root, errors)
     if errors:
         raise RuntimeError("Supply-chain policy violations:\n- " + "\n- ".join(errors))

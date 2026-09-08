@@ -4,14 +4,26 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from pydantic import ValidationError
 
+from metaproc.engine.pathing import resolve_item_key
 from metaproc.engine.validation import validate_item_outputs
 from metaproc.io.frontmatter import extract_items_from_envelope, load_frontmatter_typed
 from metaproc.io.state_io import compute_item_dir
 from metaproc.models.authored import IOSpec, ProcessStep
 from metaproc.models.runtime import get_terminal_statuses
+
+type FilteredFanOutReason = Literal["completed", "cached", "running", "terminal"]
+
+
+@dataclass(frozen=True)
+class FilteredFanOutItem:
+    """An authored item context paired with its framework disposition."""
+
+    context: dict[str, str]
+    reason: FilteredFanOutReason
 
 
 @dataclass
@@ -20,7 +32,14 @@ class FanOutDiscovery:
     item_key: str
     item_fields: list[str]
     actionable_contexts: list[dict[str, str]] = field(default_factory=list)
-    filtered_items: list[dict[str, str]] = field(default_factory=list)
+    filtered_items: list[FilteredFanOutItem] = field(default_factory=list)
+
+    def nonterminal_contexts(self) -> list[dict[str, str]]:
+        """Return source-authorized contexts, including reusable in-run items."""
+        return [
+            *self.actionable_contexts,
+            *(item.context for item in self.filtered_items if item.reason != "terminal"),
+        ]
 
 
 def normalize_item_fields(step_def: ProcessStep) -> list[str]:
@@ -65,6 +84,7 @@ def discover_items_from_source(
     params: dict[str, str] | None = None,
     reuse_policy: str | None = "validated_outputs",
     run_dir: Path | None = None,
+    expected_run_id: str | None = None,
 ) -> FanOutDiscovery:
     """Extract actionable item contexts from a fan-out source file.
 
@@ -91,15 +111,16 @@ def discover_items_from_source(
         raise TypeError(msg) from exc
 
     for_each = step_def.for_each
-    item_key = for_each.bind.strip() if for_each else ""
-    if not item_key:
+    if for_each is None or not for_each.bind.strip():
         msg = f"{source_path}: fan-out discovery requires step.for_each.bind"
         raise ValueError(msg)
+    item_key = for_each.bind.strip()
 
     item_fields = normalize_item_fields(step_def)
     terminal_statuses = get_terminal_statuses()
     actionable_contexts: list[dict[str, str]] = []
-    filtered_items: list[dict[str, str]] = []
+    filtered_items: list[FilteredFanOutItem] = []
+    item_key_rows: dict[str, int] = {}
 
     for index, item in enumerate(items, 1):
         item_label = str(item.get(item_key, f"item#{index}"))
@@ -115,21 +136,38 @@ def discover_items_from_source(
             )
             for f in item_fields
         }
+        item_vars = dict(params or {})
+        item_vars.update(context)
+        resolved_item_key = resolve_item_key(for_each, item_vars, step_def.id)
+        prior_index = item_key_rows.get(resolved_item_key)
+        if prior_index is not None:
+            raise ValueError(
+                f"{source_path}: duplicate for_each.key {resolved_item_key!r} "
+                f"for items {prior_index} and {index}"
+            )
+        item_key_rows[resolved_item_key] = index
 
-        if output_paths is not None and run_dir is not None:
-            item_vars = dict(params or {})
-            item_vars.update(context)
+        if run_dir is not None:
             from metaproc.engine.pathing import (  # noqa: PLC0415 -- pre-existing local import; needs review
                 compute_task_state_dir,
             )
             from metaproc.io.state_io import (  # noqa: PLC0415 -- pre-existing local import; needs review
                 read_status_at,
+                validate_task_status_identity_at,
             )
 
             state_dir = compute_task_state_dir(run_dir, step_def, item_vars)
-            artifact_dir = compute_item_dir(output_paths, item_vars)
+            artifact_dir = compute_item_dir(output_paths or {}, item_vars)
             status_record = read_status_at(state_dir)
             if status_record is not None:
+                if expected_run_id is not None:
+                    validate_task_status_identity_at(
+                        state_dir,
+                        status_record,
+                        run_id=expected_run_id,
+                        step_id=step_def.id,
+                        item_key=state_dir.name,
+                    )
                 if status_record.step_id != step_def.id:
                     actionable_contexts.append(context)
                     continue
@@ -146,9 +184,7 @@ def discover_items_from_source(
                         if output_errors:
                             actionable_contexts.append(context)
                             continue
-                    filtered_entry = dict(context)
-                    filtered_entry["reason"] = state
-                    filtered_items.append(filtered_entry)
+                    filtered_items.append(FilteredFanOutItem(context=dict(context), reason=state))
                     continue
                 if state == "failed":
                     # "failed" → retry on next run
@@ -158,16 +194,14 @@ def discover_items_from_source(
                     # Skip running items — orphaned markers from dead pools
                     # are reconciled to "failed" before discovery runs
                     # (see reconcile_stale_running in state_io.py).
-                    filtered_entry = dict(context)
-                    filtered_entry["reason"] = "running"
-                    filtered_items.append(filtered_entry)
+                    filtered_items.append(
+                        FilteredFanOutItem(context=dict(context), reason="running")
+                    )
                     continue
 
         status = str(item.get("status", "")).strip().lower()
         if status and status in terminal_statuses:
-            filtered_entry = dict(context)
-            filtered_entry["reason"] = "terminal"
-            filtered_items.append(filtered_entry)
+            filtered_items.append(FilteredFanOutItem(context=dict(context), reason="terminal"))
             continue
 
         actionable_contexts.append(context)

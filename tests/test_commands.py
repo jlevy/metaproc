@@ -16,6 +16,7 @@ from metaproc.commands.helpers import (
     parse_adapter_config,
     parse_var_args,
     relpath,
+    resolve_gcp_worker_runs_dir,
     resolve_record_output_paths,
     seed_runtime_vars,
 )
@@ -72,6 +73,16 @@ class TestSeedRuntimeVars:
     def test_resolves_relative_runs_dir(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         monkeypatch.chdir(tmp_path)
         assert seed_runtime_vars({"RUNS_DIR": "runs"}) == {"RUNS_DIR": str(tmp_path / "runs")}
+
+
+class TestResolveGCPWorkerRunsDir:
+    def test_only_gcp_worker_uses_filestore_mount(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("METAPROC_GCP_FILESTORE_SERVER", "10.0.0.1")
+        monkeypatch.setenv("METAPROC_GCP_FILESTORE_MOUNT_PATH", "/mnt/shared")
+
+        assert resolve_gcp_worker_runs_dir("local") == ""
+        assert resolve_gcp_worker_runs_dir("plugin-backend") == ""
+        assert resolve_gcp_worker_runs_dir("gcp-worker") == "/mnt/shared/runs"
 
 
 # ── find_step_def ────────────────────────────────────────────────
@@ -275,6 +286,40 @@ class TestCheckHeadersCommand:
         result = runner.invoke(app, ["check-headers", str(process_dir / "test.process.md")])
         assert result.exit_code != 0
         assert "MISSING  template" in result.output
+
+    def test_default_backed_dependency_path(self, tmp_path):
+        child = tmp_path / "children" / "live.process.md"
+        child.parent.mkdir()
+        child.write_text(
+            "---\nprocess:\n  name: child\n  steps: []\n---\n# child\n",
+            encoding="utf-8",
+        )
+        top = tmp_path / "top.process.md"
+        top.write_text(
+            "---\n"
+            "process:\n"
+            "  name: top\n"
+            "  inputs:\n"
+            "    child_name:\n"
+            "      param: CHILD_NAME\n"
+            "      as: string\n"
+            "      required: false\n"
+            "      default: live.process.md\n"
+            "  deps:\n"
+            '    child: { path: "./children/{{child_name}}", as: path }\n'
+            "  steps:\n"
+            "    - id: child\n"
+            "      mode: composite\n"
+            "      uses: deps.child\n"
+            "---\n"
+            "# top\n",
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(app, ["check-headers", str(top)])
+
+        assert result.exit_code == 0, result.output
+        assert "0 error(s)" in result.output
 
 
 class TestCompareCommand:

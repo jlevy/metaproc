@@ -1,7 +1,7 @@
 """Enforce that every env-var read goes through a typed registry.
 
 This is the Phase 2 merge gate for
-``docs/arch/arch-metaproc-core.md``.
+``src/metaproc/docs/metaproc-design.md``.
 
 Rule
 ----
@@ -38,11 +38,9 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     # SecretRef.resolve reads env vars by name from the SecretRef instance:
     # the dataclass holds registered names but the read is through a local
     # Mapping captured at runtime.
-    ("src/metaproc/dispatch/secret_refs.py", 55): (
+    ("src/metaproc/dispatch/secret_refs.py", 52): (
         "SecretRef.resolve: dynamic env via Mapping default to os.environ"
     ),
-    # _build_env_exports iterates a literal list of var names.
-    ("src/metaproc/commands/gcp.py", 2288): "iterates _REMOTE_RUN_ENV_VARS literal list",
     # Template-placeholder fallback: the key is an arbitrary template
     # variable name, not a fixed env var, so the call is genuinely dynamic.
     ("src/metaproc/engine/placeholders.py", 84): "template {{key}} dynamic env fallback",

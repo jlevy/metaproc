@@ -25,6 +25,23 @@ make install
 make lint-check
 ```
 
+Every `make` target needs uv and the pinned Node on `PATH`. Install them directly, or
+run the repository’s bootstrap, which installs exactly the pinned versions after
+verifying each download against a pinned checksum:
+
+```bash
+bash devtools/ensure-toolchain.sh
+```
+
+The script is idempotent: it reports and exits when a satisfying toolchain is already
+installed, and otherwise installs into `~/.local`, which must be on `PATH`. Claude Code
+and Codex both run it automatically at session start, so agent sessions begin with a
+working toolchain. It installs the repository’s pins rather than the newest releases; a
+newer Node major would ship an npm outside the `engines` range that `engine-strict`
+enforces, so `npm ci` would then refuse to install.
+[Agent toolchain bootstrap](../agent-toolchain-bootstrap.md) records the pins it
+installs and how they are guarded.
+
 `make install` syncs the exact committed Python and JavaScript lockfiles and installs
 the repository’s Lefthook checks.
 Do not use an activated virtual environment or invoke `pip` directly.
@@ -62,7 +79,7 @@ adapter credential choices are:
 | pi | provider-specific API key or Vertex ADC |
 
 The exact modes and cloud-secret forms are documented in
-[credential setup](credential-setup.runbook.md).
+[credential setup](../../src/metaproc/docs/credential-setup.runbook.md).
 
 Survey configuration without making model calls:
 
@@ -103,7 +120,8 @@ uv --config-file uv.toml run --frozen metaproc run-process \
 The committed cloud self-test uses `--dry-run`; it does not submit a job or create
 spend. Live projects, service accounts, images, repositories, networks, Filestore,
 secrets, and downstream workflow packages remain operator-owned configuration.
-See [cloud dispatch](cloud-dispatch.runbook.md) for live operations.
+See [cloud dispatch](../../src/metaproc/docs/cloud-dispatch.runbook.md) for live
+operations.
 
 ## 5. Run the Complete Repository Gate
 
@@ -119,9 +137,11 @@ isolated installed-wheel smoke.
 
 - [Operator reference](../../src/metaproc/docs/metaproc-operator-reference.md) — run,
   status, pool, trace, and recovery commands.
-- [Credential setup](credential-setup.runbook.md) — adapter and Secret Manager details.
+- [Credential setup](../../src/metaproc/docs/credential-setup.runbook.md) — adapter and
+  Secret Manager details.
 - [Adapter compatibility](adapter-compatibility.runbook.md) — provider/model routing.
-- [Cloud dispatch](cloud-dispatch.runbook.md) — live Batch monitoring and recovery.
+- [Cloud dispatch](../../src/metaproc/docs/cloud-dispatch.runbook.md) — live Batch
+  monitoring and recovery.
 
 Domain-specific process specs, schemas, fixtures, handlers, and playbooks belong in the
 consumer repository and should link back to these framework runbooks.

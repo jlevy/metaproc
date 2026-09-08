@@ -1817,7 +1817,13 @@
       _row("schema", step.process_schema_token ? escHtml(step.process_schema_token) : null),
       _row("source", step.source_path ? _pathLink(step.source_path) : null),
       _row("variant", step.variant ? _chip("variant", step.variant) : null),
+      _row(
+        "execution_profile",
+        step.execution_profile ? _chip("variant", step.execution_profile) : null,
+      ),
+      _row("artifact_namespace", step.artifact_namespace ? escHtml(step.artifact_namespace) : null),
       _row("reuse_policy", step.reuse_policy ? escHtml(step.reuse_policy) : null),
+      _row("on_failure", step.on_failure ? escHtml(step.on_failure) : null),
       _row(
         "max_budget_usd",
         step.max_budget_usd != null ? escHtml(String(step.max_budget_usd)) : null,
@@ -1865,6 +1871,9 @@
         ),
       );
     }
+    if (step.resources && Object.keys(step.resources).length) {
+      parts.push(_section("Resources", _formatMap(step.resources)));
+    }
     if (step.fan_out) {
       var f = step.fan_out;
       parts.push(
@@ -1873,9 +1882,19 @@
           [
             _row("over", escHtml(f.over)),
             _row("bind", f.bind ? escHtml(f.bind) : null),
+            _row("source", f.source ? _pathLink(f.source) : null),
             _row("bind_fields", _formatList(f.bind_fields)),
             _row("batch_size", f.batch_size != null ? escHtml(String(f.batch_size)) : null),
             _row("item_count", f.item_count != null ? escHtml(String(f.item_count)) : null),
+            _row(
+              "filtered_count",
+              f.filtered_count != null ? escHtml(String(f.filtered_count)) : null,
+            ),
+            _row("align", f.align ? escHtml(f.align) : null),
+            _row(
+              "max_concurrency",
+              f.max_concurrency != null ? escHtml(String(f.max_concurrency)) : null,
+            ),
             _row("retry", _retryRow(f.retry)),
           ].join(""),
         ),
@@ -1954,7 +1973,19 @@
               escHtml(v.as_type || "—") +
               "</td>" +
               "<td>" +
+              (v.path ? _pathLink(v.path) : "—") +
+              "</td>" +
+              "<td>" +
               escHtml(v.param || "—") +
+              "</td>" +
+              "<td>" +
+              escHtml(v.parse ? [v.parse.format, v.parse.extract].filter(Boolean).join(":") : "—") +
+              "</td>" +
+              "<td>" +
+              escHtml(v.default != null ? String(v.default) : "—") +
+              "</td>" +
+              "<td>" +
+              escHtml(v.required === false ? "optional" : "required") +
               "</td>" +
               "<td>" +
               escHtml(v.description || "—") +
@@ -1966,7 +1997,7 @@
           _section(
             "Operator inputs",
             '<table class="viz-panel-table">' +
-              "<thead><tr><th>name</th><th>as</th><th>param</th><th>desc</th></tr></thead>" +
+              "<thead><tr><th>name</th><th>as</th><th>path</th><th>param</th><th>parse</th><th>default</th><th>requirement</th><th>desc</th></tr></thead>" +
               "<tbody>" +
               rows +
               "</tbody></table>",
@@ -1974,8 +2005,60 @@
         );
       }
     }
+    if (header.process_outputs) {
+      var okeys = Object.keys(header.process_outputs);
+      if (okeys.length) {
+        var outputRows = okeys
+          .map((k) => {
+            var v = header.process_outputs[k] || {};
+            return (
+              '<tr><td class="viz-panel-name">' +
+              escHtml(k) +
+              "</td>" +
+              '<td class="viz-panel-type">' +
+              escHtml(v.as_type || "—") +
+              "</td>" +
+              "<td>" +
+              (v.path ? _pathLink(v.path) : "—") +
+              "</td>" +
+              "<td>" +
+              escHtml(v.ref || "—") +
+              "</td>" +
+              "<td>" +
+              escHtml(v.format || "—") +
+              "</td>" +
+              "<td>" +
+              (v.template ? _pathLink(v.template) : "—") +
+              "</td>" +
+              "<td>" +
+              escHtml(v.condition || "—") +
+              "</td>" +
+              "<td>" +
+              escHtml(v.description || "—") +
+              "</td></tr>"
+            );
+          })
+          .join("");
+        parts.push(
+          _section(
+            "Public outputs",
+            '<table class="viz-panel-table">' +
+              "<thead><tr><th>name</th><th>as</th><th>path</th><th>ref</th><th>format</th><th>template</th><th>condition</th><th>desc</th></tr></thead>" +
+              "<tbody>" +
+              outputRows +
+              "</tbody></table>",
+          ),
+        );
+      }
+    }
     var defaults = header.defaults || {};
-    if (defaults.default_adapter || defaults.retry) {
+    if (
+      defaults.default_adapter ||
+      defaults.default_execution_profile ||
+      defaults.recommended_execution_profiles?.length ||
+      defaults.reuse_policy ||
+      defaults.retry
+    ) {
       parts.push(
         _section(
           "Defaults",
@@ -1984,6 +2067,17 @@
               "default_adapter",
               defaults.default_adapter ? escHtml(defaults.default_adapter) : null,
             ),
+            _row(
+              "default_execution_profile",
+              defaults.default_execution_profile
+                ? escHtml(defaults.default_execution_profile)
+                : null,
+            ),
+            _row(
+              "recommended_execution_profiles",
+              _formatList(defaults.recommended_execution_profiles),
+            ),
+            _row("reuse_policy", defaults.reuse_policy ? escHtml(defaults.reuse_policy) : null),
             _row("retry", _retryRow(defaults.retry)),
           ].join(""),
         ),
@@ -2161,7 +2255,16 @@
     var div = document.createElement("div");
     div.className = "viz-warning-banner";
     var items = warnings
-      .map((w) => '<pre class="viz-warning-detail">' + escHtml(w) + "</pre>")
+      .map((w) => {
+        var message = w;
+        if (w && typeof w === "object") {
+          message = w.code ? String(w.code) : "warning";
+          if (w.message) {
+            message += ": " + String(w.message);
+          }
+        }
+        return '<pre class="viz-warning-detail">' + escHtml(message) + "</pre>";
+      })
       .join("");
     var reg = typeof window !== "undefined" ? window.MetabrowserIcons : null;
     var alertIcon = reg?.withClass ? reg.withClass("alert", "viz-alert-icon") : "";
@@ -2187,6 +2290,12 @@
         "inputs",
         h.process_inputs && Object.keys(h.process_inputs).length
           ? _formatList(Object.keys(h.process_inputs))
+          : null,
+      ),
+      _row(
+        "outputs",
+        h.process_outputs && Object.keys(h.process_outputs).length
+          ? _formatList(Object.keys(h.process_outputs))
           : null,
       ),
     ].join("");

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 import typer
+from click import unstyle
 from typer.testing import CliRunner
 
 from metaproc.cloud.gcp import gcp_run_dispatch
@@ -18,6 +20,7 @@ from metaproc.cloud.gcp.gcp_run_dispatch import (
     build_gcp_run_job,
     dispatch_gcp_run,
 )
+from metaproc.cloud.gcp.secret_hydration import SECRET_REFS_ENV
 from metaproc.commands import gcp_run as cmd_gcp_run
 
 
@@ -65,6 +68,43 @@ class TestBuildGcpRunJob:
         with pytest.raises(ValueError, match="cmd argv must be non-empty"):
             build_gcp_run_job([], opts)
 
+    def test_single_host_process_dag_remains_one_batch_task(self) -> None:
+        """A local-backend DAG is one command, not a second cloud scheduler."""
+        cfg = _config(machine_type="n2-highmem-8")
+        opts = DispatchGcpRunOptions(config=cfg)
+        argv = [
+            "metaproc",
+            "run-process",
+            "workflows/example.process.md",
+            "--backend",
+            "local",
+            "--var",
+            "RUN_ID=example-run",
+        ]
+
+        _, job = build_gcp_run_job(argv, opts)
+
+        assert len(job.task_groups) == 1
+        task_group = job.task_groups[0]
+        assert task_group.task_count == 1
+        assert task_group.parallelism == 1
+        runnable = task_group.task_spec.runnables[0]
+        env = dict(runnable.environment.variables)
+        assert env["METAPROC_GCP_RUN_CMD"] == json.dumps(argv)
+        assert job.allocation_policy.instances[0].policy.machine_type == "n2-highmem-8"
+
+    def test_secret_job_requires_explicit_service_account(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(
+            "METAPROC_GCP_SECRET_CLAUDE_CREDS",
+            "projects/p/secrets/claude/versions/latest",
+        )
+        opts = DispatchGcpRunOptions(config=_config(service_account_email=""))
+
+        with pytest.raises(ValueError, match="METAPROC_GCP_SERVICE_ACCOUNT"):
+            build_gcp_run_job(["echo", "x"], opts)
+
     def test_wheel_and_workspace_uris_flow_to_env(self):
         cfg = _config()
         opts = DispatchGcpRunOptions(
@@ -73,6 +113,7 @@ class TestBuildGcpRunJob:
             wheel_sha256="1" * 64,
             workspace_gcs_uri="gs://b/gcp-run/jobid/workspace.tar.gz",
             workspace_sha256="2" * 64,
+            workspace_packages=("packages/example", "workflow"),
         )
         _, job = build_gcp_run_job(["echo", "x"], opts)
         env = dict(job.task_groups[0].task_spec.runnables[0].environment.variables)
@@ -80,6 +121,32 @@ class TestBuildGcpRunJob:
         assert env["METAPROC_WHEEL_SHA256"] == opts.wheel_sha256
         assert env["METAPROC_WORKSPACE_GCS"] == opts.workspace_gcs_uri
         assert env["METAPROC_WORKSPACE_SHA256"] == opts.workspace_sha256
+        assert env["METAPROC_WORKSPACE_PACKAGES"] == "packages/example,workflow"
+
+    def test_workspace_packages_require_workspace_artifact(self):
+        opts = DispatchGcpRunOptions(
+            config=_config(),
+            workspace_packages=("packages/example",),
+        )
+        with pytest.raises(ValueError, match="workspace_packages requires"):
+            build_gcp_run_job(["echo", "x"], opts)
+
+    @pytest.mark.parametrize(
+        "package_path",
+        ["", ".", "../outside", "/absolute", "packages/example,packages/other"],
+    )
+    def test_workspace_package_paths_must_be_safe_for_env_transport(
+        self, package_path: str
+    ) -> None:
+        opts = DispatchGcpRunOptions(
+            config=_config(),
+            workspace_gcs_uri="gs://b/workspace.tar.gz",
+            workspace_sha256="2" * 64,
+            workspace_packages=(package_path,),
+        )
+
+        with pytest.raises(ValueError, match="workspace package path"):
+            build_gcp_run_job(["echo", "x"], opts)
 
     @pytest.mark.parametrize(
         "options",
@@ -109,11 +176,10 @@ class TestBuildGcpRunJob:
         assert env["RUNS_DIR"] == "/mnt/filestore/runs"
 
     def test_filestore_config_uses_container_mount_path_for_runs_dir(self):
-        # When the config has a filestore_server and a workstation-flavoured
-        # runs_dir, the dispatched job must use the container mount path so
-        # a local ``RUNS_DIR=~/mnt/filestore/runs`` can't leak in.
+        # When the config has a filestore_server and a caller-local runs_dir,
+        # the dispatched job must use the container mount path.
         cfg = _config(
-            runs_dir="/workspace/user/mnt/filestore/runs",
+            runs_dir="/tmp/local-runs",
             filestore_server="10.0.0.5",
             filestore_mount_path="/mnt/filestore",
         )
@@ -142,8 +208,24 @@ class TestBuildGcpRunJob:
         with pytest.raises(ValueError, match="dispatcher-owned keys"):
             build_gcp_run_job(["echo", "x"], opts)
 
+    def test_extra_env_rejects_registered_plaintext_credentials(self):
+        opts = DispatchGcpRunOptions(
+            config=_config(),
+            extra_env={"GH_TOKEN": "plaintext"},
+        )
+        with pytest.raises(ValueError, match="cannot carry registered credentials"):
+            build_gcp_run_job(["echo", "x"], opts)
+
+    def test_extra_env_cannot_override_workspace_packages(self):
+        opts = DispatchGcpRunOptions(
+            config=_config(),
+            extra_env={"METAPROC_WORKSPACE_PACKAGES": "packages/override"},
+        )
+        with pytest.raises(ValueError, match="dispatcher-owned keys"):
+            build_gcp_run_job(["echo", "x"], opts)
+
     def test_secrets_resolved_from_env_registry(self, monkeypatch: pytest.MonkeyPatch):
-        # Set the registry-side var so resolve_gcp_secret_ref picks it up.
+        # Set the registry-side var so SecretRefSet resolves it.
         monkeypatch.setenv(
             "METAPROC_GCP_SECRET_CLAUDE_CREDS",
             "projects/p/secrets/claude/versions/latest",
@@ -152,9 +234,11 @@ class TestBuildGcpRunJob:
         cfg = _config()
         opts = DispatchGcpRunOptions(config=cfg)
         _, job = build_gcp_run_job(["echo", "x"], opts)
-        secrets = dict(job.task_groups[0].task_spec.runnables[0].environment.secret_variables)
+        environment = job.task_groups[0].task_spec.runnables[0].environment
+        secrets = json.loads(environment.variables[SECRET_REFS_ENV])
         assert secrets["CLAUDE_CODE_CREDS_JSON"] == "projects/p/secrets/claude/versions/latest"
         assert "GH_TOKEN" not in secrets
+        assert not environment.secret_variables
 
     def test_extra_secrets_override_registry(self, monkeypatch: pytest.MonkeyPatch):
         # Empty registry, caller provides a secret directly.
@@ -168,8 +252,10 @@ class TestBuildGcpRunJob:
             extra_secrets={"MY_SECRET": "projects/p/secrets/foo/versions/1"},
         )
         _, job = build_gcp_run_job(["echo", "x"], opts)
-        secrets = dict(job.task_groups[0].task_spec.runnables[0].environment.secret_variables)
+        environment = job.task_groups[0].task_spec.runnables[0].environment
+        secrets = json.loads(environment.variables[SECRET_REFS_ENV])
         assert secrets["MY_SECRET"] == "projects/p/secrets/foo/versions/1"
+        assert not environment.secret_variables
 
     def test_filestore_volume_present_when_configured(self):
         cfg = _config(filestore_server="10.0.0.5")
@@ -271,6 +357,7 @@ class TestGcpRunCli:
         monkeypatch.setenv("METAPROC_GCP_PROJECT", "p")
         monkeypatch.setenv("METAPROC_GCP_CONTAINER_IMAGE", "us-central1-docker.pkg.dev/p/i:t")
         monkeypatch.setenv("METAPROC_GCS_BUCKET", "test-dispatch-bucket")
+        monkeypatch.setenv("METAPROC_GCP_SERVICE_ACCOUNT", "batch@example.invalid")
         monkeypatch.delenv("METAPROC_GCP_FILESTORE_SERVER", raising=False)
 
         app = typer.Typer()
@@ -286,9 +373,17 @@ class TestGcpRunCli:
         with (
             patch.object(cmd_gcp_run, "build_wheel"),
             patch.object(cmd_gcp_run, "file_sha256", side_effect=["1" * 64, "2" * 64]),
-            patch.object(cmd_gcp_run, "upload_wheel_to_gcs", return_value="gs://b/w.whl"),
+            patch.object(
+                cmd_gcp_run,
+                "upload_wheel_to_gcs",
+                return_value="gs://b/w.whl",
+            ) as wheel_upload,
             patch.object(cmd_gcp_run, "package_workspace"),
-            patch.object(cmd_gcp_run, "upload_workspace_to_gcs", return_value="gs://b/ws.tgz"),
+            patch.object(
+                cmd_gcp_run,
+                "upload_workspace_to_gcs",
+                return_value="gs://b/ws.tgz",
+            ) as workspace_upload,
             patch.object(cmd_gcp_run, "dispatch_gcp_run", side_effect=fake_dispatch),
             patch.object(cmd_gcp_run, "tail_gcp_run_logs", return_value=0),
         ):
@@ -309,6 +404,35 @@ class TestGcpRunCli:
         opts = captured["options"]
         assert opts.extra_secrets["MY"] == "projects/p/secrets/bare-name/versions/latest"
         assert opts.extra_secrets["PINNED"] == "projects/p/secrets/pinned-name/versions/5"
+        assert wheel_upload.call_args.kwargs["project"] == "p"
+        assert workspace_upload.call_args.kwargs["project"] == "p"
+
+    def test_secret_without_service_account_fails_before_artifact_shipping(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("METAPROC_GCP_PROJECT", "p")
+        monkeypatch.setenv("METAPROC_GCP_CONTAINER_IMAGE", "example.invalid/agent:latest")
+        monkeypatch.setenv("METAPROC_GCS_BUCKET", "test-dispatch-bucket")
+        monkeypatch.delenv("METAPROC_GCP_SERVICE_ACCOUNT", raising=False)
+        monkeypatch.delenv("METAPROC_GCP_FILESTORE_SERVER", raising=False)
+        app = typer.Typer()
+        app.command("run")(cmd_gcp_run.run_command)
+
+        with patch.object(cmd_gcp_run, "_ship_artifacts") as ship_artifacts:
+            result = CliRunner().invoke(
+                app,
+                [
+                    "--no-filestore",
+                    "--secret",
+                    "API_TOKEN=api-token",
+                    "echo",
+                    "hi",
+                ],
+            )
+
+        assert result.exit_code != 0
+        assert "METAPROC_GCP_SERVICE_ACCOUNT" in result.output
+        ship_artifacts.assert_not_called()
 
     def test_build_config_requires_project(self, monkeypatch: pytest.MonkeyPatch):
 
@@ -375,6 +499,38 @@ class TestGcpRunCli:
         assert result.exit_code != 0
         assert "METAPROC_GCS_BUCKET" in result.output
 
+    def test_default_filestore_requires_server_before_artifact_shipping(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("METAPROC_GCP_PROJECT", "p")
+        monkeypatch.setenv("METAPROC_GCP_CONTAINER_IMAGE", "example.invalid/agent:latest")
+        monkeypatch.setenv("METAPROC_GCS_BUCKET", "test-dispatch-bucket")
+        monkeypatch.delenv("METAPROC_GCP_FILESTORE_SERVER", raising=False)
+        app = typer.Typer()
+        app.command("run")(cmd_gcp_run.run_command)
+
+        with (
+            patch.object(
+                cmd_gcp_run,
+                "_ship_artifacts",
+                return_value=("", "", "", ""),
+            ) as ship_artifacts,
+            patch.object(
+                cmd_gcp_run,
+                "dispatch_gcp_run",
+                return_value="projects/p/locations/us-central1/jobs/fake",
+            ) as dispatch,
+            patch.object(cmd_gcp_run, "tail_gcp_run_logs", return_value=0),
+        ):
+            result = CliRunner().invoke(app, ["echo", "hi"])
+
+        output = unstyle(result.output)
+        assert result.exit_code != 0
+        assert "METAPROC_GCP_FILESTORE_SERVER" in output
+        assert "--no-filestore" in output
+        ship_artifacts.assert_not_called()
+        dispatch.assert_not_called()
+
     def test_build_config_no_filestore_clears_runs_dir(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("METAPROC_GCP_PROJECT", "p")
         monkeypatch.setenv("METAPROC_GCP_FILESTORE_SERVER", "10.0.0.5")
@@ -435,15 +591,22 @@ class TestGcpRunCli:
         assert env_vars["METAPROC_WORKSPACE_GCS"].startswith("gs://")
         assert env_vars["METAPROC_WORKSPACE_SHA256"] == "0" * 64
 
-    def test_run_invokes_dispatch_with_resolved_options(self, monkeypatch: pytest.MonkeyPatch):
+    def test_run_invokes_dispatch_with_resolved_options(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         monkeypatch.setenv("METAPROC_GCP_PROJECT", "p")
         monkeypatch.setenv("METAPROC_GCP_CONTAINER_IMAGE", "us-central1-docker.pkg.dev/p/i:t")
         monkeypatch.setenv("METAPROC_GCS_BUCKET", "test-dispatch-bucket")
+        monkeypatch.setenv("METAPROC_GCP_SERVICE_ACCOUNT", "batch@example.invalid")
         monkeypatch.delenv("METAPROC_GCP_FILESTORE_SERVER", raising=False)
 
         app = typer.Typer()
         app.command("run")(cmd_gcp_run.run_command)
         runner = CliRunner()
+        for relative in ("packages/example", "workflow"):
+            package_dir = tmp_path / relative
+            package_dir.mkdir(parents=True)
+            (package_dir / "pyproject.toml").write_text("[project]\nname = 'example'\n")
 
         captured: dict[str, object] = {}
 
@@ -458,6 +621,7 @@ class TestGcpRunCli:
             patch.object(cmd_gcp_run, "upload_wheel_to_gcs", return_value="gs://b/w.whl"),
             patch.object(cmd_gcp_run, "package_workspace"),
             patch.object(cmd_gcp_run, "upload_workspace_to_gcs", return_value="gs://b/ws.tgz"),
+            patch.object(cmd_gcp_run, "find_repo_root", return_value=tmp_path),
             patch.object(cmd_gcp_run, "dispatch_gcp_run", side_effect=fake_dispatch),
             patch.object(cmd_gcp_run, "tail_gcp_run_logs", return_value=0) as tail_mock,
         ):
@@ -469,6 +633,10 @@ class TestGcpRunCli:
                     "FOO=bar",
                     "--secret",
                     "MY=projects/p/secrets/x/versions/1",
+                    "--workspace-package",
+                    "packages/example",
+                    "--workspace-package",
+                    "workflow",
                     "echo",
                     "hi",
                 ],
@@ -483,13 +651,125 @@ class TestGcpRunCli:
         assert opts.wheel_sha256
         assert opts.workspace_gcs_uri == "gs://b/ws.tgz"
         assert opts.workspace_sha256
+        assert opts.workspace_packages == ("packages/example", "workflow")
         assert opts.extra_env == {"FOO": "bar"}
         assert opts.extra_secrets == {"MY": "projects/p/secrets/x/versions/1"}
+        assert opts.config.filestore_server == ""
+        assert opts.config.runs_dir == ""
         # Blocking mode: tail was invoked with the resource name + project.
         tail_mock.assert_called_once()
         kwargs = tail_mock.call_args.kwargs
         assert kwargs["job_resource_name"] == "projects/p/locations/us-central1/jobs/fake"
         assert kwargs["project"] == "p"
+
+    def test_workspace_package_rejects_no_workspace(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("METAPROC_GCP_PROJECT", "p")
+        monkeypatch.setenv("METAPROC_GCP_CONTAINER_IMAGE", "example.invalid/agent:latest")
+        monkeypatch.delenv("METAPROC_GCP_FILESTORE_SERVER", raising=False)
+        app = typer.Typer()
+        app.command("run")(cmd_gcp_run.run_command)
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "--no-filestore",
+                "--no-workspace",
+                "--workspace-package",
+                "packages/example",
+                "--dry-run",
+                "echo",
+                "hi",
+            ],
+            color=True,
+        )
+
+        assert result.exit_code != 0
+        output = unstyle(result.output)
+        assert "--workspace-package" in output
+        assert "workspace shipping" in output
+
+    def test_workspace_package_missing_pyproject_fails_before_artifact_build(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("METAPROC_GCP_PROJECT", "p")
+        monkeypatch.setenv("METAPROC_GCP_CONTAINER_IMAGE", "example.invalid/agent:latest")
+        monkeypatch.setenv("METAPROC_GCS_BUCKET", "test-dispatch-bucket")
+        package_dir = tmp_path / "packages" / "example"
+        package_dir.mkdir(parents=True)
+        app = typer.Typer()
+        app.command("run")(cmd_gcp_run.run_command)
+
+        with (
+            patch.object(cmd_gcp_run, "find_repo_root", return_value=tmp_path),
+            patch.object(cmd_gcp_run, "build_wheel") as build_wheel_mock,
+        ):
+            result = CliRunner().invoke(
+                app,
+                [
+                    "--no-filestore",
+                    "--workspace-package",
+                    "packages/example",
+                    "echo",
+                    "hi",
+                ],
+            )
+
+        assert result.exit_code != 0
+        assert "pyproject.toml" in unstyle(result.output)
+        build_wheel_mock.assert_not_called()
+
+    def test_sync_only_must_ship_the_workspace_package_before_artifact_build(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("METAPROC_GCP_PROJECT", "p")
+        monkeypatch.setenv("METAPROC_GCP_CONTAINER_IMAGE", "example.invalid/agent:latest")
+        monkeypatch.setenv("METAPROC_GCS_BUCKET", "test-dispatch-bucket")
+        package_dir = tmp_path / "packages" / "example"
+        package_dir.mkdir(parents=True)
+        (package_dir / "pyproject.toml").write_text("[project]\nname = 'example'\n")
+        (tmp_path / "docs").mkdir()
+        app = typer.Typer()
+        app.command("run")(cmd_gcp_run.run_command)
+
+        with (
+            patch.object(cmd_gcp_run, "find_repo_root", return_value=tmp_path),
+            patch.object(cmd_gcp_run, "build_wheel") as build_wheel_mock,
+        ):
+            result = CliRunner().invoke(
+                app,
+                [
+                    "--no-filestore",
+                    "--sync-only",
+                    "docs",
+                    "--workspace-package",
+                    "packages/example",
+                    "echo",
+                    "hi",
+                ],
+            )
+
+        assert result.exit_code != 0
+        assert "--sync-only" in unstyle(result.output)
+        build_wheel_mock.assert_not_called()
+
+    def test_run_rejects_invalid_artifact_identity_before_build(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("METAPROC_GCP_PROJECT", "p")
+        monkeypatch.setenv("METAPROC_GCP_CONTAINER_IMAGE", "example.invalid/agent:latest")
+        monkeypatch.setenv("METAPROC_GCS_BUCKET", "test-dispatch-bucket")
+        app = typer.Typer()
+        app.command("run")(cmd_gcp_run.run_command)
+
+        with patch.object(cmd_gcp_run, "_ship_artifacts") as ship_artifacts:
+            result = CliRunner().invoke(
+                app,
+                ["--no-filestore", "--job-name", "../reuse", "echo", "hi"],
+            )
+
+        assert result.exit_code != 0
+        assert "lowercase GCP-safe ID" in unstyle(result.output)
+        ship_artifacts.assert_not_called()
 
     def test_detach_skips_tail_and_prints_log_url(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("METAPROC_GCP_PROJECT", "p")

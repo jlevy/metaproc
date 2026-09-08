@@ -33,7 +33,7 @@ tests.
 | `.env.example` | repo root `.env.example` | Regenerate: `metaproc env --template > .env.example` |
 | pi-cli model catalog | [pi-models.default.json](../../src/metaproc/data/pi-models.default.json) | Add provider block + at least one model |
 | Pricing rows | [pricing.md](../../src/metaproc/data/pricing.md) | Add provider block + comparison-table rows |
-| Cloud dispatch | [batch_backend.py](../../src/metaproc/cloud/gcp/batch_backend.py) `GCP_SECRET_REFS` | Auto-derived from registry |
+| Cloud dispatch | [secret_refs.py](../../src/metaproc/dispatch/secret_refs.py) `SecretRefSet` | Auto-derived from provider registry |
 | pi-cli auth detection | [pi_cli.py](../../src/metaproc/adapters/pi_cli.py) `check_auth` / `auth_info` | Auto-derived from registry |
 | `auth-check --live` provider inference | [auth_check.py](../../src/metaproc/commands/auth_check.py) `_infer_pi_provider` | Auto-derived from registry |
 | `PI_VALID_PROVIDERS` | [settings.py](../../src/metaproc/settings.py) | Auto-derived from registry |

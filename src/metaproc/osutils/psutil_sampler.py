@@ -1,6 +1,6 @@
 """psutil-backed CPU / RSS sampler for code-step resource attribution.
 
-Code-mode steps such as ``postprocess-adhoc-kb`` (the motivating example
+Code-mode steps such as ``normalize-items`` (the motivating example
 for this sampler) spend most of their wall-clock time in a
 ``ThreadPoolExecutor`` driving subprocess work, so the run-pool's
 ``ProcessExitEvent.peak_rss_bytes`` is too coarse — it only reports the

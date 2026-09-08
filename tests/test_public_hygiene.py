@@ -212,6 +212,26 @@ def test_reachable_git_refs_and_commit_messages_are_scanned(tmp_path: Path) -> N
     assert any("private name" in finding for finding in findings)
 
 
+def test_branch_names_may_reference_a_pull_request(tmp_path: Path) -> None:
+    """A branch named for a pull request is the same convention as its merge subject.
+
+    Ref names also include every local branch, so scanning them strictly would fail the
+    gate on one developer's checkout over a name that was never published.
+    """
+    root = tmp_path / "repo"
+    root.mkdir()
+    _init_repo(root)
+    (root / "public.txt").write_text("public")
+    subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(root), "commit", "-qm", "public commit"], check=True)
+    branch = "fix/pr-" + "19" + "-follow-up"
+    subprocess.run(["git", "-C", str(root), "branch", branch], check=True)
+
+    findings = scan_git_history(root)
+
+    assert not any("private pull-request reference" in finding for finding in findings)
+
+
 def test_git_history_scan_timeouts_are_reported_as_findings(tmp_path: Path) -> None:
     with patch(
         "devtools.public_hygiene.subprocess.run",

@@ -358,8 +358,8 @@ the same commit. Stale perf docs are worse than no perf docs.
   — the standalone browser design.
 - [Metaproc MetaBrowser plugin](../src/metaproc/metabrowser_plugin/README.md) — the
   Metaproc-owned browser integration.
-- [conventions.md](conventions.md) — naming and structure rules; some apply to
-  perf-relevant code (e.g. caching key naming).
+- [conventions.md](../src/metaproc/docs/conventions.md) — naming and structure rules;
+  some apply to perf-relevant code (e.g. caching key naming).
 - Metabrowser’s benchmark and frontend instrumentation sources.
 
 ## Phase 1 Cold-Start Baseline (2026-05-05)

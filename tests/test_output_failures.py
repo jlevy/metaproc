@@ -1,16 +1,17 @@
 """Contract failure primitives: structured records, representation, retry verdicts.
 
-What a contract failure records and what it costs, per ``arch-metaproc-core.md``
+What a contract failure records and what it costs, per ``metaproc-design.md``
 §6 (the `contract` and `on_invalid` declarations) and §14.1 (the retry chain).
 """
 
 from __future__ import annotations
 
 import datetime
+from pathlib import Path
 
 import pytest
 from pydantic import BaseModel
-from softschema import Contract, Contracts, SchemaProfile, SchemaStatus
+from softschema import Contract, Contracts, SchemaProfile, SchemaStatus, compile_model
 
 from metaproc.commands.run_parallel import _handle_success
 from metaproc.engine.build_plan import _resolve_step_inputs
@@ -21,9 +22,12 @@ from metaproc.engine.retry import (
     requires_run_abort,
     resolve_output_failure_action,
 )
+from metaproc.engine.schema_conform import conform_declared_outputs
 from metaproc.engine.validation import (
     check_artifact_contract,
     normalize_for_structural_pass,
+    repair_declared_outputs,
+    resolve_output_fpath,
     validate_item_outputs,
     validate_item_outputs_detailed,
 )
@@ -162,6 +166,35 @@ class TestStructuredFailures:
 
         assert len(failures) > 1, "three missing required fields should not collapse to one"
 
+    def test_structural_failures_use_stable_codes_and_field_locations(self, tmp_path):
+        class Strict(BaseModel):
+            model_config = {"extra": "forbid"}
+            needed: str
+
+        schema_path = tmp_path / "strict.schema.yaml"
+        compile_model(Strict, schema_path, contract_id="example:Strict/v1")
+        registry = Contracts()
+        registry.register(
+            Contract(
+                id="example:Strict/v1",
+                model=Strict,
+                envelope_key="strict",
+                status=SchemaStatus.enforced,
+                schema_path=schema_path,
+            )
+        )
+        (tmp_path / "output.md").write_text("---\nstrict:\n  surprise: x\n---\nBody\n")
+        outputs = {
+            "main": IOSpec(path="output.md", format="frontmatter-md", contract="example:Strict/v1")
+        }
+
+        failures = validate_item_outputs_detailed(tmp_path, outputs, softschema_registry=registry)
+
+        assert {(failure.invariant, failure.location) for failure in failures} == {
+            ("missing_property", "needed"),
+            ("undeclared_property", "surprise"),
+        }
+
 
 class TestStringViewIsUnchanged:
     """Every existing caller reads strings; those must not move."""
@@ -191,16 +224,14 @@ class TestRetryVerdictIgnoresFilenames:
 
     def test_the_string_path_is_filename_sensitive(self):
         """Pins the behaviour being replaced, so the improvement is visible."""
-        schema_named = (
-            "output validation failed: company-research-schema-manifest.md: file not found"
-        )
+        schema_named = "output validation failed: schema-manifest.md: file not found"
         plain = "output validation failed: source-snapshot.md: file not found"
 
         assert classify_error(schema_named) is RetryVerdict.FAIL
         assert classify_error(plain) is RetryVerdict.RETRY
 
     def test_the_structured_path_is_not(self):
-        schema_named = self._missing("company-research-schema-manifest.md")
+        schema_named = self._missing("schema-manifest.md")
         plain = self._missing("source-snapshot.md")
 
         assert classify_output_failures([schema_named]) is RetryVerdict.RETRY
@@ -479,7 +510,7 @@ class TestTheRecordSurvivesTheAgentPool:
 
     def test_the_pool_verdict_no_longer_reads_the_filename(self, tmp_path):
         """The end-to-end form of the defect: same miss, name containing 'schema'."""
-        batch_failed, _, outputs = self._pool_call(tmp_path, "company-research-schema-manifest.md")
+        batch_failed, _, outputs = self._pool_call(tmp_path, "schema-manifest.md")
         (_, error_str, failures) = batch_failed[0]
 
         assert classify_error(error_str) is RetryVerdict.FAIL, "the sentence still misreads it"
@@ -569,3 +600,115 @@ class TestValidateCommandAgreesWithTheStepBoundary:
 
         assert engine_failures == []
         assert command_failures == []
+
+
+class TestRepairDeclaredOutputs:
+    """Repair probes the same file validation is about to read.
+
+    The pre-validation repair pass resolves output paths with the validator's
+    own rules — templates rendered, absolute and multi-part paths taken as-is —
+    so a basename carrying a runtime var, or an output living outside the first
+    output's parent directory, is still repaired, and a directory output is
+    never handed to the frontmatter reader.
+    """
+
+    _BROKEN = "---\nrecord:\n  detail: Strong beat (Note: actually Q1 not Q2)\n---\nbody\n"
+
+    def test_renders_runtime_vars_and_reaches_outputs_in_other_dirs(self, tmp_path: Path) -> None:
+        first = tmp_path / "notes" / "first.md"
+        first.parent.mkdir()
+        first.write_text(self._BROKEN)
+        second = tmp_path / "reports" / "summary-claude.md"
+        second.parent.mkdir()
+        second.write_text(self._BROKEN)
+        outputs = {
+            "first": IOSpec(path=str(first), kind="file"),
+            "second": IOSpec(
+                path=str(tmp_path / "reports" / "summary-{{VARIANT}}.md"), kind="file"
+            ),
+        }
+
+        repaired = repair_declared_outputs(first.parent, outputs, variables={"VARIANT": "claude"})
+
+        assert sorted(p.name for p in repaired) == ["first.md", "summary-claude.md"]
+        assert '"Strong beat (Note: actually Q1 not Q2)"' in second.read_text()
+
+    def test_directory_outputs_and_missing_files_are_skipped(self, tmp_path: Path) -> None:
+        (tmp_path / "out-dir").mkdir()
+        outputs = {
+            "d": IOSpec(path=str(tmp_path / "out-dir"), kind="directory"),
+            "gone": IOSpec(path=str(tmp_path / "never-written.md"), kind="file"),
+        }
+
+        assert repair_declared_outputs(tmp_path, outputs, variables={}) == []
+
+
+class TestOutputResolution:
+    """The one resolution every pass over a declared output has to share.
+
+    Validation, YAML repair and schema conform each turn a declared output path
+    into a file on disk. They must name the same file: a pass that resolves
+    differently either fixes a document the next pass does not read, or reports
+    a failure about a file nobody wrote. The helper is public for that reason,
+    and these are the cases that made an inlined copy of it diverge.
+    """
+
+    def test_a_bare_basename_resolves_under_the_item_dir(self, tmp_path: Path) -> None:
+        assert resolve_output_fpath("prediction.md", tmp_path) == tmp_path / "prediction.md"
+
+    def test_a_multi_part_relative_path_is_taken_as_is(self, tmp_path: Path) -> None:
+        """Repo-relative, not item-relative: it falls through to the cwd."""
+        assert resolve_output_fpath("artifacts/index.yaml", tmp_path) == Path(
+            "artifacts/index.yaml"
+        )
+
+    def test_an_absolute_path_is_taken_as_is(self, tmp_path: Path) -> None:
+        outside = tmp_path.parent / "elsewhere" / "report.md"
+        assert resolve_output_fpath(str(outside), tmp_path) == outside
+
+    def test_every_pass_over_a_declared_output_names_the_same_file(self, tmp_path: Path) -> None:
+        """The property itself, end to end: a templated basename that only a
+        rendered path can find is repaired, conformed and validated as one file.
+        """
+        item_dir = tmp_path / "acme"
+        item_dir.mkdir()
+        target = item_dir / "acme-profile.md"
+        target.write_text(
+            "---\nprofile:\n  detail: Strong beat (Note: actually Q1 not Q2)\n"
+            "  name: 1850\n---\nbody\n"
+        )
+        outputs = {
+            "profile": IOSpec(
+                path="{{item}}-profile.md",
+                contract="x:Profile/v1",
+                format="frontmatter-md",
+                kind="file",
+            )
+        }
+        variables = {"item": "acme"}
+
+        class Profile(BaseModel):
+            detail: str
+            name: str
+
+        registry = Contracts()
+        registry.register(
+            Contract(
+                id="x:Profile/v1",
+                model=Profile,
+                envelope_key="profile",
+                status=SchemaStatus.enforced,
+                profile=SchemaProfile.frontmatter_md,
+            )
+        )
+
+        assert repair_declared_outputs(item_dir, outputs, variables=variables) == [target]
+        assert conform_declared_outputs(
+            item_dir, outputs, variables=variables, registry=registry
+        ) == [target]
+        assert (
+            validate_item_outputs_detailed(
+                item_dir, outputs, variables=variables, softschema_registry=registry
+            )
+            == []
+        )

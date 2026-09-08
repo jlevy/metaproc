@@ -21,13 +21,17 @@ another one-off script.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import resource
 import sys
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+
+from metaproc.config.env_vars import MetaprocEnv
 
 log = logging.getLogger(__name__)
 
@@ -273,18 +277,32 @@ def _collect_rlimits() -> RLimitSnapshot:
     )
 
 
-def _redact(name: str, value: str) -> str:
+def _dispatched_secret_targets() -> frozenset[str]:
+    encoded = MetaprocEnv.METAPROC_GCP_SECRET_REFS_JSON.read_str(default="")
+    if not encoded:
+        return frozenset()
+    try:
+        decoded = json.loads(encoded)
+    except json.JSONDecodeError:
+        return frozenset()
+    if not isinstance(decoded, Mapping):
+        return frozenset()
+    return frozenset(name for name in decoded if isinstance(name, str))
+
+
+def _redact(name: str, value: str, *, secret_targets: frozenset[str]) -> str:
     up = name.upper()
-    if any(tok in up for tok in _REDACTED_TOKENS):
+    if name in secret_targets or any(tok in up for tok in _REDACTED_TOKENS):
         return f"<redacted:{len(value)}chars>"
     return value
 
 
 def _collect_env() -> dict[str, str]:
     out: dict[str, str] = {}
+    secret_targets = _dispatched_secret_targets()
     for name, value in os.environ.items():
         if any(name.startswith(prefix) or name == prefix for prefix in _KNOWN_ENV_PREFIXES):
-            out[name] = _redact(name, value)
+            out[name] = _redact(name, value, secret_targets=secret_targets)
     return dict(sorted(out.items()))
 
 

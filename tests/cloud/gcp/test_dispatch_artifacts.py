@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import tarfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from google.api_core.exceptions import GoogleAPIError, PreconditionFailed
 
 from metaproc.cloud.gcp.dispatch_artifacts import (
+    GCS_UPLOAD_CHUNK_SIZE,
+    GCS_UPLOAD_RETRY,
+    GCS_UPLOAD_TIMEOUT_SECONDS,
     build_wheel,
     find_metaproc_source_dir,
     package_workspace,
@@ -17,6 +22,7 @@ from metaproc.cloud.gcp.dispatch_artifacts import (
     upload_wheel_to_gcs,
     upload_workspace_to_gcs,
 )
+from metaproc.errors import CLIError
 from metaproc.io.digests import file_sha256, verify_file_sha256
 
 
@@ -50,7 +56,6 @@ def _git_init_with_files(repo: Path, files: dict[str, str], gitignore: str = "")
 class TestFindMetaprocSourceDir:
     def test_locates_source_dir_from_module(self):
         src = find_metaproc_source_dir()
-        assert src.name == "metaproc"
         assert (src / "pyproject.toml").exists()
         assert (src / "src" / "metaproc").is_dir()
 
@@ -120,6 +125,37 @@ class TestPackageWorkspace:
         assert "docs/readme.md" in names
         assert not any(n.startswith("metaproc/") for n in names)
 
+    def test_default_excludes_vendored_metaproc_gitlink(self, tmp_path: Path):
+        repo = tmp_path / "repo"
+        _git_init_with_files(repo, {"src/keep.py": "pass"})
+        nested = repo / "vendor" / "metaproc"
+        _git_init_with_files(nested, {"src/metaproc/__init__.py": "pass"})
+        nested_sha = subprocess.run(
+            ["git", "-C", str(nested), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo),
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                f"160000,{nested_sha},vendor/metaproc",
+            ],
+            check=True,
+        )
+
+        out = package_workspace(repo_root=repo, out_path=tmp_path / "ws.tar.gz")
+
+        with tarfile.open(out) as tar:
+            names = set(tar.getnames())
+        assert "src/keep.py" in names
+        assert not any(n.startswith("vendor/metaproc") for n in names)
+
     def test_excludes_gitignored_files(self, tmp_path: Path):
         repo = tmp_path / "repo"
         _git_init_with_files(
@@ -187,6 +223,59 @@ class TestPackageWorkspace:
         assert "src/new.py" in names
         assert "ignored.txt" not in names
 
+    def test_default_skips_untracked_fifo_with_warning(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        repo = tmp_path / "repo"
+        _git_init_with_files(repo, {"src/tracked.py": "pass"})
+        fifo_path = repo / "agent.fifo"
+        os.mkfifo(fifo_path)
+
+        with (
+            patch(
+                "metaproc.cloud.gcp.dispatch_artifacts.subprocess.run",
+                side_effect=[
+                    subprocess.CompletedProcess([], 0, stdout="src/tracked.py\n", stderr=""),
+                    subprocess.CompletedProcess([], 0, stdout="agent.fifo\n", stderr=""),
+                ],
+            ),
+            caplog.at_level("WARNING"),
+        ):
+            out = package_workspace(repo_root=repo, out_path=tmp_path / "ws.tar.gz")
+
+        with tarfile.open(out) as tar:
+            names = set(tar.getnames())
+        assert "src/tracked.py" in names
+        assert "agent.fifo" not in names
+        assert any("agent.fifo" in record.message for record in caplog.records)
+
+    @pytest.mark.parametrize("explicit_option", ["sync_only", "extra_paths"])
+    def test_explicit_non_regular_workspace_path_is_rejected(
+        self,
+        tmp_path: Path,
+        explicit_option: str,
+    ) -> None:
+        repo = tmp_path / "repo"
+        _git_init_with_files(repo, {"src/tracked.py": "pass"})
+        fifo_path = repo / "agent.fifo"
+        os.mkfifo(fifo_path)
+
+        with pytest.raises(ValueError, match="not a regular file or directory"):
+            if explicit_option == "sync_only":
+                package_workspace(
+                    repo_root=repo,
+                    out_path=tmp_path / "ws.tar.gz",
+                    sync_only=["agent.fifo"],
+                )
+            else:
+                package_workspace(
+                    repo_root=repo,
+                    out_path=tmp_path / "ws.tar.gz",
+                    extra_paths=["agent.fifo"],
+                )
+
     def test_sync_rejects_absolute_path(self, tmp_path: Path):
         repo = tmp_path / "repo"
         _git_init_with_files(repo, {"src/a.py": "a"})
@@ -236,6 +325,98 @@ class TestPackageWorkspace:
         assert "src/missing.py" not in names
         assert any("missing.py" in r.message for r in caplog.records)
 
+    def test_materializes_tracked_in_repo_symlink_as_regular_file(self, tmp_path: Path):
+        repo = tmp_path / "repo"
+        _git_init_with_files(repo, {"data/source.yaml": "answer: 42\n"})
+        link = repo / "config" / "current.yaml"
+        link.parent.mkdir()
+        link.symlink_to("../data/source.yaml")
+        subprocess.run(["git", "-C", str(repo), "add", "config/current.yaml"], check=True)
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-q", "-m", "add link"],
+            check=True,
+        )
+
+        out = package_workspace(repo_root=repo, out_path=tmp_path / "ws.tar.gz")
+
+        with tarfile.open(out) as tar:
+            member = tar.getmember("config/current.yaml")
+            extracted = tar.extractfile(member)
+            assert member.isfile()
+            assert extracted is not None
+            assert extracted.read() == b"answer: 42\n"
+
+    def test_sync_only_preserves_materialized_symlink_path(self, tmp_path: Path):
+        repo = tmp_path / "repo"
+        _git_init_with_files(repo, {"data/source.yaml": "answer: 42\n"})
+        link = repo / "config" / "current.yaml"
+        link.parent.mkdir()
+        link.symlink_to("../data/source.yaml")
+
+        out = package_workspace(
+            repo_root=repo,
+            sync_only=["config/current.yaml"],
+            out_path=tmp_path / "ws.tar.gz",
+        )
+
+        with tarfile.open(out) as tar:
+            assert tar.getnames() == ["config/current.yaml"]
+            assert tar.getmember("config/current.yaml").isfile()
+
+    def test_materializes_nested_in_repo_symlink_from_extra_directory(self, tmp_path: Path):
+        repo = tmp_path / "repo"
+        _git_init_with_files(
+            repo,
+            {"data/source.yaml": "answer: 42\n"},
+            gitignore="scratch/\n",
+        )
+        scratch = repo / "scratch"
+        scratch.mkdir()
+        (scratch / "current.yaml").symlink_to("../data/source.yaml")
+
+        out = package_workspace(
+            repo_root=repo,
+            extra_paths=["scratch"],
+            out_path=tmp_path / "ws.tar.gz",
+        )
+
+        with tarfile.open(out) as tar:
+            member = tar.getmember("scratch/current.yaml")
+            extracted = tar.extractfile(member)
+            assert member.isfile()
+            assert extracted is not None
+            assert extracted.read() == b"answer: 42\n"
+
+    def test_rejects_tracked_symlink_that_resolves_outside_repo(self, tmp_path: Path):
+        repo = tmp_path / "repo"
+        _git_init_with_files(repo, {"src/a.py": "a"})
+        outside = tmp_path / "secret.txt"
+        outside.write_text("secret")
+        leak = repo / "src" / "leak.txt"
+        leak.symlink_to(outside)
+        subprocess.run(["git", "-C", str(repo), "add", "src/leak.txt"], check=True)
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-q", "-m", "add link"],
+            check=True,
+        )
+
+        with pytest.raises(ValueError, match="outside repo root"):
+            package_workspace(repo_root=repo, out_path=tmp_path / "ws.tar.gz")
+
+    def test_rejects_directory_symlink_cycle(self, tmp_path: Path):
+        repo = tmp_path / "repo"
+        _git_init_with_files(repo, {"assets/source.yaml": "answer: 42\n"})
+        loop = repo / "assets" / "loop"
+        loop.symlink_to(".", target_is_directory=True)
+        subprocess.run(["git", "-C", str(repo), "add", "assets/loop"], check=True)
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-q", "-m", "add loop"],
+            check=True,
+        )
+
+        with pytest.raises(ValueError, match="directory link cycle"):
+            package_workspace(repo_root=repo, out_path=tmp_path / "ws.tar.gz")
+
 
 # ── upload helpers ───────────────────────────────────────────
 
@@ -254,26 +435,114 @@ class TestUploadToGcs:
         with patch(
             "metaproc.cloud.gcp.dispatch_artifacts.storage.Client",
             return_value=client,
-        ):
-            uri = upload_to_gcs(local, "gs://my-bucket/gcp-run/jobid/payload.txt")
+        ) as client_factory:
+            uri = upload_to_gcs(
+                local,
+                "gs://my-bucket/gcp-run/jobid/payload.txt",
+                project="explicit-project",
+            )
 
         assert uri == "gs://my-bucket/gcp-run/jobid/payload.txt"
+        client_factory.assert_called_once_with(project="explicit-project")
         client.bucket.assert_called_once_with("my-bucket")
         bucket.blob.assert_called_once_with("gcp-run/jobid/payload.txt")
-        blob.upload_from_filename.assert_called_once_with(str(local))
+        assert blob.chunk_size == GCS_UPLOAD_CHUNK_SIZE
+        blob.upload_from_filename.assert_called_once_with(
+            str(local),
+            if_generation_match=0,
+            timeout=GCS_UPLOAD_TIMEOUT_SECONDS,
+            retry=GCS_UPLOAD_RETRY,
+        )
         assert blob.metadata == {"metaproc-sha256": file_sha256(local)}
+
+    def test_identical_existing_object_makes_retry_idempotent(self, tmp_path: Path):
+        """R32: a dispatch that failed after uploading must stay retriable.
+
+        ``if_generation_match=0`` raises 412 on the second attempt. Same bytes means
+        the upload already succeeded, so the URI is returned rather than dead-ending
+        the operator on a re-run with the same ``--job-name``.
+        """
+        local = tmp_path / "payload.txt"
+        local.write_text("hi")
+
+        blob = MagicMock()
+        blob.upload_from_filename.side_effect = PreconditionFailed("412")
+        # reload() is what fetches the *server's* metadata; the uploader has already
+        # overwritten blob.metadata locally with the digest it was about to write.
+        blob.reload.side_effect = lambda: setattr(
+            blob, "metadata", {"metaproc-sha256": file_sha256(local)}
+        )
+        bucket = MagicMock()
+        bucket.blob.return_value = blob
+        client = MagicMock()
+        client.bucket.return_value = bucket
+
+        with patch(
+            "metaproc.cloud.gcp.dispatch_artifacts.storage.Client",
+            return_value=client,
+        ):
+            uri = upload_to_gcs(local, "gs://my-bucket/gcp-run/j/payload.txt", project="p")
+
+        assert uri == "gs://my-bucket/gcp-run/j/payload.txt"
+        blob.reload.assert_called_once()
+
+    def test_conflicting_existing_object_raises_actionable_cli_error(self, tmp_path: Path):
+        """Different bytes under the same URI stay a hard error, with remediation."""
+        local = tmp_path / "payload.txt"
+        local.write_text("hi")
+
+        blob = MagicMock()
+        blob.upload_from_filename.side_effect = PreconditionFailed("412")
+        blob.reload.side_effect = lambda: setattr(
+            blob, "metadata", {"metaproc-sha256": "some-other-digest"}
+        )
+        bucket = MagicMock()
+        bucket.blob.return_value = blob
+        client = MagicMock()
+        client.bucket.return_value = bucket
+
+        with (
+            patch(
+                "metaproc.cloud.gcp.dispatch_artifacts.storage.Client",
+                return_value=client,
+            ),
+            pytest.raises(CLIError, match="already exists with different content"),
+        ):
+            upload_to_gcs(local, "gs://my-bucket/gcp-run/j/payload.txt", project="p")
+
+    def test_unreadable_existing_object_raises_cli_error(self, tmp_path: Path):
+        """A 412 whose metadata cannot be read must not surface as a raw traceback."""
+        local = tmp_path / "payload.txt"
+        local.write_text("hi")
+
+        blob = MagicMock()
+        blob.upload_from_filename.side_effect = PreconditionFailed("412")
+        blob.reload.side_effect = GoogleAPIError("no access")
+        bucket = MagicMock()
+        bucket.blob.return_value = blob
+        client = MagicMock()
+        client.bucket.return_value = bucket
+
+        with (
+            patch(
+                "metaproc.cloud.gcp.dispatch_artifacts.storage.Client",
+                return_value=client,
+            ),
+            pytest.raises(CLIError, match="metadata could not be read"),
+        ):
+            upload_to_gcs(local, "gs://my-bucket/gcp-run/j/payload.txt", project="p")
 
     def test_rejects_non_gs_uri(self, tmp_path: Path):
         local = tmp_path / "x"
         local.write_text("")
         with pytest.raises(ValueError, match="Expected gs:// URI"):
-            upload_to_gcs(local, "https://example.com/x")
+            upload_to_gcs(local, "https://example.com/x", project="p")
 
     def test_rejects_uri_without_blob_path(self, tmp_path: Path):
         local = tmp_path / "x"
         local.write_text("")
         with pytest.raises(ValueError, match="Missing blob path"):
-            upload_to_gcs(local, "gs://my-bucket")
+            upload_to_gcs(local, "gs://my-bucket", project="p")
 
 
 class TestUploadWheelAndWorkspace:
@@ -291,7 +560,12 @@ class TestUploadWheelAndWorkspace:
             "metaproc.cloud.gcp.dispatch_artifacts.storage.Client",
             return_value=client,
         ):
-            uri = upload_wheel_to_gcs(wheel, bucket="dispatch-bucket", job_id="job-abc-123")
+            uri = upload_wheel_to_gcs(
+                wheel,
+                bucket="dispatch-bucket",
+                job_id="job-abc-123",
+                project="p",
+            )
 
         assert uri == "gs://dispatch-bucket/gcp-run/job-abc-123/metaproc-0.2.0-py3-none-any.whl"
         bucket.blob.assert_called_once_with("gcp-run/job-abc-123/metaproc-0.2.0-py3-none-any.whl")
@@ -309,8 +583,8 @@ class TestUploadWheelAndWorkspace:
             "metaproc.cloud.gcp.dispatch_artifacts.storage.Client",
             return_value=client,
         ):
-            uri_a = upload_wheel_to_gcs(wheel, bucket="b", job_id="job-a")
-            uri_b = upload_wheel_to_gcs(wheel, bucket="b", job_id="job-b")
+            uri_a = upload_wheel_to_gcs(wheel, bucket="b", job_id="job-a", project="p")
+            uri_b = upload_wheel_to_gcs(wheel, bucket="b", job_id="job-b", project="p")
 
         assert uri_a == "gs://b/gcp-run/job-a/metaproc-0.2.0-py3-none-any.whl"
         assert uri_b == "gs://b/gcp-run/job-b/metaproc-0.2.0-py3-none-any.whl"
@@ -330,7 +604,12 @@ class TestUploadWheelAndWorkspace:
             "metaproc.cloud.gcp.dispatch_artifacts.storage.Client",
             return_value=client,
         ):
-            uri = upload_workspace_to_gcs(ws, bucket="dispatch-bucket", job_id="job-abc-123")
+            uri = upload_workspace_to_gcs(
+                ws,
+                bucket="dispatch-bucket",
+                job_id="job-abc-123",
+                project="p",
+            )
 
         assert uri == "gs://dispatch-bucket/gcp-run/job-abc-123/workspace.tar.gz"
         bucket.blob.assert_called_once_with("gcp-run/job-abc-123/workspace.tar.gz")
@@ -345,5 +624,11 @@ class TestUploadWheelAndWorkspace:
             "metaproc.cloud.gcp.dispatch_artifacts.storage.Client",
             return_value=client,
         ):
-            uri = upload_wheel_to_gcs(wheel, bucket="b", job_id="j1", prefix="custom-prefix")
+            uri = upload_wheel_to_gcs(
+                wheel,
+                bucket="b",
+                job_id="j1",
+                project="p",
+                prefix="custom-prefix",
+            )
         assert uri == "gs://b/custom-prefix/j1/w.whl"

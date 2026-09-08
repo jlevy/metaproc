@@ -1,6 +1,6 @@
 """Tests for SlotCoordinator vehicle-aware materialization (Phase 3).
 
-Spec: docs/arch/arch-metaproc-core.md
+Spec: src/metaproc/docs/metaproc-design.md
 Regression coverage (Phase 3 of the original design).
 
 Verifies that ``SlotCoordinator.acquire_slot`` reads
@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from metaproc.adapters.claude_code import ClaudeCodeCliAdapter
+from metaproc.adapters.claude_cli import ClaudeCodeCliAdapter
 from metaproc.dispatch.credential_pool import (
     ConcurrentModificationError,
     EntryState,

@@ -265,18 +265,15 @@ class TestWorkerDispatchRuntimeVars:
         assert "METAPROC_AUTH_EXCLUDE_LABELS" not in env_vars
 
     def test_submit_workers_uses_config_auth_flags_when_set(self, monkeypatch):
-        """Regression coverage: hybrid CLI propagation.
+        """The Batch worker dispatch must prefer its explicit auth flags.
 
-        Hybrid (`run-process --backend gcp-worker --auth-*`) builds a
-        resolved AuthPoolFlags at the orchestrator level and passes it
-        on WorkerDispatchConfig.auth_flags. The orchestrator process
-        does NOT have METAPROC_AUTH_* env vars set (they came in as CLI
-        flags only), so a from_env() fallback at the worker_dispatch
-        site would silently drop the auth chain. config.auth_flags must
-        win over an empty ambient env.
+        The full-cloud orchestrator passes resolved AuthPoolFlags on
+        WorkerDispatchConfig.auth_flags. A from_env() fallback at the worker
+        dispatch site could silently drop that auth chain, so config.auth_flags
+        must win over an empty ambient environment.
         """
 
-        # Hybrid orchestrator: ambient env has NO auth-pool vars set.
+        # The orchestrator ambient env has no auth-pool variables set.
         for var in (
             "METAPROC_AUTH_ACCOUNT",
             "METAPROC_AUTH_BACKEND",
@@ -292,8 +289,7 @@ class TestWorkerDispatchRuntimeVars:
             container_image="gcr.io/test/agent:latest",
             filestore_server="10.0.0.1",
         )
-        # Resolved auth flags as run-process would build them: explicit
-        # gcp-secret-manager backend (the hybrid worker default).
+        # Resolved auth flags as the outer cloud request would build them.
         config = WorkerDispatchConfig(
             gcp=gcp_config,
             num_workers=1,

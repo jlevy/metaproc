@@ -1,6 +1,6 @@
 """Single source of truth for the METAPROC_AUTH_* / ``--auth-*`` chain.
 
-The auth-pool dispatch chain propagates five flags through three layers:
+The auth-pool dispatch chain propagates one configuration cohort through three layers:
 
 .. code-block:: text
 
@@ -10,14 +10,14 @@ The auth-pool dispatch chain propagates five flags through three layers:
                                 |   (worker_dispatch env-var forwarding)
     worker entrypoint           ->  inner `run-parallel --backend local --auth-*`
 
-Each of those sites used to hardcode the same five env-var names and CLI
-flag names as bare strings, re-implementing CSV-to-tuple encoding for the
+Each of those sites used to hardcode the same env-var and CLI flag names
+as bare strings, re-implementing CSV-to-tuple encoding for the
 include/exclude labels independently, and silently breaking the chain on
 any typo.
 
 This module gives every layer one shape to import:
 
-- :class:`AuthPoolFlags`: frozen dataclass holding the five values.
+- :class:`AuthPoolFlags`: frozen dataclass holding the transport values.
 - :meth:`AuthPoolFlags.from_env`: read from process env (or test mapping).
 - :meth:`AuthPoolFlags.to_env_vars`: encode for Batch job env_vars dict.
 - :meth:`AuthPoolFlags.to_cli_flags`: encode as ``--auth-*`` argv list.
@@ -70,8 +70,8 @@ class AuthPoolFlags:
     auth_account: str = ""
     auth_backend: str = ""
     auth_fallback_policy: str = ""
-    # plan-2026-05-03: label selection policy. Empty
-    # string means "use the default" — round-robin for ≥ 2 included
+    # Empty string means "use the default" label selection policy:
+    # round-robin for ≥ 2 included
     # labels, else priority-order. Values: priority-order|round-robin|
     # least-active.
     auth_policy: str = ""

@@ -10,7 +10,7 @@ description: The runtime command and recovery reference for operators (human or 
 > The CLI surfaces this doc via `metaproc help operator`. If you have NOT read § Top
 > mistakes to avoid + § Operating Rules below, stop and read them before touching a run.
 
-Related docs: [concepts](metaproc-concepts-and-principles.md) (first principles) ·
+Related docs: [concepts](metaproc-concepts.md) (first principles) ·
 [developer guide](metaproc-developer-guide.md) (extending metaproc).
 This reference and the other bundled docs are served at runtime via
 `metaproc help <operator|concepts|developer>`.
@@ -63,12 +63,13 @@ contract):
 - Base class `Adapter.classify_failure` exists in `src/metaproc/adapters/base.py`. The
   default returns `unknown` (→ generic retry).
   Override is currently OPTIONAL — that is the gap that allowed mistake #5 above.
-- `claude_code.py` and `codex.py` implement it; `gemini.py` and `pi_cli.py` do NOT.
+- `claude_cli.py` and `codex_cli.py` implement it; `gemini_cli.py` and `pi_cli.py` do
+  NOT.
 - Open work: make `classify_failure` REQUIRED (no default fallback to generic retry);
-  add the missing implementations for both `gemini.py` and `pi_cli.py`; surface ABORT
-  events to the wrapper log with the actual error message (not just `status=exit_N`);
-  cascade-abort the whole step after N consecutive ABORTs in one fan-out (suggested
-  threshold N=3).
+  add the missing implementations for both `gemini_cli.py` and `pi_cli.py`; surface
+  ABORT events to the wrapper log with the actual error message (not just
+  `status=exit_N`); cascade-abort the whole step after N consecutive ABORTs in one
+  fan-out (suggested threshold N=3).
 
 **Operator surfacing**: when ABORT fires, the wrapper log MUST emit the actual error
 message in the alternation pattern, not the opaque exit code:
@@ -101,23 +102,22 @@ uv run metaproc auth --help
 uv run metaproc gcp --help
 ```
 
-For procedural how-tos, see the runbooks under [`runbooks/`](../../../docs/runbooks/):
+For procedural how-tos, see the runbooks under
+[`runbooks/`](https://github.com/jlevy/metaproc/blob/main/docs/runbooks):
 
 | Runbook | Use when |
 | --- | --- |
-| [`environment-bootstrap.runbook.md`](../../../docs/runbooks/environment-bootstrap.runbook.md) | First-time setup on a new machine or fresh shell; tool installs; `auth-check` preflight. |
-| [`credential-setup.runbook.md`](../../../docs/runbooks/credential-setup.runbook.md) | Wiring per-adapter credentials (Claude OAuth pool, Codex ChatGPT-plan, Gemini modes, GCP infra + Secret Manager). |
-| [`cloud-dispatch.runbook.md`](../../../docs/runbooks/cloud-dispatch.runbook.md) | Running, monitoring, and recovering jobs on GCP Batch (`--backend gcp-worker`). |
-| [`adapter-compatibility.runbook.md`](../../../docs/runbooks/adapter-compatibility.runbook.md) | Adapter-routing pitfalls (pi-cli API matrix, Gemini 3 `thought_signature`, ADC on Batch, `derive_variant` cascade). |
-| [`adding-a-new-llm-provider.runbook.md`](../../../docs/runbooks/adding-a-new-llm-provider.runbook.md) | Onboarding a new model or provider into the dispatch matrix. |
-| [`claude-code-cli-remote-vm.runbook.md`](../../../docs/runbooks/claude-code-cli-remote-vm.runbook.md) | Operator setup for the Claude Code CLI on a remote VM. |
-| [`softschema-validation.runbook.md`](../../../docs/runbooks/softschema-validation.runbook.md) | Validating softschema-tagged artifacts. |
-| [`browser-streaming-smoke.runbook.md`](../../../docs/runbooks/browser-streaming-smoke.runbook.md) | Browser streaming smoke procedure. |
+| [`environment-bootstrap.runbook.md`](https://github.com/jlevy/metaproc/blob/main/docs/runbooks/environment-bootstrap.runbook.md) | First-time setup on a new machine or fresh shell; tool installs; `auth-check` preflight. |
+| [`credential-setup.runbook.md`](credential-setup.runbook.md) | Wiring per-adapter credentials (Claude OAuth pool, Codex ChatGPT-plan, Gemini modes, GCP infra + Secret Manager). |
+| [`cloud-dispatch.runbook.md`](cloud-dispatch.runbook.md) | Running, monitoring, and recovering jobs on GCP Batch (`--backend gcp-worker`). |
+| [`adapter-compatibility.runbook.md`](https://github.com/jlevy/metaproc/blob/main/docs/runbooks/adapter-compatibility.runbook.md) | Adapter-routing pitfalls (pi-cli API matrix, Gemini 3 `thought_signature`, ADC on Batch, `derive_variant` cascade). |
+| [`adding-a-new-llm-provider.runbook.md`](https://github.com/jlevy/metaproc/blob/main/docs/runbooks/adding-a-new-llm-provider.runbook.md) | Onboarding a new model or provider into the dispatch matrix. |
+| [`softschema-validation.runbook.md`](https://github.com/jlevy/metaproc/blob/main/docs/runbooks/softschema-validation.runbook.md) | Validating softschema-tagged artifacts. |
+| [`browser-streaming-smoke.runbook.md`](https://github.com/jlevy/metaproc/blob/main/docs/runbooks/browser-streaming-smoke.runbook.md) | Browser streaming smoke procedure. |
 
-For implementation contracts see
-[`arch/arch-metaproc-core.md`](../../../docs/arch/arch-metaproc-core.md), for pool
-behavior [`arch/arch-runpool.md`](../../../docs/arch/arch-runpool.md), and for naming
-rules [`conventions.md`](../../../docs/conventions.md).
+For implementation contracts see [`metaproc-design.md`](metaproc-design.md), for pool
+behavior [`arch/arch-runpool.md`](arch-runpool.md), and for naming rules
+[`conventions.md`](conventions.md).
 
 ## Operating Rules
 
@@ -146,15 +146,33 @@ rules [`conventions.md`](../../../docs/conventions.md).
 7. Hold the operator cap high; let the runpool govern down.
    `--max-concurrency` at launch and `pool override --cap N` mid-run set the *operator
    cap*, which is a hand-set ceiling, not the safety governor.
+   For a local `run-process`, the launch cap is shared by executable leaves across
+   fan-out pools, scalar steps, and composite scopes.
+   A `gcp-worker` launch applies it independently inside each worker.
    The adaptive memory and provider ceilings are what actively govern under pressure.
-   For local agent-pool dispatches (claude, codex, gemini, pi-cli), keep the operator
-   cap at ≥20 so the adaptive controller has room to ratchet down; setting it tighter
-   silently caps
+   Command-backed `mode: code` steps also use the shared launch cap and may execute
+   concurrently at one DAG level; fan-out paths retain their step caps.
+   The run-owned synchronous executor defaults to 32 workers and grows to an explicit
+   higher launch cap, so its implementation capacity does not silently lower that cap.
+   Code subprocesses share the process directory, so commands that mutate repository
+   state, lockfiles, or other shared paths must use per-item paths or their own
+   synchronization. For local agent-pool dispatches (claude, codex, gemini, pi-cli), keep
+   the operator cap at ≥20 so the adaptive controller has room to ratchet down; setting
+   it tighter silently caps
    `effective_target = min(memory_ceiling, provider_ceiling, operator_cap)` with no
    warning, even when the host could safely run more.
-   See [`arch-runpool.md`](../../../docs/arch/arch-runpool.md) § “Operator cap floor”
-   for the full rationale and why per-adapter memory profiles are not yet stable enough
-   to tune the cap tightly.
+   See [`arch-runpool.md`](arch-runpool.md) § “Operator cap floor” for the full
+   rationale and why per-adapter memory profiles are not yet stable enough to tune the
+   cap tightly.
+8. Treat `mode: code` work as owned by the step.
+   A command-backed step owns its complete process group.
+   Metaproc terminates surviving descendants and flushes the command log before
+   releasing run capacity, including after an exit-zero leader.
+   Intentional daemonization is therefore unsupported.
+   A long-running Python handler under `run-process` must check
+   `StepContext.cancel_requested()` at safe checkpoints and return promptly; Metaproc
+   waits for started handler work rather than abandoning a thread that may still write
+   artifacts.
 
 ## Runtime Terms
 
@@ -169,6 +187,31 @@ rules [`conventions.md`](../../../docs/conventions.md).
 
 Use **item** for workflow data and **task** for the harness-owned execution record.
 The `tasks/` path segment is about execution state, not the input data by itself.
+
+### Mapped composite scopes
+
+A composite step may declare `for_each` to run one child process per roster item.
+The child evaluator runs in the parent process; it does not start a child Metaproc
+command or acquire another orchestrator lease.
+For item `AAPL` on step `research`, the child scope is `<run>/research/AAPL/` and the
+parent task state is `<run>/.state/tasks/research/AAPL/`.
+
+The child process declares every output required for its own valid completion.
+The mapped parent separately declares the subset it publishes to downstream steps; the
+first implementation does not automatically project child ports.
+Metaproc validates both boundaries and revalidates every child-process output before
+reusing a completed parent item.
+This is stricter than earlier scalar-composite behavior: an inaccurate child output
+declaration now fails and must be corrected or removed.
+Duplicate resolved item keys fail before execution.
+
+`for_each.max_concurrency` is an optional ceiling on active structural scope evaluators.
+It is not a memory estimate or a replacement for executable-leaf and host admission.
+Retries belong to child leaves; a whole-scope `for_each.retry` is rejected.
+Mapped composites currently run on one host; selecting `gcp-worker` is rejected before
+any active DAG step or cloud dispatch begins.
+To place a mapped process on one GCP Batch VM, use one `gcp run` task whose command is
+`run-process --backend local`; do not chain `gcp run` calls per step or item.
 
 ## Starting Runs
 
@@ -186,8 +229,16 @@ Useful dispatch selectors:
 - `--from <step>` starts at a step and lets downstream dependencies run
 - `--only <step>` runs only the named step
 - `--skip <step>` marks a step skipped for this invocation
-- `--force` bypasses reuse checks and reruns eligible work
+- `--force` bypasses reuse checks throughout the run, including composite descendants
 - `--dry-run` prints the plan without launching work
+
+`--skip`, `--from`, and `--only` currently name root-process steps.
+They are not matched against same-named steps inside a composite child.
+
+The initial local run-owned pool supports one execution profile per run.
+If a later scalar agent leaf resolves to a different profile, Metaproc fails before
+launching it; run distinct profiles as separate sibling runs until mixed-profile pool
+placement is implemented.
 
 For the common “I edited one step, rerun and reuse the rest” loop, you usually do
 **not** pass any of these flags; rerun with the same `RUN_ID` and let the fingerprint
@@ -289,6 +340,15 @@ The cascade only fires when the recorded fingerprint disagrees with the current 
 Runs whose completion records carry no `recorded_step_hash` (legacy completions) are
 kept as completed and are *not* re-executed.
 
+One class of runbook is deliberately outside the fingerprint: a file the run itself
+produces, referenced through a dep that declares `produced_by`. A step may load a
+runbook an earlier step generates, and that file does not exist yet when the plan is
+built, so hashing its bytes would give the same step two different fingerprints — one at
+planning and one at execution — and nothing could be compared against a recorded value.
+Editing such a file by hand therefore does not re-run its consumer; changing the step
+that *produces* it does, and the cascade carries that downstream.
+Use `--from <step>` to force a rerun after editing a generated runbook in place.
+
 ### When to reach for a flag
 
 The fingerprint covers runbook bytes and the declared step contract.
@@ -306,6 +366,12 @@ decision:
 
 Use `run-process --dry-run` or `metaproc deps <run>` to preview the cascade if you are
 unsure what the next launch will execute.
+
+Keep every resolved `--var` value unchanged when resuming a run ID. Metaproc rejects a
+changed, added, or removed variable before it reuses task state; start a new run ID for
+a different input set.
+Equivalent local and cloud Filestore mount aliases for `RUNS_DIR` are the sole
+normalization exception.
 
 ### Worked example
 
@@ -390,11 +456,17 @@ OAuth check because it would override the scoped Codex credential.
 ## Local, Cloud, and Worker Execution
 
 Local runs use the default local backend.
-Cloud fan-out uses `--backend gcp-worker` or the workflow’s cloud-oriented wrapper
-options; use command help for the current flag set:
+For compatible multi-VM fan-out, use `--backend gcp-worker --cloud` or the workflow’s
+cloud-oriented wrapper options.
+The bare `gcp-worker` backend is reserved for the inner Batch orchestrator leg.
+A complete local-backend DAG may instead run as the one command in a `gcp run` Batch
+task. That form keeps one host and is the current cloud placement for mapped composites;
+the nested `run-process` remains the only DAG orchestrator.
+Use command help for the current flag set:
 
 ```bash
 uv run metaproc run-process --help
+uv run metaproc gcp run --help
 uv run metaproc gcp status --help
 uv run metaproc gcp logs --help
 uv run metaproc gcp scale --help
@@ -431,6 +503,19 @@ uv run metaproc run-process <process.process.md> \
 Use `uv run metaproc run-process --help` for the full credential-pool flag set (the
 underlying CLI flags are named `--auth-*`), including fallback and preflight behavior.
 
+The configured pool applies to matching scalar and fan-out agent steps.
+A step using a different adapter continues with that adapter’s ambient authentication
+and emits a warning naming both adapters.
+Treat that warning as evidence that the step is outside the pool, especially when
+comparing pool usage with expected task counts.
+
+With `--backend gcp-worker`, scalar agent steps execute on the orchestrator while
+fan-out items execute on workers.
+Both lease from the same configured label set, so a long scalar call can hold a label
+that a worker is also waiting to acquire.
+Size the label set for the combined orchestrator-and-worker demand and use `auth usage`
+plus `pool events` to inspect contention.
+
 ## Monitoring Commands
 
 | Question | Command |
@@ -445,6 +530,7 @@ underlying CLI flags are named `--auth-*`), including fallback and preflight beh
 | What did it cost? | `uv run metaproc trace --extract <run-dir> && uv run metaproc trace <run-dir> --cost` |
 | How did concurrency change? | `uv run metaproc pool concurrency-timeline <run-dir>` |
 | What did the pool record? | `uv run metaproc pool events <run-dir>` |
+| What did every run-owned and step pool record? | `uv run metaproc pool rollup <run-dir>` |
 | What are throughput and resource totals? | `uv run metaproc stats <run-dir>` |
 | Which auth labels were used? | `uv run metaproc auth usage <run-dir>` |
 | What is the cloud Batch state? | `uv run metaproc gcp status <run-id>` |
@@ -476,6 +562,13 @@ Above the table, a one-line summary tells you whether anything needs attention:
   `N` counts those two states (running steps are excluded — the orchestrator is already
   on them).
 
+The top `Status:` label reports execution, while `Process:` reports definition
+freshness. A terminal code-step failure therefore renders `Status: FAILED` with its
+durable task error and does not render the potentially misleading `Process: current`
+summary. Full JSON output exposes these facts as `process_execution_state` and
+`process_error`; the projected `--steps` JSON surface remains
+`{run_dir, process_state, steps}`.
+
 Useful flags:
 
 - `--steps` shows only the Steps table (skips the variant table, timing, system metrics,
@@ -492,7 +585,9 @@ Useful flags:
 
 When `run-config.yaml` is missing, the spec has moved, or the plan no longer builds
 under the captured params, the Steps section is omitted silently — the rest of
-`metaproc status` still works.
+`metaproc status` still works because execution state comes directly from
+`process-status.yaml`. `status --check` and `wait` treat a terminal process failure as
+failed even when the process had no fan-out items.
 
 ## Log Compression
 
@@ -574,7 +669,7 @@ status file exists if the run stopped before fan-out started.
 
 Operator-facing summary of where to look for a running or completed run.
 For the full per-artifact reference (schema, lifecycle, writer, readers), see
-[artifact-catalog.md](../../../docs/artifact-catalog.md).
+[artifact-catalog.md](artifact-catalog.md).
 
 Each scope root has two reserved runtime branches and any number of workflow artifact
 branches:
@@ -595,6 +690,7 @@ for unmarked old runs.
 | Artifact | Current path | Meaning |
 | --- | --- | --- |
 | Run config | `<run>/.state/run-config.yaml` | Frozen run identity, variables, and layout marker |
+| Run plan | `<scope>/.state/run-plan.yaml` | What this scope declared: step identity, shape, canonical mapped item keys, output ports, fingerprints |
 | Orchestrator lease | `<run>/.state/orchestrator-lease.yaml` | Owner and heartbeat for cross-host safety |
 | Process status | `<run>/.state/process-status.yaml` | Aggregated DAG state for status display |
 | Overrides | `<run>/.state/overrides.yaml` | Operator dependency overrides |
@@ -617,9 +713,44 @@ for unmarked old runs.
 | Workflow tool logs | `<run>/.logs/tools/<tool-name>/invocations.jsonl` | Workflow-owned tool invocation streams |
 | Trace output | `<run>/.logs/derived/trace.jsonl` | Derived `TraceEvent/0.1` output from `metaproc trace --extract` |
 
+Runpool event streams include `auth_lease_acquired` and `auth_outcome` when a pooled
+credential is used.
+An `auth_skipped` event with `pool_enabled: false` records an adapter
+mismatch that used ambient authentication instead, so pool use can be audited without
+scraping console output.
+
 `tools/<tool-name>/` marks workflow ownership even though the file is operationally a
 log. `derived/` marks extractor output; trace extractors should not treat it as source
 input.
+
+### Reading Accepted and Unaccepted Outputs
+
+The browser’s run view splits a task’s recorded outputs into **accepted** and
+**unaccepted**. Accepted means the artifact is safe to consume: the task succeeded, the
+result belongs to the task’s latest attempt, the step fingerprint still matches
+`run-plan.yaml`, the port is declared, and the file or directory is present locally.
+
+An unaccepted output carries a reason, and the reason is the diagnosis:
+
+| Reason | What to do |
+| --- | --- |
+| `task-not-successful`, `result-not-validated` | The step did not finish cleanly. Read the task’s status and logs. |
+| `attempt-mismatch` | The artifact belongs to an earlier attempt. A later attempt superseded it; the current attempt’s result is what counts. |
+| `step-mismatch` | The artifact is real but stale: the step definition changed after it was written. Rerun the step (§Iterating on a Single Step) or accept it as historical. |
+| `legacy-unbound-result`, `legacy-unbound-step` | Written before attempt or fingerprint binding existed. Old run, not a fault. |
+| `undeclared` | The step wrote a port its spec does not declare. Fix the spec’s `outputs`. |
+| `external` | The recorded path lies outside the run tree, so it cannot be rebased onto this host. |
+| `missing` | The recorded path is gone. The artifact tree was moved, cleaned, or partially copied. |
+| `kind-mismatch` | A port declared `kind: file` is a directory on disk, or the reverse. |
+
+A **coverage gap** is different from an unaccepted output: the gap means a task or child
+scope the plan declared has no durable state at all, so nothing ran or the state was
+lost. On a run still in progress, not-yet-started work appears here too.
+
+None of this is an execution authority — it describes an existing run tree and never
+decides what runs next.
+For the full rule set see [metaproc-design.md](metaproc-design.md) §10.6 Consumable
+Outputs.
 
 ## Trace Workflow
 
@@ -633,6 +764,18 @@ uv run metaproc trace <run-dir> --tree
 uv run metaproc trace <run-dir> --health
 uv run metaproc trace <run-dir> --cost
 ```
+
+Extraction from a parent run includes framework logs from nested composite scope roots.
+Every span carries `scope.path`; `.` identifies the parent and paths such as
+`research/AAPL` identify child scopes.
+Nested span IDs and cross-source joins are scoped, so repeated child step and item names
+do not collide. If a Gemini attempt finishes successfully after a failed tool call, the
+tool remains an `error` span with `error.recovered: true` for diagnosis but does not
+change the successful session or attempt status.
+
+`pool rollup` follows the same composite-scope discovery rule.
+It includes a scope’s run-owned root pool at `.` or its relative scope path, plus any
+step-owned pools below that scope.
 
 Re-run extraction after a run completes, after recovering old logs, or after changing an
 extractor. Do not edit trace JSONL by hand; fix the source log or extractor and
@@ -654,11 +797,11 @@ reader rather than adding a one-off parser.
 When runtime paths change, update these documents in the same PR:
 
 - this operator reference
-- [artifact-catalog.md](../../../docs/artifact-catalog.md)
-- [conventions.md](../../../docs/conventions.md)
-- [arch-metaproc-core.md](../../../docs/arch/arch-metaproc-core.md)
-- [arch-runpool.md](../../../docs/arch/arch-runpool.md)
-- [../README.md](../../../README.md)
+- [artifact-catalog.md](artifact-catalog.md)
+- [conventions.md](conventions.md)
+- [metaproc-design.md](metaproc-design.md)
+- [arch-runpool.md](arch-runpool.md)
+- [../README.md](https://github.com/jlevy/metaproc/blob/main/README.md)
 - active specs that name source log paths
 - workflow runbooks or process specs that pin tool-specific environment variables
 

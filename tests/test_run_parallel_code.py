@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from metaproc.cli import app
@@ -12,7 +13,10 @@ from metaproc.models.resources import SampleEvent
 from metaproc.paths import LOGS_DIR
 
 
-def test_code_mode_persists_item_resource_samples(tmp_path: Path) -> None:
+def test_code_mode_persists_item_resource_samples(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("METAPROC_PREFLIGHT_MIN_DISK_GB", "0.1")
     source_path = tmp_path / "items.md"
     source_path.write_text(
         "---\nprogress:\n  process: parallel-code\n  items:\n"

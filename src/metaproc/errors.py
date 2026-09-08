@@ -27,3 +27,7 @@ class ValidationError(CLIError):
     @override
     def __init__(self, message: str) -> None:
         super().__init__(message, exit_code=2)
+
+
+class AttemptTerminalConflictError(ValueError):
+    """A caller tried to replace an attempt's already-persisted terminal fact."""

@@ -1,6 +1,11 @@
-"""``metaproc gcp run`` — dispatch arbitrary commands to a single GCP Batch task.
+"""``metaproc gcp run`` — dispatch one command to one GCP Batch task.
 
-See ``docs/arch/arch-metaproc-core.md``
+This is a lower-level placement primitive for probes, diagnostics, publishers, and
+applications that already own their orchestration. The one command may be a complete
+``metaproc run-process ... --backend local`` DAG on one Batch VM. Compatible multi-VM
+processes use ``metaproc run-process ... --backend gcp-worker --cloud`` instead.
+
+See ``src/metaproc/docs/metaproc-design.md``
 for the full design. This module owns:
 
 - argv parsing for the ``gcp run`` Typer subcommand,
@@ -19,11 +24,12 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 
 import typer
 from google.protobuf.json_format import MessageToDict
 
-from metaproc.cloud.gcp.batch_backend import GCPBatchConfig
+from metaproc.cloud.gcp.batch_backend import GCPBatchConfig, sanitize_label
 from metaproc.cloud.gcp.dispatch_artifacts import (
     DEFAULT_DISPATCH_BUCKET,
     DEFAULT_GCS_PREFIX,
@@ -38,11 +44,14 @@ from metaproc.cloud.gcp.gcp_run_dispatch import (
     RESERVED_ENV_KEYS,
     DispatchGcpRunOptions,
     _generate_job_id,
+    _normalize_workspace_package_paths,
     build_gcp_run_job,
     dispatch_gcp_run,
+    validate_gcp_run_secret_service_account,
 )
 from metaproc.cloud.gcp.gcp_run_logs import build_log_url, tail_gcp_run_logs
 from metaproc.config.env_vars import MetaprocEnv
+from metaproc.dispatch.secret_refs import SecretRefSet
 from metaproc.io.digests import file_sha256
 
 log = logging.getLogger(__name__)
@@ -100,6 +109,56 @@ def _expand_secret_ref(value: str, project: str) -> str:
     return f"projects/{project}/secrets/{secret}/versions/{version}"
 
 
+def _validate_workspace_package_sources(
+    repo_root: Path,
+    package_paths: tuple[str, ...],
+    sync_only: list[str] | None,
+) -> None:
+    """Fail before artifact work when a requested package cannot be shipped."""
+    resolved_repo = repo_root.resolve()
+    shipped_roots: tuple[Path, ...] = ()
+    if sync_only is not None:
+        roots: list[Path] = []
+        for raw_path in sync_only:
+            candidate = Path(raw_path)
+            resolved = (resolved_repo / candidate).resolve()
+            if candidate.is_absolute() or not resolved.is_relative_to(resolved_repo):
+                raise typer.BadParameter(
+                    f"--sync-only path must be repository-relative: {raw_path!r}",
+                    param_hint="--sync-only",
+                )
+            roots.append(resolved)
+        shipped_roots = tuple(roots)
+
+    for package_path in package_paths:
+        package_dir = (resolved_repo / package_path).resolve()
+        if not package_dir.is_relative_to(resolved_repo):
+            raise typer.BadParameter(
+                f"workspace package resolves outside the repository: {package_path!r}",
+                param_hint="--workspace-package",
+            )
+        pyproject = package_dir / "pyproject.toml"
+        if not pyproject.is_file():
+            raise typer.BadParameter(
+                f"workspace package must contain pyproject.toml: {package_path!r}",
+                param_hint="--workspace-package",
+            )
+        if shipped_roots and not any(
+            package_dir == root or package_dir.is_relative_to(root) for root in shipped_roots
+        ):
+            raise typer.BadParameter(
+                f"--sync-only does not ship workspace package {package_path!r}",
+                param_hint="--sync-only",
+            )
+
+
+def _validate_artifact_set_id(value: str) -> str:
+    """Require the immutable artifact prefix to also be a valid Batch job ID."""
+    if len(value) > 63 or not value[0].isalpha() or sanitize_label(value) != value:
+        raise typer.BadParameter("Use a lowercase GCP-safe ID", param_hint="--job-name")
+    return value
+
+
 def _build_config(
     *,
     image: str,
@@ -112,9 +171,9 @@ def _build_config(
     """Build a :class:`GCPBatchConfig` from CLI flags + env defaults.
 
     ``METAPROC_GCP_PROJECT`` is required. The container image comes from
-    ``--image`` or ``METAPROC_GCP_CONTAINER_IMAGE``. Filestore is enabled
-    iff ``--no-filestore`` is unset and ``METAPROC_GCP_FILESTORE_SERVER``
-    is in the env.
+    ``--image`` or ``METAPROC_GCP_CONTAINER_IMAGE``. Filestore is the
+    default and requires ``METAPROC_GCP_FILESTORE_SERVER``; callers must
+    explicitly select ephemeral storage with ``--no-filestore``.
     """
     project = MetaprocEnv.METAPROC_GCP_PROJECT.read_str(default="")
     if not project:
@@ -133,6 +192,12 @@ def _build_config(
     filestore_server = ""
     if not no_filestore:
         filestore_server = MetaprocEnv.METAPROC_GCP_FILESTORE_SERVER.read_str(default="")
+        if not filestore_server:
+            raise typer.BadParameter(
+                "METAPROC_GCP_FILESTORE_SERVER is required by the default Filestore "
+                "placement; pass --no-filestore to use ephemeral task storage",
+                param_hint="METAPROC_GCP_FILESTORE_SERVER",
+            )
 
     return GCPBatchConfig(
         project=project,
@@ -161,6 +226,7 @@ def _ship_artifacts(
     sync_only: list[str] | None,
     job_id: str,
     bucket: str,
+    project: str,
     prefix: str,
 ) -> tuple[str, str, str, str]:
     """Build + upload the wheel and workspace tarball as configured.
@@ -173,7 +239,13 @@ def _ship_artifacts(
     if not no_wheel:
         wheel = build_wheel()
         wheel_sha256 = file_sha256(wheel)
-        wheel_uri = upload_wheel_to_gcs(wheel, bucket=bucket, job_id=job_id, prefix=prefix)
+        wheel_uri = upload_wheel_to_gcs(
+            wheel,
+            bucket=bucket,
+            job_id=job_id,
+            project=project,
+            prefix=prefix,
+        )
 
     workspace_uri = ""
     workspace_sha256 = ""
@@ -185,7 +257,11 @@ def _ship_artifacts(
         )
         workspace_sha256 = file_sha256(workspace)
         workspace_uri = upload_workspace_to_gcs(
-            workspace, bucket=bucket, job_id=job_id, prefix=prefix
+            workspace,
+            bucket=bucket,
+            job_id=job_id,
+            project=project,
+            prefix=prefix,
         )
 
     return wheel_uri, wheel_sha256, workspace_uri, workspace_sha256
@@ -210,6 +286,14 @@ def run_command(
         "--sync-only",
         help="Ship ONLY these paths instead of the default full-tree-minus-metaproc set.",
     ),
+    workspace_package: list[str] = typer.Option(  # noqa: B008
+        None,
+        "--workspace-package",
+        help=(
+            "Repo-relative Python package to install editable from the shipped workspace. "
+            "Repeatable; keeps nested uv commands on the image environment."
+        ),
+    ),
     machine_type: str = typer.Option(
         DEFAULT_MACHINE_TYPE, "--machine-type", help="GCE machine type for the task VM."
     ),
@@ -226,7 +310,9 @@ def run_command(
         DEFAULT_RUNS_DIR, "--runs-dir", help="RUNS_DIR inside the container."
     ),
     no_filestore: bool = typer.Option(
-        False, "--no-filestore", help="Skip the Filestore NFS mount."
+        False,
+        "--no-filestore",
+        help="Use ephemeral task storage instead of the default Filestore NFS mount.",
     ),
     env: list[str] = typer.Option(  # noqa: B008
         None, "--env", help="K=V plaintext env var on the task. Repeatable."
@@ -237,7 +323,7 @@ def run_command(
         help=(
             "K=REF Secret Manager binding. REF may be a full "
             "``projects/P/secrets/S/versions/V`` path, bare ``S`` (→ versions/latest), "
-            "or ``S:V``. Repeatable."
+            "or ``S:V``. Repeatable; requires METAPROC_GCP_SERVICE_ACCOUNT."
         ),
     ),
     detach: bool = typer.Option(
@@ -258,13 +344,17 @@ def run_command(
         help="Required GCS bucket for wheel + workspace artifacts.",
     ),
 ) -> None:
-    """Dispatch ``cmd`` to a single GCP Batch task with current metaproc + repo.
+    """Run one command in one GCP Batch task.
 
-    Default behaviour ships a fresh-built wheel from the local source tree
+    The command may be a complete `metaproc run-process <spec> --backend local`
+    single-host DAG. Use `run-process <spec> --backend gcp-worker --cloud` for a
+    compatible multi-VM process.
+    Default behaviour here ships a fresh-built wheel from the local source tree
     plus a tarball of the current repo working tree, mounts Filestore at
-    ``/mnt/filestore`` (with ``RUNS_DIR=/mnt/filestore/runs``), resolves
-    ``GCP_SECRET_REFS`` (``GH_TOKEN``, ``CLAUDE_CODE_CREDS_JSON``), and
-    ``execvp``'s ``cmd`` inside the container.
+    `/mnt/filestore` (with `RUNS_DIR=/mnt/filestore/runs`), resolves
+    registered Secret Manager refs (`GH_TOKEN`, `CLAUDE_CODE_CREDS_JSON`), and
+    `execvp`'s `cmd`
+    inside the container.
     """
     config = _build_config(
         image=image,
@@ -282,10 +372,41 @@ def run_command(
             f"--env cannot set reserved keys owned by the dispatcher: {reserved}",
             param_hint="--env",
         )
+    plaintext_conflicts = SecretRefSet.all_known().plaintext_conflicts(extra_env)
+    if plaintext_conflicts:
+        raise typer.BadParameter(
+            "--env cannot carry registered credentials; bind Secret Manager "
+            f"references instead: {plaintext_conflicts}",
+            param_hint="--env",
+        )
     raw_secrets = _parse_kv_pairs(secret, "--secret")
     extra_secrets = {
         key: _expand_secret_ref(val, config.project) for key, val in raw_secrets.items()
     }
+    try:
+        validate_gcp_run_secret_service_account(config, extra_secrets)
+    except ValueError as exc:
+        raise typer.BadParameter(
+            str(exc),
+            param_hint="METAPROC_GCP_SERVICE_ACCOUNT",
+        ) from exc
+
+    if no_workspace and workspace_package:
+        raise typer.BadParameter(
+            "--workspace-package requires workspace shipping",
+            param_hint="--workspace-package",
+        )
+
+    try:
+        workspace_packages = _normalize_workspace_package_paths(tuple(workspace_package or ()))
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--workspace-package") from exc
+    if workspace_packages:
+        _validate_workspace_package_sources(
+            find_repo_root(),
+            workspace_packages,
+            list(sync_only) if sync_only else None,
+        )
 
     if not dry_run and (not no_wheel or not no_workspace) and not bucket:
         raise typer.BadParameter(
@@ -297,7 +418,7 @@ def run_command(
     # under the right gs://…/<job_id>/ prefix. Use the override if set or
     # the same generator the dispatcher uses, then pass it through as
     # options.job_name so dispatch doesn't generate a different one.
-    job_id = job_name or _generate_job_id()
+    job_id = _validate_artifact_set_id(job_name or _generate_job_id())
 
     # Skip artifact build/upload for --dry-run — the spec just needs
     # placeholder URIs so the env-var shape is visible. Running `uv build`
@@ -316,6 +437,7 @@ def run_command(
             sync_only=sync_only,
             job_id=job_id,
             bucket=bucket,
+            project=config.project,
             prefix=DEFAULT_GCS_PREFIX,
         )
 
@@ -325,6 +447,7 @@ def run_command(
         wheel_sha256=wheel_sha256,
         workspace_gcs_uri=workspace_uri,
         workspace_sha256=workspace_sha256,
+        workspace_packages=workspace_packages,
         extra_env=extra_env,
         extra_secrets=extra_secrets,
         job_name=job_id,

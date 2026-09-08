@@ -28,6 +28,7 @@ def test_async_views_ignore_stale_responses_and_share_requests_until_dispose() -
     result = subprocess.run(
         [
             "node",
+            "--experimental-vm-modules",
             str(SHIM),
             str(METABROWSER_PACKAGE_ROOT),
             str(plugin_dir()),
@@ -54,6 +55,8 @@ def test_async_views_ignore_stale_responses_and_share_requests_until_dispose() -
     assert payload["sharedVisualHtml"] == "rendered:shared"
     assert "sidekick unavailable" in payload["failedVisualHtml"]
     assert payload["retryVisualHtml"] == "rendered:recovered"
+    assert payload["logHtml"] == "agent-log:rendered"
+    assert payload["rawLogHtml"] == "agent-log:raw"
     assert payload["secondChartsHtml"] == "charts:pool"
     assert "No stats data available" in payload["secondStatsHtml"]
     assert payload["freshChartsHtml"] == "charts:fresh-pool"
@@ -63,3 +66,17 @@ def test_async_views_ignore_stale_responses_and_share_requests_until_dispose() -
     assert payload["statsRequestCount"] == 1
     assert payload["chartDisposeCalls"] == 1
     assert payload["chartRenderCalls"] == 2
+    assert payload["runtimeRequestCount"] == 1
+    assert "Runtime tasks and outputs" in payload["resourceHtml"]
+    assert "batch / collect / alpha" in payload["resourceHtml"]
+    assert "runs/current/report.md" in payload["resourceHtml"]
+    assert "result-not-validated" in payload["resourceHtml"]
+    # R33: a run with absent declared state must not render like a fully covered run.
+    assert "Missing runtime coverage (2)" in payload["resourceHtml"]
+    assert "batch / publish" in payload["resourceHtml"]
+    assert "declared task has no durable state" in payload["resourceHtml"]
+    assert "batch / review" in payload["resourceHtml"]
+    assert "declared child scope has no durable state" in payload["resourceHtml"]
+    assert payload["ensureKindCalls"] == ["markdown", "agent-log"]
+    assert payload["renderedViewRegistered"] is True
+    assert payload["sourceViewRegistered"] is True

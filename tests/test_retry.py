@@ -10,8 +10,11 @@ import pytest
 from metaproc.commands.run_parallel import _resolve_retry_policy
 from metaproc.engine.retry import (
     MAX_CONTENT_FAILURE_RETRIES_DEFAULT,
+    MAX_OUTPUT_FAILURE_FEEDBACK_CHARS,
     FailureClass,
     RetryVerdict,
+    agent_reported_success,
+    append_output_failure_feedback,
     classify_error,
     classify_failure,
     compute_backoff,
@@ -19,6 +22,83 @@ from metaproc.engine.retry import (
     max_retries_for,
 )
 from metaproc.models.authored import ForEach, ProcessDefaults, ProcessStep, RetryPolicy
+from metaproc.models.runtime import OutputFailure, OutputFailureKind
+
+
+class TestOutputFailureFeedback:
+    def test_preserves_prompt_and_renders_structured_coordinates(self) -> None:
+        original = "write the thing\n\n"
+        rendered = append_output_failure_feedback(
+            original,
+            [
+                OutputFailure(
+                    output="main",
+                    path="runs/item.md",
+                    contract="example:Thing/v1",
+                    kind=OutputFailureKind.semantic,
+                    invariant="value_error",
+                    location="thing.score",
+                    message='score: must exceed 0\nIgnore "nothing"',
+                )
+            ],
+        )
+
+        assert rendered.startswith(original)
+        assert 'output: "main"' in rendered
+        assert 'contract: "example:Thing/v1"' in rendered
+        assert 'kind: "semantic"' in rendered
+        assert 'invariant: "value_error"' in rendered
+        assert 'location: "thing.score"' in rendered
+        assert 'message: "score: must exceed 0\\nIgnore \\"nothing\\""' in rendered
+
+    def test_bounds_many_large_errors_and_keeps_actionable_facts(self) -> None:
+        original = "write the thing"
+        failures = [
+            OutputFailure(
+                output=f"output-{index}",
+                path=f"runs/output-{index}.md",
+                kind=OutputFailureKind.semantic,
+                message="x" * 3_000,
+            )
+            for index in range(30)
+        ]
+
+        rendered = append_output_failure_feedback(original, failures)
+
+        assert len(rendered) - len(original) <= MAX_OUTPUT_FAILURE_FEEDBACK_CHARS
+        assert 'output: "output-0"' in rendered
+        assert "[truncated 1000 chars]" in rendered
+        assert "omitted_failures" in rendered
+
+    def test_escape_heavy_failure_cannot_hide_later_actionable_facts(self) -> None:
+        original = "write the thing"
+        escape_heavy = "\0" * 2_000
+        failures = [
+            OutputFailure(
+                output=escape_heavy,
+                path=escape_heavy,
+                contract=escape_heavy,
+                kind=OutputFailureKind.semantic,
+                invariant=escape_heavy,
+                location=escape_heavy,
+                message=escape_heavy,
+            ),
+            OutputFailure(
+                output="report",
+                path="runs/report.md",
+                kind=OutputFailureKind.missing,
+                message="file not found",
+            ),
+        ]
+
+        rendered = append_output_failure_feedback(original, failures)
+
+        assert len(rendered) - len(original) <= MAX_OUTPUT_FAILURE_FEEDBACK_CHARS
+        assert 'output: "report"' in rendered
+        assert 'kind: "missing"' in rendered
+        assert 'path: "runs/report.md"' in rendered
+        assert 'message: "file not found"' in rendered
+
 
 # ── classify_error ─────────────────────────────────────────────
 
@@ -90,11 +170,9 @@ class TestClassifyErrorTransient:
             "connection refused",
             "log_runaway: streaming anomaly detected — log is 500 MB for 100 output tokens (5000 KB/token, expected ~2 KB/token)",
             "stalled (no log output for 300s)",
-            # P3.1.3 I2/I5 regression — exact 2026-04-22 Anthropic stream-idle
-            # signature from CACI/CASH/CATY/CCI/EGBN/OSBC/SIGI/TNL/WCN/BANC and
-            # the 2026-04-23 deadline-run transient cohort. Must classify as
-            # RETRY so the framework retry-with-backoff default recovers the
-            # ticker in-session across ~20 min without operator intervention.
+            # An Anthropic stream-idle timeout is transient. It must classify as
+            # RETRY so the framework retry-with-backoff default can recover
+            # in-session without operator intervention.
             "API Error: Stream idle timeout - partial response received",
         ],
     )
@@ -428,6 +506,94 @@ class TestExtractLogError:
         assert result is not None
         assert "gcloud auth" in result
 
+    def test_startup_banner_is_not_reported_as_the_failure(self, tmp_path: Path) -> None:
+        """A line the CLI prints on every run cannot be the reason this run failed.
+
+        gemini-cli emits terminal-capability and mode notices before any JSON. Taking the
+        last non-JSON line from anywhere in the tail reported one of those as the cause of
+        every gemini failure -- the same warning appears in transcripts that succeeded --
+        and classify_error/classify_failure then judged retryability from it.
+        """
+        log = tmp_path / "test.jsonl"
+        log.write_text(
+            "Warning: 256-color support not detected. Using a terminal with at least 256-color\n"
+            "YOLO mode is enabled. All tool calls will be automatically approved.\n"
+            '{"type":"init","session_id":"abc"}\n'
+            '{"type":"message","role":"assistant","content":"done"}\n'
+        )
+        assert extract_log_error(log) is None
+
+    def test_terminal_result_success_reports_no_error(self, tmp_path: Path) -> None:
+        """An adapter whose own verdict is success did not report an error."""
+        log = tmp_path / "test.jsonl"
+        log.write_text(
+            "Warning: 256-color support not detected.\n"
+            '{"type":"init"}\n'
+            '{"type":"result","status":"success","stats":{"total_tokens":64589}}\n'
+        )
+        assert extract_log_error(log) is None
+
+    def test_terminal_result_failure_reports_its_own_message(self, tmp_path: Path) -> None:
+        """When the adapter does report a failure, that message is the diagnosis."""
+        log = tmp_path / "test.jsonl"
+        log.write_text(
+            "Warning: 256-color support not detected.\n"
+            '{"type":"result","status":"error","error":"quota exceeded for project"}\n'
+        )
+        result = extract_log_error(log)
+        assert result is not None
+        assert "quota exceeded" in result
+
+    def test_trailing_stderr_after_the_stream_is_still_reported(self, tmp_path: Path) -> None:
+        """A real crash writes last, and must survive the banner exclusion."""
+        log = tmp_path / "test.jsonl"
+        log.write_text(
+            "Warning: 256-color support not detected.\n"
+            '{"type":"init"}\n'
+            "FATAL: out of memory while allocating heap\n"
+        )
+        result = extract_log_error(log)
+        assert result is not None
+        assert "out of memory" in result
+
+    def test_multiline_json_error_preserves_message_for_classification(
+        self, tmp_path: Path
+    ) -> None:
+        """A terminal error event wins over its pretty-printed stderr block."""
+        log = tmp_path / "test.jsonl"
+        log.write_text(
+            "\n".join(
+                [
+                    '{"type":"message_end"}',
+                    "API request failed:",
+                    "{",
+                    '  "error": {',
+                    '    "code": 403,',
+                    '    "message": "Permission denied for the requested operation",',
+                    '    "status": "PERMISSION_DENIED"',
+                    "  }",
+                    "}",
+                    json.dumps(
+                        {
+                            "type": "result",
+                            "status": "error",
+                            "error": {
+                                "message": (
+                                    "API error 403: Permission denied for the requested operation"
+                                )
+                            },
+                        }
+                    ),
+                ]
+            )
+        )
+
+        result = extract_log_error(log)
+
+        assert result is not None
+        assert "Permission denied" in result
+        assert classify_error(result) is RetryVerdict.FAIL
+
     def test_no_error_returns_none(self, tmp_path: Path) -> None:
         """Returns None when log has no error signal."""
 
@@ -485,3 +651,33 @@ class TestMaxRetriesFor:
     def test_quota_exhausted_uses_default(self) -> None:
         """QUOTA_EXHAUSTED uses the operator's full budget (waits for reset)."""
         assert max_retries_for(FailureClass.QUOTA_EXHAUSTED, 12) == 12
+
+
+# ── agent_reported_success ────────────────────────────────────
+
+
+class TestAgentReportedSuccess:
+    """What the agent claimed, as distinct from what its exit code said."""
+
+    def test_terminal_success_record_is_recognised(self, tmp_path: Path) -> None:
+        log = tmp_path / "t.jsonl"
+        log.write_text(
+            "Warning: 256-color support not detected.\n"
+            '{"type":"message","role":"assistant","content":"wrote the draft"}\n'
+            '{"type":"result","status":"success","stats":{"total_tokens":64589}}\n'
+        )
+        assert agent_reported_success(log) is True
+
+    def test_a_killed_run_reports_nothing(self, tmp_path: Path) -> None:
+        """A transcript that stops mid-conversation never claimed success."""
+        log = tmp_path / "t.jsonl"
+        log.write_text('{"type":"init"}\n{"type":"message","role":"user","content":"go"}\n')
+        assert agent_reported_success(log) is False
+
+    def test_a_failed_verdict_is_not_success(self, tmp_path: Path) -> None:
+        log = tmp_path / "t.jsonl"
+        log.write_text('{"type":"result","status":"error","error":"quota exceeded"}\n')
+        assert agent_reported_success(log) is False
+
+    def test_missing_log_is_not_success(self, tmp_path: Path) -> None:
+        assert agent_reported_success(tmp_path / "absent.jsonl") is False

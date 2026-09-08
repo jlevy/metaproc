@@ -87,6 +87,9 @@ DISK_PRESSURE_ELEVATED_FREE_GB = 12.0
 DISK_PRESSURE_HIGH_FREE_GB = 8.0
 DISK_PRESSURE_CRITICAL_FREE_GB = 5.0
 ACTIVE_LOG_PRESSURE_BYTES = 1 * 1024**3
+# Hard bound after graceful shutdown expires. A backend may wedge while killing a
+# process; status and event-log finalization must still run.
+_SHUTDOWN_CLEANUP_TIMEOUT_S = 10.0
 
 
 @dataclass(frozen=True)
@@ -632,6 +635,10 @@ class RunPool:
         self._started = False
         self._shutdown_event = asyncio.Event()
         self._monitor_task: asyncio.Task[None] | None = None
+        self._submission_tasks: set[asyncio.Task[None]] = set()
+        self._submission_tasks_by_future: dict[
+            asyncio.Future[ProcessResult], asyncio.Task[None]
+        ] = {}
 
         # Pressure tracking for hysteresis.
         self._consecutive_normal = 0
@@ -653,15 +660,24 @@ class RunPool:
 
         # Restore governor state from a previous run if available.
         #
-        # Floor the restored `memory_ceiling` at the fresh `starting` estimate
-        # so a prior low-cap run doesn't pin a high-cap relaunch. Without
-        # this floor, a run launched at `--max-concurrency 3` that converges
-        # to `memory_ceiling=2`, then is killed and relaunched at
-        # `--max-concurrency 30`, would inherit `memory_ceiling=2` and stay
-        # there — the operator-increased cap is silently ignored. With the
-        # floor, the relaunch starts at the fresh estimate (e.g. 12) and the
-        # adaptive scaler ratchets down if real memory pressure binds.
-        # 2026-05-13: caught during production rerun.
+        # `memory_ceiling` is deliberately not restored. It describes the host,
+        # not the run, and the host is free to have changed completely since the
+        # saved state was written: a ceiling of 79 earned on a quiet machine says
+        # nothing about a machine now holding 3 processes' worth of headroom.
+        # Restoring it verbatim reproduces the burst-on-resume that took a 34 GB
+        # host from a fresh estimate of 3 to a restored ceiling of 79, which at
+        # 1.5 GB per process is 118 GB of intent on 34 GB of RAM.
+        #
+        # Starting from the fresh estimate costs a ramp, and the ramp is fast.
+        # It also composes correctly with a resume, where processes already in
+        # flight are consuming memory that the fresh reading has by definition
+        # already accounted for.
+        #
+        # This subsumes the older floor-up rule, which raised a restored ceiling
+        # to the fresh estimate when it was lower and left it alone when it was
+        # higher. That protected an operator raising `--max-concurrency` from
+        # inheriting a low ceiling, and did nothing about the direction that
+        # crashes hosts. Both directions now resolve to the fresh estimate.
         #
         # `provider_ceiling` is sticky only while the saved controller state
         # still carries live provider pressure. A prior low-cap launch can
@@ -669,28 +685,26 @@ class RunPool:
         # operator has raised the profile/run cap. When the old cap was lower,
         # the restored provider ceiling is below the fresh estimate, and there
         # are no recent rate limits or pending retries, treat it as stale and
-        # floor it to the fresh estimate just like memory_ceiling.
+        # floor it to the fresh estimate. Unlike memory, provider pressure is a
+        # property of the run and the account rather than the host, so it is
+        # worth carrying across a resume when it is still live.
         if self._scale_state_path is not None and self._scale_state_path.exists():
             try:
                 prev = read_scale_state(self._scale_state_path)
                 controller = prev.controller
-                restored_memory = max(
-                    self._config.min_concurrency,
-                    min(controller.memory_ceiling, self._config.max_concurrency),
-                )
+                if controller.memory_ceiling > starting:
+                    log.info(
+                        "Discarded restored memory_ceiling=%d in favour of the fresh "
+                        "estimate %d: the saved ceiling describes a host reading that "
+                        "no longer holds",
+                        controller.memory_ceiling,
+                        starting,
+                    )
+                restored_memory = starting
                 restored_provider = max(
                     self._config.min_concurrency,
                     min(controller.provider_ceiling, self._config.max_concurrency),
                 )
-                if restored_memory < starting:
-                    log.info(
-                        "Floored restored memory_ceiling=%d to fresh estimate %d "
-                        "(max_concurrency=%d); prior run likely had a lower cap",
-                        restored_memory,
-                        starting,
-                        self._config.max_concurrency,
-                    )
-                    restored_memory = starting
                 if (
                     restored_provider < starting
                     and controller.operator_cap < self._config.max_concurrency
@@ -950,12 +964,55 @@ class RunPool:
 
     def submit(self, config: ProcessConfig) -> asyncio.Future[ProcessResult]:
         """Queue one process and return a future that resolves on completion."""
+        if self._shutdown_event.is_set():
+            raise RuntimeError("cannot submit work after RunPool shutdown has started")
         self._start()
         loop = asyncio.get_running_loop()
         future: asyncio.Future[ProcessResult] = loop.create_future()
         self._pending_count += 1
-        asyncio.create_task(self._run_process(config, future))
+        task = asyncio.create_task(self._run_process(config, future))
+        self._submission_tasks.add(task)
+        self._submission_tasks_by_future[future] = task
+
+        def _forget_submission(_task: asyncio.Task[None]) -> None:
+            self._submission_tasks.discard(_task)
+            if self._submission_tasks_by_future.get(future) is _task:
+                self._submission_tasks_by_future.pop(future, None)
+
+        def _cancel_submission_when_future_is_cancelled(
+            completed_future: asyncio.Future[ProcessResult],
+        ) -> None:
+            if completed_future.cancelled() and not task.done():
+                task.cancel()
+
+        task.add_done_callback(_forget_submission)
+        future.add_done_callback(_cancel_submission_when_future_is_cancelled)
         return future
+
+    async def cancel_submission(self, future: asyncio.Future[ProcessResult]) -> None:
+        """Cancel one submission and retain ownership until its cleanup is terminal.
+
+        Awaiting a bare Future propagates caller cancellation into that Future, but a
+        process pool owns more than a result value: it also owns the launch task,
+        process tree, admission lease, and lane accounting. This method binds those
+        lifetimes for callers that must not release outer resources until cleanup ends.
+        Repeated caller cancellation is absorbed while the owned task drains.
+        """
+        task = self._submission_tasks_by_future.get(future)
+        if task is None:
+            return
+        task.cancel()
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except BaseException:
+            log.exception("RunPool submission failed while cancellation was draining")
 
     def submit_many(self, configs: list[ProcessConfig]) -> list[asyncio.Future[ProcessResult]]:
         """Queue multiple processes and return one future per submission."""
@@ -987,54 +1044,79 @@ class RunPool:
         host admission slots its processes hold, and a held slot is invisible capacity
         loss for every other run on the machine.
         """
-        await self.shutdown()
+        immediate = exc_type is not None and issubclass(
+            exc_type,
+            (asyncio.CancelledError, KeyboardInterrupt),
+        )
+        await self.shutdown(timeout_s=0.0 if immediate else 30.0)
 
-    async def shutdown(self, timeout_s: float = 30.0) -> None:
-        """Graceful shutdown: wait for running processes, then kill stragglers."""
+    async def shutdown(self, timeout_s: float | None = None) -> None:
+        """Graceful shutdown, or immediate shutdown during task cancellation."""
+        if timeout_s is None:
+            current_task = asyncio.current_task()
+            timeout_s = 0.0 if current_task is not None and current_task.cancelling() else 30.0
         self._shutdown_event.set()
 
-        # Wait for all active processes to finish.
-        if self._active:
+        # Wait for every submitted task, including work queued behind quota or host
+        # admission. A pool owns submissions from enqueue through terminal cleanup.
+        if self._submission_tasks:
             deadline = time.monotonic() + timeout_s
-            while self._active and time.monotonic() < deadline:
-                await asyncio.sleep(0.5)
-
-        # Kill any remaining processes.
-        for _key, active in list(self._active.items()):
-            log.warning("Killing process %s on shutdown", active.config.label)
-            active.killed = True
-            active.kill_reason = "shutdown"
-            await self._backend.kill(active.handle)
-
-        # Give run_process tasks time to notice exits and clean up.
-        if self._active:
-            kill_deadline = time.monotonic() + 5.0
-            while self._active and time.monotonic() < kill_deadline:
+            while self._submission_tasks and time.monotonic() < deadline:
                 await asyncio.sleep(0.1)
 
-        # Stop the monitor task.
-        if self._monitor_task is not None:
-            self._monitor_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._monitor_task
+        for active in self._active.values():
+            active.killed = True
+            active.kill_reason = "shutdown"
 
-        # Write final status and close event log.
-        self._write_status()
-        if self._event_logger is not None:
-            self._event_logger.pool_shutdown(
-                self._pool_id,
-                self._completed_count,
-                self._failed_count,
-                self._killed_count,
-            )
-            self._event_logger.close()
-        if self._health_logger is not None:
-            self._health_logger.close()
+        try:
+            # Cancellation unwinds queued admission and drives active launches through
+            # the same kill-and-record path as any other cancelled submission.
+            remaining_tasks = tuple(self._submission_tasks)
+            for task in remaining_tasks:
+                task.cancel()
+            if remaining_tasks:
+                done, pending = await asyncio.wait(
+                    remaining_tasks,
+                    timeout=_SHUTDOWN_CLEANUP_TIMEOUT_S,
+                )
+                for task in done:
+                    with contextlib.suppress(BaseException):
+                        task.result()
+                if pending:
+                    log.error(
+                        "RunPool shutdown cleanup timed out with %d submission(s) still owned",
+                        len(pending),
+                    )
+                    for task in pending:
+                        task.cancel()
+        finally:
+            # The status/event tail must not sit behind an unbounded backend cleanup.
+            if self._monitor_task is not None:
+                self._monitor_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._monitor_task
+
+            self._write_status()
+            if self._event_logger is not None:
+                self._event_logger.pool_shutdown(
+                    self._pool_id,
+                    self._completed_count,
+                    self._failed_count,
+                    self._killed_count,
+                )
+                self._event_logger.close()
+            if self._health_logger is not None:
+                self._health_logger.close()
 
     @property
     def snapshot(self) -> RunPoolStatus:
         """Current pool state — same structure written to the status file."""
         return self._build_status()
+
+    @property
+    def shutting_down(self) -> bool:
+        """Return whether the pool has begun terminal shutdown."""
+        return self._shutdown_event.is_set()
 
     # ── Internal ────────────────────────────────────────────────
 
@@ -1043,34 +1125,45 @@ class RunPool:
     ) -> None:
         """Acquire semaphore(s), launch, monitor, and report result."""
         ext_sem = self._config.external_semaphore
-        if ext_sem is not None:
-            await ext_sem.acquire()
-        await self._await_quota_pause()
-        await self._semaphore.acquire()
+        ext_sem_acquired = False
+        pool_sem_acquired = False
         host_lease: HostAdmissionLease | None = None
         pending_removed = False
         try:
+            if ext_sem is not None:
+                await ext_sem.acquire()
+                ext_sem_acquired = True
+            await self._await_quota_pause()
+            await self._semaphore.acquire()
+            pool_sem_acquired = True
+            if self._shutdown_event.is_set():
+                raise asyncio.CancelledError
             host_lease = await self._acquire_host_slot(config)
+            if self._shutdown_event.is_set():
+                raise asyncio.CancelledError
             self._pending_count -= 1
             pending_removed = True
-            try:
-                result = await self._launch_and_monitor(config, host_lease=host_lease)
-            finally:
-                self._release_host_slot(host_lease)
-                host_lease = None
+            result = await self._launch_and_monitor(config, host_lease=host_lease)
+        except asyncio.CancelledError:
+            if not future.done():
+                future.cancel()
+            raise
         except Exception as exc:
-            if not pending_removed:
-                self._pending_count = max(0, self._pending_count - 1)
-            self._release_host_slot(host_lease)
-            self._semaphore.release()
-            if ext_sem is not None:
-                ext_sem.release()
             if not future.done():
                 future.set_exception(exc)
             return
-        self._semaphore.release()
-        if ext_sem is not None:
-            ext_sem.release()
+        except BaseException as exc:
+            if not future.done():
+                future.set_exception(exc)
+            raise
+        finally:
+            if not pending_removed:
+                self._pending_count = max(0, self._pending_count - 1)
+            self._release_host_slot(host_lease)
+            if pool_sem_acquired:
+                self._semaphore.release()
+            if ext_sem is not None and ext_sem_acquired:
+                ext_sem.release()
         if not future.done():
             future.set_result(result)
 
@@ -1082,7 +1175,28 @@ class RunPool:
     ) -> ProcessResult:
         """Launch one process and monitor it until exit or kill."""
         prepared = config.resolve_launch()
-        handle = await self._backend.launch(prepared, label=config.label)
+        launch_task = asyncio.create_task(self._backend.launch(prepared, label=config.label))
+        try:
+            handle = await asyncio.shield(launch_task)
+        except asyncio.CancelledError as cancelled:
+            try:
+                while not launch_task.done():
+                    try:
+                        await asyncio.shield(launch_task)
+                    except asyncio.CancelledError:
+                        continue
+                handle = launch_task.result()
+            except BaseException as launch_exc:
+                log.exception("Backend launch failed while cancellation was draining")
+                raise cancelled from launch_exc
+            try:
+                await self._backend.kill(handle)
+            except Exception:
+                log.exception(
+                    "Backend failed to kill late process %s during cancellation",
+                    config.label,
+                )
+            raise cancelled
         if self._host_admission is not None and host_lease is not None:
             self._host_admission.record_child(
                 host_lease,
@@ -1113,11 +1227,61 @@ class RunPool:
         # Poll until exit, checking health on each interval.
         try:
             result = await self._poll_until_exit(active)
+        except asyncio.CancelledError:
+            if not active.killed:
+                active.killed = True
+                active.kill_reason = "cancelled"
+            try:
+                await self._backend.kill(handle)
+            except Exception:
+                log.exception(
+                    "Backend failed to kill process %s during cancellation",
+                    config.label,
+                )
+            result = ProcessResult(
+                config=config,
+                pid=handle.pid,
+                external_id=handle.external_id,
+                backend=handle.backend_name,
+                exit_code=None,
+                kill_reason=active.kill_reason or "cancelled",
+                elapsed_s=round(time.monotonic() - active.start_time, 1),
+                peak_rss_bytes=active.peak_rss_bytes or None,
+                peak_descendants=active.peak_descendants or None,
+                log_size_bytes=active.current_log_bytes or None,
+            )
+            self._record_completion(result)
+            raise
+        except BaseException as exc:
+            # A backend lifecycle failure is still a terminal accounting event. Keep
+            # lane capacity and status projections honest, make a best-effort cleanup
+            # attempt, then propagate the original backend error to the submitter.
+            try:
+                await self._backend.kill(handle)
+            except BaseException:
+                log.exception(
+                    "Backend failed to kill process %s after lifecycle error",
+                    config.label,
+                )
+            result = ProcessResult(
+                config=config,
+                pid=handle.pid,
+                external_id=handle.external_id,
+                backend=handle.backend_name,
+                exit_code=None,
+                kill_reason=f"backend_error:{type(exc).__name__}",
+                elapsed_s=round(time.monotonic() - active.start_time, 1),
+                peak_rss_bytes=active.peak_rss_bytes or None,
+                peak_descendants=active.peak_descendants or None,
+                log_size_bytes=active.current_log_bytes or None,
+            )
+            self._record_completion(result)
+            raise
+        else:
+            self._record_completion(result)
         finally:
             self._active.pop(key, None)
 
-        # Record completion.
-        self._record_completion(result)
         return result
 
     async def _acquire_host_slot(self, config: ProcessConfig) -> HostAdmissionLease | None:
@@ -1164,7 +1328,8 @@ class RunPool:
             exit_code = await self._backend.poll(handle)
             if exit_code is not None:
                 # Wait for the log filter thread (if any) to flush remaining lines.
-                handle.join_filter_thread(timeout=5.0)
+                if handle.has_filter_thread:
+                    await asyncio.to_thread(handle.join_filter_thread, 5.0)
                 elapsed = time.monotonic() - active.start_time
                 return ProcessResult(
                     config=config,
@@ -1186,7 +1351,8 @@ class RunPool:
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(self._wait_for_exit(active), timeout=10)
                 # Wait for the log filter thread (if any) to flush remaining lines.
-                handle.join_filter_thread(timeout=5.0)
+                if handle.has_filter_thread:
+                    await asyncio.to_thread(handle.join_filter_thread, 5.0)
                 elapsed = time.monotonic() - active.start_time
                 return ProcessResult(
                     config=config,
@@ -1481,6 +1647,8 @@ class RunPool:
                 active.kill_reason = "external_kill"
 
         self._shutdown_event.set()
+        for task in tuple(self._submission_tasks):
+            task.cancel()
         return True
 
     def _read_overrides(self) -> None:
@@ -1596,7 +1764,13 @@ class RunPool:
 
     def _handle_telemetry_failure(self, exc: UnsupportedTelemetryPlatformError) -> None:
         """Make runtime telemetry failures visible and reduce launch pressure."""
-        log.exception("RunPool resource telemetry failed; reducing concurrency to minimum")
+        # Callers reach this from inside an `except ... as exc` block, so the ambient
+        # exception state is set; pass it explicitly so the traceback does not depend
+        # on that and the intent is visible at this call site.
+        log.error(
+            "RunPool resource telemetry failed; reducing concurrency to minimum",
+            exc_info=exc,
+        )
         self._memory_ceiling = self._config.min_concurrency
         self._set_capacity(self._effective_target(), reason="telemetry_unavailable")
         if self._event_logger is not None:

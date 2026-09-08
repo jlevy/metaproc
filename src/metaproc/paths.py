@@ -7,6 +7,7 @@ Import from this module instead of hardcoding path strings.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from pathlib import Path
 
 from ruamel.yaml import YAMLError
@@ -27,7 +28,18 @@ is safe to use as a path component on every supported filesystem.
 
 def is_safe_item_key(key: str) -> bool:
     """Return whether *key* is safe to use as a filesystem path component."""
-    return bool(ITEM_KEY_RE.fullmatch(key))
+    return key not in {".", ".."} and bool(ITEM_KEY_RE.fullmatch(key))
+
+
+def normalize_path_key(path: str) -> str:
+    """Return *path* in the canonical form used to compare two authored paths.
+
+    Plan building matches a dep's path against its producer's declared output
+    path, and fingerprinting matches a step's referenced runbook against those
+    same dep paths. Both comparisons must agree or a produced runbook is only
+    recognized on one side of the chain, so they share this one definition.
+    """
+    return str(Path(path))
 
 
 # ── Runtime directories (under each item or run dir) ────────────
@@ -45,7 +57,8 @@ All engine state lives under ``<run_dir>/.state/`` with stable sub-namespaces:
 - ``<run_dir>/.state/workers/<worker_id>/`` — per-worker pool state
   (runpool-status.yaml).
 - ``<run_dir>/.state/tasks/<step_id>/<item_key>/`` — per-task state
-  (status.yaml, attempt.yaml, result.yaml, manual-ack.yaml).
+  (status.yaml, the legacy attempt.yaml snapshot, attempts/, result.yaml,
+  manual-ack.yaml).
 """
 
 LOGS_DIR = ".logs"
@@ -69,6 +82,9 @@ STEPS_SUBDIR = "steps"
 TASKS_SUBDIR = "tasks"
 """Sub-namespace inside ``.state/`` and ``.logs/`` for per-task files keyed by step+item."""
 
+ATTEMPTS_SUBDIR = "attempts"
+"""Append-only attempt-history namespace inside one task state directory."""
+
 WORKERS_SUBDIR = "workers"
 """Sub-namespace for per-worker runpool files."""
 
@@ -88,6 +104,7 @@ RUN_LAYOUT_VERSION = "metaproc-run-layout/2"
 
 STATUS_FILE = "status.yaml"
 ATTEMPT_FILE = "attempt.yaml"
+ATTEMPT_ANOMALIES_FILE = "accepted-anomalies.yaml"
 RESULT_FILE = "result.yaml"
 MANUAL_ACK_FILE = "manual-ack.yaml"
 
@@ -133,6 +150,9 @@ PROCESS_STATUS_FILE = "process-status.yaml"
 RUN_CONFIG_FILE = "run-config.yaml"
 """Immutable run identity written at creation, validated on resume."""
 
+RUN_PLAN_FILE = "run-plan.yaml"
+"""Current exact resolved plan for one root or nested process scope."""
+
 ORCHESTRATOR_LEASE_FILE = "orchestrator-lease.yaml"
 """Active orchestrator lease — heartbeat, owner identity, stale takeover."""
 
@@ -167,6 +187,68 @@ def run_state_dir(run_dir: Path) -> Path:
 def run_logs_dir(run_dir: Path) -> Path:
     """Return ``<run_dir>/.logs/`` (run-level engine logs branch)."""
     return run_dir / LOGS_DIR
+
+
+def iter_composite_run_dirs(run_dir: Path) -> Iterable[Path]:
+    """Yield a run root and nested composite scope roots.
+
+    Child scopes have the runtime-owned shape ``<scope>/<step>[/<item>]`` and
+    contain their own ``.state`` branch. Traversing only those two structural
+    levels avoids scanning arbitrary artifact trees while supporting recursive
+    composites at any depth. Resolved paths stay inside the requested run tree
+    and are deduplicated so symlinks cannot escape or repeat a scope.
+    """
+    yield run_dir
+    if not run_dir.is_dir():
+        return
+    try:
+        resolved_root = run_dir.resolve()
+    except OSError:
+        return
+    seen = {resolved_root}
+
+    def _children(parent: Path) -> list[Path]:
+        try:
+            candidates = sorted(parent.iterdir())
+        except OSError:
+            return []
+        children: list[Path] = []
+        for child in candidates:
+            if not child.is_dir():
+                continue
+            name = child.name
+            if name in {STATE_DIR, LOGS_DIR} or name.startswith((".", "worker-", "slot-")):
+                continue
+            children.append(child)
+        return children
+
+    def _claim_scope(candidate: Path) -> Path | None:
+        if not (candidate / STATE_DIR).is_dir():
+            return None
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            return None
+        if not resolved.is_relative_to(resolved_root) or resolved in seen:
+            return None
+        seen.add(resolved)
+        return candidate
+
+    def _walk_scope(scope: Path) -> Iterable[Path]:
+        for step_dir in _children(scope):
+            scalar_scope = _claim_scope(step_dir)
+            if scalar_scope is not None:
+                yield scalar_scope
+                yield from _walk_scope(scalar_scope)
+                continue
+            for item_dir in _children(step_dir):
+                mapped_scope = _claim_scope(item_dir)
+                if mapped_scope is None:
+                    continue
+                yield mapped_scope
+                yield from _walk_scope(mapped_scope)
+
+    yield from _walk_scope(run_dir)
 
 
 def run_config_file(run_dir: Path) -> Path:
@@ -305,6 +387,11 @@ def task_state_dir(run_dir: Path, step_id: str, item_key: str) -> Path:
 def task_logs_dir(run_dir: Path, step_id: str, item_key: str) -> Path:
     """Return per-task logs dir: ``<run_dir>/.logs/tasks/<step_id>/<item_key>/``."""
     return task_logs_parent_dir(run_dir, step_id) / item_key
+
+
+def attempt_state_dir(task_dir: Path, attempt_id: str) -> Path:
+    """Return ``<task_dir>/attempts/<attempt_id>/`` for one durable attempt."""
+    return task_dir / ATTEMPTS_SUBDIR / attempt_id
 
 
 def derived_logs_dir(run_dir: Path) -> Path:

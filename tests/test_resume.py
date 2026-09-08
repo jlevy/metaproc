@@ -163,11 +163,11 @@ class TestLocalRerun:
         assert first_data["created_at"] == second_data["created_at"]
 
 
-# ── Hybrid interrupted: lease stale takeover ─────────────────────
+# ── Interrupted orchestrator: lease stale takeover ───────────────
 
 
-class TestHybridInterrupted:
-    """Simulate hybrid orchestrator crash and resume via stale lease takeover."""
+class TestInterruptedOrchestrator:
+    """Simulate an orchestrator crash and resume via stale lease takeover."""
 
     def test_stale_lease_allows_resume(self, tmp_path: Path) -> None:
         """A stale lease from a crashed orchestrator can be taken over."""
@@ -299,14 +299,14 @@ class TestCloudInterrupted:
 # ── Cross-topology resume ────────────────────────────────────────
 
 
-class TestCrossTopologyResume:
-    """Resume from a different backend/topology than the original run."""
+class TestBackendAgnosticResumeState:
+    """Run identity and state remain independent of the execution backend."""
 
     def test_run_config_allows_different_backend(self, tmp_path: Path) -> None:
         """Run-config validates process + run_dir, not backend.
 
-        This enables cross-topology resume: start with local, resume with
-        gcp-worker (or vice versa) as long as the run_dir is accessible.
+        Backend is execution metadata rather than part of the durable run
+        identity; supported launch paths enforce topology separately.
         """
         run_dir = tmp_path / "run-1" / "mine"
         run_dir.mkdir(parents=True)
@@ -316,7 +316,12 @@ class TestCrossTopologyResume:
 
         # Validate with different backend — should NOT raise.
         config_path = run_dir / STATE_DIR / RUN_CONFIG_FILE
-        _validate_run_config(config_path, process_name="mine", run_dir=run_dir)
+        _validate_run_config(
+            config_path,
+            process_name="mine",
+            run_dir=run_dir,
+            variables={"RUN_ID": "test-run", "DATASET": "test-data"},
+        )
 
     def test_run_config_allows_different_variant(self, tmp_path: Path) -> None:
         """Variant is not part of the resume identity check."""
@@ -327,7 +332,12 @@ class TestCrossTopologyResume:
 
         # Validate — variant is not checked.
         config_path = run_dir / STATE_DIR / RUN_CONFIG_FILE
-        _validate_run_config(config_path, process_name="mine", run_dir=run_dir)
+        _validate_run_config(
+            config_path,
+            process_name="mine",
+            run_dir=run_dir,
+            variables={"RUN_ID": "test-run", "DATASET": "test-data"},
+        )
 
     def test_run_config_rejects_different_process(self, tmp_path: Path) -> None:
         """Cross-topology resume must still match the process identity."""
@@ -338,7 +348,12 @@ class TestCrossTopologyResume:
 
         config_path = run_dir / STATE_DIR / RUN_CONFIG_FILE
         with pytest.raises(CLIError, match="Resume mismatch.*process"):
-            _validate_run_config(config_path, process_name="retro", run_dir=run_dir)
+            _validate_run_config(
+                config_path,
+                process_name="retro",
+                run_dir=run_dir,
+                variables={"RUN_ID": "test-run", "DATASET": "test-data"},
+            )
 
     def test_step_state_shared_across_topologies(self, tmp_path: Path) -> None:
         """Step completion state is topology-agnostic (just filesystem).
@@ -356,10 +371,10 @@ class TestCrossTopologyResume:
         assert _is_step_completed(run_dir, "step-a") is True
 
     def test_full_resume_flow(self, tmp_path: Path) -> None:
-        """End-to-end: config + lease + step state across topology change.
+        """End-to-end: config, lease, and step state survive an interrupted run.
 
-        Simulates: original run with gcp-worker backend crashes mid-way,
-        new orchestrator resumes the same run_dir.
+        Simulates a Batch orchestrator crashing mid-run and a new orchestrator
+        resuming the same durable run directory.
         """
         run_dir = tmp_path / "run-1" / "mine"
         run_dir.mkdir(parents=True)
@@ -374,10 +389,15 @@ class TestCrossTopologyResume:
         write_dispatch_manifest(run_dir, "step-b", worker_jobs=worker_jobs, num_items=10)
         _write_stale_lease(run_dir)
 
-        # Phase 2: Resume (same or different topology).
+        # Phase 2: Resume from a replacement orchestrator.
         # Validate run identity.
         config_path = run_dir / STATE_DIR / RUN_CONFIG_FILE
-        _validate_run_config(config_path, process_name="mine", run_dir=run_dir)
+        _validate_run_config(
+            config_path,
+            process_name="mine",
+            run_dir=run_dir,
+            variables={"RUN_ID": "test-run", "DATASET": "test-data"},
+        )
 
         # Take over stale lease.
         lease_path = acquire_lease(run_dir, command_summary="resume attempt")

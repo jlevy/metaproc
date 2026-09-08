@@ -8,26 +8,32 @@ Two responsibilities:
    (``package_workspace``) and upload it to GCS
    (``upload_workspace_to_gcs``).
 
-Both artifact types ship to ``gs://<bucket>/<prefix>/...`` so a Batch task
-container can fetch the current-branch metaproc + workspace without
-requiring an agent-image rebuild or a cross-VPC git clone.
+Both artifact types are created immutably under ``gs://<bucket>/<prefix>/...`` so a
+Batch task container can fetch the current-branch metaproc + workspace without requiring
+an agent-image rebuild or a cross-VPC git clone.
 
-The wheel build path was extracted from
-``metaproc/src/metaproc/commands/gcp.py:_run_self_install`` so the
-self-install SSH command and the gcp-run dispatcher share one
-implementation.
+The wheel build path is shared by local artifact packaging and the ``gcp run``
+dispatcher.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import tarfile
 import tempfile
 from pathlib import Path
 
+from google.api_core.exceptions import GoogleAPIError, PreconditionFailed
 from google.cloud import storage
+from google.cloud.storage.retry import (
+    DEFAULT_RETRY,
+    ConditionalRetryPolicy,
+    is_generation_specified,
+)
 
+from metaproc.errors import CLIError
 from metaproc.io.digests import file_sha256
 
 log = logging.getLogger(__name__)
@@ -39,6 +45,18 @@ DEFAULT_GCS_PREFIX = "gcp-run"
 # step (build, upload, container-side fetch, dry-run URI) imports this
 # rather than spelling out the literal.
 WORKSPACE_TARBALL_NAME: str = "workspace.tar.gz"
+
+# google-cloud-storage otherwise sends resumable uploads in 100 MiB chunks. A valid
+# 100 MiB workspace hit the client's 120-second retry deadline on a slow uplink before
+# Batch submission. Smaller chunks preserve resumability without making the overall
+# artifact size a per-request latency requirement.
+GCS_UPLOAD_CHUNK_SIZE = 16 * 1024 * 1024
+GCS_UPLOAD_TIMEOUT_SECONDS = 120
+GCS_UPLOAD_RETRY = ConditionalRetryPolicy(
+    DEFAULT_RETRY.with_deadline(10 * 60),
+    is_generation_specified,
+    ["query_params"],
+)
 
 
 def find_metaproc_source_dir(start: Path | None = None) -> Path:
@@ -94,10 +112,61 @@ def _contain_in_repo(repo: Path, rel: str) -> str:
     """
     if Path(rel).is_absolute():
         raise ValueError(f"Path must be repo-relative, got absolute: {rel!r}")
+    normalized = Path(os.path.normpath(rel))
+    if ".." in normalized.parts:
+        raise ValueError(f"Path escapes repo root ({repo}): {rel!r}")
     full = (repo / rel).resolve()
     if not full.is_relative_to(repo):
         raise ValueError(f"Path escapes repo root ({repo}): {rel!r}")
-    return str(full.relative_to(repo))
+    return normalized.as_posix()
+
+
+def _add_workspace_path(
+    archive: tarfile.TarFile,
+    *,
+    repo: Path,
+    source: Path,
+    arcname: str,
+    emitted: set[str],
+    active_directories: set[Path],
+    required: bool,
+) -> None:
+    """Add one workspace path while materializing only safe in-repo links."""
+    resolved = source.resolve(strict=True)
+    if not resolved.is_relative_to(repo):
+        raise ValueError(f"Workspace path resolves outside repo root ({repo}): {source}")
+    if arcname in emitted:
+        return
+
+    if resolved.is_file():
+        archive.add(str(resolved), arcname=arcname, recursive=False)
+        emitted.add(arcname)
+        return
+    if not resolved.is_dir():
+        if required:
+            raise ValueError(f"Workspace path is not a regular file or directory: {source}")
+        log.warning("Skipping %s — not a regular file or directory", source)
+        return
+    if resolved in active_directories:
+        raise ValueError(f"Workspace directory link cycle detected at: {source}")
+
+    archive.add(str(resolved), arcname=arcname, recursive=False)
+    emitted.add(arcname)
+    active_directories.add(resolved)
+    try:
+        for child in sorted(resolved.iterdir(), key=lambda path: path.name):
+            child_arcname = f"{arcname.rstrip('/')}/{child.name}"
+            _add_workspace_path(
+                archive,
+                repo=repo,
+                source=child,
+                arcname=child_arcname,
+                emitted=emitted,
+                active_directories=active_directories,
+                required=required,
+            )
+    finally:
+        active_directories.remove(resolved)
 
 
 def package_workspace(
@@ -105,7 +174,7 @@ def package_workspace(
     repo_root: Path,
     extra_paths: list[str] | None = None,
     sync_only: list[str] | None = None,
-    exclude_prefixes: tuple[str, ...] = ("metaproc/",),
+    exclude_prefixes: tuple[str, ...] = ("metaproc/", "vendor/metaproc/"),
     out_path: Path | None = None,
 ) -> Path:
     """Tar+gzip a subset of the repo working tree for shipment to a Batch task.
@@ -113,12 +182,17 @@ def package_workspace(
     Default path-set: tracked files (``git ls-files``) unioned with
     untracked-but-not-gitignored files (``git ls-files --others
     --exclude-standard``), minus anything under ``exclude_prefixes``
-    (default: ``metaproc/``, since the wheel ships that separately), plus
-    any caller-supplied ``extra_paths``.
+    (default: ``metaproc/`` and ``vendor/metaproc/``, since the wheel ships
+    that source separately), plus any caller-supplied ``extra_paths``.
 
     Including untracked-non-ignored files matters because iterating on a
     new spec or dataset file that hasn't been committed yet would
     otherwise silently ship stale data to the Batch task.
+
+    Symlinks that resolve within the repository are materialized as regular
+    files or directories so the receiving side can keep rejecting archive
+    links. Links that escape the repository and directory-link cycles fail
+    packaging before upload.
 
     ``sync_only`` overrides the default entirely; only the listed paths
     are packaged.
@@ -126,12 +200,15 @@ def package_workspace(
     All ``extra_paths`` and ``sync_only`` entries must resolve inside
     ``repo_root``; absolute paths or ``..`` escapes raise ``ValueError``.
 
-    Missing paths log a warning and are skipped. Returns the path to the
-    created tarball.
+    Missing paths log a warning and are skipped. Non-regular entries found by
+    the default Git scan also log and skip; explicitly requested paths fail.
+    Returns the path to the created tarball.
     """
     repo = repo_root.resolve()
+    required_paths: set[str] = set()
     if sync_only is not None:
         paths = [_contain_in_repo(repo, p) for p in sync_only]
+        required_paths.update(paths)
     else:
         tracked = subprocess.run(
             ["git", "ls-files"],
@@ -159,37 +236,88 @@ def package_workspace(
             if not any(p == pref.rstrip("/") or p.startswith(pref) for pref in exclude_prefixes)
         ]
         if extra_paths:
-            paths.extend(_contain_in_repo(repo, p) for p in extra_paths)
+            normalized_extra_paths = [_contain_in_repo(repo, p) for p in extra_paths]
+            paths.extend(normalized_extra_paths)
+            required_paths.update(normalized_extra_paths)
 
     if out_path is None:
         out_path = Path(tempfile.mkdtemp(prefix="metaproc-workspace-")) / WORKSPACE_TARBALL_NAME
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with tarfile.open(out_path, "w:gz") as tar:
+    emitted: set[str] = set()
+    with tarfile.open(out_path, "w:gz", dereference=True) as tar:
         for rel in paths:
             full = repo / rel
             if not full.exists():
                 log.warning("Skipping %s — not present in working tree", rel)
                 continue
-            tar.add(str(full), arcname=rel, recursive=True)
+            _add_workspace_path(
+                tar,
+                repo=repo,
+                source=full,
+                arcname=rel,
+                emitted=emitted,
+                active_directories=set(),
+                required=rel in required_paths,
+            )
     log.info("Packaged %d entries into %s", len(paths), out_path)
     return out_path
 
 
-def upload_to_gcs(local_path: Path, gs_uri: str) -> str:
-    """Upload a local file to a ``gs://`` URI. Returns the URI on success."""
+def upload_to_gcs(local_path: Path, gs_uri: str, *, project: str) -> str:
+    """Create one immutable GCS object under the explicit GCP project."""
     if not gs_uri.startswith("gs://"):
         raise ValueError(f"Expected gs:// URI, got {gs_uri!r}")
     bucket_name, _, blob_path = gs_uri[len("gs://") :].partition("/")
     if not blob_path:
         raise ValueError(f"Missing blob path in gs:// URI: {gs_uri!r}")
-    client = storage.Client()
+    client = storage.Client(project=project)
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(blob_path)
-    blob.metadata = {"metaproc-sha256": file_sha256(local_path)}
-    blob.upload_from_filename(str(local_path))
+    blob.chunk_size = GCS_UPLOAD_CHUNK_SIZE
+    digest = file_sha256(local_path)
+    blob.metadata = {"metaproc-sha256": digest}
+    try:
+        blob.upload_from_filename(
+            str(local_path),
+            if_generation_match=0,
+            timeout=GCS_UPLOAD_TIMEOUT_SECONDS,
+            # The storage client accepts this policy even though its annotation names Retry.
+            retry=GCS_UPLOAD_RETRY,  # pyright: ignore[reportArgumentType]
+        )
+    except PreconditionFailed as exc:
+        return _accept_existing_object(blob, gs_uri, digest, exc)
     log.info("Uploaded %s -> %s", local_path, gs_uri)
     return gs_uri
+
+
+def _accept_existing_object(
+    blob: storage.Blob, gs_uri: str, digest: str, cause: PreconditionFailed
+) -> str:
+    """Resolve an ``if_generation_match=0`` collision without losing retriability.
+
+    Immutability is the point of the generation precondition, but a dispatch that
+    uploaded the wheel and then failed while packaging the workspace must stay
+    retriable under the same ``--job-name``. Identical bytes are therefore treated as
+    the upload already having succeeded; different bytes remain a hard error, because
+    a queued Batch task may already be pinned to the object under this URI.
+    """
+    try:
+        blob.reload()
+    except GoogleAPIError as exc:
+        raise CLIError(
+            f"{gs_uri} already exists and its metadata could not be read ({exc}). "
+            "Re-run the dispatch with a new --job-name."
+        ) from exc
+    existing = (blob.metadata or {}).get("metaproc-sha256")
+    if existing == digest:
+        log.info("Reusing identical existing object %s (sha256 %s)", gs_uri, digest)
+        return gs_uri
+    raise CLIError(
+        f"{gs_uri} already exists with different content "
+        f"(existing sha256 {existing or 'unknown'}, local {digest}). "
+        "Dispatch artifacts are immutable; re-run the dispatch with a new --job-name."
+    ) from cause
 
 
 def upload_wheel_to_gcs(
@@ -197,6 +325,7 @@ def upload_wheel_to_gcs(
     *,
     bucket: str,
     job_id: str,
+    project: str,
     prefix: str = DEFAULT_GCS_PREFIX,
 ) -> str:
     """Upload a built wheel to ``gs://<bucket>/<prefix>/<job_id>/<wheel-name>``.
@@ -207,7 +336,7 @@ def upload_wheel_to_gcs(
     install the wheel that matched its own workspace tarball.
     """
     gs_uri = f"gs://{bucket}/{prefix}/{job_id}/{wheel.name}"
-    return upload_to_gcs(wheel, gs_uri)
+    return upload_to_gcs(wheel, gs_uri, project=project)
 
 
 def upload_workspace_to_gcs(
@@ -215,8 +344,9 @@ def upload_workspace_to_gcs(
     *,
     bucket: str,
     job_id: str,
+    project: str,
     prefix: str = DEFAULT_GCS_PREFIX,
 ) -> str:
     """Upload a workspace tarball to ``gs://<bucket>/<prefix>/<job_id>/<WORKSPACE_TARBALL_NAME>``."""
     gs_uri = f"gs://{bucket}/{prefix}/{job_id}/{WORKSPACE_TARBALL_NAME}"
-    return upload_to_gcs(workspace, gs_uri)
+    return upload_to_gcs(workspace, gs_uri, project=project)

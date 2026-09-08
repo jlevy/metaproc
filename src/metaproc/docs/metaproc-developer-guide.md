@@ -1,18 +1,22 @@
 ---
 title: Metaproc Developer Guide
-description: How to use and extend the framework — authoring processes, adding steps and adapters, and testing changes.
+description: "For developers building workflows on Metaproc: authoring process specs, adding steps and adapters, and testing changes."
 ---
 # Metaproc Developer Guide
 
-Related docs: [concepts](metaproc-concepts-and-principles.md) (first principles) ·
+Related docs: [concepts](metaproc-concepts.md) (first principles) ·
 [operator reference](metaproc-operator-reference.md) (runtime CLI).
 
 ## Purpose
 
-For engineers extending metaproc or building a workflow on top of it.
-Read this before adding a CLI command, a process-spec feature, or — especially — before
-writing a script that wraps metaproc.
+For developers building workflows on top of metaproc: process specs, handlers, adapters,
+and plugins. Read it before writing a script that wraps metaproc, which is the mistake
+this guide exists to prevent.
 It is generic to metaproc, not specific to any one workflow.
+
+Running an existing workflow is the [operator reference](metaproc-operator-reference.md)
+instead. Working on metaproc itself is covered by the architecture docs and the
+repository’s own contributor documentation.
 
 ## The Core Principle: Metaproc Is the Right Wrapper
 
@@ -58,8 +62,29 @@ File a bead against metaproc, simplify a CLI shape, or surface the missing primi
 and keep the workflow calling metaproc directly.
 The overarching goal is that both the framework and the workflows on top of it stay
 flexible yet minimally complex.
-See [`metaproc-concepts-and-principles.md`](metaproc-concepts-and-principles.md) for the
-design ethos.
+See [`metaproc-concepts.md`](metaproc-concepts.md) for the design ethos.
+
+## Launch and Cancellation Contracts
+
+`PreparedLaunch.env` has two distinct meanings.
+`None` inherits the Metaproc process environment; an explicit mapping is the complete
+child environment. Adapter code must construct and scrub that mapping before launch.
+A backend must pass it through without merging ambient variables back in, because doing
+so can restore credentials that the adapter deliberately removed.
+
+Local command launches own their process group through terminal cleanup.
+A command is complete only after Metaproc has collected its leader, terminated surviving
+descendants, and flushed its captured log.
+A `mode: code` command therefore must not intentionally daemonize a child that should
+survive the step.
+
+Long-running Python handlers executed by `run-process` must call
+`StepContext.cancel_requested()` at safe checkpoints and return promptly when it becomes
+true. Metaproc drains synchronous work that has already started; it does not abandon or
+forcibly terminate a Python thread, because doing so could release run capacity while
+the handler still mutates run artifacts.
+Direct `run-step` and `run-parallel` handler calls do not establish a run-owned
+cooperative-cancellation event.
 
 ## Adapter Contract: `classify_failure` Is Mandatory
 
@@ -82,14 +107,14 @@ The contract:
 | HTTP 5xx, network errors, connection reset, stream-idle timeout (host suspend) | `severity=FailureSeverity.RETRY_NOW` | Transient; immediate retry usually works. |
 | Nothing matched | `AuthFailureClassification(status="unknown", reason="generic")` — the generic retry classifier wins | Fail open (less destructive). |
 
-Reference implementations: `src/metaproc/adapters/claude_code.py` and
-`src/metaproc/adapters/codex.py`. When adding a new adapter or filling a gap, mirror the
-structure: check terminal signals first, then `known_bugs.py`, then soft rate-limit
+Reference implementations: `src/metaproc/adapters/claude_cli.py` and
+`src/metaproc/adapters/codex_cli.py`. When adding a new adapter or filling a gap, mirror
+the structure: check terminal signals first, then `known_bugs.py`, then soft rate-limit
 family, then return `unknown`.
 
 **Current adapter gaps:**
 
-- `src/metaproc/adapters/gemini.py` — no `classify_failure`. 401 from Vertex
+- `src/metaproc/adapters/gemini_cli.py` — no `classify_failure`. 401 from Vertex
   (`Expected OAuth2 access token` because `GOOGLE_API_KEY` conflicts with
   `GOOGLE_GENAI_USE_VERTEXAI=true`) falls through to generic retry.
   Repeated retries can waste an entire attempt budget.
@@ -120,7 +145,7 @@ Skills are **self-generated**: the source baseline lives in the tool package and
 `.agents/skills/<name>/` path (cross-agent) and mirrors it to `.claude/skills/<name>/`
 (gitignored, `DO NOT EDIT`); a workflow registers its skill via a `metaproc.skills`
 entry point. See the **Skills and Agent Instruction Files** rules in
-[`AGENTS.md`](../../../AGENTS.md).
+[`AGENTS.md`](https://github.com/jlevy/metaproc/blob/main/AGENTS.md).
 
 ## Suggested Vocabulary for Fan-Out Workflows
 
@@ -142,8 +167,8 @@ Its kickoff skill should call `metaproc run-process` directly with the selected 
 and run variables. The client owns roster selection and reporting; Metaproc owns DAG
 execution, status, retries, traces, and resource controls.
 The deterministic
-[offline example](../../../examples/offline-smoke/offline-smoke.process.md) shows the
-same process/handler boundary without domain-specific policy.
+[offline example](https://github.com/jlevy/metaproc/blob/main/examples/offline-smoke/offline-smoke.process.md)
+shows the same process/handler boundary without domain-specific policy.
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

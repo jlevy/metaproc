@@ -14,6 +14,11 @@ SKIP_PARTS = {
     ".git",
     ".tbd",
     ".venv",
+    # Where `tbd shortcut checkout-third-party-repo` clones a dependency's source to
+    # read it. Gitignored, frequently present, and not this repository's prose: another
+    # project's broken relative links are not this gate's business, and letting them
+    # fail it makes the documented workflow unusable.
+    "attic",
     "dist",
     "node_modules",
     "__pycache__",

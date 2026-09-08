@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Self
+from typing import Self, cast
+from unittest.mock import MagicMock
 
 import psutil
 import pytest
@@ -116,3 +120,65 @@ def test_sampling_continues_when_event_log_cannot_open(
 
     assert body_executed
     assert sampler.stats.sample_count >= 1
+
+
+def test_windows_cleanup_error_does_not_replace_command_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = MagicMock(pid=1234)
+    process.poll.return_value = None
+    process.wait.side_effect = subprocess.TimeoutExpired("command", 1)
+    process.kill.side_effect = PermissionError("access denied")
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    resource_sampling_module._terminate_process_tree(
+        cast("subprocess.Popen[str]", process),
+    )
+
+    process.kill.assert_called_once_with()
+
+
+def test_completed_command_does_not_signal_a_recycled_process_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = MagicMock(pid=1234)
+    process.poll.return_value = 0
+    recycled = MagicMock(pid=1235, info={"pid": 1235, "create_time": 30.0})
+    monkeypatch.setattr(psutil, "process_iter", lambda _attrs: [recycled], raising=False)
+    monkeypatch.setattr(os, "getpgid", lambda _pid: 1234)
+    killpg = MagicMock()
+    monkeypatch.setattr(os, "killpg", killpg)
+
+    resource_sampling_module._terminate_process_tree(
+        cast("subprocess.Popen[str]", process),
+        leader_create_time=10.0,
+        ownership_observed_until=20.0,
+    )
+
+    killpg.assert_not_called()
+
+
+def test_completed_command_rejects_a_recycled_group_leader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = MagicMock(pid=1234)
+    process.poll.return_value = 0
+    recycled_leader = MagicMock(pid=1234, info={"pid": 1234, "create_time": 15.0})
+    recycled_child = MagicMock(pid=1235, info={"pid": 1235, "create_time": 16.0})
+    monkeypatch.setattr(psutil, "process_iter", lambda _attrs: [recycled_leader, recycled_child])
+    monkeypatch.setattr(os, "getpgid", lambda _pid: 1234)
+    monkeypatch.setattr(
+        resource_sampling_module,
+        "_process_create_time",
+        lambda pid: 15.0 if pid == 1234 else 16.0,
+    )
+    killpg = MagicMock()
+    monkeypatch.setattr(os, "killpg", killpg)
+
+    resource_sampling_module._terminate_process_tree(
+        cast("subprocess.Popen[str]", process),
+        leader_create_time=10.0,
+        ownership_observed_until=20.0,
+    )
+
+    killpg.assert_not_called()

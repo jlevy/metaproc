@@ -11,8 +11,7 @@ from metaproc.config.providers import providers_with_api_keys
 from metaproc.runpool.pool import RunPoolConfig
 
 # Provide a placeholder RUNS_DIR so CLI tests pass the
-# require_runtime_runs_dir guard added in
-# plan-2026-05-20-earnings-run-settings-migration.md. Tests that need a
+# require_runtime_runs_dir guard. Tests that need a
 # specific value (e.g. test_resolve_templates_env_var_fallback) still
 # override via monkeypatch.setenv; tests that just want the CLI to get
 # past the requirement check inherit this default. Dev shells typically
@@ -175,7 +174,7 @@ def _clear_provider_credential_env(monkeypatch: pytest.MonkeyPatch) -> None:
     leaks into tests that only monkeypatch the historical subset of
     keys, producing flaky pollution failures: pi-cli's `check_auth`
     sees real creds when tests assume none, and
-    `_build_secret_env_vars` raises plaintext-leakage RuntimeErrors
+    `SecretRefSet.resolve_env_refs()` raises plaintext-leakage RuntimeErrors
     because the matching SECRET ref is unset.
 
     The list is derived from `metaproc.config.providers.PROVIDERS` so

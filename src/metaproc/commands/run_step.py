@@ -12,7 +12,7 @@ from typing import cast
 import typer
 from strif import atomic_output_file
 
-from metaproc.adapters.base import Adapter
+from metaproc.adapters.base import Adapter, agent_seed_env
 from metaproc.adapters.registry import derive_variant, get_adapter
 from metaproc.cli import app, get_output
 from metaproc.commands.helpers import (
@@ -31,13 +31,17 @@ from metaproc.config.env_vars import MetaprocEnv
 from metaproc.engine.build_plan import build_plan, merge_defaults
 from metaproc.engine.code_handler import resolve_code_handler
 from metaproc.engine.dep_state import fingerprint_step
-from metaproc.engine.input_validation import validate_process_inputs
+from metaproc.engine.launch_validation import (
+    INPUT_FILE_GROUP,
+    PARAM_GROUP,
+    collect_launch_errors,
+    format_launch_errors,
+)
 from metaproc.engine.pathing import compute_run_dir, compute_task_state_dir
 from metaproc.engine.placeholders import (
     collect_step_runtime_placeholders,
     resolve_runtime_config,
     resolve_templates,
-    validate_spec_placeholders,
 )
 from metaproc.engine.process_scope import expand_process_vars
 from metaproc.engine.resource_sampling import run_sampled_step_command, sample_step_resources
@@ -55,11 +59,13 @@ from metaproc.io.state_io import (
     mark_failed_at,
     mark_running_at,
     read_status_at,
+    validate_task_status_identity_at,
     write_attempt_at,
     write_manual_ack_at,
     write_result_at,
 )
 from metaproc.logutil.compaction import try_compact_log
+from metaproc.models.authored import StepContext
 from metaproc.models.runtime import AttemptRecord, ManualAckRecord, ResultRecord
 from metaproc.paths import MANUAL_ACK_FILE
 
@@ -104,21 +110,25 @@ def run_step(
     require_runtime_runs_dir(variables, command="run-step")
     config_overrides = parse_adapter_config(adapter_config)
 
-    placeholder_errors = validate_spec_placeholders(spec, variables)
-    if placeholder_errors:
-        msg = (
-            "unresolved placeholders in process spec (pass via --var or set env var):\n  "
-            + "\n  ".join(placeholder_errors)
+    # Validation exit code (2), not the general failure code (1): nothing has run.
+    # Every class of missing input is reported together, so fixing a launch
+    # takes one more launch rather than one per class.
+    launch_errors = collect_launch_errors(
+        spec,
+        variables,
+        process_dir,
+        process_path=process_path,
+        adapter_override=adapter,
+        validate_inputs=not no_validate,
+    )
+    if launch_errors:
+        skippable = {PARAM_GROUP, INPUT_FILE_GROUP}
+        hint = (
+            "(pass --no-validate to skip process input validation)"
+            if any(header in skippable for header, _messages in launch_errors)
+            else ""
         )
-        raise CLIError(msg)
-
-    if not no_validate:
-        input_errors = validate_process_inputs(spec, variables, process_dir)
-        if input_errors:
-            msg = "process input validation failed (pass --no-validate to skip):\n  " + "\n  ".join(
-                input_errors
-            )
-            raise CLIError(msg)
+        raise ValidationError(format_launch_errors(launch_errors, hint=hint))
 
     try:
         resolved = build_plan(
@@ -209,7 +219,16 @@ def run_step(
         run_context = variables.get("RUN_ID", variables.get("DATE", variables.get("SCOPE", "")))
         run_id = f"{spec.name}/{run_context}"
         item_record = {"step": step}
+        item_key = state_dir.name if step_def.for_each is not None else None
         current_status = read_status_at(state_dir)
+        if current_status is not None:
+            validate_task_status_identity_at(
+                state_dir,
+                current_status,
+                run_id=run_id,
+                step_id=step,
+                item_key=item_key,
+            )
         running_record = (
             current_status if current_status and current_status.state == "running" else None
         )
@@ -217,7 +236,11 @@ def run_step(
             current_status is None or current_status.state != "completed"
         ):
             running_record = mark_running_at(
-                state_dir, run_id=run_id, step_id=step, item=item_record
+                state_dir,
+                run_id=run_id,
+                step_id=step,
+                item=item_record,
+                item_key=item_key,
             )
 
         write_manual_ack_at(
@@ -252,6 +275,7 @@ def run_step(
             ResultRecord(
                 run_id=run_id,
                 step_id=step,
+                attempt_id=completed.attempt_id,
                 state="completed",
                 validated=True,
                 outputs=resolve_record_output_paths(effective_outputs, variables),
@@ -343,7 +367,13 @@ def run_step(
                 step_hash=step_hash,
             ),
         )
-        mark_running_at(state_dir, run_id=run_id, step_id=step, item=item_record)
+        mark_running_at(
+            state_dir,
+            run_id=run_id,
+            step_id=step,
+            item=item_record,
+            item_key=canonical_item_key,
+        )
 
         try:
             if handler_ref:
@@ -359,7 +389,7 @@ def run_step(
                     step_node_id=step,
                     item_key=canonical_item_key,
                 ):
-                    handler_fn(dict(variables), process_step)
+                    handler_fn(StepContext(dict(variables)), process_step)
             else:
                 if command_ref is None:
                     raise CLIError(f"no command or handler configured for step '{step}'")
@@ -403,12 +433,13 @@ def run_step(
                 )
                 exit_code = 1
             else:
-                mark_completed_at(state_dir)
+                completed = mark_completed_at(state_dir)
                 write_result_at(
                     state_dir,
                     ResultRecord(
                         run_id=run_id,
                         step_id=step,
+                        attempt_id=completed.attempt_id,
                         state="completed",
                         validated=True,
                         outputs=resolve_record_output_paths(effective_outputs, variables),
@@ -509,9 +540,10 @@ def run_step(
             run_id=run_id,
             step_id=step,
             item={each: context_label} if each else {},
+            item_key=state_dir.name if for_each is not None else None,
         )
 
-        env = adapter_obj.prepare_env(dict(os.environ), runtime_config)
+        env = adapter_obj.prepare_env(agent_seed_env(), runtime_config)
         if target.env:
             env.update(
                 {key: resolve_templates(value, variables) for key, value in target.env.items()}
@@ -572,12 +604,16 @@ def run_step(
                 )
                 exit_code = 1
             else:
-                mark_completed_at(state_dir, running_record=running_record)
+                completed = mark_completed_at(
+                    state_dir,
+                    running_record=running_record,
+                )
                 write_result_at(
                     state_dir,
                     ResultRecord(
                         run_id=run_id,
                         step_id=step,
+                        attempt_id=completed.attempt_id,
                         state="completed",
                         validated=True,
                         outputs=resolve_record_output_paths(effective_outputs, variables),

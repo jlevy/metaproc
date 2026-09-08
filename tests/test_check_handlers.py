@@ -129,3 +129,42 @@ def test_check_handlers_fails_on_missing_sub_process_file(
     assert result.exit_code != 0, result.output
     assert "FAIL" in result.output
     assert "missing sub-process file" in result.output
+
+
+def test_check_handlers_resolves_default_backed_dependency_path(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """Static traversal uses the same declared literal defaults as runtime."""
+
+    child_dir = tmp_path / "children"
+    child_dir.mkdir()
+    _write_handler_module(child_dir, "handler_ok")
+    child = _write_process_spec(child_dir, "handler_ok.py:my_handler")
+    child.rename(child_dir / "live.process.md")
+    top = tmp_path / "top.process.md"
+    top.write_text(
+        """---
+process:
+  name: top
+  inputs:
+    child_name:
+      param: CHILD_NAME
+      as: string
+      required: false
+      default: live.process.md
+  deps:
+    child: { path: "./children/{{child_name}}", as: path }
+  steps:
+    - id: child
+      mode: composite
+      uses: deps.child
+---
+# top process
+""",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["check-handlers", str(top)])
+
+    assert result.exit_code == 0, result.output
+    assert "1 handler(s), 0 error(s)" in result.output

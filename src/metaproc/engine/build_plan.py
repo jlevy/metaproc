@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -41,6 +41,7 @@ from metaproc.models.execution_profile import (
     ResolvedExecutionProfile,
 )
 from metaproc.models.plan import FanOut, Plan, ResolvedAdapter, ResolvedDep, ResolvedStep
+from metaproc.paths import normalize_path_key
 from metaproc.plugins.discovery import get_plugin_registry
 
 log = logging.getLogger(__name__)
@@ -105,6 +106,58 @@ def _resolve_required_profile(
     except ValueError as exc:
         msg = f"{context}: {exc}"
         raise ValueError(msg) from exc
+
+
+def validate_execution_profiles(
+    spec: ProcessSpec,
+    *,
+    process_path: Path,
+    profile_files: Sequence[Path] = (),
+    adapter_override: str | None = None,
+    step_profile_overrides: Mapping[str, str] | None = None,
+) -> list[str]:
+    """Return every execution-profile request in *spec* that will not resolve.
+
+    ``build_plan`` resolves profiles as it walks the spec and raises on the
+    first bad one. Launch validation needs the whole set at once, so this walks
+    the same requests in the same order through the same resolver and collects
+    the messages instead.
+    """
+    registry = _load_profile_registry(process_path, profile_files)
+    overrides = step_profile_overrides or {}
+
+    requests: list[tuple[str, str]] = []
+    if adapter_override is None and spec.defaults.default_execution_profile:
+        requests.append(
+            (spec.defaults.default_execution_profile, "defaults.default_execution_profile")
+        )
+    for step in spec.steps:
+        step_override = overrides.get(step.id)
+        if step_override:
+            requests.append((step_override, f"--step-variant {step.id}"))
+        elif step.execution_profile:
+            requests.append((step.execution_profile, f"step {step.id!r} execution_profile"))
+
+    errors: list[str] = []
+    for profile_name, context in requests:
+        try:
+            _resolve_required_profile(registry, profile_name, context=context)
+        except ValueError as exc:
+            errors.append(str(exc))
+
+    # An --variant/--profile value that names neither a registry profile, a
+    # spec-declared adapter config, nor a raw adapter type is the same refusal
+    # build_plan makes once the run profile comes back unresolved.
+    if (
+        adapter_override is not None
+        and _resolve_profile(registry, adapter_override) is None
+        and adapter_override not in spec.defaults.adapters
+        and adapter_override not in ADAPTER_REGISTRY
+    ):
+        supported = ", ".join(sorted(ADAPTER_REGISTRY))
+        errors.append(f"unknown adapter override: {adapter_override!r} (supported: {supported})")
+
+    return errors
 
 
 def _apply_run_namespace_params(
@@ -231,10 +284,6 @@ def _parse_symbolic_ref(ref: str, *, context: str) -> tuple[str, str]:
         msg = f"{context}: invalid ref {ref!r} (expected '<step-id>.<output-name>')"
         raise ValueError(msg)
     return step_id, output_name
-
-
-def _normalize_path_key(path: str) -> str:
-    return str(Path(path))
 
 
 def _parse_produced_by(ref: str, *, context: str) -> tuple[str, str | None]:
@@ -466,9 +515,9 @@ def _resolve_process_deps(
             else:
                 candidate_outputs = list(producer_outputs.items())
 
-            dep_key = _normalize_path_key(dep_path)
+            dep_key = normalize_path_key(dep_path)
             if not any(
-                output.path and _normalize_path_key(output.path) == dep_key
+                output.path and normalize_path_key(output.path) == dep_key
                 for _, output in candidate_outputs
             ):
                 available = ", ".join(
@@ -511,13 +560,118 @@ def _resolve_prompt_paths(
     return resolved_paths
 
 
+def _transitive_ancestors(step_id: str, needs_by_step: dict[str, list[str]]) -> set[str]:
+    """Return every step *step_id* depends on, directly or transitively.
+
+    Carries its own visited set rather than trusting the graph to be acyclic:
+    ``validate_step_graph`` is what rejects a cycle, and it runs after this. A spec that
+    is about to be rejected for a cycle must not hang the planner first.
+    """
+    ancestors: set[str] = set()
+    frontier = list(needs_by_step.get(step_id, ()))
+    while frontier:
+        current = frontier.pop()
+        if current in ancestors or current == step_id:
+            continue
+        ancestors.add(current)
+        frontier.extend(needs_by_step.get(current, ()))
+    return ancestors
+
+
+def _resolve_produced_refs(
+    step: ProcessStep,
+    *,
+    resolved_deps: dict[str, ResolvedDep],
+    step_outputs: dict[str, dict[str, IOSpec]],
+    params: dict[str, str],
+    ancestor_ids: set[str],
+) -> list[str]:
+    """Return the referenced paths this run produces, for ``produced_refs``.
+
+    Two ways a reference can name a file the run writes rather than an authored input.
+
+    A dep-ref carries ``produced_by``, which says outright that a step writes it.
+
+    A raw path is produced when a step this one depends on, directly or transitively,
+    declares that exact path as an output. The plan holds both facts, so whether the run
+    writes it is decided rather than assumed, and a released spec that wires a produced
+    file as a raw path is as correct as one that wires it through a dep. This is the
+    common shape: a step that stages a source snapshot, then a later step that reads it
+    by path.
+
+    Ancestry is the whole point of the test, not a detail of it. Only an upstream
+    producer is ordered before this step, so only an upstream producer is guaranteed to
+    have written the file by the time this step reads it. A step that declares the same
+    output path while running independently or downstream supplies nothing to this
+    reader, and treating its declaration as proof would drop a real authored file out of
+    both the existence check and the content fingerprint — the file then goes stale
+    without invalidating anything, or the step fails at runtime on a file the plan
+    promised.
+
+    Anything else is an authored input the run does not write, so its bytes stay in the
+    fingerprint and a missing file is still the misconfiguration it has always been.
+
+    Two upstream producers of one path is refused rather than resolved. The set of bytes
+    this reader will see is then a race between them, and no fingerprint can describe
+    a race.
+
+    This takes the opposite position to ``_validate_raw_path_dataflow`` below, which
+    rejects the same wiring on ``inputs``. The asymmetry is deliberate and is about what
+    released specs already contain: a raw-path ``inputs`` duplicate has always been an
+    error, so no spec carries one and the rule can stay strict, while a raw-path
+    ``prompt_paths`` duplicate has always been accepted, so specs do carry them and
+    rejecting them now would break released processes.
+    """
+    # Keyed the way every other authored-path comparison in this module is keyed. A
+    # doubled slash or a `./` segment must not decide whether a file is produced, and
+    # `normalize_path_key` is the one definition those comparisons share.
+    #
+    # A step's own outputs are absent because a step is never its own ancestor, which
+    # keeps a step that reads and rewrites one path from dropping it from its
+    # fingerprint.
+    producers_by_key: dict[str, set[str]] = {}
+    for producer_id in ancestor_ids:
+        for output_spec in step_outputs.get(producer_id, {}).values():
+            if output_spec.path:
+                producers_by_key.setdefault(normalize_path_key(output_spec.path), set()).add(
+                    producer_id
+                )
+
+    produced: list[str] = []
+    for candidate in (*step.prompt_paths, step.uses):
+        if not candidate:
+            continue
+        if is_dep_ref(candidate):
+            dep_name = parse_dep_ref(candidate, context=f"step '{step.id}' produced refs")
+            dep = resolved_deps.get(dep_name)
+            if dep is not None and dep.produced_by and dep.path:
+                produced.append(dep.path)
+            continue
+        resolved = resolve_templates(candidate, params)
+        producers = producers_by_key.get(normalize_path_key(resolved))
+        if not producers:
+            continue
+        if len(producers) > 1:
+            names = ", ".join(sorted(producers))
+            raise ValueError(
+                f"step '{step.id}': referenced path {resolved!r} is declared as an output "
+                f"by more than one upstream step ({names}); one producer must own it"
+            )
+        produced.append(resolved)
+    return list(dict.fromkeys(produced))
+
+
 def _validate_raw_path_dataflow(
     step: ProcessStep,
     *,
     resolved_inputs: dict[str, IOSpec],
     step_outputs: dict[str, dict[str, IOSpec]],
 ) -> None:
-    """Reject authored raw-path wiring when a symbolic ref is available."""
+    """Reject authored raw-path wiring when a symbolic ref is available.
+
+    Only for ``inputs``. ``prompt_paths`` takes the opposite position in
+    ``_resolve_produced_refs`` above, and that docstring explains why.
+    """
     output_index: dict[str, list[str]] = {}
     for producer_step_id, outputs in step_outputs.items():
         for output_name, output_spec in outputs.items():
@@ -685,10 +839,14 @@ def build_plan(
 
     resolved_steps: list[ResolvedStep] = []
     for step in spec.steps:
-        if step.mode == "composite" and step.for_each is not None:
+        if (
+            step.mode == "composite"
+            and step.for_each is not None
+            and step.for_each.retry is not None
+        ):
             raise ValueError(
-                f"step '{step.id}': composite mode does not support for_each; "
-                "push for_each into the child spec's agent steps instead"
+                f"step '{step.id}': mapped composite does not support for_each.retry; "
+                "declare retries on child leaves and resume the failed item scope"
             )
 
         step_profile_override = step_profile_overrides.get(step.id)
@@ -859,7 +1017,11 @@ def build_plan(
                 batch_size=step.for_each.batch_size,
                 items=items,
                 filtered_count=filtered_count,
-                retry=step.for_each.retry or spec.defaults.retry,
+                retry=(
+                    None if step.mode == "composite" else step.for_each.retry or spec.defaults.retry
+                ),
+                align=step.for_each.align,
+                max_concurrency=step.for_each.max_concurrency,
             )
 
         resolved_env: dict[str, str] = {}
@@ -910,6 +1072,10 @@ def build_plan(
                 needs=list(dict.fromkeys([*step.needs, *ref_needs])),
                 on_failure=step.on_failure,
                 uses_path=uses_path,
+                # Filled in after the loop: whether a raw path is produced depends on
+                # this step's transitive ancestors, and a step's `needs` is only final
+                # once every step has resolved its ref-derived edges.
+                produced_refs=[],
                 execution_profile=step_execution_profile,
                 artifact_namespace=step_artifact_namespace,
                 variant=step.variant,
@@ -917,6 +1083,23 @@ def build_plan(
                 max_budget_usd=step.max_budget_usd,
                 token_budget=step.token_budget,
             )
+        )
+
+    # `needs` here is the authored edges plus the ones `_resolve_step_inputs` derived
+    # from symbolic refs, which is the same relation the scheduler orders steps by. Any
+    # narrower view would call a path unproduced that the run does in fact write first.
+    needs_by_step = {resolved.step_id: resolved.needs for resolved in resolved_steps}
+    steps_by_id = {authored.id: authored for authored in spec.steps}
+    for resolved in resolved_steps:
+        authored_step = steps_by_id.get(resolved.step_id)
+        if authored_step is None:
+            continue
+        resolved.produced_refs = _resolve_produced_refs(
+            authored_step,
+            resolved_deps=resolved_deps,
+            step_outputs=step_outputs,
+            params=params,
+            ancestor_ids=_transitive_ancestors(resolved.step_id, needs_by_step),
         )
 
     graph_errors = validate_step_graph(resolved_steps)

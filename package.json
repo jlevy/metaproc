@@ -4,7 +4,7 @@
   "private": true,
   "description": "Pinned JavaScript toolchain for Metaproc plugin linting and type checking.",
   "engines": {
-    "node": ">=24.18.0 <25",
+    "node": ">=24.19.0 <25",
     "npm": ">=11.10.0 <12"
   },
   "scripts": {

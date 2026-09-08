@@ -1,9 +1,10 @@
 # RunPool Module
 
 RunPool design is documented in
-[`metaproc/docs/arch/arch-runpool.md`](../../../docs/arch/arch-runpool.md).
-Keep that file as the single design contract for subsystem boundary, memory and swap
-telemetry, adaptive concurrency, host admission, visibility, and testing rules.
+[`metaproc/docs/arch-runpool.md`](../docs/arch-runpool.md), also readable as
+`metaproc help arch-runpool`. Keep that file as the single design contract for subsystem
+boundary, memory and swap telemetry, adaptive concurrency, host admission, visibility,
+and testing rules.
 
 Key constraints:
 

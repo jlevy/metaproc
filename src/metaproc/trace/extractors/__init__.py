@@ -42,6 +42,14 @@ class TraceExtractor(Protocol):
     source: str
     """Stable source name (matches ``TraceEvent.source``)."""
 
+    scope_local: bool
+    """Whether the extractor reads only the supplied scope root.
+
+    Scope-local extractors are invoked for the parent and every discovered
+    composite child. Entry-point extractors without this opt-in retain their
+    historical once-per-parent behavior.
+    """
+
     def detect(self, run_dir: Path) -> bool:
         """Return ``True`` iff this extractor has data to read in ``run_dir``."""
         ...

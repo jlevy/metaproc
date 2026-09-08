@@ -1,6 +1,6 @@
 """Tests for schema_version 2 fields on EntryState (Vehicle A pool redesign).
 
-Spec: docs/arch/arch-metaproc-core.md
+Spec: src/metaproc/docs/metaproc-design.md
 Regression coverage (Phase 1 of the original design).
 
 Exercises:

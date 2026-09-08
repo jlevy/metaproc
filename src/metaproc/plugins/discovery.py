@@ -16,6 +16,9 @@ ENTRY_POINT_GROUP = "metaproc.plugins"
 # Global singleton set once by discover_and_load_plugins, accessible to commands.
 _global_registry = PluginRegistryImpl()
 
+# Whether an entry-point scan has already populated the global registry in this process.
+_discovery_completed = False
+
 
 def get_plugin_registry() -> PluginRegistryImpl:
     """Return the global plugin registry (populated at CLI startup)."""
@@ -50,8 +53,12 @@ def _load_plugin_object(
 
 
 def discover_and_load_plugins(registry: PluginRegistryImpl | None = None) -> PluginRegistryImpl:
-    """Discover installed plugins via entry points and populate *registry*."""
-    global _global_registry  # noqa: PLW0603
+    """Discover installed plugins via entry points and populate *registry*.
+
+    Always rescans. Long-lived servers should call :func:`ensure_plugins_loaded`
+    instead, so a polled route does not repeat the scan on every request.
+    """
+    global _global_registry, _discovery_completed  # noqa: PLW0603
 
     if registry is None:
         registry = PluginRegistryImpl()
@@ -65,4 +72,26 @@ def discover_and_load_plugins(registry: PluginRegistryImpl | None = None) -> Plu
             log.exception("Failed to load plugin: %s", ep.name)
 
     _global_registry = registry
+    _discovery_completed = True
     return registry
+
+
+def ensure_plugins_loaded() -> PluginRegistryImpl:
+    """Populate the global registry once per process; later calls are no-ops.
+
+    Entry-point discovery is process-stable: rescanning re-executes every plugin's
+    registration and swaps the module-global registry, which is needless churn on a
+    request-scoped path and racy under a threaded server.
+    """
+    if _discovery_completed:
+        return _global_registry
+    return discover_and_load_plugins()
+
+
+def reset_plugin_discovery() -> None:
+    """Forget that discovery ran, so the next :func:`ensure_plugins_loaded` rescans.
+
+    Exists for tests that install or remove entry points within one process.
+    """
+    global _discovery_completed  # noqa: PLW0603
+    _discovery_completed = False

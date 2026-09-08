@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import stat
+import subprocess
 import sys
 import time as _time
 import types
@@ -15,16 +16,19 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from metaproc.adapters.base import (
+    AGENT_ENV_OVERRIDES,
     Adapter,
     AuthCapableCliAdapter,
     AuthFailureClassification,
     AuthStatus,
     QuotaUsage,
+    agent_seed_env,
     resolve_templates,
+    validate_terminal_result_log,
 )
-from metaproc.adapters.claude_code import CLAUDE_CREDS_ENV_VAR, ClaudeCodeCliAdapter
-from metaproc.adapters.gemini import GeminiCliAdapter
-from metaproc.adapters.pi_cli import PiCliAdapter, _build_pi_flags
+from metaproc.adapters.claude_cli import CLAUDE_CREDS_ENV_VAR, ClaudeCodeCliAdapter
+from metaproc.adapters.gemini_cli import GeminiCliAdapter
+from metaproc.adapters.pi_cli import PI_CLI_INSTALL_HINT, PiCliAdapter, _build_pi_flags
 from metaproc.adapters.registry import (
     ADAPTER_REGISTRY,
     derive_variant,
@@ -45,6 +49,135 @@ class TestResolveTemplates:
     def test_keeps_unknown_vars(self):
         result = resolve_templates("{{UNKNOWN}}", {})
         assert result == "{{UNKNOWN}}"
+
+
+class TestAgentSeedEnv:
+    """The seed environment agent children are built from forces styling off."""
+
+    def test_styling_is_off_even_when_the_operator_forces_it_on(self, monkeypatch):
+        """An operator shell exporting color-on must not reach an agent transcript."""
+        monkeypatch.setenv("FORCE_COLOR", "3")
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        monkeypatch.setenv("TERM", "xterm-256color")
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        env = agent_seed_env()
+        assert env["NO_COLOR"] == "1"
+        assert env["FORCE_COLOR"] == "0"
+        assert env["CLICOLOR"] == "0"
+        assert env["CLICOLOR_FORCE"] == "0"
+        assert env["TERM"] == "dumb"
+
+    def test_everything_else_is_inherited(self, monkeypatch):
+        """Credentials and settings pass through; only the styling keys are rewritten.
+
+        The set-equality assertion is a deliberate tripwire rather than a restatement
+        of the constant: every key here is written into every agent child, so adding
+        one should be a considered two-file change, not a one-line edit that rides
+        along in an unrelated commit.
+        """
+        monkeypatch.setenv("GEMINI_API_KEY", "inherit-me")
+        env = agent_seed_env()
+        assert env["GEMINI_API_KEY"] == "inherit-me"
+        assert set(AGENT_ENV_OVERRIDES) == {
+            "NO_COLOR",
+            "FORCE_COLOR",
+            "CLICOLOR",
+            "CLICOLOR_FORCE",
+            "TERM",
+        }
+
+    def test_every_registered_adapter_preserves_the_policy(self, monkeypatch):
+        """prepare_env receives the scrubbed seed and returns it intact.
+
+        The launch paths hand adapters agent_seed_env() rather than a bare
+        os.environ copy; an adapter that dropped the keys would silently reopen
+        the styling leak. Iterating the registry rather than a hand-picked pair
+        means a newly registered adapter is covered the day it is added.
+        """
+        monkeypatch.setenv("TERM", "xterm-256color")
+        assert ADAPTER_REGISTRY, "registry is empty; this test would vacuously pass"
+        for adapter_type, adapter in ADAPTER_REGISTRY.items():
+            env = adapter.prepare_env(agent_seed_env(), {})
+            for key, value in AGENT_ENV_OVERRIDES.items():
+                assert env[key] == value, f"{adapter_type} dropped {key}"
+
+
+class TestTerminalResultValidation:
+    def test_adapter_can_reject_the_last_terminal_event(self, tmp_path):
+        class ValidatingAdapter:
+            adapter_type = "validating"
+            short_name = "validating"
+            default_model = None
+
+            def parse_result_event(self, line):
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    return None
+                return event if event.get("type") == "result" else None
+
+            def validate_result_event(self, event, merged_config):
+                return f"rejected {event['model']} for {merged_config['model']}"
+
+        log_path = tmp_path / "attempt.jsonl"
+        log_path.write_text(
+            "warning before JSON\n"
+            '{"type":"result","model":"first"}\n'
+            '{"type":"result","model":"actual"}\n'
+        )
+
+        error = validate_terminal_result_log(
+            ValidatingAdapter(),
+            log_path,
+            {"model": "expected"},
+        )
+
+        assert error == "rejected actual for expected"
+
+    def test_adapter_without_validator_preserves_existing_behavior(self, tmp_path):
+        class ParsingOnlyAdapter:
+            adapter_type = "parsing-only"
+            short_name = "parsing-only"
+            default_model = None
+
+            def parse_result_event(self, line: str) -> dict[str, object] | None:  # noqa: ARG002
+                return {"type": "result"}
+
+        log_path = tmp_path / "attempt.jsonl"
+        log_path.write_text('{"type":"result"}\n')
+
+        assert (
+            validate_terminal_result_log(
+                ParsingOnlyAdapter(),
+                log_path,
+                {},
+            )
+            is None
+        )
+
+
+class TestAgentSeedEnvIsUsedEverywhere:
+    """No launch path may build an agent's environment from a bare os.environ.
+
+    The policy is enforced at each call site, and a review of this change found two
+    launch paths that had been missed, so the gap this guards against is the one that
+    actually happened rather than a hypothetical. Reading the source is crude but it
+    catches the whole class at once, including paths a unit test would never reach
+    (detached launches, credential probes) and any path added later.
+    """
+
+    def test_no_call_site_passes_a_bare_environ_to_prepare_env(self):
+        src = _Path(__file__).resolve().parent.parent / "src" / "metaproc"
+        offenders = [
+            f"{path.relative_to(src)}:{number}"
+            for path in sorted(src.rglob("*.py"))
+            for number, line in enumerate(path.read_text().splitlines(), start=1)
+            if "prepare_env(dict(os.environ)" in line.replace(" ", "")
+        ]
+        assert not offenders, (
+            "these launch paths bypass agent_seed_env(), so an operator's FORCE_COLOR "
+            f"would reach an agent transcript: {offenders}"
+        )
 
 
 class TestAuthStatus:
@@ -372,10 +505,9 @@ class TestClaudeCodeCliAdapterAuthCapable:
         # Regression: the classifier MUST NOT mark a credential expired
         # when the keyword `authentication_error` or `invalid_grant`
         # appears as ordinary tool / model output rather than a
-        # structured auth signal. This was the failure mode that
-        # destroyed Test A's V predict-ticker — a 403 from www.sec.gov
-        # got misclassified as an Anthropic auth failure because the
-        # session log happened to contain the substring.
+        # structured auth signal. A remote-site 403 must not be
+        # misclassified as an Anthropic auth failure merely because the
+        # session log happens to contain the substring.
         session_log = tmp_path / "session.jsonl"
         session_log.write_text(
             # Realistic shape: agent-emitted text mentioning auth keywords
@@ -386,7 +518,7 @@ class TestClaudeCodeCliAdapterAuthCapable:
             "appears to be invalid_grant — but that is unrelated to our actual "
             'auth state."}]}}\n'
             '{"type":"result","is_error":true,"result":"Failed to fetch '
-            "https://www.sec.gov/...: AxiosError: Request failed with status "
+            "https://example.invalid/...: AxiosError: Request failed with status "
             'code 403"}\n'
         )
         result = self.adapter.classify_failure(None, "exit code 1", session_log)
@@ -441,7 +573,7 @@ class TestClaudeCodeCliAdapterAuthCapable:
         # misses 401 and the broad claude-startup-exit-1-silent
         # known-bug detector misclassifies the failure as ``unknown``,
         # leaving the bad credential active in the pool.
-        session_log = tmp_path / "predict-ticker_TELNY_2026-04-27.jsonl"
+        session_log = tmp_path / "process-item_item-1.jsonl"
         session_log.write_text(
             '{"type":"result","subtype":"success","is_error":true,'
             '"api_error_status":401,'
@@ -524,8 +656,30 @@ class TestGeminiCliAdapter:
         prompt = tmp_path / "prompt.md"
         prompt.write_text("Do something.")
         cmd = self.adapter.build_command(prompt, {}, {})
-        assert cmd[0] == "gemini"
-        assert "-p" in cmd
+        assert cmd[:2] == ["/bin/sh", "-c"]
+        assert cmd[4:6] == [str(prompt), "gemini"]
+        assert "-p" not in cmd[5:]
+
+    def test_build_command_streams_ignored_audit_prompt_to_stdin(self, tmp_path, monkeypatch):
+        logs_dir = tmp_path / ".logs"
+        logs_dir.mkdir()
+        prompt = logs_dir / "prompt.md"
+        prompt.write_text("Use the complete prompt body.")
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        fake_gemini = bin_dir / "gemini"
+        fake_gemini.write_text("#!/bin/sh\n/bin/cat\n")
+        fake_gemini.chmod(fake_gemini.stat().st_mode | stat.S_IXUSR)
+        monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+        monkeypatch.setenv("METAPROC_SKIP_GEMINI_VERSION_CHECK", "1")
+
+        cmd = self.adapter.build_command(prompt, {}, {})
+        completed = subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+        assert completed.stdout == "Use the complete prompt body."
+        assert all(str(prompt) not in arg for arg in cmd[cmd.index("gemini") :])
+        assert prompt.read_text() == "Use the complete prompt body."
 
     def test_build_command_bypass_permissions(self, tmp_path):
         prompt = tmp_path / "prompt.md"
@@ -540,9 +694,53 @@ class TestGeminiCliAdapter:
         result = self.adapter.prepare_env(env, {})
         assert "GEMINI_CLI_SYSTEM_SETTINGS_PATH" in result
 
+    def test_working_directory_absent(self):
+        assert self.adapter.working_directory({}) is None
+
+    def test_working_directory_present(self, tmp_path):
+        assert self.adapter.working_directory({"working_directory": str(tmp_path)}) == tmp_path
+        assert self.adapter.validate_config({"working_directory": str(tmp_path)}) == []
+
     def test_parse_result_event(self):
         assert self.adapter.parse_result_event('{"type": "result"}') == {"type": "result"}
         assert self.adapter.parse_result_event("garbage") is None
+
+    def test_successful_result_must_report_the_requested_model(self):
+        event: dict[str, object] = {
+            "type": "result",
+            "status": "success",
+            "stats": {"models": {"gemini-3.5-flash": {"input_tokens": 1}}},
+        }
+
+        error = self.adapter.validate_result_event(event, {"model": "gemini-3.6-flash"})
+
+        assert error is not None
+        assert "requested model 'gemini-3.6-flash'" in error
+        assert "gemini-3.5-flash" in error
+        assert "provenance invalid" in error
+
+    def test_successful_result_accepts_multi_model_usage_when_requested_model_is_present(self):
+        event: dict[str, object] = {
+            "type": "result",
+            "status": "success",
+            "stats": {
+                "models": {
+                    "gemini-3.6-flash": {"input_tokens": 1},
+                    "gemini-utility": {"input_tokens": 2},
+                }
+            },
+        }
+
+        assert self.adapter.validate_result_event(event, {"model": "gemini-3.6-flash"}) is None
+
+    def test_unsuccessful_result_keeps_its_original_failure(self):
+        event: dict[str, object] = {
+            "type": "result",
+            "status": "error",
+            "stats": {"models": {}},
+        }
+
+        assert self.adapter.validate_result_event(event, {"model": "gemini-3.6-flash"}) is None
 
 
 # ── Pi CLI adapter ──────────────────────────────────────────────
@@ -712,6 +910,7 @@ class TestPiCliAdapter:
         status = self.adapter.check_auth()
         assert status.cli_found is False
         assert status.credentials_found is False
+        assert status.setup_hint == PI_CLI_INSTALL_HINT
 
     def test_check_auth_with_anthropic_key(self, monkeypatch, tmp_path):
         monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/pi")

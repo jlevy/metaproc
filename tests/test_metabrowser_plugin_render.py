@@ -57,6 +57,7 @@ def _render(kind: str, view: str, payload: dict[str, Any]) -> str:
     result = subprocess.run(
         [
             "node",
+            "--experimental-vm-modules",
             str(SHIM),
             str(METABROWSER_PACKAGE_ROOT),
             str(METAPROC_PLUGIN_ROOT),

@@ -6,13 +6,15 @@ import re
 import subprocess as sp
 import sys
 import types
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from metaproc.adapters.base import AuthStatus
-from metaproc.adapters.codex import CodexCliAdapter
+from metaproc.adapters.codex_cli import CodexCliAdapter
 from metaproc.adapters.registry import ADAPTER_REGISTRY
 from metaproc.cli import app
 from metaproc.commands.auth_check import (
@@ -789,6 +791,15 @@ class TestPiValidateRegistration:
 
 class TestRunLiveCheckPiRegistrationGate:
     """_run_live_check wires the registration gate before dispatching prompts."""
+
+    @pytest.fixture(autouse=True)
+    def _stub_gcp_token(self) -> Iterator[None]:
+        """Keep registration tests independent of ambient ADC and gcloud state."""
+        with patch(
+            "metaproc.cloud.gcp.resolve_token.resolve_gcp_token",
+            return_value="test-gcp-token",
+        ):
+            yield
 
     def _adapter(self):
         adapter = MagicMock()

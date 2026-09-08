@@ -37,30 +37,109 @@ Confirm:
 
 ## Audited First-Party Exceptions
 
-Six exact first-party releases are exempt from the ordinary cool-off for this release:
+First-party libraries track their latest release.
+The 14-day cool-off exists to let a compromised third-party publish be caught by someone
+else before it reaches this build; that argument does not apply to code published from a
+repository maintained alongside this one, where the diff is reviewable directly.
+Holding a first-party dependency back therefore buys no supply-chain safety and costs
+currency, so an exception names the current release rather than whichever one happened
+to be current when the exception was written.
 
-- `softschema==0.4.0`, required for portable date- and timestamp-shaped YAML scalars;
+Each exception is still audited: an entry below records the release it was reviewed
+against and what changed, and a version bump requires a fresh review, not an edited
+version number.
+
+Seven exact first-party releases are exempt from the ordinary cool-off for this release:
+
+- `softschema==0.8.0`, the current release, adopted inside the cool-off as a first-party
+  release. Reviewed against `0.7.0`: same MIT license, same `jlevy/softschema` source
+  repository, same Python floor of `>=3.11,<4.0`, and the same five direct dependencies
+  (`frontmatter-format`, `jsonschema`, `pydantic`, `ruamel-yaml`, `strif`), so it adds
+  no transitive surface.
+  It adds a `repair` subcommand and the corresponding public API (`load_artifact`,
+  `repair_artifact`, `conform_artifact`, `repair_and_validate_artifact`, and
+  `resolve_bound_schema`), leaves every existing subcommand’s flags unchanged, and
+  leaves ordinary schema verdicts unchanged.
+  Two result-shape additions matter to a consumer reading results against a closed
+  schema: `repairs` is now always present on a validate result, and TypeScript semantic
+  error records may carry `expected`. Metaproc’s contract-failure adapter tolerates
+  both, and the full suite runs against this exact release.
+  Metaproc keeps its own `metaproc softschema repair`, which routes through
+  `metaproc.engine.yaml_repair`, so the new upstream subcommand is not yet on Metaproc’s
+  execution path;
 - `frontmatter-format==0.4.0`, required by SoftSchema 0.4.0 and used directly for
   deterministic alias-free Metaproc artifact writes;
-- `metabrowser==0.1.0`, used only by the development and plugin test group;
-- `kpress==0.2.2`, pulled by the exact Metabrowser development dependency and reviewed
-  as a compatible first-party maintenance update with no added dependencies;
+- `metabrowser==0.9.0`, the current release, used by the development and plugin test
+  group and by the optional `browser` extra.
+  Reviewed against `0.1.0`: same AGPL-3.0-or-later license and `jlevy/metabrowser`
+  source repository, and relocking changed exactly two packages while adding and
+  removing no transitive ones.
+  Its Python floor rises from 3.11 to 3.12, which this project already requires.
+  It advances the browser plugin SDK from 0.1 to 0.5, which is a contract change rather
+  than a version bump: plugin discovery refuses a manifest targeting the wrong SDK, so
+  this release was adopted together with the plugin migration that answers it;
+- `kpress==0.3.5`, the current release, pinned exactly by `metabrowser==0.9.0` and so
+  adopted with it rather than chosen separately.
+  Reviewed as a compatible first-party maintenance update: same source repository and
+  license, and no added dependencies;
 - `flowmark-rs==0.3.2`, used to format and verify Markdown.
   This first-party release was reviewed against `0.3.1`; its formatting output is
   unchanged, while its skill, publishing, and Markdown-parser configuration are more
   reliable;
-- `get-tbd==0.4.2`, used by the exact fallback in generated agent-integration hooks.
+- `get-tbd==0.8.1`, the current release of the issue-tracking and agent-integration CLI,
+  adopted inside the cool-off as a first-party release.
+  Reviewed against the `0.8.0` recorded here previously: same MIT license, same
+  `jlevy/tbd` source repository, same twelve direct dependencies, same npm publisher
+  (GitHub Actions OIDC), and the same `f08` tbd format, so it carries no data migration.
+  It has no lockfile effect, since the CLI is installed globally or run through `npx`
+  rather than declared in `package.json`. Adopted through the supported
+  `tbd setup --auto` path, which regenerates the hooks, skill files, `AGENTS.md` block,
+  and the recorded fallback version together; the generated hooks read that one
+  configured fallback rather than hardcoding a version in each script.
+  The 0.8.0 entry this replaces recorded the f07-to-f08 format migration and the first
+  release of the `agent-session-bootstrap` guideline that generalizes this repository’s
+  own toolchain bootstrap; both remain in effect;
+- `simple-modern-uv==v0.5.0`, the Copier template this repository is generated from,
+  applied inside the cool-off as a first-party release.
+  Reviewed against the `v0.4.0` recorded previously in `.copier-answers.yml`: same MIT
+  license and `jlevy/simple-modern-uv` source repository.
+  It has no lockfile effect of its own — it is a template applied with `copier update`,
+  not a declared dependency — and the update was run under the ordinary gate
+  (`uvx --exclude-newer "14 days" copier@9.17.0`). Its rendered changes to this
+  repository are reviewed in the diff rather than taken on trust: the project-owned
+  `uv.toml` and `UV_CONFIG_FILE` selection, the pinned action and toolchain bumps below,
+  and the dev-dependency floors it raises.
 
 The exceptions are package-scoped in configuration and do not weaken the global gate.
 Changing any version requires a new review and an updated rationale.
+An entry naming a release older than the current first-party release is drift: bring the
+pin forward and rewrite the rationale together, in one reviewed change.
 
-The generated agent-integration scripts name the exact `get-tbd@0.4.2` release, adopted
-through the supported `tbd setup --auto` migration.
+The generated agent-integration scripts read one exact release from
+`tbd_fallback_version` in `.tbd/config.yml` rather than repeating it per script.
 Hooks prefer an already-installed `tbd` binary and otherwise use that exact pinned npm
 release as a zero-install fallback.
 The session bootstrap also installs the pinned, checksum-verified `gh` 2.92.0 binary
 into a user-local bin directory when `gh` is missing.
-Refresh generated hooks and skill files deliberately with `tbd setup --auto`.
+Refresh the generated hooks, skill files, and that fallback version together with
+`tbd setup --auto`.
+
+`devtools/ensure-toolchain.sh` does the same for the Node and uv toolchain itself, so an
+agent session that starts from a bare container can run the Make targets.
+Claude Code and Codex both invoke that one shared script at session start.
+It installs the repository’s own pins, never the newest release: it resolves Node from
+`.node-version` and uv from the `uv.toml` `required-version` range, verifies each
+download against a checksum pinned in the script, and refuses a mismatch.
+The pinned uv sits inside that range rather than on its floor: the range states which uv
+line the committed lockfile is valid for, while the pin selects the newest release in
+that line that has cleared the cool-off.
+A newer Node major would carry an npm outside the `engines` range, which
+`engine-strict=true` turns into a failed `npm ci`. Bump a pin in its canonical file and
+in that script together; `check_supply_chain.py` fails when they disagree, or when
+either agent stops running the bootstrap ahead of its other session hooks.
+[Agent toolchain bootstrap](docs/agent-toolchain-bootstrap.md) records this repository’s
+pins, wiring, and guard; `tbd guidelines agent-session-bootstrap` states the general
+pattern, including when a provisioned image is the better answer.
 
 ## Audited Advisory Waivers
 
@@ -71,15 +150,11 @@ carries no exposure, while any finding in a reachable path is fixed rather than 
 Waivers are per-ID, live in the `audit` target, and are removed as soon as the fix
 becomes eligible.
 
-One waiver is active:
+No waiver is active.
 
-- `GHSA-g6cj-pr64-35w5` / `CVE-2026-69247` (high, CVSS 8.2), a Bleichenbacher oracle in
-  the `cryptography` `pkcs7` `EnvelopedData` decryption path.
-  `cryptography` is an indirect dependency reached only through `google-auth` under the
-  `gcp` extra. Neither Metaproc nor `google-auth` imports the affected `pkcs7` module;
-  `google-auth` uses `cryptography` for JWT signing and verification only.
-  The fix, `cryptography` 50.0.0, was published 2026-07-31 and is inside the 14-day
-  cool-off until roughly 2026-08-14. Remove the waiver and relock once it is eligible.
+The previous waiver, `GHSA-g6cj-pr64-35w5` / `CVE-2026-69247` (high, CVSS 8.2) in the
+`cryptography` `pkcs7` `EnvelopedData` decryption path, was removed for the 0.3.0
+release: its fix, `cryptography` 50.0.0, cleared the cool-off and is now locked.
 
 Re-review a waiver whenever the closure changes such that the affected code could become
 reachable.
@@ -88,8 +163,10 @@ reachable.
 
 `devtools/check_supply_chain.py` checks only safeguards that span configuration files:
 npm safety settings, exact direct npm specifications, npm registry and integrity data,
-the uv cool-off, matching nvm and fnm versions, full-SHA action references, and trusted
-publishing controls.
+the uv cool-off, matching nvm and fnm versions, agreement between the toolchain
+bootstrap’s pins and their canonical files, both agents running that bootstrap first,
+each agent’s copy of a generated hook script matching its twin, full-SHA action
+references, and trusted publishing controls.
 
 The configuration files own dependency versions, build behavior, lint and type ratchets,
 workflows, and documentation.

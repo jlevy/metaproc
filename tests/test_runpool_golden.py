@@ -262,6 +262,12 @@ def _run_scenario(
     """Run a scenario and return normalized events + status."""
     config = RunPoolConfig(
         max_concurrency=max_concurrency,
+        monitor_interval_s=0.05,
+        # The session fixture collapses pressure polling to 50 ms. These snapshots
+        # cover deterministic process lifecycle output; adaptive-controller behavior
+        # has dedicated tests and must not depend on whether this mock batch happens
+        # to finish before a pressure tick on the current host.
+        pressure_check_interval_s=60.0,
         state_dir=tmp_path / "state",
         logs_dir=tmp_path / "logs",
     )

@@ -97,6 +97,43 @@ def require_runtime_runs_dir(variables: dict[str, str], *, command: str) -> None
     variables["RUNS_DIR"] = str(runs_dir)
 
 
+def validate_gcp_worker_topology(
+    backend: str,
+    *,
+    cloud: bool = False,
+    dry_run: bool = False,
+    batch_task_index: str | None,
+    orchestrator_marker: str | None = None,
+    command: str = "run-process",
+) -> None:
+    """Reject operator-host execution through the internal GCP worker backend."""
+    admitted_orchestrator = orchestrator_marker == "1" or bool(
+        batch_task_index and batch_task_index.strip()
+    )
+    if backend == "gcp-worker" and not cloud and not dry_run and not admitted_orchestrator:
+        if command == "run-parallel":
+            raise CLIError(
+                "run-parallel --backend gcp-worker is only supported inside the GCP Batch "
+                "orchestrator. Start a full-cloud run with "
+                "run-process <spec> --backend gcp-worker --cloud."
+            )
+        raise CLIError(
+            "--backend gcp-worker without --cloud is only supported inside the GCP Batch "
+            "orchestrator. Use run-process <spec> --backend gcp-worker --cloud for a "
+            "full-cloud run."
+        )
+
+
+def resolve_gcp_worker_runs_dir(backend: str) -> str:
+    """Return the shared cloud runs directory for the GCP worker backend only."""
+    if backend != "gcp-worker":
+        return ""
+    if not MetaprocEnv.METAPROC_GCP_FILESTORE_SERVER.read_str(default=""):
+        return ""
+    mount_path = MetaprocEnv.METAPROC_GCP_FILESTORE_MOUNT_PATH.read_str(default="/mnt/filestore")
+    return str(Path(mount_path) / "runs")
+
+
 def parse_adapter_config(raw: list[str]) -> dict[str, str]:
     """Parse adapter config KEY=VALUE arguments."""
     config: dict[str, str] = {}
@@ -222,7 +259,7 @@ def enrich_single_item(
     discovery = discover_items_from_source(source_path, step_def, params=variables)
     # Search all items (actionable + filtered) since user explicitly chose this item.
     all_item_contexts = discovery.actionable_contexts + [
-        {k: v for k, v in ctx.items() if k != "reason"} for ctx in discovery.filtered_items
+        item.context for item in discovery.filtered_items
     ]
     matched = [ctx for ctx in all_item_contexts if ctx.get(each) == item_value]
     if not matched:

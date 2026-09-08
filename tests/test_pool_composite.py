@@ -1,7 +1,7 @@
 """Composite-aware pool discovery — covers the fix.
 
-Walks the shared discovery helper :func:`_iter_composite_run_dirs` plus the
-four operator-facing commands (status, events, health, rollup) under a
+Walks the shared discovery helper :func:`metaproc.paths.iter_composite_run_dirs` plus
+the four operator-facing commands (status, events, health, rollup) under a
 parent run dir that has child run dirs at ``<parent>/<step_id>/``.
 
 The fixture mimics a composite dispatch layout: a top-level run dir with no
@@ -24,7 +24,6 @@ from metaproc.cli import app
 from metaproc.commands.pool import (
     _collect_sub_pools,
     _composite_pool_status_files,
-    _iter_composite_run_dirs,
     _runpool_event_files_for_read,
     _runpool_health_files_for_read,
 )
@@ -158,25 +157,25 @@ def composite_run(tmp_path: Path) -> Path:
 
 class TestIterCompositeRunDirs:
     def test_yields_root_first_then_nested_child(self, composite_run: Path):
-        dirs = list(_iter_composite_run_dirs(composite_run))
+        dirs = list(paths_mod.iter_composite_run_dirs(composite_run))
         assert dirs[0] == composite_run
         assert composite_run / "analysis-research" in dirs
 
     def test_skips_state_and_logs_subtrees(self, composite_run: Path):
-        dirs = list(_iter_composite_run_dirs(composite_run))
+        dirs = list(paths_mod.iter_composite_run_dirs(composite_run))
         for d in dirs:
             assert paths_mod.STATE_DIR not in d.parts[len(composite_run.parts) :]
             assert paths_mod.LOGS_DIR not in d.parts[len(composite_run.parts) :]
 
     def test_yields_only_root_when_no_nested_runs(self, tmp_path: Path):
         _mark_v2(tmp_path)
-        assert list(_iter_composite_run_dirs(tmp_path)) == [tmp_path]
+        assert list(paths_mod.iter_composite_run_dirs(tmp_path)) == [tmp_path]
 
     def test_handles_missing_run_dir(self, tmp_path: Path):
         ghost = tmp_path / "nope"
         # No directory yet — helper should still yield the requested path
         # so the caller's downstream "no pool file" branch fires cleanly.
-        assert list(_iter_composite_run_dirs(ghost)) == [ghost]
+        assert list(paths_mod.iter_composite_run_dirs(ghost)) == [ghost]
 
     def test_skips_worker_dirs_under_logs(self, composite_run: Path):
         # Worker dirs live under .logs/runpool/workers/ — they're already
@@ -184,8 +183,30 @@ class TestIterCompositeRunDirs:
         # future layout that surfaces worker-* at the top level.
         (composite_run / "worker-0").mkdir()
         (composite_run / "worker-0" / paths_mod.STATE_DIR).mkdir()
-        dirs = list(_iter_composite_run_dirs(composite_run))
+        dirs = list(paths_mod.iter_composite_run_dirs(composite_run))
         assert composite_run / "worker-0" not in dirs
+
+    def test_follows_recursive_scope_layout_without_a_depth_limit(self, tmp_path: Path):
+        _mark_v2(tmp_path)
+        expected: list[Path] = []
+        scope = tmp_path
+        for index in range(6):
+            scope = scope / f"step-{index}" / f"item-{index}"
+            (scope / paths_mod.STATE_DIR).mkdir(parents=True)
+            expected.append(scope)
+
+        assert list(paths_mod.iter_composite_run_dirs(tmp_path)) == [tmp_path, *expected]
+
+    def test_does_not_follow_scope_symlink_outside_run_tree(self, tmp_path: Path):
+        run_dir = tmp_path / "run"
+        _mark_v2(run_dir)
+        external_scope = tmp_path / "external" / "item"
+        (external_scope / paths_mod.STATE_DIR).mkdir(parents=True)
+        step_dir = run_dir / "step"
+        step_dir.mkdir()
+        (step_dir / "item").symlink_to(external_scope, target_is_directory=True)
+
+        assert list(paths_mod.iter_composite_run_dirs(run_dir)) == [run_dir]
 
 
 class TestCompositePoolStatusFiles:
@@ -322,7 +343,7 @@ class TestPoolRollupCommand:
         _mark_v2(tmp_path)
         result = runner.invoke(app, ["pool", "rollup", str(tmp_path)])
         assert result.exit_code == 0, result.output
-        assert "No sub-step pool dirs found" in result.output
+        assert "No pool dirs found" in result.output
 
 
 class TestRunPoolEventAndHealthHelpers:

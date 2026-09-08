@@ -6,9 +6,9 @@ import re
 from typing import cast
 
 from metaproc.adapters.base import Adapter, AuthCapableCliAdapter
-from metaproc.adapters.claude_code import ClaudeCodeCliAdapter
-from metaproc.adapters.codex import CodexCliAdapter
-from metaproc.adapters.gemini import GeminiCliAdapter
+from metaproc.adapters.claude_cli import ClaudeCodeCliAdapter
+from metaproc.adapters.codex_cli import CodexCliAdapter
+from metaproc.adapters.gemini_cli import GeminiCliAdapter
 from metaproc.adapters.pi_cli import PiCliAdapter
 
 ADAPTER_REGISTRY = cast(

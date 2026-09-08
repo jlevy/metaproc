@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import importlib.resources
+import json
+import re
 from pathlib import Path
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -17,12 +20,21 @@ from metabrowser import server as proc_browser
 
 from metaproc.metabrowser_plugin import plugin_dir as metaproc_plugin_dir
 from metaproc.metabrowser_plugin import sidekick
+from metaproc.models.authored import IOSpec
 from metaproc.models.viz import (
+    AcceptedOutputProjection,
     DepDetails,
+    FanOutDetails,
+    InputSpec,
     NodeProgress,
+    OutputSpec,
     ProcessHeader,
     ProgressSnapshot,
+    RuntimeTaskProjection,
     StepDetails,
+    TaskKeyProjection,
+    TaskOutputProjection,
+    UnacceptedOutputProjection,
     VizModel,
     VizNode,
 )
@@ -72,21 +84,53 @@ def test_metaproc_plugin_registers_visual_view() -> None:
     assert "loadVisual" not in app_js
 
 
-def test_index_page_links_viz_assets_and_layout_engine(tmp_path: Path) -> None:
-    """The plugin loads its layout engine before visualization code."""
-
+def _plugin_asset_config(tmp_path: Path) -> dict[str, list[dict[str, Any]]]:
+    """The kind-to-assets map the index page hands the plugin host."""
     proc_browser._set_root_dir(tmp_path)  # noqa: SLF001
     resp = asyncio.run(proc_browser.index(Mock()))
     body = bytes(resp.body).decode("utf-8")
-    assert '<link rel="stylesheet" href="/plugin-static/metaproc/viz.css">' in body
-    assert '<script src="/plugin-static/metaproc/viz.js"></script>' in body
-    elk_tag = '<script src="/plugin-static/metaproc/elk.bundled.js"></script>'
-    viz_tag = '<script src="/plugin-static/metaproc/viz.js"></script>'
-    domain_views_tag = '<script src="/plugin-static/metaproc/domain_views.js"></script>'
-    index_tag = '<script type="module" src="/plugin-static/metaproc/index.js"></script>'
-    assert body.index(elk_tag) < body.index(viz_tag)
-    assert body.index(viz_tag) < body.index(domain_views_tag)
-    assert body.index(domain_views_tag) < body.index(index_tag)
+    match = re.search(r"configureAssets\((.*?)\);</script>", body, re.DOTALL)
+    assert match, "index page must configure plugin assets for the plugin host"
+    return json.loads(match.group(1))
+
+
+def test_the_plugin_declares_its_assets_for_every_kind_it_owns(tmp_path: Path) -> None:
+    """Metabrowser 0.9 stopped putting plugin assets in the page eagerly.
+
+    Assets are declared per kind and the host loads a descriptor the first time
+    `app.js` selects a kind that claims it, so the old assertion — that the bare index
+    page carries a `<link>` for viz.css — now describes a shell that no longer exists.
+    What has to stay true is that every metaproc kind can still reach the metaproc
+    renderers, which is what this checks instead.
+    """
+    config = _plugin_asset_config(tmp_path)
+    for kind in ("process-spec", "resource-report", "runpool-log", "process-log"):
+        descriptors = config.get(kind, [])
+        assert any(d["name"] == "metaproc" for d in descriptors), (
+            f"kind {kind!r} owns metaproc views but declares no metaproc assets"
+        )
+
+
+def test_the_layout_engine_loads_before_the_visualization_code(tmp_path: Path) -> None:
+    """ELK before viz.js before domain_views.js, then the entry module.
+
+    `viz.js` reads ELK at load time, so this order is a real dependency rather than a
+    preference. The host preserves manifest order for classic scripts and mounts the
+    module after them.
+    """
+    config = _plugin_asset_config(tmp_path)
+    descriptor = next(d for d in config["process-spec"] if d["name"] == "metaproc")
+    assert descriptor["scripts"] == [
+        "/plugin-static/metaproc/elk.bundled.js",
+        "/plugin-static/metaproc/viz.js",
+        "/plugin-static/metaproc/domain_views.js",
+    ]
+    assert descriptor["module"] == "/plugin-static/metaproc/index.js"
+    assert "/plugin-static/metaproc/viz.css" in descriptor["styles"]
+
+
+def test_the_declared_assets_exist_and_carry_what_they_promise(tmp_path: Path) -> None:
+    """A descriptor naming a file proves nothing on its own; the files back it."""
     viz_css = (METAPROC_PLUGIN_ROOT / "viz.css").read_text()
     viz_js = (METAPROC_PLUGIN_ROOT / "viz.js").read_text()
     elk_js = (METAPROC_PLUGIN_ROOT / "elk.bundled.js").read_text()
@@ -141,6 +185,23 @@ def test_relativize_viz_paths_walks_every_path_field(tmp_path: Path) -> None:
         name="p",
         process_schema_token="metaproc:ProcessSpec/0.1",
         source_path=root + "/p/process.md",
+        process_inputs={
+            "roster": InputSpec(
+                name="roster",
+                path=root + "/p/data/roster.md",
+                as_type="path",
+                default=root + "/p/data/default-roster.md",
+            )
+        },
+        process_outputs={
+            "report": OutputSpec(
+                name="report",
+                path=root + "/p/out/report.md",
+                as_type="path",
+                template=root + "/p/templates/report.md",
+            ),
+            "summary": OutputSpec(name="summary", ref="s.report", as_type="path"),
+        },
     )
     step = StepDetails(
         step_id="s",
@@ -150,6 +211,17 @@ def test_relativize_viz_paths_walks_every_path_field(tmp_path: Path) -> None:
         uses_path=root + "/p/child/process.md",
         prompt_paths=[root + "/p/prompts/a.md", root + "/p/prompts/b.md"],
         output_root=root + "/p/out",
+        inputs={"source": IOSpec(path=root + "/p/data/source.md")},
+        outputs={
+            "report": IOSpec(
+                path=root + "/p/out/report.md",
+                template=root + "/p/templates/report.md",
+            )
+        },
+        fan_out=FanOutDetails(
+            over="roster",
+            source=root + "/p/data/roster.md",
+        ),
     )
     dep = DepDetails(
         dep_name="d",
@@ -170,22 +242,69 @@ def test_relativize_viz_paths_walks_every_path_field(tmp_path: Path) -> None:
             run_dir=root + "/runs/2026-04-23",
             nodes={"s": NodeProgress(state="running")},
         ),
+        task_projection=TaskOutputProjection(
+            run_dir=root + "/runs/2026-04-23",
+            tasks=[
+                RuntimeTaskProjection(
+                    key=TaskKeyProjection(step_id="s"),
+                    state="completed",
+                    accepted_outputs=[
+                        AcceptedOutputProjection(
+                            name="report",
+                            path=root + "/runs/2026-04-23/report.md",
+                            recorded_path=root + "/runs/2026-04-23/report.md",
+                            declaration=IOSpec(path="{{run.dir}}/report.md"),
+                        )
+                    ],
+                    unaccepted_outputs=[
+                        UnacceptedOutputProjection(
+                            name="draft",
+                            path=root + "/runs/2026-04-23/draft.md",
+                            recorded_path=root + "/runs/2026-04-23/draft.md",
+                            reason="result-not-validated",
+                        ),
+                        UnacceptedOutputProjection(
+                            name="external",
+                            recorded_path="/external/report.md",
+                            reason="external",
+                        ),
+                    ],
+                )
+            ],
+        ),
     )
 
     sidekick._relativize_viz_paths(model)  # noqa: SLF001
 
     assert model.root_process == "p/process.md"
     assert model.header.source_path == "p/process.md"
+    assert model.header.process_inputs["roster"].path == "p/data/roster.md"
+    assert model.header.process_inputs["roster"].default == "p/data/default-roster.md"
+    assert model.header.process_outputs["report"].path == "p/out/report.md"
+    assert model.header.process_outputs["report"].template == "p/templates/report.md"
+    assert model.header.process_outputs["summary"].ref == "s.report"
     assert model.nodes[0].path == "p/s.md"
     assert model.nodes[0].step is not None
     assert model.nodes[0].step.source_path == "p/process.md"
     assert model.nodes[0].step.uses_path == "p/child/process.md"
     assert model.nodes[0].step.prompt_paths == ["p/prompts/a.md", "p/prompts/b.md"]
     assert model.nodes[0].step.output_root == "p/out"
+    assert model.nodes[0].step.inputs["source"].path == "p/data/source.md"
+    assert model.nodes[0].step.outputs["report"].path == "p/out/report.md"
+    assert model.nodes[0].step.outputs["report"].template == "p/templates/report.md"
+    assert model.nodes[0].step.fan_out is not None
+    assert model.nodes[0].step.fan_out.source == "p/data/roster.md"
     assert model.nodes[1].dep is not None
     assert model.nodes[1].dep.path == "p/data/d.yaml"
     assert model.nodes[1].dep.source_path == "p/process.md"
     assert model.nodes[2].process is not None
     assert model.nodes[2].process.source_path == "p/process.md"
+    assert model.nodes[2].process.process_inputs["roster"].path == "p/data/roster.md"
+    assert model.nodes[2].process.process_outputs["report"].path == "p/out/report.md"
     assert model.progress is not None
     assert model.progress.run_dir == "runs/2026-04-23"
+    assert model.task_projection is not None
+    assert model.task_projection.run_dir == "runs/2026-04-23"
+    assert model.task_projection.tasks[0].accepted_outputs[0].path == ("runs/2026-04-23/report.md")
+    assert model.task_projection.tasks[0].unaccepted_outputs[0].path == ("runs/2026-04-23/draft.md")
+    assert model.task_projection.tasks[0].unaccepted_outputs[1].path is None

@@ -10,7 +10,12 @@ from pydantic import ValidationError
 from metaproc.cli import app, get_output
 from metaproc.commands.helpers import load_process_spec, resolve_process_path
 from metaproc.engine.placeholders import resolve_templates
-from metaproc.engine.process_scope import is_dep_ref, parse_dep_ref, resolve_process_dep_path
+from metaproc.engine.process_scope import (
+    expand_process_vars,
+    is_dep_ref,
+    parse_dep_ref,
+    resolve_process_dep_path,
+)
 from metaproc.io.frontmatter import load_frontmatter_typed
 
 
@@ -56,6 +61,7 @@ def check_headers(
             return
 
         process_root = path.parent
+        process_vars = expand_process_vars(spec, {})
 
         def _resolve_dep(dep_ref: str) -> Path | None:
             dep_name = parse_dep_ref(dep_ref, context=f"{path} dep ref")
@@ -64,7 +70,7 @@ def check_headers(
                 errors.append(f"{path}: unknown dep ref {dep_ref!r}")
                 out.data(f"  FAIL  dep: {dep_ref}: unknown dep")
                 return None
-            return Path(resolve_process_dep_path(dep.path, {}, process_root))
+            return Path(resolve_process_dep_path(dep.path, process_vars, process_root))
 
         # Walk step.outputs entries; for each entry with a template:, resolve the
         # template path against input defaults and verify it parses. Template
@@ -74,6 +80,7 @@ def check_headers(
         template_vars: dict[str, str] = {
             name: decl.default for name, decl in spec.inputs.items() if decl.default is not None
         }
+        template_vars.update(process_vars)
         seen_templates: set[Path] = set()
         for step in spec.steps:
             for io_spec in step.outputs.values():

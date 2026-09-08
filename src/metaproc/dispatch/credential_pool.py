@@ -120,7 +120,7 @@ class Vehicle(StrEnum):
     """Credential delivery shape for a pool label.
 
     Added in schema_version 2 (Vehicle A pool redesign — see
-    ``docs/arch/arch-metaproc-core.md``).
+    ``src/metaproc/docs/metaproc-design.md``).
 
     - ``OAUTH_TOKEN`` — static bearer credential injected via the
       ``CLAUDE_CODE_OAUTH_TOKEN`` env var. The pool stores the long-lived
@@ -1410,8 +1410,8 @@ def select_credential(
 ) -> PoolSelection | None:
     """Pick a credential for a dispatch attempt under *strategy*.
 
-    Returns ``None`` when no eligible label exists; the caller's
-    :class:`RetryLaterPolicy` decides whether to wait or fail.
+    Returns ``None`` when no eligible label exists; the caller decides
+    whether to fail or reschedule the item.
 
     Raises ``KeyError`` when ``strategy.labels`` references a label
     that has no pool entry (operator-typo guard, preserved bit-for-bit
@@ -1529,8 +1529,8 @@ def select_fallback(
     ``AuthCapableCliAdapter`` instances; we read the
     ``compatible_fallback_adapters`` attribute for cross-provider walks.
 
-    Returns ``None`` when the policy exhausts — caller consults
-    ``RetryLaterPolicy`` (Phase 2c P2c.2/P2c.3).
+    Returns ``None`` when the policy exhausts; the caller decides
+    whether to fail or reschedule the item.
     """
     if policy == FallbackPolicy.NONE:
         return None

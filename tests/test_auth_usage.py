@@ -1,6 +1,6 @@
 """Tests for the auth_usage aggregator.
 
-Spec: docs/arch/arch-metaproc-core.md
+Spec: src/metaproc/docs/metaproc-design.md
 """
 
 from __future__ import annotations
