@@ -4079,10 +4079,16 @@ async def _orchestrate(
     max_concurrency = execution_context.max_concurrency
     skip_steps = execution_context.skip_steps if not scope_path else frozenset()
     force = execution_context.force
-    continue_on_error = (
-        execution_context.continue_on_error
-        if not scope_path
-        else execution_context.continue_on_step_failure
+    # A scope is a DAG, not a step. Its independent branches answer to the same policy
+    # as the root walk: a failure blocks its true dependents through `propagate_failure`
+    # and leaves the rest of the graph to run, and the scope still reports failed at the
+    # end. Abandoning the level walk on the first failure would discard sibling work that
+    # never depended on the failure, which in a mapped per-item scope means one step
+    # losing an unrelated branch's output for the whole item.
+    # `--continue-on-step-failure` stays additive, so `--no-continue-on-error` still
+    # fails the root fast while keeping scopes going.
+    continue_on_error = execution_context.continue_on_error or (
+        bool(scope_path) and execution_context.continue_on_step_failure
     )
     stale_count = reconcile_stale_running(run_dir)
     if stale_count:
@@ -4565,18 +4571,19 @@ def run_process_command(
         help=(
             "Continue executing independent branches on per-step failure "
             "(default: True; use --no-continue-on-error to fail-fast on first "
-            "step failure). Per-item isolation within fan-out steps is always on."
+            "step failure). Applies to composite scopes as it does to the root. "
+            "Per-item isolation within fan-out steps is always on."
         ),
     ),
     continue_on_step_failure: bool = typer.Option(
         False,
         "--continue-on-step-failure",
         help=(
-            "Inside a composite step, if one sub-step has "
-            "a per-item permanent_failure, continue launching the NEXT sub-step "
-            "for the OK items rather than aborting the whole composite. Default "
-            "False (preserves current behavior). Use for multi-item fan-out "
-            "where one bad item should not take out the entire downstream pipeline."
+            "With --no-continue-on-error, keep composite scopes walking their own "
+            "DAG on a sub-step failure while the root still fails fast. Only the "
+            "true dependents of the failed sub-step are blocked, and the scope "
+            "still reports failed. No effect under the default --continue-on-error, "
+            "which already governs scopes."
         ),
     ),
     cloud: bool = typer.Option(
