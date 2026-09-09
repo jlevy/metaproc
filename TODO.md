@@ -19,9 +19,11 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
   evidence
   ([system plan](docs/project/specs/active/plan-2026-09-01-runpool-host-safety.md),
   [package plan](docs/project/specs/active/plan-2026-09-01-safeproc-local-incubation.md)).
-- **v0.4.0 release** (`mp-1n2a`): close the remaining loose ends between `main` and a
-  tag — two correctness defects in silent paths, release records that disagree with the
-  tree, first-party dependency currency, and stale tracking.
+- **v0.4.0 release** (`mp-1n2a`): the correctness, records, dependency-currency, and
+  tracking children are closed, and the changelog,
+  [release notes](docs/project/releases/v0.4.0.md), and first-party exception rationale
+  now match the tree. What remains is the tag itself and the publish it triggers; §
+  Current Release moves to v0.4.0 once that tag exists.
   The release is a minor, not a patch: the delta since v0.3.0 removes public CLI surface
   and changes output and transport contracts.
 

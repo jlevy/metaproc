@@ -69,16 +69,20 @@ Seven exact first-party releases are exempt from the ordinary cool-off for this 
   execution path;
 - `frontmatter-format==0.4.0`, required by SoftSchema 0.4.0 and used directly for
   deterministic alias-free Metaproc artifact writes;
-- `metabrowser==0.9.0`, the current release, used by the development and plugin test
+- `metabrowser==0.9.1`, the current release, used by the development and plugin test
   group and by the optional `browser` extra.
-  Reviewed against `0.1.0`: same AGPL-3.0-or-later license and `jlevy/metabrowser`
-  source repository, and relocking changed exactly two packages while adding and
-  removing no transitive ones.
+  Reviewed against `0.1.0`, the release it replaces here: same AGPL-3.0-or-later license
+  and `jlevy/metabrowser` source repository, and relocking changed exactly two packages
+  while adding and removing no transitive ones.
   Its Python floor rises from 3.11 to 3.12, which this project already requires.
   It advances the browser plugin SDK from 0.1 to 0.5, which is a contract change rather
   than a version bump: plugin discovery refuses a manifest targeting the wrong SDK, so
-  this release was adopted together with the plugin migration that answers it;
-- `kpress==0.3.5`, the current release, pinned exactly by `metabrowser==0.9.0` and so
+  this release was adopted together with the plugin migration that answers it.
+  The 0.9.0-to-0.9.1 step within that adoption is a reviewed patch release carrying two
+  correctness fixes — lazy plugin-view binding and schema-4 folder-rollup identity —
+  with no license, source-repository, or dependency change and no Metaproc runtime or
+  compatibility-layer change of its own;
+- `kpress==0.3.5`, the current release, pinned exactly by `metabrowser==0.9.1` and so
   adopted with it rather than chosen separately.
   Reviewed as a compatible first-party maintenance update: same source repository and
   license, and no added dependencies;
