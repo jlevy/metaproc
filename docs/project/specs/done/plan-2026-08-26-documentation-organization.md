@@ -312,107 +312,107 @@ docs/
 Mechanical. `git mv` plus a link sweep plus the topic registry.
 No prose is edited beyond what a link rewrite requires.
 
-- [ ] `git mv docs/arch/arch-metaproc-core.md src/metaproc/docs/metaproc-design.md` (105
+- [x] `git mv docs/arch/arch-metaproc-core.md src/metaproc/docs/metaproc-design.md` (105
   references across 52 files; the largest sweep in this plan).
-- [ ] `git mv` the seven remaining `docs/arch/arch-*.md` into `src/metaproc/docs/`;
+- [x] `git mv` the seven remaining `docs/arch/arch-*.md` into `src/metaproc/docs/`;
   remove the empty `docs/arch/`.
-- [ ] `git mv` `conventions.md`, `artifact-catalog.md`, `process-framework-theory.md`,
+- [x] `git mv` `conventions.md`, `artifact-catalog.md`, `process-framework-theory.md`,
   and `execution-model-design.md` from `docs/` into `src/metaproc/docs/`.
-- [ ] Replace `HelpTopics`/`TOPIC_DESCRIPTIONS` in `src/metaproc/docs/__init__.py` with
+- [x] Replace `HelpTopics`/`TOPIC_DESCRIPTIONS` in `src/metaproc/docs/__init__.py` with
   a topic registry carrying topic name, filename, description, and approximate word
   count; keep `TOPIC_DESCRIPTIONS` exported and `load_help_topics()` working.
-- [ ] Update `src/metaproc/skill/builtin.py` to enumerate topics from the registry
+- [x] Update `src/metaproc/skill/builtin.py` to enumerate topics from the registry
   instead of `dataclasses.fields(HelpTopics)`.
-- [ ] Update `src/metaproc/commands/help.py` to print approximate sizes in the topic
+- [x] Update `src/metaproc/commands/help.py` to print approximate sizes in the topic
   listing.
-- [ ] Add the twelve new filenames to the required-suffix sets in
+- [x] Add the twelve new filenames to the required-suffix sets in
   `devtools/check_distribution.py` (both `_inspect_wheel` and `_inspect_sdist`).
-- [ ] Add `devtools/check_shipped_links.py`: every relative link in
+- [x] Add `devtools/check_shipped_links.py`: every relative link in
   `src/metaproc/docs/*.md` must resolve within that directory.
   Wire it into `make lint-check`.
-- [ ] Fix the pre-existing violations that rule exposes in the three current manuals (26
+- [x] Fix the pre-existing violations that rule exposes in the three current manuals (26
   links pointing outside `src/metaproc/docs/`), and any created by the move.
-- [ ] Update every inbound link repository-wide, including the Python docstrings in
+- [x] Update every inbound link repository-wide, including the Python docstrings in
   `src/metaproc/execution_model/` and the path constant in
   `tests/test_locking_policy.py`.
-- [ ] Regenerate the Agent Skill: `metaproc skill metaproc --install`.
-- [ ] `make verify`.
+- [x] Regenerate the Agent Skill: `metaproc skill metaproc --install`.
+- [x] `make verify`.
 
 ### Phase 2: README and link direction
 
-- [ ] Rewrite the README Documentation section: document as row, `metaproc help` topic
+- [x] Rewrite the README Documentation section: document as row, `metaproc help` topic
   as a column, the three-document reading path stated in order, an Architecture table
   covering all seven arch docs, and a Project Records section.
-- [ ] Link `docs/releases/` and state its relationship to `CHANGELOG.md`.
-- [ ] Link `src/metaproc/runpool/README.md` from `arch-runpool.md`, or fold it in and
+- [x] Link `docs/releases/` and state its relationship to `CHANGELOG.md`.
+- [x] Link `src/metaproc/runpool/README.md` from `arch-runpool.md`, or fold it in and
   delete it.
-- [ ] Route `metaproc help developer` to the design doc by topic name.
-- [ ] Remove the `specs/future/` sentence from `docs/project/README.md`; index
+- [x] Route `metaproc help developer` to the design doc by topic name.
+- [x] Remove the `specs/future/` sentence from `docs/project/README.md`; index
   `design/`, `releases/`, and the moved reference docs there.
-- [ ] Move the arch index out of `docs/development.md` into `docs/project/README.md`,
+- [x] Move the arch index out of `docs/development.md` into `docs/project/README.md`,
   leaving `development.md` a pointer.
-- [ ] Refresh `TODO.md` § Current Release from v0.2.1 to v0.3.0.
-- [ ] `make verify`.
+- [x] Refresh `TODO.md` § Current Release from v0.2.1 to v0.3.0.
+- [x] `make verify`.
 
 ### Phase 3: Cohesion review
 
 The set has never been read as a set.
 This phase produces findings and beads, not edits.
 
-- [ ] Read all fifteen shipped documents end to end and record overlap, contradiction,
+- [x] Read all fifteen shipped documents end to end and record overlap, contradiction,
   and gaps.
-- [ ] Resolve the naming collision the move creates: `execution-model`
+- [x] Resolve the naming collision the move creates: `execution-model`
   (`execution-model-design.md`) and `arch-execution` (`arch-execution-model.md`) are two
   topics about the execution model.
   Decide whether they merge, or what each is named to make the split obvious.
-- [ ] Decide whether the `arch-` prefix still earns its place once the directory that
+- [x] Decide whether the `arch-` prefix still earns its place once the directory that
   gave it meaning is gone.
-- [ ] Assess §7 of the design doc, the illustrative downstream analysis profile, against
+- [x] Assess §7 of the design doc, the illustrative downstream analysis profile, against
   the consumer-agnostic rule in AGENTS.md.
   Its own Future Considerations proposes moving it out.
-- [ ] Confirm the reading path holds for a wheel reader with no repository.
+- [x] Confirm the reading path holds for a wheel reader with no repository.
 
 ### Phase 4: Externalize internal material
 
-- [ ] Extract the design doc’s `Revision History` to
+- [x] Extract the design doc’s `Revision History` to
   `docs/project/design/metaproc-design-revisions.md` and remove the `Revision: rev2m`
   header line.
-- [ ] Extract `Future Considerations` from the design doc and from each arch doc to
+- [x] Extract `Future Considerations` from the design doc and from each arch doc to
   `docs/project/design/backlog/`, one file per source document, each linked from
   `docs/project/README.md`.
-- [ ] Remove §16 `Optional Workspace/State Surface (Future)` from the design doc to the
+- [x] Remove §16 `Optional Workspace/State Surface (Future)` from the design doc to the
   same backlog.
-- [ ] Remove the Maintenance blockquote from all eight moved documents; state the
+- [x] Remove the Maintenance blockquote from all eight moved documents; state the
   revision convention once in `docs/project/README.md` instead.
-- [ ] Replace revision references in shipped prose with release versions per the mapping
+- [x] Replace revision references in shipped prose with release versions per the mapping
   in Design.
-- [ ] Fix the header drift the extraction exposes: the design doc’s header claims
+- [x] Fix the header drift the extraction exposes: the design doc’s header claims
   `Revision: rev2m` and `last updated 2026-08-24` while its newest history entry is
   rev2o, dated 2026-08-25.
-- [ ] Correct the design doc’s companion list, which links to itself and omits
+- [x] Correct the design doc’s companion list, which links to itself and omits
   `arch-execution-model` and `arch-file-io-utilities`.
-- [ ] Drop the two links to `metaproc-design-rev3-proposals.md` from the shipped design
+- [x] Drop the two links to `metaproc-design-rev3-proposals.md` from the shipped design
   doc.
 - [ ]
   `git mv docs/metaproc-design-rev3-proposals.md docs/project/design/metaproc-design-proposals.md`
   and drop “rev3” from its title and prose, since a specifically-numbered next revision
   is not committed to.
-- [ ] `git mv` `releases/`, `performance-notes.md`, `memory-accounting-reference.md`,
+- [x] `git mv` `releases/`, `performance-notes.md`, `memory-accounting-reference.md`,
   `agent-toolchain-bootstrap.md`, and `publishing.md` under `docs/project/`.
-- [ ] `make verify`.
+- [x] `make verify`.
 
 ### Phase 5: Tighten
 
 75,844 words is a large payload to hand an agent, and the Phase 3 findings are the input
 here. The target is not a word count; it is that each document has one job.
 
-- [ ] Cut the duplication between the design doc §21 and `arch-cloud-execution.md`,
+- [x] Cut the duplication between the design doc §21 and `arch-cloud-execution.md`,
   which the design doc’s own backlog names as a maintenance burden.
-- [ ] Act on the Phase 3 overlap findings.
-- [ ] Add a reading guide to the design doc: 56 sections with no map is the single
+- [x] Act on the Phase 3 overlap findings.
+- [x] Add a reading guide to the design doc: 56 sections with no map is the single
   largest usability problem in the set, and its own backlog proposes the fix.
-- [ ] Re-measure and update the sizes in the topic registry.
-- [ ] `make verify`.
+- [x] Re-measure and update the sizes in the topic registry.
+- [x] `make verify`.
 
 ### Phase 6: Reconcile the concepts docs
 
@@ -424,29 +424,29 @@ shipped concepts doc wins and the general doc adopts its term.
 Where they disagree about the model, the general doc keeps its term and the concepts doc
 gains an explicit pointer saying the concept is modeled but not implemented.**
 
-- [ ] **roster.** The concepts doc says “Analysis-domain code uses *roster* as a
+- [x] **roster.** The concepts doc says “Analysis-domain code uses *roster* as a
   synonym; the framework does not.”
   The general doc defines roster as a core term and uses it 24 times, and the design doc
   uses it 32 times including as a value in its own `role` enum.
   Decide one way and make all three agree.
-- [ ] **task.** General: “the pivotal object in this model … the correct unit of
+- [x] **task.** General: “the pivotal object in this model … the correct unit of
   scheduling, of failure, and of resume.”
   Concepts: “a runtime term used by state and log paths; it is not an authored process
   object.” Both are defensible about different layers; neither says so.
   State the layer each is talking about.
-- [ ] **variant.** General makes it part of task identity.
+- [x] **variant.** General makes it part of task identity.
   Concepts §4.1 makes it a run-level adapter selector.
   Reconcile or scope explicitly.
-- [ ] **expansion, closure, generation.** Core objects in the general model, absent from
+- [x] **expansion, closure, generation.** Core objects in the general model, absent from
   the shipped glossary.
   Add pointers marking them modeled-but-not-implemented.
-- [ ] **commit, fencing.** Same treatment.
+- [x] **commit, fencing.** Same treatment.
   The general doc’s own deviations list already says Metaproc has “no single commit
   record covering a multi-output task”; the glossary does not mention the concept.
-- [ ] Add a cross-reference header to each doc naming the other and saying which owns
+- [x] Add a cross-reference header to each doc naming the other and saying which owns
   what.
-- [ ] Re-read both docs end to end for divergences beyond these five and file any found.
-- [ ] `make verify`.
+- [x] Re-read both docs end to end for divergences beyond these five and file any found.
+- [x] `make verify`.
 
 ## Testing Strategy
 
