@@ -5,7 +5,7 @@ title: Close the v0.4.0 release loose ends
 kind: epic
 status: closed
 priority: 1
-version: 9
+version: 10
 labels:
   - release
   - release-blocker
@@ -19,7 +19,7 @@ child_order_hints:
   - is-01m1f8xgv4zycvj17qc7g9x1d0
   - is-01m22c8wn6qjcqg65rs2pr0qrj
 created_at: 2026-09-01T02:04:47.228Z
-updated_at: 2026-09-09T07:33:48.493Z
+updated_at: 2026-09-09T07:38:07.001Z
 closed_at: 2026-09-09T07:33:48.492Z
 close_reason: |-
   v0.4.0 published. Tag v0.4.0 points at 2a0aade, the squash merge of PR #73 and the tip of main, so the published wheel and post-release main are the same tree.
@@ -52,3 +52,7 @@ Release is v0.4.0, not a patch: the delta removes public CLI surface (`gcp remot
 `validate --cloud-runs-dir`, `pool retry-missing`) and two environment variables.
 
 Children are independent and can land in any order; the tag waits on all of them.
+
+## Notes
+
+CORRECTION to the diagnostic recorded above. The first smoke-test attempt failed to resolve metaproc==0.4.0; the cause was uv's cached index metadata alone, and uvx --refresh resolved and reported 0.4.0 immediately. The earlier note here also blamed the uv.toml exclude-newer = '14 days' cool-off and said a post-release smoke test needs --no-config. Both are wrong. Empirically, uvx --no-config (which reads no project config at all, so no exclude-newer) still failed, and only --refresh fixed it, so the cool-off was never implicated. And by policy it would not apply anyway: SUPPLY-CHAIN-SECURITY.md states that first-party libraries track their latest release, because the cool-off exists to let a compromised third-party publish be caught by someone else before it reaches this build, and that argument does not apply to code published from a repository maintained alongside this one. All jlevy packages are first-party and exempt; metaproc itself most of all. The only real process note for publishing.md step 9 is that a same-day release needs uvx --refresh to defeat the index cache.
