@@ -295,6 +295,42 @@ orchestrator exited, restart the same launch command with the same `RUN_ID` so c
 steps can be reused.
 Create a new run ID only when a clean duplicate run is intentional.
 
+### Two Concurrent Runs on One Host
+
+Local pools do see each other.
+Admission runs through a disk-backed semaphore under
+`~/.metaproc/runpool/host-slots/<namespace>/`, where a slot is claimed by atomic `mkdir`
+and holds a lease naming the owning process.
+Both fan-out pool launches and scalar agent launches take a slot, so a second run does
+not launch into a host that the first has already filled.
+
+It is not, however, a negotiated ceiling, and an operator planning two concurrent runs
+should know why:
+
+- **Each process brings its own limit and contends only for a prefix of the slots.** A
+  gate with limit N scans slots `0` through `N-1`, so a run resolved to 4 never polls
+  slot 4 and a second run resolved to 16 can occupy slots the first cannot see.
+  Two runs agree on a host ceiling only when both resolve to the same limit, which means
+  the same profile and the same environment.
+- **Admission fails open.** A scalar launch that exhausts the admission timeout logs and
+  launches without a slot rather than failing the run.
+  Availability is preferred over the cap.
+- **Adaptive concurrency is per process.** Each pool samples host pressure and moves its
+  own ceiling; nothing exchanges targets.
+  Two concurrent runs converge because they are reading the same host, not because they
+  are coordinating.
+
+`METAPROC_HOST_MAX_LOCAL_AGENTS` composes against the resolved profile value by `min`,
+so it can only lower a limit and never raise one; the same is true of the
+`max_concurrency_hint` config key.
+Setting it above the profile value has no effect and logs nothing, so set it in the
+environment of *both* runs before launching the second, and read the resolved value back
+from the pool event log rather than assuming it applied.
+
+Host admission is a local-backend mechanism.
+Non-local backends skip it entirely, so two cloud-backed runs share nothing on the
+operator host.
+
 ## Iterating on a Single Step
 
 This is the routine “I edited one step, rerun the process and reuse everything else”
@@ -531,6 +567,8 @@ plus `pool events` to inspect contention.
 | How did concurrency change? | `uv run metaproc pool concurrency-timeline <run-dir>` |
 | What did the pool record? | `uv run metaproc pool events <run-dir>` |
 | What did every run-owned and step pool record? | `uv run metaproc pool rollup <run-dir>` |
+| What did the pressure sampler see? | `uv run metaproc pool health <run-dir>` |
+| Who holds host admission slots right now? | `uv run metaproc pool host-slots` |
 | What are throughput and resource totals? | `uv run metaproc stats <run-dir>` |
 | Which auth labels were used? | `uv run metaproc auth usage <run-dir>` |
 | What is the cloud Batch state? | `uv run metaproc gcp status <run-id>` |
@@ -588,6 +626,89 @@ under the captured params, the Steps section is omitted silently — the rest of
 `metaproc status` still works because execution state comes directly from
 `process-status.yaml`. `status --check` and `wait` treat a terminal process failure as
 failed even when the process had no fan-out items.
+
+### Reading Pool Health
+
+Pressure has four levels, not two: `normal`, `elevated`, `high`, and `critical`. The
+pool takes the worst of its memory, disk, and swap readings.
+
+Two memory signals do different jobs, and conflating them is the usual reading error:
+
+- **Available memory is the budget.** It answers how much more work fits.
+- **Swap growth rate is the degradation signal.** `swap_delta_gb_per_min` is a first
+  difference between consecutive samples, classified against ratios of total RAM per
+  minute into `swap_level`. Absolute swap use is logged for visibility but is
+  deliberately not a trigger, because it stays high long after the pressure that caused
+  it has passed.
+
+`elevated` while items are still pending is the governor applying back-pressure.
+It is correct behavior and not a fault to chase: the `elevated` branch holds the current
+cap and changes nothing.
+Reductions fire only at `high` and `critical`, and a ramp back up requires three
+consecutive `normal` checks.
+Nothing on this path fails or kills an item; memory pressure moves the cap, never the
+work.
+
+Two behaviors worth recognizing in the log.
+Telemetry failure is treated as maximal pressure, so the pool drops to `min_concurrency`
+rather than guessing.
+And a per-launch descendant limit does kill, recorded with a `descendants_limit` reason,
+which is a different mechanism from pressure and should not be read as one.
+
+On macOS the swap term lags the condition it is meant to warn about, because the memory
+compressor absorbs pressure before swap moves and compressor page count is not currently
+read. So on macOS treat available memory as the working signal, meaning metaproc’s own
+`available_pct`, which counts free, inactive, and purgeable pages, and not the raw
+free-memory percentage the OS reports.
+`kern.memorystatus_level` is sampled but deliberately never used as a budget, because it
+counts other processes’ live working sets.
+The accounting and its open gaps are in
+[memory-accounting-reference.md](https://github.com/jlevy/metaproc/blob/main/docs/memory-accounting-reference.md).
+
+### The Subprocess Count Is a Display Estimate
+
+The `Procs: N agent subprocesses` line in `metaproc status` is produced by matching a
+fixed name pattern against the `comm` column of a host-wide `ps`. Three consequences
+follow, and all three are easy to misread as signal:
+
+- It **undercounts trees.** Only a process whose own `comm` matches is counted, so an
+  agent’s own children are invisible.
+- It **overcounts across runs.** The `ps` call is host-wide and not filtered by run, so
+  other runs on the same host, and the operator’s own interactive agent session, land in
+  the count.
+- It **reports zero on failure.** A timeout or an `OSError` yields zero, so “no
+  subprocesses” and “measurement failed” are indistinguishable.
+
+The RSS figure beside it sums resident memory across matched processes, which
+double-counts pages shared across a fan-out.
+
+None of this is what the governor reads.
+The governor counts the launches it admitted itself, published as `active_count` in pool
+status and pressure events, and measures per-launch tree size separately over the owned
+process group. For a number to act on, use `metaproc pool status`, `pool health`, and
+`pool events`. Suppress the display block with `--no-system`.
+
+### A Green Run Is Not a Reviewed Run
+
+`status --check completed` passes on a run that did no work.
+With no per-item state directories on disk the variant list is empty, totals are zero,
+and pending is zero, so the check reports that all items completed and exits `0`. A
+terminal process failure is caught; emptiness is not.
+
+Read counts, not the label:
+
+- `metaproc status <run>` renders the per-variant table with Done, Fail, Pend, and Total
+  columns. In `--format json` these are `variants[].counts` and `totals`.
+- `--steps --format json` projects the payload down to
+  `{run_dir, process_state, steps}`, dropping both `variants` and `totals`. It is the
+  wrong surface for counting work.
+- The `N/M items` figure in the Steps table appears only for fan-out steps, and its
+  completed side folds in cached items, so a fully reused rerun and a fresh one look
+  alike there. The per-item `status.yaml` records under `.state/tasks/<step>/<item>/`
+  separate the two.
+
+Cross-check volume against `metaproc stats <run-dir>` and
+`metaproc pool rollup <run-dir>` before calling a run done.
 
 ## Log Compression
 
