@@ -52,10 +52,11 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
 
 - **Gemini 3.7 and 3.8 Flash**: `gemini-3.7-flash` and `gemini-3.8-flash` join the
   validated model set, and a `gemini-flash-38` execution profile ships beside the
-  existing 3.6 one. The 3.6 profile is unchanged, so a profile name that says 36 keeps
-  meaning 3.6. All three models sit in Google’s short-term-availability class, which
-  retires a model 45 days after its replacement ships; 3.8 is the newest and therefore
-  the longest-lived of the three.
+  existing 3.6 one. The 3.6 profile still pins `gemini-3.6-flash`, so a profile name that
+  says 36 keeps meaning 3.6, though its lane sizing moved with the other gemini-cli
+  profiles. All three models sit in Google’s short-term-availability class, which retires
+  a model 45 days after its replacement ships; 3.8 is the newest and therefore the
+  longest-lived of the three.
 
 ### Fixed
 
@@ -129,6 +130,16 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
   operation; and `native_settings: null` no longer suppresses settings injection
   entirely, because the retention guard is re-asserted beneath the defaults.
   An operator who deliberately sets the key still wins.
+
+- **Gemini steps can read files excluded by ignore rules**: the adapter now ships
+  `context.fileFiltering.respectGitIgnore: false` in its Gemini native settings, so the
+  agent’s own file tools read ignored files anywhere in the workspace rather than only
+  declared runtime inputs.
+  Treat the workspace, including files such as `.env`, as readable by a Gemini step, and
+  keep material an agent should not read out of the process directory rather than
+  relying on an ignore rule.
+  gemini-cli steps only; an operator can restore the previous behavior through
+  `native_settings`.
 
 - **The Pi adapter honors `no_session_persistence` instead of ignoring it**: `pi-cli`
   received `--no-session` unconditionally, so the key was accepted by the allow-list and
