@@ -5,7 +5,7 @@ title: Close the v0.4.0 release loose ends
 kind: epic
 status: open
 priority: 1
-version: 7
+version: 8
 labels:
   - release
   - release-blocker
@@ -17,8 +17,9 @@ child_order_hints:
   - is-01m1d4p4nksd76ft31egp4e7sp
   - is-01m1d4p5b1gsjsa6kbws4hxevw
   - is-01m1f8xgv4zycvj17qc7g9x1d0
+  - is-01m22c8wn6qjcqg65rs2pr0qrj
 created_at: 2026-09-01T02:04:47.228Z
-updated_at: 2026-09-01T20:00:09.572Z
+updated_at: 2026-09-09T06:04:22.053Z
 ---
 Everything standing between main 72ae119 and a tagged v0.4.0, in one place.
 
