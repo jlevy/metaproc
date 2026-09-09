@@ -3,16 +3,20 @@ type: is
 id: is-01m22c8wn6qjcqg65rs2pr0qrj
 title: Reconcile v0.4.0 release records and cut the tag
 kind: task
-status: in_progress
+status: closed
 priority: 1
-version: 2
+version: 3
 labels:
   - release
   - release-blocker
 dependencies: []
 parent_id: is-01m1dbcer80nak10tnbg1jyq52
 created_at: 2026-09-09T06:04:22.053Z
-updated_at: 2026-09-09T06:04:28.091Z
+updated_at: 2026-09-09T07:33:48.241Z
+closed_at: 2026-09-09T07:33:48.240Z
+close_reason: "v0.4.0 released. Records reconciled in PR #73 (squash 2a0aade): ten missing CHANGELOG entries, the metabrowser 0.9.0 -> 0.9.1 correction in CHANGELOG and SUPPLY-CHAIN-SECURITY.md, new docs/project/releases/v0.4.0.md, and the publishing.md pointer."
+resolution: null
+duplicate_of: null
 ---
 The v0.4.0 epic's five original children closed at main 2595662, but eleven pull requests merged after that commit and the release records did not follow.
 
