@@ -59,6 +59,20 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
 
 ### Fixed
 
+- **A bare resume no longer re-invokes completed code fan-out items**: a `mode: code`
+  step with `for_each` that is not part of an item-aligned chain received every
+  non-terminal item from discovery, completed ones included, and invoked all of them.
+  Resuming such a step with the same `RUN_ID` therefore re-ran every handler that had
+  already succeeded and recorded a fresh attempt for each, and an item already running
+  under a live sibling could be invoked concurrently.
+  The step now reuses an item whose task record is `completed` or `cached` and whose
+  declared output still validates, which is the same guard the aligned-chain executor
+  already applied per item; both paths now share one implementation.
+  Reuse is earned by a valid artifact rather than by a status file alone, so an item
+  whose output has since been removed still reruns, and `--force` is unaffected.
+  The step’s progress line now reports reused items instead of counting them as
+  actionable.
+
 - **A Gemini step is answered by the model it asked for**: gemini-cli rewrites any model
   id ending in `flash` that it does not recognize to its own default before the request
   leaves the process, and under Vertex authentication that default is
@@ -106,13 +120,22 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
   more for the same short prompt, which is enough to destabilize a host running several
   agents at once. The adapter now ships `general.sessionRetention.enabled: false` in its
   native settings, which makes cleanup return before it enumerates anything.
-  Gemini native settings are also merged rather than replaced, so a profile-supplied
-  `native_settings` block cannot silently drop a host-safety default it never mentioned.
-  Two consequences worth knowing: Gemini no longer prunes its own `chats/` and
-  `tool-outputs/` directories, so bounded retention becomes an external operation; and
-  `native_settings: null` no longer suppresses settings injection entirely, because the
-  retention guard is re-asserted beneath the defaults.
+  The guard is Gemini-specific: matched probes of Claude Code, Codex CLI, and Pi under
+  the same conditions found no comparable startup cost, so no equivalent setting ships
+  for those adapters. Gemini native settings are also merged rather than replaced, so a
+  profile-supplied `native_settings` block cannot silently drop a host-safety default it
+  never mentioned. Two consequences worth knowing: Gemini no longer prunes its own
+  `chats/` and `tool-outputs/` directories, so bounded retention becomes an external
+  operation; and `native_settings: null` no longer suppresses settings injection
+  entirely, because the retention guard is re-asserted beneath the defaults.
   An operator who deliberately sets the key still wins.
+
+- **The Pi adapter honors `no_session_persistence` instead of ignoring it**: `pi-cli`
+  received `--no-session` unconditionally, so the key was accepted by the allow-list and
+  never consulted, and a spec asking for session persistence was silently overridden.
+  The default is unchanged and still stateless; only an explicit `false` now keeps
+  sessions, matching how the Claude adapter already treats the same key.
+  No built-in Pi profile sets `false`, so no shipped profile changes behavior.
 
 - **The Gemini adapter no longer accepts `no_session_persistence`**: the key was in the
   allow-list but was never read, so a process spec could ask for session isolation and
@@ -294,9 +317,10 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
   a sibling’s failure are now `completed` or `blocked`.
 
 - **A refused launch and a failed run have different exit codes**: `run-process` and
-  `run-step` now exit 2 when a launch is refused before any step runs — unresolved
-  placeholders or failed process-input validation — matching the documented validation
-  exit code that `plan` and `deps` already used for the same two checks.
+  `run-step` now exit 2 when a launch is refused before any step runs: unresolved
+  placeholders or failed process-input validation.
+  This matches the documented validation exit code that `plan` and `deps` already used
+  for the same two checks.
   A completed run still exits 0 and a step failure still exits 1. A retry script that
   treated any nonzero exit as a run failure will now see 2 for an invocation that never
   started.

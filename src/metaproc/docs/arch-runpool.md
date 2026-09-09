@@ -9,7 +9,7 @@ status: Approved
 Module-level notes, including using RunPool as a library, are in
 [`runpool/README.md`](../runpool/README.md).
 
-**Date:** 2026-04-06 (last updated 2026-09-04) **Status:** Approved
+**Date:** 2026-04-06 (last updated 2026-09-09) **Status:** Approved
 
 RunPool is Metaproc’s local agent process manager.
 It owns subprocess lifecycle, adaptive concurrency, host-level coordination, health
@@ -302,6 +302,18 @@ Two mitigations that look plausible are not.
 A V8 heap cap converts the spike into a startup crash after the host has already
 absorbed the allocation, and a per-run working directory only selects a fresh state
 bucket that then accumulates in turn.
+
+The guard is Gemini-specific, and so is the evidence for it.
+Matched one-shot probes of Claude Code, Codex CLI, and Pi under the same conditions
+found no comparable startup cost, and stored history did not predict one: Claude Code
+carried roughly 1.5 GB of project history and Codex roughly 6.4 GB active plus 10 GB
+archived, yet neither read its full history during startup, while Gemini’s peak came
+from one specific unbounded access path rather than from Node.js or JSONL storage in
+general. No equivalent setting is shipped for the other adapters because no equivalent
+problem has been measured in them.
+The general rule above still holds: an estimate is valid only for a stated state regime,
+so a client whose startup access pattern changes needs a fresh profile rather than the
+assumption that this finding generalizes.
 
 ### What Survives a Resume
 
