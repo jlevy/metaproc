@@ -4432,8 +4432,19 @@ async def _orchestrate(
                     )
                     detail = step_states[step_id].get("error")
                     detail_text = f" Error: {detail}." if detail else ""
+                    # State the policy in force, not how it got there: the context
+                    # carries plain booleans, so a value set on the command line and
+                    # one left at its default are indistinguishable here. A scope
+                    # additionally answers to continue-on-step-failure, which is off
+                    # unless the launch turned it on.
+                    fail_fast_reason = (
+                        "continue-on-error is off and continue-on-step-failure "
+                        "is off for this scope"
+                        if scope_path
+                        else "continue-on-error is off"
+                    )
                     raise CLIError(
-                        f"Step '{step_id}' failed (--no-continue-on-error set)."
+                        f"Step '{step_id}' failed (fail-fast: {fail_fast_reason})."
                         f"{detail_text} Blocked: "
                         f"{', '.join(actually_blocked) if actually_blocked else 'none'}"
                     )

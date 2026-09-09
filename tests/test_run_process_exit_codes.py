@@ -206,4 +206,4 @@ def test_step_failure_without_continue_on_error_exits_one(tmp_path: Path) -> Non
     result = _run(process_path, tmp_path, "fail-fast-run", "--no-continue-on-error")
 
     assert result.returncode == 1, result.stderr
-    assert "Step 's1' failed (--no-continue-on-error set)" in result.stderr
+    assert "Step 's1' failed (fail-fast: continue-on-error is off)" in result.stderr
