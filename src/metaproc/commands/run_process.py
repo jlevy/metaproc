@@ -1777,6 +1777,41 @@ def _with_declared_retry(
     )
 
 
+def _item_task_is_done(
+    *,
+    target: ResolvedStep,
+    step_def: ProcessStep,
+    item_vars: dict[str, str],
+    run_dir: Path,
+    run_id: str,
+) -> bool:
+    """Whether one fan-out item of one step is already satisfied.
+
+    Reuse is earned by a completed task record *and* a valid declared output, not by
+    either alone: a status file whose artifact has since been removed describes work that
+    no longer exists. The status record is checked against this run, step, and item
+    before it is trusted, so state addressed elsewhere cannot authorize a skip.
+    """
+    state_dir = compute_task_state_dir(run_dir, step_def, item_vars)
+    prior = read_status_at(state_dir)
+    if prior is None or prior.state not in ("completed", "cached"):
+        return False
+    validate_task_status_identity_at(
+        state_dir,
+        prior,
+        run_id=run_id,
+        step_id=target.step_id,
+        item_key=state_dir.name,
+    )
+    outputs = target.outputs
+    artifact_dir = compute_item_dir(outputs, item_vars)
+    if outputs and artifact_dir is not None:
+        output_errors = validate_item_outputs(artifact_dir, outputs, variables=item_vars)
+        if output_errors:
+            return False
+    return True
+
+
 def _discover_chain_items(
     *,
     target: ResolvedStep,
@@ -1834,6 +1869,11 @@ async def _execute_code_fan_out_step(
         run_dir=run_dir,
         run_id=run_id,
     )
+    # The run-plan roster is the full source-authorized set. Execution is not: discovery
+    # returns every non-terminal item, so an item that completed in this run is still in
+    # the list. The aligned-chain executor decides reuse per item through its `is_done`
+    # guard; this one has no such hook on `run_fan_out`, so it filters here instead.
+    # Without this a bare resume re-invokes every completed handler.
     _refresh_run_plan_item_keys(
         run_dir,
         target=target,
@@ -1841,11 +1881,26 @@ async def _execute_code_fan_out_step(
         variables=variables,
         item_contexts=item_contexts,
     )
+    discovered_count = len(item_contexts)
+    item_contexts = [
+        item_context
+        for item_context in item_contexts
+        if not _item_task_is_done(
+            target=target,
+            step_def=step_def,
+            item_vars={**variables, **item_context},
+            run_dir=run_dir,
+            run_id=run_id,
+        )
+    ]
+    reused_count = discovered_count - len(item_contexts)
     if not item_contexts:
-        out.progress(f"  Step '{step_id}': no actionable items (all completed)")
+        out.progress(f"  Step '{step_id}': no actionable items ({reused_count} already complete)")
         return True
 
-    out.progress(f"  Step '{step_id}': {len(item_contexts)} actionable items")
+    out.progress(
+        f"  Step '{step_id}': {len(item_contexts)} actionable items ({reused_count} reused)"
+    )
 
     async def _invoke(_step_id: str, item_vars: dict[str, str]) -> bool:
         return await _execute_code_step(
@@ -1934,24 +1989,13 @@ async def _execute_item_aligned_chain(
         )
 
     def _is_done(step_id: str, item_vars: dict[str, str]) -> bool:
-        state_dir = compute_task_state_dir(run_dir, step_def_map[step_id], item_vars)
-        prior = read_status_at(state_dir)
-        if prior is None or prior.state not in ("completed", "cached"):
-            return False
-        validate_task_status_identity_at(
-            state_dir,
-            prior,
+        return _item_task_is_done(
+            target=step_map[step_id],
+            step_def=step_def_map[step_id],
+            item_vars=item_vars,
+            run_dir=run_dir,
             run_id=run_id,
-            step_id=step_id,
-            item_key=state_dir.name,
         )
-        outputs = step_map[step_id].outputs
-        artifact_dir = compute_item_dir(outputs, item_vars)
-        if outputs and artifact_dir is not None:
-            output_errors = validate_item_outputs(artifact_dir, outputs, variables=item_vars)
-            if output_errors:
-                return False
-        return True
 
     def _step_concurrency(step_id: str) -> int | None:
         fan_out = step_map[step_id].fan_out
