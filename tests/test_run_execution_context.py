@@ -660,6 +660,49 @@ def test_nested_scope_uses_continue_on_step_failure_policy(tmp_path: Path) -> No
     execute.assert_awaited_once()
 
 
+def test_scope_fail_fast_message_states_policy_not_a_launch_flag(tmp_path: Path) -> None:
+    """A scope stops on a default, so the message reports settings, not operator flags.
+
+    ``continue_on_step_failure`` is off here because nothing turned it on. Naming a
+    command-line flag as the cause would assert a launch that never happened, and a
+    reader who believes it goes looking for the wrong thing.
+    """
+
+    spec, plan = _one_step_process()
+    execute = AsyncMock(return_value=False)
+
+    async def exercise() -> str:
+        context = RunExecutionContext.create(max_concurrency=1, continue_on_error=False)
+        try:
+            with (
+                patch("metaproc.commands.run_process._execute_step", execute),
+                pytest.raises(CLIError) as raised,
+            ):
+                await _orchestrate(
+                    spec=spec,
+                    plan=plan,
+                    variables={},
+                    process_path=tmp_path / "child.process.md",
+                    process_dir=tmp_path,
+                    run_dir=tmp_path / "run",
+                    run_id="test/run-1/child",
+                    scope_path=("child",),
+                    execution_context=context,
+                    out=_Out(),
+                    events=MagicMock(),
+                )
+        finally:
+            context.close()
+        return str(raised.value)
+
+    message = asyncio.run(exercise())
+    assert (
+        "Step 'leaf' failed (fail-fast: continue-on-error is off and "
+        "continue-on-step-failure is off for this scope)." in message
+    )
+    assert "--" not in message
+
+
 def test_sync_executor_is_independent_of_leaf_ceiling() -> None:
     first_started = threading.Event()
     second_started = threading.Event()
