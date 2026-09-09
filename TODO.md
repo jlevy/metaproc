@@ -4,10 +4,12 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
 
 ## Current Release
 
-- **[v0.3.0](https://github.com/jlevy/metaproc/releases/tag/v0.3.0)** (`mp-wg5f`):
-  published from tag `4d518d8`. Pull request 38 merged immediately above the tag at
-  `6ac9c65`, so co-development work pins that post-release main commit rather than
-  assuming the published wheel contains pull request 38.
+- **[v0.4.0](https://github.com/jlevy/metaproc/releases/tag/v0.4.0)** (`mp-1n2a`):
+  published from tag `2a0aade`, which is the squash merge of pull request 73 and the
+  current tip of `main`, so the published wheel and post-release `main` are the same
+  tree. The release is a minor, not a patch: the delta since v0.3.0 removes public CLI
+  surface, renames the four adapter modules, changes a CLI exit code, and changes the
+  default scope failure policy.
 
 ## Active Development
 
@@ -19,13 +21,6 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
   evidence
   ([system plan](docs/project/specs/active/plan-2026-09-01-runpool-host-safety.md),
   [package plan](docs/project/specs/active/plan-2026-09-01-safeproc-local-incubation.md)).
-- **v0.4.0 release** (`mp-1n2a`): the correctness, records, dependency-currency, and
-  tracking children are closed, and the changelog,
-  [release notes](docs/project/releases/v0.4.0.md), and first-party exception rationale
-  now match the tree. What remains is the tag itself and the publish it triggers; §
-  Current Release moves to v0.4.0 once that tag exists.
-  The release is a minor, not a patch: the delta since v0.3.0 removes public CLI surface
-  and changes output and transport contracts.
 
 ## Deferred Quality Ratchets
 
