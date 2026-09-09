@@ -3,15 +3,28 @@ type: is
 id: is-01m23c495k2aqe4pqgcq0ctmx7
 title: "Amend the v0.4.0 release notes: 23 undocumented changes, 7 misdescriptions"
 kind: bug
-status: open
+status: closed
 priority: 1
-version: 1
+version: 2
 labels:
   - docs
   - release
 dependencies: []
 created_at: 2026-09-09T15:21:05.459Z
-updated_at: 2026-09-09T15:21:05.459Z
+updated_at: 2026-09-09T16:07:15.861Z
+closed_at: 2026-09-09T16:07:15.860Z
+close_reason: |-
+  Corrected in both surfaces. docs/project/releases/v0.4.0.md amended at eee0f69, and the GitHub release body at https://github.com/jlevy/metaproc/releases/tag/v0.4.0 regenerated from it via gh release edit; the published body is byte-identical to the file apart from a trailing newline GitHub appends. The v0.4.0 tag still points at 2a0aade and no artifact was touched, since PyPI is immutable and nothing about the code changed.
+
+  Added: the Gemini respectGitIgnore posture (also added to CHANGELOG), status --remote and bare run-id auto-detection removal (added to the Compatibility enumeration so the list is complete), status --check now failing runs whose items all completed, workstation Filestore alias resume removal, gcp run --job-name format validation, the uv baked-environment pinning for no-workspace runs, the Pi npm scope move to @earendil-works, the batch_backend secret API removal, a consolidated runtime-artifact entry covering run-plan.yaml, accepted-anomalies.yaml, TaskOutputProjection, result.yaml attempt_id and the four moved schema tokens, METAPROC_GCP_SECRET_REFS_JSON, and a smaller-surface entry for pool rollup, TraceExtractor scope_local, the /bin/sh wrapper, check-handlers/check-headers variable expansion, GCS upload policy, result_contract_failed, and the httpx2 dev dependency drop.
+
+  Corrected: the '3.6 profile is unchanged' claim, which this document contradicted 100 lines later and which the CHANGELOG repeated; the overstated scope of the Gemini profile re-sizing, which left pi-gemini-flash and pi-gemini-pro untouched; the unconditional runtime service account requirement, which is conditional on a job binding a secret reference; the Ctrl-C versus SIGTERM split, since Ctrl-C keeps a hard reap as a backstop; the launch-refusal enumeration, which named two of four classes; the documentation paths bullet, which omitted two shipped-document renames including one that shipped in v0.3.0; and the 'without writing an additional runtime ledger' phrasing, which read as a promise that no new artifact appeared while run-plan.yaml is new.
+
+  The public-hygiene gate rejected the first draft for a home-directory path in the Filestore example, now a placeholder. lint-check clean, 4,613 passed with 8 skipped.
+
+  mp-x1qh stays open deliberately: it asks whether respectGitIgnore: false should remain the default, which disclosure does not settle.
+resolution: null
+duplicate_of: null
 ---
 The v0.4.0 release notes were written from the CHANGELOG, PR bodies and bead descriptions rather than from the diff. A post-publication review of all 26 merged PRs (134 commits, 316 files) found the notes materially incomplete: roughly 23 undocumented user-visible changes and 7 misdescriptions across four review clusters, with a fifth surface audit outstanding.
 
