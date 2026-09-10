@@ -5,7 +5,7 @@ title: "PR 75: review RunPool stability, execution design, and documentation"
 kind: epic
 status: in_progress
 priority: 1
-version: 18
+version: 19
 labels: []
 dependencies: []
 child_order_hints:
@@ -25,10 +25,10 @@ child_order_hints:
   - is-01m260z1jxnav5y684hgm6xsz4
   - is-01m260z1v7cj4wtcghqr3gvn0k
 created_at: 2026-09-10T15:53:31.981Z
-updated_at: 2026-09-10T16:23:20.711Z
+updated_at: 2026-09-10T16:31:09.117Z
 ---
 Review PR #75 and recent run-pool/execution changes against current docs and code; publish the full design review and progress on the PR, track every finding as a child bead, implement bounded fixes, leave broader design decisions explicitly open, and complete make verify plus CI.
 
 ## Notes
 
-Full design review: https://github.com/jlevy/metaproc/pull/75#issuecomment-5621778931 . F1-F3 and the four review workstreams are complete. Seven review decisions remain open under F4-F10, with dependencies on existing implementation work where appropriate. mp-5v99 owns final commit, push, and CI completion. Keep this epic open for the deferred review decisions.
+Review and immediate fixes delivered in e98e8e3 on PR 75. Full review: https://github.com/jlevy/metaproc/pull/75#issuecomment-5621778931 . All review workstreams, F1-F3 fixes, and mp-5v99 handoff are closed. Final make verify passed (4622 passed, 8 skipped); CI https://github.com/jlevy/metaproc/actions/runs/34502193295 passed lint/distribution/Python3.12-3.14. Seven F4-F10 child findings remain open for user review, linked to existing implementation work where applicable. Keep epic open for those decisions.
