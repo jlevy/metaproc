@@ -20,6 +20,11 @@ tracking_bead: mp-1c19
 > The prose below is the plan as written and is kept as the design record; it describes
 > intent, not remaining work.
 
+Open execution follow-ups are governed by the
+[RunPool stability and execution plan](../active/plan-2026-09-10-runpool-execution-followups.md)
+under `mp-7p3z`. The completed `mp-0iy8` epic retains the released scope; follow-up
+pauses and implementation prerequisites are recorded in the active plan and tbd.
+
 ## Overview
 
 Metaproc can map agent and code steps over a roster, and it can evaluate a composite
@@ -257,7 +262,7 @@ the local exact-head and public CI gates below remain independent landing requir
 | R28: runtime plan schema fails open | Fixed | The standalone and SoftSchema registries publish the strict pure-YAML `RunPlanSnapshot/0.1` contract, validate real artifacts, and reject unknown versions. |
 | R29: runtime-produced fan-out sources leave empty item authority | Fixed | Agent, code, aligned-chain, and mapped-composite discovery atomically refresh the existing scope snapshot before dispatch. End-to-end producer-to-mapped-leaf and producer-to-mapped-composite tests prove accepted projection, and resume coverage removes a stale item key. |
 | R30: fan-out disposition collides with authored fields | Fixed | Discovery keeps framework disposition separate from authored item context. Canonical key resolution preserves every declared field, retains completed, cached, or running items, and excludes source-terminal items. |
-| R31: missing runtime state appears as complete coverage | Fixed | The projection compares exact plan-declared scalar, mapped-item, and composite-scope coordinates with durable state and emits typed coverage gaps for every absent record. Fully snapshotted synthetic and mapped-composite execution regressions require an empty gap set. |
+| R31: missing runtime state appears as complete coverage | Fixed for projection coverage | The projection compares exact plan-declared scalar, mapped-item, and composite-scope coordinates with durable state and emits typed coverage gaps for every absent record. Fully snapshotted synthetic and mapped-composite execution regressions require an empty gap set. This does not establish zero-total CLI completion semantics, which remain open as review finding F9 (`mp-q8xq`) in the active follow-up plan. |
 
 The superseded retry-later transport is excluded.
 Dormant retry primitives remain under their separate removal-or-justification audit.

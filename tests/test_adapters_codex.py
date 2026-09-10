@@ -130,11 +130,16 @@ class TestCodexBuildCommand:
         assert cmd[exec_idx + 1] == "--json"
         assert "--skip-git-repo-check" in cmd[exec_idx:]
 
-    def test_model_validation_falls_back_on_unknown(self, tmp_path: Path):
-        # Adapter logs a warning and falls back to CODEX_DEFAULT_MODEL rather
-        # than emitting an invalid -m value (matches claude/gemini behavior).
-        cmd = self._cmd(tmp_path, {"permission_mode": "default", "model": "gpt-bogus"})
-        assert cmd[cmd.index("-m") + 1] == CODEX_DEFAULT_MODEL
+    def test_luna_model_and_low_effort_are_preserved(self, tmp_path: Path) -> None:
+        cmd = self._cmd(
+            tmp_path, {"permission_mode": "default", "model": "gpt-5.6-luna", "effort": "low"}
+        )
+        assert cmd[cmd.index("-m") + 1] == "gpt-5.6-luna"
+        assert "model_reasoning_effort=low" in cmd
+
+    def test_model_validation_raises_on_unknown(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="unknown codex-cli model 'gpt-bogus'"):
+            self._cmd(tmp_path, {"permission_mode": "default", "model": "gpt-bogus"})
 
     def test_tool_mapping_websearch_emits_search_flag(self, tmp_path: Path):
         cmd = self._cmd(tmp_path, {"permission_mode": "default", "tools": ["WebSearch"]})

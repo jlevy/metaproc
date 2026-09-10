@@ -13,6 +13,15 @@ it ships.
 
 The [roadmap](../../TODO.md) lists active releases and deferred quality work.
 The tbd issue graph holds task-level status and dependencies.
+The review follow-ups have two planning entry points:
+
+- [Execution stability, operator diagnostics, and flexibility](specs/active/plan-2026-09-10-runpool-execution-followups.md)
+  (`mp-7p3z`)
+- [Model catalog compatibility](specs/active/plan-2026-09-10-model-catalog-followups.md)
+  (`mp-qmr0`)
+
+[Model Catalog Maintenance](model-catalog-maintenance.md) defines the recurring evidence
+review for accepted model IDs, defaults, lifecycle status, and adapter compatibility.
 
 ## Specifications
 
@@ -47,6 +56,8 @@ consumer that owns them.
 
 ## Design Records
 
+- [Contract failure primitives](design/contract-failure-primitives.md): the implemented
+  foundation and compatibility rationale; remaining work is in the execution plan.
 - [Design proposals](design/metaproc-design-proposals.md): the future-work backlog for
   the design doc. Not implemented; not shipped.
 - [`design/backlog/`](design/backlog/): per-document future work, one file per shipped
@@ -69,8 +80,10 @@ Two rules the shortcut does not know about:
    dead for everyone reading the installed package.
    `devtools/check_shipped_links.py` enforces this.
 
-Bump the **last updated** date in the document’s header when you make non-trivial
-changes.
+Bump the **last updated** date in the document’s header to the UTC date when you make
+non-trivial changes.
+The freshness check converts commit timestamps to UTC so an author’s timezone does not
+change the result after a squash merge.
 
 ## Architecture Docs
 

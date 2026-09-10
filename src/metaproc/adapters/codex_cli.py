@@ -23,6 +23,7 @@ from metaproc.adapters.base import (
     resolve_templates,
 )
 from metaproc.config.env_vars import MetaprocEnv
+from metaproc.config.model_catalog import resolve_model
 from metaproc.dispatch.known_bugs import detect_known_bug
 from metaproc.settings import (
     CODEX_DEFAULT_EFFORT,
@@ -241,17 +242,8 @@ def _build_codex_flag_groups(
     exec_flags: list[str] = []
     prompt_parts: list[str] = []
 
-    model = merged_config.get("model") or CODEX_DEFAULT_MODEL
-    model_str = str(model)
-    if model_str in CODEX_VALID_MODELS:
-        top_level.extend(["-m", model_str])
-    else:
-        log.warning(
-            "codex-cli: ignoring unknown model name %r; falling back to default %r",
-            model_str,
-            CODEX_DEFAULT_MODEL,
-        )
-        top_level.extend(["-m", CODEX_DEFAULT_MODEL])
+    model = resolve_model("codex-cli", merged_config.get("model"))
+    top_level.extend(["-m", model])
 
     effort = str(merged_config.get("effort") or CODEX_DEFAULT_EFFORT)
     top_level.extend(["-c", f"model_reasoning_effort={effort}"])

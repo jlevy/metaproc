@@ -2,40 +2,47 @@
 title: Contract Failure Primitives
 description: Stop flattening what output validation already knows, and let a process declare what a validation failure costs, without the framework learning any domain's vocabulary.
 date: 2026-08-20
-status: Phase 1 complete, Phase 2 partial
+status: Design record; implemented foundation with extensions tracked in the execution plan
 ---
-# Feature: Contract Failure Primitives
+# Design: Contract Failure Primitives
 
 **Date:** 2026-08-20
 
-**Status:** Phase 1 complete, Phase 2 partial
+**Status:** Design record.
+Phase 1 and part of Phase 2 are implemented.
+
+The [execution plan](../specs/active/plan-2026-09-10-runpool-execution-followups.md)
+governs remaining implementation under `mp-d019` and review acceptance `mp-rrkw`. This
+record retains the failure primitives, compatibility rationale, and implementation
+history. Active scope, checklists, and status belong to that plan and tbd.
 
 ## Overview
 
-Output validation produces structured facts and then destroys them.
-`validate_artifact` returns a record naming the failing field, the validator that
+Before Phase 1, output validation produced structured facts and then discarded them.
+`validate_artifact` returned a record naming the failing field, the validator that
 refused it, and the value it saw.
-Metaproc keeps the first such record, formats it into a sentence, joins it with
-semicolons, and stores the result in `StatusRecord.error`, a `str`.
+Metaproc kept the first such record, formatted it into a sentence, joined it with
+semicolons, and stored the result in `StatusRecord.error`, a `str`.
 
-Then it reads that sentence back.
-`classify_error` decides whether a contract failure is worth retrying by testing whether
-the words `schema`, `envelope`, or `mismatch` appear in it.
+`classify_error` then decided whether a contract failure was worth retrying by testing
+whether the words `schema`, `envelope`, or `mismatch` appeared in that string.
 
-The framework is parsing its own English.
-Everything downstream inherits that channel: a consumer wanting to know which output
-failed or which invariant refused it has no alternative but the same substring matching,
-and at least one has written it.
+Downstream consumers inherited that prose-only channel.
+A consumer wanting to know which output failed or which invariant refused it had to
+repeat the substring matching.
 
-This preserves the record instead, makes the retry rule declarative, and fixes a
-representation bug underneath the largest observed failure class.
-It teaches the framework no domain’s vocabulary.
+The implemented foundation preserves structured output failures, makes retry
+classification depend on their kind, and fixes the representation bug described below.
+The active execution plan tracks the remaining run-abort and classifier/count
+extensions.
 
 ## Background
 
+This section records the pre-Phase 1 behavior that motivated the implemented foundation.
+
 ### The Round Trip Through Prose
 
-The path a contract failure takes today, in four steps:
+The pre-Phase 1 path, in four steps:
 
 1. `validate_artifact` returns `ArtifactValidationResult`, whose `structural.errors` are
    records like
@@ -61,14 +68,15 @@ output validation failed: source-snapshot.md: file not found                    
 
 Identical failures, opposite verdicts, because one filename contains `schema`. The
 comment above the rule states the intent exactly, that missing files are transient and
-worth retrying while structural mismatches are not, and the implementation cannot honour
-it, because by the time it runs, the fact that distinguishes the two cases is gone.
+worth retrying while structural mismatches are not, and the implementation could not
+honour it, because by the time it runs, the fact that distinguishes the two cases is
+gone.
 
 Substring matching is the right tool one layer down and the docstring in
 `engine/retry.py` says why: a subprocess is opaque, its exit code is always 1, so the
 error string is the only signal there is.
 Contract validation is the opposite case.
-The framework holds the structured record and chooses to flatten it.
+The framework held the structured record and chose to flatten it.
 
 ### What a Consumer Had to Build
 
@@ -80,7 +88,7 @@ to contracts from a hand-maintained table, and classifies failures by pattern-ma
 error text.
 
 The design tests in
-[process-framework-theory.md](../../../../src/metaproc/docs/process-framework-theory.md)
+[process-framework-theory.md](../../../src/metaproc/docs/process-framework-theory.md)
 name this outcome:
 
 > A workflow forced to answer “no” by building its own coordinator on top of the
@@ -333,14 +341,20 @@ mode. Neither needs a primitive.
   never synthesize or replace validation feedback.
   Attempt-numbered prompt snapshots preserve the exact correction section sent to each
   launch.
-- [ ] Make `fail_run` stop the run.
-  It currently fails the item permanently, exactly as `fail` does; `requires_run_abort`
-  reports the declaration and is the seam a coordinator-level abort attaches to.
-- [ ] Allow a plugin to register a classifier receiving an `OutputFailure` and returning
-  an action and an optional label; store the label on the record.
-- [ ] Subdivide `invalid_output` in `FailureCounts` by `kind`, and group by label where
-  one is present.
-- [x] Test each action, and that a process declaring nothing behaves exactly as before.
+- Run-wide `fail_run` is pending (`mp-cl0d`; review acceptance `mp-rrkw`). It currently
+  fails the item permanently, exactly as `fail` does; `requires_run_abort` reports the
+  declaration and is the seam a coordinator-level abort attaches to.
+  Use one run-owned abort decision to prevent new launches, cancel and drain active
+  siblings, and preserve the initiating cause and output evidence.
+  Cover nested scopes and define the interaction with tolerant fan-in and
+  `continue_on_error`.
+- Pending: allow a plugin to register a classifier receiving an `OutputFailure` and
+  returning an action and an optional label; store the label on the record (`mp-3uaf`).
+- Pending: subdivide `invalid_output` in `FailureCounts` by `kind`, and group by label
+  where one is present (`mp-m4vi`).
+- [x] Test action classification and retry behavior, and that a process declaring
+  nothing behaves exactly as before.
+  Run-wide abort behavior remains in `mp-cl0d`.
 
 ### Compatibility Notes
 
@@ -385,10 +399,10 @@ case.
 
 ## References
 
-- [process-framework-theory.md](../../../../src/metaproc/docs/process-framework-theory.md),
+- [process-framework-theory.md](../../../src/metaproc/docs/process-framework-theory.md),
   for the requirement axis, the two-axis failure model, and the design tests cited here.
-- [metaproc-design.md](../../../../src/metaproc/docs/metaproc-design.md) §13 for the
-  layer boundary and §14.1 for the retry chain this makes declarative.
+- [metaproc-design.md](../../../src/metaproc/docs/metaproc-design.md) §13 for the layer
+  boundary and §14.1 for the retry chain this makes declarative.
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

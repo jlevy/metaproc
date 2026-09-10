@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: Testing
 
-**Date:** 2026-04-24 (last updated 2026-08-27) **Status:** Approved
+**Date:** 2026-04-24 (last updated 2026-09-10) **Status:** Approved
 
 Testing is organized into tiers by cost and scope.
 Each tier is a named process spec you run via `metaproc run-process`; the table below
@@ -69,16 +69,17 @@ Credential requirements per adapter:
 | `gemini-cli` | one of: (a) `GEMINI_API_KEY`, (b) `GOOGLE_GENAI_USE_VERTEXAI=true` + `GOOGLE_API_KEY`, (c) `GOOGLE_GENAI_USE_VERTEXAI=true` + `GOOGLE_CLOUD_PROJECT` + ADC | See [credential-setup.md § Gemini](credential-setup.runbook.md#gemini-cli-gemini-cli). The smoke uses mode (c) against `$METAPROC_GCP_PROJECT` so it runs with no Gemini-specific key. |
 | `pi-cli` | `~/.pi/auth.json` (plus GCP ADC for `vertex-maas`) | `pi login`; `gcloud auth application-default login` for MaaS |
 
-The `pi-cli` smoke pins `vertex-maas` with `glm-5-maas` because that combination is free
-in this project. Substitute `--variant pi-cli-<other>` and `--provider <other>` when
-probing a paid path.
+The `pi-cli` smoke selects `vertex-maas` with `glm-5-maas`. Substitute
+`--variant pi-cli-<other>` and `--provider <other>` to probe another configured route.
+Model selection does not establish pricing or account credit eligibility.
 
 ### Model assertion (`--assert-model`)
 
 Each per-adapter smoke passes `--assert-model <substring>` on its live-probe step so the
 harness verifies the observed model — not just the subprocess exit code.
-Without this, a silent `--model` fallback (claude/gemini warn-and-default on unknown
-model names) keeps the subprocess green even when the requested model was ignored.
+Metaproc rejects unknown explicit names before command execution, but an upstream CLI
+can still resolve aliases or change model routing.
+A successful exit alone does not establish which model responded.
 
 The helper parses the CLI’s JSONL stdout for the identity event that carries `model`:
 

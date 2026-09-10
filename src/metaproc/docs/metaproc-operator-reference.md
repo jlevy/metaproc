@@ -21,7 +21,8 @@ Treat this as a pre-flight checklist.
 
 | Mistake | Right thing to do |
 | --- | --- |
-| Parsing run directories with `find`, `ls`, `tail`, or `grep` | Use `metaproc status`, `pulse`, `pool`, `stats`, and `tail --summary`; these commands understand leases and both supported layouts. |
+| Replacing run-state checks with a private filesystem parser | Use `metaproc status`, `pulse`, `pool`, and `stats` for state and lifecycle. For agent debugging, also inspect the original logs directly as described below. |
+| Treating a rollup or generic exit code as the whole diagnosis | Identify the affected attempt and inspect its native transcript and captured output. Report the observed cause, evidence location, and any missing evidence. |
 | Treating a low operator cap as a memory-safety control | Set the intended upper bound and let adaptive memory and provider ceilings reduce concurrency from there. |
 | Writing an external autopilot or state parser | Add the missing Metaproc command or express the flow as a process spec. |
 | Retrying deterministic failures | Adapter classifiers must abort on authentication, installation, version, schema, and configuration failures. |
@@ -84,9 +85,12 @@ behavior [`arch-runpool.md`](arch-runpool.md), and for naming rules
 
 ## Operating Rules
 
-1. Use metaproc commands before raw filesystem inspection.
-   If a normal monitoring question requires `ls`, `tail`, `find`, or an ad hoc parser,
-   add or fix a metaproc command instead of encoding a private workflow.
+1. Use metaproc commands for run state and lifecycle, and original logs for deeper
+   debugging. Read-only filesystem inspection is appropriate for understanding agent
+   behavior or diagnosing gaps in a Metaproc report.
+   Keep orchestration and state mutation in the CLI. Add recurring monitoring gaps to
+   Metaproc while using the available source evidence to investigate the current
+   failure.
 2. Treat `.state/` as harness-owned runtime state.
    Files in `.state/` are full-rewrite or frozen records used for resume, adoption, and
    status checks. Do not hand-edit them except through operator commands such as
@@ -249,7 +253,61 @@ The reusable metaproc command set is:
 
 If a domain operator needs a recurring status field that is not available through these
 commands, add it to the domain report or to metaproc.
-Do not make a daily plan depend on private shell walks through `.logs` or `.state`.
+Keep recurring state checks in those commands.
+Direct source-log inspection is part of debugging and does not require waiting for a new
+Metaproc feature.
+
+### Direct Agent Debugging
+
+Start with `metaproc status <run-dir>` to identify the affected step, item, and current
+run state. A failure count, generic exit code, or extracted trace is not a complete
+explanation of agent behavior.
+Open the retained source evidence for the relevant attempt:
+
+- Per-attempt native agent streams are under
+  `<scope>/.logs/tasks/<step_id>/<item_key>/`. Inspect the attempt-specific JSONL and
+  any captured stderr or debug files present there; adapters differ in what they emit.
+- Scalar captured process output is under `<scope>/.logs/tasks/<step_id>/`, and
+  item-scoped captured output is under its `<item_key>/` directory.
+  The runtime artifact table below describes the `process_<ts>.log` naming pattern.
+- Each nested composite has its own scope root.
+  Correlate the task status, attempt metadata, timestamps, and provider session identity
+  before choosing logs; do not mix a previous retry with the active or final attempt.
+
+Use a text viewer or ordinary read-only tools to inspect an actual source path:
+
+```bash
+less '<source-log-path>'
+tail -n 100 -f '<active-source-log-path>'
+gzip -cd '<source-log-path>.gz' | less
+```
+
+These commands read the captured file directly, without an additional Metaproc parser or
+trace projection. Capture itself can already have transformed the stream: logged local
+launches combine stderr with stdout, and the Pi capture filter drops `message_update`
+and `tool_execution_update` events before writing the task log.
+Those events cannot be recovered from that file.
+Inspect provider-native or debug logs when they are available, and report when the full
+original stream was not retained.
+
+`metaproc tail --summary` and `.logs/derived/trace.jsonl` are derived views; return to
+the captured source when their interpretation is incomplete or suspect.
+Preserve available source logs during an investigation, and avoid lossy compaction until
+the needed native evidence has been retained.
+
+Report the observed cause, its affected step/item/attempt, the source path and relevant
+timestamp or excerpt, and the retry or waiting state.
+If the cause is unknown, say so and identify missing or unreadable evidence instead of
+reporting an unexplained “step failed.”
+If cloud or hydrated logs are not local, use the documented backend retrieval commands
+and state their availability.
+Do not copy credentials or private prompt payloads into shared reports.
+
+Current status output does not render every failed-item cause, and not every adapter
+captures every native log.
+Treat those absences as limits of the report or capture, rather than evidence that the
+agent had no error. Inspect what is available and record the diagnostic gap for
+correction.
 
 For local laptop runs, sleep can present as a per-item stall.
 Check `metaproc status` first: if it shows the item retrying, let the retry run; if the

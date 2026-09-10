@@ -129,9 +129,15 @@ def test_packaged_default_includes_google_vertex_provider(tmp_path: Path) -> Non
     assert gv["baseUrl"] == "https://{location}-aiplatform.googleapis.com"
 
     model_ids = {m["id"] for m in gv["models"]}
-    # Naked IDs — pi-mono's built-in google-vertex catalog uses unprefixed
-    # model names. Covers gemini-3.5-flash (GA flagship Flash), the
-    # 3.1 preview variants, gemini-3.1-flash-lite (GA), and gemini-3-flash-preview.
+    # Native Vertex uses unprefixed publisher model names.
+    assert {
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash-lite",
+    } <= model_ids
+    pro = next(model for model in gv["models"] if model["id"] == "gemini-3.1-pro-preview")
+    assert pro["contextWindow"] == 1048576
     assert "gemini-3.5-flash" in model_ids
     assert "gemini-3.1-flash-lite" in model_ids
     assert "gemini-3-flash-preview" in model_ids
@@ -140,22 +146,27 @@ def test_packaged_default_includes_google_vertex_provider(tmp_path: Path) -> Non
 
 
 def test_packaged_default_includes_openai_provider(tmp_path: Path) -> None:
-    """openai provider (gpt-5.x + o-series) is available to cloud dispatch without an operator file."""
+    """OpenAI dispatch retains older routes and uses Responses for the new models."""
     with patch.dict("os.environ", {"HOME": str(tmp_path)}, clear=False):
         raw = build_pi_models_json("exampletool")
 
     out = json.loads(raw)
     providers = out["providers"]
-    assert "openai" in providers, "openai provider required for gpt-5.x lanes"
+    assert "openai" in providers
 
     oa = providers["openai"]
     assert oa["api"] == "openai-completions"
     assert oa["baseUrl"] == "https://api.openai.com/v1"
 
-    model_ids = {m["id"] for m in oa["models"]}
-    # gpt-5.5-pro is deliberately absent — it requires /v1/responses and
-    # pi-cli's openai-completions provider cannot dispatch it. It lives
-    # in CODEX_VALID_MODELS instead. See this regression.
+    models = {m["id"]: m for m in oa["models"]}
+    model_ids = set(models)
+    # Preserve existing routes while new models select Responses per model.
+    for model_id in ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"):
+        assert models[model_id]["api"] == "openai-responses"
+        assert models[model_id]["contextWindow"] == 1050000
+        assert models[model_id]["maxTokens"] == 128000
+    assert "api" not in models["gpt-5.5"]
+    # Pro has not undergone a Pi route review; it remains absent here.
     assert {"gpt-5.5", "gpt-5.4-mini", "gpt-5.4-nano"} <= model_ids
     assert "gpt-5.5-pro" not in model_ids
 

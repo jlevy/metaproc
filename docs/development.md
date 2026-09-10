@@ -155,7 +155,8 @@ Adding a new adapter is a five-file pattern:
 See [credential-setup.runbook.md](../src/metaproc/docs/credential-setup.runbook.md) for
 credential resolution and
 [metaproc-design.md §12](../src/metaproc/docs/metaproc-design.md) for the adapter
-contract.
+contract. [Model Catalog Maintenance](project/model-catalog-maintenance.md) defines how
+model IDs, defaults, aliases, lifecycle evidence, and live compatibility are reviewed.
 
 ## Cloud (GCP) Development
 

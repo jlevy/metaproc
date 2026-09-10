@@ -19,6 +19,7 @@ from metaproc.adapters.cli_version import (
     check_cli_version,
 )
 from metaproc.config.env_vars import MetaprocEnv
+from metaproc.config.model_catalog import resolve_model
 from metaproc.settings import (
     GEMINI_DEFAULT_MODEL,
     GEMINI_DEFAULT_NATIVE_SETTINGS,
@@ -217,15 +218,7 @@ def _build_gemini_flags(
 
 def _resolved_gemini_model(merged_config: dict[str, object]) -> str:
     """Return the exact model name the adapter will pass to Gemini CLI."""
-    model = str(merged_config.get("model") or GEMINI_DEFAULT_MODEL)
-    if model in GEMINI_VALID_MODELS:
-        return model
-    log.warning(
-        "gemini-cli: ignoring unknown model name %r; falling back to default %r",
-        model,
-        GEMINI_DEFAULT_MODEL,
-    )
-    return GEMINI_DEFAULT_MODEL
+    return resolve_model("gemini-cli", merged_config.get("model"))
 
 
 class GeminiCliAdapter:

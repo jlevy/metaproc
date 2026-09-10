@@ -27,6 +27,7 @@ from metaproc.adapters.cli_version import (
 )
 from metaproc.cloud.gcp.resolve_token import resolve_gcp_token
 from metaproc.config.env_vars import MetaprocEnv
+from metaproc.config.model_catalog import resolve_model
 from metaproc.config.providers import provider_by_name, providers_with_api_keys
 from metaproc.settings import (
     PI_DEFAULT_MODEL,
@@ -129,17 +130,8 @@ def _build_pi_flags(
         flags.extend(["--provider", PI_DEFAULT_PROVIDER])
 
     # Model
-    model = merged_config.get("model") or PI_DEFAULT_MODEL
-    model_str = str(model)
-    if model_str in PI_VALID_MODELS:
-        flags.extend(["--model", model_str])
-    else:
-        log.warning(
-            "pi-cli: unknown model %r; falling back to %r",
-            model_str,
-            PI_DEFAULT_MODEL,
-        )
-        flags.extend(["--model", PI_DEFAULT_MODEL])
+    model = resolve_model("pi-cli", merged_config.get("model"))
+    flags.extend(["--model", model])
 
     # Thinking level
     thinking = merged_config.get("thinking")

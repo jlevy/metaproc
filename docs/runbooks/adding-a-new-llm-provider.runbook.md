@@ -17,8 +17,11 @@ automatically or the parity tests fail loudly.
   pi-cli to dispatch directly to it (not via Vertex MaaS).
 - You have a new Vertex MaaS publisher slot and want pi-cli to route through it.
 
-If you only need to add a *model* to an existing provider, edit `pi-models.default.json`
-and `pricing.md` — no registry change needed.
+If you only need to add a model to an existing provider, follow
+[Model Catalog Maintenance](../project/model-catalog-maintenance.md).
+Add a custom Pi provider model to `pi-models.default.json`; its accepted ID is derived
+from that packaged catalog.
+Add a native CLI model to `model_catalog.py`. Review pricing separately.
 
 ## The contract
 
@@ -37,6 +40,7 @@ tests.
 | pi-cli auth detection | [pi_cli.py](../../src/metaproc/adapters/pi_cli.py) `check_auth` / `auth_info` | Auto-derived from registry |
 | `auth-check --live` provider inference | [auth_check.py](../../src/metaproc/commands/auth_check.py) `_infer_pi_provider` | Auto-derived from registry |
 | `PI_VALID_PROVIDERS` | [settings.py](../../src/metaproc/settings.py) | Auto-derived from registry |
+| Accepted model IDs | [model_catalog.py](../../src/metaproc/config/model_catalog.py) | Native IDs plus models derived from the packaged Pi catalog |
 | Operator-side pi catalog | `~/.pi/agent/models.json` | Mirror the new block from `pi-models.default.json` (operator setup, not committed) |
 
 ## Step-by-step
@@ -113,8 +117,8 @@ OpenAI-compatible providers:
 > `"!env:DEEPSEEK_API_KEY"` is interpreted as a shell command and fails with
 > `Failed to resolve API key … from shell command: env:…`.
 
-`tests/test_pi_valid_models_catalog.py` is the gate that fails if any model ID here is
-not also in `PI_VALID_MODELS` (settings.py).
+`known_model_ids("pi-cli")` reads this packaged catalog and combines its IDs with native
+Pi aliases. Do not maintain a second Pi model whitelist.
 
 ### 5. Add pricing rows
 
@@ -150,10 +154,11 @@ cp ~/.pi/agent/models.json ~/.pi/agent/models.json.bak.$(date +%Y%m%d)
 
 ### 8. Smoke
 
-Run the full test suite first, then live-check each variant:
+Run the repository verification gate first, then live-check each variant when the
+required credentials and budget are available:
 
 ```sh
-uv --config-file uv.toml run --frozen pytest --ignore=tests/integration
+make verify
 
 uv --config-file uv.toml run --frozen metaproc auth-check
 uv --config-file uv.toml run --frozen metaproc auth-check \
@@ -172,8 +177,8 @@ should report `[+] pi-cli (<model>): live check passed`.
 | Registry entry | Auth-check live false-greens (provider inference returns None, pi-cli falls back to its default) |
 | Env var declaration | `KeyError: <NAME>_API_KEY` at import; tests fail loudly |
 | `.env.example` regen | `tests/test_env_template.py::test_template_matches_checked_in_dot_env_example` fails |
-| Catalog JSON | `tests/test_pi_valid_models_catalog.py` passes (model IDs match) but pi-cli has no provider block to dispatch through |
-| `PI_VALID_MODELS` (only triggered if you bypass the registry) | Adapter silently falls back to `PI_DEFAULT_MODEL=sonnet` and retry-storms |
+| Catalog JSON | Pi cannot resolve the provider route, and explicit model validation rejects the ID |
+| Native model catalog | Explicit native CLI selection is rejected as unknown |
 | Pricing rows | `usage.md` reports show `unknown model` and `actual_cost = 0` for every run on the new model |
 | Operator pi config | Local `pi --list-models <name>` does not list the provider; `auth-check --live` errors at `_pi_validate_registration` |
 

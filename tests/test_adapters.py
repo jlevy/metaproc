@@ -798,10 +798,9 @@ class TestBuildPiFlags:
         idx = flags.index("--provider")
         assert flags[idx + 1] == "anthropic"
 
-    def test_unknown_model_falls_back(self):
-        flags = _build_pi_flags({"model": "unknown-model"}, {})
-        idx = flags.index("--model")
-        assert flags[idx + 1] == "sonnet"
+    def test_unknown_model_raises(self) -> None:
+        with pytest.raises(ValueError, match="unknown pi-cli model 'unknown-model'"):
+            _build_pi_flags({"model": "unknown-model"}, {})
 
     def test_api_key_is_not_passed_through_argv(self):
         flags = _build_pi_flags({"api_key": "ya29.test-token-123"}, {})

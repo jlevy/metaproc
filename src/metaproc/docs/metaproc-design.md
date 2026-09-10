@@ -1737,10 +1737,10 @@ Registered adapters (in `ADAPTER_REGISTRY`):
 - `codex-cli` -- invokes
   `codex <top-level-flags> exec --json <exec-flags> <prompt_text>` (reads prompt file
   inline; no `@<file>` surrogate, mirrors gemini’s pattern).
-  Supports model (gpt-5.x and o-series via `CODEX_VALID_MODELS`), effort (via
-  `-c model_reasoning_effort=`), sandbox (read-only / workspace-write /
-  danger-full-access), approval_policy (untrusted / on-failure / on-request / never),
-  permission_mode (bypassPermissions maps to
+  Supports model (reviewed IDs in `config/model_catalog.py`, exposed through
+  `CODEX_VALID_MODELS`), effort (via `-c model_reasoning_effort=`), sandbox (read-only /
+  workspace-write / danger-full-access), approval_policy (untrusted / on-failure /
+  on-request / never), permission_mode (bypassPermissions maps to
   `--dangerously-bypass-approvals-and-sandbox`; the other three map to explicit sandbox
   \+ approval pairs; the adapter never emits `--full-auto`), tools (WebSearch/WebFetch →
   `--search`; Bash/Read/Write/Edit/Grep/Glob satisfied by sandbox; unknown tools
