@@ -17,6 +17,8 @@ import subprocess
 from datetime import date, timedelta
 from pathlib import Path
 
+import pytest
+
 from devtools.check_doc_dates import check_doc_dates, last_substantive_commit
 
 
@@ -34,15 +36,19 @@ def _repo(tmp_path: Path) -> tuple[Path, Path]:
     return tmp_path, docs
 
 
-def _commit(repo: Path, when: date, message: str) -> None:
-    stamp = f"{when.isoformat()}T12:00:00"
+def _commit(repo: Path, when: date, message: str, *, author_stamp: str | None = None) -> None:
+    stamp = f"{when.isoformat()}T12:00:00+00:00"
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
     subprocess.run(
         ["git", "commit", "-q", "-m", message],
         cwd=repo,
         check=True,
         capture_output=True,
-        env={**os.environ, "GIT_AUTHOR_DATE": stamp, "GIT_COMMITTER_DATE": stamp},
+        env={
+            **os.environ,
+            "GIT_AUTHOR_DATE": author_stamp or stamp,
+            "GIT_COMMITTER_DATE": stamp,
+        },
     )
 
 
@@ -55,6 +61,30 @@ def test_a_current_date_passes(tmp_path: Path) -> None:
     (docs / "arch-x.md").write_text(f"# X\n\n**Date:** (last updated {TODAY})\n", "utf-8")
     _commit(repo, TODAY, "add doc")
     assert check_doc_dates(docs) == []
+
+
+@pytest.mark.parametrize(
+    ("author_stamp", "claimed", "stale"),
+    [
+        ("2026-09-11T01:59:40+08:00", "2026-09-10", False),
+        ("2026-09-09T23:59:40-08:00", "2026-09-09", True),
+    ],
+)
+def test_author_timezone_does_not_change_freshness(
+    tmp_path: Path, author_stamp: str, claimed: str, stale: bool
+) -> None:
+    repo, docs = _repo(tmp_path)
+    doc = docs / "arch-x.md"
+    doc.write_text(f"# X\n\n**Date:** (last updated {claimed})\n", "utf-8")
+    _commit(repo, date(2026, 9, 10), "add doc", author_stamp=author_stamp)
+
+    latest = last_substantive_commit(doc)
+    assert latest is not None
+    assert latest[1] == date(2026, 9, 10)
+    findings = check_doc_dates(docs)
+    assert bool(findings) is stale
+    if stale:
+        assert "changed on 2026-09-10" in findings[0]
 
 
 def test_a_stale_date_is_reported(tmp_path: Path) -> None:

@@ -13,6 +13,8 @@ What counts as a real edit: a non-merge commit that changes something other than
 whitespace. Reflows from ``make format`` are ignored, because Flowmark rewraps
 paragraphs across the whole tree and would otherwise demand a date bump on every
 document at once. Renames are followed, so moving a document does not reset its history.
+Dates use UTC, matching the documented header convention. Converting the timestamp
+before taking its date keeps author timezones from changing the freshness result.
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,15 +57,14 @@ def _normalized(text: str) -> str:
 
 
 def _history(root: Path, relative: str) -> list[tuple[str, date, str]]:
-    """Return (sha, date, path-at-that-commit) newest first, following renames."""
+    """Return (sha, UTC date, path-at-that-commit) newest first, following renames."""
     log = _git(
         root,
         "log",
         "--follow",
         "--no-merges",
-        "--format=%x1e%H %ad",
+        "--format=%x1e%H %aI",
         "--name-only",
-        "--date=short",
         "--",
         relative,
     )
@@ -73,7 +74,8 @@ def _history(root: Path, relative: str) -> list[tuple[str, date, str]]:
         if len(lines) < 2:
             continue
         sha, _, datestr = lines[0].partition(" ")
-        records.append((sha, date.fromisoformat(datestr.strip()), lines[-1].strip()))
+        authored = datetime.fromisoformat(datestr.strip()).astimezone(UTC).date()
+        records.append((sha, authored, lines[-1].strip()))
     return records
 
 
