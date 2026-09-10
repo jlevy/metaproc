@@ -7,6 +7,121 @@ development series.
 
 ## [Unreleased][unreleased]
 
+## [0.4.1][] - 2026-09-10
+
+### Fixed
+
+- **An explicit model selection is preserved, or refused — never quietly replaced.**
+  Every adapter previously validated the configured model against its own allowlist and,
+  on a miss, logged a warning and passed its default instead, so a step pinned to one
+  model ran on another and the run’s cost and quality were attributed to a name that
+  never served it. `claude-code-cli`, `codex-cli`, `gemini-cli`, and `pi-cli` now route
+  selection through one reviewed catalog: an omitted selection takes the adapter
+  default, and an explicit one is either passed through exactly as written or rejected
+  with an error naming the adapter and the identifier.
+  `metaproc auth check` reports such a rejection as a failed check line rather than
+  aborting the probe.
+
+- **RunPool controller, health, and quota evidence survives the typed reader.** The pool
+  event log already recorded the concurrency controller’s memory, provider, and operator
+  ceilings, its effective target and bottleneck, active RSS and log-byte totals,
+  periodic `health_sample` records, and the `quota_pause_started` / `quota_pause_tick` /
+  `quota_pause_resumed` sequence, but the typed event models narrowed the extra fields
+  away on read and had no model at all for the health and quota-pause records.
+  A consumer reading the typed stream saw a thinner run than the one on disk and could
+  not distinguish a pool waiting on a provider quota from one that had gone quiet.
+  The models now retain every field the logger emits.
+
+- **Cleanup and admission accounting survive a bookkeeping failure.** An exception while
+  recording a started child no longer skips the cleanup obligations a poll failure
+  already honored, so admission stays held until the child is reaped rather than being
+  released under a running process.
+  A failure writing `host_slot_acquired` releases the lease the caller never received
+  instead of leaking a slot.
+  A shutdown that fails while the pool is unwinding a caller’s exception now raises the
+  original error with the shutdown failure attached as a note rather than replacing it.
+  Quota-pause timers are cancelled and drained during shutdown, and the event and health
+  loggers are closed even when the shutdown record fails to write.
+
+### Added
+
+- **A reviewed model catalog with dated evidence.** `metaproc.config.model_catalog`
+  centralizes accepted identifiers, per-adapter defaults, the source URLs each entry was
+  reviewed against, a review date and interval, and lifecycle notes recording retirement
+  dates and account-dependent routes.
+  No adapter default changed and nothing was removed from any accepted set.
+  `claude-code-cli` gains `claude-fable-5-1`, `claude-fable-5`, `claude-opus-5`,
+  `claude-sonnet-5`, `claude-opus-4-8`, and the `fable` alias; `codex-cli` gains
+  `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.6`, and
+  `gpt-5.3-codex-spark`; `gemini-cli` gains `gemini-3.5-flash-lite`; and `pi-cli` gains
+  the new Anthropic and OpenAI identifiers plus Gemini 3.8, 3.7, 3.6 Flash and 3.5
+  Flash-Lite. `claude-fable-5-1` is accepted by `claude-code-cli` only.
+  Acceptance means Metaproc preserves an identifier, not that an account, client, or API
+  can serve it.
+
+- **Pi model acceptance derives from the packaged provider catalog.** Accepted `pi-cli`
+  identifiers now come from `pi-models.default.json` plus a small retained set of native
+  selections, so adding a provider entry no longer requires a second, separately
+  maintained allowlist edit that could silently disagree with it.
+  Vertex MaaS entries resolve under both publisher-qualified and short IDs.
+
+- **Four more Codex reasoning-effort values.** `none`, `xhigh`, `max`, and `ultra` are
+  the remaining named values in the pinned codex-cli 0.147.0 parser and join `minimal`,
+  `low`, `medium`, and `high`. Accepting the syntax does not mean every model supports
+  every effort.
+
+- **Pressure checks carry their hold hysteresis.** Every `pressure_check` record now
+  includes `consecutive_normal` and `consecutive_elevated`.
+
+- **Refreshed provider data.** `pi-models.default.json` adds the Gemini Vertex 3.8, 3.7,
+  3.6 Flash and 3.5 Flash-Lite entries and the GPT-6 Astra and GPT-5.6 Sol, Terra, and
+  Luna entries, the latter using the per-model `openai-responses` override the pinned Pi
+  client supports. Vertex Gemini entries accepting image input are marked as such, and
+  the `gemini-3.1-pro-preview` context window is corrected to 1,048,576 tokens.
+  Entries whose exact identity this review could not establish in primary documentation
+  say so. `pricing.md` is refreshed against the same sources.
+
+### Changed
+
+- **An unknown model name now fails the step instead of running the default.** A process
+  spec, execution profile, or adapter map naming an identifier Metaproc does not
+  recognize raises `unknown <adapter> model <name>` at command construction.
+  Such a run was already not doing what its spec said; the failure is the disclosure.
+  Check pinned model names against the accepted sets before upgrading, and extend
+  `metaproc.config.model_catalog` for an identifier it does not yet carry.
+  An empty-string model is treated as an explicit selection and rejected on the same
+  grounds; omit the field to take the default.
+
+- **The Agent Skill’s debugging guidance is reversed where it was wrong.** The skill
+  previously told an agent never to inspect a run with ad hoc shell commands over the
+  run directory, `.state/`, or `.logs/`. That holds for run state and lifecycle and not
+  for debugging, since some captures merge stdout and stderr or filter native events, so
+  a rollup or extracted trace can omit evidence only the captured log holds.
+  The skill keeps the strong rule for state and lifecycle while directing an agent to
+  read the relevant attempt’s captured output and native transcript directly when
+  diagnosing a failure, report the cause with its evidence location, and say what is
+  missing when the logs do not contain it.
+  The committed `.agents/` and `.claude/` copies are regenerated.
+
+### Documentation
+
+- `metaproc help operator` gains **Direct Agent Debugging**, **Two Concurrent Runs on
+  One Host** (a shared disk-backed slot gate, each run bringing its own limit, admission
+  failing open, and `METAPROC_HOST_MAX_LOCAL_AGENTS` composing by minimum so it can only
+  lower a cap), **Reading Pool Health**, **The Subprocess Count Is a Display Estimate**,
+  and **A Green Run Is Not a Reviewed Run**.
+- `metaproc help design` gains §13 “Cause Preservation at Aggregation Boundaries”: no
+  aggregation boundary may discard a cause it received.
+  Three current gaps are named so they are not rediscovered as novel.
+  §11 now documents the fan-in manifest’s actual emitted field set, which omits the
+  artifact path and rendered message a consumer may have assumed were present.
+- The runpool and execution documents are aligned with the admission, pressure, retry,
+  artifact, and cause-preservation contracts as they behave, and the scalar-admission
+  description now matches where that gate sits for mapped as well as scalar leaves.
+- The shipped-document freshness gate compares Git author timestamps in UTC, so a commit
+  authored west of UTC late in the day no longer fails a document whose header is
+  correct. The UTC header convention is written down alongside the check.
+
 ## [0.4.0][] - 2026-09-09
 
 ### Documentation
@@ -664,7 +779,8 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
   implicitly. Schemas consumed through Metaproc must be self-contained: use local `$defs`
   references or a registered Pydantic model instead of network-resolved references.
 
-[unreleased]: https://github.com/jlevy/metaproc/compare/v0.4.0...HEAD
+[unreleased]: https://github.com/jlevy/metaproc/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/jlevy/metaproc/releases/tag/v0.4.1
 [0.4.0]: https://github.com/jlevy/metaproc/releases/tag/v0.4.0
 [0.3.0]: https://github.com/jlevy/metaproc/releases/tag/v0.3.0
 [0.2.1]: https://github.com/jlevy/metaproc/releases/tag/v0.2.1
