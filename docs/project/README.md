@@ -71,8 +71,10 @@ Two rules the shortcut does not know about:
    dead for everyone reading the installed package.
    `devtools/check_shipped_links.py` enforces this.
 
-Bump the **last updated** date in the document’s header when you make non-trivial
-changes.
+Bump the **last updated** date in the document’s header to the UTC date when you make
+non-trivial changes.
+The freshness check converts commit timestamps to UTC so an author’s timezone does not
+change the result after a squash merge.
 
 ## Architecture Docs
 
