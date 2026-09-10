@@ -546,6 +546,85 @@ def test_nested_scope_uses_global_force_without_reusing_root_skip(
     invalidate.assert_called_once()
 
 
+def _forked_process() -> tuple[ProcessSpec, Plan]:
+    """Two independent branches meeting at a publisher, as a mapped per-item lane does.
+
+    Levels are ``[fetch, stage]``, ``[scan]``, ``[publish]``. Only ``publish`` descends
+    from ``fetch``, so a ``fetch`` failure that reaches ``scan`` reaches it through the
+    scheduler rather than through an edge.
+    """
+
+    steps: list[tuple[str, list[str]]] = [
+        ("fetch", []),
+        ("stage", []),
+        ("scan", ["stage"]),
+        ("publish", ["scan", "fetch"]),
+    ]
+    return (
+        ProcessSpec(
+            name="child",
+            steps=[
+                ProcessStep(id=step_id, mode="code", command="true", needs=needs)
+                for step_id, needs in steps
+            ],
+        ),
+        Plan(
+            generated_at="2026-08-24T00:00:00Z",
+            process="child",
+            params={},
+            steps=[
+                ResolvedStep(step_id=step_id, mode="code", command="true", needs=needs)
+                for step_id, needs in steps
+            ],
+        ),
+    )
+
+
+def test_nested_scope_runs_independent_branches_past_a_step_failure(tmp_path: Path) -> None:
+    """A scope walks its own DAG on failure, as the root does, and still reports failed."""
+
+    spec, plan = _forked_process()
+
+    async def execute_step(**kwargs: Any) -> bool:
+        return cast(ResolvedStep, kwargs["target"]).step_id != "fetch"
+
+    execute = AsyncMock(side_effect=execute_step)
+
+    async def exercise() -> None:
+        context = RunExecutionContext.create(max_concurrency=1)
+        try:
+            with (
+                patch("metaproc.commands.run_process._execute_step", execute),
+                pytest.raises(CLIError, match="Process completed with failures: fetch"),
+            ):
+                await _orchestrate(
+                    spec=spec,
+                    plan=plan,
+                    variables={},
+                    process_path=tmp_path / "child.process.md",
+                    process_dir=tmp_path,
+                    run_dir=tmp_path / "run",
+                    run_id="test/run-1/child",
+                    scope_path=("child",),
+                    execution_context=context,
+                    out=_Out(),
+                    events=MagicMock(),
+                )
+        finally:
+            context.close()
+
+    asyncio.run(exercise())
+
+    executed = {
+        cast(ResolvedStep, call.kwargs["target"]).step_id for call in execute.await_args_list
+    }
+    assert executed == {"fetch", "stage", "scan"}
+    status = read_yaml_file(tmp_path / "run" / ".state" / "process-status.yaml")
+    assert status["steps"]["scan"]["state"] == "completed"
+    assert status["steps"]["publish"]["state"] == "blocked"
+    assert status["state"] == "failed"
+
+
 def test_nested_scope_uses_continue_on_step_failure_policy(tmp_path: Path) -> None:
     spec, plan = _one_step_process()
     execute = AsyncMock(return_value=False)
@@ -579,6 +658,49 @@ def test_nested_scope_uses_continue_on_step_failure_policy(tmp_path: Path) -> No
 
     asyncio.run(exercise())
     execute.assert_awaited_once()
+
+
+def test_scope_fail_fast_message_states_policy_not_a_launch_flag(tmp_path: Path) -> None:
+    """A scope stops on a default, so the message reports settings, not operator flags.
+
+    ``continue_on_step_failure`` is off here because nothing turned it on. Naming a
+    command-line flag as the cause would assert a launch that never happened, and a
+    reader who believes it goes looking for the wrong thing.
+    """
+
+    spec, plan = _one_step_process()
+    execute = AsyncMock(return_value=False)
+
+    async def exercise() -> str:
+        context = RunExecutionContext.create(max_concurrency=1, continue_on_error=False)
+        try:
+            with (
+                patch("metaproc.commands.run_process._execute_step", execute),
+                pytest.raises(CLIError) as raised,
+            ):
+                await _orchestrate(
+                    spec=spec,
+                    plan=plan,
+                    variables={},
+                    process_path=tmp_path / "child.process.md",
+                    process_dir=tmp_path,
+                    run_dir=tmp_path / "run",
+                    run_id="test/run-1/child",
+                    scope_path=("child",),
+                    execution_context=context,
+                    out=_Out(),
+                    events=MagicMock(),
+                )
+        finally:
+            context.close()
+        return str(raised.value)
+
+    message = asyncio.run(exercise())
+    assert (
+        "Step 'leaf' failed (fail-fast: continue-on-error is off and "
+        "continue-on-step-failure is off for this scope)." in message
+    )
+    assert "--" not in message
 
 
 def test_sync_executor_is_independent_of_leaf_ceiling() -> None:

@@ -1777,6 +1777,41 @@ def _with_declared_retry(
     )
 
 
+def _item_task_is_done(
+    *,
+    target: ResolvedStep,
+    step_def: ProcessStep,
+    item_vars: dict[str, str],
+    run_dir: Path,
+    run_id: str,
+) -> bool:
+    """Whether one fan-out item of one step is already satisfied.
+
+    Reuse is earned by a completed task record *and* a valid declared output, not by
+    either alone: a status file whose artifact has since been removed describes work that
+    no longer exists. The status record is checked against this run, step, and item
+    before it is trusted, so state addressed elsewhere cannot authorize a skip.
+    """
+    state_dir = compute_task_state_dir(run_dir, step_def, item_vars)
+    prior = read_status_at(state_dir)
+    if prior is None or prior.state not in ("completed", "cached"):
+        return False
+    validate_task_status_identity_at(
+        state_dir,
+        prior,
+        run_id=run_id,
+        step_id=target.step_id,
+        item_key=state_dir.name,
+    )
+    outputs = target.outputs
+    artifact_dir = compute_item_dir(outputs, item_vars)
+    if outputs and artifact_dir is not None:
+        output_errors = validate_item_outputs(artifact_dir, outputs, variables=item_vars)
+        if output_errors:
+            return False
+    return True
+
+
 def _discover_chain_items(
     *,
     target: ResolvedStep,
@@ -1834,6 +1869,11 @@ async def _execute_code_fan_out_step(
         run_dir=run_dir,
         run_id=run_id,
     )
+    # The run-plan roster is the full source-authorized set. Execution is not: discovery
+    # returns every non-terminal item, so an item that completed in this run is still in
+    # the list. The aligned-chain executor decides reuse per item through its `is_done`
+    # guard; this one has no such hook on `run_fan_out`, so it filters here instead.
+    # Without this a bare resume re-invokes every completed handler.
     _refresh_run_plan_item_keys(
         run_dir,
         target=target,
@@ -1841,11 +1881,26 @@ async def _execute_code_fan_out_step(
         variables=variables,
         item_contexts=item_contexts,
     )
+    discovered_count = len(item_contexts)
+    item_contexts = [
+        item_context
+        for item_context in item_contexts
+        if not _item_task_is_done(
+            target=target,
+            step_def=step_def,
+            item_vars={**variables, **item_context},
+            run_dir=run_dir,
+            run_id=run_id,
+        )
+    ]
+    reused_count = discovered_count - len(item_contexts)
     if not item_contexts:
-        out.progress(f"  Step '{step_id}': no actionable items (all completed)")
+        out.progress(f"  Step '{step_id}': no actionable items ({reused_count} already complete)")
         return True
 
-    out.progress(f"  Step '{step_id}': {len(item_contexts)} actionable items")
+    out.progress(
+        f"  Step '{step_id}': {len(item_contexts)} actionable items ({reused_count} reused)"
+    )
 
     async def _invoke(_step_id: str, item_vars: dict[str, str]) -> bool:
         return await _execute_code_step(
@@ -1934,24 +1989,13 @@ async def _execute_item_aligned_chain(
         )
 
     def _is_done(step_id: str, item_vars: dict[str, str]) -> bool:
-        state_dir = compute_task_state_dir(run_dir, step_def_map[step_id], item_vars)
-        prior = read_status_at(state_dir)
-        if prior is None or prior.state not in ("completed", "cached"):
-            return False
-        validate_task_status_identity_at(
-            state_dir,
-            prior,
+        return _item_task_is_done(
+            target=step_map[step_id],
+            step_def=step_def_map[step_id],
+            item_vars=item_vars,
+            run_dir=run_dir,
             run_id=run_id,
-            step_id=step_id,
-            item_key=state_dir.name,
         )
-        outputs = step_map[step_id].outputs
-        artifact_dir = compute_item_dir(outputs, item_vars)
-        if outputs and artifact_dir is not None:
-            output_errors = validate_item_outputs(artifact_dir, outputs, variables=item_vars)
-            if output_errors:
-                return False
-        return True
 
     def _step_concurrency(step_id: str) -> int | None:
         fan_out = step_map[step_id].fan_out
@@ -4079,10 +4123,16 @@ async def _orchestrate(
     max_concurrency = execution_context.max_concurrency
     skip_steps = execution_context.skip_steps if not scope_path else frozenset()
     force = execution_context.force
-    continue_on_error = (
-        execution_context.continue_on_error
-        if not scope_path
-        else execution_context.continue_on_step_failure
+    # A scope is a DAG, not a step. Its independent branches answer to the same policy
+    # as the root walk: a failure blocks its true dependents through `propagate_failure`
+    # and leaves the rest of the graph to run, and the scope still reports failed at the
+    # end. Abandoning the level walk on the first failure would discard sibling work that
+    # never depended on the failure, which in a mapped per-item scope means one step
+    # losing an unrelated branch's output for the whole item.
+    # `--continue-on-step-failure` stays additive, so `--no-continue-on-error` still
+    # fails the root fast while keeping scopes going.
+    continue_on_error = execution_context.continue_on_error or (
+        bool(scope_path) and execution_context.continue_on_step_failure
     )
     stale_count = reconcile_stale_running(run_dir)
     if stale_count:
@@ -4426,8 +4476,19 @@ async def _orchestrate(
                     )
                     detail = step_states[step_id].get("error")
                     detail_text = f" Error: {detail}." if detail else ""
+                    # State the policy in force, not how it got there: the context
+                    # carries plain booleans, so a value set on the command line and
+                    # one left at its default are indistinguishable here. A scope
+                    # additionally answers to continue-on-step-failure, which is off
+                    # unless the launch turned it on.
+                    fail_fast_reason = (
+                        "continue-on-error is off and continue-on-step-failure "
+                        "is off for this scope"
+                        if scope_path
+                        else "continue-on-error is off"
+                    )
                     raise CLIError(
-                        f"Step '{step_id}' failed (--no-continue-on-error set)."
+                        f"Step '{step_id}' failed (fail-fast: {fail_fast_reason})."
                         f"{detail_text} Blocked: "
                         f"{', '.join(actually_blocked) if actually_blocked else 'none'}"
                     )
@@ -4565,18 +4626,19 @@ def run_process_command(
         help=(
             "Continue executing independent branches on per-step failure "
             "(default: True; use --no-continue-on-error to fail-fast on first "
-            "step failure). Per-item isolation within fan-out steps is always on."
+            "step failure). Applies to composite scopes as it does to the root. "
+            "Per-item isolation within fan-out steps is always on."
         ),
     ),
     continue_on_step_failure: bool = typer.Option(
         False,
         "--continue-on-step-failure",
         help=(
-            "Inside a composite step, if one sub-step has "
-            "a per-item permanent_failure, continue launching the NEXT sub-step "
-            "for the OK items rather than aborting the whole composite. Default "
-            "False (preserves current behavior). Use for multi-item fan-out "
-            "where one bad item should not take out the entire downstream pipeline."
+            "With --no-continue-on-error, keep composite scopes walking their own "
+            "DAG on a sub-step failure while the root still fails fast. Only the "
+            "true dependents of the failed sub-step are blocked, and the scope "
+            "still reports failed. No effect under the default --continue-on-error, "
+            "which already governs scopes."
         ),
     ),
     cloud: bool = typer.Option(

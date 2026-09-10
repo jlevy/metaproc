@@ -7,6 +7,8 @@ development series.
 
 ## [Unreleased][unreleased]
 
+## [0.4.0][] - 2026-09-09
+
 ### Documentation
 
 - The core documentation set now ships inside the package.
@@ -48,7 +50,68 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
   Unsupported mapped-worker topology is rejected before any DAG step or cloud dispatch
   starts.
 
+- **Gemini 3.7 and 3.8 Flash**: `gemini-3.7-flash` and `gemini-3.8-flash` join the
+  validated model set, and a `gemini-flash-38` execution profile ships beside the
+  existing 3.6 one. The 3.6 profile still pins `gemini-3.6-flash`, so a profile name that
+  says 36 keeps meaning 3.6, though its lane sizing moved with the other gemini-cli
+  profiles. All three models sit in Google’s short-term-availability class, which retires
+  a model 45 days after its replacement ships; 3.8 is the newest and therefore the
+  longest-lived of the three.
+
 ### Fixed
+
+- **A bare resume no longer re-invokes completed code fan-out items**: a `mode: code`
+  step with `for_each` that is not part of an item-aligned chain received every
+  non-terminal item from discovery, completed ones included, and invoked all of them.
+  Resuming such a step with the same `RUN_ID` therefore re-ran every handler that had
+  already succeeded and recorded a fresh attempt for each, and an item already running
+  under a live sibling could be invoked concurrently.
+  The step now reuses an item whose task record is `completed` or `cached` and whose
+  declared output still validates, which is the same guard the aligned-chain executor
+  already applied per item; both paths now share one implementation.
+  Reuse is earned by a valid artifact rather than by a status file alone, so an item
+  whose output has since been removed still reruns, and `--force` is unaffected.
+  The step’s progress line now reports reused items instead of counting them as
+  actionable.
+
+- **A Gemini step is answered by the model it asked for**: gemini-cli rewrites any model
+  id ending in `flash` that it does not recognize to its own default before the request
+  leaves the process, and under Vertex authentication that default is
+  `gemini-3.5-flash`. A step pinned to `gemini-3.6-flash` was answered by 3.5 with no
+  error and no warning, and the CLI’s own `stats.models` named the substitute.
+  Two changes close it.
+  The adapter now asserts gemini-cli’s dynamic model-resolution setting beneath its
+  native-settings defaults, which passes an unrecognized id through untouched, so the
+  requested model reaches the provider.
+  And a successful agent result whose terminal `stats.models` omits the requested model
+  is now rejected for both scalar and fan-out agent steps, before valid-output rescue,
+  so a substitution that happens anyway fails loudly instead of being recorded as a
+  success by the wrong model.
+  This is upstream `google-gemini/gemini-cli#28859`, unfixed at 0.55.1 and later, so
+  upgrading the CLI is not a way out.
+
+- **`metaproc browse` renders Metaproc kinds under browser SDK 0.5**: the Markdown and
+  agent-log Metabrowser kinds are now loaded explicitly before Metaproc registers views
+  that embed their renderers.
+  SDK 0.5 stopped eagerly loading renderer namespaces for unrelated kinds, so a view
+  that borrows one had to ask for it.
+
+- **A refused launch reports every class of problem at once**: `run-process`,
+  `run-step`, `plan`, and `deps` now collect unresolved template placeholders, unset
+  operator parameters, missing input files, and unusable execution profiles together and
+  report them as one grouped message, instead of raising on the first non-empty class.
+  Bringing up a cohort took four launches to learn about four problems, and `--dry-run`
+  reported the same single class.
+  Process-input errors are additionally tagged as a parameter or a file, because “pass a
+  `--var`” and “produce a file” are different fixes.
+  Per-item messages are unchanged and a launch with one class of problem reads exactly
+  as it did.
+
+- **A fail-fast stop no longer names a flag nobody passed**: a step failure reported
+  `Step '<id>' failed (--no-continue-on-error set)` unconditionally, including when the
+  policy came from a default.
+  The message now states the policy in force rather than asserting how it was set, and
+  names `continue-on-step-failure` as well when a scope is what stopped.
 
 - **Gemini no longer scans its whole project history at startup**: Gemini CLI runs
   session-retention cleanup as an un-awaited background task during startup.
@@ -58,13 +121,32 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
   more for the same short prompt, which is enough to destabilize a host running several
   agents at once. The adapter now ships `general.sessionRetention.enabled: false` in its
   native settings, which makes cleanup return before it enumerates anything.
-  Gemini native settings are also merged rather than replaced, so a profile-supplied
-  `native_settings` block cannot silently drop a host-safety default it never mentioned.
-  Two consequences worth knowing: Gemini no longer prunes its own `chats/` and
-  `tool-outputs/` directories, so bounded retention becomes an external operation; and
-  `native_settings: null` no longer suppresses settings injection entirely, because the
-  retention guard is re-asserted beneath the defaults.
+  The guard is Gemini-specific: matched probes of Claude Code, Codex CLI, and Pi under
+  the same conditions found no comparable startup cost, so no equivalent setting ships
+  for those adapters. Gemini native settings are also merged rather than replaced, so a
+  profile-supplied `native_settings` block cannot silently drop a host-safety default it
+  never mentioned. Two consequences worth knowing: Gemini no longer prunes its own
+  `chats/` and `tool-outputs/` directories, so bounded retention becomes an external
+  operation; and `native_settings: null` no longer suppresses settings injection
+  entirely, because the retention guard is re-asserted beneath the defaults.
   An operator who deliberately sets the key still wins.
+
+- **Gemini steps can read files excluded by ignore rules**: the adapter now ships
+  `context.fileFiltering.respectGitIgnore: false` in its Gemini native settings, so the
+  agent’s own file tools read ignored files anywhere in the workspace rather than only
+  declared runtime inputs.
+  Treat the workspace, including files such as `.env`, as readable by a Gemini step, and
+  keep material an agent should not read out of the process directory rather than
+  relying on an ignore rule.
+  gemini-cli steps only; an operator can restore the previous behavior through
+  `native_settings`.
+
+- **The Pi adapter honors `no_session_persistence` instead of ignoring it**: `pi-cli`
+  received `--no-session` unconditionally, so the key was accepted by the allow-list and
+  never consulted, and a spec asking for session persistence was silently overridden.
+  The default is unchanged and still stateless; only an explicit `false` now keeps
+  sessions, matching how the Claude adapter already treats the same key.
+  No built-in Pi profile sets `false`, so no shipped profile changes behavior.
 
 - **The Gemini adapter no longer accepts `no_session_persistence`**: the key was in the
   allow-list but was never read, so a process spec could ask for session isolation and
@@ -230,6 +312,37 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
 
 ### Changed
 
+- **A scope answers to the same failure policy as the root**: `_orchestrate` walks
+  topological levels, and on a step failure inside a scope it raised immediately instead
+  of continuing the walk, so independent branches in that scope were never considered.
+  In a mapped per-item scope, where each item is its own subgraph, one step failing
+  discarded a sibling branch’s output for that item even though the sibling declared no
+  dependency on it; the sibling was left `pending`, having never reached the blocked
+  filter. A scope now continues past a failure exactly as the root does, blocking the
+  failure’s true transitive dependents and leaving the rest to run, and still reports
+  failed at the end. `--continue-on-step-failure` stays additive, so
+  `--no-continue-on-error` still fails the root fast while scopes keep walking; only the
+  default pair changes behavior.
+  Two consequences: a failing scope now spends more, not less, because the independent
+  branches it used to abandon will run; and steps that previously stayed `pending` after
+  a sibling’s failure are now `completed` or `blocked`.
+
+- **A refused launch and a failed run have different exit codes**: `run-process` and
+  `run-step` now exit 2 when a launch is refused before any step runs: unresolved
+  placeholders or failed process-input validation.
+  This matches the documented validation exit code that `plan` and `deps` already used
+  for the same two checks.
+  A completed run still exits 0 and a step failure still exits 1. A retry script that
+  treated any nonzero exit as a run failure will now see 2 for an invocation that never
+  started.
+
+- **Gemini lanes are sized from measured memory**: the shipped Gemini execution profiles
+  estimate 250 MB per process with a 0.5 initial memory budget fraction, replacing the
+  500 MB and 0.25 clean-state figures.
+  With session retention off, a Gemini process measures 113 MB mean across a run tree
+  and 187 MB on its own; the old estimate held cohorts at 7 of 20 lanes.
+  Claude profiles are unchanged.
+
 - **Agent CLI adapter module names**: the four source modules now follow one
   executable-based convention: `claude_cli.py`, `codex_cli.py`, `gemini_cli.py`, and
   `pi_cli.py`. Adapter type strings and adapter class names are unchanged.
@@ -245,7 +358,7 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
   14-day package cool-off at the time of review.
 
 - **Metabrowser 0.9 and browser plugin SDK 0.5**: the optional `browser` extra now
-  requires `metabrowser==0.9.0`, and the bundled Metabrowser plugin targets browser SDK
+  requires `metabrowser==0.9.1`, and the bundled Metabrowser plugin targets browser SDK
   0.5 instead of 0.1. Plugin discovery refuses a manifest declaring the wrong SDK, so
   the two move together.
   Three contract changes were carried: navigation goes through
@@ -551,7 +664,8 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
   implicitly. Schemas consumed through Metaproc must be self-contained: use local `$defs`
   references or a registered Pydantic model instead of network-resolved references.
 
-[unreleased]: https://github.com/jlevy/metaproc/compare/v0.3.0...HEAD
+[unreleased]: https://github.com/jlevy/metaproc/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/jlevy/metaproc/releases/tag/v0.4.0
 [0.3.0]: https://github.com/jlevy/metaproc/releases/tag/v0.3.0
 [0.2.1]: https://github.com/jlevy/metaproc/releases/tag/v0.2.1
 [0.2.0]: https://github.com/jlevy/metaproc/releases/tag/v0.2.0

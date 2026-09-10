@@ -94,7 +94,7 @@ Available via `metaproc help <topic>`, in recommended reading order:
 - **cloud-dispatch** (~1.5k words): Preparing, submitting, monitoring, and recovering GCP Batch workloads.
 - **arch-auth** (~8.9k words): Architecture: credential pools, adapter auth modes, and secret handling.
 - **arch-cloud** (~5.5k words): Architecture: GCP Batch dispatch, orchestrator and worker placement.
-- **arch-runpool** (~3.8k words): Architecture: local process manager, adaptive concurrency, memory pressure.
+- **arch-runpool** (~4.2k words): Architecture: local process manager, adaptive concurrency, memory pressure.
 - **arch-harness** (~2.9k words): Architecture: the Claude Code adapter harness and its wire format.
 - **arch-execution** (~2.6k words): Architecture: the executable reference model for scheduling, as implemented.
 - **arch-testing** (~1.1k words): Architecture: the test tiers, when to use each, and per-adapter credentials.

@@ -85,7 +85,6 @@ dev = [
     "basedpyright>=1.39.9",
     "funlog>=0.2.1",
     "httpx>=0.28.1",
-    "httpx2>=2.5.0",
 ]
 
 [project.scripts]

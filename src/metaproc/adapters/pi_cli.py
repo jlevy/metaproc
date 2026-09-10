@@ -273,7 +273,16 @@ class PiCliAdapter:
         _pi_version_drift()
         flags = _build_pi_flags(merged_config, variables)
         pi_binary = _resolve_pi_binary()
-        return [pi_binary, "--mode", "json", "-p", f"@{prompt_file}", "--no-session", *flags]
+        # `no_session_persistence` is read here rather than ignored. `--no-session` was
+        # passed unconditionally, so the key was accepted by the allow-list and never
+        # consulted: a spec asking for session persistence was silently overridden.
+        # That is the same shape the Gemini adapter now rejects outright. Pi can express
+        # the behavior, so honor it. The default stays stateless -- only an explicit
+        # `false` keeps sessions -- matching how `claude_cli` treats the same key.
+        session_flags = (
+            [] if merged_config.get("no_session_persistence") is False else ["--no-session"]
+        )
+        return [pi_binary, "--mode", "json", "-p", f"@{prompt_file}", *session_flags, *flags]
 
     def validate_config(self, merged_config: dict[str, object]) -> list[ConfigRejection]:
         rejections: list[ConfigRejection] = []
