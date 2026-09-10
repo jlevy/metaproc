@@ -5,14 +5,14 @@ title: "R1: make composite-scope discovery recursive and contained"
 kind: bug
 status: closed
 priority: 1
-version: 3
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 4
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - pr-review
 dependencies: []
 parent_id: is-01m0x358va0njc6k4g00pccj7e
 created_at: 2026-08-25T18:33:23.833Z
-updated_at: 2026-08-25T19:25:24.400Z
+updated_at: 2026-09-10T18:46:22.412Z
 closed_at: 2026-08-25T19:25:24.394Z
 close_reason: Fixed with recursive contained discovery and regression coverage; local exact-head verification passed.
 resolution: null

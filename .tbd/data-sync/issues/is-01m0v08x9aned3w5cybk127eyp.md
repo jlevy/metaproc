@@ -5,14 +5,14 @@ title: "Process: exact-head CI and spec-change rules"
 kind: task
 status: closed
 priority: 1
-version: 9
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 11
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - pr-review
 dependencies: []
 parent_id: is-01m0t5d345y4pdjcjpepb9h4q6
 created_at: 2026-08-24T23:04:16.937Z
-updated_at: 2026-08-25T19:37:17.826Z
+updated_at: 2026-09-10T18:46:20.156Z
 closed_at: 2026-08-25T19:37:17.826Z
 close_reason: "Clean draft PR #48 is pinned to 98cae8d1d42564454ad461612c40073b700e88b8; every review finding has a fixed, duplicate, or explicit evidence-triggered disposition; local make verify passed with 4,408 tests and 8 skips; all five exact-head GitHub CI jobs passed. No merge occurred, and downstream M0/scale gates remain open."
 resolution: null

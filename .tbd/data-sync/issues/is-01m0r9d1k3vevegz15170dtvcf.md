@@ -5,8 +5,8 @@ title: Persist task generations and fence-aware commit manifests
 kind: feature
 status: open
 priority: 1
-version: 5
-spec_path: src/metaproc/docs/execution-model-design.md
+version: 6
+spec_path: docs/project/specs/active/plan-2026-09-10-runpool-execution-followups.md
 labels:
   - execution-model
 dependencies:
@@ -18,6 +18,6 @@ dependencies:
     target: is-01m260z10t7p5h7maqpws2x4rc
 parent_id: is-01m0r93gwcj17mn4dmw1ts7fqa
 created_at: 2026-08-23T21:46:06.307Z
-updated_at: 2026-09-10T16:03:42.234Z
+updated_at: 2026-09-10T18:45:43.551Z
 ---
 Add typed task-generation state and a create-only validated commit manifest. Accept a commit only for the current generation and fence epoch, record superseded endings as history only, and project legacy result/status records from accepted facts while existing runs remain readable.

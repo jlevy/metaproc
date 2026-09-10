@@ -5,15 +5,15 @@ title: "PR #48: remove ambient OAuth injection from pooled scalar orchestration"
 kind: bug
 status: closed
 priority: 0
-version: 5
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 7
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels: []
 dependencies:
   - type: blocks
     target: is-01m0xrg6jeywxa1hwns3eay01m
 parent_id: is-01m0xrg4vr6n4znzxz0kkxxxt7
 created_at: 2026-08-26T01:21:46.592Z
-updated_at: 2026-08-26T01:25:49.839Z
+updated_at: 2026-09-10T18:46:06.288Z
 closed_at: 2026-08-26T01:25:49.839Z
 close_reason: The duplicated ambient-auth path is removed and the focused regression suite is green.
 resolution: null

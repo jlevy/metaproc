@@ -5,12 +5,13 @@ title: "PR 75 F2: clean up launches when post-spawn bookkeeping fails"
 kind: bug
 status: closed
 priority: 1
-version: 4
+version: 6
+spec_path: docs/project/specs/active/plan-2026-09-10-runpool-execution-followups.md
 labels: []
 dependencies: []
 parent_id: is-01m260cd2wnmjm68zd3yqaw799
 created_at: 2026-09-10T15:57:01.965Z
-updated_at: 2026-09-10T16:23:20.351Z
+updated_at: 2026-09-10T18:47:00.036Z
 closed_at: 2026-09-10T16:23:20.351Z
 close_reason: Review and bounded fixes complete; full design review published on PR 75 with per-finding dispositions. Six lifecycle regressions reproduced failures before repair; make verify passed (4622 passed, 8 skipped), including audits and distribution smoke. Commit/push/CI remain tracked by mp-5v99.
 resolution: null

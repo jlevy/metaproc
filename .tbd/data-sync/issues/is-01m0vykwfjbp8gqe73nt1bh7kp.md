@@ -5,13 +5,13 @@ title: Preserve primary failure when RunPool shutdown also fails
 kind: bug
 status: closed
 priority: 1
-version: 4
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 6
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels: []
 dependencies: []
 parent_id: is-01m0vhs620ptcvxv074ccx88z4
 created_at: 2026-08-25T07:54:33.841Z
-updated_at: 2026-08-25T19:28:49.292Z
+updated_at: 2026-09-10T18:46:21.430Z
 closed_at: 2026-08-25T19:28:49.291Z
 close_reason: Fixed with primary-error preservation across RunPool cleanup failure and focused coverage.
 resolution: null

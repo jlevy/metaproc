@@ -5,12 +5,13 @@ title: "PR 69: verify Anthropic and Claude Code model support"
 kind: task
 status: closed
 priority: 1
-version: 3
+version: 5
+spec_path: docs/project/specs/active/plan-2026-09-10-model-catalog-followups.md
 labels: []
 dependencies: []
 parent_id: is-01m26342tjmj8qh22599bhd3sn
 created_at: 2026-09-10T16:44:17.314Z
-updated_at: 2026-09-10T17:42:10.442Z
+updated_at: 2026-09-10T18:45:33.322Z
 closed_at: 2026-09-10T17:42:10.442Z
 close_reason: Official source and pinned-client review complete; catalog fixes integrated and remaining client/migration/live-evidence work tracked in separate sub-beads.
 resolution: null

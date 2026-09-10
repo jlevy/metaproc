@@ -5,15 +5,15 @@ title: "PR #48: integrate current main and the independent GCP prerequisite"
 kind: task
 status: closed
 priority: 0
-version: 7
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 9
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels: []
 dependencies:
   - type: blocks
     target: is-01m0xrg6jeywxa1hwns3eay01m
 parent_id: is-01m0xrg4vr6n4znzxz0kkxxxt7
 created_at: 2026-08-26T00:46:09.214Z
-updated_at: 2026-08-26T01:41:24.756Z
+updated_at: 2026-09-10T18:46:03.900Z
 closed_at: 2026-08-26T01:41:24.754Z
 close_reason: "PR #48 is directly based on merged #44/main and the combined overlap suite is green."
 resolution: null

@@ -5,8 +5,8 @@ title: Verify the consolidated mapped-scope runtime head
 kind: task
 status: closed
 priority: 0
-version: 15
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 16
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - execution-model
 dependencies:
@@ -22,7 +22,7 @@ child_order_hints:
   - is-01m0wfhffpxa70k40qbyxkdcyk
   - is-01m0wg34819k1mk34rfh9pm007
 created_at: 2026-08-25T04:10:15.999Z
-updated_at: 2026-08-25T19:37:17.779Z
+updated_at: 2026-09-10T18:46:00.551Z
 closed_at: 2026-08-25T19:37:17.779Z
 close_reason: "Clean draft PR #48 is pinned to 98cae8d1d42564454ad461612c40073b700e88b8; every review finding has a fixed, duplicate, or explicit evidence-triggered disposition; local make verify passed with 4,408 tests and 8 skips; all five exact-head GitHub CI jobs passed. No merge occurred, and downstream M0/scale gates remain open."
 resolution: null

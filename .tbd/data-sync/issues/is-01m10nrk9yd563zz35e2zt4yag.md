@@ -5,15 +5,15 @@ title: Anchor recorded child scopes to the declared parent plan
 kind: bug
 status: closed
 priority: 0
-version: 2
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 4
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - review
   - runtime-projection
 dependencies: []
 parent_id: is-01m10mm4vpgbqgrjqx4dbjee41
 created_at: 2026-08-27T03:56:03.262Z
-updated_at: 2026-08-27T04:36:02.228Z
+updated_at: 2026-09-10T18:46:08.569Z
 closed_at: 2026-08-27T04:36:02.215Z
 close_reason: "Fixed in 9d34c1f; full make verify passed with 4,493 tests and GitHub CI completed 5/5 green. Published per-finding dispositions on PR #49."
 resolution: null

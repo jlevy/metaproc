@@ -5,14 +5,14 @@ title: "R6: document the same-upstream mixed dependency-clause limitation"
 kind: task
 status: closed
 priority: 2
-version: 3
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 4
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - pr-review
 dependencies: []
 parent_id: is-01m0x358va0njc6k4g00pccj7e
 created_at: 2026-08-25T18:44:45.418Z
-updated_at: 2026-08-25T19:25:26.391Z
+updated_at: 2026-09-10T18:46:34.602Z
 closed_at: 2026-08-25T19:25:26.389Z
 close_reason: "Explicitly deferred: no current process requires same-upstream clause distinction; limitation is documented and model expansion remains evidence-triggered."
 resolution: null

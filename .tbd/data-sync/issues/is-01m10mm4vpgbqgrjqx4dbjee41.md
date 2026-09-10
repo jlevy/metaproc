@@ -5,8 +5,8 @@ title: Bind hydrated runtime projection to the recorded resolved plan
 kind: bug
 status: closed
 priority: 0
-version: 7
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 8
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - review
   - runtime-projection
@@ -18,7 +18,7 @@ child_order_hints:
   - is-01m10nrm81d0rfve9jggxanym6
   - is-01m10qt94wng0j0avjgjbkb3x8
 created_at: 2026-08-27T03:36:08.822Z
-updated_at: 2026-08-27T04:36:02.260Z
+updated_at: 2026-09-10T18:46:08.018Z
 closed_at: 2026-08-27T04:36:02.260Z
 close_reason: "Fixed in 9d34c1f; full make verify passed with 4,493 tests and GitHub CI completed 5/5 green. Published per-finding dispositions on PR #49."
 resolution: null

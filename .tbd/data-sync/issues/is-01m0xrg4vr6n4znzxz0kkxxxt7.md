@@ -5,8 +5,8 @@ title: "Prepare PR #48 for merge on the settled Metaproc baseline"
 kind: task
 status: closed
 priority: 0
-version: 13
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 14
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels: []
 dependencies: []
 parent_id: is-01m0r92q2y1pe7dmhrcj6nst7q
@@ -21,7 +21,7 @@ child_order_hints:
   - is-01m0xthck1gm7b131mwrpstmxd
   - is-01m0xv4aaa19xn4tmw8v68f401
 created_at: 2026-08-26T00:46:08.736Z
-updated_at: 2026-08-26T01:51:51.763Z
+updated_at: 2026-09-10T18:46:03.376Z
 closed_at: 2026-08-26T01:51:51.762Z
 close_reason: "PR #48 is clean, fully validated for its scoped merge boundary, publicly sanitized, and ready to merge."
 resolution: null

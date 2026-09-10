@@ -5,8 +5,8 @@ title: "Address review: PR #49 — runtime task/output projection"
 kind: task
 status: closed
 priority: 1
-version: 11
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 12
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - review
 dependencies: []
@@ -22,7 +22,7 @@ child_order_hints:
   - is-01m0zs3v3h8dx4xw63wbywn0m1
   - is-01m0zs3vcbzwy5mc11xp2rfvrt
 created_at: 2026-08-26T19:34:16.171Z
-updated_at: 2026-08-26T20:01:31.464Z
+updated_at: 2026-09-10T18:46:26.481Z
 closed_at: 2026-08-26T20:01:31.463Z
 close_reason: "All nine independent senior-review findings received fixed dispositions in e1b9de2; PR #49 disposition map published and CI passed."
 resolution: null

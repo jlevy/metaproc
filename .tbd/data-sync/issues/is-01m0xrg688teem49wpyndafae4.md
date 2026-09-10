@@ -5,15 +5,15 @@ title: "PR #48: rerun exact-head framework verification after baseline integrati
 kind: task
 status: closed
 priority: 0
-version: 6
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 8
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels: []
 dependencies:
   - type: blocks
     target: is-01m0xrg6jeywxa1hwns3eay01m
 parent_id: is-01m0xrg4vr6n4znzxz0kkxxxt7
 created_at: 2026-08-26T00:46:10.183Z
-updated_at: 2026-08-26T01:50:37.786Z
+updated_at: 2026-09-10T18:46:04.892Z
 closed_at: 2026-08-26T01:50:37.784Z
 close_reason: All local exact-head and GitHub CI verification gates pass on f94b8a98.
 resolution: null

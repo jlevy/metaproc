@@ -5,14 +5,14 @@ title: Bootstrap consumer plugins before run visualization reconstruction
 kind: bug
 status: closed
 priority: 0
-version: 5
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 6
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - runtime-projection
 dependencies: []
 parent_id: is-01m0rm18kbm24khxjemevb1ybv
 created_at: 2026-08-27T04:57:04.164Z
-updated_at: 2026-08-27T05:10:18.263Z
+updated_at: 2026-09-10T18:46:09.181Z
 closed_at: 2026-08-27T05:10:18.255Z
 close_reason: Fixed generically in e0882c2; 58 focused tests, 4,494-test full verification, completed-run consumer projection with no warnings or unaccepted outputs, and all five GitHub checks pass.
 resolution: null

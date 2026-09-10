@@ -5,8 +5,8 @@ title: RunPool activation tests must wait for observed launch state
 kind: bug
 status: closed
 priority: 0
-version: 11
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 12
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - testing
 dependencies:
@@ -14,7 +14,7 @@ dependencies:
     target: is-01m0vhs620ptcvxv074ccx88z4
 parent_id: is-01m0r92q2y1pe7dmhrcj6nst7q
 created_at: 2026-08-25T04:28:30.013Z
-updated_at: 2026-08-25T19:18:17.053Z
+updated_at: 2026-09-10T18:46:01.149Z
 closed_at: 2026-08-25T17:01:15.596Z
 close_reason: Both activation tests now wait for bounded observed launch state. Repeated focused coverage and full make verify pass; private downstream CI evidence is maintained outside this repository.
 resolution: null

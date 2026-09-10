@@ -5,8 +5,8 @@ title: "PR #37 B5: cancel mapped parent attempts terminally"
 kind: bug
 status: closed
 priority: 1
-version: 5
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 7
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - pr-review
 dependencies:
@@ -14,7 +14,7 @@ dependencies:
     target: is-01m0vhs620ptcvxv074ccx88z4
 parent_id: is-01m0t5d345y4pdjcjpepb9h4q6
 created_at: 2026-08-25T07:32:45.407Z
-updated_at: 2026-08-25T19:28:48.980Z
+updated_at: 2026-09-10T18:46:21.092Z
 closed_at: 2026-08-25T19:28:48.979Z
 close_reason: Fixed with terminal mapped-parent cancellation state and regression coverage.
 resolution: null

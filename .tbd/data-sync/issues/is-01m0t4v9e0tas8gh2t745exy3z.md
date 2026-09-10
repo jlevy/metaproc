@@ -5,15 +5,15 @@ title: "M0 vertical slice: offline three-item mapped composite"
 kind: task
 status: closed
 priority: 0
-version: 11
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 12
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels: []
 dependencies:
   - type: blocks
     target: is-01m0xrg6jeywxa1hwns3eay01m
 parent_id: is-01m0r93je6fk789d26aef6wx11
 created_at: 2026-08-24T15:04:59.071Z
-updated_at: 2026-08-26T01:50:36.302Z
+updated_at: 2026-09-10T18:45:58.918Z
 closed_at: 2026-08-26T01:50:36.301Z
 close_reason: Framework verification and the private exact-pin three-item consumer M0 both pass.
 resolution: null

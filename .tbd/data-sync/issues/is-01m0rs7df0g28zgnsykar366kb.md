@@ -5,8 +5,8 @@ title: Unify recursive run policy and nonblocking execution
 kind: feature
 status: closed
 priority: 1
-version: 15
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 17
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - execution-model
 dependencies:
@@ -24,7 +24,7 @@ child_order_hints:
   - is-01m0s0r624c0eszrgnq4qgjjbe
   - is-01m0t7zs3etjttp22nytn7abcn
 created_at: 2026-08-24T02:22:39.072Z
-updated_at: 2026-08-25T19:31:21.933Z
+updated_at: 2026-09-10T18:46:12.448Z
 closed_at: 2026-08-25T19:31:21.932Z
 close_reason: One recursive execution context now carries run policy, shared admission, cancellation, executor, credential settings, and pool ownership; optional API cleanup and retry audit remain separately paused.
 resolution: null

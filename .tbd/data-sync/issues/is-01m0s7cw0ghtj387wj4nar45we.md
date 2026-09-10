@@ -5,8 +5,8 @@ title: Bound retry-later waits without holding launch capacity
 kind: bug
 status: open
 priority: 1
-version: 10
-spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 12
+spec_path: docs/project/specs/active/plan-2026-09-10-runpool-execution-followups.md
 labels:
   - authentication
   - execution-model
@@ -14,7 +14,7 @@ dependencies: []
 parent_id: is-01m0s0r624c0eszrgnq4qgjjbe
 hold: paused
 created_at: 2026-08-24T06:30:17.872Z
-updated_at: 2026-09-09T15:18:16.395Z
+updated_at: 2026-09-10T18:45:46.373Z
 ---
 Wait mode must release run/host launch capacity while credentials are unavailable, use deterministic asynchronous recovery delays, and stop at auth-retry-max-wait without jitter overshoot. Cover scalar and fan-out behavior with injected clocks/sleepers.
 

@@ -5,8 +5,8 @@ title: Review consolidated mapped-scope runtime diff
 kind: task
 status: closed
 priority: 0
-version: 16
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 18
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - pr-review
 dependencies: []
@@ -26,7 +26,7 @@ child_order_hints:
   - is-01m0x587ksrhw98madas4v2gt2
   - is-01m0x5fvsh79mvqkydystcmf7g
 created_at: 2026-08-25T18:33:12.296Z
-updated_at: 2026-08-25T19:37:17.814Z
+updated_at: 2026-09-10T18:46:02.476Z
 closed_at: 2026-08-25T19:37:17.814Z
 close_reason: "Clean draft PR #48 is pinned to 98cae8d1d42564454ad461612c40073b700e88b8; every review finding has a fixed, duplicate, or explicit evidence-triggered disposition; local make verify passed with 4,408 tests and 8 skips; all five exact-head GitHub CI jobs passed. No merge occurred, and downstream M0/scale gates remain open."
 resolution: null

@@ -5,14 +5,14 @@ title: Audit dormant retry-later recovery before adoption
 kind: bug
 status: open
 priority: 1
-version: 19
-spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 20
+spec_path: docs/project/specs/active/plan-2026-09-10-runpool-execution-followups.md
 delegate: codex
 labels:
   - authentication
   - execution-model
 dependencies: []
-parent_id: is-01m0rs7df0g28zgnsykar366kb
+parent_id: is-01m260cd2wnmjm68zd3yqaw799
 child_order_hints:
   - is-01m0s7cvkpk6pmhzenf9stzmgr
   - is-01m0s7cw0ghtj387wj4nar45we
@@ -27,7 +27,7 @@ child_order_hints:
   - is-01m0tjefebxck534azhjgd5ew9
 hold: paused
 created_at: 2026-08-24T04:34:08.579Z
-updated_at: 2026-09-09T15:18:15.225Z
+updated_at: 2026-09-10T18:45:37.293Z
 ---
 Metaproc contains older wait, checkpoint, deferred-state, resume-daemon, and hard-coded fan-out cooling paths, but no current scheduler consumes a coherent public retry-later policy. Do not reintroduce the superseded proposal speculatively. Use released-consumer and framework-owned evidence to decide whether each primitive should be removed, retained as-is, or connected through the smallest shared policy. Retained behavior must avoid holding execution or host capacity while idle and reuse existing scheduler and checkpoint machinery.
 

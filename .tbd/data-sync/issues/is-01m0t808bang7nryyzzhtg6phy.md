@@ -5,8 +5,8 @@ title: "PR #36 review D4: bound retry wait by job lifetime"
 kind: bug
 status: closed
 priority: 2
-version: 8
-spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 9
+spec_path: docs/project/specs/active/plan-2026-09-10-runpool-execution-followups.md
 labels:
   - pr-review
 dependencies: []
@@ -14,7 +14,7 @@ parent_id: is-01m0s0r624c0eszrgnq4qgjjbe
 hold: null
 hold_until: null
 created_at: 2026-08-24T16:00:07.530Z
-updated_at: 2026-09-09T15:18:15.611Z
+updated_at: 2026-09-10T18:45:37.440Z
 closed_at: 2026-08-25T19:29:10.916Z
 close_reason: The future wait-policy gate mp-l3ot owns job-lifetime cross-validation as part of its acceptance criteria; retry-later implementation remains paused.
 resolution: duplicate

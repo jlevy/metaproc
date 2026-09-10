@@ -5,15 +5,15 @@ title: "PR #48: prove coverage of every retained superseded-stack behavior"
 kind: task
 status: closed
 priority: 0
-version: 5
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 7
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels: []
 dependencies:
   - type: blocks
     target: is-01m0xrg6jeywxa1hwns3eay01m
 parent_id: is-01m0xrg4vr6n4znzxz0kkxxxt7
 created_at: 2026-08-26T00:46:09.540Z
-updated_at: 2026-08-26T01:14:25.770Z
+updated_at: 2026-09-10T18:46:04.231Z
 closed_at: 2026-08-26T01:14:25.770Z
 close_reason: Completed the full superseded-stack comparison, accounted for old-only tests and documents, confirmed the consolidated branch retains the executable behavior, and recorded the public-safe evidence in the governing plan.
 resolution: null

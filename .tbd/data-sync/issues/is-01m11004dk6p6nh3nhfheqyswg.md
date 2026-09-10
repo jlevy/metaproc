@@ -5,14 +5,14 @@ title: Allow runtime projection scans from exact snapshots alone
 kind: bug
 status: closed
 priority: 1
-version: 3
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 4
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - runtime-projection
 dependencies: []
 parent_id: is-01m0rm18kbm24khxjemevb1ybv
 created_at: 2026-08-27T06:54:55.923Z
-updated_at: 2026-08-27T07:02:48.449Z
+updated_at: 2026-09-10T18:46:29.558Z
 closed_at: 2026-08-27T07:02:48.448Z
 close_reason: "Fixed in 0af3967: exact per-scope snapshots now support bundle-free scans, missing root or declared-child snapshots fail closed, 59 focused tests and the 4,497-test full gate pass, and all five PR checks are green."
 resolution: null

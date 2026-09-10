@@ -5,14 +5,14 @@ title: "Decide PR #19: agent toolchain bootstrap"
 kind: task
 status: closed
 priority: 2
-version: 4
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 6
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - pr-review
 dependencies: []
 parent_id: is-01m0t5d345y4pdjcjpepb9h4q6
 created_at: 2026-08-24T22:30:55.128Z
-updated_at: 2026-09-01T05:22:11.213Z
+updated_at: 2026-09-10T18:46:31.467Z
 closed_at: 2026-09-01T05:22:11.211Z
 close_reason: "PR #19 merged: the self-installing pinned toolchain for agent sessions shipped, and the pinned fallback version now lives in .tbd/config.yml. The decision this bead was holding open is settled."
 resolution: null

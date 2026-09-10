@@ -5,14 +5,14 @@ title: "R13: terminalize code and mapped attempts on orchestration abort"
 kind: bug
 status: closed
 priority: 1
-version: 4
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 5
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - pr-review
 dependencies: []
 parent_id: is-01m0x358va0njc6k4g00pccj7e
 created_at: 2026-08-25T19:13:56.518Z
-updated_at: 2026-08-25T19:25:28.824Z
+updated_at: 2026-09-10T18:46:26.002Z
 closed_at: 2026-08-25T19:25:28.823Z
 close_reason: Fixed with terminal code and mapped-item attempt state for cancellation and nonstandard orchestration aborts.
 resolution: null

@@ -5,14 +5,14 @@ title: Treat completed pressure checks as healthy trace events
 kind: bug
 status: closed
 priority: 2
-version: 4
-spec_path: null
+version: 5
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - operator-smoke
 dependencies: []
 parent_id: is-01m0vhs620ptcvxv074ccx88z4
 created_at: 2026-08-25T12:50:20.541Z
-updated_at: 2026-08-25T17:00:19.353Z
+updated_at: 2026-09-10T18:46:00.776Z
 closed_at: 2026-08-25T13:19:02.518Z
 close_reason: "Fixed at b5c4721; regressions, full 4385-test gate, pre-push gate, and successful-run operator replay passed. PR #37 has no checks because its stacked base is not main; exact-pin consumer CI remains the independent gate."
 resolution: null

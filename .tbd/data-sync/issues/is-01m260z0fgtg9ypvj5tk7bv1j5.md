@@ -5,12 +5,13 @@ title: "PR 75 F5: review host-safety rollout and mixed-client guarantees"
 kind: task
 status: open
 priority: 1
-version: 2
+version: 4
+spec_path: docs/project/specs/active/plan-2026-09-01-runpool-host-safety.md
 labels: []
 dependencies: []
 parent_id: is-01m260cd2wnmjm68zd3yqaw799
 created_at: 2026-09-10T16:03:41.679Z
-updated_at: 2026-09-10T16:21:09.717Z
+updated_at: 2026-09-10T18:47:10.744Z
 ---
 Review decision for existing host-safety work: count slots with per-caller prefix limits do not create one byte budget; scalar admission fails open after 60s/OSError; startup peaks are unreserved and telemetry shares the orchestrator event loop. Require broker claim-v2 compatibility, startup pacing, external-pressure attribution, sentinel failure tests and coherent mixed-client caps before advertising host safety. Implementation remains mp-qigc/mp-g3si and the active host-safety plan; no duplicate runtime implementation in this review.
 

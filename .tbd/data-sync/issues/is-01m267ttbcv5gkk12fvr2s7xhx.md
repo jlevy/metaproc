@@ -5,12 +5,13 @@ title: "Post-merge CI: normalize shipped-document commit dates across time zones
 kind: bug
 status: closed
 priority: 1
-version: 8
+version: 10
+spec_path: docs/project/specs/active/plan-2026-09-10-model-catalog-followups.md
 labels: []
 dependencies: []
 parent_id: is-01m26342tjmj8qh22599bhd3sn
 created_at: 2026-09-10T18:03:44.363Z
-updated_at: 2026-09-10T18:27:21.537Z
+updated_at: 2026-09-10T18:45:40.514Z
 closed_at: 2026-09-10T18:27:21.536Z
 close_reason: Completed and merged in PRs 69 and 76; reviewed commits, mandatory make verify gates, PR checks, and main CI all passed. Main is a125569a4992bd44e3ba7b924af987ba5ac2a4cf; https://github.com/jlevy/metaproc/actions/runs/34514137842.
 resolution: null

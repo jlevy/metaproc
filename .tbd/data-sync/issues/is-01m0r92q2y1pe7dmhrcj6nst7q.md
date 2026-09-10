@@ -5,8 +5,8 @@ title: Native mapped composite scopes and shared leaf admission
 kind: epic
 status: closed
 priority: 1
-version: 27
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 28
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - execution-model
 dependencies: []
@@ -32,7 +32,7 @@ child_order_hints:
   - is-01m0xrg4vr6n4znzxz0kkxxxt7
   - is-01m0yzwdz90x505k59tq1w73xa
 created_at: 2026-08-23T21:40:27.869Z
-updated_at: 2026-09-01T05:22:40.140Z
+updated_at: 2026-09-10T18:46:10.649Z
 closed_at: 2026-09-01T05:22:40.139Z
 close_reason: "The mapped composite scope epic shipped: for_each on composite steps, one recursive execution context, one run-owned RunPool for local mapped leaves, and mapped scopes projected through the existing views. Plan moved to docs/project/specs/done/. Open children mp-82ls, mp-rrfn, mp-f77b, mp-9bx5, mp-0paw, and mp-7t7p are post-release extensions, not remaining epic scope."
 resolution: null

@@ -5,14 +5,14 @@ title: "Design: decompose run_process.py along the engine seams"
 kind: task
 status: open
 priority: 2
-version: 5
-spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 6
+spec_path: docs/project/specs/active/plan-2026-09-10-runpool-execution-followups.md
 labels: []
 dependencies: []
-parent_id: is-01m0t5d345y4pdjcjpepb9h4q6
+parent_id: is-01m260cd2wnmjm68zd3yqaw799
 hold: paused
 created_at: 2026-08-24T23:04:17.601Z
-updated_at: 2026-09-09T15:18:23.238Z
+updated_at: 2026-09-10T18:45:40.201Z
 ---
 ~4,300 lines and growing; the well-factored engine layer below it (item_runner, fan_in, discovery, pathing) produced almost no findings while the monolith produced nearly all of them. After the stack lands, one refactor-only PR extracting: execution context + leaf admission; agent attempt lifecycle; composite/mapped scope evaluation — leaving orchestration + CLI. Do not do it mid-stack. Holistic section 4c.
 

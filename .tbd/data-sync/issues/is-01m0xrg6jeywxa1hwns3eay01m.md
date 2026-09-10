@@ -5,13 +5,13 @@ title: "PR #48: publish final senior review and merge-readiness evidence"
 kind: task
 status: closed
 priority: 0
-version: 3
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 5
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels: []
 dependencies: []
 parent_id: is-01m0xrg4vr6n4znzxz0kkxxxt7
 created_at: 2026-08-26T00:46:10.509Z
-updated_at: 2026-08-26T01:51:50.855Z
+updated_at: 2026-09-10T18:46:05.230Z
 closed_at: 2026-08-26T01:51:50.854Z
 close_reason: "The final disposition map and merge-readiness evidence are published and PR #48 is ready with all gates green."
 resolution: null

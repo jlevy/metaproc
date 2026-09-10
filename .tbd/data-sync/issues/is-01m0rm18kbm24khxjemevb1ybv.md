@@ -5,8 +5,8 @@ title: Project mapped scopes and artifacts through existing views
 kind: feature
 status: closed
 priority: 1
-version: 16
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 18
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - execution-model
 dependencies:
@@ -21,7 +21,7 @@ child_order_hints:
   - is-01m11004dk6p6nh3nhfheqyswg
   - is-01m112ah974btnfsttkxknkb22
 created_at: 2026-08-24T00:51:54.602Z
-updated_at: 2026-09-01T05:22:11.821Z
+updated_at: 2026-09-10T18:46:11.797Z
 closed_at: 2026-09-01T05:22:11.820Z
 close_reason: "The read-only mapped-scope projection landed in PR #49 at c3aa5ac; the working-tree state described in the notes is committed and on main. Optional lineage-index follow-ups remain tracked as mp-0paw and mp-7t7p."
 resolution: null

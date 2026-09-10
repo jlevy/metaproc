@@ -5,14 +5,14 @@ title: "R12: drain a cancelled pooled scalar before releasing outer ownership"
 kind: bug
 status: closed
 priority: 0
-version: 3
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 4
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - pr-review
 dependencies: []
 parent_id: is-01m0x358va0njc6k4g00pccj7e
 created_at: 2026-08-25T19:09:46.471Z
-updated_at: 2026-08-25T19:25:28.550Z
+updated_at: 2026-09-10T18:46:02.871Z
 closed_at: 2026-08-25T19:25:28.549Z
 close_reason: Fixed with shielded per-submission cancel-and-drain ownership; real subprocess cleanup precedes outer resource release.
 resolution: null

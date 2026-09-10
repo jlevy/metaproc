@@ -5,8 +5,8 @@ title: "Review PR #34: pool scalar agent credentials"
 kind: task
 status: closed
 priority: 1
-version: 21
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 23
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - pr-review
 dependencies: []
@@ -26,7 +26,7 @@ child_order_hints:
   - is-01m0vq38pr4xq4qqfwj5n5r6n4
   - is-01m0vq396my2642ep070ydj0dq
 created_at: 2026-08-24T15:14:43.076Z
-updated_at: 2026-08-25T19:28:30.034Z
+updated_at: 2026-09-10T18:46:14.084Z
 closed_at: 2026-08-25T05:50:38.990Z
 close_reason: null
 resolution: null

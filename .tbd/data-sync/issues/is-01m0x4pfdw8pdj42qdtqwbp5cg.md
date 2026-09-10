@@ -5,14 +5,14 @@ title: "R10: release slot ownership when adapter resolution fails"
 kind: bug
 status: closed
 priority: 1
-version: 3
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 4
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - pr-review
 dependencies: []
 parent_id: is-01m0x358va0njc6k4g00pccj7e
 created_at: 2026-08-25T19:00:04.668Z
-updated_at: 2026-08-25T19:25:27.663Z
+updated_at: 2026-09-10T18:46:24.879Z
 closed_at: 2026-08-25T19:25:27.663Z
 close_reason: Fixed by moving adapter resolution inside unconditional teardown and proving ownership release.
 resolution: null

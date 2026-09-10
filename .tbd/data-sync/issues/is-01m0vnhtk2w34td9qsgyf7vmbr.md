@@ -5,14 +5,14 @@ title: "PR #33 N5: reject invalid run ceilings before run setup"
 kind: bug
 status: closed
 priority: 2
-version: 4
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 6
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - pr-review
 dependencies: []
 parent_id: is-01m0t5d345y4pdjcjpepb9h4q6
 created_at: 2026-08-25T05:16:09.185Z
-updated_at: 2026-08-25T19:28:49.629Z
+updated_at: 2026-09-10T18:46:32.042Z
 closed_at: 2026-08-25T19:28:49.628Z
 close_reason: Fixed with pre-resolution validation for explicit and environment-derived invalid ceilings.
 resolution: null

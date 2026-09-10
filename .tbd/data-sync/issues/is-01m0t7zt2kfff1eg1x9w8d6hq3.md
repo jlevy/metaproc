@@ -5,14 +5,14 @@ title: "PR #33 review C2: exercise force through a real composite"
 kind: bug
 status: closed
 priority: 2
-version: 5
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 6
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - pr-review
 dependencies: []
 parent_id: is-01m0r93je6fk789d26aef6wx11
 created_at: 2026-08-24T15:59:52.914Z
-updated_at: 2026-08-25T19:28:50.032Z
+updated_at: 2026-09-10T18:46:30.749Z
 closed_at: 2026-08-25T19:28:50.031Z
 close_reason: Fixed with a real composite run/resume/force integration test.
 resolution: null

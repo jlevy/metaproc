@@ -5,12 +5,13 @@ title: "PR 69: consolidate model support and prevent explicit model substitution
 kind: task
 status: closed
 priority: 1
-version: 4
+version: 6
+spec_path: docs/project/specs/active/plan-2026-09-10-model-catalog-followups.md
 labels: []
 dependencies: []
 parent_id: is-01m26342tjmj8qh22599bhd3sn
 created_at: 2026-09-10T16:44:17.948Z
-updated_at: 2026-09-10T17:50:42.611Z
+updated_at: 2026-09-10T18:45:36.280Z
 closed_at: 2026-09-10T17:50:42.610Z
 close_reason: Implemented, documented, and independently cross-checked; make verify passed with 4673 tests, 8 skips, clean audits, and installed-wheel smoke. Recurring review is active. Publishing and merge tracked separately.
 resolution: null

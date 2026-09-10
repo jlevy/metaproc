@@ -5,15 +5,15 @@ title: Upgrade Metaproc integration to Softschema 0.7.0
 kind: task
 status: closed
 priority: 0
-version: 4
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 6
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - dependency
   - tonight-2026-08-25
 dependencies: []
 parent_id: is-01m0vhs620ptcvxv074ccx88z4
 created_at: 2026-08-25T08:05:35.170Z
-updated_at: 2026-08-25T19:31:20.981Z
+updated_at: 2026-09-10T18:46:01.640Z
 closed_at: 2026-08-25T19:31:20.980Z
 close_reason: Softschema 0.7.0 migration, lock and cutoff documentation, structured-diagnostic adapter, focused coverage, and exact-head make verify all pass.
 resolution: null

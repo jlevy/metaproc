@@ -5,14 +5,14 @@ title: "PR #37 B11: unify mapped item-key derivation"
 kind: task
 status: closed
 priority: 2
-version: 5
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 7
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - pr-review
 dependencies: []
 parent_id: is-01m0t5d345y4pdjcjpepb9h4q6
 created_at: 2026-08-25T07:32:46.844Z
-updated_at: 2026-08-25T19:28:51.600Z
+updated_at: 2026-09-10T18:46:33.460Z
 closed_at: 2026-08-25T19:28:51.599Z
 close_reason: Fixed with canonical ScopeIdentity binding plus key safety, duplicate, containment, and end-to-end isolation coverage.
 resolution: null

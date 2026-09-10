@@ -5,14 +5,14 @@ title: "PR #37 B12: expose mapped items in events and projections"
 kind: feature
 status: closed
 priority: 2
-version: 6
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 8
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - pr-review
 dependencies: []
 parent_id: is-01m0t5d345y4pdjcjpepb9h4q6
 created_at: 2026-08-25T07:32:47.123Z
-updated_at: 2026-08-25T19:28:51.880Z
+updated_at: 2026-09-10T18:46:33.743Z
 closed_at: 2026-08-25T19:28:51.879Z
 close_reason: Fixed for the minimum slice with mapped item events and recursive contained operator views; richer presentation remains under mp-1af0.
 resolution: null

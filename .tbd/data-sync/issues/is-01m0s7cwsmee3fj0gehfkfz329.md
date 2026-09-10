@@ -5,8 +5,8 @@ title: Represent deferred process state and retry-later events explicitly
 kind: bug
 status: open
 priority: 1
-version: 9
-spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 11
+spec_path: docs/project/specs/active/plan-2026-09-10-runpool-execution-followups.md
 labels:
   - authentication
   - execution-model
@@ -14,7 +14,7 @@ dependencies: []
 parent_id: is-01m0s0r624c0eszrgnq4qgjjbe
 hold: paused
 created_at: 2026-08-24T06:30:18.675Z
-updated_at: 2026-09-09T15:18:16.938Z
+updated_at: 2026-09-10T18:45:46.943Z
 ---
 StepStatus documents deferred and the auth architecture documents retry_later events, but dispatch currently has no deferred transition or event. A signal checkpoint must leave process status inspectably deferred, not running/failed, and emit a typed event without pretending the process completed.
 

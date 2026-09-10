@@ -5,15 +5,15 @@ title: Do not require parent task state for scalar composite scopes
 kind: bug
 status: closed
 priority: 0
-version: 4
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 5
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - runtime-projection
   - validation
 dependencies: []
 parent_id: is-01m10c27jjs2qh7hbcn3msz564
 created_at: 2026-08-27T08:48:43.160Z
-updated_at: 2026-08-27T08:59:13.453Z
+updated_at: 2026-09-10T18:46:10.145Z
 closed_at: 2026-08-27T08:59:13.440Z
 close_reason: "Fixed in 114da54: scalar composites project through child scope state, mapped composites retain parent item task records, and full verification plus real-layout regression pass."
 resolution: null

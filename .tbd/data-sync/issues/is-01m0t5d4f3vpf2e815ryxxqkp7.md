@@ -5,8 +5,8 @@ title: "Review PR #36: transport retry-later policy"
 kind: task
 status: closed
 priority: 1
-version: 17
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 19
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - pr-review
 dependencies: []
@@ -22,7 +22,7 @@ child_order_hints:
   - is-01m0t809p8h99cy79t3hwd3j1f
   - is-01m0tjefebxck534azhjgd5ew9
 created_at: 2026-08-24T15:14:43.810Z
-updated_at: 2026-08-25T19:28:30.034Z
+updated_at: 2026-09-10T18:46:14.710Z
 closed_at: 2026-08-24T22:31:55.135Z
 close_reason: "PR #36 closed as superseded; findings verified as resolved-by-deletion; behavior work tracked under mp-tibt"
 resolution: null

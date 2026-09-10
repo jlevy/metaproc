@@ -5,15 +5,15 @@ title: Persist code-step failure state and diagnostics in run-process
 kind: bug
 status: closed
 priority: 0
-version: 9
-spec_path: docs/project/specs/active/plan-2026-08-25-consolidated-mapped-scope-runtime.md
+version: 10
+spec_path: docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md
 labels:
   - live-smoke
   - observability
 dependencies: []
 parent_id: is-01m0r92q2y1pe7dmhrcj6nst7q
 created_at: 2026-08-25T14:49:13.095Z
-updated_at: 2026-08-25T19:18:17.053Z
+updated_at: 2026-09-10T18:46:01.955Z
 closed_at: 2026-08-25T17:01:14.102Z
 close_reason: A framework-owned deterministic failure-path regression now proves durable nonempty failed status and diagnostics, with CLI, status, trace, tail, and events in agreement. Full verification passed; the fix remains subject to consolidated review.
 resolution: null
