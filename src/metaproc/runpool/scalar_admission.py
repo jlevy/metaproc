@@ -1,13 +1,11 @@
-"""Host admission for launches that do not go through a pool.
+"""Outer host admission for the scalar agent execution path.
 
-RunPool admits every process it launches, but it is constructed only on the fan-out
-path. A step with no ``for_each`` launches its adapter subprocess directly, so on a host
-running several processes at once those launches are invisible to each other and to the
-pool: no slot accounting, no memory backpressure, nothing to stop N orchestrators from
-starting N agents simultaneously.
+``run-process`` agent leaves acquire this gate before submitting to the run-owned
+RunPool, whose internal host admission is disabled to avoid acquiring twice. The same
+gate also covers scalar launches without a run-owned pool. Mapped agent leaves can
+reach this path too; the scalar execution function does not imply a scalar-only scope.
 
-This closes that gap for the scalar path without pulling in the rest of RunPool. The
-enforceable rule is design test 7 of
+The intended resource contract is design test 7 of
 ``src/metaproc/docs/process-framework-theory.md`` ("Is every launch admitted?"):
 
     Every independently scheduled task attempt is admitted through the applicable
@@ -42,8 +40,8 @@ logger = logging.getLogger(__name__)
 # to every scalar step and then launched it ungoverned anyway. And a limit of 1 would
 # serialize unrelated scalar steps even on an idle machine, which nothing in the
 # incident record motivates — the recorded failures were dozens of simultaneous
-# launches, not two. METAPROC_HOST_MAX_LOCAL_AGENTS still overrides both ways when an
-# operator sets it.
+# launches, not two. METAPROC_HOST_MAX_LOCAL_AGENTS can lower the resolved limit; it
+# cannot raise the profile limit or this path's default.
 SCALAR_DEFAULT_HOST_LIMIT = 4
 SCALAR_ACQUIRE_TIMEOUT_S = 60.0
 
@@ -59,11 +57,11 @@ async def admitted_launch(
     namespace: str = DEFAULT_HOST_ADMISSION_NAMESPACE,
     metadata: Mapping[str, object] | None = None,
 ) -> AsyncGenerator[HostAdmissionLease | None]:
-    """Hold a host admission slot for the duration of one direct launch.
+    """Hold a host admission slot around one scalar-path launch.
 
-    Yields the lease, or ``None`` when admission is disabled or unavailable. The slot is
-    released on the way out whether or not the launch succeeded, so a crashing adapter
-    cannot leak capacity.
+    Yields the lease, or ``None`` when admission is disabled or unavailable. Release is
+    attempted on exit regardless of launch outcome. Release I/O failure can leave the
+    lease in place until later stale reclamation.
     """
     if not enabled or limit <= 0:
         yield None

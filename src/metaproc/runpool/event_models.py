@@ -96,6 +96,11 @@ class ConcurrencyAdjustEvent(BaseModel):
     reason: str
     consecutive_normal: int = 0
     consecutive_elevated: int = 0
+    memory_ceiling: int | None = None
+    provider_ceiling: int | None = None
+    operator_cap: int | None = None
+    effective_target: int | None = None
+    bottleneck: str | None = None
 
 
 class PressureCheckEvent(BaseModel):
@@ -113,7 +118,69 @@ class PressureCheckEvent(BaseModel):
     disk_used_pct: float | None = None
     disk_level: str | None = None
     disk_pressure_cause: str | None = None
+    source: str | None = None
+    current_concurrency: int | None = None
+    active_count: int | None = None
+    pending_count: int | None = None
+    memory_ceiling: int | None = None
+    provider_ceiling: int | None = None
+    operator_cap: int | None = None
+    effective_target: int | None = None
+    bottleneck: str | None = None
+    active_rss_bytes: int | None = None
+    active_peak_rss_bytes: int | None = None
     active_log_bytes: int | None = None
+    consecutive_normal: int | None = None
+    consecutive_elevated: int | None = None
+
+
+class HealthSampleEvent(BaseModel):
+    event: Literal["health_sample"]
+    ts: datetime
+    level: str
+    available_pct: float
+    memory_level: str | None = None
+    swap_used_gb: float | None = None
+    total_memory_gb: float | None = None
+    swap_delta_gb_per_min: float | None = None
+    swap_level: str | None = None
+    disk_free_gb: float | None = None
+    disk_total_gb: float | None = None
+    disk_used_pct: float | None = None
+    disk_level: str | None = None
+    disk_pressure_cause: str | None = None
+    source: str | None = None
+    current_concurrency: int | None = None
+    active_count: int | None = None
+    pending_count: int | None = None
+    memory_ceiling: int | None = None
+    provider_ceiling: int | None = None
+    operator_cap: int | None = None
+    effective_target: int | None = None
+    bottleneck: str | None = None
+    active_rss_bytes: int | None = None
+    active_peak_rss_bytes: int | None = None
+    active_log_bytes: int | None = None
+    consecutive_normal: int | None = None
+    consecutive_elevated: int | None = None
+
+
+class QuotaPauseStartedEvent(BaseModel):
+    event: Literal["quota_pause_started"]
+    ts: datetime
+    reset_at: str
+    buffer_s: float
+
+
+class QuotaPauseTickEvent(BaseModel):
+    event: Literal["quota_pause_tick"]
+    ts: datetime
+    remaining_s: float
+
+
+class QuotaPauseResumedEvent(BaseModel):
+    event: Literal["quota_pause_resumed"]
+    ts: datetime
 
 
 class ResourceTelemetryErrorEvent(BaseModel):
@@ -219,6 +286,10 @@ RunPoolEvent = Annotated[
     | HostSlotReleasedEvent
     | ConcurrencyAdjustEvent
     | PressureCheckEvent
+    | HealthSampleEvent
+    | QuotaPauseStartedEvent
+    | QuotaPauseTickEvent
+    | QuotaPauseResumedEvent
     | ResourceTelemetryErrorEvent
     | RetryScheduledEvent
     | AuthOutcomeEvent

@@ -40,13 +40,13 @@ not hand-edit them. Atomic writes via `strif.atomic_output_file`.
 | `accepted-anomalies.yaml` (per-attempt evidence) | `<run>/.state/tasks/<step>/<item>/attempts/<attempt-id>/` | `TaskAttemptAnomaliesRecord` (`metaproc:TaskAttemptAnomalies/0.1`) | atomic before the successful terminal attempt update; absent for clean and unsuccessful attempts | `io/state_io.py:end_attempt_at` | attempt-history projection, replay, operator inspection |
 | `result.yaml` (per-task) | `<run>/.state/tasks/<step>/<item>/` | `ResultRecord` | atomic, once at completion | `io/state_io.py:write_result_at` | engine, downstream steps |
 | `manual-ack.yaml` (per-task) | `<run>/.state/tasks/<step>/<item>/` | `ManualAckRecord` | atomic, on operator command | `io/state_io.py:write_manual_ack_at` | engine |
-| `runpool-status.yaml` | `<run>/.state/steps/<step>/` | `RunPoolStatus` | atomic, rewritten each tick | `runpool/status.py:write_status` | human, `metaproc pool`, metabrowser |
-| `scale-state.yaml` | `<run>/.state/steps/<step>/` | `ScaleState` | atomic, each tick | `runpool/status.py:write_scale_state` | engine controller on reconnect |
-| `scale-override.yaml` | `<run>/.state/steps/<step>/` | `ScaleOverride` | atomic, on operator command | `runpool/status.py:write_scale_override` | engine controller |
+| `runpool-status.yaml` | `<run>/.state/` or `<run>/.state/steps/<step>/` | `RunPoolStatus` | atomic, rewritten each tick | `runpool/status.py:write_status` | human, `metaproc pool`, metabrowser |
+| `scale-state.yaml` | `<run>/.state/` or `<run>/.state/steps/<step>/` | `ScaleState` | atomic, each tick | `runpool/status.py:write_scale_state` | engine controller on reconnect |
+| `scale-override.yaml` | `<run>/.state/` or `<run>/.state/steps/<step>/` | `ScaleOverride` | atomic, on operator command | `runpool/status.py:write_scale_override` | engine controller |
 | `dispatch-manifest.yaml` | `<run>/.state/steps/<step>/` | ad-hoc dict (typed envelope pending) | atomic, once after dispatch (appendable) | `io/dispatch_manifest.py:write_dispatch_manifest` | engine on resume |
 | `claimed-items.yaml` | `<run>/.state/steps/<step>/worker-<id>/` | `ClaimedItemsRecord` | atomic, on each claim | `io/claimed_items.py:write_claimed_items` | engine claim coordinator |
 | `runpool-status.yaml` (worker-scoped) | `<run>/.state/workers/worker-<id>/` | `RunPoolStatus` | atomic, rewritten each tick | `runpool/status.py:write_status` | human, `metaproc pool`, metabrowser |
-| `pool-kill-requested.yaml` | `<run>/.state/steps/<step>/` | ad-hoc dict | atomic, once | `runpool/kill.py:_write_sentinel` | engine pool loop |
+| `pool-kill-requested.yaml` | `<run>/.state/` or `<run>/.state/steps/<step>/` | ad-hoc dict | atomic, once | `runpool/kill.py:_write_sentinel` | engine pool loop |
 
 ## Stream artifacts (JSONL)
 
@@ -57,9 +57,9 @@ logical type stays `.jsonl`.
 | Filename | Path | Schema (Pydantic) | Writer | Primary readers |
 | --- | --- | --- | --- | --- |
 | `process-events.jsonl` | `<run>/.logs/` | `ProcessEvent` (discriminated union) | `runpool/process_events.py:ProcessEventLogger._write` | trace builder, resource joiner, metabrowser process-log view |
-| `events.jsonl` (per-step) | `<run>/.logs/runpool/steps/<step>/` | ad-hoc dicts (typed schema pending) | `runpool/events.py:EventLogger._write` | trace builder, auth-usage aggregator, operator inspection |
-| `events.jsonl` (per-worker) | `<run>/.logs/runpool/workers/<worker-id>/` | ad-hoc dicts | `runpool/events.py:EventLogger` | same as above |
-| `health.jsonl` (per-step/worker) | `<run>/.logs/runpool/...` | ad-hoc dicts (typed schema pending) | `runpool/events.py:EventLogger` (health channel) | `metaproc pool health`, operator triage |
+| `events.jsonl` (run-owned or per-step) | `<run>/.logs/runpool/` or `<run>/.logs/runpool/steps/<step>/` | `RunPoolEvent` (discriminated union) | `runpool/events.py:EventLogger._write` | trace builder, auth-usage aggregator, operator inspection |
+| `events.jsonl` (per-worker) | `<run>/.logs/runpool/workers/<worker-id>/` | `RunPoolEvent` (discriminated union) | `runpool/events.py:EventLogger` | same as above |
+| `health.jsonl` (run-owned, per-step, or per-worker) | `<run>/.logs/runpool/...` | `HealthSampleEvent` | `runpool/events.py:EventLogger` (health channel) | `metaproc pool health`, operator triage |
 | `dispatch-config-changes.jsonl` | `<run>/.logs/` | ad-hoc dict (typed envelope pending) | `commands/run_process.py:_record_resume_config_change` | resource aggregator timeline |
 | `trace.jsonl` | `<run>/.logs/derived/` | `TraceEvent` | `trace/store.py:write_trace` | metabrowser trace view, `metaproc trace` |
 | `<step>_<context>_<ts>.jsonl` | `<run>/.logs/tasks/<step>/<item>/` | depends on agent adapter | `runpool/backend.py` (subprocess stdout capture) | trace extractor, human debugging |

@@ -220,6 +220,8 @@ events:
   label: XOM
   pid: 0
 - available_pct: 0.0
+  consecutive_elevated: 0
+  consecutive_normal: 1
   event: pressure_check
   level: normalized
 - completed: 13

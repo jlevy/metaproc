@@ -946,6 +946,55 @@ class TestRunPool:
         }
         assert "active_rss_bytes" in sample
 
+    def test_elevated_hold_records_hysteresis_without_capacity_changes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            pool_module,
+            "measure",
+            lambda: MemoryPressure(
+                available_pct=20.0,
+                swap_used_gb=0.0,
+                total_memory_gb=32.0,
+                level=PressureLevel.ELEVATED,
+                source="test",
+            ),
+        )
+
+        async def run() -> None:
+            pool = RunPool(
+                RunPoolConfig(
+                    max_concurrency=2,
+                    initial_concurrency=2,
+                    pressure_check_interval_s=0.01,
+                    logs_dir=tmp_path,
+                )
+            )
+            sampled = asyncio.Event()
+            assert pool._health_logger is not None
+            write_sample = pool._health_logger.health_sample
+
+            def observe_sample(payload: dict[str, object]) -> None:
+                write_sample(payload)
+                if payload["consecutive_elevated"] == 3:
+                    sampled.set()
+
+            monkeypatch.setattr(pool._health_logger, "health_sample", observe_sample)
+            pool._start()
+            try:
+                await asyncio.wait_for(sampled.wait(), timeout=2)
+            finally:
+                await pool.shutdown()
+
+        asyncio.run(run())
+        events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+        pressure = [event for event in events if event["event"] == "pressure_check"]
+        health = [json.loads(line) for line in (tmp_path / "health.jsonl").read_text().splitlines()]
+        assert not any(event["event"] == "concurrency_adjust" for event in events)
+        for samples in (pressure, health):
+            assert [sample["consecutive_elevated"] for sample in samples[:3]] == [1, 2, 3]
+            assert all(sample["consecutive_normal"] == 0 for sample in samples)
+
     def test_pool_start_logs_resolved_initial_concurrency(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):

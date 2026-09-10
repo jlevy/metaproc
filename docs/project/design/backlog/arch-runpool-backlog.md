@@ -18,8 +18,6 @@ Those decisions are not duplicated here.
 
 ### Open Questions
 
-- Should disk level continue influencing the aggregate capacity level, or become purely
-  diagnostic except at near-full disk?
 - How should the auth-pool-aware classifier interaction be resolved?
   When N parallel orchestrators share a 2-label OAuth pool, the resulting 429 failures
   get misclassified by the `claude-startup-exit-1-silent` known-bug regex due to

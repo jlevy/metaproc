@@ -793,6 +793,8 @@ class RunPool:
         the pause is extended. An earlier ``reset_at`` is ignored (we don't
         shorten an existing pause; the original quota signal was authoritative).
         """
+        if self._shutdown_event.is_set():
+            return
         if self._quota_paused_until is not None and reset_at <= self._quota_paused_until:
             return
         self._quota_paused_until = reset_at
@@ -1048,7 +1050,13 @@ class RunPool:
             exc_type,
             (asyncio.CancelledError, KeyboardInterrupt),
         )
-        await self.shutdown(timeout_s=0.0 if immediate else 30.0)
+        try:
+            await self.shutdown(timeout_s=0.0 if immediate else 30.0)
+        except BaseException as cleanup_exc:
+            if exc is None:
+                raise
+            exc.add_note(f"RunPool shutdown also failed: {cleanup_exc!r}")
+            log.exception("RunPool shutdown failed while handling the caller's exception")
 
     async def shutdown(self, timeout_s: float | None = None) -> None:
         """Graceful shutdown, or immediate shutdown during task cancellation."""
@@ -1091,22 +1099,35 @@ class RunPool:
                         task.cancel()
         finally:
             # The status/event tail must not sit behind an unbounded backend cleanup.
+            if self._quota_pause_task is not None:
+                self._quota_pause_task.cancel()
+                try:
+                    await self._quota_pause_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    # A failed timer must not prevent the rest of terminal cleanup.
+                    log.exception("RunPool quota-pause timer failed before shutdown")
             if self._monitor_task is not None:
                 self._monitor_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await self._monitor_task
 
             self._write_status()
-            if self._event_logger is not None:
-                self._event_logger.pool_shutdown(
-                    self._pool_id,
-                    self._completed_count,
-                    self._failed_count,
-                    self._killed_count,
-                )
-                self._event_logger.close()
-            if self._health_logger is not None:
-                self._health_logger.close()
+            try:
+                if self._event_logger is not None:
+                    try:
+                        self._event_logger.pool_shutdown(
+                            self._pool_id,
+                            self._completed_count,
+                            self._failed_count,
+                            self._killed_count,
+                        )
+                    finally:
+                        self._event_logger.close()
+            finally:
+                if self._health_logger is not None:
+                    self._health_logger.close()
 
     @property
     def snapshot(self) -> RunPoolStatus:
@@ -1164,6 +1185,7 @@ class RunPool:
                 self._semaphore.release()
             if ext_sem is not None and ext_sem_acquired:
                 ext_sem.release()
+            self._write_status()
         if not future.done():
             future.set_result(result)
 
@@ -1197,13 +1219,6 @@ class RunPool:
                     config.label,
                 )
             raise cancelled
-        if self._host_admission is not None and host_lease is not None:
-            self._host_admission.record_child(
-                host_lease,
-                child_pid=handle.pid,
-                external_id=handle.external_id,
-                backend=handle.backend_name,
-            )
         key = handle.pid or handle.external_id or id(handle)
 
         now_mono = time.monotonic()
@@ -1218,14 +1233,21 @@ class RunPool:
         self._active[key] = active
         self._increment_lane_counter(config.lane_id, "active", 1)
 
-        if self._event_logger is not None:
-            self._event_logger.process_start(
-                handle.pid, handle.external_id, handle.backend_name, config.label
-            )
-        self._write_status()
-
-        # Poll until exit, checking health on each interval.
+        # Once launch returns, bookkeeping failures have the same cleanup obligation
+        # as poll failures. Admission must remain held until the child is reaped.
         try:
+            if self._host_admission is not None and host_lease is not None:
+                self._host_admission.record_child(
+                    host_lease,
+                    child_pid=handle.pid,
+                    external_id=handle.external_id,
+                    backend=handle.backend_name,
+                )
+            if self._event_logger is not None:
+                self._event_logger.process_start(
+                    handle.pid, handle.external_id, handle.backend_name, config.label
+                )
+            self._write_status()
             result = await self._poll_until_exit(active)
         except asyncio.CancelledError:
             if not active.killed:
@@ -1293,14 +1315,19 @@ class RunPool:
             pool_id=self._pool_id,
             metadata={"backend": self._backend_name},
         )
-        if self._event_logger is not None:
-            self._event_logger.host_slot_acquired(
-                namespace=lease.namespace,
-                slot_id=lease.slot_id,
-                limit=lease.limit,
-                label=lease.label,
-                lease_path=str(lease.lease_file),
-            )
+        try:
+            if self._event_logger is not None:
+                self._event_logger.host_slot_acquired(
+                    namespace=lease.namespace,
+                    slot_id=lease.slot_id,
+                    limit=lease.limit,
+                    label=lease.label,
+                    lease_path=str(lease.lease_file),
+                )
+        except BaseException:
+            # The caller cannot release a lease that has not been returned yet.
+            self._host_admission.release(lease)
+            raise
         return lease
 
     def _release_host_slot(self, lease: HostAdmissionLease | None) -> None:
@@ -1309,13 +1336,16 @@ class RunPool:
             return
         self._host_admission.release(lease)
         if self._event_logger is not None:
-            self._event_logger.host_slot_released(
-                namespace=lease.namespace,
-                slot_id=lease.slot_id,
-                limit=lease.limit,
-                label=lease.label,
-                lease_path=str(lease.lease_file),
-            )
+            try:
+                self._event_logger.host_slot_released(
+                    namespace=lease.namespace,
+                    slot_id=lease.slot_id,
+                    limit=lease.limit,
+                    label=lease.label,
+                    lease_path=str(lease.lease_file),
+                )
+            except OSError:
+                log.exception("Failed to record host slot release for %s", lease.label)
 
     async def _poll_until_exit(self, active: _ActiveProcess) -> ProcessResult:
         """Poll the process, checking health periodically."""
@@ -1504,25 +1534,30 @@ class RunPool:
 
         # Event log.
         if self._event_logger is not None:
-            if result.kill_reason is not None:
-                self._event_logger.process_kill(
-                    result.pid,
-                    result.external_id,
-                    result.backend,
-                    result.config.label,
-                    result.kill_reason,
-                    result.peak_rss_bytes,
-                )
-            else:
-                self._event_logger.process_exit(
-                    result.pid,
-                    result.external_id,
-                    result.backend,
-                    result.config.label,
-                    result.exit_code,
-                    result.elapsed_s,
-                    result.peak_rss_bytes,
-                )
+            try:
+                if result.kill_reason is not None:
+                    self._event_logger.process_kill(
+                        result.pid,
+                        result.external_id,
+                        result.backend,
+                        result.config.label,
+                        result.kill_reason,
+                        result.peak_rss_bytes,
+                    )
+                else:
+                    self._event_logger.process_exit(
+                        result.pid,
+                        result.external_id,
+                        result.backend,
+                        result.config.label,
+                        result.exit_code,
+                        result.elapsed_s,
+                        result.peak_rss_bytes,
+                    )
+            except OSError:
+                # A failed diagnostic sink cannot replace the process result or
+                # prevent the remaining terminal accounting from being published.
+                log.exception("Failed to record process completion for %s", result.config.label)
 
         # Recent completions ring.
         entry = ProcessStatus(
@@ -1544,8 +1579,6 @@ class RunPool:
         limit = self._config.recent_completions_limit
         if len(self._recent_completions) > limit:
             self._recent_completions = self._recent_completions[-limit:]
-
-        self._write_status()
 
     # ── Pressure monitor ────────────────────────────────────────
 
@@ -1591,6 +1624,8 @@ class RunPool:
                         current_concurrency=self._semaphore.capacity,
                         active_count=len(self._active),
                         pending_count=self._pending_count,
+                        consecutive_normal=self._consecutive_normal,
+                        consecutive_elevated=self._consecutive_elevated,
                         memory_ceiling=self._memory_ceiling,
                         provider_ceiling=self._provider_ceiling,
                         operator_cap=self._operator_cap,
@@ -1809,6 +1844,8 @@ class RunPool:
             "current_concurrency": self._semaphore.capacity,
             "active_count": len(self._active),
             "pending_count": self._pending_count,
+            "consecutive_normal": self._consecutive_normal,
+            "consecutive_elevated": self._consecutive_elevated,
             "memory_ceiling": self._memory_ceiling,
             "provider_ceiling": self._provider_ceiling,
             "operator_cap": self._operator_cap,

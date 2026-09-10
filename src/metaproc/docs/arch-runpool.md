@@ -9,7 +9,7 @@ status: Approved
 Module-level notes, including using RunPool as a library, are in
 [`runpool/README.md`](../runpool/README.md).
 
-**Date:** 2026-04-06 (last updated 2026-09-09) **Status:** Approved
+**Date:** 2026-04-06 (last updated 2026-09-10) **Status:** Approved
 
 RunPool is Metaproc’s local agent process manager.
 It owns subprocess lifecycle, adaptive concurrency, host-level coordination, health
@@ -207,13 +207,13 @@ RunPool logs disk free space and `disk_pressure_cause` for diagnosis:
 - `low_disk_unknown`: low free space without a clear RunPool-local cause
 - `none`: disk headroom is normal
 
-Current status snapshots also expose an aggregate `level` for compatibility, and the
-current adaptive controller still receives that aggregate level.
-That means disk level can influence capacity today.
+Current status snapshots expose `level`, the worst of the memory and swap levels used by
+the adaptive controller, alongside the diagnostic `disk_level`. Disk pressure does not
+change pool capacity.
 Operators should inspect `memory_level`, `swap_level`, and `disk_level` separately
 before drawing conclusions.
-A future behavior PR should keep disk cleanup decisions separate from memory-pressure
-capacity decisions unless disk is so low that new process launches would be unsafe.
+CLI preflight checks disk headroom against its configured minimum before execution.
+That check is separate from the running pool and is not a per-launch disk reservation.
 
 Log compaction and gzip compression are Metaproc log utilities, not RunPool scheduling
 policy. RunPool should keep producing gzip-readable structured logs; compression should
@@ -236,7 +236,7 @@ initial = available_memory * initial_memory_budget_fraction
           / estimated_process_rss_bytes
 ```
 
-Current pressure actions are applied to the aggregate health level today:
+Current pressure actions use the worst of memory headroom and swap growth:
 
 | Level | Action |
 | --- | --- |
@@ -248,8 +248,7 @@ Current pressure actions are applied to the aggregate health level today:
 Reductions are non-preemptive today: running subprocesses are not killed solely because
 capacity falls below active count.
 The cap takes effect as processes exit and slots are released.
-Pressure-shedding, where RunPool kills low-priority active work under sustained critical
-pressure, should be a separately designed and tested feature.
+RunPool does not kill active work solely because of system pressure.
 
 Provider pressure is separate from memory pressure.
 Bursts of provider rate-limit failures reduce the provider ceiling, and provider
@@ -261,17 +260,14 @@ cleared after the incident with `uv run metaproc pool override <run-dir> --clear
 Leaving a low override in run state pins future pools below the dynamic ceiling and
 defeats adaptive recovery.
 
-**Operator cap floor.** The operator cap is a hand-set ceiling, not the safety governor.
-The memory and provider ceilings are what actively govern under pressure.
-For local agent-pool dispatches (claude, codex, gemini, pi-cli) the operator cap should
-be set high (≥20) and the adaptive controller left to ratchet down.
-Setting the operator cap low to “be safe” silently caps
+**Operator cap selection.** The operator cap is a hand-set ceiling.
+Choose it from the execution profile’s measured process-tree RSS, host capacity, and
+other concurrent workloads, then let the memory and provider ceilings govern within it.
+A low operator cap silently caps
 `effective_target = min(memory_ceiling, provider_ceiling, operator_cap)` even when the
-adaptive controller would have allowed more, and the operator gets no warning —
-wall-clock just stretches by 2-8×. Per-adapter memory profiles still shift with CLI
-version, model, and active-count (see § “Per-adapter RSS benchmarks”), so a tight cap is
-the wrong knob: keep the operator cap as a floor (≥20 for local large workflow-class
-workloads) and treat `--cap N` with `N < 20` as a documented incident-time exception.
+adaptive controller would have allowed more, increasing wall-clock time.
+Per-adapter memory profiles shift with CLI version, model, and active count (see §
+“Per-adapter RSS benchmarks”), so remeasure before raising a profile or host cap.
 
 ### Client State Is Part of a Memory Profile
 
@@ -347,25 +343,40 @@ Per-pool `max_concurrency` is not enough when an operator starts several local M
 runs. Multiple small pools can overcommit the same laptop even if each pool’s individual
 cap looks conservative.
 
-Current local RunPools use disk-backed host admission before launching subprocesses.
+Local agent launches use disk-backed host admission.
+Standalone pools acquire slots inside RunPool; `run-process` agent leaves acquire an
+outer scalar-path gate before submitting to the run-owned pool, whose internal host
+admission is disabled to avoid acquiring twice.
 The default namespace is shared by local agent profiles:
 
 ```text
 ~/.metaproc/runpool/host-slots/local-agents/slot-N/
 ```
 
-Each slot is acquired by atomic directory creation and contains a lease with the parent
-RunPool PID, launched child PID, label, pool id, limit, and timestamps.
-Stale slots are reclaimed only after the recorded parent and child are gone.
+Each slot is acquired by atomic directory creation and contains a lease with the owner
+PID, label, pool id, limit, and timestamps.
+Pool-owned admission also records the launched child identity; the outer scalar path
+currently records only the owner.
+Stale reclamation checks the recorded process identities and uses a grace period for
+incomplete leases. A surviving child is protected only when its identity was recorded.
+The stale check and removal are separate operations, so concurrent reclamation is not
+protected by the atomic slot-creation primitive.
 
-This avoids a daemon and survives sleep or process death.
-Process-tree inspection is supporting evidence only; the slot directory is the
-coordination primitive.
+Pool-owned admission propagates a timeout or admission error.
+The outer scalar path, including agent leaves submitted to the run-owned pool, fails
+open after a bounded wait: it logs the admission failure and proceeds without a lease.
+Each gate scans only the slot prefix below its own resolved limit, so this mechanism is
+an aggregate count ceiling only for admitted launches whose launchers resolve the same
+limit. It is not a host-wide memory reservation.
 
-Execution profiles can set `resources.host_max_concurrency` to cap aggregate local agent
-launches. That cap is a safety ceiling, not a statement that the host should always run
-that low. Raising it should be based on observed RSS, memory level, swap growth, and
-wall-clock needs.
+No daemon is required; leases may remain after process death until a later acquisition
+reclaims them.
+Process-tree inspection is supporting evidence only; the slot directory is
+the coordination primitive.
+
+Execution profiles can set `resources.host_max_concurrency` to bound their slot range.
+Raising it should be based on observed RSS, memory level, swap growth, and wall-clock
+needs, with the admission limitations above taken into account.
 
 ## Locking Primitive
 
@@ -435,14 +446,10 @@ cannot be collected.
   same host unless host admission is known to cover them.
 - Treat `max_concurrency` as a ceiling.
   Too low wastes the host and can make daily runs miss wall-clock deadlines.
-- Prefer a high-enough ceiling plus adaptive control over a permanently low cap.
-  For local agent-pool dispatches, hold the operator cap at ≥20 and let the adaptive
-  memory and provider ceilings govern under pressure; see § “Adaptive Concurrency” →
-  “Operator cap floor”.
+- Set profile and host ceilings from measured process-tree RSS and host headroom, then
+  let the adaptive memory and provider ceilings govern within those bounds.
 - Use `pool override --cap` only for explicit temporary interventions, and clear it once
   host health is stable.
-  A `--cap` value below the operator-cap floor (20 for local large workflow-class
-  workloads) needs a logbook entry plus a follow-up `--clear`.
 - Treat sustained `elevated` memory as a hold state, not an automatic collapse to one
   worker.
 - Treat `high` or `critical` memory, or fast positive swap growth, as a reason to reduce
@@ -461,7 +468,8 @@ cannot be collected.
 | --- | --- |
 | `pool.py` | Pool manager, adaptive controller, health sampling, status writes |
 | `backend.py` | Launch backend protocol and local subprocess backend |
-| `host_admission.py` | Disk-backed aggregate host admission across local RunPools |
+| `host_admission.py` | Disk-backed local launch slots and lease ownership |
+| `scalar_admission.py` | Best-effort admission for direct scalar agent launches |
 | `concurrency.py` | Structured concurrency-plan provenance (`ConcurrencyPlan` model) |
 | `events.py` | Append-only JSONL event writer for pool events |
 | `event_models.py` | Typed pool event schemas |

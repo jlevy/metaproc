@@ -6,7 +6,7 @@ status: Approved
 ---
 # Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-09-09) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-09-10) **Status:** Approved
 
 Also readable as `metaproc help design`.
 
@@ -1424,8 +1424,8 @@ one than the record written to the item’s own `status.yaml`:
 | `output` | always | The declared output name from the process spec, not a filename |
 | `kind` | always | One `OutputFailureKind`: `missing`, `empty`, `unreadable`, `structural`, or `semantic` |
 | `contract` | when the output declared one | The contract id the output was validated against |
-| `invariant` | `structural` and `semantic` only | The structural error code, or the semantic validator that refused the document |
-| `location` | when the refusal carried a position | Dot-joined path *within* the document, such as `items.0.field`; not a line number and not a filesystem path |
+| `invariant` | when the validator supplied one | The structural error code or semantic validator; an input error reclassified as `unreadable` can retain its code |
+| `location` | when the refusal carried a position | The validator’s path within the document, such as `$.ticker`; list or tuple locations are dot-joined, such as `items.0.field` |
 
 A field whose value is absent is omitted rather than written null, so a `missing`-kind
 failure yields a two-field record.
@@ -1891,10 +1891,18 @@ Handling follows the class: retriable classes retry per `RetryPolicy` on the poo
 and `quota_exhausted` pauses submissions until the provider’s named reset time rather
 than burning attempts against a closed window.
 
-Two known gaps, both against design test 17: the `run-process` inline execution paths
-neither classify nor retry (the pool path owns that machinery today), and no aggregate
-view buckets failures by layer or class, so the real-time half of placement exists and
-the aggregate half does not.
+The execution paths apply these policies at different boundaries.
+Scalar agent steps classify operational and output failures and retry within the
+resolved budget. Mapped code steps and aligned code chains apply each step’s declared
+`fan_out.retry` budget to retryable contract failures.
+Scalar code steps run once.
+Pool status counts some failure classes, but `invalid_output` remains a single bucket
+and run-level step summaries do not retain item failure classes.
+
+`on_invalid: fail_run` is recognized as a permanent item failure, but execution paths do
+not yet propagate it as a run-wide abort.
+It has the same effect as `fail` today; it must not be used as a guarantee that sibling
+work will stop.
 
 ### Cause Preservation at Aggregation Boundaries
 
@@ -1917,10 +1925,11 @@ to reconstruct by hand something the framework already knew and then discarded.
 A summarizer satisfies the invariant by carrying one of three things: the causes
 themselves, a count bucketed by `FailureClass` or `OutputFailureKind`, or an explicit
 pointer to the records that hold them.
-Dropping a field because its value was `None`, or because the reading model never
-declared it, is not summarizing.
+An absent optional value may be omitted.
+A populated cause must survive as detail, a classified count, or a usable reference; an
+undeclared model field must not silently discard it.
 
-Three current implementation gaps are named here rather than left to be rediscovered.
+The current boundaries have different coverage.
 
 **The run-level step record.** Step entries in `process-status.yaml` are untyped dicts,
 and nothing requires an entry in state `failed` to carry a cause.
@@ -1938,30 +1947,25 @@ Two aggregations exist and neither closes the gap.
 `StepStatusEntry.item_counts` reports coverage with no failed count and no reason, and
 the fan-in collector reads item causes correctly but runs only when a *downstream* step
 declares `collect:`, so a mapped step with no consumer produces nothing.
-Closing this is closer to invoking the existing collector on the failing step’s own
-behalf than to building a second aggregation.
 
-**The typed event reader.** `PressureCheckEvent` declares a subset of the fields
-`EventLogger.pressure_check` writes, and the event models set no `model_config`, so
-pydantic’s default `extra="ignore"` drops the remainder.
-A consumer reading through `read_runpool_events` cannot see `bottleneck` or
-`effective_target` even though both are on disk and the raw-dict path behind
-`metaproc pool events` renders them.
-The `RunPoolEvent` union omits the quota-pause events and `health_sample` entirely, and
-the reader catches the resulting `ValidationError` and skips the line at debug level, so
-quota-pause history is invisible to every typed reader.
-A reading model that silently narrows a log it was handed is the same defect as a writer
-that never recorded the field.
+**The typed event reader.** `RunPoolEvent` includes lifecycle, quota-pause, pressure,
+and health-sample events.
+The pressure and concurrency models retain the controller ceilings, effective target,
+and bottleneck written to the log.
+Optional fields allow older records without those measurements to remain readable.
+The reader still skips malformed records and unknown event types, so a new writer event
+or field must update the typed contract and its writer-to-reader tests together.
+Health samples live in the separate `health.jsonl` stream; including their type does not
+merge the two files.
 
 **Admission.** `host_slot_acquired` is written after the slot is taken.
 A launch that waits, and a launch that exhausts `DEFAULT_HOST_ADMISSION_TIMEOUT_S` and
 then fails, write nothing.
 `pressure_check` carries `pending_count` on its sampling interval, so a reader can infer
 that work is queued but not which gate holds it or for how long.
-The governor’s hysteresis counters have the same shape of gap: `consecutive_normal` and
-`consecutive_elevated` ride only on `concurrency_adjust`, which `_set_capacity` skips
-when the cap does not move, and a cap that does not move is exactly the sustained
-`elevated` hold a reader is trying to explain.
+The governor records `consecutive_normal` and `consecutive_elevated` on each
+`pressure_check` and `health_sample`, including a sustained `elevated` hold with no
+capacity change. `concurrency_adjust` is emitted only when capacity changes.
 
 ### 13.1 Plugin System
 
@@ -2615,6 +2619,11 @@ multi-phase workflows.
 - **`metaproc status --check <condition>`**: programmatic check mode for agent
   orchestration: asserts completion state via exit codes (0=passed, 1=failures,
   2=still-running), replacing ad-hoc `--dry-run | grep` patterns.
+  `--check completed` accepts an inactive run with zero recorded tasks when no terminal
+  process failure is recorded.
+  It does not prove that expected work or output exists; validate coverage and required
+  artifacts as described in the
+  [operator reference](metaproc-operator-reference.md#a-green-run-is-not-a-reviewed-run).
 - **`metaproc wait <run-dir>`**: blocks until a run reaches terminal state, then prints
   final status. A terminal process failure returns failure even when no fan-out item
   records exist. Eliminates polling loops in multi-phase playbooks.
