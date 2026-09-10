@@ -5,12 +5,12 @@ title: v0.4.1 release
 kind: epic
 status: open
 priority: 1
-version: 1
+version: 2
 labels:
   - release
 dependencies: []
 created_at: 2026-09-10T19:34:56.548Z
-updated_at: 2026-09-10T19:34:56.548Z
+updated_at: 2026-09-10T19:42:00.397Z
 ---
 Patch release readying the four commits merged after v0.4.0: the model-catalog work (#69), the RunPool diagnostics and cleanup-ownership fixes (#75), and the UTC shipped-doc date gate (#76), plus the doc/bead reconciliation in #74.
 
@@ -23,3 +23,7 @@ Release records readied on this branch:
 - TODO.md Release Follow-Ups reconciled: mp-lto0 is closed and its stale bullet removed; mp-x1qh reworded to the open question that remains.
 
 Remaining scope is the tag itself and the publish it triggers, per docs/publishing.md. TODO.md section Current Release moves to v0.4.1 once that tag exists. The tag was deliberately not cut on this branch.
+
+## Notes
+
+Release records readied on branch claude/lucid-archimedes-mvu2er and proposed in https://github.com/jlevy/metaproc/pull/77. make verify green (4,684 passed, 8 skipped, installed-wheel smoke on metaproc 0.4.1.dev4+7e49f57); PR CI green on lint, distribution, and Python 3.12, 3.13 and 3.14. Remaining scope is the tag and the publish it triggers.
