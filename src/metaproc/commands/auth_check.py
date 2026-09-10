@@ -280,7 +280,7 @@ def _run_live_check(
     # fallback is what produced the vertex-maas false-green (see Phase 0c
     # blocker report).
     merged_config: dict[str, object] = {}
-    if variant:
+    if variant is not None:
         merged_config["model"] = variant
     effective_provider = provider
     if adapter_type == "pi-cli" and variant and not effective_provider:
@@ -315,11 +315,14 @@ def _run_live_check(
         prompt_path = Path(f.name)
 
     try:
-        cmd = adapter.build_command(
-            prompt_file=prompt_path,
-            merged_config=merged_config,
-            variables={},
-        )
+        try:
+            cmd = adapter.build_command(
+                prompt_file=prompt_path,
+                merged_config=merged_config,
+                variables={},
+            )
+        except ValueError as exc:
+            return [(False, f"{label}: invalid adapter configuration: {exc}")]
 
         # Disable function-tools for pi-cli live smokes so the dispatch
         # exercises a clean roundtrip without hitting OpenAI's
@@ -743,9 +746,8 @@ def auth_check(
         None,
         "--assert-model",
         help=(
-            "Verify the live --live probe actually dispatched against a model "
-            "whose identity contains this substring. Catches silent --model "
-            "fallbacks (claude/gemini warn-and-default on unknown names). "
+            "Verify the --live probe's observed model identity contains this substring. "
+            "Detects upstream CLI alias resolution or routing changes. "
             "codex-cli's event stream does not carry model ID, so for codex "
             "this emits an informational line rather than a hard assertion; "
             "the codex guarantee is covered by a separate negative-control smoke."

@@ -1,12 +1,14 @@
-"""Centralized model and adapter defaults.
+"""Adapter and resource defaults.
 
-Model names and valid-model sets are overridable via process spec
-config so projects can set their own defaults.
+Process specs select models from the reviewed catalog in
+``metaproc.config.model_catalog`` and can override default selections.
 """
 
 from __future__ import annotations
 
 import os as _os
+
+from metaproc.config.model_catalog import MODEL_CATALOG, known_model_ids
 
 # ── GCP ─────────────────────────────────────────────────────────
 # Proactive token refresh margin (minutes).  GCP access tokens have a 60-minute
@@ -87,80 +89,29 @@ POOL_STALL_TIMEOUT_MINUTES: int | None = (
 
 # ── Claude ────────────────────────────────────────────────────────
 
-CLAUDE_DEFAULT_MODEL = "opus"
+CLAUDE_DEFAULT_MODEL = MODEL_CATALOG.defaults["claude-code-cli"]
 CLAUDE_DEFAULT_EFFORT = "high"
 
-CLAUDE_VALID_MODELS: set[str] = {
-    "claude-fable-5-1",
-    "claude-opus-5",
-    "claude-sonnet-5",
-    "opus",
-    "sonnet",
-    "haiku",
-    "claude-opus-4-7",
-    "claude-opus-4-6",
-    "claude-sonnet-4-6",
-    "claude-haiku-4-5-20251001",
-}
+CLAUDE_VALID_MODELS: set[str] = set(known_model_ids("claude-code-cli"))
 
 # ── Gemini ────────────────────────────────────────────────────────
 
-GEMINI_DEFAULT_MODEL = "gemini-3.1-pro-preview-customtools"
+GEMINI_DEFAULT_MODEL = MODEL_CATALOG.defaults["gemini-cli"]
 GEMINI_DEFAULT_THINKING_LEVEL = "HIGH"
 
-GEMINI_VALID_MODELS: set[str] = {
-    # Gemini 3.8 — GA 2026-09-02. Newest Flash model.
-    "gemini-3.8-flash",
-    # Gemini 3.7 — GA 2026-08-13.
-    "gemini-3.7-flash",
-    # Gemini 3.6 — GA July 2026, with lower output pricing than 3.5 Flash.
-    # 3.6, 3.7 and 3.8 Flash sit in Google's short-term-availability class,
-    # which retires a model 45 days after its replacement ships, so the newest
-    # of them is also the one with the longest remaining life.
-    "gemini-3.5-flash-lite",
-    "gemini-3.6-flash",
-    # Gemini 3.5 — GA May 2026. 3.5 Flash is positioned by Google as
-    # "shifting Flash from speed to autonomy" (better at agentic / tool-use
-    # workflows than the 3.0/3.1 Flash previews). Released 2026-05-19 at I/O.
-    "gemini-3.5-flash",
-    # Gemini 3.1 family
-    "gemini-3.1-pro-preview",
-    "gemini-3.1-pro-preview-customtools",
-    "gemini-3.1-flash-lite",  # GA 2026-05-07
-    "gemini-3.1-flash-lite-preview",
-    # Gemini 3.0 (older previews — kept for backward compat with stored runs)
-    "gemini-3-pro-preview",
-    "gemini-3-flash-preview",
-    # Shorthand aliases pi-cli / gemini-cli resolve internally.
-    "auto",
-    "auto-gemini-3",
-    "pro",
-    "flash",
-    "flash-lite",
-}
+GEMINI_VALID_MODELS: set[str] = set(known_model_ids("gemini-cli"))
 
 # ── Codex ────────────────────────────────────────────────────────
 #
 # codex-cli (OpenAI Codex CLI, npm @openai/codex) defaults. The adapter
 # dispatches through `codex exec --json`; see
 # src/metaproc/docs/metaproc-design.md
-# for design context and the empirical 0.124.0 surface.
+# for design context. Model review evidence lives in config/model_catalog.py.
 
-CODEX_DEFAULT_MODEL = "gpt-5.5"
+CODEX_DEFAULT_MODEL = MODEL_CATALOG.defaults["codex-cli"]
 CODEX_DEFAULT_EFFORT = "medium"
 
-# Explicit model IDs verified against provider catalogs on 2026-09-06.
-# Preserve previous IDs for pinned workflows and historical run validation.
-CODEX_VALID_MODELS: set[str] = {
-    "gpt-6-astra",
-    "gpt-5.6-sol",
-    "gpt-5.6-terra",
-    "gpt-5.6-luna",
-    "gpt-5.5",
-    "gpt-5.5-pro",
-    "gpt-5.4",
-    "gpt-5.4-mini",
-}
+CODEX_VALID_MODELS: set[str] = set(known_model_ids("codex-cli"))
 
 # `codex exec --sandbox <MODE>` — the three upstream-documented modes.
 CODEX_VALID_SANDBOX_MODES: set[str] = {
@@ -180,81 +131,25 @@ CODEX_VALID_APPROVAL_POLICIES: set[str] = {
 }
 
 # `-c model_reasoning_effort=<EFFORT>` — codex-cli config-path override.
+# Named values in the pinned 0.147.0 parser. Availability is model-specific;
+# accepting the syntax does not mean every model supports every effort.
 CODEX_VALID_EFFORTS: set[str] = {
+    "none",
     "minimal",
     "low",
     "medium",
     "high",
+    "xhigh",
+    "max",
+    "ultra",
 }
 
 # ── Pi ───────────────────────────────────────────────────────────
 
-PI_DEFAULT_MODEL = "sonnet"
+PI_DEFAULT_MODEL = MODEL_CATALOG.defaults["pi-cli"]
 PI_DEFAULT_PROVIDER = "anthropic"
 
-PI_VALID_MODELS: set[str] = {
-    # Anthropic
-    "sonnet",
-    "opus",
-    "haiku",
-    "claude-opus-4-7",
-    "claude-sonnet-4-6",
-    "claude-opus-4-6",
-    "claude-haiku-4-5-20251001",
-    # OpenAI — current tiers only. GPT-5.5 (released 2026-04-23, API
-    # 2026-04-24) is the flagship; gpt-5.4-mini / gpt-5.4-nano are the
-    # current cost-optimized tiers (gpt-5.5-mini is projected Q3 2026).
-    # gpt-5.5-pro is intentionally absent: it requires OpenAI's
-    # /v1/responses endpoint and pi-cli's `openai-completions` api
-    # cannot dispatch it (returns "404 not a chat model"). gpt-5.5-pro
-    # is still in CODEX_VALID_MODELS — codex-cli handles responses
-    # internally — and in pricing.md for cost rollups.
-    "gpt-5.5",
-    "gpt-5.4-mini",
-    "gpt-5.4-nano",
-    # Google
-    "gemini-3.1-pro-preview",
-    # Vertex AI — Gemini via google-vertex native API (pi-mono @google/genai SDK).
-    # Migrated 2026-04-18 from openai-completions to google-vertex so Gemini 3
-    # preview thought_signature round-trip works — see
-    # metaproc/docs/runbooks/adapter-compatibility.runbook.md.
-    # Naked IDs (no "google/" prefix) — that's the form pi-mono's google-vertex
-    # provider uses. Keep these strings in sync with pi-models.default.json
-    # and with consuming process-spec adapter maps. Mismatches here cause the
-    # adapter to silently fall back to PI_DEFAULT_MODEL ("sonnet") and
-    # retry-storm every item — see commit fixing 1d-r4 / 1e-r4 / 1ect-r4.
-    # gemini-3.5-flash is the GA agentic-Flash from I/O 2026-05-19.
-    "gemini-3.5-flash",
-    "gemini-3.1-flash-lite",
-    "gemini-3-flash-preview",
-    "gemini-3.1-pro-preview-customtools",
-    # Vertex AI MaaS (via openai-completions in models.json)
-    "glm-5-maas",
-    "glm-4.7-maas",
-    "kimi-k2-thinking-maas",
-    "deepseek-v3.2-maas",
-    "qwen3-235b-a22b-instruct-2507-maas",
-    "qwen3-coder-480b-a35b-instruct-maas",
-    # Vertex MaaS models referenced by fully-qualified publisher IDs
-    # in pi-models.default.json. Both short names (above) and long
-    # forms resolve under pi-cli's lookup, so accept either here.
-    "zai-org/glm-5-maas",
-    "zai-org/glm-4.7-maas",
-    "moonshotai/kimi-k2-thinking-maas",
-    "deepseek-ai/deepseek-v3.2-maas",
-    "qwen/qwen3-235b-a22b-instruct-2507-maas",
-    "qwen/qwen3-coder-480b-a35b-instruct-maas",
-    # DeepSeek first-party API (V4 family). Released 2026-04-24.
-    # Both IDs support 1M context and dual mode (thinking /
-    # non-thinking) on the same model ID. See
-    # src/metaproc/docs/metaproc-design.md.
-    "deepseek-v4-pro",
-    "deepseek-v4-flash",
-    # Moonshot first-party API (Kimi K2.6). GA April 2026,
-    # multimodal (text + image). Vertex MaaS still only carries
-    # kimi-k2-thinking-maas (above).
-    "kimi-k2.6",
-}
+PI_VALID_MODELS: set[str] = set(known_model_ids("pi-cli"))
 
 # Derived from the central provider registry so adding a new provider in
 # metaproc/config/providers.py is a one-place change. The registry already

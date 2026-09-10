@@ -12,7 +12,7 @@ providers:
         cost_source: computed
         source_url: 'https://openai.com/api/pricing'
         last_reviewed: '2026-04-27'
-        notes: "OpenAI's current flagship — released 2026-04-23, API 2026-04-24. 1M context. Per OpenAI's public announcement: $5/M input, $30/M output. 90% cached-input discount per the GPT-5 family formula. Older gpt-5.x and o-series IDs were trimmed from this file per `only support latest OpenAI`; restore from git history if a historical run requires re-validation."
+        notes: "Reviewed 2026-04-27. Released 2026-04-23, API 2026-04-24. 1M context. Per OpenAI's public announcement: $5/M input, $30/M output. 90% cached-input discount per the GPT-5 family formula. Model availability and lifecycle are maintained in model_catalog.py."
       gpt-5.5-pro:
         actual_price:
           input_per_1m: 30.00
@@ -29,7 +29,7 @@ providers:
         cost_source: computed
         source_url: 'https://openai.com/api/pricing'
         last_reviewed: '2026-04-27'
-        notes: "Current best `mini` tier from OpenAI — gpt-5.5-mini is projected Q3 2026, until then this remains the cost-optimized choice. 90% cached-input discount per the GPT-5 family formula. Cross-verified via OpenRouter 2026-04-14."
+        notes: "Reviewed 2026-04-27. 90% cached-input discount per the GPT-5 family formula. Cross-verified via OpenRouter 2026-04-14. Model availability and lifecycle are maintained in model_catalog.py."
       gpt-5.4-nano:
         actual_price:
           input_per_1m: 0.20
@@ -38,7 +38,7 @@ providers:
         cost_source: computed
         source_url: 'https://openai.com/api/pricing'
         last_reviewed: '2026-04-27'
-        notes: "Fastest, lowest-cost OpenAI tier. No `nano` released for the gpt-5.5 family; this remains current. Cross-verified via OpenRouter 2026-04-14."
+        notes: "Reviewed 2026-04-27 and cross-verified via OpenRouter 2026-04-14. Model availability and lifecycle are maintained in model_catalog.py."
 
   anthropic:
     models:
@@ -51,7 +51,7 @@ providers:
         cost_source: self-reported
         source_url: 'https://platform.claude.com/docs/en/about-claude/pricing'
         last_reviewed: '2026-04-24'
-        notes: "Current flagship Opus (1M-context variant `claude-opus-4-7[1m]` per research-2026-04-19-agent-orch-comprehensive-review.md §release-notes). Rates carried over from 4.6 — Anthropic typically holds prices steady across point releases, but operator should cross-verify against platform.claude.com/docs/en/about-claude/pricing before production cost rollups. cache_write_per_1m uses the 5-minute prompt-cache write rate."
+        notes: "Rates carried over from 4.6, not independently verified for this model. Cross-verify against platform.claude.com/docs/en/about-claude/pricing before production cost rollups. cache_write_per_1m uses the 5-minute prompt-cache write rate. Model availability and lifecycle are maintained in model_catalog.py."
       claude-opus-4-6:
         actual_price:
           input_per_1m: 5.00
@@ -103,7 +103,7 @@ providers:
         cost_source: computed
         source_url: 'https://ai.google.dev/gemini-api/docs/pricing'
         last_reviewed: '2026-07-24'
-        notes: "Gemini 3.6 Flash — GA 2026-07-21. Current stable Flash tier for agentic and multimodal work. Google lists the same input price as Gemini 3.5 Flash with a lower output price, 1M input context, 64K maximum output, and medium default thinking."
+        notes: "Reviewed 2026-07-24. Gemini 3.6 Flash was GA 2026-07-21. Google listed the same input price as Gemini 3.5 Flash with a lower output price, 1M input context, 64K maximum output, and medium default thinking. Model availability and lifecycle are maintained in model_catalog.py."
       gemini-3.5-flash:
         actual_price:
           input_per_1m: 1.50
@@ -112,7 +112,7 @@ providers:
         cost_source: computed
         source_url: 'https://ai.google.dev/gemini-api/docs/pricing'
         last_reviewed: '2026-05-23'
-        notes: "Gemini 3.5 Flash — GA 2026-05-19 at Google I/O. Positioned by Google as the agentic-optimized Flash tier (better tool calling than gemini-3-flash-preview). Available via Gemini API, AI Studio, and Vertex AI (global + regional endpoints). 1M input context. Rate card is 3x the 2.5-flash rate but Google says intelligence/agentic gains justify it for tool-use lanes."
+        notes: "Reviewed 2026-05-23. Gemini 3.5 Flash was GA 2026-05-19 at Google I/O. Google positioned it for agentic tool use. 1M input context. Rate card was 3x the 2.5-flash rate. Model availability and lifecycle are maintained in model_catalog.py."
       gemini-3.1-pro-preview:
         actual_price:
           input_per_1m: 2.00
@@ -139,7 +139,7 @@ providers:
         cost_source: computed
         source_url: 'https://ai.google.dev/gemini-api/docs/pricing'
         last_reviewed: '2026-04-02'
-        notes: "Current public Google pricing page rate card for the preview model."
+        notes: "Google pricing page rate card reviewed 2026-04-02. Model availability and lifecycle are maintained in model_catalog.py."
       gemini-3-flash-preview:
         actual_price:
           input_per_1m: 0.50
@@ -166,7 +166,7 @@ providers:
         cost_source: computed
         source_url: 'https://ai.google.dev/gemini-api/docs/pricing'
         last_reviewed: '2026-05-23'
-        notes: "Gemini 3.1 Flash-Lite — GA 2026-05-07 (preview → stable). Identical rate card to gemini-3.1-flash-lite-preview. Use this ID for new lanes."
+        notes: "Reviewed 2026-05-23. Gemini 3.1 Flash-Lite was GA 2026-05-07. Identical rate card to gemini-3.1-flash-lite-preview. Model availability and lifecycle are maintained in model_catalog.py."
 
   deepseek:
     models:
@@ -204,7 +204,7 @@ providers:
         cost_source: computed
         source_url: 'https://platform.moonshot.ai/'
         last_reviewed: '2026-04-27'
-        notes: "Kimi K2.6 (1T-parameter MoE, 262K context) via Moonshot's direct API. GA April 2026. Multimodal (text + image). OpenAI-compatible /v1/chat/completions endpoint. The older agentic variant kimi-k2-thinking-maas is still on Vertex MaaS (see vertex-maas: block) for use cases that need it."
+        notes: "Moonshot direct-API pricing reviewed 2026-04-27. The exact current model ID and availability were not established in the 2026-09-10 model catalog review."
 
   vertex-maas:
     models:
@@ -288,12 +288,6 @@ AI MaaS models).
 For adapters that self-report cost (for example Claude CLI via Anthropic
 API), the self-reported value still takes precedence for `actual_cost`.
 
-> **Refresh check.** When updating this file, sanity-check shared model prices against
-> the private `llms.yml` reference maintained alongside metaproc.
-> The cross-check is informal; metaproc is intended to stay standalone with no hard
-> dependency on or codegen from that file (it may be open-sourced as a domain-neutral
-> tool).
-
 ## All Models — List Price Comparison
 
 Sorted by output cost descending.
@@ -338,29 +332,13 @@ after `deepseek-chat` itself was retired as a separate row.
 
 ### OpenAI
 
-**GPT-5.4 family verified 2026-04-14** against OpenRouter’s `openai/*` mirror, because
-`openai.com/api/pricing` blocks automated fetches (HTTP 403). OpenRouter
-(<https://openrouter.ai/api/v1/models>) is a standard cross-reference source for OpenAI
-rates.
+**GPT-5.4 family reviewed 2026-04-14** against OpenRouter’s `openai/*` mirror.
 
-The GPT-5.4 family (gpt-5.4, gpt-5.4-mini, gpt-5.4-nano, gpt-5.4-pro) carries verified
-rates.
-
-**Reinstated 2026-04-24:** `gpt-5.3-codex`, `gpt-5.2`, and `gpt-5.2-codex` are listed in
-the OpenAI API public catalog and are now admitted to `PI_VALID_MODELS` +
-`CODEX_VALID_MODELS` for codex-cli adapter dispatch.
-Rates for these three are **approximate estimates** in this file (derived from the
-GPT-5.4 family pattern and typical OpenAI tier discounting) and **operators should
-cross-verify against openai.com/api/pricing** before using their cost rollups for
-production accounting.
-OpenRouter does not currently mirror these older tiers, which is why they lack direct
-cross-reference.
+The retained Mini and Nano rows record that review’s rates.
 
 OpenAI’s documented cache pricing formula is input ÷ 10 (90% cached-input discount) for
-the GPT-5 family. For GPT-5.4, GPT-5.4-mini, GPT-5.4-nano, GPT-5.3-codex, GPT-5.2, and
-GPT-5.2-codex the `cache_read_per_1m` values in the YAML follow that 10:1 ratio exactly.
-`gpt-5.4-pro` has no publicly-listed cached-input price on OpenRouter, so
-`cache_read_per_1m` is omitted.
+the GPT-5 family. Treat the formula as a sanity check and verify every stored rate
+against a current primary source.
 
 **ChatGPT-OAuth dispatch (Vehicle B, via codex-cli).** When a run dispatches through
 codex-cli using a ChatGPT subscription OAuth session (`~/.codex/auth.json` with
@@ -396,21 +374,20 @@ file do not have a separate `list_price` block.
 
 **July 2026 additions:**
 
-- `gemini-3.6-flash` — GA 2026-07-21. Google’s current stable Flash model for agentic
-  and multimodal work.
-  The standard paid tier is $1.50/M input and $7.50/M output, with medium default
-  thinking, 1M input context, and 64K maximum output.
+- `gemini-3.6-flash` — GA 2026-07-21. The standard paid tier is $1.50/M input and
+  $7.50/M output, with medium default thinking, 1M input context, and 64K maximum
+  output.
 
 **May 2026 additions:**
 - `gemini-3.5-flash` — GA 2026-05-19 at Google I/O. Positioned by Google as the
   agentic-Flash tier (shift from “speed” to “autonomy”) and better at tool calling than
   `gemini-3-flash-preview`. $1.50/$9.00 — 3x the 2.5-Flash rate but Google says
   intelligence/agentic gains justify it.
-  Available via Gemini API, AI Studio, Antigravity, and Vertex AI (global + regional
-  endpoints). Note: 3.x models are not yet available in EU regions on Vertex.
 - `gemini-3.1-flash-lite` — GA 2026-05-07 (preview → stable).
-  Same rate card as `gemini-3.1-flash-lite-preview`; new IDs should use the unsuffixed
-  form.
+  Same rate card as `gemini-3.1-flash-lite-preview`.
+
+Current model availability, lifecycle, and route evidence are maintained in
+`model_catalog.py`; this file records pricing evidence only.
 
 This file stores the standard paid tier for the listed model IDs.
 For `gemini-3.1-pro-preview`, `gemini-3.1-pro-preview-customtools`, and
@@ -608,34 +585,29 @@ Additional per-model fields:
 
 ## How to Update This File
 
-**Schedule:** Monthly, or when adding a new model to a process spec, or when notified of
-provider changes.
+**Schedule:** Monthly, when adding a model to a process spec, or when a provider changes
+its rates. Model availability and lifecycle are reviewed separately under
+[Model Catalog Maintenance](../../../docs/project/model-catalog-maintenance.md).
 
 ### Update procedure
 
-1. **Drift detection** — Fetch <https://models.dev/api.json> and diff against this file.
-   Look up models under the `firmware` provider key (most complete data, including cache
-   pricing). Identify new models, deprecated models, and pricing deltas.
-   models.dev has known accuracy issues (~24 reported bugs upstream), so treat it as a
-   drift detector, not source of truth.
-2. **Cross-reference** — For models not yet on models.dev, or when models.dev looks
-   wrong, check OpenRouter (<https://openrouter.ai/api/v1/models>) and
-   `badlogic/pi-mono`’s corrections list (<https://github.com/badlogic/pi-mono>).
-3. **Verify deltas** against the official provider pages listed below.
-4. **Re-check Google credit / promotion docs** if this file makes any claims about free
+1. **Verify current rates** against the official provider pages listed below.
+   Record the applicable API, region, context tier, cache policy, and effective date.
+2. **Use secondary catalogs for drift detection.** Compare models.dev, OpenRouter, and
+   pi-mono with this file, but do not treat them as rate authority.
+3. **Resolve every delta** against a primary provider source.
+   Leave the existing rate unchanged and record the uncertainty when no current primary
+   source is available.
+4. **Recheck Google credit and promotion docs** if this file makes any claims about free
    tiers, startup credits, or partner-model credits.
-5. **Sanity-check shared models** against the private `llms.yml` reference (see the
-   refresh-check callout near the top of this file).
-   Informal; no automated sync.
-6. **Update the YAML frontmatter:** prices, notes, `last_reviewed` per model, and
+5. **Update the YAML frontmatter:** prices, notes, `last_reviewed` per model, and
    top-level `last_updated`.
-7. **Update the markdown table and prose below** so it matches the frontmatter exactly.
+6. **Update the markdown table and prose below** so it matches the frontmatter exactly.
    The table is sorted by output cost descending.
-8. **Run tests:**
-   `uv run --project metaproc --with pyyaml pytest metaproc/tests/test_usage.py -q`
-9. **Optionally lint the test file:**
-   `uv run --project metaproc python -m ruff check metaproc/tests/test_usage.py`
-10. **Verify on a recent run:** `metaproc write-usage <phase-dir>`
+7. **Run the focused test:**
+   `uv --config-file uv.toml run --frozen pytest tests/test_usage.py -q`.
+8. **Run `make verify`** and confirm the pricing data is present in the built wheel.
+9. **Verify on a recent run when available:** `metaproc write-usage <phase-dir>`.
 
 ### When to update
 
@@ -647,8 +619,7 @@ provider changes.
 
 ### Official pricing sources (primary — use these)
 
-- **OpenAI:** <https://openai.com/api/pricing> — note that this page currently returns
-  HTTP 403 to automated fetchers; cross-reference via OpenRouter (below).
+- **OpenAI:** <https://openai.com/api/pricing>
 - **Anthropic:** <https://platform.claude.com/docs/en/about-claude/pricing> and
   <https://claude.com/pricing>
 - **Google Gemini:** <https://ai.google.dev/gemini-api/docs/pricing>
@@ -664,8 +635,7 @@ provider changes.
 ### Cross-reference sources (secondary — for validation)
 
 - **models.dev:** <https://models.dev/api.json> — use the `firmware` provider key.
-- **OpenRouter:** <https://openrouter.ai/api/v1/models> — useful when a direct provider
-  page blocks automated fetchers (currently: OpenAI).
+- **OpenRouter:** <https://openrouter.ai/api/v1/models>
 - **pi-mono:** <https://github.com/badlogic/pi-mono> — maintains manual corrections for
   upstream pricing errors across 700+ models.
 
@@ -688,3 +658,7 @@ model:
 | Google | input ÷ 10 (90% discount) for Gemini 2.5 and 3.x; input ÷ 4 (75%) for Gemini 2.0 |
 | xAI | input ÷ 4 (75% discount) for most models |
 | DeepSeek | input ÷ 10 (90% discount) |
+
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
+-->

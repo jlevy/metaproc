@@ -13,6 +13,8 @@ it ships.
 
 The [roadmap](../../TODO.md) lists active releases and deferred quality work.
 The tbd issue graph holds task-level status and dependencies.
+[Model Catalog Maintenance](model-catalog-maintenance.md) defines the recurring evidence
+review for accepted model IDs, defaults, lifecycle status, and adapter compatibility.
 
 ## Specifications
 
