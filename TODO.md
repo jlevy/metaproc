@@ -4,11 +4,14 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
 
 ## Current Release
 
-- **[v0.4.0](https://github.com/jlevy/metaproc/releases/tag/v0.4.0)** (`mp-1n2a`):
-  published from tag `2a0aade`, the squash merge of pull request 73. The release is a
-  minor, not a patch: the delta since v0.3.0 removes public CLI surface, renames the
-  four adapter modules, changes a CLI exit code, and changes the default scope failure
-  policy.
+- **[v0.4.1](https://github.com/jlevy/metaproc/releases/tag/v0.4.1)** (`mp-m22t`):
+  published from tag `36ad4fa`, the squash merge of pull request 77 and the current tip
+  of main, so there is no gap between the published wheel and post-release main for a
+  co-developing consumer to pin around.
+  The release is a patch, not a minor: nothing public was removed or renamed and no
+  adapter default changed.
+  Its one behavior change is that an unrecognized explicit model name now fails the step
+  instead of silently running the adapter default, which is the fix itself.
 
 ## Release Follow-Ups
 
@@ -22,15 +25,6 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
 
 ## Active Development
 
-- **v0.4.1 release** (`mp-m22t`): the changelog,
-  [release notes](docs/project/releases/v0.4.1.md), and publishing pointer match the
-  tree. What remains is the tag itself and the publish it triggers; § Current Release
-  moves to v0.4.1 once that tag exists.
-  The release is a patch, not a minor: nothing public was removed or renamed and no
-  adapter default changed.
-  The one behavior change is that an unrecognized explicit model name now fails the step
-  instead of silently running the adapter default, which is the fix itself and is
-  recorded as a compatibility note.
 - **Process-tree and host safety** (`mp-bd6v`; umbrella feature `mp-qigc`): incubate a
   standalone `safeproc` package with owned pre-execution supervision and brokerless
   monitoring of existing process trees; add cross-platform host admission and
