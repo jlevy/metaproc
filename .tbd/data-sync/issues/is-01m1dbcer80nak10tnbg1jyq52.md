@@ -3,9 +3,9 @@ type: is
 id: is-01m1dbcer80nak10tnbg1jyq52
 title: Close the v0.4.0 release loose ends
 kind: epic
-status: open
+status: closed
 priority: 1
-version: 7
+version: 10
 labels:
   - release
   - release-blocker
@@ -17,8 +17,24 @@ child_order_hints:
   - is-01m1d4p4nksd76ft31egp4e7sp
   - is-01m1d4p5b1gsjsa6kbws4hxevw
   - is-01m1f8xgv4zycvj17qc7g9x1d0
+  - is-01m22c8wn6qjcqg65rs2pr0qrj
 created_at: 2026-09-01T02:04:47.228Z
-updated_at: 2026-09-01T20:00:09.572Z
+updated_at: 2026-09-09T07:38:07.001Z
+closed_at: 2026-09-09T07:33:48.492Z
+close_reason: |-
+  v0.4.0 published. Tag v0.4.0 points at 2a0aade, the squash merge of PR #73 and the tip of main, so the published wheel and post-release main are the same tree.
+
+  Gate before tagging: make verify on 2a0aade passed lint-check, 4,613 tests with 8 skipped, and build with distribution and installed-wheel smoke. uv audit could not run in this container (the network policy denies api.osv.dev with a CONNECT 403; confirmed a proxy denial, not a finding) and was covered by the publish workflow's own release gate, which ran it with network access. CI green on all five checks for 2a0aade.
+
+  publish.yml run 34324074426 succeeded in 2m12s: release gate, tag/version verification, and PyPI publish.
+
+  Verified after publish. PyPI metadata: version 0.4.0, license AGPL-3.0-or-later, requires-python >=3.12,<4.0, homepage/repository/issues/changelog/documentation links, 3.12/3.13/3.14 classifiers, both wheel (1.72 MB) and sdist (2.58 MB). All four publishing.md step 9 smoke tests pass against the released version. The shipped documentation claim checks out against the actual wheel: metaproc help lists 17 topics and the arch-runpool topic carries the new Gemini-specific scoping.
+
+  One diagnostic worth recording: the first smoke-test attempt failed to resolve metaproc==0.4.0. That was uv's cached index metadata, not a publish defect; uvx --refresh resolved and reported 0.4.0 immediately. The repo's own uv.toml exclude-newer = '14 days' cool-off would also filter a same-day release, so a post-release smoke test needs --no-config or an equivalent override.
+
+  Left open deliberately and disclosed in the release notes: mp-ad60 (bare resume re-enters completed scalar composites), blocked on the mp-5nko design question.
+resolution: null
+duplicate_of: null
 ---
 Everything standing between main 72ae119 and a tagged v0.4.0, in one place.
 
@@ -36,3 +52,7 @@ Release is v0.4.0, not a patch: the delta removes public CLI surface (`gcp remot
 `validate --cloud-runs-dir`, `pool retry-missing`) and two environment variables.
 
 Children are independent and can land in any order; the tag waits on all of them.
+
+## Notes
+
+CORRECTION to the diagnostic recorded above. The first smoke-test attempt failed to resolve metaproc==0.4.0; the cause was uv's cached index metadata alone, and uvx --refresh resolved and reported 0.4.0 immediately. The earlier note here also blamed the uv.toml exclude-newer = '14 days' cool-off and said a post-release smoke test needs --no-config. Both are wrong. Empirically, uvx --no-config (which reads no project config at all, so no exclude-newer) still failed, and only --refresh fixed it, so the cool-off was never implicated. And by policy it would not apply anyway: SUPPLY-CHAIN-SECURITY.md states that first-party libraries track their latest release, because the cool-off exists to let a compromised third-party publish be caught by someone else before it reaches this build, and that argument does not apply to code published from a repository maintained alongside this one. All jlevy packages are first-party and exempt; metaproc itself most of all. The only real process note for publishing.md step 9 is that a same-day release needs uvx --refresh to defeat the index cache.

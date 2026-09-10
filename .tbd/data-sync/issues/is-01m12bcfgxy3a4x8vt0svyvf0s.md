@@ -3,15 +3,19 @@ type: is
 id: is-01m12bcfgxy3a4x8vt0svyvf0s
 title: Polish the README doc index and rename the concepts docs
 kind: task
-status: open
+status: closed
 priority: 1
-version: 1
+version: 2
 spec_path: docs/project/specs/active/plan-2026-08-26-documentation-organization.md
 labels:
   - docs
 dependencies: []
 created_at: 2026-08-27T19:33:09.277Z
-updated_at: 2026-08-27T19:33:09.277Z
+updated_at: 2026-09-09T06:08:14.562Z
+closed_at: 2026-09-09T06:08:14.561Z
+close_reason: All six steps are done in the tree at df01cb7. The shipped docs are metaproc-concepts.md ('Metaproc Concepts') and process-framework-theory.md ('Process Framework Theory'); the only surviving occurrences of the old names are the documentation-organization plan's own record of the rename. check_links, check_shipped_links, and check_distribution pass, so the reference sweep in step 5 is complete.
+resolution: null
+duplicate_of: null
 ---
 Follow-up review of PR #51 by the user. Steps:
 1. README: real doc titles as bold labels for Essential/Operator/Reference; slugs for Architecture and Project Docs. DONE

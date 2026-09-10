@@ -3,15 +3,15 @@ type: is
 id: is-01m0tx4fmqn5vnwnap35z6wt9s
 title: make install gives an inscrutable TOML error on uv versions older than required-version
 kind: bug
-status: in_progress
+status: open
 priority: 1
-version: 2
+version: 3
 labels:
   - tooling,dx
 dependencies: []
 parent_id: is-01m0tx34t3n8g39jjbhzdrrpwf
 created_at: 2026-08-24T22:09:26.167Z
-updated_at: 2026-08-24T23:38:41.006Z
+updated_at: 2026-09-09T06:04:33.279Z
 ---
 ## Symptom
 

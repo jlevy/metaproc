@@ -3,15 +3,19 @@ type: is
 id: is-01m0txe7ccc7y4yhk2wt77d0dj
 title: "make verify cannot run in a fresh agent container: uv and Node floors both unmet"
 kind: bug
-status: in_progress
+status: closed
 priority: 1
-version: 3
+version: 4
 labels:
   - tooling,dx
 dependencies: []
 parent_id: is-01m0tx34t3n8g39jjbhzdrrpwf
 created_at: 2026-08-24T22:14:45.388Z
-updated_at: 2026-08-24T23:38:40.695Z
+updated_at: 2026-09-09T06:04:28.351Z
+closed_at: 2026-09-09T06:04:28.351Z
+close_reason: The pinned toolchain bootstrap resolves this. devtools/ensure-toolchain.sh installs checksum-verified Node 24.19.0 and uv 0.12.3 at session start; verified in a fresh Claude Code remote container on 2026-09-09, where the hook installed both and make install, lint-check, test (4,608 passed, 8 skipped) and build all ran without manual toolchain work. check_supply_chain.py fails when the script's pins and their canonical files disagree, so the floors cannot drift apart again silently.
+resolution: null
+duplicate_of: null
 ---
 ## Symptom
 
