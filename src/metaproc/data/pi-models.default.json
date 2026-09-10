@@ -18,23 +18,32 @@
       ]
     },
     "google-vertex": {
+      "_note": "Native Vertex metadata is reviewed against the model pages linked in metaproc.config.model_catalog. The gemini-3.1-pro-preview-customtools entry retains legacy capability values for compatibility; its Vertex endpoint and exact limits remain unverified and must not be inferred from the standard Pro entry.",
       "baseUrl": "https://{location}-aiplatform.googleapis.com",
       "api": "google-vertex",
       "apiKey": "gcp-vertex-credentials",
       "models": [
-        {"id": "gemini-3.5-flash", "name": "Gemini 3.5 Flash (Vertex)", "reasoning": true, "input": ["text"], "contextWindow": 1048576, "maxTokens": 65536},
-        {"id": "gemini-3.1-flash-lite", "name": "Gemini 3.1 Flash-Lite (Vertex)", "reasoning": true, "input": ["text"], "contextWindow": 1048576, "maxTokens": 65536},
-        {"id": "gemini-3-flash-preview", "name": "Gemini 3 Flash (preview, Vertex)", "reasoning": true, "input": ["text"], "contextWindow": 1048576, "maxTokens": 65536},
-        {"id": "gemini-3.1-pro-preview", "name": "Gemini 3.1 Pro (preview, Vertex)", "reasoning": true, "input": ["text"], "contextWindow": 2097152, "maxTokens": 65536},
+        {"id": "gemini-3.8-flash", "name": "Gemini 3.8 Flash (Vertex)", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536},
+        {"id": "gemini-3.7-flash", "name": "Gemini 3.7 Flash (Vertex)", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536},
+        {"id": "gemini-3.6-flash", "name": "Gemini 3.6 Flash (Vertex)", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536},
+        {"id": "gemini-3.5-flash-lite", "name": "Gemini 3.5 Flash-Lite (Vertex)", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536},
+        {"id": "gemini-3.5-flash", "name": "Gemini 3.5 Flash (Vertex)", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536},
+        {"id": "gemini-3.1-flash-lite", "name": "Gemini 3.1 Flash-Lite (Vertex)", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536},
+        {"id": "gemini-3-flash-preview", "name": "Gemini 3 Flash (preview, Vertex)", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536},
+        {"id": "gemini-3.1-pro-preview", "name": "Gemini 3.1 Pro (preview, Vertex)", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536},
         {"id": "gemini-3.1-pro-preview-customtools", "name": "Gemini 3.1 Pro (preview, customtools, Vertex)", "reasoning": true, "input": ["text"], "contextWindow": 2097152, "maxTokens": 65536}
       ]
     },
     "openai": {
-      "_note": "OpenAI API public catalog — current tiers only. Flagship is gpt-5.5 (released 2026-04-23, API 2026-04-24). gpt-5.5-pro is the high-compute reasoning variant. gpt-5.4-mini and gpt-5.4-nano remain the current cost-optimized tiers (gpt-5.5-mini is projected for Q3 2026). Older gpt-5.x and o-series IDs (gpt-5.2, gpt-5.3-codex, gpt-5.4, gpt-5.4-pro, o3, o4-mini) were trimmed per `only support latest OpenAI`; restore from git history if a historical run requires re-validation.",
+      "_note": "New Astra, Sol, Terra, and Luna entries use per-model Responses API overrides supported by the pinned Pi client. Existing entries retain the provider's Chat Completions default. Model names, review sources, and lifecycle evidence are maintained in metaproc.config.model_catalog; catalog inclusion does not establish account access or a live compatibility test.",
       "baseUrl": "https://api.openai.com/v1",
       "api": "openai-completions",
       "apiKey": "OPENAI_API_KEY",
       "models": [
+        {"id": "gpt-6-astra", "name": "GPT-6 Astra", "api": "openai-responses", "reasoning": true, "input": ["text", "image"], "contextWindow": 1050000, "maxTokens": 128000},
+        {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol", "api": "openai-responses", "reasoning": true, "input": ["text", "image"], "contextWindow": 1050000, "maxTokens": 128000},
+        {"id": "gpt-5.6-terra", "name": "GPT-5.6 Terra", "api": "openai-responses", "reasoning": true, "input": ["text", "image"], "contextWindow": 1050000, "maxTokens": 128000},
+        {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna", "api": "openai-responses", "reasoning": true, "input": ["text", "image"], "contextWindow": 1050000, "maxTokens": 128000},
         {"id": "gpt-5.5", "name": "GPT-5.5", "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 128000},
         {"id": "gpt-5.4-mini", "name": "GPT-5.4 Mini", "reasoning": true, "input": ["text", "image"], "contextWindow": 400000, "maxTokens": 128000},
         {"id": "gpt-5.4-nano", "name": "GPT-5.4 Nano", "reasoning": true, "input": ["text", "image"], "contextWindow": 400000, "maxTokens": 128000}
@@ -51,7 +60,7 @@
       ]
     },
     "moonshot": {
-      "_note": "Moonshot first-party API (Kimi K2.6). OpenAI-compatible /v1/chat/completions at api.moonshot.ai. K2.6 GA April 2026; multimodal (text + image), 262K context, 1T-parameter MoE. Vertex MaaS still ships only kimi-k2-thinking-maas — keep that entry in the vertex-maas block for the older agentic variant.",
+      "_note": "Retained Moonshot OpenAI-compatible configuration. The current review did not establish the exact kimi-k2.6 ID in primary Moonshot documentation; verify account model discovery and tool-call compatibility before use. See metaproc.config.model_catalog for dated evidence and the separate Vertex MaaS lifecycle.",
       "baseUrl": "https://api.moonshot.ai/v1",
       "api": "openai-completions",
       "apiKey": "MOONSHOT_API_KEY",

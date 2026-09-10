@@ -582,10 +582,9 @@ class TestPiCliAdapter:
         idx = cmd.index("--provider")
         assert cmd[idx + 1] == "anthropic"
 
-    def test_invalid_model_falls_back(self) -> None:
-        cmd = self.adapter.build_command(self.prompt_file, {"model": "nonexistent"}, {})
-        idx = cmd.index("--model")
-        assert cmd[idx + 1] == "sonnet"
+    def test_invalid_model_raises(self) -> None:
+        with pytest.raises(ValueError, match="unknown pi-cli model 'nonexistent'"):
+            self.adapter.build_command(self.prompt_file, {"model": "nonexistent"}, {})
 
     def test_template_variable_substitution(self) -> None:
         cmd = self.adapter.build_command(

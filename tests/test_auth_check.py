@@ -405,11 +405,9 @@ class TestRunLiveCheck:
 class TestRunLiveCheckAssertModel:
     """_run_live_check must verify the observed model matches --assert-model.
 
-    A silent --model fallback (claude/gemini warn-and-default on unknown
-    model names) keeps the subprocess exit code at 0, so exit-code alone
-    cannot tell the caller whether the model they asked for is actually
-    the one that responded. assert_model closes that loop by parsing the
-    CLI's identity event and comparing the observed model to the expected.
+    Upstream CLI alias resolution or routing can change the responding model
+    while keeping the subprocess exit code at 0. assert_model checks the
+    CLI's identity event and compares the observed model to the expected value.
     """
 
     def _adapter(self, build_cmd: list[str] | None = None) -> MagicMock:
@@ -609,8 +607,13 @@ class TestRunLiveCheckCodex:
     the smoke path does not require every caller to know codex's quirks.
     """
 
-    def test_codex_live_check_builds_valid_command(self):
-
+    @pytest.mark.parametrize(
+        ("model", "expected_success"),
+        [("gpt-5.6-luna", True), ("gpt-5-codex", False), ("", False)],
+    )
+    def test_codex_live_check_builds_valid_command(
+        self, model: str, expected_success: bool
+    ) -> None:
         real_codex = CodexCliAdapter()
         mock_status = MagicMock()
         mock_status.cli_found = True
@@ -623,18 +626,24 @@ class TestRunLiveCheckCodex:
                 clear=False,
             ),
             patch.object(real_codex, "check_auth", return_value=mock_status),
+            patch("metaproc.adapters.codex_cli._codex_version_drift", return_value=None),
             patch("subprocess.run") as mock_run,
         ):
             mock_proc = MagicMock()
             mock_proc.returncode = 0
             mock_run.return_value = mock_proc
 
-            results = _run_live_check("codex-cli", "gpt-5-codex", timeout_s=5)
+            results = _run_live_check("codex-cli", model, timeout_s=5)
 
         assert len(results) == 1
-        assert results[0][0], f"expected pass, got: {results[0][1]}"
+        assert results[0][0] is expected_success, results[0][1]
+        if not expected_success:
+            assert "unknown codex-cli model" in results[0][1]
+            mock_run.assert_not_called()
+            return
 
         cmd = mock_run.call_args.args[0]
+        assert cmd[cmd.index("-m") + 1] == model
         assert any(
             flag in cmd
             for flag in (
@@ -647,8 +656,7 @@ class TestRunLiveCheckCodex:
 class TestExtractObservedModel:
     """The live probe parses the CLI's JSONL output for the identity event
     that names the model the subprocess actually dispatched against. Without
-    this, a silent --model fallback (claude/gemini warn-and-default) would
-    false-green a live check.
+    this, an upstream model-routing change could false-green a live check.
     """
 
     def test_claude_system_init_event_yields_model(self):

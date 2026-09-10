@@ -29,6 +29,7 @@ from metaproc.adapters.base import (
     resolve_templates,
 )
 from metaproc.config.env_vars import MetaprocEnv
+from metaproc.config.model_catalog import resolve_model
 from metaproc.dispatch.auth_usage import query_label_headroom
 from metaproc.dispatch.credential_pool import Vehicle
 from metaproc.dispatch.known_bugs import detect_known_bug
@@ -491,17 +492,8 @@ def _build_claude_flags(
     """Build CLI flags for ``claude -p`` from merged config."""
     flags: list[str] = []
 
-    model = merged_config.get("model") or CLAUDE_DEFAULT_MODEL
-    model_str = str(model)
-    if model_str in CLAUDE_VALID_MODELS:
-        flags.extend(["--model", model_str])
-    else:
-        log.warning(
-            "claude-code-cli: ignoring unknown model name %r; falling back to default %r",
-            model_str,
-            CLAUDE_DEFAULT_MODEL,
-        )
-        flags.extend(["--model", CLAUDE_DEFAULT_MODEL])
+    model = resolve_model("claude-code-cli", merged_config.get("model"))
+    flags.extend(["--model", model])
 
     effort = merged_config.get("effort") or CLAUDE_DEFAULT_EFFORT
     flags.extend(["--effort", str(effort)])
