@@ -40,7 +40,7 @@ retroactively.
    aggregate user-visible delta, compatibility notes, and shipped Agent Skill or
    process-content changes.
    Past notes live in [releases/](project/releases/); the most recent are
-   [v0.4.0.md](project/releases/v0.4.0.md).
+   [v0.4.1.md](project/releases/v0.4.1.md).
    End with a concrete compare link.
 
 6. Create a GitHub release with a `vX.Y.Z` tag:

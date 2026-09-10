@@ -12,17 +12,25 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
 
 ## Release Follow-Ups
 
-- **Amend the v0.4.0 release notes** (`mp-lto0`): a post-publication review of all 26
-  merged pull requests found roughly 23 undocumented user-visible changes and 7
-  misdescriptions. PyPI is immutable, so the fix is amending
-  [the notes](docs/project/releases/v0.4.0.md) and the GitHub release body.
-- **Disclose the Gemini `respectGitIgnore` posture change** (`mp-x1qh`): v0.4.0 shipped
+- **Decide the Gemini `respectGitIgnore` default** (`mp-x1qh`): v0.4.0 shipped
   `respectGitIgnore: False`, so a Gemini step can read ignored files including `.env`.
-  The shipped design doc says so; the release notes never did.
-  Decide whether disclosure suffices or the default should become opt-in.
+  Disclosure has landed — the amended [v0.4.0 notes](docs/project/releases/v0.4.0.md)
+  carry it, the shipped design doc states it, and the
+  [v0.4.1 notes](docs/project/releases/v0.4.1.md) repeat it as a standing caution — so
+  what remains is the behavior question disclosure does not settle: whether reading
+  ignored files should become opt-in per step or per profile.
 
 ## Active Development
 
+- **v0.4.1 release** (`mp-m22t`): the changelog,
+  [release notes](docs/project/releases/v0.4.1.md), and publishing pointer match the
+  tree. What remains is the tag itself and the publish it triggers; § Current Release
+  moves to v0.4.1 once that tag exists.
+  The release is a patch, not a minor: nothing public was removed or renamed and no
+  adapter default changed.
+  The one behavior change is that an unrecognized explicit model name now fails the step
+  instead of silently running the adapter default, which is the fix itself and is
+  recorded as a compatibility note.
 - **Process-tree and host safety** (`mp-bd6v`; umbrella feature `mp-qigc`): incubate a
   standalone `safeproc` package with owned pre-execution supervision and brokerless
   monitoring of existing process trees; add cross-platform host admission and
