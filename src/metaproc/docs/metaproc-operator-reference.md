@@ -21,7 +21,8 @@ Treat this as a pre-flight checklist.
 
 | Mistake | Right thing to do |
 | --- | --- |
-| Parsing run directories with `find`, `ls`, `tail`, or `grep` | Use `metaproc status`, `pulse`, `pool`, `stats`, and `tail --summary`; these commands understand leases and both supported layouts. |
+| Replacing run-state checks with a private filesystem parser | Use `metaproc status`, `pulse`, `pool`, and `stats` for state and lifecycle. For agent debugging, also inspect the original logs directly as described below. |
+| Treating a rollup or generic exit code as the whole diagnosis | Identify the affected attempt and inspect its native transcript and captured output. Report the observed cause, evidence location, and any missing evidence. |
 | Treating a low operator cap as a memory-safety control | Set the intended upper bound and let adaptive memory and provider ceilings reduce concurrency from there. |
 | Writing an external autopilot or state parser | Add the missing Metaproc command or express the flow as a process spec. |
 | Retrying deterministic failures | Adapter classifiers must abort on authentication, installation, version, schema, and configuration failures. |
@@ -32,64 +33,27 @@ Treat this as a pre-flight checklist.
 
 ## Adapter Failure-Classification Contract
 
-**The principle**: a coding-agent CLI (claude / codex / gemini / pi) failing to run is a
-failure, exactly like Python failing to start.
-The runpool should not paper over it with retries.
-Every adapter’s `classify_failure` MUST identify non-retriable errors and return
-`AuthFailureClassification(severity=FailureSeverity.ABORT, reason="<specific>")` so the
-pool aborts the lane instead of burning a 7-attempt budget on a deterministic config
-error.
+Metaproc classifies failures on two separate paths.
+The engine’s generic classifier maps error text to retry classes such as rate limit,
+timeout, server error, invalid output, and crash.
+That classification drives ordinary retry policy for every adapter.
 
-What MUST escalate to `severity=ABORT` (terminal, no retry — operator action required):
+When a launch holds a credential-pool slot, the slot teardown path can also ask an
+auth-capable adapter to classify credential state and severity.
+Claude and Codex provide that adapter classifier.
+Gemini and Pi do not, so their failures remain on the generic engine path.
+An `unknown` slot classification also defers to the generic result.
+Output-validation errors bypass the slot classifier because the engine owns their retry
+decision.
 
-| Class | Signals (any adapter) | Why ABORT |
-| --- | --- | --- |
-| **Auth / authz** | HTTP 401, HTTP 403, `Expected OAuth2 access token`, `API keys are not supported by this API`, `invalid_grant`, `unauthorized`, `Unauthenticated`, expired credential, missing credential file | Deterministic config error. Retrying doesn’t fix it. |
-| **Binary / install** | `command not found`, `No such file or directory: <cli>`, version too old (e.g. `gemini-cli < 0.40` workspace-trust gate exits 55), required Node/Python version not present | The CLI literally cannot run. |
-| **Schema / contract** | Adapter returned output that fails validator on every attempt (same error across N attempts), unsupported model name rejected by the CLI’s pre-flight (e.g. `_pi_validate_registration`), known-bug signature match (`metaproc/dispatch/known_bugs.py`) | Software bug or operator misconfig — needs a fix, not retries. |
-| **Config / env** | Required env var missing under strict validation, workspace permission denied, sandbox refused, trust-gate not satisfied | Deterministic; will keep failing identically. |
-| **Quota — terminal** | “Monthly usage limit reached” with no reset clock, billing failure, account suspended | Cannot recover until operator intervenes. |
-
-What MAY retry (`severity=RETRY_NOW` or `RETRY_AFTER_WAIT`):
-
-- HTTP 429 / `rate_limited` / `Overloaded` (waits + retries)
-- HTTP 5xx, connection reset, network errors (immediate retry)
-- Stream-idle timeout (likely host suspend, retry on resume)
-- Soft validation failure that may flap (only first N attempts; cap then ABORT)
-
-**Implementation requirements** (also called out in the developer guide § Adapter
-contract):
-
-- Base class `Adapter.classify_failure` exists in `src/metaproc/adapters/base.py`. The
-  default returns `unknown` (→ generic retry).
-  Override is currently OPTIONAL — that is the gap that allowed mistake #5 above.
-- `claude_cli.py` and `codex_cli.py` implement it; `gemini_cli.py` and `pi_cli.py` do
-  NOT.
-- Open work: make `classify_failure` REQUIRED (no default fallback to generic retry);
-  add the missing implementations for both `gemini_cli.py` and `pi_cli.py`; surface
-  ABORT events to the wrapper log with the actual error message (not just
-  `status=exit_N`); cascade-abort the whole step after N consecutive ABORTs in one
-  fan-out (suggested threshold N=3).
-
-**Operator surfacing**: when ABORT fires, the wrapper log MUST emit the actual error
-message in the alternation pattern, not the opaque exit code:
-
-```
-# Wrong (current behavior for gemini-cli 401):
-Done step=business-setup item=BBAR attempt=4 status=exit_145 (10s)
-item=BBAR: retryable [crash] -- retry scheduled (attempt 5, backoff 17s)
-
-# Right (target behavior):
-Done step=business-setup item=BBAR attempt=1 status=auth_failed (10s) severity=ABORT
-  reason=gemini-401-oauth2-required
-  detail: API Error: 401 — API keys are not supported by this API. Expected OAuth2
-  access token. (See adapter-compatibility.runbook.md § Gemini auth modes.)
-ABORTING step business-setup (cascade: 3 consecutive ABORT in fan-out)
-```
-
-Any external monitor filter SHOULD include the tokens
-`auth_failed|ABORTING|severity=ABORT|reason=gemini-|reason=pi-|reason=codex-|reason=claude-`
-so a content monitor catches this immediately.
+Known-bug signatures are adapter evidence, not a third retry mechanism.
+The Claude debug-log ordering and false-positive checks are documented in
+[`arch-claude-code-harness.md`](arch-claude-code-harness.md#false-positive-classifier-pitfall).
+The extension contract is in
+[`metaproc-developer-guide.md`](metaproc-developer-guide.md#adapter-contract-classify_failure-is-mandatory).
+For an individual failure, inspect the task error, retry event, and `auth_outcome` event
+together; an opaque exit code alone does not identify which classifier decided the
+result.
 
 Use command help for exact flags:
 
@@ -116,14 +80,17 @@ For procedural how-tos, see the runbooks under
 | [`browser-streaming-smoke.runbook.md`](https://github.com/jlevy/metaproc/blob/main/docs/runbooks/browser-streaming-smoke.runbook.md) | Browser streaming smoke procedure. |
 
 For implementation contracts see [`metaproc-design.md`](metaproc-design.md), for pool
-behavior [`arch/arch-runpool.md`](arch-runpool.md), and for naming rules
+behavior [`arch-runpool.md`](arch-runpool.md), and for naming rules
 [`conventions.md`](conventions.md).
 
 ## Operating Rules
 
-1. Use metaproc commands before raw filesystem inspection.
-   If a normal monitoring question requires `ls`, `tail`, `find`, or an ad hoc parser,
-   add or fix a metaproc command instead of encoding a private workflow.
+1. Use metaproc commands for run state and lifecycle, and original logs for deeper
+   debugging. Read-only filesystem inspection is appropriate for understanding agent
+   behavior or diagnosing gaps in a Metaproc report.
+   Keep orchestration and state mutation in the CLI. Add recurring monitoring gaps to
+   Metaproc while using the available source evidence to investigate the current
+   failure.
 2. Treat `.state/` as harness-owned runtime state.
    Files in `.state/` are full-rewrite or frozen records used for resume, adoption, and
    status checks. Do not hand-edit them except through operator commands such as
@@ -143,7 +110,7 @@ behavior [`arch/arch-runpool.md`](arch-runpool.md), and for naming rules
    `steps` means step-runner control-plane data.
    `tasks` means runtime task execution data, including status, attempts, results, and
    agent/session logs.
-7. Hold the operator cap high; let the runpool govern down.
+7. Set the operator cap from measured host capacity; let the runpool govern within it.
    `--max-concurrency` at launch and `pool override --cap N` mid-run set the *operator
    cap*, which is a hand-set ceiling, not the safety governor.
    For a local `run-process`, the launch cap is shared by executable leaves across
@@ -156,14 +123,13 @@ behavior [`arch/arch-runpool.md`](arch-runpool.md), and for naming rules
    higher launch cap, so its implementation capacity does not silently lower that cap.
    Code subprocesses share the process directory, so commands that mutate repository
    state, lockfiles, or other shared paths must use per-item paths or their own
-   synchronization. For local agent-pool dispatches (claude, codex, gemini, pi-cli), keep
-   the operator cap at ≥20 so the adaptive controller has room to ratchet down; setting
-   it tighter silently caps
+   synchronization. For local agent-pool dispatches (claude, codex, gemini, pi-cli), use
+   the execution profile’s measured process-tree RSS and available host headroom to set
+   the cap. A tighter value silently caps
    `effective_target = min(memory_ceiling, provider_ceiling, operator_cap)` with no
    warning, even when the host could safely run more.
-   See [`arch-runpool.md`](arch-runpool.md) § “Operator cap floor” for the full
-   rationale and why per-adapter memory profiles are not yet stable enough to tune the
-   cap tightly.
+   See [`arch-runpool.md`](arch-runpool.md) § “Operator cap selection” for the profile
+   evidence and current limitations.
 8. Treat `mode: code` work as owned by the step.
    A command-backed step owns its complete process group.
    Metaproc terminates surviving descendants and flushes the command log before
@@ -287,13 +253,110 @@ The reusable metaproc command set is:
 
 If a domain operator needs a recurring status field that is not available through these
 commands, add it to the domain report or to metaproc.
-Do not make a daily plan depend on private shell walks through `.logs` or `.state`.
+Keep recurring state checks in those commands.
+Direct source-log inspection is part of debugging and does not require waiting for a new
+Metaproc feature.
+
+### Direct Agent Debugging
+
+Start with `metaproc status <run-dir>` to identify the affected step, item, and current
+run state. A failure count, generic exit code, or extracted trace is not a complete
+explanation of agent behavior.
+Open the retained source evidence for the relevant attempt:
+
+- Per-attempt native agent streams are under
+  `<scope>/.logs/tasks/<step_id>/<item_key>/`. Inspect the attempt-specific JSONL and
+  any captured stderr or debug files present there; adapters differ in what they emit.
+- Scalar captured process output is under `<scope>/.logs/tasks/<step_id>/`, and
+  item-scoped captured output is under its `<item_key>/` directory.
+  The runtime artifact table below describes the `process_<ts>.log` naming pattern.
+- Each nested composite has its own scope root.
+  Correlate the task status, attempt metadata, timestamps, and provider session identity
+  before choosing logs; do not mix a previous retry with the active or final attempt.
+
+Use a text viewer or ordinary read-only tools to inspect an actual source path:
+
+```bash
+less '<source-log-path>'
+tail -n 100 -f '<active-source-log-path>'
+gzip -cd '<source-log-path>.gz' | less
+```
+
+These commands read the captured file directly, without an additional Metaproc parser or
+trace projection. Capture itself can already have transformed the stream: logged local
+launches combine stderr with stdout, and the Pi capture filter drops `message_update`
+and `tool_execution_update` events before writing the task log.
+Those events cannot be recovered from that file.
+Inspect provider-native or debug logs when they are available, and report when the full
+original stream was not retained.
+
+`metaproc tail --summary` and `.logs/derived/trace.jsonl` are derived views; return to
+the captured source when their interpretation is incomplete or suspect.
+Preserve available source logs during an investigation, and avoid lossy compaction until
+the needed native evidence has been retained.
+
+Report the observed cause, its affected step/item/attempt, the source path and relevant
+timestamp or excerpt, and the retry or waiting state.
+If the cause is unknown, say so and identify missing or unreadable evidence instead of
+reporting an unexplained “step failed.”
+If cloud or hydrated logs are not local, use the documented backend retrieval commands
+and state their availability.
+Do not copy credentials or private prompt payloads into shared reports.
+
+Current status output does not render every failed-item cause, and not every adapter
+captures every native log.
+Treat those absences as limits of the report or capture, rather than evidence that the
+agent had no error. Inspect what is available and record the diagnostic gap for
+correction.
 
 For local laptop runs, sleep can present as a per-item stall.
 Check `metaproc status` first: if it shows the item retrying, let the retry run; if the
 orchestrator exited, restart the same launch command with the same `RUN_ID` so completed
 steps can be reused.
 Create a new run ID only when a clean duplicate run is intentional.
+
+### Two Concurrent Runs on One Host
+
+Local agent launches contend for shared host slots.
+Admission runs through a disk-backed semaphore under
+`~/.metaproc/runpool/host-slots/<namespace>/`, where a slot is claimed by atomic `mkdir`
+and holds a lease naming the owning process.
+Standalone pools acquire slots inside RunPool and propagate an admission timeout or
+error. Under `run-process`, agent leaves acquire an outer scalar-path gate before
+submitting to the run-owned pool.
+This path fails open after its bounded wait: it logs the failure and launches without a
+slot, including when the leaf belongs to a mapped step.
+
+It is not, however, a negotiated ceiling, and an operator planning two concurrent runs
+should know why:
+
+- **Each process brings its own limit and contends only for a prefix of the slots.** A
+  gate with limit N scans slots `0` through `N-1`, so a run resolved to 4 never polls
+  slot 4 and a second run resolved to 16 can occupy slots the first cannot see.
+  Two runs agree on a slot ceiling only when both resolve to the same limit and acquire
+  a lease for every launch.
+  The profile, environment, command-line concurrency, batch size, and scalar-versus-pool
+  path can all affect that result.
+- **Adaptive concurrency is per process.** Each pool samples host pressure and moves its
+  own ceiling; nothing exchanges targets.
+  Reading the same host does not guarantee fair sharing, coordinated startup, or
+  convergence between controllers.
+
+`METAPROC_HOST_MAX_LOCAL_AGENTS` takes the minimum of its value and the profile’s
+`host_max_concurrency`, or the path-specific default when the profile omits that key.
+It can lower a host-admission limit but cannot raise one.
+`max_concurrency_hint` is separate: it caps the pool maximum derived from
+`--max-concurrency` or batch size.
+Set the host environment variable for *both* runs before launching the second.
+Inspect the `limit` on active leases with `metaproc pool host-slots --json` to check the
+limits actually used.
+A `run-parallel` pool also records its host limit in its concurrency plan; the run-owned
+pool under `run-process` does not own the outer scalar admission gate, so its plan alone
+does not describe that gate.
+
+Host admission is a local-backend mechanism.
+Non-local backends skip it entirely, so two cloud-backed runs share nothing on the
+operator host.
 
 ## Iterating on a Single Step
 
@@ -531,6 +594,8 @@ plus `pool events` to inspect contention.
 | How did concurrency change? | `uv run metaproc pool concurrency-timeline <run-dir>` |
 | What did the pool record? | `uv run metaproc pool events <run-dir>` |
 | What did every run-owned and step pool record? | `uv run metaproc pool rollup <run-dir>` |
+| What did the pressure sampler see? | `uv run metaproc pool health <run-dir>` |
+| Who holds host admission slots right now? | `uv run metaproc pool host-slots` |
 | What are throughput and resource totals? | `uv run metaproc stats <run-dir>` |
 | Which auth labels were used? | `uv run metaproc auth usage <run-dir>` |
 | What is the cloud Batch state? | `uv run metaproc gcp status <run-id>` |
@@ -588,6 +653,90 @@ under the captured params, the Steps section is omitted silently — the rest of
 `metaproc status` still works because execution state comes directly from
 `process-status.yaml`. `status --check` and `wait` treat a terminal process failure as
 failed even when the process had no fan-out items.
+
+### Reading Pool Health
+
+Pressure has four levels: `normal`, `elevated`, `high`, and `critical`. The adaptive
+controller takes the worse of memory headroom and swap growth.
+Disk level is recorded for diagnosis and does not change concurrency.
+
+Two memory signals do different jobs, and conflating them is the usual reading error:
+
+- **Available memory is the budget.** It answers how much more work fits.
+- **Swap growth rate is the degradation signal.** `swap_delta_gb_per_min` is a first
+  difference between consecutive samples, classified against ratios of total RAM per
+  minute into `swap_level`. Absolute swap use is logged for visibility but is
+  deliberately not a trigger, because it stays high long after the pressure that caused
+  it has passed.
+
+`elevated` while items are still pending is the governor applying back-pressure.
+It is correct behavior and not a fault to chase: the `elevated` branch holds the current
+cap and changes nothing.
+Reductions fire only at `high` and `critical`, and a ramp back up requires three
+consecutive `normal` checks.
+Nothing on this path fails or kills an item; memory pressure moves the cap, never the
+work.
+
+Two behaviors worth recognizing in the log.
+Telemetry failure is treated as maximal pressure, so the pool drops to `min_concurrency`
+rather than guessing.
+And a per-launch descendant limit does kill, recorded with a `descendants_limit` reason,
+which is a different mechanism from pressure and should not be read as one.
+
+On macOS the swap term lags the condition it is meant to warn about, because the memory
+compressor absorbs pressure before swap moves and compressor page count is not currently
+read. So on macOS treat available memory as the working signal, meaning metaproc’s own
+`available_pct`, which counts free, inactive, and purgeable pages, and not the raw
+free-memory percentage the OS reports.
+`kern.memorystatus_level` is sampled but deliberately never used as a budget, because it
+counts other processes’ live working sets.
+The accounting and its open gaps are in
+[memory-accounting-reference.md](https://github.com/jlevy/metaproc/blob/main/docs/memory-accounting-reference.md).
+
+### The Subprocess Count Is a Display Estimate
+
+The `Procs: N agent subprocesses` line in `metaproc status` is produced by matching a
+fixed name pattern against the `comm` column of a host-wide `ps`. Three consequences
+follow, and all three are easy to misread as signal:
+
+- It **undercounts trees.** Only a process whose own `comm` matches is counted, so an
+  agent’s own children are invisible.
+- It **overcounts across runs.** The `ps` call is host-wide and not filtered by run, so
+  other runs on the same host, and the operator’s own interactive agent session, land in
+  the count.
+- It **reports zero on failure.** A timeout or an `OSError` yields zero, so “no
+  subprocesses” and “measurement failed” are indistinguishable.
+
+The RSS figure beside it sums resident memory across matched processes, which
+double-counts pages shared across a fan-out.
+
+None of this is what the governor reads.
+The governor counts the launches it admitted itself, published as `active_count` in pool
+status and pressure events, and measures per-launch tree size separately over the owned
+process group. For a number to act on, use `metaproc pool status`, `pool health`, and
+`pool events`. Suppress the display block with `--no-system`.
+
+### A Green Run Is Not a Reviewed Run
+
+`status --check completed` passes on a run that did no work.
+With no per-item state directories on disk the variant list is empty, totals are zero,
+and pending is zero, so the check reports that all items completed and exits `0`. A
+terminal process failure is caught; emptiness is not.
+
+Read counts, not the label:
+
+- `metaproc status <run>` renders the per-variant table with Done, Fail, Pend, and Total
+  columns. In `--format json` these are `variants[].counts` and `totals`.
+- `--steps --format json` projects the payload down to
+  `{run_dir, process_state, steps}`, dropping both `variants` and `totals`. It is the
+  wrong surface for counting work.
+- The `N/M items` figure in the Steps table appears only for fan-out steps, and its
+  completed side folds in cached items, so a fully reused rerun and a fresh one look
+  alike there. The per-item `status.yaml` records under `.state/tasks/<step>/<item>/`
+  separate the two.
+
+Cross-check volume against `metaproc stats <run-dir>` and
+`metaproc pool rollup <run-dir>` before calling a run done.
 
 ## Log Compression
 

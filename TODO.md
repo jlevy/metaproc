@@ -5,11 +5,10 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
 ## Current Release
 
 - **[v0.4.0](https://github.com/jlevy/metaproc/releases/tag/v0.4.0)** (`mp-1n2a`):
-  published from tag `2a0aade`, which is the squash merge of pull request 73 and the
-  current tip of `main`, so the published wheel and post-release `main` are the same
-  tree. The release is a minor, not a patch: the delta since v0.3.0 removes public CLI
-  surface, renames the four adapter modules, changes a CLI exit code, and changes the
-  default scope failure policy.
+  published from tag `2a0aade`, the squash merge of pull request 73. The release is a
+  minor, not a patch: the delta since v0.3.0 removes public CLI surface, renames the
+  four adapter modules, changes a CLI exit code, and changes the default scope failure
+  policy.
 
 ## Release Follow-Ups
 
@@ -32,16 +31,20 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
   evidence
   ([system plan](docs/project/specs/active/plan-2026-09-01-runpool-host-safety.md),
   [package plan](docs/project/specs/active/plan-2026-09-01-safeproc-local-incubation.md)).
-- **Mapped-scope follow-on** (`mp-tibt`, `mp-82ls`, `mp-0iy8`): 21 open beads carried by
-  the shipped
-  [mapped-scope runtime](docs/project/specs/done/plan-2026-08-25-consolidated-mapped-scope-runtime.md)
-  and not addressed in v0.4.0 — durable task records and replay parity, the retry-later
-  cluster, mapped-scope parity and scale verification, and two decomposition designs.
-  Their parent beads are closed, so this work currently rolls up to nothing.
-- **Contract failure primitives** (`mp-cl0d`, `mp-3uaf`, `mp-m4vi`): phase 2 remnants of
-  the [spec](docs/project/specs/active/plan-2026-08-20-contract-failure-primitives.md),
-  which tracked them only as checkboxes.
-  `fail_run` still does not stop a run.
+- **Execution stability, operator diagnostics, and flexibility** (`mp-7p3z`): the
+  [active plan](docs/project/specs/active/plan-2026-09-10-runpool-execution-followups.md)
+  puts prominent, actionable operator diagnostics first (`mp-5les`) and maps the
+  review’s seven open findings to implementation owners and acceptance evidence.
+  It also owns the mapped-scope follow-ons under `mp-82ls`, `mp-tibt`, and `mp-rrfn`;
+  their existing pauses and evidence requirements remain in effect.
+  Contract-failure extensions roll up through `mp-d019`: run-wide abort, plugin
+  classifiers, and per-kind counts, with
+  [design rationale](docs/project/design/contract-failure-primitives.md).
+- **Model catalog compatibility** (`mp-qmr0`): the
+  [follow-up plan](docs/project/specs/active/plan-2026-09-10-model-catalog-followups.md)
+  owns client upgrades, October Vertex retirements, and uncertain routes and pricing.
+  [Catalog maintenance](docs/project/model-catalog-maintenance.md) defines the recurring
+  review procedure.
 
 ## Deferred Quality Ratchets
 

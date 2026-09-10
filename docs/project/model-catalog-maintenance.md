@@ -11,6 +11,12 @@ Each refresh records the named person or agent who performed the review and a se
 named reviewer in the pull request or tbd issue.
 The catalog’s `reviewed_on` date records the completed evidence review.
 
+The [active follow-up plan](specs/active/plan-2026-09-10-model-catalog-followups.md) and
+epic `mp-qmr0` track the client, retirement, and route/pricing decisions left open by
+the September review.
+New reviews should update an existing unresolved bead when the issue is the same, and
+create a new child when the finding is distinct.
+
 ## Evidence Boundaries
 
 Treat these checks as separate claims:

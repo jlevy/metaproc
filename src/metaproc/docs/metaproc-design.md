@@ -1408,9 +1408,34 @@ A consumer routing work by owner needs that distinction, because a missing outpu
 refused invariant are different people’s problems and the rendered sentence cannot
 express the difference.
 
+The manifest is a contract for the consuming step, so its fields are stated here rather
+than left to be inferred from a sample.
+The envelope under `fan_in_outcomes` carries `schema`, `upstream_step`, `total`,
+`succeeded`, `failed`, and `items`. Every entry in `items` carries `key`, `state`, and
+`succeeded`; `error` when the item recorded one; `output_failures` when the item
+recorded structured contract failures; and `stopped_at` with `stopped_state` when its
+state is `not_reached`.
+
+Each entry in `output_failures` is a projection of one `OutputFailure`, and a narrower
+one than the record written to the item’s own `status.yaml`:
+
+| Field | Present | Meaning |
+| --- | --- | --- |
+| `output` | always | The declared output name from the process spec, not a filename |
+| `kind` | always | One `OutputFailureKind`: `missing`, `empty`, `unreadable`, `structural`, or `semantic` |
+| `contract` | when the output declared one | The contract id the output was validated against |
+| `invariant` | when the validator supplied one | The structural error code or semantic validator; an input error reclassified as `unreadable` can retain its code |
+| `location` | when the refusal carried a position | The validator’s path within the document, such as `$.ticker`; list or tuple locations are dot-joined, such as `items.0.field` |
+
+A field whose value is absent is omitted rather than written null, so a `missing`-kind
+failure yields a two-field record.
+The artifact `path` and the rendered `message`, both always present on the per-item
+record, are not projected into the manifest; a consumer needing either reads the item’s
+own `status.yaml`.
+
 An item that never reached the collected step is reported with where it stopped and that
 step’s failure detail, rather than as a bare absence.
-A ticker that raised and a ticker that silently produced nothing are different problems
+An item that raised and an item that silently produced nothing are different problems
 with different owners, and the collection is where a consumer learns which it has.
 
 The manifest reports against the collected step’s **expected roster**, not against the
@@ -1866,10 +1891,81 @@ Handling follows the class: retriable classes retry per `RetryPolicy` on the poo
 and `quota_exhausted` pauses submissions until the provider’s named reset time rather
 than burning attempts against a closed window.
 
-Two known gaps, both against design test 17: the `run-process` inline execution paths
-neither classify nor retry (the pool path owns that machinery today), and no aggregate
-view buckets failures by layer or class, so the real-time half of placement exists and
-the aggregate half does not.
+The execution paths apply these policies at different boundaries.
+Scalar agent steps classify operational and output failures and retry within the
+resolved budget. Mapped code steps and aligned code chains apply each step’s declared
+`fan_out.retry` budget to retryable contract failures.
+Scalar code steps run once.
+Pool status counts some failure classes, but `invalid_output` remains a single bucket
+and run-level step summaries do not retain item failure classes.
+
+`on_invalid: fail_run` is recognized as a permanent item failure, but execution paths do
+not yet propagate it as a run-wide abort.
+It has the same effect as `fail` today; it must not be used as a guarantee that sibling
+work will stop.
+
+### Cause Preservation at Aggregation Boundaries
+
+> **No aggregation boundary may discard a cause it received.**
+
+An **aggregation boundary** is any point where one record about many things replaces
+many records about one thing.
+A step summarizing its items is one, a run summarizing its steps is one, and so is a
+serializer that omits a field or a typed model that ignores a key it did not declare.
+Each is free to summarize.
+None is free to summarize a cause down to nothing, because the layer above it has no
+second source.
+
+This is the implementation half of the placement rule in
+[process-framework-theory.md](process-framework-theory.md): a failure is not explained
+until it is placed, and it can only be placed where the cause survived the trip upward.
+A summary reporting how many items failed, without what refused them, leaves an operator
+to reconstruct by hand something the framework already knew and then discarded.
+
+A summarizer satisfies the invariant by carrying one of three things: the causes
+themselves, a count bucketed by `FailureClass` or `OutputFailureKind`, or an explicit
+pointer to the records that hold them.
+An absent optional value may be omitted.
+A populated cause must survive as detail, a classified count, or a usable reference; an
+undeclared model field must not silently discard it.
+
+The current boundaries have different coverage.
+
+**The run-level step record.** Step entries in `process-status.yaml` are untyped dicts,
+and nothing requires an entry in state `failed` to carry a cause.
+Only a scalar `mode: code` step gets one: the helper that recovers an already-persisted
+task error returns empty immediately for any step whose mode is not `code` or whose
+`fan_out` is set. A mapped step, a scalar agent step, and a manual step therefore each
+record `state: failed` with no `error` key, and `metaproc status` renders
+`Failure: <step>: error not recorded`, while every failed item already wrote a precise
+cause into its own `status.yaml`. The matching `step_fail` line in
+`process-events.jsonl` carries `error: ""` from the field default.
+The break is structural rather than an omission at one call site: `run_fan_out` returns
+`(succeeded, total)` and `StepInvoker` returns `bool`, so no cause can cross the
+item-runner boundary in the current types.
+Two aggregations exist and neither closes the gap.
+`StepStatusEntry.item_counts` reports coverage with no failed count and no reason, and
+the fan-in collector reads item causes correctly but runs only when a *downstream* step
+declares `collect:`, so a mapped step with no consumer produces nothing.
+
+**The typed event reader.** `RunPoolEvent` includes lifecycle, quota-pause, pressure,
+and health-sample events.
+The pressure and concurrency models retain the controller ceilings, effective target,
+and bottleneck written to the log.
+Optional fields allow older records without those measurements to remain readable.
+The reader still skips malformed records and unknown event types, so a new writer event
+or field must update the typed contract and its writer-to-reader tests together.
+Health samples live in the separate `health.jsonl` stream; including their type does not
+merge the two files.
+
+**Admission.** `host_slot_acquired` is written after the slot is taken.
+A launch that waits, and a launch that exhausts `DEFAULT_HOST_ADMISSION_TIMEOUT_S` and
+then fails, write nothing.
+`pressure_check` carries `pending_count` on its sampling interval, so a reader can infer
+that work is queued but not which gate holds it or for how long.
+The governor records `consecutive_normal` and `consecutive_elevated` on each
+`pressure_check` and `health_sample`, including a sustained `elevated` hold with no
+capacity change. `concurrency_adjust` is emitted only when capacity changes.
 
 ### 13.1 Plugin System
 
@@ -2523,6 +2619,11 @@ multi-phase workflows.
 - **`metaproc status --check <condition>`**: programmatic check mode for agent
   orchestration: asserts completion state via exit codes (0=passed, 1=failures,
   2=still-running), replacing ad-hoc `--dry-run | grep` patterns.
+  `--check completed` accepts an inactive run with zero recorded tasks when no terminal
+  process failure is recorded.
+  It does not prove that expected work or output exists; validate coverage and required
+  artifacts as described in the
+  [operator reference](metaproc-operator-reference.md#a-green-run-is-not-a-reviewed-run).
 - **`metaproc wait <run-dir>`**: blocks until a run reaches terminal state, then prints
   final status. A terminal process failure returns failure even when no fan-out item
   records exist. Eliminates polling loops in multi-phase playbooks.

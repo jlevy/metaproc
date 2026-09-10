@@ -22,6 +22,8 @@ concurrency, health tracking, and host admission without adopting process specs.
 
 ```python
 import asyncio
+from pathlib import Path
+
 from metaproc.runpool import ProcessConfig, RunPool, RunPoolConfig
 from metaproc.runpool.backend import LocalBackend, PreparedLaunch
 
@@ -49,9 +51,12 @@ Leaving a pool unshut leaks its monitor task and its event log handle, and stran
 host admission slots its processes hold — and a stranded slot is invisible capacity loss
 for every other run on the machine.
 
-Set `initial_concurrency` low and `max_concurrency` high: the controller sizes actual
-concurrency from live memory pressure, so a hand-set low ceiling removes the safety
-mechanism rather than providing one.
+Choose `max_concurrency` from measured workload memory and host headroom, and use
+`initial_concurrency` to bound the first launch cohort.
+A lower maximum constrains throughput without disabling the adaptive governor.
+The controller samples pressure periodically and does not reserve startup memory or
+provide independent host containment; see the
+[admission limits](../docs/arch-runpool.md#host-coordination).
 
 **What RunPool is not.** It admits and supervises processes; it does not own durable
 dependencies, retries across restarts, roster expansion, downstream invalidation, or run

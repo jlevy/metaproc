@@ -23,12 +23,19 @@ The full topic list is at the end of this skill.
 The most common failure mode is an agent that skipped the operator manual and hand-rolls
 what metaproc already does:
 
-- **Do not inspect a run with ad hoc shell commands** such as `ls`, `tail`, `find`,
-  `grep`, or `jq` over the run directory, `.state/`, or `.logs/`. Use `metaproc status`,
-  `wait`, `tail`, `pool`, `trace`, `stats`, `auth usage`, or `gcp`. The operator
-  manual’s **Monitoring Commands** table maps every question to its command (Operating
-  Rule 1). A monitoring question that seems to need raw bash is the signal to add or fix
-  a metaproc command, not to write a script.
+- **Use Metaproc commands for run state and lifecycle:** `status`, `wait`, `tail`,
+  `pool`, `trace`, `stats`, `auth usage`, or `gcp`. Do not replace their orchestration
+  or state-mutation contracts with a private script.
+- **Inspect captured agent logs directly when debugging.** Read or tail the relevant
+  attempt’s captured output and available native transcript, using a viewer or read-only
+  shell tools as needed.
+  Some captures merge stdout/stderr or filter native events; Metaproc rollups and
+  extracted traces can omit further evidence.
+  The operator manual’s **Direct Agent Debugging** section explains the source paths.
+  Report the cause, affected attempt, and evidence location; if the cause or logs are
+  unavailable, say what is missing.
+  File a missing diagnostic as a Metaproc issue while continuing the investigation from
+  the retained source evidence.
 - **Do not wrap metaproc** in a Python or shell orchestrator.
   A multi-step flow is a `*.process.md`; a new run-state view is a `metaproc`
   subcommand. See `metaproc help developer`.

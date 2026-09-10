@@ -252,6 +252,8 @@ class EventLogger:
         active_rss_bytes: int | None = None,
         active_peak_rss_bytes: int | None = None,
         active_log_bytes: int | None = None,
+        consecutive_normal: int | None = None,
+        consecutive_elevated: int | None = None,
     ) -> None:
         event: dict[str, object] = {
             "event": "pressure_check",
@@ -293,6 +295,8 @@ class EventLogger:
                     "active_rss_bytes": active_rss_bytes,
                     "active_peak_rss_bytes": active_peak_rss_bytes,
                     "active_log_bytes": active_log_bytes,
+                    "consecutive_normal": consecutive_normal,
+                    "consecutive_elevated": consecutive_elevated,
                 }
             )
         )
