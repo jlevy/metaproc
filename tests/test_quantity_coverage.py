@@ -1,11 +1,24 @@
-"""What `Quantity` must refuse, so a summary cannot publish a gap as a number."""
+"""What the coverage vocabulary must refuse, so a gap is never published as a number.
+
+`Quantity` owns the four-state vocabulary; the meter models own three of it. Both
+halves are pinned here, because the boundary between them is the part a reader has
+to get right.
+"""
 
 from __future__ import annotations
 
 import pytest
 from pydantic import ValidationError
 
-from metaproc.models.resources import CoverageState, Quantity
+from metaproc.models.resources import (
+    CoverageState,
+    MeteredQuantity,
+    MeterKey,
+    MeterRollup,
+    Quantity,
+)
+
+_METER = MeterKey(provider="anthropic", product="claude-code", meter="api_requests", unit="count")
 
 
 def test_a_gap_cannot_be_published_as_a_number() -> None:
@@ -65,3 +78,44 @@ def test_the_gap_carries_its_size() -> None:
     partial = Quantity.unmeasured(reason="sampler started late", samples=417)
 
     assert partial.sample_count == 417
+
+
+def test_a_provider_meter_cannot_claim_not_applicable() -> None:
+    """The meter models take the narrower vocabulary, and refuse the fourth state.
+
+    A meter is identified by its key, so a meter that does not apply is one nobody
+    emits. Admitting the state here would be worse than useless: `MeterRollup`
+    derives coverage from the evidence it reconciled and can never return it, and
+    `aggregate_meter_rollups` counts every non-measured, non-estimated quantity as
+    an unmeasured event. An inapplicable meter would arrive at a reader as a gap
+    worth chasing, which is the confusion `Quantity` exists to prevent.
+    """
+    with pytest.raises(ValidationError):
+        MeteredQuantity.model_validate(
+            {
+                "key": _METER.model_dump(),
+                "coverage": "not_applicable",
+                "lineage": ["step runs no agent"],
+            }
+        )
+
+    with pytest.raises(ValidationError):
+        MeterRollup.model_validate(
+            {
+                "key": _METER.model_dump(),
+                "coverage": "not_applicable",
+                "source_event_ids": ["evt-no-agent-1"],
+                "lineage": ["step runs no agent"],
+            }
+        )
+
+
+def test_the_meter_vocabulary_is_the_rest_of_the_coverage_vocabulary() -> None:
+    """One vocabulary, narrowed at the meter models rather than forked into a second."""
+    meter = MeteredQuantity(
+        key=_METER,
+        coverage=CoverageState.UNMEASURED,
+        lineage=["provider request boundary absent from agent log"],
+    )
+
+    assert meter.coverage is CoverageState.UNMEASURED

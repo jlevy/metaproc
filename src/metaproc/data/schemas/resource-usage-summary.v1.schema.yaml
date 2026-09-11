@@ -148,25 +148,6 @@ $defs:
     - unmeasured
     title: BudgetStatus
     type: string
-  CoverageState:
-    description: |-
-      Evidence quality for one measured quantity.
-
-      ``NOT_APPLICABLE`` separates a quantity that cannot exist here from one that
-      could and was not captured. "No data", "not instrumented" and "this step runs
-      no agent" are three different findings, and collapsing them into a single null
-      loses the only one a reader can act on.
-
-      ``MeterRollup`` never computes ``NOT_APPLICABLE``: a rollup's coverage is
-      derived from the evidence it reconciled, so applicability is a property of the
-      quantity being asked for, not of the reconciliation.
-    enum:
-    - measured
-    - estimated
-    - unmeasured
-    - not_applicable
-    title: CoverageState
-    type: string
   FinalizationState:
     description: Terminal state retained on a resource report.
     enum:
@@ -219,7 +200,13 @@ $defs:
         default: null
         title: Actual Quantity
       coverage:
-        $ref: '#/$defs/CoverageState'
+        description: Evidence quality reconciled for one meter key.
+        enum:
+        - measured
+        - estimated
+        - unmeasured
+        title: Coverage
+        type: string
       estimated_quantity:
         anyOf:
         - minimum: 0
@@ -583,4 +570,4 @@ title: ResourceUsageSummary
 type: object
 x-softschema:
   contract: metaproc.resources:ResourceUsageSummary/v1
-  schema_sha256: 0b69d85a027e03f068184a74d0de2374aba903d567f15fa2f4c006eec68811e2
+  schema_sha256: 72bbb7448c3b9eda51d9f8d7298de2022368ce76fd0320b1e424a2e373d1a589

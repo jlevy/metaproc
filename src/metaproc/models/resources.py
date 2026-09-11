@@ -90,15 +90,33 @@ class CoverageState(StrEnum):
     no agent" are three different findings, and collapsing them into a single null
     loses the only one a reader can act on.
 
-    ``MeterRollup`` never computes ``NOT_APPLICABLE``: a rollup's coverage is
-    derived from the evidence it reconciled, so applicability is a property of the
-    quantity being asked for, not of the reconciliation.
+    Applicability is a property of the quantity being asked for, not of a provider
+    meter, so the meter models accept the narrower `MeterCoverage`.
     """
 
     MEASURED = "measured"
     ESTIMATED = "estimated"
     UNMEASURED = "unmeasured"
     NOT_APPLICABLE = "not_applicable"
+
+
+MeterCoverage = Literal[
+    CoverageState.MEASURED,
+    CoverageState.ESTIMATED,
+    CoverageState.UNMEASURED,
+]
+"""The coverage states a provider meter can hold.
+
+A meter is identified by a `MeterKey`, and a meter that does not apply is one
+nobody emits, so ``NOT_APPLICABLE`` has nothing to name here.
+
+Excluding it is load-bearing rather than tidy. `MeterRollup` derives its coverage
+from the evidence it reconciled and can only ever reach these three, and
+``aggregate_meter_rollups`` folds every `MeteredQuantity` that is neither measured
+nor estimated into ``unmeasured_event_count``. An inapplicable meter admitted at
+the event level would therefore be reported as a gap somebody could close, which
+is the confusion `Quantity` exists to prevent.
+"""
 
 
 class Quantity(BaseModel):
@@ -191,7 +209,7 @@ class MeteredQuantity(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     key: MeterKey
-    coverage: CoverageState
+    coverage: MeterCoverage = Field(description="Evidence quality for one provider-meter quantity.")
     actual_quantity: float | None = Field(default=None, ge=0)
     estimated_quantity: float | None = Field(default=None, ge=0)
     lineage: list[str] = Field(default_factory=list)
@@ -219,7 +237,7 @@ class MeterRollup(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     key: MeterKey
-    coverage: CoverageState
+    coverage: MeterCoverage = Field(description="Evidence quality reconciled for one meter key.")
     actual_quantity: float | None = Field(default=None, ge=0)
     estimated_quantity: float | None = Field(default=None, ge=0)
     unmeasured_event_count: int = Field(default=0, ge=0)
