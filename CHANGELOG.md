@@ -7,6 +7,26 @@ development series.
 
 ## [Unreleased][unreleased]
 
+### Added
+
+- **A summary value can say how well it is known, instead of publishing a gap as a
+  zero.** `Metrics` fields were nullable with the `None`-versus-`0` distinction carried
+  only in a docstring, so a reader could not tell "no data" from "not instrumented" from
+  "this step runs no agent" — three different findings, one null, and only one of them
+  worth acting on. Worse, a gap that reaches a table or a chart as `0` is
+  indistinguishable from a real measurement and reads as *instantaneous* or *free*.
+
+  `Quantity` carries a value with its `coverage`, the `reason` it is not measured, and
+  the `sample_count` the gap covers, and it refuses the combinations that would lose
+  that: a gap carrying a value, a gap without a reason, a measured quantity without one.
+  `MeteredQuantity` already had this discipline for provider usage meters, which are
+  keyed by provider/product/meter/unit; `Quantity` covers everything else a summary
+  reports, such as a wall time, a request count or a concurrency figure.
+
+  `CoverageState` gains `not_applicable` for the same reason. `MeterRollup` never
+  computes it, since a rollup's coverage follows from the evidence it reconciled, and
+  applicability is a property of the quantity being asked for.
+
 ## [0.4.1][] - 2026-09-10
 
 ### Fixed

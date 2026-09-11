@@ -83,11 +83,87 @@ class Metrics(MetricsV1):
 
 
 class CoverageState(StrEnum):
-    """Evidence quality for one provider-meter quantity."""
+    """Evidence quality for one measured quantity.
+
+    ``NOT_APPLICABLE`` separates a quantity that cannot exist here from one that
+    could and was not captured. "No data", "not instrumented" and "this step runs
+    no agent" are three different findings, and collapsing them into a single null
+    loses the only one a reader can act on.
+
+    ``MeterRollup`` never computes ``NOT_APPLICABLE``: a rollup's coverage is
+    derived from the evidence it reconciled, so applicability is a property of the
+    quantity being asked for, not of the reconciliation.
+    """
 
     MEASURED = "measured"
     ESTIMATED = "estimated"
     UNMEASURED = "unmeasured"
+    NOT_APPLICABLE = "not_applicable"
+
+
+class Quantity(BaseModel):
+    """One summary value that carries how well it is known.
+
+    ``MeteredQuantity`` covers provider usage meters, which are keyed by
+    provider/product/meter/unit. This covers everything else a summary reports:
+    a wall time, a request count, a concurrency figure.
+
+    The point is that a gap is never published as a zero. A zero read as
+    *instantaneous* or *free* is a measurement nobody made, and it is
+    indistinguishable from a real one once it reaches a table or a chart. A
+    quantity that was not measured says so, says why, and says how many
+    observations the gap covers, so a reader can tell a quiet run from an
+    uninstrumented one.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    value: float | None = None
+    coverage: CoverageState
+    unit: str | None = Field(default=None, max_length=64)
+    reason: str | None = Field(default=None, max_length=512)
+    sample_count: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def _validate_coverage(self) -> Self:
+        if self.coverage in (CoverageState.MEASURED, CoverageState.ESTIMATED):
+            if self.value is None:
+                raise ValueError(f"{self.coverage.value} quantity requires a value")
+        elif self.value is not None:
+            raise ValueError(f"{self.coverage.value} quantity must not carry a value")
+        if self.coverage is not CoverageState.MEASURED and not self.reason:
+            raise ValueError(
+                f"{self.coverage.value} quantity requires a reason naming why it is not measured"
+            )
+        return self
+
+    @classmethod
+    def measured(cls, value: float, *, unit: str | None = None, samples: int = 1) -> Self:
+        return cls(
+            value=value, coverage=CoverageState.MEASURED, unit=unit, sample_count=samples
+        )
+
+    @classmethod
+    def estimated(
+        cls, value: float, *, reason: str, unit: str | None = None, samples: int = 0
+    ) -> Self:
+        return cls(
+            value=value,
+            coverage=CoverageState.ESTIMATED,
+            unit=unit,
+            reason=reason,
+            sample_count=samples,
+        )
+
+    @classmethod
+    def unmeasured(cls, *, reason: str, unit: str | None = None, samples: int = 0) -> Self:
+        return cls(
+            coverage=CoverageState.UNMEASURED, unit=unit, reason=reason, sample_count=samples
+        )
+
+    @classmethod
+    def not_applicable(cls, *, reason: str, unit: str | None = None) -> Self:
+        return cls(coverage=CoverageState.NOT_APPLICABLE, unit=unit, reason=reason)
 
 
 class MeterKey(BaseModel):
