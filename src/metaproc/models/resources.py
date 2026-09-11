@@ -139,9 +139,7 @@ class Quantity(BaseModel):
 
     @classmethod
     def measured(cls, value: float, *, unit: str | None = None, samples: int = 1) -> Self:
-        return cls(
-            value=value, coverage=CoverageState.MEASURED, unit=unit, sample_count=samples
-        )
+        return cls(value=value, coverage=CoverageState.MEASURED, unit=unit, sample_count=samples)
 
     @classmethod
     def estimated(
