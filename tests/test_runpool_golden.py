@@ -94,6 +94,11 @@ def _normalize_event(event: dict) -> dict:
             "active_rss_bytes",
             "active_peak_rss_bytes",
             "active_log_bytes",
+            # Hold hysteresis counts consecutive checks at the normalized
+            # `level`, so it varies with host memory pressure just as the level
+            # itself does.
+            "consecutive_normal",
+            "consecutive_elevated",
         ):
             normalized.pop(key, None)
     # Normalize health metrics that vary by timing
