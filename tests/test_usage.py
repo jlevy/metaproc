@@ -497,6 +497,39 @@ class TestExtractGeminiUsage:
         assert result[0].cache_read_tokens == 200
         assert result[0].tool_calls == 5
 
+    def test_billed_output_recovers_reasoning_from_the_total(self) -> None:
+        """Gemini's reported output excludes reasoning; billed output must include it.
+
+        Numbers are one model entry from ``tests/fixtures/trace_agents/gemini-sample.jsonl``.
+        """
+        stats_dict = {
+            "input_tokens": 1_625_601,
+            "output_tokens": 9_429,
+            "cached": 960_013,
+            "total_tokens": 1_650_379,
+        }
+        billed = extract_gemini_usage(stats_dict)[0].output_tokens
+        assert billed == 24_778
+        assert billed == stats_dict["total_tokens"] - stats_dict["input_tokens"]
+
+    def test_residual_needs_an_input_figure_to_subtract(self) -> None:
+        """A total with no input beside it cannot be decomposed.
+
+        Subtracting an absent input reads as subtracting zero, which would report
+        the whole total, input included, as output.
+        """
+        stats_dict = {
+            "output_tokens": 9_429,
+            "cached": 0,
+            "total_tokens": 1_650_379,
+        }
+        assert extract_gemini_usage(stats_dict)[0].output_tokens == 9_429
+
+    def test_reported_output_is_the_floor(self) -> None:
+        """A stats block with no total falls back to the reported field."""
+        stats_dict = {"input_tokens": 5_000, "output_tokens": 1_000, "cached": 200}
+        assert extract_gemini_usage(stats_dict)[0].output_tokens == 1_000
+
 
 # ── Codex CLI usage extraction ──────────────────────────────────
 
@@ -542,6 +575,63 @@ class TestSumCodexUsage:
         cost = compute_cost(stats, pricing)
         # gpt-5.5: $5.00 input / $30.00 output per 1M. Expect $35.00.
         assert cost == pytest.approx(35.00, abs=0.01)
+
+
+# ── The shared token basis ──────────────────────────────────────
+
+
+class TestBilledOutputIsOneDefinition:
+    """Every adapter reports billed output, reasoning included.
+
+    The same turn, described in each provider's own vocabulary: 9,429 visible
+    output tokens plus 15,349 reasoning tokens against 1,625,601 input. Anthropic
+    and OpenAI count reasoning in the output field they report; Gemini does not
+    and reports it only inside its total. All three must land on 24,778, or a
+    consumer comparing two adapters compares unlike numbers.
+    """
+
+    _VISIBLE_OUTPUT = 9_429
+    _BILLED_OUTPUT = 24_778
+    _INPUT = 1_625_601
+
+    def test_gemini_reconstructs_it(self) -> None:
+        stats = extract_gemini_usage(
+            {
+                "input_tokens": self._INPUT,
+                "output_tokens": self._VISIBLE_OUTPUT,
+                "cached": 0,
+                "total_tokens": self._INPUT + self._BILLED_OUTPUT,
+            }
+        )[0]
+        assert stats.output_tokens == self._BILLED_OUTPUT
+
+    def test_claude_reports_it_directly(self) -> None:
+        stats = sum_claude_usage(
+            {
+                "modelUsage": {
+                    "claude-opus-5": {
+                        "inputTokens": self._INPUT,
+                        "outputTokens": self._BILLED_OUTPUT,
+                        "cacheReadInputTokens": 0,
+                        "cacheCreationInputTokens": 0,
+                    }
+                }
+            }
+        )
+        assert stats.output_tokens == self._BILLED_OUTPUT
+
+    def test_codex_reports_it_directly(self) -> None:
+        stats = sum_codex_usage(
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": self._INPUT,
+                    "cached_input_tokens": 0,
+                    "output_tokens": self._BILLED_OUTPUT,
+                },
+            }
+        )
+        assert stats.output_tokens == self._BILLED_OUTPUT
 
 
 # ── LogFile.usage_stats integration ─────────────────────────────

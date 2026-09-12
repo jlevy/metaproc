@@ -6,7 +6,7 @@ status: Approved
 ---
 # Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-09-10) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-09-12) **Status:** Approved
 
 Also readable as `metaproc help design`.
 
@@ -2510,6 +2510,19 @@ request counts.
 `cache_read_tokens`, `cache_write_tokens`, `cost_usd`, `duration_s`, `tool_calls`,
 `model`, `provider`, plus `cost_is_estimated` flag.
 
+**Token basis.** `output_tokens` is *billed* output: the tokens a provider charges at
+its output rate, which includes the model’s own reasoning tokens.
+`input_tokens` is uncached input only, because cached input bills at a different rate
+and is carried separately in `cache_read_tokens`. The three buckets are disjoint and sum
+to the charged total.
+
+Every adapter normalises to that one definition, so an output figure from one adapter is
+comparable with an output figure from another and both price correctly against the table
+in §15.2. A provider transcript’s own `output_tokens` field is not always the same
+number: §15.3 says which providers report billed output directly and which need it
+reconstructed. Reading a transcript field alongside a metaproc figure without knowing
+which is which compares unlike numbers.
+
 **`UsageReport`** (normalized output): Pydantic model with `totals`, `by_variant`,
 `by_model`, `by_provider` -- each a `UsageBucket`. Cost is nested as
 `CostPair(actual: CostView, list: CostView)`. Tool-use telemetry rides alongside in
@@ -2525,15 +2538,25 @@ for input, output, cache_read, cache_write.
 
 ### 15.3 Adapter-Specific Extraction
 
+Each adapter reaches the §15.1 token basis from a different provider shape.
+
 - **Pi CLI**: extracts per-turn usage from `agent_end` events, summing across assistant
   messages (`input`, `output`, `cacheRead`, `cacheWrite` tokens and estimated
   `cost.total`).
 - **Gemini CLI**: extracts per-model breakdown from `stats.models` or falls back to
-  aggregate stats, separating cached input from uncached input and including any
-  reasoning residual in billed output exactly once.
+  aggregate stats, separating cached input from uncached input.
+  Gemini excludes reasoning from the `output_tokens` it reports and the stats block
+  carries no reasoning count of its own, so billed output is recovered as the residual
+  of `total_tokens` over input, counted exactly once, and taken only when the block
+  carries an input figure to subtract.
+  On metaproc’s own Gemini fixture that residual is 2.6x the reported field, so the
+  reported field would understate both the work and the bill.
 - **Claude CLI**: treats nested `modelUsage` as the authoritative whole-attempt usage
-  when present.
+  when present. Anthropic counts extended-thinking output in the output field it reports,
+  so that field is already billed output and is taken as it stands.
 - **Codex CLI**: treats cached input as a subset of total input for pricing.
+  codex-cli rolls reasoning into the `output_tokens` it reports, so that field is
+  already billed output and is taken as it stands.
 
 ### 15.4 Aggregation and Output
 
