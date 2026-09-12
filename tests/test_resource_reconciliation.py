@@ -14,7 +14,6 @@ from metaproc.engine.resource_reconciliation import (
 from metaproc.models.resources import (
     CoverageState,
     HierarchyRef,
-    MeterCoverage,
     MeteredQuantity,
     MeterKey,
     Metrics,
@@ -137,10 +136,6 @@ def test_complete_mixed_meter_rollup_is_estimated() -> None:
         meter="credits",
         unit="credit",
     )
-    cases: list[tuple[int, MeterCoverage, int]] = [
-        (1, CoverageState.MEASURED, 3),
-        (2, CoverageState.ESTIMATED, 4),
-    ]
     events = [
         ensure_resource_event_id(
             _event(input_tokens=index).model_copy(
@@ -161,7 +156,10 @@ def test_complete_mixed_meter_rollup_is_estimated() -> None:
                 }
             )
         )
-        for index, coverage, quantity in cases
+        for index, coverage, quantity in [
+            (1, CoverageState.MEASURED, 3),
+            (2, CoverageState.ESTIMATED, 4),
+        ]
     ]
 
     rollup = aggregate_meter_rollups(events)[0]

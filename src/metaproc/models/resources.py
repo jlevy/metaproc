@@ -83,103 +83,11 @@ class Metrics(MetricsV1):
 
 
 class CoverageState(StrEnum):
-    """Evidence quality for one measured quantity.
-
-    ``NOT_APPLICABLE`` separates a quantity that cannot exist here from one that
-    could and was not captured. "No data", "not instrumented" and "this step runs
-    no agent" are three different findings, and collapsing them into a single null
-    loses the only one a reader can act on.
-
-    Applicability is a property of the quantity being asked for, not of a provider
-    meter, so the meter models accept the narrower `MeterCoverage`.
-    """
+    """Evidence quality for one provider-meter quantity."""
 
     MEASURED = "measured"
     ESTIMATED = "estimated"
     UNMEASURED = "unmeasured"
-    NOT_APPLICABLE = "not_applicable"
-
-
-MeterCoverage = Literal[
-    CoverageState.MEASURED,
-    CoverageState.ESTIMATED,
-    CoverageState.UNMEASURED,
-]
-"""The coverage states a provider meter can hold.
-
-A meter is identified by a `MeterKey`, and a meter that does not apply is one
-nobody emits, so ``NOT_APPLICABLE`` has nothing to name here.
-
-Excluding it is load-bearing rather than tidy. `MeterRollup` derives its coverage
-from the evidence it reconciled and can only ever reach these three, and
-``aggregate_meter_rollups`` folds every `MeteredQuantity` that is neither measured
-nor estimated into ``unmeasured_event_count``. An inapplicable meter admitted at
-the event level would therefore be reported as a gap somebody could close, which
-is the confusion `Quantity` exists to prevent.
-"""
-
-
-class Quantity(BaseModel):
-    """One summary value that carries how well it is known.
-
-    ``MeteredQuantity`` covers provider usage meters, which are keyed by
-    provider/product/meter/unit. This covers everything else a summary reports:
-    a wall time, a request count, a concurrency figure.
-
-    The point is that a gap is never published as a zero. A zero read as
-    *instantaneous* or *free* is a measurement nobody made, and it is
-    indistinguishable from a real one once it reaches a table or a chart. A
-    quantity that was not measured says so, says why, and says how many
-    observations the gap covers, so a reader can tell a quiet run from an
-    uninstrumented one.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    value: float | None = None
-    coverage: CoverageState
-    unit: str | None = Field(default=None, max_length=64)
-    reason: str | None = Field(default=None, max_length=512)
-    sample_count: int = Field(default=0, ge=0)
-
-    @model_validator(mode="after")
-    def _validate_coverage(self) -> Self:
-        if self.coverage in (CoverageState.MEASURED, CoverageState.ESTIMATED):
-            if self.value is None:
-                raise ValueError(f"{self.coverage.value} quantity requires a value")
-        elif self.value is not None:
-            raise ValueError(f"{self.coverage.value} quantity must not carry a value")
-        if self.coverage is not CoverageState.MEASURED and not self.reason:
-            raise ValueError(
-                f"{self.coverage.value} quantity requires a reason naming why it is not measured"
-            )
-        return self
-
-    @classmethod
-    def measured(cls, value: float, *, unit: str | None = None, samples: int = 1) -> Self:
-        return cls(value=value, coverage=CoverageState.MEASURED, unit=unit, sample_count=samples)
-
-    @classmethod
-    def estimated(
-        cls, value: float, *, reason: str, unit: str | None = None, samples: int = 0
-    ) -> Self:
-        return cls(
-            value=value,
-            coverage=CoverageState.ESTIMATED,
-            unit=unit,
-            reason=reason,
-            sample_count=samples,
-        )
-
-    @classmethod
-    def unmeasured(cls, *, reason: str, unit: str | None = None, samples: int = 0) -> Self:
-        return cls(
-            coverage=CoverageState.UNMEASURED, unit=unit, reason=reason, sample_count=samples
-        )
-
-    @classmethod
-    def not_applicable(cls, *, reason: str, unit: str | None = None) -> Self:
-        return cls(coverage=CoverageState.NOT_APPLICABLE, unit=unit, reason=reason)
 
 
 class MeterKey(BaseModel):
@@ -209,7 +117,7 @@ class MeteredQuantity(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     key: MeterKey
-    coverage: MeterCoverage = Field(description="Evidence quality for one provider-meter quantity.")
+    coverage: CoverageState
     actual_quantity: float | None = Field(default=None, ge=0)
     estimated_quantity: float | None = Field(default=None, ge=0)
     lineage: list[str] = Field(default_factory=list)
@@ -237,7 +145,7 @@ class MeterRollup(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     key: MeterKey
-    coverage: MeterCoverage = Field(description="Evidence quality reconciled for one meter key.")
+    coverage: CoverageState
     actual_quantity: float | None = Field(default=None, ge=0)
     estimated_quantity: float | None = Field(default=None, ge=0)
     unmeasured_event_count: int = Field(default=0, ge=0)

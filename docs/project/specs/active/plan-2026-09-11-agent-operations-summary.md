@@ -204,9 +204,13 @@ leaves a truncated transcript.
 Frontmatter-md, exactly as `ResourceUsageSummary` does it: validated YAML for machines,
 a generated prose body for humans that states it is explanatory.
 
-Its numeric leaves are `Quantity`, so a figure the run could not measure says so rather
-than arriving as a zero, and a figure that does not apply to a step is distinguishable
-from one nobody collected.
+A numeric leaf that can be absent follows `MeteredQuantity`, which already solves this
+for provider meters: provenance lives in the field name, `actual_quantity` and
+`estimated_quantity` are separate and a validator keeps them from overlapping, and the
+coverage state names why a value is missing. A consumer reading the measured field gets
+nothing when only an estimate exists, so a figure the run could not measure is absent
+rather than zero and cannot be read as one. Collapsing both into a single `value` behind
+a coverage flag would reintroduce exactly that misread, so the summary does not.
 
 ```yaml
 agent_operations:

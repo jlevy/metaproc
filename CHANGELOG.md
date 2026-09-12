@@ -7,45 +7,6 @@ development series.
 
 ## [Unreleased][unreleased]
 
-### Added
-
-- **`Quantity`, a reported value that carries how well it is known.** `Metrics` fields
-  are nullable with the `None`-versus-`0` distinction carried only in a docstring, so a
-  reader cannot tell “no data” from “not instrumented” from “this step runs no agent”.
-  Those are three findings, one null, and only one of them is worth acting on.
-  Worse, a gap that reaches a table or a chart as `0` is indistinguishable from a real
-  measurement and reads as *instantaneous* or *free*.
-
-  `Quantity` carries a value with its `coverage`, the `reason` it is not measured, and
-  the `sample_count` the gap covers, and it refuses the combinations that would lose
-  that: a gap carrying a value, a gap without a reason, a measured quantity without a
-  value. `CoverageState` gains `not_applicable` to name the third case, which is a
-  question that does not arise rather than an answer nobody collected.
-  `MeteredQuantity` already had this discipline for provider usage meters, which are
-  keyed by provider/product/meter/unit; `Quantity` covers everything else a summary
-  reports, such as a wall time, a request count or a concurrency figure.
-
-  This is groundwork, and it changes no artifact.
-  Nothing in Metaproc emits a `Quantity` yet, `ResourceUsageSummary.totals` is still
-  `Metrics`, and `resource-usage-summary.md` still renders an absent value as
-  `unmeasured`. The type is public so a consumer can build on the vocabulary before the
-  summary that will use it lands.
-
-### Changed
-
-- **Provider meters accept only the coverage states they can reconcile.**
-  `MeteredQuantity.coverage` and `MeterRollup.coverage` are now `MeterCoverage`, which
-  is `CoverageState` without `not_applicable`. Nothing could ever produce that state for
-  a meter, since a meter is identified by its key and one that does not apply is one
-  nobody emits, while `MeterRollup` derives coverage from the evidence it reconciled and
-  meter aggregation counts anything neither measured nor estimated as an unmeasured
-  event. Admitting it would have reported an inapplicable meter as a gap worth chasing,
-  which is the confusion `Quantity` exists to prevent.
-
-  The compiled `resource-usage-summary.v1` schema spells `provider_meters[].coverage` as
-  an inline enum instead of referencing a shared `$defs` entry.
-  The accepted values are unchanged.
-
 ## [0.4.1][] - 2026-09-10
 
 ### Fixed

@@ -16,7 +16,6 @@ from metaproc.models.resources import (
     ItemCompleteEvent,
     ItemFailEvent,
     ItemStartEvent,
-    MeterCoverage,
     MeteredQuantity,
     MeterKey,
     Metrics,
@@ -88,7 +87,7 @@ def test_metered_quantity_preserves_measured_zero() -> None:
     ],
 )
 def test_metered_quantity_rejects_overlapping_coverage(
-    coverage: MeterCoverage,
+    coverage: CoverageState,
     actual: float | None,
     estimated: float | None,
 ) -> None:
