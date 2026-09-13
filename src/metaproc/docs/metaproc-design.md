@@ -623,9 +623,16 @@ Rules:
 - scalar fields on a step override the corresponding default
 - list fields (such as `tools`) **replace**, they do not merge; to add a tool to the
   default set, the step must redeclare the full list
-- `adapter` on a step **merges** with the default adapter config looked up by
-  `default_adapter`
+- with an execution profile selected, adapter config starts from that profile; explicit
+  step adapter config overrides it, followed by the step’s `timeout_s` and CLI config
+  overrides. Legacy `defaults.adapters` maps do not merge into an execution profile
+- without an execution profile, `adapter` on a step **merges** with the selected
+  process-default adapter config
 - `with` does not “inherit everything”; it is the explicit binding surface for that step
+
+Claude, Gemini, and Codex accept `adapter.config.working_directory` as the subprocess
+working directory. Runtime placeholders such as `{{run.dir}}` resolve at launch.
+Selecting a working directory does not restrict filesystem access.
 
 ## 6.12 Template Variable Resolution
 

@@ -9,6 +9,11 @@ development series.
 
 ### Fixed
 
+- **Claude honors an explicit working directory.** `working_directory` survives adapter
+  validation under Claude execution profiles and sets the launched subprocess directory,
+  matching Gemini and Codex.
+  Omission retains the existing inherited directory.
+
 - **Failure causes survive task, step, and run aggregation.** Mapped summaries count
   distinct recorded causes against the current item roster; scalar and composite
   summaries retain their durable causes.

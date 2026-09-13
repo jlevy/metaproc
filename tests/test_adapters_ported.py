@@ -243,6 +243,11 @@ class TestClaudeCodeCliAdapter:
     def test_working_directory_returns_none(self) -> None:
         assert self.adapter.working_directory({}) is None
 
+    def test_working_directory_is_validated_and_respected(self, tmp_path: Path) -> None:
+        config: dict[str, object] = {"working_directory": str(tmp_path)}
+        assert self.adapter.validate_config(config) == []
+        assert self.adapter.working_directory(config) == tmp_path
+
     def test_parse_result_event_valid(self) -> None:
         line = '{"type": "result", "status": "success", "tokens": 1234}'
         result = self.adapter.parse_result_event(line)
