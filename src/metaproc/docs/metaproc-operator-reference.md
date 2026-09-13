@@ -88,9 +88,11 @@ behavior [`arch-runpool.md`](arch-runpool.md), and for naming rules
 1. Use metaproc commands for run state and lifecycle, and original logs for deeper
    debugging. Read-only filesystem inspection is appropriate for understanding agent
    behavior or diagnosing gaps in a Metaproc report.
-   Keep orchestration and state mutation in the CLI. Add recurring monitoring gaps to
-   Metaproc while using the available source evidence to investigate the current
-   failure.
+   Use the [monitoring commands](#monitoring-commands) for routine checks instead of
+   parsing `.state/` or `.logs/` with private shell or Python scripts.
+   Keep orchestration and state mutation in the CLI. Track a missing recurring
+   monitoring capability as an issue while using the available source evidence to
+   investigate the current failure.
 2. Treat `.state/` as harness-owned runtime state.
    Files in `.state/` are full-rewrite or frozen records used for resume, adoption, and
    status checks. Do not hand-edit them except through operator commands such as
@@ -104,8 +106,12 @@ behavior [`arch-runpool.md`](arch-runpool.md), and for naming rules
    Runpool logs are scoped by step or worker because concurrent pools must not append to
    one shared file. Per-attempt agent logs are scoped by step and item.
 5. Treat trace output as derived.
-   `metaproc trace --extract` reads source logs and writes `.logs/derived/trace.jsonl`;
-   it can be regenerated and should not be edited by hand.
+   `metaproc trace <run-dir> --extract` reads source logs and creates or overwrites
+   `.logs/derived/trace.jsonl`; it changes the run tree even though the source logs
+   remain unchanged. If an immutable receipt or digest binds that tree, extract on a
+   separate local review copy and retain the original tree unchanged.
+   Trace queries without `--extract` read the existing store and do not refresh it.
+   Derived traces can be regenerated and should not be edited by hand.
 6. Read `steps` and `tasks` as different scopes.
    `steps` means step-runner control-plane data.
    `tasks` means runtime task execution data, including status, attempts, results, and
@@ -247,7 +253,7 @@ The reusable metaproc command set is:
 | One-line health pulse (orch/progress/auth) | `uv run metaproc pulse <run-dir>` |
 | Check pool pressure | `uv run metaproc pool status <run-dir>` |
 | Read pool events | `uv run metaproc pool events <run-dir>` |
-| Tail summarized task logs | `uv run metaproc tail <run-dir>/.logs --once --summary` |
+| Tail summarized task logs | `uv run --frozen metaproc tail <attempt-log-dir> --once --summary` |
 | Build/query trace health | `uv run metaproc trace --extract <run-dir>` then `uv run metaproc trace --health <run-dir>` |
 | Stop a local run | `uv run metaproc kill <run-dir>` |
 
@@ -262,6 +268,9 @@ Metaproc feature.
 Start with `metaproc status <run-dir>` to identify the affected step, item, and current
 run state. A failure count, generic exit code, or extracted trace is not a complete
 explanation of agent behavior.
+Cross-check apparent trace failures against current status and attempt liveness.
+An absent terminal result in a transcript does not establish that an attempt failed
+while it is still running; an existing trace may also predate the latest progress.
 Open the retained source evidence for the relevant attempt:
 
 - Per-attempt native agent streams are under
@@ -274,6 +283,10 @@ Open the retained source evidence for the relevant attempt:
   Correlate the task status, attempt metadata, timestamps, and provider session identity
   before choosing logs; do not mix a previous retry with the active or final attempt.
 
+`metaproc tail <attempt-log-dir> --once` renders recognized JSONL streams in the
+supplied directory. Pass the directory that directly contains the attempt’s JSONL files;
+`tail` does not recurse through a run’s task directories.
+It accepts multiple directories when several attempts need inspection.
 Use a text viewer or ordinary read-only tools to inspect an actual source path:
 
 ```bash
@@ -294,6 +307,11 @@ original stream was not retained.
 the captured source when their interpretation is incomplete or suspect.
 Preserve available source logs during an investigation, and avoid lossy compaction until
 the needed native evidence has been retained.
+Read the affected attempt through its final available record before retrying, changing
+timeouts, or revising its prompt.
+Distinguish a reported agent result, a tool error, and an interrupted stream; correlate
+them with the recorded task cause, process exit, output validation, and pool kill or
+retry events before choosing a remedy.
 
 Report the observed cause, its affected step/item/attempt, the source path and relevant
 timestamp or excerpt, and the retry or waiting state.
@@ -587,11 +605,14 @@ plus `pool events` to inspect contention.
 | Is this run up to date with the current process? | `uv run metaproc status <run> --steps` |
 | Which steps are stale or already invalidated? | `uv run metaproc status <run> --steps --stale-only` |
 | Wait until the run finishes | `uv run metaproc wait <run-dir-or-run-id>` |
-| What is happening in agent logs? | `uv run metaproc tail <run-dir>/.logs --once --summary` |
-| What did the DAG do? | `uv run metaproc trace --extract <run-dir> && uv run metaproc trace <run-dir> --tree` |
-| What failed? | `uv run metaproc trace --extract <run-dir> && uv run metaproc trace <run-dir> --health` |
-| What did it cost? | `uv run metaproc trace --extract <run-dir> && uv run metaproc trace <run-dir> --cost` |
+| What is happening in agent logs? | `uv run --frozen metaproc tail <attempt-log-dir> --once` (add `--summary` for a rollup) |
+| What did the DAG do? | `uv run --frozen metaproc trace <run-dir> --tree` |
+| Which spans have recorded errors? | `uv run --frozen metaproc trace <run-dir> --status error` |
+| What is the evidence for one span? | `uv run --frozen metaproc trace <run-dir> --drill <span-id>` |
+| How are trace failures grouped? | `uv run --frozen metaproc trace <run-dir> --health` |
+| What did it cost? | `uv run --frozen metaproc trace <run-dir> --cost` |
 | How did concurrency change? | `uv run metaproc pool concurrency-timeline <run-dir>` |
+| What is the current pool state? | `uv run --frozen metaproc pool status <run-dir>` |
 | What did the pool record? | `uv run metaproc pool events <run-dir>` |
 | What did every run-owned and step pool record? | `uv run metaproc pool rollup <run-dir>` |
 | What did the pressure sampler see? | `uv run metaproc pool health <run-dir>` |
@@ -600,9 +621,46 @@ plus `pool events` to inspect contention.
 | Which auth labels were used? | `uv run metaproc auth usage <run-dir>` |
 | What is the cloud Batch state? | `uv run metaproc gcp status <run-id>` |
 | What did cloud jobs log? | `uv run metaproc gcp logs <run-id>` |
+| What do the declared-output checks report? | `uv run --frozen metaproc validate <process.process.md> --step <step-id> --run-root <run-dir> --var KEY=value` |
+| What does one artifact’s registered contract report? | `uv run --frozen metaproc softschema validate <artifact> --schema <contract-id>` |
 
 For a live run, prefer `status`, `wait`, `tail`, `pool`, `auth usage`, `stats`, and
 `gcp` commands over raw `tail`, `find`, Cloud Logging queries, or private parsers.
+Direct inspection of a specific native log remains appropriate for
+[agent debugging](#direct-agent-debugging).
+
+Trace queries require an existing trace store.
+To create or refresh one, run `uv run --frozen metaproc trace <run-dir> --extract`. This
+writes into the run tree; use a review copy when an immutable receipt binds the
+original, as described in [Operating Rules](#operating-rules).
+The query describes the extracted snapshot, so compare it with live status before
+declaring a running attempt failed.
+
+### Checking Output Contracts
+
+`metaproc validate` takes a process spec and a required `--step`; a run directory alone
+is not a valid invocation.
+Supply the spec’s required `--var KEY=value` inputs.
+For a mapped step, also supply `--items item-a,item-b` and, when the item binding is not
+declared by `for_each.bind`, `--each <binding>`. The command checks the selected items’
+declared non-raw outputs, frontmatter formats, and registered contracts.
+For a scalar step it checks declared output-path existence only.
+It does not certify the whole run or establish that every validation layer ran.
+Use `metaproc softschema validate <artifact> --schema <contract-id>` to inspect an
+individual artifact’s registered contract result.
+
+Read validation execution separately from the payload verdict.
+In reports that include `structural.execution` and `semantic.execution`, inspect each
+layer independently: `completed` means the evaluator reached a verdict, and `ok` says
+whether it accepted the payload.
+`not_run` and `errored` do not establish a payload verdict; read that layer’s
+`skipped_reason` and `errors` for the recorded explanation, and `structural.engine` for
+the structural evaluator.
+A schema’s `status: enforced` declares policy and does not prove either evaluator ran.
+Metaproc forwards the installed SoftSchema library’s layer records; reports without
+execution fields provide no explicit execution evidence.
+Preserve that absence or revalidate the retained artifact, and identify any new result
+as a review-time check rather than evidence of what ran originally.
 
 ### Steps section in `metaproc status`
 
