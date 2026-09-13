@@ -26,6 +26,7 @@ _ANSI_ESCAPE = re.compile(
     r"|(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]"
 )
 _NONPRINTING_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x84\x86-\x9f]")
+_JSON_STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
 _MAX_DETAIL_CHARS = 1_200
 _MAX_DETAIL_LINES = 12
 
@@ -34,7 +35,9 @@ def summarize_diagnostic(text: str, *, env: Mapping[str, str] | None = None) -> 
     """Return a bounded diagnostic with known credentials redacted.
 
     Remove terminal color/hyperlink sequences and nonprinting controls before matching
-    environment secrets and common credential forms. Omitted ``env`` uses the current
+    environment secrets and common credential forms. JSON-encoded strings are checked
+    as decoded values, including nested diagnostic payloads, before being re-encoded.
+    Omitted ``env`` uses the current
     process environment; callers with resolved child credentials can provide that
     mapping explicitly. Redaction cannot identify
     arbitrary unlabeled secrets that are absent from this environment.
@@ -56,7 +59,6 @@ def _normalize_diagnostic(text: str) -> str:
 
 def _redact_diagnostic(text: str, *, env: Mapping[str, str]) -> str:
     """Keep full normalized evidence for classification before display clipping."""
-    detail = _normalize_diagnostic(text)
     try:
         secret_refs = json.loads(env.get(MetaprocEnv.METAPROC_GCP_SECRET_REFS_JSON.name, "{}"))
     except json.JSONDecodeError:
@@ -73,7 +75,35 @@ def _redact_diagnostic(text: str, *, env: Mapping[str, str]) -> str:
         )
     }
     secrets.discard("")
-    for value in sorted(secrets, key=len, reverse=True):
+    return _redact_text(text, secrets=sorted(secrets, key=len, reverse=True))
+
+
+def _redact_text(text: str, *, secrets: list[str]) -> str:
+    def redact_encoded_string(match: re.Match[str]) -> str:
+        encoded = match.group()
+        if "\\" not in encoded:
+            return encoded
+        try:
+            decoded: str = json.loads(encoded)
+        except json.JSONDecodeError:
+            return encoded
+        # Each decoded string is shorter than its representation. Recurse so a JSON
+        # response embedded in another JSON message receives the same checks. Keep
+        # quoting/escaping intact rather than decoding arbitrary backslashes in paths.
+        redacted = _redact_text(decoded, secrets=secrets)
+        if redacted == decoded:
+            return encoded
+        # Preserve Unicode: newly spelling an ordinary character as a numeric escape
+        # can introduce a status code into later classification. Escape lone surrogate
+        # code points so the summary remains writable as UTF-8.
+        return (
+            json.dumps(redacted, ensure_ascii=False)
+            .encode("utf-8", errors="backslashreplace")
+            .decode("utf-8")
+        )
+
+    detail = _JSON_STRING.sub(redact_encoded_string, _normalize_diagnostic(text))
+    for value in secrets:
         detail = detail.replace(value, "[redacted]")
     detail = _AUTH_VALUE.sub(r"\1 [redacted]", detail)
     detail = _CREDENTIAL_VALUE.sub(r"\1[redacted]", detail)

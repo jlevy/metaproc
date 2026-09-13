@@ -1,5 +1,9 @@
 """Credential handling and missing-evidence behavior for durable command errors."""
 
+import json
+
+import pytest
+
 from metaproc.engine.command_diagnostics import command_failure_message, handler_failure_message
 from metaproc.engine.retry import FailureClass
 
@@ -126,6 +130,41 @@ def test_handler_classification_excludes_redacted_secrets_and_traceback_filename
     assert failure.error.startswith("ValueError: invalid input; [redacted]")
     assert "opaque-429-value" not in failure.error
     assert "command exit code" not in failure.error
+
+
+@pytest.mark.parametrize("handler", [False, True])
+def test_encoded_secret_cannot_control_failure_classification(handler: bool) -> None:
+    diagnostic = json.dumps({"message": "opaque-\x1b[31m429\x1b[0m-value"})
+    env = {"PROVIDER_API_KEY": "opaque-429-value"}
+    if handler:
+        failure = handler_failure_message(ValueError(diagnostic), env=env, log_path="task.log")
+    else:
+        failure = command_failure_message(
+            1, stdout=diagnostic, stderr=None, env=env, log_path="task.log"
+        )
+    assert "[redacted]" in failure.error
+    assert "429" not in failure.error
+    assert failure.failure_class is not FailureClass.RATE_LIMITED
+
+
+@pytest.mark.parametrize("with_secret", [False, True])
+def test_normalizing_json_does_not_turn_unicode_into_a_status_code(with_secret: bool) -> None:
+    message = "ValueError Щ C:\\file"
+    if with_secret:
+        message += " opaque-\x1b[31mprivate\x1b[0m-value"
+    diagnostic = json.dumps({"message": message}, ensure_ascii=False)
+    failure = command_failure_message(
+        1,
+        stdout=diagnostic,
+        stderr=None,
+        env={"PROVIDER_API_KEY": "opaque-private-value"},
+        log_path="task.log",
+    )
+    assert "Щ" in failure.error
+    assert "429" not in failure.error
+    assert failure.failure_class is FailureClass.CRASH
+    if with_secret:
+        assert "[redacted]" in failure.error
 
 
 def test_empty_handler_exception_retains_its_type_without_inventing_a_cause() -> None:
