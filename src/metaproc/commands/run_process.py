@@ -104,7 +104,11 @@ from metaproc.engine.graph import (
     propagate_failure,
     topo_sort,
 )
-from metaproc.engine.input_validation import validate_process_inputs, validate_process_outputs
+from metaproc.engine.input_validation import (
+    validate_process_inputs,
+    validate_process_outputs,
+    validate_process_outputs_detailed,
+)
 from metaproc.engine.item_runner import (
     StepInvoker,
     run_aligned_chain,
@@ -1269,6 +1273,20 @@ def _read_process_status_yaml(run_dir: Path) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+def _record_process_output_failure(run_dir: Path, error: CLIError) -> None:
+    """Persist a process-boundary refusal after its child steps have completed."""
+    data = _read_process_status_yaml(run_dir) or {}
+    data.update(state="failed", error=str(error), completed_at=_now_iso())
+    if error.output_failures:
+        data["output_failures"] = [
+            failure.model_dump(mode="json", exclude_none=True) for failure in error.output_failures
+        ]
+    path = run_dir / STATE_DIR / "process-status.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with atomic_output_file(path) as temporary:
+        Path(temporary).write_text(to_yaml_string(data))
+
+
 def _read_recorded_step_hash(run_dir: Path, step_id: str) -> str | None:
     """Compat shim — defer to the engine-layer ``recorded_step_hash``."""
     return recorded_step_hash(run_dir, step_id)
@@ -2329,7 +2347,7 @@ async def _execute_agent_step(
     except CLIError as exc:
         out.warning(str(exc))
         log.warning("Step %s credential-pool binding failed: %s", step_id, exc)
-        return False
+        raise
     auth_events = EventLogger(paths_mod.runpool_step_events(run_dir, step_id))
     retry_exclude: list[tuple[str, str]] = []
     auth_events.open()
@@ -2352,10 +2370,11 @@ async def _execute_agent_step(
                 ),
             )
             if quota_verdict.status == "refuse":
-                out.warning(
+                error = (
                     f"Step '{step_id}': scalar quota gate refused launch: {quota_verdict.message}"
                 )
-                return False
+                out.warning(error)
+                raise CLIError(error)
         while True:
             # Reset per attempt: an anomaly accepted on an attempt that went on to fail
             # describes that attempt, not the retry that replaced it.
@@ -2506,7 +2525,7 @@ async def _execute_agent_step(
                                     _mark_scalar_prelaunch_failure_after_retry(
                                         state_dir, error=str(exc)
                                     )
-                                    return False
+                                    raise CLIError(str(exc)) from exc
                                 counts = pool_dispatch.coordinator.active_counter.snapshot()
                                 active_for_adapter = {
                                     label: count
@@ -2532,7 +2551,7 @@ async def _execute_agent_step(
                                     _mark_scalar_prelaunch_failure_after_retry(
                                         state_dir, error=str(exc)
                                     )
-                                    return False
+                                    raise CLIError(str(exc)) from exc
                                 auth_adapter = get_auth_capable(lease.adapter)
                                 if auth_adapter is not None:
                                     cmd = [
@@ -3035,20 +3054,22 @@ async def _execute_composite_step(
         # Surface the inner failure message; otherwise the operator sees only
         # `Step '<composite>': FAILED` with no actionable reason.
         out.progress(f"  Step '{step_id}': inner CLIError — {exc}")
-        return False
+        raise
 
-    output_errors = validate_process_outputs(
+    validation = validate_process_outputs_detailed(
         prepared.spec,
         prepared.variables,
         prepared.process_dir,
         plan=prepared.plan,
     )
-    if output_errors:
-        out.progress(
-            f"  Step '{step_id}': child process output validation failed:\n  "
-            + "\n  ".join(output_errors)
+    if validation.errors:
+        error = CLIError(
+            f"Step '{step_id}': child process output validation failed:\n  "
+            + "\n  ".join(validation.errors),
+            output_failures=validation.output_failures,
         )
-        return False
+        _record_process_output_failure(prepared.identity.run_dir, error)
+        raise error
 
     return True
 
@@ -3221,6 +3242,21 @@ async def _execute_composite_fan_out_step(
             )
             _emit_terminal(error)
             raise
+        except CLIError as exc:
+            error = str(exc)
+            mark_failed_at(
+                state_dir,
+                error=error,
+                running_record=running_record,
+                output_failures=list(exc.output_failures),
+                failure_class=(
+                    str(FailureClass.INVALID_OUTPUT)
+                    if exc.output_failures
+                    else str(classify_failure(error))
+                ),
+            )
+            _emit_terminal(error)
+            return False
         except Exception as exc:
             error = f"child process raised {type(exc).__name__}: {exc}"
             out.progress(f"  Step '{step_id}' item '{state_dir.name}': {error}")
@@ -3678,7 +3714,7 @@ async def _execute_fan_out_step(
     except CLIError as exc:
         out.warning(str(exc))
         log.warning("Step %s credential-pool binding failed: %s", step_id, exc)
-        return False
+        raise
 
     if events is not None:
         _emit_fan_out_item_starts(
@@ -4343,6 +4379,54 @@ async def _orchestrate(
 
         return step_id, success
 
+    async def _run_one_step_preserving_errors(
+        step_id: str,
+        *,
+        peer_allowed_targets: list[WriteTarget] | None = None,
+    ) -> tuple[str, bool]:
+        """Make expected executor refusals durable without inventing an attempt."""
+        step_start = time.monotonic()
+        try:
+            return await _run_one_step(step_id, peer_allowed_targets=peer_allowed_targets)
+        except CLIError as exc:
+            elapsed = time.monotonic() - step_start
+            target = step_map[step_id]
+            if target.fan_out is None:
+                state_dir = compute_task_state_dir(run_dir, step_def_map[step_id], variables)
+                current = read_status_at(state_dir)
+                if current is not None and current.state == "running":
+                    validate_task_status_identity_at(
+                        state_dir,
+                        current,
+                        run_id=run_id,
+                        step_id=step_id,
+                        item_key=None,
+                    )
+                    mark_failed_at(
+                        state_dir,
+                        error=str(exc),
+                        running_record=current,
+                        output_failures=list(exc.output_failures),
+                    )
+            step_states[step_id] = {
+                "state": "failed",
+                "started_at": step_states[step_id].get("started_at"),
+                "completed_at": _now_iso(),
+                "elapsed_s": round(elapsed, 1),
+                "error": str(exc),
+            }
+            if exc.output_failures:
+                step_states[step_id]["output_failures"] = [
+                    failure.model_dump(mode="json", exclude_none=True)
+                    for failure in exc.output_failures
+                ]
+            events.step_fail(step_id, elapsed, error=str(exc))
+            _write_process_status(
+                run_dir, spec.name, step_states, started_at, active_step_ids=active_ids
+            )
+            out.progress(f"  Step '{step_id}': FAILED ({fmt_timedelta(elapsed)}): {exc}")
+            return step_id, False
+
     for _level_idx, level in enumerate(levels):
         events.level_start(_level_idx, list(level))
 
@@ -4468,7 +4552,7 @@ async def _orchestrate(
         try:
             results = await asyncio.gather(
                 *[
-                    _run_one_step(
+                    _run_one_step_preserving_errors(
                         sid,
                         peer_allowed_targets=peer_allowed_by_step[sid],
                     )
@@ -5425,10 +5509,14 @@ def run_process_command(
 
             asyncio.run(_run_local_process())
 
-        output_errors = validate_process_outputs(spec, variables, process_dir, plan=plan)
-        if output_errors:
-            msg = "process output validation failed:\n  " + "\n  ".join(output_errors)
-            raise CLIError(msg)
+        validation = validate_process_outputs_detailed(spec, variables, process_dir, plan=plan)
+        if validation.errors:
+            error = CLIError(
+                "process output validation failed:\n  " + "\n  ".join(validation.errors),
+                output_failures=validation.output_failures,
+            )
+            _record_process_output_failure(run_dir, error)
+            raise error
     except (TimeoutError, subprocess.TimeoutExpired) as exc:
         finalization_state = FinalizationState.TIMED_OUT
         terminal_error = exc

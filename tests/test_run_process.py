@@ -1440,28 +1440,30 @@ class TestFanOutExecution:
             patch("metaproc.commands.run_process.capture_repo_snapshot", return_value=None),
             patch("metaproc.commands.run_parallel._run_agent_pool", new=run_pool),
         ):
-            succeeded = asyncio.run(
-                _execute_fan_out_step(
-                    spec=ProcessSpec(name="mapped-fixture"),
-                    step_def=step_def,
-                    target=target,
-                    variables={},
-                    process_path=tmp_path / "test.process.md",
-                    process_dir=tmp_path,
-                    run_dir=run_dir,
-                    run_id="mapped-fixture/2026-08-24/items/AAPL",
-                    backend_name="local",
-                    max_concurrency=1,
-                    num_workers=1,
-                    machine_type="e2-standard-4",
-                    spot=False,
-                    variant_override=None,
-                    out=out,
-                    pool_dispatch_template=template,
-                )
+            invocation = _execute_fan_out_step(
+                spec=ProcessSpec(name="mapped-fixture"),
+                step_def=step_def,
+                target=target,
+                variables={},
+                process_path=tmp_path / "test.process.md",
+                process_dir=tmp_path,
+                run_dir=run_dir,
+                run_id="mapped-fixture/2026-08-24/items/AAPL",
+                backend_name="local",
+                max_concurrency=1,
+                num_workers=1,
+                machine_type="e2-standard-4",
+                spot=False,
+                variant_override=None,
+                out=out,
+                pool_dispatch_template=template,
             )
+            if expected_success:
+                assert asyncio.run(invocation) is True
+            else:
+                with pytest.raises(CLIError, match=warning_fragment):
+                    asyncio.run(invocation)
 
-        assert succeeded is expected_success
         call = run_pool.await_args
         if expected_success:
             assert call is not None
@@ -2160,7 +2162,9 @@ class TestCompositeStepExecution:
         out = FakeOut()
 
         with _test_execution_context() as execution_context:
-            result = asyncio.run(
+            failure = pytest.raises(
+                CLIError,
+                asyncio.run,
                 _execute_composite_step(
                     step_def=step_def,
                     target=target,
@@ -2171,11 +2175,11 @@ class TestCompositeStepExecution:
                     scope_path=(),
                     execution_context=execution_context,
                     out=out,
-                )
+                ),
             )
 
-        assert result is False
-        assert any("child process output validation failed" in message for message in out.messages)
+        assert "child process output validation failed" in str(failure.value)
+        assert failure.value.output_failures
 
     def test_mapped_composite_isolates_failure_and_resumes_only_failed_item(
         self,

@@ -9,6 +9,13 @@ development series.
 
 ### Fixed
 
+- **Prelaunch and process-output refusals retain their causes.** Credential and input
+  refusals now reach durable step status without creating an attempt; manual timeout
+  closes the running task.
+  Composite failures preserve child errors and structured output paths/messages through
+  fan-in. Root and child process status records output-contract failure even when all of
+  the scope’s steps completed.
+
 - **Claude honors an explicit working directory.** `working_directory` survives adapter
   validation under Claude execution profiles and sets the launched subprocess directory,
   matching Gemini and Codex.

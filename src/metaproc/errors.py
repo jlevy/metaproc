@@ -9,16 +9,27 @@ Exit codes:
 
 from __future__ import annotations
 
-from typing import override
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, override
+
+if TYPE_CHECKING:
+    from metaproc.models.runtime import OutputFailure
 
 
 class CLIError(Exception):
     """Base error raised by CLI commands. Carries an exit code."""
 
     @override
-    def __init__(self, message: str, exit_code: int = 1) -> None:
+    def __init__(
+        self,
+        message: str,
+        exit_code: int = 1,
+        *,
+        output_failures: Sequence[OutputFailure] = (),
+    ) -> None:
         super().__init__(message)
         self.exit_code: int = exit_code
+        self.output_failures: tuple[OutputFailure, ...] = tuple(output_failures)
 
 
 class ValidationError(CLIError):

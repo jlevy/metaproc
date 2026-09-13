@@ -1132,6 +1132,9 @@ Event types (13 total):
 
 All events include an auto-injected `ts` timestamp.
 The format is compatible with RunPool events for unified browser display.
+`process_complete` records step-execution totals.
+Process-level output validation follows that execution; the final `process-status.yaml`
+also records a failure at that boundary even when every step completed.
 
 ## 9.7 `run-plan.yaml`
 
@@ -1946,6 +1949,20 @@ For example, two timeouts among three items produce
 aggregation for each failed member, and absent downstream items carry the recorded
 upstream cause in their fan-in outcomes.
 This reporting does not change the chain’s reached-item completion policy.
+
+Expected executor refusals propagate as `CLIError` until the orchestrator writes their
+step failure. An input, credential-binding, quota, or slot refusal before launch creates
+no attempt record. If an attempt already exists, such as a manual step waiting for an
+acknowledgment, its running state becomes failed with the actual error.
+This path also covers failures during item-chain setup.
+
+A composite preserves a child’s error rather than returning a bare failed boolean.
+Process-level output validation records each resolved artifact’s `output`, `path`,
+`kind`, and `message`; mapped composites write that evidence to their item status for
+fan-in consumers. An invalid declaration with no resolved artifact retains its error
+without inventing a path or validator result.
+Both root and child scopes record output-boundary failure in their own process status,
+so completed child steps cannot make a failed output contract appear successful.
 
 `metaproc status` retains all failed step summaries in the run error.
 When emitted, `process_complete.errors` carries the same mapping; older events without
