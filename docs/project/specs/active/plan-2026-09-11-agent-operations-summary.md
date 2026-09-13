@@ -103,9 +103,11 @@ Four findings came out of it, and none was visible in any emitted artifact:
   model, since a truncated result is discarded rather than summarised.
 - **A second model billed alongside the step model on 40 invocations.** Easy to misread
   as a substitution when it is a grounded tool’s helper model.
-- **Effective concurrency was 9.0 against a DAG ceiling of 17**, so most of the provider
-  time one arm saved never reached the wall clock.
-  That gap is the largest single cost in the pipeline and is reported nowhere.
+- **Provider time divided by elapsed time was 9.0 against a DAG ceiling of 17.** That
+  descriptive ratio does not establish unused capacity or explain elapsed-time savings.
+  Serial dependencies, local work, and resource admission can all reduce it.
+  The run needs queue, admission, and critical-path evidence before attributing a gap to
+  insufficient concurrency.
 
 Each is generic to any agent pipeline.
 None is a domain question.
@@ -281,8 +283,8 @@ agent_operations:
     state / started_at / ended_at / wall_s
     levels / steps_total / steps_failed
     items_requested / items_completed
-    effective_concurrency          # provider_s / wall_s
-    concurrency_ceiling            # what the DAG allows
+    effective_concurrency          # descriptive provider_s / wall_s
+    concurrency_ceiling            # DAG upper bound, not necessarily runnable work
 
   provider:
     provider_s / requests / input_tokens / output_tokens / cached_tokens
@@ -322,12 +324,21 @@ Both compute theirs from the span store directly.
 | `result_truncated_at_cap` | a tool result hit the cap, so time was spent and nothing delivered |
 | `retry_concentration` | one step, or one contract field, accounts for an outsized share of retries |
 | `attempt_wrote_nothing` | an attempt completed without writing its declared output |
-| `concurrency_underrun` | effective concurrency far below the DAG ceiling |
+| `concurrency_underrun` | runnable work waits while admissible execution capacity is unused |
 | `auxiliary_model_share` | an auxiliary model exceeds a share of output tokens |
 
-Thresholds are emitter defaults with an optional per-process override, not configuration
-nobody sets. Every rule corresponds to something that happened in the comparison
-described above and was found by hand.
+Thresholds are emitter defaults with an optional per-process override.
+Each emitted anomaly carries the evidence and threshold that produced it.
+
+`concurrency_underrun` requires time-aligned runnable-queue and resource-admission
+records. A low provider-time/elapsed-time ratio alone cannot trigger it: a serial
+dependency chain may use every available opportunity while remaining far below the DAG
+ceiling. Preserve wait reasons and distinguish work that is ready to run from work
+blocked on dependencies, local execution, or an admission policy.
+Missing evidence leaves this rule unmeasured.
+Attributing elapsed-time savings additionally requires critical-path timing; aggregate
+provider seconds and elapsed seconds are different quantities and their difference is
+not lost time.
 
 `result_truncated_at_cap` needs one upstream fix first: `tool.result.truncated` is
 declared in `TOOL_USAGE_ATTRS` and populated by no extractor.
@@ -345,15 +356,19 @@ metaproc operations diff <run-a> <run-b>
 `compare-trace` compares spans grouped by key.
 This compares two summaries field by field, reporting ratios on numeric leaves and set
 differences on categorical ones.
-Two assertions run before any ratio is printed, because hand-rolled tooling violated
-both during the comparison that motivated this:
+Before printing a ratio, compare the declared step and item identities, generation
+selection rules, and observed coverage for the selected metric.
+Each summary retains the contributing logical attempt identities and counts, exclusions,
+and missing evidence after source reconciliation.
+Fail with the mismatched identities and counts when the selected populations differ,
+rather than comparing a named subset of 28 invocations against 161. Retry counts may
+differ when that difference is the measurement; require the same declared item/step
+population and disclose the resulting attempt populations.
 
-- **Population equality.** Same steps, same items, same counts.
-  Tooling that named a subset of items compared 28 invocations against 161 without
-  saying so.
-- **The decomposition identity.** `requests × tokens-per-request × seconds-per-token`
-  must reproduce the duration ratio.
-  A mismatch means the populations differ and the comparison is meaningless.
+`requests × tokens-per-request × seconds-per-token` reduces algebraically to duration
+for any selected population.
+It can explain a duration ratio but cannot validate the population or detect mismatched
+coverage, so it is not an acceptance gate.
 
 ## Implementation Plan
 
@@ -392,7 +407,7 @@ both during the comparison that motivated this:
 - [ ] The rule table, each a pure predicate with a stable code and a default threshold.
 - [ ] Prose renderer, with a test asserting every number in the body appears in the
   frontmatter.
-- [ ] `metaproc operations diff`, including both assertions above.
+- [ ] `metaproc operations diff`, including the population and coverage checks above.
 
 ## Testing Strategy
 
@@ -427,6 +442,15 @@ Beyond that: a round-trip test that the summary equals the fold of the span stor
 drift test on the compiled schema, one anomaly-rule test per code with a fixture that
 fires it and one that does not, and a test that a failing extraction inside
 `finalize_run_resources` leaves the run’s outcome unchanged.
+
+The comparison fixtures must include different populations whose decomposition products
+still reproduce their duration ratio; reject the mismatch using identities and coverage.
+Also compare the same declared population with differing retry counts, retaining each
+arm’s contributing attempts.
+For concurrency, a fully utilized serial workload must not trigger an underrun, while
+recorded runnable work waiting beside unused admissible capacity must trigger it.
+Missing queue or admission evidence must produce an unmeasured diagnosis, and an
+elapsed-time attribution must name the affected critical-path interval.
 
 A replay against a completed multi-arm comparison is useful for calibration, since the
 figures there were established by hand.
