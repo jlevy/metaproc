@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import json
+from dataclasses import fields
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as distribution_version
+from pathlib import Path
+from typing import Literal
 from unittest.mock import MagicMock
 
 import pytest
@@ -13,6 +17,7 @@ from typer.testing import CliRunner
 import metaproc.cli as cli_module
 from metaproc.cli import app
 from metaproc.errors import CLIError
+from metaproc.io import from_yaml_string
 from metaproc.plugins.discovery import get_plugin_registry
 
 runner = CliRunner()
@@ -184,6 +189,51 @@ class TestPlanCommand:
 
 
 class TestSoftschemaCommands:
+    @pytest.mark.parametrize("output_format", ["json", "yaml"])
+    @pytest.mark.parametrize("contract_id", ["metaproc:ProcessSpec/0.1", "example:Unbound/v1"])
+    def test_validate_preserves_each_native_validation_record(
+        self, tmp_path: Path, output_format: Literal["json", "yaml"], contract_id: str
+    ) -> None:
+        process_path = tmp_path / "test.process.md"
+        process_path.write_text(
+            "---\nprocess:\n  name: test\n  steps:\n"
+            "    - id: s1\n      mode: agent\n      prompt_prefix: Hello\n"
+            "      outputs:\n        main:\n          path: out.md\n---\n"
+        )
+        native = validate_artifact(
+            process_path, contract_id=contract_id, registry=get_plugin_registry().softschemas
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "--format",
+                output_format,
+                "softschema",
+                "validate",
+                str(process_path),
+                "--schema",
+                contract_id,
+            ],
+        )
+
+        assert (result.exit_code == 0) is native.ok, result.output
+        payload = (
+            json.loads(result.stdout)
+            if output_format == "json"
+            else from_yaml_string(result.stdout)
+        )
+        for layer in ("structural", "semantic"):
+            record = getattr(native, layer)
+            for field in fields(record):
+                value = getattr(record, field.name)
+                if output_format == "yaml" and value is None:
+                    # The shared YAML writer omits null fields in every command.
+                    assert payload[layer].get(field.name) is None
+                    continue
+                assert field.name in payload[layer]
+                assert payload[layer][field.name] == value
+
     def test_softschema_validate_process_artifact(self, tmp_path):
         process_path = tmp_path / "test.process.md"
         process_path.write_text(

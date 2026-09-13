@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -102,6 +103,8 @@ def _install_launch(
         for path, text in writes.items():
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text)
+        if kill_reason == "timeout":
+            raise subprocess.TimeoutExpired(_args[0], kwargs["timeout_s"] or 0)
         return exit_code, kill_reason
 
     monkeypatch.setattr("metaproc.commands.run_process._run_scalar_agent_subprocess", _fake_launch)
@@ -221,8 +224,9 @@ class TestARescuedExit:
 
 
 class TestASupervisorKillIsNotRescuable:
+    @pytest.mark.parametrize("kill_reason", ["capacity ceiling breached", "timeout"])
     def test_a_pool_kill_fails_the_step_even_with_valid_outputs_and_a_success_claim(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kill_reason: str
     ) -> None:
         """Identical to the rescued case in every respect except the kill reason.
 
@@ -235,7 +239,7 @@ class TestASupervisorKillIsNotRescuable:
         _install_launch(
             monkeypatch,
             exit_code=1,
-            kill_reason="capacity ceiling breached",
+            kill_reason=kill_reason,
             claim="success",
             writes={summary: "# summary\n"},
         )

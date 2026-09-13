@@ -26,7 +26,7 @@ from typing import Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
 from metaproc.adapters.registry import ADAPTER_REGISTRY
 from metaproc.cli import app
@@ -4520,8 +4520,9 @@ class TestNonFanOutTransientRetry:
         counter: Path,
         message: str,
         observed_prompts: list[str],
+        timeout_attempts: int = 0,
     ) -> None:
-        """An adapter that dies with *message* the first time and succeeds the second."""
+        """An adapter whose initial attempts time out or exit before writing output."""
 
         class ExitAdapter:
             adapter_type = "exit-test"
@@ -4532,10 +4533,11 @@ class TestNonFanOutTransientRetry:
                 observed_prompts.append(Path(prompt_file).read_text())
                 target_path = variables["TARGET_PATH"]
                 script = (
-                    "import sys; from pathlib import Path; "
+                    "import sys, time; from pathlib import Path; "
                     f"counter = Path({str(counter)!r}); "
                     "n = len(counter.read_text()) if counter.exists() else 0; "
                     "counter.write_text('x' * (n + 1)); "
+                    f"time.sleep(30) if n < {timeout_attempts} else None; "
                     f"print({message!r}) or sys.exit(1) if n < 1 else None; "
                     f"target = Path({target_path!r}); "
                     "target.parent.mkdir(parents=True, exist_ok=True); "
@@ -4560,7 +4562,16 @@ class TestNonFanOutTransientRetry:
 
         monkeypatch.setitem(ADAPTER_REGISTRY, "exit-test", ExitAdapter())
 
-    def _run(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, message: str, run_id: str):
+    def _run(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        message: str,
+        run_id: str,
+        *,
+        timeout_attempts: int = 0,
+        max_retries: int = 3,
+    ) -> tuple[Result, StatusRecord | None, int, Path, list[str]]:
         repo_dir = tmp_path / "exit-repo"
         process_dir = repo_dir / "exit-process"
         process_dir.mkdir(parents=True)
@@ -4569,8 +4580,14 @@ class TestNonFanOutTransientRetry:
         target = repo_dir / "runs" / run_id / "thing.md"
         counter = repo_dir / "counter.txt"
         spec = self._write_process(process_dir)
+        body = spec.read_text().replace("max_retries: 3", f"max_retries: {max_retries}")
+        if timeout_attempts:
+            body = body.replace(
+                "type: exit-test", "type: exit-test\n        config:\n          timeout_s: 1"
+            )
+        spec.write_text(body)
         observed_prompts: list[str] = []
-        self._register_adapter(monkeypatch, counter, message, observed_prompts)
+        self._register_adapter(monkeypatch, counter, message, observed_prompts, timeout_attempts)
 
         result = CliRunner().invoke(
             app,
@@ -4588,6 +4605,48 @@ class TestNonFanOutTransientRetry:
         status = read_status_at(_task_state_dir_for(repo_dir / "runs" / run_id, "write-thing"))
         calls = len(counter.read_text()) if counter.exists() else 0
         return result, status, calls, target, observed_prompts
+
+    @pytest.mark.parametrize(
+        ("timeout_attempts", "max_retries", "expected_calls", "succeeds"),
+        [(1, 1, 2, True), (2, 1, 2, False), (1, 0, 1, False)],
+        ids=["retry-succeeds", "retry-exhausted", "retry-disabled"],
+    )
+    def test_subprocess_timeout_uses_the_retry_policy(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        timeout_attempts: int,
+        max_retries: int,
+        expected_calls: int,
+        succeeds: bool,
+    ) -> None:
+        result, status, calls, target, prompts = self._run(
+            tmp_path,
+            monkeypatch,
+            message="",
+            run_id="subprocess-timeout-run",
+            timeout_attempts=timeout_attempts,
+            max_retries=max_retries,
+        )
+
+        assert (result.exit_code == 0) is succeeds, result.output
+        assert calls == expected_calls
+        assert target.exists() is succeeds
+        assert status is not None
+        assert status.state == ("completed" if succeeds else "failed")
+        assert status.attempt == expected_calls
+        history = read_attempt_history_at(_task_state_dir_for(target.parent, "write-thing"))
+        timed_out = history[:-1] if succeeds else history
+        assert len(timed_out) == min(timeout_attempts, expected_calls)
+        assert all(record.disposition is AttemptDisposition.retryable for record in timed_out)
+        assert all(record.failure_class == "timeout" for record in timed_out)
+        assert all(record.error == "timeout after 1s" for record in timed_out)
+        assert all(
+            "The prior attempt's declared output failed validation." not in prompt
+            for prompt in prompts
+        )
+        if succeeds:
+            assert history[-1].disposition is AttemptDisposition.succeeded
 
     def test_a_body_timeout_is_retried_and_the_second_attempt_succeeds(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

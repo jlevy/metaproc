@@ -9,6 +9,18 @@ development series.
 
 ### Fixed
 
+- **Scalar agent timeouts follow the configured retry policy.** A subprocess timeout
+  uses the same classification, backoff, credential checks, and retry limit as a
+  retryable nonzero exit.
+  Attempt history retains the timeout cause when the retry succeeds or the budget is
+  exhausted. A timed-out process cannot be accepted as a successful shutdown, even if it
+  wrote its outputs first.
+
+- **SoftSchema CLI validation preserves each library validation record.** Structural and
+  semantic results retain their skip reasons and any execution evidence the installed
+  SoftSchema version reports.
+  The CLI does not infer execution from the declared schema status.
+
 - **Token counts now state their basis and evidence limits.** `output_tokens` targets
   output-rate tokens including reasoning.
   Claude and Codex report that count directly; Gemini reconstructs it from valid total

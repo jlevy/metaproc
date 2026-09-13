@@ -2172,9 +2172,13 @@ validated after each attempt (§14.6), `classify_output_failures` reads the stru
 failure record against the output’s `on_invalid`, and retryable verdicts re-run the step
 under the `INVALID_OUTPUT` cap with the same correction section used by fan-out retries,
 recording `attempt: N` in the step’s status.
-Nonzero exits are classified exactly as fan-out failures are -- transient ones draw the
-full `max_retries` budget, with the log tail folded into the recorded error -- while
-step timeouts and write-boundary violations stay terminal on this path.
+Nonzero exits and subprocess timeouts use the same classification, backoff, credential
+checks, and `max_retries` budget as fan-out failures.
+The log tail is folded into nonzero-exit errors; timed-out attempts retain the timeout
+cause and a retryable disposition even when the budget is exhausted.
+A timeout is never accepted as a successful shutdown based on the agent’s success claim
+or existing outputs.
+Write-boundary violations stay terminal on this path.
 
 The pool exposes `record_retry_scheduled` / `record_retry_consumed` methods that
 maintain a `pending_retries` counter in `runpool-status.yaml`. Observability consumers

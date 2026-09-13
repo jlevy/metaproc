@@ -2279,7 +2279,7 @@ async def _execute_agent_step(
     # may get it right on a second pass. The ``on_invalid`` clause on the output says
     # which failures are worth another call, and the content-failure cap bounds how
     # many. Transient exit-code failures are classified below and draw the full
-    # retry budget; step timeouts and boundary violations stay terminal here.
+    # retry budget, as do subprocess timeouts. Boundary violations stay terminal.
     retry_policy = _resolve_retry_policy(step_def, spec.defaults)
     content_retry_cap = max_retries_for(FailureClass.INVALID_OUTPUT, retry_policy.max_retries)
     attempt = 1
@@ -2410,6 +2410,8 @@ async def _execute_agent_step(
                     else None
                 )
                 pool_kill_reason: str | None = None
+                timed_out = False
+                boundary_before = None
                 try:
                     async with _leaf_slot(execution_context):
                         async with admitted_launch(
@@ -2554,33 +2556,32 @@ async def _execute_agent_step(
                                 execution_profile=effective_execution_profile,
                             )
                 except subprocess.TimeoutExpired:
-                    timeout_error = f"timeout after {timeout_s}s"
-                    await _complete_auth_attempt(timeout_error)
-                    mark_failed_at(
-                        state_dir,
-                        error=timeout_error,
-                        running_record=running_record,
-                        failure_class=str(FailureClass.TIMEOUT),
+                    if running_record is None:
+                        raise
+                    timed_out = True
+                    exit_error = f"timeout after {timeout_s}s"
+                else:
+                    # Read the log before compacting it: the exit code alone says nothing
+                    # about why the agent died, and the answer is in the last few lines.
+                    # A bare "exit code 1" also classifies as a crash, so without this the
+                    # transient failures below look like a prompt that always fails.
+                    exit_error: str | None = None
+                    if pool_kill_reason is not None:
+                        exit_error = f"RunPool killed process: {pool_kill_reason}"
+                    elif exit_code != 0:
+                        exit_error = f"exit code {exit_code}"
+                        log_error = extract_log_error(attempt_log_path)
+                        if log_error:
+                            exit_error = f"{exit_error} (log: {log_error})"
+
+                terminal_contract_error = (
+                    None
+                    if timed_out
+                    else validate_terminal_result_log(
+                        adapter_obj,
+                        attempt_log_path,
+                        runtime_config,
                     )
-                    return False
-
-                # Read the log before compacting it: the exit code alone says nothing about
-                # why the agent died, and the answer is in the last few lines. A bare
-                # "exit code 1" also classifies as a crash, so without this the transient
-                # failures below are indistinguishable from a prompt that always fails.
-                exit_error: str | None = None
-                if pool_kill_reason is not None:
-                    exit_error = f"RunPool killed process: {pool_kill_reason}"
-                elif exit_code != 0:
-                    exit_error = f"exit code {exit_code}"
-                    log_error = extract_log_error(attempt_log_path)
-                    if log_error:
-                        exit_error = f"{exit_error} (log: {log_error})"
-
-                terminal_contract_error = validate_terminal_result_log(
-                    adapter_obj,
-                    attempt_log_path,
-                    runtime_config,
                 )
                 if terminal_contract_error is not None:
                     exit_error = terminal_contract_error
@@ -2609,6 +2610,7 @@ async def _execute_agent_step(
                 # supervises.
                 if (
                     exit_error is not None
+                    and not timed_out
                     and terminal_contract_error is None
                     and pool_kill_reason is None
                     and effective_outputs
