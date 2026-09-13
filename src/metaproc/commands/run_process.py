@@ -92,6 +92,7 @@ from metaproc.dispatch.preflight import (
 from metaproc.dispatch.slot_coordinator import SlotCoordinator, SlotLease
 from metaproc.engine.build_plan import build_plan, merge_defaults
 from metaproc.engine.code_handler import resolve_code_handler
+from metaproc.engine.command_diagnostics import command_failure_message
 from metaproc.engine.dep_state import (
     fingerprint_step,
     recorded_step_hash,
@@ -1615,6 +1616,7 @@ async def _execute_code_step(
     logs_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     log_file = logs_dir / f"process_{ts}.log"
+    env = dict(os.environ)
 
     try:
         if handler_fn is not None:
@@ -1644,7 +1646,6 @@ async def _execute_code_step(
             await _run_sync(execution_context, _run_handler)
         elif command_ref is not None:
             resolved_cmd = resolve_templates(command_ref, variables)
-            env = dict(os.environ)
             if target.env:
                 env.update({k: resolve_templates(v, variables) for k, v in target.env.items()})
             result = await _run_sync(
@@ -1683,7 +1684,13 @@ async def _execute_code_step(
         if output:
             with atomic_output_file(log_file) as tmp_path:
                 tmp_path.write_text(output)
-        command_error = f"command exit code {exc.returncode}"
+        command_error = command_failure_message(
+            exc.returncode,
+            stdout=exc.stdout,
+            stderr=exc.stderr,
+            env=env,
+            log_path=str(log_file.relative_to(run_dir)),
+        )
         mark_failed_at(
             state_dir,
             error=command_error,

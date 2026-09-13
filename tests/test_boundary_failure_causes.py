@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import textwrap
 from pathlib import Path
 
@@ -13,8 +14,135 @@ from metaproc.engine.fan_in import collect_item_outcomes
 from metaproc.engine.input_validation import validate_process_outputs_detailed
 from metaproc.engine.run_status import scan_run_status
 from metaproc.io import read_yaml_file
-from metaproc.io.state_io import read_status_at
+from metaproc.io.state_io import read_attempt_history_at, read_status_at
 from metaproc.models.authored import ProcessSpec
+
+
+@pytest.mark.parametrize("stream", ["stderr", "stdout"])
+def test_command_diagnostic_reaches_attempt_mapped_item_and_root_failure(
+    tmp_path: Path, stream: str
+) -> None:
+    diagnostic = 'RuntimeError: query terms must not contain commas: "Example, Inc."'
+    (tmp_path / "fail.py").write_text(
+        "import sys\n"
+        "print('provider request started')\n"
+        f"print({diagnostic!r}, file=sys.{stream})\n"
+        "raise SystemExit(7)\n"
+    )
+    (tmp_path / "child.process.md").write_text(
+        "---\nprocess:\n  name: child\n  steps:\n"
+        "    - id: query\n      mode: code\n"
+        f"      command: '{sys.executable} fail.py'\n---\n"
+    )
+    (tmp_path / "items.md").write_text("---\nprogress:\n  items:\n    - item: alfa\n---\n")
+    process = tmp_path / "parent.process.md"
+    process.write_text(
+        textwrap.dedent("""\
+        ---
+        process:
+          name: parent
+          deps:
+            child: {path: ./child.process.md, as: path}
+            items: {path: ./items.md, as: path}
+          steps:
+            - id: child
+              mode: composite
+              uses: deps.child
+              for_each:
+                over: deps.items
+                bind: item
+                bind_fields: [item]
+                key: "{{item}}"
+        ---
+        """)
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-process",
+            str(process),
+            "--var",
+            f"RUNS_DIR={tmp_path / 'runs'}",
+            "--var",
+            "RUN_ID=command",
+        ],
+    )
+    assert result.exit_code == 1, result.output
+    run = tmp_path / "runs" / "command"
+    leaf = run / "child" / "alfa" / ".state" / "tasks" / "query"
+    attempt = read_attempt_history_at(leaf)[0]
+    assert attempt.error and diagnostic in attempt.error
+    assert "command exit code 7" in attempt.error
+    assert diagnostic in collect_item_outcomes(run, "child")[0]["error"]
+    root = scan_run_status(run, include_system=False)
+    assert root.process_error and diagnostic in root.process_error
+    assert "command exit code 7" in root.process_error
+
+
+@pytest.mark.parametrize("mapped", [False, True])
+def test_command_diagnostic_is_bounded_redacted_and_prefers_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mapped: bool
+) -> None:
+    secret = "fixture-private-value-" + "s" * 300
+    monkeypatch.setenv("PROVIDER_API_KEY", secret)
+    diagnostic = "ProviderError: HTTP 429 Too Many Requests; Retry-After: 17"
+    (tmp_path / "fail.py").write_text(
+        "import os, sys\n"
+        'print(\'{"type":"result","status":"success"}\')\n'
+        "print('unrelated progress\\n' * 500, file=sys.stderr)\n"
+        f"print({diagnostic!r}, file=sys.stderr)\n"
+        "print('credential=' + os.environ['PROVIDER_API_KEY'], file=sys.stderr)\n"
+        "print('Authorization: Bearer fixture-bearer-token', file=sys.stderr)\n"
+        "raise SystemExit(9)\n"
+    )
+    (tmp_path / "items.md").write_text("---\nprogress:\n  items:\n    - item: alfa\n---\n")
+    process = tmp_path / "command.process.md"
+    process.write_text(
+        "---\nprocess:\n  name: command\n"
+        "  deps:\n    items: {path: ./items.md, as: path}\n"
+        "  steps:\n    - id: query\n      mode: code\n"
+        f"      command: '{sys.executable} fail.py'\n"
+        + (
+            "      for_each:\n        over: deps.items\n        bind: item\n"
+            "        bind_fields: [item]\n        key: '{{item}}'\n"
+            if mapped
+            else ""
+        )
+        + "---\n"
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-process",
+            str(process),
+            "--var",
+            f"RUNS_DIR={tmp_path / 'runs'}",
+            "--var",
+            "RUN_ID=redacted",
+        ],
+    )
+    assert result.exit_code == 1, result.output
+    run = tmp_path / "runs" / "redacted"
+    task = run / ".state" / "tasks" / "query"
+    if mapped:
+        task /= "alfa"
+    attempt = read_attempt_history_at(task)[0]
+    assert attempt.error and diagnostic in attempt.error
+    assert "command exit code 9" in attempt.error
+    assert attempt.failure_class == "rate_limited"
+    assert len(attempt.error) < 2_000
+    assert "[redacted]" in attempt.error
+    root = scan_run_status(run, include_system=False)
+    assert root.process_error and diagnostic in root.process_error
+    assert "fixture-private-value" not in root.process_error
+    assert "fixture-bearer-token" not in root.process_error
+    assert '"status":"success"' not in root.process_error
+    logs = run / ".logs" / "tasks" / "query"
+    if mapped:
+        logs /= "alfa"
+    captured = next(logs.glob("process_*.log")).read_text()
+    assert secret in captured  # Source evidence is retained; the durable summary is redacted.
+    assert "unrelated progress" in captured
 
 
 @pytest.mark.parametrize("mapped", [False, True])
