@@ -1607,10 +1607,6 @@ async def _execute_code_step(
         item_key=state_dir.name if step_def.for_each is not None else None,
     )
 
-    handler_fn = None
-    if handler_ref:
-        handler_fn = resolve_code_handler(handler_ref, process_dir)
-
     # Captured code stdout/stderr is a task log, not a run-level stream.
     logs_dir = compute_task_logs_dir(run_dir, step_def, variables)
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -1619,6 +1615,7 @@ async def _execute_code_step(
     env = dict(os.environ)
 
     try:
+        handler_fn = resolve_code_handler(handler_ref, process_dir) if handler_ref else None
         if handler_fn is not None:
             process_step = step_def.model_copy(
                 deep=True,

@@ -11,6 +11,7 @@ import shlex
 import shutil
 import subprocess
 import time
+import traceback
 from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import asdict
@@ -86,9 +87,10 @@ from metaproc.commands.helpers import (
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.engine.build_plan import build_plan, merge_defaults
 from metaproc.engine.code_handler import resolve_code_handler
+from metaproc.engine.command_diagnostics import command_failure_message, handler_failure_message
 from metaproc.engine.dep_state import fingerprint_step
 from metaproc.engine.discovery import normalize_item_fields
-from metaproc.engine.pathing import compute_run_dir, compute_task_state_dir
+from metaproc.engine.pathing import compute_run_dir, compute_task_logs_dir, compute_task_state_dir
 from metaproc.engine.placeholders import (
     collect_step_runtime_placeholders,
     resolve_runtime_config,
@@ -934,6 +936,7 @@ def run_parallel(
                     )
 
                     error_str: str | None = None
+                    env = dict(os.environ)
                     try:
                         if handler_fn is not None:
                             assert process_step is not None
@@ -947,7 +950,6 @@ def run_parallel(
                         else:
                             assert command_ref is not None
                             resolved_cmd = resolve_templates(command_ref, item_vars)
-                            env = dict(os.environ)
                             env.update(_resolve_env(target.env, item_vars))
                             run_sampled_step_command(
                                 shlex.split(resolved_cmd),
@@ -960,10 +962,28 @@ def run_parallel(
                             )
                         exit_code = 0
                     except subprocess.CalledProcessError as exc:
-                        error_str = f"command exit code {exc.returncode}"
+                        item_logs_dir = compute_task_logs_dir(run_dir, step_def, item_vars)
+                        item_logs_dir.mkdir(parents=True, exist_ok=True)
+                        log_file = item_logs_dir / f"process_{running_record.attempt_id}.log"
+                        with atomic_output_file(log_file) as tmp_path:
+                            tmp_path.write_text((exc.stdout or "") + (exc.stderr or ""))
+                        error_str = command_failure_message(
+                            exc.returncode,
+                            stdout=exc.stdout,
+                            stderr=exc.stderr,
+                            env=env,
+                            log_path=str(log_file.relative_to(run_dir)),
+                        ).error
                         exit_code = 1
                     except Exception as exc:  # noqa: BLE001
-                        error_str = str(exc)
+                        item_logs_dir = compute_task_logs_dir(run_dir, step_def, item_vars)
+                        item_logs_dir.mkdir(parents=True, exist_ok=True)
+                        log_file = item_logs_dir / f"process_{running_record.attempt_id}.log"
+                        with atomic_output_file(log_file) as tmp_path:
+                            tmp_path.write_text(traceback.format_exc())
+                        error_str = handler_failure_message(
+                            exc, env=env, log_path=str(log_file.relative_to(run_dir))
+                        ).error
                         exit_code = 1
 
                     if exit_code != 0:

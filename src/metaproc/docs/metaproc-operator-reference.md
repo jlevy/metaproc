@@ -144,7 +144,13 @@ behavior [`arch-runpool.md`](arch-runpool.md), and for naming rules
    A long-running Python handler under `run-process` must check
    `StepContext.cancel_requested()` at safe checkpoints and return promptly; Metaproc
    waits for started handler work rather than abandoning a thread that may still write
-   artifacts.
+   artifacts. On failure, inspect the task’s `process_*.log` for original command output
+   or a handler traceback.
+   The status and CLI summarize that evidence with a bounded, credential-redacted cause
+   and a relative log path.
+   A missing or unimportable handler in `run-process` fails its task while independent
+   steps continue; normal dependency and `on_failure` policy still decide whether
+   downstream steps can run.
 
 ## Runtime Terms
 

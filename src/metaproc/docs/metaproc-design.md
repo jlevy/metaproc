@@ -1442,6 +1442,12 @@ written to the item’s own `status.yaml`:
 A field whose value is absent is omitted rather than written null.
 For example, a `missing`-kind failure carries `output`, `path`, `kind`, and `message`;
 it does not invent a contract or invariant.
+When SoftSchema executes and rejects both structural and semantic validation, Metaproc
+retains both sets of failures in that order.
+A structural refusal remains first in the status summary.
+Retry and abort policy for that output uses its structural failures until the shape is
+valid; the semantic records show the additional checks that actually ran rather than
+implying they were skipped.
 
 An item that never reached the collected step is reported with where it stopped and that
 step’s failure detail, rather than as a bare absence.

@@ -21,6 +21,180 @@ from metaproc.io.state_io import read_attempt_history_at, read_status_at
 from metaproc.models.authored import ProcessSpec
 
 
+@pytest.mark.parametrize(
+    "source,exception_type,detail",
+    [
+        (None, "FileNotFoundError", "handler file not found"),
+        ("def other(context, step):\n    pass\n", "AttributeError", "function 'fail' not found"),
+        ("def fail(\n", "SyntaxError", "was never closed"),
+        (
+            "raise ImportError('required binding is unavailable')\n",
+            "ImportError",
+            "required binding",
+        ),
+        (
+            "raise RuntimeError('handler initialization refused')\n",
+            "RuntimeError",
+            "initialization refused",
+        ),
+    ],
+)
+def test_handler_resolution_failure_is_durable_and_does_not_abandon_siblings(
+    tmp_path: Path, source: str | None, exception_type: str, detail: str
+) -> None:
+    if source is not None:
+        (tmp_path / "broken.py").write_text(source)
+    (tmp_path / "healthy.py").write_text(
+        "from pathlib import Path\n"
+        "def run(context, step):\n"
+        f"    Path({str(tmp_path / 'healthy.txt')!r}).write_text('finished')\n"
+    )
+    process = tmp_path / "binding.process.md"
+    process.write_text(
+        "---\nprocess:\n  name: binding\n  steps:\n"
+        "    - id: broken\n      mode: code\n      handler: broken.py:fail\n"
+        "    - id: healthy\n      mode: code\n      handler: healthy.py:run\n---\n"
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-process",
+            str(process),
+            "--var",
+            f"RUNS_DIR={tmp_path / 'runs'}",
+            "--var",
+            "RUN_ID=binding",
+        ],
+    )
+    assert result.exit_code == 1, result.output
+    run = tmp_path / "runs" / "binding"
+    process_status = read_yaml_file(run / ".state" / "process-status.yaml")
+    assert process_status["state"] == "failed"
+    assert process_status["steps"]["healthy"]["state"] == "completed"
+    assert (tmp_path / "healthy.txt").read_text() == "finished"
+    error = process_status["steps"]["broken"]["error"]
+    assert exception_type in error and detail in error
+    task = run / ".state" / "tasks" / "broken"
+    status = read_status_at(task)
+    assert status is not None and status.state == "failed"
+    attempt = read_attempt_history_at(task)[0]
+    assert attempt.error == error
+    captured = next((run / ".logs" / "tasks" / "broken").glob("process_*.log"))
+    assert str(captured.relative_to(run)) in error
+    assert exception_type in captured.read_text() and detail in captured.read_text()
+
+
+@pytest.mark.parametrize("verb", ["run-step", "run-parallel"])
+def test_standalone_code_command_retains_raw_evidence_and_safe_rate_limit_cause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, verb: str
+) -> None:
+    secret = "fixture-private-value-" + "s" * 256
+    monkeypatch.setenv("PROVIDER_API_KEY", secret)
+    monkeypatch.setenv("METAPROC_PREFLIGHT_MIN_DISK_GB", "0.1")
+    (tmp_path / "fail.py").write_text(
+        "import os, sys\n"
+        "print('ProviderError: HTTP 429 Too Many Requests', file=sys.stderr)\n"
+        "print('credential=' + os.environ['PROVIDER_API_KEY'], file=sys.stderr)\n"
+        "raise SystemExit(7)\n"
+    )
+    parallel = verb == "run-parallel"
+    if parallel:
+        (tmp_path / "items.md").write_text(
+            "---\nprogress:\n  process: code\n  items:\n    - ticker: AAPL\n---\n"
+        )
+    process = tmp_path / "code.process.md"
+    process.write_text(
+        "---\nprocess:\n  name: code\n  steps:\n"
+        "    - id: query\n      mode: code\n"
+        f"      command: '{sys.executable} fail.py'\n"
+        + (
+            "      inputs:\n        items:\n"
+            f"          path: {tmp_path / 'items.md'}\n"
+            "          kind: file\n          format: frontmatter-md\n"
+            "      for_each:\n        over: items\n        bind: ticker\n"
+            "        bind_fields: [ticker]\n        key: '{{ticker}}'\n"
+            if parallel
+            else ""
+        )
+        + "---\n"
+    )
+    args = [verb, str(process), "--step", "query"]
+    if parallel:
+        args.extend(["--items", "AAPL", "--no-retry"])
+    args.extend(["--var", f"RUNS_DIR={tmp_path / 'runs'}", "--var", "RUN_ID=failed"])
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code != 0
+    run = tmp_path / "runs" / "failed"
+    task = run / ".state" / "tasks" / "query"
+    logs = run / ".logs" / "tasks" / "query"
+    if parallel:
+        task /= "AAPL"
+        logs /= "AAPL"
+    attempt = read_attempt_history_at(task)[0]
+    assert attempt.error and "HTTP 429" in attempt.error
+    assert attempt.failure_class == "rate_limited"
+    assert len(attempt.error) < 2_000
+    assert secret not in attempt.error and secret not in result.output
+    assert "[redacted]" in attempt.error
+    captured = next(logs.glob("process_*.log"))
+    assert secret in captured.read_text()
+    assert str(captured.relative_to(run)) in attempt.error
+
+
+@pytest.mark.parametrize("verb", ["run-step", "run-parallel"])
+def test_standalone_handler_exception_keeps_traceback_without_leaking_env_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, verb: str
+) -> None:
+    secret = "fixture-handler-private-value-" + "s" * 256
+    monkeypatch.setenv("PROVIDER_API_KEY", secret)
+    monkeypatch.setenv("METAPROC_PREFLIGHT_MIN_DISK_GB", "0.1")
+    (tmp_path / "fail.py").write_text(
+        "import os\n"
+        "def fail(context, step):\n"
+        "    raise RuntimeError('handler refused: ' + os.environ['PROVIDER_API_KEY'])\n"
+    )
+    parallel = verb == "run-parallel"
+    if parallel:
+        (tmp_path / "items.md").write_text(
+            "---\nprogress:\n  process: code\n  items:\n    - ticker: AAPL\n---\n"
+        )
+    process = tmp_path / "handler.process.md"
+    process.write_text(
+        "---\nprocess:\n  name: handler\n  steps:\n"
+        "    - id: query\n      mode: code\n      handler: fail.py:fail\n"
+        + (
+            "      inputs:\n        items:\n"
+            f"          path: {tmp_path / 'items.md'}\n"
+            "          kind: file\n          format: frontmatter-md\n"
+            "      for_each:\n        over: items\n        bind: ticker\n"
+            "        bind_fields: [ticker]\n        key: '{{ticker}}'\n"
+            if parallel
+            else ""
+        )
+        + "---\n"
+    )
+    args = [verb, str(process), "--step", "query"]
+    if parallel:
+        args.extend(["--items", "AAPL", "--no-retry"])
+    args.extend(["--var", f"RUNS_DIR={tmp_path / 'runs'}", "--var", "RUN_ID=failed"])
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code != 0
+    run = tmp_path / "runs" / "failed"
+    task = run / ".state" / "tasks" / "query"
+    logs = run / ".logs" / "tasks" / "query"
+    if parallel:
+        task /= "AAPL"
+        logs /= "AAPL"
+    attempt = read_attempt_history_at(task)[0]
+    assert attempt.error and "RuntimeError: handler refused" in attempt.error
+    assert len(attempt.error) < 2_000
+    assert "[redacted]" in attempt.error
+    assert secret not in attempt.error and secret not in result.output
+    captured = next(logs.glob("process_*.log"))
+    assert secret in captured.read_text()
+    assert str(captured.relative_to(run)) in attempt.error
+
+
 @pytest.mark.parametrize("stream", ["stderr", "stdout"])
 def test_command_diagnostic_reaches_attempt_mapped_item_and_root_failure(
     tmp_path: Path, stream: str
