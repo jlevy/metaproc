@@ -9,6 +9,14 @@ development series.
 
 ### Fixed
 
+- **Failure causes survive task, step, and run aggregation.** Mapped summaries count
+  distinct recorded causes against the current item roster; scalar and composite
+  summaries retain their durable causes.
+  Run status and process completion events preserve every failed step, and fan-in
+  outcomes retain output paths and validator messages.
+  Host-admission events distinguish waiting, failure, and best-effort bypass using the
+  gate’s actual decisions.
+
 - **Scalar agent timeouts follow the configured retry policy.** A subprocess timeout
   uses the same classification, backoff, credential checks, and retry limit as a
   retryable nonzero exit.

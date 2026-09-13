@@ -1310,11 +1310,36 @@ class RunPool:
         """Acquire host-wide launch admission when configured."""
         if self._host_admission is None:
             return None
-        lease = await self._host_admission.acquire(
-            label=config.label,
-            pool_id=self._pool_id,
-            metadata={"backend": self._backend_name},
-        )
+        gate = self._host_admission
+
+        def record_wait() -> None:
+            if self._event_logger is not None:
+                self._event_logger.host_admission_denied(
+                    namespace=gate.namespace,
+                    limit=gate.limit,
+                    label=config.label,
+                    reason="no_available_slot",
+                    decision="wait",
+                )
+
+        try:
+            lease = await gate.acquire(
+                label=config.label,
+                pool_id=self._pool_id,
+                metadata={"backend": self._backend_name},
+                on_wait=record_wait,
+            )
+        except OSError as exc:
+            if self._event_logger is not None:
+                self._event_logger.host_admission_denied(
+                    namespace=gate.namespace,
+                    limit=gate.limit,
+                    label=config.label,
+                    reason="timeout" if isinstance(exc, TimeoutError) else "unavailable",
+                    decision="fail",
+                    error=str(exc),
+                )
+            raise
         try:
             if self._event_logger is not None:
                 self._event_logger.host_slot_acquired(

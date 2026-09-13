@@ -65,6 +65,7 @@ from metaproc.commands.run_process import (
     _preflight_plan_adapters,
     _publish_run_plan,
     _read_recorded_step_hash,
+    _read_step_failure_error,
     _read_step_status,
     _refresh_run_plan_item_keys,
     _run_agent_subprocess,
@@ -75,6 +76,7 @@ from metaproc.commands.run_process import (
 from metaproc.engine.discovery import FanOutDiscovery
 from metaproc.engine.graph import topo_sort
 from metaproc.engine.pathing import compute_task_state_dir
+from metaproc.engine.run_status import scan_run_status
 from metaproc.engine.write_boundary import RepoSnapshot, WriteTarget
 from metaproc.io.state_io import (
     mark_completed_at,
@@ -1112,6 +1114,48 @@ class TestAncestorVerification:
 
 
 class TestProcessStatusFile:
+    def test_mapped_failure_summary_counts_only_current_roster(self, tmp_path: Path) -> None:
+        target = ResolvedStep(
+            step_id="work",
+            mode="agent",
+            adapter=ResolvedAdapter(type="gemini-cli"),
+            fan_out=FanOut(over="deps.items", bind="item", source="items.md"),
+        )
+        write_run_plan(
+            tmp_path,
+            RunPlanSnapshot(
+                run_id="run",
+                steps=[
+                    RunPlanStep(
+                        step_id="work",
+                        mode="agent",
+                        task_shape="mapped",
+                        item_keys=["a", "b", "c"],
+                        fingerprint=fingerprint_step(target),
+                    )
+                ],
+            ),
+        )
+        for key, state, error in (
+            ("a", "failed", "timeout after 600s"),
+            ("b", "failed", "timeout after 600s"),
+            ("c", "completed", None),
+            ("old", "failed", "historical failure"),
+        ):
+            write_status_at(
+                tmp_path / STATE_DIR / "tasks" / "work" / key,
+                StatusRecord(
+                    run_id="run",
+                    step_id="work",
+                    item={"item": key},
+                    state="completed" if state == "completed" else "failed",
+                    error=error,
+                ),
+            )
+        assert _read_step_failure_error(tmp_path, target) == (
+            "2 of 3 items failed (2 x timeout after 600s)"
+        )
+
     @pytest.mark.parametrize(
         ("suffix", "extra_args", "expected_publish_state"),
         [
@@ -2258,6 +2302,12 @@ class TestCompositeStepExecution:
         assert alfa_status is not None and alfa_status.state == "completed"
         assert brvo_status is not None and brvo_status.state == "failed"
         assert chrl_status is not None and chrl_status.state == "completed"
+        assert brvo_status.error
+        expected_error = f"1 of 3 items failed (1 x {brvo_status.error})"
+        process_status = read_yaml_file(run_dir / STATE_DIR / "process-status.yaml")
+        assert process_status["steps"]["ticker-flow"]["error"] == expected_error
+        assert scan_run_status(run_dir).process_error == f"ticker-flow: {expected_error}"
+        assert expected_error in first.output
         assert (run_dir / "ticker-flow" / "alfa" / STATE_DIR / "process-status.yaml").exists()
         assert (run_dir / "ticker-flow" / "brvo" / STATE_DIR / "process-status.yaml").exists()
         assert (run_dir / "ticker-flow" / "chrl" / STATE_DIR / "process-status.yaml").exists()
@@ -2292,6 +2342,10 @@ class TestCompositeStepExecution:
         assert [event["item_key"] for event in first_events if event["event"] == "item_fail"] == [
             "brvo"
         ]
+        assert (
+            next(event for event in first_events if event["event"] == "step_fail")["error"]
+            == expected_error
+        )
 
         fail_marker.unlink()
         second = runner.invoke(app, args)

@@ -9,6 +9,7 @@ import yaml
 from typer.testing import CliRunner
 
 from metaproc.cli import app
+from metaproc.engine.run_status import scan_run_status
 from metaproc.io.state_io import read_status_at
 from metaproc.paths import STATE_DIR, STATUS_FILE, TASKS_SUBDIR
 
@@ -43,6 +44,15 @@ def test_resume_runs_an_incomplete_member_behind_a_complete_chain_head(
 
     process_status = yaml.safe_load((run_dir / STATE_DIR / "process-status.yaml").read_text())
     assert process_status["steps"]["stage-a"]["state"] == "completed"
+    failed = read_status_at(run_dir / STATE_DIR / TASKS_SUBDIR / "stage-b" / "dlta")
+    assert failed is not None and failed.error
+    summary = process_status["steps"]["stage-b"]["error"]
+    assert "2 of 5 items failed" in summary
+    assert failed.error in summary
+    process_error = scan_run_status(run_dir, include_system=False).process_error
+    assert process_error
+    assert "stage-b:" in process_error
+    assert failed.error in process_error
 
     target_state_dir = _task_state_dir(run_dir, "stage-b")
     target_status = target_state_dir / STATUS_FILE

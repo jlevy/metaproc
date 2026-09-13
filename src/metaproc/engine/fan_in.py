@@ -20,6 +20,7 @@ from pydantic import ValidationError
 from strif import atomic_output_file
 
 from metaproc.io.state_io import read_status_at
+from metaproc.models.runtime import StatusRecord
 
 OUTCOME_CONTRACT = "metaproc:FanInOutcomes/0.1"
 
@@ -63,11 +64,13 @@ def collect_item_outcomes(
             continue
         try:
             status = read_status_at(item_dir)
-        except (ValueError, TypeError, ValidationError):
+        except (ValueError, TypeError, ValidationError) as exc:
             # A status this function cannot read is still an item the consumer needs
             # told about. Raising here would let one malformed record destroy the whole
             # collection, in the one function whose job is reporting partial failure.
-            outcomes.append({"key": key, "state": "unreadable", "succeeded": False})
+            outcomes.append(
+                {"key": key, "state": "unreadable", "succeeded": False, "error": str(exc)}
+            )
             continue
         if status is None:
             outcomes.append({"key": key, "state": "unknown", "succeeded": False})
@@ -91,26 +94,14 @@ def collect_item_outcomes(
     return outcomes
 
 
-def _structured_failures(status: object) -> list[dict[str, Any]]:
+def _structured_failures(status: StatusRecord) -> list[dict[str, Any]]:
     """Softschema's vocabulary, passed through rather than flattened to a sentence.
 
     A consumer routing work by owner needs to tell a missing output from a refused
     invariant, and the rendered message cannot express that difference.
     """
-    failures = getattr(status, "output_failures", None) or []
     return [
-        {
-            name: value
-            for name, value in (
-                ("output", failure.output),
-                ("kind", str(failure.kind)),
-                ("contract", failure.contract),
-                ("invariant", failure.invariant),
-                ("location", failure.location),
-            )
-            if value is not None
-        }
-        for failure in failures
+        failure.model_dump(mode="json", exclude_none=True) for failure in status.output_failures
     ]
 
 
@@ -128,8 +119,9 @@ def _absent_item_outcome(run_dir: Path, key: str, upstream_chain: Sequence[str])
             continue
         try:
             status = read_status_at(state_dir)
-        except (ValueError, TypeError, ValidationError):
-            continue
+        except (ValueError, TypeError, ValidationError) as exc:
+            record.update(stopped_at=step_id, stopped_state="unreadable", error=str(exc))
+            break
         if status is None:
             continue
         record["stopped_at"] = step_id

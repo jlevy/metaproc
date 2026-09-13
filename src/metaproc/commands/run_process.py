@@ -19,6 +19,7 @@ import shlex
 import subprocess
 import time
 import traceback
+from collections import Counter
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -96,7 +97,7 @@ from metaproc.engine.dep_state import (
     recorded_step_hash,
 )
 from metaproc.engine.discovery import discover_items_from_source
-from metaproc.engine.fan_in import write_outcome_manifest
+from metaproc.engine.fan_in import collect_item_outcomes, write_outcome_manifest
 from metaproc.engine.graph import (
     downstream,
     item_aligned_chains,
@@ -1190,31 +1191,64 @@ def _read_step_status(run_dir: Path, step_id: str) -> StatusRecord | None:
     return read_status_at(_step_item_dir(run_dir, step_id))
 
 
-def _read_scalar_code_failure_error(
+def _read_step_failure_error(
     run_dir: Path,
     target: ResolvedStep,
+    *,
+    upstream_chain: Sequence[str] = (),
 ) -> str:
-    """Return the durable task error for a failed scalar code step.
-
-    ``_execute_code_step`` owns the detailed failure record. The DAG layer
-    only receives a boolean, so recover that already-persisted detail here
-    rather than introducing a second execution-result type solely for
-    observability.
-    """
-    if target.mode != "code" or target.fan_out is not None:
-        return ""
+    """Lift the durable causes received by this step into its failure summary."""
     try:
+        if target.fan_out is not None:
+            snapshot = read_run_plan(run_dir)
+            step = (
+                next((step for step in snapshot.steps if step.step_id == target.step_id), None)
+                if snapshot is not None
+                else None
+            )
+            keys = step.item_keys if step is not None else None
+            if keys is None:
+                return "item failure detail unavailable: current item roster not recorded"
+            outcomes = collect_item_outcomes(
+                run_dir, target.step_id, expected_keys=keys, upstream_chain=upstream_chain
+            )
+            # Retained directories outside the current published roster are history,
+            # not members of this execution's denominator or failure population.
+            current_keys = set(keys)
+            failures = [o for o in outcomes if o["key"] in current_keys and not o["succeeded"]]
+            if not failures:
+                return "step failed without a recorded item failure"
+            causes = Counter(
+                o.get("error") or f"error not recorded (state: {o['state']})" for o in failures
+            )
+            detail = "; ".join(f"{count} x {error}" for error, count in sorted(causes.items()))
+            return f"{len(failures)} of {len(keys)} items failed ({detail})"
+        if target.mode == "composite":
+            child_status = _read_process_status_yaml(run_dir / target.step_id)
+            if child_status is not None:
+                errors = _process_step_errors(child_status.get("steps", {}))
+                if errors:
+                    return "; ".join(f"{step_id}: {error}" for step_id, error in errors.items())
         record = _read_step_status(run_dir, target.step_id)
-    except Exception:  # noqa: BLE001 -- status projection is best-effort
+    except Exception as exc:  # noqa: BLE001 -- status projection is best-effort
         log.warning(
-            "could not read failure detail for scalar code step %r",
+            "could not read failure detail for step %r",
             target.step_id,
             exc_info=True,
         )
-        return ""
+        return f"failure detail unavailable: {type(exc).__name__}: {exc}"
     if record is None or record.state != "failed" or not record.error:
-        return ""
+        return "error not recorded"
     return record.error
+
+
+def _process_step_errors(step_states: Mapping[str, Mapping[str, Any]]) -> dict[str, str]:
+    """Preserve each failed step's cause, explicitly marking missing evidence."""
+    return {
+        step_id: state.get("error") or "error not recorded"
+        for step_id, state in step_states.items()
+        if state.get("state") == "failed"
+    }
 
 
 def _read_process_status_yaml(run_dir: Path) -> dict[str, Any] | None:
@@ -2296,14 +2330,9 @@ async def _execute_agent_step(
         out.warning(str(exc))
         log.warning("Step %s credential-pool binding failed: %s", step_id, exc)
         return False
-    auth_events = (
-        EventLogger(paths_mod.runpool_step_events(run_dir, step_id))
-        if pool_dispatch is not None
-        else None
-    )
+    auth_events = EventLogger(paths_mod.runpool_step_events(run_dir, step_id))
     retry_exclude: list[tuple[str, str]] = []
-    if auth_events is not None:
-        auth_events.open()
+    auth_events.open()
 
     try:
         if (
@@ -2367,7 +2396,7 @@ async def _execute_agent_step(
                 attempt_number: int = attempt,
             ) -> AuthFailureClassification | None:
                 nonlocal lease
-                if lease is None or pool_dispatch is None or auth_events is None:
+                if lease is None or pool_dispatch is None:
                     return None
                 completed_lease = lease
                 lease = None
@@ -2415,6 +2444,7 @@ async def _execute_agent_step(
                 try:
                     async with _leaf_slot(execution_context):
                         async with admitted_launch(
+                            event_logger=auth_events,
                             enabled=backend_name == "local",
                             limit=resolve_host_max_concurrency(
                                 scalar_resource_config, default=SCALAR_DEFAULT_HOST_LIMIT
@@ -2427,7 +2457,7 @@ async def _execute_agent_step(
                                 "mode": "agent",
                             },
                         ):
-                            if pool_dispatch is not None and auth_events is not None:
+                            if pool_dispatch is not None:
 
                                 def _complete_cancelled_acquisition(
                                     cancelled_lease: SlotLease,
@@ -2842,8 +2872,7 @@ async def _execute_agent_step(
                         )
                 raise
     finally:
-        if auth_events is not None:
-            auth_events.close()
+        auth_events.close()
 
     completed = mark_completed_at(
         state_dir, running_record=running_record, anomalies=accepted_anomalies
@@ -4252,7 +4281,11 @@ async def _orchestrate(
                 if member_ok:
                     events.step_complete(member_id, chain_elapsed)
                 else:
-                    events.step_fail(member_id, chain_elapsed)
+                    error = _read_step_failure_error(
+                        run_dir, step_map[member_id], upstream_chain=chain[: chain.index(member_id)]
+                    )
+                    step_states[member_id]["error"] = error
+                    events.step_fail(member_id, chain_elapsed, error=error)
             _write_process_status(
                 run_dir,
                 spec.name,
@@ -4295,7 +4328,7 @@ async def _orchestrate(
             events.step_complete(step_id, elapsed)
             out.progress(f"  Step '{step_id}': completed ({fmt_timedelta(elapsed)})")
         else:
-            error = _read_scalar_code_failure_error(run_dir, target)
+            error = _read_step_failure_error(run_dir, target)
             step_states[step_id] = {
                 "state": "failed",
                 "started_at": step_states[step_id].get("started_at"),
@@ -4525,6 +4558,7 @@ async def _orchestrate(
         failed=len(failed_steps),
         skipped=skipped_count + len(blocked_list),
         elapsed_s=total_elapsed,
+        errors=_process_step_errors(step_states),
     )
 
     if failed_steps:

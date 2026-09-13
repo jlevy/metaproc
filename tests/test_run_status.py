@@ -584,7 +584,10 @@ class TestWaitForCompletion:
             "steps:\n"
             "  intake:\n"
             "    state: failed\n"
-            "    error: 'RuntimeError: source attestation mismatch'\n",
+            "    error: 'RuntimeError: source attestation mismatch'\n"
+            "  independent:\n"
+            "    state: failed\n"
+            "    error: 'timeout after 600s'\n",
             encoding="utf-8",
         )
 
@@ -592,7 +595,9 @@ class TestWaitForCompletion:
 
         assert exit_code == 1
         assert status.process_execution_state == "failed"
-        assert status.process_error == "intake: RuntimeError: source attestation mismatch"
+        assert status.process_error == (
+            "intake: RuntimeError: source attestation mismatch; independent: timeout after 600s"
+        )
 
     def test_timeout(self, tmp_path: Path) -> None:
         """If items are still running and timeout expires, exit code 2."""

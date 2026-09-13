@@ -97,6 +97,8 @@ class TestCollectItemOutcomes:
         assert failure["kind"] == "semantic"
         assert failure["invariant"] == "required"
         assert failure["contract"] == "example:Thing/v1"
+        assert failure["path"] == "/tmp/out.md"
+        assert failure["message"] == "missing required field"
 
     def test_an_absent_item_reports_where_and_why_it_stopped(self, tmp_path: Path) -> None:
         """A bare absence is the least useful true thing a collection could report."""
@@ -140,6 +142,8 @@ class TestCollectItemOutcomes:
             tmp_path, "two", expected_keys=["B"], upstream_chain=["one", "two"]
         )
         assert outcomes[0]["output_failures"][0]["kind"] == "missing"
+        assert outcomes[0]["output_failures"][0]["path"] == "/tmp/out.json"
+        assert outcomes[0]["output_failures"][0]["message"] == "file not found"
 
     def test_without_a_chain_an_absent_item_is_just_absent(self, tmp_path: Path) -> None:
         _task(tmp_path, "one", "B", "failed", error="raised")

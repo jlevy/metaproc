@@ -16,7 +16,7 @@ import os
 import shutil
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -124,17 +124,21 @@ class HostAdmissionGate:
         label: str,
         pool_id: str,
         metadata: dict[str, object] | None = None,
+        on_wait: Callable[[], None] | None = None,
     ) -> HostAdmissionLease:
         """Wait until a host slot is available and return its lease.
 
         Raises :class:`TimeoutError` after ``acquire_timeout_s`` so a
         permanently occupied or corrupted namespace cannot stall a run forever.
         Pass ``None`` explicitly to retain unbounded waiting.
+        ``on_wait`` observes the first unsuccessful scan, once per acquisition;
+        it reports a real refusal without flooding the event log on every poll.
         """
         self.namespace_dir.mkdir(parents=True, exist_ok=True)
         deadline = (
             None if self.acquire_timeout_s is None else time.monotonic() + self.acquire_timeout_s
         )
+        reported_wait = False
         while True:
             for slot_id in range(self.limit):
                 lease = self._try_acquire_slot(
@@ -145,6 +149,9 @@ class HostAdmissionGate:
                 )
                 if lease is not None:
                     return lease
+            if not reported_wait and on_wait is not None:
+                on_wait()
+                reported_wait = True
             if deadline is not None:
                 remaining_s = deadline - time.monotonic()
                 if remaining_s <= 0:

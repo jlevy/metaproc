@@ -1110,7 +1110,7 @@ Event types (13 total):
 | Event | Fields | When |
 | --- | --- | --- |
 | `process_start` | process, run_id, backend, step_count | DAG execution begins |
-| `process_complete` | process, run_id, completed, failed, skipped, elapsed_s | DAG execution ends |
+| `process_complete` | process, run_id, completed, failed, skipped, elapsed_s, errors | DAG execution ends; `errors` maps every failed step to its cause |
 | `level_start` | level, steps | topological level begins |
 | `level_complete` | level, elapsed_s | topological level ends |
 | `step_start` | step_id, mode | step execution begins |
@@ -1416,22 +1416,22 @@ The envelope under `fan_in_outcomes` carries `schema`, `upstream_step`, `total`,
 recorded structured contract failures; and `stopped_at` with `stopped_state` when its
 state is `not_reached`.
 
-Each entry in `output_failures` is a projection of one `OutputFailure`, and a narrower
-one than the record written to the item’s own `status.yaml`:
+Each entry in `output_failures` preserves every populated field of the `OutputFailure`
+written to the item’s own `status.yaml`:
 
 | Field | Present | Meaning |
 | --- | --- | --- |
 | `output` | always | The declared output name from the process spec, not a filename |
+| `path` | always | The rendered artifact path recorded by the producing task |
+| `message` | always | The validator’s recorded explanation |
 | `kind` | always | One `OutputFailureKind`: `missing`, `empty`, `unreadable`, `structural`, or `semantic` |
 | `contract` | when the output declared one | The contract id the output was validated against |
 | `invariant` | when the validator supplied one | The structural error code or semantic validator; an input error reclassified as `unreadable` can retain its code |
 | `location` | when the refusal carried a position | The validator’s path within the document, such as `$.ticker`; list or tuple locations are dot-joined, such as `items.0.field` |
 
-A field whose value is absent is omitted rather than written null, so a `missing`-kind
-failure yields a two-field record.
-The artifact `path` and the rendered `message`, both always present on the per-item
-record, are not projected into the manifest; a consumer needing either reads the item’s
-own `status.yaml`.
+A field whose value is absent is omitted rather than written null.
+For example, a `missing`-kind failure carries `output`, `path`, `kind`, and `message`;
+it does not invent a contract or invariant.
 
 An item that never reached the collected step is reported with where it stopped and that
 step’s failure detail, rather than as a bare absence.
@@ -1929,24 +1929,22 @@ An absent optional value may be omitted.
 A populated cause must survive as detail, a classified count, or a usable reference; an
 undeclared model field must not silently discard it.
 
-The current boundaries have different coverage.
+**The run-level step record.** A failed step recovers its durable task causes before
+writing `process-status.yaml` and `step_fail`. Scalar tasks retain the recorded error
+regardless of adapter or step mode; scalar composites retain their child step errors.
+Mapped tasks summarize the current `run-plan.yaml` item roster, count distinct recorded
+causes, and exclude retained directories outside that roster.
+For example, two timeouts among three items produce
+`2 of 3 items failed (2 x timeout after 600s)`. An item-aligned chain uses the same
+aggregation for each failed member, and absent downstream items carry the recorded
+upstream cause in their fan-in outcomes.
+This reporting does not change the chain’s reached-item completion policy.
 
-**The run-level step record.** Step entries in `process-status.yaml` are untyped dicts,
-and nothing requires an entry in state `failed` to carry a cause.
-Only a scalar `mode: code` step gets one: the helper that recovers an already-persisted
-task error returns empty immediately for any step whose mode is not `code` or whose
-`fan_out` is set. A mapped step, a scalar agent step, and a manual step therefore each
-record `state: failed` with no `error` key, and `metaproc status` renders
-`Failure: <step>: error not recorded`, while every failed item already wrote a precise
-cause into its own `status.yaml`. The matching `step_fail` line in
-`process-events.jsonl` carries `error: ""` from the field default.
-The break is structural rather than an omission at one call site: `run_fan_out` returns
-`(succeeded, total)` and `StepInvoker` returns `bool`, so no cause can cross the
-item-runner boundary in the current types.
-Two aggregations exist and neither closes the gap.
-`StepStatusEntry.item_counts` reports coverage with no failed count and no reason, and
-the fan-in collector reads item causes correctly but runs only when a *downstream* step
-declares `collect:`, so a mapped step with no consumer produces nothing.
+`metaproc status` retains all failed step summaries in the run error.
+When emitted, `process_complete.errors` carries the same mapping; older events without
+the field have an empty mapping and require their step events or task records for
+detail. A missing error or roster is explicitly reported as unavailable rather than
+inferred from a numeric exit code or omitted as an empty successful result.
 
 **The typed event reader.** `RunPoolEvent` includes lifecycle, quota-pause, pressure,
 and health-sample events.
@@ -1958,14 +1956,19 @@ or field must update the typed contract and its writer-to-reader tests together.
 Health samples live in the separate `health.jsonl` stream; including their type does not
 merge the two files.
 
-**Admission.** `host_slot_acquired` is written after the slot is taken.
-A launch that waits, and a launch that exhausts `DEFAULT_HOST_ADMISSION_TIMEOUT_S` and
-then fails, write nothing.
-`pressure_check` carries `pending_count` on its sampling interval, so a reader can infer
-that work is queued but not which gate holds it or for how long.
+**Admission.** `host_slot_acquired` is written after a RunPool slot is taken.
+Both the RunPool and scalar launch paths write `host_admission_denied` once on the first
+unsuccessful slot scan, with `reason: no_available_slot` and `decision: wait`. A
+terminal refusal records the actual `timeout` or `unavailable` reason and exception
+message. RunPool records `decision: fail`; the scalar path records `decision: bypass`
+when its existing best-effort policy launches without a slot.
+Every refusal identifies the namespace, configured limit, and launch label.
+No occupied-slot count, wait duration, or successful admission is inferred from these
+records; a wait event alone does not establish the eventual outcome.
 The governor records `consecutive_normal` and `consecutive_elevated` on each
 `pressure_check` and `health_sample`, including a sustained `elevated` hold with no
 capacity change. `concurrency_adjust` is emitted only when capacity changes.
+Zero counters are recorded; absent historical measurements remain optional.
 
 ### 13.1 Plugin System
 
