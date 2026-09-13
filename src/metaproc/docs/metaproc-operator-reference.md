@@ -662,6 +662,28 @@ execution fields provide no explicit execution evidence.
 Preserve that absence or revalidate the retained artifact, and identify any new result
 as a review-time check rather than evidence of what ran originally.
 
+#### Built-in contract checks
+
+Metaproc’s built-in contracts validate payloads with their bound Python models.
+The models check types and declared invariants, including cross-field rules; each
+model’s own extra-field and coercion policies apply.
+The bindings retain `status: enforced` and do not bind an independent JSON Schema.
+
+With SoftSchema’s execution-evidence API, these checks report
+`semantic.execution: completed` on either acceptance or rejection, together with the
+actual verdict and errors.
+The structural record reports `execution: not_run` and
+`skipped_reason: inferred_via_model`. Its `engine: json_schema` label identifies the
+available engine, not an invocation.
+
+The `document-enforcement-via-model-only` advisory is intentional and remains visible in
+validation reports. A valid result establishes acceptance by the Python model; it does
+not establish independent structural validation or equivalent validation in another
+language. A rejected model result remains invalid despite the unrun structural layer’s
+`ok: true`. Do not change maturity metadata or suppress the advisory to imply a stronger
+guarantee. Adding compiled schemas requires reviewing the accepted payloads and the
+models’ policies as a contract change.
+
 ### Steps section in `metaproc status`
 
 `status` renders a per-step Steps table whenever it can rebuild the resolved plan from

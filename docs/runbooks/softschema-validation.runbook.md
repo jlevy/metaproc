@@ -35,6 +35,12 @@ uv run metaproc softschema compile module:Model --out schemas/model.schema.yaml 
 Use the package docs for reusable behavior and this path as a compatibility pointer for
 older Metaproc references.
 
+For Metaproc’s built-in contracts, read
+[Built-in contract checks](../../src/metaproc/docs/metaproc-operator-reference.md#built-in-contract-checks)
+before interpreting the model-only advisory.
+It describes the actual Python validation guarantee and the separate structural check
+that did not run.
+
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.
 -->
