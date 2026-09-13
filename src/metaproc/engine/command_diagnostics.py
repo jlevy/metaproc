@@ -5,10 +5,16 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 from metaproc.config.env_vars import MetaprocEnv
+from metaproc.engine.retry import FailureClass, classify_failure
 
-_SECRET_ENV_MARKERS = ("TOKEN", "KEY", "SECRET", "PASSWORD", "CREDENTIALS", "AUTH", "BEARER")
+_SECRET_ENV_NAME = re.compile(
+    r"(?:^|_)(?:TOKEN|KEY|SECRET|PASSWORD|PASSWD|CREDENTIALS?|CREDS|AUTH|BEARER)"
+    r"(?:_(?:JSON|BASE64))?$",
+    re.IGNORECASE,
+)
 _FRAMEWORK_ENV_KINDS = {variable.name: variable.kind for variable in MetaprocEnv}
 _AUTH_VALUE = re.compile(r"(?i)\b(Bearer|Basic)\s+[^\s\"',;}]+")
 _CREDENTIAL_VALUE = re.compile(
@@ -21,6 +27,12 @@ _MAX_DETAIL_CHARS = 1_200
 _MAX_DETAIL_LINES = 12
 
 
+@dataclass(frozen=True)
+class CommandFailure:
+    error: str
+    failure_class: FailureClass
+
+
 def command_failure_message(
     returncode: int,
     *,
@@ -28,17 +40,21 @@ def command_failure_message(
     stderr: str | None,
     env: Mapping[str, str],
     log_path: str,
-) -> str:
-    """Keep exit status and the diagnostic stream's tail without copying credentials.
+) -> CommandFailure:
+    """Return a bounded message and classify the credential-redacted diagnostic.
 
     Stderr owns command diagnostics when present; stdout is a fallback for commands
-    that report errors there. Redact before truncating so cutting a long secret cannot
-    leave an unrecognized prefix in durable state.
+    that report errors there. Normalize terminal escapes before redaction, then classify
+    before truncation or appending the log path: neither omitted evidence nor a filename
+    containing a status code may change the category.
     """
-    source = "stderr" if stderr and stderr.strip() else "stdout"
+    stderr = _ANSI_ESCAPE.sub("", stderr or "")
+    stdout = _ANSI_ESCAPE.sub("", stdout or "")
+    source = "stderr" if stderr.strip() else "stdout"
     detail = (stderr if source == "stderr" else stdout) or ""
     if not detail.strip():
-        return f"command exit code {returncode} (no stdout/stderr captured)"
+        error = f"command exit code {returncode} (no stdout/stderr captured)"
+        return CommandFailure(error=error, failure_class=classify_failure(error))
 
     try:
         secret_refs = json.loads(env.get(MetaprocEnv.METAPROC_GCP_SECRET_REFS_JSON.name, "{}"))
@@ -46,24 +62,22 @@ def command_failure_message(
         secret_refs = {}
     declared_secrets = set(secret_refs) if isinstance(secret_refs, dict) else set()
     secrets = {
-        value
+        _ANSI_ESCAPE.sub("", value)
         for name, value in env.items()
         if value
         and (
             name in declared_secrets
             or _FRAMEWORK_ENV_KINDS.get(name) == "SECRET"
-            or (
-                name not in _FRAMEWORK_ENV_KINDS
-                and any(marker in name.upper() for marker in _SECRET_ENV_MARKERS)
-            )
+            or (name not in _FRAMEWORK_ENV_KINDS and _SECRET_ENV_NAME.search(name) is not None)
         )
     }
+    secrets.discard("")
     for value in sorted(secrets, key=len, reverse=True):
         detail = detail.replace(value, "[redacted]")
     detail = _AUTH_VALUE.sub(r"\1 [redacted]", detail)
     detail = _CREDENTIAL_VALUE.sub(r"\1[redacted]", detail)
     detail = _URL_USERINFO.sub(r"\1[redacted]@", detail)
-    detail = _ANSI_ESCAPE.sub("", detail)
+    failure_class = classify_failure(f"command exit code {returncode} ({source}: {detail})")
     lines = [line.strip() for line in detail.splitlines() if line.strip()]
     truncated = len(lines) > _MAX_DETAIL_LINES
     detail = "\n".join(lines[-_MAX_DETAIL_LINES:])
@@ -72,4 +86,7 @@ def command_failure_message(
         truncated = True
     if truncated:
         detail = "[truncated]\n" + detail
-    return f"command exit code {returncode} ({source}: {detail}; log: {log_path})"
+    return CommandFailure(
+        error=f"command exit code {returncode} ({source}: {detail}; log: {log_path})",
+        failure_class=failure_class,
+    )

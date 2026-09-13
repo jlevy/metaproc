@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import sys
 import textwrap
+from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 from typer.testing import CliRunner
 
 from metaproc.cli import app
+from metaproc.commands import run_process as run_process_module
 from metaproc.engine.fan_in import collect_item_outcomes
 from metaproc.engine.input_validation import validate_process_outputs_detailed
 from metaproc.engine.run_status import scan_run_status
@@ -92,6 +95,7 @@ def test_command_diagnostic_is_bounded_redacted_and_prefers_stderr(
         "print('unrelated progress\\n' * 500, file=sys.stderr)\n"
         f"print({diagnostic!r}, file=sys.stderr)\n"
         "print('credential=' + os.environ['PROVIDER_API_KEY'], file=sys.stderr)\n"
+        "print('unlabeled ' + os.environ['PROVIDER_API_KEY'].replace('private', '\\x1b[31mprivate\\x1b[0m'), file=sys.stderr)\n"
         "print('Authorization: Bearer fixture-bearer-token', file=sys.stderr)\n"
         "raise SystemExit(9)\n"
     )
@@ -143,6 +147,40 @@ def test_command_diagnostic_is_bounded_redacted_and_prefers_stderr(
     captured = next(logs.glob("process_*.log")).read_text()
     assert secret in captured  # Source evidence is retained; the durable summary is redacted.
     assert "unrelated progress" in captured
+
+
+@pytest.mark.parametrize("step_id,second", [("quota-check", 29), ("query", 29), ("query", 3)])
+def test_command_failure_class_ignores_step_names_and_log_timestamps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, step_id: str, second: int
+) -> None:
+    clock = Mock(wraps=datetime)
+    clock.now.return_value = datetime(2026, 9, 13, 0, 44 if second == 29 else 5, second, tzinfo=UTC)
+    monkeypatch.setattr(run_process_module, "datetime", clock)
+    (tmp_path / "fail.py").write_text(
+        "import sys\nprint('ValueError: invalid input', file=sys.stderr)\nraise SystemExit(1)\n"
+    )
+    process = tmp_path / "command.process.md"
+    process.write_text(
+        "---\nprocess:\n  name: command\n  steps:\n"
+        f"    - id: {step_id}\n      mode: code\n"
+        f"      command: '{sys.executable} fail.py'\n---\n"
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-process",
+            str(process),
+            "--var",
+            f"RUNS_DIR={tmp_path / 'runs'}",
+            "--var",
+            "RUN_ID=classification",
+        ],
+    )
+    assert result.exit_code == 1, result.output
+    task = tmp_path / "runs" / "classification" / ".state" / "tasks" / step_id
+    attempt = read_attempt_history_at(task)[0]
+    assert attempt.error and "ValueError: invalid input" in attempt.error
+    assert attempt.failure_class == "crash"
 
 
 @pytest.mark.parametrize("mapped", [False, True])

@@ -1684,7 +1684,7 @@ async def _execute_code_step(
         if output:
             with atomic_output_file(log_file) as tmp_path:
                 tmp_path.write_text(output)
-        command_error = command_failure_message(
+        command_failure = command_failure_message(
             exc.returncode,
             stdout=exc.stdout,
             stderr=exc.stderr,
@@ -1693,9 +1693,9 @@ async def _execute_code_step(
         )
         mark_failed_at(
             state_dir,
-            error=command_error,
+            error=command_failure.error,
             running_record=running_record,
-            failure_class=str(classify_failure(command_error)),
+            failure_class=str(command_failure.failure_class),
         )
         return False
     except (asyncio.CancelledError, KeyboardInterrupt) as exc:
