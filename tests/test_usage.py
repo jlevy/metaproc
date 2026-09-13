@@ -512,18 +512,62 @@ class TestExtractGeminiUsage:
         assert billed == 24_778
         assert billed == stats_dict["total_tokens"] - stats_dict["input_tokens"]
 
-    def test_residual_needs_an_input_figure_to_subtract(self) -> None:
-        """A total with no input beside it cannot be decomposed.
+    @pytest.mark.parametrize("per_model", [False, True], ids=["aggregate", "per-model"])
+    @pytest.mark.parametrize(
+        ("input_fields", "expected_input", "expected_output"),
+        [
+            pytest.param({}, 0, 9_429, id="missing"),
+            pytest.param({"input_tokens": None}, 0, 9_429, id="null"),
+            pytest.param({"input_tokens": False}, 0, 9_429, id="false"),
+            pytest.param({"input_tokens": True}, 0, 9_429, id="true"),
+            pytest.param({"input_tokens": ""}, 0, 9_429, id="empty-string"),
+            pytest.param({"input_tokens": "0"}, 0, 9_429, id="numeric-string"),
+            pytest.param({"input_tokens": -1}, 0, 9_429, id="negative"),
+            pytest.param({"input_tokens": -0.5}, 0, 9_429, id="negative-fraction"),
+            pytest.param({"input_tokens": float("nan")}, 0, 9_429, id="nan"),
+            pytest.param({"input_tokens": float("inf")}, 0, 9_429, id="infinity"),
+            pytest.param({"input_tokens": float("-inf")}, 0, 9_429, id="negative-infinity"),
+            pytest.param({"input_tokens": []}, 0, 9_429, id="array"),
+            pytest.param({"input_tokens": 0}, 0, 1_650_379, id="measured-zero"),
+            pytest.param({"input_tokens": 0.0}, 0, 1_650_379, id="measured-float-zero"),
+            pytest.param({"input_tokens": 1_625_601}, 1_625_601, 24_778, id="measured"),
+            pytest.param({"input_tokens": 10**400}, 10**400, 9_429, id="large-integer"),
+        ],
+    )
+    def test_residual_requires_valid_input_evidence(
+        self,
+        per_model: bool,
+        input_fields: dict[str, object],
+        expected_input: int,
+        expected_output: int,
+    ) -> None:
+        """Invalid or absent input cannot justify treating the total as output."""
+        stats_dict = {"output_tokens": 9_429, "total_tokens": 1_650_379, **input_fields}
+        payload = {"models": {"gemini-test": stats_dict}} if per_model else stats_dict
+        stats = extract_gemini_usage(payload)[0]
+        assert stats.input_tokens == expected_input
+        assert stats.output_tokens == expected_output
 
-        Subtracting an absent input reads as subtracting zero, which would report
-        the whole total, input included, as output.
-        """
-        stats_dict = {
-            "output_tokens": 9_429,
-            "cached": 0,
-            "total_tokens": 1_650_379,
-        }
-        assert extract_gemini_usage(stats_dict)[0].output_tokens == 9_429
+    @pytest.mark.parametrize("per_model", [False, True], ids=["aggregate", "per-model"])
+    @pytest.mark.parametrize(
+        "total_fields",
+        [
+            pytest.param({}, id="missing"),
+            pytest.param({"total_tokens": None}, id="null"),
+            pytest.param({"total_tokens": False}, id="false"),
+            pytest.param({"total_tokens": ""}, id="empty-string"),
+            pytest.param({"total_tokens": -1}, id="negative"),
+            pytest.param({"total_tokens": float("nan")}, id="nan"),
+            pytest.param({"total_tokens": float("inf")}, id="infinity"),
+            pytest.param({"total_tokens": float("-inf")}, id="negative-infinity"),
+        ],
+    )
+    def test_invalid_total_falls_back_to_reported_output(
+        self, per_model: bool, total_fields: dict[str, object]
+    ) -> None:
+        stats_dict = {"input_tokens": 1_625_601, "output_tokens": 9_429, **total_fields}
+        payload = {"models": {"gemini-test": stats_dict}} if per_model else stats_dict
+        assert extract_gemini_usage(payload)[0].output_tokens == 9_429
 
     def test_reported_output_is_the_floor(self) -> None:
         """A stats block with no total falls back to the reported field."""
@@ -581,18 +625,21 @@ class TestSumCodexUsage:
 
 
 class TestBilledOutputIsOneDefinition:
-    """Every adapter reports billed output, reasoning included.
+    """Complete usage evidence reaches one output basis in all four adapters.
 
     The same turn, described in each provider's own vocabulary: 9,429 visible
     output tokens plus 15,349 reasoning tokens against 1,625,601 input. Anthropic
     and OpenAI count reasoning in the output field they report; Gemini does not
-    and reports it only inside its total. All three must land on 24,778, or a
-    consumer comparing two adapters compares unlike numbers.
+    and reports it only inside its total. Pi carries the provider's normalized
+    output. All four must land on 24,778; partial-record fallbacks are tested
+    separately because they cannot guarantee reasoning-inclusive output.
     """
 
     _VISIBLE_OUTPUT = 9_429
     _BILLED_OUTPUT = 24_778
     _INPUT = 1_625_601
+    _CACHE_READ = 300
+    _CACHE_WRITE = 400
 
     def test_gemini_reconstructs_it(self) -> None:
         stats = extract_gemini_usage(
@@ -612,13 +659,41 @@ class TestBilledOutputIsOneDefinition:
                     "claude-opus-5": {
                         "inputTokens": self._INPUT,
                         "outputTokens": self._BILLED_OUTPUT,
-                        "cacheReadInputTokens": 0,
-                        "cacheCreationInputTokens": 0,
+                        "cacheReadInputTokens": self._CACHE_READ,
+                        "cacheCreationInputTokens": self._CACHE_WRITE,
                     }
                 }
             }
         )
         assert stats.output_tokens == self._BILLED_OUTPUT
+        assert stats.total_tokens == (
+            self._INPUT + self._BILLED_OUTPUT + self._CACHE_READ + self._CACHE_WRITE
+        )
+
+    def test_pi_preserves_provider_output_and_cache_writes(self) -> None:
+        stats = sum_pi_usage(
+            {
+                "type": "agent_end",
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "model": "claude-opus-5",
+                        "provider": "anthropic",
+                        "usage": {
+                            "input": self._INPUT,
+                            "output": self._BILLED_OUTPUT,
+                            "cacheRead": self._CACHE_READ,
+                            "cacheWrite": self._CACHE_WRITE,
+                        },
+                    }
+                ],
+            }
+        )
+        assert stats.output_tokens == self._BILLED_OUTPUT
+        assert stats.cache_write_tokens == self._CACHE_WRITE
+        assert stats.total_tokens == (
+            self._INPUT + self._BILLED_OUTPUT + self._CACHE_READ + self._CACHE_WRITE
+        )
 
     def test_codex_reports_it_directly(self) -> None:
         stats = sum_codex_usage(

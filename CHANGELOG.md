@@ -9,27 +9,23 @@ development series.
 
 ### Fixed
 
-- **Token counts now name the quantity they report.** `output_tokens` is billed output:
-  the tokens a provider charges at its output rate, reasoning included.
-  Nothing said so. Anthropic and OpenAI count reasoning in the output field they report,
-  so the Claude and Codex paths take that field as it stands, while Gemini excludes it
-  and metaproc recovers it as the residual of `total_tokens` over input.
-  On metaproc’s own Gemini fixture that reconstruction is 2.6x the transcript’s
-  `output_tokens` field.
-  Both figures are defensible and neither was labelled, so a consumer reading a provider
-  transcript beside a metaproc report, or comparing one adapter against another, could
-  compare unlike numbers without noticing.
-  `UsageStats` now defines the basis, each adapter’s extractor states how it reaches it,
-  and `metaproc-design.md` §15.1 and §15.3 carry the same statement for a reader of the
-  installed package.
+- **Token counts now state their basis and evidence limits.** `output_tokens` targets
+  output-rate tokens including reasoning.
+  Claude and Codex report that count directly; Gemini reconstructs it from valid total
+  and input counts. A partial Gemini record falls back to reported output, a lower bound
+  with unknown reasoning, so cross-adapter completeness is not guaranteed.
+  The normalized total sums all four available buckets: uncached input, output, cache
+  reads, and cache writes.
+  CLI-reported costs and calculations from pricing tables remain list-cost estimates,
+  separate from provider-authoritative billing.
+  `UsageStats` and `metaproc-design.md` §15.1 and §15.3 document this contract.
 
-- **A partial Gemini stats block no longer reports its input as output.** The
-  reconstruction above had a floor on one side only.
-  A block carrying `total_tokens` with no `input_tokens` beside it read as a subtraction
-  from zero, so the whole total, input included, became the output figure: 1,650,379
-  output tokens where the provider reported 9,429, priced at the output rate.
-  The residual is now taken only when the block carries an input figure to subtract, and
-  a block without one falls back to the reported field.
+- **A partial Gemini stats block no longer reports its input as output.** Missing, null,
+  or invalid input counts cannot justify subtracting zero from `total_tokens`. Such a
+  block now retains the reported 9,429 output tokens in the regression fixture, instead
+  of attributing the entire 1,650,379-token total to output-rate estimates.
+  Non-finite counts are handled as unavailable, and an explicitly measured zero remains
+  valid. Complete records retain the reasoning-inclusive residual.
 
   No artifact shape changes and no contract is widened.
   Reported figures move only for a Gemini stats block that was already being read wrong.

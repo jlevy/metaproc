@@ -3,13 +3,18 @@ title: Agent Operations Summary
 description: Emit the trace Metaproc already knows how to extract, fold it into a contract-bound summary at finalization, and make run-to-run comparison a diff of two documents instead of a transcript scan.
 author: Joshua Levy (github.com/jlevy) with LLM assistance
 date: 2026-09-11
-last_updated: 2026-09-11
+last_updated: 2026-09-13
 status: Draft
 category: plan
+tracking_bead: mp-enxg
 ---
 # Feature: Agent Operations Summary
 
-**Date:** 2026-09-11
+**Date:** 2026-09-11 (last updated 2026-09-13)
+
+Epic `mp-enxg` tracks the prerequisites and future phases below.
+This draft specifies future behavior; completing the plan does not enable automatic
+extraction or implement the operations summary.
 
 ## Overview
 
@@ -138,27 +143,74 @@ None is a domain question.
 
 ### Extraction at Finalization
 
-`finalize_run_resources` calls `extract_trace` and `write_trace` on the same trigger
-that writes `resources.json` and `resource-usage-summary.md`, with the same failure
-semantics: an observability artifact must never fail a production run.
+Terminal finalization calls `extract_trace` and `write_trace` alongside resource
+finalization, with the same failure semantics: an observability artifact must never fail
+a production run. Automatic extraction first requires a freshness contract for each
+projection, independent of the resource report’s current mtime check:
 
-This is the smallest change with the largest effect, and it is a prerequisite for
-everything below. The recovery path matters as much as the terminal one:
-`metaproc status` re-finalizes when the projection is older than its sources, so a run
-that died before finalization still gets a trace the first time somebody looks at it.
+- Track the primary evidence consumed by each projection: agent transcripts, engine
+  event logs, result records, durable `attempt.yaml` records, and relevant run
+  configuration. Source inventories must detect additions, removals, and changes,
+  including an attempt record rewritten with its terminal disposition.
+- Exclude `.logs/derived/`, summaries, and other derived-only outputs from
+  primary-source invalidation.
+  A resource ledger may also retain independently written primary events: those events
+  must still invalidate affected projections, while the finalizer’s derived rewrites
+  must not. Writing a trace after resource files must not make the resource projection
+  stale or invalidate the trace itself.
+- Detect missing or stale trace artifacts independently, even when all resource
+  artifacts are fresh.
+  When the operations summary is introduced, give it its own freshness state tied to the
+  trace revision and primary evidence it consumes.
+  Record the extraction/contract version so a changed projection can rebuild without
+  pretending primary evidence changed.
+- After successful finalization, repeated `metaproc status` and recovery calls with
+  unchanged inputs must leave output files untouched and avoid full transcript scans.
+  A cheap source-inventory check is allowed.
+  Preserve the inactive-orchestrator guard on status recovery; do not rebuild a live run
+  from changing evidence.
+
+Recovery must use these checks to rebuild the affected projection after an interrupted
+finalization. The current resource-only recovery predicate is not sufficient to trigger
+automatic trace extraction.
+Phase 1 must establish this contract and the runtime-cost measurement before enabling
+the trigger.
 
 ### Attempt Records in the Trace
 
-The Metaproc engine extractor gains a pass over
-`.state/tasks/<step>/<item>/attempts/<attempt>/attempt.yaml`, emitting one `attempt`
-span per record with `disposition`, `failure_class`, and one attribute set per
-`OutputFailure` (`kind`, `contract`, `invariant`, `location`). The linker already joins
-`attempt` spans to their `item` parent.
+The Metaproc engine extractor reads
+`.state/tasks/<step>/<item>/attempts/<attempt>/attempt.yaml` as evidence for a logical
+attempt. It must reconcile that evidence with the attempt already emitted by an agent
+extractor before parent linking or aggregation; emitting an additional span per record
+would count one invocation twice.
+Reusing a span ID without collapsing duplicate entries is insufficient.
 
-No new event type is needed for this.
-An earlier draft of this plan proposed an `attempt_rejected` process event;
-`TaskAttemptRecord/0.1` already persists exactly that verdict, including for a terminal
-failure with no retry after it.
+Use `(run_id, attempt_id)` from `TaskAttemptRecord` as the primary identity, retaining
+the typed `att` ID. For transcripts from released versions that lack it, match only when
+`(run_id, scope_path, step_id, item_key, generation, attempt_number)` and the recorded
+transcript path identify one attempt unambiguously.
+Never match on step/item/attempt number alone across resumed generations.
+An ambiguous match remains explicitly unresolved evidence and must not silently add an
+attempt to retry counts or duration distributions.
+
+Reconciliation emits one logical `attempt` span and redirects transcript child spans to
+it. Source precedence is field-specific:
+
+- The durable record owns attempt identity, generation, engine start/end times,
+  `disposition`, `failure_class`, and `OutputFailure` detail (`kind`, `contract`,
+  `invariant`, `location`). Its terminal verdict takes precedence over a transcript’s
+  apparent success.
+- The transcript owns served-model, token, tool, and provider-timing evidence.
+  Preserve these metrics when a record contributes a failed-output verdict; overlapping
+  copies of a metric are not additive.
+- Live attempt events fill evidence missing from a durable record or transcript.
+  They use the same identity and precedence rules, not another logical attempt.
+  Conflicting evidence remains diagnosable with source references.
+
+Record-only and transcript-only attempts each yield one span, with unavailable fields
+absent.
+No new rejection event is needed: the durable record already retains the verdict,
+including for a terminal failure with no retry after it.
 
 ### Two Live Attempt Events
 
@@ -169,12 +221,16 @@ Two additions follow that pattern.
 ```python
 class AttemptStartEvent(_ItemEventBase):
     event: Literal["attempt_start"] = "attempt_start"
+    attempt_id: str  # Existing typed att ID; use the shared validator.
+    generation: int
     attempt: int
     requested_model: str | None
     adapter: str
 
 class AttemptCompleteEvent(_ItemEventBase):
     event: Literal["attempt_complete"] = "attempt_complete"
+    attempt_id: str
+    generation: int
     attempt: int
     outcome: Literal["completed", "failed", "timeout"]
     served_models: list[str]
@@ -188,12 +244,11 @@ class AttemptCompleteEvent(_ItemEventBase):
     outputs_written: list[str]
 ```
 
-These overlap the `attempt` spans the agent-log extractors already produce, and the
-overlap is the point: the extractors reconstruct an attempt from a transcript, while
-these are emitted live by the runner.
-They carry what the engine knows and the transcript does not, chiefly the *requested*
-model against the served set, and they survive a run that fails partway, is resumed, or
-leaves a truncated transcript.
+These events join the same logical attempt through the reconciliation rules above.
+The extractors reconstruct an attempt from a transcript, while these are emitted live by
+the runner. They carry what the engine knows and the transcript does not, chiefly the
+*requested* model against the served set, and they survive a run that fails partway, is
+resumed, or leaves a truncated transcript.
 
 ### The Summary
 
@@ -304,16 +359,23 @@ both during the comparison that motivated this:
 
 ### Phase 1: Turn On What Exists
 
+- [ ] Measure automatic extraction on a large cohort and choose the enablement policy
+  before shipping it.
+- [ ] Implement independent primary-evidence freshness for trace and resource
+  projections, including attempt records and missing trace files; exclude derived
+  outputs and retain a cheap unchanged-input no-op path.
 - [ ] Call `extract_trace` and `write_trace` from `finalize_run_resources`, guarded so a
   failure is logged and never fails the run.
-- [ ] Cover the recovery and `metaproc status` paths, not just terminal finalization.
+- [ ] Cover the recovery and `metaproc status` freshness sequence below, as well as
+  terminal finalization.
 - [ ] Register a versioned contract for `TraceEvent` so the file it writes has a stated
   shape.
 
 ### Phase 2: Close the Evidence Gaps
 
-- [ ] Read `attempt.yaml` in the Metaproc engine extractor and emit `attempt` spans
-  carrying `OutputFailure` detail.
+- [ ] Read `attempt.yaml` and reconcile record/transcript/live-event evidence into one
+  logical attempt before parent linking and aggregation, carrying `OutputFailure` detail
+  and preserving transcript metrics.
 - [ ] Populate `tool.result.truncated`, which no extractor sets today.
 - [ ] Add `attempt_start` and `attempt_complete` to the process-event union, emit them
   around the adapter invocation, and cover them in the typed reader so the new fields
@@ -325,6 +387,8 @@ both during the comparison that motivated this:
   resource-summary counterparts.
 - [ ] Register the contract in `plugins/registry.py`, with the compiled schema staged
   and drift-tested against the model.
+- [ ] Give the operations summary its own missing/stale detection against the consumed
+  trace revision and primary evidence, without invalidating upstream projections.
 - [ ] The rule table, each a pure predicate with a stable code and a default threshold.
 - [ ] Prose renderer, with a test asserting every number in the body appears in the
   frontmatter.
@@ -337,6 +401,27 @@ in CI and any contributor can reproduce them.
 Extend them with an attempt-record fixture and a truncated tool result, then assert that
 the summary folded from them reproduces figures computed independently from the same
 fixtures.
+
+The freshness acceptance sequence is: finalize a completed run, write the trace after
+the resource artifacts, then call status/recovery repeatedly with unchanged primary
+inputs. Assert no extra extraction, transcript reads, or output rewrites.
+Delete the trace while keeping resource artifacts fresh and assert exactly one rebuild,
+then another no-op status call.
+Add or update an `attempt.yaml` without changing JSONL inputs and assert one rebuild of
+the affected projections, followed by another no-op.
+Append an independently written primary event to the resource ledger and assert that it
+invalidates its consumers, while a derived rewrite alone does not.
+Also cover a stale trace, primary-source removal, an extraction-version change, and a
+missing/stale operations summary once Phase 3 introduces it.
+
+The reconciliation fixture must contain a durable attempt record and its transcript,
+yielding exactly one attempt with the record’s rejection reason and the transcript’s
+usage. Assert one retry contribution and one duration sample, with transcript children
+linked to that attempt.
+Cover record-only, transcript-only, and live-event overlap; two resumed generations with
+the same step/item/attempt number must remain two logical attempts.
+A legacy transcript may join only one generation unambiguously; conflicting or ambiguous
+evidence must be surfaced without inflating aggregates.
 
 Beyond that: a round-trip test that the summary equals the fold of the span store, a
 drift test on the compiled schema, one anomaly-rule test per code with a fixture that
