@@ -21,7 +21,11 @@ _CREDENTIAL_VALUE = re.compile(
     r"""(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;&}]+)"""
 )
 _URL_USERINFO = re.compile(r"(https?://)[^/\s@]+@", re.IGNORECASE)
-_ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_ANSI_ESCAPE = re.compile(
+    r"(?:\x1b\]|\x9d)[^\x07\x1b\x9c]*(?:\x07|\x1b\\|\x9c)"
+    r"|(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]"
+)
+_NONPRINTING_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x84\x86-\x9f]")
 _MAX_DETAIL_CHARS = 1_200
 _MAX_DETAIL_LINES = 12
 
@@ -29,9 +33,10 @@ _MAX_DETAIL_LINES = 12
 def summarize_diagnostic(text: str, *, env: Mapping[str, str] | None = None) -> str:
     """Return a bounded diagnostic with known credentials redacted.
 
-    Normalize ANSI escapes before matching environment secrets and common credential
-    forms. Omitted ``env`` uses the current process environment; callers with resolved
-    child credentials can provide that mapping explicitly. Redaction cannot identify
+    Remove terminal color/hyperlink sequences and nonprinting controls before matching
+    environment secrets and common credential forms. Omitted ``env`` uses the current
+    process environment; callers with resolved child credentials can provide that
+    mapping explicitly. Redaction cannot identify
     arbitrary unlabeled secrets that are absent from this environment.
 
     The summary retains at most the last twelve nonempty lines and 1,200 characters,
@@ -43,7 +48,10 @@ def summarize_diagnostic(text: str, *, env: Mapping[str, str] | None = None) -> 
 
 
 def _normalize_diagnostic(text: str) -> str:
-    return _ANSI_ESCAPE.sub("", text)
+    # OSC hyperlinks use either ST or BEL termination. Remove the complete control
+    # sequence before redaction so hyperlink metadata cannot split a known secret.
+    # Retain tabs and line breaks, but no controls that make durable YAML unreadable.
+    return _NONPRINTING_CONTROL.sub("", _ANSI_ESCAPE.sub("", text))
 
 
 def _redact_diagnostic(text: str, *, env: Mapping[str, str]) -> str:

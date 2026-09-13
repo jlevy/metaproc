@@ -184,6 +184,89 @@ def test_command_failure_class_ignores_step_names_and_log_timestamps(
 
 
 @pytest.mark.parametrize("mapped", [False, True])
+@pytest.mark.parametrize("terminator", [None, "\x1b\\", "\x07"])
+def test_handler_subprocess_failure_keeps_full_evidence_and_safe_durable_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mapped: bool, terminator: str | None
+) -> None:
+    secret = "opaque-private-value"
+    monkeypatch.setenv("PROVIDER_API_KEY", secret)
+    decorated_secret = (
+        "opaque-\x1b[31mprivate\x1b[0m-value"
+        if terminator is None
+        else f"opaque-\x1b]8;;https://example.invalid{terminator}private\x1b]8;;{terminator}-value"
+    )
+    diagnostic = (
+        "HTTP 429 Too Many Requests\n"
+        + "cleanup completed " * 100
+        + "\ncleanup completed\n" * 20
+        + f"unlabeled {decorated_secret}\n"
+        + "Authorization: Bearer fixture-bearer-token\n"
+        + "request refused; Retry-After: 17\n"
+    )
+    (tmp_path / "provider.py").write_text(
+        f"import sys\nsys.stderr.write({diagnostic!r})\nraise SystemExit(7)\n"
+    )
+    (tmp_path / "handler.py").write_text(
+        "import subprocess, sys\nfrom pathlib import Path\n"
+        "def fail(_context, _step):\n"
+        "    result = subprocess.run([sys.executable, str(Path(__file__).with_name('provider.py'))], "
+        "capture_output=True, text=True, check=False)\n"
+        "    raise RuntimeError(f'provider subprocess exited {result.returncode}: {result.stderr}')\n"
+    )
+    (tmp_path / "items.md").write_text("---\nprogress:\n  items:\n    - item: alfa\n---\n")
+    process = tmp_path / "handler.process.md"
+    process.write_text(
+        "---\nprocess:\n  name: handler\n"
+        "  deps:\n    items: {path: ./items.md, as: path}\n"
+        "  steps:\n    - id: query\n      mode: code\n"
+        "      handler: handler.py:fail\n"
+        + (
+            "      for_each:\n        over: deps.items\n        bind: item\n"
+            "        bind_fields: [item]\n        key: '{{item}}'\n"
+            if mapped
+            else ""
+        )
+        + "---\n"
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-process",
+            str(process),
+            "--var",
+            f"RUNS_DIR={tmp_path / 'runs'}",
+            "--var",
+            "RUN_ID=handler-evidence",
+        ],
+    )
+    assert result.exit_code == 1, result.output
+    run = tmp_path / "runs" / "handler-evidence"
+    task = run / ".state" / "tasks" / "query"
+    logs = run / ".logs" / "tasks" / "query"
+    if mapped:
+        task /= "alfa"
+        logs /= "alfa"
+    attempt = read_attempt_history_at(task)[0]
+    assert attempt.error and attempt.error.startswith("RuntimeError:")
+    assert "request refused; Retry-After: 17" in attempt.error
+    assert attempt.failure_class == "rate_limited"
+    assert len(attempt.error) < 1_600
+    assert "[truncated]" in attempt.error
+    assert "HTTP 429" not in attempt.error  # Classification precedes display clipping.
+    assert "command exit code" not in attempt.error
+    root = scan_run_status(run, include_system=False)
+    assert root.process_error and "request refused" in root.process_error
+    assert "[redacted]" in root.process_error
+    for value in ("opaque-", "private", "fixture-bearer-token", "\x1b"):
+        assert value not in root.process_error
+    log_file = next(logs.glob("process_*.log"))
+    assert str(log_file.relative_to(run)) in attempt.error
+    captured = log_file.read_text()
+    assert diagnostic in captured
+    assert "RuntimeError: provider subprocess exited 7:" in captured
+
+
+@pytest.mark.parametrize("mapped", [False, True])
 def test_composite_output_failure_retains_path_message_and_failed_scope(
     tmp_path: Path,
     mapped: bool,

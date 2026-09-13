@@ -5,6 +5,24 @@ import pytest
 from metaproc.runtime.diagnostics import summarize_diagnostic
 
 
+@pytest.mark.parametrize("terminator", ["\x1b\\", "\x07"])
+def test_hyperlink_controls_are_removed_before_matching_a_secret(terminator: str) -> None:
+    diagnostic = (
+        f"unlabeled opaque-\x1b]8;;https://example.invalid{terminator}"
+        f"private\x1b]8;;{terminator}-value"
+    )
+    summary = summarize_diagnostic(diagnostic, env={"PROVIDER_API_KEY": "opaque-private-value"})
+    assert summary == "unlabeled [redacted]"
+
+
+def test_nonprinting_controls_cannot_split_a_secret_or_reach_persisted_text() -> None:
+    summary = summarize_diagnostic(
+        "unlabeled opaque-\x00priv\x08ate-value",
+        env={"PROVIDER_API_KEY": "opaque-private-value"},
+    )
+    assert summary == "unlabeled [redacted]"
+
+
 @pytest.mark.parametrize("explicit_env", [False, True])
 def test_summary_redacts_before_clipping_without_adding_execution_facts(
     monkeypatch: pytest.MonkeyPatch, explicit_env: bool

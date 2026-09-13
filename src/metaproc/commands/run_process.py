@@ -92,7 +92,7 @@ from metaproc.dispatch.preflight import (
 from metaproc.dispatch.slot_coordinator import SlotCoordinator, SlotLease
 from metaproc.engine.build_plan import build_plan, merge_defaults
 from metaproc.engine.code_handler import resolve_code_handler
-from metaproc.engine.command_diagnostics import command_failure_message
+from metaproc.engine.command_diagnostics import command_failure_message, handler_failure_message
 from metaproc.engine.dep_state import (
     fingerprint_step,
     recorded_step_hash,
@@ -1711,12 +1711,16 @@ async def _execute_code_step(
         tb = traceback.format_exc()
         with atomic_output_file(log_file) as tmp_path:
             tmp_path.write_text(tb)
-        handler_error = f"{type(exc).__name__}: {exc} (traceback in {log_file.name})"
+        handler_failure = handler_failure_message(
+            exc,
+            env=env,
+            log_path=str(log_file.relative_to(run_dir)),
+        )
         mark_failed_at(
             state_dir,
-            error=handler_error,
+            error=handler_failure.error,
             running_record=running_record,
-            failure_class=str(classify_failure(handler_error)),
+            failure_class=str(handler_failure.failure_class),
         )
         return False
     except BaseException as exc:

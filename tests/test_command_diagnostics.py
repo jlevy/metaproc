@@ -1,6 +1,6 @@
 """Credential handling and missing-evidence behavior for durable command errors."""
 
-from metaproc.engine.command_diagnostics import command_failure_message
+from metaproc.engine.command_diagnostics import command_failure_message, handler_failure_message
 from metaproc.engine.retry import FailureClass
 
 
@@ -114,3 +114,21 @@ def test_classification_uses_redacted_diagnostics_before_display_truncation() ->
     )
     assert secret_only.failure_class is FailureClass.CRASH
     assert "opaque-429-value" not in secret_only.error
+
+
+def test_handler_classification_excludes_redacted_secrets_and_traceback_filenames() -> None:
+    failure = handler_failure_message(
+        ValueError("invalid input; opaque-429-value"),
+        env={"PROVIDER_API_KEY": "opaque-429-value"},
+        log_path=".logs/tasks/quota-check/process_20260913T000503Z.log",
+    )
+    assert failure.failure_class is FailureClass.UNKNOWN
+    assert failure.error.startswith("ValueError: invalid input; [redacted]")
+    assert "opaque-429-value" not in failure.error
+    assert "command exit code" not in failure.error
+
+
+def test_empty_handler_exception_retains_its_type_without_inventing_a_cause() -> None:
+    failure = handler_failure_message(ValueError(), env={}, log_path="task.log")
+    assert failure.error == "ValueError (traceback: task.log)"
+    assert failure.failure_class is FailureClass.UNKNOWN

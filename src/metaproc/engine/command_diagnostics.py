@@ -1,4 +1,4 @@
-"""Bounded command diagnostics for durable task errors; raw capture stays in task logs."""
+"""Bounded execution diagnostics; original command capture and tracebacks stay in task logs."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from metaproc.runtime.diagnostics import (
 
 
 @dataclass(frozen=True)
-class CommandFailure:
+class ExecutionFailure:
     error: str
     failure_class: FailureClass
 
@@ -26,7 +26,7 @@ def command_failure_message(
     stderr: str | None,
     env: Mapping[str, str],
     log_path: str,
-) -> CommandFailure:
+) -> ExecutionFailure:
     """Return a bounded message and classify the credential-redacted diagnostic.
 
     Stderr owns command diagnostics when present; stdout is a fallback for commands
@@ -40,12 +40,33 @@ def command_failure_message(
     detail = (stderr if source == "stderr" else stdout) or ""
     if not detail.strip():
         error = f"command exit code {returncode} (no stdout/stderr captured)"
-        return CommandFailure(error=error, failure_class=classify_failure(error))
+        return ExecutionFailure(error=error, failure_class=classify_failure(error))
 
     detail = _redact_diagnostic(detail, env=env)
     failure_class = classify_failure(f"command exit code {returncode} ({source}: {detail})")
     detail = _clip_diagnostic(detail)
-    return CommandFailure(
+    return ExecutionFailure(
         error=f"command exit code {returncode} ({source}: {detail}; log: {log_path})",
         failure_class=failure_class,
+    )
+
+
+def handler_failure_message(
+    exception: Exception,
+    *,
+    env: Mapping[str, str],
+    log_path: str,
+) -> ExecutionFailure:
+    """Project an exception without treating it as a subprocess exit status.
+
+    The caller retains the complete traceback at ``log_path``. Classify the full
+    redacted exception before clipping its message or attaching that evidence path.
+    """
+    exception_type = type(exception).__name__
+    detail = _redact_diagnostic(str(exception), env=env)
+    summary = _clip_diagnostic(detail)
+    message = f"{exception_type}: {summary}" if summary else exception_type
+    return ExecutionFailure(
+        error=f"{message} (traceback: {log_path})",
+        failure_class=classify_failure(f"{exception_type}: {detail}"),
     )
