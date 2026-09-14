@@ -361,6 +361,15 @@ Optional fields:
 - `with`
 - `needs`
 - `for_each`
+- `execution_profile`
+
+A child process is planned with its parent scope’s execution profile: the launch
+`--variant` at the root, inherited downward.
+A composite step that declares `execution_profile:` runs its whole subtree on that
+profile instead, and its scope answers `{{run.execution_profile}}` with it, as a run
+launched with that `--variant` would.
+An agent step’s own `execution_profile:` still wins for that step, anywhere in the
+subtree. Every profile in the tree shares the root run’s RunPool.
 
 With `for_each`, Metaproc maps one in-process child scope per item under
 `<run>/<step>/<item-key>/`. The mapped parent task remains in

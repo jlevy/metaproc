@@ -183,6 +183,7 @@ def test_composite_reuses_parent_execution_context(tmp_path: Path) -> None:
                     run_id="test/run-1",
                     scope_path=(),
                     execution_context=context,
+                    scope_execution_profile=None,
                     out=_Out(),
                 )
             assert captured["execution_context"] is context
@@ -273,6 +274,7 @@ def test_mapped_composite_scopes_share_run_context_and_leaf_ceiling(tmp_path: Pa
                     run_id="test/run-1",
                     scope_path=(),
                     execution_context=context,
+                    scope_execution_profile=None,
                     events=events,
                     out=_Out(),
                 )
@@ -352,6 +354,7 @@ def test_mapped_composite_has_a_structural_scope_default(tmp_path: Path) -> None
                     run_id="test/run-1",
                     scope_path=(),
                     execution_context=context,
+                    scope_execution_profile=None,
                     out=_Out(),
                 )
         finally:
@@ -420,6 +423,7 @@ def test_mapped_composite_cancellation_ends_parent_attempt(tmp_path: Path) -> No
                         run_id="test/run-1",
                         scope_path=(),
                         execution_context=context,
+                        scope_execution_profile=None,
                         out=_Out(),
                     )
                 )
@@ -494,6 +498,7 @@ def test_mapped_composite_abort_ends_parent_attempt(tmp_path: Path) -> None:
                         run_id="test/run-1",
                         scope_path=(),
                         execution_context=context,
+                        scope_execution_profile=None,
                         out=_Out(),
                     )
         finally:
@@ -545,6 +550,7 @@ def test_mapped_composite_rejects_gcp_worker_partitioning(tmp_path: Path) -> Non
                     run_id="test/run-1",
                     scope_path=(),
                     execution_context=context,
+                    scope_execution_profile=None,
                     out=_Out(),
                 )
         finally:
@@ -564,6 +570,7 @@ def test_recursive_evaluator_accepts_only_scope_local_arguments() -> None:
         "run_id",
         "scope_path",
         "execution_context",
+        "scope_execution_profile",
         "out",
         "events",
     }
@@ -612,6 +619,7 @@ def test_nested_scope_uses_global_force_without_reusing_root_skip(
                     run_id="test/run-1/child",
                     scope_path=("child",),
                     execution_context=context,
+                    scope_execution_profile=None,
                     out=_Out(),
                     events=MagicMock(),
                 )
@@ -684,6 +692,7 @@ def test_nested_scope_runs_independent_branches_past_a_step_failure(tmp_path: Pa
                     run_id="test/run-1/child",
                     scope_path=("child",),
                     execution_context=context,
+                    scope_execution_profile=None,
                     out=_Out(),
                     events=MagicMock(),
                 )
@@ -727,6 +736,7 @@ def test_nested_scope_uses_continue_on_step_failure_policy(tmp_path: Path) -> No
                     run_id="test/run-1/child",
                     scope_path=("child",),
                     execution_context=context,
+                    scope_execution_profile=None,
                     out=_Out(),
                     events=MagicMock(),
                 )
@@ -765,6 +775,7 @@ def test_scope_fail_fast_message_states_policy_not_a_launch_flag(tmp_path: Path)
                     run_id="test/run-1/child",
                     scope_path=("child",),
                     execution_context=context,
+                    scope_execution_profile=None,
                     out=_Out(),
                     events=MagicMock(),
                 )
@@ -922,6 +933,7 @@ def test_recursive_siblings_share_one_executable_leaf_ceiling(tmp_path: Path) ->
                             run_id="test/run-1",
                             scope_path=(),
                             execution_context=context,
+                            scope_execution_profile=None,
                             out=_Out(),
                         )
                         for step_id in ("left", "right")

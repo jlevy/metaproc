@@ -112,8 +112,9 @@ def unknown_step_override_errors(spec: ProcessSpec, overrides: Mapping[str, str]
     """Return one error per ``--step-variant`` step id that is not a step of *spec*.
 
     Overrides apply only to the process being launched. A composite step's child process
-    is planned with the run-level profile, so an id naming a step inside a child would
-    otherwise be accepted and have no effect.
+    is planned with the run-level profile or the composite step's authored
+    `execution_profile:`, so an id naming a step inside a child would otherwise be
+    accepted and have no effect.
     """
     root_ids = [step.id for step in spec.steps]
     unknown = [step_id for step_id in overrides if step_id not in root_ids]
