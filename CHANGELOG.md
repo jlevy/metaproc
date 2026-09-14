@@ -19,6 +19,8 @@ development series.
   `metaproc operations summary RUN_DIR` builds the same document for a finished run
   without writing, and `metaproc operations rollup RUN_DIR...` sets runs side by side
   against a per-item chain-time target.
+  A run that executed as a child scope of a larger run is summarized with its nested
+  scopes and transcripts, whether read in place or from a copy.
 
 ### Fixed
 

@@ -856,6 +856,11 @@ Run finalization writes `operations-summary.md` at the run root, beside
 `resource-usage-summary.md`, for completed, failed, cancelled, and timed-out runs alike.
 Its frontmatter is `metaproc.operations:AgentOperationsSummary/v1`; the body renders the
 same values. Point it at the run root; a child scope is not a run.
+A run that executed as a child scope of a larger run, such as one cohort of a batch, is
+a run root of its own for the summary, in place or copied elsewhere: its plans record
+their paths from the larger run’s root, and its own root plan names that prefix.
+Tokens, meters and list cost come only from a run’s own `resource-usage-summary.md`,
+which such a run does not have; the larger run’s summary holds them.
 
 | Section | What it measures |
 | --- | --- |

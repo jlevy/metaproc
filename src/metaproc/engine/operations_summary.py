@@ -258,6 +258,7 @@ class _Evidence:
         root_plan_error: str | None = None
         ignored = 0
         root_has_plan = (run_dir / paths_mod.STATE_DIR / paths_mod.RUN_PLAN_FILE).is_file()
+        root_scope_path: list[str] = []
         for scope_dir in paths_mod.iter_composite_run_dirs(run_dir):
             state_dir = scope_dir / paths_mod.STATE_DIR
             plan_path = state_dir / paths_mod.RUN_PLAN_FILE
@@ -269,9 +270,14 @@ class _Evidence:
             except (OSError, ValueError, yaml.YAMLError) as exc:
                 if scope_dir == run_dir:
                     root_plan_error = _describe_error(plan_path, exc, run_dir)
+            if scope_dir == run_dir:
+                # A run that executed as a child scope of a larger run records every plan
+                # path from that run's root, and the requested root's own plan names the
+                # prefix. It is empty for a top-level run.
+                root_scope_path = scope_path or []
             # A copied tree can carry a .state directory in the shape of a scope. When the
             # run records plans, a real child scope's plan names exactly its own path.
-            if parts and root_has_plan and scope_path != list(parts):
+            if parts and root_has_plan and scope_path != [*root_scope_path, *parts]:
                 ignored += 1
                 continue
             status = _load_yaml_mapping(state_dir / paths_mod.PROCESS_STATUS_FILE)

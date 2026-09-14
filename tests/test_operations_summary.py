@@ -9,11 +9,13 @@ from __future__ import annotations
 import gzip
 import json
 import logging
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 from pydantic import ValidationError
 from softschema import Contract, SchemaStatus, compile_model, validate_artifact
 from typer.testing import CliRunner
@@ -562,6 +564,53 @@ def test_steps_ignore_copied_state_and_split_agent_from_code(composite_run: Path
     assert rows[(_ROOT_PROCESS, "author")].elapsed_s.total == 720 + 1200
     assert steps.agent_total_s == 480 + 900 + 180 + 590
     assert steps.code_total_s == 240 + 300 + 90 + 20 + 30
+
+
+def _nest_under_parent_run(run_dir: Path, prefix: list[str]) -> None:
+    """Record every plan path of *run_dir* from the root of a run that holds it at *prefix*.
+
+    A run executed as a child scope of a larger run writes plans the way the larger run
+    addresses them, so the run's own root plan names *prefix* rather than an empty path.
+    """
+    for plan_path in run_dir.rglob("run-plan.yaml"):
+        document = yaml.safe_load(plan_path.read_text())
+        plan = document["run_plan"]
+        plan["scope_path"] = [*prefix, *plan["scope_path"]]
+        plan["run_id"] = "/".join([f"{_ROOT_PROCESS}/batch-1", *plan["scope_path"]])
+        plan_path.write_text(to_yaml_string(document))
+
+
+def test_a_run_executed_inside_a_parent_run_keeps_its_nested_scopes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Read in place or hydrated alone, the child run's scopes and transcripts are its own."""
+    monkeypatch.setattr(ops, "TOOL_RESULT_CAP_BYTES", 4096)
+    prefix = ["cohorts", "week-1", "main", "run-1"]
+    in_place = _composite_run(tmp_path.joinpath("batch", *prefix[:-1]))
+    _nest_under_parent_run(in_place, prefix)
+    hydrated = tmp_path / "hydrated" / "run-1"
+    shutil.copytree(in_place, hydrated)
+
+    for run_dir in (in_place, hydrated):
+        summary = _summary(run_dir)
+        assert summary.steps is not None and summary.agents is not None
+        assert (summary.steps.scope_count, summary.steps.ignored_state_dirs) == (5, 1)
+        assert (summary.agents.transcripts, summary.agents.provider_s) == (4, 1300.0)
+        assert summary.items is not None
+        assert {chain.item_key: chain.chain_running_s for chain in summary.items.items} == {
+            "A": 720 + 300,
+            "B": 1200 + 590,
+        }
+
+    # A scope whose plan names its path from the child run's own root, not the parent's,
+    # is a copy from another tree and stays ignored.
+    stray = hydrated / "depth" / "B" / ".state" / "run-plan.yaml"
+    document = yaml.safe_load(stray.read_text())
+    document["run_plan"]["scope_path"] = ["depth", "B"]
+    stray.write_text(to_yaml_string(document))
+    steps = _summary(hydrated).steps
+    assert steps is not None
+    assert (steps.scope_count, steps.ignored_state_dirs) == (4, 2)
 
 
 def test_attempt_records_in_three_shapes(composite_run: Path) -> None:
