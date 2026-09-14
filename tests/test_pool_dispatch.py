@@ -19,7 +19,7 @@ import pytest
 
 import metaproc.adapters.registry as reg
 import metaproc.dispatch.pool_dispatch as pd
-from metaproc.adapters.base import AuthFailureClassification, FailureSeverity, NativeSessionLogSet
+from metaproc.adapters.base import AuthFailureClassification, FailureSeverity
 from metaproc.adapters.claude_cli import ClaudeApiSignals, ClaudeCodeCliAdapter
 from metaproc.commands.run_parallel import (
     _build_prepare_launch,
@@ -190,9 +190,6 @@ class _StubAdapter:
 
     def diagnostic_filenames(self) -> tuple[str, ...]:
         return ("claude-code-debug.log",)
-
-    def native_session_log_sets(self) -> tuple[NativeSessionLogSet, ...]:
-        return ()
 
     def setup_token_command(self) -> list[str] | None:
         return None

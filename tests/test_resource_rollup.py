@@ -146,6 +146,28 @@ def test_attributes_agent_log_to_owning_step(tmp_path: Path) -> None:
     assert doc.source_logs[0].adapter == "claude"
 
 
+def test_native_agent_transcripts_are_not_generic_resource_sources(tmp_path: Path) -> None:
+    parent = _write(tmp_path, "parent/test.process.md", _PARENT_PROCESS)
+    _write(tmp_path, "parent/child/test.process.md", _CHILD_PROCESS)
+    bundle = load_plan_bundle(parent, params={"CUTOFF_DATE": "2026-04-21"})
+    run_dir = tmp_path / "runs" / "2026-04-21"
+    _make_claude_log(
+        run_dir
+        / "run_child"
+        / ".logs"
+        / "native"
+        / "predict"
+        / "MSFT"
+        / "session.claude-projects"
+        / "transcript.jsonl"
+    )
+
+    doc = build_resources_document(bundle=bundle, run_dir=run_dir, run_id="run-1")
+
+    assert doc.source_logs == []
+    assert doc.hierarchy_root.total_metrics.input_tokens is None
+
+
 def test_totals_propagate_bottom_up(tmp_path: Path) -> None:
     parent = _write(tmp_path, "parent/test.process.md", _PARENT_PROCESS)
     _write(tmp_path, "parent/child/test.process.md", _CHILD_PROCESS)

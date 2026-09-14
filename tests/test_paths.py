@@ -13,6 +13,7 @@ from metaproc.paths import (
     DERIVED_SUBDIR,
     DISPATCH_CONFIG_CHANGES_FILE,
     LOGS_DIR,
+    NATIVE_SUBDIR,
     RESOURCE_EVENTS_FILE,
     RUN_LAYOUT_VERSION,
     RUNPOOL_SUBDIR,
@@ -24,12 +25,14 @@ from metaproc.paths import (
     WORKERS_SUBDIR,
     dispatch_config_changes_for_read,
     dispatch_config_changes_log,
+    is_native_session_log_path,
     is_v2_run_layout,
     legacy_dispatch_config_changes_log,
     legacy_runpool_step_events,
     legacy_runpool_worker_events,
     legacy_trace_out,
     legacy_worker_state_dir,
+    native_session_logs_destination,
     read_metaproc_layout,
     run_logs_dir,
     run_state_dir,
@@ -55,6 +58,7 @@ def test_constants():
     assert LOGS_DIR == ".logs"
     assert STEPS_SUBDIR == "steps"
     assert TASKS_SUBDIR == "tasks"
+    assert NATIVE_SUBDIR == "native"
     assert RUNPOOL_SUBDIR == "runpool"
     assert WORKERS_SUBDIR == "workers"
     assert DERIVED_SUBDIR == "derived"
@@ -100,6 +104,31 @@ def test_task_logs_dir():
 def test_task_logs_parent_dir():
     run_dir = Path("/tmp/runs/r1")
     assert task_logs_parent_dir(run_dir, "predict") == run_dir / ".logs" / "tasks" / "predict"
+
+
+def test_native_session_logs_destination_preserves_task_scope():
+    run_dir = Path("/tmp/runs/r1")
+    task_log = run_dir / ".logs" / "tasks" / "predict" / "MSFT" / "session.jsonl"
+
+    assert native_session_logs_destination(task_log, "codex-sessions") == (
+        run_dir / ".logs" / "native" / "predict" / "MSFT" / "session.codex-sessions"
+    )
+
+
+def test_native_session_log_path_detection_is_namespace_specific():
+    run_dir = Path("/tmp/runs/r1")
+    assert is_native_session_log_path(
+        run_dir / ".logs" / "native" / "predict" / "MSFT" / "rollout.jsonl"
+    )
+    assert not is_native_session_log_path(
+        run_dir / ".logs" / "tasks" / "predict" / "MSFT" / "native.jsonl"
+    )
+
+
+def test_native_session_log_destination_rejects_escaping_set_name():
+    task_log = Path("/tmp/runs/r1/.logs/tasks/predict/session.jsonl")
+    with pytest.raises(ValueError, match="safe path component"):
+        native_session_logs_destination(task_log, "../credentials")
 
 
 def test_worker_paths_normalize_worker_id():

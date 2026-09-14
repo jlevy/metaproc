@@ -28,7 +28,7 @@ from typing import Any
 
 import pytest
 
-from metaproc.adapters.base import AuthFailureClassification, NativeSessionLogSet
+from metaproc.adapters.base import AuthFailureClassification
 from metaproc.dispatch.credential_pool import (
     ConcurrentModificationError,
     EntryState,
@@ -153,9 +153,6 @@ class _Adapter:
         return []
 
     def diagnostic_filenames(self) -> tuple[str, ...]:
-        return ()
-
-    def native_session_log_sets(self) -> tuple[NativeSessionLogSet, ...]:
         return ()
 
     def setup_token_command(self) -> list[str] | None:

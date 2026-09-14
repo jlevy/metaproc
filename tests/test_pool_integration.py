@@ -165,9 +165,6 @@ class _StubClaude:
     def diagnostic_filenames(self):
         return ("claude-code-debug.log",)
 
-    def native_session_log_sets(self):
-        return ()
-
     def setup_token_command(self):
         return None
 

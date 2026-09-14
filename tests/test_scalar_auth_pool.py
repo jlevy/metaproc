@@ -17,7 +17,7 @@ import psutil
 import pytest
 
 from metaproc import paths as paths_mod
-from metaproc.adapters.base import AuthFailureClassification, NativeSessionLogSet
+from metaproc.adapters.base import AuthFailureClassification
 from metaproc.adapters.registry import ADAPTER_REGISTRY
 from metaproc.commands.run_process import (
     RunExecutionContext,
@@ -167,9 +167,6 @@ class _ScalarAuthAdapter:
         return []
 
     def diagnostic_filenames(self) -> tuple[str, ...]:
-        return ()
-
-    def native_session_log_sets(self) -> tuple[NativeSessionLogSet, ...]:
         return ()
 
     def setup_token_command(self) -> list[str] | None:

@@ -38,7 +38,7 @@ from metaproc.models.resources import (
     SourceLog,
     read_resources_document,
 )
-from metaproc.paths import run_config_file
+from metaproc.paths import is_native_session_log_path, run_config_file
 
 RESOURCE_EVENTS_RELATIVE = ".logs/resource-events.jsonl"
 RESOURCES_RELATIVE = "resources.json"
@@ -183,6 +183,7 @@ def resource_artifacts_need_recovery(run_dir: Path) -> bool:
         return any(
             source.stat().st_mtime_ns > projection_mtime
             for source in iter_artifact_paths(run_dir, "**/*.jsonl")
+            if not is_native_session_log_path(source)
         )
     except OSError:
         return True

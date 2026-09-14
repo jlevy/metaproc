@@ -264,9 +264,16 @@ run state. A failure count, generic exit code, or extracted trace is not a compl
 explanation of agent behavior.
 Open the retained source evidence for the relevant attempt:
 
-- Per-attempt native agent streams are under
+- Per-attempt captured agent streams are under
   `<scope>/.logs/tasks/<step_id>/<item_key>/`. Inspect the attempt-specific JSONL and
   any captured stderr or debug files present there; adapters differ in what they emit.
+- A pooled Codex or Claude attempt can also retain the CLI’s externally owned session
+  records under
+  `<scope>/.logs/native/<step_id>[/<item_key>]/<session-stem>.<set-name>/`. These raw
+  records are isolated because their schemas differ from captured streams.
+  Generic status, stats, trace, usage, resource, and compaction commands skip them by
+  default; inspect them directly or with tooling that explicitly supports the native
+  format.
 - Scalar captured process output is under `<scope>/.logs/tasks/<step_id>/`, and
   item-scoped captured output is under its `<item_key>/` directory.
   The runtime artifact table below describes the `process_<ts>.log` naming pattern.
@@ -857,6 +864,7 @@ for unmarked old runs.
 | Step runpool events | `<run>/.logs/runpool/steps/<step_id>/events.jsonl` | Per-step fan-out runner events |
 | Worker runpool events | `<run>/.logs/runpool/workers/<worker-id>/events.jsonl` | Worker-scoped runner events |
 | Agent session logs | `<run>/.logs/tasks/<step_id>/<item_key>/*.jsonl` | Per-attempt adapter stream JSONL |
+| Native CLI session records | `<run>/.logs/native/<step_id>[/<item_key>]/<session-stem>.<set-name>/` | Complete Codex rollout or Claude transcript set preserved from a pooled credential slot; absent when the CLI emitted no native record or preservation failed |
 | Captured process output | `<run>/.logs/tasks/<step_id>/process_<ts>.log` | Scalar code/subprocess stdout and stderr |
 | Captured item output | `<run>/.logs/tasks/<step_id>/<item_key>/process_<ts>.log` | Item-scoped code/subprocess stdout and stderr |
 | Workflow tool logs | `<run>/.logs/tools/<tool-name>/invocations.jsonl` | Workflow-owned tool invocation streams |

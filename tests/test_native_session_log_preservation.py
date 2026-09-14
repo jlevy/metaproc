@@ -22,6 +22,7 @@ import pytest
 
 from metaproc.adapters.claude_cli import ClaudeCodeCliAdapter
 from metaproc.adapters.codex_cli import CodexCliAdapter
+from metaproc.dispatch import slot_coordinator as slot_coordinator_module
 from metaproc.dispatch.credential_pool import (
     ConcurrentModificationError,
     EntryState,
@@ -163,15 +164,22 @@ def _run_logs_dir(attempt: _Attempt) -> Path:
     return attempt.config.runs_dir / "run-1" / ".logs"
 
 
+def _preserved(attempt: _Attempt, log_set_name: str) -> Path:
+    """Return the isolated native-log destination for one captured task log."""
+    logs_dir = _run_logs_dir(attempt)
+    relative_parent = attempt.session_log.parent.relative_to(logs_dir / "tasks")
+    return logs_dir / "native" / relative_parent / f"{_SESSION_STEM}.{log_set_name}"
+
+
 class TestCodexRolloutsSurviveTeardown:
-    def test_rollouts_are_copied_next_to_the_session_log(self, tmp_path: Path) -> None:
+    def test_rollouts_are_copied_into_the_native_log_namespace(self, tmp_path: Path) -> None:
         attempt = _lease_attempt(tmp_path, "codex-cli", _CODEX_BLOB)
         _write_codex_rollouts(attempt.lease.slot_dir)
 
         _complete(attempt)
 
         assert not attempt.lease.slot_dir.exists()
-        preserved = attempt.session_log.parent / f"{_SESSION_STEM}.codex-sessions"
+        preserved = _preserved(attempt, "codex-sessions")
         day = preserved / "2026" / "09" / "14"
         assert (day / f"{_ROLLOUT}.jsonl").read_text() == (
             '{"type": "session_meta", "synthetic": true}\n'
@@ -183,7 +191,7 @@ class TestCodexRolloutsSurviveTeardown:
 
 class TestClaudeTranscriptsSurviveTeardown:
     @pytest.mark.parametrize("error_str", [None, "exit code 1"])
-    def test_transcripts_and_subagents_are_copied_next_to_the_session_log(
+    def test_transcripts_and_subagents_are_copied_into_the_native_log_namespace(
         self, tmp_path: Path, error_str: str | None
     ) -> None:
         attempt = _lease_attempt(tmp_path, "claude-code-cli", _CLAUDE_BLOB)
@@ -192,7 +200,7 @@ class TestClaudeTranscriptsSurviveTeardown:
         _complete(attempt, error_str=error_str)
 
         assert not attempt.lease.slot_dir.exists()
-        project = attempt.session_log.parent / f"{_SESSION_STEM}.claude-projects" / _CLAUDE_PROJECT
+        project = _preserved(attempt, "claude-projects") / _CLAUDE_PROJECT
         assert (project / f"{_CLAUDE_SESSION}.jsonl").read_text() == (
             '{"type": "assistant", "synthetic": true}\n'
         )
@@ -219,7 +227,7 @@ class TestCredentialsNeverReachLogs:
         _complete(attempt)
 
         _assert_no_secret_or_symlink(_run_logs_dir(attempt), _CODEX_SECRET)
-        preserved = attempt.session_log.parent / f"{_SESSION_STEM}.codex-sessions"
+        preserved = _preserved(attempt, "codex-sessions")
         assert sorted(p.name for p in (preserved / "2026" / "09" / "14").iterdir()) == [
             f"{_ROLLOUT}.jsonl",
             f"{_ROLLOUT}.jsonl.zst",
@@ -238,7 +246,7 @@ class TestCredentialsNeverReachLogs:
         _complete(attempt)
 
         _assert_no_secret_or_symlink(_run_logs_dir(attempt), _CLAUDE_SECRET)
-        preserved = attempt.session_log.parent / f"{_SESSION_STEM}.claude-projects"
+        preserved = _preserved(attempt, "claude-projects")
         assert sorted(str(p.relative_to(preserved)) for p in preserved.rglob("*")) == [
             _CLAUDE_PROJECT,
             f"{_CLAUDE_PROJECT}/{_CLAUDE_SESSION}",
@@ -257,8 +265,45 @@ class TestCredentialsNeverReachLogs:
         _complete(attempt)
 
         assert not attempt.lease.slot_dir.exists()
-        assert not (attempt.session_log.parent / f"{_SESSION_STEM}.claude-projects").exists()
+        assert not _preserved(attempt, "claude-projects").exists()
         _assert_no_secret_or_symlink(_run_logs_dir(attempt), _CLAUDE_SECRET)
+
+    def test_file_replaced_after_planning_aborts_the_whole_set(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        attempt = _lease_attempt(tmp_path, "codex-cli", _CODEX_BLOB)
+        _write_codex_rollouts(attempt.lease.slot_dir)
+        rollout = (
+            attempt.lease.slot_dir
+            / ".codex"
+            / "sessions"
+            / "2026"
+            / "09"
+            / "14"
+            / f"{_ROLLOUT}.jsonl"
+        )
+        credential = attempt.lease.slot_dir / ".codex" / "auth.json"
+        original_copy = slot_coordinator_module._copy_native_session_log_files
+
+        def replace_then_copy(root_fd: int, planned: list[Path], staging: Path) -> None:
+            rollout.unlink()
+            rollout.symlink_to(credential)
+            original_copy(root_fd, planned, staging)
+
+        monkeypatch.setattr(
+            slot_coordinator_module,
+            "_copy_native_session_log_files",
+            replace_then_copy,
+        )
+        with caplog.at_level(logging.WARNING, logger="metaproc.dispatch.slot_coordinator"):
+            _complete(attempt)
+
+        assert "failed to preserve native session log set" in caplog.text
+        assert not _preserved(attempt, "codex-sessions").exists()
+        _assert_no_secret_or_symlink(_run_logs_dir(attempt), _CODEX_SECRET)
 
 
 def _assert_no_secret_or_symlink(logs_dir: Path, secret: str) -> None:
@@ -281,7 +326,7 @@ class TestPreservationIsBestEffort:
         def fail_copy(*_args: object, **_kwargs: object) -> None:
             raise PermissionError("synthetic copy failure")
 
-        monkeypatch.setattr("metaproc.dispatch.slot_coordinator.shutil.copy2", fail_copy)
+        monkeypatch.setattr("metaproc.dispatch.slot_coordinator.shutil.copyfileobj", fail_copy)
         with caplog.at_level(logging.WARNING, logger="metaproc.dispatch.slot_coordinator"):
             _complete(attempt)
 
@@ -289,8 +334,9 @@ class TestPreservationIsBestEffort:
         assert attempt.lease.label_lock_path is not None
         assert not attempt.lease.label_lock_path.exists()
         assert "native session log" in caplog.text
-        assert not (attempt.session_log.parent / f"{_SESSION_STEM}.codex-sessions").exists()
-        assert _hidden_entries(attempt.session_log.parent) == []
+        assert not _preserved(attempt, "codex-sessions").exists()
+        native_parent = _run_logs_dir(attempt) / "native" / "predict" / "AAPL"
+        assert _hidden_entries(native_parent) == []
 
     def test_publish_failure_leaves_no_partial_tree(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
@@ -307,13 +353,14 @@ class TestPreservationIsBestEffort:
 
         assert not attempt.lease.slot_dir.exists()
         assert "native session log" in caplog.text
-        assert not (attempt.session_log.parent / f"{_SESSION_STEM}.claude-projects").exists()
-        assert _hidden_entries(attempt.session_log.parent) == []
+        assert not _preserved(attempt, "claude-projects").exists()
+        native_parent = _run_logs_dir(attempt) / "native" / "predict" / "AAPL"
+        assert _hidden_entries(native_parent) == []
 
     def test_existing_destination_is_not_replaced(self, tmp_path: Path) -> None:
         attempt = _lease_attempt(tmp_path, "codex-cli", _CODEX_BLOB)
         _write_codex_rollouts(attempt.lease.slot_dir)
-        preserved = attempt.session_log.parent / f"{_SESSION_STEM}.codex-sessions"
+        preserved = _preserved(attempt, "codex-sessions")
         _write(preserved / "earlier.jsonl", "earlier\n")
 
         _complete(attempt)
@@ -321,6 +368,18 @@ class TestPreservationIsBestEffort:
         assert not attempt.lease.slot_dir.exists()
         assert [p.name for p in preserved.iterdir()] == ["earlier.jsonl"]
         assert _hidden_entries(attempt.session_log.parent) == []
+
+    def test_existing_empty_destination_is_not_replaced(self, tmp_path: Path) -> None:
+        attempt = _lease_attempt(tmp_path, "codex-cli", _CODEX_BLOB)
+        _write_codex_rollouts(attempt.lease.slot_dir)
+        preserved = _preserved(attempt, "codex-sessions")
+        preserved.mkdir(parents=True)
+
+        _complete(attempt)
+
+        assert preserved.is_dir()
+        assert list(preserved.iterdir()) == []
+        assert _hidden_entries(preserved.parent) == []
 
     def test_no_session_files_writes_nothing(self, tmp_path: Path) -> None:
         # Claude's default `--no-session-persistence` leaves no `projects/` tree.
@@ -332,6 +391,7 @@ class TestPreservationIsBestEffort:
         assert sorted(p.name for p in attempt.session_log.parent.iterdir()) == [
             f"{_SESSION_STEM}.jsonl"
         ]
+        assert not (_run_logs_dir(attempt) / "native").exists()
 
 
 def _hidden_entries(directory: Path) -> list[str]:

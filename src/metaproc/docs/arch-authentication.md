@@ -1109,14 +1109,17 @@ transcripts under `projects/<project>/` when a step sets
 token usage, model, and timestamps, plus rate-limit snapshots for Codex.
 The captured stdout stream is thinner; Codex’s `exec --json` stream carries neither
 timestamps nor the model.
-Each adapter declares where it lives through a second Protocol method,
-`native_session_log_sets()`, which returns a slot-relative root directory and filename
-patterns:
+Adapters that provide this optional surface implement the separate, runtime-checkable
+`NativeSessionLogCapable` Protocol.
+Keeping it separate from `AuthCapableCliAdapter` preserves structural compatibility for
+third-party auth adapters.
+Its `native_session_log_sets()` method returns a slot-relative root directory and
+filename patterns:
 
 | Adapter | Root | Patterns | Preserved as |
 | --- | --- | --- | --- |
-| `codex-cli` | `.codex/sessions` | `rollout-*.jsonl`, `rollout-*.jsonl.zst` | `<session-stem>.codex-sessions/` |
-| `claude-code-cli` | `projects` | `*.jsonl`, `*.meta.json` | `<session-stem>.claude-projects/` |
+| `codex-cli` | `.codex/sessions` | `rollout-*.jsonl`, `rollout-*.jsonl.zst` | `.logs/native/<step>[/<item>]/<session-stem>.codex-sessions/` |
+| `claude-code-cli` | `projects` | `*.jsonl`, `*.meta.json` | `.logs/native/<step>[/<item>]/<session-stem>.claude-projects/` |
 
 `complete_slot` calls
 `SlotCoordinator.preserve_native_session_logs(lease, session_log_path)` right after
@@ -1124,11 +1127,18 @@ patterns:
 preserved directory can be read as if it were the CLI’s own `sessions/` or `projects/`
 directory.
 The copy is staged in a private mode-0700 directory beside the destination and
-published with one rename; an existing destination is never replaced.
-Symlinks are neither followed nor copied, and a root reached through a symlink is
-refused, so an agent cannot point a session-shaped name at a credential file.
-Like diagnostic preservation, it is best-effort: a failure is logged, and credential
-teardown still runs.
+published with one rename.
+An already visible destination, including an empty directory or symlink, is retained.
+POSIX also refuses to replace a populated directory; if another publisher creates an
+empty directory after the check, the final rename can replace that empty directory, but
+it cannot discard destination data.
+Source discovery and copying use directory-relative descriptors with no-follow opens.
+Symlinks are neither followed nor copied, and any planned path that changes before it is
+opened aborts the set.
+A copy failure discards the whole staging tree rather than publishing partial evidence.
+Like diagnostic preservation, this remains best-effort at the run level: the failure is
+logged, credential teardown still runs, and no destination for the failed set is
+published.
 
 **Failure-path classifier ordering.** `_classify_and_maybe_retry` runs *before*
 `try_compact_log` on every failure path.
