@@ -6,7 +6,7 @@ status: Approved
 ---
 # Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-09-13) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-09-14) **Status:** Approved
 
 Also readable as `metaproc help design`.
 
@@ -2648,6 +2648,18 @@ frontmatter envelope and carries the complete SoftSchema contract/schema/envelop
 description. Its Markdown body is explanatory only.
 `metaproc resource-report` and the Metabrowser resource view expose actual cost and list
 estimate separately, along with meters, coverage, budgets, and outcome.
+
+After resource finalization, the same terminal path writes `operations-summary.md`
+(`metaproc.operations:AgentOperationsSummary/v1`, envelope `agent_operations`). It folds
+evidence already on disk: root and scope process status, run plans, task and attempt
+records, transcript terminal results, RunPool events and health samples, and the
+resource summary. It reports elapsed time, per-item chain time across mapped top-level
+stages, step durations, concurrency, attempt dispositions, agent models, and resources.
+It writes no `.jsonl` and never calls resource recovery, so it cannot make the resource
+projections stale. A section whose evidence cannot be read is null with its reason, and
+any failure is logged without changing the run’s outcome.
+`metaproc operations summary` and `metaproc operations rollup` read the same fold for
+finished runs.
 
 ## 17. Run Pool and Process Management
 

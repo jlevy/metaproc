@@ -3,18 +3,20 @@ title: Agent Operations Summary
 description: Emit the trace Metaproc already knows how to extract, fold it into a contract-bound summary at finalization, and make run-to-run comparison a diff of two documents instead of a transcript scan.
 author: Joshua Levy (github.com/jlevy) with LLM assistance
 date: 2026-09-11
-last_updated: 2026-09-13
+last_updated: 2026-09-14
 status: Draft
 category: plan
 tracking_bead: mp-enxg
 ---
 # Feature: Agent Operations Summary
 
-**Date:** 2026-09-11 (last updated 2026-09-13)
+**Date:** 2026-09-11 (last updated 2026-09-14)
 
 Epic `mp-enxg` tracks the prerequisites and future phases below.
 This draft specifies future behavior; completing the plan does not enable automatic
-extraction or implement the operations summary.
+extraction.
+A first slice of the summary, folded from on-disk evidence without the trace,
+has shipped; Phase 3 records what it covers.
 
 ## Overview
 
@@ -398,9 +400,23 @@ coverage, so it is not an acceptance gate.
 
 ### Phase 3: Summary and Comparison
 
-- [ ] `models/agent_operations.py` and `engine/agent_operations.py`, beside their
+A first slice shipped ahead of Phases 1 and 2. It folds evidence already on disk
+(process status and run plans in every scope, `TaskAttemptRecord` files found by schema
+token, transcript terminal results, RunPool events and health samples, and the resource
+summary) rather than the span store, so it needs neither automatic extraction nor
+attempt reconciliation.
+It lives in `models/operations_summary.py`, `engine/operations_summary.py`,
+`engine/operations_render.py` and `engine/operations_rollup.py`, writes
+`operations-summary.md` after terminal resource finalization, and adds
+`metaproc operations summary` and `metaproc operations rollup` (several runs against a
+per-item chain-time target) in place of a two-run diff.
+Its figures are elapsed and per-item chain time, step durations, concurrency, attempt
+dispositions, served models, and resources; the provider and tool-use blocks and the
+anomaly rules below still depend on the trace.
+
+- [x] `models/operations_summary.py` and `engine/operations_summary.py`, beside their
   resource-summary counterparts.
-- [ ] Register the contract in `plugins/registry.py`, with the compiled schema staged
+- [x] Register the contract in `plugins/registry.py`, with the compiled schema staged
   and drift-tested against the model.
 - [ ] Give the operations summary its own missing/stale detection against the consumed
   trace revision and primary evidence, without invalidating upstream projections.

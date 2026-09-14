@@ -122,6 +122,7 @@ import metaproc.commands.gzip_text  # noqa: E402, F401
 import metaproc.commands.help  # noqa: E402, F401
 import metaproc.commands.kill  # noqa: E402, F401
 import metaproc.commands.liveness_watch  # noqa: E402, F401
+import metaproc.commands.operations  # noqa: E402, F401
 import metaproc.commands.override  # noqa: E402, F401
 import metaproc.commands.plan  # noqa: E402, F401
 import metaproc.commands.pool  # noqa: E402, F401

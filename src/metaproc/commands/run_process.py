@@ -117,6 +117,7 @@ from metaproc.engine.item_runner import (
     with_retry,
 )
 from metaproc.engine.launch_validation import collect_launch_errors, format_launch_errors
+from metaproc.engine.operations_summary import finalize_operations_summary
 from metaproc.engine.pathing import (
     compute_logs_dir,
     compute_run_dir,
@@ -5556,6 +5557,13 @@ def run_process_command(
                 if terminal_error is None:
                     raise
                 log.exception("resource finalization interrupted for %s", run_dir)
+            # Reads the resource summary written above and logs its own failures.
+            try:
+                finalize_operations_summary(run_dir, outcome=finalization_state)
+            except BaseException:
+                if terminal_error is None:
+                    raise
+                log.exception("operations summary interrupted for %s", run_dir)
         finally:
             release_lease(run_dir)
 

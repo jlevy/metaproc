@@ -34,6 +34,7 @@ from metaproc.commands.run_process import run_process_command
 from metaproc.dispatch.auth_pool_flags import AuthPoolFlags
 from metaproc.dispatch.pool_dispatch import PoolDispatchConfig
 from metaproc.engine.dep_state import fingerprint_step
+from metaproc.engine.operations_summary import read_operations_summary
 from metaproc.errors import CLIError
 from metaproc.io import read_yaml_file
 from metaproc.io.state_io import write_result_at
@@ -308,6 +309,45 @@ def test_run_process_passes_causal_failure_to_resource_finalizer(
     assert document.finalization is not None
     assert document.finalization.state is expected
     assert document.finalization.terminal_error_type == type(error).__name__
+    operations = read_operations_summary(tmp_path / "runs" / "run-1")
+    assert operations is not None
+    assert operations.trigger == "finalization"
+    assert operations.run is not None
+    assert (operations.run.state, operations.run.state_source) == (expected.value, "finalization")
+
+
+def test_run_process_outcome_survives_a_failing_operations_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process_path = tmp_path / "ok.process.md"
+    process_path.write_text(
+        "---\nprocess:\n  name: ok\n  steps:\n    - id: noop\n"
+        "      mode: code\n      command: 'true'\n---\n"
+    )
+
+    def broken_summary(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("summary exploded")
+
+    monkeypatch.setattr(
+        "metaproc.engine.operations_summary.build_operations_summary", broken_summary
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-process",
+            str(process_path),
+            "--var",
+            f"RUNS_DIR={tmp_path / 'runs'}",
+            "--var",
+            "RUN_ID=run-1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    run_dir = tmp_path / "runs" / "run-1"
+    assert (run_dir / "resource-usage-summary.md").is_file()
+    assert not (run_dir / "operations-summary.md").exists()
 
 
 def test_run_process_preserves_original_failure_and_releases_lease_when_finalizer_interrupts(
