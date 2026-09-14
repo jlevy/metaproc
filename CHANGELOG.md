@@ -31,6 +31,12 @@ development series.
   pool keeps the default of 4. Terminal host-admission refusals record `waited_s`, and
   `metaproc pool events --type host_admission_denied --summary` counts waits, bypassed
   launches, and terminal wait seconds.
+- **A composite step’s `execution_profile:` applies to its whole subtree.** The child
+  process was planned with the launch `--variant` whatever profile the composite step
+  pinned. A pinned composite now plans its child, every nested scope below it, and their
+  unpinned agent leaves on its own profile, and its scope answers
+  `{{run.execution_profile}}` with it. Agent-step pins inside the subtree still win, and
+  every profile shares the root run’s RunPool.
 - **`--step-variant` refuses a step the launched process does not have.** Overrides
   apply to the launched process’s top-level steps only; a step id inside a composite
   child process was silently ignored and now fails launch validation with the top-level

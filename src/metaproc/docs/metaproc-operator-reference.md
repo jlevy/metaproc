@@ -527,10 +527,10 @@ execution profile. `{{run.variant}}` is only a migration alias for
 
 `--step-variant STEP=PROFILE` overrides the profile of one top-level step of the
 launched process.
-A composite step’s child process is planned with the run-level profile, or with the
-composite step’s own authored `execution_profile:`, which then applies to its whole
-subtree. A step inside a child cannot be overridden from the command line; launch
-validation refuses such an id and lists the top-level step ids.
+A composite step’s child process is planned with the run-level profile,
+or with the composite step’s own authored `execution_profile:`, which then applies to
+its whole subtree. A step inside a child cannot be overridden from the command line;
+launch validation refuses such an id and lists the top-level step ids.
 
 Preflight credentials before a live dispatch:
 
