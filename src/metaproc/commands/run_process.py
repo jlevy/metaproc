@@ -371,7 +371,6 @@ class RunExecutionContext:
     num_workers: int
     machine_type: str
     spot: bool
-    variant_override: str | None
     profile_files: tuple[Path, ...]
     skip_steps: frozenset[str]
     force: bool
@@ -395,7 +394,6 @@ class RunExecutionContext:
         num_workers: int = 1,
         machine_type: str = "",
         spot: bool = False,
-        variant_override: str | None = None,
         profile_files: Sequence[Path] = (),
         skip_steps: set[str] | frozenset[str] = frozenset(),
         force: bool = False,
@@ -418,7 +416,6 @@ class RunExecutionContext:
             num_workers=num_workers,
             machine_type=machine_type,
             spot=spot,
-            variant_override=variant_override,
             profile_files=tuple(profile_files),
             skip_steps=frozenset(skip_steps),
             force=force,
@@ -518,6 +515,25 @@ class _PreparedCompositeScope:
     plan: Plan
     variables: dict[str, str]
     identity: ScopeIdentity
+    execution_profile: str | None
+    """The profile override the child scope plans its own children and agent leaves with."""
+
+
+def _composite_scope_execution_profile(
+    step_def: ProcessStep,
+    target: ResolvedStep,
+    scope_execution_profile: str | None,
+) -> tuple[str | None, bool]:
+    """Return the profile override for a composite step's child scope, and whether it is pinned.
+
+    A composite step that declares `execution_profile:` runs its whole subtree on that
+    profile, in place of the one its own scope runs on. Without a pin the child inherits
+    the enclosing scope's override: the launch `--variant` at the root, or the nearest
+    pinned ancestor below it. Step-level pins inside the subtree still win for their steps.
+    """
+    if not step_def.execution_profile:
+        return scope_execution_profile, False
+    return target.execution_profile or step_def.execution_profile, True
 
 
 async def _run_sync[SyncResult](
@@ -2995,12 +3011,16 @@ def _prepare_composite_scope(
     run_id: str,
     scope_path: tuple[str, ...],
     execution_context: RunExecutionContext,
+    scope_execution_profile: str | None,
     mapped_item_key: str | None = None,
     announce: bool,
     out: Any,
 ) -> _PreparedCompositeScope:
     """Resolve one child scope through the same identity and planning path."""
     step_id = step_def.id
+    child_execution_profile, profile_pinned = _composite_scope_execution_profile(
+        step_def, target, scope_execution_profile
+    )
 
     if not target.uses_path:
         raise CLIError(f"step '{step_id}': composite mode requires a resolved child process")
@@ -3020,6 +3040,10 @@ def _prepare_composite_scope(
     if step_def.with_:
         for key, template in step_def.with_.items():
             child_vars[key] = resolve_templates(template, variables)
+    if profile_pinned and child_execution_profile is not None:
+        # The pinned scope answers `{{run.execution_profile}}` with its own profile, as a
+        # run launched with that `--variant` would, and its descendants inherit it.
+        child_vars["EXECUTION_PROFILE"] = child_execution_profile
 
     if step_def.for_each is not None and mapped_item_key is None:
         raise CLIError(f"mapped composite step '{step_id}' requires its canonical task item key")
@@ -3053,10 +3077,13 @@ def _prepare_composite_scope(
         child_spec,
         child_vars,
         process_path=child_spec_path,
-        adapter_override=execution_context.variant_override,
+        adapter_override=child_execution_profile,
         artifact_namespace=target.artifact_namespace,
         profile_files=execution_context.profile_files,
     )
+    if profile_pinned and child_plan.artifact_namespace:
+        child_vars.setdefault("ARTIFACT_NAMESPACE", child_plan.artifact_namespace)
+        child_vars.setdefault("VARIANT", child_plan.artifact_namespace)
     _publish_run_plan(
         child_identity.run_dir,
         run_id=child_identity.record_id,
@@ -3073,6 +3100,7 @@ def _prepare_composite_scope(
         plan=child_plan,
         variables=child_vars,
         identity=child_identity,
+        execution_profile=child_execution_profile,
     )
 
 
@@ -3086,6 +3114,7 @@ async def _execute_composite_step(
     run_id: str,
     scope_path: tuple[str, ...],
     execution_context: RunExecutionContext,
+    scope_execution_profile: str | None,
     mapped_item_key: str | None = None,
     out: Any,
 ) -> bool:
@@ -3100,6 +3129,7 @@ async def _execute_composite_step(
         run_id=run_id,
         scope_path=scope_path,
         execution_context=execution_context,
+        scope_execution_profile=scope_execution_profile,
         mapped_item_key=mapped_item_key,
         announce=True,
         out=out,
@@ -3121,6 +3151,7 @@ async def _execute_composite_step(
                 run_id=prepared.identity.record_id,
                 scope_path=prepared.identity.scope_path,
                 execution_context=execution_context,
+                scope_execution_profile=prepared.execution_profile,
                 out=out,
                 events=events,
             )
@@ -3158,6 +3189,7 @@ async def _execute_composite_fan_out_step(
     run_id: str,
     scope_path: tuple[str, ...],
     execution_context: RunExecutionContext,
+    scope_execution_profile: str | None,
     events: ProcessEventLogger | None = None,
     out: Any,
 ) -> bool:
@@ -3213,6 +3245,7 @@ async def _execute_composite_fan_out_step(
             run_id=run_id,
             scope_path=scope_path,
             execution_context=execution_context,
+            scope_execution_profile=scope_execution_profile,
             mapped_item_key=state_dir.name,
             announce=False,
             out=out,
@@ -3303,6 +3336,7 @@ async def _execute_composite_fan_out_step(
                 run_id=run_id,
                 scope_path=scope_path,
                 execution_context=execution_context,
+                scope_execution_profile=scope_execution_profile,
                 mapped_item_key=state_dir.name,
                 out=out,
             )
@@ -4091,6 +4125,7 @@ async def _execute_step(
     run_id: str,
     scope_path: tuple[str, ...],
     execution_context: RunExecutionContext,
+    scope_execution_profile: str | None,
     peer_allowed_targets: list[WriteTarget] | None = None,
     events: ProcessEventLogger | None = None,
     out: Any,
@@ -4145,6 +4180,7 @@ async def _execute_step(
                 run_id=run_id,
                 scope_path=scope_path,
                 execution_context=execution_context,
+                scope_execution_profile=scope_execution_profile,
                 events=events,
                 out=out,
             )
@@ -4157,6 +4193,7 @@ async def _execute_step(
             run_id=run_id,
             scope_path=scope_path,
             execution_context=execution_context,
+            scope_execution_profile=scope_execution_profile,
             out=out,
         )
 
@@ -4215,7 +4252,7 @@ async def _execute_step(
                 num_workers=execution_context.num_workers,
                 machine_type=execution_context.machine_type,
                 spot=execution_context.spot,
-                variant_override=execution_context.variant_override,
+                variant_override=scope_execution_profile,
                 execution_context=execution_context,
                 peer_allowed_targets=peer_allowed_targets,
                 events=events,
@@ -4232,7 +4269,7 @@ async def _execute_step(
             process_dir=process_dir,
             run_dir=run_dir,
             run_id=run_id,
-            variant_override=execution_context.variant_override,
+            variant_override=scope_execution_profile,
             peer_allowed_targets=peer_allowed_targets,
             backend_name=execution_context.backend_name,
             execution_context=execution_context,
@@ -4256,10 +4293,16 @@ async def _orchestrate(
     run_id: str,
     scope_path: tuple[str, ...] = (),
     execution_context: RunExecutionContext,
+    scope_execution_profile: str | None,
     out: Any,
     events: ProcessEventLogger,
 ) -> None:
-    """Walk the DAG, executing independent steps in parallel via asyncio.gather()."""
+    """Walk the DAG, executing independent steps in parallel via asyncio.gather().
+
+    `scope_execution_profile` is the profile override this scope plans its composite
+    children and unpinned agent leaves with: the launch `--variant` at the root, or the
+    nearest enclosing composite step's `execution_profile:` below it.
+    """
     backend_name = execution_context.backend_name
     max_concurrency = execution_context.max_concurrency
     skip_steps = execution_context.skip_steps if not scope_path else frozenset()
@@ -4421,6 +4464,7 @@ async def _orchestrate(
             run_id=run_id,
             scope_path=scope_path,
             execution_context=execution_context,
+            scope_execution_profile=scope_execution_profile,
             peer_allowed_targets=peer_allowed_targets,
             events=events,
             out=out,
@@ -5536,7 +5580,6 @@ def run_process_command(
                     num_workers=num_workers,
                     machine_type=machine_type,
                     spot=spot,
-                    variant_override=variant,
                     profile_files=profile_files,
                     skip_steps=skip_set,
                     force=force,
@@ -5559,6 +5602,7 @@ def run_process_command(
                         run_dir=run_dir,
                         run_id=run_id,
                         execution_context=execution_context,
+                        scope_execution_profile=variant or None,
                         out=out,
                         events=events,
                     )

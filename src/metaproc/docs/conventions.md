@@ -475,7 +475,7 @@ The framework-owned template surface is closed and intentionally small:
 | `{{run.id}}` | Framework-managed run identifier |
 | `{{run.dir}}` | Output root for the current run |
 | `{{run.parent_dir}}` | Parent directory that contains all runs |
-| `{{run.execution_profile}}` | Named adapter runtime profile selected for this run |
+| `{{run.execution_profile}}` | Named adapter runtime profile selected for this run, or for the nearest enclosing composite step that pins one |
 | `{{run.artifact_namespace}}` | Output grouping label for this run |
 | `{{run.variant}}` | Deprecated migration alias for `{{run.artifact_namespace}}` |
 | `{{step.prompt_path}}` | Resolved path of the current prompt file |

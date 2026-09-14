@@ -252,13 +252,11 @@ def test_adapter_preflight_checks_each_active_agent_adapter_once() -> None:
 def _test_execution_context(
     *,
     max_concurrency: int | None = None,
-    variant_override: str | None = None,
     profile_files: Sequence[Path] = (),
     pool_dispatch_template: PoolDispatchConfig | None = None,
 ) -> Generator[RunExecutionContext, None, None]:
     context = RunExecutionContext.create(
         max_concurrency=max_concurrency,
-        variant_override=variant_override,
         profile_files=profile_files,
         pool_dispatch_template=pool_dispatch_template,
     )
@@ -1305,6 +1303,7 @@ class TestProcessStatusFile:
                     run_dir=tmp_path / "run",
                     run_id="test/run",
                     execution_context=execution_context,
+                    scope_execution_profile=None,
                     out=out,
                     events=MagicMock(),
                 )
@@ -1842,6 +1841,7 @@ class TestCompositeStepExecution:
                     run_id="test/run",
                     scope_path=(),
                     execution_context=execution_context,
+                    scope_execution_profile=None,
                     out=FakeOut(),
                 )
             )
@@ -1933,8 +1933,10 @@ class TestCompositeStepExecution:
         assert forced.exit_code == 0, forced.output
         assert count_path.read_text(encoding="utf-8") == "2\n"
 
-    def test_composite_propagates_variant_override_to_child_plan(self, tmp_path: Path) -> None:
-        """Composite child plans must honor the top-level adapter override."""
+    def test_composite_plans_its_child_with_the_scope_profile_override(
+        self, tmp_path: Path
+    ) -> None:
+        """A composite child is planned with the profile override of the scope that runs it."""
 
         child_dir = tmp_path / "child"
         child_dir.mkdir()
@@ -1989,7 +1991,7 @@ class TestCompositeStepExecution:
             captured["plan"] = cast(Plan, kwargs["plan"])
 
         with (
-            _test_execution_context(variant_override="codex-cli") as execution_context,
+            _test_execution_context() as execution_context,
             patch("metaproc.commands.run_process._orchestrate", fake_orchestrate),
         ):
             result = asyncio.run(
@@ -2002,6 +2004,7 @@ class TestCompositeStepExecution:
                     run_id="test/run",
                     scope_path=(),
                     execution_context=execution_context,
+                    scope_execution_profile="codex-cli",
                     out=FakeOut(),
                 )
             )
@@ -2071,10 +2074,7 @@ class TestCompositeStepExecution:
             captured["plan"] = cast(Plan, kwargs["plan"])
 
         with (
-            _test_execution_context(
-                variant_override="local-codex",
-                profile_files=[profile_file],
-            ) as execution_context,
+            _test_execution_context(profile_files=[profile_file]) as execution_context,
             patch("metaproc.commands.run_process._orchestrate", fake_orchestrate),
         ):
             result = asyncio.run(
@@ -2087,6 +2087,7 @@ class TestCompositeStepExecution:
                     run_id="test/run",
                     scope_path=(),
                     execution_context=execution_context,
+                    scope_execution_profile="local-codex",
                     out=FakeOut(),
                 )
             )
@@ -2137,6 +2138,7 @@ class TestCompositeStepExecution:
                     run_id="test/run",
                     scope_path=(),
                     execution_context=execution_context,
+                    scope_execution_profile=None,
                     out=FakeOut(),
                 )
             )
@@ -2165,6 +2167,7 @@ class TestCompositeStepExecution:
                     run_id="test/run",
                     scope_path=(),
                     execution_context=execution_context,
+                    scope_execution_profile=None,
                     out=FakeOut(),
                 )
             )
@@ -2214,6 +2217,7 @@ class TestCompositeStepExecution:
                     run_id="run",
                     scope_path=(),
                     execution_context=execution_context,
+                    scope_execution_profile=None,
                     out=out,
                 ),
             )
@@ -4278,6 +4282,7 @@ class TestCompositePoolDispatchPropagation:
                     run_id="test-run",
                     scope_path=(),
                     execution_context=execution_context,
+                    scope_execution_profile=None,
                     out=out,
                 )
             )
@@ -4793,7 +4798,7 @@ class TestRunOwnedPoolExecutionProfiles:
 
     @classmethod
     def _register_adapter(cls, monkeypatch: pytest.MonkeyPatch) -> None:
-        """An adapter whose process writes the prompt's ``OUTPUT_FILE``."""
+        """An adapter whose process writes its execution profile to the prompt's ``OUTPUT_FILE``."""
 
         class ProfileLaneAdapter:
             adapter_type = cls.ADAPTER
@@ -4806,11 +4811,12 @@ class TestRunOwnedPoolExecutionProfiles:
                     for line in Path(prompt_file).read_text().splitlines()
                     if line.startswith("OUTPUT_FILE=")
                 )
+                profile = str(variables["EXECUTION_PROFILE"])
                 script = (
                     "from pathlib import Path; "
                     f"target = Path({str(target)!r}); "
                     "target.parent.mkdir(parents=True, exist_ok=True); "
-                    "target.write_text('ok\\n')"
+                    f"target.write_text({profile + chr(10)!r})"
                 )
                 return [sys.executable, "-c", script]
 
@@ -4848,11 +4854,11 @@ class TestRunOwnedPoolExecutionProfiles:
         )
 
     @staticmethod
-    def _agent_step(step_id: str, profile: str, *, needs: str | None = None) -> str:
+    def _agent_step(step_id: str, profile: str | None, *, needs: str | None = None) -> str:
         lines = [
             f"- id: {step_id}",
             "  mode: agent",
-            f"  execution_profile: {profile}",
+            *([f"  execution_profile: {profile}"] if profile else []),
             f'  prompt_prefix: "OUTPUT_FILE={{{{run.dir}}}}/{step_id}.md"',
             *([f"  needs: [{needs}]"] if needs else []),
             "  outputs:",
@@ -4871,7 +4877,7 @@ class TestRunOwnedPoolExecutionProfiles:
         return repo_dir, process_dir
 
     @staticmethod
-    def _invoke(spec: Path, run_dir: Path) -> Result:
+    def _invoke(spec: Path, run_dir: Path, *options: str) -> Result:
         """Run ``spec`` into ``run_dir``, which sits outside the repository.
 
         Keeping the run tree out of the repository keeps these checks about the pool
@@ -4886,6 +4892,7 @@ class TestRunOwnedPoolExecutionProfiles:
                 f"RUNS_DIR={run_dir.parent}",
                 "--var",
                 f"RUN_ID={run_dir.name}",
+                *options,
             ],
         )
 
@@ -5017,3 +5024,114 @@ class TestRunOwnedPoolExecutionProfiles:
         assert "initial_memory_budget_fraction 0.5" not in error
         status = read_yaml_file(run_dir / STATE_DIR / "runpool-status.yaml")
         assert [lane["lane_id"] for lane in status["lanes"]] == ["light"]
+
+    def test_a_composite_pin_runs_its_subtree_on_that_profile(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo_dir, process_dir = self._repo(tmp_path)
+        self._register_adapter(monkeypatch)
+        equal: dict[str, object] = {
+            "estimated_process_rss_mb": 250,
+            "initial_memory_budget_fraction": 0.5,
+        }
+        self._write_repo_profiles(repo_dir, {"run-a": equal, "pin-b": equal, "leaf-c": equal})
+        (process_dir / "grandchild.process.md").write_text(
+            "---\nprocess:\n  name: grandchild\n  steps:\n"
+            + self._agent_step("grandchild-leaf", None)
+            + "---\n",
+            encoding="utf-8",
+        )
+        (process_dir / "child.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: pinned-child
+                  deps:
+                    grandchild:
+                      path: ./grandchild.process.md
+                      as: path
+                  steps:
+                    - id: record-profile
+                      mode: code
+                      command: >-
+                        /bin/sh -c 'mkdir -p "{{run.dir}}";
+                        printf "%s\\n" "{{run.execution_profile}}" > "{{run.dir}}/profile.txt"'
+                      outputs:
+                        profile:
+                          path: "{{run.dir}}/profile.txt"
+                          kind: file
+                    - id: nested
+                      mode: composite
+                      uses: deps.grandchild
+                """
+            )
+            + self._agent_step("child-leaf", None)
+            + self._agent_step("pinned-leaf", "leaf-c")
+            + "---\n",
+            encoding="utf-8",
+        )
+        (process_dir / "parent.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: pinned-parent
+                  deps:
+                    roster:
+                      path: "{{run.dir}}/roster.md"
+                      as: path
+                      produced_by: write-roster.roster
+                    child:
+                      path: ./child.process.md
+                      as: path
+                  steps:
+                    - id: write-roster
+                      mode: code
+                      outputs:
+                        roster:
+                          path: "{{run.dir}}/roster.md"
+                          kind: file
+                          format: frontmatter-md
+                      command: >-
+                        /bin/sh -c 'mkdir -p "{{run.dir}}";
+                        printf "%s\\n" "---" "progress:" "  schema: metaproc:ProgressSpec/0.1" "  process: pinned" "  items:" "    - cohort: alfa" "---" > "{{run.dir}}/roster.md"'
+                    - id: pinned
+                      mode: composite
+                      uses: deps.child
+                      execution_profile: pin-b
+                      needs: [write-roster]
+                      for_each:
+                        over: deps.roster
+                        bind: cohort
+                        bind_fields: [cohort]
+                        key: "{{cohort}}"
+                """
+            )
+            + self._agent_step("root-leaf", None)
+            + "---\n",
+            encoding="utf-8",
+        )
+
+        run_dir = tmp_path / "runs" / "pinned-subtree"
+        result = self._invoke(process_dir / "parent.process.md", run_dir, "--variant", "run-a")
+
+        assert result.exit_code == 0, result.output
+        child = run_dir / "pinned" / "alfa"
+        served = {
+            "root-leaf": run_dir / "root-leaf.md",
+            "child-leaf": child / "child-leaf.md",
+            "pinned-leaf": child / "pinned-leaf.md",
+            "grandchild-leaf": child / "nested" / "grandchild-leaf.md",
+        }
+        assert {step: path.read_text().strip() for step, path in served.items()} == {
+            "root-leaf": "run-a",
+            "child-leaf": "pin-b",
+            "pinned-leaf": "leaf-c",
+            "grandchild-leaf": "pin-b",
+        }
+        assert (child / "profile.txt").read_text().strip() == "pin-b"
+        status = read_yaml_file(run_dir / STATE_DIR / "runpool-status.yaml")
+        lanes = {lane["lane_id"]: lane["completed_count"] for lane in status["lanes"]}
+        assert lanes == {"run-a": 1, "pin-b": 2, "leaf-c": 1}
+        assert not (child / STATE_DIR / "runpool-status.yaml").exists()
