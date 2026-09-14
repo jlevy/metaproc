@@ -2192,6 +2192,19 @@ class RunPool:
             )
         return rows
 
+    def register_lane(self, lane: ExecutionLane) -> None:
+        """Add a lane to status reporting; an already registered lane id is kept.
+
+        Lanes carry identity and counters only. Admission stays pool-wide: every
+        lane shares the one adaptive semaphore and the ceilings sized at
+        construction.
+        """
+        self._lane_registry.setdefault(lane.lane_id, lane)
+        self._lane_counters.setdefault(
+            lane.lane_id,
+            {"active": 0, "completed": 0, "failed": 0, "killed": 0},
+        )
+
     def _increment_lane_counter(self, lane_id: str | None, key: str, delta: int) -> None:
         """Bump a per-lane counter, registering unknown lane ids lazily.
 
@@ -2203,19 +2216,7 @@ class RunPool:
         if lane_id is None:
             return
         if lane_id not in self._lane_counters:
-            self._lane_registry.setdefault(
-                lane_id,
-                ExecutionLane(
-                    lane_id=lane_id,
-                    execution_profile=lane_id,
-                ),
-            )
-            self._lane_counters[lane_id] = {
-                "active": 0,
-                "completed": 0,
-                "failed": 0,
-                "killed": 0,
-            }
+            self.register_lane(ExecutionLane(lane_id=lane_id, execution_profile=lane_id))
         counters = self._lane_counters[lane_id]
         counters[key] = max(0, counters.get(key, 0) + delta)
 

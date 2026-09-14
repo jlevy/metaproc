@@ -180,6 +180,43 @@ class TestPoolLaneRegistry:
         assert claude.completed_count == 0
         assert claude.failed_count == 1
 
+    def test_register_lane_lists_a_lane_before_it_launches_and_keeps_counters(
+        self, tmp_path: Path
+    ) -> None:
+        config = RunPoolConfig(
+            execution_profile="gemini-flash-36",
+            max_concurrency=2,
+            state_dir=tmp_path / "state",
+            logs_dir=tmp_path / "logs",
+        )
+
+        async def _run() -> tuple[RunPoolStatus, RunPoolStatus]:
+            pool = RunPool(config, backend=MockBackend())
+            pool.register_lane(
+                ExecutionLane(lane_id="gemini-flash-38", execution_profile="gemini-flash-38")
+            )
+            registered = pool.snapshot
+            await pool.submit(_mock_config("judge", lane_id="gemini-flash-38"))
+            pool.register_lane(
+                ExecutionLane(
+                    lane_id="gemini-flash-38",
+                    execution_profile="gemini-flash-38",
+                    comparison_role="replacement",
+                )
+            )
+            await pool.shutdown()
+            return registered, pool.snapshot
+
+        registered, finished = asyncio.run(_run())
+        assert [lane.lane_id for lane in registered.lanes] == ["gemini-flash-36", "gemini-flash-38"]
+        assert registered.lanes[1].completed_count == 0
+        late = finished.lanes[1]
+        assert (late.lane_id, late.completed_count, late.comparison_role) == (
+            "gemini-flash-38",
+            1,
+            None,
+        )
+
     def test_unregistered_lane_id_gets_lazy_registered(self, tmp_path: Path) -> None:
         config = RunPoolConfig(
             execution_profile="codex-gpt55",

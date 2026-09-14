@@ -39,6 +39,7 @@ from metaproc.errors import CLIError
 from metaproc.io import read_yaml_file
 from metaproc.io.state_io import read_attempt_history_at, read_status_at
 from metaproc.models.authored import ForEach, ProcessSpec, ProcessStep, StepContext
+from metaproc.models.lane import ExecutionLane
 from metaproc.models.plan import FanOut, Plan, ResolvedAdapter, ResolvedStep
 from metaproc.models.runtime import AttemptDisposition
 from metaproc.runpool.pool import ProcessConfig
@@ -51,14 +52,18 @@ class _Out:
         pass
 
 
-def test_run_pool_owner_reuses_one_profile_and_rejects_a_second(tmp_path: Path) -> None:
-    pool = MagicMock()
-    owner = RunPoolOwner(
+def _run_pool_owner(tmp_path: Path) -> RunPoolOwner:
+    return RunPoolOwner(
         run_dir=tmp_path,
         backend_name="local",
         max_concurrency=2,
         initial_concurrency=1,
     )
+
+
+def test_run_pool_owner_reuses_one_pool_for_one_profile(tmp_path: Path) -> None:
+    pool = MagicMock()
+    owner = _run_pool_owner(tmp_path)
 
     with (
         patch("metaproc.commands.run_process.get_backend", return_value=MagicMock()),
@@ -66,10 +71,77 @@ def test_run_pool_owner_reuses_one_profile_and_rejects_a_second(tmp_path: Path) 
     ):
         assert owner.get_pool(resource_config={}, execution_profile="profile-a") is pool
         assert owner.get_pool(resource_config={}, execution_profile="profile-a") is pool
-        with pytest.raises(CLIError, match="supports one execution profile"):
-            owner.get_pool(resource_config={}, execution_profile="profile-b")
 
     pool_type.assert_called_once()
+    config = pool_type.call_args.args[0]
+    assert config.execution_profile == "profile-a"
+    assert config.max_concurrency == 2
+    pool.register_lane.assert_not_called()
+
+
+def test_run_pool_owner_adds_a_profile_with_equal_resources_as_a_lane(tmp_path: Path) -> None:
+    pool = MagicMock()
+    owner = _run_pool_owner(tmp_path)
+    megabytes = {"estimated_process_rss_mb": 250, "initial_memory_budget_fraction": 0.5}
+    same_in_bytes = {"estimated_process_rss_bytes": 250 * 1024 * 1024}
+
+    with (
+        patch("metaproc.commands.run_process.get_backend", return_value=MagicMock()),
+        patch("metaproc.commands.run_process.RunPool", return_value=pool) as pool_type,
+    ):
+        assert owner.get_pool(resource_config=megabytes, execution_profile="flash-36") is pool
+        assert owner.get_pool(resource_config=same_in_bytes, execution_profile="flash-38") is pool
+        assert owner.get_pool(resource_config=same_in_bytes, execution_profile="flash-38") is pool
+        assert owner.get_pool(resource_config=megabytes, execution_profile="flash-36") is pool
+
+    pool_type.assert_called_once()
+    assert pool_type.call_args.args[0].execution_profile == "flash-36"
+    pool.register_lane.assert_called_once_with(
+        ExecutionLane(lane_id="flash-38", execution_profile="flash-38")
+    )
+
+
+@pytest.mark.parametrize(
+    ("second_resources", "difference"),
+    [
+        (
+            {"estimated_process_rss_mb": 1024},
+            (
+                f"estimated_process_rss_bytes {250 * 1024 * 1024} for 'light', "
+                f"{1024 * 1024 * 1024} for 'heavy'"
+            ),
+        ),
+        (
+            {"estimated_process_rss_mb": 250, "max_concurrency_hint": 20},
+            "max_concurrency_hint None for 'light', 20 for 'heavy'",
+        ),
+        (
+            {"estimated_process_rss_mb": 250, "initial_memory_budget_fraction": 0.25},
+            "initial_memory_budget_fraction 0.5 for 'light', 0.25 for 'heavy'",
+        ),
+    ],
+)
+def test_run_pool_owner_refuses_a_profile_with_different_resources(
+    tmp_path: Path, second_resources: dict[str, object], difference: str
+) -> None:
+    pool = MagicMock()
+    owner = _run_pool_owner(tmp_path)
+
+    with (
+        patch("metaproc.commands.run_process.get_backend", return_value=MagicMock()),
+        patch("metaproc.commands.run_process.RunPool", return_value=pool) as pool_type,
+    ):
+        owner.get_pool(resource_config={"estimated_process_rss_mb": 250}, execution_profile="light")
+        with pytest.raises(CLIError) as refused:
+            owner.get_pool(resource_config=second_resources, execution_profile="heavy")
+        assert owner.get_pool(resource_config={}, execution_profile="light") is pool
+
+    message = str(refused.value)
+    assert "'heavy' cannot share the run-owned RunPool sized from 'light'" in message
+    assert f": {difference}." in message
+    assert "no per-lane resource accounting" in message
+    pool_type.assert_called_once()
+    pool.register_lane.assert_not_called()
 
 
 def test_composite_reuses_parent_execution_context(tmp_path: Path) -> None:

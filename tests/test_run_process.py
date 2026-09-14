@@ -4744,3 +4744,236 @@ class TestNonFanOutTransientRetry:
         # The recorded error carries the log line, not a bare exit code: diagnosing
         # week 35 cost hours precisely because `exit code 1` said nothing.
         assert "quota" in (status.error or "")
+
+
+class TestRunOwnedPoolExecutionProfiles:
+    """One run-owned RunPool serves every execution profile its agent leaves pin."""
+
+    ADAPTER = "profile-lane-test"
+
+    @classmethod
+    def _register_adapter(cls, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An adapter whose process writes the prompt's ``OUTPUT_FILE``."""
+
+        class ProfileLaneAdapter:
+            adapter_type = cls.ADAPTER
+            short_name = cls.ADAPTER
+            default_model = None
+
+            def build_command(self, prompt_file, merged_config, variables):  # noqa: ANN001, ARG002
+                target = next(
+                    line.removeprefix("OUTPUT_FILE=")
+                    for line in Path(prompt_file).read_text().splitlines()
+                    if line.startswith("OUTPUT_FILE=")
+                )
+                script = (
+                    "from pathlib import Path; "
+                    f"target = Path({str(target)!r}); "
+                    "target.parent.mkdir(parents=True, exist_ok=True); "
+                    "target.write_text('ok\\n')"
+                )
+                return [sys.executable, "-c", script]
+
+            def prepare_env(self, env, merged_config):  # noqa: ANN001, ARG002
+                return env
+
+            def working_directory(self, merged_config):  # noqa: ANN001, ARG002
+                return None
+
+            def parse_result_event(self, line):  # noqa: ANN001, ARG002
+                return None
+
+            def check_auth(self):
+                raise NotImplementedError
+
+            def auth_info(self):
+                return ""
+
+        monkeypatch.setitem(ADAPTER_REGISTRY, cls.ADAPTER, ProfileLaneAdapter())
+
+    @classmethod
+    def _write_repo_profiles(cls, repo_dir: Path, resources: dict[str, dict[str, object]]) -> None:
+        path = repo_dir / ".metaproc" / "execution-profiles.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        name: {"adapter": cls.ADAPTER, "status": "tested", "resources": values}
+                        for name, values in resources.items()
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _agent_step(step_id: str, profile: str, *, needs: str | None = None) -> str:
+        lines = [
+            f"- id: {step_id}",
+            "  mode: agent",
+            f"  execution_profile: {profile}",
+            f'  prompt_prefix: "OUTPUT_FILE={{{{run.dir}}}}/{step_id}.md"',
+            *([f"  needs: [{needs}]"] if needs else []),
+            "  outputs:",
+            "    decision:",
+            f'      path: "{{{{run.dir}}}}/{step_id}.md"',
+            "      kind: file",
+        ]
+        return "".join(f"    {line}\n" for line in lines)
+
+    @staticmethod
+    def _repo(tmp_path: Path) -> tuple[Path, Path]:
+        repo_dir = tmp_path / "repo"
+        process_dir = repo_dir / "process"
+        process_dir.mkdir(parents=True)
+        subprocess.run(["git", "init"], cwd=repo_dir, check=True, capture_output=True)
+        return repo_dir, process_dir
+
+    @staticmethod
+    def _invoke(spec: Path, run_dir: Path) -> Result:
+        """Run ``spec`` into ``run_dir``, which sits outside the repository.
+
+        Keeping the run tree out of the repository keeps these checks about the pool
+        rather than about repository write-boundary snapshots.
+        """
+        return CliRunner().invoke(
+            app,
+            [
+                "run-process",
+                str(spec),
+                "--var",
+                f"RUNS_DIR={run_dir.parent}",
+                "--var",
+                f"RUN_ID={run_dir.name}",
+            ],
+        )
+
+    def test_mapped_composite_leaves_on_two_equal_profiles_share_one_pool(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo_dir, process_dir = self._repo(tmp_path)
+        self._register_adapter(monkeypatch)
+        # Two spellings of one estimate: pool resources compare as resolved values.
+        self._write_repo_profiles(
+            repo_dir,
+            {
+                "judge-a": {"estimated_process_rss_mb": 250, "initial_memory_budget_fraction": 0.5},
+                "judge-b": {"estimated_process_rss_bytes": 250 * 1024 * 1024},
+            },
+        )
+        (process_dir / "child.process.md").write_text(
+            "---\nprocess:\n  name: judge-pair\n  steps:\n"
+            + self._agent_step("judge-a", "judge-a")
+            + self._agent_step("judge-b", "judge-b")
+            + "---\n",
+            encoding="utf-8",
+        )
+        (process_dir / "parent.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: review
+                  deps:
+                    roster:
+                      path: "{{run.dir}}/roster.md"
+                      as: path
+                      produced_by: write-roster.roster
+                    child:
+                      path: ./child.process.md
+                      as: path
+                  steps:
+                    - id: write-roster
+                      mode: code
+                      outputs:
+                        roster:
+                          path: "{{run.dir}}/roster.md"
+                          kind: file
+                          format: frontmatter-md
+                      command: >-
+                        /bin/sh -c 'mkdir -p "{{run.dir}}";
+                        printf "%s\\n" "---" "progress:" "  schema: metaproc:ProgressSpec/0.1" "  process: review" "  items:" "    - ticker: alfa" "    - ticker: brvo" "---" > "{{run.dir}}/roster.md"'
+                    - id: review-ticker
+                      mode: composite
+                      uses: deps.child
+                      needs: [write-roster]
+                      for_each:
+                        over: deps.roster
+                        bind: ticker
+                        bind_fields: [ticker]
+                        key: "{{ticker}}"
+                ---
+                """
+            ),
+            encoding="utf-8",
+        )
+
+        run_dir = tmp_path / "runs" / "two-lanes"
+        result = self._invoke(process_dir / "parent.process.md", run_dir)
+
+        assert result.exit_code == 0, result.output
+        for ticker in ("alfa", "brvo"):
+            for step_id in ("judge-a", "judge-b"):
+                assert (run_dir / "review-ticker" / ticker / f"{step_id}.md").is_file()
+        status = read_yaml_file(run_dir / STATE_DIR / "runpool-status.yaml")
+        lanes = {lane["lane_id"]: lane for lane in status["lanes"]}
+        assert set(lanes) == {"judge-a", "judge-b"}
+        assert all(lane["execution_profile"] == lane_id for lane_id, lane in lanes.items())
+        assert all(lane["completed_count"] == 2 for lane in lanes.values())
+        assert all(lane["failed_count"] == 0 for lane in lanes.values())
+        assert status["concurrency_plan"]["execution_profile"] in lanes
+        assert status["concurrency_plan"]["estimated_process_rss_bytes"] == 250 * 1024 * 1024
+        rendered = CliRunner().invoke(app, ["pool", "status", str(run_dir)])
+        assert rendered.exit_code == 0, rendered.output
+        for lane_id in ("judge-a", "judge-b"):
+            assert (
+                f"  {lane_id} (profile={lane_id}): active=0, completed=2, failed=0, killed=0"
+                in rendered.output
+            )
+
+    def test_a_profile_with_different_pool_resources_is_refused_by_name_and_value(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo_dir, process_dir = self._repo(tmp_path)
+        self._register_adapter(monkeypatch)
+        self._write_repo_profiles(
+            repo_dir,
+            {
+                "light": {"estimated_process_rss_mb": 250, "initial_memory_budget_fraction": 0.5},
+                "heavy": {
+                    "estimated_process_rss_mb": 1024,
+                    "initial_memory_budget_fraction": 0.5,
+                    "max_concurrency_hint": 20,
+                },
+            },
+        )
+        spec = process_dir / "mixed.process.md"
+        spec.write_text(
+            "---\nprocess:\n  name: mixed\n  steps:\n"
+            + self._agent_step("first", "light")
+            + self._agent_step("second", "heavy", needs="first")
+            + "---\n",
+            encoding="utf-8",
+        )
+
+        run_dir = tmp_path / "runs" / "mixed-lanes"
+        result = self._invoke(spec, run_dir)
+
+        assert result.exit_code != 0
+        first = read_status_at(_task_state_dir_for(run_dir, "first"))
+        assert first is not None and first.state == "completed", result.output
+        assert (run_dir / "first.md").is_file()
+        assert not (run_dir / "second.md").exists()
+        steps = read_yaml_file(run_dir / STATE_DIR / "process-status.yaml")["steps"]
+        assert steps["second"]["state"] == "failed", result.output
+        error = steps["second"]["error"]
+        light_rss, heavy_rss = 250 * 1024 * 1024, 1024 * 1024 * 1024
+        assert "'heavy' cannot share the run-owned RunPool sized from 'light'" in error
+        assert (
+            f"estimated_process_rss_bytes {light_rss} for 'light', {heavy_rss} for 'heavy'" in error
+        )
+        assert "max_concurrency_hint None for 'light', 20 for 'heavy'" in error
+        assert "initial_memory_budget_fraction 0.5" not in error
+        status = read_yaml_file(run_dir / STATE_DIR / "runpool-status.yaml")
+        assert [lane["lane_id"] for lane in status["lanes"]] == ["light"]

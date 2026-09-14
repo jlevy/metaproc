@@ -62,6 +62,15 @@ development series.
   No artifact shape changes and no contract is widened.
   Reported figures move only for a Gemini stats block that was already being read wrong.
 
+- **A run serves several execution profiles from its one pool.** Steps pinned to
+  different profiles no longer fail when the second profile reaches the run-owned
+  RunPool. A profile joins as another lane when its `max_concurrency_hint`,
+  `estimated_process_rss_bytes`, and `initial_memory_budget_fraction` resolve equal to
+  those of the profile that sized the pool, and `pool status` lists every lane.
+  A profile whose values differ still fails before launch, now with an error naming each
+  differing value for both profiles, because the pool keeps no per-lane resource
+  accounting. `RunPool.register_lane` adds a lane to status before its first launch.
+
 ## [0.4.1][] - 2026-09-10
 
 ### Fixed
