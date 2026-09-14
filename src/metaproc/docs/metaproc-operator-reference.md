@@ -508,6 +508,12 @@ uv run metaproc run-process <process.process.md> \
 execution profile. `{{run.variant}}` is only a migration alias for
 `{{run.artifact_namespace}}`.
 
+`--step-variant STEP=PROFILE` overrides the profile of one top-level step of the
+launched process.
+A composite step’s child process is planned with the run-level profile,
+so a step inside a child cannot be overridden this way; launch validation refuses such
+an id and lists the top-level step ids.
+
 Preflight credentials before a live dispatch:
 
 ```bash

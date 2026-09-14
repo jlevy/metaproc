@@ -9,6 +9,11 @@ development series.
 
 ### Fixed
 
+- **`--step-variant` refuses a step the launched process does not have.** Overrides
+  apply to the launched process’s top-level steps only; a step id inside a composite
+  child process was silently ignored and now fails launch validation with the top-level
+  step ids.
+
 - **Prelaunch and process-output refusals retain their causes.** Credential and input
   refusals now reach durable step status without creating an attempt; manual timeout
   closes the running task.
