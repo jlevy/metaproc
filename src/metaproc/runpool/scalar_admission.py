@@ -15,11 +15,14 @@ Admission is best-effort in one specific sense: if the gate cannot be reached or
 wait times out, the launch proceeds rather than failing the run. A step that would have
 run before this module existed must not start failing because the shared slot directory
 is unwritable; the point is to bound normal operation, not to add a new outage mode.
+Each bypass is recorded as ``host_admission_denied`` with ``decision: bypass`` and the
+seconds spent waiting, so ungoverned launches can be counted from the event log.
 """
 
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -30,6 +33,7 @@ from metaproc.runpool.host_admission import (
     HostAdmissionGate,
     HostAdmissionLease,
 )
+from metaproc.runpool.pool import resolve_host_max_concurrency
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +45,32 @@ logger = logging.getLogger(__name__)
 # to every scalar step and then launched it ungoverned anyway. And a limit of 1 would
 # serialize unrelated scalar steps even on an idle machine, which nothing in the
 # incident record motivates — the recorded failures were dozens of simultaneous
-# launches, not two. METAPROC_HOST_MAX_LOCAL_AGENTS can lower the resolved limit; it
-# cannot raise the profile limit or this path's default.
+# launches, not two. The default limit applies only to a leaf without a run-owned
+# RunPool; resolve_agent_leaf_host_limit owns the full precedence.
 SCALAR_DEFAULT_HOST_LIMIT = 4
 SCALAR_ACQUIRE_TIMEOUT_S = 60.0
+
+
+def resolve_agent_leaf_host_limit(
+    resource_config: Mapping[str, object],
+    *,
+    pool_max_concurrency: int | None,
+) -> int:
+    """Resolve the host-slot limit for one ``run-process`` agent leaf.
+
+    Precedence:
+    1. ``METAPROC_HOST_MAX_LOCAL_AGENTS`` lowers the result and never raises it.
+    2. An explicit ``host_max_concurrency`` in the leaf's resources.
+    3. ``pool_max_concurrency`` when the leaf runs under a run-owned RunPool, so the
+       gate has a slot for every agent that pool can run.
+    4. ``SCALAR_DEFAULT_HOST_LIMIT`` for a leaf without a run-owned pool.
+
+    A leaf holds its slot from before pool submission until its process exits, so a
+    limit below the run's leaf ceiling makes leaves wait on slots that the same run's
+    queued leaves hold.
+    """
+    default = SCALAR_DEFAULT_HOST_LIMIT if pool_max_concurrency is None else pool_max_concurrency
+    return resolve_host_max_concurrency(resource_config, default=default)
 
 
 @asynccontextmanager
@@ -87,6 +113,7 @@ async def admitted_launch(
                 decision="wait",
             )
 
+    started = time.monotonic()
     try:
         lease = await gate.acquire(
             label=label,
@@ -95,6 +122,7 @@ async def admitted_launch(
             on_wait=record_wait,
         )
     except OSError as exc:
+        waited_s = time.monotonic() - started
         if event_logger is not None:
             event_logger.host_admission_denied(
                 namespace=gate.namespace,
@@ -103,9 +131,15 @@ async def admitted_launch(
                 reason="timeout" if isinstance(exc, TimeoutError) else "unavailable",
                 decision="bypass",
                 error=str(exc),
+                waited_s=waited_s,
             )
         logger.warning(
-            "host admission unavailable for %s (%s); launching without a slot", label, exc
+            "host admission unavailable for %s after %.1fs at limit %d (%s); "
+            "launching without a slot",
+            label,
+            waited_s,
+            limit,
+            exc,
         )
 
     try:

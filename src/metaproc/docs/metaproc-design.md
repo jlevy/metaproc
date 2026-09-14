@@ -6,7 +6,7 @@ status: Approved
 ---
 # Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-09-13) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-09-14) **Status:** Approved
 
 Also readable as `metaproc help design`.
 
@@ -1989,12 +1989,16 @@ merge the two files.
 **Admission.** `host_slot_acquired` is written after a RunPool slot is taken.
 Both the RunPool and scalar launch paths write `host_admission_denied` once on the first
 unsuccessful slot scan, with `reason: no_available_slot` and `decision: wait`. A
-terminal refusal records the actual `timeout` or `unavailable` reason and exception
-message. RunPool records `decision: fail`; the scalar path records `decision: bypass`
-when its existing best-effort policy launches without a slot.
+terminal refusal records the actual `timeout` or `unavailable` reason, exception
+message, and `waited_s`, the seconds that acquisition spent before the refusal.
+RunPool records `decision: fail`; the scalar path records `decision: bypass` when its
+existing best-effort policy launches without a slot.
 Every refusal identifies the namespace, configured limit, and launch label.
-No occupied-slot count, wait duration, or successful admission is inferred from these
-records; a wait event alone does not establish the eventual outcome.
+`metaproc pool events --type host_admission_denied --summary` counts them by decision
+and reason and totals the terminal wait seconds.
+No occupied-slot count or successful admission is inferred from these records.
+A scalar-path wait that ends in a slot has no closing record or duration, so a wait
+event alone does not establish the eventual outcome.
 The governor records `consecutive_normal` and `consecutive_elevated` on each
 `pressure_check` and `health_sample`, including a sustained `elevated` hold with no
 capacity change. `concurrency_adjust` is emitted only when capacity changes.

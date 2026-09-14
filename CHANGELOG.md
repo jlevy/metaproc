@@ -9,6 +9,16 @@ development series.
 
 ### Fixed
 
+- **Agent leaves under a run-owned pool are admitted up to the pool’s maximum.** The
+  host-slot limit for a `run-process` agent leaf defaults to the run-owned pool’s
+  `max_concurrency` instead of 4, so one run no longer makes every agent past the fourth
+  wait 60 seconds and launch without a slot.
+  An explicit `resources.host_max_concurrency` still replaces the default, and
+  `METAPROC_HOST_MAX_LOCAL_AGENTS` still lowers the result; a leaf without a run-owned
+  pool keeps the default of 4. Terminal host-admission refusals record `waited_s`, and
+  `metaproc pool events --type host_admission_denied --summary` counts waits, bypassed
+  launches, and terminal wait seconds.
+
 - **Prelaunch and process-output refusals retain their causes.** Credential and input
   refusals now reach durable step status without creating an attempt; manual timeout
   closes the running task.

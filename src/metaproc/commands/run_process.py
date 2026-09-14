@@ -220,7 +220,7 @@ from metaproc.runpool.pool import (
 )
 from metaproc.runpool.process_events import ProcessEventLogger
 from metaproc.runpool.registry import get_backend
-from metaproc.runpool.scalar_admission import SCALAR_DEFAULT_HOST_LIMIT, admitted_launch
+from metaproc.runpool.scalar_admission import admitted_launch, resolve_agent_leaf_host_limit
 from metaproc.settings import POOL_MAX_CONCURRENCY
 from metaproc.viz_loader import load_plan_bundle
 
@@ -2465,6 +2465,14 @@ async def _execute_agent_step(
                     if execution_context is not None
                     else None
                 )
+                # Under a run-owned pool the slot limit defaults to that pool's ceiling,
+                # so the gate admits every agent the pool can run.
+                host_limit = resolve_agent_leaf_host_limit(
+                    scalar_resource_config,
+                    pool_max_concurrency=(
+                        scalar_pool.max_concurrency if scalar_pool is not None else None
+                    ),
+                )
                 pool_kill_reason: str | None = None
                 timed_out = False
                 boundary_before = None
@@ -2473,9 +2481,7 @@ async def _execute_agent_step(
                         async with admitted_launch(
                             event_logger=auth_events,
                             enabled=backend_name == "local",
-                            limit=resolve_host_max_concurrency(
-                                scalar_resource_config, default=SCALAR_DEFAULT_HOST_LIMIT
-                            ),
+                            limit=host_limit,
                             label=f"{run_id}/{step_id}",
                             pool_id=f"run-process:{run_id}",
                             metadata={

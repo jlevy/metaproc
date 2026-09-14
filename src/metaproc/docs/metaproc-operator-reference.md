@@ -348,8 +348,11 @@ and holds a lease naming the owning process.
 Standalone pools acquire slots inside RunPool and propagate an admission timeout or
 error. Under `run-process`, agent leaves acquire an outer scalar-path gate before
 submitting to the run-owned pool.
-This path fails open after its bounded wait: it logs the failure and launches without a
+This path fails open after a 60-second wait: it logs the failure, records
+`host_admission_denied` with `decision: bypass` and `waited_s`, and launches without a
 slot, including when the leaf belongs to a mapped step.
+Count waits and ungoverned launches with
+`metaproc pool events <run-dir> --type host_admission_denied --summary`.
 
 It is not, however, a negotiated ceiling, and an operator planning two concurrent runs
 should know why:
@@ -369,6 +372,15 @@ should know why:
 `METAPROC_HOST_MAX_LOCAL_AGENTS` takes the minimum of its value and the profile’s
 `host_max_concurrency`, or the path-specific default when the profile omits that key.
 It can lower a host-admission limit but cannot raise one.
+The default for a `run-process` agent leaf is the run-owned pool’s maximum, so a single
+run admits as many agents as `--max-concurrency` allows; a leaf without a run-owned pool
+defaults to 4. Two runs at `--max-concurrency 30` share slots `0` through `29`: together
+they hold at most 30, and each leaf beyond that waits 60 seconds and launches without a
+slot. A leaf holds its slot while it is queued behind its pool’s adaptive capacity, so a
+run whose memory ceiling is below its maximum can occupy its full slot range.
+To bound two runs without bypassed launches, give both the same
+`resources.host_max_concurrency`, equal to the intended total, and keep the sum of their
+`--max-concurrency` values at or below it.
 `max_concurrency_hint` is separate: it caps the pool maximum derived from
 `--max-concurrency` or batch size.
 Set the host environment variable for *both* runs before launching the second.
@@ -377,6 +389,8 @@ limits actually used.
 A `run-parallel` pool also records its host limit in its concurrency plan; the run-owned
 pool under `run-process` does not own the outer scalar admission gate, so its plan alone
 does not describe that gate.
+The complete precedence table is in `metaproc help arch-runpool` under Host
+Coordination.
 
 Host admission is a local-backend mechanism.
 Non-local backends skip it entirely, so two cloud-backed runs share nothing on the

@@ -747,6 +747,11 @@ class RunPool:
         return len(self._active)
 
     @property
+    def max_concurrency(self) -> int:
+        """Configured ceiling; adaptive capacity moves at or below it."""
+        return self._config.max_concurrency
+
+    @property
     def current_max_concurrency(self) -> int:
         return self._semaphore.capacity
 
@@ -1322,6 +1327,7 @@ class RunPool:
                     decision="wait",
                 )
 
+        started = time.monotonic()
         try:
             lease = await gate.acquire(
                 label=config.label,
@@ -1338,6 +1344,7 @@ class RunPool:
                     reason="timeout" if isinstance(exc, TimeoutError) else "unavailable",
                     decision="fail",
                     error=str(exc),
+                    waited_s=time.monotonic() - started,
                 )
             raise
         try:

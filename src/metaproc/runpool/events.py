@@ -178,8 +178,13 @@ class EventLogger:
         reason: str,
         decision: str,
         error: str | None = None,
+        waited_s: float | None = None,
     ) -> None:
-        """Record the observed refusal and the caller's actual next action."""
+        """Record the observed refusal and the caller's actual next action.
+
+        ``waited_s`` is the time spent in the acquisition that ended in a terminal
+        refusal; the first-scan ``wait`` record omits it.
+        """
         self._write(
             _without_none(
                 {
@@ -190,6 +195,7 @@ class EventLogger:
                     "reason": reason,
                     "decision": decision,
                     "error": error,
+                    "waited_s": None if waited_s is None else round(waited_s, 1),
                 }
             )
         )

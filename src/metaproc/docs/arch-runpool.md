@@ -9,7 +9,7 @@ status: Approved
 Module-level notes, including using RunPool as a library, are in
 [`runpool/README.md`](../runpool/README.md).
 
-**Date:** 2026-04-06 (last updated 2026-09-10) **Status:** Approved
+**Date:** 2026-04-06 (last updated 2026-09-14) **Status:** Approved
 
 RunPool is Metaproc’s local agent process manager.
 It owns subprocess lifecycle, adaptive concurrency, host-level coordination, health
@@ -364,10 +364,26 @@ protected by the atomic slot-creation primitive.
 
 Pool-owned admission propagates a timeout or admission error.
 The outer scalar path, including agent leaves submitted to the run-owned pool, fails
-open after a bounded wait: it logs the admission failure and proceeds without a lease.
-Each gate scans only the slot prefix below its own resolved limit, so this mechanism is
-an aggregate count ceiling only for admitted launches whose launchers resolve the same
-limit. It is not a host-wide memory reservation.
+open after a 60-second wait: it logs the admission failure, records
+`host_admission_denied` with `decision: bypass` and `waited_s`, and proceeds without a
+lease. Each gate scans only the slot prefix below its own resolved limit, so this
+mechanism is an aggregate count ceiling only for admitted launches whose launchers
+resolve the same limit.
+It is not a host-wide memory reservation.
+
+The limits resolve as follows; `METAPROC_HOST_MAX_LOCAL_AGENTS` lowers every result and
+never raises one:
+
+| Launcher | Limit when `resources.host_max_concurrency` is unset |
+| --- | --- |
+| `run-parallel` or `run-process` fan-out pool | That pool’s `max_concurrency` |
+| `run-process` agent leaf under the run-owned pool | That pool’s `max_concurrency`: `--max-concurrency` or `METAPROC_DEFAULT_MAX_CONCURRENCY` (200 when neither is set), lowered by `max_concurrency_hint` |
+| Agent leaf without a run-owned pool | 4 |
+
+An explicit `resources.host_max_concurrency` replaces the default in every row,
+including a value above the pool ceiling.
+An agent leaf holds its slot from before pool submission until its process exits, so
+leaves queued behind the pool’s adaptive capacity still count against the host limit.
 
 No daemon is required; leases may remain after process death until a later acquisition
 reclaims them.

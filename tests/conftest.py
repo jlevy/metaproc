@@ -81,6 +81,27 @@ def pytest_addoption(parser):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_host_admission(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """Keep tests off the host-wide admission state that live local runs share.
+
+    A gate constructed without an explicit root uses ``~/.metaproc/runpool/host-slots``,
+    so a test reaching one would hold or wait on the same slots as any Metaproc run on
+    the machine, and fail or stall a live run's launches. The operator's
+    ``METAPROC_HOST_MAX_LOCAL_AGENTS`` is cleared for the same reason; tests that
+    exercise it set it explicitly.
+    """
+    root = tmp_path_factory.mktemp("host-slots")
+    monkeypatch.setattr(
+        "metaproc.runpool.host_admission.default_host_admission_root",
+        lambda: root,
+    )
+    monkeypatch.delenv("METAPROC_HOST_MAX_LOCAL_AGENTS", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _clear_gh_token_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Scrub GH_TOKEN vars from the test env.
 

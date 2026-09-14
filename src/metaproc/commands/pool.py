@@ -22,6 +22,7 @@ from metaproc.io import (
     resolve_existing_artifact,
 )
 from metaproc.paths import POOL_STATUS_FILE, SCALE_OVERRIDE_FILE, STATE_DIR
+from metaproc.runpool import host_admission
 from metaproc.runpool.host_admission import (
     DEFAULT_HOST_ADMISSION_NAMESPACE,
     list_host_admission_slots,
@@ -244,7 +245,7 @@ def pool_events(
     summary: bool = typer.Option(
         False,
         "--summary",
-        help="Aggregate counts (per event type, or per-label/classification when --type=auth_outcome, or per-label/policy when --type=auth_lease_acquired) instead of a per-event listing",
+        help="Aggregate counts (per event type, or per-label/classification when --type=auth_outcome, or per-label/policy when --type=auth_lease_acquired, or per-decision/reason with terminal wait seconds when --type=host_admission_denied) instead of a per-event listing",
     ),
 ) -> None:
     """Show RunPool event log for a run directory."""
@@ -403,7 +404,7 @@ def pool_host_slots(
         return
 
     if not slots:
-        root = root_dir or Path.home() / ".metaproc" / "runpool" / "host-slots"
+        root = root_dir or host_admission.default_host_admission_root()
         out.progress(f"No host admission slots under {root / namespace}")
         return
 
@@ -563,11 +564,34 @@ def _summarize_events(
         base["pressure_check"] = _summarize_pressure_samples(events)
         return base
 
+    if event_type == "host_admission_denied":
+        base["host_admission_denied"] = _summarize_host_admission_denials(events)
+        return base
+
     by_event: Counter[str] = Counter()
     for ev in events:
         by_event[ev.get("event", "unknown")] += 1
     base["by_event"] = dict(by_event)
     return base
+
+
+def _summarize_host_admission_denials(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Count host-slot waits and their terminal outcomes.
+
+    ``wait`` counts acquisitions whose first slot scan found no free slot, ``bypass``
+    counts launches that proceeded without a slot, and ``fail`` counts RunPool launches
+    refused. Waited seconds come from terminal refusals only.
+    """
+    waited = [
+        float(ev["waited_s"]) for ev in events if isinstance(ev.get("waited_s"), (int, float))
+    ]
+    return {
+        "by_decision": dict(Counter(str(ev.get("decision", "unknown")) for ev in events)),
+        "by_reason": dict(Counter(str(ev.get("reason", "unknown")) for ev in events)),
+        "by_limit": dict(Counter(str(ev.get("limit", "unknown")) for ev in events)),
+        "terminal_waited_s_total": round(sum(waited), 1),
+        "terminal_waited_s_max": max(waited) if waited else None,
+    }
 
 
 def _summarize_health(samples: list[dict[str, Any]]) -> dict[str, Any]:
@@ -731,6 +755,18 @@ def _render_summary(report: dict[str, Any], *, out: Any) -> None:
             "Pool: "
             f"active max={pressure.get('max_active_count')} "
             f"cap max={pressure.get('max_concurrency')}"
+        )
+        return
+
+    if "host_admission_denied" in report:
+        denied = report["host_admission_denied"]
+        out.data(f"\nDecisions: {denied['by_decision']}")
+        out.data(f"Reasons: {denied['by_reason']}")
+        out.data(f"Limits: {denied['by_limit']}")
+        out.data(
+            "Terminal waits: "
+            f"total={_format_float(denied['terminal_waited_s_total'], suffix='s')} "
+            f"max={_format_float(denied['terminal_waited_s_max'], suffix='s')}"
         )
         return
 

@@ -1340,6 +1340,8 @@ class TestRunPool:
             ("timeout", "fail"),
         ]
         assert decisions[-1].error and "timed out waiting" in decisions[-1].error
+        assert decisions[0].waited_s is None
+        assert decisions[-1].waited_s is not None and decisions[-1].waited_s >= 0
 
     def test_pressure_adjusts_live_pool_capacity(self, tmp_path: Path):
         """RunPool updates its semaphore capacity when pressure changes."""
