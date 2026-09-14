@@ -7,6 +7,19 @@ development series.
 
 ## [Unreleased][unreleased]
 
+### Added
+
+- **Every run writes an operations summary.** Run finalization writes
+  `operations-summary.md` (`metaproc.operations:AgentOperationsSummary/v1`) beside
+  `resource-usage-summary.md`: real elapsed time, setup, per-stage shares, per-item
+  chain running time and barrier wait, step durations, pool concurrency, attempt
+  dispositions, agent transcripts, and machine resources.
+  A figure the run cannot establish is null with a stated reason.
+  A failure while summarizing is logged and never changes the run’s outcome.
+  `metaproc operations summary RUN_DIR` builds the same document for a finished run
+  without writing, and `metaproc operations rollup RUN_DIR...` sets runs side by side
+  against a per-item chain-time target.
+
 ### Fixed
 
 - **Agent leaves under a run-owned pool are admitted up to the pool’s maximum.** The
@@ -18,6 +31,10 @@ development series.
   pool keeps the default of 4. Terminal host-admission refusals record `waited_s`, and
   `metaproc pool events --type host_admission_denied --summary` counts waits, bypassed
   launches, and terminal wait seconds.
+- **`--step-variant` refuses a step the launched process does not have.** Overrides
+  apply to the launched process’s top-level steps only; a step id inside a composite
+  child process was silently ignored and now fails launch validation with the top-level
+  step ids.
 
 - **Prelaunch and process-output refusals retain their causes.** Credential and input
   refusals now reach durable step status without creating an attempt; manual timeout

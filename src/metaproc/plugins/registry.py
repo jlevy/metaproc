@@ -9,6 +9,11 @@ from softschema import Contract, Contracts, SchemaProfile, SchemaStatus
 
 from metaproc.io.frontmatter import ProgressSpec
 from metaproc.models.authored import ProcessSpec
+from metaproc.models.operations_summary import (
+    OPERATIONS_SUMMARY_CONTRACT,
+    OPERATIONS_SUMMARY_ENVELOPE,
+    AgentOperationsSummary,
+)
 from metaproc.models.plan import RUN_PLAN_SNAPSHOT_CONTRACT, Plan, RunPlanSnapshot
 from metaproc.models.qa import QaReport, QaSummary
 from metaproc.models.resource_summary import (
@@ -132,6 +137,7 @@ class PluginRegistryImpl:
             ("metaproc:QaSummary/0.1", QaSummary, "qa_summary"),
             ("metaproc:UsageReport/0.2", UsageReport, "usage"),
             (RESOURCE_USAGE_SUMMARY_CONTRACT, ResourceUsageSummary, "resource_usage"),
+            (OPERATIONS_SUMMARY_CONTRACT, AgentOperationsSummary, OPERATIONS_SUMMARY_ENVELOPE),
             (STRUCTURE_REPORT_CONTRACT_ID, StructureReport, "structure_report"),
         ]:
             self.register_softschema(

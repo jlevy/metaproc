@@ -522,6 +522,12 @@ uv run metaproc run-process <process.process.md> \
 execution profile. `{{run.variant}}` is only a migration alias for
 `{{run.artifact_namespace}}`.
 
+`--step-variant STEP=PROFILE` overrides the profile of one top-level step of the
+launched process.
+A composite step’s child process is planned with the run-level profile,
+so a step inside a child cannot be overridden this way; launch validation refuses such
+an id and lists the top-level step ids.
+
 Preflight credentials before a live dispatch:
 
 ```bash
@@ -638,6 +644,8 @@ plus `pool events` to inspect contention.
 | What did the pressure sampler see? | `uv run metaproc pool health <run-dir>` |
 | Who holds host admission slots right now? | `uv run metaproc pool host-slots` |
 | What are throughput and resource totals? | `uv run metaproc stats <run-dir>` |
+| Where did a finished run spend its time, per stage and per item? | `uv run --frozen metaproc operations summary <run-dir>` |
+| How do several runs compare per item? | `uv run --frozen metaproc operations rollup <run-dir> <run-dir>...` |
 | Which auth labels were used? | `uv run metaproc auth usage <run-dir>` |
 | What is the cloud Batch state? | `uv run metaproc gcp status <run-id>` |
 | What did cloud jobs log? | `uv run metaproc gcp logs <run-id>` |
@@ -837,6 +845,48 @@ Read counts, not the label:
 
 Cross-check volume against `metaproc stats <run-dir>` and
 `metaproc pool rollup <run-dir>` before calling a run done.
+
+### Reading the Operations Summary
+
+Run finalization writes `operations-summary.md` at the run root, beside
+`resource-usage-summary.md`, for completed, failed, cancelled, and timed-out runs alike.
+Its frontmatter is `metaproc.operations:AgentOperationsSummary/v1`; the body renders the
+same values. Point it at the run root; a child scope is not a run.
+
+| Section | What it measures |
+| --- | --- |
+| Run | Elapsed as last recorded completion minus first start in the root `process-status.yaml`, the terminal state, item count, variant, and revisions from the run config |
+| Setup and stages | Elapsed per top-level step and its share of run elapsed; setup is every top-level step that is not a mapped fan-out |
+| Per item | For each item key of the mapped top-level steps: running time in each stage’s item scope, barrier wait from its completion in one stage to its start in the next, chain running time (the sum of stage running times), and chain span |
+| Steps | Duration distribution per step type across every scope, with agent and code totals from each scope’s `run-plan.yaml` |
+| Parallelism | Peak and time-weighted mean running pooled tasks from RunPool process events, and the share of health samples at the current cap and at the pool ceiling |
+| Retries | Every `TaskAttemptRecord` found by schema token in every scope, by disposition and failure class; a lost attempt without a class counts as `unclassified` |
+| Agents | Transcript count, provider time and served models from each transcript’s terminal result, requested models, token totals and meter coverage from the resource summary, and tool-result lines at the 16 MiB cap |
+| Resources | List cost, CPU, and peak RSS from the resource summary; swap peak, swap growth, and minimum free disk from RunPool health samples; run size on disk |
+
+A figure the evidence cannot establish is null, and its reason is in the section’s
+`unavailable` map and in the body’s Unavailable Figures table.
+Read it as unmeasured, never as zero.
+
+For a run that finished before this summary existed, or to rebuild it:
+
+```bash
+uv run --frozen metaproc operations summary <run-dir>                 # print, write nothing
+uv run --frozen metaproc operations summary <run-dir> --format yaml   # or json
+uv run --frozen metaproc operations summary <run-dir> --write         # also write the file
+uv run --frozen metaproc operations rollup <run-dir> <run-dir> \
+  --target-min-minutes 10 --target-max-minutes 15
+```
+
+`summary` never runs resource recovery and writes no `.jsonl`, so it is safe on a run
+whose resource projections must not change.
+`rollup` prints one row per run: items, elapsed, setup, chain running p50, p90 and max
+with the count under, within, and over the target, elapsed and list cost per item, peak
+and mean concurrency against the ceiling, peak RSS, swap peak, and retries.
+It reads each run’s written summary and builds one in memory when the file is absent or
+from another extractor version; pass `--recompute` to build every row from evidence.
+A later `metaproc status` that re-finalizes resources does not rewrite the operations
+summary; rebuild it with `--write` when the resource figures must match.
 
 ## Log Compression
 
