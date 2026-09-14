@@ -337,6 +337,31 @@ That costs a ramp, which is fast, and it composes correctly with a resume: proce
 still in flight are consuming memory that the fresh reading has by definition already
 counted.
 
+### Several Execution Profiles in One Run
+
+`run-process` owns one RunPool per local run, and every scalar agent leaf (an agent step
+without `for_each`) submits to it, including leaves inside composite and mapped scopes.
+Steps can pin different execution profiles, so the pool may serve several.
+The first leaf to reach it sizes the pool from that leaf’s profile:
+`max_concurrency_hint` lowers the ceiling, and `estimated_process_rss_bytes` with
+`initial_memory_budget_fraction` set the startup estimate described above.
+
+A leaf on another profile joins the same pool as another lane when those three values
+resolve equal to the sizing profile’s (`estimated_process_rss_mb: 250` equals
+`estimated_process_rss_bytes: 262144000`). Lanes add identity and counters, not
+admission: every lane shares the one semaphore and its memory, provider, and operator
+ceilings. `lanes` in `runpool-status.yaml` and `metaproc pool status` list every profile
+the pool serves, while `concurrency_plan` names the profile that sized it.
+
+A profile whose values differ is refused, and its step fails with an error naming each
+differing value for both profiles.
+The pool computes its estimate and ceiling once and keeps no per-lane resource
+accounting, so it has no way to honor a second estimate after it has started.
+Accepting one would let a heavier profile fill capacity sized for a lighter one.
+Align the profiles’ resources, or run those steps as separate runs.
+Which profile sizes the pool can vary between launches when leaves start concurrently;
+because acceptance requires equality, the outcome does not.
+
 ## Host Coordination
 
 Per-pool `max_concurrency` is not enough when an operator starts several local Metaproc

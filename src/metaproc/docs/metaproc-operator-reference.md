@@ -213,10 +213,13 @@ Useful dispatch selectors:
 `--skip`, `--from`, and `--only` currently name root-process steps.
 They are not matched against same-named steps inside a composite child.
 
-The initial local run-owned pool supports one execution profile per run.
-If a later scalar agent leaf resolves to a different profile, Metaproc fails before
-launching it; run distinct profiles as separate sibling runs until mixed-profile pool
-placement is implemented.
+A local run serves the execution profiles its scalar agent steps pin from one run-owned
+pool, as long as those profiles’ `max_concurrency_hint`, `estimated_process_rss_bytes`,
+and `initial_memory_budget_fraction` resolve equal.
+A leaf whose profile differs in any of them fails before launch with an error naming
+both values; align the resources or run those steps as separate runs.
+`metaproc pool status <run-dir>` lists one lane per profile served.
+See [arch-runpool.md](arch-runpool.md) § Several Execution Profiles in One Run.
 
 For the common “I edited one step, rerun and reuse the rest” loop, you usually do
 **not** pass any of these flags; rerun with the same `RUN_ID` and let the fingerprint
