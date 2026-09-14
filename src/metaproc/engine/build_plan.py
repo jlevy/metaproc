@@ -108,6 +108,26 @@ def _resolve_required_profile(
         raise ValueError(msg) from exc
 
 
+def unknown_step_override_errors(spec: ProcessSpec, overrides: Mapping[str, str]) -> list[str]:
+    """Return one error per ``--step-variant`` step id that is not a step of *spec*.
+
+    Overrides apply only to the process being launched. A composite step's child process
+    is planned with the run-level profile, so an id naming a step inside a child would
+    otherwise be accepted and have no effect.
+    """
+    root_ids = [step.id for step in spec.steps]
+    unknown = [step_id for step_id in overrides if step_id not in root_ids]
+    if not unknown:
+        return []
+    available = ", ".join(root_ids) or "(none)"
+    return [
+        f"--step-variant {step_id}: no step {step_id!r} in process {spec.name!r}; "
+        f"overrides apply only to its top-level steps ({available}), not to steps inside "
+        "composite child processes"
+        for step_id in unknown
+    ]
+
+
 def validate_execution_profiles(
     spec: ProcessSpec,
     *,
@@ -126,6 +146,7 @@ def validate_execution_profiles(
     registry = _load_profile_registry(process_path, profile_files)
     overrides = step_profile_overrides or {}
 
+    errors: list[str] = unknown_step_override_errors(spec, overrides)
     requests: list[tuple[str, str]] = []
     if adapter_override is None and spec.defaults.default_execution_profile:
         requests.append(
@@ -138,7 +159,6 @@ def validate_execution_profiles(
         elif step.execution_profile:
             requests.append((step.execution_profile, f"step {step.id!r} execution_profile"))
 
-    errors: list[str] = []
     for profile_name, context in requests:
         try:
             _resolve_required_profile(registry, profile_name, context=context)
@@ -780,6 +800,8 @@ def build_plan(
         artifact_namespace=run_artifact_namespace,
     )
     step_profile_overrides = step_profile_overrides or {}
+    if override_errors := unknown_step_override_errors(spec, step_profile_overrides):
+        raise ValueError("\n".join(override_errors))
 
     fan_out_errors = validate_fan_out_contracts(spec, process_path)
     if validate_spec and fan_out_errors:
