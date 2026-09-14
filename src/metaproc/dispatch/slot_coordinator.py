@@ -33,17 +33,25 @@ returned :class:`SlotLease` carries.
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import logging
+import os
 import random
 import shutil
+import stat
+import tempfile
 import time
 import time as _time
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
-from metaproc.adapters.base import AuthCapableCliAdapter, AuthFailureClassification
+from metaproc.adapters.base import (
+    AuthCapableCliAdapter,
+    AuthFailureClassification,
+    NativeSessionLogSet,
+)
 from metaproc.adapters.registry import get_auth_capable
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.dispatch.credential_pool import (
@@ -453,10 +461,11 @@ class SlotCoordinator:
 
         ``rm -rf``s the slot dir on the way out so failed attempts get
         a fresh ``a<attempt+1>/`` on retry. The caller is responsible
-        for calling :meth:`preserve_diagnostics` first if it wants the
-        slot's diagnostic files (``claude-code-debug.log``, …) preserved
-        next to the run's session log — teardown itself never copies
-        anything out. Idempotent.
+        for calling :meth:`preserve_diagnostics` and
+        :meth:`preserve_native_session_logs` first if it wants the
+        slot's diagnostic files (``claude-code-debug.log``, …) and the
+        CLI's own session records preserved next to the run's session
+        log — teardown itself never copies anything out. Idempotent.
 
         Returns the flushed blob (or ``None``) so the caller can stamp
         post-run fingerprints into the ``auth_outcome`` event.
@@ -563,6 +572,42 @@ class SlotCoordinator:
                     exc_info=True,
                 )
 
+    def preserve_native_session_logs(self, lease: SlotLease, target_log_path: Path) -> None:
+        """Copy the agent CLI's own session records out of the slot before teardown.
+
+        The slot is the CLI's config home, so the CLI writes its native session record
+        there (Codex rollouts, Claude transcripts). Those records carry per-response
+        usage, model, and timestamps that the captured stdout stream lacks, and
+        ``teardown`` would otherwise delete them with the credentials.
+
+        For each :class:`NativeSessionLogSet` the lease's adapter declares, regular
+        files matching the set's patterns below its root are copied, keeping their
+        relative layout, to ``<target_log_path.parent>/<stem>.<set name>/``. The tree is
+        staged in a private directory beside that destination and published with one
+        rename, so readers see either no directory or the complete copy; an existing
+        destination is never replaced. Symlinks are neither followed nor copied, so an
+        entry cannot pull a credential file into ``.logs/``.
+
+        Best-effort, like :meth:`preserve_diagnostics`: failures are logged and never
+        block credential cleanup or fail a run. A file that cannot be copied is logged
+        and skipped; the rest of its set is still published.
+        """
+        if not lease.slot_dir.exists():
+            return
+        adapter_impl = self._resolve_adapter(lease.adapter)
+        if adapter_impl is None:
+            return
+        for log_set in adapter_impl.native_session_log_sets():
+            try:
+                _publish_native_session_log_set(lease.slot_dir, log_set, target_log_path)
+            except (OSError, ValueError):
+                log.warning(
+                    "slot_coordinator: failed to preserve native session log set %r from %s",
+                    log_set.name,
+                    lease.slot_dir,
+                    exc_info=True,
+                )
+
     # ── Internal helpers ────────────────────────────────────────
 
     def _resolve_adapter(self, adapter_name: str) -> AuthCapableCliAdapter | None:
@@ -622,6 +667,108 @@ class SlotCoordinator:
             jitter = random.uniform(30, 120)
             sleep_fn(sleep_target + jitter)
         return False
+
+
+def _native_session_log_root(slot_dir: Path, log_set: NativeSessionLogSet) -> Path | None:
+    """Return the set's root directory inside *slot_dir*, or None when absent.
+
+    The agent controls the slot's contents, so every component of the root is checked
+    with ``lstat``: a root reached through a symlink could expose the slot's credential
+    files, or files outside the slot, and is refused. A root that escapes the slot is a
+    declaration error and raises ``ValueError``.
+    """
+    relative = PurePosixPath(log_set.root)
+    if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+        msg = f"native session log root must be a slot-relative path: {log_set.root!r}"
+        raise ValueError(msg)
+    current = slot_dir
+    for part in relative.parts:
+        current = current / part
+        try:
+            mode = current.lstat().st_mode
+        except FileNotFoundError:
+            return None
+        if not stat.S_ISDIR(mode):
+            log.warning(
+                "slot_coordinator: native session log root %s is not a real directory; skipping",
+                current,
+            )
+            return None
+    return current
+
+
+def _plan_native_session_log_files(root: Path, log_set: NativeSessionLogSet) -> list[Path]:
+    """Return root-relative paths of regular files matching *log_set*, in sorted order."""
+    planned: list[Path] = []
+
+    def _log_walk_error(exc: OSError) -> None:
+        log.warning("slot_coordinator: cannot scan native session logs at %s: %s", root, exc)
+
+    # followlinks=False: a symlinked directory is listed but never descended into.
+    for dirpath, dirnames, filenames in os.walk(root, onerror=_log_walk_error):
+        dirnames.sort()
+        directory = Path(dirpath)
+        for name in sorted(filenames):
+            if not any(fnmatch.fnmatchcase(name, pattern) for pattern in log_set.filename_patterns):
+                continue
+            path = directory / name
+            try:
+                if not stat.S_ISREG(path.lstat().st_mode):
+                    continue
+            except OSError:
+                continue
+            planned.append(path.relative_to(root))
+    return planned
+
+
+def _publish_native_session_log_set(
+    slot_dir: Path, log_set: NativeSessionLogSet, target_log_path: Path
+) -> None:
+    """Stage one set's files beside the destination and publish them with one rename."""
+    root = _native_session_log_root(slot_dir, log_set)
+    if root is None:
+        return
+    planned = _plan_native_session_log_files(root, log_set)
+    if not planned:
+        return
+    target_dir = target_log_path.parent
+    destination = target_dir / f"{target_log_path.stem}.{log_set.name}"
+    if destination.exists():
+        log.warning(
+            "slot_coordinator: native session log destination %s already exists; not replacing",
+            destination,
+        )
+        return
+    target_dir.mkdir(parents=True, exist_ok=True)
+    # mkdtemp creates the staging directory mode 0700: transcripts carry prompt and tool
+    # content, so the copy is no more readable than the slot it came from.
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{destination.name}.", suffix=".partial", dir=target_dir)
+    )
+    try:
+        copied = 0
+        for relative in planned:
+            source = root / relative
+            staged = staging / relative
+            try:
+                staged.parent.mkdir(parents=True, exist_ok=True)
+                # follow_symlinks=False: a file swapped for a symlink after planning is
+                # copied as a link, never as the content it points at.
+                shutil.copy2(source, staged, follow_symlinks=False)
+            except OSError:
+                log.warning(
+                    "slot_coordinator: failed to copy native session log %s", source, exc_info=True
+                )
+                continue
+            copied += 1
+        if copied == 0:
+            return
+        # A directory rename does not replace a non-empty destination, so a concurrent
+        # publisher's complete tree is kept rather than overwritten.
+        os.rename(staging, destination)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
 
 
 def apply_slot_env(

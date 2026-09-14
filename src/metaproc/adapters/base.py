@@ -310,6 +310,22 @@ class QuotaUsage:
     detail: str = ""
 
 
+@dataclass(frozen=True)
+class NativeSessionLogSet:
+    """Where an agent CLI writes its own session records inside a credential slot.
+
+    ``root`` is a slot-relative directory, such as ``.codex/sessions``.
+    ``filename_patterns`` are :func:`fnmatch.fnmatchcase` patterns matched against the
+    names of regular files at any depth below ``root``; the directory structure below
+    ``root`` is kept when the files are preserved. ``name`` suffixes the preserved
+    directory next to the step's session log: ``<session-stem>.<name>/``.
+    """
+
+    name: str
+    root: str
+    filename_patterns: tuple[str, ...]
+
+
 @runtime_checkable
 class AuthCapableCliAdapter(Adapter, Protocol):
     """Adapter that can participate in the labeled credential pool.
@@ -486,6 +502,19 @@ class AuthCapableCliAdapter(Adapter, Protocol):
         rather than ``debug.log``) so a future multi-adapter slot or
         side-by-side comparison stays unambiguous in the operator-facing
         logs tree.
+        """
+        return ()
+
+    def native_session_log_sets(self) -> tuple[NativeSessionLogSet, ...]:
+        """Return where the CLI writes its own session records inside the slot.
+
+        :meth:`credential_scope_env` points the CLI's config home into the slot, so the
+        CLI's native session records (Codex rollouts, Claude transcripts) land there too.
+        They are the CLI's authoritative record of per-response usage, model, and
+        timing, and they are NOT credential material: the orchestrator copies matching
+        files into the run's ``.logs/`` directory before slot teardown. Each set's
+        ``root`` must not contain credential files that match its patterns. Returns
+        ``()`` for adapters whose CLI keeps no session record in the slot.
         """
         return ()
 

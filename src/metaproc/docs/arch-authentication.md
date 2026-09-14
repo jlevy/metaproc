@@ -6,7 +6,7 @@ status: Draft — partial currency notice below
 ---
 # Architecture: Authentication and Credentials
 
-**Date:** 2026-04-21 (last updated 2026-09-10) **Status:** Draft — partial currency
+**Date:** 2026-04-21 (last updated 2026-09-14) **Status:** Draft — partial currency
 notice below
 
 ## Currency notice (2026-04-28)
@@ -1100,6 +1100,35 @@ All of a step’s logs live under that step’s `.logs/`.
 transient 5xx, or surfaced rate-limit boundaries — all useful for post-hoc throughput
 analysis. The `.logs/` directory is the operator’s authoritative record of every
 dispatch, success or failure.
+
+**Native session logs.** The slot is also the CLI’s config home
+(`CODEX_HOME=<slot>/.codex`, `CLAUDE_CONFIG_DIR=<slot>`), so the CLI’s own session
+record lands there too: Codex rollouts under `.codex/sessions/YYYY/MM/DD/`, and Claude
+transcripts under `projects/<project>/` when a step sets
+`no_session_persistence: false`. That record is the CLI’s own account of each response:
+token usage, model, and timestamps, plus rate-limit snapshots for Codex.
+The captured stdout stream is thinner; Codex’s `exec --json` stream carries neither
+timestamps nor the model.
+Each adapter declares where it lives through a second Protocol method,
+`native_session_log_sets()`, which returns a slot-relative root directory and filename
+patterns:
+
+| Adapter | Root | Patterns | Preserved as |
+| --- | --- | --- | --- |
+| `codex-cli` | `.codex/sessions` | `rollout-*.jsonl`, `rollout-*.jsonl.zst` | `<session-stem>.codex-sessions/` |
+| `claude-code-cli` | `projects` | `*.jsonl`, `*.meta.json` | `<session-stem>.claude-projects/` |
+
+`complete_slot` calls
+`SlotCoordinator.preserve_native_session_logs(lease, session_log_path)` right after
+`preserve_diagnostics`. Matching regular files keep their layout below the root, so the
+preserved directory can be read as if it were the CLI’s own `sessions/` or `projects/`
+directory.
+The copy is staged in a private mode-0700 directory beside the destination and
+published with one rename; an existing destination is never replaced.
+Symlinks are neither followed nor copied, and a root reached through a symlink is
+refused, so an agent cannot point a session-shaped name at a credential file.
+Like diagnostic preservation, it is best-effort: a failure is logged, and credential
+teardown still runs.
 
 **Failure-path classifier ordering.** `_classify_and_maybe_retry` runs *before*
 `try_compact_log` on every failure path.

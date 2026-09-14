@@ -18,6 +18,7 @@ from metaproc.adapters.base import (
     AuthStatus,
     ConfigRejection,
     FailureSeverity,
+    NativeSessionLogSet,
     QuotaUsage,
     parse_jsonl_event,
     resolve_templates,
@@ -609,6 +610,19 @@ class CodexCliAdapter:
         # ``codex-cli-debug.log`` here so it joins the same .logs/
         # tree the claude debug log already lives in.
         return ()
+
+    def native_session_log_sets(self) -> tuple[NativeSessionLogSet, ...]:
+        # `codex exec` runs without `--ephemeral`, so it records each session as a
+        # rollout under `$CODEX_HOME/sessions/YYYY/MM/DD/`. A pool slot sets
+        # CODEX_HOME to `<slot_dir>/.codex`; auth.json and config.toml sit beside
+        # `sessions/`, never inside it.
+        return (
+            NativeSessionLogSet(
+                name="codex-sessions",
+                root=".codex/sessions",
+                filename_patterns=("rollout-*.jsonl", "rollout-*.jsonl.zst"),
+            ),
+        )
 
     def credential_scope_env(
         self,

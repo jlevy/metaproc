@@ -16,7 +16,7 @@ from typing import cast as _cast
 
 import pytest
 
-from metaproc.adapters.base import AuthFailureClassification, QuotaUsage
+from metaproc.adapters.base import AuthFailureClassification, NativeSessionLogSet, QuotaUsage
 from metaproc.dispatch.credential_pool import (
     ConcurrentModificationError,
     EntryState,
@@ -169,6 +169,9 @@ class _StubAdapter:
         return []
 
     def diagnostic_filenames(self) -> tuple[str, ...]:
+        return ()
+
+    def native_session_log_sets(self) -> tuple[NativeSessionLogSet, ...]:
         return ()
 
     def setup_token_command(self) -> list[str] | None:
