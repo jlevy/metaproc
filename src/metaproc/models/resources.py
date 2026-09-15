@@ -437,6 +437,20 @@ class SourceLog(BaseModel):
     summary: LogSummary = Field(default_factory=LogSummary)
 
 
+class UnpricedModel(BaseModel):
+    """A model whose invocations carry token usage but no list cost.
+
+    Metaproc prices tokens from ``data/pricing.md``; a model with no entry there
+    contributes tokens to every total but nothing to ``list_cost_usd``.
+    ``model`` is ``None`` when the usage record named no model.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: str | None = Field(default=None, min_length=1, max_length=256)
+    invocations: int = Field(ge=1)
+
+
 class PrefixRollup(BaseModel):
     """One taxonomy-prefix entry on the persisted roll-up document.
 
@@ -494,6 +508,8 @@ class ResourcesDocument(BaseModel):
     meter_rollups: list[MeterRollup] = Field(default_factory=list)
     unattributed_meters: list[MeterRollup] = Field(default_factory=list)
     coverage_gaps: list[MeterKey] = Field(default_factory=list)
+    unpriced_models: list[UnpricedModel] = Field(default_factory=list)
+    """Invocations every ``list_cost_usd`` total leaves out for want of a list price."""
     budget_evaluations: list[BudgetEvaluation] = Field(default_factory=list)
     finalization: ResourceFinalization | None = None
     summary_path: str | None = None

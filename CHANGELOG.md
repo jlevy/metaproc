@@ -24,6 +24,13 @@ development series.
 
 ### Fixed
 
+- **A list cost that leaves out unpriced tokens says so.** An invocation whose model has
+  no entry in the pricing table added its tokens to every total but nothing to
+  `list_cost_usd`, so the total read as complete.
+  `resources.json` and `resource-usage-summary.md` carry `unpriced_models`, naming each
+  such model with its invocation count; the summary body reports the list cost as a
+  lower bound, and `metaproc resource-report` lists the models.
+
 - **Agent leaves under a run-owned pool are admitted up to the pool’s maximum.** The
   host-slot limit for a `run-process` agent leaf defaults to the run-owned pool’s
   `max_concurrency` instead of 4, so one run no longer makes every agent past the fourth

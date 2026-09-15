@@ -23,7 +23,14 @@ from metaproc.models.resource_summary import (
     RESOURCE_USAGE_SUMMARY_CONTRACT,
     ResourceUsageSummary,
 )
-from metaproc.models.resources import HierarchyRef, Metrics, SourceRef, UsageEvent
+from metaproc.models.resources import (
+    HierarchyRef,
+    Metrics,
+    SourceRef,
+    TaxonomyPaths,
+    UnpricedModel,
+    UsageEvent,
+)
 from metaproc.plugins.discovery import get_plugin_registry
 from metaproc.viz_loader import load_plan_bundle
 
@@ -135,7 +142,12 @@ def _mapped_snapshot() -> ResourceRunSnapshot:
     )
 
 
-def _seed_run(tmp_path: Path, *, snapshot: ResourceRunSnapshot | None) -> Path:
+def _seed_run(
+    tmp_path: Path,
+    *,
+    snapshot: ResourceRunSnapshot | None,
+    events: list[UsageEvent] | None = None,
+) -> Path:
     run_dir = tmp_path / "run-1"
     run_dir.mkdir()
     _write_run_config(
@@ -149,7 +161,8 @@ def _seed_run(tmp_path: Path, *, snapshot: ResourceRunSnapshot | None) -> Path:
         resource_snapshot=snapshot,
     )
     with ResourceEventLogger(run_dir / ".logs" / "resource-events.jsonl") as logger:
-        logger.write(_event())
+        for event in events if events is not None else [_event()]:
+            logger.write(event)
     return run_dir
 
 
@@ -224,6 +237,33 @@ def test_generated_summary_is_self_describing_and_softschema_valid(tmp_path: Pat
         ),
     )
     assert validation.ok, (validation.structural.errors, validation.semantic.errors)
+
+
+def test_summary_names_unpriced_models_rather_than_a_complete_list_cost(tmp_path: Path) -> None:
+    priced = _event().model_copy(
+        update={
+            "metrics": Metrics(input_tokens=3, list_cost_usd=0.5),
+            "taxonomy": TaxonomyPaths(model_path=["model", "google", "priced-flash"]),
+            "source": SourceRef(kind="agent_log", path="priced-session.jsonl"),
+        }
+    )
+    unpriced = _event().model_copy(
+        update={"taxonomy": TaxonomyPaths(model_path=["model", "google", "unlisted-flash"])}
+    )
+    run_dir = _seed_run(tmp_path, snapshot=_snapshot(), events=[priced, unpriced])
+
+    finalize_run_resources(run_dir, outcome=FinalizationState.COMPLETED)
+
+    summary_path = run_dir / "resource-usage-summary.md"
+    metadata = fmf_read_frontmatter(summary_path)
+    assert metadata is not None
+    summary = ResourceUsageSummary.model_validate(metadata["resource_usage"])
+    assert summary.totals.list_cost_usd == pytest.approx(0.5)
+    assert summary.unpriced_models == [UnpricedModel(model="unlisted-flash", invocations=1)]
+    body = summary_path.read_text()
+    assert "| Estimated list cost (USD) | at least 0.500000 |" in body
+    assert "leaves out 1 invocation(s)" in body
+    assert "| `unlisted-flash` | 1 |" in body
 
 
 def test_committed_resource_summary_schema_has_no_compilation_drift() -> None:

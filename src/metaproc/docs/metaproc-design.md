@@ -2646,6 +2646,10 @@ contract and reports hierarchical metrics, exact `(provider, product, meter, uni
 quantities, coverage gaps, launch-time budget evaluations, and causal finalization
 state. Strict documents carrying the historical `metaproc.resources/v1` or
 `metaproc.resources/v2` tokens remain readable.
+List cost comes from the CLI’s reported cost or the `data/pricing.md` rate card.
+A token-bearing usage event whose model has no rate card adds its tokens but no list
+cost, so both documents name each such model with its invocation count in
+`unpriced_models`, and a list-cost total beside a nonempty list is a lower bound.
 
 The first `run-process` launch freezes the recursive process/step topology and
 normalized budgets under `.state/run-config.yaml:resources`; resume never rewrites it.

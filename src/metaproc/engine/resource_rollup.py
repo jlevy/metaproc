@@ -9,6 +9,7 @@ then derived from that reconciled ledger; cached projections are never inputs.
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -55,6 +56,8 @@ from metaproc.models.resources import (
     SourceLog,
     SourceRef,
     ToolCallEvent,
+    UnpricedModel,
+    UsageEvent,
 )
 from metaproc.plugins.discovery import get_plugin_registry
 from metaproc.stats.path_tally import PathTally, render_canonical
@@ -431,6 +434,7 @@ def project_resource_document(
         unattributed=Metrics(),
         meter_rollups=meter_rollups,
         coverage_gaps=coverage_gaps,
+        unpriced_models=_unpriced_models(reconciled),
         finalization=finalization,
         summary_path=summary_path,
     )
@@ -440,6 +444,38 @@ def project_resource_document(
         events=reconciled,
     )
     return document
+
+
+def _unpriced_models(events: Iterable[ResourceEvent]) -> list[UnpricedModel]:
+    """Count the token-bearing usage events that carry no list cost, by model.
+
+    Such an event adds its tokens to every total but nothing to `list_cost_usd`,
+    so a total with any of them is a lower bound, not the run's list cost.
+    """
+    counts: Counter[str | None] = Counter()
+    for event in events:
+        if not isinstance(event, UsageEvent) or event.metrics.list_cost_usd is not None:
+            continue
+        metrics = event.metrics
+        token_counts = (
+            metrics.input_tokens,
+            metrics.output_tokens,
+            metrics.cache_read_tokens,
+            metrics.cache_write_tokens,
+        )
+        if all(count is None for count in token_counts):
+            continue
+        model_path = event.taxonomy.model_path
+        model = model_path[-1] if model_path and len(model_path) > 1 else None
+        if model is None and event.provider is not None:
+            model = event.provider.model
+        counts[model or None] += 1
+    return [
+        UnpricedModel(model=model, invocations=invocations)
+        for model, invocations in sorted(
+            counts.items(), key=lambda item: (item[0] is None, item[0] or "")
+        )
+    ]
 
 
 def _clear_projection(node: Node) -> None:
