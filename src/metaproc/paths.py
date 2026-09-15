@@ -72,6 +72,9 @@ Log paths are organized by the thing that produced them:
 - ``<run_dir>/.logs/runpool/workers/<worker_id>/`` — per-worker pool streams.
 - ``<run_dir>/.logs/tasks/<step_id>/`` — per-scalar-task captured process logs.
 - ``<run_dir>/.logs/tasks/<step_id>/<item_key>/`` — per-fan-out-task logs.
+- ``<run_dir>/.logs/native/<step_id>[/<item_key>]/`` — externally owned CLI
+  transcripts preserved from credential slots; generic captured-stream readers skip
+  this namespace.
 - ``<run_dir>/.logs/derived/`` — derived indexes such as trace.jsonl.
 - ``<run_dir>/.logs/tools/<tool_name>/`` — tool invocation streams.
 """
@@ -81,6 +84,9 @@ STEPS_SUBDIR = "steps"
 
 TASKS_SUBDIR = "tasks"
 """Sub-namespace inside ``.state/`` and ``.logs/`` for per-task files keyed by step+item."""
+
+NATIVE_SUBDIR = "native"
+"""Sub-namespace for preserved, externally owned agent CLI session records."""
 
 ATTEMPTS_SUBDIR = "attempts"
 """Append-only attempt-history namespace inside one task state directory."""
@@ -387,6 +393,39 @@ def task_state_dir(run_dir: Path, step_id: str, item_key: str) -> Path:
 def task_logs_dir(run_dir: Path, step_id: str, item_key: str) -> Path:
     """Return per-task logs dir: ``<run_dir>/.logs/tasks/<step_id>/<item_key>/``."""
     return task_logs_parent_dir(run_dir, step_id) / item_key
+
+
+def native_session_logs_destination(task_log_path: Path, log_set_name: str) -> Path:
+    """Map one captured task log to its isolated native-session-log directory.
+
+    Scalar and fan-out task logs keep the same step/item branch while moving from
+    ``.logs/tasks`` to ``.logs/native``. The set name becomes part of one filename,
+    so it must be a safe path component.
+    """
+    if not is_safe_item_key(log_set_name):
+        msg = f"native session log set name must be a safe path component: {log_set_name!r}"
+        raise ValueError(msg)
+    for tasks_dir in task_log_path.parents:
+        if tasks_dir.name != TASKS_SUBDIR or tasks_dir.parent.name != LOGS_DIR:
+            continue
+        relative_parent = task_log_path.parent.relative_to(tasks_dir)
+        return (
+            tasks_dir.parent
+            / NATIVE_SUBDIR
+            / relative_parent
+            / f"{task_log_path.stem}.{log_set_name}"
+        )
+    msg = f"task log path is not below a canonical .logs/tasks directory: {task_log_path}"
+    raise ValueError(msg)
+
+
+def is_native_session_log_path(path: Path) -> bool:
+    """Return whether *path* is inside any ``.logs/native`` namespace."""
+    parts = path.parts
+    return any(
+        parts[index] == LOGS_DIR and parts[index + 1] == NATIVE_SUBDIR
+        for index in range(len(parts) - 1)
+    )
 
 
 def attempt_state_dir(task_dir: Path, attempt_id: str) -> Path:

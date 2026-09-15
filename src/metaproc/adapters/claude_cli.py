@@ -24,6 +24,7 @@ from metaproc.adapters.base import (
     AuthStatus,
     ConfigRejection,
     FailureSeverity,
+    NativeSessionLogSet,
     QuotaUsage,
     parse_jsonl_event,
     resolve_templates,
@@ -764,6 +765,21 @@ class ClaudeCodeCliAdapter:
 
     def diagnostic_filenames(self) -> tuple[str, ...]:
         return ("claude-code-debug.log",)
+
+    def native_session_log_sets(self) -> tuple[NativeSessionLogSet, ...]:
+        # With `no_session_persistence: false`, Claude Code records each session under
+        # `$CLAUDE_CONFIG_DIR/projects/<project>/<session>.jsonl`, with subagent
+        # transcripts and their `.meta.json` files below `<session>/subagents/`. A pool
+        # slot is the config dir; `.credentials.json`, `.claude.json`, and
+        # `settings.json` sit at the slot root, outside `projects/`. The default
+        # `--no-session-persistence` leaves no `projects/` tree, so nothing is copied.
+        return (
+            NativeSessionLogSet(
+                name="claude-projects",
+                root="projects",
+                filename_patterns=("*.jsonl", "*.meta.json"),
+            ),
+        )
 
     def setup_token_command(self) -> list[str] | None:
         """Return argv for ``claude setup-token``.

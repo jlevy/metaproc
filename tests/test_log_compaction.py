@@ -236,6 +236,21 @@ def test_plan_compaction_applies_adapter_filter_for_dry_runs(tmp_path: Path) -> 
     assert plan.candidates[0].adapter == "codex"
 
 
+def test_compaction_sweep_excludes_native_agent_transcripts(tmp_path: Path) -> None:
+    captured = tmp_path / ".logs" / "tasks" / "predict" / "MSFT" / "captured.jsonl"
+    native = tmp_path / ".logs" / "native" / "predict" / "MSFT" / "rollout.jsonl"
+    captured.parent.mkdir(parents=True)
+    native.parent.mkdir(parents=True)
+    content = json.dumps({"type": "thread.started", "thread_id": "thread-1"}) + "\n"
+    captured.write_text(content)
+    native.write_text(content)
+
+    plan = plan_compaction(tmp_path)
+
+    assert [candidate.path for candidate in plan.candidates] == [captured]
+    assert plan.matched == 1
+
+
 def test_codex_compaction_preserves_real_error_events(tmp_path: Path) -> None:
     codex_log = tmp_path / "codex.jsonl"
     codex_log.write_text(

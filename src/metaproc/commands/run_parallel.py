@@ -2202,6 +2202,7 @@ async def _run_agent_pool(  # noqa: PLR0913
             _classify_and_maybe_retry(shared, error_str)
             if log_path is not None:
                 try_compact_log(log_path)
+
         elif result.exit_code == 0:
             _record_declared_outputs()
         else:
@@ -2233,6 +2234,23 @@ async def _run_agent_pool(  # noqa: PLR0913
             _classify_and_maybe_retry(shared, error_str)
             if log_path is not None:
                 try_compact_log(log_path)
+
+    async def _process_completion_off_loop(
+        future: asyncio.Future[Any], shared: dict[str, Any]
+    ) -> None:
+        """Run completion filesystem work off-loop without abandoning slot teardown."""
+        completion = asyncio.create_task(asyncio.to_thread(_process_completion, future, shared))
+        try:
+            await asyncio.shield(completion)
+        except asyncio.CancelledError:
+            # The worker thread cannot be cancelled. Wait for its slot teardown before
+            # propagating scheduler cancellation so credentials and lease counters are
+            # never left live after the coroutine exits.
+            try:
+                await completion
+            except Exception:
+                log.exception("Could not finalize item while scheduler cancellation was pending")
+            raise
 
     def _fill_pool() -> None:
         """Fill available pool slots: retries-due first, then first-pass items."""
@@ -2331,7 +2349,11 @@ async def _run_agent_pool(  # noqa: PLR0913
                 )
                 for future in done:
                     shared = active.pop(future)
-                    _process_completion(future, shared)
+                    # Completion includes credential-slot teardown, which can copy a
+                    # large native transcript tree before deleting the slot. Keep that
+                    # filesystem work off the scheduler loop so other heartbeats and
+                    # cancellation remain responsive.
+                    await _process_completion_off_loop(future, shared)
             elif retry_heap:
                 # No active futures, but retries are waiting for backoff.
                 sleep_time = max(0, retry_heap[0][0] - time.monotonic())
@@ -2347,7 +2369,7 @@ async def _run_agent_pool(  # noqa: PLR0913
                 continue
             active.pop(future, None)
             try:
-                _process_completion(future, shared)
+                await _process_completion_off_loop(future, shared)
             except Exception:
                 log.exception("Could not finalize item after pool shutdown")
 

@@ -25,6 +25,7 @@ from strif import atomic_output_file
 
 from metaproc.io import ArtifactPath
 from metaproc.logutil.parsing import detect_adapter
+from metaproc.paths import is_native_session_log_path
 
 log = logging.getLogger(__name__)
 
@@ -106,14 +107,22 @@ class CompactionPlan:
 
 def _walk_jsonl_files(root: Path) -> list[Path]:
     if root.is_file():
-        return [root] if root.suffix.lower() == ".jsonl" else []
+        return (
+            [root]
+            if root.suffix.lower() == ".jsonl" and not is_native_session_log_path(root)
+            else []
+        )
     if not root.is_dir():
         return []
     out: list[Path] = []
     for dirpath, _, filenames in os.walk(root, followlinks=False):
         for filename in filenames:
             path = Path(dirpath) / filename
-            if path.suffix.lower() == ".jsonl" and not path.is_symlink():
+            if (
+                path.suffix.lower() == ".jsonl"
+                and not path.is_symlink()
+                and not is_native_session_log_path(path)
+            ):
                 out.append(path)
     return sorted(out)
 

@@ -8,11 +8,14 @@ tracking_bead: mp-7p3z
 ---
 # Plan: Execution Stability, Operator Diagnostics, and Flexibility
 
-**Date:** 2026-09-10 (last updated 2026-09-10)
+**Date:** 2026-09-10 (last updated 2026-09-15)
 
 **Status:** In review.
 F1–F3 are implemented in [pull request 75](https://github.com/jlevy/metaproc/pull/75);
 F4–F10 remain open.
+The pooled native-transcript preservation foundation for `mp-83g2` is
+implemented in [pull request 82](https://github.com/jlevy/metaproc/pull/82); direct-log
+discovery and drilldown remain open.
 
 ## Overview
 
@@ -129,6 +132,20 @@ The Pi capture filter drops native update events before writing the task log, so
 file access alone cannot meet this contract.
 The implementation must retain a raw stream before any filtering and label combined
 captures honestly.
+
+Pull request 82 supplies one bounded foundation: pooled Codex rollouts and opt-in Claude
+transcripts survive credential-slot teardown as complete private sets under
+`.logs/native/`. Generic trace, stats, usage, resource, and compaction readers skip that
+namespace. Descriptor-relative copying prevents symlink redirection, and the shipped
+authentication, artifact, conventions, design, and operator docs define the current
+privacy and `.logs/` lifecycle.
+The branch passed `make verify` with 4,704 tests and the Python 3.12–3.14 CI matrix; a
+current GTIA v3.1 dry-run and retained-run compatibility checks also passed.
+
+That foundation does not close `mp-83g2`. Attempt locators, raw pre-filter stdout and
+stderr, direct open and tail affordances, nonpooled providers, cloud and hydrated
+mapping, expiry visibility, and a retention contract that keeps all original evidence
+available remain part of the unchecked acceptance criteria below.
 
 - [ ] Expose the source-log locations for every agent attempt, including successful
   attempts and earlier retries, while running and after completion, failure, or
@@ -272,6 +289,7 @@ acceptance evidence for F4–F10.
 ## References
 
 - [Review finding disposition](https://github.com/jlevy/metaproc/pull/75#issuecomment-5622046867)
+- [Native-session preservation disposition](https://github.com/jlevy/metaproc/pull/82#issuecomment-5672236721)
 - [Execution contracts](../../../../src/metaproc/docs/execution-model-design.md)
 - [Execution implementation boundary](../../../../src/metaproc/docs/arch-execution-model.md)
 

@@ -12,6 +12,7 @@ exact current behavior, whether correct or incorrect.
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -630,6 +631,107 @@ class TestPoolSubmitAndShutdown:
             assert status is not None
             assert status.failure_class == history[0].failure_class
             assert status.error == history[0].error
+
+        asyncio.run(_run())
+
+    def test_completion_copy_does_not_block_the_scheduler_loop(self, tmp_path: Path) -> None:
+        async def _run() -> None:
+            class CompletedPool:
+                _status_path = None
+
+                @property
+                def snapshot(self) -> Any:
+                    return SimpleNamespace(current_concurrency=1, active_count=0, pending_count=0)
+
+                def submit(self, _config: Any) -> asyncio.Future[Any]:
+                    future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+                    future.set_result(
+                        SimpleNamespace(exit_code=0, kill_reason=None, elapsed_s=0.01)
+                    )
+                    return future
+
+                async def shutdown(self) -> None:
+                    pass
+
+            copy_started = threading.Event()
+            release_copy = threading.Event()
+
+            def slow_teardown(*_args: Any, **_kwargs: Any) -> None:
+                copy_started.set()
+                assert release_copy.wait(timeout=2)
+
+            def record_success(
+                _each: str,
+                item: str,
+                _item_dir: Path | None,
+                _state_dir: Path,
+                _item_context: dict[str, str],
+                _log_path: Path | None,
+                _running_record: Any,
+                _effective_outputs: dict[str, IOSpec] | None,
+                _variables: dict[str, str],
+                _run_id: str,
+                _step: str,
+                _result: Any,
+                _out: Any,
+                all_results: list[tuple[str, int]],
+                _batch_failed: list[tuple[dict[str, Any], str, list[OutputFailure]]],
+                _shared: dict[str, Any],
+                **_kwargs: Any,
+            ) -> None:
+                all_results.append((item, 0))
+
+            with (
+                patch("metaproc.commands.run_parallel.RunPool", return_value=CompletedPool()),
+                patch(
+                    "metaproc.commands.run_parallel._build_prepare_launch",
+                    return_value=MagicMock(),
+                ),
+                patch("metaproc.commands.run_parallel.compute_item_dir", return_value=None),
+                patch(
+                    "metaproc.commands.run_parallel.compute_task_state_dir",
+                    return_value=tmp_path / "state",
+                ),
+                patch("metaproc.commands.run_parallel._handle_success", side_effect=record_success),
+                patch(
+                    "metaproc.commands.run_parallel._teardown_pool_slot",
+                    side_effect=slow_teardown,
+                ),
+            ):
+                run = asyncio.create_task(
+                    _run_agent_pool(
+                        spec=_make_spec(),
+                        step_def=_make_step_def(),
+                        step="predict",
+                        each="ticker",
+                        variables={"RUN_ID": "test/run", "VARIANT": "v1"},
+                        item_contexts=[{"ticker": "AAPL"}],
+                        adapter_type="claude-code-cli",
+                        merged_config={"model": "claude-3"},
+                        effective_outputs=None,
+                        effective_variant="v1",
+                        allowed_runtime=set(),
+                        retry_policy=RetryPolicy(max_retries=0),
+                        process_dir=tmp_path,
+                        target_env=None,
+                        refresh_token_fn=None,
+                        pool_config=RunPoolConfig(),
+                        backend=MagicMock(),
+                        out=MagicMock(),
+                    )
+                )
+
+                async def observe_started_copy() -> None:
+                    while not copy_started.is_set():
+                        await asyncio.sleep(0)
+
+                await asyncio.wait_for(observe_started_copy(), timeout=0.5)
+                run.cancel()
+                await asyncio.sleep(0)
+                assert not run.done(), "cancellation must wait for credential-slot teardown"
+                release_copy.set()
+                with pytest.raises(asyncio.CancelledError):
+                    await run
 
         asyncio.run(_run())
 

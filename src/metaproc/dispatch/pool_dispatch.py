@@ -508,10 +508,13 @@ def complete_slot(
                 )
         if session_log_path is not None:
             config.coordinator.preserve_diagnostics(lease, session_log_path)
+            # The slot is the agent CLI's config home, so its own session records
+            # live there and would be deleted by teardown along with the credentials.
+            config.coordinator.preserve_native_session_logs(lease, session_log_path)
     except BaseException:
-        # Classification and diagnostic preservation are policy/observability, not
-        # ownership. A defect in either must still release slot files, active counters,
-        # and Vehicle B's label lock. Unknown leaves credential health unchanged.
+        # Classification and log preservation are policy/observability, not ownership.
+        # A defect in any of them must still release slot files, active counters, and
+        # Vehicle B's label lock. Unknown leaves credential health unchanged.
         config.coordinator.teardown(
             lease,
             failure=AuthFailureClassification(

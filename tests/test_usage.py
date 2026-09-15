@@ -1351,6 +1351,30 @@ class TestWriteUsageArenaToolsDiscovery:
             + "\n"
         )
 
+    def test_native_agent_transcripts_are_not_parsed_as_captured_streams(
+        self, tmp_path: Path
+    ) -> None:
+        phase_dir = tmp_path / "analysis-research"
+        captured = phase_dir / ".logs" / "tasks" / "predict" / "AAA" / "captured.jsonl"
+        native = (
+            phase_dir
+            / ".logs"
+            / "native"
+            / "predict"
+            / "AAA"
+            / "captured.codex-sessions"
+            / "rollout.jsonl"
+        )
+        captured.parent.mkdir(parents=True)
+        native.parent.mkdir(parents=True)
+        captured.write_text("")
+        native.write_text(json.dumps({"type": "session_meta", "id": "native"}) + "\n")
+
+        result = CliRunner().invoke(app, ["write-usage", str(phase_dir)])
+
+        assert result.exit_code == 0, result.output
+        assert "Found 1 log files" in result.output
+
     def test_default_glob_finds_flat_phase_level_path(self, tmp_path: Path) -> None:
         """Post-cutover canonical layout: <phase>/.logs/tools/arena/resource-events.jsonl"""
 
