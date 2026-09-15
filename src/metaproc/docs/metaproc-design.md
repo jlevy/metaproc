@@ -2680,6 +2680,8 @@ stages, step durations, concurrency, attempt dispositions, agent models, and res
 It writes no `.jsonl` and never calls resource recovery, so it cannot make the resource
 projections stale. A section whose evidence cannot be read is null with its reason, and
 any failure is logged without changing the run’s outcome.
+A run killed by a signal skips that terminal path, so status-triggered resource recovery
+writes the summary when it is missing and leaves an existing one alone.
 `metaproc operations summary` and `metaproc operations rollup` read the same fold for
 finished runs.
 

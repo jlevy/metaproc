@@ -21,6 +21,10 @@ development series.
   against a per-item chain-time target.
   A run that executed as a child scope of a larger run is summarized with its nested
   scopes and transcripts, whether read in place or from a copy.
+  A run killed by a signal, which never reaches finalization, gets its summary from the
+  next `metaproc status` that recovers its resource artifacts.
+  A list cost that leaves out unpriced models reads `at least` in the summary and the
+  rollup.
 - **`gemini-3.8-flash` has a list price.** The pricing table records Google’s
   introductory rate through 2026-12-31 ($0.75/M input, $3.75/M output, $0.075/M cached
   input) as its actual price and the standard rate from 2027-01-01 ($1.50, $7.50, $0.15)

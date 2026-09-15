@@ -873,24 +873,27 @@ Cross-check volume against `metaproc stats <run-dir>` and
 
 Run finalization writes `operations-summary.md` at the run root, beside
 `resource-usage-summary.md`, for completed, failed, cancelled, and timed-out runs alike.
-Its frontmatter is `metaproc.operations:AgentOperationsSummary/v1`; the body renders the
-same values. Point it at the run root; a child scope is not a run.
-A run that executed as a child scope of a larger run, such as one cohort of a batch, is
-a run root of its own for the summary, in place or copied elsewhere: its plans record
-their paths from the larger run’s root, and its own root plan names that prefix.
+A run killed by a signal never reaches finalization; once it is inactive, the next
+`metaproc status` on it recovers its resource artifacts and writes the missing summary
+with `trigger: status`. Its frontmatter is
+`metaproc.operations:AgentOperationsSummary/v1`; the body renders the same values.
+Point it at a run root: a top-level run, a batch root, or a child run of a batch (one
+cohort, say), in place or copied elsewhere.
+A child run’s plans record their paths from the batch root and its own root plan names
+that prefix, which is how the summary tells its scopes from a copied `.state` tree.
 Tokens, meters and list cost come only from a run’s own `resource-usage-summary.md`,
-which such a run does not have; the larger run’s summary holds them.
+which a child run does not have; the batch root’s summary holds them.
 
 | Section | What it measures |
 | --- | --- |
 | Run | Elapsed as last recorded completion minus first start in the root `process-status.yaml`, the terminal state, item count, variant, and revisions from the run config |
 | Setup and stages | Elapsed per top-level step and its share of run elapsed; setup is every top-level step that is not a mapped fan-out |
-| Per item | For each item key of the mapped top-level steps: running time in each stage’s item scope, barrier wait from its completion in one stage to its start in the next, chain running time (the sum of stage running times), and chain span |
-| Steps | Duration distribution per step type across every scope, with agent and code totals from each scope’s `run-plan.yaml` |
-| Parallelism | Peak and time-weighted mean running pooled tasks from RunPool process events, and the share of health samples at the current cap and at the pool ceiling |
-| Retries | Every `TaskAttemptRecord` found by schema token in every scope, by disposition and failure class; a lost attempt without a class counts as `unclassified` |
+| Per item | For each item key of the mapped top-level steps: running time in each stage’s item scope, barrier wait from its completion in one stage to its start in the next stage it started, chain running time (the sum of stage running times), and chain span. Stages without an edge between them can overlap, and an item whose stages overlap has no barrier wait |
+| Steps | Duration distribution per step type across every scope, with agent and code totals from each scope’s `run-plan.yaml`; a scope whose plan exists but cannot be read still counts and is listed |
+| Parallelism | Peak and time-weighted mean running pooled tasks from the RunPool streams that started a pool or a process, and the share of health samples (or pressure checks, for a pool without a health stream) at the current cap and at the pool ceiling. Agent step admission streams are counted, not listed |
+| Retries | Every `TaskAttemptRecord` found by schema token in every scope, by disposition and failure class, and by step within its process; retries are attempts beyond each task’s first, and a lost attempt without a class counts as `unclassified` |
 | Agents | Transcript count, provider time and served models from each transcript’s terminal result, requested models, token totals and meter coverage from the resource summary, and tool-result lines at the 16 MiB cap |
-| Resources | List cost, CPU, and peak RSS from the resource summary; swap peak, swap growth, and minimum free disk from RunPool health samples; run size on disk |
+| Resources | List cost, CPU, and peak RSS from the resource summary; swap peak, swap growth, and minimum free disk from RunPool health samples; run size on disk. A list cost that leaves out invocations of unpriced models reads `at least` and names those models |
 
 A figure the evidence cannot establish is null, and its reason is in the section’s
 `unavailable` map and in the body’s Unavailable Figures table.
@@ -909,8 +912,9 @@ uv run --frozen metaproc operations rollup <run-dir> <run-dir> \
 `summary` never runs resource recovery and writes no `.jsonl`, so it is safe on a run
 whose resource projections must not change.
 `rollup` prints one row per run: items, elapsed, setup, chain running p50, p90 and max
-with the count under, within, and over the target, elapsed and list cost per item, peak
-and mean concurrency against the ceiling, peak RSS, swap peak, and retries.
+with the count under, within, and over the target, elapsed and list cost per item
+(`at least` when the run used an unpriced model), peak and mean concurrency against the
+ceiling, peak RSS, swap peak, and retries beside attempts that did not succeed.
 It reads each run’s written summary and builds one in memory when the file is absent or
 from another extractor version; pass `--recompute` to build every row from evidence.
 A later `metaproc status` that re-finalizes resources does not rewrite the operations
