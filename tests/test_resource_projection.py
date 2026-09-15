@@ -18,6 +18,7 @@ from metaproc.models.resources import (
     SampleEvent,
     SourceRef,
     TaxonomyPaths,
+    UnpricedModel,
     UsageEvent,
 )
 
@@ -180,3 +181,40 @@ def test_sample_averages_are_weighted_by_raw_evidence_across_children() -> None:
     assert document.hierarchy_root.total_metrics.cpu_pct_max == pytest.approx(40.0)
     assert document.hierarchy_root.total_metrics.rss_bytes_avg == pytest.approx(250.0)
     assert document.hierarchy_root.total_metrics.rss_bytes_max == 400
+
+
+def _usage(
+    path: str,
+    *,
+    model: str | None,
+    input_tokens: int | None,
+    list_cost_usd: float | None = None,
+) -> UsageEvent:
+    return UsageEvent(
+        ts=datetime(2026, 9, 14, tzinfo=UTC),
+        hierarchy=HierarchyRef(run_id="run-1"),
+        metrics=Metrics(input_tokens=input_tokens, list_cost_usd=list_cost_usd),
+        taxonomy=TaxonomyPaths(model_path=["model", "google", model] if model else None),
+        source=SourceRef(kind="agent_log", path=path),
+    )
+
+
+def test_token_usage_without_a_list_price_is_named_by_model() -> None:
+    document = project_resource_document(
+        hierarchy_root=_root(),
+        run_id="run-1",
+        events=[
+            _usage("a.jsonl", model="priced-flash", input_tokens=100, list_cost_usd=0.25),
+            _usage("b.jsonl", model="unlisted-flash", input_tokens=200),
+            _usage("c.jsonl", model="unlisted-flash", input_tokens=300),
+            _usage("d.jsonl", model=None, input_tokens=400),
+            _usage("e.jsonl", model="tokenless-flash", input_tokens=None),
+        ],
+    )
+
+    assert document.hierarchy_root.total_metrics.input_tokens == 1000
+    assert document.hierarchy_root.total_metrics.list_cost_usd == pytest.approx(0.25)
+    assert document.unpriced_models == [
+        UnpricedModel(model="unlisted-flash", invocations=2),
+        UnpricedModel(model=None, invocations=1),
+    ]

@@ -386,6 +386,7 @@ def test_composite_executes_scalar_leaf_with_shared_pool_policy(
                 run_id=f"parent/{root_scope}",
                 scope_path=(),
                 execution_context=context,
+                scope_execution_profile=None,
                 out=out,
             )
         )
@@ -604,6 +605,7 @@ def test_pool_exhaustion_marks_top_level_scalar_step_failed(
                     run_dir=run_dir,
                     run_id=f"{spec.name}/{run_id}",
                     execution_context=context,
+                    scope_execution_profile=None,
                     out=_Out(),
                     events=events,
                 )

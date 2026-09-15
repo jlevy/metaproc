@@ -9,7 +9,7 @@ status: Approved
 Module-level notes, including using RunPool as a library, are in
 [`runpool/README.md`](../runpool/README.md).
 
-**Date:** 2026-04-06 (last updated 2026-09-10) **Status:** Approved
+**Date:** 2026-04-06 (last updated 2026-09-14) **Status:** Approved
 
 RunPool is Metaproc’s local agent process manager.
 It owns subprocess lifecycle, adaptive concurrency, host-level coordination, health
@@ -337,6 +337,31 @@ That costs a ramp, which is fast, and it composes correctly with a resume: proce
 still in flight are consuming memory that the fresh reading has by definition already
 counted.
 
+### Several Execution Profiles in One Run
+
+`run-process` owns one RunPool per local run, and every scalar agent leaf (an agent step
+without `for_each`) submits to it, including leaves inside composite and mapped scopes.
+Steps can pin different execution profiles, so the pool may serve several.
+The first leaf to reach it sizes the pool from that leaf’s profile:
+`max_concurrency_hint` lowers the ceiling, and `estimated_process_rss_bytes` with
+`initial_memory_budget_fraction` set the startup estimate described above.
+
+A leaf on another profile joins the same pool as another lane when those three values
+resolve equal to the sizing profile’s (`estimated_process_rss_mb: 250` equals
+`estimated_process_rss_bytes: 262144000`). Lanes add identity and counters, not
+admission: every lane shares the one semaphore and its memory, provider, and operator
+ceilings. `lanes` in `runpool-status.yaml` and `metaproc pool status` list every profile
+the pool serves, while `concurrency_plan` names the profile that sized it.
+
+A profile whose values differ is refused, and its step fails with an error naming each
+differing value for both profiles.
+The pool computes its estimate and ceiling once and keeps no per-lane resource
+accounting, so it has no way to honor a second estimate after it has started.
+Accepting one would let a heavier profile fill capacity sized for a lighter one.
+Align the profiles’ resources, or run those steps as separate runs.
+Which profile sizes the pool can vary between launches when leaves start concurrently;
+because acceptance requires equality, the outcome does not.
+
 ## Host Coordination
 
 Per-pool `max_concurrency` is not enough when an operator starts several local Metaproc
@@ -364,10 +389,26 @@ protected by the atomic slot-creation primitive.
 
 Pool-owned admission propagates a timeout or admission error.
 The outer scalar path, including agent leaves submitted to the run-owned pool, fails
-open after a bounded wait: it logs the admission failure and proceeds without a lease.
-Each gate scans only the slot prefix below its own resolved limit, so this mechanism is
-an aggregate count ceiling only for admitted launches whose launchers resolve the same
-limit. It is not a host-wide memory reservation.
+open after a 60-second wait: it logs the admission failure, records
+`host_admission_denied` with `decision: bypass` and `waited_s`, and proceeds without a
+lease. Each gate scans only the slot prefix below its own resolved limit, so this
+mechanism is an aggregate count ceiling only for admitted launches whose launchers
+resolve the same limit.
+It is not a host-wide memory reservation.
+
+The limits resolve as follows; `METAPROC_HOST_MAX_LOCAL_AGENTS` lowers every result and
+never raises one:
+
+| Launcher | Limit when `resources.host_max_concurrency` is unset |
+| --- | --- |
+| `run-parallel` or `run-process` fan-out pool | That pool’s `max_concurrency` |
+| `run-process` agent leaf under the run-owned pool | That pool’s `max_concurrency`: `--max-concurrency` or `METAPROC_DEFAULT_MAX_CONCURRENCY` (200 when neither is set), lowered by `max_concurrency_hint` |
+| Agent leaf without a run-owned pool | 4 |
+
+An explicit `resources.host_max_concurrency` replaces the default in every row,
+including a value above the pool ceiling.
+An agent leaf holds its slot from before pool submission until its process exits, so
+leaves queued behind the pool’s adaptive capacity still count against the host limit.
 
 No daemon is required; leases may remain after process death until a later acquisition
 reclaims them.

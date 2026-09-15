@@ -213,10 +213,13 @@ Useful dispatch selectors:
 `--skip`, `--from`, and `--only` currently name root-process steps.
 They are not matched against same-named steps inside a composite child.
 
-The initial local run-owned pool supports one execution profile per run.
-If a later scalar agent leaf resolves to a different profile, Metaproc fails before
-launching it; run distinct profiles as separate sibling runs until mixed-profile pool
-placement is implemented.
+A local run serves the execution profiles its scalar agent steps pin from one run-owned
+pool, as long as those profiles’ `max_concurrency_hint`, `estimated_process_rss_bytes`,
+and `initial_memory_budget_fraction` resolve equal.
+A leaf whose profile differs in any of them fails before launch with an error naming
+both values; align the resources or run those steps as separate runs.
+`metaproc pool status <run-dir>` lists one lane per profile served.
+See [arch-runpool.md](arch-runpool.md) § Several Execution Profiles in One Run.
 
 For the common “I edited one step, rerun and reuse the rest” loop, you usually do
 **not** pass any of these flags; rerun with the same `RUN_ID` and let the fingerprint
@@ -367,8 +370,11 @@ and holds a lease naming the owning process.
 Standalone pools acquire slots inside RunPool and propagate an admission timeout or
 error. Under `run-process`, agent leaves acquire an outer scalar-path gate before
 submitting to the run-owned pool.
-This path fails open after its bounded wait: it logs the failure and launches without a
+This path fails open after a 60-second wait: it logs the failure, records
+`host_admission_denied` with `decision: bypass` and `waited_s`, and launches without a
 slot, including when the leaf belongs to a mapped step.
+Count waits and ungoverned launches with
+`metaproc pool events <run-dir> --type host_admission_denied --summary`.
 
 It is not, however, a negotiated ceiling, and an operator planning two concurrent runs
 should know why:
@@ -388,6 +394,15 @@ should know why:
 `METAPROC_HOST_MAX_LOCAL_AGENTS` takes the minimum of its value and the profile’s
 `host_max_concurrency`, or the path-specific default when the profile omits that key.
 It can lower a host-admission limit but cannot raise one.
+The default for a `run-process` agent leaf is the run-owned pool’s maximum, so a single
+run admits as many agents as `--max-concurrency` allows; a leaf without a run-owned pool
+defaults to 4. Two runs at `--max-concurrency 30` share slots `0` through `29`: together
+they hold at most 30, and each leaf beyond that waits 60 seconds and launches without a
+slot. A leaf holds its slot while it is queued behind its pool’s adaptive capacity, so a
+run whose memory ceiling is below its maximum can occupy its full slot range.
+To bound two runs without bypassed launches, give both the same
+`resources.host_max_concurrency`, equal to the intended total, and keep the sum of their
+`--max-concurrency` values at or below it.
 `max_concurrency_hint` is separate: it caps the pool maximum derived from
 `--max-concurrency` or batch size.
 Set the host environment variable for *both* runs before launching the second.
@@ -396,6 +411,8 @@ limits actually used.
 A `run-parallel` pool also records its host limit in its concurrency plan; the run-owned
 pool under `run-process` does not own the outer scalar admission gate, so its plan alone
 does not describe that gate.
+The complete precedence table is in `metaproc help arch-runpool` under Host
+Coordination.
 
 Host admission is a local-backend mechanism.
 Non-local backends skip it entirely, so two cloud-backed runs share nothing on the
@@ -527,6 +544,13 @@ uv run metaproc run-process <process.process.md> \
 execution profile. `{{run.variant}}` is only a migration alias for
 `{{run.artifact_namespace}}`.
 
+`--step-variant STEP=PROFILE` overrides the profile of one top-level step of the
+launched process.
+A composite step’s child process is planned with the run-level profile,
+or with the composite step’s own authored `execution_profile:`, which then applies to
+its whole subtree. A step inside a child cannot be overridden from the command line;
+launch validation refuses such an id and lists the top-level step ids.
+
 Preflight credentials before a live dispatch:
 
 ```bash
@@ -643,6 +667,8 @@ plus `pool events` to inspect contention.
 | What did the pressure sampler see? | `uv run metaproc pool health <run-dir>` |
 | Who holds host admission slots right now? | `uv run metaproc pool host-slots` |
 | What are throughput and resource totals? | `uv run metaproc stats <run-dir>` |
+| Where did a finished run spend its time, per stage and per item? | `uv run --frozen metaproc operations summary <run-dir>` |
+| How do several runs compare per item? | `uv run --frozen metaproc operations rollup <run-dir> <run-dir>...` |
 | Which auth labels were used? | `uv run metaproc auth usage <run-dir>` |
 | What is the cloud Batch state? | `uv run metaproc gcp status <run-id>` |
 | What did cloud jobs log? | `uv run metaproc gcp logs <run-id>` |
@@ -842,6 +868,53 @@ Read counts, not the label:
 
 Cross-check volume against `metaproc stats <run-dir>` and
 `metaproc pool rollup <run-dir>` before calling a run done.
+
+### Reading the Operations Summary
+
+Run finalization writes `operations-summary.md` at the run root, beside
+`resource-usage-summary.md`, for completed, failed, cancelled, and timed-out runs alike.
+Its frontmatter is `metaproc.operations:AgentOperationsSummary/v1`; the body renders the
+same values. Point it at the run root; a child scope is not a run.
+A run that executed as a child scope of a larger run, such as one cohort of a batch, is
+a run root of its own for the summary, in place or copied elsewhere: its plans record
+their paths from the larger run’s root, and its own root plan names that prefix.
+Tokens, meters and list cost come only from a run’s own `resource-usage-summary.md`,
+which such a run does not have; the larger run’s summary holds them.
+
+| Section | What it measures |
+| --- | --- |
+| Run | Elapsed as last recorded completion minus first start in the root `process-status.yaml`, the terminal state, item count, variant, and revisions from the run config |
+| Setup and stages | Elapsed per top-level step and its share of run elapsed; setup is every top-level step that is not a mapped fan-out |
+| Per item | For each item key of the mapped top-level steps: running time in each stage’s item scope, barrier wait from its completion in one stage to its start in the next, chain running time (the sum of stage running times), and chain span |
+| Steps | Duration distribution per step type across every scope, with agent and code totals from each scope’s `run-plan.yaml` |
+| Parallelism | Peak and time-weighted mean running pooled tasks from RunPool process events, and the share of health samples at the current cap and at the pool ceiling |
+| Retries | Every `TaskAttemptRecord` found by schema token in every scope, by disposition and failure class; a lost attempt without a class counts as `unclassified` |
+| Agents | Transcript count, provider time and served models from each transcript’s terminal result, requested models, token totals and meter coverage from the resource summary, and tool-result lines at the 16 MiB cap |
+| Resources | List cost, CPU, and peak RSS from the resource summary; swap peak, swap growth, and minimum free disk from RunPool health samples; run size on disk |
+
+A figure the evidence cannot establish is null, and its reason is in the section’s
+`unavailable` map and in the body’s Unavailable Figures table.
+Read it as unmeasured, never as zero.
+
+For a run that finished before this summary existed, or to rebuild it:
+
+```bash
+uv run --frozen metaproc operations summary <run-dir>                 # print, write nothing
+uv run --frozen metaproc operations summary <run-dir> --format yaml   # or json
+uv run --frozen metaproc operations summary <run-dir> --write         # also write the file
+uv run --frozen metaproc operations rollup <run-dir> <run-dir> \
+  --target-min-minutes 10 --target-max-minutes 15
+```
+
+`summary` never runs resource recovery and writes no `.jsonl`, so it is safe on a run
+whose resource projections must not change.
+`rollup` prints one row per run: items, elapsed, setup, chain running p50, p90 and max
+with the count under, within, and over the target, elapsed and list cost per item, peak
+and mean concurrency against the ceiling, peak RSS, swap peak, and retries.
+It reads each run’s written summary and builds one in memory when the file is absent or
+from another extractor version; pass `--recompute` to build every row from evidence.
+A later `metaproc status` that re-finalizes resources does not rewrite the operations
+summary; rebuild it with `--write` when the resource figures must match.
 
 ## Log Compression
 

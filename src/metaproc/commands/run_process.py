@@ -117,6 +117,7 @@ from metaproc.engine.item_runner import (
     with_retry,
 )
 from metaproc.engine.launch_validation import collect_launch_errors, format_launch_errors
+from metaproc.engine.operations_summary import finalize_operations_summary
 from metaproc.engine.pathing import (
     compute_logs_dir,
     compute_run_dir,
@@ -188,6 +189,7 @@ from metaproc.io.state_io import (
 )
 from metaproc.logutil.compaction import try_compact_log
 from metaproc.models.authored import IOSpec, ProcessSpec, ProcessStep, StepContext
+from metaproc.models.lane import ExecutionLane
 from metaproc.models.plan import Plan, ResolvedStep, RunPlanSnapshot, RunPlanStep
 from metaproc.models.resource_budget import FinalizationState
 from metaproc.models.resource_snapshot import ResourceRunSnapshot
@@ -220,7 +222,7 @@ from metaproc.runpool.pool import (
 )
 from metaproc.runpool.process_events import ProcessEventLogger
 from metaproc.runpool.registry import get_backend
-from metaproc.runpool.scalar_admission import SCALAR_DEFAULT_HOST_LIMIT, admitted_launch
+from metaproc.runpool.scalar_admission import admitted_launch, resolve_agent_leaf_host_limit
 from metaproc.settings import POOL_MAX_CONCURRENCY
 from metaproc.viz_loader import load_plan_bundle
 
@@ -237,16 +239,51 @@ def _sync_executor_worker_count(max_concurrency: int | None) -> int:
     return max(_MIN_SYNC_EXECUTOR_WORKERS, max_concurrency or 0)
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class RunPoolResources:
+    """The execution-profile resources a run-owned RunPool is sized from."""
+
+    max_concurrency_hint: int | None
+    estimated_process_rss_bytes: int
+    initial_memory_budget_fraction: float
+
+    @classmethod
+    def resolve(cls, resource_config: Mapping[str, object]) -> RunPoolResources:
+        """Resolve the values the pool would use, so equal estimates compare equal."""
+        raw_hint = resource_config.get("max_concurrency_hint")
+        return cls(
+            max_concurrency_hint=int(str(raw_hint)) if raw_hint is not None else None,
+            estimated_process_rss_bytes=resolve_estimated_process_rss_bytes(resource_config),
+            initial_memory_budget_fraction=resolve_initial_memory_budget_fraction(resource_config),
+        )
+
+    def differences(self, other: RunPoolResources) -> list[tuple[str, object, object]]:
+        """Return ``(field, own value, other value)`` for each field that differs."""
+        return [
+            (field.name, getattr(self, field.name), getattr(other, field.name))
+            for field in dataclasses.fields(self)
+            if getattr(self, field.name) != getattr(other, field.name)
+        ]
+
+
 @dataclasses.dataclass(slots=True)
 class RunPoolOwner:
-    """Lazily construct and close the one adaptive process pool for a run."""
+    """Lazily construct and close the one adaptive process pool for a run.
+
+    The first agent leaf sizes the pool from its execution profile's resources. Each
+    later profile joins as another status lane when its `RunPoolResources` resolve
+    equal to the sizing profile's, and is refused when they differ: the pool sizes its
+    startup concurrency and ceiling once and has no per-lane resource accounting.
+    """
 
     run_dir: Path
     backend_name: str
     max_concurrency: int | None
     initial_concurrency: int | None
     pool: RunPool | None = None
-    execution_profile: str | None = None
+    sizing_profile: str | None = None
+    sizing_resources: RunPoolResources | None = None
+    lane_profiles: set[str] = dataclasses.field(default_factory=set)
 
     def get_pool(
         self,
@@ -254,27 +291,48 @@ class RunPoolOwner:
         resource_config: Mapping[str, object],
         execution_profile: str,
     ) -> RunPool:
-        """Return the run pool, configured from the first executable agent leaf."""
+        """Return the run pool with ``execution_profile`` registered as one of its lanes."""
+        if self.pool is not None and execution_profile in self.lane_profiles:
+            return self.pool
+
+        resources = RunPoolResources.resolve(resource_config)
         if self.pool is not None:
-            if self.execution_profile != execution_profile:
-                raise CLIError(
-                    "one run-owned RunPool currently supports one execution profile; "
-                    f"started with {self.execution_profile!r}, then received "
-                    f"{execution_profile!r}"
+            differences = (
+                self.sizing_resources.differences(resources)
+                if self.sizing_resources is not None
+                else []
+            )
+            if differences:
+                detail = "; ".join(
+                    f"{name} {sized!r} for {self.sizing_profile!r}, "
+                    f"{requested!r} for {execution_profile!r}"
+                    for name, sized, requested in differences
                 )
+                raise CLIError(
+                    f"execution profile {execution_profile!r} cannot share the run-owned "
+                    f"RunPool sized from {self.sizing_profile!r}: {detail}. A run-owned "
+                    "RunPool serves several execution profiles only when their "
+                    "max_concurrency_hint, estimated_process_rss_bytes, and "
+                    "initial_memory_budget_fraction resolve equal, because it sizes "
+                    "startup concurrency and its ceiling once and has no per-lane resource "
+                    "accounting. Align those resources across the profiles, or run these "
+                    "steps in separate runs."
+                )
+            self.pool.register_lane(
+                ExecutionLane(lane_id=execution_profile, execution_profile=execution_profile)
+            )
+            self.lane_profiles.add(execution_profile)
             return self.pool
 
         pool_max = self.max_concurrency or POOL_MAX_CONCURRENCY
-        raw_profile_hint = resource_config.get("max_concurrency_hint")
-        profile_hint = int(str(raw_profile_hint)) if raw_profile_hint is not None else None
-        if profile_hint is not None:
-            pool_max = min(pool_max, profile_hint)
+        if resources.max_concurrency_hint is not None:
+            pool_max = min(pool_max, resources.max_concurrency_hint)
         config = RunPoolConfig(
             max_concurrency=pool_max,
             initial_concurrency=self.initial_concurrency or 0,
             min_concurrency=1,
-            estimated_process_rss_bytes=resolve_estimated_process_rss_bytes(resource_config),
-            initial_memory_budget_fraction=resolve_initial_memory_budget_fraction(resource_config),
+            estimated_process_rss_bytes=resources.estimated_process_rss_bytes,
+            initial_memory_budget_fraction=resources.initial_memory_budget_fraction,
             state_dir=paths_mod.run_state_dir(self.run_dir),
             logs_dir=paths_mod.runpool_logs_dir(self.run_dir),
             # Scalar callers already enter the shared run leaf gate and host-admission
@@ -284,10 +342,12 @@ class RunPoolOwner:
             host_admission_enabled=False,
             execution_profile=execution_profile,
             cli_max_concurrency=self.max_concurrency,
-            profile_max_concurrency_hint=profile_hint,
+            profile_max_concurrency_hint=resources.max_concurrency_hint,
         )
-        self.execution_profile = execution_profile
         self.pool = RunPool(config, backend=get_backend(self.backend_name))
+        self.sizing_profile = execution_profile
+        self.sizing_resources = resources
+        self.lane_profiles.add(execution_profile)
         return self.pool
 
     async def close(self) -> None:
@@ -311,7 +371,6 @@ class RunExecutionContext:
     num_workers: int
     machine_type: str
     spot: bool
-    variant_override: str | None
     profile_files: tuple[Path, ...]
     skip_steps: frozenset[str]
     force: bool
@@ -335,7 +394,6 @@ class RunExecutionContext:
         num_workers: int = 1,
         machine_type: str = "",
         spot: bool = False,
-        variant_override: str | None = None,
         profile_files: Sequence[Path] = (),
         skip_steps: set[str] | frozenset[str] = frozenset(),
         force: bool = False,
@@ -358,7 +416,6 @@ class RunExecutionContext:
             num_workers=num_workers,
             machine_type=machine_type,
             spot=spot,
-            variant_override=variant_override,
             profile_files=tuple(profile_files),
             skip_steps=frozenset(skip_steps),
             force=force,
@@ -458,6 +515,25 @@ class _PreparedCompositeScope:
     plan: Plan
     variables: dict[str, str]
     identity: ScopeIdentity
+    execution_profile: str | None
+    """The profile override the child scope plans its own children and agent leaves with."""
+
+
+def _composite_scope_execution_profile(
+    step_def: ProcessStep,
+    target: ResolvedStep,
+    scope_execution_profile: str | None,
+) -> tuple[str | None, bool]:
+    """Return the profile override for a composite step's child scope, and whether it is pinned.
+
+    A composite step that declares `execution_profile:` runs its whole subtree on that
+    profile, in place of the one its own scope runs on. Without a pin the child inherits
+    the enclosing scope's override: the launch `--variant` at the root, or the nearest
+    pinned ancestor below it. Step-level pins inside the subtree still win for their steps.
+    """
+    if not step_def.execution_profile:
+        return scope_execution_profile, False
+    return target.execution_profile or step_def.execution_profile, True
 
 
 async def _run_sync[SyncResult](
@@ -2465,6 +2541,14 @@ async def _execute_agent_step(
                     if execution_context is not None
                     else None
                 )
+                # Under a run-owned pool the slot limit defaults to that pool's ceiling,
+                # so the gate admits every agent the pool can run.
+                host_limit = resolve_agent_leaf_host_limit(
+                    scalar_resource_config,
+                    pool_max_concurrency=(
+                        scalar_pool.max_concurrency if scalar_pool is not None else None
+                    ),
+                )
                 pool_kill_reason: str | None = None
                 timed_out = False
                 boundary_before = None
@@ -2473,9 +2557,7 @@ async def _execute_agent_step(
                         async with admitted_launch(
                             event_logger=auth_events,
                             enabled=backend_name == "local",
-                            limit=resolve_host_max_concurrency(
-                                scalar_resource_config, default=SCALAR_DEFAULT_HOST_LIMIT
-                            ),
+                            limit=host_limit,
                             label=f"{run_id}/{step_id}",
                             pool_id=f"run-process:{run_id}",
                             metadata={
@@ -2929,12 +3011,16 @@ def _prepare_composite_scope(
     run_id: str,
     scope_path: tuple[str, ...],
     execution_context: RunExecutionContext,
+    scope_execution_profile: str | None,
     mapped_item_key: str | None = None,
     announce: bool,
     out: Any,
 ) -> _PreparedCompositeScope:
     """Resolve one child scope through the same identity and planning path."""
     step_id = step_def.id
+    child_execution_profile, profile_pinned = _composite_scope_execution_profile(
+        step_def, target, scope_execution_profile
+    )
 
     if not target.uses_path:
         raise CLIError(f"step '{step_id}': composite mode requires a resolved child process")
@@ -2954,6 +3040,10 @@ def _prepare_composite_scope(
     if step_def.with_:
         for key, template in step_def.with_.items():
             child_vars[key] = resolve_templates(template, variables)
+    if profile_pinned and child_execution_profile is not None:
+        # The pinned scope answers `{{run.execution_profile}}` with its own profile, as a
+        # run launched with that `--variant` would, and its descendants inherit it.
+        child_vars["EXECUTION_PROFILE"] = child_execution_profile
 
     if step_def.for_each is not None and mapped_item_key is None:
         raise CLIError(f"mapped composite step '{step_id}' requires its canonical task item key")
@@ -2987,10 +3077,13 @@ def _prepare_composite_scope(
         child_spec,
         child_vars,
         process_path=child_spec_path,
-        adapter_override=execution_context.variant_override,
+        adapter_override=child_execution_profile,
         artifact_namespace=target.artifact_namespace,
         profile_files=execution_context.profile_files,
     )
+    if profile_pinned and child_plan.artifact_namespace:
+        child_vars.setdefault("ARTIFACT_NAMESPACE", child_plan.artifact_namespace)
+        child_vars.setdefault("VARIANT", child_plan.artifact_namespace)
     _publish_run_plan(
         child_identity.run_dir,
         run_id=child_identity.record_id,
@@ -3007,6 +3100,7 @@ def _prepare_composite_scope(
         plan=child_plan,
         variables=child_vars,
         identity=child_identity,
+        execution_profile=child_execution_profile,
     )
 
 
@@ -3020,6 +3114,7 @@ async def _execute_composite_step(
     run_id: str,
     scope_path: tuple[str, ...],
     execution_context: RunExecutionContext,
+    scope_execution_profile: str | None,
     mapped_item_key: str | None = None,
     out: Any,
 ) -> bool:
@@ -3034,6 +3129,7 @@ async def _execute_composite_step(
         run_id=run_id,
         scope_path=scope_path,
         execution_context=execution_context,
+        scope_execution_profile=scope_execution_profile,
         mapped_item_key=mapped_item_key,
         announce=True,
         out=out,
@@ -3055,6 +3151,7 @@ async def _execute_composite_step(
                 run_id=prepared.identity.record_id,
                 scope_path=prepared.identity.scope_path,
                 execution_context=execution_context,
+                scope_execution_profile=prepared.execution_profile,
                 out=out,
                 events=events,
             )
@@ -3092,6 +3189,7 @@ async def _execute_composite_fan_out_step(
     run_id: str,
     scope_path: tuple[str, ...],
     execution_context: RunExecutionContext,
+    scope_execution_profile: str | None,
     events: ProcessEventLogger | None = None,
     out: Any,
 ) -> bool:
@@ -3147,6 +3245,7 @@ async def _execute_composite_fan_out_step(
             run_id=run_id,
             scope_path=scope_path,
             execution_context=execution_context,
+            scope_execution_profile=scope_execution_profile,
             mapped_item_key=state_dir.name,
             announce=False,
             out=out,
@@ -3237,6 +3336,7 @@ async def _execute_composite_fan_out_step(
                 run_id=run_id,
                 scope_path=scope_path,
                 execution_context=execution_context,
+                scope_execution_profile=scope_execution_profile,
                 mapped_item_key=state_dir.name,
                 out=out,
             )
@@ -4025,6 +4125,7 @@ async def _execute_step(
     run_id: str,
     scope_path: tuple[str, ...],
     execution_context: RunExecutionContext,
+    scope_execution_profile: str | None,
     peer_allowed_targets: list[WriteTarget] | None = None,
     events: ProcessEventLogger | None = None,
     out: Any,
@@ -4079,6 +4180,7 @@ async def _execute_step(
                 run_id=run_id,
                 scope_path=scope_path,
                 execution_context=execution_context,
+                scope_execution_profile=scope_execution_profile,
                 events=events,
                 out=out,
             )
@@ -4091,6 +4193,7 @@ async def _execute_step(
             run_id=run_id,
             scope_path=scope_path,
             execution_context=execution_context,
+            scope_execution_profile=scope_execution_profile,
             out=out,
         )
 
@@ -4149,7 +4252,7 @@ async def _execute_step(
                 num_workers=execution_context.num_workers,
                 machine_type=execution_context.machine_type,
                 spot=execution_context.spot,
-                variant_override=execution_context.variant_override,
+                variant_override=scope_execution_profile,
                 execution_context=execution_context,
                 peer_allowed_targets=peer_allowed_targets,
                 events=events,
@@ -4166,7 +4269,7 @@ async def _execute_step(
             process_dir=process_dir,
             run_dir=run_dir,
             run_id=run_id,
-            variant_override=execution_context.variant_override,
+            variant_override=scope_execution_profile,
             peer_allowed_targets=peer_allowed_targets,
             backend_name=execution_context.backend_name,
             execution_context=execution_context,
@@ -4190,10 +4293,16 @@ async def _orchestrate(
     run_id: str,
     scope_path: tuple[str, ...] = (),
     execution_context: RunExecutionContext,
+    scope_execution_profile: str | None,
     out: Any,
     events: ProcessEventLogger,
 ) -> None:
-    """Walk the DAG, executing independent steps in parallel via asyncio.gather()."""
+    """Walk the DAG, executing independent steps in parallel via asyncio.gather().
+
+    `scope_execution_profile` is the profile override this scope plans its composite
+    children and unpinned agent leaves with: the launch `--variant` at the root, or the
+    nearest enclosing composite step's `execution_profile:` below it.
+    """
     backend_name = execution_context.backend_name
     max_concurrency = execution_context.max_concurrency
     skip_steps = execution_context.skip_steps if not scope_path else frozenset()
@@ -4355,6 +4464,7 @@ async def _orchestrate(
             run_id=run_id,
             scope_path=scope_path,
             execution_context=execution_context,
+            scope_execution_profile=scope_execution_profile,
             peer_allowed_targets=peer_allowed_targets,
             events=events,
             out=out,
@@ -5470,7 +5580,6 @@ def run_process_command(
                     num_workers=num_workers,
                     machine_type=machine_type,
                     spot=spot,
-                    variant_override=variant,
                     profile_files=profile_files,
                     skip_steps=skip_set,
                     force=force,
@@ -5493,6 +5602,7 @@ def run_process_command(
                         run_dir=run_dir,
                         run_id=run_id,
                         execution_context=execution_context,
+                        scope_execution_profile=variant or None,
                         out=out,
                         events=events,
                     )
@@ -5556,6 +5666,13 @@ def run_process_command(
                 if terminal_error is None:
                     raise
                 log.exception("resource finalization interrupted for %s", run_dir)
+            # Reads the resource summary written above and logs its own failures.
+            try:
+                finalize_operations_summary(run_dir, outcome=finalization_state)
+            except BaseException:
+                if terminal_error is None:
+                    raise
+                log.exception("operations summary interrupted for %s", run_dir)
         finally:
             release_lease(run_dir)
 

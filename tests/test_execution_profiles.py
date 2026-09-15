@@ -351,6 +351,15 @@ profiles:
     assert plan.steps[0].artifact_namespace == "shared-artifacts"
     assert plan.steps[0].adapter.type == "codex-cli"
     assert plan.steps[0].adapter.config["model"] == "gpt-5.5"
+    with pytest.raises(ValueError, match=r"--step-variant nested-judge: no step .*\(summarize\)"):
+        build_plan(
+            spec,
+            {"RUNS_DIR": str(tmp_path), "RUN_ID": "run-1"},
+            process_path=tmp_path / "profile-test.process.md",
+            adapter_override="run-profile",
+            profile_files=[profile_file],
+            step_profile_overrides={"nested-judge": "summary-profile"},
+        )
     output_path = plan.steps[0].outputs["out"].path
     assert output_path is not None
     assert output_path.endswith("/run-1/shared-artifacts/summary.md")

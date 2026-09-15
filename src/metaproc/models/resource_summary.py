@@ -7,7 +7,7 @@ from typing import ClassVar
 from pydantic import BaseModel, ConfigDict, Field
 
 from metaproc.models.resource_budget import BudgetEvaluation, ResourceFinalization
-from metaproc.models.resources import MeterKey, MeterRollup, Metrics
+from metaproc.models.resources import MeterKey, MeterRollup, Metrics, UnpricedModel
 
 RESOURCE_USAGE_SUMMARY_CONTRACT = "metaproc.resources:ResourceUsageSummary/v1"
 
@@ -31,6 +31,8 @@ class ResourceUsageSummary(BaseModel):
     totals: Metrics
     provider_meters: list[MeterRollup] = Field(default_factory=list)
     coverage_gaps: list[MeterKey] = Field(default_factory=list)
+    unpriced_models: list[UnpricedModel] = Field(default_factory=list)
+    """Invocations ``totals.list_cost_usd`` leaves out for want of a list price."""
     budgets: list[BudgetEvaluation] = Field(default_factory=list)
     finalization: ResourceFinalization
     artifacts: ResourceUsageArtifacts = Field(default_factory=ResourceUsageArtifacts)

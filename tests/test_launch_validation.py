@@ -24,6 +24,7 @@ from metaproc.engine.launch_validation import (
     collect_launch_errors,
     format_launch_errors,
 )
+from metaproc.errors import ValidationError
 
 RUNNER = CliRunner()
 
@@ -240,3 +241,81 @@ def test_run_step_reports_all_classes_in_one_error(tmp_path: Path) -> None:
     assert "launch validation failed: 4 problems across 4 classes of input" in error_text
     for header in (PLACEHOLDER_GROUP, PARAM_GROUP, INPUT_FILE_GROUP, PROFILE_GROUP):
         assert header in error_text
+
+
+# A parent whose composite step runs a child process with its own `judge` step.
+_COMPOSITE_PARENT = """\
+    ---
+    process:
+      name: parent
+      steps:
+        - id: prepare
+          mode: code
+          command: "true"
+        - id: nested
+          mode: composite
+          uses: ./child.process.md
+    ---
+    # Parent
+    """
+
+_COMPOSITE_CHILD = """\
+    ---
+    process:
+      name: child
+      steps:
+        - id: judge
+          mode: code
+          command: "true"
+    ---
+    # Child
+    """
+
+
+def _composite_parent(tmp_path: Path) -> Path:
+    child = tmp_path / "child.process.md"
+    child.write_text(textwrap.dedent(_COMPOSITE_CHILD), encoding="utf-8")
+    return _write_spec(tmp_path, _COMPOSITE_PARENT)
+
+
+def test_step_variant_naming_a_child_step_fails_with_the_root_step_ids(tmp_path: Path) -> None:
+    process_path = _composite_parent(tmp_path)
+    spec = load_process_spec(process_path)
+
+    groups = collect_launch_errors(
+        spec,
+        {"RUNS_DIR": str(tmp_path)},
+        tmp_path,
+        process_path=process_path,
+        step_profile_overrides={"judge": "any-profile"},
+    )
+
+    assert _headers(groups) == [PROFILE_GROUP]
+    (message,) = groups[0][1]
+    assert message.startswith("--step-variant judge: no step 'judge' in process 'parent'")
+    assert "top-level steps (prepare, nested)" in message
+    assert "composite child processes" in message
+
+
+def test_run_process_refuses_a_step_variant_for_a_nested_step(tmp_path: Path) -> None:
+    process_path = _composite_parent(tmp_path)
+
+    result = RUNNER.invoke(
+        app,
+        [
+            "run-process",
+            str(process_path),
+            "--var",
+            f"RUNS_DIR={tmp_path / 'runs'}",
+            "--var",
+            "RUN_ID=nested-override",
+            "--step-variant",
+            "judge=any-profile",
+        ],
+    )
+
+    assert isinstance(result.exception, ValidationError)
+    assert result.exception.exit_code == 2
+    error_text = result.output or str(result.exception)
+    assert "--step-variant judge: no step 'judge'" in error_text
+    assert not (tmp_path / "runs" / "nested-override").exists()

@@ -7,7 +7,56 @@ development series.
 
 ## [Unreleased][unreleased]
 
+### Added
+
+- **Every run writes an operations summary.** Run finalization writes
+  `operations-summary.md` (`metaproc.operations:AgentOperationsSummary/v1`) beside
+  `resource-usage-summary.md`: real elapsed time, setup, per-stage shares, per-item
+  chain running time and barrier wait, step durations, pool concurrency, attempt
+  dispositions, agent transcripts, and machine resources.
+  A figure the run cannot establish is null with a stated reason.
+  A failure while summarizing is logged and never changes the run’s outcome.
+  `metaproc operations summary RUN_DIR` builds the same document for a finished run
+  without writing, and `metaproc operations rollup RUN_DIR...` sets runs side by side
+  against a per-item chain-time target.
+  A run that executed as a child scope of a larger run is summarized with its nested
+  scopes and transcripts, whether read in place or from a copy.
+- **`gemini-3.8-flash` has a list price.** The pricing table records Google’s
+  introductory rate through 2026-12-31 ($0.75/M input, $3.75/M output, $0.075/M cached
+  input) as its actual price and the standard rate from 2027-01-01 ($1.50, $7.50, $0.15)
+  as its list price, so its invocations count toward `list_cost_usd`.
+
 ### Fixed
+
+- **A list cost that leaves out unpriced tokens says so.** An invocation whose model has
+  no entry in the pricing table added its tokens to every total but nothing to
+  `list_cost_usd`, so the total read as complete.
+  `resources.json` and `resource-usage-summary.md` carry `unpriced_models`, naming each
+  such model with its invocation count; the summary body reports the list cost as a
+  lower bound, and `metaproc resource-report` lists the models.
+
+- **Agent leaves under a run-owned pool are admitted up to the pool’s maximum.** The
+  host-slot limit for a `run-process` agent leaf defaults to the run-owned pool’s
+  `max_concurrency` instead of 4, so one run no longer makes every agent past the fourth
+  wait 60 seconds and launch without a slot.
+  An explicit `resources.host_max_concurrency` still replaces the default, and
+  `METAPROC_HOST_MAX_LOCAL_AGENTS` still lowers the result; a leaf without a run-owned
+  pool keeps the default of 4. Terminal host-admission refusals record `waited_s`, and
+  `metaproc pool events --type host_admission_denied --summary` counts waits, bypassed
+  launches, and terminal wait seconds.
+
+- **A composite step’s `execution_profile:` applies to its whole subtree.** The child
+  process was planned with the launch `--variant` whatever profile the composite step
+  pinned. A pinned composite now plans its child, every nested scope below it, and their
+  unpinned agent leaves on its own profile, and its scope answers
+  `{{run.execution_profile}}` with it.
+  Agent-step pins inside the subtree still win, and every profile shares the root run’s
+  RunPool.
+
+- **`--step-variant` refuses a step the launched process does not have.** Overrides
+  apply to the launched process’s top-level steps only; a step id inside a composite
+  child process was silently ignored and now fails launch validation with the top-level
+  step ids.
 
 - **Prelaunch and process-output refusals retain their causes.** Credential and input
   refusals now reach durable step status without creating an attempt; manual timeout
@@ -61,6 +110,15 @@ development series.
 
   No artifact shape changes and no contract is widened.
   Reported figures move only for a Gemini stats block that was already being read wrong.
+
+- **A run serves several execution profiles from its one pool.** Steps pinned to
+  different profiles no longer fail when the second profile reaches the run-owned
+  RunPool. A profile joins as another lane when its `max_concurrency_hint`,
+  `estimated_process_rss_bytes`, and `initial_memory_budget_fraction` resolve equal to
+  those of the profile that sized the pool, and `pool status` lists every lane.
+  A profile whose values differ still fails before launch, now with an error naming each
+  differing value for both profiles, because the pool keeps no per-lane resource
+  accounting. `RunPool.register_lane` adds a lane to status before its first launch.
 
 ## [0.4.1][] - 2026-09-10
 

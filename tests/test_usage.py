@@ -20,6 +20,7 @@ from metaproc.logutil.usage import (
     _DualCostAccum,
     aggregate_usage,
     compute_cost,
+    estimate_list_cost,
     extract_gemini_usage,
     load_pricing,
     sum_claude_usage,
@@ -282,6 +283,21 @@ class TestPricing:
         list_cost = compute_cost(stats, pricing, use_list_prices=True)
         # Anthropic has no list_* fields — list == actual
         assert abs(actual - list_cost) < 0.001
+
+    def test_introductory_rate_is_actual_and_standard_rate_is_list(self) -> None:
+        """gemini-3.8-flash bills Google's introductory rate and lists its standard rate."""
+        pricing = load_pricing()
+        stats = UsageStats(
+            input_tokens=1_000_000,
+            output_tokens=100_000,
+            cache_read_tokens=1_000_000,
+            model="gemini-3.8-flash",
+            has_token_usage=True,
+        )
+        # 1M * 0.75 + 100K * 3.75 + 1M * 0.075 per 1M
+        assert compute_cost(stats, pricing) == pytest.approx(1.2)
+        # 1M * 1.50 + 100K * 7.50 + 1M * 0.15 per 1M
+        assert estimate_list_cost(stats, pricing) == pytest.approx(2.4)
 
     def test_markdown_comparison_table_matches_frontmatter_exactly(self) -> None:
         content, meta = fmf_read(_PRICING_DOC_PATH)
