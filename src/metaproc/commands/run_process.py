@@ -1231,12 +1231,6 @@ def _read_step_failure_error(
                 o.get("error") or f"error not recorded (state: {o['state']})" for o in failures
             )
             return f"{len(failures)} of {len(keys)} items failed ({detail})"
-        if target.mode == "composite":
-            child_status = _read_process_status_yaml(run_dir / target.step_id)
-            if child_status is not None:
-                errors = _process_step_errors(child_status.get("steps", {}))
-                if errors:
-                    return "; ".join(f"{step_id}: {error}" for step_id, error in errors.items())
         record = _read_step_status(run_dir, target.step_id)
     except Exception as exc:  # noqa: BLE001 -- status projection is best-effort
         log.warning(

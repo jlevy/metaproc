@@ -195,9 +195,10 @@ def test_standalone_handler_exception_keeps_traceback_without_leaking_env_value(
     assert str(captured.relative_to(run)) in attempt.error
 
 
+@pytest.mark.parametrize("mapped", [False, True])
 @pytest.mark.parametrize("stream", ["stderr", "stdout"])
-def test_command_diagnostic_reaches_attempt_mapped_item_and_root_failure(
-    tmp_path: Path, stream: str
+def test_command_diagnostic_reaches_attempt_composite_step_and_root_failure(
+    tmp_path: Path, stream: str, mapped: bool
 ) -> None:
     diagnostic = 'RuntimeError: query terms must not contain commas: "Example, Inc."'
     (tmp_path / "fail.py").write_text(
@@ -212,6 +213,17 @@ def test_command_diagnostic_reaches_attempt_mapped_item_and_root_failure(
         f"      command: '{sys.executable} fail.py'\n---\n"
     )
     (tmp_path / "items.md").write_text("---\nprogress:\n  items:\n    - item: alfa\n---\n")
+    for_each = (
+        """\
+      for_each:
+        over: deps.items
+        bind: item
+        bind_fields: [item]
+        key: "{{item}}"
+"""
+        if mapped
+        else ""
+    )
     process = tmp_path / "parent.process.md"
     process.write_text(
         textwrap.dedent("""\
@@ -225,13 +237,9 @@ def test_command_diagnostic_reaches_attempt_mapped_item_and_root_failure(
             - id: child
               mode: composite
               uses: deps.child
-              for_each:
-                over: deps.items
-                bind: item
-                bind_fields: [item]
-                key: "{{item}}"
-        ---
         """)
+        + for_each
+        + "---\n"
     )
     result = CliRunner().invoke(
         app,
@@ -246,11 +254,17 @@ def test_command_diagnostic_reaches_attempt_mapped_item_and_root_failure(
     )
     assert result.exit_code == 1, result.output
     run = tmp_path / "runs" / "command"
-    leaf = run / "child" / "alfa" / ".state" / "tasks" / "query"
-    attempt = read_attempt_history_at(leaf)[0]
+    child = run / "child" / "alfa" if mapped else run / "child"
+    attempt = read_attempt_history_at(child / ".state" / "tasks" / "query")[0]
     assert attempt.error and diagnostic in attempt.error
     assert "command exit code 7" in attempt.error
-    assert diagnostic in collect_item_outcomes(run, "child")[0]["error"]
+    if mapped:
+        assert diagnostic in collect_item_outcomes(run, "child")[0]["error"]
+    else:
+        step_error = read_yaml_file(run / ".state" / "process-status.yaml")["steps"]["child"][
+            "error"
+        ]
+        assert f"query: {attempt.error}" in step_error
     root = scan_run_status(run, include_system=False)
     assert root.process_error and diagnostic in root.process_error
     assert "command exit code 7" in root.process_error
