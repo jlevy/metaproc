@@ -3,17 +3,28 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 from metaproc.cli import app
+from metaproc.commands.resource_report import _render_tree
 from metaproc.commands.run_process import _write_run_config
 from metaproc.engine.resource_finalization import resource_artifacts_need_recovery
+from metaproc.engine.resource_rollup import project_resource_document
 from metaproc.errors import CLIError
 from metaproc.models.resource_snapshot import ResourceRunSnapshot, ResourceTopologyNode
-from metaproc.models.resources import RESOURCES_DOCUMENT_CONTRACT
+from metaproc.models.resources import (
+    RESOURCES_DOCUMENT_CONTRACT,
+    HierarchyRef,
+    Metrics,
+    Node,
+    SourceRef,
+    TaxonomyPaths,
+    UsageEvent,
+)
 
 runner = CliRunner()
 
@@ -308,3 +319,24 @@ def test_snapshot_recovery_preserves_completed_process_outcome(tmp_path: Path) -
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["finalization"]["state"] == "completed"
+
+
+def test_tree_names_models_left_out_of_the_list_estimate() -> None:
+    document = project_resource_document(
+        hierarchy_root=Node(node_type="run", node_id="run:run-1", label="run-1"),
+        run_id="run-1",
+        events=[
+            UsageEvent(
+                ts=datetime(2026, 9, 14, tzinfo=UTC),
+                hierarchy=HierarchyRef(run_id="run-1"),
+                metrics=Metrics(input_tokens=10),
+                taxonomy=TaxonomyPaths(model_path=["model", "google", "unlisted-flash"]),
+                source=SourceRef(kind="agent_log", path="session.jsonl"),
+            )
+        ],
+    )
+
+    rendered = _render_tree(document)
+
+    assert "unpriced_models (excluded from list_estimate_usd):" in rendered
+    assert "  unlisted-flash: 1 invocation(s)" in rendered

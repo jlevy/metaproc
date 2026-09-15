@@ -118,7 +118,10 @@ def test_reader_dispatches_current_and_strict_historical_contracts() -> None:
         }
     )
     current_payload = _doc().model_dump(mode="json", by_alias=True)
-    v2_payload = {**current_payload, "schema": SCHEMA_V2}
+    v2_payload = {
+        **{key: value for key, value in current_payload.items() if key != "unpriced_models"},
+        "schema": SCHEMA_V2,
+    }
 
     assert isinstance(read_resources_document_json(v1_raw), ResourcesDocumentV1)
     assert isinstance(read_resources_document_json(json.dumps(v2_payload)), ResourcesDocumentV2)

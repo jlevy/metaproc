@@ -230,6 +230,12 @@ def _render_tree(document: ReadableResourcesDocument) -> str:
         if document.coverage_gaps:
             lines.extend(["", "coverage_gaps:"])
             lines.extend(f"  - {'/'.join(key.sort_key())}" for key in document.coverage_gaps)
+        if isinstance(document, ResourcesDocument) and document.unpriced_models:
+            lines.extend(["", "unpriced_models (excluded from list_estimate_usd):"])
+            lines.extend(
+                f"  {entry.model or '(no model named)'}: {entry.invocations} invocation(s)"
+                for entry in document.unpriced_models
+            )
         if document.budget_evaluations:
             lines.extend(["", "budgets:"])
             for evaluation in document.budget_evaluations:
