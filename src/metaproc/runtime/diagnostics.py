@@ -15,6 +15,13 @@ _SECRET_ENV_NAME = re.compile(
     re.IGNORECASE,
 )
 _FRAMEWORK_ENV_KINDS = {variable.name: variable.kind for variable in MetaprocEnv}
+# A name that merely looks secret is weak evidence. Values below a typical scanner floor,
+# booleans, and numbers under such names are usually configuration, and replacing them
+# would rewrite ordinary words and status codes that classification reads.
+_MIN_HEURISTIC_SECRET_CHARS = 8
+_NON_SECRET_LITERAL = re.compile(
+    r"(?i)(?:true|false|yes|no|on|off|enabled|disabled|[+-]?\d+(?:\.\d+)?)"
+)
 _AUTH_VALUE = re.compile(r"(?i)\b(Bearer|Basic)\s+[^\s\"',;}]+")
 _CREDENTIAL_VALUE = re.compile(
     r"""(?ix)(["']?(?:api[_-]?key|(?:access|refresh|id)[_-]?token|token|secret|password|client[_-]?secret)["']?\s*[:=]\s*)"""
@@ -39,7 +46,10 @@ def summarize_diagnostic(text: str, *, env: Mapping[str, str] | None = None) -> 
     as decoded values, including nested diagnostic payloads, before being re-encoded.
     Omitted ``env`` uses the current
     process environment; callers with resolved child credentials can provide that
-    mapping explicitly. Redaction cannot identify
+    mapping explicitly. Declared ``METAPROC_GCP_SECRET_REFS_JSON`` targets and framework
+    ``SECRET`` variables are always redacted. Other names ending in a credential word such
+    as ``TOKEN``, ``KEY``, or ``AUTH`` are redacted only when the value has at least eight
+    characters and is not a boolean or number. Redaction cannot identify
     arbitrary unlabeled secrets that are absent from this environment.
 
     The summary retains at most the last twelve nonempty lines and 1,200 characters,
@@ -71,11 +81,27 @@ def _redact_diagnostic(text: str, *, env: Mapping[str, str]) -> str:
         and (
             name in declared_secrets
             or _FRAMEWORK_ENV_KINDS.get(name) == "SECRET"
-            or (name not in _FRAMEWORK_ENV_KINDS and _SECRET_ENV_NAME.search(name) is not None)
+            or (
+                name not in _FRAMEWORK_ENV_KINDS
+                and _SECRET_ENV_NAME.search(name) is not None
+                and _is_plausible_secret_value(value)
+            )
         )
     }
     secrets.discard("")
     return _redact_text(text, secrets=sorted(secrets, key=len, reverse=True))
+
+
+def _is_plausible_secret_value(value: str) -> bool:
+    """Whether a value under a secret-like name is credential-shaped enough to redact.
+
+    Declared secret references and framework ``SECRET`` variables bypass this check.
+    """
+    stripped = value.strip()
+    return (
+        len(stripped) >= _MIN_HEURISTIC_SECRET_CHARS
+        and _NON_SECRET_LITERAL.fullmatch(stripped) is None
+    )
 
 
 def _redact_text(text: str, *, secrets: list[str]) -> str:

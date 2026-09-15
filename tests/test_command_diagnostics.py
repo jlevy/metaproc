@@ -71,12 +71,12 @@ def test_public_unknown_env_values_preserve_provider_status_and_retry_timing() -
     error = command_failure_message(
         1,
         stdout=None,
-        stderr="ProviderError: HTTP 429; Retry-After: 17; credentials are xy and ab",
+        stderr="ProviderError: HTTP 429; Retry-After: 17; credentials are xy and opaque-api-value",
         env={
             "AUTH_TIMEOUT_S": "17",
             "PUBLIC_KEY_ID": "429",
             "TOKEN_COUNT": "17",
-            "CUSTOM_API_KEY": "ab",
+            "CUSTOM_API_KEY": "opaque-api-value",
             "METAPROC_GCP_SECRET_REFS_JSON": '{"CUSTOM_KEY_ID":"projects/example/secrets/id/versions/latest"}',
             "CUSTOM_KEY_ID": "xy",
         },
@@ -84,6 +84,58 @@ def test_public_unknown_env_values_preserve_provider_status_and_retry_timing() -
     ).error
     assert "HTTP 429; Retry-After: 17" in error
     assert "credentials are [redacted] and [redacted]" in error
+
+
+def test_short_boolean_and_numeric_values_under_secret_like_names_are_not_redacted() -> None:
+    """A name heuristic alone cannot make ``true`` or ``9`` a credential.
+
+    Replacing such values would rewrite ordinary words and status codes, and
+    classification deliberately reads the redacted text.
+    """
+    untrue = command_failure_message(
+        1,
+        stdout=None,
+        stderr="ValueError: construed input is untrue",
+        env={"NPM_CONFIG_ALWAYS_AUTH": "true"},
+        log_path="task.log",
+    )
+    assert "construed input is untrue" in untrue.error
+    assert "[redacted]" not in untrue.error
+
+    handler = handler_failure_message(
+        RuntimeError("HTTP 429 rate exceeded; Retry-After: 19"),
+        env={"SKIP_AUTH": "9"},
+        log_path="task.log",
+    )
+    assert "HTTP 429 rate exceeded; Retry-After: 19" in handler.error
+    assert handler.verdict is RetryVerdict.RETRY
+    assert handler.failure_class is FailureClass.RATE_LIMITED
+
+    command = command_failure_message(
+        1,
+        stdout=None,
+        stderr="ProviderError: HTTP 429; Retry-After: 19; request 12345678901234 disabled",
+        env={"BUILD_KEY": "9", "SERVICE_TOKEN": "12345678901234", "LEGACY_AUTH": "disabled"},
+        log_path="task.log",
+    )
+    assert "HTTP 429; Retry-After: 19; request 12345678901234 disabled" in command.error
+    assert command.failure_class is FailureClass.RATE_LIMITED
+
+
+def test_declared_and_framework_secrets_are_redacted_whatever_their_length() -> None:
+    error = command_failure_message(
+        1,
+        stdout=None,
+        stderr="refused values: q7 and z9 and 4242",
+        env={
+            "METAPROC_GCP_SECRET_REFS_JSON": '{"SERVICE_VALUE":"projects/example/secrets/value/versions/latest"}',
+            "SERVICE_VALUE": "q7",
+            "GH_TOKEN": "z9",
+            "ANTHROPIC_API_KEY": "4242",
+        },
+        log_path="task.log",
+    ).error
+    assert "refused values: [redacted] and [redacted] and [redacted]" in error
 
 
 def test_giant_line_keeps_the_terminal_diagnostic_and_marks_omission() -> None:
