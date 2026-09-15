@@ -1607,8 +1607,9 @@ async def _execute_code_step(
     # Captured code stdout/stderr is a task log, not a run-level stream.
     logs_dir = compute_task_logs_dir(run_dir, step_def, variables)
     logs_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    log_file = logs_dir / f"process_{ts}.log"
+    # Name the log for its attempt, as run-step and run-parallel do: attempts started in
+    # the same second must not overwrite the file their durable errors point at.
+    log_file = logs_dir / f"process_{running_record.attempt_id}.log"
     env = dict(os.environ)
 
     try:

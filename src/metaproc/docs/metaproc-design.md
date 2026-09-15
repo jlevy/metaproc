@@ -220,8 +220,8 @@ Logs use producer and writer scope rather than mirroring every `.state/` branch:
   {run_dir}/.logs/runpool/steps/{step_id}/events.jsonl
   {run_dir}/.logs/runpool/workers/{worker_id}/events.jsonl
   {run_dir}/.logs/tasks/{step_id}/<item_key>/*.jsonl
-  {run_dir}/.logs/tasks/{step_id}/process_<ts>.log
-  {run_dir}/.logs/tasks/{step_id}/<item_key>/process_<ts>.log
+  {run_dir}/.logs/tasks/{step_id}/process_<attempt_id>.log
+  {run_dir}/.logs/tasks/{step_id}/<item_key>/process_<attempt_id>.log
   {run_dir}/.logs/native/{step_id}/[<item_key>/]<session-stem>.<set-name>/**/*
   {run_dir}/.logs/tools/<tool-name>/invocations.jsonl
   {run_dir}/.logs/derived/trace.jsonl
@@ -1113,8 +1113,9 @@ It complements the adapter/session logs described in section 9.5 by recording
 process-wide lifecycle events rather than per-agent streaming events.
 
 Written to `{run_dir}/.logs/process-events.jsonl`. Code step stdout/stderr is captured
-under task execution logs: `{run_dir}/.logs/tasks/{step_id}/process_<ts>.log` for scalar
-steps and `{run_dir}/.logs/tasks/{step_id}/<item_key>/process_<ts>.log` for item-scoped
+under task execution logs: `{run_dir}/.logs/tasks/{step_id}/process_<attempt_id>.log`
+for scalar steps and
+`{run_dir}/.logs/tasks/{step_id}/<item_key>/process_<attempt_id>.log` for item-scoped
 work.
 
 Event types (13 total):

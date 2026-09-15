@@ -337,13 +337,17 @@ def test_command_diagnostic_is_bounded_redacted_and_prefers_stderr(
     assert "unrelated progress" in captured
 
 
-@pytest.mark.parametrize("step_id,second", [("quota-check", 29), ("query", 29), ("query", 3)])
-def test_command_failure_class_ignores_step_names_and_log_timestamps(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, step_id: str, second: int
+@pytest.mark.parametrize(
+    "step_id,attempt_fraction",
+    [("quota-check", "4290000000"), ("query", "4290000000"), ("query", "5030000000")],
+)
+def test_command_failure_class_ignores_step_names_and_log_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, step_id: str, attempt_fraction: str
 ) -> None:
-    clock = Mock(wraps=datetime)
-    clock.now.return_value = datetime(2026, 9, 13, 0, 44 if second == 29 else 5, second, tzinfo=UTC)
-    monkeypatch.setattr(run_process_module, "datetime", clock)
+    monkeypatch.setattr(
+        "metaproc.io.state_io.new_timestamped_typed_id",
+        lambda _prefix: f"att-20260913T000000Z.{attempt_fraction}.fixture",
+    )
     (tmp_path / "fail.py").write_text(
         "import sys\nprint('ValueError: invalid input', file=sys.stderr)\nraise SystemExit(1)\n"
     )
@@ -368,7 +372,47 @@ def test_command_failure_class_ignores_step_names_and_log_timestamps(
     task = tmp_path / "runs" / "classification" / ".state" / "tasks" / step_id
     attempt = read_attempt_history_at(task)[0]
     assert attempt.error and "ValueError: invalid input" in attempt.error
+    assert f".{attempt_fraction}." in attempt.error
     assert attempt.failure_class == "crash"
+
+
+def test_run_process_code_attempts_in_the_same_second_keep_their_own_logs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = Mock(wraps=datetime)
+    clock.now.return_value = datetime(2026, 9, 13, 0, 5, 3, tzinfo=UTC)
+    monkeypatch.setattr(run_process_module, "datetime", clock)
+    (tmp_path / "fail.py").write_text(
+        "import sys\nfrom pathlib import Path\n"
+        "counter = Path(__file__).with_name('count.txt')\n"
+        "count = int(counter.read_text()) + 1 if counter.exists() else 1\n"
+        "counter.write_text(str(count))\n"
+        "print(f'ValueError: failure {count}', file=sys.stderr)\nraise SystemExit(1)\n"
+    )
+    process = tmp_path / "command.process.md"
+    process.write_text(
+        "---\nprocess:\n  name: command\n  steps:\n"
+        "    - id: query\n      mode: code\n"
+        f"      command: '{sys.executable} fail.py'\n---\n"
+    )
+    args = [
+        "run-process",
+        str(process),
+        "--var",
+        f"RUNS_DIR={tmp_path / 'runs'}",
+        "--var",
+        "RUN_ID=same-second",
+    ]
+    for _ in range(2):
+        result = CliRunner().invoke(app, args)
+        assert result.exit_code == 1, result.output
+    run = tmp_path / "runs" / "same-second"
+    attempts = read_attempt_history_at(run / ".state" / "tasks" / "query")
+    assert len(attempts) == 2
+    for number, attempt in enumerate(attempts, start=1):
+        log_file = run / ".logs" / "tasks" / "query" / f"process_{attempt.attempt_id}.log"
+        assert attempt.error and str(log_file.relative_to(run)) in attempt.error
+        assert log_file.read_text() == f"ValueError: failure {number}\n"
 
 
 _CLEANUP_LINES = "\\n".join(f"cleanup line {index}" for index in range(13))

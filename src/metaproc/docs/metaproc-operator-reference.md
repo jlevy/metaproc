@@ -291,7 +291,8 @@ Open the retained source evidence for the relevant attempt:
   format.
 - Scalar captured process output is under `<scope>/.logs/tasks/<step_id>/`, and
   item-scoped captured output is under its `<item_key>/` directory.
-  The runtime artifact table below describes the `process_<ts>.log` naming pattern.
+  The runtime artifact table below describes the `process_<attempt_id>.log` naming
+  pattern.
 - Each nested composite has its own scope root.
   Correlate the task status, attempt metadata, timestamps, and provider session identity
   before choosing logs; do not mix a previous retry with the active or final attempt.
@@ -961,8 +962,8 @@ for unmarked old runs.
 | Worker runpool events | `<run>/.logs/runpool/workers/<worker-id>/events.jsonl` | Worker-scoped runner events |
 | Agent session logs | `<run>/.logs/tasks/<step_id>/<item_key>/*.jsonl` | Per-attempt adapter stream JSONL |
 | Native CLI session records | `<run>/.logs/native/<step_id>[/<item_key>]/<session-stem>.<set-name>/` | Complete Codex rollout or Claude transcript set preserved from a pooled credential slot; absent when the CLI emitted no native record or preservation failed |
-| Captured process output | `<run>/.logs/tasks/<step_id>/process_<ts>.log` | Scalar code/subprocess stdout and stderr |
-| Captured item output | `<run>/.logs/tasks/<step_id>/<item_key>/process_<ts>.log` | Item-scoped code/subprocess stdout and stderr |
+| Captured process output | `<run>/.logs/tasks/<step_id>/process_<attempt_id>.log` | Scalar code/subprocess stdout and stderr |
+| Captured item output | `<run>/.logs/tasks/<step_id>/<item_key>/process_<attempt_id>.log` | Item-scoped code/subprocess stdout and stderr |
 | Workflow tool logs | `<run>/.logs/tools/<tool-name>/invocations.jsonl` | Workflow-owned tool invocation streams |
 | Trace output | `<run>/.logs/derived/trace.jsonl` | Derived `TraceEvent/0.1` output from `metaproc trace --extract` |
 
