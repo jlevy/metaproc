@@ -57,10 +57,14 @@ development series.
   Agent-step pins inside the subtree still win, and every profile shares the root run’s
   RunPool.
 
-- **`--step-variant` refuses a step the launched process does not have.** Overrides
-  apply to the launched process’s top-level steps only; a step id inside a composite
-  child process was silently ignored and now fails launch validation with the top-level
-  step ids.
+- **`--step-variant` refuses a step it cannot override, and a resume keeps it.**
+  Overrides apply to the launched process’s top-level steps that are not composite; a
+  step id inside a composite child process, or a composite step itself, was silently
+  ignored (or replaced the composite’s pin) and now fails launch validation with the
+  steps that can be overridden.
+  `run-config.yaml` records the overrides: a resume without `--step-variant` reuses
+  them, a resume with a different set is refused, and `metaproc status --steps` plans
+  them.
 
 - **Prelaunch and process-output refusals retain their causes.** Credential and input
   refusals now reach durable step status without creating an attempt; manual timeout

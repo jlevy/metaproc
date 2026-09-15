@@ -68,6 +68,7 @@ def _load_plan_from_run(run_dir: Path) -> Plan | None:
     try:
         from metaproc.commands.helpers import (  # noqa: PLC0415 -- guarded import (optional dep / circular)
             load_process_spec,
+            recorded_step_variants,
         )
         from metaproc.engine.build_plan import (  # noqa: PLC0415 -- guarded import (optional dep / circular)
             build_plan,
@@ -85,6 +86,7 @@ def _load_plan_from_run(run_dir: Path) -> Plan | None:
             process_path=spec_path,
             adapter_override=_optional_config_string(config, "execution_profile"),
             artifact_namespace=_optional_config_string(config, "artifact_namespace"),
+            step_profile_overrides=recorded_step_variants(config),
             validate_required_inputs=False,
             validate_spec=False,
         )

@@ -74,6 +74,7 @@ from metaproc.commands.run_process import (
     _verify_ancestors,
     _write_process_status,
 )
+from metaproc.commands.status import _load_plan_from_run
 from metaproc.engine.discovery import FanOutDiscovery
 from metaproc.engine.graph import topo_sort
 from metaproc.engine.pathing import compute_task_state_dir
@@ -5135,3 +5136,54 @@ class TestRunOwnedPoolExecutionProfiles:
         lanes = {lane["lane_id"]: lane["completed_count"] for lane in status["lanes"]}
         assert lanes == {"run-a": 1, "pin-b": 2, "leaf-c": 1}
         assert not (child / STATE_DIR / "runpool-status.yaml").exists()
+
+    def test_a_resume_reapplies_recorded_step_variants_and_refuses_a_different_set(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A step override is part of the run: a resume and `status` follow the recorded set."""
+        repo_dir, process_dir = self._repo(tmp_path)
+        self._register_adapter(monkeypatch)
+        same = {"estimated_process_rss_mb": 250, "initial_memory_budget_fraction": 0.5}
+        self._write_repo_profiles(repo_dir, {"run-a": same, "judge-b": same})
+        spec = process_dir / "judged.process.md"
+        spec.write_text(
+            "---\nprocess:\n  name: judged\n  steps:\n"
+            + self._agent_step("draft", None)
+            + self._agent_step("judge", None, needs="draft")
+            + "---\n",
+            encoding="utf-8",
+        )
+        run_dir = tmp_path / "runs" / "judged-resume"
+
+        launched = self._invoke(
+            spec,
+            run_dir,
+            "--variant",
+            "run-a",
+            "--step-variant",
+            "judge=judge-b",
+            "--only",
+            "draft",
+        )
+        assert launched.exit_code == 0, launched.output
+        assert read_yaml_file(run_dir / STATE_DIR / "run-config.yaml")["step_variants"] == {
+            "judge": "judge-b"
+        }
+
+        refused = self._invoke(spec, run_dir, "--variant", "run-a", "--step-variant", "judge=run-a")
+        assert refused.exit_code != 0
+        message = refused.output or str(refused.exception)
+        assert "Resume mismatch" in message
+        assert "judge=judge-b" in message and "judge=run-a" in message
+        assert not (run_dir / "judge.md").exists()
+
+        resumed = self._invoke(spec, run_dir, "--variant", "run-a")
+        assert resumed.exit_code == 0, resumed.output
+        assert (run_dir / "draft.md").read_text().strip() == "run-a"
+        assert (run_dir / "judge.md").read_text().strip() == "judge-b"
+        plan = _load_plan_from_run(run_dir)
+        assert plan is not None
+        assert {step.step_id: step.execution_profile for step in plan.steps} == {
+            "draft": "run-a",
+            "judge": "judge-b",
+        }

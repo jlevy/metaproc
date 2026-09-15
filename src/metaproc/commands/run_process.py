@@ -54,6 +54,7 @@ from metaproc.commands.helpers import (
     parse_adapter_config,
     parse_step_variant_args,
     parse_var_args,
+    recorded_step_variants,
     require_runtime_runs_dir,
     resolve_gcp_worker_runs_dir,
     resolve_process_path,
@@ -768,6 +769,7 @@ def _write_run_config(  # noqa: PLR0913
     auth_flags: AuthPoolFlags | None = None,
     max_concurrency: int | None = None,
     resource_snapshot: ResourceRunSnapshot | None = None,
+    step_variants: Mapping[str, str] | None = None,
 ) -> Path:
     """Write run-config.yaml at run creation time; record changes on resume.
 
@@ -829,6 +831,8 @@ def _write_run_config(  # noqa: PLR0913
         data["artifact_namespace"] = artifact_namespace
     if resolved_profiles:
         data["resolved_profiles"] = resolved_profiles
+    if step_variants:
+        data["step_variants"] = dict(sorted(step_variants.items()))
     if auth_flags is not None and auth_flags.is_pool_dispatch_enabled():
         data["auth"] = _serialize_auth_flags(auth_flags)
     if max_concurrency is not None:
@@ -1128,6 +1132,38 @@ def _json_dumps(value: object) -> str:
     """Single-line JSON for jsonl writers; lazy import keeps top-level lean."""
 
     return _json.dumps(value, default=str)
+
+
+def _resume_step_variants(run_dir: Path, requested: Mapping[str, str]) -> dict[str, str]:
+    """Return the ``--step-variant`` overrides a launch or resume of *run_dir* runs with.
+
+    A run records its overrides in ``run-config.yaml`` at creation. The plan, its step
+    fingerprints, and ``metaproc status`` all follow that record, so a resume that passes
+    no overrides re-applies it and a resume that passes a different set is refused.
+    """
+    config_path = paths_mod.run_config_file(run_dir)
+    if not config_path.exists():
+        return dict(requested)
+    raw = read_yaml_file(config_path)
+    recorded = recorded_step_variants(raw) if isinstance(raw, dict) else {}
+    if not requested:
+        return recorded
+    if dict(requested) != recorded:
+        raise CLIError(
+            "Resume mismatch: run-config.yaml records "
+            f"{_format_step_variants(recorded)} but you launched with "
+            f"{_format_step_variants(requested)}. Resume without --step-variant to reuse "
+            "the recorded overrides, or use a different RUN_ID."
+        )
+    return recorded
+
+
+def _format_step_variants(overrides: Mapping[str, str]) -> str:
+    if not overrides:
+        return "no --step-variant"
+    return ", ".join(
+        f"--step-variant {step}={profile}" for step, profile in sorted(overrides.items())
+    )
 
 
 def _validate_run_config(
@@ -4852,7 +4888,10 @@ def run_process_command(
     step_variant: list[str] = typer.Option(
         [],
         "--step-variant",
-        help="STEP=PROFILE execution-profile override for a single step (repeatable).",
+        help=(
+            "STEP=PROFILE execution-profile override for one top-level step that is not "
+            "composite (repeatable). Recorded in run-config.yaml; a resume reuses it."
+        ),
     ),
     adapter_config: list[str] = typer.Option(
         [], "--adapter-config", help="KEY=VALUE adapter config overrides (repeatable)"
@@ -5035,6 +5074,9 @@ def run_process_command(
 
     variables = expand_process_vars(spec, variables, process_dir=process_dir)
     require_runtime_runs_dir(variables, command="run-process")
+    step_profile_overrides = _resume_step_variants(
+        compute_run_dir(spec, variables), step_profile_overrides
+    )
 
     # Launch validation runs before any step, so it carries the validation exit
     # code (2) rather than the general failure code (1) an executed-and-failed
@@ -5350,6 +5392,7 @@ def run_process_command(
         auth_flags=auth_flags_for_config,
         max_concurrency=max_concurrency,
         resource_snapshot=resource_snapshot,
+        step_variants=step_profile_overrides,
     )
 
     out.progress(f"run-process: {spec.name} ({len(active_step_ids)} steps, {len(levels)} levels)")
