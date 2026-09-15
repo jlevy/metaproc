@@ -658,6 +658,64 @@ def test_composite_output_failure_retains_path_message_and_failed_scope(
     assert failure["message"] == f"path does not exist: {expected_path}"
 
 
+@pytest.mark.parametrize("chain", [False, True], ids=["fan-out", "item-aligned-chain"])
+def test_mapped_item_refused_before_launch_records_its_own_failure(
+    tmp_path: Path, chain: bool
+) -> None:
+    (tmp_path / "extra-alfa.txt").write_text("present")
+    (tmp_path / "items.md").write_text(
+        "---\nprogress:\n  items:\n    - item: alfa\n    - item: brvo\n---\n"
+    )
+    for_each = (
+        "      for_each:\n        over: deps.items\n        bind: item\n"
+        "        bind_fields: [item]\n        key: '{{item}}'\n"
+    )
+    first = "    - id: first\n      mode: code\n      command: 'true'\n" + for_each
+    second = (
+        "    - id: second\n      mode: code\n      command: 'true'\n"
+        + ("      needs: [first]\n" if chain else "")
+        + "      inputs:\n"
+        f"        extra: {{path: '{tmp_path}/extra-{{{{item}}}}.txt', kind: file}}\n"
+        + for_each
+        + ("        align: same_key\n" if chain else "")
+    )
+    process = tmp_path / "refusal.process.md"
+    process.write_text(
+        "---\nprocess:\n  name: refusal\n"
+        "  deps:\n    items: {path: ./items.md, as: path}\n"
+        "  steps:\n" + (first if chain else "") + second + "---\n"
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-process",
+            str(process),
+            "--var",
+            f"RUNS_DIR={tmp_path / 'runs'}",
+            "--var",
+            "RUN_ID=refusal",
+        ],
+    )
+    assert result.exit_code == 1, result.output
+    run = tmp_path / "runs" / "refusal"
+    refusal = f"step 'second': input 'extra' not found: {tmp_path / 'extra-brvo.txt'}"
+    tasks = run / ".state" / "tasks" / "second"
+    completed = read_status_at(tasks / "alfa")
+    assert completed is not None and completed.state == "completed"
+    refused = read_status_at(tasks / "brvo")
+    assert refused is not None and refused.state == "failed"
+    assert refused.error == refusal
+    attempts = read_attempt_history_at(tasks / "brvo")
+    assert [(attempt.item_key, attempt.disposition) for attempt in attempts] == [
+        ("brvo", "permanent")
+    ]
+    outcomes = {outcome["key"]: outcome for outcome in collect_item_outcomes(run, "second")}
+    assert outcomes["brvo"]["state"] == "failed"
+    assert outcomes["brvo"]["error"] == refusal
+    process_status = read_yaml_file(run / ".state" / "process-status.yaml")
+    assert process_status["steps"]["second"]["error"] == f"1 of 2 items failed (1 x {refusal})"
+
+
 @pytest.mark.parametrize("missing_input", [False, True])
 def test_manual_refusal_finishes_step_with_the_actual_cause(
     tmp_path: Path,

@@ -12,6 +12,8 @@ development series.
 - **Prelaunch and process-output refusals retain their causes.** Credential and input
   refusals now reach durable step status without creating an attempt; manual timeout
   closes the running task.
+  A mapped code item refused for a missing input records that failure on its own status
+  while its siblings continue.
   Composite failures preserve child errors and structured output paths/messages through
   fan-in. Root and child process status records output-contract failure even when all of
   the scope’s steps completed.

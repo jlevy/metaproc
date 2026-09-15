@@ -1970,6 +1970,11 @@ step failure. An input, credential-binding, quota, or slot refusal before launch
 no attempt record. If an attempt already exists, such as a manual step waiting for an
 acknowledgment, its running state becomes failed with the actual error.
 This path also covers failures during item-chain setup.
+Mapped agent and composite steps check every actionable item’s inputs before launching
+any of them, so a missing input there refuses the step and names the item.
+A mapped code item checks its own inputs as it starts, and a refusal is that item’s
+failure: it records failed status and a `permanent` attempt carrying the refusal, its
+siblings continue, and the step summary and fan-in outcomes attribute the cause to it.
 
 A composite preserves a child’s error rather than returning a bare failed boolean.
 Process-level output validation records each resolved artifact’s `output`, `path`,

@@ -179,6 +179,7 @@ from metaproc.io.state_io import (
     end_status_attempt_at,
     mark_completed_at,
     mark_failed_at,
+    mark_failed_synthetic_at,
     mark_running_at,
     read_manual_ack_at,
     read_run_plan,
@@ -1907,6 +1908,54 @@ def _discover_chain_items(
     return discovery.nonterminal_contexts()
 
 
+async def _execute_mapped_code_item(
+    *,
+    spec: ProcessSpec,
+    step_def: ProcessStep,
+    target: ResolvedStep,
+    variables: dict[str, str],
+    process_dir: Path,
+    run_dir: Path,
+    run_id: str,
+    execution_context: RunExecutionContext | None,
+    out: Any,
+) -> bool:
+    """Execute one item of a mapped code step, keeping a prelaunch refusal on that item.
+
+    ``_execute_code_step`` raises ``CLIError`` only before its attempt starts, for
+    example when an input is missing. A scalar step lets that reach the orchestrator,
+    which records the step failure. For a mapped step the refusal is this item's
+    failure: raising it would leave the item without a status, attributing the cause
+    to the whole step, while its siblings finish.
+    """
+    try:
+        return await _execute_code_step(
+            spec=spec,
+            step_def=step_def,
+            target=target,
+            variables=variables,
+            process_dir=process_dir,
+            run_dir=run_dir,
+            run_id=run_id,
+            execution_context=execution_context,
+            out=out,
+        )
+    except CLIError as exc:
+        state_dir = compute_task_state_dir(run_dir, step_def, variables)
+        state_dir.mkdir(parents=True, exist_ok=True)
+        mark_failed_synthetic_at(
+            state_dir,
+            run_id=run_id,
+            step_id=target.step_id,
+            item={"step": target.step_id},
+            item_key=state_dir.name,
+            error=str(exc),
+            attempt_disposition=AttemptDisposition.permanent,
+        )
+        out.progress(f"  Step '{target.step_id}' item '{state_dir.name}': refused ({exc})")
+        return False
+
+
 async def _execute_code_fan_out_step(
     *,
     spec: ProcessSpec,
@@ -1965,7 +2014,7 @@ async def _execute_code_fan_out_step(
     )
 
     async def _invoke(_step_id: str, item_vars: dict[str, str]) -> bool:
-        return await _execute_code_step(
+        return await _execute_mapped_code_item(
             spec=spec,
             step_def=step_def,
             target=target,
@@ -2038,7 +2087,7 @@ async def _execute_item_aligned_chain(
     out.progress(f"  Chain '{' -> '.join(chain)}': {len(item_contexts)} items, item-aligned")
 
     async def _invoke(step_id: str, item_vars: dict[str, str]) -> bool:
-        return await _execute_code_step(
+        return await _execute_mapped_code_item(
             spec=spec,
             step_def=step_def_map[step_id],
             target=step_map[step_id],
