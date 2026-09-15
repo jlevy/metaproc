@@ -1,5 +1,5 @@
 ---
-last_updated: '2026-07-24'
+last_updated: '2026-09-14'
 
 providers:
   openai:
@@ -95,6 +95,20 @@ providers:
 
   google:
     models:
+      gemini-3.8-flash:
+        actual_price:
+          input_per_1m: 0.75
+          output_per_1m: 3.75
+          cache_read_per_1m: 0.075
+        list_price:
+          input_per_1m: 1.50
+          output_per_1m: 7.50
+          cache_read_per_1m: 0.15
+        cost_source: computed
+        source_url: 'https://ai.google.dev/gemini-api/docs/pricing'
+        list_source_url: 'https://ai.google.dev/gemini-api/docs/pricing'
+        last_reviewed: '2026-09-14'
+        notes: "Reviewed 2026-09-14 against Google's Gemini API pricing page (last updated 2026-09-11) and cross-checked against the Vertex AI pricing page. Gemini 3.8 Flash was GA 2026-09-02. Standard paid tier with no context-length tiers; output includes thinking tokens. actual_price is Google's introductory rate through 2026-12-31; list_price is the standard rate Google publishes from 2027-01-01. Context-cache storage ($0.50 per 1M tokens per hour through 2026-12-31, $1.00 from 2027-01-01) is not modelled. Vertex AI's global endpoint charges the same rates; its non-global regions charge 10% more. Model availability and lifecycle are maintained in model_catalog.py."
       gemini-3.6-flash:
         actual_price:
           input_per_1m: 1.50
@@ -292,7 +306,8 @@ API), the self-reported value still takes precedence for `actual_cost`.
 
 Sorted by output cost descending.
 List price = the public vendor-direct rate when we have a separate, independently
-verifiable vendor price.
+verifiable vendor price, or the provider’s standard rate when a time-limited
+introductory rate is in effect.
 When `list_price` is absent, `list_cost` falls back to `actual_price`.
 
 The **Norm** column shows each model’s input price as a multiple of $0.28 / 1M tokens —
@@ -311,6 +326,7 @@ after `deepseek-chat` itself was retired as a separate row.
 | gemini-3.1-pro-preview | Google | $2.00 | 7.14x | $12.00 | $0.20 | -- | [google](https://ai.google.dev/gemini-api/docs/pricing) |
 | gemini-3-pro-preview | Google | $2.00 | 7.14x | $12.00 | $0.20 | -- | [google](https://ai.google.dev/gemini-api/docs/pricing) |
 | gemini-3.5-flash | Google | $1.50 | 5.36x | $9.00 | $0.15 | -- | [google](https://ai.google.dev/gemini-api/docs/pricing) |
+| gemini-3.8-flash | Google | $1.50 | 5.36x | $7.50 | $0.15 | -- | [google](https://ai.google.dev/gemini-api/docs/pricing) |
 | gemini-3.6-flash | Google | $1.50 | 5.36x | $7.50 | $0.15 | -- | [google](https://ai.google.dev/gemini-api/docs/pricing) |
 | claude-haiku-4-5 | Anthropic | $1.00 | 3.57x | $5.00 | $0.10 | $1.25 | [anthropic](https://platform.claude.com/docs/en/about-claude/pricing) |
 | gpt-5.4-mini | OpenAI | $0.75 | 2.68x | $4.50 | $0.075 | -- | [openai](https://openai.com/api/pricing) |
@@ -371,6 +387,20 @@ file do not have a separate `list_price` block.
 [Gemini pricing page](https://ai.google.dev/gemini-api/docs/pricing),
 [Gemini changelog](https://ai.google.dev/gemini-api/docs/changelog), and
 [Gemini 3 developer guide](https://ai.google.dev/gemini-api/docs/gemini-3).
+
+**September 2026 additions** (verified 2026-09-14 against the Gemini pricing page and
+the [Vertex AI pricing page](https://cloud.google.com/vertex-ai/generative-ai/pricing)):
+
+- `gemini-3.8-flash`, GA 2026-09-02. Google charges an introductory standard paid tier
+  of $0.75/M input, $3.75/M output, and $0.075/M cached input through 2026-12-31, and
+  publishes a standard rate of $1.50/M input, $7.50/M output, and $0.15/M cached input
+  from 2027-01-01. Neither rate has a context-length tier.
+  `actual_price` holds the introductory rate and `list_price` the standard rate, so
+  `list_cost` prices this model at the same standard rate card as the `gemini-3.6-flash`
+  row.
+- Both pages list the same introductory pricing for `gemini-3.6-flash` and
+  `gemini-3.7-flash`. The `gemini-3.6-flash` row records its 2026-07-24 review, and
+  `gemini-3.7-flash` has no row yet.
 
 **July 2026 additions:**
 
@@ -497,7 +527,7 @@ The `metaproc write-usage` command produces `usage.md` files with two cost colum
 | --- | --- | --- |
 | OpenAI | Computed from `actual_price` (no adapter self-reports OpenAI cost today) | Same as actual because OpenAI models in this file do not have a separate `list_price` block |
 | Anthropic (Claude CLI, Pi CLI) | Uses self-reported `cost_usd` from the API response when present; otherwise computes from `actual_price` | Falls back to `actual_price` because Anthropic models in this file do not have a separate `list_price` block |
-| Google (Gemini CLI) | Computed from `actual_price` because Gemini CLI does not report cost | Same as actual because Google models in this file do not have a separate `list_price` block |
+| Google (Gemini CLI) | Computed from `actual_price` because Gemini CLI does not report cost | Computed from `list_price` when present (the standard rate after an introductory period), otherwise falls back to `actual_price` |
 | DeepSeek (direct API) | Computed from `actual_price` | Same as actual |
 | Vertex MaaS (Pi CLI) | Computed from Vertex AI’s published `actual_price` when the adapter reports no cost | Computed from `list_price` when present, otherwise falls back to `actual_price` |
 
@@ -570,8 +600,8 @@ Each model entry in the YAML frontmatter has an `actual_price` block:
 - `cache_read_per_1m` -- cost per 1M cached input tokens (cache hits)
 - `cache_write_per_1m` -- cost per 1M tokens written to cache
 
-Models with a separately stored vendor-direct public rate also have a `list_price` block
-with the same fields.
+Models with a separately stored vendor-direct public rate, or a standard rate that
+follows an introductory rate, also have a `list_price` block with the same fields.
 When `list_price` is absent, `list_cost` falls back to `actual_price`.
 
 Additional per-model fields:
