@@ -303,7 +303,17 @@ def scan_git_history(root: Path = ROOT) -> list[str]:
     """Scan reachable ref names plus subjects and bodies on the current history."""
     findings: list[str] = []
     commands = (
-        ("refs", ["git", "-C", str(root), "for-each-ref", "--format=%(refname)"]),
+        (
+            "refs",
+            [
+                "git",
+                "-C",
+                str(root),
+                "for-each-ref",
+                "--merged=HEAD",
+                "--format=%(refname)",
+            ],
+        ),
         ("commits", ["git", "-C", str(root), "log", "HEAD", "--format=%H%n%s%n%b"]),
     )
     for label, command in commands:
@@ -325,9 +335,9 @@ def scan_git_history(root: Path = ROOT) -> list[str]:
             findings.append(f"git-{label}: unable to scan reachable Git metadata")
             continue
         # Ref names carry the same convention commit subjects do: a branch named
-        # `fix/pr-12` is the counterpart of "Merge pull request #12", and refs also
-        # include every local branch, so scanning them strictly would fail the gate
-        # on one developer's checkout for a name that was never published.
+        # `fix/pr-12` is the counterpart of "Merge pull request #12". Restrict the
+        # scan to tips reachable from HEAD so a full-fetch CI checkout does not make
+        # the current history responsible for unrelated, unmerged branch names.
         findings.extend(find_git_metadata_findings(f"git-{label}", result.stdout))
     return findings
 

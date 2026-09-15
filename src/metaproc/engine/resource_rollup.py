@@ -56,6 +56,7 @@ from metaproc.models.resources import (
     SourceRef,
     ToolCallEvent,
 )
+from metaproc.paths import is_native_session_log_path
 from metaproc.plugins.discovery import get_plugin_registry
 from metaproc.stats.path_tally import PathTally, render_canonical
 
@@ -471,7 +472,9 @@ def _discover_log_files(run_dir: Path, *, exclude: Iterable[Path] = ()) -> list[
         return []
     excluded = {_normalized_path(p) for p in exclude}
     return [
-        p for p in iter_artifact_paths(run_dir, "**/*.jsonl") if _normalized_path(p) not in excluded
+        p
+        for p in iter_artifact_paths(run_dir, "**/*.jsonl")
+        if not is_native_session_log_path(p) and _normalized_path(p) not in excluded
     ]
 
 

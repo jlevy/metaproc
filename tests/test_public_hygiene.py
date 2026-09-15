@@ -212,6 +212,28 @@ def test_reachable_git_refs_and_commit_messages_are_scanned(tmp_path: Path) -> N
     assert any("private name" in finding for finding in findings)
 
 
+def test_unmerged_sibling_ref_is_not_part_of_current_history(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _init_repo(root)
+    (root / "public.txt").write_text("public")
+    subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(root), "commit", "-qm", "public commit"], check=True)
+
+    sibling_ref = "refs/remotes/origin/" + "earnings" + "-predictions"
+    sibling_commit = subprocess.run(
+        ["git", "-C", str(root), "commit-tree", "HEAD^{tree}", "-m", "sibling commit"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    subprocess.run(["git", "-C", str(root), "update-ref", sibling_ref, sibling_commit], check=True)
+
+    findings = scan_git_history(root)
+
+    assert not any("private name" in finding for finding in findings)
+
+
 def test_branch_names_may_reference_a_pull_request(tmp_path: Path) -> None:
     """A branch named for a pull request is the same convention as its merge subject.
 

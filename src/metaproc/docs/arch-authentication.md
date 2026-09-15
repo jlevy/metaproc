@@ -6,7 +6,7 @@ status: Draft — partial currency notice below
 ---
 # Architecture: Authentication and Credentials
 
-**Date:** 2026-04-21 (last updated 2026-09-10) **Status:** Draft — partial currency
+**Date:** 2026-04-21 (last updated 2026-09-15) **Status:** Draft — partial currency
 notice below
 
 ## Currency notice (2026-04-28)
@@ -1100,6 +1100,58 @@ All of a step’s logs live under that step’s `.logs/`.
 transient 5xx, or surfaced rate-limit boundaries — all useful for post-hoc throughput
 analysis. The `.logs/` directory is the operator’s authoritative record of every
 dispatch, success or failure.
+
+**Native session logs.** The slot is also the CLI’s config home
+(`CODEX_HOME=<slot>/.codex`, `CLAUDE_CONFIG_DIR=<slot>`), so the CLI’s own session
+record lands there too: Codex rollouts under `.codex/sessions/YYYY/MM/DD/`, and Claude
+transcripts under `projects/<project>/` when a step sets
+`no_session_persistence: false`. That record is the CLI’s own account of each response:
+token usage, model, and timestamps, plus rate-limit snapshots for Codex.
+The captured stdout stream is thinner; Codex’s `exec --json` stream carries neither
+timestamps nor the model.
+Adapters that provide this optional surface implement the separate, runtime-checkable
+`NativeSessionLogCapable` Protocol.
+Keeping it separate from `AuthCapableCliAdapter` preserves structural compatibility for
+third-party auth adapters.
+Its `native_session_log_sets()` method returns a slot-relative root directory and
+filename patterns:
+
+| Adapter | Root | Patterns | Preserved as |
+| --- | --- | --- | --- |
+| `codex-cli` | `.codex/sessions` | `rollout-*.jsonl`, `rollout-*.jsonl.zst` | `.logs/native/<step>[/<item>]/<session-stem>.codex-sessions/` |
+| `claude-code-cli` | `projects` | `*.jsonl`, `*.meta.json` | `.logs/native/<step>[/<item>]/<session-stem>.claude-projects/` |
+
+`complete_slot` calls
+`SlotCoordinator.preserve_native_session_logs(lease, session_log_path)` right after
+`preserve_diagnostics`. Matching regular files keep their layout below the root, so the
+preserved directory can be read as if it were the CLI’s own `sessions/` or `projects/`
+directory.
+The copy is staged in a private mode-0700 directory beside the destination and
+published with one rename.
+An already visible destination, including an empty directory or symlink, is retained.
+POSIX also refuses to replace a populated directory; if another publisher creates an
+empty directory after the check, the final rename can replace that empty directory, but
+it cannot discard destination data.
+Source discovery and copying use directory-relative descriptors with no-follow opens.
+Symlinks are neither followed nor copied, and any planned path that changes before it is
+opened aborts the set.
+A copy failure discards the whole staging tree rather than publishing partial evidence.
+Like diagnostic preservation, this remains best-effort at the run level: the failure is
+logged, credential teardown still runs, and no destination for the failed set is
+published.
+
+Native session records can contain full prompts and responses, tool inputs and outputs,
+file contents read by the agent, and provider metadata.
+Treat them as private run data, not as a redacted diagnostic format.
+Mode-0700 directories and mode-0600 files restrict their initial local visibility, but
+those permissions are not a sharing policy.
+Preserved records follow the existing `.logs/` lifecycle: they are large, operational,
+and safe to delete; Metaproc does not promote them into the durable declared-artifact
+tree or give them a separate retention guarantee.
+After slot teardown, deleting the preserved set removes Metaproc’s run-scoped copy.
+Run sharing and export tooling must exclude these records unless the operator explicitly
+authorizes private transcript content.
+Isolation from generic readers is a schema boundary, not a privacy boundary.
 
 **Failure-path classifier ordering.** `_classify_and_maybe_retry` runs *before*
 `try_compact_log` on every failure path.

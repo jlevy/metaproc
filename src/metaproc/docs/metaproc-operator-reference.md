@@ -279,9 +279,16 @@ An absent terminal result in a transcript does not establish that an attempt fai
 while it is still running; an existing trace may also predate the latest progress.
 Open the retained source evidence for the relevant attempt:
 
-- Per-attempt native agent streams are under
+- Per-attempt captured agent streams are under
   `<scope>/.logs/tasks/<step_id>/<item_key>/`. Inspect the attempt-specific JSONL and
   any captured stderr or debug files present there; adapters differ in what they emit.
+- A pooled Codex or Claude attempt can also retain the CLI’s externally owned session
+  records under
+  `<scope>/.logs/native/<step_id>[/<item_key>]/<session-stem>.<set-name>/`. These raw
+  records are isolated because their schemas differ from captured streams.
+  Generic status, stats, trace, usage, resource, and compaction commands skip them by
+  default; inspect them directly or with tooling that explicitly supports the native
+  format.
 - Scalar captured process output is under `<scope>/.logs/tasks/<step_id>/`, and
   item-scoped captured output is under its `<item_key>/` directory.
   The runtime artifact table below describes the `process_<ts>.log` naming pattern.
@@ -318,6 +325,18 @@ timeouts, or revising its prompt.
 Distinguish a reported agent result, a tool error, and an interrupted stream; correlate
 them with the recorded task cause, process exit, output validation, and pool kill or
 retry events before choosing a remedy.
+
+Treat native session records as private run data.
+They can contain full prompts and responses, tool inputs and outputs, file contents read
+by the agent, and provider metadata.
+Do not attach them to public reports or include them in shared run bundles without
+explicit authorization and a content review.
+They follow the ordinary `.logs/` lifecycle: they are operational, potentially large,
+gitignored, safe to delete, and not promoted into the durable declared-artifact tree.
+After credential-slot teardown, the preserved set is Metaproc’s run-scoped copy;
+deleting it makes that evidence unavailable.
+Private filesystem modes limit initial access but do not replace an export or sharing
+policy.
 
 Report the observed cause, its affected step/item/attempt, the source path and relevant
 timestamp or excerpt, and the retry or waiting state.
@@ -943,6 +962,7 @@ for unmarked old runs.
 | Step runpool events | `<run>/.logs/runpool/steps/<step_id>/events.jsonl` | Per-step fan-out runner events |
 | Worker runpool events | `<run>/.logs/runpool/workers/<worker-id>/events.jsonl` | Worker-scoped runner events |
 | Agent session logs | `<run>/.logs/tasks/<step_id>/<item_key>/*.jsonl` | Per-attempt adapter stream JSONL |
+| Native CLI session records | `<run>/.logs/native/<step_id>[/<item_key>]/<session-stem>.<set-name>/` | Complete Codex rollout or Claude transcript set preserved from a pooled credential slot; absent when the CLI emitted no native record or preservation failed |
 | Captured process output | `<run>/.logs/tasks/<step_id>/process_<ts>.log` | Scalar code/subprocess stdout and stderr |
 | Captured item output | `<run>/.logs/tasks/<step_id>/<item_key>/process_<ts>.log` | Item-scoped code/subprocess stdout and stderr |
 | Workflow tool logs | `<run>/.logs/tools/<tool-name>/invocations.jsonl` | Workflow-owned tool invocation streams |

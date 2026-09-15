@@ -310,6 +310,42 @@ class QuotaUsage:
     detail: str = ""
 
 
+@dataclass(frozen=True)
+class NativeSessionLogSet:
+    """Where an agent CLI writes its own session records inside a credential slot.
+
+    ``root`` is a slot-relative directory, such as ``.codex/sessions``.
+    ``filename_patterns`` are :func:`fnmatch.fnmatchcase` patterns matched against the
+    names of regular files at any depth below ``root``; the directory structure below
+    ``root`` is kept when the files are preserved. ``name`` suffixes the preserved
+    directory under the corresponding ``.logs/native`` task scope:
+    ``<session-stem>.<name>/``.
+    """
+
+    name: str
+    root: str
+    filename_patterns: tuple[str, ...]
+
+
+@runtime_checkable
+class NativeSessionLogCapable(Protocol):
+    """Optional adapter capability for preserving CLI-owned session records.
+
+    This capability is separate from :class:`AuthCapableCliAdapter`, so third-party
+    auth adapters do not need to implement native transcript preservation to remain
+    structurally compatible.
+    """
+
+    def native_session_log_sets(self) -> tuple[NativeSessionLogSet, ...]:
+        """Return where the CLI writes its own session records inside a pool slot.
+
+        :meth:`AuthCapableCliAdapter.credential_scope_env` points the CLI's config home
+        into the slot, so native records can land there too. Each set's ``root`` must
+        not contain credential files that match its patterns.
+        """
+        ...
+
+
 @runtime_checkable
 class AuthCapableCliAdapter(Adapter, Protocol):
     """Adapter that can participate in the labeled credential pool.
