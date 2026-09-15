@@ -21,6 +21,10 @@ development series.
   against a per-item chain-time target.
   A run that executed as a child scope of a larger run is summarized with its nested
   scopes and transcripts, whether read in place or from a copy.
+- **`gemini-3.8-flash` has a list price.** The pricing table records Google’s
+  introductory rate through 2026-12-31 ($0.75/M input, $3.75/M output, $0.075/M cached
+  input) as its actual price and the standard rate from 2027-01-01 ($1.50, $7.50, $0.15)
+  as its list price, so its invocations count toward `list_cost_usd`.
 
 ### Fixed
 
