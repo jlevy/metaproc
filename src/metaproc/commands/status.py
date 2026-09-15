@@ -12,6 +12,7 @@ from prettyfmt import fmt_timedelta
 from ruamel.yaml import YAMLError
 
 from metaproc.cli import app, get_output
+from metaproc.engine.operations_summary import OPERATIONS_SUMMARY_FILE, finalize_operations_summary
 from metaproc.engine.resource_finalization import (
     finalize_run_resources,
     infer_recovery_outcome,
@@ -129,6 +130,11 @@ def _recover_resource_artifacts(run_dir: Path, status: RunStatus) -> None:
         )
     except Exception:  # noqa: BLE001 - status remains available if reporting recovery fails
         log.exception("resource artifact recovery failed for inactive run %s", run_dir)
+        return
+    # A run killed by a signal skips the finalization that writes its operations summary.
+    # The summary is write-once, so a run that already has one keeps it.
+    if not (run_dir / OPERATIONS_SUMMARY_FILE).exists():
+        finalize_operations_summary(run_dir, outcome=None, trigger="status")
 
 
 def _format_text(status: RunStatus, *, steps_only: bool = False, stale_only: bool = False) -> str:
