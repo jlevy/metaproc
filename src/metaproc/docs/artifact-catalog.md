@@ -64,9 +64,20 @@ logical type stays `.jsonl`.
 | `dispatch-config-changes.jsonl` | `<run>/.logs/` | ad-hoc dict (typed envelope pending) | `commands/run_process.py:_record_resume_config_change` | resource aggregator timeline |
 | `trace.jsonl` | `<run>/.logs/derived/` | `TraceEvent` | `trace/store.py:write_trace` | metabrowser trace view, `metaproc trace` |
 | `<step>_<context>_<ts>.jsonl` | `<run>/.logs/tasks/<step>/<item>/` | depends on agent adapter | `runpool/backend.py` (subprocess stdout capture) | trace extractor, human debugging |
+| `<session-stem>.codex-sessions/YYYY/MM/DD/rollout-*.jsonl[.zst]` | `<run>/.logs/native/<step>[/<item>]/` | Codex CLI native rollout (externally owned) | `dispatch/slot_coordinator.py:SlotCoordinator.preserve_native_session_logs`; complete set staged privately and atomically published before slot teardown | explicit native-session tooling, human debugging |
+| `<session-stem>.claude-projects/<project>/**/*.jsonl` and `*.meta.json` | `<run>/.logs/native/<step>[/<item>]/`, when `no_session_persistence: false` | Claude Code native transcript (externally owned) | `dispatch/slot_coordinator.py:SlotCoordinator.preserve_native_session_logs`; complete set staged privately and atomically published before slot teardown | explicit native-session tooling, human debugging |
 | `invocations.jsonl` | `<run>/.logs/tools/<tool-name>/` | Tool-specific record on read side; write side currently ad-hoc | consumer plugin | resource joiner, eval judge, usage aggregator |
 | `web-searches.jsonl` | `<run>/.logs/tools/<tool-name>/` | Consumer-defined search log | consumer plugin | eval judge, human debugging |
 | `resource-events.jsonl` | `<run>/.logs/` | `ResourceEvent` (discriminated union) | `logutil/resource_events.py:ResourceEventLogger.write` plus atomic rewrite by rollup | resource rollup builder |
+
+Native CLI session records are private, externally owned source evidence.
+They can contain full prompts and responses, tool inputs and outputs, and file contents
+read by the agent. Their mode-0700 directories and mode-0600 files follow the ordinary
+`.logs/` lifecycle: operational, potentially large, gitignored, and safe to delete.
+They are not promoted into the durable declared-artifact tree or included in sharing or
+export by default. A missing native set means either the CLI emitted no matching record
+or best-effort preservation failed; readers must not infer that no agent activity
+occurred.
 
 Legacy: `runpool-events.jsonl` is the pre-V2 equivalent of `events.jsonl`. Still parsed
 by the trace extractor as a fallback; new runs do not emit it.

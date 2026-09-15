@@ -10,6 +10,7 @@ from metaproc.cli import app, get_output
 from metaproc.io import iter_artifact_paths, logical_path
 from metaproc.logutil.parsing import LogFile
 from metaproc.logutil.usage import load_pricing, write_usage_report
+from metaproc.paths import is_native_session_log_path
 
 
 @app.command("write-usage")
@@ -43,7 +44,9 @@ def write_usage(
 
     # Discover agent log files, excluding plugin-owned tool event streams.
     jsonl_files = [
-        f for f in iter_artifact_paths(phase_dir, "**/*.jsonl") if not _is_tool_event_log(f)
+        f
+        for f in iter_artifact_paths(phase_dir, "**/*.jsonl")
+        if not _is_tool_event_log(f) and not is_native_session_log_path(f)
     ]
     if not jsonl_files:
         out.data(f"No .jsonl files found in {phase_dir}")

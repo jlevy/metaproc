@@ -599,6 +599,9 @@ lives where the runs live, not in `/tmp/`.
 - runpool logs are scoped by the step runner or worker that writes them:
   `.logs/runpool/steps/<step_id>/events.jsonl` or
   `.logs/runpool/workers/<worker-id>/events.jsonl`
+- externally owned native CLI session records live under
+  `.logs/native/<step_id>[/<item_key>]/<session-stem>.<set-name>/`; generic
+  captured-stream readers skip this namespace
 - workflow-owned tool logs live under `.logs/tools/<tool-name>/`
 - derived JSONL outputs live under `.logs/derived/`; extractors must not treat
   `.logs/derived/` as a source tree
@@ -606,6 +609,8 @@ lives where the runs live, not in `/tmp/`.
   batch-slug filename (see policy above)
 - log filenames should preserve enough context to identify step, item key, and time
 - logs are operational artifacts and should normally be gitignored
+- raw logs may contain prompts, tool data, file contents, and other private run content;
+  gitignore and filesystem permissions do not authorize sharing or export
 - operator-facing command guidance lives in
   [metaproc-operator-reference.md](metaproc-operator-reference.md)
 

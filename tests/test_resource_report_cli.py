@@ -126,6 +126,11 @@ def test_inactive_legacy_build_writes_complete_resource_artifact_set(tmp_path: P
     assert (run_dir / ".state" / "schemas" / "resource-usage-summary.v1.schema.yaml").is_file()
     assert resource_artifacts_need_recovery(run_dir) is False
 
+    native_log = run_dir / ".logs" / "native" / "step" / "session" / "rollout.jsonl"
+    native_log.parent.mkdir(parents=True)
+    native_log.write_text('{"type": "session_meta"}\n')
+    assert resource_artifacts_need_recovery(run_dir) is False
+
 
 def test_subsequent_invocation_reads_cached_resources_json(tmp_path: Path) -> None:
     spec_path, run_dir = _setup_run(tmp_path)

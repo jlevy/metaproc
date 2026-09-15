@@ -14,6 +14,7 @@ from metaproc.logutil.compaction import (
     compact_logs_path,
     plan_compaction,
 )
+from metaproc.paths import is_native_session_log_path
 
 
 def _parse_adapters(value: str) -> frozenset[str] | None:
@@ -50,9 +51,13 @@ def compact_logs(
     out = get_output()
 
     if path.is_file():
-        files = [path]
+        files = [] if is_native_session_log_path(path) else [path]
     elif path.is_dir():
-        files = sorted(path.rglob("*.jsonl"))
+        files = sorted(
+            candidate
+            for candidate in path.rglob("*.jsonl")
+            if not is_native_session_log_path(candidate)
+        )
     else:
         out.data(f"Path not found: {path}")
         raise typer.Exit(code=1)
