@@ -17,7 +17,13 @@ from typing import Any
 import pytest
 import yaml
 from pydantic import ValidationError
-from softschema import Contract, SchemaStatus, compile_model, validate_artifact
+from softschema import (
+    ArtifactValidationResult,
+    Contract,
+    SchemaStatus,
+    compile_model,
+    validate_artifact,
+)
 from typer.testing import CliRunner
 
 from metaproc.cli import app
@@ -735,6 +741,19 @@ def test_long_result_line_after_a_capped_line_in_gzip(
 # ── Written document ──────────────────────────────────────────────
 
 
+def _validate_written_summary(path: Path, run_dir: Path) -> ArtifactValidationResult:
+    return validate_artifact(
+        path,
+        contract=Contract(
+            id=OPERATIONS_SUMMARY_CONTRACT,
+            model=AgentOperationsSummary,
+            envelope_key="agent_operations",
+            status=SchemaStatus.enforced,
+            schema_path=run_dir / ops.OPERATIONS_SUMMARY_SCHEMA_RELATIVE,
+        ),
+    )
+
+
 def test_written_summary_validates_against_its_registered_contract(composite_run: Path) -> None:
     summary = _summary(composite_run)
     path = ops.write_operations_summary(summary, composite_run)
@@ -742,23 +761,37 @@ def test_written_summary_validates_against_its_registered_contract(composite_run
     metadata = fmf_read_frontmatter(path)
     assert metadata is not None
     assert metadata["softschema"]["contract"] == OPERATIONS_SUMMARY_CONTRACT
-    schema_path = composite_run / ops.OPERATIONS_SUMMARY_SCHEMA_RELATIVE
-    validation = validate_artifact(
-        path,
-        contract=Contract(
-            id=OPERATIONS_SUMMARY_CONTRACT,
-            model=AgentOperationsSummary,
-            envelope_key="agent_operations",
-            status=SchemaStatus.enforced,
-            schema_path=schema_path,
-        ),
-    )
+    validation = _validate_written_summary(path, composite_run)
     assert validation.ok, (validation.structural.errors, validation.semantic.errors)
     assert ops.read_operations_summary(composite_run) == summary
 
     contract = get_plugin_registry().softschemas.resolve(OPERATIONS_SUMMARY_CONTRACT)
     assert contract is not None
     assert contract.model is AgentOperationsSummary
+
+
+def test_enforced_contract_rejects_an_undeclared_key_in_a_nested_nullable_section(
+    composite_run: Path,
+) -> None:
+    """``agents`` and its ``tokens`` are both nullable model references.
+
+    The enforced profile refuses an outer nullable reference whose target would need an
+    inferred closure, so the contract states closure at each nullable model reference.
+    That stated closure has to keep rejecting a key the nested model does not declare.
+    """
+    path = ops.write_operations_summary(_summary(composite_run), composite_run)
+    assert _validate_written_summary(path, composite_run).structural.ok
+    metadata = fmf_read_frontmatter(path)
+    assert metadata is not None
+    metadata["agent_operations"]["agents"]["tokens"]["unmodeled_tokens"] = 1
+    fmf_write(path, "# Operations summary\n", metadata)
+
+    structural = _validate_written_summary(path, composite_run).structural
+
+    assert structural.errors
+    assert {(error["kind"], tuple(error.get("path", ()))) for error in structural.errors} == {
+        ("schema_violation", ("agents",))
+    }, structural.errors
 
 
 def test_committed_operations_summary_schema_has_no_drift() -> None:

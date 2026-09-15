@@ -51,6 +51,7 @@ $defs:
         - $ref: '#/$defs/TokenFigures'
         - type: 'null'
         default: null
+        unevaluatedProperties: false
       tool_calls:
         anyOf:
         - type: integer
@@ -152,6 +153,7 @@ $defs:
         - $ref: '#/$defs/StepRef'
         - type: 'null'
         default: null
+        unevaluatedProperties: false
       stages:
         items:
           $ref: '#/$defs/ItemStage'
@@ -175,16 +177,19 @@ $defs:
         - $ref: '#/$defs/Distribution'
         - type: 'null'
         default: null
+        unevaluatedProperties: false
       chain_running_s:
         anyOf:
         - $ref: '#/$defs/Distribution'
         - type: 'null'
         default: null
+        unevaluatedProperties: false
       chain_span_s:
         anyOf:
         - $ref: '#/$defs/Distribution'
         - type: 'null'
         default: null
+        unevaluatedProperties: false
       item_count:
         title: Item Count
         type: integer
@@ -238,6 +243,7 @@ $defs:
         - $ref: '#/$defs/StepRef'
         - type: 'null'
         default: null
+        unevaluatedProperties: false
       stage:
         title: Stage
         type: string
@@ -767,6 +773,7 @@ $defs:
         - $ref: '#/$defs/Distribution'
         - type: 'null'
         default: null
+        unevaluatedProperties: false
       stage:
         title: Stage
         type: string
@@ -1000,6 +1007,7 @@ properties:
     - $ref: '#/$defs/AgentFigures'
     - type: 'null'
     default: null
+    unevaluatedProperties: false
   artifacts:
     $ref: '#/$defs/OperationsSummaryArtifacts'
   extraction_s:
@@ -1021,26 +1029,31 @@ properties:
     - $ref: '#/$defs/ItemFigures'
     - type: 'null'
     default: null
+    unevaluatedProperties: false
   parallelism:
     anyOf:
     - $ref: '#/$defs/ParallelismFigures'
     - type: 'null'
     default: null
+    unevaluatedProperties: false
   resources:
     anyOf:
     - $ref: '#/$defs/ResourceFigures'
     - type: 'null'
     default: null
+    unevaluatedProperties: false
   retries:
     anyOf:
     - $ref: '#/$defs/RetryFigures'
     - type: 'null'
     default: null
+    unevaluatedProperties: false
   run:
     anyOf:
     - $ref: '#/$defs/RunFigures'
     - type: 'null'
     default: null
+    unevaluatedProperties: false
   run_id:
     title: Run Id
     type: string
@@ -1049,6 +1062,7 @@ properties:
     - $ref: '#/$defs/SetupFigures'
     - type: 'null'
     default: null
+    unevaluatedProperties: false
   stages:
     anyOf:
     - items:
@@ -1062,6 +1076,7 @@ properties:
     - $ref: '#/$defs/StepFigures'
     - type: 'null'
     default: null
+    unevaluatedProperties: false
   trigger:
     enum:
     - finalization
@@ -1081,4 +1096,4 @@ title: AgentOperationsSummary
 type: object
 x-softschema:
   contract: metaproc.operations:AgentOperationsSummary/v1
-  schema_sha256: ecf65cc84e2481c28b762a40239b9dd4bb8feef1690667e2dac414a6adb472f9
+  schema_sha256: f74fc56c767e6ad9cacf11b5ee5f332ee20ccdbb85619306d4a9f32cf7309183

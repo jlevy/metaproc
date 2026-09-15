@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import ClassVar, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic.config import JsonDict
 
 from metaproc.models.resources import CoverageState, MeterKey
 
@@ -20,10 +21,40 @@ OPERATIONS_SUMMARY_ENVELOPE = "agent_operations"
 OPERATIONS_SUMMARY_EXTRACTOR_VERSION = 1
 
 
+def _close_nullable_model_references(schema: JsonDict) -> None:
+    """State closure on each ``Model | None`` property of one record's JSON Schema.
+
+    Pydantic renders such a property as ``anyOf: [{$ref: Model}, {type: null}]``. The
+    softschema enforced profile infers ``unevaluatedProperties: false`` on that wrapper,
+    then refuses any nullable reference whose target contains an inferred closure
+    (``composition_reference_context``), which is every section holding a nullable model.
+    Every model this contract references already forbids extra keys, so stating the
+    closure leaves validation unchanged. It is ``unevaluatedProperties`` because the
+    wrapper declares no properties of its own, so ``additionalProperties: false`` would
+    reject every key.
+    """
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return
+    for property_schema in properties.values():
+        if not isinstance(property_schema, dict):
+            continue
+        branches = property_schema.get("anyOf")
+        if (
+            isinstance(branches, list)
+            and len(branches) == 2
+            and {"type": "null"} in branches
+            and any(isinstance(branch, dict) and "$ref" in branch for branch in branches)
+        ):
+            property_schema["unevaluatedProperties"] = False
+
+
 class _Explained(BaseModel):
     """A record whose null figures each carry a reason in ``unavailable``."""
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", json_schema_extra=_close_nullable_model_references
+    )
 
     unavailable: dict[str, str] = Field(default_factory=dict)
 
