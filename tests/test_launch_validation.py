@@ -293,8 +293,74 @@ def test_step_variant_naming_a_child_step_fails_with_the_root_step_ids(tmp_path:
     assert _headers(groups) == [PROFILE_GROUP]
     (message,) = groups[0][1]
     assert message.startswith("--step-variant judge: no step 'judge' in process 'parent'")
-    assert "top-level steps (prepare, nested)" in message
+    assert "top-level steps that are not composite (prepare)" in message
     assert "composite child processes" in message
+
+
+_PINNED_COMPOSITE_PARENT = _COMPOSITE_PARENT.replace(
+    "          uses: ./child.process.md\n",
+    "          uses: ./child.process.md\n          execution_profile: gemini-pro\n",
+)
+
+
+def test_step_variant_naming_a_composite_step_fails_whether_or_not_it_is_pinned(
+    tmp_path: Path,
+) -> None:
+    """A composite's child is planned without the override, so it could only be ignored.
+
+    Unpinned, the recorded plan would name the override while the subtree ran on the run
+    profile; pinned, the override would silently replace the authored pin.
+    """
+    for body in (_COMPOSITE_PARENT, _PINNED_COMPOSITE_PARENT):
+        (tmp_path / "child.process.md").write_text(
+            textwrap.dedent(_COMPOSITE_CHILD), encoding="utf-8"
+        )
+        process_path = _write_spec(tmp_path, body)
+        spec = load_process_spec(process_path)
+
+        groups = collect_launch_errors(
+            spec,
+            {"RUNS_DIR": str(tmp_path)},
+            tmp_path,
+            process_path=process_path,
+            step_profile_overrides={"nested": "gemini-flash"},
+        )
+
+        messages = [message for _header, group in groups for message in group]
+        refusal = [message for message in messages if message.startswith("--step-variant nested")]
+        assert refusal == [
+            (
+                "--step-variant nested: step 'nested' in process 'parent' is a composite step; "
+                "overrides apply only to top-level steps that are not composite (prepare). "
+                "Pin execution_profile: on the composite step to run its subtree on another "
+                "profile"
+            )
+        ]
+
+
+def test_run_process_refuses_a_step_variant_for_a_composite_step(tmp_path: Path) -> None:
+    process_path = _composite_parent(tmp_path)
+
+    result = RUNNER.invoke(
+        app,
+        [
+            "run-process",
+            str(process_path),
+            "--var",
+            f"RUNS_DIR={tmp_path / 'runs'}",
+            "--var",
+            "RUN_ID=composite-override",
+            "--step-variant",
+            "nested=gemini-flash",
+        ],
+    )
+
+    assert isinstance(result.exception, ValidationError)
+    assert result.exception.exit_code == 2
+    assert "--step-variant nested: step 'nested' in process 'parent' is a composite step" in (
+        result.output or str(result.exception)
+    )
+    assert not (tmp_path / "runs" / "composite-override").exists()
 
 
 def test_run_process_refuses_a_step_variant_for_a_nested_step(tmp_path: Path) -> None:

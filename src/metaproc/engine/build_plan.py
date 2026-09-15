@@ -108,25 +108,34 @@ def _resolve_required_profile(
         raise ValueError(msg) from exc
 
 
-def unknown_step_override_errors(spec: ProcessSpec, overrides: Mapping[str, str]) -> list[str]:
-    """Return one error per ``--step-variant`` step id that is not a step of *spec*.
+def step_override_target_errors(spec: ProcessSpec, overrides: Mapping[str, str]) -> list[str]:
+    """Return one error per ``--step-variant`` step id that cannot take an override.
 
-    Overrides apply only to the process being launched. A composite step's child process
-    is planned with the run-level profile or the composite step's authored
-    `execution_profile:`, so an id naming a step inside a child would otherwise be
-    accepted and have no effect.
+    Overrides apply only to the top-level steps of the process being launched that are not
+    composite. A composite step's child process is planned with the enclosing scope's
+    profile or the composite step's authored `execution_profile:`, never with an override,
+    so an id naming a step inside a child, or a composite step itself, would otherwise be
+    accepted and have no effect, or replace the authored pin.
     """
-    root_ids = [step.id for step in spec.steps]
-    unknown = [step_id for step_id in overrides if step_id not in root_ids]
-    if not unknown:
-        return []
-    available = ", ".join(root_ids) or "(none)"
-    return [
-        f"--step-variant {step_id}: no step {step_id!r} in process {spec.name!r}; "
-        f"overrides apply only to its top-level steps ({available}), not to steps inside "
-        "composite child processes"
-        for step_id in unknown
-    ]
+    steps = {step.id: step for step in spec.steps}
+    targets = ", ".join(step.id for step in spec.steps if step.mode != "composite") or "(none)"
+    errors: list[str] = []
+    for step_id in overrides:
+        step = steps.get(step_id)
+        if step is None:
+            errors.append(
+                f"--step-variant {step_id}: no step {step_id!r} in process {spec.name!r}; "
+                f"overrides apply only to its top-level steps that are not composite "
+                f"({targets}), not to steps inside composite child processes"
+            )
+        elif step.mode == "composite":
+            errors.append(
+                f"--step-variant {step_id}: step {step_id!r} in process {spec.name!r} is a "
+                f"composite step; overrides apply only to top-level steps that are not "
+                f"composite ({targets}). Pin execution_profile: on the composite step to run "
+                "its subtree on another profile"
+            )
+    return errors
 
 
 def validate_execution_profiles(
@@ -147,7 +156,7 @@ def validate_execution_profiles(
     registry = _load_profile_registry(process_path, profile_files)
     overrides = step_profile_overrides or {}
 
-    errors: list[str] = unknown_step_override_errors(spec, overrides)
+    errors: list[str] = step_override_target_errors(spec, overrides)
     requests: list[tuple[str, str]] = []
     if adapter_override is None and spec.defaults.default_execution_profile:
         requests.append(
@@ -801,7 +810,7 @@ def build_plan(
         artifact_namespace=run_artifact_namespace,
     )
     step_profile_overrides = step_profile_overrides or {}
-    if override_errors := unknown_step_override_errors(spec, step_profile_overrides):
+    if override_errors := step_override_target_errors(spec, step_profile_overrides):
         raise ValueError("\n".join(override_errors))
 
     fan_out_errors = validate_fan_out_contracts(spec, process_path)
