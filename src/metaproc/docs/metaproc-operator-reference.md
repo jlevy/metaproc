@@ -302,6 +302,18 @@ the captured source when their interpretation is incomplete or suspect.
 Preserve available source logs during an investigation, and avoid lossy compaction until
 the needed native evidence has been retained.
 
+Treat native session records as private run data.
+They can contain full prompts and responses, tool inputs and outputs, file contents read
+by the agent, and provider metadata.
+Do not attach them to public reports or include them in shared run bundles without
+explicit authorization and a content review.
+They follow the ordinary `.logs/` lifecycle: they are operational, potentially large,
+gitignored, safe to delete, and not promoted into the durable declared-artifact tree.
+After credential-slot teardown, the preserved set is Metaproc’s run-scoped copy;
+deleting it makes that evidence unavailable.
+Private filesystem modes limit initial access but do not replace an export or sharing
+policy.
+
 Report the observed cause, its affected step/item/attempt, the source path and relevant
 timestamp or excerpt, and the retry or waiting state.
 If the cause is unknown, say so and identify missing or unreadable evidence instead of

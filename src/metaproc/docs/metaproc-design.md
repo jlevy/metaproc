@@ -6,7 +6,7 @@ status: Approved
 ---
 # Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-09-14) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-09-15) **Status:** Approved
 
 Also readable as `metaproc help design`.
 
@@ -222,7 +222,7 @@ Logs use producer and writer scope rather than mirroring every `.state/` branch:
   {run_dir}/.logs/tasks/{step_id}/<item_key>/*.jsonl
   {run_dir}/.logs/tasks/{step_id}/process_<ts>.log
   {run_dir}/.logs/tasks/{step_id}/<item_key>/process_<ts>.log
-  {run_dir}/.logs/native/{step_id}/<item_key>/<session-stem>.<set-name>/**/*
+  {run_dir}/.logs/native/{step_id}/[<item_key>/]<session-stem>.<set-name>/**/*
   {run_dir}/.logs/tools/<tool-name>/invocations.jsonl
   {run_dir}/.logs/derived/trace.jsonl
 
@@ -2857,3 +2857,7 @@ Authentication across the cloud boundary is in
 [arch-authentication.md](arch-authentication.md) (`metaproc help arch-auth`), and the
 operator procedure is [cloud-dispatch.runbook.md](cloud-dispatch.runbook.md)
 (`metaproc help cloud-dispatch`).
+
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
+-->

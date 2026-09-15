@@ -6,7 +6,7 @@ status: Draft — partial currency notice below
 ---
 # Architecture: Authentication and Credentials
 
-**Date:** 2026-04-21 (last updated 2026-09-14) **Status:** Draft — partial currency
+**Date:** 2026-04-21 (last updated 2026-09-15) **Status:** Draft — partial currency
 notice below
 
 ## Currency notice (2026-04-28)
@@ -1139,6 +1139,19 @@ A copy failure discards the whole staging tree rather than publishing partial ev
 Like diagnostic preservation, this remains best-effort at the run level: the failure is
 logged, credential teardown still runs, and no destination for the failed set is
 published.
+
+Native session records can contain full prompts and responses, tool inputs and outputs,
+file contents read by the agent, and provider metadata.
+Treat them as private run data, not as a redacted diagnostic format.
+Mode-0700 directories and mode-0600 files restrict their initial local visibility, but
+those permissions are not a sharing policy.
+Preserved records follow the existing `.logs/` lifecycle: they are large, operational,
+and safe to delete; Metaproc does not promote them into the durable declared-artifact
+tree or give them a separate retention guarantee.
+After slot teardown, deleting the preserved set removes Metaproc’s run-scoped copy.
+Run sharing and export tooling must exclude these records unless the operator explicitly
+authorizes private transcript content.
+Isolation from generic readers is a schema boundary, not a privacy boundary.
 
 **Failure-path classifier ordering.** `_classify_and_maybe_retry` runs *before*
 `try_compact_log` on every failure path.

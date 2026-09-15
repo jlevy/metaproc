@@ -69,6 +69,15 @@ logical type stays `.jsonl`.
 | `web-searches.jsonl` | `<run>/.logs/tools/<tool-name>/` | Consumer-defined search log | consumer plugin | eval judge, human debugging |
 | `resource-events.jsonl` | `<run>/.logs/` | `ResourceEvent` (discriminated union) | `logutil/resource_events.py:ResourceEventLogger.write` plus atomic rewrite by rollup | resource rollup builder |
 
+Native CLI session records are private, externally owned source evidence.
+They can contain full prompts and responses, tool inputs and outputs, and file contents
+read by the agent. Their mode-0700 directories and mode-0600 files follow the ordinary
+`.logs/` lifecycle: operational, potentially large, gitignored, and safe to delete.
+They are not promoted into the durable declared-artifact tree or included in sharing or
+export by default. A missing native set means either the CLI emitted no matching record
+or best-effort preservation failed; readers must not infer that no agent activity
+occurred.
+
 Legacy: `runpool-events.jsonl` is the pre-V2 equivalent of `events.jsonl`. Still parsed
 by the trace extractor as a fallback; new runs do not emit it.
 
