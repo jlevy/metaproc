@@ -674,18 +674,18 @@ It does not certify the whole run or establish that every validation layer ran.
 Use `metaproc softschema validate <artifact> --schema <contract-id>` to inspect an
 individual artifact’s registered contract result.
 
-Read validation execution separately from the payload verdict.
-In reports that include `structural.execution` and `semantic.execution`, inspect each
-layer independently: `completed` means the evaluator reached a verdict, and `ok` says
-whether it accepted the payload.
-`not_run` and `errored` do not establish a payload verdict; read that layer’s
-`skipped_reason` and `errors` for the recorded explanation, and `structural.engine` for
-the structural evaluator.
+Read each validation layer separately from the overall verdict.
+With the supported SoftSchema 0.8 releases, `structural` and `semantic` each report
+`ok`, `errors`, and `skipped_reason`, and `structural.engine` names the structural
+evaluator type.
+A layer with a `skipped_reason` did not evaluate the payload, so its `ok`
+is the library’s default for that case rather than a verdict.
+These reports carry no execution fields and no other evidence of which evaluators ran.
 A schema’s `status: enforced` declares policy and does not prove either evaluator ran.
-Metaproc forwards the installed SoftSchema library’s layer records; reports without
-execution fields provide no explicit execution evidence.
-Preserve that absence or revalidate the retained artifact, and identify any new result
-as a review-time check rather than evidence of what ran originally.
+Metaproc forwards the installed SoftSchema library’s layer records unchanged.
+When reviewing a retained artifact, preserve that absence of evidence or revalidate the
+artifact, and identify any new result as a review-time check rather than evidence of
+what ran originally.
 
 #### Built-in contract checks
 
@@ -694,20 +694,18 @@ The models check types and declared invariants, including cross-field rules; eac
 model’s own extra-field and coercion policies apply.
 The bindings retain `status: enforced` and do not bind an independent JSON Schema.
 
-With SoftSchema’s execution-evidence API, these checks report
-`semantic.execution: completed` on either acceptance or rejection, together with the
-actual verdict and errors.
-The structural record reports `execution: not_run` and
-`skipped_reason: inferred_via_model`. Its `engine: json_schema` label identifies the
-available engine, not an invocation.
+The model verdict is the `semantic` layer: `ok` and `errors` record acceptance or
+rejection, with no `skipped_reason`. The structural layer reports
+`skipped_reason: inferred_via_model` with `ok: true` because it did not run; its
+`engine: json_schema` label identifies the available engine, not an invocation.
+The report’s `warnings` list is empty.
 
-The `document-enforcement-via-model-only` advisory is intentional and remains visible in
-validation reports. A valid result establishes acceptance by the Python model; it does
-not establish independent structural validation or equivalent validation in another
-language. A rejected model result remains invalid despite the unrun structural layer’s
-`ok: true`. Do not change maturity metadata or suppress the advisory to imply a stronger
-guarantee. Adding compiled schemas requires reviewing the accepted payloads and the
-models’ policies as a contract change.
+A valid result establishes acceptance by the Python model; it does not establish
+independent structural validation or equivalent validation in another language.
+A rejected model result remains invalid despite the unrun structural layer’s `ok: true`.
+Do not change maturity metadata to imply a stronger guarantee.
+Adding compiled schemas requires reviewing the accepted payloads and the models’
+policies as a contract change.
 
 ### Steps section in `metaproc status`
 
