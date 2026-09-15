@@ -445,6 +445,58 @@ def test_run_parallel_retry_policy_uses_the_unclipped_path_free_classification(
     assert status is not None and status.failure_class == failure_class
 
 
+@pytest.mark.parametrize("handler", [False, True])
+def test_identical_mapped_failures_count_as_one_cause_despite_per_item_evidence(
+    tmp_path: Path, handler: bool
+) -> None:
+    diagnostic = "ProviderError: HTTP 503 Service Unavailable"
+    if handler:
+        (tmp_path / "fail.py").write_text(
+            f"def fail(context, step):\n    raise RuntimeError({diagnostic!r})\n"
+        )
+        runner = "      handler: fail.py:fail\n"
+        cause = f"RuntimeError: {diagnostic}"
+    else:
+        (tmp_path / "fail.py").write_text(
+            f"import sys\nprint({diagnostic!r}, file=sys.stderr)\nraise SystemExit(1)\n"
+        )
+        runner = f"      command: '{sys.executable} fail.py'\n"
+        cause = f"command exit code 1 (stderr: {diagnostic})"
+    (tmp_path / "items.md").write_text(
+        "---\nprogress:\n  items:\n    - item: alfa\n    - item: brvo\n    - item: chrl\n---\n"
+    )
+    process = tmp_path / "mapped.process.md"
+    process.write_text(
+        "---\nprocess:\n  name: mapped\n"
+        "  deps:\n    items: {path: ./items.md, as: path}\n"
+        "  steps:\n    - id: query\n      mode: code\n"
+        + runner
+        + "      for_each:\n        over: deps.items\n        bind: item\n"
+        "        bind_fields: [item]\n        key: '{{item}}'\n"
+        "---\n"
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-process",
+            str(process),
+            "--var",
+            f"RUNS_DIR={tmp_path / 'runs'}",
+            "--var",
+            "RUN_ID=mapped",
+        ],
+    )
+    assert result.exit_code == 1, result.output
+    run = tmp_path / "runs" / "mapped"
+    expected = f"3 of 3 items failed (3 x {cause})"
+    process_status = read_yaml_file(run / ".state" / "process-status.yaml")
+    assert process_status["steps"]["query"]["error"] == expected
+    assert scan_run_status(run, include_system=False).process_error == f"query: {expected}"
+    for outcome in collect_item_outcomes(run, "query"):
+        # Each item keeps the pointer to its own retained evidence.
+        assert f".logs/tasks/query/{outcome['key']}/process_" in outcome["error"]
+
+
 @pytest.mark.parametrize("mapped", [False, True])
 @pytest.mark.parametrize("terminator", [None, "\x1b\\", "\x07"])
 def test_handler_subprocess_failure_keeps_full_evidence_and_safe_durable_summary(

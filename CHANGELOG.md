@@ -22,8 +22,9 @@ development series.
   Omission retains the existing inherited directory.
 
 - **Failure causes survive task, step, and run aggregation.** Mapped summaries count
-  distinct recorded causes against the current item roster; scalar and composite
-  summaries retain their durable causes.
+  distinct recorded causes against the current item roster, ignoring each attempt’s
+  evidence path, and list at most five causes within a bounded length; scalar and
+  composite summaries retain their durable causes.
   Run status and process completion events preserve every failed step, and fan-in
   outcomes retain output paths and validator messages.
   Host-admission events distinguish waiting, failure, and best-effort bypass using the

@@ -19,7 +19,6 @@ import shlex
 import subprocess
 import time
 import traceback
-from collections import Counter
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -92,7 +91,11 @@ from metaproc.dispatch.preflight import (
 from metaproc.dispatch.slot_coordinator import SlotCoordinator, SlotLease
 from metaproc.engine.build_plan import build_plan, merge_defaults
 from metaproc.engine.code_handler import resolve_code_handler
-from metaproc.engine.command_diagnostics import command_failure_message, handler_failure_message
+from metaproc.engine.command_diagnostics import (
+    command_failure_message,
+    handler_failure_message,
+    summarize_failure_causes,
+)
 from metaproc.engine.dep_state import (
     fingerprint_step,
     recorded_step_hash,
@@ -1223,10 +1226,9 @@ def _read_step_failure_error(
             failures = [o for o in outcomes if o["key"] in current_keys and not o["succeeded"]]
             if not failures:
                 return "step failed without a recorded item failure"
-            causes = Counter(
+            detail = summarize_failure_causes(
                 o.get("error") or f"error not recorded (state: {o['state']})" for o in failures
             )
-            detail = "; ".join(f"{count} x {error}" for error, count in sorted(causes.items()))
             return f"{len(failures)} of {len(keys)} items failed ({detail})"
         if target.mode == "composite":
             child_status = _read_process_status_yaml(run_dir / target.step_id)

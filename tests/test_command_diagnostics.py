@@ -4,7 +4,12 @@ import json
 
 import pytest
 
-from metaproc.engine.command_diagnostics import command_failure_message, handler_failure_message
+from metaproc.engine.command_diagnostics import (
+    command_failure_message,
+    failure_cause,
+    handler_failure_message,
+    summarize_failure_causes,
+)
 from metaproc.engine.retry import FailureClass, RetryVerdict
 
 
@@ -225,3 +230,65 @@ def test_empty_handler_exception_retains_its_type_without_inventing_a_cause() ->
     failure = handler_failure_message(ValueError(), env={}, log_path="task.log")
     assert failure.error == "ValueError (traceback: task.log)"
     assert failure.failure_class is FailureClass.UNKNOWN
+
+
+def test_failure_cause_drops_only_the_trailing_evidence_path() -> None:
+    command = command_failure_message(
+        1,
+        stdout=None,
+        stderr="ProviderError: HTTP 503 (traceback: remote)",
+        env={},
+        log_path=".logs/tasks/query/alfa/process_att-1.log",
+    ).error
+    assert (
+        failure_cause(command)
+        == "command exit code 1 (stderr: ProviderError: HTTP 503 (traceback: remote))"
+    )
+    handler = handler_failure_message(
+        RuntimeError("upstream said; log: remote)"),
+        env={},
+        log_path=".logs/tasks/query/brvo/process_att-2.log",
+    ).error
+    assert failure_cause(handler) == "RuntimeError: upstream said; log: remote)"
+    for unchanged in (
+        "exit code 1 (log: API Error: overloaded)",
+        "timeout after 600s",
+        "output validation failed: report: path does not exist: report.md",
+    ):
+        assert failure_cause(unchanged) == unchanged
+
+
+def test_identical_item_failures_share_one_cause_across_evidence_paths() -> None:
+    errors = [
+        command_failure_message(
+            1,
+            stdout=None,
+            stderr="ProviderError: HTTP 503 Service Unavailable",
+            env={},
+            log_path=f".logs/tasks/query/{key}/process_att-{key}.log",
+        ).error
+        for key in ("alfa", "brvo", "chrl")
+    ]
+    assert summarize_failure_causes(errors) == (
+        "3 x command exit code 1 (stderr: ProviderError: HTTP 503 Service Unavailable)"
+    )
+
+
+def test_many_distinct_causes_render_the_most_frequent_within_a_bounded_summary() -> None:
+    errors = ["timeout after 600s"] * 3 + ["exit code 1"] * 2
+    errors += [
+        handler_failure_message(
+            RuntimeError(f"item {index}: " + "x" * 1_150),
+            env={},
+            log_path=f".logs/tasks/query/item-{index}/process_att-{index}.log",
+        ).error
+        for index in range(200)
+    ]
+    summary = summarize_failure_causes(errors)
+    assert summary.startswith("3 x timeout after 600s; 2 x exit code 1; 1 x RuntimeError: item ")
+    assert len(summary) <= 4_000
+    assert "process_att-" not in summary
+    omitted = int(summary.rsplit("; and ", 1)[1].split(" ", 1)[0])
+    shown = summary.count(" x ")
+    assert shown + omitted == 202
+    assert summary.endswith(f"and {omitted} more causes ({omitted} items)")

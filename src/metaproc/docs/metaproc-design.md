@@ -1955,11 +1955,15 @@ writing `process-status.yaml` and `step_fail`. Scalar tasks retain the recorded 
 regardless of adapter or step mode; scalar composites retain their child step errors.
 Mapped tasks summarize the current `run-plan.yaml` item roster, count distinct recorded
 causes, and exclude retained directories outside that roster.
+Command and handler errors end with their own attempt’s `log:` or `traceback:` path, so
+the count compares causes without that suffix; each item’s status keeps its full error.
 For example, two timeouts among three items produce
-`2 of 3 items failed (2 x timeout after 600s)`. An item-aligned chain uses the same
-aggregation for each failed member, and absent downstream items carry the recorded
-upstream cause in their fan-in outcomes.
-This reporting does not change the chain’s reached-item completion policy.
+`2 of 3 items failed (2 x timeout after 600s)`. The summary lists at most five causes,
+most frequent first, within 4,000 characters, and reports the remainder as
+`and K more causes (N items)`. An item-aligned chain uses the same aggregation for each
+failed member, and absent downstream items carry the recorded upstream cause in their
+fan-in outcomes. This reporting does not change the chain’s reached-item completion
+policy.
 
 Expected executor refusals propagate as `CLIError` until the orchestrator writes their
 step failure. An input, credential-binding, quota, or slot refusal before launch creates
