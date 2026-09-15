@@ -5,7 +5,7 @@ import json
 import pytest
 
 from metaproc.engine.command_diagnostics import command_failure_message, handler_failure_message
-from metaproc.engine.retry import FailureClass
+from metaproc.engine.retry import FailureClass, RetryVerdict
 
 
 def test_ansi_normalization_cannot_reconstruct_a_redacted_secret() -> None:
@@ -106,6 +106,7 @@ def test_classification_uses_redacted_diagnostics_before_display_truncation() ->
         log_path="task.log",
     )
     assert failure.failure_class is FailureClass.RATE_LIMITED
+    assert failure.verdict is RetryVerdict.RETRY
     assert "[truncated]" in failure.error
     assert "HTTP 429" not in failure.error
 
@@ -127,6 +128,7 @@ def test_handler_classification_excludes_redacted_secrets_and_traceback_filename
         log_path=".logs/tasks/quota-check/process_20260913T000503Z.log",
     )
     assert failure.failure_class is FailureClass.UNKNOWN
+    assert failure.verdict is RetryVerdict.FAIL
     assert failure.error.startswith("ValueError: invalid input; [redacted]")
     assert "opaque-429-value" not in failure.error
     assert "command exit code" not in failure.error

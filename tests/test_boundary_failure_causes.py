@@ -357,6 +357,94 @@ def test_command_failure_class_ignores_step_names_and_log_timestamps(
     assert attempt.failure_class == "crash"
 
 
+_CLEANUP_LINES = "\\n".join(f"cleanup line {index}" for index in range(13))
+
+
+@pytest.mark.parametrize(
+    "step_id,handler,diagnostic,attempt_fraction,attempts,failure_class",
+    [
+        # A permanent word in the step id and log path must not decide retry policy.
+        (
+            "quota-check",
+            False,
+            "ProviderError: HTTP 503 Service Unavailable",
+            None,
+            2,
+            "server_error",
+        ),
+        # Classification reads the rate-limit line that display clipping later drops.
+        ("query", True, f"HTTP 429 Too Many Requests\\n{_CLEANUP_LINES}", None, 2, "rate_limited"),
+        # A status code inside the attempt id's timestamp fraction must not invent a retry.
+        ("query", True, "bad input", "4290000000", 1, "unknown"),
+    ],
+    ids=["permanent-word-in-step-id", "clipped-rate-limit", "status-code-in-attempt-id"],
+)
+def test_run_parallel_retry_policy_uses_the_unclipped_path_free_classification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    step_id: str,
+    handler: bool,
+    diagnostic: str,
+    attempt_fraction: str | None,
+    attempts: int,
+    failure_class: str,
+) -> None:
+    monkeypatch.setenv("METAPROC_PREFLIGHT_MIN_DISK_GB", "0.1")
+    if attempt_fraction is not None:
+        attempt_ids = (
+            f"att-20260913T000000Z.{attempt_fraction}.fixture{index}" for index in range(1, 10)
+        )
+        monkeypatch.setattr(
+            "metaproc.io.state_io.new_timestamped_typed_id", lambda _prefix: next(attempt_ids)
+        )
+    if handler:
+        (tmp_path / "fail.py").write_text(
+            f"def fail(context, step):\n    raise RuntimeError('{diagnostic}')\n"
+        )
+        runner = "      handler: fail.py:fail\n"
+    else:
+        (tmp_path / "fail.py").write_text(
+            f"import sys\nprint({diagnostic!r}, file=sys.stderr)\nraise SystemExit(1)\n"
+        )
+        runner = f"      command: '{sys.executable} fail.py'\n"
+    (tmp_path / "items.md").write_text(
+        "---\nprogress:\n  process: code\n  items:\n    - ticker: AAPL\n---\n"
+    )
+    process = tmp_path / "code.process.md"
+    process.write_text(
+        "---\nprocess:\n  name: code\n  steps:\n"
+        f"    - id: {step_id}\n      mode: code\n" + runner + "      inputs:\n        items:\n"
+        f"          path: {tmp_path / 'items.md'}\n"
+        "          kind: file\n          format: frontmatter-md\n"
+        "      for_each:\n        over: items\n        bind: ticker\n"
+        "        bind_fields: [ticker]\n        key: '{{ticker}}'\n"
+        "        retry: {max_retries: 1, initial_backoff_s: 0}\n"
+        "---\n"
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-parallel",
+            str(process),
+            "--step",
+            step_id,
+            "--items",
+            "AAPL",
+            "--var",
+            f"RUNS_DIR={tmp_path / 'runs'}",
+            "--var",
+            "RUN_ID=classification",
+        ],
+    )
+    assert result.exit_code != 0
+    task = tmp_path / "runs" / "classification" / ".state" / "tasks" / step_id / "AAPL"
+    history = read_attempt_history_at(task)
+    assert [attempt.failure_class for attempt in history] == [failure_class] * attempts
+    assert history[-1].disposition == ("retryable" if attempts > 1 else "permanent")
+    status = read_status_at(task)
+    assert status is not None and status.failure_class == failure_class
+
+
 @pytest.mark.parametrize("mapped", [False, True])
 @pytest.mark.parametrize("terminator", [None, "\x1b\\", "\x07"])
 def test_handler_subprocess_failure_keeps_full_evidence_and_safe_durable_summary(
