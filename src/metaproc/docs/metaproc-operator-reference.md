@@ -38,6 +38,15 @@ The engine’s generic classifier maps error text to retry classes such as rate 
 timeout, server error, invalid output, and crash.
 That classification drives ordinary retry policy for every adapter.
 
+Agent timeouts are retryable for scalar steps and fan-out items alike, and they draw the
+full `max_retries` budget (12 by default) with the same backoff as other transient
+failures; only invalid output is capped, at three retries.
+A step that always exceeds `timeout_s` therefore runs up to 13 times by default, costing
+13 times its timeout plus about 21 minutes of backoff before it fails.
+When a timeout is not transient, raise `timeout_s` or lower the budget:
+`for_each.retry.max_retries` for a fan-out step, `process.defaults.retry.max_retries`
+for scalar steps.
+
 When a launch holds a credential-pool slot, the slot teardown path can also ask an
 auth-capable adapter to classify credential state and severity.
 Claude and Codex provide that adapter classifier.
