@@ -16,6 +16,7 @@ from metaproc.models.operations_summary import (
     Distribution,
     ItemChain,
     OperationsRollup,
+    PoolRow,
 )
 
 NOT_AVAILABLE = "n/a"
@@ -62,7 +63,7 @@ def render_rollup_markdown(rollup: OperationsRollup) -> str:
         "Peak / mean running / ceiling",
         "Peak RSS",
         "Swap peak",
-        "Retries",
+        "Retries / not succeeded",
     ]
     rows = [
         [
@@ -83,11 +84,11 @@ def render_rollup_markdown(rollup: OperationsRollup) -> str:
                 )
             ),
             _minutes(row.elapsed_per_item_s),
-            _money(row.list_cost_per_item_usd),
+            _list_cost(row.list_cost_per_item_usd, lower_bound=row.unpriced_invocations > 0),
             f"{_count(row.peak_running)} / {_number(row.mean_running, 1)} / {_count(row.ceiling)}",
             _gib(row.rss_bytes_max),
             _gb(row.swap_used_peak_gb),
-            _count(row.retries),
+            f"{_count(row.retries)} / {_count(row.not_succeeded)}",
         ]
         for row in rollup.rows
     ]
@@ -98,6 +99,16 @@ def render_rollup_markdown(rollup: OperationsRollup) -> str:
         "",
         render_markdown_table(headers, rows, align=["left", "left", *["right"] * 13]),
     ]
+    if any(row.unpriced_invocations for row in rollup.rows):
+        lines.extend(
+            [
+                "",
+                (
+                    "A list cost marked `at least` leaves out invocations whose model has no "
+                    "list price."
+                ),
+            ]
+        )
     notes = [
         f"- `{row.run_id}`: {name}: {reason}"
         for row in rollup.rows
@@ -214,7 +225,7 @@ def _step_section(summary: AgentOperationsSummary) -> list[str]:
     if steps is None:
         return [*lines, _missing_section(summary, "steps")]
     ignored = (
-        f" ({steps.ignored_state_dirs} copied `.state` directories ignored)"
+        f" ({_plural(steps.ignored_state_dirs, 'copied `.state` directory', 'copied `.state` directories')} ignored)"
         if steps.ignored_state_dirs
         else ""
     )
@@ -223,6 +234,15 @@ def _step_section(summary: AgentOperationsSummary) -> list[str]:
         f"{_seconds(steps.agent_total_s)}; code steps total {_seconds(steps.code_total_s)}. "
         "A mapped step contributes one sample per item."
     )
+    if steps.unreadable_plans:
+        lines.extend(
+            [
+                "",
+                "Run plans that could not be read; their scopes count, without step modes:",
+                "",
+                *(f"- `{path}`: {reason}" for path, reason in steps.unreadable_plans.items()),
+            ]
+        )
     lines.append("")
     rows = [
         [
@@ -252,13 +272,27 @@ def _parallelism_section(summary: AgentOperationsSummary) -> list[str]:
     parallelism = summary.parallelism
     if parallelism is None:
         return [*lines, _missing_section(summary, "parallelism")]
+    if parallelism.sample_source == "pressure_check":
+        samples = _plural(parallelism.pressure_checks, "pressure check", "pressure checks")
+    else:
+        samples = _plural(parallelism.health_samples, "health sample", "health samples")
     lines.append(
         f"Peak {_count(parallelism.peak_running)} and time-weighted mean "
         f"{_number(parallelism.mean_running, 1)} running pooled tasks against a ceiling of "
         f"{_count(parallelism.ceiling)}; {_pct(parallelism.share_samples_at_cap)} of "
-        f"{parallelism.health_samples} health samples were at the current cap and "
+        f"{samples} were at the current cap and "
         f"{_pct(parallelism.share_samples_at_ceiling)} at the ceiling."
     )
+    if parallelism.empty_streams:
+        lines.extend(
+            [
+                "",
+                (
+                    f"{_plural(parallelism.empty_streams, 'other event stream', 'other event streams')}"
+                    ", such as agent step admission streams, started no pool or process."
+                ),
+            ]
+        )
     lines.append("")
     rows = [
         [
@@ -268,7 +302,7 @@ def _parallelism_section(summary: AgentOperationsSummary) -> list[str]:
             _count(pool.peak_running),
             _number(pool.mean_running, 1),
             f"{_count(pool.cap_min)} to {_count(pool.cap_max)}",
-            str(pool.health_samples),
+            _pool_samples(pool),
             _pct(pool.share_samples_at_cap),
             _pct(pool.share_samples_at_ceiling),
         ]
@@ -300,7 +334,8 @@ def _retry_section(summary: AgentOperationsSummary) -> list[str]:
     if retries is None:
         return [*lines, _missing_section(summary, "retries")]
     lines.append(
-        f"{retries.attempt_records} attempt records ({_counts(retries.path_shapes)}); "
+        f"{retries.attempt_records} attempt records ({_counts(retries.path_shapes)}), "
+        f"{retries.retries} of them retries; "
         f"{retries.live_attempts} without a disposition; {retries.non_record_attempt_files} "
         f"other `attempt.yaml` files; {retries.unreadable_records} unreadable. Attempts that "
         f"wrote nothing: {_count(retries.wrote_nothing)}."
@@ -313,17 +348,18 @@ def _retry_section(summary: AgentOperationsSummary) -> list[str]:
         lines.append("")
         lines.append(
             render_markdown_table(
-                ["Step", "Attempts", "Not succeeded", "Failure classes"],
+                ["Step", "Process", "Attempts", "Not succeeded", "Failure classes"],
                 [
                     [
                         f"`{row.step_id}`",
+                        f"`{row.process}`",
                         str(row.attempts),
                         str(row.not_succeeded),
                         _counts(row.by_failure_class),
                     ]
                     for row in retries.by_step
                 ],
-                align=["left", "right", "right", "left"],
+                align=["left", "left", "right", "right", "left"],
             )
         )
     return lines
@@ -345,6 +381,7 @@ def _agent_section(summary: AgentOperationsSummary) -> list[str]:
         ["Input tokens", _count(tokens.input_tokens if tokens else None)],
         ["Output tokens", _count(tokens.output_tokens if tokens else None)],
         ["Cache read tokens", _count(tokens.cache_read_tokens if tokens else None)],
+        ["Cache write tokens", _count(tokens.cache_write_tokens if tokens else None)],
         ["Tool calls", _count(agents.tool_calls)],
         ["Tool results at the 16 MiB cap", _count(agents.tool_results_at_cap)],
     ]
@@ -382,7 +419,7 @@ def _resource_section(summary: AgentOperationsSummary) -> list[str]:
     if res is None:
         return [*lines, _missing_section(summary, "resources")]
     rows = [
-        ["List cost", _money(res.list_cost_usd)],
+        ["List cost", _list_cost(res.list_cost_usd, lower_bound=bool(res.unpriced_models))],
         ["Actual cost", _money(res.actual_cost_usd)],
         ["CPU average", _number(res.cpu_pct_avg, 1, suffix="%")],
         ["CPU peak", _number(res.cpu_pct_max, 1, suffix="%")],
@@ -397,6 +434,29 @@ def _resource_section(summary: AgentOperationsSummary) -> list[str]:
         ["Resource finalization", _text(res.resource_finalization_state)],
     ]
     lines.append(render_markdown_table(["Figure", "Value"], rows, align=["left", "right"]))
+    if res.unpriced_models:
+        left_out = sum(entry.invocations for entry in res.unpriced_models)
+        lines.extend(
+            [
+                "",
+                (
+                    f"The list cost leaves out {_plural(left_out, 'invocation', 'invocations')} "
+                    "with token usage whose model has no list price, so it is a lower bound."
+                ),
+                "",
+                render_markdown_table(
+                    ["Model", "Invocations"],
+                    [
+                        [
+                            f"`{entry.model}`" if entry.model else "(no model named)",
+                            str(entry.invocations),
+                        ]
+                        for entry in res.unpriced_models
+                    ],
+                    align=["left", "right"],
+                ),
+            ]
+        )
     return lines
 
 
@@ -497,6 +557,21 @@ def _pct(value: float | None) -> str:
 
 def _money(value: float | None) -> str:
     return f"USD {value:,.2f}" if value is not None else NOT_AVAILABLE
+
+
+def _list_cost(value: float | None, *, lower_bound: bool) -> str:
+    """Mark a list cost that leaves out unpriced invocations as the lower bound it is."""
+    return f"at least {_money(value)}" if lower_bound and value is not None else _money(value)
+
+
+def _plural(count: int, singular: str, plural: str) -> str:
+    return f"{count:,} {singular if count == 1 else plural}"
+
+
+def _pool_samples(pool: PoolRow) -> str:
+    if pool.sample_source == "pressure_check":
+        return f"{pool.pressure_checks} pressure checks"
+    return str(pool.health_samples)
 
 
 def _gib(value: int | None) -> str:

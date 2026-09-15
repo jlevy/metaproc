@@ -14,11 +14,11 @@ from typing import ClassVar, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.config import JsonDict
 
-from metaproc.models.resources import CoverageState, MeterKey
+from metaproc.models.resources import CoverageState, MeterKey, UnpricedModel
 
 OPERATIONS_SUMMARY_CONTRACT = "metaproc.operations:AgentOperationsSummary/v1"
 OPERATIONS_SUMMARY_ENVELOPE = "agent_operations"
-OPERATIONS_SUMMARY_EXTRACTOR_VERSION = 1
+OPERATIONS_SUMMARY_EXTRACTOR_VERSION = 2
 
 
 def _close_nullable_model_references(schema: JsonDict) -> None:
@@ -141,7 +141,12 @@ class StepRef(BaseModel):
 
 
 class ItemStage(_Explained):
-    """One item's pass through one mapped top-level stage."""
+    """One item's pass through one mapped top-level stage.
+
+    ``wait_before_s`` is the time from the completion of the stage this item started
+    before this one to this stage's start. Stages without an edge between them can
+    overlap; a stage that started before the previous one completed has no wait.
+    """
 
     stage: str
     state: str | None = None
@@ -153,7 +158,12 @@ class ItemStage(_Explained):
 
 
 class ItemChain(_Explained):
-    """One item key's path through every mapped top-level stage it appears in."""
+    """One item key's path through every mapped top-level stage it appears in.
+
+    ``stages`` are in start order, with stages that never started last in plan order.
+    ``barrier_wait_s`` sums the waits between consecutive stages and is null when any two
+    of them overlap.
+    """
 
     item_key: str
     stages: list[ItemStage] = Field(default_factory=list)
@@ -211,14 +221,20 @@ class StepFigures(_Explained):
 
     scope_count: int
     ignored_state_dirs: int
-    """Directories shaped like a scope whose run plan does not name their own path."""
+    """Directories shaped like a scope whose run plan is absent or names another path."""
+    unreadable_plans: dict[str, str] = Field(default_factory=dict)
+    """Run plans present but unreadable, by path, with the error; their scopes still count."""
     rows: list[StepTypeRow] = Field(default_factory=list)
     agent_total_s: float | None = None
     code_total_s: float | None = None
 
 
 class PoolRow(_Explained):
-    """Concurrency observed by one RunPool event and health stream pair."""
+    """Concurrency observed by one RunPool event and health stream pair.
+
+    Sample shares come from the pool's health samples, or from its ``pressure_check``
+    events when it wrote no health stream; ``sample_source`` names which.
+    """
 
     source: str
     ceiling: int | None = None
@@ -226,6 +242,8 @@ class PoolRow(_Explained):
     peak_running: int | None = None
     mean_running: float | None = None
     health_samples: int
+    pressure_checks: int = 0
+    sample_source: Literal["health_sample", "pressure_check"] | None = None
     share_samples_at_cap: float | None = None
     share_samples_at_ceiling: float | None = None
     cap_min: int | None = None
@@ -237,25 +255,33 @@ class ParallelismFigures(_Explained):
 
     ``peak_running`` and ``mean_running`` replay ``process_start`` and ``process_exit``
     events; ``mean_running`` is time-weighted over the pool window from its first start to
-    its last exit. Sample shares come from health samples: at the cap means
-    ``active_count`` reached the current concurrency cap, at the ceiling means it reached
-    the pool's configured maximum.
+    its last exit. Sample shares come from health samples, or pressure checks when a
+    pool wrote no health stream: at the cap means ``active_count`` reached the current
+    concurrency cap, at the ceiling means it reached the pool's configured maximum.
+
+    ``pools`` holds the streams that started a pool or a process. Every agent step also
+    owns an admission stream that records only authentication and host admission;
+    ``empty_streams`` counts those and any other stream that started neither.
     """
 
     ceiling: int | None = None
     peak_running: int | None = None
     mean_running: float | None = None
     health_samples: int
+    pressure_checks: int = 0
+    sample_source: Literal["health_sample", "pressure_check"] | None = None
     share_samples_at_cap: float | None = None
     share_samples_at_ceiling: float | None = None
     pools: list[PoolRow] = Field(default_factory=list)
+    empty_streams: int = 0
 
 
 class RetryStepRow(BaseModel):
-    """Attempt counts for one step type that had a non-succeeded attempt."""
+    """Attempt counts for one step type, keyed by owning process, with a non-succeeded attempt."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
+    process: str
     step_id: str
     attempts: int
     not_succeeded: int
@@ -267,10 +293,12 @@ class RetryFigures(_Explained):
 
     A non-succeeded attempt without ``failure_class``, lost attempts included, counts
     under ``unclassified``. ``wrote_nothing`` counts terminal attempts whose recorded
-    output failures are all ``missing``.
+    output failures are all ``missing``. ``retries`` counts attempt records beyond the
+    first for each task, where a task is one step, or one item of a step, in one scope.
     """
 
     attempt_records: int
+    retries: int = 0
     by_disposition: dict[str, int] = Field(default_factory=dict)
     by_failure_class: dict[str, int] = Field(default_factory=dict)
     live_attempts: int
@@ -325,10 +353,16 @@ class AgentFigures(_Explained):
 
 
 class ResourceFigures(_Explained):
-    """Machine resources from the resource usage summary and RunPool health samples."""
+    """Machine resources from the resource usage summary and RunPool health samples.
+
+    ``unpriced_models`` is copied from the resource usage summary: invocations with token
+    usage whose model has no list price, which ``list_cost_usd`` leaves out. When it is
+    nonempty, ``list_cost_usd`` is a lower bound.
+    """
 
     resource_finalization_state: str | None = None
     list_cost_usd: float | None = None
+    unpriced_models: list[UnpricedModel] = Field(default_factory=list)
     actual_cost_usd: float | None = None
     cpu_pct_avg: float | None = None
     cpu_pct_max: float | None = None
@@ -361,7 +395,8 @@ class AgentOperationsSummary(_Explained):
 
     run_id: str
     generated_at: datetime
-    trigger: Literal["finalization", "command"]
+    trigger: Literal["finalization", "status", "command"]
+    """``status`` means ``metaproc status`` wrote it while recovering an inactive run."""
     extractor_version: int = OPERATIONS_SUMMARY_EXTRACTOR_VERSION
     extraction_s: float | None = None
     run: RunFigures | None = None
@@ -377,7 +412,12 @@ class AgentOperationsSummary(_Explained):
 
 
 class OperationsRollupRow(_Explained):
-    """One run's row in ``metaproc operations rollup``."""
+    """One run's row in ``metaproc operations rollup``.
+
+    A nonzero ``unpriced_invocations`` makes ``list_cost_usd`` and
+    ``list_cost_per_item_usd`` lower bounds. ``retries`` counts attempts beyond each
+    task's first; ``not_succeeded`` counts every attempt that ended without success.
+    """
 
     run_dir: str
     run_id: str
@@ -394,12 +434,14 @@ class OperationsRollupRow(_Explained):
     elapsed_per_item_s: float | None = None
     list_cost_usd: float | None = None
     list_cost_per_item_usd: float | None = None
+    unpriced_invocations: int = 0
     peak_running: int | None = None
     mean_running: float | None = None
     ceiling: int | None = None
     rss_bytes_max: int | None = None
     swap_used_peak_gb: float | None = None
     retries: int | None = None
+    not_succeeded: int | None = None
     summary_source: Literal["written", "computed"]
 
 

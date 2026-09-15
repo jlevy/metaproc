@@ -116,6 +116,7 @@ def rollup_row(
 
     list_cost = resources.list_cost_usd if resources else None
     need("list_cost_usd", list_cost, _reason(summary, "resources", "list_cost_usd"))
+    unpriced = sum(entry.invocations for entry in resources.unpriced_models) if resources else 0
     cost_per_item: float | None = None
     if list_cost is not None and item_count:
         cost_per_item = round(list_cost / item_count, 6)
@@ -138,14 +139,16 @@ def rollup_row(
     need("rss_bytes_max", rss, _reason(summary, "resources", "rss_bytes_max"))
     need("swap_used_peak_gb", swap, _reason(summary, "resources", "swap_used_peak_gb"))
 
-    retry_count: int | None = None
+    retry_count = retries.retries if retries else None
+    not_succeeded: int | None = None
     if retries is not None:
-        retry_count = sum(
+        not_succeeded = sum(
             count
             for disposition, count in retries.by_disposition.items()
             if disposition != "succeeded"
         )
     need("retries", retry_count, _reason(summary, "retries", None))
+    need("not_succeeded", not_succeeded, _reason(summary, "retries", None))
 
     return OperationsRollupRow(
         run_dir=str(run_dir),
@@ -163,12 +166,14 @@ def rollup_row(
         elapsed_per_item_s=per_item,
         list_cost_usd=list_cost,
         list_cost_per_item_usd=cost_per_item,
+        unpriced_invocations=unpriced,
         peak_running=peak,
         mean_running=mean,
         ceiling=ceiling,
         rss_bytes_max=rss,
         swap_used_peak_gb=swap,
         retries=retry_count,
+        not_succeeded=not_succeeded,
         summary_source=source,
         unavailable=unavailable,
     )

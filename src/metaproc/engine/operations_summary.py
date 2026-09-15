@@ -60,7 +60,8 @@ from metaproc.models.operations_summary import (
     TokenFigures,
 )
 from metaproc.models.resource_budget import FinalizationState
-from metaproc.runpool.log_files import runpool_event_files, runpool_health_files
+from metaproc.models.resources import UnpricedModel
+from metaproc.runpool.log_files import scope_runpool_event_files, scope_runpool_health_files
 
 log = logging.getLogger(__name__)
 
@@ -83,6 +84,7 @@ RUN_SIZE_WALK_LIMIT = 1_000_000
 SLOWEST_ITEM_COUNT = 5
 
 _TASKS = paths_mod.TASKS_SUBDIR
+_NEVER = datetime.min.replace(tzinfo=UTC)
 _ATTEMPT_RECORD_SCHEMA_PREFIX = "metaproc:TaskAttemptRecord/"
 _REVISION_KEY = re.compile(r"^[A-Za-z0-9_]*_revision$", re.IGNORECASE)
 _MODEL_FLAGS = ("-m", "--model")
@@ -100,7 +102,7 @@ def build_operations_summary(
     run_dir: Path,
     *,
     outcome: FinalizationState | None = None,
-    trigger: Literal["finalization", "command"] = "command",
+    trigger: Literal["finalization", "status", "command"] = "command",
     generated_at: datetime | None = None,
 ) -> AgentOperationsSummary:
     """Read a run tree and return its operations summary without writing anything.
@@ -121,9 +123,9 @@ def build_operations_summary(
     items = _contained("items", unavailable, lambda: _item_figures(evidence))
     steps = _contained("steps", unavailable, lambda: _step_figures(evidence))
     health_errors: dict[str, str] = {}
-    health = _contained("health", health_errors, lambda: _read_health_samples(run_dir))
+    health = _contained("health", health_errors, lambda: _read_health_samples(evidence))
     parallelism = _contained(
-        "parallelism", unavailable, lambda: _parallelism_figures(run_dir, health)
+        "parallelism", unavailable, lambda: _parallelism_figures(evidence, health)
     )
     retries = _contained("retries", unavailable, lambda: _retry_figures(evidence))
     agents = _contained("agents", unavailable, lambda: _agent_figures(evidence))
@@ -196,14 +198,18 @@ def read_operations_summary(run_dir: Path) -> AgentOperationsSummary | None:
 def finalize_operations_summary(
     run_dir: Path,
     *,
-    outcome: FinalizationState,
+    outcome: FinalizationState | None,
+    trigger: Literal["finalization", "status"] = "finalization",
 ) -> Path | None:
     """Write the summary at run finalization; log and return ``None`` on any failure.
 
-    An observability artifact must never change a run's outcome.
+    An observability artifact must never change a run's outcome. ``metaproc status``
+    passes ``trigger="status"`` and no outcome when it recovers a run that ended without
+    finalizing, such as one killed by a signal, so run state comes from the resource usage
+    summary that recovery just wrote.
     """
     try:
-        summary = build_operations_summary(run_dir, outcome=outcome, trigger="finalization")
+        summary = build_operations_summary(run_dir, outcome=outcome, trigger=trigger)
         return write_operations_summary(summary, run_dir)
     except Exception:  # noqa: BLE001 - reporting cannot replace process outcome
         log.exception("operations summary failed for %s", run_dir)
@@ -246,7 +252,9 @@ class _Evidence:
     scopes: list[_Scope]
     root_plan_error: str | None
     ignored_state_dirs: int = 0
+    unreadable_plans: dict[str, str] = field(default_factory=dict)
     by_path: dict[Path, _Scope] = field(default_factory=dict)
+    item_runs: dict[tuple[Path, str, str], _ItemRun] = field(default_factory=dict)
 
     @property
     def root(self) -> _Scope:
@@ -256,31 +264,44 @@ class _Evidence:
     def load(cls, run_dir: Path) -> _Evidence:
         scopes: list[_Scope] = []
         root_plan_error: str | None = None
+        unreadable_plans: dict[str, str] = {}
         ignored = 0
         root_has_plan = (run_dir / paths_mod.STATE_DIR / paths_mod.RUN_PLAN_FILE).is_file()
-        root_scope_path: list[str] = []
+        # A run that executed as a child scope of a larger run records every plan path from
+        # that run's root, and the requested root's own plan names the prefix. It is empty
+        # for a top-level run, and unknown when the root plan cannot be read.
+        root_scope_path: list[str] | None = []
         for scope_dir in paths_mod.iter_composite_run_dirs(run_dir):
             state_dir = scope_dir / paths_mod.STATE_DIR
             plan_path = state_dir / paths_mod.RUN_PLAN_FILE
             parts = scope_dir.relative_to(run_dir).parts if scope_dir != run_dir else ()
             plan_steps: dict[str, Mapping[str, Any]] = {}
             scope_path: list[str] | None = None
+            plan_error: str | None = None
+            plan_unreadable = False
             try:
                 plan_steps, scope_path = _plan_steps(_load_yaml_mapping(plan_path, strict=True))
+            except FileNotFoundError as exc:
+                plan_error = _describe_error(plan_path, exc, run_dir)
             except (OSError, ValueError, yaml.YAMLError) as exc:
-                if scope_dir == run_dir:
-                    root_plan_error = _describe_error(plan_path, exc, run_dir)
+                plan_error = _describe_error(plan_path, exc, run_dir)
+                plan_unreadable = True
+                unreadable_plans[str(plan_path.relative_to(run_dir))] = _error_detail(exc)
             if scope_dir == run_dir:
-                # A run that executed as a child scope of a larger run records every plan
-                # path from that run's root, and the requested root's own plan names the
-                # prefix. It is empty for a top-level run.
-                root_scope_path = scope_path or []
+                root_plan_error = plan_error
+                root_scope_path = None if plan_unreadable else scope_path or []
             # A copied tree can carry a .state directory in the shape of a scope. When the
-            # run records plans, a real child scope's plan names exactly its own path.
-            if parts and root_has_plan and scope_path != [*root_scope_path, *parts]:
+            # run records plans, a real child scope's plan names its own path. A plan that
+            # exists but cannot be read proves nothing either way, so its scope stays.
+            if (
+                parts
+                and root_has_plan
+                and not plan_unreadable
+                and not _plan_names_scope(scope_path, parts, root_scope_path)
+            ):
                 ignored += 1
                 continue
-            status = _load_yaml_mapping(state_dir / paths_mod.PROCESS_STATUS_FILE)
+            status = _trimmed_status(_load_yaml_mapping(state_dir / paths_mod.PROCESS_STATUS_FILE))
             scopes.append(_Scope(scope_dir, tuple(parts), status, plan_steps))
 
         config = _load_yaml_mapping(run_dir / paths_mod.STATE_DIR / paths_mod.RUN_CONFIG_FILE)
@@ -309,14 +330,38 @@ class _Evidence:
             scopes=scopes or [_Scope(run_dir, (), None, {})],
             root_plan_error=root_plan_error,
             ignored_state_dirs=ignored,
+            unreadable_plans=unreadable_plans,
         )
         evidence.by_path = {scope.path: scope for scope in evidence.scopes}
         return evidence
 
 
+def _plan_names_scope(
+    scope_path: list[str] | None, parts: tuple[str, ...], root_scope_path: list[str] | None
+) -> bool:
+    """Return whether a scope's own plan records the path the run addresses it by.
+
+    With the run's prefix unknown, a plan naming the scope's path relative to any root
+    still identifies it; a copy's plan names the path of the tree it was copied from.
+    """
+    if scope_path is None:
+        return False
+    if root_scope_path is None:
+        return len(scope_path) >= len(parts) and scope_path[len(scope_path) - len(parts) :] == [
+            *parts
+        ]
+    return scope_path == [*root_scope_path, *parts]
+
+
+_PLAN_STEP_KEYS = ("step_id", "mode", "task_shape", "item_keys")
+_STATUS_KEYS = ("process", "state", "started_at", "completed_at")
+_STATUS_STEP_KEYS = ("state", "started_at", "completed_at", "elapsed_s")
+
+
 def _plan_steps(
     document: Mapping[str, Any] | None,
 ) -> tuple[dict[str, Mapping[str, Any]], list[str] | None]:
+    """Return each plan step's fields the fold reads, by step id, and the plan's scope path."""
     if document is None:
         raise ValueError("run-plan.yaml is absent")
     plan = document.get("run_plan", document)
@@ -328,11 +373,26 @@ def _plan_steps(
         [str(part) for part in raw_scope_path] if isinstance(raw_scope_path, list) else None
     )
     by_id = {
-        str(step["step_id"]): step
+        str(step["step_id"]): {key: step[key] for key in _PLAN_STEP_KEYS if key in step}
         for step in steps
         if isinstance(step, Mapping) and isinstance(step.get("step_id"), str)
     }
     return by_id, scope_path
+
+
+def _trimmed_status(status: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+    """Keep the process status fields the fold reads, so large scope trees stay small."""
+    if status is None:
+        return None
+    trimmed: dict[str, Any] = {key: status[key] for key in _STATUS_KEYS if key in status}
+    steps = status.get("steps")
+    if isinstance(steps, Mapping):
+        trimmed["steps"] = {
+            step_id: {key: entry[key] for key in _STATUS_STEP_KEYS if key in entry}
+            for step_id, entry in steps.items()
+            if isinstance(entry, Mapping)
+        }
+    return trimmed
 
 
 def _run_id(
@@ -634,6 +694,16 @@ def _item_figures(evidence: _Evidence) -> ItemFigures | None:
 
 
 def _item_run(evidence: _Evidence, scope: _Scope, step_id: str, item_key: str) -> _ItemRun:
+    """Return one mapped item's run, read once per scope, step, and item."""
+    memo_key = (scope.path, step_id, item_key)
+    if (cached := evidence.item_runs.get(memo_key)) is not None:
+        return cached
+    run = _read_item_run(evidence, scope, step_id, item_key)
+    evidence.item_runs[memo_key] = run
+    return run
+
+
+def _read_item_run(evidence: _Evidence, scope: _Scope, step_id: str, item_key: str) -> _ItemRun:
     child_dir = scope.path / step_id / item_key
     child = evidence.by_path.get(child_dir)
     if child is not None and child.status is not None:
@@ -665,20 +735,21 @@ def _item_chain(
     key: str, stages: Sequence[str], runs: Mapping[tuple[str, str], _ItemRun]
 ) -> ItemChain:
     stage_rows: list[ItemStage] = []
-    previous_completed: datetime | None = None
-    previous_seen = False
+    previous: _ItemRun | None = None
     running_values: list[float] = []
     waits: list[float] = []
     missing_running = False
     missing_wait = False
+    overlap = False
     slowest: StepRef | None = None
     first_started: datetime | None = None
     last_completed: datetime | None = None
 
-    for stage in stages:
-        run = runs.get((stage, key))
-        if run is None:
-            continue
+    # Mapped stages without an edge between them run in any order and can overlap, so an
+    # item's stages pair in start order. Stages that never started follow in plan order.
+    entered = [(stage, run) for stage in stages if (run := runs.get((stage, key))) is not None]
+    entered.sort(key=lambda pair: (pair[1].started is None, pair[1].started or _NEVER))
+    for stage, run in entered:
         unavailable: dict[str, str] = {}
         running: float | None = None
         if run.started is not None and run.completed is not None:
@@ -692,16 +763,19 @@ def _item_chain(
                 else f"item is {run.state} without a start and an end"
             )
         wait: float | None = None
-        if not previous_seen:
+        if previous is None:
             unavailable["wait_before_s"] = "first mapped stage for this item"
-        elif previous_completed is not None and run.started is not None:
-            wait = round((run.started - previous_completed).total_seconds(), 3)
-            waits.append(wait)
-        else:
+        elif previous.completed is None or run.started is None:
             missing_wait = True
             unavailable["wait_before_s"] = (
                 "previous stage completion or this stage start is missing"
             )
+        elif run.started < previous.completed:
+            overlap = True
+            unavailable["wait_before_s"] = "this stage started before the previous stage completed"
+        else:
+            wait = round((run.started - previous.completed).total_seconds(), 3)
+            waits.append(wait)
         stage_slowest: StepRef | None = None
         if run.child_steps:
             step_id, elapsed = max(run.child_steps.items(), key=lambda pair: pair[1])
@@ -716,7 +790,7 @@ def _item_chain(
             )
         if run.started is not None and first_started is None:
             first_started = run.started
-        if run.completed is not None:
+        if run.completed is not None and (last_completed is None or run.completed > last_completed):
             last_completed = run.completed
         for name, value in (
             ("state", run.state),
@@ -737,8 +811,7 @@ def _item_chain(
                 unavailable=unavailable,
             )
         )
-        previous_completed = run.completed
-        previous_seen = True
+        previous = run
 
     unavailable = {}
     chain_running = (
@@ -746,13 +819,15 @@ def _item_chain(
     )
     if chain_running is None:
         unavailable["chain_running_s"] = "a stage this item entered has no running time"
-    barrier = round(sum(waits), 3) if len(stage_rows) > 1 and not missing_wait else None
-    if barrier is None:
-        unavailable["barrier_wait_s"] = (
-            "item entered one mapped stage"
-            if len(stage_rows) <= 1
-            else "a stage boundary is missing a completion or a start"
-        )
+    barrier: float | None = None
+    if len(stage_rows) <= 1:
+        unavailable["barrier_wait_s"] = "item entered one mapped stage"
+    elif overlap:
+        unavailable["barrier_wait_s"] = "stages overlap for this item"
+    elif missing_wait:
+        unavailable["barrier_wait_s"] = "a stage boundary is missing a completion or a start"
+    else:
+        barrier = round(sum(waits), 3)
     span: float | None = None
     if first_started is not None and last_completed is not None:
         span = round((last_completed - first_started).total_seconds(), 3)
@@ -811,6 +886,7 @@ def _step_figures(evidence: _Evidence) -> StepFigures:
     return StepFigures(
         scope_count=len(evidence.scopes),
         ignored_state_dirs=evidence.ignored_state_dirs,
+        unreadable_plans=evidence.unreadable_plans,
         rows=rows,
         agent_total_s=round(agent_total, 3) if agent_rows else None,
         code_total_s=round(code_total, 3) if code_rows else None,
@@ -828,15 +904,15 @@ class _HealthSamples:
         return merged
 
 
-def _read_health_samples(run_dir: Path) -> _HealthSamples:
+def _read_health_samples(evidence: _Evidence) -> _HealthSamples:
     by_dir: dict[Path, list[Mapping[str, Any]]] = {}
-    for path in runpool_health_files(run_dir):
-        samples: list[Mapping[str, Any]] = [
-            {key: obj.get(key) for key in _HEALTH_KEYS}
-            for obj in iter_jsonl_objects(path)
-            if obj.get("event") in {"health_sample", None}
-        ]
-        by_dir[path.parent] = samples
+    for scope in evidence.scopes:
+        for path in scope_runpool_health_files(scope.path):
+            by_dir[path.parent] = [
+                {key: obj.get(key) for key in _HEALTH_KEYS}
+                for obj in iter_jsonl_objects(path)
+                if obj.get("event") in {"health_sample", None}
+            ]
     return _HealthSamples(by_dir)
 
 
@@ -850,19 +926,33 @@ _HEALTH_KEYS = (
 )
 
 
-def _parallelism_figures(run_dir: Path, health: _HealthSamples | None) -> ParallelismFigures:
+def _parallelism_figures(evidence: _Evidence, health: _HealthSamples | None) -> ParallelismFigures:
+    """Fold the pool streams of the scopes the summary kept, so copied trees add nothing."""
     pools: list[PoolRow] = []
-    for path in runpool_event_files(run_dir):
-        pools.append(_pool_row(run_dir, path, health))
+    empty_streams = 0
+    for scope in evidence.scopes:
+        for path in scope_runpool_event_files(scope.path):
+            pool = _pool_row(evidence.run_dir, path, health)
+            if pool is None:
+                empty_streams += 1
+            else:
+                pools.append(pool)
     if not pools:
-        raise ValueError("no RunPool event stream exists in any scope")
-    headline = max(pools, key=lambda pool: (pool.process_starts, pool.health_samples))
+        raise ValueError(
+            f"none of {empty_streams} RunPool event streams started a pool or a process"
+            if empty_streams
+            else "no RunPool event stream exists in any scope"
+        )
+    headline = max(
+        pools, key=lambda pool: (pool.process_starts, pool.health_samples, pool.pressure_checks)
+    )
     unavailable = {
         name: headline.unavailable[name]
         for name in (
             "ceiling",
             "peak_running",
             "mean_running",
+            "sample_source",
             "share_samples_at_cap",
             "share_samples_at_ceiling",
         )
@@ -873,14 +963,19 @@ def _parallelism_figures(run_dir: Path, health: _HealthSamples | None) -> Parall
         peak_running=headline.peak_running,
         mean_running=headline.mean_running,
         health_samples=headline.health_samples,
+        pressure_checks=headline.pressure_checks,
+        sample_source=headline.sample_source,
         share_samples_at_cap=headline.share_samples_at_cap,
         share_samples_at_ceiling=headline.share_samples_at_ceiling,
         pools=pools,
+        empty_streams=empty_streams,
         unavailable=unavailable,
     )
 
 
-def _pool_row(run_dir: Path, events_path: Path, health: _HealthSamples | None) -> PoolRow:
+def _pool_row(run_dir: Path, events_path: Path, health: _HealthSamples | None) -> PoolRow | None:
+    """Return the stream's concurrency row, or ``None`` when it started no pool or process."""
+    pool_started = False
     ceiling: int | None = None
     starts = 0
     active: set[tuple[object, object]] = set()
@@ -894,6 +989,7 @@ def _pool_row(run_dir: Path, events_path: Path, health: _HealthSamples | None) -
         kind = event.get("event")
         ts = _parse_ts(event.get("ts"))
         if kind == "pool_start":
+            pool_started = True
             maximum = event.get("max_concurrency")
             if isinstance(maximum, int):
                 ceiling = max(ceiling or 0, maximum)
@@ -918,6 +1014,8 @@ def _pool_row(run_dir: Path, events_path: Path, health: _HealthSamples | None) -
         if last_ts is None or ts > last_ts:
             last_ts = ts
 
+    if not pool_started and not starts:
+        return None
     unavailable: dict[str, str] = {}
     source = str(events_path.relative_to(run_dir))
     peak_running: int | None = peak if starts else None
@@ -932,7 +1030,15 @@ def _pool_row(run_dir: Path, events_path: Path, health: _HealthSamples | None) -
     if ceiling is None:
         unavailable["ceiling"] = "the pool recorded no pool_start with max_concurrency"
 
-    samples = (health.by_stream_dir.get(events_path.parent) if health else None) or pressure_samples
+    health_samples = (health.by_stream_dir.get(events_path.parent) if health else None) or []
+    sample_source: Literal["health_sample", "pressure_check"] | None = None
+    samples: list[Mapping[str, Any]] = []
+    if health_samples:
+        sample_source, samples = "health_sample", health_samples
+    elif pressure_samples:
+        sample_source, samples = "pressure_check", pressure_samples
+    else:
+        unavailable["sample_source"] = "the pool recorded no health or pressure samples"
     at_cap = [
         sample
         for sample in samples
@@ -967,7 +1073,9 @@ def _pool_row(run_dir: Path, events_path: Path, health: _HealthSamples | None) -
         process_starts=starts,
         peak_running=peak_running,
         mean_running=mean_running,
-        health_samples=len(samples),
+        health_samples=len(health_samples),
+        pressure_checks=len(pressure_samples),
+        sample_source=sample_source,
         share_samples_at_cap=share_at_cap,
         share_samples_at_ceiling=share_at_ceiling,
         cap_min=min(caps) if caps else None,
@@ -980,9 +1088,10 @@ def _retry_figures(evidence: _Evidence) -> RetryFigures:
     by_disposition: Counter[str] = Counter()
     by_failure_class: Counter[str] = Counter()
     shapes: Counter[str] = Counter()
-    step_attempts: Counter[str] = Counter()
-    step_failures: Counter[str] = Counter()
-    step_classes: dict[str, Counter[str]] = defaultdict(Counter)
+    step_attempts: Counter[tuple[str, str]] = Counter()
+    step_failures: Counter[tuple[str, str]] = Counter()
+    step_classes: dict[tuple[str, str], Counter[str]] = defaultdict(Counter)
+    tasks: set[tuple[Path, tuple[str, ...]]] = set()
     records = 0
     live = 0
     unreadable = 0
@@ -1005,10 +1114,11 @@ def _retry_figures(evidence: _Evidence) -> RetryFigures:
                 non_record_files += 1
                 continue
             records += 1
-            shape = _attempt_shape(scope, path.relative_to(tasks_dir).parts)
-            shapes[shape] += 1
-            step_id = str(record.get("step_id") or path.relative_to(tasks_dir).parts[0])
-            step_attempts[step_id] += 1
+            relative = path.relative_to(tasks_dir).parts
+            shapes[_attempt_shape(scope, relative)] += 1
+            tasks.add((scope.path, _attempt_task(relative)))
+            step_key = (scope.process, str(record.get("step_id") or relative[0]))
+            step_attempts[step_key] += 1
             disposition = record.get("disposition")
             if not isinstance(disposition, str):
                 live += 1
@@ -1017,7 +1127,7 @@ def _retry_figures(evidence: _Evidence) -> RetryFigures:
             if disposition == "succeeded":
                 continue
             failed_total += 1
-            step_failures[step_id] += 1
+            step_failures[step_key] += 1
             failure_class = record.get("failure_class")
             label = (
                 failure_class
@@ -1025,7 +1135,7 @@ def _retry_figures(evidence: _Evidence) -> RetryFigures:
                 else "unclassified"
             )
             by_failure_class[label] += 1
-            step_classes[step_id][label] += 1
+            step_classes[step_key][label] += 1
             failures = record.get("output_failures")
             if isinstance(failures, list) and failures:
                 failed_with_outputs += 1
@@ -1039,20 +1149,20 @@ def _retry_figures(evidence: _Evidence) -> RetryFigures:
         unavailable["wrote_nothing"] = "no failed attempt recorded output failures"
     return RetryFigures(
         attempt_records=records,
+        retries=records - len(tasks),
         by_disposition=dict(sorted(by_disposition.items())),
         by_failure_class=dict(sorted(by_failure_class.items())),
         live_attempts=live,
         wrote_nothing=wrote_nothing_value,
         by_step=[
             RetryStepRow(
-                step_id=step_id,
-                attempts=step_attempts[step_id],
+                process=key[0],
+                step_id=key[1],
+                attempts=step_attempts[key],
                 not_succeeded=count,
-                by_failure_class=dict(sorted(step_classes[step_id].items())),
+                by_failure_class=dict(sorted(step_classes[key].items())),
             )
-            for step_id, count in sorted(
-                step_failures.items(), key=lambda pair: (-pair[1], pair[0])
-            )
+            for key, count in sorted(step_failures.items(), key=lambda pair: (-pair[1], pair[0]))
         ],
         path_shapes=dict(sorted(shapes.items())),
         unreadable_records=unreadable,
@@ -1064,11 +1174,25 @@ def _retry_figures(evidence: _Evidence) -> RetryFigures:
 def _attempt_shape(scope: _Scope, relative_parts: tuple[str, ...]) -> str:
     """Classify ``<step>/attempts/<id>/attempt.yaml`` against ``<step>/<item>/attempts/...``."""
     where = "root" if not scope.parts else "child"
+    return f"{where}_{_attempt_kind(relative_parts)}"
+
+
+def _attempt_task(relative_parts: tuple[str, ...]) -> tuple[str, ...]:
+    """Return the step, or step and item, an attempt record belongs to."""
+    kind = _attempt_kind(relative_parts)
+    if kind == "step":
+        return relative_parts[:1]
+    if kind == "item":
+        return relative_parts[:2]
+    return relative_parts[:-1]
+
+
+def _attempt_kind(relative_parts: tuple[str, ...]) -> Literal["step", "item", "other"]:
     if len(relative_parts) >= 4 and relative_parts[1] == paths_mod.ATTEMPTS_SUBDIR:
-        return f"{where}_step"
+        return "step"
     if len(relative_parts) >= 5 and relative_parts[2] == paths_mod.ATTEMPTS_SUBDIR:
-        return f"{where}_item"
-    return f"{where}_other"
+        return "item"
+    return "other"
 
 
 @dataclass
@@ -1241,6 +1365,12 @@ def _resource_figures(
         )
 
     list_cost = total("list_cost_usd")
+    raw_unpriced = summary.get("unpriced_models") if summary else None
+    unpriced_models = [
+        UnpricedModel.model_validate(entry)
+        for entry in (raw_unpriced if isinstance(raw_unpriced, list) else [])
+        if isinstance(entry, Mapping)
+    ]
     actual_cost = total("actual_cost_usd")
     cpu_avg = total("cpu_pct_avg")
     cpu_max = total("cpu_pct_max")
@@ -1275,6 +1405,7 @@ def _resource_figures(
     return ResourceFigures(
         resource_finalization_state=finalization_state,
         list_cost_usd=round(list_cost, 6) if list_cost is not None else None,
+        unpriced_models=unpriced_models,
         actual_cost_usd=round(actual_cost, 6) if actual_cost is not None else None,
         cpu_pct_avg=round(cpu_avg, 3) if cpu_avg is not None else None,
         cpu_pct_max=round(cpu_max, 3) if cpu_max is not None else None,
@@ -1711,8 +1842,12 @@ def _describe_error(path: Path, exc: BaseException, run_dir: Path) -> str:
         shown = path.relative_to(run_dir)
     except ValueError:
         shown = path
+    return f"{shown}: {_error_detail(exc)}"
+
+
+def _error_detail(exc: BaseException) -> str:
     detail = exc.strerror if isinstance(exc, OSError) and exc.strerror else str(exc)
-    return f"{shown}: {detail or type(exc).__name__}"
+    return " ".join(detail.split()) or type(exc).__name__
 
 
 def _write_schema_sidecar(target: Path) -> None:

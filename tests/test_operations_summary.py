@@ -29,7 +29,7 @@ from typer.testing import CliRunner
 from metaproc.cli import app
 from metaproc.commands.run_process import _write_run_config
 from metaproc.engine import operations_summary as ops
-from metaproc.engine.operations_render import render_summary_markdown
+from metaproc.engine.operations_render import render_rollup_markdown, render_summary_markdown
 from metaproc.engine.operations_rollup import build_operations_rollup
 from metaproc.engine.resource_finalization import (
     finalize_run_resources,
@@ -179,7 +179,12 @@ def _jsonl(path: Path, events: list[dict[str, Any]]) -> None:
     path.write_text("".join(json.dumps(event) + "\n" for event in events))
 
 
-def _resource_summary(run_dir: Path) -> None:
+def _resource_summary(
+    run_dir: Path,
+    *,
+    list_cost_usd: float = 2.5,
+    unpriced_models: list[dict[str, Any]] | None = None,
+) -> None:
     fmf_write(
         run_dir / "resource-usage-summary.md",
         "# Resource usage summary\n",
@@ -191,12 +196,13 @@ def _resource_summary(run_dir: Path) -> None:
             },
             "resource_usage": {
                 "run_id": f"{_ROOT_PROCESS}/run-1",
+                "unpriced_models": unpriced_models or [],
                 "totals": {
                     "input_tokens": 1000,
                     "output_tokens": 200,
                     "cache_read_tokens": 50,
                     "cache_write_tokens": 0,
-                    "list_cost_usd": 2.5,
+                    "list_cost_usd": list_cost_usd,
                     "cpu_pct_avg": 50.0,
                     "cpu_pct_max": 120.0,
                     "rss_bytes_max": 2 * 1024**3,
@@ -457,6 +463,36 @@ def _composite_run(root: Path, name: str = "run-1") -> Path:
             _health("10:05:00", active=2, cap=4, swap=1.5, delta=0.5, disk=90.0),
             _health("10:22:40", active=2, cap=2, swap=2.5, delta=0.2, disk=80.0),
             _health("10:26:00", active=4, cap=4, swap=2.0, delta=0.0, disk=85.0),
+        ],
+    )
+    # Every agent step owns an admission stream that records auth and host admission
+    # but never a pool start; a copied tree can carry a pool stream of its own.
+    _jsonl(
+        run_dir / "author" / "A" / ".logs" / "runpool" / "steps" / "research" / "events.jsonl",
+        [{"event": "auth_outcome", "ts": "2026-09-11T10:00:10+00:00"}],
+    )
+    _jsonl(
+        depth_b / ".logs" / "runpool" / "steps" / "plan" / "events.jsonl",
+        [
+            {
+                "event": "host_admission_denied",
+                "decision": "wait",
+                "ts": "2026-09-11T10:20:40+00:00",
+            }
+        ],
+    )
+    _jsonl(
+        run_dir
+        / "author"
+        / "A"
+        / "research-copy"
+        / "original"
+        / ".logs"
+        / "runpool"
+        / "events.jsonl",
+        [
+            {"event": "pool_start", "max_concurrency": 9, "ts": "2026-09-11T10:00:05+00:00"},
+            {"event": "process_start", "pid": 9, "label": "x", "ts": "2026-09-11T10:00:10+00:00"},
         ],
     )
     _resource_summary(run_dir)
@@ -720,6 +756,283 @@ def test_a_null_figure_without_a_reason_is_rejected() -> None:
         )
 
 
+def _edit_yaml(path: Path, edit: Any) -> None:
+    document = yaml.safe_load(path.read_text())
+    edit(document)
+    path.write_text(to_yaml_string(document))
+
+
+def _move_scope_window(scope: Path, step_id: str, started: str, completed: str) -> None:
+    """Move a single-step stage scope, and that step, to one start and completion."""
+
+    def edit(status: dict[str, Any]) -> None:
+        status["started_at"] = _ts(started)
+        status["completed_at"] = _ts(completed)
+        status["steps"] = {step_id: status["steps"][step_id]}
+        status["steps"][step_id].update(started_at=_ts(started), completed_at=_ts(completed))
+        status["steps"][step_id].pop("elapsed_s", None)
+
+    _edit_yaml(scope / ".state" / "process-status.yaml", edit)
+
+
+def test_items_pair_stages_in_start_order_and_never_report_a_negative_wait(
+    composite_run: Path,
+) -> None:
+    """Mapped stages with no edge between them may overlap or run out of declared order."""
+    # A's depth pass starts at 10:05:00, before A's authoring completes at 10:12:10.
+    _move_scope_window(composite_run / "depth" / "A", "plan", "10:05:00", "10:25:30")
+    # B's depth pass runs and completes before B's authoring starts at 10:00:10.
+    _move_scope_window(composite_run / "depth" / "B", "plan", "09:40:00", "09:50:00")
+
+    items = _summary(composite_run).items
+    assert items is not None
+    chains = {chain.item_key: chain for chain in items.items}
+
+    a_depth = next(stage for stage in chains["A"].stages if stage.stage == "depth")
+    assert a_depth.wait_before_s is None
+    assert a_depth.unavailable["wait_before_s"] == (
+        "this stage started before the previous stage completed"
+    )
+    assert chains["A"].barrier_wait_s is None
+    assert chains["A"].unavailable["barrier_wait_s"] == "stages overlap for this item"
+    assert chains["A"].chain_span_s == 1520
+
+    assert [stage.stage for stage in chains["B"].stages] == ["depth", "author"]
+    assert chains["B"].stages[1].wait_before_s == 610
+    assert chains["B"].barrier_wait_s == 610
+
+    assert items.barrier_wait_s is not None
+    assert (items.barrier_wait_s.count, items.barrier_wait_s.total) == (1, 610.0)
+    assert all(
+        stage.wait_before_s is None or stage.wait_before_s >= 0
+        for chain in items.items
+        for stage in chain.stages
+    )
+
+
+def test_a_scope_whose_plan_cannot_be_read_is_kept_and_named(composite_run: Path) -> None:
+    (composite_run / "author" / "B" / ".state" / "run-plan.yaml").write_text(
+        "run_plan: [unclosed\n"
+    )
+
+    summary = _summary(composite_run)
+
+    steps = summary.steps
+    assert steps is not None and summary.agents is not None and summary.retries is not None
+    assert (steps.scope_count, steps.ignored_state_dirs) == (5, 1)
+    assert list(steps.unreadable_plans) == ["author/B/.state/run-plan.yaml"]
+    assert (summary.agents.transcripts, summary.retries.attempt_records) == (4, 9)
+    body = render_summary_markdown(summary)
+    assert "1 copied `.state` directory ignored" in body
+    assert "`author/B/.state/run-plan.yaml`" in body
+
+
+def test_an_unreadable_root_plan_keeps_the_scopes_of_a_run_nested_in_a_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ops, "TOOL_RESULT_CAP_BYTES", 4096)
+    prefix = ["cohorts", "week-1", "main", "run-1"]
+    run_dir = _composite_run(tmp_path.joinpath("batch", *prefix[:-1]))
+    _nest_under_parent_run(run_dir, prefix)
+    (run_dir / ".state" / "run-plan.yaml").write_text("run_plan: [unclosed\n")
+
+    summary = _summary(run_dir)
+
+    assert summary.steps is not None and summary.agents is not None
+    assert (summary.steps.scope_count, summary.steps.ignored_state_dirs) == (5, 1)
+    assert list(summary.steps.unreadable_plans) == [".state/run-plan.yaml"]
+    assert summary.agents.transcripts == 4
+
+
+def test_parallelism_reports_pools_and_counts_streams_that_started_nothing(
+    composite_run: Path,
+) -> None:
+    """Agent step admission streams and copied trees add no pool rows."""
+    parallelism = _summary(composite_run).parallelism
+    assert parallelism is not None
+
+    assert [pool.source for pool in parallelism.pools] == [".logs/runpool/events.jsonl"]
+    assert parallelism.empty_streams == 2
+    assert parallelism.ceiling == 4
+
+
+def test_pressure_checks_stand_in_for_absent_health_samples_under_their_own_name(
+    composite_run: Path,
+) -> None:
+    runpool = composite_run / ".logs" / "runpool"
+    (runpool / "health.jsonl").unlink()
+    with (runpool / "events.jsonl").open("a") as stream:
+        for clock, active, cap in (("10:00:20", 2, 2), ("10:05:00", 1, 4)):
+            pressure = {"event": "pressure_check", "active_count": active}
+            stream.write(json.dumps(pressure | {"current_concurrency": cap, "ts": _ts(clock)}))
+            stream.write("\n")
+
+    parallelism = _summary(composite_run).parallelism
+    assert parallelism is not None
+    pool = parallelism.pools[0]
+
+    assert (pool.health_samples, pool.pressure_checks, pool.sample_source) == (
+        0,
+        2,
+        "pressure_check",
+    )
+    assert pool.share_samples_at_cap == 0.5
+    assert (parallelism.health_samples, parallelism.pressure_checks) == (0, 2)
+    assert parallelism.sample_source == "pressure_check"
+    body = render_summary_markdown(_summary(composite_run))
+    assert "of 2 pressure checks were at the current cap" in body
+
+
+def test_retries_count_attempts_beyond_the_first_and_keep_processes_apart(
+    composite_run: Path,
+) -> None:
+    """A failed attempt that was never retried is not a retry."""
+    research_a = composite_run / "author" / "A" / ".state" / "tasks" / "research"
+    research_b = composite_run / "author" / "B" / ".state" / "tasks" / "research"
+    shutil.rmtree(research_a / "attempts" / "att-4")
+    shutil.rmtree(research_b / "attempts" / "att-6")
+    _attempt(
+        composite_run / "depth" / "B" / ".state" / "tasks" / "research" / "attempts" / "att-10",
+        step_id="research",
+        number=1,
+        disposition="failed",
+        failure_class="invalid_output",
+    )
+
+    summary = _summary(composite_run)
+    retries = summary.retries
+    assert retries is not None
+
+    assert (retries.attempt_records, retries.retries) == (8, 1)
+    rows = {(row.process, row.step_id): row for row in retries.by_step}
+    assert (
+        rows[(_ITEM_PROCESS, "research")].attempts,
+        rows[(_ITEM_PROCESS, "research")].not_succeeded,
+    ) == (2, 2)
+    assert (
+        rows[(_DEPTH_PROCESS, "research")].attempts,
+        rows[(_DEPTH_PROCESS, "research")].not_succeeded,
+    ) == (1, 1)
+
+    ops.write_operations_summary(summary, composite_run)
+    row = build_operations_rollup([composite_run], target_min_s=0, target_max_s=3600).rows[0]
+    assert (row.retries, row.not_succeeded) == (1, 4)
+
+
+def test_a_list_cost_that_leaves_out_unpriced_models_reads_as_a_lower_bound(
+    composite_run: Path,
+) -> None:
+    _resource_summary(
+        composite_run,
+        list_cost_usd=1.0,
+        unpriced_models=[{"model": "mystery-model", "invocations": 3}],
+    )
+
+    summary = _summary(composite_run)
+    resources = summary.resources
+    assert resources is not None
+    assert resources.list_cost_usd == 1.0
+    assert [(entry.model, entry.invocations) for entry in resources.unpriced_models] == [
+        ("mystery-model", 3)
+    ]
+    body = render_summary_markdown(summary)
+    assert "| List cost | at least USD 1.00 |" in body
+    assert "| `mystery-model` | 3 |" in body
+
+    path = ops.write_operations_summary(summary, composite_run)
+    validation = _validate_written_summary(path, composite_run)
+    assert validation.ok, (validation.structural.errors, validation.semantic.errors)
+    rollup = build_operations_rollup([composite_run], target_min_s=0, target_max_s=3600)
+    row = rollup.rows[0]
+    assert (row.list_cost_usd, row.list_cost_per_item_usd, row.unpriced_invocations) == (
+        1.0,
+        0.5,
+        3,
+    )
+    assert "| at least USD 0.50 |" in render_rollup_markdown(rollup)
+
+
+def test_agents_table_shows_every_token_bucket(composite_run: Path) -> None:
+    body = render_summary_markdown(_summary(composite_run))
+    assert "| Cache read tokens | 50 |" in body
+    assert "| Cache write tokens | 0 |" in body
+
+
+def _wide_run(root: Path, item_count: int) -> Path:
+    """A root with two mapped stages over *item_count* items, shaped like a batch root."""
+    run_dir = root / "wide"
+    keys = [f"item-{index:03d}" for index in range(item_count)]
+
+    def write(path: Path, data: object) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data))
+
+    write(
+        run_dir / ".state" / "process-status.yaml",
+        _status(
+            _ROOT_PROCESS,
+            "10:00:00",
+            "12:00:00",
+            {
+                "author": _step("10:00:00", "11:00:00", 3600.0),
+                "depth": _step("11:00:00", "12:00:00", 3600.0),
+            },
+        ),
+    )
+    write(
+        run_dir / ".state" / "run-plan.yaml",
+        _plan(
+            [],
+            [("author", "composite", "mapped", keys), ("depth", "composite", "mapped", keys)],
+        ),
+    )
+    item_steps = [(f"step-{index}", "agent", "scalar", []) for index in range(4)]
+    for stage, start, end in (("author", "10:00", "11:00"), ("depth", "11:00", "12:00")):
+        for key in keys:
+            scope = run_dir / stage / key
+            steps = {
+                step_id: _step(f"{start}:00", f"{end}:00", 3600.0) for step_id, *_rest in item_steps
+            }
+            write(
+                scope / ".state" / "process-status.yaml",
+                _status(_ITEM_PROCESS, f"{start}:00", f"{end}:00", steps),
+            )
+            write(scope / ".state" / "run-plan.yaml", _plan([stage, key], item_steps))
+            for step_id, *_rest in item_steps:
+                write(
+                    scope / ".logs" / "runpool" / "steps" / step_id / "events.jsonl",
+                    {"event": "auth_outcome", "ts": "2026-09-11T10:00:00+00:00"},
+                )
+    runpool = run_dir / ".logs" / "runpool"
+    _jsonl(
+        runpool / "events.jsonl",
+        [
+            {"event": "pool_start", "max_concurrency": 40, "ts": "2026-09-11T10:00:00+00:00"},
+            {"event": "process_start", "pid": 1, "label": "a", "ts": "2026-09-11T10:00:00+00:00"},
+            {"event": "process_exit", "pid": 1, "label": "a", "ts": "2026-09-11T12:00:00+00:00"},
+        ],
+    )
+    return run_dir
+
+
+def test_a_wide_root_folds_to_one_pool_row_in_bounded_time_and_size(tmp_path: Path) -> None:
+    """Two hundred items with four agent steps per stage scope: 1,600 admission streams."""
+    run_dir = _wide_run(tmp_path, 200)
+
+    summary = _summary(run_dir)
+
+    assert summary.unavailable == {}
+    assert summary.items is not None and summary.steps is not None
+    assert summary.parallelism is not None
+    assert (summary.items.item_count, summary.steps.scope_count) == (200, 401)
+    assert len(summary.parallelism.pools) == 1
+    assert summary.parallelism.empty_streams == 1600
+    # Generous bounds that still catch a per-stream or per-scope blow-up on a busy host.
+    assert summary.extraction_s is not None and summary.extraction_s < 60
+    written = ops.write_operations_summary(summary, run_dir)
+    assert written.stat().st_size < 1024 * 1024
+
+
 def test_long_result_line_after_a_capped_line_in_gzip(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -778,6 +1091,11 @@ def test_enforced_contract_rejects_an_undeclared_key_in_a_nested_nullable_sectio
     The enforced profile refuses an outer nullable reference whose target would need an
     inferred closure, so the contract states closure at each nullable model reference.
     That stated closure has to keep rejecting a key the nested model does not declare.
+
+    The error path is ``("agents",)`` rather than ``("agents", "tokens")`` because the
+    stated closure on the outer ``agents`` wrapper reports the violation, not the nested
+    ``TokenFigures`` model. A validator that reports the deeper path is an improvement,
+    not a regression; the rejection itself is what this test guards.
     """
     path = ops.write_operations_summary(_summary(composite_run), composite_run)
     assert _validate_written_summary(path, composite_run).structural.ok

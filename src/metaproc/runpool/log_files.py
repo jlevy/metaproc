@@ -20,7 +20,7 @@ def runpool_event_files(run_dir: Path) -> list[Path]:
     seen: set[Path] = set()
     files: list[Path] = []
     for sub_run in paths_mod.iter_composite_run_dirs(run_dir):
-        for candidate in _event_files_for_one_scope(sub_run):
+        for candidate in scope_runpool_event_files(sub_run):
             if candidate in seen:
                 continue
             seen.add(candidate)
@@ -33,7 +33,7 @@ def runpool_health_files(run_dir: Path) -> list[Path]:
     seen: set[Path] = set()
     files: list[Path] = []
     for sub_run in paths_mod.iter_composite_run_dirs(run_dir):
-        for candidate in _health_files_for_one_scope(sub_run):
+        for candidate in scope_runpool_health_files(sub_run):
             if candidate in seen:
                 continue
             seen.add(candidate)
@@ -48,8 +48,8 @@ def _resolve_event_path(*, is_v2: bool, v2_path: Path, legacy_path: Path) -> Pat
     return resolve_existing_artifact(legacy_path)
 
 
-def _event_files_for_one_scope(run_dir: Path) -> list[Path]:
-    """Return readable RunPool event streams for a single scope directory.
+def scope_runpool_event_files(run_dir: Path) -> list[Path]:
+    """Return readable RunPool event streams owned by one scope, not its children.
 
     The run-level stream plus V2 step and worker streams. Unmarked runs keep exact
     legacy fallback per stream: a present V2 stream wins for that scope, otherwise
@@ -112,8 +112,8 @@ def _event_files_for_one_scope(run_dir: Path) -> list[Path]:
     return _existing_unique(candidates)
 
 
-def _health_files_for_one_scope(run_dir: Path) -> list[Path]:
-    """Return readable RunPool health streams for a single scope directory."""
+def scope_runpool_health_files(run_dir: Path) -> list[Path]:
+    """Return readable RunPool health streams owned by one scope, not its children."""
     candidates: list[Path] = [resolve_existing_artifact(paths_mod.runpool_health(run_dir))]
 
     steps_root = paths_mod.runpool_logs_dir(run_dir) / paths_mod.STEPS_SUBDIR
