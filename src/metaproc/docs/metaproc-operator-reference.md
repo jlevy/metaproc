@@ -564,6 +564,9 @@ command line; launch validation refuses such an id and lists the steps that can 
 The run records its overrides in `run-config.yaml`. A resume without `--step-variant`
 reuses them, a resume that passes a different set is refused, and
 `metaproc status --steps` plans the recorded overrides.
+A run launched by v0.4.1, which applied overrides without recording them, has no
+recorded set; a resume of one adopts the `--step-variant` it passes and records it from
+then on.
 
 Preflight credentials before a live dispatch:
 

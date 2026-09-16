@@ -819,6 +819,8 @@ def _write_run_config(  # noqa: PLR0913
     Returns the path to the config file. Resume calls validate the process,
     run directory, and resolved immutable variables (raises CLIError on
     mismatch) but accept changes to auth / concurrency as recorded events.
+    The one field a resume writes back is ``step_variants``, for a config that
+    records none; see ``_adopt_step_variants``.
     """
     config_path = paths_mod.run_config_file(run_dir)
     logs_dir = paths_mod.run_logs_dir(run_dir)
@@ -837,6 +839,7 @@ def _write_run_config(  # noqa: PLR0913
             new_auth_flags=auth_flags,
             new_max_concurrency=max_concurrency,
         )
+        _adopt_step_variants(config_path, step_variants)
         return config_path
 
     state_dir = paths_mod.run_state_dir(run_dir)
@@ -1175,6 +1178,11 @@ def _resume_step_variants(run_dir: Path, requested: Mapping[str, str]) -> dict[s
     A run records its overrides in ``run-config.yaml`` at creation. The plan, its step
     fingerprints, and ``metaproc status`` all follow that record, so a resume that passes
     no overrides re-applies it and a resume that passes a different set is refused.
+
+    A config that records nothing holds no set to contradict: ``--step-variant`` shipped
+    before the record existed, so a run from that version applies its overrides with
+    nothing to resume from. Such a resume adopts what it passes, and ``_write_run_config``
+    records it once launch validation has accepted it.
     """
     config_path = paths_mod.run_config_file(run_dir)
     if not config_path.exists():
@@ -1183,6 +1191,8 @@ def _resume_step_variants(run_dir: Path, requested: Mapping[str, str]) -> dict[s
     recorded = recorded_step_variants(raw) if isinstance(raw, dict) else {}
     if not requested:
         return recorded
+    if not recorded:
+        return dict(requested)
     if dict(requested) != recorded:
         raise CLIError(
             "Resume mismatch: run-config.yaml records "
@@ -1194,11 +1204,30 @@ def _resume_step_variants(run_dir: Path, requested: Mapping[str, str]) -> dict[s
 
 
 def _format_step_variants(overrides: Mapping[str, str]) -> str:
-    if not overrides:
-        return "no --step-variant"
+    """Render a non-empty override set as the flags that produce it."""
     return ", ".join(
         f"--step-variant {step}={profile}" for step, profile in sorted(overrides.items())
     )
+
+
+def _adopt_step_variants(config_path: Path, step_variants: Mapping[str, str] | None) -> None:
+    """Record the overrides a resume adopted, for a config that records none.
+
+    ``_resume_step_variants`` lets a resume adopt what it passes when the config holds no
+    set to contradict. Recording it here rather than there puts the write after launch
+    validation, so an override the run cannot accept never reaches the config and poisons
+    every later resume. A config that already records a set keeps it — the resume either
+    matched it or was refused.
+    """
+    if not step_variants:
+        return
+    raw = read_yaml_file(config_path)
+    if not isinstance(raw, dict) or recorded_step_variants(raw):
+        return
+    raw["step_variants"] = dict(sorted(step_variants.items()))
+    with atomic_output_file(config_path) as tmp_path:
+        Path(tmp_path).write_text(to_yaml_string(raw))
+    log.info("Recorded resumed --step-variant overrides in %s", config_path)
 
 
 def _validate_run_config(

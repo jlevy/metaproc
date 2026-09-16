@@ -36,7 +36,7 @@ from metaproc.dispatch.pool_dispatch import PoolDispatchConfig
 from metaproc.engine.dep_state import fingerprint_step
 from metaproc.engine.operations_summary import read_operations_summary
 from metaproc.errors import CLIError
-from metaproc.io import read_yaml_file
+from metaproc.io import read_yaml_file, to_yaml_string
 from metaproc.io.state_io import write_result_at
 from metaproc.logutil.resource_events import read_events
 from metaproc.models.resource_budget import FinalizationState
@@ -5191,3 +5191,59 @@ class TestRunOwnedPoolExecutionProfiles:
             "draft": "run-a",
             "judge": "judge-b",
         }
+
+    def test_a_resume_adopts_the_step_variants_a_run_recorded_none_of(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`--step-variant` shipped in v0.4.1 without a record, so a run from that
+        version carries none. Repeating the flag on a resume adopts and records it
+        rather than reading the absent record as a mismatch; a set once recorded still
+        refuses a different one."""
+        repo_dir, process_dir = self._repo(tmp_path)
+        self._register_adapter(monkeypatch)
+        same: dict[str, object] = {
+            "estimated_process_rss_mb": 250,
+            "initial_memory_budget_fraction": 0.5,
+        }
+        self._write_repo_profiles(repo_dir, {"run-a": same, "judge-b": same})
+        spec = process_dir / "judged.process.md"
+        spec.write_text(
+            "---\nprocess:\n  name: judged\n  steps:\n"
+            + self._agent_step("draft", None)
+            + self._agent_step("judge", None, needs="draft")
+            + "---\n",
+            encoding="utf-8",
+        )
+        run_dir = tmp_path / "runs" / "judged-unrecorded"
+
+        launched = self._invoke(
+            spec,
+            run_dir,
+            "--variant",
+            "run-a",
+            "--step-variant",
+            "judge=judge-b",
+            "--only",
+            "draft",
+        )
+        assert launched.exit_code == 0, launched.output
+        # What a v0.4.1 run leaves behind: the overrides took effect, nothing recorded them.
+        config_path = run_dir / STATE_DIR / "run-config.yaml"
+        config = read_yaml_file(config_path)
+        del config["step_variants"]
+        config_path.write_text(to_yaml_string(config), encoding="utf-8")
+
+        resumed = self._invoke(
+            spec, run_dir, "--variant", "run-a", "--step-variant", "judge=judge-b"
+        )
+
+        assert resumed.exit_code == 0, resumed.output
+        assert (run_dir / "judge.md").read_text().strip() == "judge-b"
+        assert read_yaml_file(config_path)["step_variants"] == {"judge": "judge-b"}
+
+        refused = self._invoke(spec, run_dir, "--variant", "run-a", "--step-variant", "judge=run-a")
+
+        assert refused.exit_code != 0
+        message = refused.output or str(refused.exception)
+        assert "Resume mismatch" in message
+        assert "judge=judge-b" in message and "judge=run-a" in message

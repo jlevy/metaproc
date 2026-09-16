@@ -74,7 +74,10 @@ development series.
   steps that can be overridden.
   `run-config.yaml` records the overrides: a resume without `--step-variant` reuses
   them, a resume with a different set is refused, and `metaproc status --steps` plans
-  them.
+  them. A run launched by 0.4.1, which applied overrides without recording them, has no
+  recorded set to contradict, so a resume of one adopts the `--step-variant` it passes
+  and records it rather than refusing a run it cannot otherwise resume on its own
+  profiles.
 
 - **Prelaunch and process-output refusals retain their causes.** Credential and input
   refusals now reach durable step status without creating an attempt; manual timeout
