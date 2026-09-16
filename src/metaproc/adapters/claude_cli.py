@@ -263,6 +263,7 @@ _CLAUDE_ALLOWED_KEYS = frozenset(
         "tools",
         "verbose",
         "worktree",
+        "working_directory",
     }
 )
 
@@ -653,8 +654,9 @@ class ClaudeCodeCliAdapter:
             )
         return env
 
-    def working_directory(self, _merged_config: dict[str, object]) -> Path | None:
-        return None
+    def working_directory(self, merged_config: dict[str, object]) -> Path | None:
+        value = merged_config.get("working_directory")
+        return Path(str(value)) if value else None
 
     def parse_result_event(self, line: str) -> dict[str, object] | None:
         return parse_jsonl_event(line, "result")

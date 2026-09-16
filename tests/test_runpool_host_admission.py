@@ -148,8 +148,12 @@ def test_acquire_times_out_when_all_slots_remain_live(tmp_path: Path) -> None:
 
     async def _run() -> None:
         lease = await gate.acquire(label="first", pool_id="pool-first")
+        refusals: list[str] = []
         with pytest.raises(TimeoutError, match="host admission slot"):
-            await gate.acquire(label="second", pool_id="pool-second")
+            await gate.acquire(
+                label="second", pool_id="pool-second", on_wait=lambda: refusals.append("wait")
+            )
+        assert refusals == ["wait"]
         gate.release(lease)
 
     asyncio.run(_run())

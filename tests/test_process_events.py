@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from metaproc.runpool.process_events import ProcessEventLogger
+from metaproc.runpool.process_events import ProcessEventLogger, read_process_events
 
 
 def test_process_lifecycle_events(tmp_path: Path) -> None:
@@ -59,12 +59,25 @@ def test_step_fail_and_blocked(tmp_path: Path) -> None:
         logger.step_start("generate-record", "agent")
         logger.step_fail("generate-record", 30.0, error="exit code 1")
         logger.step_blocked("qa-check")
+        logger.process_complete(
+            "mine",
+            "run-1",
+            completed=0,
+            failed=1,
+            skipped=1,
+            elapsed_s=30.0,
+            errors={"generate-record": "exit code 1"},
+        )
 
     events = [json.loads(line) for line in log_path.read_text().strip().split("\n")]
     assert events[1]["event"] == "step_fail"
     assert events[1]["error"] == "exit code 1"
     assert events[2]["event"] == "step_blocked"
     assert events[2]["step_id"] == "qa-check"
+    assert events[3]["errors"] == {"generate-record": "exit code 1"}
+    terminal = read_process_events(log_path)[-1]
+    assert terminal.event == "process_complete"
+    assert terminal.errors == {"generate-record": "exit code 1"}
 
 
 def test_worker_dispatch_event(tmp_path: Path) -> None:

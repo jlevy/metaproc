@@ -169,6 +169,31 @@ class EventLogger:
             }
         )
 
+    def host_admission_denied(
+        self,
+        *,
+        namespace: str,
+        limit: int,
+        label: str,
+        reason: str,
+        decision: str,
+        error: str | None = None,
+    ) -> None:
+        """Record the observed refusal and the caller's actual next action."""
+        self._write(
+            _without_none(
+                {
+                    "event": "host_admission_denied",
+                    "namespace": namespace,
+                    "limit": limit,
+                    "label": label,
+                    "reason": reason,
+                    "decision": decision,
+                    "error": error,
+                }
+            )
+        )
+
     def host_slot_released(
         self,
         *,

@@ -220,8 +220,8 @@ Logs use producer and writer scope rather than mirroring every `.state/` branch:
   {run_dir}/.logs/runpool/steps/{step_id}/events.jsonl
   {run_dir}/.logs/runpool/workers/{worker_id}/events.jsonl
   {run_dir}/.logs/tasks/{step_id}/<item_key>/*.jsonl
-  {run_dir}/.logs/tasks/{step_id}/process_<ts>.log
-  {run_dir}/.logs/tasks/{step_id}/<item_key>/process_<ts>.log
+  {run_dir}/.logs/tasks/{step_id}/process_<attempt_id>.log
+  {run_dir}/.logs/tasks/{step_id}/<item_key>/process_<attempt_id>.log
   {run_dir}/.logs/native/{step_id}/[<item_key>/]<session-stem>.<set-name>/**/*
   {run_dir}/.logs/tools/<tool-name>/invocations.jsonl
   {run_dir}/.logs/derived/trace.jsonl
@@ -624,9 +624,16 @@ Rules:
 - scalar fields on a step override the corresponding default
 - list fields (such as `tools`) **replace**, they do not merge; to add a tool to the
   default set, the step must redeclare the full list
-- `adapter` on a step **merges** with the default adapter config looked up by
-  `default_adapter`
+- with an execution profile selected, adapter config starts from that profile; explicit
+  step adapter config overrides it, followed by the step’s `timeout_s` and CLI config
+  overrides. Legacy `defaults.adapters` maps do not merge into an execution profile
+- without an execution profile, `adapter` on a step **merges** with the selected
+  process-default adapter config
 - `with` does not “inherit everything”; it is the explicit binding surface for that step
+
+Claude, Gemini, and Codex accept `adapter.config.working_directory` as the subprocess
+working directory. Runtime placeholders such as `{{run.dir}}` resolve at launch.
+Selecting a working directory does not restrict filesystem access.
 
 ## 6.12 Template Variable Resolution
 
@@ -1106,8 +1113,9 @@ It complements the adapter/session logs described in section 9.5 by recording
 process-wide lifecycle events rather than per-agent streaming events.
 
 Written to `{run_dir}/.logs/process-events.jsonl`. Code step stdout/stderr is captured
-under task execution logs: `{run_dir}/.logs/tasks/{step_id}/process_<ts>.log` for scalar
-steps and `{run_dir}/.logs/tasks/{step_id}/<item_key>/process_<ts>.log` for item-scoped
+under task execution logs: `{run_dir}/.logs/tasks/{step_id}/process_<attempt_id>.log`
+for scalar steps and
+`{run_dir}/.logs/tasks/{step_id}/<item_key>/process_<attempt_id>.log` for item-scoped
 work.
 
 Event types (13 total):
@@ -1115,7 +1123,7 @@ Event types (13 total):
 | Event | Fields | When |
 | --- | --- | --- |
 | `process_start` | process, run_id, backend, step_count | DAG execution begins |
-| `process_complete` | process, run_id, completed, failed, skipped, elapsed_s | DAG execution ends |
+| `process_complete` | process, run_id, completed, failed, skipped, elapsed_s, errors | DAG execution ends; `errors` maps every failed step to its cause |
 | `level_start` | level, steps | topological level begins |
 | `level_complete` | level, elapsed_s | topological level ends |
 | `step_start` | step_id, mode | step execution begins |
@@ -1130,6 +1138,9 @@ Event types (13 total):
 
 All events include an auto-injected `ts` timestamp.
 The format is compatible with RunPool events for unified browser display.
+`process_complete` records step-execution totals.
+Process-level output validation follows that execution; the final `process-status.yaml`
+also records a failure at that boundary even when every step completed.
 
 ## 9.7 `run-plan.yaml`
 
@@ -1421,22 +1432,28 @@ The envelope under `fan_in_outcomes` carries `schema`, `upstream_step`, `total`,
 recorded structured contract failures; and `stopped_at` with `stopped_state` when its
 state is `not_reached`.
 
-Each entry in `output_failures` is a projection of one `OutputFailure`, and a narrower
-one than the record written to the item’s own `status.yaml`:
+Each entry in `output_failures` preserves every populated field of the `OutputFailure`
+written to the item’s own `status.yaml`:
 
 | Field | Present | Meaning |
 | --- | --- | --- |
 | `output` | always | The declared output name from the process spec, not a filename |
+| `path` | always | The rendered artifact path recorded by the producing task |
+| `message` | always | The validator’s recorded explanation |
 | `kind` | always | One `OutputFailureKind`: `missing`, `empty`, `unreadable`, `structural`, or `semantic` |
 | `contract` | when the output declared one | The contract id the output was validated against |
 | `invariant` | when the validator supplied one | The structural error code or semantic validator; an input error reclassified as `unreadable` can retain its code |
 | `location` | when the refusal carried a position | The validator’s path within the document, such as `$.ticker`; list or tuple locations are dot-joined, such as `items.0.field` |
 
-A field whose value is absent is omitted rather than written null, so a `missing`-kind
-failure yields a two-field record.
-The artifact `path` and the rendered `message`, both always present on the per-item
-record, are not projected into the manifest; a consumer needing either reads the item’s
-own `status.yaml`.
+A field whose value is absent is omitted rather than written null.
+For example, a `missing`-kind failure carries `output`, `path`, `kind`, and `message`;
+it does not invent a contract or invariant.
+When SoftSchema executes and rejects both structural and semantic validation, Metaproc
+retains both sets of failures in that order.
+A structural refusal remains first in the status summary.
+Retry and abort policy for that output uses its structural failures until the shape is
+valid; the semantic records show the additional checks that actually ran rather than
+implying they were skipped.
 
 An item that never reached the collected step is reported with where it stopped and that
 step’s failure detail, rather than as a bare absence.
@@ -1934,24 +1951,45 @@ An absent optional value may be omitted.
 A populated cause must survive as detail, a classified count, or a usable reference; an
 undeclared model field must not silently discard it.
 
-The current boundaries have different coverage.
+**The run-level step record.** A failed step recovers its durable task causes before
+writing `process-status.yaml` and `step_fail`. Scalar tasks retain the recorded error
+regardless of adapter or step mode; scalar composites retain their child step errors.
+Mapped tasks summarize the current `run-plan.yaml` item roster, count distinct recorded
+causes, and exclude retained directories outside that roster.
+Command and handler errors end with their own attempt’s `log:` or `traceback:` path, so
+the count compares causes without that suffix; each item’s status keeps its full error.
+For example, two timeouts among three items produce
+`2 of 3 items failed (2 x timeout after 600s)`. The summary lists at most five causes,
+most frequent first, within 4,000 characters, and reports the remainder as
+`and K more causes (N items)`. An item-aligned chain uses the same aggregation for each
+failed member, and absent downstream items carry the recorded upstream cause in their
+fan-in outcomes. This reporting does not change the chain’s reached-item completion
+policy.
 
-**The run-level step record.** Step entries in `process-status.yaml` are untyped dicts,
-and nothing requires an entry in state `failed` to carry a cause.
-Only a scalar `mode: code` step gets one: the helper that recovers an already-persisted
-task error returns empty immediately for any step whose mode is not `code` or whose
-`fan_out` is set. A mapped step, a scalar agent step, and a manual step therefore each
-record `state: failed` with no `error` key, and `metaproc status` renders
-`Failure: <step>: error not recorded`, while every failed item already wrote a precise
-cause into its own `status.yaml`. The matching `step_fail` line in
-`process-events.jsonl` carries `error: ""` from the field default.
-The break is structural rather than an omission at one call site: `run_fan_out` returns
-`(succeeded, total)` and `StepInvoker` returns `bool`, so no cause can cross the
-item-runner boundary in the current types.
-Two aggregations exist and neither closes the gap.
-`StepStatusEntry.item_counts` reports coverage with no failed count and no reason, and
-the fan-in collector reads item causes correctly but runs only when a *downstream* step
-declares `collect:`, so a mapped step with no consumer produces nothing.
+Expected executor refusals propagate as `CLIError` until the orchestrator writes their
+step failure. An input, credential-binding, quota, or slot refusal before launch creates
+no attempt record. If an attempt already exists, such as a manual step waiting for an
+acknowledgment, its running state becomes failed with the actual error.
+This path also covers failures during item-chain setup.
+Mapped agent and composite steps check every actionable item’s inputs before launching
+any of them, so a missing input there refuses the step and names the item.
+A mapped code item checks its own inputs as it starts, and a refusal is that item’s
+failure: it records failed status and a `permanent` attempt carrying the refusal, its
+siblings continue, and the step summary and fan-in outcomes attribute the cause to it.
+
+A composite preserves a child’s error rather than returning a bare failed boolean.
+Process-level output validation records each resolved artifact’s `output`, `path`,
+`kind`, and `message`; mapped composites write that evidence to their item status for
+fan-in consumers. An invalid declaration with no resolved artifact retains its error
+without inventing a path or validator result.
+Both root and child scopes record output-boundary failure in their own process status,
+so completed child steps cannot make a failed output contract appear successful.
+
+`metaproc status` retains all failed step summaries in the run error.
+When emitted, `process_complete.errors` carries the same mapping; older events without
+the field have an empty mapping and require their step events or task records for
+detail. A missing error or roster is explicitly reported as unavailable rather than
+inferred from a numeric exit code or omitted as an empty successful result.
 
 **The typed event reader.** `RunPoolEvent` includes lifecycle, quota-pause, pressure,
 and health-sample events.
@@ -1963,14 +2001,19 @@ or field must update the typed contract and its writer-to-reader tests together.
 Health samples live in the separate `health.jsonl` stream; including their type does not
 merge the two files.
 
-**Admission.** `host_slot_acquired` is written after the slot is taken.
-A launch that waits, and a launch that exhausts `DEFAULT_HOST_ADMISSION_TIMEOUT_S` and
-then fails, write nothing.
-`pressure_check` carries `pending_count` on its sampling interval, so a reader can infer
-that work is queued but not which gate holds it or for how long.
+**Admission.** `host_slot_acquired` is written after a RunPool slot is taken.
+Both the RunPool and scalar launch paths write `host_admission_denied` once on the first
+unsuccessful slot scan, with `reason: no_available_slot` and `decision: wait`. A
+terminal refusal records the actual `timeout` or `unavailable` reason and exception
+message. RunPool records `decision: fail`; the scalar path records `decision: bypass`
+when its existing best-effort policy launches without a slot.
+Every refusal identifies the namespace, configured limit, and launch label.
+No occupied-slot count, wait duration, or successful admission is inferred from these
+records; a wait event alone does not establish the eventual outcome.
 The governor records `consecutive_normal` and `consecutive_elevated` on each
 `pressure_check` and `health_sample`, including a sustained `elevated` hold with no
 capacity change. `concurrency_adjust` is emitted only when capacity changes.
+Zero counters are recorded; absent historical measurements remain optional.
 
 ### 13.1 Plugin System
 
@@ -2177,9 +2220,13 @@ validated after each attempt (§14.6), `classify_output_failures` reads the stru
 failure record against the output’s `on_invalid`, and retryable verdicts re-run the step
 under the `INVALID_OUTPUT` cap with the same correction section used by fan-out retries,
 recording `attempt: N` in the step’s status.
-Nonzero exits are classified exactly as fan-out failures are -- transient ones draw the
-full `max_retries` budget, with the log tail folded into the recorded error -- while
-step timeouts and write-boundary violations stay terminal on this path.
+Nonzero exits and subprocess timeouts use the same classification, backoff, credential
+checks, and `max_retries` budget as fan-out failures.
+The log tail is folded into nonzero-exit errors; timed-out attempts retain the timeout
+cause and a retryable disposition even when the budget is exhausted.
+A timeout is never accepted as a successful shutdown based on the agent’s success claim
+or existing outputs.
+Write-boundary violations stay terminal on this path.
 
 The pool exposes `record_retry_scheduled` / `record_retry_consumed` methods that
 maintain a `pending_retries` counter in `runpool-status.yaml`. Observability consumers
@@ -2515,6 +2562,22 @@ request counts.
 `cache_read_tokens`, `cache_write_tokens`, `cost_usd`, `duration_s`, `tool_calls`,
 `model`, `provider`, plus `cost_is_estimated` flag.
 
+**Token basis.** `output_tokens` targets the tokens charged at the output rate,
+including reasoning, when the source evidence supports that count.
+For partial Gemini records with missing or invalid input or total counts, extraction
+falls back to reported output.
+That fallback is a lower bound with unknown reasoning, so it is not necessarily
+comparable with complete output counts from another adapter.
+Missing counts contribute zero; `UsageStats` does not encode per-bucket completeness.
+§15.3 describes each adapter’s evidence and normalization.
+
+`input_tokens` is uncached input; cache reads and writes are carried separately in
+`cache_read_tokens` and `cache_write_tokens`, each with its own rate.
+The four available buckets sum to `total_tokens`, the normalized total of the evidence.
+This need not equal a provider’s complete billed total when records are partial.
+Costs reported by agent CLIs or calculated from the table in §15.2 remain list-cost
+estimates, distinct from provider-authoritative billing.
+
 **`UsageReport`** (normalized output): Pydantic model with `totals`, `by_variant`,
 `by_model`, `by_provider` -- each a `UsageBucket`. Cost is nested as
 `CostPair(actual: CostView, list: CostView)`. Tool-use telemetry rides alongside in
@@ -2530,15 +2593,28 @@ for input, output, cache_read, cache_write.
 
 ### 15.3 Adapter-Specific Extraction
 
+Each adapter reaches the §15.1 token basis from a different provider shape.
+
 - **Pi CLI**: extracts per-turn usage from `agent_end` events, summing across assistant
   messages (`input`, `output`, `cacheRead`, `cacheWrite` tokens and estimated
   `cost.total`).
 - **Gemini CLI**: extracts per-model breakdown from `stats.models` or falls back to
-  aggregate stats, separating cached input from uncached input and including any
-  reasoning residual in billed output exactly once.
+  aggregate stats, separating cached input from uncached input.
+  Gemini excludes reasoning from the `output_tokens` it reports and the stats block
+  carries no reasoning count of its own, so reasoning-inclusive output is recovered as
+  the residual of `total_tokens` over input, counted exactly once.
+  Reconstruction requires valid, finite, nonnegative numeric total and input counts;
+  measured zero input is valid evidence.
+  Reported output remains the floor and is the fallback when either measurement is
+  unavailable. Reasoning is unknown in that fallback.
+  On metaproc’s complete Gemini fixture the residual is 24,778 against reported output
+  of 9,429, so using only the reported field would understate the output-rate estimate.
 - **Claude CLI**: treats nested `modelUsage` as the authoritative whole-attempt usage
-  when present.
+  when present. Anthropic counts extended-thinking output in the output field it reports,
+  so that field is already billed output and is taken as it stands.
 - **Codex CLI**: treats cached input as a subset of total input for pricing.
+  codex-cli rolls reasoning into the `output_tokens` it reports, so that field is
+  already billed output and is taken as it stands.
 
 ### 15.4 Aggregation and Output
 

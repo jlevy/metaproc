@@ -1,0 +1,506 @@
+---
+title: Agent Operations Summary
+description: Emit the trace Metaproc already knows how to extract, fold it into a contract-bound summary at finalization, and make run-to-run comparison a diff of two documents instead of a transcript scan.
+author: Joshua Levy (github.com/jlevy) with LLM assistance
+date: 2026-09-11
+last_updated: 2026-09-13
+status: Draft
+category: plan
+tracking_bead: mp-enxg
+---
+# Feature: Agent Operations Summary
+
+**Date:** 2026-09-11 (last updated 2026-09-13)
+
+Epic `mp-enxg` tracks the prerequisites and future phases below.
+This draft specifies future behavior; completing the plan does not enable automatic
+extraction or implement the operations summary.
+
+## Overview
+
+A run emits `resource-usage-summary.md` describing what it cost the machine: CPU, RSS,
+tokens, tool-call count, provider meters.
+Nothing it emits describes what the agents *did*.
+
+The evidence for that is not missing.
+`metaproc.trace` already reads agent transcripts into typed spans, and
+`TaskAttemptRecord/0.1` already persists one record per attempt including the structured
+list of reasons an output was rejected.
+What is missing is a trigger and a fold.
+The span store is written only when an operator types
+`metaproc trace <run-dir> --extract`, and nothing turns either source into a bounded
+document that two runs can be compared through.
+
+So questions about agent behaviour still get answered after the fact by re-reading
+`.logs/tasks/**/*.jsonl`. On a large cohort that is hundreds of megabytes, including
+individual transcripts in the tens of megabytes.
+The scan runs when the data is cold and may already have been pruned, and each new
+question needs its own throwaway script.
+Two runs analysed a week apart are not comparable, because nothing fixes which questions
+get asked.
+
+**The run should emit this record about itself, and summarise it at finalization.**
+
+## What Already Exists
+
+- **A typed span store.** `metaproc.trace` defines `TraceEvent` over eleven span kinds
+  (`run`, `level`, `step`, `item`, `attempt`, `agent_session`, `tool_call`,
+  `subprocess`, `llm_call`, `provider_call`, `internal`), with hierarchy carried by
+  `parent_span_id`. It has an extractor per agent log format and one for the Metaproc
+  engine, a linker that joins them across sources and propagates severity upward, and
+  `aggregate()` over arbitrary group keys.
+  `metaproc trace <run-dir> --extract` writes the result to
+  `<run>/.logs/derived/trace.jsonl`.
+- **Run-to-run comparison.** `metaproc compare-trace` is already a row-per-group by
+  column-per-run matrix over that same aggregation, grouping on
+  `adapter.type,step.id,tool.family` by default.
+- **Per-attempt rejection causes.** `TaskAttemptRecord/0.1` persists to
+  `<run>/.state/tasks/<step>/<item>/attempts/<attempt>/attempt.yaml` with `disposition`,
+  an optional `failure_class`, and `output_failures`: a list of `OutputFailure` carrying
+  `output`, `path`, `contract`, `kind`, `invariant`, `location` and `message`.
+- **A finalization trigger.** `finalize_run_resources` runs at the end of a run, again
+  on `metaproc status` when the projection is older than its sources, and on recovery.
+  It already writes two contract-bound artifacts.
+
+## The Gaps
+
+- **Nothing triggers extraction.** `finalize_run_resources` neither imports nor calls
+  `extract_trace` or `write_trace`. Their only call site in the package is
+  `commands/trace.py`, under the `--extract` flag.
+  The plugin surface has no post-run hook that could stand in.
+  A run therefore has no `.logs/derived/` unless a human asked for one, by which time
+  the transcripts may be cold or pruned.
+- **The rejection causes never reach the trace.** `attempt` spans are built by the four
+  agent-log extractors from the transcript path.
+  The engine extractor reads `process-events.jsonl`, the runpool step events and
+  `result.yaml`, but not `attempt.yaml`. So the one place that already holds a
+  structured answer to “why was this retried” is invisible to `trace` and
+  `compare-trace`.
+- **`TraceEvent` is unversioned.** The string `TraceEvent/0.1` appears in the module
+  docstring and in CLI output, but `TraceEvent` is in neither the softschema contract
+  registry nor the schema-token registry.
+  Nothing validates a trace file against a stated contract, and nothing pins its shape
+  across releases.
+- **There is no run-level summary.** `metaproc trace --count` prints a by-kind tally to
+  stderr. Nothing is written, so there is no artifact to diff, publish, or attach to a
+  run.
+- **`process-events.jsonl` says nothing about attempts.** It carries process, level,
+  step and item events.
+  A run that dies before its transcripts are complete leaves no attempt-level record
+  from the engine’s own side.
+
+## Motivation
+
+An internal two-arm model comparison over one cohort, run sequentially with a single
+variable, needed roughly a day of ad-hoc scripting to answer questions the run already
+held the answers to.
+Four findings came out of it, and none was visible in any emitted artifact:
+
+- **One step retried a third of its invocations, every failure on the same field of the
+  same contract.** The cause was recovered by pattern-matching the prose of the *next*
+  attempt’s rendered prompt, even though `attempt.yaml` had it structurally all along.
+- **Three tool results hit the result cap**, costing time and delivering nothing to the
+  model, since a truncated result is discarded rather than summarised.
+- **A second model billed alongside the step model on 40 invocations.** Easy to misread
+  as a substitution when it is a grounded tool’s helper model.
+- **Provider time divided by elapsed time was 9.0 against a DAG ceiling of 17.** That
+  descriptive ratio does not establish unused capacity or explain elapsed-time savings.
+  Serial dependencies, local work, and resource admission can all reduce it.
+  The run needs queue, admission, and critical-path evidence before attributing a gap to
+  insufficient concurrency.
+
+Each is generic to any agent pipeline.
+None is a domain question.
+
+## Goals
+
+- One contract-bound summary per run describing agent behaviour, emitted at finalization
+  beside `resource-usage-summary.md`.
+- The trace extracted automatically, so the drill-down that already exists is populated
+  for every run rather than for the runs somebody remembered to ask about.
+- `attempt.yaml` folded into the trace, so rejection causes are queryable rather than
+  regex-recovered.
+- Run-to-run comparison as a field-wise diff of two summaries, complementing the
+  span-level matrix `compare-trace` already produces.
+- Anomalies surfaced by rule with stable codes, so the same condition always surfaces
+  the same way and two runs’ anomaly lists are comparable.
+
+## Non-Goals
+
+- **Not a new drill-down subsystem.** `metaproc.trace` is the drill-down.
+  This plan turns it on and folds it; it does not replace it.
+- **Not replacing `ResourceUsageSummary`.** That owns machine resources and cost meters.
+  This owns agent behaviour.
+  No field appears in both.
+- **Not a new log format.** Transcripts are unchanged, and the span store keeps its
+  current path and shape.
+- **Not domain reporting.** Whether a step’s *output* was any good is a question only
+  the downstream project can answer.
+  This describes execution, not judgment.
+- **Not retroactive.** Existing runs do not gain a summary automatically.
+  A post-hoc fold is possible, since `extract_trace` already works against a completed
+  run directory.
+
+## Design
+
+### Extraction at Finalization
+
+Terminal finalization calls `extract_trace` and `write_trace` alongside resource
+finalization, with the same failure semantics: an observability artifact must never fail
+a production run. Automatic extraction first requires a freshness contract for each
+projection, independent of the resource report’s current mtime check:
+
+- Track the primary evidence consumed by each projection: agent transcripts, engine
+  event logs, result records, durable `attempt.yaml` records, and relevant run
+  configuration. Source inventories must detect additions, removals, and changes,
+  including an attempt record rewritten with its terminal disposition.
+- Exclude `.logs/derived/`, summaries, and other derived-only outputs from
+  primary-source invalidation.
+  A resource ledger may also retain independently written primary events: those events
+  must still invalidate affected projections, while the finalizer’s derived rewrites
+  must not. Writing a trace after resource files must not make the resource projection
+  stale or invalidate the trace itself.
+- Detect missing or stale trace artifacts independently, even when all resource
+  artifacts are fresh.
+  When the operations summary is introduced, give it its own freshness state tied to the
+  trace revision and primary evidence it consumes.
+  Record the extraction/contract version so a changed projection can rebuild without
+  pretending primary evidence changed.
+- After successful finalization, repeated `metaproc status` and recovery calls with
+  unchanged inputs must leave output files untouched and avoid full transcript scans.
+  A cheap source-inventory check is allowed.
+  Preserve the inactive-orchestrator guard on status recovery; do not rebuild a live run
+  from changing evidence.
+
+Recovery must use these checks to rebuild the affected projection after an interrupted
+finalization. The current resource-only recovery predicate is not sufficient to trigger
+automatic trace extraction.
+Phase 1 must establish this contract and the runtime-cost measurement before enabling
+the trigger.
+
+### Attempt Records in the Trace
+
+The Metaproc engine extractor reads
+`.state/tasks/<step>/<item>/attempts/<attempt>/attempt.yaml` as evidence for a logical
+attempt. It must reconcile that evidence with the attempt already emitted by an agent
+extractor before parent linking or aggregation; emitting an additional span per record
+would count one invocation twice.
+Reusing a span ID without collapsing duplicate entries is insufficient.
+
+Use `(run_id, attempt_id)` from `TaskAttemptRecord` as the primary identity, retaining
+the typed `att` ID. For transcripts from released versions that lack it, match only when
+`(run_id, scope_path, step_id, item_key, generation, attempt_number)` and the recorded
+transcript path identify one attempt unambiguously.
+Never match on step/item/attempt number alone across resumed generations.
+An ambiguous match remains explicitly unresolved evidence and must not silently add an
+attempt to retry counts or duration distributions.
+
+Reconciliation emits one logical `attempt` span and redirects transcript child spans to
+it. Source precedence is field-specific:
+
+- The durable record owns attempt identity, generation, engine start/end times,
+  `disposition`, `failure_class`, and `OutputFailure` detail (`kind`, `contract`,
+  `invariant`, `location`). Its terminal verdict takes precedence over a transcript’s
+  apparent success.
+- The transcript owns served-model, token, tool, and provider-timing evidence.
+  Preserve these metrics when a record contributes a failed-output verdict; overlapping
+  copies of a metric are not additive.
+- Live attempt events fill evidence missing from a durable record or transcript.
+  They use the same identity and precedence rules, not another logical attempt.
+  Conflicting evidence remains diagnosable with source references.
+
+Record-only and transcript-only attempts each yield one span, with unavailable fields
+absent.
+No new rejection event is needed: the durable record already retains the verdict,
+including for a terminal failure with no retry after it.
+
+### Two Live Attempt Events
+
+`runpool/process_event_models.py` is a typed discriminated union with `extra="forbid"`,
+and `runpool/process_events.py` has one logger method per event.
+Two additions follow that pattern.
+
+```python
+class AttemptStartEvent(_ItemEventBase):
+    event: Literal["attempt_start"] = "attempt_start"
+    attempt_id: str  # Existing typed att ID; use the shared validator.
+    generation: int
+    attempt: int
+    requested_model: str | None
+    adapter: str
+
+class AttemptCompleteEvent(_ItemEventBase):
+    event: Literal["attempt_complete"] = "attempt_complete"
+    attempt_id: str
+    generation: int
+    attempt: int
+    outcome: Literal["completed", "failed", "timeout"]
+    served_models: list[str]
+    requests: int
+    input_tokens: int
+    output_tokens: int
+    cached_tokens: int
+    provider_s: float
+    tool_calls: dict[str, int]
+    tool_exec_s: float
+    outputs_written: list[str]
+```
+
+These events join the same logical attempt through the reconciliation rules above.
+The extractors reconstruct an attempt from a transcript, while these are emitted live by
+the runner. They carry what the engine knows and the transcript does not, chiefly the
+*requested* model against the served set, and they survive a run that fails partway, is
+resumed, or leaves a truncated transcript.
+
+### The Summary
+
+`metaproc.operations:AgentOperationsSummary/v1`, envelope `agent_operations`,
+`status: enforced`, schema staged to
+`.state/schemas/agent-operations-summary.v1.schema.yaml`, written to
+`agent-operations-summary.md` at the run root.
+Frontmatter-md, exactly as `ResourceUsageSummary` does it: validated YAML for machines,
+a generated prose body for humans that states it is explanatory.
+
+A numeric leaf that can be absent follows `MeteredQuantity`, which already solves this
+for provider meters: provenance lives in the field name, `actual_quantity` and
+`estimated_quantity` are separate and a validator keeps them from overlapping, and the
+coverage state names why a value is missing.
+A consumer reading the measured field gets nothing when only an estimate exists, so a
+figure the run could not measure is absent rather than zero and cannot be read as one.
+Collapsing both into a single `value` behind a coverage flag would reintroduce exactly
+that misread, so the summary does not.
+
+```yaml
+agent_operations:
+  run_id: ...
+  generated_at: ...
+
+  identity:
+    process / execution_profile / declared_model / adapter
+    source_revision: {revision, dirty, moved}
+
+  execution:
+    state / started_at / ended_at / wall_s
+    levels / steps_total / steps_failed
+    items_requested / items_completed
+    effective_concurrency          # descriptive provider_s / wall_s
+    concurrency_ceiling            # DAG upper bound, not necessarily runnable work
+
+  provider:
+    provider_s / requests / input_tokens / output_tokens / cached_tokens
+    generation_s                   # provider_s - tool_exec_s
+    by_model: [{model, role: requested|auxiliary, invocations, requests, tokens...}]
+
+  models:
+    requested: {model: count}
+    served_as_requested: {model: count}
+    auxiliary: [{model, count, steps: [...]}]
+    substitutions: []              # present and empty is a stated healthy state
+
+  steps:
+    - step / invocations / retries / items_covered / wrote
+      duration: {p50, p90, max, total}
+      requests / output_tokens
+      tools: {tool: count}
+
+  tool_use:
+    calls_total / exec_s_total
+    by_tool: {tool: {calls, seconds}}
+    truncated_at_cap: {count, seconds, cap_bytes}
+
+  retries: [...]                   # one row per rejected attempt
+  anomalies: [...]
+```
+
+**Percentiles do not compose.** If the summary and its per-step rows both carry
+`p50`/`p90`, neither can be a fold of the other’s summary statistics.
+Both compute theirs from the span store directly.
+
+### Anomalies Are Rules With Stable Codes
+
+| Code | Fires when |
+| --- | --- |
+| `model_substituted` | a requested model is absent from its served set |
+| `result_truncated_at_cap` | a tool result hit the cap, so time was spent and nothing delivered |
+| `retry_concentration` | one step, or one contract field, accounts for an outsized share of retries |
+| `attempt_wrote_nothing` | an attempt completed without writing its declared output |
+| `concurrency_underrun` | runnable work waits while admissible execution capacity is unused |
+| `auxiliary_model_share` | an auxiliary model exceeds a share of output tokens |
+
+Thresholds are emitter defaults with an optional per-process override.
+Each emitted anomaly carries the evidence and threshold that produced it.
+
+`concurrency_underrun` requires time-aligned runnable-queue and resource-admission
+records. A low provider-time/elapsed-time ratio alone cannot trigger it: a serial
+dependency chain may use every available opportunity while remaining far below the DAG
+ceiling. Preserve wait reasons and distinguish work that is ready to run from work
+blocked on dependencies, local execution, or an admission policy.
+Missing evidence leaves this rule unmeasured.
+Attributing elapsed-time savings additionally requires critical-path timing; aggregate
+provider seconds and elapsed seconds are different quantities and their difference is
+not lost time.
+
+`result_truncated_at_cap` needs one upstream fix first: `tool.result.truncated` is
+declared in `TOOL_USAGE_ATTRS` and populated by no extractor.
+Its neighbours are in better shape.
+`tool.input.command` is populated by the Claude, Codex and Gemini extractors, and
+`tool.result.size_bytes` by Claude and Gemini, though only on the non-error branch and
+only for a string result, so an errored or structured result carries no size.
+
+### Comparison
+
+```
+metaproc operations diff <run-a> <run-b>
+```
+
+`compare-trace` compares spans grouped by key.
+This compares two summaries field by field, reporting ratios on numeric leaves and set
+differences on categorical ones.
+Before printing a ratio, compare the declared step and item identities, generation
+selection rules, and observed coverage for the selected metric.
+Each summary retains the contributing logical attempt identities and counts, exclusions,
+and missing evidence after source reconciliation.
+Fail with the mismatched identities and counts when the selected populations differ,
+rather than comparing a named subset of 28 invocations against 161. Retry counts may
+differ when that difference is the measurement; require the same declared item/step
+population and disclose the resulting attempt populations.
+
+`requests × tokens-per-request × seconds-per-token` reduces algebraically to duration
+for any selected population.
+It can explain a duration ratio but cannot validate the population or detect mismatched
+coverage, so it is not an acceptance gate.
+
+## Implementation Plan
+
+### Phase 1: Turn On What Exists
+
+- [ ] Measure automatic extraction on a large cohort and choose the enablement policy
+  before shipping it.
+- [ ] Implement independent primary-evidence freshness for trace and resource
+  projections, including attempt records and missing trace files; exclude derived
+  outputs and retain a cheap unchanged-input no-op path.
+- [ ] Call `extract_trace` and `write_trace` from `finalize_run_resources`, guarded so a
+  failure is logged and never fails the run.
+- [ ] Cover the recovery and `metaproc status` freshness sequence below, as well as
+  terminal finalization.
+- [ ] Register a versioned contract for `TraceEvent` so the file it writes has a stated
+  shape.
+
+### Phase 2: Close the Evidence Gaps
+
+- [ ] Read `attempt.yaml` and reconcile record/transcript/live-event evidence into one
+  logical attempt before parent linking and aggregation, carrying `OutputFailure` detail
+  and preserving transcript metrics.
+- [ ] Populate `tool.result.truncated`, which no extractor sets today.
+- [ ] Add `attempt_start` and `attempt_complete` to the process-event union, emit them
+  around the adapter invocation, and cover them in the typed reader so the new fields
+  are not narrowed away.
+
+### Phase 3: Summary and Comparison
+
+- [ ] `models/agent_operations.py` and `engine/agent_operations.py`, beside their
+  resource-summary counterparts.
+- [ ] Register the contract in `plugins/registry.py`, with the compiled schema staged
+  and drift-tested against the model.
+- [ ] Give the operations summary its own missing/stale detection against the consumed
+  trace revision and primary evidence, without invalidating upstream projections.
+- [ ] The rule table, each a pure predicate with a stable code and a default threshold.
+- [ ] Prose renderer, with a test asserting every number in the body appears in the
+  frontmatter.
+- [ ] `metaproc operations diff`, including the population and coverage checks above.
+
+## Testing Strategy
+
+The agent-log fixtures in `tests/fixtures/trace_agents/` are the gate, because they run
+in CI and any contributor can reproduce them.
+Extend them with an attempt-record fixture and a truncated tool result, then assert that
+the summary folded from them reproduces figures computed independently from the same
+fixtures.
+
+The freshness acceptance sequence is: finalize a completed run, write the trace after
+the resource artifacts, then call status/recovery repeatedly with unchanged primary
+inputs. Assert no extra extraction, transcript reads, or output rewrites.
+Delete the trace while keeping resource artifacts fresh and assert exactly one rebuild,
+then another no-op status call.
+Add or update an `attempt.yaml` without changing JSONL inputs and assert one rebuild of
+the affected projections, followed by another no-op.
+Append an independently written primary event to the resource ledger and assert that it
+invalidates its consumers, while a derived rewrite alone does not.
+Also cover a stale trace, primary-source removal, an extraction-version change, and a
+missing/stale operations summary once Phase 3 introduces it.
+
+The reconciliation fixture must contain a durable attempt record and its transcript,
+yielding exactly one attempt with the record’s rejection reason and the transcript’s
+usage. Assert one retry contribution and one duration sample, with transcript children
+linked to that attempt.
+Cover record-only, transcript-only, and live-event overlap; two resumed generations with
+the same step/item/attempt number must remain two logical attempts.
+A legacy transcript may join only one generation unambiguously; conflicting or ambiguous
+evidence must be surfaced without inflating aggregates.
+
+Beyond that: a round-trip test that the summary equals the fold of the span store, a
+drift test on the compiled schema, one anomaly-rule test per code with a fixture that
+fires it and one that does not, and a test that a failing extraction inside
+`finalize_run_resources` leaves the run’s outcome unchanged.
+
+The comparison fixtures must include different populations whose decomposition products
+still reproduce their duration ratio; reject the mismatch using identities and coverage.
+Also compare the same declared population with differing retry counts, retaining each
+arm’s contributing attempts.
+For concurrency, a fully utilized serial workload must not trigger an underrun, while
+recorded runnable work waiting beside unused admissible capacity must trigger it.
+Missing queue or admission evidence must produce an unmeasured diagnosis, and an
+elapsed-time attribution must name the affected critical-path interval.
+
+A replay against a completed multi-arm comparison is useful for calibration, since the
+figures there were established by hand.
+It is not the gate, because the runs are not public.
+
+## Rollout Plan
+
+Additive throughout.
+The events are new lines in an existing log that typed readers already tolerate growing.
+The summary appears beside one that already exists, and nothing reads it until the diff
+command is wired.
+
+Automatic extraction is the one change with a cost at runtime: it reads every transcript
+in the run at finalization.
+That cost is bounded by the same data a manual `--extract` already walks, but it now
+lands on every run, so it needs a measurement before it ships and a way to decline it
+for a run that does not want it.
+
+**An observability artifact must never fail a production run.** A failure to emit is
+logged and does not fail the run, on the same footing as `ResourceUsageSummary` today.
+
+## Open Questions
+
+- **What does automatic extraction cost on a large cohort?** Unmeasured, and it gates
+  Phase 1. If it is material, extraction moves behind a process-level setting or runs
+  per-step as transcripts complete rather than once at the end.
+- **Does a composite run emit one summary or several?** A process that spawns child
+  processes has a summary-shaped question at each level.
+  One per run root with steps attributed to their subgraph is probably right, and
+  `subgraph_key` already exists on every process event to support it.
+- **Does the span store belong in a published tree?** It lives under `.logs/derived/`. A
+  reader hydrating a published run to answer “which attempt” needs it present, and log
+  pruning must know not to take it.
+- **Should `attempt_complete` carry per-tool result bytes, or only counts and seconds?**
+  Bytes are what reveal the truncation pathology, but they are also the largest field.
+
+## References
+
+- `src/metaproc/trace/`, the span store, extractors, linker and aggregation this builds
+  on
+- `src/metaproc/commands/trace.py` and `src/metaproc/commands/compare_trace.py`, the
+  existing query and comparison surface
+- `src/metaproc/models/runtime.py`, `TaskAttemptRecord` and `OutputFailure`
+- `src/metaproc/models/resource_summary.py` and
+  `src/metaproc/engine/resource_summary.py`, the contract-bound summary pattern this
+  copies
+- `src/metaproc/engine/resource_finalization.py`, the trigger this hangs from
+- `src/metaproc/runpool/process_event_models.py`, the union the two new events join
+- [Execution Stability, Operator Diagnostics, and Flexibility](plan-2026-09-10-runpool-execution-followups.md)
+
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
+-->

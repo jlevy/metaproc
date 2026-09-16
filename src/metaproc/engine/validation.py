@@ -482,22 +482,16 @@ def _artifact_failures(
 ) -> list[OutputFailure]:
     """Turn a softschema result into one failure per refusing invariant.
 
-    ``message`` reproduces the string this has always produced, so
-    ``StatusRecord.error`` is unchanged. Everything beside it is the detail that
-    used to be discarded: which pass refused the document, which validator, and
-    where.
+    Structural messages keep their existing order. Both executed validation
+    layers contribute records, so the status summary may include additional
+    semantic failures that were previously discarded.
     """
-    # Both passes read the same document, so a structurally invalid one draws
-    # complaints from each about the same fields. Report the pass that refused
-    # it first: once the shape is wrong the semantic verdict describes the same
-    # defect a second time, and a consumer counting failures would count it
-    # twice and could route the two copies to different owners.
-    if result.structural.errors:
-        entries: list[tuple[OutputFailureKind, dict[str, object]]] = [
-            (OutputFailureKind.structural, e) for e in result.structural.errors
-        ]
-    else:
-        entries = [(OutputFailureKind.semantic, e) for e in result.semantic.errors]
+    # Keep both executed layers as evidence. Structural refusals lead the list
+    # so the existing first-failure summary and retry priority remain stable.
+    entries: list[tuple[OutputFailureKind, dict[str, object]]] = [
+        (OutputFailureKind.structural, e) for e in result.structural.errors
+    ]
+    entries.extend((OutputFailureKind.semantic, e) for e in result.semantic.errors)
     if not entries:
         return [
             OutputFailure(

@@ -91,19 +91,28 @@ from metaproc.dispatch.preflight import (
 from metaproc.dispatch.slot_coordinator import SlotCoordinator, SlotLease
 from metaproc.engine.build_plan import build_plan, merge_defaults
 from metaproc.engine.code_handler import resolve_code_handler
+from metaproc.engine.command_diagnostics import (
+    command_failure_message,
+    handler_failure_message,
+    summarize_failure_causes,
+)
 from metaproc.engine.dep_state import (
     fingerprint_step,
     recorded_step_hash,
 )
 from metaproc.engine.discovery import discover_items_from_source
-from metaproc.engine.fan_in import write_outcome_manifest
+from metaproc.engine.fan_in import collect_item_outcomes, write_outcome_manifest
 from metaproc.engine.graph import (
     downstream,
     item_aligned_chains,
     propagate_failure,
     topo_sort,
 )
-from metaproc.engine.input_validation import validate_process_inputs, validate_process_outputs
+from metaproc.engine.input_validation import (
+    validate_process_inputs,
+    validate_process_outputs,
+    validate_process_outputs_detailed,
+)
 from metaproc.engine.item_runner import (
     StepInvoker,
     run_aligned_chain,
@@ -170,6 +179,7 @@ from metaproc.io.state_io import (
     end_status_attempt_at,
     mark_completed_at,
     mark_failed_at,
+    mark_failed_synthetic_at,
     mark_running_at,
     read_manual_ack_at,
     read_run_plan,
@@ -1190,31 +1200,57 @@ def _read_step_status(run_dir: Path, step_id: str) -> StatusRecord | None:
     return read_status_at(_step_item_dir(run_dir, step_id))
 
 
-def _read_scalar_code_failure_error(
+def _read_step_failure_error(
     run_dir: Path,
     target: ResolvedStep,
+    *,
+    upstream_chain: Sequence[str] = (),
 ) -> str:
-    """Return the durable task error for a failed scalar code step.
-
-    ``_execute_code_step`` owns the detailed failure record. The DAG layer
-    only receives a boolean, so recover that already-persisted detail here
-    rather than introducing a second execution-result type solely for
-    observability.
-    """
-    if target.mode != "code" or target.fan_out is not None:
-        return ""
+    """Lift the durable causes received by this step into its failure summary."""
     try:
+        if target.fan_out is not None:
+            snapshot = read_run_plan(run_dir)
+            step = (
+                next((step for step in snapshot.steps if step.step_id == target.step_id), None)
+                if snapshot is not None
+                else None
+            )
+            keys = step.item_keys if step is not None else None
+            if keys is None:
+                return "item failure detail unavailable: current item roster not recorded"
+            outcomes = collect_item_outcomes(
+                run_dir, target.step_id, expected_keys=keys, upstream_chain=upstream_chain
+            )
+            # Retained directories outside the current published roster are history,
+            # not members of this execution's denominator or failure population.
+            current_keys = set(keys)
+            failures = [o for o in outcomes if o["key"] in current_keys and not o["succeeded"]]
+            if not failures:
+                return "step failed without a recorded item failure"
+            detail = summarize_failure_causes(
+                o.get("error") or f"error not recorded (state: {o['state']})" for o in failures
+            )
+            return f"{len(failures)} of {len(keys)} items failed ({detail})"
         record = _read_step_status(run_dir, target.step_id)
-    except Exception:  # noqa: BLE001 -- status projection is best-effort
+    except Exception as exc:  # noqa: BLE001 -- status projection is best-effort
         log.warning(
-            "could not read failure detail for scalar code step %r",
+            "could not read failure detail for step %r",
             target.step_id,
             exc_info=True,
         )
-        return ""
+        return f"failure detail unavailable: {type(exc).__name__}: {exc}"
     if record is None or record.state != "failed" or not record.error:
-        return ""
+        return "error not recorded"
     return record.error
+
+
+def _process_step_errors(step_states: Mapping[str, Mapping[str, Any]]) -> dict[str, str]:
+    """Preserve each failed step's cause, explicitly marking missing evidence."""
+    return {
+        step_id: state.get("error") or "error not recorded"
+        for step_id, state in step_states.items()
+        if state.get("state") == "failed"
+    }
 
 
 def _read_process_status_yaml(run_dir: Path) -> dict[str, Any] | None:
@@ -1233,6 +1269,20 @@ def _read_process_status_yaml(run_dir: Path) -> dict[str, Any] | None:
     except YAMLError:
         return None
     return data if isinstance(data, dict) else None
+
+
+def _record_process_output_failure(run_dir: Path, error: CLIError) -> None:
+    """Persist a process-boundary refusal after its child steps have completed."""
+    data = _read_process_status_yaml(run_dir) or {}
+    data.update(state="failed", error=str(error), completed_at=_now_iso())
+    if error.output_failures:
+        data["output_failures"] = [
+            failure.model_dump(mode="json", exclude_none=True) for failure in error.output_failures
+        ]
+    path = run_dir / STATE_DIR / "process-status.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with atomic_output_file(path) as temporary:
+        Path(temporary).write_text(to_yaml_string(data))
 
 
 def _read_recorded_step_hash(run_dir: Path, step_id: str) -> str | None:
@@ -1554,17 +1604,16 @@ async def _execute_code_step(
         item_key=state_dir.name if step_def.for_each is not None else None,
     )
 
-    handler_fn = None
-    if handler_ref:
-        handler_fn = resolve_code_handler(handler_ref, process_dir)
-
     # Captured code stdout/stderr is a task log, not a run-level stream.
     logs_dir = compute_task_logs_dir(run_dir, step_def, variables)
     logs_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    log_file = logs_dir / f"process_{ts}.log"
+    # Name the log for its attempt, as run-step and run-parallel do: attempts started in
+    # the same second must not overwrite the file their durable errors point at.
+    log_file = logs_dir / f"process_{running_record.attempt_id}.log"
+    env = dict(os.environ)
 
     try:
+        handler_fn = resolve_code_handler(handler_ref, process_dir) if handler_ref else None
         if handler_fn is not None:
             process_step = step_def.model_copy(
                 deep=True,
@@ -1592,7 +1641,6 @@ async def _execute_code_step(
             await _run_sync(execution_context, _run_handler)
         elif command_ref is not None:
             resolved_cmd = resolve_templates(command_ref, variables)
-            env = dict(os.environ)
             if target.env:
                 env.update({k: resolve_templates(v, variables) for k, v in target.env.items()})
             result = await _run_sync(
@@ -1631,12 +1679,18 @@ async def _execute_code_step(
         if output:
             with atomic_output_file(log_file) as tmp_path:
                 tmp_path.write_text(output)
-        command_error = f"command exit code {exc.returncode}"
+        command_failure = command_failure_message(
+            exc.returncode,
+            stdout=exc.stdout,
+            stderr=exc.stderr,
+            env=env,
+            log_path=str(log_file.relative_to(run_dir)),
+        )
         mark_failed_at(
             state_dir,
-            error=command_error,
+            error=command_failure.error,
             running_record=running_record,
-            failure_class=str(classify_failure(command_error)),
+            failure_class=str(command_failure.failure_class),
         )
         return False
     except (asyncio.CancelledError, KeyboardInterrupt) as exc:
@@ -1652,12 +1706,16 @@ async def _execute_code_step(
         tb = traceback.format_exc()
         with atomic_output_file(log_file) as tmp_path:
             tmp_path.write_text(tb)
-        handler_error = f"{type(exc).__name__}: {exc} (traceback in {log_file.name})"
+        handler_failure = handler_failure_message(
+            exc,
+            env=env,
+            log_path=str(log_file.relative_to(run_dir)),
+        )
         mark_failed_at(
             state_dir,
-            error=handler_error,
+            error=handler_failure.error,
             running_record=running_record,
-            failure_class=str(classify_failure(handler_error)),
+            failure_class=str(handler_failure.failure_class),
         )
         return False
     except BaseException as exc:
@@ -1845,6 +1903,54 @@ def _discover_chain_items(
     return discovery.nonterminal_contexts()
 
 
+async def _execute_mapped_code_item(
+    *,
+    spec: ProcessSpec,
+    step_def: ProcessStep,
+    target: ResolvedStep,
+    variables: dict[str, str],
+    process_dir: Path,
+    run_dir: Path,
+    run_id: str,
+    execution_context: RunExecutionContext | None,
+    out: Any,
+) -> bool:
+    """Execute one item of a mapped code step, keeping a prelaunch refusal on that item.
+
+    ``_execute_code_step`` raises ``CLIError`` only before its attempt starts, for
+    example when an input is missing. A scalar step lets that reach the orchestrator,
+    which records the step failure. For a mapped step the refusal is this item's
+    failure: raising it would leave the item without a status, attributing the cause
+    to the whole step, while its siblings finish.
+    """
+    try:
+        return await _execute_code_step(
+            spec=spec,
+            step_def=step_def,
+            target=target,
+            variables=variables,
+            process_dir=process_dir,
+            run_dir=run_dir,
+            run_id=run_id,
+            execution_context=execution_context,
+            out=out,
+        )
+    except CLIError as exc:
+        state_dir = compute_task_state_dir(run_dir, step_def, variables)
+        state_dir.mkdir(parents=True, exist_ok=True)
+        mark_failed_synthetic_at(
+            state_dir,
+            run_id=run_id,
+            step_id=target.step_id,
+            item={"step": target.step_id},
+            item_key=state_dir.name,
+            error=str(exc),
+            attempt_disposition=AttemptDisposition.permanent,
+        )
+        out.progress(f"  Step '{target.step_id}' item '{state_dir.name}': refused ({exc})")
+        return False
+
+
 async def _execute_code_fan_out_step(
     *,
     spec: ProcessSpec,
@@ -1903,7 +2009,7 @@ async def _execute_code_fan_out_step(
     )
 
     async def _invoke(_step_id: str, item_vars: dict[str, str]) -> bool:
-        return await _execute_code_step(
+        return await _execute_mapped_code_item(
             spec=spec,
             step_def=step_def,
             target=target,
@@ -1976,7 +2082,7 @@ async def _execute_item_aligned_chain(
     out.progress(f"  Chain '{' -> '.join(chain)}': {len(item_contexts)} items, item-aligned")
 
     async def _invoke(step_id: str, item_vars: dict[str, str]) -> bool:
-        return await _execute_code_step(
+        return await _execute_mapped_code_item(
             spec=spec,
             step_def=step_def_map[step_id],
             target=step_map[step_id],
@@ -2279,7 +2385,7 @@ async def _execute_agent_step(
     # may get it right on a second pass. The ``on_invalid`` clause on the output says
     # which failures are worth another call, and the content-failure cap bounds how
     # many. Transient exit-code failures are classified below and draw the full
-    # retry budget; step timeouts and boundary violations stay terminal here.
+    # retry budget, as do subprocess timeouts. Boundary violations stay terminal.
     retry_policy = _resolve_retry_policy(step_def, spec.defaults)
     content_retry_cap = max_retries_for(FailureClass.INVALID_OUTPUT, retry_policy.max_retries)
     attempt = 1
@@ -2295,15 +2401,10 @@ async def _execute_agent_step(
     except CLIError as exc:
         out.warning(str(exc))
         log.warning("Step %s credential-pool binding failed: %s", step_id, exc)
-        return False
-    auth_events = (
-        EventLogger(paths_mod.runpool_step_events(run_dir, step_id))
-        if pool_dispatch is not None
-        else None
-    )
+        raise
+    auth_events = EventLogger(paths_mod.runpool_step_events(run_dir, step_id))
     retry_exclude: list[tuple[str, str]] = []
-    if auth_events is not None:
-        auth_events.open()
+    auth_events.open()
 
     try:
         if (
@@ -2323,10 +2424,11 @@ async def _execute_agent_step(
                 ),
             )
             if quota_verdict.status == "refuse":
-                out.warning(
+                error = (
                     f"Step '{step_id}': scalar quota gate refused launch: {quota_verdict.message}"
                 )
-                return False
+                out.warning(error)
+                raise CLIError(error)
         while True:
             # Reset per attempt: an anomaly accepted on an attempt that went on to fail
             # describes that attempt, not the retry that replaced it.
@@ -2367,7 +2469,7 @@ async def _execute_agent_step(
                 attempt_number: int = attempt,
             ) -> AuthFailureClassification | None:
                 nonlocal lease
-                if lease is None or pool_dispatch is None or auth_events is None:
+                if lease is None or pool_dispatch is None:
                     return None
                 completed_lease = lease
                 lease = None
@@ -2410,9 +2512,12 @@ async def _execute_agent_step(
                     else None
                 )
                 pool_kill_reason: str | None = None
+                timed_out = False
+                boundary_before = None
                 try:
                     async with _leaf_slot(execution_context):
                         async with admitted_launch(
+                            event_logger=auth_events,
                             enabled=backend_name == "local",
                             limit=resolve_host_max_concurrency(
                                 scalar_resource_config, default=SCALAR_DEFAULT_HOST_LIMIT
@@ -2425,7 +2530,7 @@ async def _execute_agent_step(
                                 "mode": "agent",
                             },
                         ):
-                            if pool_dispatch is not None and auth_events is not None:
+                            if pool_dispatch is not None:
 
                                 def _complete_cancelled_acquisition(
                                     cancelled_lease: SlotLease,
@@ -2474,7 +2579,7 @@ async def _execute_agent_step(
                                     _mark_scalar_prelaunch_failure_after_retry(
                                         state_dir, error=str(exc)
                                     )
-                                    return False
+                                    raise CLIError(str(exc)) from exc
                                 counts = pool_dispatch.coordinator.active_counter.snapshot()
                                 active_for_adapter = {
                                     label: count
@@ -2500,7 +2605,7 @@ async def _execute_agent_step(
                                     _mark_scalar_prelaunch_failure_after_retry(
                                         state_dir, error=str(exc)
                                     )
-                                    return False
+                                    raise CLIError(str(exc)) from exc
                                 auth_adapter = get_auth_capable(lease.adapter)
                                 if auth_adapter is not None:
                                     cmd = [
@@ -2554,33 +2659,32 @@ async def _execute_agent_step(
                                 execution_profile=effective_execution_profile,
                             )
                 except subprocess.TimeoutExpired:
-                    timeout_error = f"timeout after {timeout_s}s"
-                    await _complete_auth_attempt(timeout_error)
-                    mark_failed_at(
-                        state_dir,
-                        error=timeout_error,
-                        running_record=running_record,
-                        failure_class=str(FailureClass.TIMEOUT),
+                    if running_record is None:
+                        raise
+                    timed_out = True
+                    exit_error = f"timeout after {timeout_s}s"
+                else:
+                    # Read the log before compacting it: the exit code alone says nothing
+                    # about why the agent died, and the answer is in the last few lines.
+                    # A bare "exit code 1" also classifies as a crash, so without this the
+                    # transient failures below look like a prompt that always fails.
+                    exit_error: str | None = None
+                    if pool_kill_reason is not None:
+                        exit_error = f"RunPool killed process: {pool_kill_reason}"
+                    elif exit_code != 0:
+                        exit_error = f"exit code {exit_code}"
+                        log_error = extract_log_error(attempt_log_path)
+                        if log_error:
+                            exit_error = f"{exit_error} (log: {log_error})"
+
+                terminal_contract_error = (
+                    None
+                    if timed_out
+                    else validate_terminal_result_log(
+                        adapter_obj,
+                        attempt_log_path,
+                        runtime_config,
                     )
-                    return False
-
-                # Read the log before compacting it: the exit code alone says nothing about
-                # why the agent died, and the answer is in the last few lines. A bare
-                # "exit code 1" also classifies as a crash, so without this the transient
-                # failures below are indistinguishable from a prompt that always fails.
-                exit_error: str | None = None
-                if pool_kill_reason is not None:
-                    exit_error = f"RunPool killed process: {pool_kill_reason}"
-                elif exit_code != 0:
-                    exit_error = f"exit code {exit_code}"
-                    log_error = extract_log_error(attempt_log_path)
-                    if log_error:
-                        exit_error = f"{exit_error} (log: {log_error})"
-
-                terminal_contract_error = validate_terminal_result_log(
-                    adapter_obj,
-                    attempt_log_path,
-                    runtime_config,
                 )
                 if terminal_contract_error is not None:
                     exit_error = terminal_contract_error
@@ -2609,6 +2713,7 @@ async def _execute_agent_step(
                 # supervises.
                 if (
                     exit_error is not None
+                    and not timed_out
                     and terminal_contract_error is None
                     and pool_kill_reason is None
                     and effective_outputs
@@ -2840,8 +2945,7 @@ async def _execute_agent_step(
                         )
                 raise
     finally:
-        if auth_events is not None:
-            auth_events.close()
+        auth_events.close()
 
     completed = mark_completed_at(
         state_dir, running_record=running_record, anomalies=accepted_anomalies
@@ -3004,20 +3108,22 @@ async def _execute_composite_step(
         # Surface the inner failure message; otherwise the operator sees only
         # `Step '<composite>': FAILED` with no actionable reason.
         out.progress(f"  Step '{step_id}': inner CLIError — {exc}")
-        return False
+        raise
 
-    output_errors = validate_process_outputs(
+    validation = validate_process_outputs_detailed(
         prepared.spec,
         prepared.variables,
         prepared.process_dir,
         plan=prepared.plan,
     )
-    if output_errors:
-        out.progress(
-            f"  Step '{step_id}': child process output validation failed:\n  "
-            + "\n  ".join(output_errors)
+    if validation.errors:
+        error = CLIError(
+            f"Step '{step_id}': child process output validation failed:\n  "
+            + "\n  ".join(validation.errors),
+            output_failures=validation.output_failures,
         )
-        return False
+        _record_process_output_failure(prepared.identity.run_dir, error)
+        raise error
 
     return True
 
@@ -3190,6 +3296,21 @@ async def _execute_composite_fan_out_step(
             )
             _emit_terminal(error)
             raise
+        except CLIError as exc:
+            error = str(exc)
+            mark_failed_at(
+                state_dir,
+                error=error,
+                running_record=running_record,
+                output_failures=list(exc.output_failures),
+                failure_class=(
+                    str(FailureClass.INVALID_OUTPUT)
+                    if exc.output_failures
+                    else str(classify_failure(error))
+                ),
+            )
+            _emit_terminal(error)
+            return False
         except Exception as exc:
             error = f"child process raised {type(exc).__name__}: {exc}"
             out.progress(f"  Step '{step_id}' item '{state_dir.name}': {error}")
@@ -3647,7 +3768,7 @@ async def _execute_fan_out_step(
     except CLIError as exc:
         out.warning(str(exc))
         log.warning("Step %s credential-pool binding failed: %s", step_id, exc)
-        return False
+        raise
 
     if events is not None:
         _emit_fan_out_item_starts(
@@ -4250,7 +4371,11 @@ async def _orchestrate(
                 if member_ok:
                     events.step_complete(member_id, chain_elapsed)
                 else:
-                    events.step_fail(member_id, chain_elapsed)
+                    error = _read_step_failure_error(
+                        run_dir, step_map[member_id], upstream_chain=chain[: chain.index(member_id)]
+                    )
+                    step_states[member_id]["error"] = error
+                    events.step_fail(member_id, chain_elapsed, error=error)
             _write_process_status(
                 run_dir,
                 spec.name,
@@ -4293,7 +4418,7 @@ async def _orchestrate(
             events.step_complete(step_id, elapsed)
             out.progress(f"  Step '{step_id}': completed ({fmt_timedelta(elapsed)})")
         else:
-            error = _read_scalar_code_failure_error(run_dir, target)
+            error = _read_step_failure_error(run_dir, target)
             step_states[step_id] = {
                 "state": "failed",
                 "started_at": step_states[step_id].get("started_at"),
@@ -4307,6 +4432,54 @@ async def _orchestrate(
             out.progress(f"  Step '{step_id}': FAILED ({fmt_timedelta(elapsed)}){detail}")
 
         return step_id, success
+
+    async def _run_one_step_preserving_errors(
+        step_id: str,
+        *,
+        peer_allowed_targets: list[WriteTarget] | None = None,
+    ) -> tuple[str, bool]:
+        """Make expected executor refusals durable without inventing an attempt."""
+        step_start = time.monotonic()
+        try:
+            return await _run_one_step(step_id, peer_allowed_targets=peer_allowed_targets)
+        except CLIError as exc:
+            elapsed = time.monotonic() - step_start
+            target = step_map[step_id]
+            if target.fan_out is None:
+                state_dir = compute_task_state_dir(run_dir, step_def_map[step_id], variables)
+                current = read_status_at(state_dir)
+                if current is not None and current.state == "running":
+                    validate_task_status_identity_at(
+                        state_dir,
+                        current,
+                        run_id=run_id,
+                        step_id=step_id,
+                        item_key=None,
+                    )
+                    mark_failed_at(
+                        state_dir,
+                        error=str(exc),
+                        running_record=current,
+                        output_failures=list(exc.output_failures),
+                    )
+            step_states[step_id] = {
+                "state": "failed",
+                "started_at": step_states[step_id].get("started_at"),
+                "completed_at": _now_iso(),
+                "elapsed_s": round(elapsed, 1),
+                "error": str(exc),
+            }
+            if exc.output_failures:
+                step_states[step_id]["output_failures"] = [
+                    failure.model_dump(mode="json", exclude_none=True)
+                    for failure in exc.output_failures
+                ]
+            events.step_fail(step_id, elapsed, error=str(exc))
+            _write_process_status(
+                run_dir, spec.name, step_states, started_at, active_step_ids=active_ids
+            )
+            out.progress(f"  Step '{step_id}': FAILED ({fmt_timedelta(elapsed)}): {exc}")
+            return step_id, False
 
     for _level_idx, level in enumerate(levels):
         events.level_start(_level_idx, list(level))
@@ -4433,7 +4606,7 @@ async def _orchestrate(
         try:
             results = await asyncio.gather(
                 *[
-                    _run_one_step(
+                    _run_one_step_preserving_errors(
                         sid,
                         peer_allowed_targets=peer_allowed_by_step[sid],
                     )
@@ -4523,6 +4696,7 @@ async def _orchestrate(
         failed=len(failed_steps),
         skipped=skipped_count + len(blocked_list),
         elapsed_s=total_elapsed,
+        errors=_process_step_errors(step_states),
     )
 
     if failed_steps:
@@ -5389,10 +5563,14 @@ def run_process_command(
 
             asyncio.run(_run_local_process())
 
-        output_errors = validate_process_outputs(spec, variables, process_dir, plan=plan)
-        if output_errors:
-            msg = "process output validation failed:\n  " + "\n  ".join(output_errors)
-            raise CLIError(msg)
+        validation = validate_process_outputs_detailed(spec, variables, process_dir, plan=plan)
+        if validation.errors:
+            error = CLIError(
+                "process output validation failed:\n  " + "\n  ".join(validation.errors),
+                output_failures=validation.output_failures,
+            )
+            _record_process_output_failure(run_dir, error)
+            raise error
     except (TimeoutError, subprocess.TimeoutExpired) as exc:
         finalization_state = FinalizationState.TIMED_OUT
         terminal_error = exc

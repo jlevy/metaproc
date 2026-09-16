@@ -26,7 +26,7 @@ from typing import Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
 from metaproc.adapters.registry import ADAPTER_REGISTRY
 from metaproc.cli import app
@@ -65,6 +65,7 @@ from metaproc.commands.run_process import (
     _preflight_plan_adapters,
     _publish_run_plan,
     _read_recorded_step_hash,
+    _read_step_failure_error,
     _read_step_status,
     _refresh_run_plan_item_keys,
     _run_agent_subprocess,
@@ -75,6 +76,7 @@ from metaproc.commands.run_process import (
 from metaproc.engine.discovery import FanOutDiscovery
 from metaproc.engine.graph import topo_sort
 from metaproc.engine.pathing import compute_task_state_dir
+from metaproc.engine.run_status import scan_run_status
 from metaproc.engine.write_boundary import RepoSnapshot, WriteTarget
 from metaproc.io.state_io import (
     mark_completed_at,
@@ -1112,6 +1114,48 @@ class TestAncestorVerification:
 
 
 class TestProcessStatusFile:
+    def test_mapped_failure_summary_counts_only_current_roster(self, tmp_path: Path) -> None:
+        target = ResolvedStep(
+            step_id="work",
+            mode="agent",
+            adapter=ResolvedAdapter(type="gemini-cli"),
+            fan_out=FanOut(over="deps.items", bind="item", source="items.md"),
+        )
+        write_run_plan(
+            tmp_path,
+            RunPlanSnapshot(
+                run_id="run",
+                steps=[
+                    RunPlanStep(
+                        step_id="work",
+                        mode="agent",
+                        task_shape="mapped",
+                        item_keys=["a", "b", "c"],
+                        fingerprint=fingerprint_step(target),
+                    )
+                ],
+            ),
+        )
+        for key, state, error in (
+            ("a", "failed", "timeout after 600s"),
+            ("b", "failed", "timeout after 600s"),
+            ("c", "completed", None),
+            ("old", "failed", "historical failure"),
+        ):
+            write_status_at(
+                tmp_path / STATE_DIR / "tasks" / "work" / key,
+                StatusRecord(
+                    run_id="run",
+                    step_id="work",
+                    item={"item": key},
+                    state="completed" if state == "completed" else "failed",
+                    error=error,
+                ),
+            )
+        assert _read_step_failure_error(tmp_path, target) == (
+            "2 of 3 items failed (2 x timeout after 600s)"
+        )
+
     @pytest.mark.parametrize(
         ("suffix", "extra_args", "expected_publish_state"),
         [
@@ -1396,28 +1440,30 @@ class TestFanOutExecution:
             patch("metaproc.commands.run_process.capture_repo_snapshot", return_value=None),
             patch("metaproc.commands.run_parallel._run_agent_pool", new=run_pool),
         ):
-            succeeded = asyncio.run(
-                _execute_fan_out_step(
-                    spec=ProcessSpec(name="mapped-fixture"),
-                    step_def=step_def,
-                    target=target,
-                    variables={},
-                    process_path=tmp_path / "test.process.md",
-                    process_dir=tmp_path,
-                    run_dir=run_dir,
-                    run_id="mapped-fixture/2026-08-24/items/AAPL",
-                    backend_name="local",
-                    max_concurrency=1,
-                    num_workers=1,
-                    machine_type="e2-standard-4",
-                    spot=False,
-                    variant_override=None,
-                    out=out,
-                    pool_dispatch_template=template,
-                )
+            invocation = _execute_fan_out_step(
+                spec=ProcessSpec(name="mapped-fixture"),
+                step_def=step_def,
+                target=target,
+                variables={},
+                process_path=tmp_path / "test.process.md",
+                process_dir=tmp_path,
+                run_dir=run_dir,
+                run_id="mapped-fixture/2026-08-24/items/AAPL",
+                backend_name="local",
+                max_concurrency=1,
+                num_workers=1,
+                machine_type="e2-standard-4",
+                spot=False,
+                variant_override=None,
+                out=out,
+                pool_dispatch_template=template,
             )
+            if expected_success:
+                assert asyncio.run(invocation) is True
+            else:
+                with pytest.raises(CLIError, match=warning_fragment):
+                    asyncio.run(invocation)
 
-        assert succeeded is expected_success
         call = run_pool.await_args
         if expected_success:
             assert call is not None
@@ -2116,7 +2162,9 @@ class TestCompositeStepExecution:
         out = FakeOut()
 
         with _test_execution_context() as execution_context:
-            result = asyncio.run(
+            failure = pytest.raises(
+                CLIError,
+                asyncio.run,
                 _execute_composite_step(
                     step_def=step_def,
                     target=target,
@@ -2127,11 +2175,11 @@ class TestCompositeStepExecution:
                     scope_path=(),
                     execution_context=execution_context,
                     out=out,
-                )
+                ),
             )
 
-        assert result is False
-        assert any("child process output validation failed" in message for message in out.messages)
+        assert "child process output validation failed" in str(failure.value)
+        assert failure.value.output_failures
 
     def test_mapped_composite_isolates_failure_and_resumes_only_failed_item(
         self,
@@ -2258,6 +2306,12 @@ class TestCompositeStepExecution:
         assert alfa_status is not None and alfa_status.state == "completed"
         assert brvo_status is not None and brvo_status.state == "failed"
         assert chrl_status is not None and chrl_status.state == "completed"
+        assert brvo_status.error
+        expected_error = f"1 of 3 items failed (1 x {brvo_status.error})"
+        process_status = read_yaml_file(run_dir / STATE_DIR / "process-status.yaml")
+        assert process_status["steps"]["ticker-flow"]["error"] == expected_error
+        assert scan_run_status(run_dir).process_error == f"ticker-flow: {expected_error}"
+        assert expected_error in first.output
         assert (run_dir / "ticker-flow" / "alfa" / STATE_DIR / "process-status.yaml").exists()
         assert (run_dir / "ticker-flow" / "brvo" / STATE_DIR / "process-status.yaml").exists()
         assert (run_dir / "ticker-flow" / "chrl" / STATE_DIR / "process-status.yaml").exists()
@@ -2292,6 +2346,10 @@ class TestCompositeStepExecution:
         assert [event["item_key"] for event in first_events if event["event"] == "item_fail"] == [
             "brvo"
         ]
+        assert (
+            next(event for event in first_events if event["event"] == "step_fail")["error"]
+            == expected_error
+        )
 
         fail_marker.unlink()
         second = runner.invoke(app, args)
@@ -4520,8 +4578,9 @@ class TestNonFanOutTransientRetry:
         counter: Path,
         message: str,
         observed_prompts: list[str],
+        timeout_attempts: int = 0,
     ) -> None:
-        """An adapter that dies with *message* the first time and succeeds the second."""
+        """An adapter whose initial attempts time out or exit before writing output."""
 
         class ExitAdapter:
             adapter_type = "exit-test"
@@ -4532,10 +4591,11 @@ class TestNonFanOutTransientRetry:
                 observed_prompts.append(Path(prompt_file).read_text())
                 target_path = variables["TARGET_PATH"]
                 script = (
-                    "import sys; from pathlib import Path; "
+                    "import sys, time; from pathlib import Path; "
                     f"counter = Path({str(counter)!r}); "
                     "n = len(counter.read_text()) if counter.exists() else 0; "
                     "counter.write_text('x' * (n + 1)); "
+                    f"time.sleep(30) if n < {timeout_attempts} else None; "
                     f"print({message!r}) or sys.exit(1) if n < 1 else None; "
                     f"target = Path({target_path!r}); "
                     "target.parent.mkdir(parents=True, exist_ok=True); "
@@ -4560,7 +4620,16 @@ class TestNonFanOutTransientRetry:
 
         monkeypatch.setitem(ADAPTER_REGISTRY, "exit-test", ExitAdapter())
 
-    def _run(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, message: str, run_id: str):
+    def _run(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        message: str,
+        run_id: str,
+        *,
+        timeout_attempts: int = 0,
+        max_retries: int = 3,
+    ) -> tuple[Result, StatusRecord | None, int, Path, list[str]]:
         repo_dir = tmp_path / "exit-repo"
         process_dir = repo_dir / "exit-process"
         process_dir.mkdir(parents=True)
@@ -4569,8 +4638,14 @@ class TestNonFanOutTransientRetry:
         target = repo_dir / "runs" / run_id / "thing.md"
         counter = repo_dir / "counter.txt"
         spec = self._write_process(process_dir)
+        body = spec.read_text().replace("max_retries: 3", f"max_retries: {max_retries}")
+        if timeout_attempts:
+            body = body.replace(
+                "type: exit-test", "type: exit-test\n        config:\n          timeout_s: 1"
+            )
+        spec.write_text(body)
         observed_prompts: list[str] = []
-        self._register_adapter(monkeypatch, counter, message, observed_prompts)
+        self._register_adapter(monkeypatch, counter, message, observed_prompts, timeout_attempts)
 
         result = CliRunner().invoke(
             app,
@@ -4588,6 +4663,48 @@ class TestNonFanOutTransientRetry:
         status = read_status_at(_task_state_dir_for(repo_dir / "runs" / run_id, "write-thing"))
         calls = len(counter.read_text()) if counter.exists() else 0
         return result, status, calls, target, observed_prompts
+
+    @pytest.mark.parametrize(
+        ("timeout_attempts", "max_retries", "expected_calls", "succeeds"),
+        [(1, 1, 2, True), (2, 1, 2, False), (1, 0, 1, False)],
+        ids=["retry-succeeds", "retry-exhausted", "retry-disabled"],
+    )
+    def test_subprocess_timeout_uses_the_retry_policy(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        timeout_attempts: int,
+        max_retries: int,
+        expected_calls: int,
+        succeeds: bool,
+    ) -> None:
+        result, status, calls, target, prompts = self._run(
+            tmp_path,
+            monkeypatch,
+            message="",
+            run_id="subprocess-timeout-run",
+            timeout_attempts=timeout_attempts,
+            max_retries=max_retries,
+        )
+
+        assert (result.exit_code == 0) is succeeds, result.output
+        assert calls == expected_calls
+        assert target.exists() is succeeds
+        assert status is not None
+        assert status.state == ("completed" if succeeds else "failed")
+        assert status.attempt == expected_calls
+        history = read_attempt_history_at(_task_state_dir_for(target.parent, "write-thing"))
+        timed_out = history[:-1] if succeeds else history
+        assert len(timed_out) == min(timeout_attempts, expected_calls)
+        assert all(record.disposition is AttemptDisposition.retryable for record in timed_out)
+        assert all(record.failure_class == "timeout" for record in timed_out)
+        assert all(record.error == "timeout after 1s" for record in timed_out)
+        assert all(
+            "The prior attempt's declared output failed validation." not in prompt
+            for prompt in prompts
+        )
+        if succeeds:
+            assert history[-1].disposition is AttemptDisposition.succeeded
 
     def test_a_body_timeout_is_retried_and_the_second_attempt_succeeds(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

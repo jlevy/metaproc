@@ -18,7 +18,10 @@ import metaproc.runpool.pool as pool_module
 from metaproc.osutils.memory_pressure import MemoryPressure, PressureLevel
 from metaproc.paths import POOL_KILL_SENTINEL_FILE
 from metaproc.runpool.backend import HealthMetrics, LaunchHandle, PreparedLaunch
+from metaproc.runpool.event_models import HostAdmissionDeniedEvent
+from metaproc.runpool.event_reader import read_runpool_events
 from metaproc.runpool.events import EventLogger
+from metaproc.runpool.host_admission import HostAdmissionGate
 from metaproc.runpool.pool import (
     ProcessConfig,
     RunPool,
@@ -1291,6 +1294,52 @@ class TestRunPool:
         event_types = [event["event"] for event in events]
         assert "host_slot_acquired" in event_types
         assert "host_slot_released" in event_types
+
+    def test_host_refusal_records_wait_then_failure_without_launch(self, tmp_path: Path) -> None:
+        marker = tmp_path / "launched"
+        slots = tmp_path / "host-slots"
+        gate = HostAdmissionGate(root_dir=slots, limit=1)
+
+        async def run() -> None:
+            held = await gate.acquire(label="owner", pool_id="owner")
+            pool = RunPool(
+                RunPoolConfig(
+                    max_concurrency=1,
+                    initial_concurrency=1,
+                    min_concurrency=1,
+                    state_dir=tmp_path / "state",
+                    logs_dir=tmp_path / "logs",
+                    host_admission_enabled=True,
+                    host_admission_dir=slots,
+                    host_admission_limit=1,
+                )
+            )
+            assert pool._host_admission is not None
+            pool._host_admission.acquire_timeout_s = 0.01
+            try:
+                with pytest.raises(TimeoutError, match="timed out waiting"):
+                    await pool.submit(
+                        ProcessConfig(
+                            launch=PreparedLaunch(command=("touch", str(marker))),
+                            label="waiting",
+                        )
+                    )
+            finally:
+                await pool.shutdown()
+                gate.release(held)
+
+        asyncio.run(run())
+        assert not marker.exists()
+        decisions = [
+            event
+            for event in read_runpool_events(tmp_path / "logs" / "events.jsonl")
+            if isinstance(event, HostAdmissionDeniedEvent)
+        ]
+        assert [(event.reason, event.decision) for event in decisions] == [
+            ("no_available_slot", "wait"),
+            ("timeout", "fail"),
+        ]
+        assert decisions[-1].error and "timed out waiting" in decisions[-1].error
 
     def test_pressure_adjusts_live_pool_capacity(self, tmp_path: Path):
         """RunPool updates its semaphore capacity when pressure changes."""

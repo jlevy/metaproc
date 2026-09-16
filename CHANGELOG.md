@@ -7,6 +7,64 @@ development series.
 
 ## [Unreleased][unreleased]
 
+### Fixed
+
+- **Prelaunch and process-output refusals retain their causes.** Credential and input
+  refusals now reach durable step status without creating an attempt; manual timeout
+  closes the running task.
+  A mapped code item refused for a missing input records that failure on its own status
+  while its siblings continue.
+  Composite failures preserve child errors and structured output paths/messages through
+  fan-in. Root and child process status records output-contract failure even when all of
+  the scope’s steps completed.
+
+- **Claude honors an explicit working directory.** `working_directory` survives adapter
+  validation under Claude execution profiles and sets the launched subprocess directory,
+  matching Gemini and Codex.
+  Omission retains the existing inherited directory.
+
+- **Failure causes survive task, step, and run aggregation.** Mapped summaries count
+  distinct recorded causes against the current item roster, ignoring each attempt’s
+  evidence path, and list at most five causes within a bounded length; scalar and
+  composite summaries retain their durable causes.
+  Run status and process completion events preserve every failed step, and fan-in
+  outcomes retain output paths and validator messages.
+  Host-admission events distinguish waiting, failure, and best-effort bypass using the
+  gate’s actual decisions.
+
+- **Scalar agent timeouts follow the configured retry policy.** A subprocess timeout
+  uses the same classification, backoff, credential checks, and retry limit as a
+  retryable nonzero exit.
+  Attempt history retains the timeout cause when the retry succeeds or the budget is
+  exhausted. A timed-out process cannot be accepted as a successful shutdown, even if it
+  wrote its outputs first.
+
+- **SoftSchema CLI validation preserves each library validation record.** Structural and
+  semantic results retain their skip reasons and any execution evidence the installed
+  SoftSchema version reports.
+  The CLI does not infer execution from the declared schema status.
+
+- **Token counts now state their basis and evidence limits.** `output_tokens` targets
+  output-rate tokens including reasoning.
+  Claude and Codex report that count directly; Gemini reconstructs it from valid total
+  and input counts. A partial Gemini record falls back to reported output, a lower bound
+  with unknown reasoning, so cross-adapter completeness is not guaranteed.
+  The normalized total sums all four available buckets: uncached input, output, cache
+  reads, and cache writes.
+  CLI-reported costs and calculations from pricing tables remain list-cost estimates,
+  separate from provider-authoritative billing.
+  `UsageStats` and `metaproc-design.md` §15.1 and §15.3 document this contract.
+
+- **A partial Gemini stats block no longer reports its input as output.** Missing, null,
+  or invalid input counts cannot justify subtracting zero from `total_tokens`. Such a
+  block now retains the reported 9,429 output tokens in the regression fixture, instead
+  of attributing the entire 1,650,379-token total to output-rate estimates.
+  Non-finite counts are handled as unavailable, and an explicitly measured zero remains
+  valid. Complete records retain the reasoning-inclusive residual.
+
+  No artifact shape changes and no contract is widened.
+  Reported figures move only for a Gemini stats block that was already being read wrong.
+
 ## [0.4.1][] - 2026-09-10
 
 ### Fixed

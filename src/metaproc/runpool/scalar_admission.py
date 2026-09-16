@@ -24,6 +24,7 @@ from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from metaproc.runpool.events import EventLogger
 from metaproc.runpool.host_admission import (
     DEFAULT_HOST_ADMISSION_NAMESPACE,
     HostAdmissionGate,
@@ -56,6 +57,7 @@ async def admitted_launch(
     root_dir: Path | None = None,
     namespace: str = DEFAULT_HOST_ADMISSION_NAMESPACE,
     metadata: Mapping[str, object] | None = None,
+    event_logger: EventLogger | None = None,
 ) -> AsyncGenerator[HostAdmissionLease | None]:
     """Hold a host admission slot around one scalar-path launch.
 
@@ -74,19 +76,34 @@ async def admitted_launch(
         acquire_timeout_s=SCALAR_ACQUIRE_TIMEOUT_S,
     )
     lease: HostAdmissionLease | None = None
+
+    def record_wait() -> None:
+        if event_logger is not None:
+            event_logger.host_admission_denied(
+                namespace=gate.namespace,
+                limit=limit,
+                label=label,
+                reason="no_available_slot",
+                decision="wait",
+            )
+
     try:
         lease = await gate.acquire(
             label=label,
             pool_id=pool_id,
             metadata=dict(metadata or {}),
-        )
-    except TimeoutError:
-        logger.warning(
-            "host admission timed out for %s after %ss; launching without a slot",
-            label,
-            gate.acquire_timeout_s,
+            on_wait=record_wait,
         )
     except OSError as exc:
+        if event_logger is not None:
+            event_logger.host_admission_denied(
+                namespace=gate.namespace,
+                limit=limit,
+                label=label,
+                reason="timeout" if isinstance(exc, TimeoutError) else "unavailable",
+                decision="bypass",
+                error=str(exc),
+            )
         logger.warning(
             "host admission unavailable for %s (%s); launching without a slot", label, exc
         )

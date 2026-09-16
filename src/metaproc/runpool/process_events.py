@@ -140,6 +140,7 @@ class ProcessEventLogger:
         failed: int,
         skipped: int,
         elapsed_s: float,
+        errors: dict[str, str] | None = None,
     ) -> None:
         self._write(
             ProcessCompleteEvent(
@@ -152,6 +153,7 @@ class ProcessEventLogger:
                 failed=failed,
                 skipped=skipped,
                 elapsed_s=round(elapsed_s, 1),
+                errors=errors or {},
             )
         )
 
