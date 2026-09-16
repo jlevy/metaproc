@@ -176,23 +176,60 @@ def summary_metadata(summary: AgentOperationsSummary) -> dict[str, Any]:
     }
 
 
-def read_operations_summary(run_dir: Path) -> AgentOperationsSummary | None:
-    """Return the written summary for *run_dir*, or ``None`` when absent or unreadable."""
+@dataclass(frozen=True)
+class OperationsSummaryRead:
+    """What reading one run's ``operations-summary.md`` found.
+
+    A caller that cannot tell a run that wrote no summary from one whose summary no
+    longer reads will silently recompute the second, and so will not learn that a
+    published document stopped reading. The two are separate states here.
+    """
+
+    path: Path
+    """Where the document would be, whether or not one is there."""
+    summary: AgentOperationsSummary | None = None
+    error: str | None = None
+    """Why a document that is there did not read, or ``None`` when none is there."""
+
+    @property
+    def absent(self) -> bool:
+        """No document is there to read."""
+        return self.summary is None and self.error is None
+
+    @property
+    def unreadable(self) -> bool:
+        """A document is there and did not read."""
+        return self.error is not None
+
+
+def read_operations_summary(run_dir: Path) -> OperationsSummaryRead:
+    """Read the written summary for *run_dir*, separating absent from unreadable.
+
+    Never raises, so a caller that falls back to folding the run tree keeps working. A
+    document that does not parse, does not carry this contract, or does not validate is
+    returned unreadable with the reason, and logged with its path, so the fallback can
+    say it happened rather than reading as an ordinary absence.
+    """
     path = run_dir / OPERATIONS_SUMMARY_FILE
     if not path.is_file():
-        return None
+        return OperationsSummaryRead(path)
     try:
         metadata = _read_frontmatter(path)
         if not isinstance(metadata, Mapping):
-            return None
+            return _unreadable(path, "the file carries no frontmatter mapping")
         envelope = metadata.get("softschema")
-        if not isinstance(envelope, Mapping) or envelope.get("contract") != (
-            OPERATIONS_SUMMARY_CONTRACT
-        ):
-            return None
-        return AgentOperationsSummary.model_validate(metadata.get(OPERATIONS_SUMMARY_ENVELOPE))
-    except (OSError, ValueError, yaml.YAMLError):
-        return None
+        contract = envelope.get("contract") if isinstance(envelope, Mapping) else None
+        if contract != OPERATIONS_SUMMARY_CONTRACT:
+            return _unreadable(path, f"declares contract {contract!r}, not the summary contract")
+        summary = AgentOperationsSummary.model_validate(metadata.get(OPERATIONS_SUMMARY_ENVELOPE))
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        return _unreadable(path, f"{type(exc).__name__}: {exc}")
+    return OperationsSummaryRead(path, summary=summary)
+
+
+def _unreadable(path: Path, error: str) -> OperationsSummaryRead:
+    log.warning("operations summary at %s did not read: %s", path, error)
+    return OperationsSummaryRead(path, error=error)
 
 
 def finalize_operations_summary(

@@ -41,9 +41,14 @@ from metaproc.io.markdown_table import render_markdown_table
 from metaproc.models.operations_summary import (
     OPERATIONS_SUMMARY_CONTRACT,
     AgentOperationsSummary,
+    PoolRow,
     RunFigures,
 )
 from metaproc.models.resource_budget import FinalizationState
+from metaproc.models.resource_summary import (
+    RESOURCE_USAGE_SUMMARY_CONTRACT,
+    ResourceUsageSummary,
+)
 from metaproc.plugins.discovery import get_plugin_registry
 
 runner = CliRunner()
@@ -1077,7 +1082,7 @@ def test_written_summary_validates_against_its_registered_contract(composite_run
     assert metadata["softschema"]["contract"] == OPERATIONS_SUMMARY_CONTRACT
     validation = _validate_written_summary(path, composite_run)
     assert validation.ok, (validation.structural.errors, validation.semantic.errors)
-    assert ops.read_operations_summary(composite_run) == summary
+    assert ops.read_operations_summary(composite_run).summary == summary
 
     contract = get_plugin_registry().softschemas.resolve(OPERATIONS_SUMMARY_CONTRACT)
     assert contract is not None
@@ -1153,6 +1158,173 @@ def test_markdown_table_escapes_cells() -> None:
         render_markdown_table(["a"], [["1", "2"]])
 
 
+# ── Documents an earlier writer wrote ─────────────────────────────
+
+_EARLIER_DOCUMENTS = Path(__file__).resolve().parent / "fixtures" / "operations_summary_v1"
+"""A real run's artifacts, written before ``sample_source`` and ``RetryStepRow.process``.
+
+Only the process name and the item keys are replaced, so the document keeps the shape
+the earlier writer produced.
+"""
+
+
+def _earlier_run(tmp_path: Path) -> Path:
+    run_dir = tmp_path / "run-earlier"
+    (run_dir / ".state").mkdir(parents=True)
+    for name in ("operations-summary.md", "resource-usage-summary.md"):
+        shutil.copy(_EARLIER_DOCUMENTS / name, run_dir / name)
+    return run_dir
+
+
+def test_a_summary_written_before_the_added_fields_still_reads(tmp_path: Path) -> None:
+    """The fields added under this contract id are absent, and the rest must survive.
+
+    A reader that cannot parse the document loses the run's process, which is what the
+    consumer needs to know which process produced the run.
+    """
+    read = ops.read_operations_summary(_earlier_run(tmp_path))
+
+    assert read.error is None
+    summary = read.summary
+    assert summary is not None
+    assert summary.extractor_version == 1
+    assert summary.run is not None
+    assert summary.run.process == "example-roster-fit"
+    assert summary.run.state == "failed"
+
+    parallelism = summary.parallelism
+    assert parallelism is not None
+    assert parallelism.sample_source is None
+    assert "sample_source" not in parallelism.unavailable
+    assert [pool.sample_source for pool in parallelism.pools] == [None]
+    assert parallelism.health_samples == 326
+
+    retries = summary.retries
+    assert retries is not None
+    assert [(row.process, row.step_id) for row in retries.by_step] == [
+        (None, "review-ticker"),
+        (None, "judge-fit-gemini-flash-38"),
+        (None, "judge-fit-gemini-flash-36"),
+    ]
+
+
+def test_an_earlier_summary_passes_the_contract_that_current_writers_compile_to(
+    tmp_path: Path,
+) -> None:
+    """The Python reader is not the only reader; the shipped JSON Schema must agree."""
+    run_dir = _earlier_run(tmp_path)
+    shipped = Path(__file__).resolve().parents[1] / "src" / "metaproc" / "data" / "schemas"
+
+    for name, contract_id, model, envelope, schema in (
+        (
+            "operations-summary.md",
+            OPERATIONS_SUMMARY_CONTRACT,
+            AgentOperationsSummary,
+            "agent_operations",
+            "agent-operations-summary.v1.schema.yaml",
+        ),
+        (
+            "resource-usage-summary.md",
+            RESOURCE_USAGE_SUMMARY_CONTRACT,
+            ResourceUsageSummary,
+            "resource_usage",
+            "resource-usage-summary.v1.schema.yaml",
+        ),
+    ):
+        validation = validate_artifact(
+            run_dir / name,
+            contract=Contract(
+                id=contract_id,
+                model=model,
+                envelope_key=envelope,
+                status=SchemaStatus.enforced,
+                schema_path=shipped / schema,
+            ),
+        )
+        assert validation.ok, (name, validation.structural.errors, validation.semantic.errors)
+
+
+def _edit_summary(path: Path, edit: Callable[[dict[str, Any]], None]) -> None:
+    """Rewrite one written summary's frontmatter, keeping it a frontmatter document."""
+    metadata = fmf_read_frontmatter(path)
+    assert metadata is not None
+    edit(metadata)
+    fmf_write(path, "# Operations summary\n", metadata)
+
+
+def test_an_absent_summary_reads_as_absent(tmp_path: Path) -> None:
+    read = ops.read_operations_summary(tmp_path)
+
+    assert (read.absent, read.unreadable) == (True, False)
+    assert (read.summary, read.error) == (None, None)
+
+
+def test_a_malformed_summary_reads_as_unreadable_and_names_its_path(
+    composite_run: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A document that no writer of any vintage could have produced stays an error.
+
+    Reporting it as absent is what let a consumer recompute a run it should have read.
+    """
+    path = ops.write_operations_summary(_summary(composite_run), composite_run)
+    _edit_summary(path, lambda data: data["agent_operations"]["run"].update(elapsed_s="soon"))
+
+    with caplog.at_level(logging.WARNING):
+        read = ops.read_operations_summary(composite_run)
+
+    assert (read.absent, read.unreadable) == (False, True)
+    assert read.summary is None
+    assert read.error is not None
+    assert "elapsed_s" in read.error
+    assert str(path) in caplog.text
+    assert "elapsed_s" in caplog.text
+
+
+def test_a_summary_under_another_contract_reads_as_unreadable(composite_run: Path) -> None:
+    path = ops.write_operations_summary(_summary(composite_run), composite_run)
+    _edit_summary(path, lambda data: data["softschema"].update(contract="other:Thing/v1"))
+
+    read = ops.read_operations_summary(composite_run)
+
+    assert read.unreadable
+    assert read.error is not None
+    assert "other:Thing/v1" in read.error
+
+
+def test_a_rollup_says_when_it_recomputed_because_a_summary_did_not_read(
+    composite_run: Path,
+) -> None:
+    """Recomputing is right; doing it silently is what hid the break."""
+    rows = build_operations_rollup([composite_run], target_min_s=0, target_max_s=3600).rows
+    assert [row.summary_source for row in rows] == ["computed"]
+
+    ops.write_operations_summary(_summary(composite_run), composite_run)
+    rows = build_operations_rollup([composite_run], target_min_s=0, target_max_s=3600).rows
+    assert [row.summary_source for row in rows] == ["written"]
+
+    _edit_summary(
+        composite_run / ops.OPERATIONS_SUMMARY_FILE,
+        lambda data: data["agent_operations"]["run"].update(elapsed_s="soon"),
+    )
+    rows = build_operations_rollup([composite_run], target_min_s=0, target_max_s=3600).rows
+
+    assert [row.summary_source for row in rows] == ["unreadable"]
+    assert rows[0].elapsed_s == 1860.0
+
+
+def test_a_writer_must_still_explain_a_null_it_states() -> None:
+    """The pairing rule binds what a document says, so it still binds every writer.
+
+    The fold names every figure it builds, so a null it leaves unexplained is rejected
+    as it is written. Only a field the document never mentions is exempt.
+    """
+    with pytest.raises(ValidationError, match="sample_source is null without a reason"):
+        PoolRow(source="events.jsonl", process_starts=0, health_samples=0, sample_source=None)
+
+    unstated = PoolRow(source="events.jsonl", process_starts=0, health_samples=0)
+    assert (unstated.sample_source, unstated.ceiling) == (None, None)
+
+
 # ── Finalization ──────────────────────────────────────────────────
 
 
@@ -1186,7 +1358,7 @@ def test_finalization_writes_no_jsonl_and_keeps_resources_fresh(tmp_path: Path) 
     assert written == run_dir / "operations-summary.md"
     assert sorted(run_dir.rglob("*.jsonl")) == jsonl_before
     assert resource_artifacts_need_recovery(run_dir) is False
-    summary = ops.read_operations_summary(run_dir)
+    summary = ops.read_operations_summary(run_dir).summary
     assert summary is not None and summary.run is not None
     assert (summary.trigger, summary.run.state, summary.run.state_source) == (
         "finalization",

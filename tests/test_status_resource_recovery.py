@@ -109,7 +109,7 @@ def test_inactive_status_writes_a_missing_operations_summary_once(tmp_path: Path
 
     _recover_resource_artifacts(run_dir, status)
 
-    summary = read_operations_summary(run_dir)
+    summary = read_operations_summary(run_dir).summary
     assert summary is not None and summary.run is not None
     assert (summary.trigger, summary.run.state, summary.run.state_source) == (
         "status",
@@ -141,7 +141,7 @@ def test_inactive_status_writes_a_missing_operations_summary_beside_fresh_resour
 
     _recover_resource_artifacts(run_dir, status)
 
-    summary = read_operations_summary(run_dir)
+    summary = read_operations_summary(run_dir).summary
     assert summary is not None and summary.run is not None
     assert (summary.trigger, summary.run.state_source) == ("status", "resource_summary")
 

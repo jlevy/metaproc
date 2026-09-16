@@ -4,6 +4,15 @@ Every figure the summary cannot establish is ``null`` with a reason in the ownin
 section's ``unavailable`` map, and a validator enforces that pairing, so a missing
 measurement never reads as a zero. The frontmatter writer omits null keys, so a figure
 absent from the YAML is null and its reason is still present.
+
+A document outlives the writer that produced it, so this contract id must keep reading
+documents written before a field was added to it. Every field added under an id already
+in use therefore has a default, and no validator makes its absence an error: a reader
+that meets an older document learns that the writer did not record the field, never a
+value that reads as measured. A change that cannot be expressed that way, such as a
+newly required field or a field whose meaning moves, is a new contract id.
+``extractor_version`` counts what the fold measures and emits, so a reader can ask which
+fields to expect; the contract id answers whether the document can be read at all.
 """
 
 from __future__ import annotations
@@ -50,7 +59,14 @@ def _close_nullable_model_references(schema: JsonDict) -> None:
 
 
 class _Explained(BaseModel):
-    """A record whose null figures each carry a reason in ``unavailable``."""
+    """A record whose null figures each carry a reason in ``unavailable``.
+
+    The rule binds the fields a document states, not the fields this model declares. The
+    fold names every figure it builds, so a null it leaves unexplained is rejected as it
+    is written. A document written before a field existed omits that field, and reading
+    it leaves the field null with no reason, which is what a missing figure means on
+    read: the writer of that document did not record it.
+    """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(
         extra="forbid", json_schema_extra=_close_nullable_model_references
@@ -61,7 +77,7 @@ class _Explained(BaseModel):
     @model_validator(mode="after")
     def _nulls_are_explained(self) -> Self:
         fields = type(self).model_fields
-        for name in fields:
+        for name in self.model_fields_set:
             if name == "unavailable":
                 continue
             if getattr(self, name) is None and name not in self.unavailable:
@@ -233,7 +249,9 @@ class PoolRow(_Explained):
     """Concurrency observed by one RunPool event and health stream pair.
 
     Sample shares come from the pool's health samples, or from its ``pressure_check``
-    events when it wrote no health stream; ``sample_source`` names which.
+    events when it wrote no health stream; ``sample_source`` names which. It is null
+    with a reason when the pool recorded neither, and null with no reason in a document
+    written before it was recorded, where the shares' provenance is unknown.
     """
 
     source: str
@@ -258,6 +276,7 @@ class ParallelismFigures(_Explained):
     its last exit. Sample shares come from health samples, or pressure checks when a
     pool wrote no health stream: at the cap means ``active_count`` reached the current
     concurrency cap, at the ceiling means it reached the pool's configured maximum.
+    ``sample_source`` names which, and reads as ``PoolRow.sample_source`` does.
 
     ``pools`` holds the streams that started a pool or a process. Every agent step also
     owns an admission stream that records only authentication and host admission;
@@ -277,11 +296,17 @@ class ParallelismFigures(_Explained):
 
 
 class RetryStepRow(BaseModel):
-    """Attempt counts for one step type, keyed by owning process, with a non-succeeded attempt."""
+    """Attempt counts for one step type, keyed by owning process, with a non-succeeded attempt.
+
+    ``process`` is null in a document written before rows were keyed by it. Such a row
+    is keyed by ``step_id`` alone, so it can pool the attempts of a step id that ran in
+    more than one process; a reader groups those rows by ``step_id`` and must not
+    attribute them to the run's own process.
+    """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
-    process: str
+    process: str | None = None
     step_id: str
     attempts: int
     not_succeeded: int
@@ -417,6 +442,10 @@ class OperationsRollupRow(_Explained):
     A nonzero ``unpriced_invocations`` makes ``list_cost_usd`` and
     ``list_cost_per_item_usd`` lower bounds. ``retries`` counts attempts beyond each
     task's first; ``not_succeeded`` counts every attempt that ended without success.
+
+    ``summary_source`` says where the figures came from: the run's written summary, a
+    fold computed because no usable summary was written, or a fold computed although a
+    summary is there, because that document did not read.
     """
 
     run_dir: str
@@ -442,7 +471,7 @@ class OperationsRollupRow(_Explained):
     swap_used_peak_gb: float | None = None
     retries: int | None = None
     not_succeeded: int | None = None
-    summary_source: Literal["written", "computed"]
+    summary_source: Literal["written", "computed", "unreadable"]
 
 
 class OperationsRollup(BaseModel):

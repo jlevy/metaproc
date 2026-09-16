@@ -352,7 +352,7 @@ def _retry_section(summary: AgentOperationsSummary) -> list[str]:
                 [
                     [
                         f"`{row.step_id}`",
-                        f"`{row.process}`",
+                        _name(row.process),
                         str(row.attempts),
                         str(row.not_succeeded),
                         _counts(row.by_failure_class),
@@ -533,6 +533,11 @@ def _missing_section(summary: AgentOperationsSummary, name: str) -> str:
 
 def _text(value: str | None) -> str:
     return value or NOT_AVAILABLE
+
+
+def _name(value: str | None) -> str:
+    """Render an identifier in code style, or the marker when the document has none."""
+    return f"`{value}`" if value else NOT_AVAILABLE
 
 
 def _count(value: int | None) -> str:

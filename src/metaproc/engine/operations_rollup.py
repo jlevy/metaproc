@@ -24,21 +24,25 @@ def build_operations_rollup(
 ) -> OperationsRollup:
     """Return one row per run, reading each written summary unless *recompute* is set.
 
-    A written summary from another extractor version is recomputed in memory. Nothing
-    is written.
+    A written summary from another extractor version is recomputed in memory, and so is
+    one whose document did not read, which the row reports as ``unreadable`` rather than
+    passing for a run that wrote none. Nothing is written.
     """
     if target_min_s < 0 or target_max_s < target_min_s:
         raise ValueError("target range must satisfy 0 <= min <= max")
     rows: list[OperationsRollupRow] = []
     for run_dir in run_dirs:
-        source: Literal["written", "computed"] = "computed"
-        summary = None if recompute else read_operations_summary(run_dir)
+        source: Literal["written", "computed", "unreadable"] = "computed"
+        read = None if recompute else read_operations_summary(run_dir)
+        written = read.summary if read is not None else None
         if (
-            summary is not None
-            and summary.extractor_version == OPERATIONS_SUMMARY_EXTRACTOR_VERSION
+            written is not None
+            and written.extractor_version == OPERATIONS_SUMMARY_EXTRACTOR_VERSION
         ):
-            source = "written"
+            summary, source = written, "written"
         else:
+            if read is not None and read.unreadable:
+                source = "unreadable"
             summary = build_operations_summary(run_dir)
         rows.append(
             rollup_row(
@@ -56,7 +60,7 @@ def rollup_row(
     run_dir: Path,
     summary: AgentOperationsSummary,
     *,
-    source: Literal["written", "computed"],
+    source: Literal["written", "computed", "unreadable"],
     target_min_s: float,
     target_max_s: float,
 ) -> OperationsRollupRow:

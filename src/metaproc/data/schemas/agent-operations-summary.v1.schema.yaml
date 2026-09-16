@@ -375,6 +375,7 @@ $defs:
       its last exit. Sample shares come from health samples, or pressure checks when a
       pool wrote no health stream: at the cap means ``active_count`` reached the current
       concurrency cap, at the ceiling means it reached the pool's configured maximum.
+      ``sample_source`` names which, and reads as ``PoolRow.sample_source`` does.
 
       ``pools`` holds the streams that started a pool or a process. Every agent step also
       owns an admission stream that records only authentication and host admission;
@@ -450,7 +451,9 @@ $defs:
       Concurrency observed by one RunPool event and health stream pair.
 
       Sample shares come from the pool's health samples, or from its ``pressure_check``
-      events when it wrote no health stream; ``sample_source`` names which.
+      events when it wrote no health stream; ``sample_source`` names which. It is null
+      with a reason when the pool recorded neither, and null with no reason in a document
+      written before it was recorded, where the shares' provenance is unknown.
     properties:
       cap_max:
         anyOf:
@@ -691,7 +694,13 @@ $defs:
     type: object
   RetryStepRow:
     additionalProperties: false
-    description: Attempt counts for one step type, keyed by owning process, with a non-succeeded attempt.
+    description: |-
+      Attempt counts for one step type, keyed by owning process, with a non-succeeded attempt.
+
+      ``process`` is null in a document written before rows were keyed by it. Such a row
+      is keyed by ``step_id`` alone, so it can pool the attempts of a step id that ran in
+      more than one process; a reader groups those rows by ``step_id`` and must not
+      attribute them to the run's own process.
     properties:
       attempts:
         title: Attempts
@@ -705,15 +714,17 @@ $defs:
         title: Not Succeeded
         type: integer
       process:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
         title: Process
-        type: string
       step_id:
         title: Step Id
         type: string
     required:
     - attempts
     - not_succeeded
-    - process
     - step_id
     title: RetryStepRow
     type: object
@@ -1194,4 +1205,4 @@ title: AgentOperationsSummary
 type: object
 x-softschema:
   contract: metaproc.operations:AgentOperationsSummary/v1
-  schema_sha256: 4fcbe895dc9273a0f6f9bc1ac208f0d938fef507f75b2ee6f6d099f90f6bdfae
+  schema_sha256: 68f67c3233a97df6092adee5a55bc781c98deda9febe877d27deeed79efa3f73

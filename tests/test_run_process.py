@@ -308,7 +308,7 @@ def test_run_process_passes_causal_failure_to_resource_finalizer(
     assert document.finalization is not None
     assert document.finalization.state is expected
     assert document.finalization.terminal_error_type == type(error).__name__
-    operations = read_operations_summary(tmp_path / "runs" / "run-1")
+    operations = read_operations_summary(tmp_path / "runs" / "run-1").summary
     assert operations is not None
     assert operations.trigger == "finalization"
     assert operations.run is not None
