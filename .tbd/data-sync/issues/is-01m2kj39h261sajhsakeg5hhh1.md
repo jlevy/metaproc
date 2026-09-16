@@ -3,9 +3,9 @@ type: is
 id: is-01m2kj39h261sajhsakeg5hhh1
 title: "Address review: PR #83 — operations summary accounting and run pool admission"
 kind: task
-status: open
+status: closed
 priority: 1
-version: 23
+version: 24
 labels: []
 dependencies: []
 child_order_hints:
@@ -32,6 +32,10 @@ child_order_hints:
   - is-01m2kj48y5c6yfn803tzkkxj43
   - is-01m2kj4fk441sf9r79vspysp3e
 created_at: 2026-09-15T22:13:15.425Z
-updated_at: 2026-09-15T22:13:54.403Z
+updated_at: 2026-09-16T02:53:16.287Z
+closed_at: 2026-09-16T02:53:16.284Z
+close_reason: "Both reviews on PR #83 addressed at 316f496afd: every R finding fixed with a regression test, every suggestion done except part 1 S1 (deferred as mp-c9fq). CI green, disposition comment posted, PR left a draft."
+resolution: null
+duplicate_of: null
 ---
 Address both senior engineering reviews on jlevy/metaproc PR #83 (run-operations-summary into agent-operations): part 1 operations summary and accounting (P1-R1..R8, P1-S1..S5) and part 2 run pool, admission and profiles (P2-R1..R4, P2-S1..S5).
