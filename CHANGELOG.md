@@ -40,6 +40,19 @@ development series.
   such model with its invocation count; the summary body reports the list cost as a
   lower bound, and `metaproc resource-report` lists the models.
 
+- **An operations summary written by an earlier build still reads.** `PoolRow` and
+  `ParallelismFigures` gained `sample_source`, and `retries.by_step` gained `process`,
+  under the same `metaproc.operations:AgentOperationsSummary/v1` contract id, so every
+  document written before them failed to validate.
+  A field added under a contract id already in use is now optional on read: the
+  explained-null rule binds the figures a document states rather than the fields the
+  current model declares, and `process` on a retry row is null when the document
+  predates keying rows by it, which groups those rows by `step_id` alone.
+  `read_operations_summary` returns a result that separates a run with no summary from
+  one whose summary did not read, logging the second with its path and the error;
+  `metaproc operations rollup` reports such a run as `unreadable` instead of recomputing
+  it as though nothing was written.
+
 - **Agent leaves take a host slot when their pool admits them, not before.** A
   `run-process` agent leaf under the run-owned pool acquires its host slot inside that
   pool, after pool admission, with a limit defaulting to the pool’s ceiling instead of

@@ -3,14 +3,14 @@ title: Agent Operations Summary
 description: Emit the trace Metaproc already knows how to extract, fold it into a contract-bound summary at finalization, and make run-to-run comparison a diff of two documents instead of a transcript scan.
 author: Joshua Levy (github.com/jlevy) with LLM assistance
 date: 2026-09-11
-last_updated: 2026-09-14
+last_updated: 2026-09-15
 status: Draft
 category: plan
 tracking_bead: mp-enxg
 ---
 # Feature: Agent Operations Summary
 
-**Date:** 2026-09-11 (last updated 2026-09-14)
+**Date:** 2026-09-11 (last updated 2026-09-15)
 
 Epic `mp-enxg` tracks the prerequisites and future phases below.
 This draft specifies future behavior; completing the plan does not enable automatic
@@ -317,6 +317,41 @@ agent_operations:
 **Percentiles do not compose.** If the summary and its per-step rows both carry
 `p50`/`p90`, neither can be a fold of the other’s summary statistics.
 Both compute theirs from the span store directly.
+
+### The Contract Version and the Extractor Version
+
+A run tree is published and receipted, so its summary outlives the writer that produced
+it and is read by consumers on their own upgrade schedule.
+The contract id is therefore a promise about *readability*: a document declaring
+`metaproc.operations:AgentOperationsSummary/v1` must validate under every later reader
+of `/v1`.
+
+That makes a field added under an id already in use **optional on read**. It needs a
+default, and no validator may make its absence an error.
+A nullable field qualifies, and adding one is allowed, provided null is a state a reader
+can act on, meaning the writer did not record it, rather than a value that reads as
+measured.
+A change that cannot be expressed that way, such as a newly required field or a
+field whose meaning moves, is a new contract id.
+
+The rule has one consequence worth stating, because it is the trap the `/v1` contract
+fell into. Every record derives from `_Explained`, whose validator rejects a null figure
+with no reason in `unavailable`. That rule binds the fields a *document states*, not the
+fields the current model declares: the fold names every figure it builds, so a null it
+leaves unexplained is still rejected as it is written, while a document that predates a
+field omits it entirely and reads with that field null and unexplained.
+Writer and reader obligations are different obligations, and only the writer’s is about
+completeness.
+
+`extractor_version` counts what the fold measures and emits.
+It moves whenever a field is added or a computation changes, so a reader can ask which
+fields to expect and a cross-run comparison can refuse to mix vintages.
+It never decides whether a document can be read; only the contract id does that.
+
+Two readers exist for each artifact and both have to hold.
+The Python model is one; the compiled JSON Schema staged beside the document is the
+other, and a field that is `required` there breaks the same documents in any language.
+The regression test reads a real pre-change document through both.
 
 ### Anomalies Are Rules With Stable Codes
 
