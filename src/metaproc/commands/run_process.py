@@ -3981,6 +3981,7 @@ async def _execute_fan_out_step(
         step=step_id,
         each=each,
         variables=step_vars,
+        scope_run_id=run_id,
         item_contexts=item_contexts,
         adapter_type=adapter_type,
         merged_config=merged_config,
