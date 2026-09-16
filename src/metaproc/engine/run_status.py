@@ -669,11 +669,12 @@ def _read_process_execution(
             )
 
     process_error = None
-    if execution_state == "failed" and step_errors:
-        step_id, error = next(iter(step_errors.items()))
-        process_error = f"{step_id}: {error}"
-    elif execution_state == "failed":
-        process_error = "process failed without a recorded step error"
+    if execution_state == "failed":
+        causes = [f"{step_id}: {error}" for step_id, error in step_errors.items()]
+        boundary_error = raw.get("error")
+        if isinstance(boundary_error, str) and boundary_error:
+            causes.append(boundary_error)
+        process_error = "; ".join(causes) or "process failed without a recorded step error"
     elif execution_state == "cancelled":
         process_error = "process was cancelled"
     return execution_state, process_error, step_errors

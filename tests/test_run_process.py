@@ -26,7 +26,7 @@ from typing import Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
 from metaproc.adapters.registry import ADAPTER_REGISTRY
 from metaproc.cli import app
@@ -34,8 +34,9 @@ from metaproc.commands.run_process import run_process_command
 from metaproc.dispatch.auth_pool_flags import AuthPoolFlags
 from metaproc.dispatch.pool_dispatch import PoolDispatchConfig
 from metaproc.engine.dep_state import fingerprint_step
+from metaproc.engine.operations_summary import read_operations_summary
 from metaproc.errors import CLIError
-from metaproc.io import read_yaml_file
+from metaproc.io import read_yaml_file, to_yaml_string
 from metaproc.io.state_io import write_result_at
 from metaproc.logutil.resource_events import read_events
 from metaproc.models.resource_budget import FinalizationState
@@ -65,6 +66,7 @@ from metaproc.commands.run_process import (
     _preflight_plan_adapters,
     _publish_run_plan,
     _read_recorded_step_hash,
+    _read_step_failure_error,
     _read_step_status,
     _refresh_run_plan_item_keys,
     _run_agent_subprocess,
@@ -72,9 +74,11 @@ from metaproc.commands.run_process import (
     _verify_ancestors,
     _write_process_status,
 )
+from metaproc.commands.status import _load_plan_from_run
 from metaproc.engine.discovery import FanOutDiscovery
 from metaproc.engine.graph import topo_sort
 from metaproc.engine.pathing import compute_task_state_dir
+from metaproc.engine.run_status import scan_run_status
 from metaproc.engine.write_boundary import RepoSnapshot, WriteTarget
 from metaproc.io.state_io import (
     mark_completed_at,
@@ -249,13 +253,11 @@ def test_adapter_preflight_checks_each_active_agent_adapter_once() -> None:
 def _test_execution_context(
     *,
     max_concurrency: int | None = None,
-    variant_override: str | None = None,
     profile_files: Sequence[Path] = (),
     pool_dispatch_template: PoolDispatchConfig | None = None,
 ) -> Generator[RunExecutionContext, None, None]:
     context = RunExecutionContext.create(
         max_concurrency=max_concurrency,
-        variant_override=variant_override,
         profile_files=profile_files,
         pool_dispatch_template=pool_dispatch_template,
     )
@@ -306,6 +308,45 @@ def test_run_process_passes_causal_failure_to_resource_finalizer(
     assert document.finalization is not None
     assert document.finalization.state is expected
     assert document.finalization.terminal_error_type == type(error).__name__
+    operations = read_operations_summary(tmp_path / "runs" / "run-1").summary
+    assert operations is not None
+    assert operations.trigger == "finalization"
+    assert operations.run is not None
+    assert (operations.run.state, operations.run.state_source) == (expected.value, "finalization")
+
+
+def test_run_process_outcome_survives_a_failing_operations_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process_path = tmp_path / "ok.process.md"
+    process_path.write_text(
+        "---\nprocess:\n  name: ok\n  steps:\n    - id: noop\n"
+        "      mode: code\n      command: 'true'\n---\n"
+    )
+
+    def broken_summary(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("summary exploded")
+
+    monkeypatch.setattr(
+        "metaproc.engine.operations_summary.build_operations_summary", broken_summary
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-process",
+            str(process_path),
+            "--var",
+            f"RUNS_DIR={tmp_path / 'runs'}",
+            "--var",
+            "RUN_ID=run-1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    run_dir = tmp_path / "runs" / "run-1"
+    assert (run_dir / "resource-usage-summary.md").is_file()
+    assert not (run_dir / "operations-summary.md").exists()
 
 
 def test_run_process_preserves_original_failure_and_releases_lease_when_finalizer_interrupts(
@@ -1112,6 +1153,48 @@ class TestAncestorVerification:
 
 
 class TestProcessStatusFile:
+    def test_mapped_failure_summary_counts_only_current_roster(self, tmp_path: Path) -> None:
+        target = ResolvedStep(
+            step_id="work",
+            mode="agent",
+            adapter=ResolvedAdapter(type="gemini-cli"),
+            fan_out=FanOut(over="deps.items", bind="item", source="items.md"),
+        )
+        write_run_plan(
+            tmp_path,
+            RunPlanSnapshot(
+                run_id="run",
+                steps=[
+                    RunPlanStep(
+                        step_id="work",
+                        mode="agent",
+                        task_shape="mapped",
+                        item_keys=["a", "b", "c"],
+                        fingerprint=fingerprint_step(target),
+                    )
+                ],
+            ),
+        )
+        for key, state, error in (
+            ("a", "failed", "timeout after 600s"),
+            ("b", "failed", "timeout after 600s"),
+            ("c", "completed", None),
+            ("old", "failed", "historical failure"),
+        ):
+            write_status_at(
+                tmp_path / STATE_DIR / "tasks" / "work" / key,
+                StatusRecord(
+                    run_id="run",
+                    step_id="work",
+                    item={"item": key},
+                    state="completed" if state == "completed" else "failed",
+                    error=error,
+                ),
+            )
+        assert _read_step_failure_error(tmp_path, target) == (
+            "2 of 3 items failed (2 x timeout after 600s)"
+        )
+
     @pytest.mark.parametrize(
         ("suffix", "extra_args", "expected_publish_state"),
         [
@@ -1221,6 +1304,7 @@ class TestProcessStatusFile:
                     run_dir=tmp_path / "run",
                     run_id="test/run",
                     execution_context=execution_context,
+                    scope_execution_profile=None,
                     out=out,
                     events=MagicMock(),
                 )
@@ -1396,28 +1480,30 @@ class TestFanOutExecution:
             patch("metaproc.commands.run_process.capture_repo_snapshot", return_value=None),
             patch("metaproc.commands.run_parallel._run_agent_pool", new=run_pool),
         ):
-            succeeded = asyncio.run(
-                _execute_fan_out_step(
-                    spec=ProcessSpec(name="mapped-fixture"),
-                    step_def=step_def,
-                    target=target,
-                    variables={},
-                    process_path=tmp_path / "test.process.md",
-                    process_dir=tmp_path,
-                    run_dir=run_dir,
-                    run_id="mapped-fixture/2026-08-24/items/AAPL",
-                    backend_name="local",
-                    max_concurrency=1,
-                    num_workers=1,
-                    machine_type="e2-standard-4",
-                    spot=False,
-                    variant_override=None,
-                    out=out,
-                    pool_dispatch_template=template,
-                )
+            invocation = _execute_fan_out_step(
+                spec=ProcessSpec(name="mapped-fixture"),
+                step_def=step_def,
+                target=target,
+                variables={},
+                process_path=tmp_path / "test.process.md",
+                process_dir=tmp_path,
+                run_dir=run_dir,
+                run_id="mapped-fixture/2026-08-24/items/AAPL",
+                backend_name="local",
+                max_concurrency=1,
+                num_workers=1,
+                machine_type="e2-standard-4",
+                spot=False,
+                variant_override=None,
+                out=out,
+                pool_dispatch_template=template,
             )
+            if expected_success:
+                assert asyncio.run(invocation) is True
+            else:
+                with pytest.raises(CLIError, match=warning_fragment):
+                    asyncio.run(invocation)
 
-        assert succeeded is expected_success
         call = run_pool.await_args
         if expected_success:
             assert call is not None
@@ -1756,6 +1842,7 @@ class TestCompositeStepExecution:
                     run_id="test/run",
                     scope_path=(),
                     execution_context=execution_context,
+                    scope_execution_profile=None,
                     out=FakeOut(),
                 )
             )
@@ -1847,8 +1934,10 @@ class TestCompositeStepExecution:
         assert forced.exit_code == 0, forced.output
         assert count_path.read_text(encoding="utf-8") == "2\n"
 
-    def test_composite_propagates_variant_override_to_child_plan(self, tmp_path: Path) -> None:
-        """Composite child plans must honor the top-level adapter override."""
+    def test_composite_plans_its_child_with_the_scope_profile_override(
+        self, tmp_path: Path
+    ) -> None:
+        """A composite child is planned with the profile override of the scope that runs it."""
 
         child_dir = tmp_path / "child"
         child_dir.mkdir()
@@ -1903,7 +1992,7 @@ class TestCompositeStepExecution:
             captured["plan"] = cast(Plan, kwargs["plan"])
 
         with (
-            _test_execution_context(variant_override="codex-cli") as execution_context,
+            _test_execution_context() as execution_context,
             patch("metaproc.commands.run_process._orchestrate", fake_orchestrate),
         ):
             result = asyncio.run(
@@ -1916,6 +2005,7 @@ class TestCompositeStepExecution:
                     run_id="test/run",
                     scope_path=(),
                     execution_context=execution_context,
+                    scope_execution_profile="codex-cli",
                     out=FakeOut(),
                 )
             )
@@ -1985,10 +2075,7 @@ class TestCompositeStepExecution:
             captured["plan"] = cast(Plan, kwargs["plan"])
 
         with (
-            _test_execution_context(
-                variant_override="local-codex",
-                profile_files=[profile_file],
-            ) as execution_context,
+            _test_execution_context(profile_files=[profile_file]) as execution_context,
             patch("metaproc.commands.run_process._orchestrate", fake_orchestrate),
         ):
             result = asyncio.run(
@@ -2001,6 +2088,7 @@ class TestCompositeStepExecution:
                     run_id="test/run",
                     scope_path=(),
                     execution_context=execution_context,
+                    scope_execution_profile="local-codex",
                     out=FakeOut(),
                 )
             )
@@ -2051,6 +2139,7 @@ class TestCompositeStepExecution:
                     run_id="test/run",
                     scope_path=(),
                     execution_context=execution_context,
+                    scope_execution_profile=None,
                     out=FakeOut(),
                 )
             )
@@ -2079,6 +2168,7 @@ class TestCompositeStepExecution:
                     run_id="test/run",
                     scope_path=(),
                     execution_context=execution_context,
+                    scope_execution_profile=None,
                     out=FakeOut(),
                 )
             )
@@ -2116,7 +2206,9 @@ class TestCompositeStepExecution:
         out = FakeOut()
 
         with _test_execution_context() as execution_context:
-            result = asyncio.run(
+            failure = pytest.raises(
+                CLIError,
+                asyncio.run,
                 _execute_composite_step(
                     step_def=step_def,
                     target=target,
@@ -2126,12 +2218,13 @@ class TestCompositeStepExecution:
                     run_id="run",
                     scope_path=(),
                     execution_context=execution_context,
+                    scope_execution_profile=None,
                     out=out,
-                )
+                ),
             )
 
-        assert result is False
-        assert any("child process output validation failed" in message for message in out.messages)
+        assert "child process output validation failed" in str(failure.value)
+        assert failure.value.output_failures
 
     def test_mapped_composite_isolates_failure_and_resumes_only_failed_item(
         self,
@@ -2258,6 +2351,12 @@ class TestCompositeStepExecution:
         assert alfa_status is not None and alfa_status.state == "completed"
         assert brvo_status is not None and brvo_status.state == "failed"
         assert chrl_status is not None and chrl_status.state == "completed"
+        assert brvo_status.error
+        expected_error = f"1 of 3 items failed (1 x {brvo_status.error})"
+        process_status = read_yaml_file(run_dir / STATE_DIR / "process-status.yaml")
+        assert process_status["steps"]["ticker-flow"]["error"] == expected_error
+        assert scan_run_status(run_dir).process_error == f"ticker-flow: {expected_error}"
+        assert expected_error in first.output
         assert (run_dir / "ticker-flow" / "alfa" / STATE_DIR / "process-status.yaml").exists()
         assert (run_dir / "ticker-flow" / "brvo" / STATE_DIR / "process-status.yaml").exists()
         assert (run_dir / "ticker-flow" / "chrl" / STATE_DIR / "process-status.yaml").exists()
@@ -2292,6 +2391,10 @@ class TestCompositeStepExecution:
         assert [event["item_key"] for event in first_events if event["event"] == "item_fail"] == [
             "brvo"
         ]
+        assert (
+            next(event for event in first_events if event["event"] == "step_fail")["error"]
+            == expected_error
+        )
 
         fail_marker.unlink()
         second = runner.invoke(app, args)
@@ -4180,6 +4283,7 @@ class TestCompositePoolDispatchPropagation:
                     run_id="test-run",
                     scope_path=(),
                     execution_context=execution_context,
+                    scope_execution_profile=None,
                     out=out,
                 )
             )
@@ -4520,8 +4624,9 @@ class TestNonFanOutTransientRetry:
         counter: Path,
         message: str,
         observed_prompts: list[str],
+        timeout_attempts: int = 0,
     ) -> None:
-        """An adapter that dies with *message* the first time and succeeds the second."""
+        """An adapter whose initial attempts time out or exit before writing output."""
 
         class ExitAdapter:
             adapter_type = "exit-test"
@@ -4532,10 +4637,11 @@ class TestNonFanOutTransientRetry:
                 observed_prompts.append(Path(prompt_file).read_text())
                 target_path = variables["TARGET_PATH"]
                 script = (
-                    "import sys; from pathlib import Path; "
+                    "import sys, time; from pathlib import Path; "
                     f"counter = Path({str(counter)!r}); "
                     "n = len(counter.read_text()) if counter.exists() else 0; "
                     "counter.write_text('x' * (n + 1)); "
+                    f"time.sleep(30) if n < {timeout_attempts} else None; "
                     f"print({message!r}) or sys.exit(1) if n < 1 else None; "
                     f"target = Path({target_path!r}); "
                     "target.parent.mkdir(parents=True, exist_ok=True); "
@@ -4560,7 +4666,16 @@ class TestNonFanOutTransientRetry:
 
         monkeypatch.setitem(ADAPTER_REGISTRY, "exit-test", ExitAdapter())
 
-    def _run(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, message: str, run_id: str):
+    def _run(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        message: str,
+        run_id: str,
+        *,
+        timeout_attempts: int = 0,
+        max_retries: int = 3,
+    ) -> tuple[Result, StatusRecord | None, int, Path, list[str]]:
         repo_dir = tmp_path / "exit-repo"
         process_dir = repo_dir / "exit-process"
         process_dir.mkdir(parents=True)
@@ -4569,8 +4684,14 @@ class TestNonFanOutTransientRetry:
         target = repo_dir / "runs" / run_id / "thing.md"
         counter = repo_dir / "counter.txt"
         spec = self._write_process(process_dir)
+        body = spec.read_text().replace("max_retries: 3", f"max_retries: {max_retries}")
+        if timeout_attempts:
+            body = body.replace(
+                "type: exit-test", "type: exit-test\n        config:\n          timeout_s: 1"
+            )
+        spec.write_text(body)
         observed_prompts: list[str] = []
-        self._register_adapter(monkeypatch, counter, message, observed_prompts)
+        self._register_adapter(monkeypatch, counter, message, observed_prompts, timeout_attempts)
 
         result = CliRunner().invoke(
             app,
@@ -4588,6 +4709,48 @@ class TestNonFanOutTransientRetry:
         status = read_status_at(_task_state_dir_for(repo_dir / "runs" / run_id, "write-thing"))
         calls = len(counter.read_text()) if counter.exists() else 0
         return result, status, calls, target, observed_prompts
+
+    @pytest.mark.parametrize(
+        ("timeout_attempts", "max_retries", "expected_calls", "succeeds"),
+        [(1, 1, 2, True), (2, 1, 2, False), (1, 0, 1, False)],
+        ids=["retry-succeeds", "retry-exhausted", "retry-disabled"],
+    )
+    def test_subprocess_timeout_uses_the_retry_policy(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        timeout_attempts: int,
+        max_retries: int,
+        expected_calls: int,
+        succeeds: bool,
+    ) -> None:
+        result, status, calls, target, prompts = self._run(
+            tmp_path,
+            monkeypatch,
+            message="",
+            run_id="subprocess-timeout-run",
+            timeout_attempts=timeout_attempts,
+            max_retries=max_retries,
+        )
+
+        assert (result.exit_code == 0) is succeeds, result.output
+        assert calls == expected_calls
+        assert target.exists() is succeeds
+        assert status is not None
+        assert status.state == ("completed" if succeeds else "failed")
+        assert status.attempt == expected_calls
+        history = read_attempt_history_at(_task_state_dir_for(target.parent, "write-thing"))
+        timed_out = history[:-1] if succeeds else history
+        assert len(timed_out) == min(timeout_attempts, expected_calls)
+        assert all(record.disposition is AttemptDisposition.retryable for record in timed_out)
+        assert all(record.failure_class == "timeout" for record in timed_out)
+        assert all(record.error == "timeout after 1s" for record in timed_out)
+        assert all(
+            "The prior attempt's declared output failed validation." not in prompt
+            for prompt in prompts
+        )
+        if succeeds:
+            assert history[-1].disposition is AttemptDisposition.succeeded
 
     def test_a_body_timeout_is_retried_and_the_second_attempt_succeeds(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -4627,3 +4790,465 @@ class TestNonFanOutTransientRetry:
         # The recorded error carries the log line, not a bare exit code: diagnosing
         # week 35 cost hours precisely because `exit code 1` said nothing.
         assert "quota" in (status.error or "")
+
+
+class TestRunOwnedPoolExecutionProfiles:
+    """One run-owned RunPool serves every execution profile its agent leaves pin."""
+
+    ADAPTER = "profile-lane-test"
+
+    @classmethod
+    def _register_adapter(cls, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An adapter whose process writes its execution profile to the prompt's ``OUTPUT_FILE``."""
+
+        class ProfileLaneAdapter:
+            adapter_type = cls.ADAPTER
+            short_name = cls.ADAPTER
+            default_model = None
+
+            def build_command(self, prompt_file, merged_config, variables):  # noqa: ANN001, ARG002
+                target = next(
+                    line.removeprefix("OUTPUT_FILE=")
+                    for line in Path(prompt_file).read_text().splitlines()
+                    if line.startswith("OUTPUT_FILE=")
+                )
+                profile = str(variables["EXECUTION_PROFILE"])
+                script = (
+                    "from pathlib import Path; "
+                    f"target = Path({str(target)!r}); "
+                    "target.parent.mkdir(parents=True, exist_ok=True); "
+                    f"target.write_text({profile + chr(10)!r})"
+                )
+                return [sys.executable, "-c", script]
+
+            def prepare_env(self, env, merged_config):  # noqa: ANN001, ARG002
+                return env
+
+            def working_directory(self, merged_config):  # noqa: ANN001, ARG002
+                return None
+
+            def parse_result_event(self, line):  # noqa: ANN001, ARG002
+                return None
+
+            def check_auth(self):
+                raise NotImplementedError
+
+            def auth_info(self):
+                return ""
+
+        monkeypatch.setitem(ADAPTER_REGISTRY, cls.ADAPTER, ProfileLaneAdapter())
+
+    @classmethod
+    def _write_repo_profiles(cls, repo_dir: Path, resources: dict[str, dict[str, object]]) -> None:
+        path = repo_dir / ".metaproc" / "execution-profiles.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        name: {"adapter": cls.ADAPTER, "status": "tested", "resources": values}
+                        for name, values in resources.items()
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _agent_step(step_id: str, profile: str | None, *, needs: str | None = None) -> str:
+        lines = [
+            f"- id: {step_id}",
+            "  mode: agent",
+            *([f"  execution_profile: {profile}"] if profile else []),
+            f'  prompt_prefix: "OUTPUT_FILE={{{{run.dir}}}}/{step_id}.md"',
+            *([f"  needs: [{needs}]"] if needs else []),
+            "  outputs:",
+            "    decision:",
+            f'      path: "{{{{run.dir}}}}/{step_id}.md"',
+            "      kind: file",
+        ]
+        return "".join(f"    {line}\n" for line in lines)
+
+    @staticmethod
+    def _repo(tmp_path: Path) -> tuple[Path, Path]:
+        repo_dir = tmp_path / "repo"
+        process_dir = repo_dir / "process"
+        process_dir.mkdir(parents=True)
+        subprocess.run(["git", "init"], cwd=repo_dir, check=True, capture_output=True)
+        return repo_dir, process_dir
+
+    @staticmethod
+    def _invoke(spec: Path, run_dir: Path, *options: str) -> Result:
+        """Run ``spec`` into ``run_dir``, which sits outside the repository.
+
+        Keeping the run tree out of the repository keeps these checks about the pool
+        rather than about repository write-boundary snapshots.
+        """
+        return CliRunner().invoke(
+            app,
+            [
+                "run-process",
+                str(spec),
+                "--var",
+                f"RUNS_DIR={run_dir.parent}",
+                "--var",
+                f"RUN_ID={run_dir.name}",
+                *options,
+            ],
+        )
+
+    def test_mapped_composite_leaves_on_two_equal_profiles_share_one_pool(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo_dir, process_dir = self._repo(tmp_path)
+        self._register_adapter(monkeypatch)
+        # Two spellings of one estimate: pool resources compare as resolved values.
+        self._write_repo_profiles(
+            repo_dir,
+            {
+                "judge-a": {"estimated_process_rss_mb": 250, "initial_memory_budget_fraction": 0.5},
+                "judge-b": {"estimated_process_rss_bytes": 250 * 1024 * 1024},
+            },
+        )
+        (process_dir / "child.process.md").write_text(
+            "---\nprocess:\n  name: judge-pair\n  steps:\n"
+            + self._agent_step("judge-a", "judge-a")
+            + self._agent_step("judge-b", "judge-b")
+            + "---\n",
+            encoding="utf-8",
+        )
+        (process_dir / "parent.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: review
+                  deps:
+                    roster:
+                      path: "{{run.dir}}/roster.md"
+                      as: path
+                      produced_by: write-roster.roster
+                    child:
+                      path: ./child.process.md
+                      as: path
+                  steps:
+                    - id: write-roster
+                      mode: code
+                      outputs:
+                        roster:
+                          path: "{{run.dir}}/roster.md"
+                          kind: file
+                          format: frontmatter-md
+                      command: >-
+                        /bin/sh -c 'mkdir -p "{{run.dir}}";
+                        printf "%s\\n" "---" "progress:" "  schema: metaproc:ProgressSpec/0.1" "  process: review" "  items:" "    - ticker: alfa" "    - ticker: brvo" "---" > "{{run.dir}}/roster.md"'
+                    - id: review-ticker
+                      mode: composite
+                      uses: deps.child
+                      needs: [write-roster]
+                      for_each:
+                        over: deps.roster
+                        bind: ticker
+                        bind_fields: [ticker]
+                        key: "{{ticker}}"
+                ---
+                """
+            ),
+            encoding="utf-8",
+        )
+
+        run_dir = tmp_path / "runs" / "two-lanes"
+        result = self._invoke(process_dir / "parent.process.md", run_dir)
+
+        assert result.exit_code == 0, result.output
+        for ticker in ("alfa", "brvo"):
+            for step_id in ("judge-a", "judge-b"):
+                assert (run_dir / "review-ticker" / ticker / f"{step_id}.md").is_file()
+        status = read_yaml_file(run_dir / STATE_DIR / "runpool-status.yaml")
+        lanes = {lane["lane_id"]: lane for lane in status["lanes"]}
+        assert set(lanes) == {"judge-a", "judge-b"}
+        assert all(lane["execution_profile"] == lane_id for lane_id, lane in lanes.items())
+        assert all(lane["completed_count"] == 2 for lane in lanes.values())
+        assert all(lane["failed_count"] == 0 for lane in lanes.values())
+        assert status["concurrency_plan"]["execution_profile"] in lanes
+        assert status["concurrency_plan"]["estimated_process_rss_bytes"] == 250 * 1024 * 1024
+        rendered = CliRunner().invoke(app, ["pool", "status", str(run_dir)])
+        assert rendered.exit_code == 0, rendered.output
+        for lane_id in ("judge-a", "judge-b"):
+            assert (
+                f"  {lane_id} (profile={lane_id}): active=0, completed=2, failed=0, killed=0"
+                in rendered.output
+            )
+
+    def test_a_profile_with_different_pool_resources_is_refused_by_name_and_value(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo_dir, process_dir = self._repo(tmp_path)
+        self._register_adapter(monkeypatch)
+        self._write_repo_profiles(
+            repo_dir,
+            {
+                "light": {"estimated_process_rss_mb": 250, "initial_memory_budget_fraction": 0.5},
+                "heavy": {
+                    "estimated_process_rss_mb": 1024,
+                    "initial_memory_budget_fraction": 0.5,
+                    "max_concurrency_hint": 20,
+                },
+            },
+        )
+        spec = process_dir / "mixed.process.md"
+        spec.write_text(
+            "---\nprocess:\n  name: mixed\n  steps:\n"
+            + self._agent_step("first", "light")
+            + self._agent_step("second", "heavy", needs="first")
+            + "---\n",
+            encoding="utf-8",
+        )
+
+        run_dir = tmp_path / "runs" / "mixed-lanes"
+        result = self._invoke(spec, run_dir)
+
+        assert result.exit_code != 0
+        first = read_status_at(_task_state_dir_for(run_dir, "first"))
+        assert first is not None and first.state == "completed", result.output
+        assert (run_dir / "first.md").is_file()
+        assert not (run_dir / "second.md").exists()
+        steps = read_yaml_file(run_dir / STATE_DIR / "process-status.yaml")["steps"]
+        assert steps["second"]["state"] == "failed", result.output
+        error = steps["second"]["error"]
+        light_rss, heavy_rss = 250 * 1024 * 1024, 1024 * 1024 * 1024
+        assert "'heavy' cannot share the run-owned RunPool sized from 'light'" in error
+        assert (
+            f"estimated_process_rss_bytes {light_rss} for 'light', {heavy_rss} for 'heavy'" in error
+        )
+        assert "max_concurrency 200 for 'light', 20 for 'heavy'" in error
+        assert "host_max_concurrency 200 for 'light', 20 for 'heavy'" in error
+        assert "initial_memory_budget_fraction 0.5" not in error
+        status = read_yaml_file(run_dir / STATE_DIR / "runpool-status.yaml")
+        assert [lane["lane_id"] for lane in status["lanes"]] == ["light"]
+
+    def test_a_composite_pin_runs_its_subtree_on_that_profile(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo_dir, process_dir = self._repo(tmp_path)
+        self._register_adapter(monkeypatch)
+        equal: dict[str, object] = {
+            "estimated_process_rss_mb": 250,
+            "initial_memory_budget_fraction": 0.5,
+        }
+        self._write_repo_profiles(repo_dir, {"run-a": equal, "pin-b": equal, "leaf-c": equal})
+        (process_dir / "grandchild.process.md").write_text(
+            "---\nprocess:\n  name: grandchild\n  steps:\n"
+            + self._agent_step("grandchild-leaf", None)
+            + "---\n",
+            encoding="utf-8",
+        )
+        (process_dir / "child.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: pinned-child
+                  deps:
+                    grandchild:
+                      path: ./grandchild.process.md
+                      as: path
+                  steps:
+                    - id: record-profile
+                      mode: code
+                      command: >-
+                        /bin/sh -c 'mkdir -p "{{run.dir}}";
+                        printf "%s\\n" "{{run.execution_profile}}" > "{{run.dir}}/profile.txt"'
+                      outputs:
+                        profile:
+                          path: "{{run.dir}}/profile.txt"
+                          kind: file
+                    - id: nested
+                      mode: composite
+                      uses: deps.grandchild
+                """
+            )
+            + self._agent_step("child-leaf", None)
+            + self._agent_step("pinned-leaf", "leaf-c")
+            + "---\n",
+            encoding="utf-8",
+        )
+        (process_dir / "parent.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: pinned-parent
+                  deps:
+                    roster:
+                      path: "{{run.dir}}/roster.md"
+                      as: path
+                      produced_by: write-roster.roster
+                    child:
+                      path: ./child.process.md
+                      as: path
+                  steps:
+                    - id: write-roster
+                      mode: code
+                      outputs:
+                        roster:
+                          path: "{{run.dir}}/roster.md"
+                          kind: file
+                          format: frontmatter-md
+                      command: >-
+                        /bin/sh -c 'mkdir -p "{{run.dir}}";
+                        printf "%s\\n" "---" "progress:" "  schema: metaproc:ProgressSpec/0.1" "  process: pinned" "  items:" "    - cohort: alfa" "---" > "{{run.dir}}/roster.md"'
+                    - id: pinned
+                      mode: composite
+                      uses: deps.child
+                      execution_profile: pin-b
+                      needs: [write-roster]
+                      for_each:
+                        over: deps.roster
+                        bind: cohort
+                        bind_fields: [cohort]
+                        key: "{{cohort}}"
+                """
+            )
+            + self._agent_step("root-leaf", None)
+            + "---\n",
+            encoding="utf-8",
+        )
+
+        run_dir = tmp_path / "runs" / "pinned-subtree"
+        result = self._invoke(process_dir / "parent.process.md", run_dir, "--variant", "run-a")
+
+        assert result.exit_code == 0, result.output
+        child = run_dir / "pinned" / "alfa"
+        served = {
+            "root-leaf": run_dir / "root-leaf.md",
+            "child-leaf": child / "child-leaf.md",
+            "pinned-leaf": child / "pinned-leaf.md",
+            "grandchild-leaf": child / "nested" / "grandchild-leaf.md",
+        }
+        assert {step: path.read_text().strip() for step, path in served.items()} == {
+            "root-leaf": "run-a",
+            "child-leaf": "pin-b",
+            "pinned-leaf": "leaf-c",
+            "grandchild-leaf": "pin-b",
+        }
+        assert (child / "profile.txt").read_text().strip() == "pin-b"
+        status = read_yaml_file(run_dir / STATE_DIR / "runpool-status.yaml")
+        lanes = {lane["lane_id"]: lane["completed_count"] for lane in status["lanes"]}
+        assert lanes == {"run-a": 1, "pin-b": 2, "leaf-c": 1}
+        assert not (child / STATE_DIR / "runpool-status.yaml").exists()
+
+    def test_a_resume_reapplies_recorded_step_variants_and_refuses_a_different_set(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A step override is part of the run: a resume and `status` follow the recorded set."""
+        repo_dir, process_dir = self._repo(tmp_path)
+        self._register_adapter(monkeypatch)
+        same: dict[str, object] = {
+            "estimated_process_rss_mb": 250,
+            "initial_memory_budget_fraction": 0.5,
+        }
+        self._write_repo_profiles(repo_dir, {"run-a": same, "judge-b": same})
+        spec = process_dir / "judged.process.md"
+        spec.write_text(
+            "---\nprocess:\n  name: judged\n  steps:\n"
+            + self._agent_step("draft", None)
+            + self._agent_step("judge", None, needs="draft")
+            + "---\n",
+            encoding="utf-8",
+        )
+        run_dir = tmp_path / "runs" / "judged-resume"
+
+        launched = self._invoke(
+            spec,
+            run_dir,
+            "--variant",
+            "run-a",
+            "--step-variant",
+            "judge=judge-b",
+            "--only",
+            "draft",
+        )
+        assert launched.exit_code == 0, launched.output
+        assert read_yaml_file(run_dir / STATE_DIR / "run-config.yaml")["step_variants"] == {
+            "judge": "judge-b"
+        }
+
+        refused = self._invoke(spec, run_dir, "--variant", "run-a", "--step-variant", "judge=run-a")
+        assert refused.exit_code != 0
+        message = refused.output or str(refused.exception)
+        assert "Resume mismatch" in message
+        assert "judge=judge-b" in message and "judge=run-a" in message
+        assert not (run_dir / "judge.md").exists()
+
+        resumed = self._invoke(spec, run_dir, "--variant", "run-a")
+        assert resumed.exit_code == 0, resumed.output
+        assert (run_dir / "draft.md").read_text().strip() == "run-a"
+        assert (run_dir / "judge.md").read_text().strip() == "judge-b"
+        plan = _load_plan_from_run(run_dir)
+        assert plan is not None
+        assert {step.step_id: step.execution_profile for step in plan.steps} == {
+            "draft": "run-a",
+            "judge": "judge-b",
+        }
+
+    def test_a_resume_adopts_the_step_variants_a_run_recorded_none_of(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`--step-variant` shipped in v0.4.1 without a record, so a run from that
+        version carries none. Repeating the flag on a resume adopts and records it
+        rather than reading the absent record as a mismatch; a set once recorded still
+        refuses a different one."""
+        repo_dir, process_dir = self._repo(tmp_path)
+        self._register_adapter(monkeypatch)
+        same: dict[str, object] = {
+            "estimated_process_rss_mb": 250,
+            "initial_memory_budget_fraction": 0.5,
+        }
+        self._write_repo_profiles(repo_dir, {"run-a": same, "judge-b": same})
+        spec = process_dir / "judged.process.md"
+        spec.write_text(
+            "---\nprocess:\n  name: judged\n  steps:\n"
+            + self._agent_step("draft", None)
+            + self._agent_step("judge", None, needs="draft")
+            + "---\n",
+            encoding="utf-8",
+        )
+        run_dir = tmp_path / "runs" / "judged-unrecorded"
+
+        launched = self._invoke(
+            spec,
+            run_dir,
+            "--variant",
+            "run-a",
+            "--step-variant",
+            "judge=judge-b",
+            "--only",
+            "draft",
+        )
+        assert launched.exit_code == 0, launched.output
+        # What a v0.4.1 run leaves behind: the overrides took effect, nothing recorded them.
+        config_path = run_dir / STATE_DIR / "run-config.yaml"
+        config = read_yaml_file(config_path)
+        del config["step_variants"]
+        config_path.write_text(to_yaml_string(config), encoding="utf-8")
+
+        resumed = self._invoke(
+            spec, run_dir, "--variant", "run-a", "--step-variant", "judge=judge-b"
+        )
+
+        assert resumed.exit_code == 0, resumed.output
+        assert (run_dir / "judge.md").read_text().strip() == "judge-b"
+        # Adopting rewrites the config, so every other field it carries must survive —
+        # the resource snapshot the terminal finalizer reads from it above all.
+        recorded = read_yaml_file(config_path)
+        assert recorded["step_variants"] == {"judge": "judge-b"}
+        assert set(recorded) == set(config) | {"step_variants"}
+        assert recorded["resources"] == config["resources"]
+
+        refused = self._invoke(spec, run_dir, "--variant", "run-a", "--step-variant", "judge=run-a")
+
+        assert refused.exit_code != 0
+        message = refused.output or str(refused.exception)
+        assert "Resume mismatch" in message
+        assert "judge=judge-b" in message and "judge=run-a" in message

@@ -247,3 +247,43 @@ class TestSummarizeAuthLeaseAcquired:
         report = _summarize_events([], total_in_file=42, event_type="auth_lease_acquired")
         assert report["matched"] == 0
         assert "auth_lease_acquired" not in report
+
+
+def _host_denied(decision: str, reason: str, *, limit: int = 4, waited_s: float | None = None):
+    event: dict[str, object] = {
+        "event": "host_admission_denied",
+        "namespace": "local-agents",
+        "limit": limit,
+        "label": "run/step",
+        "reason": reason,
+        "decision": decision,
+        "ts": "2026-09-14T14:49:37+00:00",
+    }
+    if waited_s is not None:
+        event["waited_s"] = waited_s
+    return event
+
+
+class TestSummarizeHostAdmissionDenials:
+    def test_counts_waits_and_ungoverned_launches_with_terminal_wait_seconds(self):
+        events = [
+            _host_denied("wait", "no_available_slot"),
+            _host_denied("bypass", "timeout", waited_s=60.1),
+            _host_denied("wait", "no_available_slot"),
+            _host_denied("bypass", "timeout", waited_s=60.0),
+            _host_denied("wait", "no_available_slot", limit=30),
+        ]
+        report = _summarize_events(events, total_in_file=9, event_type="host_admission_denied")
+        denied = report["host_admission_denied"]
+        assert denied["by_decision"] == {"wait": 3, "bypass": 2}
+        assert denied["by_reason"] == {"no_available_slot": 3, "timeout": 2}
+        assert denied["by_limit"] == {"4": 4, "30": 1}
+        assert denied["terminal_waited_s_total"] == 120.1
+        assert denied["terminal_waited_s_max"] == 60.1
+
+    def test_waits_without_terminal_refusals_report_no_wait_seconds(self):
+        events = [_host_denied("wait", "no_available_slot")]
+        report = _summarize_events(events, total_in_file=1, event_type="host_admission_denied")
+        denied = report["host_admission_denied"]
+        assert denied["terminal_waited_s_total"] == 0
+        assert denied["terminal_waited_s_max"] is None

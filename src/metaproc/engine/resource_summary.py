@@ -29,6 +29,7 @@ def write_resource_usage_summary(document: ResourcesDocument, run_dir: Path) -> 
         totals=document.hierarchy_root.total_metrics,
         provider_meters=document.meter_rollups,
         coverage_gaps=document.coverage_gaps,
+        unpriced_models=document.unpriced_models,
         budgets=document.budget_evaluations,
         finalization=document.finalization,
     )
@@ -74,9 +75,29 @@ def _render_summary(summary: ResourceUsageSummary) -> str:
         f"| Input tokens | {_format_quantity(totals.input_tokens)} |",
         f"| Output tokens | {_format_quantity(totals.output_tokens)} |",
         f"| Actual cost (USD) | {_format_money(totals.actual_cost_usd)} |",
-        f"| Estimated list cost (USD) | {_format_money(totals.list_cost_usd)} |",
+        f"| Estimated list cost (USD) | {_list_cost_cell(summary)} |",
         f"| Tool calls | {_format_quantity(totals.tool_calls)} |",
     ]
+    if summary.unpriced_models:
+        left_out = sum(entry.invocations for entry in summary.unpriced_models)
+        lines.extend(
+            [
+                "",
+                "## Unpriced models",
+                "",
+                (
+                    f"The estimated list cost leaves out {left_out} invocation(s) with token "
+                    "usage whose model has no list price in Metaproc's pricing table, so it is "
+                    "a lower bound."
+                ),
+                "",
+                "| Model | Invocations |",
+                "| --- | ---: |",
+            ]
+        )
+        for entry in summary.unpriced_models:
+            name = f"`{entry.model}`" if entry.model else "(no model named)"
+            lines.append(f"| {name} | {entry.invocations} |")
     if summary.provider_meters:
         lines.extend(
             [
@@ -99,6 +120,13 @@ def _render_summary(summary: ResourceUsageSummary) -> str:
             marker = "⚠" if evaluation.status in {BudgetStatus.NEAR, BudgetStatus.EXCEEDED} else "-"
             lines.append(f"{marker} `{evaluation.budget.budget_id}`: {evaluation.message}")
     return "\n".join(lines) + "\n"
+
+
+def _list_cost_cell(summary: ResourceUsageSummary) -> str:
+    cost = _format_money(summary.totals.list_cost_usd)
+    if summary.unpriced_models and summary.totals.list_cost_usd is not None:
+        return f"at least {cost}"
+    return cost
 
 
 def _format_quantity(value: float | None) -> str:

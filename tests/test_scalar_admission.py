@@ -9,11 +9,16 @@ a shared slot directory is unwritable.
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from metaproc.runpool.event_models import HostAdmissionDeniedEvent
+from metaproc.runpool.event_reader import read_runpool_events
+from metaproc.runpool.events import EventLogger
 from metaproc.runpool.host_admission import (
     HostAdmissionGate,
     list_host_admission_slots,
@@ -184,6 +189,55 @@ class TestDegradesRatherThanFails:
                 assert lease is None
 
         asyncio.run(run())
+
+
+def test_real_gate_refusal_records_wait_then_timeout_bypass(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr("metaproc.runpool.scalar_admission.SCALAR_ACQUIRE_TIMEOUT_S", 0.2)
+    gate = HostAdmissionGate(root_dir=tmp_path / "slots", limit=1)
+    events_path = tmp_path / "events.jsonl"
+
+    async def run() -> None:
+        held = await gate.acquire(label="owner", pool_id="owner")
+        try:
+            with EventLogger(events_path) as logger:
+                async with admitted_launch(
+                    enabled=True,
+                    limit=1,
+                    label="waiting",
+                    pool_id="waiting",
+                    root_dir=tmp_path / "slots",
+                    event_logger=logger,
+                ) as lease:
+                    assert lease is None
+        finally:
+            gate.release(held)
+
+    asyncio.run(run())
+    events = read_runpool_events(events_path)
+    assert len(events) == 2
+    assert all(isinstance(event, HostAdmissionDeniedEvent) for event in events)
+    raw = [json.loads(line) for line in events_path.read_text().splitlines()]
+    assert [(event["reason"], event["decision"]) for event in raw] == [
+        ("no_available_slot", "wait"),
+        ("timeout", "bypass"),
+    ]
+    assert all(event["limit"] == 1 and event["label"] == "waiting" for event in raw)
+    assert "error" not in raw[0]
+    assert "timed out waiting for a host admission slot" in raw[1]["error"]
+    assert "waited_s" not in raw[0]
+    assert raw[1]["waited_s"] >= 0.2
+    bypass = events[1]
+    assert isinstance(bypass, HostAdmissionDeniedEvent)
+    assert bypass.waited_s == raw[1]["waited_s"]
+    assert re.search(
+        r"host admission unavailable for waiting after \d+\.\ds at limit 1 .*"
+        r"launching without a slot",
+        caplog.text,
+    )
 
 
 class TestScalarDefaults:

@@ -8,6 +8,7 @@ in-repo spec that hasn't adopted the Phase 2A surface yet.
 from __future__ import annotations
 
 import glob as glob_mod
+from dataclasses import dataclass
 from pathlib import Path
 
 from metaproc.engine.parse_dispatch import ParseError, parse_input_file
@@ -15,6 +16,7 @@ from metaproc.engine.placeholders import resolve_templates
 from metaproc.io import FmFormatError, fmf_read_frontmatter
 from metaproc.models.authored import ProcessInput, ProcessOutput, ProcessSpec
 from metaproc.models.plan import Plan
+from metaproc.models.runtime import OutputFailure, OutputFailureKind
 
 #: An input the operator supplies on the command line, e.g. ``--var TICKER=AAPL``.
 INPUT_CLASS_PARAM = "param"
@@ -111,6 +113,18 @@ def _check_file(
     return []
 
 
+@dataclass(frozen=True)
+class ProcessOutputValidation:
+    """Human errors and the artifact evidence available at the process boundary.
+
+    Invalid declarations can have no resolved path. They retain their error without
+    fabricating an artifact failure; failures of resolved artifacts carry both forms.
+    """
+
+    errors: tuple[str, ...]
+    output_failures: tuple[OutputFailure, ...] = ()
+
+
 def validate_process_outputs(
     spec: ProcessSpec,
     variables: dict[str, str],
@@ -119,10 +133,24 @@ def validate_process_outputs(
     plan: Plan | None = None,
 ) -> list[str]:
     """Return a list of process-level output contract violations."""
+    return list(validate_process_outputs_detailed(spec, variables, process_dir, plan=plan).errors)
+
+
+def validate_process_outputs_detailed(
+    spec: ProcessSpec,
+    variables: dict[str, str],
+    process_dir: Path,
+    *,
+    plan: Plan | None = None,
+) -> ProcessOutputValidation:
+    """Preserve resolved output paths and messages alongside the existing CLI errors."""
     errors: list[str] = []
+    failures: list[OutputFailure] = []
     for name, decl in spec.outputs.items():
-        errors.extend(_check_output(name, decl, variables, process_dir, plan=plan))
-    return errors
+        result = _check_output(name, decl, variables, process_dir, plan=plan)
+        errors.extend(result.errors)
+        failures.extend(result.output_failures)
+    return ProcessOutputValidation(tuple(errors), tuple(failures))
 
 
 def _check_output(
@@ -132,50 +160,68 @@ def _check_output(
     process_dir: Path,
     *,
     plan: Plan | None,
-) -> list[str]:
+) -> ProcessOutputValidation:
     if decl.ref is not None:
         if plan is None:
-            return [f"output {name!r}: internal error, plan is required to resolve 'ref:'"]
+            return ProcessOutputValidation(
+                (f"output {name!r}: internal error, plan is required to resolve 'ref:'",)
+            )
         resolved_ref = _resolve_output_ref(name, decl.ref, plan)
         if isinstance(resolved_ref, str):
-            return [resolved_ref]
+            return ProcessOutputValidation((resolved_ref,))
         resolved_path, resolved_format = resolved_ref
         format_errors = _check_output_path(
+            name,
             resolved_path,
             decl.as_,
             decl.format or resolved_format,
         )
-        return [f"output {name!r}: {error}" for error in format_errors]
-    if decl.path is None:
-        return [f"output {name!r}: must declare either 'path:' or 'ref:'"]
-
-    resolved = _resolve_declared_path(decl.path, variables, process_dir)
-    format_errors = _check_output_path(
-        resolved,
-        decl.as_,
-        decl.format,
+    else:
+        if decl.path is None:
+            return ProcessOutputValidation(
+                (f"output {name!r}: must declare either 'path:' or 'ref:'",)
+            )
+        resolved = _resolve_declared_path(decl.path, variables, process_dir)
+        format_errors = _check_output_path(name, resolved, decl.as_, decl.format)
+    return ProcessOutputValidation(
+        tuple(f"output {name!r}: {failure.message}" for failure in format_errors),
+        tuple(format_errors),
     )
-    return [f"output {name!r}: {error}" for error in format_errors]
 
 
 def _check_output_path(
+    name: str,
     resolved: Path,
     declared_type: object,
     format_name: str | None,
-) -> list[str]:
+) -> list[OutputFailure]:
     if (
         getattr(declared_type, "kind", None) == "list"
         and getattr(getattr(declared_type, "element", None), "kind", None) == "path"
     ):
         matches = [Path(match) for match in glob_mod.glob(str(resolved))]
         if not matches:
-            return [f"no files matched: {resolved}"]
-        return _check_output_format(matches, format_name)
+            return [
+                OutputFailure(
+                    output=name,
+                    path=str(resolved),
+                    kind=OutputFailureKind.missing,
+                    message=f"no files matched: {resolved}",
+                )
+            ]
+        return _check_output_format(name, matches, format_name)
 
     if not resolved.exists():
-        return [f"path does not exist: {resolved}"]
+        return [
+            OutputFailure(
+                output=name,
+                path=str(resolved),
+                kind=OutputFailureKind.missing,
+                message=f"path does not exist: {resolved}",
+            )
+        ]
 
-    return _check_output_format([resolved], format_name)
+    return _check_output_format(name, [resolved], format_name)
 
 
 def _resolve_output_ref(
@@ -212,14 +258,32 @@ def _resolve_declared_path(
     return (process_dir / path).resolve()
 
 
-def _check_output_format(paths: list[Path], format_name: str | None) -> list[str]:
+def _check_output_format(
+    name: str, paths: list[Path], format_name: str | None
+) -> list[OutputFailure]:
     if format_name != "frontmatter-md":
         return []
 
-    errors: list[str] = []
+    errors: list[OutputFailure] = []
     for path in paths:
         try:
             fmf_read_frontmatter(path)
         except FmFormatError as exc:
-            errors.append(f"{path}: invalid frontmatter: {exc}")
+            errors.append(
+                OutputFailure(
+                    output=name,
+                    path=str(path),
+                    kind=OutputFailureKind.unreadable,
+                    message=f"{path}: invalid frontmatter: {exc}",
+                )
+            )
+        except OSError as exc:
+            errors.append(
+                OutputFailure(
+                    output=name,
+                    path=str(path),
+                    kind=OutputFailureKind.unreadable,
+                    message=f"{path}: could not read output: {exc}",
+                )
+            )
     return errors

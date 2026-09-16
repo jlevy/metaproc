@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+from dataclasses import asdict
 from pathlib import Path
 
 import typer
@@ -144,16 +145,8 @@ def _artifact_result_payload(result: ArtifactValidationResult) -> dict[str, obje
         "status": result.status.value,
         "profile": result.profile.value,
         "warnings": [warning.model_dump() for warning in result.warnings],
-        "structural": {
-            "ok": result.structural.ok,
-            "engine": result.structural.engine,
-            "errors": result.structural.errors,
-        },
-        "semantic": {
-            "ok": result.semantic.ok,
-            "errors": result.semantic.errors,
-            "skipped_reason": result.semantic.skipped_reason,
-        },
+        "structural": asdict(result.structural),
+        "semantic": asdict(result.semantic),
     }
 
 

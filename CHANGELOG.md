@@ -7,6 +7,156 @@ development series.
 
 ## [Unreleased][unreleased]
 
+### Added
+
+- **Every run writes an operations summary.** Run finalization writes
+  `operations-summary.md` (`metaproc.operations:AgentOperationsSummary/v1`) beside
+  `resource-usage-summary.md`: real elapsed time, setup, per-stage shares, per-item
+  chain running time and barrier wait, step durations, pool concurrency, attempt
+  dispositions, agent transcripts, and machine resources.
+  A figure the run cannot establish is null with a stated reason.
+  A failure while summarizing is logged and never changes the run’s outcome.
+  `metaproc operations summary RUN_DIR` builds the same document for a finished run
+  without writing, and `metaproc operations rollup RUN_DIR...` sets runs side by side
+  against a per-item chain-time target.
+  A run that executed as a child scope of a larger run is summarized with its nested
+  scopes and transcripts, whether read in place or from a copy.
+  A run that never reaches finalization — killed by a signal, interrupted between the
+  resource and operations finalizers, or with a fold that raised — gets its summary from
+  the next `metaproc status` on it, whether or not its resource artifacts also need
+  recovering. A list cost that leaves out unpriced models reads `at least` in the summary
+  and the rollup.
+- **`gemini-3.8-flash` has a list price.** The pricing table records Google’s
+  introductory rate through 2026-12-31 ($0.75/M input, $3.75/M output, $0.075/M cached
+  input) as its actual price and the standard rate from 2027-01-01 ($1.50, $7.50, $0.15)
+  as its list price, so its invocations count toward `list_cost_usd`.
+
+### Fixed
+
+- **A list cost that leaves out unpriced tokens says so.** An invocation whose model has
+  no entry in the pricing table added its tokens to every total but nothing to
+  `list_cost_usd`, so the total read as complete.
+  `resources.json` and `resource-usage-summary.md` carry `unpriced_models`, naming each
+  such model with its invocation count; the summary body reports the list cost as a
+  lower bound, and `metaproc resource-report` lists the models.
+
+- **An operations summary written by an earlier build still reads.** `PoolRow` and
+  `ParallelismFigures` gained `sample_source`, and `retries.by_step` gained `process`,
+  under the same `metaproc.operations:AgentOperationsSummary/v1` contract id, so every
+  document written before them failed to validate.
+  A field added under a contract id already in use is now optional on read: the
+  explained-null rule binds the figures a document states rather than the fields the
+  current model declares, and `process` on a retry row is null when the document
+  predates keying rows by it, which groups those rows by `step_id` alone.
+  `read_operations_summary` returns a result that separates a run with no summary from
+  one whose summary did not read, logging the second with its path and the error;
+  `metaproc operations rollup` reports such a run as `unreadable` instead of recomputing
+  it as though nothing was written.
+
+- **Agent leaves take a host slot when their pool admits them, not before.** A
+  `run-process` agent leaf under the run-owned pool acquires its host slot inside that
+  pool, after pool admission, with a limit defaulting to the pool’s ceiling instead of
+  4\. A slot is therefore held only while a process runs: leaves queued behind adaptive
+  capacity or a `max_concurrency_hint` below `--max-concurrency` no longer wait 60
+  seconds for a slot and launch without one, and each lease records the agent process it
+  admitted. An explicit `resources.host_max_concurrency` still replaces the default, and
+  `METAPROC_HOST_MAX_LOCAL_AGENTS` still lowers the result; a leaf without a run-owned
+  pool keeps the default of 4. Terminal host-admission refusals record `waited_s`, and
+  `metaproc pool events --type host_admission_denied --summary` counts waits, bypassed
+  launches, and terminal wait seconds.
+
+- **One run-owned pool compares the values each profile resolves to.** A profile joins
+  the run’s pool as another lane when the pool ceiling (`--max-concurrency` lowered by
+  `max_concurrency_hint`), host-slot limit, per-process RSS estimate, and initial memory
+  budget fraction it resolves to match the sizing profile’s, so hints at or above the
+  run’s ceiling no longer refuse each other, and a differing `host_max_concurrency` is
+  named in the refusal instead of being silently ignored.
+
+- **A composite step’s `execution_profile:` applies to its whole subtree.** The child
+  process was planned with the launch `--variant` whatever profile the composite step
+  pinned. A pinned composite now plans its child, every nested scope below it, and their
+  unpinned agent leaves on its own profile, and its scope answers
+  `{{run.execution_profile}}` with it.
+  Agent-step pins inside the subtree still win, and every profile shares the root run’s
+  RunPool.
+
+- **`--step-variant` refuses a step it cannot override, and a resume keeps it.**
+  Overrides apply to the launched process’s top-level steps that are not composite; a
+  step id inside a composite child process, or a composite step itself, was silently
+  ignored (or replaced the composite’s pin) and now fails launch validation with the
+  steps that can be overridden.
+  `run-config.yaml` records the overrides: a resume without `--step-variant` reuses
+  them, a resume with a different set is refused, and `metaproc status --steps` plans
+  them. A run launched by 0.4.1, which applied overrides without recording them, has no
+  recorded set to contradict, so a resume of one adopts the `--step-variant` it passes
+  and records it rather than refusing a run it cannot otherwise resume on its own
+  profiles.
+
+- **Prelaunch and process-output refusals retain their causes.** Credential and input
+  refusals now reach durable step status without creating an attempt; manual timeout
+  closes the running task.
+  A mapped code item refused for a missing input records that failure on its own status
+  while its siblings continue.
+  Composite failures preserve child errors and structured output paths/messages through
+  fan-in. Root and child process status records output-contract failure even when all of
+  the scope’s steps completed.
+
+- **Claude honors an explicit working directory.** `working_directory` survives adapter
+  validation under Claude execution profiles and sets the launched subprocess directory,
+  matching Gemini and Codex.
+  Omission retains the existing inherited directory.
+
+- **Failure causes survive task, step, and run aggregation.** Mapped summaries count
+  distinct recorded causes against the current item roster, ignoring each attempt’s
+  evidence path, and list at most five causes within a bounded length; scalar and
+  composite summaries retain their durable causes.
+  Run status and process completion events preserve every failed step, and fan-in
+  outcomes retain output paths and validator messages.
+  Host-admission events distinguish waiting, failure, and best-effort bypass using the
+  gate’s actual decisions.
+
+- **Scalar agent timeouts follow the configured retry policy.** A subprocess timeout
+  uses the same classification, backoff, credential checks, and retry limit as a
+  retryable nonzero exit.
+  Attempt history retains the timeout cause when the retry succeeds or the budget is
+  exhausted. A timed-out process cannot be accepted as a successful shutdown, even if it
+  wrote its outputs first.
+
+- **SoftSchema CLI validation preserves each library validation record.** Structural and
+  semantic results retain their skip reasons and any execution evidence the installed
+  SoftSchema version reports.
+  The CLI does not infer execution from the declared schema status.
+
+- **Token counts now state their basis and evidence limits.** `output_tokens` targets
+  output-rate tokens including reasoning.
+  Claude and Codex report that count directly; Gemini reconstructs it from valid total
+  and input counts. A partial Gemini record falls back to reported output, a lower bound
+  with unknown reasoning, so cross-adapter completeness is not guaranteed.
+  The normalized total sums all four available buckets: uncached input, output, cache
+  reads, and cache writes.
+  CLI-reported costs and calculations from pricing tables remain list-cost estimates,
+  separate from provider-authoritative billing.
+  `UsageStats` and `metaproc-design.md` §15.1 and §15.3 document this contract.
+
+- **A partial Gemini stats block no longer reports its input as output.** Missing, null,
+  or invalid input counts cannot justify subtracting zero from `total_tokens`. Such a
+  block now retains the reported 9,429 output tokens in the regression fixture, instead
+  of attributing the entire 1,650,379-token total to output-rate estimates.
+  Non-finite counts are handled as unavailable, and an explicitly measured zero remains
+  valid. Complete records retain the reasoning-inclusive residual.
+
+  No artifact shape changes and no contract is widened.
+  Reported figures move only for a Gemini stats block that was already being read wrong.
+
+- **A run serves several execution profiles from its one pool.** Steps pinned to
+  different profiles no longer fail when the second profile reaches the run-owned
+  RunPool. A profile joins as another lane when its `max_concurrency_hint`,
+  `estimated_process_rss_bytes`, and `initial_memory_budget_fraction` resolve equal to
+  those of the profile that sized the pool, and `pool status` lists every lane.
+  A profile whose values differ still fails before launch, now with an error naming each
+  differing value for both profiles, because the pool keeps no per-lane resource
+  accounting. `RunPool.register_lane` adds a lane to status before its first launch.
+
 ## [0.4.1][] - 2026-09-10
 
 ### Fixed

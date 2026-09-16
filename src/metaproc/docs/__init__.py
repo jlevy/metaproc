@@ -76,7 +76,7 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
         "operator",
         "metaproc-operator-reference",
         "Runtime CLI reference: running, monitoring, and resuming processes.",
-        7300,
+        9000,
     ),
     Topic(
         "developer",
@@ -130,7 +130,7 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
         "arch-runpool",
         "arch-runpool",
         "Architecture: local process manager, adaptive concurrency, memory pressure.",
-        4200,
+        4600,
     ),
     Topic(
         "arch-harness",

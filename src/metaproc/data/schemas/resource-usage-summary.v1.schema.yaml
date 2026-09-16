@@ -536,6 +536,31 @@ $defs:
         type: string
     title: ResourceUsageArtifacts
     type: object
+  UnpricedModel:
+    additionalProperties: false
+    description: |-
+      A model whose invocations carry token usage but no list cost.
+
+      Metaproc prices tokens from ``data/pricing.md``; a model with no entry there
+      contributes tokens to every total but nothing to ``list_cost_usd``.
+      ``model`` is ``None`` when the usage record named no model.
+    properties:
+      invocations:
+        minimum: 1
+        title: Invocations
+        type: integer
+      model:
+        anyOf:
+        - maxLength: 256
+          minLength: 1
+          type: string
+        - type: 'null'
+        default: null
+        title: Model
+    required:
+    - invocations
+    title: UnpricedModel
+    type: object
 $schema: https://json-schema.org/draft/2020-12/schema
 additionalProperties: false
 description: All machine-consumed values stored in summary frontmatter.
@@ -564,6 +589,11 @@ properties:
     type: string
   totals:
     $ref: '#/$defs/Metrics'
+  unpriced_models:
+    items:
+      $ref: '#/$defs/UnpricedModel'
+    title: Unpriced Models
+    type: array
 required:
 - finalization
 - run_id
@@ -572,4 +602,4 @@ title: ResourceUsageSummary
 type: object
 x-softschema:
   contract: metaproc.resources:ResourceUsageSummary/v1
-  schema_sha256: 7bcc01c10e5aadaec72f8813fd7e448a113b352a2b0e0e19a59fe9677d1adef0
+  schema_sha256: e457b3201f3084f2cbd38b7c439c6f53e441592fbc184e0f45c2dccaaa94b42a

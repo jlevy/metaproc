@@ -208,6 +208,7 @@ def test_run_dir_has_three_top_level_branches(smoke_run: Path) -> None:
         "summary.md",
         "resources.json",
         "resource-usage-summary.md",
+        "operations-summary.md",
     }
     actual = {entry.name for entry in smoke_run.iterdir()}
     assert actual == expected_top_level, (
@@ -398,6 +399,7 @@ def test_state_tree_snapshot_matches_expected_shape(smoke_run: Path) -> None:
         "run-config.yaml",
         "run-plan.yaml",
         "schemas/resource-usage-summary.v1.schema.yaml",
+        "schemas/agent-operations-summary.v1.schema.yaml",
         # Per-step (fan-out runner pool)
         "steps/write-artifact/runpool-status.yaml",
         "steps/write-artifact/scale-state.yaml",

@@ -8,6 +8,8 @@ from pathlib import Path
 
 from metaproc.commands.run_process import _write_run_config
 from metaproc.commands.status import _recover_resource_artifacts
+from metaproc.engine.operations_summary import read_operations_summary
+from metaproc.engine.resource_finalization import resource_artifacts_need_recovery
 from metaproc.engine.run_status import RunStatus
 from metaproc.logutil.resource_events import ResourceEventLogger
 from metaproc.models.authored import ProgressCounts
@@ -98,3 +100,55 @@ def test_inactive_status_rebuilds_a_summary_older_than_local_evidence(tmp_path: 
 
     assert summary.read_text().startswith("---\n")
     assert "# Resource usage summary" in summary.read_text()
+
+
+def test_inactive_status_writes_a_missing_operations_summary_once(tmp_path: Path) -> None:
+    """A run killed by a signal never reaches finalization; status recovery writes its summary."""
+    run_dir = _seed(tmp_path)
+    status = _status(run_dir, active=False)
+
+    _recover_resource_artifacts(run_dir, status)
+
+    summary = read_operations_summary(run_dir).summary
+    assert summary is not None and summary.run is not None
+    assert (summary.trigger, summary.run.state, summary.run.state_source) == (
+        "status",
+        "completed",
+        "resource_summary",
+    )
+    written = (run_dir / "operations-summary.md").read_bytes()
+    resource_summary = run_dir / "resource-usage-summary.md"
+    resource_summary.write_text("stale summary\n")
+    os.utime(resource_summary, ns=(1, 1))
+
+    _recover_resource_artifacts(run_dir, status)
+
+    assert resource_summary.read_text().startswith("---\n")
+    assert (run_dir / "operations-summary.md").read_bytes() == written
+
+
+def test_inactive_status_writes_a_missing_operations_summary_beside_fresh_resources(
+    tmp_path: Path,
+) -> None:
+    """Fresh resource artifacts and no summary is reachable: a signal between the two
+    finalizers, a fold that raised at finalization, or resources an earlier status
+    already recovered. Recovering nothing must still leave the run a summary."""
+    run_dir = _seed(tmp_path)
+    status = _status(run_dir, active=False)
+    _recover_resource_artifacts(run_dir, status)
+    (run_dir / "operations-summary.md").unlink()
+    assert not resource_artifacts_need_recovery(run_dir)
+
+    _recover_resource_artifacts(run_dir, status)
+
+    summary = read_operations_summary(run_dir).summary
+    assert summary is not None and summary.run is not None
+    assert (summary.trigger, summary.run.state_source) == ("status", "resource_summary")
+
+
+def test_active_status_never_writes_an_operations_summary(tmp_path: Path) -> None:
+    run_dir = _seed(tmp_path)
+
+    _recover_resource_artifacts(run_dir, _status(run_dir, active=True))
+
+    assert not (run_dir / "operations-summary.md").exists()

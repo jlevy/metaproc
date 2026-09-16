@@ -314,6 +314,10 @@ def validate_item_outputs_detailed(
     whose output path contains a bind var will fail validation because
     ``Path("{{item}}").name`` compares as the literal placeholder.
 
+    An output marked ``optional`` may be absent: a step writes it only in some runs,
+    and its absence is not a failure. A present one is validated like any other, so a
+    malformed optional artifact still fails the step.
+
     Directory-kind outputs must be non-empty — an empty directory indicates
     the step produced zero records and is treated as a silent-success failure
     (the classic ``extract-items`` mode where an agent reports SUCCESS but wrote
@@ -365,7 +369,8 @@ def validate_item_outputs_detailed(
             if not fpath.exists() and item_dir.name == fname:
                 fpath = item_dir
             if not fpath.exists() or not fpath.is_dir():
-                fail(OutputFailureKind.missing, "directory not found")
+                if not io_spec.optional:
+                    fail(OutputFailureKind.missing, "directory not found")
                 continue
             if not _directory_has_content(fpath):
                 fail(OutputFailureKind.empty, "directory is empty (no output files produced)")
@@ -373,7 +378,8 @@ def validate_item_outputs_detailed(
 
         fpath = resolve_output_fpath(rendered, item_dir)
         if not fpath.exists() and not artifact_exists(fpath):
-            fail(OutputFailureKind.missing, "file not found")
+            if not io_spec.optional:
+                fail(OutputFailureKind.missing, "file not found")
             continue
         if artifact_exists(fpath):
             fpath = resolve_existing_artifact(fpath)
@@ -482,22 +488,16 @@ def _artifact_failures(
 ) -> list[OutputFailure]:
     """Turn a softschema result into one failure per refusing invariant.
 
-    ``message`` reproduces the string this has always produced, so
-    ``StatusRecord.error`` is unchanged. Everything beside it is the detail that
-    used to be discarded: which pass refused the document, which validator, and
-    where.
+    Structural messages keep their existing order. Both executed validation
+    layers contribute records, so the status summary may include additional
+    semantic failures that were previously discarded.
     """
-    # Both passes read the same document, so a structurally invalid one draws
-    # complaints from each about the same fields. Report the pass that refused
-    # it first: once the shape is wrong the semantic verdict describes the same
-    # defect a second time, and a consumer counting failures would count it
-    # twice and could route the two copies to different owners.
-    if result.structural.errors:
-        entries: list[tuple[OutputFailureKind, dict[str, object]]] = [
-            (OutputFailureKind.structural, e) for e in result.structural.errors
-        ]
-    else:
-        entries = [(OutputFailureKind.semantic, e) for e in result.semantic.errors]
+    # Keep both executed layers as evidence. Structural refusals lead the list
+    # so the existing first-failure summary and retry priority remain stable.
+    entries: list[tuple[OutputFailureKind, dict[str, object]]] = [
+        (OutputFailureKind.structural, e) for e in result.structural.errors
+    ]
+    entries.extend((OutputFailureKind.semantic, e) for e in result.semantic.errors)
     if not entries:
         return [
             OutputFailure(

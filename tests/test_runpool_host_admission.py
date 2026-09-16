@@ -14,6 +14,7 @@ import pytest
 from metaproc.runpool.host_admission import (
     UNRECORDED_LEASE_GRACE_S,
     HostAdmissionGate,
+    list_host_admission_slots,
 )
 
 
@@ -148,8 +149,19 @@ def test_acquire_times_out_when_all_slots_remain_live(tmp_path: Path) -> None:
 
     async def _run() -> None:
         lease = await gate.acquire(label="first", pool_id="pool-first")
+        refusals: list[str] = []
         with pytest.raises(TimeoutError, match="host admission slot"):
-            await gate.acquire(label="second", pool_id="pool-second")
+            await gate.acquire(
+                label="second", pool_id="pool-second", on_wait=lambda: refusals.append("wait")
+            )
+        assert refusals == ["wait"]
         gate.release(lease)
 
     asyncio.run(_run())
+
+
+def test_the_suite_never_uses_the_host_wide_slot_root() -> None:
+    """A test gate without a root shares no slots with live runs on the machine."""
+    gate = HostAdmissionGate(root_dir=None, limit=1)
+    assert gate.root_dir != Path.home() / ".metaproc" / "runpool" / "host-slots"
+    assert list_host_admission_slots() == []

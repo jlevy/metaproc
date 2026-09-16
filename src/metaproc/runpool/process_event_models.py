@@ -57,6 +57,7 @@ class ProcessCompleteEvent(_ProcessEventBase):
     failed: int
     skipped: int
     elapsed_s: float
+    errors: dict[str, str] = Field(default_factory=dict)
 
 
 # ── Level events ───────────────────────────────────────────────────

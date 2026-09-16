@@ -386,6 +386,7 @@ def test_composite_executes_scalar_leaf_with_shared_pool_policy(
                 run_id=f"parent/{root_scope}",
                 scope_path=(),
                 execution_context=context,
+                scope_execution_profile=None,
                 out=out,
             )
         )
@@ -444,7 +445,9 @@ def test_pool_exhaustion_fails_before_scalar_attempt_history_starts(
     run_dir = runs_dir / run_id
     out = _Out()
     try:
-        succeeded = asyncio.run(
+        failure = pytest.raises(
+            CLIError,
+            asyncio.run,
             _execute_agent_step(
                 spec=spec,
                 step_def=step_def,
@@ -459,12 +462,12 @@ def test_pool_exhaustion_fails_before_scalar_attempt_history_starts(
                 run_id=run_id,
                 execution_context=context,
                 out=out,
-            )
+            ),
         )
     finally:
         context.close()
 
-    assert succeeded is False
+    assert "no eligible pool label" in str(failure.value)
     assert any("no eligible pool label" in warning for warning in out.warnings)
     state_dir = compute_task_state_dir(run_dir, step_def, {})
     assert read_attempt_history_at(state_dir) == ()
@@ -510,7 +513,9 @@ def test_pool_exhaustion_after_retry_marks_existing_attempt_terminal(
         preflight_quota_guard="off",
     )
     try:
-        succeeded = asyncio.run(
+        failure = pytest.raises(
+            CLIError,
+            asyncio.run,
             _execute_agent_step(
                 spec=ProcessSpec(
                     name="scalar-auth",
@@ -529,12 +534,12 @@ def test_pool_exhaustion_after_retry_marks_existing_attempt_terminal(
                 run_id=f"scalar-auth/{run_id}",
                 execution_context=context,
                 out=_Out(),
-            )
+            ),
         )
     finally:
         context.close()
 
-    assert succeeded is False
+    assert "no eligible pool label" in str(failure.value)
     state_dir = compute_task_state_dir(run_dir, step_def, {})
     history = read_attempt_history_at(state_dir)
     assert len(history) == 1
@@ -600,6 +605,7 @@ def test_pool_exhaustion_marks_top_level_scalar_step_failed(
                     run_dir=run_dir,
                     run_id=f"{spec.name}/{run_id}",
                     execution_context=context,
+                    scope_execution_profile=None,
                     out=_Out(),
                     events=events,
                 )
@@ -610,6 +616,7 @@ def test_pool_exhaustion_marks_top_level_scalar_step_failed(
     status = read_yaml_file(run_dir / ".state" / "process-status.yaml")
     assert status["state"] == "failed"
     assert status["steps"][step_def.id]["state"] == "failed"
+    assert "no eligible pool label" in status["steps"][step_def.id]["error"]
     events.step_fail.assert_called_once()
     state_dir = compute_task_state_dir(run_dir, step_def, {})
     assert read_attempt_history_at(state_dir) == ()
@@ -718,7 +725,9 @@ def test_scalar_binding_failure_degrades_to_step_failure(
     )
     out = _Out()
     try:
-        succeeded = asyncio.run(
+        failure = pytest.raises(
+            CLIError,
+            asyncio.run,
             _execute_agent_step(
                 spec=ProcessSpec(name="scalar-auth", steps=[step_def]),
                 step_def=step_def,
@@ -733,12 +742,12 @@ def test_scalar_binding_failure_degrades_to_step_failure(
                 run_id="scalar-auth/run",
                 execution_context=context,
                 out=out,
-            )
+            ),
         )
     finally:
         context.close()
 
-    assert succeeded is False
+    assert "outside credential pool runs directory" in str(failure.value)
     assert len(out.warnings) == 1
     assert "outside credential pool runs directory" in out.warnings[0]
 
@@ -825,7 +834,9 @@ def test_scalar_pool_auth_override_fails_cleanly_and_releases_lease(
     )
     out = _Out()
     try:
-        succeeded = asyncio.run(
+        failure = pytest.raises(
+            CLIError,
+            asyncio.run,
             _execute_agent_step(
                 spec=ProcessSpec(name="scalar-auth", steps=[step_def]),
                 step_def=step_def,
@@ -840,12 +851,12 @@ def test_scalar_pool_auth_override_fails_cleanly_and_releases_lease(
                 run_id=f"scalar-auth/{run_id}",
                 execution_context=context,
                 out=out,
-            )
+            ),
         )
     finally:
         context.close()
 
-    assert succeeded is False
+    assert "ambient auth wins" in str(failure.value)
     assert out.warnings == ["Step 'scalar-agent': ambient auth wins"]
     assert coordinator.active_counter.snapshot() == {(adapter.adapter_type, "alt1"): 0}
     state_dir = compute_task_state_dir(run_dir, step_def, {})
@@ -886,7 +897,9 @@ def test_scalar_pool_reuses_quota_preflight_before_acquiring(
     )
     out = _Out()
     try:
-        succeeded = asyncio.run(
+        failure = pytest.raises(
+            CLIError,
+            asyncio.run,
             _execute_agent_step(
                 spec=ProcessSpec(name="scalar-auth", steps=[step_def]),
                 step_def=step_def,
@@ -901,12 +914,12 @@ def test_scalar_pool_reuses_quota_preflight_before_acquiring(
                 run_id=f"scalar-auth/{run_id}",
                 execution_context=context,
                 out=out,
-            )
+            ),
         )
     finally:
         context.close()
 
-    assert succeeded is False
+    assert "not enough quota" in str(failure.value)
     preflight.assert_called_once_with(
         coordinator.backend,
         adapter=adapter.adapter_type,
@@ -958,7 +971,9 @@ def test_scalar_pool_warn_posture_skips_per_step_quota_scan(
         preflight_quota_guard="warn",
     )
     try:
-        succeeded = asyncio.run(
+        failure = pytest.raises(
+            CLIError,
+            asyncio.run,
             _execute_agent_step(
                 spec=ProcessSpec(name="scalar-auth", steps=[step_def]),
                 step_def=step_def,
@@ -973,12 +988,12 @@ def test_scalar_pool_warn_posture_skips_per_step_quota_scan(
                 run_id=f"scalar-auth/{run_id}",
                 execution_context=context,
                 out=_Out(),
-            )
+            ),
         )
     finally:
         context.close()
 
-    assert succeeded is False
+    assert "no eligible pool label" in str(failure.value)
     preflight.assert_not_called()
 
 

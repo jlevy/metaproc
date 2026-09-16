@@ -169,6 +169,37 @@ class EventLogger:
             }
         )
 
+    def host_admission_denied(
+        self,
+        *,
+        namespace: str,
+        limit: int,
+        label: str,
+        reason: str,
+        decision: str,
+        error: str | None = None,
+        waited_s: float | None = None,
+    ) -> None:
+        """Record the observed refusal and the caller's actual next action.
+
+        ``waited_s`` is the time spent in the acquisition that ended in a terminal
+        refusal; the first-scan ``wait`` record omits it.
+        """
+        self._write(
+            _without_none(
+                {
+                    "event": "host_admission_denied",
+                    "namespace": namespace,
+                    "limit": limit,
+                    "label": label,
+                    "reason": reason,
+                    "decision": decision,
+                    "error": error,
+                    "waited_s": None if waited_s is None else round(waited_s, 1),
+                }
+            )
+        )
+
     def host_slot_released(
         self,
         *,

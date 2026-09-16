@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import textwrap
 from pathlib import Path
+from typing import cast
 
 import pytest
 from typer.testing import CliRunner
 
+from metaproc.adapters.registry import get_adapter
 from metaproc.cli import app
 from metaproc.commands.auth_check import _resolve_variant_target
 from metaproc.engine.build_plan import build_plan
+from metaproc.engine.placeholders import resolve_runtime_config
 from metaproc.models.authored import ProcessSpec
 from metaproc.models.execution_profile import ExecutionProfileRegistry
 
@@ -251,6 +254,50 @@ profiles:
     assert output_path.endswith("/run-1/fast-codex/out.md")
 
 
+@pytest.mark.parametrize(
+    "profile", ["claude-sonnet", "claude-opus", "gemini-flash-36", "codex-gpt55"]
+)
+def test_selected_profile_retains_explicit_step_working_directory(
+    tmp_path: Path,
+    profile: str,
+) -> None:
+    spec = ProcessSpec.model_validate(
+        {
+            "name": "working-directory",
+            "steps": [
+                {
+                    "id": "write",
+                    "mode": "agent",
+                    "prompt_prefix": "write",
+                    "adapter": {
+                        "type": "gemini-cli",
+                        "config": {"working_directory": "{{run.dir}}"},
+                    },
+                    "outputs": {"out": {"path": "{{run.dir}}/out.md", "kind": "file"}},
+                }
+            ],
+        }
+    )
+    plan = build_plan(
+        spec,
+        {"RUNS_DIR": str(tmp_path), "RUN_ID": "run-1"},
+        process_path=tmp_path / "test.process.md",
+        adapter_override=profile,
+    )
+    adapter = get_adapter(plan.steps[0].adapter.type)
+    config = plan.steps[0].adapter.config
+    assert config["working_directory"] == "{{run.dir}}"
+    assert adapter.validate_config(config) == []
+    runtime_config = cast(
+        dict[str, object],
+        resolve_runtime_config(
+            config,
+            {"run.dir": str(tmp_path / "run-1")},
+        ),
+    )
+    assert adapter.working_directory(runtime_config) == tmp_path / "run-1"
+
+
 def test_step_profile_override_preserves_run_artifact_namespace(tmp_path: Path) -> None:
     profile_file = tmp_path / "profiles.yaml"
     _write(
@@ -304,6 +351,15 @@ profiles:
     assert plan.steps[0].artifact_namespace == "shared-artifacts"
     assert plan.steps[0].adapter.type == "codex-cli"
     assert plan.steps[0].adapter.config["model"] == "gpt-5.5"
+    with pytest.raises(ValueError, match=r"--step-variant nested-judge: no step .*\(summarize\)"):
+        build_plan(
+            spec,
+            {"RUNS_DIR": str(tmp_path), "RUN_ID": "run-1"},
+            process_path=tmp_path / "profile-test.process.md",
+            adapter_override="run-profile",
+            profile_files=[profile_file],
+            step_profile_overrides={"nested-judge": "summary-profile"},
+        )
     output_path = plan.steps[0].outputs["out"].path
     assert output_path is not None
     assert output_path.endswith("/run-1/shared-artifacts/summary.md")

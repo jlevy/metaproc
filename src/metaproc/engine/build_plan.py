@@ -108,6 +108,36 @@ def _resolve_required_profile(
         raise ValueError(msg) from exc
 
 
+def step_override_target_errors(spec: ProcessSpec, overrides: Mapping[str, str]) -> list[str]:
+    """Return one error per ``--step-variant`` step id that cannot take an override.
+
+    Overrides apply only to the top-level steps of the process being launched that are not
+    composite. A composite step's child process is planned with the enclosing scope's
+    profile or the composite step's authored `execution_profile:`, never with an override,
+    so an id naming a step inside a child, or a composite step itself, would otherwise be
+    accepted and have no effect, or replace the authored pin.
+    """
+    steps = {step.id: step for step in spec.steps}
+    targets = ", ".join(step.id for step in spec.steps if step.mode != "composite") or "(none)"
+    errors: list[str] = []
+    for step_id in overrides:
+        step = steps.get(step_id)
+        if step is None:
+            errors.append(
+                f"--step-variant {step_id}: no step {step_id!r} in process {spec.name!r}; "
+                f"overrides apply only to its top-level steps that are not composite "
+                f"({targets}), not to steps inside composite child processes"
+            )
+        elif step.mode == "composite":
+            errors.append(
+                f"--step-variant {step_id}: step {step_id!r} in process {spec.name!r} is a "
+                f"composite step; overrides apply only to top-level steps that are not "
+                f"composite ({targets}). Pin execution_profile: on the composite step to run "
+                "its subtree on another profile"
+            )
+    return errors
+
+
 def validate_execution_profiles(
     spec: ProcessSpec,
     *,
@@ -126,6 +156,7 @@ def validate_execution_profiles(
     registry = _load_profile_registry(process_path, profile_files)
     overrides = step_profile_overrides or {}
 
+    errors: list[str] = step_override_target_errors(spec, overrides)
     requests: list[tuple[str, str]] = []
     if adapter_override is None and spec.defaults.default_execution_profile:
         requests.append(
@@ -138,7 +169,6 @@ def validate_execution_profiles(
         elif step.execution_profile:
             requests.append((step.execution_profile, f"step {step.id!r} execution_profile"))
 
-    errors: list[str] = []
     for profile_name, context in requests:
         try:
             _resolve_required_profile(registry, profile_name, context=context)
@@ -780,6 +810,8 @@ def build_plan(
         artifact_namespace=run_artifact_namespace,
     )
     step_profile_overrides = step_profile_overrides or {}
+    if override_errors := step_override_target_errors(spec, step_profile_overrides):
+        raise ValueError("\n".join(override_errors))
 
     fan_out_errors = validate_fan_out_contracts(spec, process_path)
     if validate_spec and fan_out_errors:

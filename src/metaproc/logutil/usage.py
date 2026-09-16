@@ -13,6 +13,7 @@ Provides:
 from __future__ import annotations
 
 import logging
+import math
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -43,7 +44,25 @@ _PRICING_PATH = Path(__file__).parent.parent / "data" / "pricing.md"
 
 @dataclass
 class UsageStats:
-    """Aggregatable token usage and cost data."""
+    """Aggregatable token usage and cost data.
+
+    ``output_tokens`` targets output-rate tokens, including reasoning, when the
+    source evidence supports that count. Claude and Codex report that count
+    directly; Pi carries its provider's normalized usage. Gemini excludes
+    reasoning from its reported output, so `_gemini_billed_tokens` reconstructs
+    it from valid total and input counts. With incomplete or invalid evidence,
+    Gemini falls back to reported output: a lower bound with unknown reasoning,
+    not a verified complete count. Missing counts contribute zero; this model
+    does not encode per-bucket completeness, so partial records need not be
+    comparable across adapters.
+
+    ``input_tokens`` is uncached input. Cache reads and writes are separate
+    ``cache_read_tokens`` and ``cache_write_tokens`` buckets with their own
+    rates. These four available buckets sum to ``total_tokens``, the normalized
+    total of the evidence, not necessarily a provider's complete billed total.
+    CLI-reported costs and pricing-table calculations are list-cost estimates;
+    provider-authoritative billing is tracked separately.
+    """
 
     input_tokens: int = 0
     output_tokens: int = 0
@@ -246,6 +265,10 @@ def sum_claude_usage(
     ``modelUsage`` is the whole-attempt breakdown and includes subagent/model
     contributions that the top-level ``usage`` object can omit. When present,
     it is authoritative rather than additive with the top-level object.
+
+    Anthropic bills extended-thinking output at the output rate and counts it in
+    the output field either object reports, so that field is already the billed
+    output `UsageStats` defines and is taken as it stands.
     """
     stats = UsageStats(
         model=fallback_model,
@@ -308,7 +331,9 @@ def sum_codex_usage(turn_completed_event: dict[str, Any]) -> UsageStats:
     event as ``usage.{input_tokens, cached_input_tokens, output_tokens}``
     (reasoning tokens are rolled into ``output_tokens`` by the server in this
     release; older 0.31.0-era ``info.total_token_usage`` + separate
-    ``reasoning_output_tokens`` / ``total_tokens`` fields are gone).
+    ``reasoning_output_tokens`` / ``total_tokens`` fields are gone). That field
+    is therefore already the billed output `UsageStats` defines and is taken as
+    it stands.
 
     Sets ``provider="openai"`` for cost-rollup routing.
     """
@@ -375,8 +400,18 @@ def extract_gemini_usage(stats_dict: dict[str, Any]) -> list[UsageStats]:
 
 
 def _gemini_billed_tokens(stats: dict[str, Any]) -> tuple[int, int, int]:
-    """Return disjoint uncached-input, billed-output, and cached-input buckets."""
-    total_input = _nonnegative_int(stats.get("input_tokens"))
+    """Return uncached-input, normalized-output, and cached-input buckets.
+
+    Gemini's reported output excludes reasoning. Valid total and input counts
+    allow its reconstruction as their residual, counted exactly once. Reported
+    output remains the floor. If either measurement is unavailable, use that
+    floor with reasoning unknown, as defined on `UsageStats`.
+
+    Invalid or absent input cannot justify subtracting zero and reporting the
+    entire total as output. An explicitly measured zero can.
+    """
+    measured_input = _optional_nonnegative_int(stats.get("input_tokens"))
+    total_input = measured_input or 0
     cached_input = _nonnegative_int(stats.get("cached"))
     uncached_raw = stats.get("input")
     uncached_input = (
@@ -384,20 +419,25 @@ def _gemini_billed_tokens(stats: dict[str, Any]) -> tuple[int, int, int]:
         if uncached_raw is not None
         else max(total_input - cached_input, 0)
     )
-    visible_output = _nonnegative_int(stats.get("output_tokens"))
-    total_tokens = _nonnegative_int(stats.get("total_tokens"))
-    billed_output = max(visible_output, total_tokens - total_input, 0)
+    reported_output = _nonnegative_int(stats.get("output_tokens"))
+    total_tokens = _optional_nonnegative_int(stats.get("total_tokens"))
+    reasoning_residual = (
+        total_tokens - measured_input
+        if total_tokens is not None and measured_input is not None
+        else 0
+    )
+    billed_output = max(reported_output, reasoning_residual, 0)
     return (uncached_input, billed_output, cached_input)
 
 
 def _nonnegative_int(value: object) -> int:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return 0
-    return max(int(value), 0)
+    return _optional_nonnegative_int(value) or 0
 
 
 def _optional_nonnegative_int(value: object) -> int | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        return None
+    if isinstance(value, float) and not math.isfinite(value):
         return None
     return int(value)
 

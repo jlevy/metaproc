@@ -371,6 +371,7 @@ def classify_output_failures(
     Any failure another attempt cannot fix makes the whole set permanent, since
     the step has to produce all of its outputs.
     """
+    failures = _decision_failures(failures)
     if not failures:
         return RetryVerdict.FAIL
 
@@ -404,7 +405,25 @@ def requires_run_abort(
     permanently and the run continues. This is the seam a coordinator-level
     abort would attach to.
     """
-    return any(declared_action_for(f, outputs) == "fail_run" for f in failures)
+    return any(declared_action_for(f, outputs) == "fail_run" for f in _decision_failures(failures))
+
+
+def _decision_failures(failures: Sequence[OutputFailure]) -> list[OutputFailure]:
+    """Use structural refusals for policy when the same output also failed semantically.
+
+    Both records remain durable evidence, but a semantic model may report the
+    same malformed payload a second time. Policy for that output continues to
+    use the structural pass until its shape is valid.
+    """
+    structural_outputs = {
+        failure.output for failure in failures if failure.kind is OutputFailureKind.structural
+    }
+    return [
+        failure
+        for failure in failures
+        if failure.kind is not OutputFailureKind.semantic
+        or failure.output not in structural_outputs
+    ]
 
 
 def classify_failure(error: str) -> FailureClass:

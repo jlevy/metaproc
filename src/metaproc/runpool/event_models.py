@@ -88,6 +88,18 @@ class HostSlotReleasedEvent(BaseModel):
     lease_path: str
 
 
+class HostAdmissionDeniedEvent(BaseModel):
+    event: Literal["host_admission_denied"]
+    ts: datetime
+    namespace: str
+    limit: int
+    label: str
+    reason: Literal["no_available_slot", "timeout", "unavailable"]
+    decision: Literal["wait", "fail", "bypass"]
+    error: str | None = None
+    waited_s: float | None = None
+
+
 class ConcurrencyAdjustEvent(BaseModel):
     event: Literal["concurrency_adjust"]
     ts: datetime
@@ -283,6 +295,7 @@ RunPoolEvent = Annotated[
     | ProcessExitEvent
     | ProcessKillEvent
     | HostSlotAcquiredEvent
+    | HostAdmissionDeniedEvent
     | HostSlotReleasedEvent
     | ConcurrencyAdjustEvent
     | PressureCheckEvent

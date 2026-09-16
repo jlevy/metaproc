@@ -190,10 +190,16 @@ class TestStructuredFailures:
 
         failures = validate_item_outputs_detailed(tmp_path, outputs, softschema_registry=registry)
 
-        assert {(failure.invariant, failure.location) for failure in failures} == {
+        assert {
+            (failure.invariant, failure.location)
+            for failure in failures
+            if failure.kind is OutputFailureKind.structural
+        } == {
             ("missing_property", "needed"),
             ("undeclared_property", "surprise"),
         }
+        assert any(failure.kind is OutputFailureKind.semantic for failure in failures)
+        assert classify_output_failures(failures, outputs) is RetryVerdict.FAIL
 
 
 class TestStringViewIsUnchanged:
@@ -348,6 +354,14 @@ class TestOnInvalidDeclarations:
             )
             is RetryVerdict.FAIL
         )
+
+    def test_structural_decision_keeps_priority_when_semantic_evidence_is_also_retained(self):
+        structural = self._failure(OutputFailureKind.structural, invariant="type")
+        semantic = self._failure(OutputFailureKind.semantic, invariant="value_error")
+        outputs = self._outputs({"type": "retry", "value_error": "fail_run"})
+
+        assert classify_output_failures([structural, semantic], outputs) is RetryVerdict.RETRY
+        assert not requires_run_abort([structural, semantic], outputs)
 
     def test_a_declaration_governs_only_the_output_that_made_it(self):
         """Two outputs of one step have two contracts and two reasons to fail."""

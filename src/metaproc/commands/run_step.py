@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
+import traceback
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -30,6 +31,7 @@ from metaproc.commands.helpers import (
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.engine.build_plan import build_plan, merge_defaults
 from metaproc.engine.code_handler import resolve_code_handler
+from metaproc.engine.command_diagnostics import command_failure_message, handler_failure_message
 from metaproc.engine.dep_state import fingerprint_step
 from metaproc.engine.launch_validation import (
     INPUT_FILE_GROUP,
@@ -37,7 +39,7 @@ from metaproc.engine.launch_validation import (
     collect_launch_errors,
     format_launch_errors,
 )
-from metaproc.engine.pathing import compute_run_dir, compute_task_state_dir
+from metaproc.engine.pathing import compute_run_dir, compute_task_logs_dir, compute_task_state_dir
 from metaproc.engine.placeholders import (
     collect_step_runtime_placeholders,
     resolve_runtime_config,
@@ -367,7 +369,7 @@ def run_step(
                 step_hash=step_hash,
             ),
         )
-        mark_running_at(
+        running_record = mark_running_at(
             state_dir,
             run_id=run_id,
             step_id=step,
@@ -375,6 +377,7 @@ def run_step(
             item_key=canonical_item_key,
         )
 
+        env = dict(os.environ)
         try:
             if handler_ref:
                 if handler_fn is None:
@@ -394,7 +397,6 @@ def run_step(
                 if command_ref is None:
                     raise CLIError(f"no command or handler configured for step '{step}'")
                 resolved_cmd = resolve_templates(command_ref, variables)
-                env = dict(os.environ)
                 env.update(
                     {
                         key: resolve_templates(value, variables)
@@ -413,11 +415,41 @@ def run_step(
                 if proc.stdout:
                     out.progress(proc.stdout.rstrip())
         except subprocess.CalledProcessError as exc:
-            mark_failed_at(state_dir, error=f"command exit code {exc.returncode}")
-            raise CLIError(f"step '{step}' command failed (exit {exc.returncode})") from exc
+            logs_dir = compute_task_logs_dir(run_dir, step_def, variables)
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            log_file = logs_dir / f"process_{running_record.attempt_id}.log"
+            with atomic_output_file(log_file) as tmp_path:
+                tmp_path.write_text((exc.stdout or "") + (exc.stderr or ""))
+            failure = command_failure_message(
+                exc.returncode,
+                stdout=exc.stdout,
+                stderr=exc.stderr,
+                env=env,
+                log_path=str(log_file.relative_to(run_dir)),
+            )
+            mark_failed_at(
+                state_dir,
+                error=failure.error,
+                running_record=running_record,
+                failure_class=str(failure.failure_class),
+            )
+            raise CLIError(f"step '{step}' command failed: {failure.error}") from exc
         except Exception as exc:
-            mark_failed_at(state_dir, error=str(exc))
-            raise CLIError(f"step '{step}' code execution failed: {exc}") from exc
+            logs_dir = compute_task_logs_dir(run_dir, step_def, variables)
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            log_file = logs_dir / f"process_{running_record.attempt_id}.log"
+            with atomic_output_file(log_file) as tmp_path:
+                tmp_path.write_text(traceback.format_exc())
+            failure = handler_failure_message(
+                exc, env=env, log_path=str(log_file.relative_to(run_dir))
+            )
+            mark_failed_at(
+                state_dir,
+                error=failure.error,
+                running_record=running_record,
+                failure_class=str(failure.failure_class),
+            )
+            raise CLIError(f"step '{step}' code execution failed: {failure.error}") from exc
 
         exit_code = 0
         if effective_outputs and artifact_dir is not None:

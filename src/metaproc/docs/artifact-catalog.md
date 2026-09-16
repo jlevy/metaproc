@@ -18,7 +18,7 @@ the filename constants.
 | YAML | ~19 | `<run>/.state/` |
 | JSONL | ~9 | `<run>/.logs/` |
 | JSON | 3 writers | `<run>/.state/` sidecars, `<run>/resources.json`, arena cache |
-| Softschema MD | 5 | `<run>/` and `<run>/<artifact-tree>/` (post-run human reports) |
+| Softschema MD | 6 | `<run>/` and `<run>/<artifact-tree>/` (post-run human reports) |
 | Plain text | ~5 | `<run>/.logs/` (subprocess captures and prompt snapshots) |
 
 ## State artifacts (YAML)
@@ -28,9 +28,10 @@ not hand-edit them. Atomic writes via `strif.atomic_output_file`.
 
 | Filename | Path | Schema (Pydantic) | Lifecycle | Writer | Primary readers |
 | --- | --- | --- | --- | --- | --- |
-| `run-config.yaml` | `<run>/.state/` | ad-hoc outer dict with typed `ResourceRunSnapshot` resources block | atomic, once at creation; immutable process, run-directory, and resolved-variable identity validated on resume | `commands/run_process.py:_write_run_config` | engine resume validation, terminal resource finalizer, metabrowser, `metaproc status` |
+| `run-config.yaml` | `<run>/.state/` | ad-hoc outer dict with typed `ResourceRunSnapshot` resources block | atomic, once at creation; immutable process, run-directory, and resolved-variable identity validated on resume; recorded `step_variants` re-applied on a resume without `--step-variant` and refused when a resume passes a different set, and a config recording none adopts and records what a resume passes | `commands/run_process.py:_write_run_config` | engine resume validation, terminal resource finalizer, metabrowser, `metaproc status` |
 | `run-plan.yaml` | `<scope>/.state/` | pure-YAML `RunPlanSnapshot` (`metaproc:RunPlanSnapshot/0.1`) | atomic, refreshed before evaluating the root or nested process scope and after runtime discovery of an upstream-produced fan-out source; records step identity, shape, canonical mapped item keys, output declarations, and fingerprints while excluding item payloads and execution configuration | `commands/run_process.py:_publish_run_plan`, `_refresh_run_plan_item_keys` | runtime task/output projection, metabrowser, operator inspection |
 | `resource-usage-summary.v1.schema.yaml` | `<run>/.state/schemas/` | compiled SoftSchema JSON Schema | atomic, terminal/recovery refresh | `engine/resource_summary.py` | SoftSchema validators, operator audit |
+| `agent-operations-summary.v1.schema.yaml` | `<run>/.state/schemas/` | compiled SoftSchema JSON Schema | atomic, at terminal finalization, status-triggered recovery, and `operations summary --write` | `engine/operations_summary.py` | SoftSchema validators, operator audit |
 | `process-status.yaml` | `<run>/.state/` | ad-hoc dict (typed envelope pending) | atomic, rewritten each DAG tick | `commands/run_process.py:_write_process_status` | human, `metaproc status`, metabrowser |
 | `orchestrator-lease.yaml` | `<run>/.state/` | ad-hoc dict | heartbeat-updated every 30s | `io/orchestrator_lease.py:acquire_lease` | engine lease check |
 | `overrides.yaml` | `<run>/.state/` | `OverridesDocument` (`metaproc:OverridesDocument/0.1`) | atomic, on `metaproc override` | `io/overrides.py:_write_overrides` | `_verify_ancestors`, `metaproc status` footer |
@@ -107,6 +108,7 @@ Pattern documented in the standalone
 | --- | --- | --- | --- | --- |
 | `usage.md` | `<run>/` | `usage` / `metaproc:UsageReport/0.2` | `commands/write_usage.py` via `logutil/usage.py:write_usage_report` | human operator |
 | `resource-usage-summary.md` | `<run>/` | `resource_usage` / `metaproc.resources:ResourceUsageSummary/v1` | `engine/resource_summary.py` | human operator, SoftSchema validation |
+| `operations-summary.md` | `<run>/` | `agent_operations` / `metaproc.operations:AgentOperationsSummary/v1` | `engine/operations_summary.py`, after resource finalization in `commands/run_process.py`, or when missing after status-triggered resource recovery in `commands/status.py` | human operator, `metaproc operations rollup`, SoftSchema validation |
 | `qa-report.md` (per-item) | `<run>/<artifact-tree>/.../` | `qa` / domain-defined | downstream QA plugin handler | human operator |
 | `qa-summary.md` (per-process) | `<run>/<artifact-tree>/.../` | `qa_summary` / domain-defined | downstream QA plugin handler | human operator |
 
@@ -117,7 +119,7 @@ The `usage.md` envelope is registered in `metaproc.io.frontmatter.ENVELOPE_MAP`;
 
 | Filename | Path | Writer | Notes |
 | --- | --- | --- | --- |
-| `process_<ts>.log` | `<run>/.logs/tasks/<step>/` or `<run>/.logs/tasks/<step>/<item>/` | `runpool/backend.py` | Captured subprocess stdout and stderr; gzip on close |
+| `process_<attempt_id>.log` | `<run>/.logs/tasks/<step>/` or `<run>/.logs/tasks/<step>/<item>/` | `runpool/backend.py` | Captured subprocess stdout and stderr; gzip on close |
 | `probe.stderr` | `<run>/.state/steps/<step>/...` | `dispatch/pool_dispatch.py` | Captured stderr from a failed preflight probe |
 | `prompt-<step>-attempt<N>-<HHMMSS>.txt` | `<run>/.logs/tasks/<step>/` | `commands/run_process.py:_execute_agent_step` | Resolved prompt for one scalar agent attempt; atomic, once before launch |
 | `<step>_<context>_<ts>-attempt<N>.prompt.md` | `<run>/.logs/tasks/<step>/<item>/` | `commands/run_parallel.py:_build_prepare_launch` | Resolved prompt for one fan-out agent attempt; atomic, once before launch |

@@ -53,6 +53,7 @@ from metaproc.commands.helpers import (
     parse_adapter_config,
     parse_step_variant_args,
     parse_var_args,
+    recorded_step_variants,
     require_runtime_runs_dir,
     resolve_gcp_worker_runs_dir,
     resolve_process_path,
@@ -91,19 +92,28 @@ from metaproc.dispatch.preflight import (
 from metaproc.dispatch.slot_coordinator import SlotCoordinator, SlotLease
 from metaproc.engine.build_plan import build_plan, merge_defaults
 from metaproc.engine.code_handler import resolve_code_handler
+from metaproc.engine.command_diagnostics import (
+    command_failure_message,
+    handler_failure_message,
+    summarize_failure_causes,
+)
 from metaproc.engine.dep_state import (
     fingerprint_step,
     recorded_step_hash,
 )
 from metaproc.engine.discovery import discover_items_from_source
-from metaproc.engine.fan_in import write_outcome_manifest
+from metaproc.engine.fan_in import collect_item_outcomes, write_outcome_manifest
 from metaproc.engine.graph import (
     downstream,
     item_aligned_chains,
     propagate_failure,
     topo_sort,
 )
-from metaproc.engine.input_validation import validate_process_inputs, validate_process_outputs
+from metaproc.engine.input_validation import (
+    validate_process_inputs,
+    validate_process_outputs,
+    validate_process_outputs_detailed,
+)
 from metaproc.engine.item_runner import (
     StepInvoker,
     run_aligned_chain,
@@ -111,6 +121,7 @@ from metaproc.engine.item_runner import (
     with_retry,
 )
 from metaproc.engine.launch_validation import collect_launch_errors, format_launch_errors
+from metaproc.engine.operations_summary import finalize_operations_summary
 from metaproc.engine.pathing import (
     compute_logs_dir,
     compute_run_dir,
@@ -170,6 +181,7 @@ from metaproc.io.state_io import (
     end_status_attempt_at,
     mark_completed_at,
     mark_failed_at,
+    mark_failed_synthetic_at,
     mark_running_at,
     read_manual_ack_at,
     read_run_plan,
@@ -182,6 +194,7 @@ from metaproc.io.state_io import (
 )
 from metaproc.logutil.compaction import try_compact_log
 from metaproc.models.authored import IOSpec, ProcessSpec, ProcessStep, StepContext
+from metaproc.models.lane import ExecutionLane
 from metaproc.models.plan import Plan, ResolvedStep, RunPlanSnapshot, RunPlanStep
 from metaproc.models.resource_budget import FinalizationState
 from metaproc.models.resource_snapshot import ResourceRunSnapshot
@@ -214,7 +227,11 @@ from metaproc.runpool.pool import (
 )
 from metaproc.runpool.process_events import ProcessEventLogger
 from metaproc.runpool.registry import get_backend
-from metaproc.runpool.scalar_admission import SCALAR_DEFAULT_HOST_LIMIT, admitted_launch
+from metaproc.runpool.scalar_admission import (
+    SCALAR_ACQUIRE_TIMEOUT_S,
+    SCALAR_DEFAULT_HOST_LIMIT,
+    admitted_launch,
+)
 from metaproc.settings import POOL_MAX_CONCURRENCY
 from metaproc.viz_loader import load_plan_bundle
 
@@ -231,16 +248,72 @@ def _sync_executor_worker_count(max_concurrency: int | None) -> int:
     return max(_MIN_SYNC_EXECUTOR_WORKERS, max_concurrency or 0)
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class RunPoolResources:
+    """The values a run-owned RunPool is sized from, as one execution profile resolves them.
+
+    Each is the value the pool would use, so a `max_concurrency_hint` at or above the
+    command-line ceiling and an explicit `host_max_concurrency` equal to the default
+    compare equal to leaving them unset.
+    """
+
+    max_concurrency: int
+    """The pool ceiling: `--max-concurrency` or the default maximum, lowered by the hint."""
+    max_concurrency_hint: int | None
+    host_max_concurrency: int
+    """The host-slot limit: `host_max_concurrency` or the pool ceiling, lowered by
+    `METAPROC_HOST_MAX_LOCAL_AGENTS`."""
+    estimated_process_rss_bytes: int
+    initial_memory_budget_fraction: float
+
+    @classmethod
+    def resolve(cls, resource_config: Mapping[str, object], *, ceiling: int) -> RunPoolResources:
+        """Resolve one profile's resources under the run's command-line *ceiling*."""
+        raw_hint = resource_config.get("max_concurrency_hint")
+        hint = int(str(raw_hint)) if raw_hint is not None else None
+        max_concurrency = min(ceiling, hint) if hint is not None else ceiling
+        return cls(
+            max_concurrency=max_concurrency,
+            max_concurrency_hint=hint,
+            host_max_concurrency=resolve_host_max_concurrency(
+                resource_config, default=max_concurrency
+            ),
+            estimated_process_rss_bytes=resolve_estimated_process_rss_bytes(resource_config),
+            initial_memory_budget_fraction=resolve_initial_memory_budget_fraction(resource_config),
+        )
+
+    def differences(self, other: RunPoolResources) -> list[tuple[str, object, object]]:
+        """Return ``(field, own value, other value)`` for each pool-sizing value that differs.
+
+        The raw hint is recorded for status only; its effect is `max_concurrency`.
+        """
+        return [
+            (field.name, getattr(self, field.name), getattr(other, field.name))
+            for field in dataclasses.fields(self)
+            if field.name != "max_concurrency_hint"
+            and getattr(self, field.name) != getattr(other, field.name)
+        ]
+
+
 @dataclasses.dataclass(slots=True)
 class RunPoolOwner:
-    """Lazily construct and close the one adaptive process pool for a run."""
+    """Lazily construct and close the one adaptive process pool for a run.
+
+    The first agent leaf sizes the pool from its execution profile's resources. Each
+    later profile joins as another status lane when its `RunPoolResources` resolve
+    equal to the sizing profile's, and is refused when they differ: the pool sizes its
+    startup concurrency, ceiling, and host-slot limit once and has no per-lane resource
+    accounting.
+    """
 
     run_dir: Path
     backend_name: str
     max_concurrency: int | None
     initial_concurrency: int | None
     pool: RunPool | None = None
-    execution_profile: str | None = None
+    sizing_profile: str | None = None
+    sizing_resources: RunPoolResources | None = None
+    lane_profiles: set[str] = dataclasses.field(default_factory=set)
 
     def get_pool(
         self,
@@ -248,40 +321,69 @@ class RunPoolOwner:
         resource_config: Mapping[str, object],
         execution_profile: str,
     ) -> RunPool:
-        """Return the run pool, configured from the first executable agent leaf."""
-        if self.pool is not None:
-            if self.execution_profile != execution_profile:
-                raise CLIError(
-                    "one run-owned RunPool currently supports one execution profile; "
-                    f"started with {self.execution_profile!r}, then received "
-                    f"{execution_profile!r}"
-                )
+        """Return the run pool with ``execution_profile`` registered as one of its lanes."""
+        if self.pool is not None and execution_profile in self.lane_profiles:
             return self.pool
 
-        pool_max = self.max_concurrency or POOL_MAX_CONCURRENCY
-        raw_profile_hint = resource_config.get("max_concurrency_hint")
-        profile_hint = int(str(raw_profile_hint)) if raw_profile_hint is not None else None
-        if profile_hint is not None:
-            pool_max = min(pool_max, profile_hint)
+        resources = RunPoolResources.resolve(
+            resource_config, ceiling=self.max_concurrency or POOL_MAX_CONCURRENCY
+        )
+        if self.pool is not None:
+            differences = (
+                self.sizing_resources.differences(resources)
+                if self.sizing_resources is not None
+                else []
+            )
+            if differences:
+                detail = "; ".join(
+                    f"{name} {sized!r} for {self.sizing_profile!r}, "
+                    f"{requested!r} for {execution_profile!r}"
+                    for name, sized, requested in differences
+                )
+                raise CLIError(
+                    f"execution profile {execution_profile!r} cannot share the run-owned "
+                    f"RunPool sized from {self.sizing_profile!r}: {detail}. A run-owned "
+                    "RunPool serves several execution profiles only when they resolve "
+                    "equal max_concurrency (the run's ceiling lowered by "
+                    "max_concurrency_hint), host_max_concurrency, "
+                    "estimated_process_rss_bytes, and initial_memory_budget_fraction, "
+                    "because it sizes startup concurrency, its ceiling, and its host-slot "
+                    "limit once and has no per-lane resource accounting. Align those "
+                    "resources across the profiles, or run these steps in separate runs."
+                )
+            self.pool.register_lane(
+                ExecutionLane(lane_id=execution_profile, execution_profile=execution_profile)
+            )
+            self.lane_profiles.add(execution_profile)
+            return self.pool
+
         config = RunPoolConfig(
-            max_concurrency=pool_max,
+            max_concurrency=resources.max_concurrency,
             initial_concurrency=self.initial_concurrency or 0,
             min_concurrency=1,
-            estimated_process_rss_bytes=resolve_estimated_process_rss_bytes(resource_config),
-            initial_memory_budget_fraction=resolve_initial_memory_budget_fraction(resource_config),
+            estimated_process_rss_bytes=resources.estimated_process_rss_bytes,
+            initial_memory_budget_fraction=resources.initial_memory_budget_fraction,
             state_dir=paths_mod.run_state_dir(self.run_dir),
             logs_dir=paths_mod.runpool_logs_dir(self.run_dir),
-            # Scalar callers already enter the shared run leaf gate and host-admission
-            # scope before submitting. The pool is the adaptive process controller;
-            # reacquiring either outer gate here would deadlock at a ceiling of one.
+            # Agent leaves enter the shared run leaf gate before submitting; reacquiring
+            # it here would deadlock at a ceiling of one.
             external_semaphore=None,
-            host_admission_enabled=False,
+            # A leaf takes its host slot here, once the pool admits its process, so slots
+            # count running agents rather than leaves queued behind adaptive capacity or
+            # a hinted ceiling, and each lease records its child. Like the scalar gate, it
+            # waits at most a minute and then launches without a slot.
+            host_admission_enabled=True,
+            host_admission_limit=resources.host_max_concurrency,
+            host_admission_acquire_timeout_s=SCALAR_ACQUIRE_TIMEOUT_S,
+            host_admission_fail_open=True,
             execution_profile=execution_profile,
             cli_max_concurrency=self.max_concurrency,
-            profile_max_concurrency_hint=profile_hint,
+            profile_max_concurrency_hint=resources.max_concurrency_hint,
         )
-        self.execution_profile = execution_profile
         self.pool = RunPool(config, backend=get_backend(self.backend_name))
+        self.sizing_profile = execution_profile
+        self.sizing_resources = resources
+        self.lane_profiles.add(execution_profile)
         return self.pool
 
     async def close(self) -> None:
@@ -305,7 +407,6 @@ class RunExecutionContext:
     num_workers: int
     machine_type: str
     spot: bool
-    variant_override: str | None
     profile_files: tuple[Path, ...]
     skip_steps: frozenset[str]
     force: bool
@@ -329,7 +430,6 @@ class RunExecutionContext:
         num_workers: int = 1,
         machine_type: str = "",
         spot: bool = False,
-        variant_override: str | None = None,
         profile_files: Sequence[Path] = (),
         skip_steps: set[str] | frozenset[str] = frozenset(),
         force: bool = False,
@@ -352,7 +452,6 @@ class RunExecutionContext:
             num_workers=num_workers,
             machine_type=machine_type,
             spot=spot,
-            variant_override=variant_override,
             profile_files=tuple(profile_files),
             skip_steps=frozenset(skip_steps),
             force=force,
@@ -452,6 +551,25 @@ class _PreparedCompositeScope:
     plan: Plan
     variables: dict[str, str]
     identity: ScopeIdentity
+    execution_profile: str | None
+    """The profile override the child scope plans its own children and agent leaves with."""
+
+
+def _composite_scope_execution_profile(
+    step_def: ProcessStep,
+    target: ResolvedStep,
+    scope_execution_profile: str | None,
+) -> tuple[str | None, bool]:
+    """Return the profile override for a composite step's child scope, and whether it is pinned.
+
+    A composite step that declares `execution_profile:` runs its whole subtree on that
+    profile, in place of the one its own scope runs on. Without a pin the child inherits
+    the enclosing scope's override: the launch `--variant` at the root, or the nearest
+    pinned ancestor below it. Step-level pins inside the subtree still win for their steps.
+    """
+    if not step_def.execution_profile:
+        return scope_execution_profile, False
+    return target.execution_profile or step_def.execution_profile, True
 
 
 async def _run_sync[SyncResult](
@@ -686,6 +804,7 @@ def _write_run_config(  # noqa: PLR0913
     auth_flags: AuthPoolFlags | None = None,
     max_concurrency: int | None = None,
     resource_snapshot: ResourceRunSnapshot | None = None,
+    step_variants: Mapping[str, str] | None = None,
 ) -> Path:
     """Write run-config.yaml at run creation time; record changes on resume.
 
@@ -700,6 +819,8 @@ def _write_run_config(  # noqa: PLR0913
     Returns the path to the config file. Resume calls validate the process,
     run directory, and resolved immutable variables (raises CLIError on
     mismatch) but accept changes to auth / concurrency as recorded events.
+    The one field a resume writes back is ``step_variants``, for a config that
+    records none; see ``_adopt_step_variants``.
     """
     config_path = paths_mod.run_config_file(run_dir)
     logs_dir = paths_mod.run_logs_dir(run_dir)
@@ -718,6 +839,7 @@ def _write_run_config(  # noqa: PLR0913
             new_auth_flags=auth_flags,
             new_max_concurrency=max_concurrency,
         )
+        _adopt_step_variants(config_path, step_variants)
         return config_path
 
     state_dir = paths_mod.run_state_dir(run_dir)
@@ -747,6 +869,8 @@ def _write_run_config(  # noqa: PLR0913
         data["artifact_namespace"] = artifact_namespace
     if resolved_profiles:
         data["resolved_profiles"] = resolved_profiles
+    if step_variants:
+        data["step_variants"] = dict(sorted(step_variants.items()))
     if auth_flags is not None and auth_flags.is_pool_dispatch_enabled():
         data["auth"] = _serialize_auth_flags(auth_flags)
     if max_concurrency is not None:
@@ -1048,6 +1172,64 @@ def _json_dumps(value: object) -> str:
     return _json.dumps(value, default=str)
 
 
+def _resume_step_variants(run_dir: Path, requested: Mapping[str, str]) -> dict[str, str]:
+    """Return the ``--step-variant`` overrides a launch or resume of *run_dir* runs with.
+
+    A run records its overrides in ``run-config.yaml`` at creation. The plan, its step
+    fingerprints, and ``metaproc status`` all follow that record, so a resume that passes
+    no overrides re-applies it and a resume that passes a different set is refused.
+
+    A config that records nothing holds no set to contradict: ``--step-variant`` shipped
+    before the record existed, so a run from that version applies its overrides with
+    nothing to resume from. Such a resume adopts what it passes, and ``_write_run_config``
+    records it once launch validation has accepted it.
+    """
+    config_path = paths_mod.run_config_file(run_dir)
+    if not config_path.exists():
+        return dict(requested)
+    raw = read_yaml_file(config_path)
+    recorded = recorded_step_variants(raw) if isinstance(raw, dict) else {}
+    if not requested:
+        return recorded
+    if not recorded:
+        return dict(requested)
+    if dict(requested) != recorded:
+        raise CLIError(
+            "Resume mismatch: run-config.yaml records "
+            f"{_format_step_variants(recorded)} but you launched with "
+            f"{_format_step_variants(requested)}. Resume without --step-variant to reuse "
+            "the recorded overrides, or use a different RUN_ID."
+        )
+    return recorded
+
+
+def _format_step_variants(overrides: Mapping[str, str]) -> str:
+    """Render a non-empty override set as the flags that produce it."""
+    return ", ".join(
+        f"--step-variant {step}={profile}" for step, profile in sorted(overrides.items())
+    )
+
+
+def _adopt_step_variants(config_path: Path, step_variants: Mapping[str, str] | None) -> None:
+    """Record the overrides a resume adopted, for a config that records none.
+
+    ``_resume_step_variants`` lets a resume adopt what it passes when the config holds no
+    set to contradict. Recording it here rather than there puts the write after launch
+    validation, so an override the run cannot accept never reaches the config and poisons
+    every later resume. A config that already records a set keeps it — the resume either
+    matched it or was refused.
+    """
+    if not step_variants:
+        return
+    raw = read_yaml_file(config_path)
+    if not isinstance(raw, dict) or recorded_step_variants(raw):
+        return
+    raw["step_variants"] = dict(sorted(step_variants.items()))
+    with atomic_output_file(config_path) as tmp_path:
+        Path(tmp_path).write_text(to_yaml_string(raw))
+    log.info("Recorded resumed --step-variant overrides in %s", config_path)
+
+
 def _validate_run_config(
     config_path: Path,
     *,
@@ -1190,31 +1372,57 @@ def _read_step_status(run_dir: Path, step_id: str) -> StatusRecord | None:
     return read_status_at(_step_item_dir(run_dir, step_id))
 
 
-def _read_scalar_code_failure_error(
+def _read_step_failure_error(
     run_dir: Path,
     target: ResolvedStep,
+    *,
+    upstream_chain: Sequence[str] = (),
 ) -> str:
-    """Return the durable task error for a failed scalar code step.
-
-    ``_execute_code_step`` owns the detailed failure record. The DAG layer
-    only receives a boolean, so recover that already-persisted detail here
-    rather than introducing a second execution-result type solely for
-    observability.
-    """
-    if target.mode != "code" or target.fan_out is not None:
-        return ""
+    """Lift the durable causes received by this step into its failure summary."""
     try:
+        if target.fan_out is not None:
+            snapshot = read_run_plan(run_dir)
+            step = (
+                next((step for step in snapshot.steps if step.step_id == target.step_id), None)
+                if snapshot is not None
+                else None
+            )
+            keys = step.item_keys if step is not None else None
+            if keys is None:
+                return "item failure detail unavailable: current item roster not recorded"
+            outcomes = collect_item_outcomes(
+                run_dir, target.step_id, expected_keys=keys, upstream_chain=upstream_chain
+            )
+            # Retained directories outside the current published roster are history,
+            # not members of this execution's denominator or failure population.
+            current_keys = set(keys)
+            failures = [o for o in outcomes if o["key"] in current_keys and not o["succeeded"]]
+            if not failures:
+                return "step failed without a recorded item failure"
+            detail = summarize_failure_causes(
+                o.get("error") or f"error not recorded (state: {o['state']})" for o in failures
+            )
+            return f"{len(failures)} of {len(keys)} items failed ({detail})"
         record = _read_step_status(run_dir, target.step_id)
-    except Exception:  # noqa: BLE001 -- status projection is best-effort
+    except Exception as exc:  # noqa: BLE001 -- status projection is best-effort
         log.warning(
-            "could not read failure detail for scalar code step %r",
+            "could not read failure detail for step %r",
             target.step_id,
             exc_info=True,
         )
-        return ""
+        return f"failure detail unavailable: {type(exc).__name__}: {exc}"
     if record is None or record.state != "failed" or not record.error:
-        return ""
+        return "error not recorded"
     return record.error
+
+
+def _process_step_errors(step_states: Mapping[str, Mapping[str, Any]]) -> dict[str, str]:
+    """Preserve each failed step's cause, explicitly marking missing evidence."""
+    return {
+        step_id: state.get("error") or "error not recorded"
+        for step_id, state in step_states.items()
+        if state.get("state") == "failed"
+    }
 
 
 def _read_process_status_yaml(run_dir: Path) -> dict[str, Any] | None:
@@ -1233,6 +1441,20 @@ def _read_process_status_yaml(run_dir: Path) -> dict[str, Any] | None:
     except YAMLError:
         return None
     return data if isinstance(data, dict) else None
+
+
+def _record_process_output_failure(run_dir: Path, error: CLIError) -> None:
+    """Persist a process-boundary refusal after its child steps have completed."""
+    data = _read_process_status_yaml(run_dir) or {}
+    data.update(state="failed", error=str(error), completed_at=_now_iso())
+    if error.output_failures:
+        data["output_failures"] = [
+            failure.model_dump(mode="json", exclude_none=True) for failure in error.output_failures
+        ]
+    path = run_dir / STATE_DIR / "process-status.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with atomic_output_file(path) as temporary:
+        Path(temporary).write_text(to_yaml_string(data))
 
 
 def _read_recorded_step_hash(run_dir: Path, step_id: str) -> str | None:
@@ -1554,17 +1776,16 @@ async def _execute_code_step(
         item_key=state_dir.name if step_def.for_each is not None else None,
     )
 
-    handler_fn = None
-    if handler_ref:
-        handler_fn = resolve_code_handler(handler_ref, process_dir)
-
     # Captured code stdout/stderr is a task log, not a run-level stream.
     logs_dir = compute_task_logs_dir(run_dir, step_def, variables)
     logs_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    log_file = logs_dir / f"process_{ts}.log"
+    # Name the log for its attempt, as run-step and run-parallel do: attempts started in
+    # the same second must not overwrite the file their durable errors point at.
+    log_file = logs_dir / f"process_{running_record.attempt_id}.log"
+    env = dict(os.environ)
 
     try:
+        handler_fn = resolve_code_handler(handler_ref, process_dir) if handler_ref else None
         if handler_fn is not None:
             process_step = step_def.model_copy(
                 deep=True,
@@ -1592,7 +1813,6 @@ async def _execute_code_step(
             await _run_sync(execution_context, _run_handler)
         elif command_ref is not None:
             resolved_cmd = resolve_templates(command_ref, variables)
-            env = dict(os.environ)
             if target.env:
                 env.update({k: resolve_templates(v, variables) for k, v in target.env.items()})
             result = await _run_sync(
@@ -1631,12 +1851,18 @@ async def _execute_code_step(
         if output:
             with atomic_output_file(log_file) as tmp_path:
                 tmp_path.write_text(output)
-        command_error = f"command exit code {exc.returncode}"
+        command_failure = command_failure_message(
+            exc.returncode,
+            stdout=exc.stdout,
+            stderr=exc.stderr,
+            env=env,
+            log_path=str(log_file.relative_to(run_dir)),
+        )
         mark_failed_at(
             state_dir,
-            error=command_error,
+            error=command_failure.error,
             running_record=running_record,
-            failure_class=str(classify_failure(command_error)),
+            failure_class=str(command_failure.failure_class),
         )
         return False
     except (asyncio.CancelledError, KeyboardInterrupt) as exc:
@@ -1652,12 +1878,16 @@ async def _execute_code_step(
         tb = traceback.format_exc()
         with atomic_output_file(log_file) as tmp_path:
             tmp_path.write_text(tb)
-        handler_error = f"{type(exc).__name__}: {exc} (traceback in {log_file.name})"
+        handler_failure = handler_failure_message(
+            exc,
+            env=env,
+            log_path=str(log_file.relative_to(run_dir)),
+        )
         mark_failed_at(
             state_dir,
-            error=handler_error,
+            error=handler_failure.error,
             running_record=running_record,
-            failure_class=str(classify_failure(handler_error)),
+            failure_class=str(handler_failure.failure_class),
         )
         return False
     except BaseException as exc:
@@ -1845,6 +2075,54 @@ def _discover_chain_items(
     return discovery.nonterminal_contexts()
 
 
+async def _execute_mapped_code_item(
+    *,
+    spec: ProcessSpec,
+    step_def: ProcessStep,
+    target: ResolvedStep,
+    variables: dict[str, str],
+    process_dir: Path,
+    run_dir: Path,
+    run_id: str,
+    execution_context: RunExecutionContext | None,
+    out: Any,
+) -> bool:
+    """Execute one item of a mapped code step, keeping a prelaunch refusal on that item.
+
+    ``_execute_code_step`` raises ``CLIError`` only before its attempt starts, for
+    example when an input is missing. A scalar step lets that reach the orchestrator,
+    which records the step failure. For a mapped step the refusal is this item's
+    failure: raising it would leave the item without a status, attributing the cause
+    to the whole step, while its siblings finish.
+    """
+    try:
+        return await _execute_code_step(
+            spec=spec,
+            step_def=step_def,
+            target=target,
+            variables=variables,
+            process_dir=process_dir,
+            run_dir=run_dir,
+            run_id=run_id,
+            execution_context=execution_context,
+            out=out,
+        )
+    except CLIError as exc:
+        state_dir = compute_task_state_dir(run_dir, step_def, variables)
+        state_dir.mkdir(parents=True, exist_ok=True)
+        mark_failed_synthetic_at(
+            state_dir,
+            run_id=run_id,
+            step_id=target.step_id,
+            item={"step": target.step_id},
+            item_key=state_dir.name,
+            error=str(exc),
+            attempt_disposition=AttemptDisposition.permanent,
+        )
+        out.progress(f"  Step '{target.step_id}' item '{state_dir.name}': refused ({exc})")
+        return False
+
+
 async def _execute_code_fan_out_step(
     *,
     spec: ProcessSpec,
@@ -1903,7 +2181,7 @@ async def _execute_code_fan_out_step(
     )
 
     async def _invoke(_step_id: str, item_vars: dict[str, str]) -> bool:
-        return await _execute_code_step(
+        return await _execute_mapped_code_item(
             spec=spec,
             step_def=step_def,
             target=target,
@@ -1976,7 +2254,7 @@ async def _execute_item_aligned_chain(
     out.progress(f"  Chain '{' -> '.join(chain)}': {len(item_contexts)} items, item-aligned")
 
     async def _invoke(step_id: str, item_vars: dict[str, str]) -> bool:
-        return await _execute_code_step(
+        return await _execute_mapped_code_item(
             spec=spec,
             step_def=step_def_map[step_id],
             target=step_map[step_id],
@@ -2279,7 +2557,7 @@ async def _execute_agent_step(
     # may get it right on a second pass. The ``on_invalid`` clause on the output says
     # which failures are worth another call, and the content-failure cap bounds how
     # many. Transient exit-code failures are classified below and draw the full
-    # retry budget; step timeouts and boundary violations stay terminal here.
+    # retry budget, as do subprocess timeouts. Boundary violations stay terminal.
     retry_policy = _resolve_retry_policy(step_def, spec.defaults)
     content_retry_cap = max_retries_for(FailureClass.INVALID_OUTPUT, retry_policy.max_retries)
     attempt = 1
@@ -2295,15 +2573,10 @@ async def _execute_agent_step(
     except CLIError as exc:
         out.warning(str(exc))
         log.warning("Step %s credential-pool binding failed: %s", step_id, exc)
-        return False
-    auth_events = (
-        EventLogger(paths_mod.runpool_step_events(run_dir, step_id))
-        if pool_dispatch is not None
-        else None
-    )
+        raise
+    auth_events = EventLogger(paths_mod.runpool_step_events(run_dir, step_id))
     retry_exclude: list[tuple[str, str]] = []
-    if auth_events is not None:
-        auth_events.open()
+    auth_events.open()
 
     try:
         if (
@@ -2323,10 +2596,11 @@ async def _execute_agent_step(
                 ),
             )
             if quota_verdict.status == "refuse":
-                out.warning(
+                error = (
                     f"Step '{step_id}': scalar quota gate refused launch: {quota_verdict.message}"
                 )
-                return False
+                out.warning(error)
+                raise CLIError(error)
         while True:
             # Reset per attempt: an anomaly accepted on an attempt that went on to fail
             # describes that attempt, not the retry that replaced it.
@@ -2367,7 +2641,7 @@ async def _execute_agent_step(
                 attempt_number: int = attempt,
             ) -> AuthFailureClassification | None:
                 nonlocal lease
-                if lease is None or pool_dispatch is None or auth_events is None:
+                if lease is None or pool_dispatch is None:
                     return None
                 completed_lease = lease
                 lease = None
@@ -2409,14 +2683,24 @@ async def _execute_agent_step(
                     if execution_context is not None
                     else None
                 )
+                # A leaf under the run-owned pool takes its host slot inside the pool once
+                # the pool admits its process; any other local leaf takes one here.
+                host_limit = (
+                    resolve_host_max_concurrency(
+                        scalar_resource_config, default=SCALAR_DEFAULT_HOST_LIMIT
+                    )
+                    if scalar_pool is None
+                    else 0
+                )
                 pool_kill_reason: str | None = None
+                timed_out = False
+                boundary_before = None
                 try:
                     async with _leaf_slot(execution_context):
                         async with admitted_launch(
-                            enabled=backend_name == "local",
-                            limit=resolve_host_max_concurrency(
-                                scalar_resource_config, default=SCALAR_DEFAULT_HOST_LIMIT
-                            ),
+                            event_logger=auth_events,
+                            enabled=backend_name == "local" and scalar_pool is None,
+                            limit=host_limit,
                             label=f"{run_id}/{step_id}",
                             pool_id=f"run-process:{run_id}",
                             metadata={
@@ -2425,7 +2709,7 @@ async def _execute_agent_step(
                                 "mode": "agent",
                             },
                         ):
-                            if pool_dispatch is not None and auth_events is not None:
+                            if pool_dispatch is not None:
 
                                 def _complete_cancelled_acquisition(
                                     cancelled_lease: SlotLease,
@@ -2474,7 +2758,7 @@ async def _execute_agent_step(
                                     _mark_scalar_prelaunch_failure_after_retry(
                                         state_dir, error=str(exc)
                                     )
-                                    return False
+                                    raise CLIError(str(exc)) from exc
                                 counts = pool_dispatch.coordinator.active_counter.snapshot()
                                 active_for_adapter = {
                                     label: count
@@ -2500,7 +2784,7 @@ async def _execute_agent_step(
                                     _mark_scalar_prelaunch_failure_after_retry(
                                         state_dir, error=str(exc)
                                     )
-                                    return False
+                                    raise CLIError(str(exc)) from exc
                                 auth_adapter = get_auth_capable(lease.adapter)
                                 if auth_adapter is not None:
                                     cmd = [
@@ -2554,33 +2838,32 @@ async def _execute_agent_step(
                                 execution_profile=effective_execution_profile,
                             )
                 except subprocess.TimeoutExpired:
-                    timeout_error = f"timeout after {timeout_s}s"
-                    await _complete_auth_attempt(timeout_error)
-                    mark_failed_at(
-                        state_dir,
-                        error=timeout_error,
-                        running_record=running_record,
-                        failure_class=str(FailureClass.TIMEOUT),
+                    if running_record is None:
+                        raise
+                    timed_out = True
+                    exit_error = f"timeout after {timeout_s}s"
+                else:
+                    # Read the log before compacting it: the exit code alone says nothing
+                    # about why the agent died, and the answer is in the last few lines.
+                    # A bare "exit code 1" also classifies as a crash, so without this the
+                    # transient failures below look like a prompt that always fails.
+                    exit_error: str | None = None
+                    if pool_kill_reason is not None:
+                        exit_error = f"RunPool killed process: {pool_kill_reason}"
+                    elif exit_code != 0:
+                        exit_error = f"exit code {exit_code}"
+                        log_error = extract_log_error(attempt_log_path)
+                        if log_error:
+                            exit_error = f"{exit_error} (log: {log_error})"
+
+                terminal_contract_error = (
+                    None
+                    if timed_out
+                    else validate_terminal_result_log(
+                        adapter_obj,
+                        attempt_log_path,
+                        runtime_config,
                     )
-                    return False
-
-                # Read the log before compacting it: the exit code alone says nothing about
-                # why the agent died, and the answer is in the last few lines. A bare
-                # "exit code 1" also classifies as a crash, so without this the transient
-                # failures below are indistinguishable from a prompt that always fails.
-                exit_error: str | None = None
-                if pool_kill_reason is not None:
-                    exit_error = f"RunPool killed process: {pool_kill_reason}"
-                elif exit_code != 0:
-                    exit_error = f"exit code {exit_code}"
-                    log_error = extract_log_error(attempt_log_path)
-                    if log_error:
-                        exit_error = f"{exit_error} (log: {log_error})"
-
-                terminal_contract_error = validate_terminal_result_log(
-                    adapter_obj,
-                    attempt_log_path,
-                    runtime_config,
                 )
                 if terminal_contract_error is not None:
                     exit_error = terminal_contract_error
@@ -2609,6 +2892,7 @@ async def _execute_agent_step(
                 # supervises.
                 if (
                     exit_error is not None
+                    and not timed_out
                     and terminal_contract_error is None
                     and pool_kill_reason is None
                     and effective_outputs
@@ -2840,8 +3124,7 @@ async def _execute_agent_step(
                         )
                 raise
     finally:
-        if auth_events is not None:
-            auth_events.close()
+        auth_events.close()
 
     completed = mark_completed_at(
         state_dir, running_record=running_record, anomalies=accepted_anomalies
@@ -2871,12 +3154,16 @@ def _prepare_composite_scope(
     run_id: str,
     scope_path: tuple[str, ...],
     execution_context: RunExecutionContext,
+    scope_execution_profile: str | None,
     mapped_item_key: str | None = None,
     announce: bool,
     out: Any,
 ) -> _PreparedCompositeScope:
     """Resolve one child scope through the same identity and planning path."""
     step_id = step_def.id
+    child_execution_profile, profile_pinned = _composite_scope_execution_profile(
+        step_def, target, scope_execution_profile
+    )
 
     if not target.uses_path:
         raise CLIError(f"step '{step_id}': composite mode requires a resolved child process")
@@ -2896,6 +3183,10 @@ def _prepare_composite_scope(
     if step_def.with_:
         for key, template in step_def.with_.items():
             child_vars[key] = resolve_templates(template, variables)
+    if profile_pinned and child_execution_profile is not None:
+        # The pinned scope answers `{{run.execution_profile}}` with its own profile, as a
+        # run launched with that `--variant` would, and its descendants inherit it.
+        child_vars["EXECUTION_PROFILE"] = child_execution_profile
 
     if step_def.for_each is not None and mapped_item_key is None:
         raise CLIError(f"mapped composite step '{step_id}' requires its canonical task item key")
@@ -2929,10 +3220,13 @@ def _prepare_composite_scope(
         child_spec,
         child_vars,
         process_path=child_spec_path,
-        adapter_override=execution_context.variant_override,
+        adapter_override=child_execution_profile,
         artifact_namespace=target.artifact_namespace,
         profile_files=execution_context.profile_files,
     )
+    if profile_pinned and child_plan.artifact_namespace:
+        child_vars.setdefault("ARTIFACT_NAMESPACE", child_plan.artifact_namespace)
+        child_vars.setdefault("VARIANT", child_plan.artifact_namespace)
     _publish_run_plan(
         child_identity.run_dir,
         run_id=child_identity.record_id,
@@ -2949,6 +3243,7 @@ def _prepare_composite_scope(
         plan=child_plan,
         variables=child_vars,
         identity=child_identity,
+        execution_profile=child_execution_profile,
     )
 
 
@@ -2962,6 +3257,7 @@ async def _execute_composite_step(
     run_id: str,
     scope_path: tuple[str, ...],
     execution_context: RunExecutionContext,
+    scope_execution_profile: str | None,
     mapped_item_key: str | None = None,
     out: Any,
 ) -> bool:
@@ -2976,6 +3272,7 @@ async def _execute_composite_step(
         run_id=run_id,
         scope_path=scope_path,
         execution_context=execution_context,
+        scope_execution_profile=scope_execution_profile,
         mapped_item_key=mapped_item_key,
         announce=True,
         out=out,
@@ -2997,6 +3294,7 @@ async def _execute_composite_step(
                 run_id=prepared.identity.record_id,
                 scope_path=prepared.identity.scope_path,
                 execution_context=execution_context,
+                scope_execution_profile=prepared.execution_profile,
                 out=out,
                 events=events,
             )
@@ -3004,20 +3302,22 @@ async def _execute_composite_step(
         # Surface the inner failure message; otherwise the operator sees only
         # `Step '<composite>': FAILED` with no actionable reason.
         out.progress(f"  Step '{step_id}': inner CLIError — {exc}")
-        return False
+        raise
 
-    output_errors = validate_process_outputs(
+    validation = validate_process_outputs_detailed(
         prepared.spec,
         prepared.variables,
         prepared.process_dir,
         plan=prepared.plan,
     )
-    if output_errors:
-        out.progress(
-            f"  Step '{step_id}': child process output validation failed:\n  "
-            + "\n  ".join(output_errors)
+    if validation.errors:
+        error = CLIError(
+            f"Step '{step_id}': child process output validation failed:\n  "
+            + "\n  ".join(validation.errors),
+            output_failures=validation.output_failures,
         )
-        return False
+        _record_process_output_failure(prepared.identity.run_dir, error)
+        raise error
 
     return True
 
@@ -3032,6 +3332,7 @@ async def _execute_composite_fan_out_step(
     run_id: str,
     scope_path: tuple[str, ...],
     execution_context: RunExecutionContext,
+    scope_execution_profile: str | None,
     events: ProcessEventLogger | None = None,
     out: Any,
 ) -> bool:
@@ -3087,6 +3388,7 @@ async def _execute_composite_fan_out_step(
             run_id=run_id,
             scope_path=scope_path,
             execution_context=execution_context,
+            scope_execution_profile=scope_execution_profile,
             mapped_item_key=state_dir.name,
             announce=False,
             out=out,
@@ -3177,6 +3479,7 @@ async def _execute_composite_fan_out_step(
                 run_id=run_id,
                 scope_path=scope_path,
                 execution_context=execution_context,
+                scope_execution_profile=scope_execution_profile,
                 mapped_item_key=state_dir.name,
                 out=out,
             )
@@ -3190,6 +3493,21 @@ async def _execute_composite_fan_out_step(
             )
             _emit_terminal(error)
             raise
+        except CLIError as exc:
+            error = str(exc)
+            mark_failed_at(
+                state_dir,
+                error=error,
+                running_record=running_record,
+                output_failures=list(exc.output_failures),
+                failure_class=(
+                    str(FailureClass.INVALID_OUTPUT)
+                    if exc.output_failures
+                    else str(classify_failure(error))
+                ),
+            )
+            _emit_terminal(error)
+            return False
         except Exception as exc:
             error = f"child process raised {type(exc).__name__}: {exc}"
             out.progress(f"  Step '{step_id}' item '{state_dir.name}': {error}")
@@ -3647,7 +3965,7 @@ async def _execute_fan_out_step(
     except CLIError as exc:
         out.warning(str(exc))
         log.warning("Step %s credential-pool binding failed: %s", step_id, exc)
-        return False
+        raise
 
     if events is not None:
         _emit_fan_out_item_starts(
@@ -3950,6 +4268,7 @@ async def _execute_step(
     run_id: str,
     scope_path: tuple[str, ...],
     execution_context: RunExecutionContext,
+    scope_execution_profile: str | None,
     peer_allowed_targets: list[WriteTarget] | None = None,
     events: ProcessEventLogger | None = None,
     out: Any,
@@ -4004,6 +4323,7 @@ async def _execute_step(
                 run_id=run_id,
                 scope_path=scope_path,
                 execution_context=execution_context,
+                scope_execution_profile=scope_execution_profile,
                 events=events,
                 out=out,
             )
@@ -4016,6 +4336,7 @@ async def _execute_step(
             run_id=run_id,
             scope_path=scope_path,
             execution_context=execution_context,
+            scope_execution_profile=scope_execution_profile,
             out=out,
         )
 
@@ -4074,7 +4395,7 @@ async def _execute_step(
                 num_workers=execution_context.num_workers,
                 machine_type=execution_context.machine_type,
                 spot=execution_context.spot,
-                variant_override=execution_context.variant_override,
+                variant_override=scope_execution_profile,
                 execution_context=execution_context,
                 peer_allowed_targets=peer_allowed_targets,
                 events=events,
@@ -4091,7 +4412,7 @@ async def _execute_step(
             process_dir=process_dir,
             run_dir=run_dir,
             run_id=run_id,
-            variant_override=execution_context.variant_override,
+            variant_override=scope_execution_profile,
             peer_allowed_targets=peer_allowed_targets,
             backend_name=execution_context.backend_name,
             execution_context=execution_context,
@@ -4115,10 +4436,16 @@ async def _orchestrate(
     run_id: str,
     scope_path: tuple[str, ...] = (),
     execution_context: RunExecutionContext,
+    scope_execution_profile: str | None,
     out: Any,
     events: ProcessEventLogger,
 ) -> None:
-    """Walk the DAG, executing independent steps in parallel via asyncio.gather()."""
+    """Walk the DAG, executing independent steps in parallel via asyncio.gather().
+
+    `scope_execution_profile` is the profile override this scope plans its composite
+    children and unpinned agent leaves with: the launch `--variant` at the root, or the
+    nearest enclosing composite step's `execution_profile:` below it.
+    """
     backend_name = execution_context.backend_name
     max_concurrency = execution_context.max_concurrency
     skip_steps = execution_context.skip_steps if not scope_path else frozenset()
@@ -4250,7 +4577,11 @@ async def _orchestrate(
                 if member_ok:
                     events.step_complete(member_id, chain_elapsed)
                 else:
-                    events.step_fail(member_id, chain_elapsed)
+                    error = _read_step_failure_error(
+                        run_dir, step_map[member_id], upstream_chain=chain[: chain.index(member_id)]
+                    )
+                    step_states[member_id]["error"] = error
+                    events.step_fail(member_id, chain_elapsed, error=error)
             _write_process_status(
                 run_dir,
                 spec.name,
@@ -4276,6 +4607,7 @@ async def _orchestrate(
             run_id=run_id,
             scope_path=scope_path,
             execution_context=execution_context,
+            scope_execution_profile=scope_execution_profile,
             peer_allowed_targets=peer_allowed_targets,
             events=events,
             out=out,
@@ -4293,7 +4625,7 @@ async def _orchestrate(
             events.step_complete(step_id, elapsed)
             out.progress(f"  Step '{step_id}': completed ({fmt_timedelta(elapsed)})")
         else:
-            error = _read_scalar_code_failure_error(run_dir, target)
+            error = _read_step_failure_error(run_dir, target)
             step_states[step_id] = {
                 "state": "failed",
                 "started_at": step_states[step_id].get("started_at"),
@@ -4307,6 +4639,54 @@ async def _orchestrate(
             out.progress(f"  Step '{step_id}': FAILED ({fmt_timedelta(elapsed)}){detail}")
 
         return step_id, success
+
+    async def _run_one_step_preserving_errors(
+        step_id: str,
+        *,
+        peer_allowed_targets: list[WriteTarget] | None = None,
+    ) -> tuple[str, bool]:
+        """Make expected executor refusals durable without inventing an attempt."""
+        step_start = time.monotonic()
+        try:
+            return await _run_one_step(step_id, peer_allowed_targets=peer_allowed_targets)
+        except CLIError as exc:
+            elapsed = time.monotonic() - step_start
+            target = step_map[step_id]
+            if target.fan_out is None:
+                state_dir = compute_task_state_dir(run_dir, step_def_map[step_id], variables)
+                current = read_status_at(state_dir)
+                if current is not None and current.state == "running":
+                    validate_task_status_identity_at(
+                        state_dir,
+                        current,
+                        run_id=run_id,
+                        step_id=step_id,
+                        item_key=None,
+                    )
+                    mark_failed_at(
+                        state_dir,
+                        error=str(exc),
+                        running_record=current,
+                        output_failures=list(exc.output_failures),
+                    )
+            step_states[step_id] = {
+                "state": "failed",
+                "started_at": step_states[step_id].get("started_at"),
+                "completed_at": _now_iso(),
+                "elapsed_s": round(elapsed, 1),
+                "error": str(exc),
+            }
+            if exc.output_failures:
+                step_states[step_id]["output_failures"] = [
+                    failure.model_dump(mode="json", exclude_none=True)
+                    for failure in exc.output_failures
+                ]
+            events.step_fail(step_id, elapsed, error=str(exc))
+            _write_process_status(
+                run_dir, spec.name, step_states, started_at, active_step_ids=active_ids
+            )
+            out.progress(f"  Step '{step_id}': FAILED ({fmt_timedelta(elapsed)}): {exc}")
+            return step_id, False
 
     for _level_idx, level in enumerate(levels):
         events.level_start(_level_idx, list(level))
@@ -4433,7 +4813,7 @@ async def _orchestrate(
         try:
             results = await asyncio.gather(
                 *[
-                    _run_one_step(
+                    _run_one_step_preserving_errors(
                         sid,
                         peer_allowed_targets=peer_allowed_by_step[sid],
                     )
@@ -4523,6 +4903,7 @@ async def _orchestrate(
         failed=len(failed_steps),
         skipped=skipped_count + len(blocked_list),
         elapsed_s=total_elapsed,
+        errors=_process_step_errors(step_states),
     )
 
     if failed_steps:
@@ -4614,7 +4995,10 @@ def run_process_command(
     step_variant: list[str] = typer.Option(
         [],
         "--step-variant",
-        help="STEP=PROFILE execution-profile override for a single step (repeatable).",
+        help=(
+            "STEP=PROFILE execution-profile override for one top-level step that is not "
+            "composite (repeatable). Recorded in run-config.yaml; a resume reuses it."
+        ),
     ),
     adapter_config: list[str] = typer.Option(
         [], "--adapter-config", help="KEY=VALUE adapter config overrides (repeatable)"
@@ -4797,6 +5181,9 @@ def run_process_command(
 
     variables = expand_process_vars(spec, variables, process_dir=process_dir)
     require_runtime_runs_dir(variables, command="run-process")
+    step_profile_overrides = _resume_step_variants(
+        compute_run_dir(spec, variables), step_profile_overrides
+    )
 
     # Launch validation runs before any step, so it carries the validation exit
     # code (2) rather than the general failure code (1) an executed-and-failed
@@ -5112,6 +5499,7 @@ def run_process_command(
         auth_flags=auth_flags_for_config,
         max_concurrency=max_concurrency,
         resource_snapshot=resource_snapshot,
+        step_variants=step_profile_overrides,
     )
 
     out.progress(f"run-process: {spec.name} ({len(active_step_ids)} steps, {len(levels)} levels)")
@@ -5342,7 +5730,6 @@ def run_process_command(
                     num_workers=num_workers,
                     machine_type=machine_type,
                     spot=spot,
-                    variant_override=variant,
                     profile_files=profile_files,
                     skip_steps=skip_set,
                     force=force,
@@ -5365,6 +5752,7 @@ def run_process_command(
                         run_dir=run_dir,
                         run_id=run_id,
                         execution_context=execution_context,
+                        scope_execution_profile=variant or None,
                         out=out,
                         events=events,
                     )
@@ -5389,10 +5777,14 @@ def run_process_command(
 
             asyncio.run(_run_local_process())
 
-        output_errors = validate_process_outputs(spec, variables, process_dir, plan=plan)
-        if output_errors:
-            msg = "process output validation failed:\n  " + "\n  ".join(output_errors)
-            raise CLIError(msg)
+        validation = validate_process_outputs_detailed(spec, variables, process_dir, plan=plan)
+        if validation.errors:
+            error = CLIError(
+                "process output validation failed:\n  " + "\n  ".join(validation.errors),
+                output_failures=validation.output_failures,
+            )
+            _record_process_output_failure(run_dir, error)
+            raise error
     except (TimeoutError, subprocess.TimeoutExpired) as exc:
         finalization_state = FinalizationState.TIMED_OUT
         terminal_error = exc
@@ -5424,6 +5816,13 @@ def run_process_command(
                 if terminal_error is None:
                     raise
                 log.exception("resource finalization interrupted for %s", run_dir)
+            # Reads the resource summary written above and logs its own failures.
+            try:
+                finalize_operations_summary(run_dir, outcome=finalization_state)
+            except BaseException:
+                if terminal_error is None:
+                    raise
+                log.exception("operations summary interrupted for %s", run_dir)
         finally:
             release_lease(run_dir)
 
