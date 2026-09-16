@@ -5239,7 +5239,12 @@ class TestRunOwnedPoolExecutionProfiles:
 
         assert resumed.exit_code == 0, resumed.output
         assert (run_dir / "judge.md").read_text().strip() == "judge-b"
-        assert read_yaml_file(config_path)["step_variants"] == {"judge": "judge-b"}
+        # Adopting rewrites the config, so every other field it carries must survive —
+        # the resource snapshot the terminal finalizer reads from it above all.
+        recorded = read_yaml_file(config_path)
+        assert recorded["step_variants"] == {"judge": "judge-b"}
+        assert set(recorded) == set(config) | {"step_variants"}
+        assert recorded["resources"] == config["resources"]
 
         refused = self._invoke(spec, run_dir, "--variant", "run-a", "--step-variant", "judge=run-a")
 
