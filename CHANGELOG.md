@@ -78,6 +78,8 @@ development series.
 - **Prelaunch and process-output refusals retain their causes.** Credential and input
   refusals now reach durable step status without creating an attempt; manual timeout
   closes the running task.
+  A mapped code item refused for a missing input records that failure on its own status
+  while its siblings continue.
   Composite failures preserve child errors and structured output paths/messages through
   fan-in. Root and child process status records output-contract failure even when all of
   the scope’s steps completed.
@@ -88,8 +90,9 @@ development series.
   Omission retains the existing inherited directory.
 
 - **Failure causes survive task, step, and run aggregation.** Mapped summaries count
-  distinct recorded causes against the current item roster; scalar and composite
-  summaries retain their durable causes.
+  distinct recorded causes against the current item roster, ignoring each attempt’s
+  evidence path, and list at most five causes within a bounded length; scalar and
+  composite summaries retain their durable causes.
   Run status and process completion events preserve every failed step, and fan-in
   outcomes retain output paths and validator messages.
   Host-admission events distinguish waiting, failure, and best-effort bypass using the

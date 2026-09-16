@@ -37,9 +37,9 @@ older Metaproc references.
 
 For Metaproc’s built-in contracts, read
 [Built-in contract checks](../../src/metaproc/docs/metaproc-operator-reference.md#built-in-contract-checks)
-before interpreting the model-only advisory.
-It describes the actual Python validation guarantee and the separate structural check
-that did not run.
+before interpreting their validation reports.
+It describes the actual Python validation guarantee and the structural check that did
+not run.
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

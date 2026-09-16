@@ -195,9 +195,10 @@ def test_standalone_handler_exception_keeps_traceback_without_leaking_env_value(
     assert str(captured.relative_to(run)) in attempt.error
 
 
+@pytest.mark.parametrize("mapped", [False, True])
 @pytest.mark.parametrize("stream", ["stderr", "stdout"])
-def test_command_diagnostic_reaches_attempt_mapped_item_and_root_failure(
-    tmp_path: Path, stream: str
+def test_command_diagnostic_reaches_attempt_composite_step_and_root_failure(
+    tmp_path: Path, stream: str, mapped: bool
 ) -> None:
     diagnostic = 'RuntimeError: query terms must not contain commas: "Example, Inc."'
     (tmp_path / "fail.py").write_text(
@@ -212,6 +213,17 @@ def test_command_diagnostic_reaches_attempt_mapped_item_and_root_failure(
         f"      command: '{sys.executable} fail.py'\n---\n"
     )
     (tmp_path / "items.md").write_text("---\nprogress:\n  items:\n    - item: alfa\n---\n")
+    for_each = (
+        """\
+      for_each:
+        over: deps.items
+        bind: item
+        bind_fields: [item]
+        key: "{{item}}"
+"""
+        if mapped
+        else ""
+    )
     process = tmp_path / "parent.process.md"
     process.write_text(
         textwrap.dedent("""\
@@ -225,13 +237,9 @@ def test_command_diagnostic_reaches_attempt_mapped_item_and_root_failure(
             - id: child
               mode: composite
               uses: deps.child
-              for_each:
-                over: deps.items
-                bind: item
-                bind_fields: [item]
-                key: "{{item}}"
-        ---
         """)
+        + for_each
+        + "---\n"
     )
     result = CliRunner().invoke(
         app,
@@ -246,11 +254,17 @@ def test_command_diagnostic_reaches_attempt_mapped_item_and_root_failure(
     )
     assert result.exit_code == 1, result.output
     run = tmp_path / "runs" / "command"
-    leaf = run / "child" / "alfa" / ".state" / "tasks" / "query"
-    attempt = read_attempt_history_at(leaf)[0]
+    child = run / "child" / "alfa" if mapped else run / "child"
+    attempt = read_attempt_history_at(child / ".state" / "tasks" / "query")[0]
     assert attempt.error and diagnostic in attempt.error
     assert "command exit code 7" in attempt.error
-    assert diagnostic in collect_item_outcomes(run, "child")[0]["error"]
+    if mapped:
+        assert diagnostic in collect_item_outcomes(run, "child")[0]["error"]
+    else:
+        step_error = read_yaml_file(run / ".state" / "process-status.yaml")["steps"]["child"][
+            "error"
+        ]
+        assert f"query: {attempt.error}" in step_error
     root = scan_run_status(run, include_system=False)
     assert root.process_error and diagnostic in root.process_error
     assert "command exit code 7" in root.process_error
@@ -323,13 +337,17 @@ def test_command_diagnostic_is_bounded_redacted_and_prefers_stderr(
     assert "unrelated progress" in captured
 
 
-@pytest.mark.parametrize("step_id,second", [("quota-check", 29), ("query", 29), ("query", 3)])
-def test_command_failure_class_ignores_step_names_and_log_timestamps(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, step_id: str, second: int
+@pytest.mark.parametrize(
+    "step_id,attempt_fraction",
+    [("quota-check", "4290000000"), ("query", "4290000000"), ("query", "5030000000")],
+)
+def test_command_failure_class_ignores_step_names_and_log_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, step_id: str, attempt_fraction: str
 ) -> None:
-    clock = Mock(wraps=datetime)
-    clock.now.return_value = datetime(2026, 9, 13, 0, 44 if second == 29 else 5, second, tzinfo=UTC)
-    monkeypatch.setattr(run_process_module, "datetime", clock)
+    monkeypatch.setattr(
+        "metaproc.io.state_io.new_timestamped_typed_id",
+        lambda _prefix: f"att-20260913T000000Z.{attempt_fraction}.fixture",
+    )
     (tmp_path / "fail.py").write_text(
         "import sys\nprint('ValueError: invalid input', file=sys.stderr)\nraise SystemExit(1)\n"
     )
@@ -354,7 +372,187 @@ def test_command_failure_class_ignores_step_names_and_log_timestamps(
     task = tmp_path / "runs" / "classification" / ".state" / "tasks" / step_id
     attempt = read_attempt_history_at(task)[0]
     assert attempt.error and "ValueError: invalid input" in attempt.error
+    assert f".{attempt_fraction}." in attempt.error
     assert attempt.failure_class == "crash"
+
+
+def test_run_process_code_attempts_in_the_same_second_keep_their_own_logs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = Mock(wraps=datetime)
+    clock.now.return_value = datetime(2026, 9, 13, 0, 5, 3, tzinfo=UTC)
+    monkeypatch.setattr(run_process_module, "datetime", clock)
+    (tmp_path / "fail.py").write_text(
+        "import sys\nfrom pathlib import Path\n"
+        "counter = Path(__file__).with_name('count.txt')\n"
+        "count = int(counter.read_text()) + 1 if counter.exists() else 1\n"
+        "counter.write_text(str(count))\n"
+        "print(f'ValueError: failure {count}', file=sys.stderr)\nraise SystemExit(1)\n"
+    )
+    process = tmp_path / "command.process.md"
+    process.write_text(
+        "---\nprocess:\n  name: command\n  steps:\n"
+        "    - id: query\n      mode: code\n"
+        f"      command: '{sys.executable} fail.py'\n---\n"
+    )
+    args = [
+        "run-process",
+        str(process),
+        "--var",
+        f"RUNS_DIR={tmp_path / 'runs'}",
+        "--var",
+        "RUN_ID=same-second",
+    ]
+    for _ in range(2):
+        result = CliRunner().invoke(app, args)
+        assert result.exit_code == 1, result.output
+    run = tmp_path / "runs" / "same-second"
+    attempts = read_attempt_history_at(run / ".state" / "tasks" / "query")
+    assert len(attempts) == 2
+    for number, attempt in enumerate(attempts, start=1):
+        log_file = run / ".logs" / "tasks" / "query" / f"process_{attempt.attempt_id}.log"
+        assert attempt.error and str(log_file.relative_to(run)) in attempt.error
+        assert log_file.read_text() == f"ValueError: failure {number}\n"
+
+
+_CLEANUP_LINES = "\\n".join(f"cleanup line {index}" for index in range(13))
+
+
+@pytest.mark.parametrize(
+    "step_id,handler,diagnostic,attempt_fraction,attempts,failure_class",
+    [
+        # A permanent word in the step id and log path must not decide retry policy.
+        (
+            "quota-check",
+            False,
+            "ProviderError: HTTP 503 Service Unavailable",
+            None,
+            2,
+            "server_error",
+        ),
+        # Classification reads the rate-limit line that display clipping later drops.
+        ("query", True, f"HTTP 429 Too Many Requests\\n{_CLEANUP_LINES}", None, 2, "rate_limited"),
+        # A status code inside the attempt id's timestamp fraction must not invent a retry.
+        ("query", True, "bad input", "4290000000", 1, "unknown"),
+    ],
+    ids=["permanent-word-in-step-id", "clipped-rate-limit", "status-code-in-attempt-id"],
+)
+def test_run_parallel_retry_policy_uses_the_unclipped_path_free_classification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    step_id: str,
+    handler: bool,
+    diagnostic: str,
+    attempt_fraction: str | None,
+    attempts: int,
+    failure_class: str,
+) -> None:
+    monkeypatch.setenv("METAPROC_PREFLIGHT_MIN_DISK_GB", "0.1")
+    if attempt_fraction is not None:
+        attempt_ids = (
+            f"att-20260913T000000Z.{attempt_fraction}.fixture{index}" for index in range(1, 10)
+        )
+        monkeypatch.setattr(
+            "metaproc.io.state_io.new_timestamped_typed_id", lambda _prefix: next(attempt_ids)
+        )
+    if handler:
+        (tmp_path / "fail.py").write_text(
+            f"def fail(context, step):\n    raise RuntimeError('{diagnostic}')\n"
+        )
+        runner = "      handler: fail.py:fail\n"
+    else:
+        (tmp_path / "fail.py").write_text(
+            f"import sys\nprint({diagnostic!r}, file=sys.stderr)\nraise SystemExit(1)\n"
+        )
+        runner = f"      command: '{sys.executable} fail.py'\n"
+    (tmp_path / "items.md").write_text(
+        "---\nprogress:\n  process: code\n  items:\n    - ticker: AAPL\n---\n"
+    )
+    process = tmp_path / "code.process.md"
+    process.write_text(
+        "---\nprocess:\n  name: code\n  steps:\n"
+        f"    - id: {step_id}\n      mode: code\n" + runner + "      inputs:\n        items:\n"
+        f"          path: {tmp_path / 'items.md'}\n"
+        "          kind: file\n          format: frontmatter-md\n"
+        "      for_each:\n        over: items\n        bind: ticker\n"
+        "        bind_fields: [ticker]\n        key: '{{ticker}}'\n"
+        "        retry: {max_retries: 1, initial_backoff_s: 0}\n"
+        "---\n"
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-parallel",
+            str(process),
+            "--step",
+            step_id,
+            "--items",
+            "AAPL",
+            "--var",
+            f"RUNS_DIR={tmp_path / 'runs'}",
+            "--var",
+            "RUN_ID=classification",
+        ],
+    )
+    assert result.exit_code != 0
+    task = tmp_path / "runs" / "classification" / ".state" / "tasks" / step_id / "AAPL"
+    history = read_attempt_history_at(task)
+    assert [attempt.failure_class for attempt in history] == [failure_class] * attempts
+    assert history[-1].disposition == ("retryable" if attempts > 1 else "permanent")
+    status = read_status_at(task)
+    assert status is not None and status.failure_class == failure_class
+
+
+@pytest.mark.parametrize("handler", [False, True])
+def test_identical_mapped_failures_count_as_one_cause_despite_per_item_evidence(
+    tmp_path: Path, handler: bool
+) -> None:
+    diagnostic = "ProviderError: HTTP 503 Service Unavailable"
+    if handler:
+        (tmp_path / "fail.py").write_text(
+            f"def fail(context, step):\n    raise RuntimeError({diagnostic!r})\n"
+        )
+        runner = "      handler: fail.py:fail\n"
+        cause = f"RuntimeError: {diagnostic}"
+    else:
+        (tmp_path / "fail.py").write_text(
+            f"import sys\nprint({diagnostic!r}, file=sys.stderr)\nraise SystemExit(1)\n"
+        )
+        runner = f"      command: '{sys.executable} fail.py'\n"
+        cause = f"command exit code 1 (stderr: {diagnostic})"
+    (tmp_path / "items.md").write_text(
+        "---\nprogress:\n  items:\n    - item: alfa\n    - item: brvo\n    - item: chrl\n---\n"
+    )
+    process = tmp_path / "mapped.process.md"
+    process.write_text(
+        "---\nprocess:\n  name: mapped\n"
+        "  deps:\n    items: {path: ./items.md, as: path}\n"
+        "  steps:\n    - id: query\n      mode: code\n"
+        + runner
+        + "      for_each:\n        over: deps.items\n        bind: item\n"
+        "        bind_fields: [item]\n        key: '{{item}}'\n"
+        "---\n"
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-process",
+            str(process),
+            "--var",
+            f"RUNS_DIR={tmp_path / 'runs'}",
+            "--var",
+            "RUN_ID=mapped",
+        ],
+    )
+    assert result.exit_code == 1, result.output
+    run = tmp_path / "runs" / "mapped"
+    expected = f"3 of 3 items failed (3 x {cause})"
+    process_status = read_yaml_file(run / ".state" / "process-status.yaml")
+    assert process_status["steps"]["query"]["error"] == expected
+    assert scan_run_status(run, include_system=False).process_error == f"query: {expected}"
+    for outcome in collect_item_outcomes(run, "query"):
+        # Each item keeps the pointer to its own retained evidence.
+        assert f".logs/tasks/query/{outcome['key']}/process_" in outcome["error"]
 
 
 @pytest.mark.parametrize("mapped", [False, True])
@@ -516,6 +714,64 @@ def test_composite_output_failure_retains_path_message_and_failed_scope(
     assert failure["path"] == expected_path
     assert failure["kind"] == "missing"
     assert failure["message"] == f"path does not exist: {expected_path}"
+
+
+@pytest.mark.parametrize("chain", [False, True], ids=["fan-out", "item-aligned-chain"])
+def test_mapped_item_refused_before_launch_records_its_own_failure(
+    tmp_path: Path, chain: bool
+) -> None:
+    (tmp_path / "extra-alfa.txt").write_text("present")
+    (tmp_path / "items.md").write_text(
+        "---\nprogress:\n  items:\n    - item: alfa\n    - item: brvo\n---\n"
+    )
+    for_each = (
+        "      for_each:\n        over: deps.items\n        bind: item\n"
+        "        bind_fields: [item]\n        key: '{{item}}'\n"
+    )
+    first = "    - id: first\n      mode: code\n      command: 'true'\n" + for_each
+    second = (
+        "    - id: second\n      mode: code\n      command: 'true'\n"
+        + ("      needs: [first]\n" if chain else "")
+        + "      inputs:\n"
+        f"        extra: {{path: '{tmp_path}/extra-{{{{item}}}}.txt', kind: file}}\n"
+        + for_each
+        + ("        align: same_key\n" if chain else "")
+    )
+    process = tmp_path / "refusal.process.md"
+    process.write_text(
+        "---\nprocess:\n  name: refusal\n"
+        "  deps:\n    items: {path: ./items.md, as: path}\n"
+        "  steps:\n" + (first if chain else "") + second + "---\n"
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-process",
+            str(process),
+            "--var",
+            f"RUNS_DIR={tmp_path / 'runs'}",
+            "--var",
+            "RUN_ID=refusal",
+        ],
+    )
+    assert result.exit_code == 1, result.output
+    run = tmp_path / "runs" / "refusal"
+    refusal = f"step 'second': input 'extra' not found: {tmp_path / 'extra-brvo.txt'}"
+    tasks = run / ".state" / "tasks" / "second"
+    completed = read_status_at(tasks / "alfa")
+    assert completed is not None and completed.state == "completed"
+    refused = read_status_at(tasks / "brvo")
+    assert refused is not None and refused.state == "failed"
+    assert refused.error == refusal
+    attempts = read_attempt_history_at(tasks / "brvo")
+    assert [(attempt.item_key, attempt.disposition) for attempt in attempts] == [
+        ("brvo", "permanent")
+    ]
+    outcomes = {outcome["key"]: outcome for outcome in collect_item_outcomes(run, "second")}
+    assert outcomes["brvo"]["state"] == "failed"
+    assert outcomes["brvo"]["error"] == refusal
+    process_status = read_yaml_file(run / ".state" / "process-status.yaml")
+    assert process_status["steps"]["second"]["error"] == f"1 of 2 items failed (1 x {refusal})"
 
 
 @pytest.mark.parametrize("missing_input", [False, True])

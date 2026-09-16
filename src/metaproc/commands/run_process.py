@@ -19,7 +19,6 @@ import shlex
 import subprocess
 import time
 import traceback
-from collections import Counter
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -93,7 +92,11 @@ from metaproc.dispatch.preflight import (
 from metaproc.dispatch.slot_coordinator import SlotCoordinator, SlotLease
 from metaproc.engine.build_plan import build_plan, merge_defaults
 from metaproc.engine.code_handler import resolve_code_handler
-from metaproc.engine.command_diagnostics import command_failure_message, handler_failure_message
+from metaproc.engine.command_diagnostics import (
+    command_failure_message,
+    handler_failure_message,
+    summarize_failure_causes,
+)
 from metaproc.engine.dep_state import (
     fingerprint_step,
     recorded_step_hash,
@@ -178,6 +181,7 @@ from metaproc.io.state_io import (
     end_status_attempt_at,
     mark_completed_at,
     mark_failed_at,
+    mark_failed_synthetic_at,
     mark_running_at,
     read_manual_ack_at,
     read_run_plan,
@@ -1366,17 +1370,10 @@ def _read_step_failure_error(
             failures = [o for o in outcomes if o["key"] in current_keys and not o["succeeded"]]
             if not failures:
                 return "step failed without a recorded item failure"
-            causes = Counter(
+            detail = summarize_failure_causes(
                 o.get("error") or f"error not recorded (state: {o['state']})" for o in failures
             )
-            detail = "; ".join(f"{count} x {error}" for error, count in sorted(causes.items()))
             return f"{len(failures)} of {len(keys)} items failed ({detail})"
-        if target.mode == "composite":
-            child_status = _read_process_status_yaml(run_dir / target.step_id)
-            if child_status is not None:
-                errors = _process_step_errors(child_status.get("steps", {}))
-                if errors:
-                    return "; ".join(f"{step_id}: {error}" for step_id, error in errors.items())
         record = _read_step_status(run_dir, target.step_id)
     except Exception as exc:  # noqa: BLE001 -- status projection is best-effort
         log.warning(
@@ -1753,8 +1750,9 @@ async def _execute_code_step(
     # Captured code stdout/stderr is a task log, not a run-level stream.
     logs_dir = compute_task_logs_dir(run_dir, step_def, variables)
     logs_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    log_file = logs_dir / f"process_{ts}.log"
+    # Name the log for its attempt, as run-step and run-parallel do: attempts started in
+    # the same second must not overwrite the file their durable errors point at.
+    log_file = logs_dir / f"process_{running_record.attempt_id}.log"
     env = dict(os.environ)
 
     try:
@@ -2048,6 +2046,54 @@ def _discover_chain_items(
     return discovery.nonterminal_contexts()
 
 
+async def _execute_mapped_code_item(
+    *,
+    spec: ProcessSpec,
+    step_def: ProcessStep,
+    target: ResolvedStep,
+    variables: dict[str, str],
+    process_dir: Path,
+    run_dir: Path,
+    run_id: str,
+    execution_context: RunExecutionContext | None,
+    out: Any,
+) -> bool:
+    """Execute one item of a mapped code step, keeping a prelaunch refusal on that item.
+
+    ``_execute_code_step`` raises ``CLIError`` only before its attempt starts, for
+    example when an input is missing. A scalar step lets that reach the orchestrator,
+    which records the step failure. For a mapped step the refusal is this item's
+    failure: raising it would leave the item without a status, attributing the cause
+    to the whole step, while its siblings finish.
+    """
+    try:
+        return await _execute_code_step(
+            spec=spec,
+            step_def=step_def,
+            target=target,
+            variables=variables,
+            process_dir=process_dir,
+            run_dir=run_dir,
+            run_id=run_id,
+            execution_context=execution_context,
+            out=out,
+        )
+    except CLIError as exc:
+        state_dir = compute_task_state_dir(run_dir, step_def, variables)
+        state_dir.mkdir(parents=True, exist_ok=True)
+        mark_failed_synthetic_at(
+            state_dir,
+            run_id=run_id,
+            step_id=target.step_id,
+            item={"step": target.step_id},
+            item_key=state_dir.name,
+            error=str(exc),
+            attempt_disposition=AttemptDisposition.permanent,
+        )
+        out.progress(f"  Step '{target.step_id}' item '{state_dir.name}': refused ({exc})")
+        return False
+
+
 async def _execute_code_fan_out_step(
     *,
     spec: ProcessSpec,
@@ -2106,7 +2152,7 @@ async def _execute_code_fan_out_step(
     )
 
     async def _invoke(_step_id: str, item_vars: dict[str, str]) -> bool:
-        return await _execute_code_step(
+        return await _execute_mapped_code_item(
             spec=spec,
             step_def=step_def,
             target=target,
@@ -2179,7 +2225,7 @@ async def _execute_item_aligned_chain(
     out.progress(f"  Chain '{' -> '.join(chain)}': {len(item_contexts)} items, item-aligned")
 
     async def _invoke(step_id: str, item_vars: dict[str, str]) -> bool:
-        return await _execute_code_step(
+        return await _execute_mapped_code_item(
             spec=spec,
             step_def=step_def_map[step_id],
             target=step_map[step_id],

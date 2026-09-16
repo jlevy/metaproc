@@ -220,8 +220,8 @@ Logs use producer and writer scope rather than mirroring every `.state/` branch:
   {run_dir}/.logs/runpool/steps/{step_id}/events.jsonl
   {run_dir}/.logs/runpool/workers/{worker_id}/events.jsonl
   {run_dir}/.logs/tasks/{step_id}/<item_key>/*.jsonl
-  {run_dir}/.logs/tasks/{step_id}/process_<ts>.log
-  {run_dir}/.logs/tasks/{step_id}/<item_key>/process_<ts>.log
+  {run_dir}/.logs/tasks/{step_id}/process_<attempt_id>.log
+  {run_dir}/.logs/tasks/{step_id}/<item_key>/process_<attempt_id>.log
   {run_dir}/.logs/native/{step_id}/[<item_key>/]<session-stem>.<set-name>/**/*
   {run_dir}/.logs/tools/<tool-name>/invocations.jsonl
   {run_dir}/.logs/derived/trace.jsonl
@@ -1122,8 +1122,9 @@ It complements the adapter/session logs described in section 9.5 by recording
 process-wide lifecycle events rather than per-agent streaming events.
 
 Written to `{run_dir}/.logs/process-events.jsonl`. Code step stdout/stderr is captured
-under task execution logs: `{run_dir}/.logs/tasks/{step_id}/process_<ts>.log` for scalar
-steps and `{run_dir}/.logs/tasks/{step_id}/<item_key>/process_<ts>.log` for item-scoped
+under task execution logs: `{run_dir}/.logs/tasks/{step_id}/process_<attempt_id>.log`
+for scalar steps and
+`{run_dir}/.logs/tasks/{step_id}/<item_key>/process_<attempt_id>.log` for item-scoped
 work.
 
 Event types (13 total):
@@ -1964,17 +1965,26 @@ writing `process-status.yaml` and `step_fail`. Scalar tasks retain the recorded 
 regardless of adapter or step mode; scalar composites retain their child step errors.
 Mapped tasks summarize the current `run-plan.yaml` item roster, count distinct recorded
 causes, and exclude retained directories outside that roster.
+Command and handler errors end with their own attempt’s `log:` or `traceback:` path, so
+the count compares causes without that suffix; each item’s status keeps its full error.
 For example, two timeouts among three items produce
-`2 of 3 items failed (2 x timeout after 600s)`. An item-aligned chain uses the same
-aggregation for each failed member, and absent downstream items carry the recorded
-upstream cause in their fan-in outcomes.
-This reporting does not change the chain’s reached-item completion policy.
+`2 of 3 items failed (2 x timeout after 600s)`. The summary lists at most five causes,
+most frequent first, within 4,000 characters, and reports the remainder as
+`and K more causes (N items)`. An item-aligned chain uses the same aggregation for each
+failed member, and absent downstream items carry the recorded upstream cause in their
+fan-in outcomes. This reporting does not change the chain’s reached-item completion
+policy.
 
 Expected executor refusals propagate as `CLIError` until the orchestrator writes their
 step failure. An input, credential-binding, quota, or slot refusal before launch creates
 no attempt record. If an attempt already exists, such as a manual step waiting for an
 acknowledgment, its running state becomes failed with the actual error.
 This path also covers failures during item-chain setup.
+Mapped agent and composite steps check every actionable item’s inputs before launching
+any of them, so a missing input there refuses the step and names the item.
+A mapped code item checks its own inputs as it starts, and a refusal is that item’s
+failure: it records failed status and a `permanent` attempt carrying the refusal, its
+siblings continue, and the step summary and fan-in outcomes attribute the cause to it.
 
 A composite preserves a child’s error rather than returning a bare failed boolean.
 Process-level output validation records each resolved artifact’s `output`, `path`,

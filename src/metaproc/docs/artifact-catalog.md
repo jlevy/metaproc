@@ -119,7 +119,7 @@ The `usage.md` envelope is registered in `metaproc.io.frontmatter.ENVELOPE_MAP`;
 
 | Filename | Path | Writer | Notes |
 | --- | --- | --- | --- |
-| `process_<ts>.log` | `<run>/.logs/tasks/<step>/` or `<run>/.logs/tasks/<step>/<item>/` | `runpool/backend.py` | Captured subprocess stdout and stderr; gzip on close |
+| `process_<attempt_id>.log` | `<run>/.logs/tasks/<step>/` or `<run>/.logs/tasks/<step>/<item>/` | `runpool/backend.py` | Captured subprocess stdout and stderr; gzip on close |
 | `probe.stderr` | `<run>/.state/steps/<step>/...` | `dispatch/pool_dispatch.py` | Captured stderr from a failed preflight probe |
 | `prompt-<step>-attempt<N>-<HHMMSS>.txt` | `<run>/.logs/tasks/<step>/` | `commands/run_process.py:_execute_agent_step` | Resolved prompt for one scalar agent attempt; atomic, once before launch |
 | `<step>_<context>_<ts>-attempt<N>.prompt.md` | `<run>/.logs/tasks/<step>/<item>/` | `commands/run_parallel.py:_build_prepare_launch` | Resolved prompt for one fan-out agent attempt; atomic, once before launch |
