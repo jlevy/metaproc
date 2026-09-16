@@ -15,17 +15,14 @@ from prettyfmt import fmt_timedelta
 from metaproc import paths as paths_mod
 from metaproc.cli import app, get_output
 from metaproc.errors import CLIError
-from metaproc.io import (
-    artifact_exists,
-    iter_artifact_paths,
-    iter_jsonl_objects,
-    resolve_existing_artifact,
-)
+from metaproc.io import iter_jsonl_objects
 from metaproc.paths import POOL_STATUS_FILE, SCALE_OVERRIDE_FILE, STATE_DIR
+from metaproc.runpool import host_admission
 from metaproc.runpool.host_admission import (
     DEFAULT_HOST_ADMISSION_NAMESPACE,
     list_host_admission_slots,
 )
+from metaproc.runpool.log_files import runpool_event_files, runpool_health_files
 from metaproc.runpool.status import ScaleOverride, is_pool_alive, read_status, write_scale_override
 
 pool_app = typer.Typer(
@@ -244,13 +241,13 @@ def pool_events(
     summary: bool = typer.Option(
         False,
         "--summary",
-        help="Aggregate counts (per event type, or per-label/classification when --type=auth_outcome, or per-label/policy when --type=auth_lease_acquired) instead of a per-event listing",
+        help="Aggregate counts (per event type, or per-label/classification when --type=auth_outcome, or per-label/policy when --type=auth_lease_acquired, or per-decision/reason with terminal wait seconds when --type=host_admission_denied) instead of a per-event listing",
     ),
 ) -> None:
     """Show RunPool event log for a run directory."""
     out = get_output()
 
-    event_files = _runpool_event_files_for_read(run_dir)
+    event_files = runpool_event_files(run_dir)
     if not event_files:
         out.progress(f"No RunPool event files under {paths_mod.run_logs_dir(run_dir)}")
         raise typer.Exit(code=0)
@@ -403,7 +400,7 @@ def pool_host_slots(
         return
 
     if not slots:
-        root = root_dir or Path.home() / ".metaproc" / "runpool" / "host-slots"
+        root = root_dir or host_admission.default_host_admission_root()
         out.progress(f"No host admission slots under {root / namespace}")
         return
 
@@ -431,7 +428,7 @@ def pool_health(
     """Show dedicated RunPool health samples for a run directory."""
     out = get_output()
 
-    health_files = _runpool_health_files_for_read(run_dir)
+    health_files = runpool_health_files(run_dir)
     if not health_files:
         out.progress(f"No RunPool health files under {paths_mod.run_logs_dir(run_dir)}")
         raise typer.Exit(code=0)
@@ -563,11 +560,34 @@ def _summarize_events(
         base["pressure_check"] = _summarize_pressure_samples(events)
         return base
 
+    if event_type == "host_admission_denied":
+        base["host_admission_denied"] = _summarize_host_admission_denials(events)
+        return base
+
     by_event: Counter[str] = Counter()
     for ev in events:
         by_event[ev.get("event", "unknown")] += 1
     base["by_event"] = dict(by_event)
     return base
+
+
+def _summarize_host_admission_denials(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Count host-slot waits and their terminal outcomes.
+
+    ``wait`` counts acquisitions whose first slot scan found no free slot, ``bypass``
+    counts launches that proceeded without a slot, and ``fail`` counts RunPool launches
+    refused. Waited seconds come from terminal refusals only.
+    """
+    waited = [
+        float(ev["waited_s"]) for ev in events if isinstance(ev.get("waited_s"), (int, float))
+    ]
+    return {
+        "by_decision": dict(Counter(str(ev.get("decision", "unknown")) for ev in events)),
+        "by_reason": dict(Counter(str(ev.get("reason", "unknown")) for ev in events)),
+        "by_limit": dict(Counter(str(ev.get("limit", "unknown")) for ev in events)),
+        "terminal_waited_s_total": round(sum(waited), 1),
+        "terminal_waited_s_max": max(waited) if waited else None,
+    }
 
 
 def _summarize_health(samples: list[dict[str, Any]]) -> dict[str, Any]:
@@ -734,6 +754,18 @@ def _render_summary(report: dict[str, Any], *, out: Any) -> None:
         )
         return
 
+    if "host_admission_denied" in report:
+        denied = report["host_admission_denied"]
+        out.data(f"\nDecisions: {denied['by_decision']}")
+        out.data(f"Reasons: {denied['by_reason']}")
+        out.data(f"Limits: {denied['by_limit']}")
+        out.data(
+            "Terminal waits: "
+            f"total={_format_float(denied['terminal_waited_s_total'], suffix='s')} "
+            f"max={_format_float(denied['terminal_waited_s_max'], suffix='s')}"
+        )
+        return
+
     out.data("\nBy event type:")
     for event_name, n in sorted(report.get("by_event", {}).items(), key=lambda kv: -kv[1]):
         out.data(f"  {event_name:20s}  {n}")
@@ -765,7 +797,7 @@ def pool_concurrency_timeline(
     adjustment carries a relative offset.
     """
     out = get_output()
-    event_files = _runpool_event_files_for_read(run_dir)
+    event_files = runpool_event_files(run_dir)
     if not event_files:
         out.progress(f"No RunPool event files under {paths_mod.run_logs_dir(run_dir)}")
         raise typer.Exit(code=0)
@@ -775,13 +807,6 @@ def pool_concurrency_timeline(
         out.data(json.dumps(timeline, indent=2))
         return
     _render_concurrency_timeline(timeline, out=out)
-
-
-def _resolve_event_path(*, is_v2: bool, v2_path: Path, legacy_path: Path) -> Path:
-    """Resolve one event stream using the V2 marker and exact legacy fallback."""
-    if is_v2 or artifact_exists(v2_path):
-        return resolve_existing_artifact(v2_path)
-    return resolve_existing_artifact(legacy_path)
 
 
 def _composite_pool_status_files(run_dir: Path) -> list[dict[str, Any]]:
@@ -846,136 +871,6 @@ def _composite_pool_status_files(run_dir: Path) -> list[dict[str, Any]]:
                     continue
                 _try_add(sub_run, step_dir / POOL_STATUS_FILE, step_id=step_dir.name)
     return entries
-
-
-def _runpool_event_files_for_one_run(run_dir: Path) -> list[Path]:
-    """Return readable RunPool event streams for a single run directory.
-
-    The operator-facing pool commands aggregate the run-level stream plus
-    V2 step and worker streams. Unmarked runs keep exact legacy fallback
-    per stream: a present V2 stream wins for that scope, otherwise the
-    matching legacy stream is used.
-
-    See :func:`_runpool_event_files_for_read` for the composite-aware
-    aggregation across nested child run directories.
-    """
-    is_v2 = paths_mod.is_v2_run_layout(run_dir)
-    candidates: list[Path] = [
-        _resolve_event_path(
-            is_v2=is_v2,
-            v2_path=paths_mod.runpool_events(run_dir),
-            legacy_path=paths_mod.legacy_runpool_events(run_dir),
-        )
-    ]
-
-    step_ids: set[str] = set()
-    steps_root = paths_mod.runpool_logs_dir(run_dir) / paths_mod.STEPS_SUBDIR
-    if steps_root.is_dir():
-        step_ids.update(
-            path.parent.name
-            for path in iter_artifact_paths(steps_root, f"*/{paths_mod.RUNPOOL_EVENTS_FILE}")
-        )
-    legacy_steps_root = paths_mod.run_logs_dir(run_dir) / paths_mod.STEPS_SUBDIR
-    if not is_v2 and legacy_steps_root.is_dir():
-        step_ids.update(
-            path.parent.name
-            for path in iter_artifact_paths(legacy_steps_root, f"*/{paths_mod.POOL_EVENTS_FILE}")
-        )
-    for step_id in sorted(step_ids):
-        candidates.append(
-            _resolve_event_path(
-                is_v2=is_v2,
-                v2_path=paths_mod.runpool_step_events(run_dir, step_id),
-                legacy_path=paths_mod.legacy_runpool_step_events(run_dir, step_id),
-            )
-        )
-
-    worker_ids: set[str] = set()
-    workers_root = paths_mod.runpool_logs_dir(run_dir) / paths_mod.WORKERS_SUBDIR
-    if workers_root.is_dir():
-        worker_ids.update(
-            path.parent.name
-            for path in iter_artifact_paths(workers_root, f"*/{paths_mod.RUNPOOL_EVENTS_FILE}")
-        )
-    if not is_v2:
-        worker_ids.update(
-            path.parent.name
-            for path in paths_mod.run_logs_dir(run_dir).glob(
-                f"worker-*/{paths_mod.POOL_EVENTS_FILE}"
-            )
-        )
-    for worker_id in sorted(worker_ids):
-        candidates.append(
-            _resolve_event_path(
-                is_v2=is_v2,
-                v2_path=paths_mod.runpool_worker_events(run_dir, worker_id),
-                legacy_path=paths_mod.legacy_runpool_worker_events(run_dir, worker_id),
-            )
-        )
-
-    seen: set[Path] = set()
-    files: list[Path] = []
-    for candidate in candidates:
-        if candidate in seen or not candidate.is_file():
-            continue
-        seen.add(candidate)
-        files.append(candidate)
-    return files
-
-
-def _runpool_event_files_for_read(run_dir: Path) -> list[Path]:
-    """Composite-aware: return event streams across ``run_dir`` and every
-    nested composite child run directory.
-
-    See :func:`metaproc.paths.iter_composite_run_dirs` for the discovery rules.
-    """
-    seen: set[Path] = set()
-    files: list[Path] = []
-    for sub_run in paths_mod.iter_composite_run_dirs(run_dir):
-        for candidate in _runpool_event_files_for_one_run(sub_run):
-            if candidate in seen:
-                continue
-            seen.add(candidate)
-            files.append(candidate)
-    return files
-
-
-def _runpool_health_files_for_one_run(run_dir: Path) -> list[Path]:
-    """Return readable RunPool health streams for a single run directory."""
-    candidates: list[Path] = [resolve_existing_artifact(paths_mod.runpool_health(run_dir))]
-
-    steps_root = paths_mod.runpool_logs_dir(run_dir) / paths_mod.STEPS_SUBDIR
-    if steps_root.is_dir():
-        for path in iter_artifact_paths(steps_root, f"*/{paths_mod.RUNPOOL_HEALTH_FILE}"):
-            candidates.append(path)
-
-    workers_root = paths_mod.runpool_logs_dir(run_dir) / paths_mod.WORKERS_SUBDIR
-    if workers_root.is_dir():
-        for path in iter_artifact_paths(workers_root, f"*/{paths_mod.RUNPOOL_HEALTH_FILE}"):
-            candidates.append(path)
-
-    seen: set[Path] = set()
-    files: list[Path] = []
-    for candidate in candidates:
-        if candidate in seen or not candidate.is_file():
-            continue
-        seen.add(candidate)
-        files.append(candidate)
-    return files
-
-
-def _runpool_health_files_for_read(run_dir: Path) -> list[Path]:
-    """Composite-aware: return health streams across ``run_dir`` and every
-    nested composite child run directory."""
-    seen: set[Path] = set()
-    files: list[Path] = []
-    for sub_run in paths_mod.iter_composite_run_dirs(run_dir):
-        for candidate in _runpool_health_files_for_one_run(sub_run):
-            if candidate in seen:
-                continue
-            seen.add(candidate)
-            files.append(candidate)
-    return files
 
 
 def _read_runpool_events(event_files: list[Path]) -> list[dict[str, Any]]:

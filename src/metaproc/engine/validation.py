@@ -314,6 +314,10 @@ def validate_item_outputs_detailed(
     whose output path contains a bind var will fail validation because
     ``Path("{{item}}").name`` compares as the literal placeholder.
 
+    An output marked ``optional`` may be absent: a step writes it only in some runs,
+    and its absence is not a failure. A present one is validated like any other, so a
+    malformed optional artifact still fails the step.
+
     Directory-kind outputs must be non-empty — an empty directory indicates
     the step produced zero records and is treated as a silent-success failure
     (the classic ``extract-items`` mode where an agent reports SUCCESS but wrote
@@ -365,7 +369,8 @@ def validate_item_outputs_detailed(
             if not fpath.exists() and item_dir.name == fname:
                 fpath = item_dir
             if not fpath.exists() or not fpath.is_dir():
-                fail(OutputFailureKind.missing, "directory not found")
+                if not io_spec.optional:
+                    fail(OutputFailureKind.missing, "directory not found")
                 continue
             if not _directory_has_content(fpath):
                 fail(OutputFailureKind.empty, "directory is empty (no output files produced)")
@@ -373,7 +378,8 @@ def validate_item_outputs_detailed(
 
         fpath = resolve_output_fpath(rendered, item_dir)
         if not fpath.exists() and not artifact_exists(fpath):
-            fail(OutputFailureKind.missing, "file not found")
+            if not io_spec.optional:
+                fail(OutputFailureKind.missing, "file not found")
             continue
         if artifact_exists(fpath):
             fpath = resolve_existing_artifact(fpath)

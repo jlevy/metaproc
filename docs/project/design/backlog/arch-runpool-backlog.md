@@ -34,3 +34,13 @@ Those decisions are not duplicated here.
 - Revisit `codex-gpt55` host cap using observed RSS and swap-growth data from clean
   runs.
 - Add Windows support only after a clear telemetry and process-tree design exists.
+- Let one run-owned pool serve execution profiles whose resources differ.
+  The pool refuses them, which blocks a process that pins one step to a light profile
+  while `--variant` selects a heavier one for the rest, such as a Gemini judge in a
+  Claude run. Candidates are per-lane RSS-weighted admission, per-lane concurrency
+  ceilings for `max_concurrency_hint`, or re-clamping the memory ceiling to the heaviest
+  registered lane’s fresh estimate when that lane joins.
+  The refusal covers four resolved values, and a per-lane design has to answer for each:
+  the pool ceiling, the host-slot limit (`host_max_concurrency`, which sizes one gate
+  for the whole pool), the per-process RSS estimate, and the initial memory budget
+  fraction.

@@ -23,6 +23,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import psutil
 import pytest
 
+from metaproc import paths as paths_mod
 from metaproc.commands.run_process import (
     RunExecutionContext,
     RunPoolOwner,
@@ -39,9 +40,15 @@ from metaproc.errors import CLIError
 from metaproc.io import read_yaml_file
 from metaproc.io.state_io import read_attempt_history_at, read_status_at
 from metaproc.models.authored import ForEach, ProcessSpec, ProcessStep, StepContext
+from metaproc.models.lane import ExecutionLane
 from metaproc.models.plan import FanOut, Plan, ResolvedAdapter, ResolvedStep
 from metaproc.models.runtime import AttemptDisposition
-from metaproc.runpool.pool import ProcessConfig
+from metaproc.runpool.backend import HealthMetrics, LaunchHandle, PreparedLaunch
+from metaproc.runpool.event_models import HostAdmissionDeniedEvent, HostSlotAcquiredEvent
+from metaproc.runpool.event_reader import read_runpool_events
+from metaproc.runpool.host_admission import HostAdmissionSlotSnapshot, list_host_admission_slots
+from metaproc.runpool.pool import ProcessConfig, RunPoolConfig
+from metaproc.runpool.scalar_admission import SCALAR_DEFAULT_HOST_LIMIT
 
 _PROCESS_TREE_TEST_TIMEOUT_S = 2.0
 
@@ -51,14 +58,18 @@ class _Out:
         pass
 
 
-def test_run_pool_owner_reuses_one_profile_and_rejects_a_second(tmp_path: Path) -> None:
-    pool = MagicMock()
-    owner = RunPoolOwner(
+def _run_pool_owner(tmp_path: Path) -> RunPoolOwner:
+    return RunPoolOwner(
         run_dir=tmp_path,
         backend_name="local",
         max_concurrency=2,
         initial_concurrency=1,
     )
+
+
+def test_run_pool_owner_reuses_one_pool_for_one_profile(tmp_path: Path) -> None:
+    pool = MagicMock()
+    owner = _run_pool_owner(tmp_path)
 
     with (
         patch("metaproc.commands.run_process.get_backend", return_value=MagicMock()),
@@ -66,10 +77,108 @@ def test_run_pool_owner_reuses_one_profile_and_rejects_a_second(tmp_path: Path) 
     ):
         assert owner.get_pool(resource_config={}, execution_profile="profile-a") is pool
         assert owner.get_pool(resource_config={}, execution_profile="profile-a") is pool
-        with pytest.raises(CLIError, match="supports one execution profile"):
-            owner.get_pool(resource_config={}, execution_profile="profile-b")
 
     pool_type.assert_called_once()
+    config = pool_type.call_args.args[0]
+    assert config.execution_profile == "profile-a"
+    assert config.max_concurrency == 2
+    pool.register_lane.assert_not_called()
+
+
+def test_run_pool_owner_adds_a_profile_with_equal_resources_as_a_lane(tmp_path: Path) -> None:
+    pool = MagicMock()
+    owner = _run_pool_owner(tmp_path)
+    megabytes = {"estimated_process_rss_mb": 250, "initial_memory_budget_fraction": 0.5}
+    same_in_bytes = {"estimated_process_rss_bytes": 250 * 1024 * 1024}
+
+    with (
+        patch("metaproc.commands.run_process.get_backend", return_value=MagicMock()),
+        patch("metaproc.commands.run_process.RunPool", return_value=pool) as pool_type,
+    ):
+        assert owner.get_pool(resource_config=megabytes, execution_profile="flash-36") is pool
+        assert owner.get_pool(resource_config=same_in_bytes, execution_profile="flash-38") is pool
+        assert owner.get_pool(resource_config=same_in_bytes, execution_profile="flash-38") is pool
+        assert owner.get_pool(resource_config=megabytes, execution_profile="flash-36") is pool
+
+    pool_type.assert_called_once()
+    assert pool_type.call_args.args[0].execution_profile == "flash-36"
+    pool.register_lane.assert_called_once_with(
+        ExecutionLane(lane_id="flash-38", execution_profile="flash-38")
+    )
+
+
+def test_run_pool_owner_compares_the_ceiling_and_host_limit_each_profile_resolves_to(
+    tmp_path: Path,
+) -> None:
+    """Hints at or above `--max-concurrency` and an explicit host cap equal to it change nothing."""
+    pool = MagicMock()
+    owner = _run_pool_owner(tmp_path)
+    rss = {"estimated_process_rss_mb": 250}
+
+    with (
+        patch("metaproc.commands.run_process.get_backend", return_value=MagicMock()),
+        patch("metaproc.commands.run_process.RunPool", return_value=pool) as pool_type,
+    ):
+        owner.get_pool(resource_config=rss, execution_profile="unhinted")
+        for name, extra in (
+            ("hint-at-ceiling", {"max_concurrency_hint": 2}),
+            ("hint-above-ceiling", {"max_concurrency_hint": 50}),
+            ("host-cap-at-ceiling", {"host_max_concurrency": 2}),
+        ):
+            assert owner.get_pool(resource_config=rss | extra, execution_profile=name) is pool
+
+    pool_type.assert_called_once()
+    assert pool.register_lane.call_count == 3
+
+
+@pytest.mark.parametrize(
+    ("second_resources", "difference"),
+    [
+        (
+            {"estimated_process_rss_mb": 1024},
+            (
+                f"estimated_process_rss_bytes {250 * 1024 * 1024} for 'light', "
+                f"{1024 * 1024 * 1024} for 'heavy'"
+            ),
+        ),
+        (
+            {"estimated_process_rss_mb": 250, "max_concurrency_hint": 1},
+            (
+                "max_concurrency 2 for 'light', 1 for 'heavy'; "
+                "host_max_concurrency 2 for 'light', 1 for 'heavy'"
+            ),
+        ),
+        (
+            {"estimated_process_rss_mb": 250, "host_max_concurrency": 1},
+            "host_max_concurrency 2 for 'light', 1 for 'heavy'",
+        ),
+        (
+            {"estimated_process_rss_mb": 250, "initial_memory_budget_fraction": 0.25},
+            "initial_memory_budget_fraction 0.5 for 'light', 0.25 for 'heavy'",
+        ),
+    ],
+)
+def test_run_pool_owner_refuses_a_profile_with_different_resources(
+    tmp_path: Path, second_resources: dict[str, object], difference: str
+) -> None:
+    pool = MagicMock()
+    owner = _run_pool_owner(tmp_path)
+
+    with (
+        patch("metaproc.commands.run_process.get_backend", return_value=MagicMock()),
+        patch("metaproc.commands.run_process.RunPool", return_value=pool) as pool_type,
+    ):
+        owner.get_pool(resource_config={"estimated_process_rss_mb": 250}, execution_profile="light")
+        with pytest.raises(CLIError) as refused:
+            owner.get_pool(resource_config=second_resources, execution_profile="heavy")
+        assert owner.get_pool(resource_config={}, execution_profile="light") is pool
+
+    message = str(refused.value)
+    assert "'heavy' cannot share the run-owned RunPool sized from 'light'" in message
+    assert f": {difference}." in message
+    assert "no per-lane resource accounting" in message
+    pool_type.assert_called_once()
+    pool.register_lane.assert_not_called()
 
 
 def test_composite_reuses_parent_execution_context(tmp_path: Path) -> None:
@@ -106,6 +215,7 @@ def test_composite_reuses_parent_execution_context(tmp_path: Path) -> None:
                     run_id="test/run-1",
                     scope_path=(),
                     execution_context=context,
+                    scope_execution_profile=None,
                     out=_Out(),
                 )
             assert captured["execution_context"] is context
@@ -196,6 +306,7 @@ def test_mapped_composite_scopes_share_run_context_and_leaf_ceiling(tmp_path: Pa
                     run_id="test/run-1",
                     scope_path=(),
                     execution_context=context,
+                    scope_execution_profile=None,
                     events=events,
                     out=_Out(),
                 )
@@ -275,6 +386,7 @@ def test_mapped_composite_has_a_structural_scope_default(tmp_path: Path) -> None
                     run_id="test/run-1",
                     scope_path=(),
                     execution_context=context,
+                    scope_execution_profile=None,
                     out=_Out(),
                 )
         finally:
@@ -343,6 +455,7 @@ def test_mapped_composite_cancellation_ends_parent_attempt(tmp_path: Path) -> No
                         run_id="test/run-1",
                         scope_path=(),
                         execution_context=context,
+                        scope_execution_profile=None,
                         out=_Out(),
                     )
                 )
@@ -417,6 +530,7 @@ def test_mapped_composite_abort_ends_parent_attempt(tmp_path: Path) -> None:
                         run_id="test/run-1",
                         scope_path=(),
                         execution_context=context,
+                        scope_execution_profile=None,
                         out=_Out(),
                     )
         finally:
@@ -468,6 +582,7 @@ def test_mapped_composite_rejects_gcp_worker_partitioning(tmp_path: Path) -> Non
                     run_id="test/run-1",
                     scope_path=(),
                     execution_context=context,
+                    scope_execution_profile=None,
                     out=_Out(),
                 )
         finally:
@@ -487,6 +602,7 @@ def test_recursive_evaluator_accepts_only_scope_local_arguments() -> None:
         "run_id",
         "scope_path",
         "execution_context",
+        "scope_execution_profile",
         "out",
         "events",
     }
@@ -535,6 +651,7 @@ def test_nested_scope_uses_global_force_without_reusing_root_skip(
                     run_id="test/run-1/child",
                     scope_path=("child",),
                     execution_context=context,
+                    scope_execution_profile=None,
                     out=_Out(),
                     events=MagicMock(),
                 )
@@ -607,6 +724,7 @@ def test_nested_scope_runs_independent_branches_past_a_step_failure(tmp_path: Pa
                     run_id="test/run-1/child",
                     scope_path=("child",),
                     execution_context=context,
+                    scope_execution_profile=None,
                     out=_Out(),
                     events=MagicMock(),
                 )
@@ -650,6 +768,7 @@ def test_nested_scope_uses_continue_on_step_failure_policy(tmp_path: Path) -> No
                     run_id="test/run-1/child",
                     scope_path=("child",),
                     execution_context=context,
+                    scope_execution_profile=None,
                     out=_Out(),
                     events=MagicMock(),
                 )
@@ -688,6 +807,7 @@ def test_scope_fail_fast_message_states_policy_not_a_launch_flag(tmp_path: Path)
                     run_id="test/run-1/child",
                     scope_path=("child",),
                     execution_context=context,
+                    scope_execution_profile=None,
                     out=_Out(),
                     events=MagicMock(),
                 )
@@ -845,6 +965,7 @@ def test_recursive_siblings_share_one_executable_leaf_ceiling(tmp_path: Path) ->
                             run_id="test/run-1",
                             scope_path=(),
                             execution_context=context,
+                            scope_execution_profile=None,
                             out=_Out(),
                         )
                         for step_id in ("left", "right")
@@ -1009,6 +1130,279 @@ def test_scalar_agent_steps_use_one_run_owned_pool(tmp_path: Path) -> None:
     }
     assert all(config.execution_profile == "test" for config in submitted)
     pool.shutdown.assert_awaited_once()
+
+
+def _agent_leaf_adapter() -> MagicMock:
+    adapter = MagicMock()
+    adapter.build_command.return_value = ["fake-adapter"]
+    adapter.prepare_env.side_effect = lambda env, _config: env
+    adapter.working_directory.return_value = None
+    return adapter
+
+
+def _run_pool_factory(
+    submit: Any,
+    configs: list[RunPoolConfig] | None = None,
+) -> MagicMock:
+    """Return a RunPool stand-in that records the configuration RunPoolOwner chose."""
+
+    def make_pool(config: RunPoolConfig, **_kwargs: object) -> MagicMock:
+        if configs is not None:
+            configs.append(config)
+        pool = MagicMock()
+        pool.max_concurrency = config.max_concurrency
+        pool.shutdown = AsyncMock()
+        pool.submit.side_effect = submit
+        return pool
+
+    return MagicMock(side_effect=make_pool)
+
+
+async def _execute_agent_leaves(
+    tmp_path: Path,
+    *,
+    step_ids: tuple[str, ...],
+    context: RunExecutionContext,
+    resources: dict[str, object] | None = None,
+) -> list[bool]:
+    return await asyncio.gather(
+        *(
+            _execute_agent_step(
+                spec=ProcessSpec(name="test"),
+                step_def=ProcessStep(id=step_id, mode="agent", prompt_prefix="test"),
+                target=ResolvedStep(
+                    step_id=step_id,
+                    mode="agent",
+                    adapter=ResolvedAdapter(type="test", config={}),
+                    resources=dict(resources or {}),
+                ),
+                variables={},
+                process_dir=tmp_path,
+                run_dir=tmp_path / "run",
+                run_id="test/run-1",
+                execution_context=context,
+                out=_Out(),
+            )
+            for step_id in step_ids
+        )
+    )
+
+
+class _SlotObservingBackend:
+    """A backend named ``local`` whose processes exit on their second poll.
+
+    Each poll records the host slot leases held at that moment and whether one of them
+    names the polled process as its child, so a test sees what the run-owned pool's
+    admission holds while its processes run.
+    """
+
+    name = "local"
+
+    def __init__(self) -> None:
+        self.polls: dict[int, int] = {}
+        self.held: list[list[HostAdmissionSlotSnapshot]] = []
+        self.child_recorded: list[bool] = []
+        self.next_pid = 40_000
+
+    async def launch(self, prepared: PreparedLaunch, label: str = "") -> LaunchHandle:
+        del label
+        assert prepared.log_path is not None
+        prepared.log_path.parent.mkdir(parents=True, exist_ok=True)
+        prepared.log_path.write_text("", encoding="utf-8")
+        self.next_pid += 1
+        return LaunchHandle(pid=self.next_pid, backend_name=self.name)
+
+    async def poll(self, handle: LaunchHandle) -> int | None:
+        assert handle.pid is not None
+        held = list_host_admission_slots()
+        self.held.append(held)
+        self.child_recorded.append(any(lease.child_pid == handle.pid for lease in held))
+        self.polls[handle.pid] = self.polls.get(handle.pid, 0) + 1
+        return 0 if self.polls[handle.pid] >= 2 else None
+
+    async def kill(self, handle: LaunchHandle, sig: int | None = None) -> None:
+        del handle, sig
+
+    async def health(self, handle: LaunchHandle) -> HealthMetrics | None:
+        del handle
+        return None
+
+    async def read_log_tail(self, handle: LaunchHandle, lines: int = 50) -> str:
+        del handle, lines
+        return ""
+
+
+def test_run_owned_pool_admits_agent_leaves_to_host_slots_after_pool_admission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Six leaves under a hinted pool ceiling of two hold at most two host slots, never waiting.
+
+    `--max-concurrency 6` admits six leaves while the profile's `max_concurrency_hint`
+    caps the pool at two. A slot taken before pool submission would have four leaves wait
+    out the acquire timeout and launch without one; a slot taken once the pool admits a
+    process counts running agents and records each child.
+    """
+    leaf_count = 6
+    monkeypatch.setattr("metaproc.runpool.scalar_admission.SCALAR_ACQUIRE_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(
+        "metaproc.commands.run_process.SCALAR_ACQUIRE_TIMEOUT_S", 0.2, raising=False
+    )
+    step_ids = tuple(f"leaf-{index}" for index in range(leaf_count))
+    backend = _SlotObservingBackend()
+    run_dir = tmp_path / "run"
+
+    async def exercise() -> list[bool]:
+        context = RunExecutionContext.create(
+            max_concurrency=leaf_count,
+            initial_concurrency=leaf_count,
+            run_dir=run_dir,
+            enable_run_pool=True,
+        )
+        try:
+            with (
+                patch("metaproc.commands.run_process.get_backend", return_value=backend),
+                patch(
+                    "metaproc.commands.run_process.get_adapter",
+                    return_value=_agent_leaf_adapter(),
+                ),
+                patch("metaproc.commands.run_process.capture_repo_snapshot", return_value=None),
+            ):
+                return await asyncio.wait_for(
+                    _execute_agent_leaves(
+                        tmp_path,
+                        step_ids=step_ids,
+                        context=context,
+                        resources={"max_concurrency_hint": 2},
+                    ),
+                    timeout=30,
+                )
+        finally:
+            await context.aclose()
+
+    assert asyncio.run(exercise()) == [True] * leaf_count
+    streams = [
+        paths_mod.runpool_events(run_dir),
+        *(paths_mod.runpool_step_events(run_dir, step_id) for step_id in step_ids),
+    ]
+    events = [
+        event for stream in streams if stream.exists() for event in read_runpool_events(stream)
+    ]
+    assert [event for event in events if isinstance(event, HostAdmissionDeniedEvent)] == []
+    acquired = [event for event in events if isinstance(event, HostSlotAcquiredEvent)]
+    assert len(acquired) == leaf_count
+    assert {event.limit for event in acquired} == {2}
+    assert backend.held and max(len(held) for held in backend.held) <= 2
+    assert backend.child_recorded and all(backend.child_recorded)
+    assert list_host_admission_slots() == []
+
+
+@pytest.mark.parametrize(
+    ("env_cap", "resources", "expected"),
+    [
+        pytest.param(None, {}, 6, id="pool-ceiling-default"),
+        pytest.param(None, {"max_concurrency_hint": 2}, 2, id="hint-below-cli-ceiling"),
+        pytest.param(None, {"max_concurrency_hint": 20}, 6, id="hint-above-cli-ceiling"),
+        pytest.param("3", {}, 3, id="env-caps-pool-ceiling"),
+        pytest.param("50", {}, 6, id="env-cannot-raise"),
+        pytest.param(None, {"host_max_concurrency": 9}, 9, id="resource-over-default"),
+        pytest.param(None, {"host_max_concurrency": 2}, 2, id="resource-below-default"),
+        pytest.param(
+            None,
+            {"max_concurrency_hint": 2, "host_max_concurrency": 9},
+            9,
+            id="resource-over-hinted-ceiling",
+        ),
+        pytest.param("5", {"host_max_concurrency": 9}, 5, id="env-caps-resource"),
+    ],
+)
+def test_agent_leaf_host_limit_precedence_under_a_run_owned_pool(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    env_cap: str | None,
+    resources: dict[str, object],
+    expected: int,
+) -> None:
+    """The run-owned pool holds the host limit; the leaf's own gate stays disabled."""
+    if env_cap is not None:
+        monkeypatch.setenv("METAPROC_HOST_MAX_LOCAL_AGENTS", env_cap)
+    configs: list[RunPoolConfig] = []
+    outer_enabled: list[bool] = []
+
+    @asynccontextmanager
+    async def recorded_admission(**kwargs: Any) -> AsyncGenerator[None]:
+        outer_enabled.append(kwargs["enabled"])
+        yield None
+
+    def submit(config: ProcessConfig) -> asyncio.Future[Any]:
+        launch = config.launch
+        assert launch is not None and launch.log_path is not None
+        launch.log_path.write_text("", encoding="utf-8")
+        future = asyncio.get_running_loop().create_future()
+        future.set_result(SimpleNamespace(exit_code=0, kill_reason=None))
+        return future
+
+    async def exercise() -> list[bool]:
+        context = RunExecutionContext.create(
+            max_concurrency=6,
+            run_dir=tmp_path / "run",
+            enable_run_pool=True,
+        )
+        try:
+            with (
+                patch("metaproc.commands.run_process.RunPool", _run_pool_factory(submit, configs)),
+                patch(
+                    "metaproc.commands.run_process.get_adapter",
+                    return_value=_agent_leaf_adapter(),
+                ),
+                patch("metaproc.commands.run_process.admitted_launch", recorded_admission),
+                patch("metaproc.commands.run_process.capture_repo_snapshot", return_value=None),
+            ):
+                return await _execute_agent_leaves(
+                    tmp_path, step_ids=("leaf",), context=context, resources=resources
+                )
+        finally:
+            await context.aclose()
+
+    assert asyncio.run(exercise()) == [True]
+    (config,) = configs
+    assert (config.host_admission_enabled, config.host_admission_fail_open) == (True, True)
+    assert config.host_admission_limit == expected
+    assert outer_enabled == [False]
+
+
+def test_agent_leaf_without_a_run_owned_pool_uses_the_scalar_default(tmp_path: Path) -> None:
+    limits: list[int] = []
+
+    @asynccontextmanager
+    async def recorded_admission(**kwargs: Any) -> AsyncGenerator[None]:
+        limits.append(kwargs["limit"])
+        yield None
+
+    async def direct_agent(*_args: object, **kwargs: object) -> int:
+        log_path = kwargs["log_path"]
+        assert isinstance(log_path, Path)
+        log_path.write_text("")
+        return 0
+
+    async def exercise() -> list[bool]:
+        context = RunExecutionContext.create(max_concurrency=30)
+        try:
+            with (
+                patch(
+                    "metaproc.commands.run_process.get_adapter",
+                    return_value=_agent_leaf_adapter(),
+                ),
+                patch("metaproc.commands.run_process._run_agent_subprocess", direct_agent),
+                patch("metaproc.commands.run_process.admitted_launch", recorded_admission),
+                patch("metaproc.commands.run_process.capture_repo_snapshot", return_value=None),
+            ):
+                return await _execute_agent_leaves(tmp_path, step_ids=("leaf",), context=context)
+        finally:
+            await context.aclose()
+
+    assert asyncio.run(exercise()) == [True]
+    assert limits == [SCALAR_DEFAULT_HOST_LIMIT]
 
 
 def test_run_context_closes_executor_when_pool_shutdown_fails(tmp_path: Path) -> None:

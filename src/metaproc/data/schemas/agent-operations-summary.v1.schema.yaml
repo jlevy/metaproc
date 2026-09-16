@@ -1,0 +1,1208 @@
+$defs:
+  AgentFigures:
+    additionalProperties: false
+    description: |-
+      Agent invocations read from transcript terminal results and invocation records.
+
+      ``tool_results_at_cap`` counts transcript lines of at least 16 MiB encoded bytes that
+      carry a tool result. Only transcripts at least that large are scanned, in bounded
+      chunks.
+    properties:
+      meters:
+        items:
+          $ref: '#/$defs/MeterFigure'
+        title: Meters
+        type: array
+      model_mismatches:
+        anyOf:
+        - type: integer
+        - type: 'null'
+        default: null
+        title: Model Mismatches
+      oversized_transcripts:
+        items:
+          type: string
+        title: Oversized Transcripts
+        type: array
+      provider_s:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Provider S
+      requested_models:
+        anyOf:
+        - additionalProperties:
+            type: integer
+          type: object
+        - type: 'null'
+        default: null
+        title: Requested Models
+      served_models:
+        anyOf:
+        - additionalProperties:
+            type: integer
+          type: object
+        - type: 'null'
+        default: null
+        title: Served Models
+      tokens:
+        anyOf:
+        - $ref: '#/$defs/TokenFigures'
+        - type: 'null'
+        default: null
+        unevaluatedProperties: false
+      tool_calls:
+        anyOf:
+        - type: integer
+        - type: 'null'
+        default: null
+        title: Tool Calls
+      tool_results_at_cap:
+        anyOf:
+        - type: integer
+        - type: 'null'
+        default: null
+        title: Tool Results At Cap
+      transcripts:
+        title: Transcripts
+        type: integer
+      transcripts_without_result:
+        title: Transcripts Without Result
+        type: integer
+      unavailable:
+        additionalProperties:
+          type: string
+        title: Unavailable
+        type: object
+    required:
+    - transcripts
+    - transcripts_without_result
+    title: AgentFigures
+    type: object
+  CoverageState:
+    description: Evidence quality for one provider-meter quantity.
+    enum:
+    - measured
+    - estimated
+    - unmeasured
+    title: CoverageState
+    type: string
+  Distribution:
+    additionalProperties: false
+    description: |-
+      Order statistics over a non-empty sample, in seconds unless the field says otherwise.
+
+      Percentiles interpolate linearly between closest ranks.
+    properties:
+      count:
+        minimum: 1
+        title: Count
+        type: integer
+      max:
+        title: Max
+        type: number
+      mean:
+        title: Mean
+        type: number
+      p50:
+        title: P50
+        type: number
+      p90:
+        title: P90
+        type: number
+      total:
+        title: Total
+        type: number
+    required:
+    - count
+    - max
+    - mean
+    - p50
+    - p90
+    - total
+    title: Distribution
+    type: object
+  ItemChain:
+    additionalProperties: false
+    description: |-
+      One item key's path through every mapped top-level stage it appears in.
+
+      ``stages`` are in start order, with stages that never started last in plan order.
+      ``barrier_wait_s`` sums the waits between consecutive stages and is null when any two
+      of them overlap.
+    properties:
+      barrier_wait_s:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Barrier Wait S
+      chain_running_s:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Chain Running S
+      chain_span_s:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Chain Span S
+      item_key:
+        title: Item Key
+        type: string
+      slowest_step:
+        anyOf:
+        - $ref: '#/$defs/StepRef'
+        - type: 'null'
+        default: null
+        unevaluatedProperties: false
+      stages:
+        items:
+          $ref: '#/$defs/ItemStage'
+        title: Stages
+        type: array
+      unavailable:
+        additionalProperties:
+          type: string
+        title: Unavailable
+        type: object
+    required:
+    - item_key
+    title: ItemChain
+    type: object
+  ItemFigures:
+    additionalProperties: false
+    description: Per-item chain time across the mapped top-level stages.
+    properties:
+      barrier_wait_s:
+        anyOf:
+        - $ref: '#/$defs/Distribution'
+        - type: 'null'
+        default: null
+        unevaluatedProperties: false
+      chain_running_s:
+        anyOf:
+        - $ref: '#/$defs/Distribution'
+        - type: 'null'
+        default: null
+        unevaluatedProperties: false
+      chain_span_s:
+        anyOf:
+        - $ref: '#/$defs/Distribution'
+        - type: 'null'
+        default: null
+        unevaluatedProperties: false
+      item_count:
+        title: Item Count
+        type: integer
+      items:
+        items:
+          $ref: '#/$defs/ItemChain'
+        title: Items
+        type: array
+      per_stage:
+        items:
+          $ref: '#/$defs/StageItemStats'
+        title: Per Stage
+        type: array
+      slowest:
+        items:
+          $ref: '#/$defs/ItemChain'
+        title: Slowest
+        type: array
+      stages:
+        items:
+          type: string
+        title: Stages
+        type: array
+      unavailable:
+        additionalProperties:
+          type: string
+        title: Unavailable
+        type: object
+    required:
+    - item_count
+    title: ItemFigures
+    type: object
+  ItemStage:
+    additionalProperties: false
+    description: |-
+      One item's pass through one mapped top-level stage.
+
+      ``wait_before_s`` is the time from the completion of the stage this item started
+      before this one to this stage's start. Stages without an edge between them can
+      overlap; a stage that started before the previous one completed has no wait.
+    properties:
+      completed_at:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Completed At
+      running_s:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Running S
+      slowest_step:
+        anyOf:
+        - $ref: '#/$defs/StepRef'
+        - type: 'null'
+        default: null
+        unevaluatedProperties: false
+      stage:
+        title: Stage
+        type: string
+      started_at:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Started At
+      state:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: State
+      unavailable:
+        additionalProperties:
+          type: string
+        title: Unavailable
+        type: object
+      wait_before_s:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Wait Before S
+    required:
+    - stage
+    title: ItemStage
+    type: object
+  MeterFigure:
+    additionalProperties: false
+    description: A provider meter copied from the resource usage summary, coverage included.
+    properties:
+      actual_quantity:
+        anyOf:
+        - minimum: 0
+          type: number
+        - type: 'null'
+        default: null
+        title: Actual Quantity
+      coverage:
+        $ref: '#/$defs/CoverageState'
+      estimated_quantity:
+        anyOf:
+        - minimum: 0
+          type: number
+        - type: 'null'
+        default: null
+        title: Estimated Quantity
+      key:
+        $ref: '#/$defs/MeterKey'
+      unmeasured_event_count:
+        default: 0
+        minimum: 0
+        title: Unmeasured Event Count
+        type: integer
+    required:
+    - coverage
+    - key
+    title: MeterFigure
+    type: object
+  MeterKey:
+    additionalProperties: false
+    description: Exact aggregation key for a provider-defined usage meter.
+    properties:
+      meter:
+        maxLength: 128
+        minLength: 1
+        title: Meter
+        type: string
+      product:
+        maxLength: 128
+        minLength: 1
+        title: Product
+        type: string
+      provider:
+        maxLength: 128
+        minLength: 1
+        title: Provider
+        type: string
+      unit:
+        maxLength: 64
+        minLength: 1
+        title: Unit
+        type: string
+    required:
+    - meter
+    - product
+    - provider
+    - unit
+    title: MeterKey
+    type: object
+  OperationsSummaryArtifacts:
+    additionalProperties: false
+    description: Relative paths joining this summary to its sibling evidence.
+    properties:
+      process_status:
+        default: .state/process-status.yaml
+        title: Process Status
+        type: string
+      resource_summary:
+        default: resource-usage-summary.md
+        title: Resource Summary
+        type: string
+      summary:
+        default: operations-summary.md
+        title: Summary
+        type: string
+    title: OperationsSummaryArtifacts
+    type: object
+  ParallelismFigures:
+    additionalProperties: false
+    description: |-
+      Concurrently running pooled tasks against the pool ceiling.
+
+      ``peak_running`` and ``mean_running`` replay ``process_start`` and ``process_exit``
+      events; ``mean_running`` is time-weighted over the pool window from its first start to
+      its last exit. Sample shares come from health samples, or pressure checks when a
+      pool wrote no health stream: at the cap means ``active_count`` reached the current
+      concurrency cap, at the ceiling means it reached the pool's configured maximum.
+      ``sample_source`` names which, and reads as ``PoolRow.sample_source`` does.
+
+      ``pools`` holds the streams that started a pool or a process. Every agent step also
+      owns an admission stream that records only authentication and host admission;
+      ``empty_streams`` counts those and any other stream that started neither.
+    properties:
+      ceiling:
+        anyOf:
+        - type: integer
+        - type: 'null'
+        default: null
+        title: Ceiling
+      empty_streams:
+        default: 0
+        title: Empty Streams
+        type: integer
+      health_samples:
+        title: Health Samples
+        type: integer
+      mean_running:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Mean Running
+      peak_running:
+        anyOf:
+        - type: integer
+        - type: 'null'
+        default: null
+        title: Peak Running
+      pools:
+        items:
+          $ref: '#/$defs/PoolRow'
+        title: Pools
+        type: array
+      pressure_checks:
+        default: 0
+        title: Pressure Checks
+        type: integer
+      sample_source:
+        anyOf:
+        - enum:
+          - health_sample
+          - pressure_check
+          type: string
+        - type: 'null'
+        default: null
+        title: Sample Source
+      share_samples_at_cap:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Share Samples At Cap
+      share_samples_at_ceiling:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Share Samples At Ceiling
+      unavailable:
+        additionalProperties:
+          type: string
+        title: Unavailable
+        type: object
+    required:
+    - health_samples
+    title: ParallelismFigures
+    type: object
+  PoolRow:
+    additionalProperties: false
+    description: |-
+      Concurrency observed by one RunPool event and health stream pair.
+
+      Sample shares come from the pool's health samples, or from its ``pressure_check``
+      events when it wrote no health stream; ``sample_source`` names which. It is null
+      with a reason when the pool recorded neither, and null with no reason in a document
+      written before it was recorded, where the shares' provenance is unknown.
+    properties:
+      cap_max:
+        anyOf:
+        - type: integer
+        - type: 'null'
+        default: null
+        title: Cap Max
+      cap_min:
+        anyOf:
+        - type: integer
+        - type: 'null'
+        default: null
+        title: Cap Min
+      ceiling:
+        anyOf:
+        - type: integer
+        - type: 'null'
+        default: null
+        title: Ceiling
+      health_samples:
+        title: Health Samples
+        type: integer
+      mean_running:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Mean Running
+      peak_running:
+        anyOf:
+        - type: integer
+        - type: 'null'
+        default: null
+        title: Peak Running
+      pressure_checks:
+        default: 0
+        title: Pressure Checks
+        type: integer
+      process_starts:
+        title: Process Starts
+        type: integer
+      sample_source:
+        anyOf:
+        - enum:
+          - health_sample
+          - pressure_check
+          type: string
+        - type: 'null'
+        default: null
+        title: Sample Source
+      share_samples_at_cap:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Share Samples At Cap
+      share_samples_at_ceiling:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Share Samples At Ceiling
+      source:
+        title: Source
+        type: string
+      unavailable:
+        additionalProperties:
+          type: string
+        title: Unavailable
+        type: object
+    required:
+    - health_samples
+    - process_starts
+    - source
+    title: PoolRow
+    type: object
+  ResourceFigures:
+    additionalProperties: false
+    description: |-
+      Machine resources from the resource usage summary and RunPool health samples.
+
+      ``unpriced_models`` is copied from the resource usage summary: invocations with token
+      usage whose model has no list price, which ``list_cost_usd`` leaves out. When it is
+      nonempty, ``list_cost_usd`` is a lower bound.
+    properties:
+      actual_cost_usd:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Actual Cost Usd
+      cpu_pct_avg:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Cpu Pct Avg
+      cpu_pct_max:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Cpu Pct Max
+      disk_free_min_gb:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Disk Free Min Gb
+      health_samples:
+        title: Health Samples
+        type: integer
+      list_cost_usd:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: List Cost Usd
+      resource_finalization_state:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Resource Finalization State
+      rss_bytes_max:
+        anyOf:
+        - type: integer
+        - type: 'null'
+        default: null
+        title: Rss Bytes Max
+      run_file_count:
+        anyOf:
+        - type: integer
+        - type: 'null'
+        default: null
+        title: Run File Count
+      run_size_bytes:
+        anyOf:
+        - type: integer
+        - type: 'null'
+        default: null
+        title: Run Size Bytes
+      swap_delta_max_gb_per_min:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Swap Delta Max Gb Per Min
+      swap_growth_gb:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Swap Growth Gb
+      swap_used_peak_gb:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Swap Used Peak Gb
+      unavailable:
+        additionalProperties:
+          type: string
+        title: Unavailable
+        type: object
+      unpriced_models:
+        items:
+          $ref: '#/$defs/UnpricedModel'
+        title: Unpriced Models
+        type: array
+    required:
+    - health_samples
+    title: ResourceFigures
+    type: object
+  RetryFigures:
+    additionalProperties: false
+    description: |-
+      ``TaskAttemptRecord`` attempts found by schema token in every scope.
+
+      A non-succeeded attempt without ``failure_class``, lost attempts included, counts
+      under ``unclassified``. ``wrote_nothing`` counts terminal attempts whose recorded
+      output failures are all ``missing``. ``retries`` counts attempt records beyond the
+      first for each task, where a task is one step, or one item of a step, in one scope.
+    properties:
+      attempt_records:
+        title: Attempt Records
+        type: integer
+      by_disposition:
+        additionalProperties:
+          type: integer
+        title: By Disposition
+        type: object
+      by_failure_class:
+        additionalProperties:
+          type: integer
+        title: By Failure Class
+        type: object
+      by_step:
+        items:
+          $ref: '#/$defs/RetryStepRow'
+        title: By Step
+        type: array
+      live_attempts:
+        title: Live Attempts
+        type: integer
+      non_record_attempt_files:
+        title: Non Record Attempt Files
+        type: integer
+      path_shapes:
+        additionalProperties:
+          type: integer
+        title: Path Shapes
+        type: object
+      retries:
+        default: 0
+        title: Retries
+        type: integer
+      unavailable:
+        additionalProperties:
+          type: string
+        title: Unavailable
+        type: object
+      unreadable_records:
+        title: Unreadable Records
+        type: integer
+      wrote_nothing:
+        anyOf:
+        - type: integer
+        - type: 'null'
+        default: null
+        title: Wrote Nothing
+    required:
+    - attempt_records
+    - live_attempts
+    - non_record_attempt_files
+    - unreadable_records
+    title: RetryFigures
+    type: object
+  RetryStepRow:
+    additionalProperties: false
+    description: |-
+      Attempt counts for one step type, keyed by owning process, with a non-succeeded attempt.
+
+      ``process`` is null in a document written before rows were keyed by it. Such a row
+      is keyed by ``step_id`` alone, so it can pool the attempts of a step id that ran in
+      more than one process; a reader groups those rows by ``step_id`` and must not
+      attribute them to the run's own process.
+    properties:
+      attempts:
+        title: Attempts
+        type: integer
+      by_failure_class:
+        additionalProperties:
+          type: integer
+        title: By Failure Class
+        type: object
+      not_succeeded:
+        title: Not Succeeded
+        type: integer
+      process:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Process
+      step_id:
+        title: Step Id
+        type: string
+    required:
+    - attempts
+    - not_succeeded
+    - step_id
+    title: RetryStepRow
+    type: object
+  RunFigures:
+    additionalProperties: false
+    description: Identity, terminal state, and real elapsed time of the run root.
+    properties:
+      backend:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Backend
+      elapsed_s:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Elapsed S
+      ended_at:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Ended At
+      execution_profile:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Execution Profile
+      item_count:
+        anyOf:
+        - type: integer
+        - type: 'null'
+        default: null
+        title: Item Count
+      process:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Process
+      revisions:
+        anyOf:
+        - additionalProperties:
+            type: string
+          type: object
+        - type: 'null'
+        default: null
+        title: Revisions
+      started_at:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Started At
+      state:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: State
+      state_source:
+        anyOf:
+        - enum:
+          - finalization
+          - resource_summary
+          - process_status
+          type: string
+        - type: 'null'
+        default: null
+        title: State Source
+      unavailable:
+        additionalProperties:
+          type: string
+        title: Unavailable
+        type: object
+      variant:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Variant
+    title: RunFigures
+    type: object
+  SetupFigures:
+    additionalProperties: false
+    description: Time spent in top-level steps that are not per-item fan-outs.
+    properties:
+      elapsed_s:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Elapsed S
+      share_of_elapsed:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Share Of Elapsed
+      step_ids:
+        items:
+          type: string
+        title: Step Ids
+        type: array
+      unavailable:
+        additionalProperties:
+          type: string
+        title: Unavailable
+        type: object
+    title: SetupFigures
+    type: object
+  StageItemStats:
+    additionalProperties: false
+    description: Per-item running time within one mapped stage.
+    properties:
+      item_count:
+        title: Item Count
+        type: integer
+      running_s:
+        anyOf:
+        - $ref: '#/$defs/Distribution'
+        - type: 'null'
+        default: null
+        unevaluatedProperties: false
+      stage:
+        title: Stage
+        type: string
+      steps:
+        items:
+          $ref: '#/$defs/StageStepStats'
+        title: Steps
+        type: array
+      unavailable:
+        additionalProperties:
+          type: string
+        title: Unavailable
+        type: object
+    required:
+    - item_count
+    - stage
+    title: StageItemStats
+    type: object
+  StageRow:
+    additionalProperties: false
+    description: One top-level step of the run root.
+    properties:
+      completed_at:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Completed At
+      elapsed_s:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Elapsed S
+      item_count:
+        anyOf:
+        - type: integer
+        - type: 'null'
+        default: null
+        title: Item Count
+      mode:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Mode
+      share_of_elapsed:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Share Of Elapsed
+      started_at:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Started At
+      state:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: State
+      step_id:
+        title: Step Id
+        type: string
+      task_shape:
+        anyOf:
+        - enum:
+          - scalar
+          - mapped
+          type: string
+        - type: 'null'
+        default: null
+        title: Task Shape
+      unavailable:
+        additionalProperties:
+          type: string
+        title: Unavailable
+        type: object
+    required:
+    - step_id
+    title: StageRow
+    type: object
+  StageStepStats:
+    additionalProperties: false
+    description: Distribution of one direct child step across a stage's item scopes.
+    properties:
+      elapsed_s:
+        $ref: '#/$defs/Distribution'
+      mode:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Mode
+      step_id:
+        title: Step Id
+        type: string
+    required:
+    - elapsed_s
+    - step_id
+    title: StageStepStats
+    type: object
+  StepFigures:
+    additionalProperties: false
+    description: Step durations from every scope's process status and task status.
+    properties:
+      agent_total_s:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Agent Total S
+      code_total_s:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Code Total S
+      ignored_state_dirs:
+        title: Ignored State Dirs
+        type: integer
+      rows:
+        items:
+          $ref: '#/$defs/StepTypeRow'
+        title: Rows
+        type: array
+      scope_count:
+        title: Scope Count
+        type: integer
+      unavailable:
+        additionalProperties:
+          type: string
+        title: Unavailable
+        type: object
+      unreadable_plans:
+        additionalProperties:
+          type: string
+        title: Unreadable Plans
+        type: object
+    required:
+    - ignored_state_dirs
+    - scope_count
+    title: StepFigures
+    type: object
+  StepRef:
+    additionalProperties: false
+    description: The slowest direct step inside one item's stage scope.
+    properties:
+      elapsed_s:
+        title: Elapsed S
+        type: number
+      stage:
+        title: Stage
+        type: string
+      step_id:
+        title: Step Id
+        type: string
+    required:
+    - elapsed_s
+    - stage
+    - step_id
+    title: StepRef
+    type: object
+  StepTypeRow:
+    additionalProperties: false
+    description: One step type, keyed by owning process and step id, across every scope.
+    properties:
+      elapsed_s:
+        $ref: '#/$defs/Distribution'
+      mode:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Mode
+      process:
+        title: Process
+        type: string
+      step_id:
+        title: Step Id
+        type: string
+    required:
+    - elapsed_s
+    - process
+    - step_id
+    title: StepTypeRow
+    type: object
+  TokenFigures:
+    additionalProperties: false
+    description: Token totals copied from the resource usage summary.
+    properties:
+      cache_read_tokens:
+        anyOf:
+        - type: integer
+        - type: 'null'
+        default: null
+        title: Cache Read Tokens
+      cache_write_tokens:
+        anyOf:
+        - type: integer
+        - type: 'null'
+        default: null
+        title: Cache Write Tokens
+      input_tokens:
+        anyOf:
+        - type: integer
+        - type: 'null'
+        default: null
+        title: Input Tokens
+      output_tokens:
+        anyOf:
+        - type: integer
+        - type: 'null'
+        default: null
+        title: Output Tokens
+      unavailable:
+        additionalProperties:
+          type: string
+        title: Unavailable
+        type: object
+    title: TokenFigures
+    type: object
+  UnpricedModel:
+    additionalProperties: false
+    description: |-
+      A model whose invocations carry token usage but no list cost.
+
+      Metaproc prices tokens from ``data/pricing.md``; a model with no entry there
+      contributes tokens to every total but nothing to ``list_cost_usd``.
+      ``model`` is ``None`` when the usage record named no model.
+    properties:
+      invocations:
+        minimum: 1
+        title: Invocations
+        type: integer
+      model:
+        anyOf:
+        - maxLength: 256
+          minLength: 1
+          type: string
+        - type: 'null'
+        default: null
+        title: Model
+    required:
+    - invocations
+    title: UnpricedModel
+    type: object
+$schema: https://json-schema.org/draft/2020-12/schema
+additionalProperties: false
+description: |-
+  All machine-consumed values stored in operations summary frontmatter.
+
+  A section that could not be built is ``null``, and its ``unavailable`` reason names
+  the missing evidence or the error raised while reading it.
+properties:
+  agents:
+    anyOf:
+    - $ref: '#/$defs/AgentFigures'
+    - type: 'null'
+    default: null
+    unevaluatedProperties: false
+  artifacts:
+    $ref: '#/$defs/OperationsSummaryArtifacts'
+  extraction_s:
+    anyOf:
+    - type: number
+    - type: 'null'
+    default: null
+    title: Extraction S
+  extractor_version:
+    default: 2
+    title: Extractor Version
+    type: integer
+  generated_at:
+    format: date-time
+    title: Generated At
+    type: string
+  items:
+    anyOf:
+    - $ref: '#/$defs/ItemFigures'
+    - type: 'null'
+    default: null
+    unevaluatedProperties: false
+  parallelism:
+    anyOf:
+    - $ref: '#/$defs/ParallelismFigures'
+    - type: 'null'
+    default: null
+    unevaluatedProperties: false
+  resources:
+    anyOf:
+    - $ref: '#/$defs/ResourceFigures'
+    - type: 'null'
+    default: null
+    unevaluatedProperties: false
+  retries:
+    anyOf:
+    - $ref: '#/$defs/RetryFigures'
+    - type: 'null'
+    default: null
+    unevaluatedProperties: false
+  run:
+    anyOf:
+    - $ref: '#/$defs/RunFigures'
+    - type: 'null'
+    default: null
+    unevaluatedProperties: false
+  run_id:
+    title: Run Id
+    type: string
+  setup:
+    anyOf:
+    - $ref: '#/$defs/SetupFigures'
+    - type: 'null'
+    default: null
+    unevaluatedProperties: false
+  stages:
+    anyOf:
+    - items:
+        $ref: '#/$defs/StageRow'
+      type: array
+    - type: 'null'
+    default: null
+    title: Stages
+  steps:
+    anyOf:
+    - $ref: '#/$defs/StepFigures'
+    - type: 'null'
+    default: null
+    unevaluatedProperties: false
+  trigger:
+    enum:
+    - finalization
+    - status
+    - command
+    title: Trigger
+    type: string
+  unavailable:
+    additionalProperties:
+      type: string
+    title: Unavailable
+    type: object
+required:
+- generated_at
+- run_id
+- trigger
+title: AgentOperationsSummary
+type: object
+x-softschema:
+  contract: metaproc.operations:AgentOperationsSummary/v1
+  schema_sha256: 68f67c3233a97df6092adee5a55bc781c98deda9febe877d27deeed79efa3f73

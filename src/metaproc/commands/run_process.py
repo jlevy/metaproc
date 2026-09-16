@@ -53,6 +53,7 @@ from metaproc.commands.helpers import (
     parse_adapter_config,
     parse_step_variant_args,
     parse_var_args,
+    recorded_step_variants,
     require_runtime_runs_dir,
     resolve_gcp_worker_runs_dir,
     resolve_process_path,
@@ -120,6 +121,7 @@ from metaproc.engine.item_runner import (
     with_retry,
 )
 from metaproc.engine.launch_validation import collect_launch_errors, format_launch_errors
+from metaproc.engine.operations_summary import finalize_operations_summary
 from metaproc.engine.pathing import (
     compute_logs_dir,
     compute_run_dir,
@@ -192,6 +194,7 @@ from metaproc.io.state_io import (
 )
 from metaproc.logutil.compaction import try_compact_log
 from metaproc.models.authored import IOSpec, ProcessSpec, ProcessStep, StepContext
+from metaproc.models.lane import ExecutionLane
 from metaproc.models.plan import Plan, ResolvedStep, RunPlanSnapshot, RunPlanStep
 from metaproc.models.resource_budget import FinalizationState
 from metaproc.models.resource_snapshot import ResourceRunSnapshot
@@ -224,7 +227,11 @@ from metaproc.runpool.pool import (
 )
 from metaproc.runpool.process_events import ProcessEventLogger
 from metaproc.runpool.registry import get_backend
-from metaproc.runpool.scalar_admission import SCALAR_DEFAULT_HOST_LIMIT, admitted_launch
+from metaproc.runpool.scalar_admission import (
+    SCALAR_ACQUIRE_TIMEOUT_S,
+    SCALAR_DEFAULT_HOST_LIMIT,
+    admitted_launch,
+)
 from metaproc.settings import POOL_MAX_CONCURRENCY
 from metaproc.viz_loader import load_plan_bundle
 
@@ -241,16 +248,72 @@ def _sync_executor_worker_count(max_concurrency: int | None) -> int:
     return max(_MIN_SYNC_EXECUTOR_WORKERS, max_concurrency or 0)
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class RunPoolResources:
+    """The values a run-owned RunPool is sized from, as one execution profile resolves them.
+
+    Each is the value the pool would use, so a `max_concurrency_hint` at or above the
+    command-line ceiling and an explicit `host_max_concurrency` equal to the default
+    compare equal to leaving them unset.
+    """
+
+    max_concurrency: int
+    """The pool ceiling: `--max-concurrency` or the default maximum, lowered by the hint."""
+    max_concurrency_hint: int | None
+    host_max_concurrency: int
+    """The host-slot limit: `host_max_concurrency` or the pool ceiling, lowered by
+    `METAPROC_HOST_MAX_LOCAL_AGENTS`."""
+    estimated_process_rss_bytes: int
+    initial_memory_budget_fraction: float
+
+    @classmethod
+    def resolve(cls, resource_config: Mapping[str, object], *, ceiling: int) -> RunPoolResources:
+        """Resolve one profile's resources under the run's command-line *ceiling*."""
+        raw_hint = resource_config.get("max_concurrency_hint")
+        hint = int(str(raw_hint)) if raw_hint is not None else None
+        max_concurrency = min(ceiling, hint) if hint is not None else ceiling
+        return cls(
+            max_concurrency=max_concurrency,
+            max_concurrency_hint=hint,
+            host_max_concurrency=resolve_host_max_concurrency(
+                resource_config, default=max_concurrency
+            ),
+            estimated_process_rss_bytes=resolve_estimated_process_rss_bytes(resource_config),
+            initial_memory_budget_fraction=resolve_initial_memory_budget_fraction(resource_config),
+        )
+
+    def differences(self, other: RunPoolResources) -> list[tuple[str, object, object]]:
+        """Return ``(field, own value, other value)`` for each pool-sizing value that differs.
+
+        The raw hint is recorded for status only; its effect is `max_concurrency`.
+        """
+        return [
+            (field.name, getattr(self, field.name), getattr(other, field.name))
+            for field in dataclasses.fields(self)
+            if field.name != "max_concurrency_hint"
+            and getattr(self, field.name) != getattr(other, field.name)
+        ]
+
+
 @dataclasses.dataclass(slots=True)
 class RunPoolOwner:
-    """Lazily construct and close the one adaptive process pool for a run."""
+    """Lazily construct and close the one adaptive process pool for a run.
+
+    The first agent leaf sizes the pool from its execution profile's resources. Each
+    later profile joins as another status lane when its `RunPoolResources` resolve
+    equal to the sizing profile's, and is refused when they differ: the pool sizes its
+    startup concurrency, ceiling, and host-slot limit once and has no per-lane resource
+    accounting.
+    """
 
     run_dir: Path
     backend_name: str
     max_concurrency: int | None
     initial_concurrency: int | None
     pool: RunPool | None = None
-    execution_profile: str | None = None
+    sizing_profile: str | None = None
+    sizing_resources: RunPoolResources | None = None
+    lane_profiles: set[str] = dataclasses.field(default_factory=set)
 
     def get_pool(
         self,
@@ -258,40 +321,69 @@ class RunPoolOwner:
         resource_config: Mapping[str, object],
         execution_profile: str,
     ) -> RunPool:
-        """Return the run pool, configured from the first executable agent leaf."""
-        if self.pool is not None:
-            if self.execution_profile != execution_profile:
-                raise CLIError(
-                    "one run-owned RunPool currently supports one execution profile; "
-                    f"started with {self.execution_profile!r}, then received "
-                    f"{execution_profile!r}"
-                )
+        """Return the run pool with ``execution_profile`` registered as one of its lanes."""
+        if self.pool is not None and execution_profile in self.lane_profiles:
             return self.pool
 
-        pool_max = self.max_concurrency or POOL_MAX_CONCURRENCY
-        raw_profile_hint = resource_config.get("max_concurrency_hint")
-        profile_hint = int(str(raw_profile_hint)) if raw_profile_hint is not None else None
-        if profile_hint is not None:
-            pool_max = min(pool_max, profile_hint)
+        resources = RunPoolResources.resolve(
+            resource_config, ceiling=self.max_concurrency or POOL_MAX_CONCURRENCY
+        )
+        if self.pool is not None:
+            differences = (
+                self.sizing_resources.differences(resources)
+                if self.sizing_resources is not None
+                else []
+            )
+            if differences:
+                detail = "; ".join(
+                    f"{name} {sized!r} for {self.sizing_profile!r}, "
+                    f"{requested!r} for {execution_profile!r}"
+                    for name, sized, requested in differences
+                )
+                raise CLIError(
+                    f"execution profile {execution_profile!r} cannot share the run-owned "
+                    f"RunPool sized from {self.sizing_profile!r}: {detail}. A run-owned "
+                    "RunPool serves several execution profiles only when they resolve "
+                    "equal max_concurrency (the run's ceiling lowered by "
+                    "max_concurrency_hint), host_max_concurrency, "
+                    "estimated_process_rss_bytes, and initial_memory_budget_fraction, "
+                    "because it sizes startup concurrency, its ceiling, and its host-slot "
+                    "limit once and has no per-lane resource accounting. Align those "
+                    "resources across the profiles, or run these steps in separate runs."
+                )
+            self.pool.register_lane(
+                ExecutionLane(lane_id=execution_profile, execution_profile=execution_profile)
+            )
+            self.lane_profiles.add(execution_profile)
+            return self.pool
+
         config = RunPoolConfig(
-            max_concurrency=pool_max,
+            max_concurrency=resources.max_concurrency,
             initial_concurrency=self.initial_concurrency or 0,
             min_concurrency=1,
-            estimated_process_rss_bytes=resolve_estimated_process_rss_bytes(resource_config),
-            initial_memory_budget_fraction=resolve_initial_memory_budget_fraction(resource_config),
+            estimated_process_rss_bytes=resources.estimated_process_rss_bytes,
+            initial_memory_budget_fraction=resources.initial_memory_budget_fraction,
             state_dir=paths_mod.run_state_dir(self.run_dir),
             logs_dir=paths_mod.runpool_logs_dir(self.run_dir),
-            # Scalar callers already enter the shared run leaf gate and host-admission
-            # scope before submitting. The pool is the adaptive process controller;
-            # reacquiring either outer gate here would deadlock at a ceiling of one.
+            # Agent leaves enter the shared run leaf gate before submitting; reacquiring
+            # it here would deadlock at a ceiling of one.
             external_semaphore=None,
-            host_admission_enabled=False,
+            # A leaf takes its host slot here, once the pool admits its process, so slots
+            # count running agents rather than leaves queued behind adaptive capacity or
+            # a hinted ceiling, and each lease records its child. Like the scalar gate, it
+            # waits at most a minute and then launches without a slot.
+            host_admission_enabled=True,
+            host_admission_limit=resources.host_max_concurrency,
+            host_admission_acquire_timeout_s=SCALAR_ACQUIRE_TIMEOUT_S,
+            host_admission_fail_open=True,
             execution_profile=execution_profile,
             cli_max_concurrency=self.max_concurrency,
-            profile_max_concurrency_hint=profile_hint,
+            profile_max_concurrency_hint=resources.max_concurrency_hint,
         )
-        self.execution_profile = execution_profile
         self.pool = RunPool(config, backend=get_backend(self.backend_name))
+        self.sizing_profile = execution_profile
+        self.sizing_resources = resources
+        self.lane_profiles.add(execution_profile)
         return self.pool
 
     async def close(self) -> None:
@@ -315,7 +407,6 @@ class RunExecutionContext:
     num_workers: int
     machine_type: str
     spot: bool
-    variant_override: str | None
     profile_files: tuple[Path, ...]
     skip_steps: frozenset[str]
     force: bool
@@ -339,7 +430,6 @@ class RunExecutionContext:
         num_workers: int = 1,
         machine_type: str = "",
         spot: bool = False,
-        variant_override: str | None = None,
         profile_files: Sequence[Path] = (),
         skip_steps: set[str] | frozenset[str] = frozenset(),
         force: bool = False,
@@ -362,7 +452,6 @@ class RunExecutionContext:
             num_workers=num_workers,
             machine_type=machine_type,
             spot=spot,
-            variant_override=variant_override,
             profile_files=tuple(profile_files),
             skip_steps=frozenset(skip_steps),
             force=force,
@@ -462,6 +551,25 @@ class _PreparedCompositeScope:
     plan: Plan
     variables: dict[str, str]
     identity: ScopeIdentity
+    execution_profile: str | None
+    """The profile override the child scope plans its own children and agent leaves with."""
+
+
+def _composite_scope_execution_profile(
+    step_def: ProcessStep,
+    target: ResolvedStep,
+    scope_execution_profile: str | None,
+) -> tuple[str | None, bool]:
+    """Return the profile override for a composite step's child scope, and whether it is pinned.
+
+    A composite step that declares `execution_profile:` runs its whole subtree on that
+    profile, in place of the one its own scope runs on. Without a pin the child inherits
+    the enclosing scope's override: the launch `--variant` at the root, or the nearest
+    pinned ancestor below it. Step-level pins inside the subtree still win for their steps.
+    """
+    if not step_def.execution_profile:
+        return scope_execution_profile, False
+    return target.execution_profile or step_def.execution_profile, True
 
 
 async def _run_sync[SyncResult](
@@ -696,6 +804,7 @@ def _write_run_config(  # noqa: PLR0913
     auth_flags: AuthPoolFlags | None = None,
     max_concurrency: int | None = None,
     resource_snapshot: ResourceRunSnapshot | None = None,
+    step_variants: Mapping[str, str] | None = None,
 ) -> Path:
     """Write run-config.yaml at run creation time; record changes on resume.
 
@@ -710,6 +819,8 @@ def _write_run_config(  # noqa: PLR0913
     Returns the path to the config file. Resume calls validate the process,
     run directory, and resolved immutable variables (raises CLIError on
     mismatch) but accept changes to auth / concurrency as recorded events.
+    The one field a resume writes back is ``step_variants``, for a config that
+    records none; see ``_adopt_step_variants``.
     """
     config_path = paths_mod.run_config_file(run_dir)
     logs_dir = paths_mod.run_logs_dir(run_dir)
@@ -728,6 +839,7 @@ def _write_run_config(  # noqa: PLR0913
             new_auth_flags=auth_flags,
             new_max_concurrency=max_concurrency,
         )
+        _adopt_step_variants(config_path, step_variants)
         return config_path
 
     state_dir = paths_mod.run_state_dir(run_dir)
@@ -757,6 +869,8 @@ def _write_run_config(  # noqa: PLR0913
         data["artifact_namespace"] = artifact_namespace
     if resolved_profiles:
         data["resolved_profiles"] = resolved_profiles
+    if step_variants:
+        data["step_variants"] = dict(sorted(step_variants.items()))
     if auth_flags is not None and auth_flags.is_pool_dispatch_enabled():
         data["auth"] = _serialize_auth_flags(auth_flags)
     if max_concurrency is not None:
@@ -1056,6 +1170,64 @@ def _json_dumps(value: object) -> str:
     """Single-line JSON for jsonl writers; lazy import keeps top-level lean."""
 
     return _json.dumps(value, default=str)
+
+
+def _resume_step_variants(run_dir: Path, requested: Mapping[str, str]) -> dict[str, str]:
+    """Return the ``--step-variant`` overrides a launch or resume of *run_dir* runs with.
+
+    A run records its overrides in ``run-config.yaml`` at creation. The plan, its step
+    fingerprints, and ``metaproc status`` all follow that record, so a resume that passes
+    no overrides re-applies it and a resume that passes a different set is refused.
+
+    A config that records nothing holds no set to contradict: ``--step-variant`` shipped
+    before the record existed, so a run from that version applies its overrides with
+    nothing to resume from. Such a resume adopts what it passes, and ``_write_run_config``
+    records it once launch validation has accepted it.
+    """
+    config_path = paths_mod.run_config_file(run_dir)
+    if not config_path.exists():
+        return dict(requested)
+    raw = read_yaml_file(config_path)
+    recorded = recorded_step_variants(raw) if isinstance(raw, dict) else {}
+    if not requested:
+        return recorded
+    if not recorded:
+        return dict(requested)
+    if dict(requested) != recorded:
+        raise CLIError(
+            "Resume mismatch: run-config.yaml records "
+            f"{_format_step_variants(recorded)} but you launched with "
+            f"{_format_step_variants(requested)}. Resume without --step-variant to reuse "
+            "the recorded overrides, or use a different RUN_ID."
+        )
+    return recorded
+
+
+def _format_step_variants(overrides: Mapping[str, str]) -> str:
+    """Render a non-empty override set as the flags that produce it."""
+    return ", ".join(
+        f"--step-variant {step}={profile}" for step, profile in sorted(overrides.items())
+    )
+
+
+def _adopt_step_variants(config_path: Path, step_variants: Mapping[str, str] | None) -> None:
+    """Record the overrides a resume adopted, for a config that records none.
+
+    ``_resume_step_variants`` lets a resume adopt what it passes when the config holds no
+    set to contradict. Recording it here rather than there puts the write after launch
+    validation, so an override the run cannot accept never reaches the config and poisons
+    every later resume. A config that already records a set keeps it — the resume either
+    matched it or was refused.
+    """
+    if not step_variants:
+        return
+    raw = read_yaml_file(config_path)
+    if not isinstance(raw, dict) or recorded_step_variants(raw):
+        return
+    raw["step_variants"] = dict(sorted(step_variants.items()))
+    with atomic_output_file(config_path) as tmp_path:
+        Path(tmp_path).write_text(to_yaml_string(raw))
+    log.info("Recorded resumed --step-variant overrides in %s", config_path)
 
 
 def _validate_run_config(
@@ -2511,6 +2683,15 @@ async def _execute_agent_step(
                     if execution_context is not None
                     else None
                 )
+                # A leaf under the run-owned pool takes its host slot inside the pool once
+                # the pool admits its process; any other local leaf takes one here.
+                host_limit = (
+                    resolve_host_max_concurrency(
+                        scalar_resource_config, default=SCALAR_DEFAULT_HOST_LIMIT
+                    )
+                    if scalar_pool is None
+                    else 0
+                )
                 pool_kill_reason: str | None = None
                 timed_out = False
                 boundary_before = None
@@ -2518,10 +2699,8 @@ async def _execute_agent_step(
                     async with _leaf_slot(execution_context):
                         async with admitted_launch(
                             event_logger=auth_events,
-                            enabled=backend_name == "local",
-                            limit=resolve_host_max_concurrency(
-                                scalar_resource_config, default=SCALAR_DEFAULT_HOST_LIMIT
-                            ),
+                            enabled=backend_name == "local" and scalar_pool is None,
+                            limit=host_limit,
                             label=f"{run_id}/{step_id}",
                             pool_id=f"run-process:{run_id}",
                             metadata={
@@ -2975,12 +3154,16 @@ def _prepare_composite_scope(
     run_id: str,
     scope_path: tuple[str, ...],
     execution_context: RunExecutionContext,
+    scope_execution_profile: str | None,
     mapped_item_key: str | None = None,
     announce: bool,
     out: Any,
 ) -> _PreparedCompositeScope:
     """Resolve one child scope through the same identity and planning path."""
     step_id = step_def.id
+    child_execution_profile, profile_pinned = _composite_scope_execution_profile(
+        step_def, target, scope_execution_profile
+    )
 
     if not target.uses_path:
         raise CLIError(f"step '{step_id}': composite mode requires a resolved child process")
@@ -3000,6 +3183,10 @@ def _prepare_composite_scope(
     if step_def.with_:
         for key, template in step_def.with_.items():
             child_vars[key] = resolve_templates(template, variables)
+    if profile_pinned and child_execution_profile is not None:
+        # The pinned scope answers `{{run.execution_profile}}` with its own profile, as a
+        # run launched with that `--variant` would, and its descendants inherit it.
+        child_vars["EXECUTION_PROFILE"] = child_execution_profile
 
     if step_def.for_each is not None and mapped_item_key is None:
         raise CLIError(f"mapped composite step '{step_id}' requires its canonical task item key")
@@ -3033,10 +3220,13 @@ def _prepare_composite_scope(
         child_spec,
         child_vars,
         process_path=child_spec_path,
-        adapter_override=execution_context.variant_override,
+        adapter_override=child_execution_profile,
         artifact_namespace=target.artifact_namespace,
         profile_files=execution_context.profile_files,
     )
+    if profile_pinned and child_plan.artifact_namespace:
+        child_vars.setdefault("ARTIFACT_NAMESPACE", child_plan.artifact_namespace)
+        child_vars.setdefault("VARIANT", child_plan.artifact_namespace)
     _publish_run_plan(
         child_identity.run_dir,
         run_id=child_identity.record_id,
@@ -3053,6 +3243,7 @@ def _prepare_composite_scope(
         plan=child_plan,
         variables=child_vars,
         identity=child_identity,
+        execution_profile=child_execution_profile,
     )
 
 
@@ -3066,6 +3257,7 @@ async def _execute_composite_step(
     run_id: str,
     scope_path: tuple[str, ...],
     execution_context: RunExecutionContext,
+    scope_execution_profile: str | None,
     mapped_item_key: str | None = None,
     out: Any,
 ) -> bool:
@@ -3080,6 +3272,7 @@ async def _execute_composite_step(
         run_id=run_id,
         scope_path=scope_path,
         execution_context=execution_context,
+        scope_execution_profile=scope_execution_profile,
         mapped_item_key=mapped_item_key,
         announce=True,
         out=out,
@@ -3101,6 +3294,7 @@ async def _execute_composite_step(
                 run_id=prepared.identity.record_id,
                 scope_path=prepared.identity.scope_path,
                 execution_context=execution_context,
+                scope_execution_profile=prepared.execution_profile,
                 out=out,
                 events=events,
             )
@@ -3138,6 +3332,7 @@ async def _execute_composite_fan_out_step(
     run_id: str,
     scope_path: tuple[str, ...],
     execution_context: RunExecutionContext,
+    scope_execution_profile: str | None,
     events: ProcessEventLogger | None = None,
     out: Any,
 ) -> bool:
@@ -3193,6 +3388,7 @@ async def _execute_composite_fan_out_step(
             run_id=run_id,
             scope_path=scope_path,
             execution_context=execution_context,
+            scope_execution_profile=scope_execution_profile,
             mapped_item_key=state_dir.name,
             announce=False,
             out=out,
@@ -3283,6 +3479,7 @@ async def _execute_composite_fan_out_step(
                 run_id=run_id,
                 scope_path=scope_path,
                 execution_context=execution_context,
+                scope_execution_profile=scope_execution_profile,
                 mapped_item_key=state_dir.name,
                 out=out,
             )
@@ -4071,6 +4268,7 @@ async def _execute_step(
     run_id: str,
     scope_path: tuple[str, ...],
     execution_context: RunExecutionContext,
+    scope_execution_profile: str | None,
     peer_allowed_targets: list[WriteTarget] | None = None,
     events: ProcessEventLogger | None = None,
     out: Any,
@@ -4125,6 +4323,7 @@ async def _execute_step(
                 run_id=run_id,
                 scope_path=scope_path,
                 execution_context=execution_context,
+                scope_execution_profile=scope_execution_profile,
                 events=events,
                 out=out,
             )
@@ -4137,6 +4336,7 @@ async def _execute_step(
             run_id=run_id,
             scope_path=scope_path,
             execution_context=execution_context,
+            scope_execution_profile=scope_execution_profile,
             out=out,
         )
 
@@ -4195,7 +4395,7 @@ async def _execute_step(
                 num_workers=execution_context.num_workers,
                 machine_type=execution_context.machine_type,
                 spot=execution_context.spot,
-                variant_override=execution_context.variant_override,
+                variant_override=scope_execution_profile,
                 execution_context=execution_context,
                 peer_allowed_targets=peer_allowed_targets,
                 events=events,
@@ -4212,7 +4412,7 @@ async def _execute_step(
             process_dir=process_dir,
             run_dir=run_dir,
             run_id=run_id,
-            variant_override=execution_context.variant_override,
+            variant_override=scope_execution_profile,
             peer_allowed_targets=peer_allowed_targets,
             backend_name=execution_context.backend_name,
             execution_context=execution_context,
@@ -4236,10 +4436,16 @@ async def _orchestrate(
     run_id: str,
     scope_path: tuple[str, ...] = (),
     execution_context: RunExecutionContext,
+    scope_execution_profile: str | None,
     out: Any,
     events: ProcessEventLogger,
 ) -> None:
-    """Walk the DAG, executing independent steps in parallel via asyncio.gather()."""
+    """Walk the DAG, executing independent steps in parallel via asyncio.gather().
+
+    `scope_execution_profile` is the profile override this scope plans its composite
+    children and unpinned agent leaves with: the launch `--variant` at the root, or the
+    nearest enclosing composite step's `execution_profile:` below it.
+    """
     backend_name = execution_context.backend_name
     max_concurrency = execution_context.max_concurrency
     skip_steps = execution_context.skip_steps if not scope_path else frozenset()
@@ -4401,6 +4607,7 @@ async def _orchestrate(
             run_id=run_id,
             scope_path=scope_path,
             execution_context=execution_context,
+            scope_execution_profile=scope_execution_profile,
             peer_allowed_targets=peer_allowed_targets,
             events=events,
             out=out,
@@ -4788,7 +4995,10 @@ def run_process_command(
     step_variant: list[str] = typer.Option(
         [],
         "--step-variant",
-        help="STEP=PROFILE execution-profile override for a single step (repeatable).",
+        help=(
+            "STEP=PROFILE execution-profile override for one top-level step that is not "
+            "composite (repeatable). Recorded in run-config.yaml; a resume reuses it."
+        ),
     ),
     adapter_config: list[str] = typer.Option(
         [], "--adapter-config", help="KEY=VALUE adapter config overrides (repeatable)"
@@ -4971,6 +5181,9 @@ def run_process_command(
 
     variables = expand_process_vars(spec, variables, process_dir=process_dir)
     require_runtime_runs_dir(variables, command="run-process")
+    step_profile_overrides = _resume_step_variants(
+        compute_run_dir(spec, variables), step_profile_overrides
+    )
 
     # Launch validation runs before any step, so it carries the validation exit
     # code (2) rather than the general failure code (1) an executed-and-failed
@@ -5286,6 +5499,7 @@ def run_process_command(
         auth_flags=auth_flags_for_config,
         max_concurrency=max_concurrency,
         resource_snapshot=resource_snapshot,
+        step_variants=step_profile_overrides,
     )
 
     out.progress(f"run-process: {spec.name} ({len(active_step_ids)} steps, {len(levels)} levels)")
@@ -5516,7 +5730,6 @@ def run_process_command(
                     num_workers=num_workers,
                     machine_type=machine_type,
                     spot=spot,
-                    variant_override=variant,
                     profile_files=profile_files,
                     skip_steps=skip_set,
                     force=force,
@@ -5539,6 +5752,7 @@ def run_process_command(
                         run_dir=run_dir,
                         run_id=run_id,
                         execution_context=execution_context,
+                        scope_execution_profile=variant or None,
                         out=out,
                         events=events,
                     )
@@ -5602,6 +5816,13 @@ def run_process_command(
                 if terminal_error is None:
                     raise
                 log.exception("resource finalization interrupted for %s", run_dir)
+            # Reads the resource summary written above and logs its own failures.
+            try:
+                finalize_operations_summary(run_dir, outcome=finalization_state)
+            except BaseException:
+                if terminal_error is None:
+                    raise
+                log.exception("operations summary interrupted for %s", run_dir)
         finally:
             release_lease(run_dir)
 

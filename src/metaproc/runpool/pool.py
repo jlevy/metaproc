@@ -57,6 +57,7 @@ from metaproc.runpool.concurrency import ConcurrencyPlan, build_concurrency_plan
 from metaproc.runpool.events import EventLogger
 from metaproc.runpool.host_admission import (
     DEFAULT_HOST_ADMISSION_NAMESPACE,
+    DEFAULT_HOST_ADMISSION_TIMEOUT_S,
     HostAdmissionGate,
     HostAdmissionLease,
 )
@@ -368,6 +369,13 @@ class RunPoolConfig(BaseModel):
     host_admission_namespace: str = DEFAULT_HOST_ADMISSION_NAMESPACE
     host_admission_limit: int | None = None
     host_admission_poll_interval_s: float = 1.0
+    host_admission_acquire_timeout_s: float | None = DEFAULT_HOST_ADMISSION_TIMEOUT_S
+    host_admission_fail_open: bool = False
+    """Launch without a slot when admission times out or its directory is unavailable.
+
+    The launch records ``host_admission_denied`` with ``decision: bypass``. Without it, the
+    admission error fails the submission.
+    """
     execution_profile: str | None = None
     cli_max_concurrency: int | None = None
     batch_size: int | None = None
@@ -520,6 +528,7 @@ class RunPool:
                 namespace=self._config.host_admission_namespace,
                 limit=configured_host_limit,
                 poll_interval_s=self._config.host_admission_poll_interval_s,
+                acquire_timeout_s=self._config.host_admission_acquire_timeout_s,
             )
             if self._config.host_admission_enabled and self._backend_name == "local"
             else None
@@ -745,6 +754,11 @@ class RunPool:
     @property
     def active_count(self) -> int:
         return len(self._active)
+
+    @property
+    def max_concurrency(self) -> int:
+        """Configured ceiling; adaptive capacity moves at or below it."""
+        return self._config.max_concurrency
 
     @property
     def current_max_concurrency(self) -> int:
@@ -1322,6 +1336,7 @@ class RunPool:
                     decision="wait",
                 )
 
+        started = time.monotonic()
         try:
             lease = await gate.acquire(
                 label=config.label,
@@ -1330,16 +1345,29 @@ class RunPool:
                 on_wait=record_wait,
             )
         except OSError as exc:
+            waited_s = time.monotonic() - started
+            fail_open = self._config.host_admission_fail_open
             if self._event_logger is not None:
                 self._event_logger.host_admission_denied(
                     namespace=gate.namespace,
                     limit=gate.limit,
                     label=config.label,
                     reason="timeout" if isinstance(exc, TimeoutError) else "unavailable",
-                    decision="fail",
+                    decision="bypass" if fail_open else "fail",
                     error=str(exc),
+                    waited_s=waited_s,
                 )
-            raise
+            if not fail_open:
+                raise
+            log.warning(
+                "host admission unavailable for %s after %.1fs at limit %d (%s); "
+                "launching without a slot",
+                config.label,
+                waited_s,
+                gate.limit,
+                exc,
+            )
+            return None
         try:
             if self._event_logger is not None:
                 self._event_logger.host_slot_acquired(
@@ -2192,6 +2220,19 @@ class RunPool:
             )
         return rows
 
+    def register_lane(self, lane: ExecutionLane) -> None:
+        """Add a lane to status reporting; an already registered lane id is kept.
+
+        Lanes carry identity and counters only. Admission stays pool-wide: every
+        lane shares the one adaptive semaphore and the ceilings sized at
+        construction.
+        """
+        self._lane_registry.setdefault(lane.lane_id, lane)
+        self._lane_counters.setdefault(
+            lane.lane_id,
+            {"active": 0, "completed": 0, "failed": 0, "killed": 0},
+        )
+
     def _increment_lane_counter(self, lane_id: str | None, key: str, delta: int) -> None:
         """Bump a per-lane counter, registering unknown lane ids lazily.
 
@@ -2203,19 +2244,7 @@ class RunPool:
         if lane_id is None:
             return
         if lane_id not in self._lane_counters:
-            self._lane_registry.setdefault(
-                lane_id,
-                ExecutionLane(
-                    lane_id=lane_id,
-                    execution_profile=lane_id,
-                ),
-            )
-            self._lane_counters[lane_id] = {
-                "active": 0,
-                "completed": 0,
-                "failed": 0,
-                "killed": 0,
-            }
+            self.register_lane(ExecutionLane(lane_id=lane_id, execution_profile=lane_id))
         counters = self._lane_counters[lane_id]
         counters[key] = max(0, counters.get(key, 0) + delta)
 

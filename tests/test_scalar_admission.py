@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -193,8 +194,9 @@ class TestDegradesRatherThanFails:
 def test_real_gate_refusal_records_wait_then_timeout_bypass(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    monkeypatch.setattr("metaproc.runpool.scalar_admission.SCALAR_ACQUIRE_TIMEOUT_S", 0.01)
+    monkeypatch.setattr("metaproc.runpool.scalar_admission.SCALAR_ACQUIRE_TIMEOUT_S", 0.2)
     gate = HostAdmissionGate(root_dir=tmp_path / "slots", limit=1)
     events_path = tmp_path / "events.jsonl"
 
@@ -226,6 +228,16 @@ def test_real_gate_refusal_records_wait_then_timeout_bypass(
     assert all(event["limit"] == 1 and event["label"] == "waiting" for event in raw)
     assert "error" not in raw[0]
     assert "timed out waiting for a host admission slot" in raw[1]["error"]
+    assert "waited_s" not in raw[0]
+    assert raw[1]["waited_s"] >= 0.2
+    bypass = events[1]
+    assert isinstance(bypass, HostAdmissionDeniedEvent)
+    assert bypass.waited_s == raw[1]["waited_s"]
+    assert re.search(
+        r"host admission unavailable for waiting after \d+\.\ds at limit 1 .*"
+        r"launching without a slot",
+        caplog.text,
+    )
 
 
 class TestScalarDefaults:

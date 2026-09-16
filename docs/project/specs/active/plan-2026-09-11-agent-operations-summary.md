@@ -3,18 +3,20 @@ title: Agent Operations Summary
 description: Emit the trace Metaproc already knows how to extract, fold it into a contract-bound summary at finalization, and make run-to-run comparison a diff of two documents instead of a transcript scan.
 author: Joshua Levy (github.com/jlevy) with LLM assistance
 date: 2026-09-11
-last_updated: 2026-09-13
+last_updated: 2026-09-15
 status: Draft
 category: plan
 tracking_bead: mp-enxg
 ---
 # Feature: Agent Operations Summary
 
-**Date:** 2026-09-11 (last updated 2026-09-13)
+**Date:** 2026-09-11 (last updated 2026-09-15)
 
 Epic `mp-enxg` tracks the prerequisites and future phases below.
 This draft specifies future behavior; completing the plan does not enable automatic
-extraction or implement the operations summary.
+extraction.
+A first slice of the summary, folded from on-disk evidence without the trace,
+has shipped; Phase 3 records what it covers.
 
 ## Overview
 
@@ -316,6 +318,41 @@ agent_operations:
 `p50`/`p90`, neither can be a fold of the other’s summary statistics.
 Both compute theirs from the span store directly.
 
+### The Contract Version and the Extractor Version
+
+A run tree is published and receipted, so its summary outlives the writer that produced
+it and is read by consumers on their own upgrade schedule.
+The contract id is therefore a promise about *readability*: a document declaring
+`metaproc.operations:AgentOperationsSummary/v1` must validate under every later reader
+of `/v1`.
+
+That makes a field added under an id already in use **optional on read**. It needs a
+default, and no validator may make its absence an error.
+A nullable field qualifies, and adding one is allowed, provided null is a state a reader
+can act on, meaning the writer did not record it, rather than a value that reads as
+measured.
+A change that cannot be expressed that way, such as a newly required field or a
+field whose meaning moves, is a new contract id.
+
+The rule has one consequence worth stating, because it is the trap the `/v1` contract
+fell into. Every record derives from `_Explained`, whose validator rejects a null figure
+with no reason in `unavailable`. That rule binds the fields a *document states*, not the
+fields the current model declares: the fold names every figure it builds, so a null it
+leaves unexplained is still rejected as it is written, while a document that predates a
+field omits it entirely and reads with that field null and unexplained.
+Writer and reader obligations are different obligations, and only the writer’s is about
+completeness.
+
+`extractor_version` counts what the fold measures and emits.
+It moves whenever a field is added or a computation changes, so a reader can ask which
+fields to expect and a cross-run comparison can refuse to mix vintages.
+It never decides whether a document can be read; only the contract id does that.
+
+Two readers exist for each artifact and both have to hold.
+The Python model is one; the compiled JSON Schema staged beside the document is the
+other, and a field that is `required` there breaks the same documents in any language.
+The regression test reads a real pre-change document through both.
+
 ### Anomalies Are Rules With Stable Codes
 
 | Code | Fires when |
@@ -398,9 +435,23 @@ coverage, so it is not an acceptance gate.
 
 ### Phase 3: Summary and Comparison
 
-- [ ] `models/agent_operations.py` and `engine/agent_operations.py`, beside their
+A first slice shipped ahead of Phases 1 and 2. It folds evidence already on disk
+(process status and run plans in every scope, `TaskAttemptRecord` files found by schema
+token, transcript terminal results, RunPool events and health samples, and the resource
+summary) rather than the span store, so it needs neither automatic extraction nor
+attempt reconciliation.
+It lives in `models/operations_summary.py`, `engine/operations_summary.py`,
+`engine/operations_render.py` and `engine/operations_rollup.py`, writes
+`operations-summary.md` after terminal resource finalization, and adds
+`metaproc operations summary` and `metaproc operations rollup` (several runs against a
+per-item chain-time target) in place of a two-run diff.
+Its figures are elapsed and per-item chain time, step durations, concurrency, attempt
+dispositions, served models, and resources; the provider and tool-use blocks and the
+anomaly rules below still depend on the trace.
+
+- [x] `models/operations_summary.py` and `engine/operations_summary.py`, beside their
   resource-summary counterparts.
-- [ ] Register the contract in `plugins/registry.py`, with the compiled schema staged
+- [x] Register the contract in `plugins/registry.py`, with the compiled schema staged
   and drift-tested against the model.
 - [ ] Give the operations summary its own missing/stale detection against the consumed
   trace revision and primary evidence, without invalidating upstream projections.

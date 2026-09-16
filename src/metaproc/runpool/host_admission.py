@@ -33,6 +33,11 @@ UNRECORDED_LEASE_GRACE_S = 120.0
 PROCESS_CREATE_TIME_TOLERANCE_S = 1.0
 
 
+def default_host_admission_root() -> Path:
+    """Return the slot root shared by every local launcher on this host."""
+    return Path.home() / ".metaproc" / "runpool" / "host-slots"
+
+
 @dataclass(frozen=True)
 class HostAdmissionLease:
     """Held host-wide admission slot."""
@@ -111,7 +116,7 @@ class HostAdmissionGate:
             raise ValueError("host admission poll interval must be > 0")
         if acquire_timeout_s is not None and acquire_timeout_s <= 0:
             raise ValueError("host admission timeout must be > 0 or None")
-        self.root_dir: Path = root_dir or Path.home() / ".metaproc" / "runpool" / "host-slots"
+        self.root_dir: Path = root_dir or default_host_admission_root()
         self.namespace: str = _safe_segment(namespace)
         self.limit: int = limit
         self.poll_interval_s: float = poll_interval_s
@@ -308,7 +313,7 @@ def list_host_admission_slots(
     This is intentionally read-only. Stale lease reclamation remains in the
     admission gate, so inspection cannot change launch behavior.
     """
-    root = root_dir or Path.home() / ".metaproc" / "runpool" / "host-slots"
+    root = root_dir or default_host_admission_root()
     safe_namespace = _safe_segment(namespace)
     namespace_dir = root / safe_namespace
     if not namespace_dir.exists():

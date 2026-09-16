@@ -24,10 +24,9 @@ from metaproc.cli import app
 from metaproc.commands.pool import (
     _collect_sub_pools,
     _composite_pool_status_files,
-    _runpool_event_files_for_read,
-    _runpool_health_files_for_read,
 )
 from metaproc.io import to_yaml_string
+from metaproc.runpool.log_files import runpool_event_files, runpool_health_files
 
 runner = CliRunner()
 
@@ -350,13 +349,13 @@ class TestRunPoolEventAndHealthHelpers:
     """Pin the lower-level helpers used by the rendered commands."""
 
     def test_event_files_dedup_across_composite_children(self, composite_run: Path):
-        files = _runpool_event_files_for_read(composite_run)
+        files = runpool_event_files(composite_run)
         # Every returned path should be unique even though the walker
         # visits both the parent run and the child run.
         assert len(files) == len(set(files))
         assert any("research-step" in str(p) for p in files)
 
     def test_health_files_dedup_across_composite_children(self, composite_run: Path):
-        files = _runpool_health_files_for_read(composite_run)
+        files = runpool_health_files(composite_run)
         assert len(files) == len(set(files))
         assert any("research-step" in str(p) for p in files)

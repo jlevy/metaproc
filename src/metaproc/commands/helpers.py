@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
@@ -156,6 +157,17 @@ def parse_step_variant_args(raw: list[str]) -> dict[str, str]:
             raise ValidationError(f"step-variant must be STEP=PROFILE, got: {value}")
         overrides[step_id.strip()] = profile.strip()
     return overrides
+
+
+def recorded_step_variants(run_config: Mapping[object, object]) -> dict[str, str]:
+    """Return the ``--step-variant`` overrides a run recorded in its ``run-config.yaml``.
+
+    The YAML writer omits an empty mapping, so an absent field means no overrides.
+    """
+    recorded = run_config.get("step_variants")
+    if not isinstance(recorded, Mapping):
+        return {}
+    return {str(step_id): str(profile) for step_id, profile in recorded.items()}
 
 
 def load_item_contexts() -> list[dict[str, str]]:

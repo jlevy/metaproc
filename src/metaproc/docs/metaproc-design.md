@@ -6,7 +6,7 @@ status: Approved
 ---
 # Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-09-15) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-09-16) **Status:** Approved
 
 Also readable as `metaproc help design`.
 
@@ -362,6 +362,15 @@ Optional fields:
 - `with`
 - `needs`
 - `for_each`
+- `execution_profile`
+
+A child process is planned with its parent scope’s execution profile: the launch
+`--variant` at the root, inherited downward.
+A composite step that declares `execution_profile:` runs its whole subtree on that
+profile instead, and its scope answers `{{run.execution_profile}}` with it, as a run
+launched with that `--variant` would.
+An agent step’s own `execution_profile:` still wins for that step, anywhere in the
+subtree. Every profile in the tree shares the root run’s RunPool.
 
 With `for_each`, Metaproc maps one in-process child scope per item under
 `<run>/<step>/<item-key>/`. The mapped parent task remains in
@@ -2004,12 +2013,16 @@ merge the two files.
 **Admission.** `host_slot_acquired` is written after a RunPool slot is taken.
 Both the RunPool and scalar launch paths write `host_admission_denied` once on the first
 unsuccessful slot scan, with `reason: no_available_slot` and `decision: wait`. A
-terminal refusal records the actual `timeout` or `unavailable` reason and exception
-message. RunPool records `decision: fail`; the scalar path records `decision: bypass`
-when its existing best-effort policy launches without a slot.
-Every refusal identifies the namespace, configured limit, and launch label.
-No occupied-slot count, wait duration, or successful admission is inferred from these
-records; a wait event alone does not establish the eventual outcome.
+terminal refusal records the actual `timeout` or `unavailable` reason, exception
+message, and `waited_s`, the seconds that acquisition spent before the refusal.
+A pool configured to fail open, as `run-process` configures its run-owned pool, and the
+scalar path both record `decision: bypass` when they launch without a slot; any other
+pool records `decision: fail`. Every refusal identifies the namespace, configured limit,
+and launch label. `metaproc pool events --type host_admission_denied --summary` counts
+them by decision and reason and totals the terminal wait seconds.
+No occupied-slot count or successful admission is inferred from these records.
+A scalar-path wait that ends in a slot has no closing record or duration, so a wait
+event alone does not establish the eventual outcome.
 The governor records `consecutive_normal` and `consecutive_elevated` on each
 `pressure_check` and `health_sample`, including a sustained `elevated` hold with no
 capacity change. `concurrency_adjust` is emitted only when capacity changes.
@@ -2648,6 +2661,10 @@ contract and reports hierarchical metrics, exact `(provider, product, meter, uni
 quantities, coverage gaps, launch-time budget evaluations, and causal finalization
 state. Strict documents carrying the historical `metaproc.resources/v1` or
 `metaproc.resources/v2` tokens remain readable.
+List cost comes from the CLI’s reported cost or the `data/pricing.md` rate card.
+A token-bearing usage event whose model has no rate card adds its tokens but no list
+cost, so both documents name each such model with its invocation count in
+`unpriced_models`, and a list-cost total beside a nonempty list is a lower bound.
 
 The first `run-process` launch freezes the recursive process/step topology and
 normalized budgets under `.state/run-config.yaml:resources`; resume never rewrites it.
@@ -2663,6 +2680,22 @@ frontmatter envelope and carries the complete SoftSchema contract/schema/envelop
 description. Its Markdown body is explanatory only.
 `metaproc resource-report` and the Metabrowser resource view expose actual cost and list
 estimate separately, along with meters, coverage, budgets, and outcome.
+
+After resource finalization, the same terminal path writes `operations-summary.md`
+(`metaproc.operations:AgentOperationsSummary/v1`, envelope `agent_operations`). It folds
+evidence already on disk: root and scope process status, run plans, task and attempt
+records, transcript terminal results, RunPool events and health samples, and the
+resource summary. It reports elapsed time, per-item chain time across mapped top-level
+stages, step durations, concurrency, attempt dispositions, agent models, and resources.
+It writes no `.jsonl` and never calls resource recovery, so it cannot make the resource
+projections stale. A section whose evidence cannot be read is null with its reason, and
+any failure is logged without changing the run’s outcome.
+A run can skip that terminal path: killed by a signal, interrupted between the resource
+and operations finalizers, or with a fold that raised.
+So `metaproc status` on an inactive run writes the summary when it is missing, whether
+or not the resource artifacts beside it also need recovering, and leaves an existing one
+alone. `metaproc operations summary` and `metaproc operations rollup` read the same fold
+for finished runs.
 
 ## 17. Run Pool and Process Management
 

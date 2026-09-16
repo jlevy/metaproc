@@ -97,6 +97,7 @@ class HostAdmissionDeniedEvent(BaseModel):
     reason: Literal["no_available_slot", "timeout", "unavailable"]
     decision: Literal["wait", "fail", "bypass"]
     error: str | None = None
+    waited_s: float | None = None
 
 
 class ConcurrencyAdjustEvent(BaseModel):
