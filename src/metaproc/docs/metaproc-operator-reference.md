@@ -394,12 +394,13 @@ should know why:
 `METAPROC_HOST_MAX_LOCAL_AGENTS` takes the minimum of its value and the profile’s
 `host_max_concurrency`, or the path-specific default when the profile omits that key.
 It can lower a host-admission limit but cannot raise one.
-The default for a `run-process` agent leaf is the run-owned pool’s maximum, so a single
-run admits as many agents as `--max-concurrency` allows; a leaf without a run-owned pool
+The default for a `run-process` agent leaf is the run-owned pool’s ceiling, which is
+`--max-concurrency` lowered by the profile’s `max_concurrency_hint`, so a single run
+admits as many agents as that pool can run at once; a leaf without a run-owned pool
 defaults to 4. Two runs at `--max-concurrency 30` share slots `0` through `29`: together
 they hold at most 30, and each leaf beyond that waits 60 seconds and launches without a
-slot. A leaf holds its slot while it is queued behind its pool’s adaptive capacity, so a
-run whose memory ceiling is below its maximum can occupy its full slot range.
+slot. A leaf takes its slot when its pool admits its process and releases it when the
+process exits, so leaves queued behind adaptive capacity hold none.
 To bound two runs without bypassed launches, give both the same
 `resources.host_max_concurrency`, equal to the intended total, and keep the sum of their
 `--max-concurrency` values at or below it.

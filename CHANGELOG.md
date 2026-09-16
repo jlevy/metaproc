@@ -39,15 +39,24 @@ development series.
   such model with its invocation count; the summary body reports the list cost as a
   lower bound, and `metaproc resource-report` lists the models.
 
-- **Agent leaves under a run-owned pool are admitted up to the pool’s maximum.** The
-  host-slot limit for a `run-process` agent leaf defaults to the run-owned pool’s
-  `max_concurrency` instead of 4, so one run no longer makes every agent past the fourth
-  wait 60 seconds and launch without a slot.
-  An explicit `resources.host_max_concurrency` still replaces the default, and
+- **Agent leaves take a host slot when their pool admits them, not before.** A
+  `run-process` agent leaf under the run-owned pool acquires its host slot inside that
+  pool, after pool admission, with a limit defaulting to the pool’s ceiling instead of
+  4\. A slot is therefore held only while a process runs: leaves queued behind adaptive
+  capacity or a `max_concurrency_hint` below `--max-concurrency` no longer wait 60
+  seconds for a slot and launch without one, and each lease records the agent process it
+  admitted. An explicit `resources.host_max_concurrency` still replaces the default, and
   `METAPROC_HOST_MAX_LOCAL_AGENTS` still lowers the result; a leaf without a run-owned
   pool keeps the default of 4. Terminal host-admission refusals record `waited_s`, and
   `metaproc pool events --type host_admission_denied --summary` counts waits, bypassed
   launches, and terminal wait seconds.
+
+- **One run-owned pool compares the values each profile resolves to.** A profile joins
+  the run’s pool as another lane when the pool ceiling (`--max-concurrency` lowered by
+  `max_concurrency_hint`), host-slot limit, per-process RSS estimate, and initial memory
+  budget fraction it resolves to match the sizing profile’s, so hints at or above the
+  run’s ceiling no longer refuse each other, and a differing `host_max_concurrency` is
+  named in the refusal instead of being silently ignored.
 
 - **A composite step’s `execution_profile:` applies to its whole subtree.** The child
   process was planned with the launch `--variant` whatever profile the composite step

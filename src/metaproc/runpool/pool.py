@@ -57,6 +57,7 @@ from metaproc.runpool.concurrency import ConcurrencyPlan, build_concurrency_plan
 from metaproc.runpool.events import EventLogger
 from metaproc.runpool.host_admission import (
     DEFAULT_HOST_ADMISSION_NAMESPACE,
+    DEFAULT_HOST_ADMISSION_TIMEOUT_S,
     HostAdmissionGate,
     HostAdmissionLease,
 )
@@ -368,6 +369,13 @@ class RunPoolConfig(BaseModel):
     host_admission_namespace: str = DEFAULT_HOST_ADMISSION_NAMESPACE
     host_admission_limit: int | None = None
     host_admission_poll_interval_s: float = 1.0
+    host_admission_acquire_timeout_s: float | None = DEFAULT_HOST_ADMISSION_TIMEOUT_S
+    host_admission_fail_open: bool = False
+    """Launch without a slot when admission times out or its directory is unavailable.
+
+    The launch records ``host_admission_denied`` with ``decision: bypass``. Without it, the
+    admission error fails the submission.
+    """
     execution_profile: str | None = None
     cli_max_concurrency: int | None = None
     batch_size: int | None = None
@@ -520,6 +528,7 @@ class RunPool:
                 namespace=self._config.host_admission_namespace,
                 limit=configured_host_limit,
                 poll_interval_s=self._config.host_admission_poll_interval_s,
+                acquire_timeout_s=self._config.host_admission_acquire_timeout_s,
             )
             if self._config.host_admission_enabled and self._backend_name == "local"
             else None
@@ -1336,17 +1345,29 @@ class RunPool:
                 on_wait=record_wait,
             )
         except OSError as exc:
+            waited_s = time.monotonic() - started
+            fail_open = self._config.host_admission_fail_open
             if self._event_logger is not None:
                 self._event_logger.host_admission_denied(
                     namespace=gate.namespace,
                     limit=gate.limit,
                     label=config.label,
                     reason="timeout" if isinstance(exc, TimeoutError) else "unavailable",
-                    decision="fail",
+                    decision="bypass" if fail_open else "fail",
                     error=str(exc),
-                    waited_s=time.monotonic() - started,
+                    waited_s=waited_s,
                 )
-            raise
+            if not fail_open:
+                raise
+            log.warning(
+                "host admission unavailable for %s after %.1fs at limit %d (%s); "
+                "launching without a slot",
+                config.label,
+                waited_s,
+                gate.limit,
+                exc,
+            )
+            return None
         try:
             if self._event_logger is not None:
                 self._event_logger.host_slot_acquired(

@@ -223,7 +223,11 @@ from metaproc.runpool.pool import (
 )
 from metaproc.runpool.process_events import ProcessEventLogger
 from metaproc.runpool.registry import get_backend
-from metaproc.runpool.scalar_admission import admitted_launch, resolve_agent_leaf_host_limit
+from metaproc.runpool.scalar_admission import (
+    SCALAR_ACQUIRE_TIMEOUT_S,
+    SCALAR_DEFAULT_HOST_LIMIT,
+    admitted_launch,
+)
 from metaproc.settings import POOL_MAX_CONCURRENCY
 from metaproc.viz_loader import load_plan_bundle
 
@@ -242,28 +246,48 @@ def _sync_executor_worker_count(max_concurrency: int | None) -> int:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class RunPoolResources:
-    """The execution-profile resources a run-owned RunPool is sized from."""
+    """The values a run-owned RunPool is sized from, as one execution profile resolves them.
 
+    Each is the value the pool would use, so a `max_concurrency_hint` at or above the
+    command-line ceiling and an explicit `host_max_concurrency` equal to the default
+    compare equal to leaving them unset.
+    """
+
+    max_concurrency: int
+    """The pool ceiling: `--max-concurrency` or the default maximum, lowered by the hint."""
     max_concurrency_hint: int | None
+    host_max_concurrency: int
+    """The host-slot limit: `host_max_concurrency` or the pool ceiling, lowered by
+    `METAPROC_HOST_MAX_LOCAL_AGENTS`."""
     estimated_process_rss_bytes: int
     initial_memory_budget_fraction: float
 
     @classmethod
-    def resolve(cls, resource_config: Mapping[str, object]) -> RunPoolResources:
-        """Resolve the values the pool would use, so equal estimates compare equal."""
+    def resolve(cls, resource_config: Mapping[str, object], *, ceiling: int) -> RunPoolResources:
+        """Resolve one profile's resources under the run's command-line *ceiling*."""
         raw_hint = resource_config.get("max_concurrency_hint")
+        hint = int(str(raw_hint)) if raw_hint is not None else None
+        max_concurrency = min(ceiling, hint) if hint is not None else ceiling
         return cls(
-            max_concurrency_hint=int(str(raw_hint)) if raw_hint is not None else None,
+            max_concurrency=max_concurrency,
+            max_concurrency_hint=hint,
+            host_max_concurrency=resolve_host_max_concurrency(
+                resource_config, default=max_concurrency
+            ),
             estimated_process_rss_bytes=resolve_estimated_process_rss_bytes(resource_config),
             initial_memory_budget_fraction=resolve_initial_memory_budget_fraction(resource_config),
         )
 
     def differences(self, other: RunPoolResources) -> list[tuple[str, object, object]]:
-        """Return ``(field, own value, other value)`` for each field that differs."""
+        """Return ``(field, own value, other value)`` for each pool-sizing value that differs.
+
+        The raw hint is recorded for status only; its effect is `max_concurrency`.
+        """
         return [
             (field.name, getattr(self, field.name), getattr(other, field.name))
             for field in dataclasses.fields(self)
-            if getattr(self, field.name) != getattr(other, field.name)
+            if field.name != "max_concurrency_hint"
+            and getattr(self, field.name) != getattr(other, field.name)
         ]
 
 
@@ -274,7 +298,8 @@ class RunPoolOwner:
     The first agent leaf sizes the pool from its execution profile's resources. Each
     later profile joins as another status lane when its `RunPoolResources` resolve
     equal to the sizing profile's, and is refused when they differ: the pool sizes its
-    startup concurrency and ceiling once and has no per-lane resource accounting.
+    startup concurrency, ceiling, and host-slot limit once and has no per-lane resource
+    accounting.
     """
 
     run_dir: Path
@@ -296,7 +321,9 @@ class RunPoolOwner:
         if self.pool is not None and execution_profile in self.lane_profiles:
             return self.pool
 
-        resources = RunPoolResources.resolve(resource_config)
+        resources = RunPoolResources.resolve(
+            resource_config, ceiling=self.max_concurrency or POOL_MAX_CONCURRENCY
+        )
         if self.pool is not None:
             differences = (
                 self.sizing_resources.differences(resources)
@@ -312,12 +339,13 @@ class RunPoolOwner:
                 raise CLIError(
                     f"execution profile {execution_profile!r} cannot share the run-owned "
                     f"RunPool sized from {self.sizing_profile!r}: {detail}. A run-owned "
-                    "RunPool serves several execution profiles only when their "
-                    "max_concurrency_hint, estimated_process_rss_bytes, and "
-                    "initial_memory_budget_fraction resolve equal, because it sizes "
-                    "startup concurrency and its ceiling once and has no per-lane resource "
-                    "accounting. Align those resources across the profiles, or run these "
-                    "steps in separate runs."
+                    "RunPool serves several execution profiles only when they resolve "
+                    "equal max_concurrency (the run's ceiling lowered by "
+                    "max_concurrency_hint), host_max_concurrency, "
+                    "estimated_process_rss_bytes, and initial_memory_budget_fraction, "
+                    "because it sizes startup concurrency, its ceiling, and its host-slot "
+                    "limit once and has no per-lane resource accounting. Align those "
+                    "resources across the profiles, or run these steps in separate runs."
                 )
             self.pool.register_lane(
                 ExecutionLane(lane_id=execution_profile, execution_profile=execution_profile)
@@ -325,22 +353,25 @@ class RunPoolOwner:
             self.lane_profiles.add(execution_profile)
             return self.pool
 
-        pool_max = self.max_concurrency or POOL_MAX_CONCURRENCY
-        if resources.max_concurrency_hint is not None:
-            pool_max = min(pool_max, resources.max_concurrency_hint)
         config = RunPoolConfig(
-            max_concurrency=pool_max,
+            max_concurrency=resources.max_concurrency,
             initial_concurrency=self.initial_concurrency or 0,
             min_concurrency=1,
             estimated_process_rss_bytes=resources.estimated_process_rss_bytes,
             initial_memory_budget_fraction=resources.initial_memory_budget_fraction,
             state_dir=paths_mod.run_state_dir(self.run_dir),
             logs_dir=paths_mod.runpool_logs_dir(self.run_dir),
-            # Scalar callers already enter the shared run leaf gate and host-admission
-            # scope before submitting. The pool is the adaptive process controller;
-            # reacquiring either outer gate here would deadlock at a ceiling of one.
+            # Agent leaves enter the shared run leaf gate before submitting; reacquiring
+            # it here would deadlock at a ceiling of one.
             external_semaphore=None,
-            host_admission_enabled=False,
+            # A leaf takes its host slot here, once the pool admits its process, so slots
+            # count running agents rather than leaves queued behind adaptive capacity or
+            # a hinted ceiling, and each lease records its child. Like the scalar gate, it
+            # waits at most a minute and then launches without a slot.
+            host_admission_enabled=True,
+            host_admission_limit=resources.host_max_concurrency,
+            host_admission_acquire_timeout_s=SCALAR_ACQUIRE_TIMEOUT_S,
+            host_admission_fail_open=True,
             execution_profile=execution_profile,
             cli_max_concurrency=self.max_concurrency,
             profile_max_concurrency_hint=resources.max_concurrency_hint,
@@ -2577,13 +2608,14 @@ async def _execute_agent_step(
                     if execution_context is not None
                     else None
                 )
-                # Under a run-owned pool the slot limit defaults to that pool's ceiling,
-                # so the gate admits every agent the pool can run.
-                host_limit = resolve_agent_leaf_host_limit(
-                    scalar_resource_config,
-                    pool_max_concurrency=(
-                        scalar_pool.max_concurrency if scalar_pool is not None else None
-                    ),
+                # A leaf under the run-owned pool takes its host slot inside the pool once
+                # the pool admits its process; any other local leaf takes one here.
+                host_limit = (
+                    resolve_host_max_concurrency(
+                        scalar_resource_config, default=SCALAR_DEFAULT_HOST_LIMIT
+                    )
+                    if scalar_pool is None
+                    else 0
                 )
                 pool_kill_reason: str | None = None
                 timed_out = False
@@ -2592,7 +2624,7 @@ async def _execute_agent_step(
                     async with _leaf_slot(execution_context):
                         async with admitted_launch(
                             event_logger=auth_events,
-                            enabled=backend_name == "local",
+                            enabled=backend_name == "local" and scalar_pool is None,
                             limit=host_limit,
                             label=f"{run_id}/{step_id}",
                             pool_id=f"run-process:{run_id}",

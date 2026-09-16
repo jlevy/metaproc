@@ -1,9 +1,10 @@
-"""Outer host admission for the scalar agent execution path.
+"""Outer host admission for agent launches without a run-owned RunPool.
 
-``run-process`` agent leaves acquire this gate before submitting to the run-owned
-RunPool, whose internal host admission is disabled to avoid acquiring twice. The same
-gate also covers scalar launches without a run-owned pool. Mapped agent leaves can
-reach this path too; the scalar execution function does not imply a scalar-only scope.
+A ``run-process`` agent leaf under the run-owned RunPool takes its host slot inside that
+pool, once the pool admits its process, with the same fail-open wait as this gate. A
+local agent leaf without a run-owned pool acquires this gate around its launch instead.
+Mapped agent leaves can reach this path too; the scalar execution function does not
+imply a scalar-only scope.
 
 The intended resource contract is design test 7 of
 ``src/metaproc/docs/process-framework-theory.md`` ("Is every launch admitted?"):
@@ -33,7 +34,6 @@ from metaproc.runpool.host_admission import (
     HostAdmissionGate,
     HostAdmissionLease,
 )
-from metaproc.runpool.pool import resolve_host_max_concurrency
 
 logger = logging.getLogger(__name__)
 
@@ -46,31 +46,10 @@ logger = logging.getLogger(__name__)
 # serialize unrelated scalar steps even on an idle machine, which nothing in the
 # incident record motivates — the recorded failures were dozens of simultaneous
 # launches, not two. The default limit applies only to a leaf without a run-owned
-# RunPool; resolve_agent_leaf_host_limit owns the full precedence.
+# RunPool; under one, the limit defaults to the pool's ceiling. The run-owned pool also
+# uses this acquire timeout.
 SCALAR_DEFAULT_HOST_LIMIT = 4
 SCALAR_ACQUIRE_TIMEOUT_S = 60.0
-
-
-def resolve_agent_leaf_host_limit(
-    resource_config: Mapping[str, object],
-    *,
-    pool_max_concurrency: int | None,
-) -> int:
-    """Resolve the host-slot limit for one ``run-process`` agent leaf.
-
-    Precedence:
-    1. ``METAPROC_HOST_MAX_LOCAL_AGENTS`` lowers the result and never raises it.
-    2. An explicit ``host_max_concurrency`` in the leaf's resources.
-    3. ``pool_max_concurrency`` when the leaf runs under a run-owned RunPool, so the
-       gate has a slot for every agent that pool can run.
-    4. ``SCALAR_DEFAULT_HOST_LIMIT`` for a leaf without a run-owned pool.
-
-    A leaf holds its slot from before pool submission until its process exits, so a
-    limit below the run's leaf ceiling makes leaves wait on slots that the same run's
-    queued leaves hold.
-    """
-    default = SCALAR_DEFAULT_HOST_LIMIT if pool_max_concurrency is None else pool_max_concurrency
-    return resolve_host_max_concurrency(resource_config, default=default)
 
 
 @asynccontextmanager

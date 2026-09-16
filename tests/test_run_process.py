@@ -5021,7 +5021,8 @@ class TestRunOwnedPoolExecutionProfiles:
         assert (
             f"estimated_process_rss_bytes {light_rss} for 'light', {heavy_rss} for 'heavy'" in error
         )
-        assert "max_concurrency_hint None for 'light', 20 for 'heavy'" in error
+        assert "max_concurrency 200 for 'light', 20 for 'heavy'" in error
+        assert "host_max_concurrency 200 for 'light', 20 for 'heavy'" in error
         assert "initial_memory_budget_fraction 0.5" not in error
         status = read_yaml_file(run_dir / STATE_DIR / "runpool-status.yaml")
         assert [lane["lane_id"] for lane in status["lanes"]] == ["light"]

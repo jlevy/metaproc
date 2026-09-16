@@ -1343,6 +1343,52 @@ class TestRunPool:
         assert decisions[0].waited_s is None
         assert decisions[-1].waited_s is not None and decisions[-1].waited_s >= 0
 
+    def test_fail_open_host_admission_launches_without_a_slot_after_its_timeout(
+        self, tmp_path: Path
+    ) -> None:
+        marker = tmp_path / "launched"
+        slots = tmp_path / "host-slots"
+        gate = HostAdmissionGate(root_dir=slots, limit=1)
+
+        async def run() -> None:
+            held = await gate.acquire(label="owner", pool_id="owner")
+            pool = RunPool(
+                RunPoolConfig(
+                    max_concurrency=1,
+                    initial_concurrency=1,
+                    min_concurrency=1,
+                    state_dir=tmp_path / "state",
+                    logs_dir=tmp_path / "logs",
+                    host_admission_enabled=True,
+                    host_admission_dir=slots,
+                    host_admission_limit=1,
+                    host_admission_acquire_timeout_s=0.01,
+                    host_admission_fail_open=True,
+                )
+            )
+            try:
+                result = await pool.submit(
+                    ProcessConfig(
+                        launch=PreparedLaunch(command=("touch", str(marker))),
+                        label="bypassing",
+                    )
+                )
+                assert result.exit_code == 0
+            finally:
+                await pool.shutdown()
+                gate.release(held)
+
+        asyncio.run(run())
+        assert marker.exists()
+        events = read_runpool_events(tmp_path / "logs" / "events.jsonl")
+        decisions = [event for event in events if isinstance(event, HostAdmissionDeniedEvent)]
+        assert [(event.reason, event.decision) for event in decisions] == [
+            ("no_available_slot", "wait"),
+            ("timeout", "bypass"),
+        ]
+        assert decisions[-1].waited_s is not None and decisions[-1].waited_s >= 0
+        assert not [event for event in events if event.event == "host_slot_acquired"]
+
     def test_pressure_adjusts_live_pool_capacity(self, tmp_path: Path):
         """RunPool updates its semaphore capacity when pressure changes."""
         pool = RunPool(

@@ -40,3 +40,7 @@ Those decisions are not duplicated here.
   Claude run. Candidates are per-lane RSS-weighted admission, per-lane concurrency
   ceilings for `max_concurrency_hint`, or re-clamping the memory ceiling to the heaviest
   registered lane’s fresh estimate when that lane joins.
+  The refusal covers four resolved values, and a per-lane design has to answer for each:
+  the pool ceiling, the host-slot limit (`host_max_concurrency`, which sizes one gate
+  for the whole pool), the per-process RSS estimate, and the initial memory budget
+  fraction.

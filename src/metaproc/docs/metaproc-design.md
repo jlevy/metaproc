@@ -2005,11 +2005,11 @@ Both the RunPool and scalar launch paths write `host_admission_denied` once on t
 unsuccessful slot scan, with `reason: no_available_slot` and `decision: wait`. A
 terminal refusal records the actual `timeout` or `unavailable` reason, exception
 message, and `waited_s`, the seconds that acquisition spent before the refusal.
-RunPool records `decision: fail`; the scalar path records `decision: bypass` when its
-existing best-effort policy launches without a slot.
-Every refusal identifies the namespace, configured limit, and launch label.
-`metaproc pool events --type host_admission_denied --summary` counts them by decision
-and reason and totals the terminal wait seconds.
+A pool configured to fail open, as `run-process` configures its run-owned pool, and the
+scalar path both record `decision: bypass` when they launch without a slot; any other
+pool records `decision: fail`. Every refusal identifies the namespace, configured limit,
+and launch label. `metaproc pool events --type host_admission_denied --summary` counts
+them by decision and reason and totals the terminal wait seconds.
 No occupied-slot count or successful admission is inferred from these records.
 A scalar-path wait that ends in a slot has no closing record or duration, so a wait
 event alone does not establish the eventual outcome.

@@ -43,11 +43,12 @@ from metaproc.models.authored import ForEach, ProcessSpec, ProcessStep, StepCont
 from metaproc.models.lane import ExecutionLane
 from metaproc.models.plan import FanOut, Plan, ResolvedAdapter, ResolvedStep
 from metaproc.models.runtime import AttemptDisposition
+from metaproc.runpool.backend import HealthMetrics, LaunchHandle, PreparedLaunch
 from metaproc.runpool.event_models import HostAdmissionDeniedEvent
 from metaproc.runpool.event_reader import read_runpool_events
-from metaproc.runpool.host_admission import HostAdmissionLease
-from metaproc.runpool.pool import ProcessConfig
-from metaproc.runpool.scalar_admission import SCALAR_DEFAULT_HOST_LIMIT, admitted_launch
+from metaproc.runpool.host_admission import HostAdmissionSlotSnapshot, list_host_admission_slots
+from metaproc.runpool.pool import ProcessConfig, RunPoolConfig
+from metaproc.runpool.scalar_admission import SCALAR_DEFAULT_HOST_LIMIT
 
 _PROCESS_TREE_TEST_TIMEOUT_S = 2.0
 
@@ -106,6 +107,30 @@ def test_run_pool_owner_adds_a_profile_with_equal_resources_as_a_lane(tmp_path: 
     )
 
 
+def test_run_pool_owner_compares_the_ceiling_and_host_limit_each_profile_resolves_to(
+    tmp_path: Path,
+) -> None:
+    """Hints at or above `--max-concurrency` and an explicit host cap equal to it change nothing."""
+    pool = MagicMock()
+    owner = _run_pool_owner(tmp_path)
+    rss = {"estimated_process_rss_mb": 250}
+
+    with (
+        patch("metaproc.commands.run_process.get_backend", return_value=MagicMock()),
+        patch("metaproc.commands.run_process.RunPool", return_value=pool) as pool_type,
+    ):
+        owner.get_pool(resource_config=rss, execution_profile="unhinted")
+        for name, extra in (
+            ("hint-at-ceiling", {"max_concurrency_hint": 2}),
+            ("hint-above-ceiling", {"max_concurrency_hint": 50}),
+            ("host-cap-at-ceiling", {"host_max_concurrency": 2}),
+        ):
+            assert owner.get_pool(resource_config=rss | extra, execution_profile=name) is pool
+
+    pool_type.assert_called_once()
+    assert pool.register_lane.call_count == 3
+
+
 @pytest.mark.parametrize(
     ("second_resources", "difference"),
     [
@@ -117,8 +142,15 @@ def test_run_pool_owner_adds_a_profile_with_equal_resources_as_a_lane(tmp_path: 
             ),
         ),
         (
-            {"estimated_process_rss_mb": 250, "max_concurrency_hint": 20},
-            "max_concurrency_hint None for 'light', 20 for 'heavy'",
+            {"estimated_process_rss_mb": 250, "max_concurrency_hint": 1},
+            (
+                "max_concurrency 2 for 'light', 1 for 'heavy'; "
+                "host_max_concurrency 2 for 'light', 1 for 'heavy'"
+            ),
+        ),
+        (
+            {"estimated_process_rss_mb": 250, "host_max_concurrency": 1},
+            "host_max_concurrency 2 for 'light', 1 for 'heavy'",
         ),
         (
             {"estimated_process_rss_mb": 250, "initial_memory_budget_fraction": 0.25},
@@ -1110,10 +1142,13 @@ def _agent_leaf_adapter() -> MagicMock:
 
 def _run_pool_factory(
     submit: Any,
+    configs: list[RunPoolConfig] | None = None,
 ) -> MagicMock:
-    """Return a RunPool stand-in that keeps the configured ceiling RunPoolOwner chose."""
+    """Return a RunPool stand-in that records the configuration RunPoolOwner chose."""
 
-    def make_pool(config: Any, **_kwargs: object) -> MagicMock:
+    def make_pool(config: RunPoolConfig, **_kwargs: object) -> MagicMock:
+        if configs is not None:
+            configs.append(config)
         pool = MagicMock()
         pool.max_concurrency = config.max_concurrency
         pool.shutdown = AsyncMock()
@@ -1153,88 +1188,131 @@ async def _execute_agent_leaves(
     )
 
 
-def test_run_owned_pool_ceiling_admits_that_many_agent_leaves_without_host_waits(
+class _SlotObservingBackend:
+    """A backend named ``local`` whose processes exit on their second poll.
+
+    Each poll records the host slot leases held at that moment and whether one of them
+    names the polled process as its child, so a test sees what the run-owned pool's
+    admission holds while its processes run.
+    """
+
+    name = "local"
+
+    def __init__(self) -> None:
+        self.polls: dict[int, int] = {}
+        self.held: list[list[HostAdmissionSlotSnapshot]] = []
+        self.child_recorded: list[bool] = []
+        self.next_pid = 40_000
+
+    async def launch(self, prepared: PreparedLaunch, label: str = "") -> LaunchHandle:
+        del label
+        assert prepared.log_path is not None
+        prepared.log_path.parent.mkdir(parents=True, exist_ok=True)
+        prepared.log_path.write_text("", encoding="utf-8")
+        self.next_pid += 1
+        return LaunchHandle(pid=self.next_pid, backend_name=self.name)
+
+    async def poll(self, handle: LaunchHandle) -> int | None:
+        assert handle.pid is not None
+        held = list_host_admission_slots()
+        self.held.append(held)
+        self.child_recorded.append(any(lease.child_pid == handle.pid for lease in held))
+        self.polls[handle.pid] = self.polls.get(handle.pid, 0) + 1
+        return 0 if self.polls[handle.pid] >= 2 else None
+
+    async def kill(self, handle: LaunchHandle, sig: int | None = None) -> None:
+        del handle, sig
+
+    async def health(self, handle: LaunchHandle) -> HealthMetrics | None:
+        del handle
+        return None
+
+    async def read_log_tail(self, handle: LaunchHandle, lines: int = 50) -> str:
+        del handle, lines
+        return ""
+
+
+def test_run_owned_pool_admits_agent_leaves_to_host_slots_after_pool_admission(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Six leaves under a pool ceiling of six hold six host slots at once.
+    """Six leaves under a hinted pool ceiling of two hold at most two host slots, never waiting.
 
-    A gate limited to SCALAR_DEFAULT_HOST_LIMIT would make two of them wait out the
-    shortened acquire timeout and launch without a slot.
+    `--max-concurrency 6` admits six leaves while the profile's `max_concurrency_hint`
+    caps the pool at two. A slot taken before pool submission would have four leaves wait
+    out the acquire timeout and launch without one; a slot taken once the pool admits a
+    process counts running agents and records each child.
     """
     leaf_count = 6
-    assert leaf_count > SCALAR_DEFAULT_HOST_LIMIT
     monkeypatch.setattr("metaproc.runpool.scalar_admission.SCALAR_ACQUIRE_TIMEOUT_S", 0.2)
-    slots = tmp_path / "host-slots"
+    monkeypatch.setattr(
+        "metaproc.commands.run_process.SCALAR_ACQUIRE_TIMEOUT_S", 0.2, raising=False
+    )
     step_ids = tuple(f"leaf-{index}" for index in range(leaf_count))
-    limits: list[int] = []
-    leases: list[HostAdmissionLease | None] = []
-    pending: list[asyncio.Future[Any]] = []
-
-    @asynccontextmanager
-    async def isolated_admission(**kwargs: Any) -> AsyncGenerator[HostAdmissionLease | None]:
-        limits.append(kwargs["limit"])
-        async with admitted_launch(**kwargs, root_dir=slots) as lease:
-            leases.append(lease)
-            yield lease
-
-    def submit(config: ProcessConfig) -> asyncio.Future[Any]:
-        launch = config.launch
-        assert launch is not None and launch.log_path is not None
-        launch.log_path.write_text("", encoding="utf-8")
-        future = asyncio.get_running_loop().create_future()
-        pending.append(future)
-        # A leaf keeps its host slot until its result arrives, so finishing only after
-        # the last submission proves every slot was held at the same time.
-        if len(pending) == leaf_count:
-            for waiting in pending:
-                waiting.set_result(SimpleNamespace(exit_code=0, kill_reason=None))
-        return future
+    backend = _SlotObservingBackend()
+    run_dir = tmp_path / "run"
 
     async def exercise() -> list[bool]:
         context = RunExecutionContext.create(
             max_concurrency=leaf_count,
-            run_dir=tmp_path / "run",
+            initial_concurrency=leaf_count,
+            run_dir=run_dir,
             enable_run_pool=True,
         )
         try:
             with (
-                patch("metaproc.commands.run_process.RunPool", _run_pool_factory(submit)),
+                patch("metaproc.commands.run_process.get_backend", return_value=backend),
                 patch(
                     "metaproc.commands.run_process.get_adapter",
                     return_value=_agent_leaf_adapter(),
                 ),
-                patch("metaproc.commands.run_process.admitted_launch", isolated_admission),
                 patch("metaproc.commands.run_process.capture_repo_snapshot", return_value=None),
             ):
                 return await asyncio.wait_for(
-                    _execute_agent_leaves(tmp_path, step_ids=step_ids, context=context),
-                    timeout=10,
+                    _execute_agent_leaves(
+                        tmp_path,
+                        step_ids=step_ids,
+                        context=context,
+                        resources={"max_concurrency_hint": 2},
+                    ),
+                    timeout=30,
                 )
         finally:
             await context.aclose()
 
     assert asyncio.run(exercise()) == [True] * leaf_count
-    denied = [
-        event
-        for step_id in step_ids
-        for event in read_runpool_events(paths_mod.runpool_step_events(tmp_path / "run", step_id))
-        if isinstance(event, HostAdmissionDeniedEvent)
+    streams = [
+        paths_mod.runpool_events(run_dir),
+        *(paths_mod.runpool_step_events(run_dir, step_id) for step_id in step_ids),
     ]
-    assert denied == []
-    assert all(lease is not None for lease in leases)
-    assert {lease.slot_id for lease in leases if lease is not None} == set(range(leaf_count))
-    assert limits == [leaf_count] * leaf_count
+    events = [
+        event for stream in streams if stream.exists() for event in read_runpool_events(stream)
+    ]
+    assert [event for event in events if isinstance(event, HostAdmissionDeniedEvent)] == []
+    acquired = [event for event in events if getattr(event, "event", None) == "host_slot_acquired"]
+    assert len(acquired) == leaf_count
+    assert {event.limit for event in acquired} == {2}
+    assert backend.held and max(len(held) for held in backend.held) <= 2
+    assert backend.child_recorded and all(backend.child_recorded)
+    assert list_host_admission_slots() == []
 
 
 @pytest.mark.parametrize(
     ("env_cap", "resources", "expected"),
     [
         pytest.param(None, {}, 6, id="pool-ceiling-default"),
+        pytest.param(None, {"max_concurrency_hint": 2}, 2, id="hint-below-cli-ceiling"),
+        pytest.param(None, {"max_concurrency_hint": 20}, 6, id="hint-above-cli-ceiling"),
         pytest.param("3", {}, 3, id="env-caps-pool-ceiling"),
         pytest.param("50", {}, 6, id="env-cannot-raise"),
         pytest.param(None, {"host_max_concurrency": 9}, 9, id="resource-over-default"),
         pytest.param(None, {"host_max_concurrency": 2}, 2, id="resource-below-default"),
+        pytest.param(
+            None,
+            {"max_concurrency_hint": 2, "host_max_concurrency": 9},
+            9,
+            id="resource-over-hinted-ceiling",
+        ),
         pytest.param("5", {"host_max_concurrency": 9}, 5, id="env-caps-resource"),
     ],
 )
@@ -1245,13 +1323,15 @@ def test_agent_leaf_host_limit_precedence_under_a_run_owned_pool(
     resources: dict[str, object],
     expected: int,
 ) -> None:
+    """The run-owned pool holds the host limit; the leaf's own gate stays disabled."""
     if env_cap is not None:
         monkeypatch.setenv("METAPROC_HOST_MAX_LOCAL_AGENTS", env_cap)
-    limits: list[int] = []
+    configs: list[RunPoolConfig] = []
+    outer_enabled: list[bool] = []
 
     @asynccontextmanager
     async def recorded_admission(**kwargs: Any) -> AsyncGenerator[None]:
-        limits.append(kwargs["limit"])
+        outer_enabled.append(kwargs["enabled"])
         yield None
 
     def submit(config: ProcessConfig) -> asyncio.Future[Any]:
@@ -1270,7 +1350,7 @@ def test_agent_leaf_host_limit_precedence_under_a_run_owned_pool(
         )
         try:
             with (
-                patch("metaproc.commands.run_process.RunPool", _run_pool_factory(submit)),
+                patch("metaproc.commands.run_process.RunPool", _run_pool_factory(submit, configs)),
                 patch(
                     "metaproc.commands.run_process.get_adapter",
                     return_value=_agent_leaf_adapter(),
@@ -1285,7 +1365,10 @@ def test_agent_leaf_host_limit_precedence_under_a_run_owned_pool(
             await context.aclose()
 
     assert asyncio.run(exercise()) == [True]
-    assert limits == [expected]
+    (config,) = configs
+    assert (config.host_admission_enabled, config.host_admission_fail_open) == (True, True)
+    assert config.host_admission_limit == expected
+    assert outer_enabled == [False]
 
 
 def test_agent_leaf_without_a_run_owned_pool_uses_the_scalar_default(tmp_path: Path) -> None:

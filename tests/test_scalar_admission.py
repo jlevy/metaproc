@@ -27,7 +27,6 @@ from metaproc.runpool.scalar_admission import (
     SCALAR_ACQUIRE_TIMEOUT_S,
     SCALAR_DEFAULT_HOST_LIMIT,
     admitted_launch,
-    resolve_agent_leaf_host_limit,
 )
 
 
@@ -239,45 +238,6 @@ def test_real_gate_refusal_records_wait_then_timeout_bypass(
         r"launching without a slot",
         caplog.text,
     )
-
-
-class TestAgentLeafHostLimit:
-    """Precedence for the slot limit of one ``run-process`` agent leaf."""
-
-    def test_without_a_run_owned_pool_the_scalar_default_applies(self) -> None:
-        assert resolve_agent_leaf_host_limit({}, pool_max_concurrency=None) == (
-            SCALAR_DEFAULT_HOST_LIMIT
-        )
-
-    def test_a_run_owned_pool_ceiling_is_the_default(self) -> None:
-        assert resolve_agent_leaf_host_limit({}, pool_max_concurrency=30) == 30
-
-    @pytest.mark.parametrize(("resource", "pool_max"), [(12, 30), (40, 30), (9, None)])
-    def test_an_explicit_resource_limit_replaces_the_default(
-        self, resource: int, pool_max: int | None
-    ) -> None:
-        resources = {"host_max_concurrency": resource}
-        assert resolve_agent_leaf_host_limit(resources, pool_max_concurrency=pool_max) == resource
-
-    @pytest.mark.parametrize(
-        ("resources", "pool_max", "env_cap", "expected"),
-        [
-            ({}, 30, "10", 10),
-            ({}, 30, "50", 30),
-            ({}, None, "2", 2),
-            ({"host_max_concurrency": 12}, 30, "10", 10),
-        ],
-    )
-    def test_the_host_environment_cap_only_lowers(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        resources: dict[str, object],
-        pool_max: int | None,
-        env_cap: str,
-        expected: int,
-    ) -> None:
-        monkeypatch.setenv("METAPROC_HOST_MAX_LOCAL_AGENTS", env_cap)
-        assert resolve_agent_leaf_host_limit(resources, pool_max_concurrency=pool_max) == expected
 
 
 class TestScalarDefaults:

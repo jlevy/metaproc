@@ -369,10 +369,10 @@ runs. Multiple small pools can overcommit the same laptop even if each pool’s 
 cap looks conservative.
 
 Local agent launches use disk-backed host admission.
-Standalone pools acquire slots inside RunPool; `run-process` agent leaves acquire an
-outer scalar-path gate before submitting to the run-owned pool, whose internal host
-admission is disabled to avoid acquiring twice.
-The default namespace is shared by local agent profiles:
+Every pooled launch acquires its slot inside RunPool, after pool admission and before
+the process starts, so a held slot always corresponds to a running process.
+A local agent leaf with no run-owned pool acquires an outer scalar-path gate around its
+launch instead. The default namespace is shared by local agent profiles:
 
 ```text
 ~/.metaproc/runpool/host-slots/local-agents/slot-N/
@@ -381,17 +381,17 @@ The default namespace is shared by local agent profiles:
 Each slot is acquired by atomic directory creation and contains a lease with the owner
 PID, label, pool id, limit, and timestamps.
 Pool-owned admission also records the launched child identity; the outer scalar path
-currently records only the owner.
+records only the owner.
 Stale reclamation checks the recorded process identities and uses a grace period for
 incomplete leases. A surviving child is protected only when its identity was recorded.
 The stale check and removal are separate operations, so concurrent reclamation is not
 protected by the atomic slot-creation primitive.
 
-Pool-owned admission propagates a timeout or admission error.
-The outer scalar path, including agent leaves submitted to the run-owned pool, fails
-open after a 60-second wait: it logs the admission failure, records
-`host_admission_denied` with `decision: bypass` and `waited_s`, and proceeds without a
-lease. Each gate scans only the slot prefix below its own resolved limit, so this
+A pool configured to fail open, which is how `run-process` configures its run-owned
+pool, and the outer scalar path both wait 60 seconds and then launch without a lease:
+each logs the admission failure and records `host_admission_denied` with
+`decision: bypass` and `waited_s`. Any other pool propagates the timeout or admission
+error. Each gate scans only the slot prefix below its own resolved limit, so this
 mechanism is an aggregate count ceiling only for admitted launches whose launchers
 resolve the same limit.
 It is not a host-wide memory reservation.
@@ -407,8 +407,10 @@ never raises one:
 
 An explicit `resources.host_max_concurrency` replaces the default in every row,
 including a value above the pool ceiling.
-An agent leaf holds its slot from before pool submission until its process exits, so
-leaves queued behind the pool’s adaptive capacity still count against the host limit.
+A slot is held only while its process runs, so leaves queued behind the pool’s adaptive
+capacity or a hinted ceiling hold none.
+The run-owned pool resolves one limit for every lane it serves, and refuses a profile
+whose resolved limit differs.
 
 No daemon is required; leases may remain after process death until a later acquisition
 reclaims them.
