@@ -215,7 +215,7 @@ def validate_result_attempt_identity_at(
     if result.attempt_id != latest.attempt_id:
         raise ValueError(f"{state_dir}: result does not name latest attempt {latest.attempt_id!r}")
     mismatches = [
-        field_name
+        f"{field_name} ({result_value!r} against {attempt_value!r})"
         for field_name, result_value, attempt_value in (
             ("run_id", result.run_id, latest.run_id),
             ("step_id", result.step_id, latest.step_id),

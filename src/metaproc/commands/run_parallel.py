@@ -1592,6 +1592,7 @@ async def _run_agent_pool(  # noqa: PLR0913
     step: str,
     each: str,
     variables: dict[str, str],
+    scope_run_id: str | None = None,
     item_contexts: list[dict[str, str]],
     adapter_type: str,
     merged_config: dict[str, object],
@@ -1626,7 +1627,13 @@ async def _run_agent_pool(  # noqa: PLR0913
     runs unchanged.
     """
     run_context = variables.get("RUN_ID", variables.get("DATE", variables.get("SCOPE", "")))
-    run_id = f"{spec.name}/{run_context}"
+    # A caller that already owns this scope's durable identity passes it: a child process
+    # of a composite step records every other step under the identity its parent derived,
+    # and an item's attempt has to agree with the result written beside it. Composing one
+    # here from this spec's own name would name the child spec instead, and the result
+    # write would refuse the attempt it just succeeded under. A standalone `run-parallel`
+    # has no such caller and composes its own.
+    run_id = scope_run_id or f"{spec.name}/{run_context}"
     run_dir = compute_run_dir(spec, variables)
 
     stall_timeout_s: float | None = (
