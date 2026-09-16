@@ -3,13 +3,30 @@ type: is
 id: is-01m2m3ds4bznns3520b0phc7ja
 title: Adding a nullable field to an _Explained model makes earlier AgentOperationsSummary/v1 artifacts unreadable
 kind: task
-status: open
+status: closed
 priority: 3
-version: 1
+version: 3
 labels: []
-dependencies: []
+dependencies:
+  - type: blocks
+    target: is-01m2m60b86rdxpfdk5dcfjszfb
 created_at: 2026-09-16T03:16:04.874Z
-updated_at: 2026-09-16T03:16:04.874Z
+updated_at: 2026-09-16T04:16:49.286Z
+closed_at: 2026-09-16T04:16:49.285Z
+close_reason: |
+  Settled in PR #83 by mp-dvv2, and the defect materialized before the fix landed: a downstream consumer's CI hit it on published run trees, so it was not latent after all. A second reader appeared, exactly the condition this bead named.
+
+  Decision, closest to the bead's option 1 with the reasoning made explicit: a contract id promises readability, so a field added under an id already in use is optional on read. It needs a default, and no validator may make its absence an error. A nullable field qualifies, provided null is a state a reader can act on (the writer did not record it) rather than a value that reads as measured. A newly required field, or one whose meaning moves, is a new contract id.
+
+  `_Explained` now applies its explained-null rule to the fields a document states (`model_fields_set`) rather than the fields the current model declares. The bead's worry that this weakens the invariant does not apply as feared: the fold constructs every record with explicit keyword arguments, so every field is in `model_fields_set` at write time and an unexplained null is still rejected as it is written. Only the reader stops holding an older document to a field list it never saw. Writer completeness and reader tolerance are different obligations.
+
+  Option 2 (bump to `/v2` per nullable field) was rejected because it makes every consumer carry a version matrix for changes that cost them nothing, and the run trees are already published. Option 3 (reader-side defaults) was rejected because the reason text would be synthesized rather than measured, and because it fixes only the Python reader: `process` was `required` in the compiled JSON Schema, which breaks any reader in any language.
+
+  On the bead's closing question, `extractor_version` counts what the fold measures and emits. It tells a reader which fields to expect and lets a cross-run comparison refuse to mix vintages. It never decides whether a document can be read; only the contract id does that.
+
+  Recorded in `docs/project/specs/active/plan-2026-09-11-agent-operations-summary.md` ("The Contract Version and the Extractor Version"), in the `models/operations_summary.py` module docstring, and in `CHANGELOG.md`. A checked-in real pre-change document is read through both the model and the shipped JSON Schema, so the next such addition fails a test rather than a consumer.
+resolution: null
+duplicate_of: null
 ---
 Filed from the PR #83 re-review (finding N3, https://github.com/jlevy/metaproc/pull/83#issuecomment-5691478410).
 
