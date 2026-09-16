@@ -119,22 +119,23 @@ def _recover_resource_artifacts(run_dir: Path, status: RunStatus) -> None:
     except Exception:  # noqa: BLE001 - status must survive observability scan failures
         log.exception("could not inspect resource artifact freshness for %s", run_dir)
         return
-    if not needs_recovery:
-        return
-
-    outcome = infer_recovery_outcome(run_dir, totals=status.totals)
-    try:
-        finalize_run_resources(
-            run_dir,
-            outcome=outcome,
-            trigger="status",
-            bundle=load_plan_bundle_from_run(run_dir),
-        )
-    except Exception:  # noqa: BLE001 - status remains available if reporting recovery fails
-        log.exception("resource artifact recovery failed for inactive run %s", run_dir)
-        return
-    # A run killed by a signal skips the finalization that writes its operations summary.
-    # The summary is write-once, so a run that already has one keeps it.
+    if needs_recovery:
+        outcome = infer_recovery_outcome(run_dir, totals=status.totals)
+        try:
+            finalize_run_resources(
+                run_dir,
+                outcome=outcome,
+                trigger="status",
+                bundle=load_plan_bundle_from_run(run_dir),
+            )
+        except Exception:  # noqa: BLE001 - status remains available if reporting recovery fails
+            log.exception("resource artifact recovery failed for inactive run %s", run_dir)
+            return
+    # An operations summary can be missing while the resource artifacts beside it are
+    # fresh: a signal between the two finalizers, a fold that raised at finalization, or
+    # resources an earlier status already recovered. So the summary is checked on its
+    # own, not only after a recovery. It is write-once — a run that has one keeps it —
+    # and it reads the run's state from the resource summary either way.
     if not (run_dir / OPERATIONS_SUMMARY_FILE).exists():
         finalize_operations_summary(run_dir, outcome=None, trigger="status")
 

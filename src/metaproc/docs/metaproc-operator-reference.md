@@ -885,12 +885,14 @@ Cross-check volume against `metaproc stats <run-dir>` and
 
 Run finalization writes `operations-summary.md` at the run root, beside
 `resource-usage-summary.md`, for completed, failed, cancelled, and timed-out runs alike.
-A run killed by a signal never reaches finalization; once it is inactive, the next
-`metaproc status` on it recovers its resource artifacts and writes the missing summary
-with `trigger: status`. Its frontmatter is
-`metaproc.operations:AgentOperationsSummary/v1`; the body renders the same values.
-Point it at a run root: a top-level run, a batch root, or a child run of a batch (one
-cohort, say), in place or copied elsewhere.
+A run can end without one: killed by a signal, interrupted between the resource and
+operations finalizers, or with a fold that raised.
+Once such a run is inactive, the next `metaproc status` on it writes the missing summary
+with `trigger: status`, recovering its resource artifacts first if they are stale.
+It writes one only when the file is absent.
+Its frontmatter is `metaproc.operations:AgentOperationsSummary/v1`; the body renders the
+same values. Point it at a run root: a top-level run, a batch root, or a child run of a
+batch (one cohort, say), in place or copied elsewhere.
 A child run’s plans record their paths from the batch root and its own root plan names
 that prefix, which is how the summary tells its scopes from a copied `.state` tree.
 Tokens, meters and list cost come only from a run’s own `resource-usage-summary.md`,
