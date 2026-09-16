@@ -6,7 +6,7 @@ status: Approved
 ---
 # Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-09-15) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-09-16) **Status:** Approved
 
 Also readable as `metaproc help design`.
 

@@ -5144,7 +5144,10 @@ class TestRunOwnedPoolExecutionProfiles:
         """A step override is part of the run: a resume and `status` follow the recorded set."""
         repo_dir, process_dir = self._repo(tmp_path)
         self._register_adapter(monkeypatch)
-        same = {"estimated_process_rss_mb": 250, "initial_memory_budget_fraction": 0.5}
+        same: dict[str, object] = {
+            "estimated_process_rss_mb": 250,
+            "initial_memory_budget_fraction": 0.5,
+        }
         self._write_repo_profiles(repo_dir, {"run-a": same, "judge-b": same})
         spec = process_dir / "judged.process.md"
         spec.write_text(

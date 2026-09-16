@@ -44,7 +44,7 @@ from metaproc.models.lane import ExecutionLane
 from metaproc.models.plan import FanOut, Plan, ResolvedAdapter, ResolvedStep
 from metaproc.models.runtime import AttemptDisposition
 from metaproc.runpool.backend import HealthMetrics, LaunchHandle, PreparedLaunch
-from metaproc.runpool.event_models import HostAdmissionDeniedEvent
+from metaproc.runpool.event_models import HostAdmissionDeniedEvent, HostSlotAcquiredEvent
 from metaproc.runpool.event_reader import read_runpool_events
 from metaproc.runpool.host_admission import HostAdmissionSlotSnapshot, list_host_admission_slots
 from metaproc.runpool.pool import ProcessConfig, RunPoolConfig
@@ -1289,7 +1289,7 @@ def test_run_owned_pool_admits_agent_leaves_to_host_slots_after_pool_admission(
         event for stream in streams if stream.exists() for event in read_runpool_events(stream)
     ]
     assert [event for event in events if isinstance(event, HostAdmissionDeniedEvent)] == []
-    acquired = [event for event in events if getattr(event, "event", None) == "host_slot_acquired"]
+    acquired = [event for event in events if isinstance(event, HostSlotAcquiredEvent)]
     assert len(acquired) == leaf_count
     assert {event.limit for event in acquired} == {2}
     assert backend.held and max(len(held) for held in backend.held) <= 2

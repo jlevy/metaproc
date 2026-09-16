@@ -372,7 +372,7 @@ def _plan_steps(
     scope_path = (
         [str(part) for part in raw_scope_path] if isinstance(raw_scope_path, list) else None
     )
-    by_id = {
+    by_id: dict[str, Mapping[str, Any]] = {
         str(step["step_id"]): {key: step[key] for key in _PLAN_STEP_KEYS if key in step}
         for step in steps
         if isinstance(step, Mapping) and isinstance(step.get("step_id"), str)
