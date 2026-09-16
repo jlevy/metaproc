@@ -10,6 +10,7 @@ import gzip
 import json
 import logging
 import shutil
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -756,7 +757,7 @@ def test_a_null_figure_without_a_reason_is_rejected() -> None:
         )
 
 
-def _edit_yaml(path: Path, edit: Any) -> None:
+def _edit_yaml(path: Path, edit: Callable[[dict[str, Any]], None]) -> None:
     document = yaml.safe_load(path.read_text())
     edit(document)
     path.write_text(to_yaml_string(document))
