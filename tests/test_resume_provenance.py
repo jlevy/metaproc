@@ -5,8 +5,8 @@ code revision that launched it, rather than what the run is. A resume may change
 value; every other resolved variable stays part of the identity ``run-config.yaml``
 records, and changing one refuses the resume.
 
-The end-to-end tests drive ``metaproc run-process`` twice against one ``RUN_ID``: a
-launch, then a resume that changes the launch values or edits the process spec.
+The end-to-end tests drive ``metaproc run-process`` repeatedly against one ``RUN_ID``: a
+launch, then resumes that change the launch values or edit the process spec.
 """
 
 from __future__ import annotations
@@ -20,15 +20,19 @@ from strif import atomic_output_file
 from typer.testing import CliRunner, Result
 
 from metaproc.cli import app
+from metaproc.commands.helpers import load_process_spec
 from metaproc.commands.run_process import (
     _resume_variable_identity,
     _validate_run_config,
     _write_run_config,
 )
+from metaproc.engine.build_plan import build_plan
+from metaproc.engine.dep_state import fingerprint_step
 from metaproc.engine.process_scope import expand_process_vars
+from metaproc.engine.validation import validate_scope_collisions
 from metaproc.errors import CLIError
 from metaproc.io import iter_jsonl_objects, read_yaml_file, to_yaml_string
-from metaproc.models.authored import ProcessInput, ProcessSpec
+from metaproc.models.authored import ProcessSpec
 from metaproc.paths import RUN_CONFIG_FILE, STATE_DIR, dispatch_config_changes_log
 
 _HANDLERS = '''\
@@ -140,6 +144,23 @@ def _invocations(run_dir: Path) -> list[str]:
     return (run_dir / "invocations.log").read_text().splitlines()
 
 
+def _advanced(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """Return the resume's provenance-advance INFO lines, newest capture only."""
+    return [r.getMessage() for r in caplog.records if "advances provenance" in r.getMessage()]
+
+
+def _provenance_changes(run_dir: Path) -> list[list[dict[str, object]]]:
+    """Return the ``changes`` of each ``provenance_advance`` event, in write order."""
+    log_path = dispatch_config_changes_log(run_dir)
+    if not log_path.is_file():
+        return []
+    return [
+        event["changes"]
+        for event in iter_jsonl_objects(log_path)
+        if event.get("event") == "provenance_advance" and "changes" in event
+    ]
+
+
 def _launch(tmp_path: Path, *, provenance: bool = True) -> tuple[Path, Path, str]:
     process_path = _write_process(tmp_path / "proc", provenance=provenance)
     runs_dir = tmp_path / "runs"
@@ -163,11 +184,9 @@ def test_changed_provenance_input_resumes(tmp_path: Path, caplog: pytest.LogCapt
     assert resumed.exit_code == 0, _message(resumed)
     # The completed step is reused, not re-run.
     assert _invocations(run_dir) == ["record"]
-    # The run's log records the move under both names resolution writes.
-    advanced = [r.getMessage() for r in caplog.records if "advances provenance" in r.getMessage()]
-    assert advanced == [
-        "Resume advances provenance input CODE_REVISION: 'rev-a' -> 'rev-b'",
-        "Resume advances provenance input code_revision: 'rev-a' -> 'rev-b'",
+    # One line for the input, naming both the logical name and the operator's alias.
+    assert _advanced(caplog) == [
+        "Resume advances provenance input code_revision (CODE_REVISION): 'rev-a' -> 'rev-b'"
     ]
     # run-config.yaml keeps the values the run was launched with.
     recorded = read_yaml_file(run_dir / STATE_DIR / RUN_CONFIG_FILE)["variables"]
@@ -177,9 +196,46 @@ def test_changed_provenance_input_resumes(tmp_path: Path, caplog: pytest.LogCapt
     events = list(iter_jsonl_objects(dispatch_config_changes_log(run_dir)))
     assert [event["event"] for event in events] == ["provenance_advance"]
     assert events[0]["changes"] == [
-        {"field": "CODE_REVISION", "diff": {"old": "rev-a", "new": "rev-b"}},
-        {"field": "code_revision", "diff": {"old": "rev-a", "new": "rev-b"}},
+        {
+            "field": "code_revision",
+            "param": "CODE_REVISION",
+            "diff": {"old": "rev-a", "new": "rev-b"},
+        }
     ]
+
+
+def test_each_advance_is_recorded_against_the_last_effective_value(tmp_path: Path) -> None:
+    """``old`` is what the previous resume ran with, not the launch value.
+
+    ``run-config.yaml`` is never rewritten, so diffing every resume against it would
+    make the log unable to say what the latest resume ran with: a repeat would re-emit
+    an identical event, a chain would never record ``rev-b -> rev-c``, and a return to
+    the launch value would record nothing at all while the last entry still claimed the
+    advanced value.
+    """
+    process_path, runs_dir, run_id = _launch(tmp_path)
+    run_dir = runs_dir / run_id
+
+    for revision in ("rev-b", "rev-c", "rev-c", "rev-a"):
+        resumed = _run(process_path, runs_dir, run_id, DATASET="ds-1", CODE_REVISION=revision)
+        assert resumed.exit_code == 0, _message(resumed)
+    # Every resume reused the completed step.
+    assert _invocations(run_dir) == ["record"]
+
+    def diff(old: str, new: str) -> list[dict[str, object]]:
+        return [
+            {"field": "code_revision", "param": "CODE_REVISION", "diff": {"old": old, "new": new}}
+        ]
+
+    assert _provenance_changes(run_dir) == [
+        diff("rev-a", "rev-b"),  # against the launch value, no event yet
+        diff("rev-b", "rev-c"),  # a chain, not a second diff from rev-a
+        # The repeat at rev-c moved nothing and wrote nothing.
+        diff("rev-c", "rev-a"),  # the return to the launch value is still a move
+    ]
+    # run-config.yaml is untouched throughout.
+    recorded = read_yaml_file(run_dir / STATE_DIR / RUN_CONFIG_FILE)["variables"]
+    assert recorded["code_revision"] == "rev-a"
 
 
 def test_a_resume_with_the_launch_values_records_no_provenance_advance(tmp_path: Path) -> None:
@@ -225,10 +281,8 @@ def test_edited_default_on_provenance_input_resumes(
 
     assert resumed.exit_code == 0, _message(resumed)
     assert _invocations(runs_dir / run_id) == ["record"]
-    advanced = [r.getMessage() for r in caplog.records if "advances provenance" in r.getMessage()]
-    assert advanced == [
-        "Resume advances provenance input BUILD_LABEL: 'label-a' -> 'label-b'",
-        "Resume advances provenance input build_label: 'label-a' -> 'label-b'",
+    assert _advanced(caplog) == [
+        "Resume advances provenance input build_label (BUILD_LABEL): 'label-a' -> 'label-b'"
     ]
 
 
@@ -263,8 +317,10 @@ def test_newly_added_identity_input_still_refuses(tmp_path: Path) -> None:
 
     assert refused.exit_code != 0
     message = _message(refused)
-    assert "Resume mismatch: run-config.yaml identity variables changed: REGION, region." in (
-        message
+    # Values stay out of the refusal, so each name says whether the resume added it.
+    assert (
+        "Resume mismatch: run-config.yaml identity variables changed: "
+        "REGION (added), region (added)." in message
     )
     assert "CODE_REVISION" not in message.split("may change on a resume")[0]
     assert _invocations(runs_dir / run_id) == ["record"]
@@ -296,10 +352,11 @@ def test_newly_added_provenance_input_resumes(
 
     assert resumed.exit_code == 0, _message(resumed)
     assert _invocations(runs_dir / run_id) == ["record"]
-    advanced = [r.getMessage() for r in caplog.records if "advances provenance" in r.getMessage()]
-    assert advanced == [
-        "Resume advances provenance input FRAMEWORK_REVISION: <unset> -> 'fw-1'",
-        "Resume advances provenance input framework_revision: <unset> -> 'fw-1'",
+    assert _advanced(caplog) == [
+        (
+            "Resume advances provenance input framework_revision (FRAMEWORK_REVISION): "
+            "<unset> -> 'fw-1'"
+        )
     ]
 
 
@@ -335,12 +392,6 @@ def test_spec_without_provenance_inputs_behaves_as_before(tmp_path: Path) -> Non
 # ── The authored field and the names it contributes ──────────────
 
 
-def test_provenance_defaults_to_false() -> None:
-    decl = ProcessInput.model_validate({"param": "DATASET", "as": "string"})
-    assert decl.provenance is False
-    assert ProcessInput.model_validate({"as": "string", "provenance": True}).provenance is True
-
-
 def test_provenance_input_names_cover_logical_name_and_param_alias() -> None:
     spec = ProcessSpec.model_validate(
         {
@@ -352,8 +403,61 @@ def test_provenance_input_names_cover_logical_name_and_param_alias() -> None:
             },
         }
     )
+    # An input is provenance only where the spec says so.
+    assert spec.inputs["code_revision"].provenance is True
+    assert spec.inputs["dataset"].provenance is False
+    # One entry per input, carrying the alias a log entry names alongside it.
+    assert spec.provenance_inputs == {"code_revision": "CODE_REVISION", "notes": None}
+    # Flattened to the variable names resolution writes.
     assert spec.provenance_input_names == {"code_revision", "CODE_REVISION", "notes"}
+    assert ProcessSpec.model_validate({"name": "none"}).provenance_inputs == {}
     assert ProcessSpec.model_validate({"name": "none"}).provenance_input_names == set()
+
+
+def test_a_provenance_name_may_not_also_be_an_identity_input_name() -> None:
+    """A name is provenance or identity, never both.
+
+    ``X`` below leaves the resume comparison as ``revision``'s alias, and it is the
+    identity input's only name, so without this rejection that input could change on a
+    resume unnoticed.
+    """
+    spec = ProcessSpec.model_validate(
+        {
+            "name": "shadow",
+            "inputs": {
+                "revision": {"param": "X", "as": "string", "provenance": True},
+                "X": {"as": "string"},
+            },
+        }
+    )
+    assert validate_scope_collisions(spec) == [
+        (
+            "provenance input 'revision': name 'X' is also used by an input that is not "
+            "`provenance: true`, which would drop that input out of resume identity"
+        )
+    ]
+
+    shared_param = ProcessSpec.model_validate(
+        {
+            "name": "shared-param",
+            "inputs": {
+                "revision": {"param": "X", "as": "string", "provenance": True},
+                "other": {"param": "X", "as": "string"},
+            },
+        }
+    )
+    assert len(validate_scope_collisions(shared_param)) == 1
+
+    clean = ProcessSpec.model_validate(
+        {
+            "name": "clean",
+            "inputs": {
+                "revision": {"param": "CODE_REVISION", "as": "string", "provenance": True},
+                "dataset": {"param": "DATASET", "as": "string"},
+            },
+        }
+    )
+    assert validate_scope_collisions(clean) == []
 
 
 # ── The identity comparison directly ──────────────────────────────
@@ -436,7 +540,7 @@ def test_removed_provenance_variable_resumes_and_removed_identity_refuses(
         variables={"RUN_ID": "run-1", "DATASET": "ds-1"},
         provenance_names={"NOTE"},
     )
-    with pytest.raises(CLIError, match=r"identity variables changed: DATASET\."):
+    with pytest.raises(CLIError, match=r"identity variables changed: DATASET \(removed\)\."):
         _validate_run_config(
             config_path,
             process_name="mine",
@@ -446,11 +550,11 @@ def test_removed_provenance_variable_resumes_and_removed_identity_refuses(
         )
 
 
-def test_write_run_config_threads_provenance_names_to_validation(tmp_path: Path) -> None:
+def test_write_run_config_threads_provenance_inputs_to_validation(tmp_path: Path) -> None:
     run_dir = tmp_path / "run-1" / "mine"
     run_dir.mkdir(parents=True)
 
-    def write(revision: str, provenance_names: frozenset[str]) -> None:
+    def write(revision: str, provenance_inputs: dict[str, str | None]) -> None:
         _write_run_config(
             run_dir,
             process_name="mine",
@@ -459,10 +563,151 @@ def test_write_run_config_threads_provenance_names_to_validation(tmp_path: Path)
             variables={"RUN_ID": "run-1", "CODE_REVISION": revision},
             backend="local",
             variant=None,
-            provenance_names=provenance_names,
+            provenance_inputs=provenance_inputs,
         )
 
-    write("rev-a", frozenset({"CODE_REVISION"}))
-    write("rev-b", frozenset({"CODE_REVISION"}))
+    write("rev-a", {"code_revision": "CODE_REVISION"})
+    write("rev-b", {"code_revision": "CODE_REVISION"})
     with pytest.raises(CLIError, match=r"identity variables changed: CODE_REVISION\."):
-        write("rev-c", frozenset())
+        write("rev-c", {})
+
+
+def test_an_unwritable_changes_log_fails_the_resume_with_the_path(tmp_path: Path) -> None:
+    """A log the process cannot append to is an error naming the file, not a traceback."""
+    run_dir = tmp_path / "run-1" / "mine"
+    run_dir.mkdir(parents=True)
+
+    def write(revision: str) -> None:
+        _write_run_config(
+            run_dir,
+            process_name="mine",
+            process_path=Path("process/mine/mine.process.md"),
+            run_id="run-1",
+            variables={"RUN_ID": "run-1", "CODE_REVISION": revision},
+            backend="local",
+            variant=None,
+            provenance_inputs={"code_revision": "CODE_REVISION"},
+        )
+
+    write("rev-a")
+    blocked = dispatch_config_changes_log(run_dir)
+    blocked.parent.mkdir(parents=True, exist_ok=True)
+    blocked.mkdir()
+    with pytest.raises(CLIError, match=r"Cannot record the resume change event in .*"):
+        write("rev-b")
+
+
+def test_a_damaged_changes_log_falls_back_to_the_launch_value(tmp_path: Path) -> None:
+    """A line this reader cannot interpret means "nothing recorded", never a failure."""
+    run_dir = tmp_path / "run-1" / "mine"
+    run_dir.mkdir(parents=True)
+
+    def write(revision: str) -> None:
+        _write_run_config(
+            run_dir,
+            process_name="mine",
+            process_path=Path("process/mine/mine.process.md"),
+            run_id="run-1",
+            variables={"RUN_ID": "run-1", "CODE_REVISION": revision},
+            backend="local",
+            variant=None,
+            provenance_inputs={"code_revision": "CODE_REVISION"},
+        )
+
+    write("rev-a")
+    changes = dispatch_config_changes_log(run_dir)
+    changes.parent.mkdir(parents=True, exist_ok=True)
+    changes.write_text(
+        "not json\n"
+        '{"event": "provenance_advance"}\n'
+        '{"event": "provenance_advance", "changes": [{"field": "code_revision"}]}\n',
+        encoding="utf-8",
+    )
+
+    write("rev-b")
+
+    # Nothing legible said otherwise, so the launch value is the last effective one.
+    assert _provenance_changes(run_dir)[-1] == [
+        {
+            "field": "code_revision",
+            "param": "CODE_REVISION",
+            "diff": {"old": "rev-a", "new": "rev-b"},
+        }
+    ]
+
+
+# ── The fingerprint caveat ────────────────────────────────────────
+
+
+def test_advancing_a_provenance_input_changes_only_the_fingerprints_that_bind_it(
+    tmp_path: Path,
+) -> None:
+    """Leaving resume identity does not exempt a value from step fingerprints.
+
+    A value bound through a composite step's ``with:`` stays a template in the resolved
+    plan, so advancing it leaves that step's fingerprint alone. A value substituted into
+    a resolved field such as ``env:`` is in the payload, so the step re-runs with its
+    downstream on the next resume. Absolute fingerprint values are not asserted: a
+    composite step's payload carries its absolute ``uses_path``, so its hash depends on
+    where the process files live.
+    """
+    (tmp_path / "child.process.md").write_text(
+        textwrap.dedent("""\
+            ---
+            process:
+              name: child
+              inputs:
+                rev: {param: REV, as: string}
+              steps:
+                - id: leaf
+                  mode: code
+                  command: "true"
+            ---
+            # Child
+            """),
+        encoding="utf-8",
+    )
+    process_path = tmp_path / "parent.process.md"
+    process_path.write_text(
+        textwrap.dedent("""\
+            ---
+            process:
+              name: parent
+              inputs:
+                code_revision: {param: CODE_REVISION, as: string, provenance: true}
+              deps:
+                child: {path: ./child.process.md, as: path}
+              steps:
+                - id: via-with
+                  mode: composite
+                  uses: deps.child
+                  with:
+                    rev: "{{code_revision}}"
+                - id: via-env
+                  mode: code
+                  command: "true"
+                  env:
+                    REV: "{{code_revision}}"
+            ---
+            # Parent
+            """),
+        encoding="utf-8",
+    )
+    spec = load_process_spec(process_path)
+
+    def fingerprints(revision: str) -> dict[str, str]:
+        params = expand_process_vars(
+            spec,
+            {
+                "CODE_REVISION": revision,
+                "RUN_ID": "run-1",
+                "RUNS_DIR": str(tmp_path / "runs"),
+            },
+        )
+        plan = build_plan(spec, params, process_path=process_path)
+        return {step.step_id: fingerprint_step(step) for step in plan.steps}
+
+    before, after = fingerprints("rev-a"), fingerprints("rev-b")
+
+    assert before["via-with"] == after["via-with"]
+    assert before["via-env"] != after["via-env"]
