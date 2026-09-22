@@ -6,7 +6,7 @@ status: Approved
 ---
 # Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-09-16) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-09-22) **Status:** Approved
 
 Also readable as `metaproc help design`.
 
@@ -1203,6 +1203,12 @@ mapped keys — that is what `item_keys: null` marks.
 The fallback is read-only and never written back.
 
 ## 10. Resumability and Publication Semantics
+
+These sections implement principle 7 of [metaproc-concepts.md](metaproc-concepts.md)
+§6.2: a rerun against the same `RUN_ID` is a normal operating mode that is simple,
+resumable, transparent, idempotent, and flexible.
+Reuse follows content, provenance is recorded and never used to refuse, and the harness
+records and warns about operational change rather than aborting on it.
 
 ## 10.1 Harness-Owned Publication
 

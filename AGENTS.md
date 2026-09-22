@@ -72,6 +72,10 @@ pre-push gates.
   points, and Agent Skill behavior unless the change includes a migration plan.
 - The Metabrowser plugin owns Metaproc-specific views and uses the public Metabrowser
   SDK. Do not reach into private browser globals.
+- Resume is a normal operating mode (`metaproc help concepts`, §6.2 principle 7): a
+  rerun against the same `RUN_ID` is simple, resumable, transparent, idempotent, and
+  flexible. A change on the resume path is recorded and warned about, never refused
+  unless continuing would corrupt state, and reuse follows content, never seals.
 - Run Biome and TypeScript checks through the Make targets after JavaScript, CSS, JSON,
   or plugin changes.
 
