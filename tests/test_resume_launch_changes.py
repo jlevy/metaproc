@@ -39,7 +39,12 @@ from metaproc.engine.process_scope import expand_process_vars
 from metaproc.errors import CLIError
 from metaproc.io import iter_jsonl_objects, read_yaml_file, to_yaml_string
 from metaproc.io.orchestrator_lease import acquire_lease, release_lease
-from metaproc.paths import RUN_CONFIG_FILE, STATE_DIR, dispatch_config_changes_log
+from metaproc.paths import (
+    ORCHESTRATOR_LEASE_FILE,
+    RUN_CONFIG_FILE,
+    STATE_DIR,
+    dispatch_config_changes_log,
+)
 
 _HANDLERS = '''\
 """Code handlers for the resume launch-change tests."""
@@ -239,9 +244,14 @@ def test_a_changed_variable_resumes_and_is_recorded(
 
 def test_an_unwritable_change_log_refuses_the_resume_as_a_cli_error(tmp_path: Path) -> None:
     """A change log the resume cannot append to fails with its path, not a traceback,
-    and leaves the config holding the values the resume would have replaced."""
+    and leaves the config holding the values the resume would have replaced.
+
+    The refusal comes under the lease but before anything runs, so the run is not
+    finalized again: its summaries still describe the completed launch.
+    """
     process_path, runs_dir, run_id = _launch(tmp_path)
     run_dir = runs_dir / run_id
+    summaries = {name: (run_dir / name).read_bytes() for name in _SUMMARIES}
     changes_log = dispatch_config_changes_log(run_dir)
     # A directory where the log belongs cannot be opened for append.
     changes_log.mkdir(parents=True)
@@ -257,6 +267,9 @@ def test_an_unwritable_change_log_refuses_the_resume_as_a_cli_error(tmp_path: Pa
     assert isinstance(variables, dict)
     assert variables["DATASET"] == "ds-1"
     assert sorted(_invocations(run_dir)) == ["record", "stamp"]
+    assert {name: (run_dir / name).read_bytes() for name in _SUMMARIES} == summaries
+    # The refused resume released its lease.
+    assert not (run_dir / STATE_DIR / ORCHESTRATOR_LEASE_FILE).exists()
 
 
 def test_an_edited_default_resumes_and_is_recorded(tmp_path: Path) -> None:

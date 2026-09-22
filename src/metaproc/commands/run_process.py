@@ -971,14 +971,15 @@ def _apply_resume_config_changes(
     the launch config (*launch*) this resume runs with, and
     ``_record_resume_config_change`` appends a ``dispatch_config_change`` event for any
     auth or concurrency change. Both events go to ``.logs/dispatch-config-changes.jsonl``;
-    a log this resume cannot append to raises ``CLIError`` naming it, and the caller's
-    ``finally`` releases the lease.
+    a log this resume cannot append to raises ``CLIError`` naming it.
 
-    ``run_process_command`` calls this immediately after ``acquire_lease`` succeeds and
-    inside the block that releases it. Before that point the launch can still be refused,
-    by the ``--from``/``--only`` ancestor check or by a live lease another orchestrator
-    holds, and a refused launch must leave a run that may still be executing exactly as
-    it found it. Under the lease this resume is the run's only writer.
+    ``run_process_command`` calls this immediately after ``acquire_lease`` succeeds.
+    Before that point the launch can still be refused, by the ``--from``/``--only``
+    ancestor check or by a live lease another orchestrator holds, and a refused launch
+    must leave a run that may still be executing exactly as it found it. Under the lease
+    this resume is the run's only writer. The caller releases the lease when this raises,
+    without finalizing the run: a resume refused here has run nothing, so the run's
+    summaries stay as the last run left them.
 
     Returns the launch-config changes it recorded, for the operator's warnings: empty for
     a first write (``run_config.resumed`` false) and for a resume with the recorded
@@ -6177,17 +6178,12 @@ def run_process_command(
         command_summary += f" --initial-concurrency {initial_concurrency}"
     acquire_lease(run_dir, owner_type="local", command_summary=command_summary, force=force)
 
-    # Leave SIGINT at Python's default so asyncio.Runner translates Ctrl-C into
-    # cooperative task cancellation. SIGTERM retains the hard descendant reaper.
-    install_subprocess_reaper_signal_handlers(include_sigint=False)
-
-    finalization_state = FinalizationState.COMPLETED
-    terminal_error: BaseException | None = None
+    # Find and record a resume's changes only now that this orchestrator holds the lease:
+    # a launch refused above left the run as it found it, and the config compared here is
+    # the one no other resume can rewrite until this run ends. A resume refused here has
+    # run nothing, so it releases the lease without the finalization below, which would
+    # rewrite the run's summaries as a failed run.
     try:
-        # Find and record a resume's changes only now that this orchestrator holds the
-        # lease, and inside the block that releases it: a launch refused above left the
-        # run as it found it, and the config compared here is the one no other resume can
-        # rewrite until this run ends. The operator sees the changes once recorded.
         launch_changes = _apply_resume_config_changes(
             run_dir,
             run_config,
@@ -6196,15 +6192,27 @@ def run_process_command(
             auth_flags=auth_flags_for_config,
             max_concurrency=max_concurrency,
         )
-        for field, (old, new) in launch_changes.items():
-            out.warning(_describe_launch_config_change(field, old, new))
-        if launch_changes:
-            out.warning(
-                f"Recorded {len(launch_changes)} launch-config change(s) as a "
-                "launch_config_change event in "
-                f"{paths_mod.dispatch_config_changes_log(run_dir)}; run-config.yaml now "
-                "records the launch config this resume runs with."
-            )
+    except BaseException:
+        release_lease(run_dir)
+        raise
+    # The operator sees the changes once recorded.
+    for field, (old, new) in launch_changes.items():
+        out.warning(_describe_launch_config_change(field, old, new))
+    if launch_changes:
+        out.warning(
+            f"Recorded {len(launch_changes)} launch-config change(s) as a "
+            "launch_config_change event in "
+            f"{paths_mod.dispatch_config_changes_log(run_dir)}; run-config.yaml now "
+            "records the launch config this resume runs with."
+        )
+
+    # Leave SIGINT at Python's default so asyncio.Runner translates Ctrl-C into
+    # cooperative task cancellation. SIGTERM retains the hard descendant reaper.
+    install_subprocess_reaper_signal_handlers(include_sigint=False)
+
+    finalization_state = FinalizationState.COMPLETED
+    terminal_error: BaseException | None = None
+    try:
         _publish_run_plan(
             run_dir,
             run_id=run_id,
