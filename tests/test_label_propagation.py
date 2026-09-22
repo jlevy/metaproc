@@ -404,7 +404,7 @@ class TestOrchestratorDispatchLabelPropagation:
         config = OrchestratorDispatchConfig(
             gcp=gcp_config,
             process_spec_rel="example_plugin",
-            variables={"RUN_ID": "mine-smoke-us-traded-20-2026-04-16-cloud-replaysa"},
+            variables={"RUN_ID": "mine-smoke-20-2026-04-16-cloud-replay"},
             variant="deepseek",
             poll_interval=0,
         )

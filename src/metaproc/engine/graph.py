@@ -115,8 +115,8 @@ def propagate_failure(
 
     Steps with ``on_failure == "continue"`` are excluded — they run
     regardless of upstream failure. This is the rollup / post-mortem
-    escape hatch (e.g. ``run-stats`` always emitting even on partial
-    cohort failure). All other transitive dependents are included.
+    escape hatch (e.g. ``run-stats`` always emitting even on a partly
+    failed run). All other transitive dependents are included.
     """
     by_id: dict[str, ResolvedStep] = {step.step_id: step for step in steps}
     blocked: list[str] = []

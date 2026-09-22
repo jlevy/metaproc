@@ -895,7 +895,7 @@ with `trigger: status`, recovering its resource artifacts first if they are stal
 It writes one only when the file is absent.
 Its frontmatter is `metaproc.operations:AgentOperationsSummary/v1`; the body renders the
 same values. Point it at a run root: a top-level run, a batch root, or a child run of a
-batch (one cohort, say), in place or copied elsewhere.
+batch, in place or copied elsewhere.
 A child run’s plans record their paths from the batch root and its own root plan names
 that prefix, which is how the summary tells its scopes from a copied `.state` tree.
 Tokens, meters and list cost come only from a run’s own `resource-usage-summary.md`,

@@ -2212,8 +2212,8 @@ class TestQuotaPauseResume:
     """End-to-end coverage for the QuotaExhaustedError-triggered pool pause
     This covers the dispatch-robustness contract.
 
-    Scenario: a quota signal lands mid-cohort, pool pauses until the named
-    reset_at + buffer, queued submissions block during the pause, no tickers
+    Scenario: a quota signal lands mid-dispatch, pool pauses until the named
+    reset_at + buffer, queued submissions block during the pause, no items
     are marked permanent_failure, then submissions resume cleanly.
     """
 

@@ -483,7 +483,7 @@ class TestWorkerDispatchRuntimeVars:
                     process_spec_rel="example_plugin",
                     vars_json=json.dumps(
                         {
-                            "RUN_ID": "mine-smoke-us-traded-20-2026-04-16-cloud-replaysa",
+                            "RUN_ID": "mine-smoke-20-2026-04-16-cloud-replay",
                         }
                     ),
                     run_dir=None,

@@ -36,7 +36,7 @@ RUNPOOL_POOL_START = {
 PROCESS_STEP_START = {
     "event": "step_start",
     "step_id": "mine/extract",
-    "process": "earnings",
+    "process": "example",
     "ts": "2026-07-14T00:00:01Z",
 }
 

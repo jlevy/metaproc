@@ -99,17 +99,17 @@ def test_readable_legacy_parent_does_not_adopt_new_width_classification() -> Non
 
 def test_timestamped_child_keeps_parent_time_and_derives_compact_uniqueness() -> None:
     parent = "run-20260802T193000Z.1234560000.abc123def4"
-    first = derive_timestamped_typed_child_id("run", parent, "RCKY\x1f2026-07-31")
-    assert first == derive_timestamped_typed_child_id("run", parent, "RCKY\x1f2026-07-31")
-    assert first != derive_timestamped_typed_child_id("run", parent, "GIL\x1f2026-07-31")
-    assert first == "run-20260802T193000Z.1234560000.olntjzq9um"
+    first = derive_timestamped_typed_child_id("run", parent, "item-j\x1f2026-07-31")
+    assert first == derive_timestamped_typed_child_id("run", parent, "item-j\x1f2026-07-31")
+    assert first != derive_timestamped_typed_child_id("run", parent, "item-k\x1f2026-07-31")
+    assert first == "run-20260802T193000Z.1234560000.xxb2llrg9p"
 
 
 def test_timestamped_legacy_parent_replay_preserves_complete_identity() -> None:
     parent = "run_20260802T193000Z-1234560000-abc123def4"
     assert (
-        derive_timestamped_typed_child_id("run", parent, "RCKY\x1f2026-07-31")
-        == "run_20260802T193000Z-1234560000-61yatahx77"
+        derive_timestamped_typed_child_id("run", parent, "item-j\x1f2026-07-31")
+        == "run_20260802T193000Z-1234560000-4o9c17y4jo"
     )
 
 

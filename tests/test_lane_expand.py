@@ -162,19 +162,19 @@ class TestExpandStepTaskInstances:
         )
         step = _step(
             "predict",
-            items=[{"ticker": "CAVA", "sector": "consumer"}, {"ticker": "MNDY"}],
+            items=[{"ticker": "item-a", "sector": "consumer"}, {"ticker": "item-b"}],
         )
         instances = expand_step_task_instances(step, lanes)
         assert len(instances) == 4
         task_ids = [t.task_id for t in instances]
-        assert "predict:codex-gpt55:CAVA" in task_ids
-        assert "predict:codex-gpt55:MNDY" in task_ids
-        assert "predict:claude-opus:CAVA" in task_ids
-        assert "predict:claude-opus:MNDY" in task_ids
-        cava_codex = next(t for t in instances if t.task_id == "predict:codex-gpt55:CAVA")
-        assert cava_codex.item_context == {"ticker": "CAVA", "sector": "consumer"}
-        assert cava_codex.execution_profile == "codex-gpt55"
-        assert cava_codex.replica_index == 0
+        assert "predict:codex-gpt55:item-a" in task_ids
+        assert "predict:codex-gpt55:item-b" in task_ids
+        assert "predict:claude-opus:item-a" in task_ids
+        assert "predict:claude-opus:item-b" in task_ids
+        item_a_codex = next(t for t in instances if t.task_id == "predict:codex-gpt55:item-a")
+        assert item_a_codex.item_context == {"ticker": "item-a", "sector": "consumer"}
+        assert item_a_codex.execution_profile == "codex-gpt55"
+        assert item_a_codex.replica_index == 0
 
     def test_non_fan_out_step_has_single_sentinel_instance(
         self, registry: ExecutionProfileRegistry
@@ -198,7 +198,7 @@ class TestExpandStepTaskInstances:
         assert expand_step_task_instances(step, lanes) == []
 
     def test_no_lanes_yields_no_instances(self) -> None:
-        step = _step("predict", items=[{"ticker": "CAVA"}])
+        step = _step("predict", items=[{"ticker": "item-a"}])
         assert expand_step_task_instances(step, []) == []
 
 
@@ -212,7 +212,7 @@ class TestCountTaskInstances:
             _step("scaffold"),
             _step(
                 "predict",
-                items=[{"ticker": "CAVA"}, {"ticker": "MNDY"}, {"ticker": "NVDA"}],
+                items=[{"ticker": "item-a"}, {"ticker": "item-b"}, {"ticker": "NVDA"}],
             ),
         ]
         assert count_task_instances(steps, lanes) == {"scaffold": 2, "predict": 6}

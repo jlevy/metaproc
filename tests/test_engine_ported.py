@@ -60,8 +60,7 @@ def test_resolve_templates_env_var_fallback(
 ) -> None:
     """Unresolved placeholders fall back to os.environ.
 
-    The fallback runs through ``resolve_runtime_runs_dir`` (added in
-    plan-2026-05-20-earnings-run-settings-migration.md), which resolves
+    The fallback runs through ``resolve_runtime_runs_dir``, which resolves
     ``RUNS_DIR`` to an absolute path; this test uses an absolute
     ``tmp_path`` so the assertion is environment-stable.
     """
