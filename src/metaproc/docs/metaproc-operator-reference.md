@@ -501,11 +501,15 @@ decision:
 Use `run-process --dry-run` or `metaproc deps <run>` to preview the cascade if you are
 unsure what the next launch will execute.
 
-Keep every resolved `--var` value unchanged when resuming a run ID. Metaproc rejects a
-changed, added, or removed variable before it reuses task state; start a new run ID for
-a different input set.
+Keep every resolved `--var` value unchanged when resuming a run ID, other than inputs
+the process declares `provenance: true`. Metaproc rejects a changed, added, or removed
+identity variable before it reuses task state, including one that changed because an
+input’s `default:` was edited, and the refusal names each such variable; start a new run
+ID for a different input set.
+A provenance input, such as a code revision, may advance on a resume: the resume logs
+its recorded and current values, and `run-config.yaml` keeps the launch value.
 Equivalent local and cloud Filestore mount aliases for `RUNS_DIR` are the sole
-normalization exception.
+normalization of an identity variable.
 
 ### Worked example
 

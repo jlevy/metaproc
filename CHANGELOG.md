@@ -9,6 +9,17 @@ development series.
 
 ### Added
 
+- **A resume may advance a provenance input.** A process input may declare
+  `provenance: true` to mark a value that records how a run executed, such as the code
+  revision that launched it, rather than what the run is.
+  Resume validation leaves such an input out of the identity `run-config.yaml` records,
+  under both its logical name and its `param:` alias, so a run can resume onto corrected
+  code with every completed step reused.
+  The resume logs each provenance input that moved with its recorded and current value,
+  and `run-config.yaml` keeps the launch value.
+  Every other resolved variable is still identity: changing, adding, or removing one,
+  including through an edited `default:`, refuses the resume, and the refusal now names
+  the identity variables that changed and the inputs the process declares provenance.
 - **Every run writes an operations summary.** Run finalization writes
   `operations-summary.md` (`metaproc.operations:AgentOperationsSummary/v1`) beside
   `resource-usage-summary.md`: real elapsed time, setup, per-stage shares, per-item

@@ -19,7 +19,7 @@ import shlex
 import subprocess
 import time
 import traceback
-from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Collection, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -805,6 +805,7 @@ def _write_run_config(  # noqa: PLR0913
     max_concurrency: int | None = None,
     resource_snapshot: ResourceRunSnapshot | None = None,
     step_variants: Mapping[str, str] | None = None,
+    provenance_names: Collection[str] = frozenset(),
 ) -> Path:
     """Write run-config.yaml at run creation time; record changes on resume.
 
@@ -817,8 +818,10 @@ def _write_run_config(  # noqa: PLR0913
     original config — preserves the audit trail per spec.
 
     Returns the path to the config file. Resume calls validate the process,
-    run directory, and resolved immutable variables (raises CLIError on
+    run directory, and resolved identity variables (raises CLIError on
     mismatch) but accept changes to auth / concurrency as recorded events.
+    ``provenance_names`` are the variables a resume may change; see
+    ``_validate_run_config``. The config keeps the values the run was launched with.
     The one field a resume writes back is ``step_variants``, for a config that
     records none; see ``_adopt_step_variants``.
     """
@@ -830,6 +833,7 @@ def _write_run_config(  # noqa: PLR0913
             process_name=process_name,
             run_dir=run_dir,
             variables=variables,
+            provenance_names=provenance_names,
         )
         # Compute and record any auth/concurrency diff so the
         # aggregator can render the resume timeline.
@@ -1236,12 +1240,18 @@ def _validate_run_config(
     process_name: str,
     run_dir: Path,
     variables: Mapping[str, str],
+    provenance_names: Collection[str] = frozenset(),
 ) -> None:
     """Validate existing run-config.yaml matches immutable launch parameters.
 
     Backend topology, authentication, and concurrency may change on resume.
-    Process identity, run directory, and resolved variables may not. Raises
+    Process identity, run directory, and resolved identity variables may not. Raises
     CLIError on incompatible resume attempts.
+
+    ``provenance_names`` are the variables of inputs the process declares
+    ``provenance: true`` (``ProcessSpec.provenance_input_names``). They are left out of
+    the comparison, so a resume may change, add, or drop them; each one that moves is
+    logged with its recorded and current value.
     """
     raw = read_yaml_file(config_path)
     if not isinstance(raw, dict):
@@ -1280,21 +1290,45 @@ def _validate_run_config(
             f"Corrupt run-config.yaml: {config_path}: variables must be a string-to-string mapping"
         )
 
-    saved_identity = _resume_variable_identity(cast(dict[str, str], saved_variables))
-    current_identity = _resume_variable_identity(variables)
-    changed_variables = sorted(
-        key
-        for key in set(saved_identity) | set(current_identity)
-        if saved_identity.get(key) != current_identity.get(key)
-    )
+    recorded_variables = cast(dict[str, str], saved_variables)
+    saved_identity = _resume_variable_identity(recorded_variables, provenance_names)
+    current_identity = _resume_variable_identity(variables, provenance_names)
+    changed_variables = _changed_variable_names(saved_identity, current_identity)
     if changed_variables:
-        changed_names = ", ".join(changed_variables)
+        declared_clause = (
+            f"this process declares: {', '.join(sorted(provenance_names))}"
+            if provenance_names
+            else "this process declares none"
+        )
         raise CLIError(
-            "Resume mismatch: run-config.yaml immutable variables changed: "
-            f"{changed_names}. Use the original --var values or a new RUN_ID."
+            "Resume mismatch: run-config.yaml identity variables changed: "
+            f"{', '.join(changed_variables)}. Resume with the original --var values and "
+            "input defaults, or use a new RUN_ID. Only an input the process declares "
+            f"`provenance: true` may change on a resume ({declared_clause})."
+        )
+
+    for name in _changed_variable_names(
+        {key: value for key, value in recorded_variables.items() if key in provenance_names},
+        {key: value for key, value in variables.items() if key in provenance_names},
+    ):
+        log.info(
+            "Resume advances provenance input %s: %s -> %s",
+            name,
+            _describe_variable_value(recorded_variables.get(name)),
+            _describe_variable_value(variables.get(name)),
         )
 
     log.info("Resume validated against run-config.yaml (%s)", config_path)
+
+
+def _changed_variable_names(saved: Mapping[str, str], current: Mapping[str, str]) -> list[str]:
+    """Return, sorted, every name added, removed, or given a different value."""
+    return sorted(key for key in set(saved) | set(current) if saved.get(key) != current.get(key))
+
+
+def _describe_variable_value(value: str | None) -> str:
+    """Render a variable value for the resume log, marking an absent one."""
+    return "<unset>" if value is None else repr(value)
 
 
 def _resume_run_dir_identity(run_dir: str) -> str:
@@ -1308,9 +1342,15 @@ def _resume_run_dir_identity(run_dir: str) -> str:
     return _normalize_filestore_runs_path(run_dir)
 
 
-def _resume_variable_identity(variables: Mapping[str, str]) -> dict[str, str]:
-    """Return immutable variables with known topology aliases normalized."""
-    identity = dict(variables)
+def _resume_variable_identity(
+    variables: Mapping[str, str], provenance_names: Collection[str]
+) -> dict[str, str]:
+    """Return the identity variables, with known topology aliases normalized.
+
+    Every name in ``provenance_names`` is dropped: a provenance input records how the
+    run executed, not what it is, so a resume may change it.
+    """
+    identity = {key: value for key, value in variables.items() if key not in provenance_names}
     if runs_dir := identity.get("RUNS_DIR"):
         identity["RUNS_DIR"] = _normalize_filestore_runs_path(runs_dir)
     return identity
@@ -5501,6 +5541,7 @@ def run_process_command(
         max_concurrency=max_concurrency,
         resource_snapshot=resource_snapshot,
         step_variants=step_profile_overrides,
+        provenance_names=spec.provenance_input_names,
     )
 
     out.progress(f"run-process: {spec.name} ({len(active_step_ids)} steps, {len(levels)} levels)")

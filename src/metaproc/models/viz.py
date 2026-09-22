@@ -84,6 +84,7 @@ class InputSpec(BaseModel):
     parse: ParseConfig | None = None
     required: bool = True
     default: str | int | float | bool | None = None
+    provenance: bool = False
     description: str | None = None
 
 

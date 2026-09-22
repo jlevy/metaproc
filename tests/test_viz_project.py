@@ -254,6 +254,7 @@ def test_projection_preserves_public_ports_and_resolved_execution_fields() -> No
                     "parse": ParseConfig(format="frontmatter-md", extract="progress.items"),
                     "required": False,
                     "default": "data/default-roster.md",
+                    "provenance": True,
                     "description": "Mapped work roster.",
                 }
             )
@@ -318,6 +319,7 @@ def test_projection_preserves_public_ports_and_resolved_execution_fields() -> No
         parse=ParseConfig(format="frontmatter-md", extract="progress.items"),
         required=False,
         default="data/default-roster.md",
+        provenance=True,
         description="Mapped work roster.",
     )
     assert viz.header.process_outputs["report"] == OutputSpec(

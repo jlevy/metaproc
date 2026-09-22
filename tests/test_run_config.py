@@ -117,7 +117,7 @@ class TestWriteRunConfig:
             variant=None,
         )
 
-        with pytest.raises(CLIError, match=r"immutable variables.*DATASET") as exc_info:
+        with pytest.raises(CLIError, match=r"identity variables changed: DATASET") as exc_info:
             _write_run_config(
                 run_dir,
                 process_name="mine",
@@ -146,7 +146,7 @@ class TestWriteRunConfig:
             variant=None,
         )
 
-        with pytest.raises(CLIError, match=r"immutable variables.*OPTIONAL_MODE"):
+        with pytest.raises(CLIError, match=r"identity variables changed: OPTIONAL_MODE"):
             _write_run_config(
                 run_dir,
                 process_name="mine",

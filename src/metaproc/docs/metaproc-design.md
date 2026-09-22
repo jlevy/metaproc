@@ -6,7 +6,7 @@ status: Approved
 ---
 # Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-09-16) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-09-22) **Status:** Approved
 
 Also readable as `metaproc help design`.
 
@@ -517,6 +517,31 @@ Sources of values:
 - process-relative authored files in the source tree
 - files produced earlier in the same run
 - child process specs referenced by composite steps
+
+A process-level input under `inputs:` also takes these fields:
+
+| Field | Purpose |
+| --- | --- |
+| `param` | Operator-facing name, set with `--var NAME=value`. Resolution writes the value under both this name and the input’s logical name. |
+| `required` | Whether launch validation refuses a run that leaves a `param`-backed input unset. Defaults to `true`. |
+| `default` | Literal value for an optional, `param`-backed input the operator leaves unset. |
+| `provenance` | `true` for an input that records how the run executed rather than what it is, such as the code revision that launched it. Defaults to `false`. |
+
+Every resolved input is part of a run’s identity unless it declares `provenance: true`.
+`run-config.yaml` records the resolved variables at launch, and a resume that changes,
+adds, or removes an identity variable is refused, including one whose value comes from
+an edited `default:`. A provenance input resolves and reaches the graph like any other,
+but it is left out of that comparison under both its logical name and its `param` alias,
+so a resume may advance it; the resume logs each provenance input that moved with its
+recorded and current value, and `run-config.yaml` keeps the launch value.
+Only the process knows what its inputs mean, so Metaproc marks no input as provenance on
+its own.
+
+Leaving resume identity does not exempt an input from step fingerprints (§10.3). A value
+bound through a step’s `with:` stays a template in the resolved plan, so advancing it
+leaves the fingerprint unchanged.
+A value substituted into a resolved field, such as `env:` or an output path, changes the
+fingerprint, and that step re-runs with its downstream on the next resume.
 
 Scopes are explicit:
 
