@@ -11,10 +11,13 @@ import pytest
 from strif import atomic_output_file
 
 from metaproc.commands.run_process import (
+    _apply_resume_config_changes,
     _get_git_sha,
+    _RunConfigWrite,
     _validate_run_config,
     _write_run_config,
 )
+from metaproc.dispatch.auth_pool_flags import AuthPoolFlags
 from metaproc.errors import CLIError
 from metaproc.io import read_yaml_file, to_yaml_string
 from metaproc.paths import (
@@ -24,6 +27,45 @@ from metaproc.paths import (
     RUN_LAYOUT_VERSION,
     STATE_DIR,
 )
+
+
+def _resume_run_config(  # noqa: PLR0913
+    run_dir: Path,
+    *,
+    process_name: str,
+    variables: dict[str, str],
+    variant: str | None = None,
+    auth_flags: AuthPoolFlags | None = None,
+    max_concurrency: int | None = None,
+    step_variants: dict[str, str] | None = None,
+) -> _RunConfigWrite:
+    """Resume the way ``run-process`` does: validate, then record once the lease is held.
+
+    The resume-only arguments of ``_write_run_config`` (``process_path``, ``run_id``,
+    ``backend``) are not compared, so fixed values stand in for them.
+    """
+    run_config = _write_run_config(
+        run_dir,
+        process_name=process_name,
+        process_path=Path("process/mine/mine.process.md"),
+        run_id="unused-on-resume",
+        variables=variables,
+        backend="local",
+        variant=variant,
+        auth_flags=auth_flags,
+        max_concurrency=max_concurrency,
+        step_variants=step_variants,
+    )
+    assert run_config.resumed
+    _apply_resume_config_changes(
+        run_dir,
+        run_config,
+        variables=variables,
+        step_variants=step_variants,
+        auth_flags=auth_flags,
+        max_concurrency=max_concurrency,
+    )
+    return run_config
 
 
 class TestWriteRunConfig:
@@ -122,19 +164,35 @@ class TestWriteRunConfig:
             max_concurrency=4,
         )
         before = read_yaml_file(created.path)
+        before_bytes = created.path.read_bytes()
+        resumed_variables = {"RUN_ID": "run-variable-change", "DATASET": "replacement-dataset"}
 
         resumed = _write_run_config(
             run_dir,
             process_name="mine",
             process_path=Path("process/mine/mine.process.md"),
             run_id="run-variable-change",
-            variables={"RUN_ID": "run-variable-change", "DATASET": "replacement-dataset"},
+            variables=resumed_variables,
             backend="local",
             variant="pi-glm-5",
             max_concurrency=4,
         )
 
+        # Validation reports the change and writes nothing: recording waits for the lease.
+        assert resumed.resumed
         assert resumed.changes == {"variables.DATASET": ("original-dataset", "replacement-dataset")}
+        assert resumed.path.read_bytes() == before_bytes
+        assert not (run_dir / LOGS_DIR / DISPATCH_CONFIG_CHANGES_FILE).exists()
+
+        _apply_resume_config_changes(
+            run_dir,
+            resumed,
+            variables=resumed_variables,
+            step_variants=None,
+            auth_flags=None,
+            max_concurrency=4,
+        )
+
         events = [
             json.loads(line)
             for line in (run_dir / LOGS_DIR / DISPATCH_CONFIG_CHANGES_FILE).read_text().splitlines()
@@ -170,17 +228,13 @@ class TestWriteRunConfig:
             variant=None,
         )
 
-        resumed = _write_run_config(
+        resumed = _resume_run_config(
             run_dir,
             process_name="mine",
-            process_path=Path("process/mine/mine.process.md"),
-            run_id="run-default-change",
             variables={
                 "RUN_ID": "run-default-change",
                 "OPTIONAL_MODE": "replacement-default",
             },
-            backend="local",
-            variant=None,
         )
 
         assert resumed.changes == {
@@ -193,17 +247,23 @@ class TestWriteRunConfig:
         run_dir.mkdir(parents=True)
 
         def write(step_variants: dict[str, str] | None) -> dict[str, tuple[str | None, str | None]]:
-            return _write_run_config(
+            return _resume_run_config(
                 run_dir,
                 process_name="mine",
-                process_path=Path("process/mine/mine.process.md"),
-                run_id="run-step-variants",
                 variables={"RUN_ID": "run-step-variants"},
-                backend="local",
-                variant=None,
                 step_variants=step_variants,
             ).changes
 
+        _write_run_config(
+            run_dir,
+            process_name="mine",
+            process_path=Path("process/mine/mine.process.md"),
+            run_id="run-step-variants",
+            variables={"RUN_ID": "run-step-variants"},
+            backend="local",
+            variant=None,
+            step_variants={"judge": "judge-a"},
+        )
         config_path = run_dir / STATE_DIR / RUN_CONFIG_FILE
         assert write({"judge": "judge-a"}) == {}
         assert write({"judge": "judge-b", "draft": "draft-a"}) == {
@@ -240,15 +300,7 @@ class TestWriteRunConfig:
         shutil.copytree(original, moved)
         config_bytes = (moved / STATE_DIR / RUN_CONFIG_FILE).read_bytes()
 
-        resumed = _write_run_config(
-            moved,
-            process_name="mine",
-            process_path=Path("process/mine/mine.process.md"),
-            run_id="run-moved",
-            variables={"RUN_ID": "run-moved"},
-            backend="local",
-            variant=None,
-        )
+        resumed = _resume_run_config(moved, process_name="mine", variables={"RUN_ID": "run-moved"})
 
         assert resumed.changes == {"run_dir": (str(original), str(moved))}
         events = [
@@ -553,12 +605,9 @@ class TestValidateRunConfig:
 # ── Phase 3: auth + concurrency persistence ──
 
 
-from metaproc.dispatch.auth_pool_flags import AuthPoolFlags  # noqa: E402
-
-
 class TestAuthAndConcurrencyPersistence:
     """run-config v2: persist auth: + concurrency: blocks on first write,
-    record dispatch_config_change events on resume.
+    record dispatch_config_change events on resume, once the lease is held.
     """
 
     def test_auth_block_persisted_on_first_write(self, tmp_path: Path) -> None:
@@ -643,16 +692,8 @@ class TestAuthAndConcurrencyPersistence:
             max_concurrency=25,
         )
         # Same flags on resume — no change event.
-        _write_run_config(
-            run_dir,
-            process_name="predict",
-            process_path=Path("p.md"),
-            run_id="run-1",
-            variables={},
-            backend="local",
-            variant=None,
-            auth_flags=flags,
-            max_concurrency=25,
+        _resume_run_config(
+            run_dir, process_name="predict", variables={}, auth_flags=flags, max_concurrency=25
         )
         changes_path = run_dir / LOGS_DIR / DISPATCH_CONFIG_CHANGES_FILE
         assert not changes_path.exists()
@@ -676,7 +717,8 @@ class TestAuthAndConcurrencyPersistence:
             auth_flags=flags,
             max_concurrency=25,
         )
-        _write_run_config(
+        # Validation alone records nothing; the event is written once the lease is held.
+        resumed = _write_run_config(
             run_dir,
             process_name="predict",
             process_path=Path("p.md"),
@@ -687,8 +729,17 @@ class TestAuthAndConcurrencyPersistence:
             auth_flags=flags,
             max_concurrency=10,
         )
-
         changes_path = run_dir / LOGS_DIR / DISPATCH_CONFIG_CHANGES_FILE
+        assert not changes_path.exists()
+        _apply_resume_config_changes(
+            run_dir,
+            resumed,
+            variables={},
+            step_variants=None,
+            auth_flags=flags,
+            max_concurrency=10,
+        )
+
         assert changes_path.exists()
         events = [json.loads(line) for line in changes_path.read_text().splitlines() if line]
         assert len(events) == 1
@@ -724,16 +775,7 @@ class TestAuthAndConcurrencyPersistence:
             variant=None,
             auth_flags=first_flags,
         )
-        _write_run_config(
-            run_dir,
-            process_name="predict",
-            process_path=Path("p.md"),
-            run_id="run-1",
-            variables={},
-            backend="local",
-            variant=None,
-            auth_flags=second_flags,
-        )
+        _resume_run_config(run_dir, process_name="predict", variables={}, auth_flags=second_flags)
 
         changes_path = run_dir / LOGS_DIR / DISPATCH_CONFIG_CHANGES_FILE
         assert changes_path.exists()

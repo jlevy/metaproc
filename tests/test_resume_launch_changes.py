@@ -29,6 +29,7 @@ from metaproc.cli import app
 from metaproc.commands.run_process import _validate_run_config
 from metaproc.errors import CLIError
 from metaproc.io import iter_jsonl_objects, read_yaml_file, to_yaml_string
+from metaproc.io.orchestrator_lease import acquire_lease, release_lease
 from metaproc.paths import RUN_CONFIG_FILE, STATE_DIR, dispatch_config_changes_log
 
 _HANDLERS = '''\
@@ -437,12 +438,33 @@ def test_a_different_step_variant_set_resumes_and_is_recorded(tmp_path: Path) ->
     assert sorted(_invocations(run_dir)) == ["draft", "judge", "judge"]
 
 
-# ── The --from/--only ancestor refusal ─────────────────────────────
+# ── Nothing is recorded before the orchestrator lease ──────────────
 
 
-def test_an_unsatisfied_ancestor_refusal_names_the_override(tmp_path: Path) -> None:
-    process_dir = tmp_path / "proc"
-    process_dir.mkdir()
+def test_a_resume_refused_by_a_live_lease_records_nothing(tmp_path: Path) -> None:
+    """Another orchestrator may be executing the run; its config and log stay untouched."""
+    process_path, runs_dir, run_id = _launch(tmp_path)
+    run_dir = runs_dir / run_id
+    config_bytes = (run_dir / STATE_DIR / RUN_CONFIG_FILE).read_bytes()
+
+    acquire_lease(run_dir, command_summary="live orchestrator")
+    try:
+        refused = _run(process_path, runs_dir, run_id, DATASET="ds-2")
+    finally:
+        release_lease(run_dir)
+
+    assert refused.exit_code != 0
+    assert "Another orchestrator holds the lease" in _message(refused)
+    # The operator is not told of changes that were never recorded.
+    assert "Resume changes" not in refused.output
+    assert (run_dir / STATE_DIR / RUN_CONFIG_FILE).read_bytes() == config_bytes
+    assert _events(run_dir) == []
+    assert sorted(_invocations(run_dir)) == ["record", "stamp"]
+
+
+def _write_chain_process(process_dir: Path) -> Path:
+    """Write a two-step process in which ``second`` needs ``first``."""
+    process_dir.mkdir(parents=True, exist_ok=True)
     spec = process_dir / "chain.process.md"
     spec.write_text(
         textwrap.dedent(
@@ -450,6 +472,12 @@ def test_an_unsatisfied_ancestor_refusal_names_the_override(tmp_path: Path) -> N
             ---
             process:
               name: chain
+              inputs:
+                dataset:
+                  param: DATASET
+                  as: string
+                  required: false
+                  default: ds-1
               steps:
                 - id: first
                   mode: code
@@ -461,7 +489,7 @@ def test_an_unsatisfied_ancestor_refusal_names_the_override(tmp_path: Path) -> N
                 - id: second
                   mode: code
                   needs: [first]
-                  command: /bin/sh -c 'echo second > "{{run.dir}}/second.txt"'
+                  command: /bin/sh -c 'mkdir -p "{{run.dir}}"; echo second > "{{run.dir}}/second.txt"'
                   outputs:
                     out:
                       path: "{{run.dir}}/second.txt"
@@ -472,6 +500,29 @@ def test_an_unsatisfied_ancestor_refusal_names_the_override(tmp_path: Path) -> N
         ),
         encoding="utf-8",
     )
+    return spec
+
+
+def test_a_resume_refused_for_unsatisfied_ancestors_records_nothing(tmp_path: Path) -> None:
+    spec = _write_chain_process(tmp_path / "proc")
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "chain-run"
+    # ``--force`` skips the ancestor check, so ``second`` runs and ``first`` never does.
+    launched = _run(spec, runs_dir, "chain-run", "--only", "second", "--force")
+    assert launched.exit_code == 0, _message(launched)
+    config_bytes = (run_dir / STATE_DIR / RUN_CONFIG_FILE).read_bytes()
+
+    refused = _run(spec, runs_dir, "chain-run", "--from", "second", DATASET="ds-2")
+
+    assert refused.exit_code != 0
+    assert "Unsatisfied ancestors for --from second" in _message(refused)
+    assert "Resume changes" not in refused.output
+    assert (run_dir / STATE_DIR / RUN_CONFIG_FILE).read_bytes() == config_bytes
+    assert _events(run_dir) == []
+
+
+def test_an_unsatisfied_ancestor_refusal_names_the_override(tmp_path: Path) -> None:
+    spec = _write_chain_process(tmp_path / "proc")
 
     refused = _run(spec, tmp_path / "runs", "chain-run", "--only", "second")
 
