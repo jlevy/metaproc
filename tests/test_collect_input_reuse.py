@@ -15,6 +15,8 @@ is removed.
 from __future__ import annotations
 
 import hashlib
+import json
+import logging
 import os
 import textwrap
 from collections import Counter
@@ -24,6 +26,7 @@ import pytest
 from typer.testing import CliRunner, Result
 
 from metaproc.cli import app
+from metaproc.engine.fan_in import build_outcome_manifest
 from metaproc.io import read_yaml_file, to_yaml_string
 from metaproc.io.state_io import read_collected_inputs_at, read_status_at
 from metaproc.paths import COLLECTED_INPUTS_FILE, STATE_DIR, TASKS_SUBDIR
@@ -472,6 +475,13 @@ def _record_dir(run_dir: Path, step_id: str) -> Path:
     return run_dir / STATE_DIR / TASKS_SUBDIR / step_id
 
 
+def _step_states(run_dir: Path) -> dict[str, str]:
+    """Each top-level step's state as ``metaproc status --steps`` reports it."""
+    result = CliRunner().invoke(app, ["status", str(run_dir), "--steps", "--format", "json"])
+    assert result.exit_code == 0, _message(result)
+    return {entry["step_id"]: entry["state"] for entry in json.loads(result.output)["steps"]}
+
+
 def _setup(tmp_path: Path, shape: str, *, failing: str | None) -> tuple[Path, Path, Path]:
     process_path = _write_process(tmp_path / "proc", shape)
     runs_dir = tmp_path / "runs"
@@ -507,6 +517,10 @@ def test_resume_reruns_a_consumer_whose_collected_input_changed(tmp_path: Path) 
     assert _invocations(run_dir) == Counter({"scan:a": 1, "scan:b": 2, "summarize": 2, "report": 2})
     assert (run_dir / "summary" / "summary.txt").read_text() == "a,b\n"
     assert (run_dir / "report.txt").read_text() == "report:a,b\n"
+    # The invalidation left `status.yaml.stale` beside each re-run step's new record;
+    # status reports the steps by their new completion, not by the leftover file.
+    assert (_record_dir(run_dir, "summarize") / "status.yaml.stale").exists()
+    assert _step_states(run_dir) == {"scan": "current", "summarize": "current", "report": "current"}
 
 
 @pytest.mark.parametrize(
@@ -526,7 +540,8 @@ def test_unchanged_resume_reuses_every_step(
     document = run_dir / manifest
     record = read_collected_inputs_at(_record_dir(run_dir, consumer))
     assert record is not None
-    assert record.inputs["outcomes"].sha256 == hashlib.sha256(document.read_bytes()).hexdigest()
+    rebuilt = build_outcome_manifest(run_dir, "scan", expected_keys=["a", "b"])
+    assert record.inputs["outcomes"].outcomes_sha256 == rebuilt.outcomes_sha256
     before = _invocations(run_dir)
     content = document.read_bytes()
     # Age the document so a rewrite on resume is observable.
@@ -675,14 +690,19 @@ def _item_error(run_dir: Path, step_id: str, key: str) -> str:
     return status.error
 
 
-def test_a_repeated_failure_yields_byte_identical_outcome_documents(tmp_path: Path) -> None:
-    """The attempt log path an item's error ends in is not copied into the document."""
+def test_a_repeated_failure_names_the_new_log_and_reuses_the_consumer(
+    tmp_path: Path,
+) -> None:
+    """The document carries each item's full error, attempt log path included; reuse
+    follows the outcome digest, which a new log path does not move."""
     process_path, runs_dir, run_dir = _setup(tmp_path, "composite", failing="b")
     launched = _run(process_path, runs_dir, run_dir.name)
     assert launched.exit_code != 0, _message(launched)
     document = run_dir / "consume" / "outcomes.yaml"
-    first_bytes = document.read_bytes()
     first_error = _item_error(run_dir, "scan", "b")
+    assert "(traceback: " in first_error
+    record = read_collected_inputs_at(_record_dir(run_dir, "consume"))
+    assert record is not None
 
     # The item fails again the same way, under a new attempt. The composite consumer
     # is re-entered, so its document is written again.
@@ -690,12 +710,13 @@ def test_a_repeated_failure_yields_byte_identical_outcome_documents(tmp_path: Pa
 
     assert resumed.exit_code != 0, _message(resumed)
     second_error = _item_error(run_dir, "scan", "b")
-    assert "(traceback: " in first_error
     assert first_error != second_error
-    assert document.read_bytes() == first_bytes
     items = read_yaml_file(document)["fan_in_outcomes"]["items"]
     failed = next(item for item in items if item["key"] == "b")
-    assert failed["error"] == "RuntimeError: b: failing while its marker exists"
+    assert failed["error"] == second_error
+    assert first_error not in document.read_text(encoding="utf-8")
+    # Same outcomes, so the record stands and the consumer's child step is reused.
+    assert read_collected_inputs_at(_record_dir(run_dir, "consume")) == record
     assert "Step 'consume': collected input" not in resumed.output
     assert _invocations(run_dir) == Counter({"scan:a": 1, "scan:b": 2, "select": 1, "report": 1})
 
@@ -732,23 +753,35 @@ def test_a_failed_item_that_fails_again_differently_does_not_rerun_its_consumer(
         assert "(attempt 2)" in next(item for item in items if item["key"] == "b")["error"]
 
 
-def test_a_record_without_outcome_digests_does_not_cascade(tmp_path: Path) -> None:
-    """A record written before outcome digests existed is not compared."""
+@pytest.mark.parametrize("earlier_shape", [False, True], ids=["missing", "byte-digest"])
+def test_a_record_missing_the_outcome_digest_is_treated_as_absent(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, earlier_shape: bool
+) -> None:
+    """A record without ``outcomes_sha256`` fails validation: it is logged and treated
+    like no record, so its consumer is not compared and does not cascade."""
     process_path, runs_dir, run_dir = _setup(tmp_path, "two-consumers", failing="b")
     launched = _run(process_path, runs_dir, run_dir.name)
     assert launched.exit_code != 0, _message(launched)
 
-    # Rewrite `summarize`'s record in the earlier shape, which held only the digest of
-    # the document's bytes; `tally` keeps the current shape.
+    # Rewrite `summarize`'s record without the outcome digest, or in the earlier shape
+    # that held the digest of the document's bytes instead; `tally` keeps its record.
     record_path = _record_dir(run_dir, "summarize") / COLLECTED_INPUTS_FILE
     record = read_yaml_file(record_path)
     for entry in record["inputs"].values():
-        entry.pop("outcomes_sha256", None)
+        del entry["outcomes_sha256"]
+        if earlier_shape:
+            document = Path(entry["path"])
+            entry["sha256"] = hashlib.sha256(document.read_bytes()).hexdigest()
     record_path.write_text(to_yaml_string(record), encoding="utf-8")
     (runs_dir / "fail-b").unlink()
-    resumed = _run(process_path, runs_dir, run_dir.name)
+
+    with caplog.at_level(logging.WARNING, logger="metaproc.engine.collected_inputs"):
+        resumed = _run(process_path, runs_dir, run_dir.name)
 
     assert resumed.exit_code == 0, _message(resumed)
+    warnings = [r.getMessage() for r in caplog.records if "cannot be compared" in r.getMessage()]
+    assert len(warnings) == 1
+    assert warnings[0].startswith(f"step 'summarize': unreadable {COLLECTED_INPUTS_FILE}")
     assert "Step 'summarize': collected input" not in resumed.output
     assert (run_dir / "report.txt").read_text() == "report:a\n"
     assert "Step 'tally': collected input 'outcomes' from 'scan' changed" in resumed.output

@@ -7,7 +7,6 @@ is what makes a dropped item read as full coverage.
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 
 import yaml
@@ -184,49 +183,44 @@ class TestWriteOutcomeManifest:
         assert written["upstream_step"] == "s"
         assert [i["key"] for i in written["items"]] == ["A", "B", "C"]
 
-    def test_the_digest_is_of_the_delivered_bytes_and_stable(self, tmp_path: Path) -> None:
-        """A resume compares digests, so unchanged state must render identical bytes."""
+    def test_the_manifest_is_stable_and_its_digest_follows_state(self, tmp_path: Path) -> None:
+        """Unchanged state rebuilds an equal manifest; a completed item moves the digest."""
         _task(tmp_path, "s", "A", "completed")
         _task(tmp_path, "s", "B", "failed", error="boom")
         dest = tmp_path / "out" / "outcomes.yaml"
         first = build_outcome_manifest(tmp_path, "s", expected_keys=["A", "B"])
         first.write(dest)
-        assert first.sha256 == hashlib.sha256(dest.read_bytes()).hexdigest()
+        assert dest.read_text(encoding="utf-8") == first.text
         assert build_outcome_manifest(tmp_path, "s", expected_keys=["A", "B"]) == first
 
         _task(tmp_path, "s", "B", "completed")
-        assert build_outcome_manifest(tmp_path, "s", expected_keys=["A", "B"]).sha256 != (
-            first.sha256
+        completed = build_outcome_manifest(tmp_path, "s", expected_keys=["A", "B"])
+        assert completed.outcomes_sha256 != first.outcomes_sha256
+
+    def test_an_items_error_keeps_its_attempt_log_path(self, tmp_path: Path) -> None:
+        """The document copies each error verbatim, so a consumer can open the log."""
+        error = (
+            "Process completed with failures: child: RuntimeError: refused "
+            "(traceback: .logs/tasks/child/process_att-1.log). Blocked: none "
+            "(traceback: .logs/tasks/s/B/process_att-1.log)"
         )
+        _task(tmp_path, "s", "A", "completed")
+        _task(tmp_path, "s", "B", "failed", error=error)
+        manifest = build_outcome_manifest(tmp_path, "s", expected_keys=["A", "B"])
+        failed = manifest.payload["fan_in_outcomes"]["items"][1]
+        assert failed["error"] == error
+        written = yaml.safe_load(manifest.text)["fan_in_outcomes"]["items"][1]
+        assert written["error"] == error
+        assert "(traceback: .logs/tasks/s/B/process_att-1.log)" in written["error"]
+
+        # The same failure under a new attempt names the new log; the digest holds.
+        _task(tmp_path, "s", "B", "failed", error=error.replace("att-1", "att-2"))
+        again = build_outcome_manifest(tmp_path, "s", expected_keys=["A", "B"])
+        assert "process_att-2.log" in again.text
+        assert again.outcomes_sha256 == manifest.outcomes_sha256
 
 
-class TestDeterministicManifest:
-    def test_errors_are_copied_without_attempt_evidence_paths(self, tmp_path: Path) -> None:
-        """The same failure under a new attempt must render the same bytes."""
-        first = tmp_path / "first"
-        second = tmp_path / "second"
-        for run_dir, attempt in ((first, "att-1"), (second, "att-2")):
-            _task(run_dir, "s", "A", "completed")
-            _task(
-                run_dir,
-                "s",
-                "B",
-                "failed",
-                error=(
-                    "Process completed with failures: child: RuntimeError: refused "
-                    f"(traceback: .logs/tasks/child/process_{attempt}.log). Blocked: none "
-                    f"(traceback: .logs/tasks/s/B/process_{attempt}.log)"
-                ),
-            )
-        rendered = build_outcome_manifest(first, "s")
-        assert rendered.text == build_outcome_manifest(second, "s").text
-        failed = rendered.payload["fan_in_outcomes"]["items"][1]
-        assert failed["error"] == (
-            "Process completed with failures: child: RuntimeError: refused. Blocked: none"
-        )
-        # The per-item record itself keeps the path, for readers that need the log.
-        assert "(traceback: " in collect_item_outcomes(first, "s")[1]["error"]
-
+class TestOutcomeDigest:
     def test_the_outcome_digest_follows_state_not_wording(self, tmp_path: Path) -> None:
         _task(tmp_path, "s", "A", "completed")
         _task(tmp_path, "s", "B", "failed", error="first wording")
@@ -234,7 +228,7 @@ class TestDeterministicManifest:
 
         _task(tmp_path, "s", "B", "failed", error="second wording")
         reworded = build_outcome_manifest(tmp_path, "s", expected_keys=["A", "B"])
-        assert reworded.sha256 != first.sha256
+        assert reworded.text != first.text
         assert reworded.outcomes_sha256 == first.outcomes_sha256
 
         _task(tmp_path, "s", "B", "completed")

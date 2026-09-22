@@ -45,8 +45,6 @@ _MAX_DETAIL_LINES = 12
 
 # Command and handler messages end by naming their own attempt's retained evidence.
 _EVIDENCE_SUFFIXES: tuple[tuple[str, str], ...] = (("; log: ", ")"), (" (traceback: ", ""))
-# The same two references anywhere in a message, as nested process errors carry them.
-_EVIDENCE_REFERENCES = re.compile(r" \(traceback: [^()\n]*?\.log\)|; log: [^()\n]*?\.log(?=\))")
 _MAX_SUMMARY_CAUSES = 5
 _MAX_SUMMARY_CAUSE_CHARS = 1_500
 _MAX_SUMMARY_CHARS = 4_000
@@ -228,19 +226,6 @@ def failure_cause(error: str) -> str:
     if not found or "\n" in path or not path.endswith(".log)"):
         return error
     return head + replacement
-
-
-def without_evidence_paths(error: str) -> str:
-    """Return a failure message with every attempt evidence reference removed.
-
-    ``failure_cause`` removes the one path that ends a message. A composite's error
-    nests the messages of the child steps that failed, each ending in the path of its
-    own attempt's log, so a record that must read the same whenever the same failure
-    recurs removes every ``(traceback: <path>.log)`` and every ``; log: <path>.log``
-    inside ``(...)``. The message text stays, and the attempt log stays discoverable
-    from the task's own state.
-    """
-    return _EVIDENCE_REFERENCES.sub("", error)
 
 
 def summarize_failure_causes(errors: Iterable[str]) -> str:

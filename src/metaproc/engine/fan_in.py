@@ -6,11 +6,12 @@ which makes a missing artifact and a failed item indistinguishable, and makes pa
 success look like corruption.
 
 The manifest here is derived from durable per-item state, never stored as truth: it is
-rebuilt on every read, so it cannot drift from the state it describes. Its rendering is
-deterministic: errors are copied without the attempt log paths they end in, so an item
-that fails again the same way yields byte-identical text. A resume decides whether a
-consumer's collected input changed from a digest of what the manifest says happened
-(each item's key, state and success, and the totals), not from its error wording.
+rebuilt on every read, so it cannot drift from the state it describes. Each item's
+error is copied verbatim, including the attempt log path it names, so a consumer can go
+straight to the evidence. A resume decides whether a consumer's collected input changed
+from a digest of what the manifest says happened (the upstream step, the totals, and each
+item's key, state and success), not from its bytes: error wording and log paths are not
+part of it.
 """
 
 from __future__ import annotations
@@ -26,7 +27,6 @@ import yaml
 from pydantic import ValidationError
 from strif import atomic_output_file
 
-from metaproc.engine.command_diagnostics import without_evidence_paths
 from metaproc.io.state_io import read_status_at
 from metaproc.models.runtime import StatusRecord
 
@@ -146,24 +146,25 @@ def _absent_item_outcome(run_dir: Path, key: str, upstream_chain: Sequence[str])
 
 @dataclass(frozen=True, slots=True)
 class OutcomeManifest:
-    """One fan-in document: its payload and the exact text a consumer is handed."""
+    """One fan-in document: its payload and the exact text a consumer is handed.
+
+    The document has one digest, ``outcomes_sha256``, of its outcome projection. Its
+    bytes are not digested: they carry each item's full error, and the attempt log path
+    in an error changes whenever an item fails again.
+    """
 
     payload: dict[str, Any]
     text: str
-
-    @property
-    def sha256(self) -> str:
-        """Digest of the delivered bytes, recorded for audit."""
-        return hashlib.sha256(self.text.encode("utf-8")).hexdigest()
 
     @property
     def outcomes_sha256(self) -> str:
         """Digest of what happened: the upstream step, the totals, and each item's key,
         state and success.
 
-        This is the value a resume compares. Error wording is left out, so an item that
-        fails again with a different message digests the same, while an item that
-        changes state, or appears or disappears, does not.
+        This is the value a resume compares. Error wording and attempt log paths are
+        left out, so an item that fails again with a different message or a new log
+        digests the same, while an item that changes state, or appears or disappears,
+        does not.
         """
         block = self.payload["fan_in_outcomes"]
         projection = {
@@ -186,14 +187,6 @@ class OutcomeManifest:
             tmp_path.write_text(self.text, encoding="utf-8")
 
 
-def _without_attempt_paths(outcome: dict[str, Any]) -> dict[str, Any]:
-    """An item outcome with the attempt log paths removed from its error."""
-    error = outcome.get("error")
-    if not isinstance(error, str):
-        return outcome
-    return {**outcome, "error": without_evidence_paths(error)}
-
-
 def build_outcome_manifest(
     run_dir: Path,
     upstream_step_id: str,
@@ -202,15 +195,9 @@ def build_outcome_manifest(
 ) -> OutcomeManifest:
     """Build the fan-in manifest for one upstream step without writing it.
 
-    Each item's error is copied without its attempt evidence paths, so the document
-    reads the same whenever the same failure recurs.
+    Each item's error is copied verbatim, including the attempt log path it names.
     """
-    outcomes = [
-        _without_attempt_paths(outcome)
-        for outcome in collect_item_outcomes(
-            run_dir, upstream_step_id, expected_keys, upstream_chain
-        )
-    ]
+    outcomes = collect_item_outcomes(run_dir, upstream_step_id, expected_keys, upstream_chain)
     succeeded = sum(1 for o in outcomes if o["succeeded"])
     payload = {
         "fan_in_outcomes": {
