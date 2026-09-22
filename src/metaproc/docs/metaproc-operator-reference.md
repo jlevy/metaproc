@@ -557,18 +557,19 @@ Use `run-process --dry-run` or `metaproc deps <run>` to preview the cascade if y
 unsure what the next launch will execute.
 
 A resume may change any `--var` value, including by adding or removing one or through an
-edited input `default:`, and it may change the process name, the run directory, or the
-`--step-variant` set.
-Metaproc prints a `Resume changes <field>: <old> -> <new>` warning for each change,
+edited input `default:`, and it may change the run directory or the `--step-variant`
+set. Metaproc prints a `Resume changes <field>: <old> -> <new>` warning for each change,
 appends one `launch_config_change` event listing them to
-`.logs/dispatch-config-changes.jsonl`, and rewrites the process, variables, and step
-variants in `run-config.yaml` to the values the resume ran with, so the file describes
-the latest launch and the event log holds its history.
+`.logs/dispatch-config-changes.jsonl`, and rewrites the variables and step variants in
+`run-config.yaml` to the values the resume ran with, so the file describes the latest
+launch and the event log holds its history.
 `run_dir` keeps its creation value; result paths recorded under it are rebased from that
 value. What re-runs still follows fingerprints: a value a step binds through `with:`
 leaves its fingerprint unchanged, while one substituted into `env:` or an output path
 re-runs that step and its downstream.
-Only a corrupt `run-config.yaml` refuses the resume.
+Only two things refuse the resume: a corrupt `run-config.yaml`, and a process name that
+differs from the recorded one, because every task record’s identity is
+`<process>/<RUN_ID>`; resume under the recorded name, or start a new `RUN_ID`.
 Equivalent Filestore mount aliases for `RUNS_DIR` normalize to one run directory, so
 resuming through either records no change.
 

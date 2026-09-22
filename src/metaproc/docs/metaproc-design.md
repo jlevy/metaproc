@@ -530,24 +530,26 @@ A process-level input under `inputs:` also takes these fields:
 `run-config.yaml` records every resolved input at launch, under both its logical name
 and its `param` alias.
 A resume may change any of them, including by adding or removing one or through an
-edited `default:`, and it may also change the process name, the run directory, or the
-`--step-variant` set.
+edited `default:`, and it may also change the run directory or the `--step-variant` set.
 The resume logs each change at WARNING and prints it to the operator as
 `Resume changes <field>: <old> -> <new>`, where the field is `variables.<NAME>`,
-`process`, `run_dir`, or `step_variants.<step>` and `<unset>` stands for an absent side.
+`run_dir`, or `step_variants.<step>` and `<unset>` stands for an absent side.
 It appends one `launch_config_change` event listing the changes to
 `.logs/dispatch-config-changes.jsonl`, in the `changes: [{field, diff: {old, new}}]`
 shape the `dispatch_config_change` events use.
-It then rewrites `run-config.yaml` so that its process, variables, and step variants
-hold the values the resume ran with.
+It then rewrites `run-config.yaml` so that its variables and step variants hold the
+values the resume ran with.
 `run_dir` and every other field keep their creation values: the results projection
 rebases recorded result paths from the creation `run_dir`, so a resume in a different
 directory is recorded in the event and leaves that anchor alone.
 A resume that changes nothing writes no event and rewrites nothing.
 The two canonical cloud Filestore mount roots for `RUNS_DIR` normalize to one run
 directory and record no change.
-Validation refuses only a corrupt `run-config.yaml`: one that does not read as a YAML
-mapping, or whose `variables` is not a mapping of strings to strings.
+Validation refuses a process name that differs from the recorded one, because every task
+record’s identity is `<process>/<RUN_ID>` and a renamed process cannot own the existing
+task state (the refusal names the recorded name and the two ways out: resume under that
+name, or start a new `RUN_ID`), and a corrupt `run-config.yaml`: one that does not read
+as a YAML mapping, or whose `variables` is not a mapping of strings to strings.
 
 Recording a change does not decide what re-runs; step fingerprints do (§10.3). A value
 bound through a step’s `with:` stays a template in the resolved plan, so changing it

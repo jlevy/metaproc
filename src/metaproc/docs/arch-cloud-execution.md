@@ -181,15 +181,17 @@ subset.
 **`run-config.yaml`** (`{run_dir}/.state/run-config.yaml`): written at run creation time
 with the process name, run ID, resolved variables, creation-time backend and variant,
 git SHA, and timestamp.
-On resume, a change to the process name, the run directory, or a resolved variable is
-logged and recorded rather than refused: the resume appends it as a
-`launch_config_change` event to `.logs/dispatch-config-changes.jsonl` and rewrites
-`run-config.yaml` to the values it ran with.
-The two canonical cloud Filestore mount roots normalize to one identity and record no
-change; a workstation mount path is a different run directory and is recorded as one.
-Cross-topology resume (for example, hybrid to full cloud) remains allowed because the
-backend is not part of resume identity and both topologies share the authoritative
-filesystem. Authentication and concurrency changes remain explicit timeline events.
+On resume, a change to the run directory or a resolved variable is logged and recorded
+rather than refused: the resume appends it as a `launch_config_change` event to
+`.logs/dispatch-config-changes.jsonl` and rewrites the variables in `run-config.yaml` to
+the values it ran with, keeping `run_dir` at its creation value.
+A different process name still refuses, because every task record’s identity is
+`<process>/<RUN_ID>`. The two canonical cloud Filestore mount roots normalize to one
+identity and record no change; a workstation mount path is a different run directory and
+is recorded as one. Cross-topology resume (for example, hybrid to full cloud) remains
+allowed because the backend is not part of resume identity and both topologies share the
+authoritative filesystem.
+Authentication and concurrency changes remain explicit timeline events.
 
 **`run-plan.yaml`** (`{scope_dir}/.state/run-plan.yaml`): records the exact step
 identity, scalar-or-mapped shape, canonical mapped item keys, output declarations, and

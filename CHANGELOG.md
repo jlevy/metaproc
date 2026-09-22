@@ -11,18 +11,19 @@ development series.
 
 - **A resume records launch-config changes instead of refusing.** A resume may change
   any resolved variable, including by adding or removing one or through an edited
-  `default:`, and it may change the process name, the run directory, or the
-  `--step-variant` set.
+  `default:`, and it may change the run directory or the `--step-variant` set.
   Each change is printed as a `Resume changes <field>: <old> -> <new>` warning.
   All of one resume’s changes are appended, with their old and new values, as one
   `launch_config_change` event in `.logs/dispatch-config-changes.jsonl`, and
-  `run-config.yaml` is then rewritten so its process, variables, and step variants hold
-  the values the resume ran with; `run_dir` keeps its creation value, because recorded
-  result paths are rebased from it.
-  Launch-config validation refuses only a corrupt `run-config.yaml`. What re-runs is
-  decided by step fingerprints as before: a value bound through `with:` stays a template
-  and does not re-run its step, while a value substituted into a resolved field such as
-  `env:` re-runs that step and its downstream.
+  `run-config.yaml` is then rewritten so its variables and step variants hold the values
+  the resume ran with; `run_dir` keeps its creation value, because recorded result paths
+  are rebased from it.
+  Launch-config validation refuses only a corrupt `run-config.yaml` and a process name
+  that differs from the recorded one, because every task record’s identity is
+  `<process>/<RUN_ID>`; that refusal names the recorded name and the two ways out.
+  What re-runs is decided by step fingerprints as before: a value bound through `with:`
+  stays a template and does not re-run its step, while a value substituted into a
+  resolved field such as `env:` re-runs that step and its downstream.
   A `--from` or `--only` launch refused for unsatisfied ancestors also names the
   `metaproc override <RUN_ID> <step> --process <spec> --satisfied` command that records
   an ancestor as satisfied.
