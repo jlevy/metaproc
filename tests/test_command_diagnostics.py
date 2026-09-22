@@ -264,14 +264,14 @@ def test_without_evidence_paths_drops_every_nested_attempt_path() -> None:
     child = handler_failure_message(
         RuntimeError("staging refused"),
         env={},
-        log_path=".logs/tasks/finalize/process_att-20260922T105447Z.1.aaa.log",
+        log_path=".logs/tasks/finalize/process_att-20260101T000000Z.1.aaa.log",
     ).error
     command = command_failure_message(
         1, stdout=None, stderr="boom", env={}, log_path=".logs/tasks/fetch/process_att-2.log"
     ).error
     nested = (
         f"Process completed with failures: finalize: {child}; fetch: {command}. "
-        "Blocked: none (traceback: .logs/tasks/research/BB/process_att-3.log)"
+        "Blocked: none (traceback: .logs/tasks/scan/b/process_att-3.log)"
     )
     assert without_evidence_paths(nested) == (
         "Process completed with failures: finalize: RuntimeError: staging refused; "

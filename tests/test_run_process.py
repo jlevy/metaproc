@@ -1068,26 +1068,26 @@ class TestDownstreamInvalidation:
         """A composite root and a downstream mapped composite, each with completed
         child steps, plus an artifact sharing the root's scope directory."""
         plan = _make_plan(
-            _step("promote", mode="composite"),
-            _step("depth", ["promote"], mode="composite"),
+            _step("consume", mode="composite"),
+            _step("enrich", ["consume"], mode="composite"),
         )
-        _write_completed_status(tmp_path / "promote", "select")
-        _write_completed_status(tmp_path / "promote" / "inner", "leaf")
-        _write_completed_status(tmp_path / "depth" / "AAA", "fetch")
+        _write_completed_status(tmp_path / "consume", "select")
+        _write_completed_status(tmp_path / "consume" / "inner", "leaf")
+        _write_completed_status(tmp_path / "enrich" / "a", "fetch")
         # Parent-level per-item record of the mapped composite.
-        item_state = _task_state_dir_for(tmp_path, "depth") / "AAA"
+        item_state = _task_state_dir_for(tmp_path, "enrich") / "a"
         item_state.mkdir(parents=True)
         write_status_at(
             item_state,
             StatusRecord(
                 run_id="test/run1",
-                step_id="depth",
-                item={"key": "AAA"},
+                step_id="enrich",
+                item={"key": "a"},
                 state="completed",
                 started_at="2026-04-09T00:00:00",
             ),
         )
-        (tmp_path / "promote" / "status.yaml").write_text("an output sharing the name\n")
+        (tmp_path / "consume" / "status.yaml").write_text("an output sharing the name\n")
         return plan
 
     def test_invalidate_keeps_composite_child_scopes_by_default(self, tmp_path: Path) -> None:
@@ -1095,14 +1095,14 @@ class TestDownstreamInvalidation:
         completed child steps, root or downstream."""
         plan = self._composite_scopes(tmp_path)
 
-        invalidated = _invalidate_downstream(tmp_path, "promote", plan)
+        invalidated = _invalidate_downstream(tmp_path, "consume", plan)
 
-        assert invalidated == ["depth"]
-        assert not (_task_state_dir_for(tmp_path, "depth") / "AAA" / STATUS_FILE).exists()
+        assert invalidated == ["enrich"]
+        assert not (_task_state_dir_for(tmp_path, "enrich") / "a" / STATUS_FILE).exists()
         for scope, step_id in (
-            (tmp_path / "promote", "select"),
-            (tmp_path / "promote" / "inner", "leaf"),
-            (tmp_path / "depth" / "AAA", "fetch"),
+            (tmp_path / "consume", "select"),
+            (tmp_path / "consume" / "inner", "leaf"),
+            (tmp_path / "enrich" / "a", "fetch"),
         ):
             assert (_task_state_dir_for(scope, step_id) / STATUS_FILE).exists()
 
@@ -1114,20 +1114,20 @@ class TestDownstreamInvalidation:
         plan = self._composite_scopes(tmp_path)
 
         invalidated = _invalidate_downstream(
-            tmp_path, "promote", plan, invalidate_root_children=True
+            tmp_path, "consume", plan, invalidate_root_children=True
         )
 
-        assert invalidated == ["promote", "depth"]
+        assert invalidated == ["consume", "enrich"]
         for scope, step_id in (
-            (tmp_path / "promote", "select"),
-            (tmp_path / "promote" / "inner", "leaf"),
+            (tmp_path / "consume", "select"),
+            (tmp_path / "consume" / "inner", "leaf"),
         ):
             state_dir = _task_state_dir_for(scope, step_id)
             assert not (state_dir / STATUS_FILE).exists()
             assert (state_dir / "status.yaml.stale").exists()
-        assert not (_task_state_dir_for(tmp_path, "depth") / "AAA" / STATUS_FILE).exists()
-        assert (_task_state_dir_for(tmp_path / "depth" / "AAA", "fetch") / STATUS_FILE).exists()
-        assert (tmp_path / "promote" / "status.yaml").exists()
+        assert not (_task_state_dir_for(tmp_path, "enrich") / "a" / STATUS_FILE).exists()
+        assert (_task_state_dir_for(tmp_path / "enrich" / "a", "fetch") / STATUS_FILE).exists()
+        assert (tmp_path / "consume" / "status.yaml").exists()
 
     def test_invalidate_at_canonical_task_state(self, tmp_path: Path) -> None:
         """Invalidation renames status.yaml at the per-task state location.

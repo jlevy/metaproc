@@ -93,11 +93,11 @@ def report(variables: dict[str, str], step: object) -> None:
     _write(step, "report", "report:" + Path(step.inputs["summary"].path).read_text())
 
 
-def roster_select(variables: dict[str, str], step: object) -> None:
+def build_roster(variables: dict[str, str], step: object) -> None:
     _log(variables, "roster")
     items = "".join(f"    - item: {key}\\n" for key in _succeeded(step))
-    header = "---\\nprogress:\\n  schema: metaproc:ProgressSpec/0.1\\n  process: depth\\n"
-    _write(step, "roster", header + "  items:\\n" + items + "---\\n# Depth Roster\\n")
+    header = "---\\nprogress:\\n  schema: metaproc:ProgressSpec/0.1\\n  process: enrich\\n"
+    _write(step, "roster", header + "  items:\\n" + items + "---\\n# Enrich Roster\\n")
 
 
 def fetch(variables: dict[str, str], step: object) -> None:
@@ -174,7 +174,7 @@ _TALLY = """\
 
 def _report(upstream: str) -> str:
     # `on_failure: continue` lets the downstream step run over partial outcomes on the
-    # launch, as the rollup and review steps of a real cohort do.
+    # launch, as a rollup over a partly failed fan-out typically does.
     return f"""\
 - id: report
   mode: code
@@ -190,25 +190,25 @@ def _report(upstream: str) -> str:
 
 # The consumer is a composite whose own `collect:` input is handed to its child process
 # through `with:`; the child step that reads it sees a plain file input.
-_PROMOTION = """\
-- id: promotion
+_CONSUME = """\
+- id: consume
   mode: composite
-  uses: deps.promotion_process
+  uses: deps.consume_process
   needs: [scan]
   inputs:
     outcomes:
-      path: "{{run.dir}}/promotion/outcomes.yaml"
+      path: "{{run.dir}}/consume/outcomes.yaml"
       collect: scan
       require: finished
   with:
-    outcomes: "{{run.dir}}/promotion/outcomes.yaml"
+    outcomes: "{{run.dir}}/consume/outcomes.yaml"
   outputs:
-    summary: { path: "{{run.dir}}/promotion/summary.txt", kind: file }
+    summary: { path: "{{run.dir}}/consume/summary.txt", kind: file }
 """
 
-_PROMOTION_CHILD = """\
+_CONSUME_CHILD = """\
 process:
-  name: promotion
+  name: consume
   inputs:
     outcomes: { param: OUTCOMES, as: path }
   outputs:
@@ -235,47 +235,47 @@ _STAGE = """\
 
 # A composite collector whose child writes the roster a downstream mapped composite
 # fans out over, and whose items each hold a counted provider-style fetch.
-_ROSTER_PROMOTION = """\
-- id: promotion
+_ROSTER_CONSUME = """\
+- id: consume
   mode: composite
-  uses: deps.promotion_process
+  uses: deps.consume_process
   needs: [scan]
   inputs:
     outcomes:
-      path: "{{run.dir}}/promotion/outcomes.yaml"
+      path: "{{run.dir}}/consume/outcomes.yaml"
       collect: scan
       require: finished
   with:
-    outcomes: "{{run.dir}}/promotion/outcomes.yaml"
+    outcomes: "{{run.dir}}/consume/outcomes.yaml"
   outputs:
-    roster: { path: "{{run.dir}}/promotion/depth-roster.md", kind: file }
+    roster: { path: "{{run.dir}}/consume/enrich-roster.md", kind: file }
 """
 
-_ROSTER_PROMOTION_CHILD = """\
+_ROSTER_CONSUME_CHILD = """\
 process:
-  name: promotion
+  name: consume
   inputs:
     outcomes: { param: OUTCOMES, as: path }
   outputs:
-    roster: { ref: roster-select.roster, as: path }
+    roster: { ref: build-roster.roster, as: path }
   steps:
-    - id: roster-select
+    - id: build-roster
       mode: code
-      handler: "handlers.py:roster_select"
+      handler: "handlers.py:build_roster"
       inputs:
         outcomes: { path: "{{outcomes}}", kind: file }
       outputs:
-        roster: { path: "{{run.dir}}/depth-roster.md", kind: file }
+        roster: { path: "{{run.dir}}/enrich-roster.md", kind: file }
 """
 
-_DEPTH = """\
-- id: depth
+_ENRICH = """\
+- id: enrich
   mode: composite
-  uses: deps.depth_process
-  needs: [promotion]
+  uses: deps.enrich_process
+  needs: [consume]
   on_failure: continue
   inputs:
-    roster: { ref: promotion.roster }
+    roster: { ref: consume.roster }
   for_each:
     over: roster
     bind: item
@@ -284,12 +284,12 @@ _DEPTH = """\
   with:
     item: "{{item}}"
   outputs:
-    fetched: { path: "{{run.dir}}/depth/{{item}}/fetched.txt", kind: file }
+    fetched: { path: "{{run.dir}}/enrich/{{item}}/fetched.txt", kind: file }
 """
 
-_DEPTH_CHILD = """\
+_ENRICH_CHILD = """\
 process:
-  name: depth
+  name: enrich
   inputs:
     item: { param: ITEM, as: string }
   outputs:
@@ -377,12 +377,12 @@ def _write_process(process_dir: Path, shape: str) -> Path:
 
     - ``top-level``: ``scan`` -> ``summarize`` (collects scan) -> ``report``.
     - ``two-consumers``: ``top-level`` plus ``tally``, a second collector of scan.
-    - ``composite``: ``scan`` -> ``promotion`` (a composite that collects scan and
+    - ``composite``: ``scan`` -> ``consume`` (a composite that collects scan and
       hands the document to its child step ``select``) -> ``report``.
     - ``child-collector``: one composite ``stage`` whose child process is the
       ``top-level`` shape, so the collector is a child step.
-    - ``downstream-mapped``: ``scan`` -> ``promotion`` (a composite collector whose
-      child writes a roster) -> ``depth`` (a mapped composite over that roster whose
+    - ``downstream-mapped``: ``scan`` -> ``consume`` (a composite collector whose
+      child writes a roster) -> ``enrich`` (a mapped composite over that roster whose
       items each run a counted ``fetch``).
     - ``fingerprint``: ``stage1`` (a mapped composite) -> ``stage2`` (a scalar
       composite) -> ``report``; no collector.
@@ -397,11 +397,11 @@ def _write_process(process_dir: Path, shape: str) -> Path:
             steps.append(_TALLY)
         body = _process_block("collect-reuse", roster_dep, steps)
     elif shape == "composite":
-        (process_dir / "promotion.process.md").write_text(
-            _spec_document("Promotion", _PROMOTION_CHILD), encoding="utf-8"
+        (process_dir / "consume.process.md").write_text(
+            _spec_document("Consume", _CONSUME_CHILD), encoding="utf-8"
         )
-        deps = roster_dep + "promotion_process: { path: ./promotion.process.md, as: path }\n"
-        body = _process_block("collect-reuse", deps, [_SCAN, _PROMOTION, _report("promotion")])
+        deps = roster_dep + "consume_process: { path: ./consume.process.md, as: path }\n"
+        body = _process_block("collect-reuse", deps, [_SCAN, _CONSUME, _report("consume")])
     elif shape == "child-collector":
         child = _process_block(
             "stage",
@@ -415,16 +415,16 @@ def _write_process(process_dir: Path, shape: str) -> Path:
         deps = "stage_process: { path: ./stage.process.md, as: path }\n"
         body = _process_block("collect-reuse", deps, [_STAGE])
     elif shape == "downstream-mapped":
-        for name, child in (("promotion", _ROSTER_PROMOTION_CHILD), ("depth", _DEPTH_CHILD)):
+        for name, child in (("consume", _ROSTER_CONSUME_CHILD), ("enrich", _ENRICH_CHILD)):
             (process_dir / f"{name}.process.md").write_text(
                 _spec_document(name.title(), child), encoding="utf-8"
             )
         deps = (
             roster_dep
-            + "promotion_process: { path: ./promotion.process.md, as: path }\n"
-            + "depth_process: { path: ./depth.process.md, as: path }\n"
+            + "consume_process: { path: ./consume.process.md, as: path }\n"
+            + "enrich_process: { path: ./enrich.process.md, as: path }\n"
         )
-        body = _process_block("collect-reuse", deps, [_SCAN, _ROSTER_PROMOTION, _DEPTH])
+        body = _process_block("collect-reuse", deps, [_SCAN, _ROSTER_CONSUME, _ENRICH])
     elif shape == "fingerprint":
         for name, child in (("stage1", _STAGE_ONE_CHILD), ("stage2", _STAGE_TWO_CHILD)):
             (process_dir / f"{name}.process.md").write_text(
@@ -513,7 +513,7 @@ def test_resume_reruns_a_consumer_whose_collected_input_changed(tmp_path: Path) 
     ("shape", "consumer", "manifest"),
     [
         ("top-level", "summarize", "summary/outcomes.yaml"),
-        ("composite", "promotion", "promotion/outcomes.yaml"),
+        ("composite", "consume", "consume/outcomes.yaml"),
     ],
 )
 def test_unchanged_resume_reuses_every_step(
@@ -559,13 +559,13 @@ def test_resume_reruns_a_composite_consumers_child_steps(tmp_path: Path) -> None
 
     assert resumed.exit_code == 0, _message(resumed)
     assert (
-        "Step 'promotion': collected input 'outcomes' from 'scan' changed since the step "
-        "last ran — invalidated: promotion, report"
+        "Step 'consume': collected input 'outcomes' from 'scan' changed since the step "
+        "last ran — invalidated: consume, report"
     ) in resumed.output
     # The child step reads the collected document as a plain file input; it re-runs
     # because its enclosing composite was invalidated.
     assert _invocations(run_dir) == Counter({"scan:a": 1, "scan:b": 2, "select": 2, "report": 2})
-    assert (run_dir / "promotion" / "summary.txt").read_text() == "a,b\n"
+    assert (run_dir / "consume" / "summary.txt").read_text() == "a,b\n"
     assert (run_dir / "report.txt").read_text() == "report:a,b\n"
 
     again = _run(process_path, runs_dir, run_dir.name)
@@ -639,15 +639,15 @@ def test_a_downstream_mapped_composite_reuses_its_completed_items_child_steps(
 
     assert resumed.exit_code == 0, _message(resumed)
     assert (
-        "Step 'promotion': collected input 'outcomes' from 'scan' changed since the step "
-        "last ran — invalidated: promotion, depth"
+        "Step 'consume': collected input 'outcomes' from 'scan' changed since the step "
+        "last ran — invalidated: consume, enrich"
     ) in resumed.output
     # The collector's child re-runs over the full outcomes; item a's fetch is reused and
     # only the added item b fetches.
     assert _invocations(run_dir) == Counter(
         {"scan:a": 1, "scan:b": 2, "roster": 2, "fetch:a": 1, "fetch:b": 1}
     )
-    assert (run_dir / "depth" / "b" / "fetched.txt").read_text() == "b\n"
+    assert (run_dir / "enrich" / "b" / "fetched.txt").read_text() == "b\n"
 
 
 def test_a_fingerprint_change_keeps_composites_completed_child_steps(tmp_path: Path) -> None:
@@ -680,7 +680,7 @@ def test_a_repeated_failure_yields_byte_identical_outcome_documents(tmp_path: Pa
     process_path, runs_dir, run_dir = _setup(tmp_path, "composite", failing="b")
     launched = _run(process_path, runs_dir, run_dir.name)
     assert launched.exit_code != 0, _message(launched)
-    document = run_dir / "promotion" / "outcomes.yaml"
+    document = run_dir / "consume" / "outcomes.yaml"
     first_bytes = document.read_bytes()
     first_error = _item_error(run_dir, "scan", "b")
 
@@ -696,7 +696,7 @@ def test_a_repeated_failure_yields_byte_identical_outcome_documents(tmp_path: Pa
     items = read_yaml_file(document)["fan_in_outcomes"]["items"]
     failed = next(item for item in items if item["key"] == "b")
     assert failed["error"] == "RuntimeError: b: failing while its marker exists"
-    assert "Step 'promotion': collected input" not in resumed.output
+    assert "Step 'consume': collected input" not in resumed.output
     assert _invocations(run_dir) == Counter({"scan:a": 1, "scan:b": 2, "select": 1, "report": 1})
 
 
@@ -704,7 +704,7 @@ def test_a_repeated_failure_yields_byte_identical_outcome_documents(tmp_path: Pa
     ("shape", "consumer", "manifest"),
     [
         ("top-level", "summarize", "summary/outcomes.yaml"),
-        ("composite", "select", "promotion/outcomes.yaml"),
+        ("composite", "select", "consume/outcomes.yaml"),
     ],
 )
 def test_a_failed_item_that_fails_again_differently_does_not_rerun_its_consumer(
