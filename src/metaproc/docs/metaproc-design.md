@@ -213,6 +213,7 @@ Per-task state (one runtime task per fan-out item, keyed by for_each.key):
   {run_dir}/.state/tasks/{step_id}/<item_key>/result.yaml
   {run_dir}/.state/tasks/{step_id}/<item_key>/manual-ack.yaml   (manual steps only)
   {run_dir}/.state/tasks/{step_id}/status.yaml                  (non-fan-out steps)
+  {run_dir}/.state/tasks/{step_id}/collected-inputs.yaml        (steps with collect: inputs)
 
 Logs use producer and writer scope rather than mirroring every `.state/` branch:
   {run_dir}/.logs/process-events.jsonl
@@ -1319,14 +1320,18 @@ completion and is not invalidated by this rule.
 
 `_invalidate_downstream` renames `status.yaml` to `status.yaml.stale` for each affected
 parent-level task. A composite invalidated that way is re-entered and reuses its
-completed child steps, on the fingerprint and `--force` paths alike, so a downstream
-mapped composite re-does no work for an item whose inputs did not change.
+completed child steps, so a downstream mapped composite re-does no work for an item
+whose inputs did not change.
+`--force` differs only inside the selected steps: it applies in child scopes too, so a
+selected composite re-runs its child steps, while a downstream composite outside the
+selection is renamed at the parent level and reuses its completed child steps when a
+later run reaches it.
 The collected-input cascade alone passes `invalidate_root_children=True`, which also
 renames every task in the consumer’s own child scopes, because those children read the
 changed document through `with:` paths.
 Downstream composites keep their children on that path too; a downstream collector is
 judged by its own digest comparison when the walk reaches it.
-A renamed record persists until its task runs again: reconciliation at the next
+An invalidation persists until its task runs again: reconciliation at the next
 orchestrator entry projects a terminal attempt back into `status.yaml` only when no
 `status.yaml.stale` names that attempt.
 

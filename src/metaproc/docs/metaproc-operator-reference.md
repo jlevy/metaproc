@@ -523,11 +523,14 @@ change: each is re-entered and reuses its completed child steps, so a downstream
 composite does work only for the items its new roster adds.
 A downstream step that itself collects a changed document is judged by its own digest
 comparison when the walk reaches it.
-A renamed record stays renamed until its task runs again, including across an
+An invalidated task stays invalidated until it runs again, including across an
 interrupted run.
 
 `metaproc status --steps` does not predict this invalidation, because the orchestrator
 decides it at resume from per-item state.
+The comparison runs only for steps the launch walks: a collector left out by `--only`,
+`--from`, or `--skip`, or satisfied by a `metaproc override`, is not compared, and
+`--force` re-runs the selected steps without comparing.
 Three cases are outside the rule: a step that reads a mapped step’s outputs without
 declaring `collect:`, a downstream composite whose completed child steps read changed
 content through `with:` paths, and the downstream of a composite whose own child
@@ -818,6 +821,8 @@ policies as a contract change.
 - `invalidated` — a prior `status.yaml` was renamed `.stale` by `--force`, the
   fingerprint cascade, or a changed collected input.
   The step will rerun.
+  The `.stale` file stays beside the new `status.yaml`, so the step still reads
+  `invalidated` after that re-run completes.
 - `missing` — never started, or started and failed without a recorded completion.
 - `in_flight` — actively running.
 

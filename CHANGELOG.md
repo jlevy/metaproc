@@ -67,11 +67,13 @@ development series.
   does work only for the items its new roster adds.
   An invalidated task also stays invalidated across an interrupted run: reconciliation
   no longer projects the invalidated attempt back into `status.yaml`.
+  `metaproc status --steps` names a changed collected input among the causes of an
+  `invalidated` step.
 
 - **Fan-in documents read the same when a failure recurs.** A failed item’s `error` in a
   `metaproc:FanInOutcomes/0.1` document ended in the path of its attempt’s log, so a
-  retry that failed the same way rewrote the document with new bytes, and a publication
-  gate that seals these documents refused the run tree.
+  retry that failed the same way rewrote the document with new bytes, and a downstream
+  reader that compares or seals these documents saw a change where there was none.
   The document now copies each error without its attempt evidence paths, every
   `(traceback: <path>.log)` and `; log: <path>.log` including those nested in a
   composite’s error, and keeps the message text.
