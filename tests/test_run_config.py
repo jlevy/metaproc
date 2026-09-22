@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import patch
 
@@ -38,11 +39,15 @@ def _resume_run_config(  # noqa: PLR0913
     auth_flags: AuthPoolFlags | None = None,
     max_concurrency: int | None = None,
     step_variants: dict[str, str] | None = None,
-) -> _RunConfigWrite:
+    before_lease: Callable[[], None] | None = None,
+) -> dict[str, tuple[str | None, str | None]]:
     """Resume the way ``run-process`` does: validate, then record once the lease is held.
 
-    The resume-only arguments of ``_write_run_config`` (``process_path``, ``run_id``,
-    ``backend``) are not compared, so fixed values stand in for them.
+    *before_lease* runs between the two, where ``run-process`` runs auth preflight and
+    the ancestor check and another resume may still rewrite the config. Returns the
+    changes recorded under the lease. The resume-only arguments of ``_write_run_config``
+    (``process_path``, ``run_id``, ``backend``) are not compared, so fixed values stand
+    in for them.
     """
     run_config = _write_run_config(
         run_dir,
@@ -56,16 +61,23 @@ def _resume_run_config(  # noqa: PLR0913
         max_concurrency=max_concurrency,
         step_variants=step_variants,
     )
-    assert run_config.resumed
-    _apply_resume_config_changes(
+    assert run_config == _RunConfigWrite(path=run_dir / STATE_DIR / RUN_CONFIG_FILE, resumed=True)
+    if before_lease is not None:
+        before_lease()
+    return _apply_resume_config_changes(
         run_dir,
         run_config,
+        process_name=process_name,
         variables=variables,
         step_variants=step_variants,
         auth_flags=auth_flags,
         max_concurrency=max_concurrency,
     )
-    return run_config
+
+
+def _events(run_dir: Path) -> list[dict[str, object]]:
+    path = run_dir / LOGS_DIR / DISPATCH_CONFIG_CHANGES_FILE
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
 
 class TestWriteRunConfig:
@@ -86,7 +98,7 @@ class TestWriteRunConfig:
         )
         config_path = written.path
 
-        assert written.changes == {}
+        assert not written.resumed
         assert config_path.exists()
         assert config_path == run_dir / STATE_DIR / RUN_CONFIG_FILE
 
@@ -134,20 +146,10 @@ class TestWriteRunConfig:
         ).path
         first_bytes = first_path.read_bytes()
 
-        # Second call — should validate, not overwrite.
-        second = _write_run_config(
-            run_dir,
-            process_name="mine",
-            process_path=Path("process/mine/mine.process.md"),
-            run_id="run-3",
-            variables={"RUN_ID": "run-3"},
-            backend="local",
-            variant=None,
-        )
-
-        assert second.changes == {}
-        assert second.path.read_bytes() == first_bytes
-        assert not (run_dir / LOGS_DIR / DISPATCH_CONFIG_CHANGES_FILE).exists()
+        # Second call — should validate, not overwrite, and find nothing to record.
+        assert _resume_run_config(run_dir, process_name="mine", variables={"RUN_ID": "run-3"}) == {}
+        assert first_path.read_bytes() == first_bytes
+        assert _events(run_dir) == []
 
     def test_resume_records_and_adopts_a_changed_variable(self, tmp_path: Path) -> None:
         run_dir = tmp_path / "run-variable-change" / "mine"
@@ -178,25 +180,23 @@ class TestWriteRunConfig:
             max_concurrency=4,
         )
 
-        # Validation reports the change and writes nothing: recording waits for the lease.
-        assert resumed.resumed
-        assert resumed.changes == {"variables.DATASET": ("original-dataset", "replacement-dataset")}
+        # Validation alone writes nothing: recording waits for the lease.
+        assert resumed == _RunConfigWrite(path=created.path, resumed=True)
         assert resumed.path.read_bytes() == before_bytes
-        assert not (run_dir / LOGS_DIR / DISPATCH_CONFIG_CHANGES_FILE).exists()
+        assert _events(run_dir) == []
 
-        _apply_resume_config_changes(
+        applied = _apply_resume_config_changes(
             run_dir,
             resumed,
+            process_name="mine",
             variables=resumed_variables,
             step_variants=None,
             auth_flags=None,
             max_concurrency=4,
         )
 
-        events = [
-            json.loads(line)
-            for line in (run_dir / LOGS_DIR / DISPATCH_CONFIG_CHANGES_FILE).read_text().splitlines()
-        ]
+        assert applied == {"variables.DATASET": ("original-dataset", "replacement-dataset")}
+        events = _events(run_dir)
         assert [event["event"] for event in events] == ["launch_config_change"]
         assert events[0]["changes"] == [
             {
@@ -228,7 +228,7 @@ class TestWriteRunConfig:
             variant=None,
         )
 
-        resumed = _resume_run_config(
+        applied = _resume_run_config(
             run_dir,
             process_name="mine",
             variables={
@@ -237,10 +237,60 @@ class TestWriteRunConfig:
             },
         )
 
-        assert resumed.changes == {
-            "variables.OPTIONAL_MODE": ("original-default", "replacement-default")
-        }
-        assert read_yaml_file(resumed.path)["variables"]["OPTIONAL_MODE"] == ("replacement-default")
+        assert applied == {"variables.OPTIONAL_MODE": ("original-default", "replacement-default")}
+        config = read_yaml_file(run_dir / STATE_DIR / RUN_CONFIG_FILE)
+        assert config["variables"]["OPTIONAL_MODE"] == "replacement-default"
+
+    def test_the_changes_found_under_the_lease_are_the_ones_recorded(self, tmp_path: Path) -> None:
+        """Another resume may rewrite the config between validation and the lease.
+
+        What this resume records, rewrites, and reports is compared against the config as
+        it stands under the lease, so the event carries that resume's value as ``old``.
+        """
+        run_dir = tmp_path / "run-concurrent" / "mine"
+        run_dir.mkdir(parents=True)
+        config_path = _write_run_config(
+            run_dir,
+            process_name="mine",
+            process_path=Path("process/mine/mine.process.md"),
+            run_id="run-concurrent",
+            variables={"RUN_ID": "run-concurrent", "DATASET": "ds-a"},
+            backend="local",
+            variant=None,
+        ).path
+
+        def concurrent_resume(dataset: str) -> Callable[[], None]:
+            def rewrite() -> None:
+                data = read_yaml_file(config_path)
+                data["variables"]["DATASET"] = dataset
+                config_path.write_text(to_yaml_string(data))
+
+            return rewrite
+
+        # Validated against ds-a, recorded against the ds-b a concurrent resume wrote.
+        applied = _resume_run_config(
+            run_dir,
+            process_name="mine",
+            variables={"RUN_ID": "run-concurrent", "DATASET": "ds-c"},
+            before_lease=concurrent_resume("ds-b"),
+        )
+        assert applied == {"variables.DATASET": ("ds-b", "ds-c")}
+        assert [event["changes"] for event in _events(run_dir)] == [
+            [{"field": "variables.DATASET", "diff": {"old": "ds-b", "new": "ds-c"}}]
+        ]
+        assert read_yaml_file(config_path)["variables"]["DATASET"] == "ds-c"
+
+        # A resume that matched the config before the lease still records the change a
+        # concurrent resume made, and restores the value it runs with.
+        applied = _resume_run_config(
+            run_dir,
+            process_name="mine",
+            variables={"RUN_ID": "run-concurrent", "DATASET": "ds-c"},
+            before_lease=concurrent_resume("ds-d"),
+        )
+        assert applied == {"variables.DATASET": ("ds-d", "ds-c")}
+        assert len(_events(run_dir)) == 2
+        assert read_yaml_file(config_path)["variables"]["DATASET"] == "ds-c"
 
     def test_resume_records_step_variant_changes_and_rewrites_the_set(self, tmp_path: Path) -> None:
         run_dir = tmp_path / "run-step-variants" / "mine"
@@ -252,7 +302,7 @@ class TestWriteRunConfig:
                 process_name="mine",
                 variables={"RUN_ID": "run-step-variants"},
                 step_variants=step_variants,
-            ).changes
+            )
 
         _write_run_config(
             run_dir,
@@ -300,15 +350,11 @@ class TestWriteRunConfig:
         shutil.copytree(original, moved)
         config_bytes = (moved / STATE_DIR / RUN_CONFIG_FILE).read_bytes()
 
-        resumed = _resume_run_config(moved, process_name="mine", variables={"RUN_ID": "run-moved"})
+        applied = _resume_run_config(moved, process_name="mine", variables={"RUN_ID": "run-moved"})
 
-        assert resumed.changes == {"run_dir": (str(original), str(moved))}
-        events = [
-            json.loads(line)
-            for line in (moved / LOGS_DIR / DISPATCH_CONFIG_CHANGES_FILE).read_text().splitlines()
-        ]
-        assert [event["event"] for event in events] == ["launch_config_change"]
-        assert resumed.path.read_bytes() == config_bytes
+        assert applied == {"run_dir": (str(original), str(moved))}
+        assert [event["event"] for event in _events(moved)] == ["launch_config_change"]
+        assert (moved / STATE_DIR / RUN_CONFIG_FILE).read_bytes() == config_bytes
 
     def test_resume_accepts_equivalent_runs_dir_mount_alias(self, tmp_path: Path) -> None:
         run_dir = tmp_path / "run-mount-alias" / "mine"
@@ -327,24 +373,19 @@ class TestWriteRunConfig:
             variant=None,
         )
 
-        resumed = _write_run_config(
+        applied = _resume_run_config(
             run_dir,
             process_name="mine",
-            process_path=Path("process/mine/mine.process.md"),
-            run_id="run-mount-alias",
             variables={
                 "RUN_ID": "run-mount-alias",
                 "RUNS_DIR": "/mnt/filestore/runs",
             },
-            backend="local",
-            variant=None,
         )
 
         # Two spellings of one mount are one value: no change, nothing rewritten.
-        assert resumed.changes == {}
-        assert read_yaml_file(resumed.path)["variables"]["RUNS_DIR"] == (
-            "/mnt/disks/filestore/runs"
-        )
+        assert applied == {}
+        config = read_yaml_file(run_dir / STATE_DIR / RUN_CONFIG_FILE)
+        assert config["variables"]["RUNS_DIR"] == "/mnt/disks/filestore/runs"
 
     def test_resume_rejects_different_process(self, tmp_path: Path) -> None:
         run_dir = tmp_path / "run-4" / "mine"
@@ -734,6 +775,7 @@ class TestAuthAndConcurrencyPersistence:
         _apply_resume_config_changes(
             run_dir,
             resumed,
+            process_name="predict",
             variables={},
             step_variants=None,
             auth_flags=flags,
