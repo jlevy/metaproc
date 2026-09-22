@@ -30,7 +30,7 @@ def run_dir(tmp_path: Path) -> Path:
 
 def _write_jsonl(path: Path, events: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w") as f:
+    with path.open("w", encoding="utf-8") as f:
         for e in events:
             f.write(json.dumps(e) + "\n")
 

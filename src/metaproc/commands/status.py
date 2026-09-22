@@ -100,7 +100,11 @@ def _load_plan_from_run(run_dir: Path) -> Plan | None:
 
 
 def _optional_config_string(config: dict[object, object], key: str) -> str | None:
-    """Return one non-empty immutable run-config identity field."""
+    """Return one non-empty launch-config field of ``run-config.yaml``, or ``None``.
+
+    A resume rewrites these fields to the values it runs with, so the plan rebuilt from
+    them is the one the latest launch ran.
+    """
     value = config.get(key)
     return value if isinstance(value, str) and value else None
 

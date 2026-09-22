@@ -85,7 +85,7 @@ def _make_claude_log(path: Path) -> None:
             }
         ),
     ]
-    path.write_text("\n".join(lines) + "\n")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 class _FakeRequest:

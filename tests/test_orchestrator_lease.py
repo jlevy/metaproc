@@ -72,7 +72,7 @@ class TestAcquireLease:
             "last_heartbeat_at": stale_time,
         }
         with atomic_output_file(lease_path) as tmp:
-            Path(tmp).write_text(to_yaml_string(data))
+            Path(tmp).write_text(to_yaml_string(data), encoding="utf-8")
 
         # Should take over without error.
         path = acquire_lease(tmp_path)
@@ -93,7 +93,7 @@ class TestAcquireLease:
             "last_heartbeat_at": _now_iso(),
         }
         with atomic_output_file(lease_path) as tmp:
-            Path(tmp).write_text(to_yaml_string(data))
+            Path(tmp).write_text(to_yaml_string(data), encoding="utf-8")
 
         # PID 2147483647 is not alive, so takeover should succeed.
         path = acquire_lease(tmp_path)
@@ -206,7 +206,7 @@ class TestUpdateHeartbeat:
         data = read_yaml_file(path)
         data["owner_token"] = "foreign-owner"
         with atomic_output_file(path) as tmp:
-            Path(tmp).write_text(to_yaml_string(data))
+            Path(tmp).write_text(to_yaml_string(data), encoding="utf-8")
 
         before = data["last_heartbeat_at"]
         time.sleep(0.1)
@@ -232,7 +232,7 @@ class TestReleaseLease:
         data = read_yaml_file(path)
         data["owner_token"] = "foreign-owner"
         with atomic_output_file(path) as tmp:
-            Path(tmp).write_text(to_yaml_string(data))
+            Path(tmp).write_text(to_yaml_string(data), encoding="utf-8")
 
         release_lease(tmp_path)
         assert path.exists()
@@ -254,7 +254,7 @@ class TestLeaseLiveness:
             "last_heartbeat_at": _now_iso(),
         }
         with atomic_output_file(lease_path) as tmp:
-            Path(tmp).write_text(to_yaml_string(data))
+            Path(tmp).write_text(to_yaml_string(data), encoding="utf-8")
 
         with patch("metaproc.io.orchestrator_lease.os.kill", side_effect=PermissionError):
             assert is_orchestrator_alive(tmp_path) is True

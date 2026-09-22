@@ -30,7 +30,7 @@ CODEX_JSONL = FIXTURE_DIR / "codex-sample.jsonl"
 
 def _load_fixture_events(path: Path) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
-    with path.open() as fh:
+    with path.open(encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
             if line:

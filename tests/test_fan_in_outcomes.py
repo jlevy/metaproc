@@ -11,7 +11,10 @@ from pathlib import Path
 
 import yaml
 
-from metaproc.engine.fan_in import collect_item_outcomes, write_outcome_manifest
+from metaproc.engine.fan_in import (
+    build_outcome_manifest,
+    collect_item_outcomes,
+)
 
 
 def _task(run_dir: Path, step: str, key: str, state: str, error: str = "") -> None:
@@ -166,15 +169,71 @@ class TestCollectItemOutcomes:
         assert by_key["B"]["succeeded"] is False
 
 
-class TestWriteOutcomeManifest:
+class TestOutcomeManifest:
     def test_manifest_counts_against_the_expected_roster(self, tmp_path: Path) -> None:
         _task(tmp_path, "s", "A", "completed")
         _task(tmp_path, "s", "B", "failed")
         dest = tmp_path / "out" / "outcomes.yaml"
-        payload = write_outcome_manifest(tmp_path, "s", dest, expected_keys=["A", "B", "C"])
-        block = payload["fan_in_outcomes"]
+        manifest = build_outcome_manifest(tmp_path, "s", expected_keys=["A", "B", "C"])
+        manifest.write(dest)
+        block = manifest.payload["fan_in_outcomes"]
         assert (block["total"], block["succeeded"], block["failed"]) == (3, 1, 2)
         assert dest.is_file()
         written = yaml.safe_load(dest.read_text())["fan_in_outcomes"]
         assert written["upstream_step"] == "s"
         assert [i["key"] for i in written["items"]] == ["A", "B", "C"]
+
+    def test_the_manifest_is_stable_and_its_digest_follows_state(self, tmp_path: Path) -> None:
+        """Unchanged state rebuilds an equal manifest; a completed item moves the digest."""
+        _task(tmp_path, "s", "A", "completed")
+        _task(tmp_path, "s", "B", "failed", error="boom")
+        dest = tmp_path / "out" / "outcomes.yaml"
+        first = build_outcome_manifest(tmp_path, "s", expected_keys=["A", "B"])
+        first.write(dest)
+        assert dest.read_text(encoding="utf-8") == first.text
+        assert build_outcome_manifest(tmp_path, "s", expected_keys=["A", "B"]) == first
+
+        _task(tmp_path, "s", "B", "completed")
+        completed = build_outcome_manifest(tmp_path, "s", expected_keys=["A", "B"])
+        assert completed.outcomes_sha256 != first.outcomes_sha256
+
+    def test_an_items_error_keeps_its_attempt_log_path(self, tmp_path: Path) -> None:
+        """The document copies each error verbatim, so a consumer can open the log."""
+        error = (
+            "Process completed with failures: child: RuntimeError: refused "
+            "(traceback: .logs/tasks/child/process_att-1.log). Blocked: none "
+            "(traceback: .logs/tasks/s/B/process_att-1.log)"
+        )
+        _task(tmp_path, "s", "A", "completed")
+        _task(tmp_path, "s", "B", "failed", error=error)
+        manifest = build_outcome_manifest(tmp_path, "s", expected_keys=["A", "B"])
+        failed = manifest.payload["fan_in_outcomes"]["items"][1]
+        assert failed["error"] == error
+        written = yaml.safe_load(manifest.text)["fan_in_outcomes"]["items"][1]
+        assert written["error"] == error
+        assert "(traceback: .logs/tasks/s/B/process_att-1.log)" in written["error"]
+
+        # The same failure under a new attempt names the new log; the digest holds.
+        _task(tmp_path, "s", "B", "failed", error=error.replace("att-1", "att-2"))
+        again = build_outcome_manifest(tmp_path, "s", expected_keys=["A", "B"])
+        assert "process_att-2.log" in again.text
+        assert again.outcomes_sha256 == manifest.outcomes_sha256
+
+
+class TestOutcomeDigest:
+    def test_the_outcome_digest_follows_state_not_wording(self, tmp_path: Path) -> None:
+        _task(tmp_path, "s", "A", "completed")
+        _task(tmp_path, "s", "B", "failed", error="first wording")
+        first = build_outcome_manifest(tmp_path, "s", expected_keys=["A", "B"])
+
+        _task(tmp_path, "s", "B", "failed", error="second wording")
+        reworded = build_outcome_manifest(tmp_path, "s", expected_keys=["A", "B"])
+        assert reworded.text != first.text
+        assert reworded.outcomes_sha256 == first.outcomes_sha256
+
+        _task(tmp_path, "s", "B", "completed")
+        completed = build_outcome_manifest(tmp_path, "s", expected_keys=["A", "B"])
+        assert completed.outcomes_sha256 != first.outcomes_sha256
+
+        widened = build_outcome_manifest(tmp_path, "s", expected_keys=["A", "B", "C"])
+        assert widened.outcomes_sha256 != completed.outcomes_sha256

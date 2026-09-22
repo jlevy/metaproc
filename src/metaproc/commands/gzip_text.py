@@ -249,6 +249,9 @@ def gzip_file(
     fd = os.open(str(tmp), flags, 0o644)
     try:
         try:
+            # write-contract: private-staging -- `tmp` is this function's own staging
+            # file, published to `gz` by the `os.replace` below only after the bytes
+            # are fsynced and verified.
             with os.fdopen(fd, "wb", closefd=False) as raw_fh:
                 with (
                     gzip.GzipFile(

@@ -1,8 +1,9 @@
 """Runtime state models — .state/ directory records.
 
 These models track execution state: what was launched (AttemptRecord),
-current status (StatusRecord), validated results (ResultRecord), and
-manual-step acknowledgments (ManualAckRecord).
+current status (StatusRecord), validated results (ResultRecord),
+manual-step acknowledgments (ManualAckRecord), and the fan-in documents a
+consumer was last handed (CollectedInputsRecord).
 """
 
 from __future__ import annotations
@@ -28,7 +29,10 @@ class StepState(StrEnum):
       fingerprint differs from the recorded one (operator edited the
       runbook since the last completion).
     - ``invalidated``: a prior completion record was renamed ``.stale`` by
-      ``--force`` or a fingerprint cascade — the step will rerun.
+      ``--force``, a fingerprint cascade, or a changed collected input, and no
+      ``status.yaml`` has been written beside it since — the step will rerun. Once
+      the re-run writes a new ``status.yaml``, the leftover ``.stale`` is the
+      record of a past invalidation and the step reads by its new record.
     - ``missing``: never started, or started and failed without a
       recorded completion.
     - ``in_flight``: actively running.
@@ -254,6 +258,56 @@ class ManualAckRecord(BaseModel):
     operator: str
     acknowledged_at: str
     note: str | None = None
+
+
+class CollectedInput(BaseModel):
+    """One fan-in document as a consumer was handed it."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    upstream_step: str
+    """The mapped step whose per-item outcomes the document reports."""
+
+    path: str
+    """Rendered path the document was written to."""
+
+    outcomes_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    """The document's one digest, of its outcome projection: the upstream step, the
+    totals, and each item's key, state and success. Error wording and attempt log
+    paths are not part of it, so an item that fails again with a different message or
+    a new log does not count as a change, while an item that changes state does."""
+
+
+class CollectedInputsRecord(BaseModel):
+    """The ``collect:`` inputs last delivered to a step — ``collected-inputs.yaml``.
+
+    Written in the step's task state directory each time the orchestrator
+    materializes the step's fan-in documents, before the step runs. A later run
+    against the same ``RUN_ID`` rebuilds each document from durable per-item
+    state and compares its one digest, of the outcome projection (upstream step,
+    totals, and each item's key, state and success; error wording and log paths
+    are not part of it): a difference means the step last ran over outcomes that
+    no longer hold, so the step (with a composite's own child steps) re-runs and
+    its downstream steps are invalidated. A step with no record (one that last
+    ran before the record existed) is not invalidated by this rule. A record that
+    is present but cannot be read, including one that does not validate, counts as
+    changed.
+
+    Kept apart from ``fingerprint_step``, which is definition-only: the run plan
+    publishes fingerprints at launch, and the collected documents are execution
+    state that changes as mapped items finish.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", populate_by_name=True)
+
+    schema_: Literal["metaproc:CollectedInputs/0.1"] = Field(
+        default="metaproc:CollectedInputs/0.1", alias="schema"
+    )
+    run_id: str
+    step_id: str
+    recorded_at: str
+    inputs: dict[str, CollectedInput]
+    """Keyed by the consumer's declared input name."""
 
 
 # ── Generic map-reduce item models ────────────────────────────────

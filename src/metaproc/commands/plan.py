@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import typer
-from strif import atomic_output_file
+from strif import atomic_write_text
 
 from metaproc.cli import app, get_output
 from metaproc.commands.helpers import (
@@ -80,8 +80,7 @@ def plan(
             else render_html(viz, decorators=decorators)
         )
         if output:
-            with atomic_output_file(output) as tmp_path:
-                Path(tmp_path).write_text(rendered)
+            atomic_write_text(output, rendered)
             out.progress(f"{output_format.upper()} written to {output}")
         else:
             out.data(rendered)
@@ -120,8 +119,7 @@ def plan(
     yaml_text = to_yaml_string(plan_data)
 
     if output:
-        with atomic_output_file(output) as tmp_path:
-            Path(tmp_path).write_text(yaml_text)
+        atomic_write_text(output, yaml_text)
         out.progress(f"Plan written to {output}")
     else:
         out.data(yaml_text.rstrip())

@@ -196,7 +196,7 @@ class ExecutionProfileRegistry(BaseModel):
                 return
             msg = f"profile registry file not found: {path}"
             raise ValueError(msg)
-        cls._load_text(entries, path.read_text(), source=source)
+        cls._load_text(entries, path.read_text(encoding="utf-8"), source=source)
 
     @classmethod
     def _load_text(

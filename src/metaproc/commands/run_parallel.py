@@ -21,7 +21,7 @@ from typing import Any, cast
 
 import typer
 from prettyfmt import fmt_timedelta
-from strif import atomic_output_file
+from strif import atomic_write_text
 
 from metaproc.cloud.gcp.resolve_token import resolve_gcp_token
 from metaproc.dispatch.credential_pool import (
@@ -967,10 +967,10 @@ def run_parallel(
                         exit_code = 0
                     except subprocess.CalledProcessError as exc:
                         item_logs_dir = compute_task_logs_dir(run_dir, step_def, item_vars)
-                        item_logs_dir.mkdir(parents=True, exist_ok=True)
                         log_file = item_logs_dir / f"process_{running_record.attempt_id}.log"
-                        with atomic_output_file(log_file) as tmp_path:
-                            tmp_path.write_text((exc.stdout or "") + (exc.stderr or ""))
+                        atomic_write_text(
+                            log_file, (exc.stdout or "") + (exc.stderr or ""), make_parents=True
+                        )
                         failure = command_failure_message(
                             exc.returncode,
                             stdout=exc.stdout,
@@ -981,10 +981,8 @@ def run_parallel(
                         exit_code = 1
                     except Exception as exc:  # noqa: BLE001
                         item_logs_dir = compute_task_logs_dir(run_dir, step_def, item_vars)
-                        item_logs_dir.mkdir(parents=True, exist_ok=True)
                         log_file = item_logs_dir / f"process_{running_record.attempt_id}.log"
-                        with atomic_output_file(log_file) as tmp_path:
-                            tmp_path.write_text(traceback.format_exc())
+                        atomic_write_text(log_file, traceback.format_exc(), make_parents=True)
                         failure = handler_failure_message(
                             exc, env=env, log_path=str(log_file.relative_to(run_dir))
                         )
@@ -1442,8 +1440,7 @@ def _build_prepare_launch(  # noqa: PLR0913
         adapter = get_adapter(adapter_type)
         log_path_obj = Path(log_path)
         prompt_file = log_path_obj.with_name(f"{log_path_obj.stem}-attempt{attempt}.prompt.md")
-        with atomic_output_file(prompt_file) as tmp_path:
-            Path(tmp_path).write_text(resolved_prompt)
+        atomic_write_text(prompt_file, resolved_prompt)
         cmd = adapter.build_command(
             prompt_file,
             item_runtime_config,

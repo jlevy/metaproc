@@ -51,7 +51,7 @@ JUSTIFIED_RE = re.compile(
 def scan_file(path: Path) -> list[tuple[int, str]]:
     failures: list[tuple[int, str]] = []
     try:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return failures
     all_lines = text.splitlines()

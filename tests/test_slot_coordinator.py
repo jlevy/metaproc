@@ -8,6 +8,9 @@ touching GCP or a real adapter's on-disk state.
 
 from __future__ import annotations
 
+import os
+import shutil
+import stat
 import time as _time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -746,7 +749,10 @@ class TestPreserveDiagnostics:
             "stub-cli", runs_dir=tmp_path, run_id="r", step="s", item="i", attempt=0
         )
         assert lease is not None
-        (lease.slot_dir / "stub-debug.log").write_text("DEBUG body\n")
+        debug_source = lease.slot_dir / "stub-debug.log"
+        debug_source.write_text("DEBUG body\n", encoding="utf-8")
+        debug_source.chmod(0o600)
+        os.utime(debug_source, (1_700_000_000, 1_700_000_000))
         (lease.slot_dir / "stub-trace.log").write_text("TRACE body\n")
 
         logs_dir = tmp_path / "r" / "s" / ".logs"
@@ -759,7 +765,38 @@ class TestPreserveDiagnostics:
         debug_target = logs_dir / "predict-ticker_item-m_2026-04-27T18-07-20.stub-debug.log"
         trace_target = logs_dir / "predict-ticker_item-m_2026-04-27T18-07-20.stub-trace.log"
         assert debug_target.read_text() == "DEBUG body\n"
+        assert stat.S_IMODE(debug_target.stat().st_mode) == 0o600
+        assert debug_target.stat().st_mtime_ns == debug_source.stat().st_mtime_ns
         assert trace_target.read_text() == "TRACE body\n"
+
+    def test_failed_copy_preserves_existing_diagnostic(
+        self, tmp_path: Path, pool: _InMemoryPool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        adapter = self._adapter_with_diagnostics("stub-debug.log")
+        coord = SlotCoordinator(pool, adapter_registry={"stub-cli": adapter})
+        lease = coord.acquire_slot(
+            "stub-cli", runs_dir=tmp_path, run_id="r", step="s", item="i", attempt=0
+        )
+        assert lease is not None
+        source = lease.slot_dir / "stub-debug.log"
+        source.write_text("replacement", encoding="utf-8")
+        source.chmod(0o600)
+        session_log = tmp_path / "session.jsonl"
+        target = tmp_path / "session.stub-debug.log"
+        target.write_text("original", encoding="utf-8")
+        staged_modes: list[int] = []
+
+        def fail_copy(
+            source: str | Path, destination: str | Path, *, follow_symlinks: bool = True
+        ) -> None:
+            Path(destination).write_text("partial", encoding="utf-8")
+            staged_modes.append(stat.S_IMODE(Path(destination).stat().st_mode))
+            raise OSError("injected copy failure")
+
+        monkeypatch.setattr(shutil, "copyfile", fail_copy)
+        coord.preserve_diagnostics(lease, session_log)
+        assert target.read_text(encoding="utf-8") == "original"
+        assert staged_modes == [0o600]
 
     def test_preserves_no_files_for_adapter_with_empty_set(self, tmp_path, pool):
         # codex / gemini / pi return ``()`` until they grow equivalents

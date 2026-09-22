@@ -43,7 +43,10 @@ _JSON_STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
 _MAX_DETAIL_CHARS = 1_200
 _MAX_DETAIL_LINES = 12
 
-# Command and handler messages end by naming their own attempt's retained evidence.
+# Command and handler messages end by naming their own attempt's retained evidence:
+# each entry is the marker that introduces the path and the text that replaces the
+# reference once ``failure_cause`` removes the path, so a third evidence form is
+# added here alone.
 _EVIDENCE_SUFFIXES: tuple[tuple[str, str], ...] = (("; log: ", ")"), (" (traceback: ", ""))
 _MAX_SUMMARY_CAUSES = 5
 _MAX_SUMMARY_CAUSE_CHARS = 1_500

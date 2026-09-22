@@ -64,7 +64,7 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
         "design",
         "metaproc-design",
         "How Metaproc is built: spec format, runtime artifacts, adapters, robustness.",
-        18500,
+        20500,
     ),
     Topic(
         "framework",
@@ -76,7 +76,7 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
         "operator",
         "metaproc-operator-reference",
         "Runtime CLI reference: running, monitoring, and resuming processes.",
-        9000,
+        9900,
     ),
     Topic(
         "developer",
@@ -94,7 +94,7 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
         "artifacts",
         "artifact-catalog",
         "Every runtime artifact Metaproc writes or reads: format, schema, lifecycle.",
-        1600,
+        2100,
     ),
     Topic(
         "execution-contracts",
@@ -153,8 +153,8 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
     Topic(
         "arch-file-io",
         "arch-file-io-utilities",
-        "Architecture: the curated metaproc.io surface and frontmatter gotchas.",
-        1000,
+        "Architecture: the curated metaproc.io surface, write contracts, and frontmatter gotchas.",
+        1800,
     ),
 )
 

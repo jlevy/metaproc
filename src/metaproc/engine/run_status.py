@@ -619,7 +619,10 @@ def _build_step_status_entry(
     elif state == StepState.stale and recorded is not None and current is not None:
         reason = f"definition changed (was {recorded}, now {current})"
     elif state == StepState.invalidated:
-        reason = "will rerun: marked .stale by --force or fingerprint cascade"
+        reason = (
+            "will rerun: marked .stale by --force, a fingerprint cascade, "
+            "or a changed collected input"
+        )
     elif state == StepState.in_flight:
         reason = "currently running"
 

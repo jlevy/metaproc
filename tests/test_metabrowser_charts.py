@@ -19,7 +19,7 @@ from metaproc.metabrowser_plugin.charts import extract_runpool_charts
 
 def _write_jsonl(events: Sequence[object]) -> Path:
     """Write events to a temporary JSONL file and return the path."""
-    f = tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False)
+    f = tempfile.NamedTemporaryFile(encoding="utf-8", mode="w", suffix=".jsonl", delete=False)
     for ev in events:
         f.write(json.dumps(ev) + "\n")
     f.close()

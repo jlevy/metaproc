@@ -57,7 +57,10 @@ def _all_states_run_status() -> RunStatus:
                 state=StepState.invalidated,
                 recorded_hash="e9aacccccccccccc",
                 current_hash="e9aacccccccccccc",
-                reason="will rerun: marked .stale by --force or fingerprint cascade",
+                reason=(
+                    "will rerun: marked .stale by --force, a fingerprint cascade, "
+                    "or a changed collected input"
+                ),
             ),
             StepStatusEntry(
                 step_id="edge-assessment",
@@ -84,7 +87,7 @@ Steps:
   edge-candidate-ledger   stale        d77eaaaaaaaaaaaa → e801bbbbbbbbbbbb  \
 definition changed (was d77eaaaaaaaaaaaa, now e801bbbbbbbbbbbb)
   edge-scenario-analysis  invalidated  e9aacccccccccccc → e9aacccccccccccc  \
-will rerun: marked .stale by --force or fingerprint cascade
+will rerun: marked .stale by --force, a fingerprint cascade, or a changed collected input
   edge-assessment         in_flight                ---- →             ----  currently running
   run-stats               missing                  ---- →             ----\
 """
@@ -97,7 +100,7 @@ Steps:
   edge-candidate-ledger   stale        d77eaaaaaaaaaaaa → e801bbbbbbbbbbbb  \
 definition changed (was d77eaaaaaaaaaaaa, now e801bbbbbbbbbbbb)
   edge-scenario-analysis  invalidated  e9aacccccccccccc → e9aacccccccccccc  \
-will rerun: marked .stale by --force or fingerprint cascade
+will rerun: marked .stale by --force, a fingerprint cascade, or a changed collected input
   edge-assessment         in_flight                ---- →             ----  currently running\
 """
 
