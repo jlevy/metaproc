@@ -224,6 +224,28 @@ def test_a_changed_variable_resumes_and_is_recorded(
     assert invocations.count("stamp") == 2
 
 
+def test_an_unwritable_change_log_refuses_the_resume_as_a_cli_error(tmp_path: Path) -> None:
+    """A change log the resume cannot append to fails with its path, not a traceback,
+    and leaves the config holding the values the resume would have replaced."""
+    process_path, runs_dir, run_id = _launch(tmp_path)
+    run_dir = runs_dir / run_id
+    changes_log = dispatch_config_changes_log(run_dir)
+    # A directory where the log belongs cannot be opened for append.
+    changes_log.mkdir(parents=True)
+
+    refused = _run(process_path, runs_dir, run_id, DATASET="ds-2")
+
+    assert refused.exit_code != 0
+    assert isinstance(refused.exception, CLIError), _message(refused)
+    assert str(changes_log) in str(refused.exception)
+    assert isinstance(refused.exception.__cause__, OSError)
+    assert "Traceback" not in refused.output
+    variables = _config(run_dir)["variables"]
+    assert isinstance(variables, dict)
+    assert variables["DATASET"] == "ds-1"
+    assert sorted(_invocations(run_dir)) == ["record", "stamp"]
+
+
 def test_an_edited_default_resumes_and_is_recorded(tmp_path: Path) -> None:
     process_path, runs_dir, run_id = _launch(tmp_path)
     run_dir = runs_dir / run_id

@@ -647,6 +647,48 @@ class TestValidateRunConfig:
 # ── Phase 3: auth + concurrency persistence ──
 
 
+class TestUnwritableChangeLog:
+    """A resume that cannot append its change event refuses as a ``CLIError``."""
+
+    @pytest.mark.parametrize(
+        ("variables", "max_concurrency", "event"),
+        [
+            ({"DATASET": "ds-2"}, 25, "launch_config_change"),
+            ({"DATASET": "ds-1"}, 10, "dispatch_config_change"),
+        ],
+        ids=["launch-config", "dispatch-config"],
+    )
+    def test_the_error_names_the_log_and_chains_the_cause(
+        self, tmp_path: Path, variables: dict[str, str], max_concurrency: int, event: str
+    ) -> None:
+        run_dir = tmp_path / "run-1"
+        run_dir.mkdir()
+        _write_run_config(
+            run_dir,
+            process_name="mine",
+            process_path=Path("p.md"),
+            run_id="run-1",
+            variables={"DATASET": "ds-1"},
+            backend="local",
+            variant=None,
+            max_concurrency=25,
+        )
+        changes_path = run_dir / LOGS_DIR / DISPATCH_CONFIG_CHANGES_FILE
+        # A directory where the log belongs cannot be opened for append.
+        changes_path.mkdir(parents=True)
+
+        with pytest.raises(CLIError, match=event) as exc_info:
+            _resume_run_config(
+                run_dir,
+                process_name="mine",
+                variables=variables,
+                max_concurrency=max_concurrency,
+            )
+
+        assert str(changes_path) in str(exc_info.value)
+        assert isinstance(exc_info.value.__cause__, OSError)
+
+
 class TestAuthAndConcurrencyPersistence:
     """run-config v2: persist auth: + concurrency: blocks on first write,
     record dispatch_config_change events on resume, once the lease is held.

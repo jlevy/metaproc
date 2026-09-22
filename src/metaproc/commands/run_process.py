@@ -97,6 +97,8 @@ from metaproc.engine.collected_inputs import (
     COLLECTED_INPUTS_UNREADABLE,
     changed_collected_inputs,
     collected_documents,
+    declares_collected_inputs,
+    read_collected_inputs,
     record_collected_inputs,
 )
 from metaproc.engine.command_diagnostics import (
@@ -937,7 +939,9 @@ def _apply_resume_config_changes(  # noqa: PLR0913
     ``launch_config_change`` event, ``_rewrite_launch_config`` makes the config record
     the variables and step variants this resume runs with, and
     ``_record_resume_config_change`` appends a ``dispatch_config_change`` event for any
-    auth or concurrency change. Both events go to ``.logs/dispatch-config-changes.jsonl``.
+    auth or concurrency change. Both events go to ``.logs/dispatch-config-changes.jsonl``;
+    a log this resume cannot append to raises ``CLIError`` naming it, and the caller's
+    ``finally`` releases the lease.
 
     ``run_process_command`` calls this immediately after ``acquire_lease`` succeeds and
     inside the block that releases it. Before that point the launch can still be refused,
@@ -966,8 +970,8 @@ def _apply_resume_config_changes(  # noqa: PLR0913
         variables=variables,
         step_variants=resumed_step_variants,
     )
-    # Compute and record any auth/concurrency diff so the
-    # aggregator can render the resume timeline.
+    # Compute and record any auth/concurrency diff for the resume timeline that
+    # `metaproc auth usage` renders.
     _record_resume_config_change(
         run_config.path,
         logs_dir=paths_mod.run_logs_dir(run_dir),
@@ -1227,16 +1231,36 @@ def _record_resume_config_change(
     if not changes:
         return
 
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    event = {
-        "event": "dispatch_config_change",
-        "ts": _now_iso(),
-        "changes": changes,
-    }
-    target = logs_dir / paths_mod.DISPATCH_CONFIG_CHANGES_FILE
-    with target.open("a") as fh:
-        fh.write(_json_dumps(event) + "\n")
+    _append_config_change_event(
+        logs_dir,
+        {
+            "event": "dispatch_config_change",
+            "ts": _now_iso(),
+            "changes": changes,
+        },
+    )
     log.info("Recorded dispatch_config_change: %d field(s)", len(changes))
+
+
+def _append_config_change_event(logs_dir: Path, event: Mapping[str, object]) -> None:
+    """Append one event to ``.logs/dispatch-config-changes.jsonl``.
+
+    The file is an append-only timeline, so each event is appended, never published by
+    replacing the file. A resume calls this under the orchestrator lease
+    (``_apply_resume_config_changes``), and a log it cannot write refuses the resume as
+    a ``CLIError`` that names the file, with the ``OSError`` as its cause: the event is
+    the run's only record of the values a resume replaces.
+    """
+    target = logs_dir / paths_mod.DISPATCH_CONFIG_CHANGES_FILE
+    try:
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding="utf-8") as fh:
+            fh.write(_json_dumps(event) + "\n")
+    except OSError as exc:
+        raise CLIError(
+            f"Cannot record this resume's {event['event']} event: appending to {target} "
+            f"failed ({type(exc).__name__}: {exc}). Make it appendable and resume again."
+        ) from exc
 
 
 def _record_launch_config_changes(logs_dir: Path, changes: _LaunchConfigChanges) -> None:
@@ -1244,27 +1268,30 @@ def _record_launch_config_changes(logs_dir: Path, changes: _LaunchConfigChanges)
 
     Each change is logged at WARNING (``_describe_launch_config_change``). The
     ``launch_config_change`` event goes to ``.logs/dispatch-config-changes.jsonl`` beside
-    the ``dispatch_config_change`` events, in the same ``changes: [{field, diff: {old,
-    new}}]`` shape, so one timeline shows every resume change. It is the run directory's
-    record of the values a resume replaced, because ``_rewrite_launch_config`` then makes
+    the ``dispatch_config_change`` events, so one timeline shows every resume change.
+    It lists ``changes: [{field, diff}]`` with the flat ``{old, new}`` diff that the
+    ``max_concurrency`` change of a ``dispatch_config_change`` event uses; that event's
+    ``auth`` diff is instead keyed by subfield. The event is the run directory's record
+    of the values a resume replaced, because ``_rewrite_launch_config`` then makes
     ``run-config.yaml`` hold the new ones. A resume that changes nothing writes nothing.
+    A log it cannot append to refuses the resume before the config is rewritten
+    (``_append_config_change_event``).
     """
     if not changes:
         return
     ordered = sorted(changes.items())
     for field, (old, new) in ordered:
         log.warning("%s", _describe_launch_config_change(field, old, new))
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    event = {
-        "event": "launch_config_change",
-        "ts": _now_iso(),
-        "changes": [
-            {"field": field, "diff": {"old": old, "new": new}} for field, (old, new) in ordered
-        ],
-    }
-    target = logs_dir / paths_mod.DISPATCH_CONFIG_CHANGES_FILE
-    with target.open("a") as fh:
-        fh.write(_json_dumps(event) + "\n")
+    _append_config_change_event(
+        logs_dir,
+        {
+            "event": "launch_config_change",
+            "ts": _now_iso(),
+            "changes": [
+                {"field": field, "diff": {"old": old, "new": new}} for field, (old, new) in ordered
+            ],
+        },
+    )
 
 
 def _describe_launch_config_change(field: str, old: str | None, new: str | None) -> str:
@@ -4536,14 +4563,12 @@ def _maybe_cascade_for_collected_inputs(
     as changed. Returns the step IDs whose per-task ``status.yaml`` files were renamed
     to ``.stale``.
     """
+    if not declares_collected_inputs(step):
+        return []
+    # Only the record read is guarded: an error rebuilding the documents from per-item
+    # state is not an unreadable record and propagates.
     try:
-        changed = changed_collected_inputs(
-            run_dir,
-            step,
-            step_map=step_map,
-            chains_by_member=chains_by_member,
-            variables=variables,
-        )
+        recorded = read_collected_inputs(run_dir, step.step_id)
     except COLLECTED_INPUTS_UNREADABLE as exc:
         # Absent means a run that predates the record, which keeps its legacy reuse.
         # Present but unreadable means the step ran over outcomes this process cannot
@@ -4566,6 +4591,16 @@ def _maybe_cascade_for_collected_inputs(
             f"({detail}); its collected inputs count as changed{suffix}"
         )
         return invalidated
+    if recorded is None:
+        return []
+    changed = changed_collected_inputs(
+        run_dir,
+        step,
+        step_map=step_map,
+        chains_by_member=chains_by_member,
+        variables=variables,
+        recorded=recorded,
+    )
     if not changed:
         return []
     invalidated = _cascade_invalidation(run_dir, plan, step.step_id, variables=variables)

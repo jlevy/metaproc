@@ -581,9 +581,13 @@ launch and the event log holds its history.
 value. What re-runs still follows fingerprints: a value a step binds through `with:`
 leaves its fingerprint unchanged, while one substituted into `env:` or an output path
 re-runs that step and its downstream.
-Only two things refuse the resume: a corrupt `run-config.yaml`, and a process name that
-differs from the recorded one, because every task record’s identity is
-`<process>/<RUN_ID>`; resume under the recorded name, or start a new `RUN_ID`.
+Only two launch-config findings refuse the resume: a corrupt `run-config.yaml`, and a
+process name that differs from the recorded one, because every task record’s identity is
+`<process>/<RUN_ID>`; resume under the recorded name, or start a new `RUN_ID`. A resume
+that cannot append to `.logs/dispatch-config-changes.jsonl` also stops, with an error
+naming that file, before any step runs; a `launch_config_change` event it cannot append
+stops it before it rewrites `run-config.yaml`, because that event is the only record of
+the values the resume replaces.
 Equivalent Filestore mount aliases for `RUNS_DIR` normalize to one run directory, so
 resuming through either records no change.
 

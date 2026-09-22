@@ -18,9 +18,10 @@ development series.
   `run-config.yaml` is then rewritten so its variables and step variants hold the values
   the resume ran with; `run_dir` keeps its creation value, because recorded result paths
   are rebased from it.
-  Launch-config validation refuses only a corrupt `run-config.yaml` and a process name
-  that differs from the recorded one, because every task record’s identity is
-  `<process>/<RUN_ID>`; that refusal names the recorded name and the two ways out.
+  A resume that cannot append to that file stops with an error naming it, before any
+  step runs. Launch-config validation refuses only a corrupt `run-config.yaml` and a
+  process name that differs from the recorded one, because every task record’s identity
+  is `<process>/<RUN_ID>`; that refusal names the recorded name and the two ways out.
   What re-runs is decided by step fingerprints as before: a value bound through `with:`
   stays a template and does not re-run its step, while a value substituted into a
   resolved field such as `env:` re-runs that step and its downstream.

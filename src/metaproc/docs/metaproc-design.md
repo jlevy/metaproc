@@ -535,8 +535,10 @@ The resume logs each change at WARNING and prints it to the operator as
 `Resume changes <field>: <old> -> <new>`, where the field is `variables.<NAME>`,
 `run_dir`, or `step_variants.<step>` and `<unset>` stands for an absent side.
 It appends one `launch_config_change` event listing the changes to
-`.logs/dispatch-config-changes.jsonl`, in the `changes: [{field, diff: {old, new}}]`
-shape the `dispatch_config_change` events use.
+`.logs/dispatch-config-changes.jsonl` as `changes: [{field, diff}]`, each diff the flat
+`{old, new}` pair that the `max_concurrency` change of a `dispatch_config_change` event
+uses (that event’s `auth` diff is keyed by subfield instead).
+A log the resume cannot append to refuses the resume with an error naming it.
 It then rewrites `run-config.yaml` so that its variables and step variants hold the
 values the resume ran with.
 `run_dir` and every other field keep their creation values: the results projection

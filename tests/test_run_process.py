@@ -1372,6 +1372,37 @@ class TestCollectedInputRecordReads:
         assert "invalidated:" not in out.messages[0]
         assert "count as changed" in out.messages[0]
 
+    def test_an_error_rebuilding_the_documents_is_not_an_unreadable_record(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only the record read counts as unreadable: a readable record whose documents
+        cannot be rebuilt from per-item state propagates the error and renames nothing."""
+        plan, consumer = self._consumer_plan(tmp_path)
+        document = CollectedDocument(
+            input_name="outcomes",
+            upstream_step="scan",
+            path=tmp_path / "outcomes.yaml",
+            manifest=build_outcome_manifest(tmp_path, "scan"),
+        )
+        record_collected_inputs(
+            tmp_path, run_id="test/run1", step_id="summarize", documents=[document]
+        )
+
+        def unreadable_item_state(*_args: object, **_kwargs: object) -> None:
+            raise PermissionError("item status is not readable")
+
+        monkeypatch.setattr(
+            "metaproc.engine.collected_inputs.build_outcome_manifest", unreadable_item_state
+        )
+        out = FakeOut()
+
+        with pytest.raises(PermissionError, match="item status is not readable"):
+            self._cascade(tmp_path, plan, consumer, out)
+
+        for step_id in ("summarize", "report"):
+            assert (_task_state_dir_for(tmp_path, step_id) / STATUS_FILE).exists()
+        assert out.messages == []
+
 
 # ── Ancestor verification ────────────────────────────────────────
 

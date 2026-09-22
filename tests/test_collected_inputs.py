@@ -305,6 +305,28 @@ class TestChangedCollectedInputs:
         with pytest.raises(COLLECTED_INPUTS_UNREADABLE):
             _changed(tmp_path)
 
+    def test_a_supplied_record_is_compared_without_reading_the_file(self, tmp_path: Path) -> None:
+        """A caller that has read the record passes it, and the file is not read again."""
+        _task(tmp_path, "scan", "a", "completed")
+        _task(tmp_path, "scan", "b", "failed", error="boom")
+        _deliver(tmp_path)
+        recorded = read_collected_inputs(tmp_path, "summarize")
+        assert recorded is not None
+        # The file no longer reads, so only the supplied record can be compared.
+        _write_record(tmp_path, "inputs: [unclosed\n")
+        _task(tmp_path, "scan", "b", "completed")
+
+        changed = changed_collected_inputs(
+            tmp_path,
+            _consumer(),
+            step_map={"scan": _scan()},
+            chains_by_member={},
+            variables=_variables(tmp_path),
+            recorded=recorded,
+        )
+
+        assert [document.input_name for document in changed] == ["outcomes"]
+
     def test_an_input_the_record_does_not_name_is_not_compared(self, tmp_path: Path) -> None:
         _task(tmp_path, "scan", "a", "completed")
         _task(tmp_path, "scan", "b", "failed", error="boom")

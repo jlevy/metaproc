@@ -64,6 +64,11 @@ def _now_iso() -> str:
     return datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%S")
 
 
+def declares_collected_inputs(step: ResolvedStep) -> bool:
+    """Whether *step* declares a ``collect:`` input with a path to deliver it to."""
+    return any(spec.collect and spec.path for spec in step.inputs.values())
+
+
 def collected_documents(
     target: ResolvedStep,
     *,
@@ -171,6 +176,7 @@ def changed_collected_inputs(
     step_map: Mapping[str, ResolvedStep],
     chains_by_member: Mapping[str, list[str]],
     variables: dict[str, str],
+    recorded: CollectedInputsRecord | None = None,
 ) -> list[CollectedDocument]:
     """The ``collect:`` documents *step* was last handed that durable per-item state
     no longer matches.
@@ -187,13 +193,17 @@ def changed_collected_inputs(
     no record (it last ran before the record existed), or when every recorded digest
     matches. An input the record does not name is not compared.
 
-    Raises one of ``COLLECTED_INPUTS_UNREADABLE`` when the step's record is present
-    but cannot be read, before any document is built: whether that counts as a change
-    is the caller's decision, and the orchestrator counts it as one.
+    *recorded* is the step's record when the caller has already read it; the record
+    is then not read again. Without it, the record is read here, and a record that is
+    present but cannot be read raises one of ``COLLECTED_INPUTS_UNREADABLE`` before
+    any document is built: whether that counts as a change is the caller's decision.
+    The orchestrator reads the record itself, so that only the read, not rebuilding the
+    documents, is treated as an unreadable record, and counts it as a change.
     """
-    if not any(spec.collect and spec.path for spec in step.inputs.values()):
+    if not declares_collected_inputs(step):
         return []
-    recorded = read_collected_inputs(run_dir, step.step_id)
+    if recorded is None:
+        recorded = read_collected_inputs(run_dir, step.step_id)
     if recorded is None:
         return []
     documents = collected_documents(
