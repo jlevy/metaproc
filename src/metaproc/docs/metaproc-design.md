@@ -799,9 +799,9 @@ plan:
   process: example_plugin/process/mine/mine.process.md
   params:
     RUN_ID: doc-sync-demo
-    DATASET: tech-mix-5
+    DATASET: sample-5
     RUNS_DIR: runs/local/example-workflow
-    dataset: tech-mix-5
+    dataset: sample-5
   deps:
     roster:
       path: runs/local/example-workflow/doc-sync-demo/mine/progress.md
@@ -1588,7 +1588,7 @@ make the result depend on step order in the spec.
 Failure follows the same granularity.
 An item failing partway through a chain skips its own remaining steps and touches no
 sibling, so the chain finishes with partial coverage instead of blocking the graph.
-Measured on a four-item cohort where one item fails at the second of three stages: under
+Measured on a four-item run where one item fails at the second of three stages: under
 the level walk no item completes the third stage, because the step failure blocks it
 wholesale; under an aligned chain three of four complete.
 
@@ -1664,7 +1664,7 @@ It only needs a declared items file whose parsed value is `list<map<...>>`.
 ---
 events:
   schema: "example_plugin:MineRosterDocument/0.1"
-  source_dataset: tech-mix-500
+  source_dataset: sample-500
   items:
     - event_id: AAPL_2025-Q1
       item: AAPL

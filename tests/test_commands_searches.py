@@ -94,30 +94,30 @@ def run_dir(tmp_path: Path) -> Path:
         _make_span(
             adapter="",
             step="analysis-research",
-            item="CXM",
-            ticker="CXM",
-            tool_name="company_web_research_bundle",
+            item="item-f",
+            ticker="item-f",
+            tool_name="web_research_bundle",
             tool_family="web",
             tool_operation="search",
             provider="exa",
-            query="Sprinklr CXM Q2 2026 EPS revenue consensus",
+            query="item-f quarterly revenue consensus",
             kind="provider_call",
             source="web-bundle",
-            span_id="web-bundle-CXM-exa-q001",
+            span_id="web-bundle-item-f-exa-q001",
         ),
         _make_span(
             adapter="",
             step="analysis-research",
-            item="CXM",
-            ticker="CXM",
-            tool_name="company_web_research_bundle",
+            item="item-f",
+            ticker="item-f",
+            tool_name="web_research_bundle",
             tool_family="web",
             tool_operation="fetch",
             provider="exa",
-            url="https://example.com/cxm",
+            url="https://example.com/item-f",
             kind="provider_call",
             source="web-bundle",
-            span_id="web-bundle-CXM-exa-fetch",
+            span_id="web-bundle-item-f-exa-fetch",
         ),
         # Non-web tool call -- should NOT appear in searches output
         _make_span(
@@ -182,8 +182,8 @@ class TestSearchesList:
         assert result.exit_code == 0
         assert "provider_call" in result.output
         assert "web-bundle" in result.output
-        assert "Sprinklr CXM Q2 2026" in result.output
-        assert "https://example.com/cxm" not in result.output
+        assert "item-f quarterly revenue" in result.output
+        assert "https://example.com/item-f" not in result.output
 
     def test_custom_project(self, run_dir: Path) -> None:
         result = runner.invoke(

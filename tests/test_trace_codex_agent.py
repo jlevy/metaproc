@@ -118,7 +118,7 @@ def test_codex_invocation_flips_source_to_codex_agent(run_dir: Path) -> None:
     _write_attempt(
         run_dir,
         step="research-step",
-        item_key="CAVA",
+        item_key="item-a",
         session_id="s-codex-1",
         tool_use_id="t1",
         tool_name="Read",
@@ -137,7 +137,7 @@ def test_codex_attempt_carries_execution_profile_and_artifact_namespace(run_dir:
     _write_attempt(
         run_dir,
         step="research-step",
-        item_key="CAVA",
+        item_key="item-a",
         session_id="s-codex-2",
         tool_use_id="t1",
         tool_name="Read",
@@ -162,11 +162,11 @@ def test_codex_websearch_preserves_native_query(run_dir: Path) -> None:
     _write_attempt(
         run_dir,
         step="deep-research",
-        item_key="MNDY",
+        item_key="item-b",
         session_id="s-codex-5",
         tool_use_id="search1",
         tool_name="WebSearch",
-        tool_input={"query": "MNDY enterprise customer growth Q2 2026"},
+        tool_input={"query": "item-b enterprise customer growth Q2 2026"},
         invocation_metadata=_codex_invocation(),
     )
     spans = list(ClaudeAgentExtractor().extract(run_dir, trace_id="run-codex"))
@@ -174,7 +174,7 @@ def test_codex_websearch_preserves_native_query(run_dir: Path) -> None:
     assert tool.source == "codex-agent"
     assert tool.attributes["tool.family"] == "web"
     assert tool.attributes["tool.operation"] == "search"
-    assert tool.attributes["tool.input.query"] == "MNDY enterprise customer growth Q2 2026"
+    assert tool.attributes["tool.input.query"] == "item-b enterprise customer growth Q2 2026"
     assert tool.attributes["source_origin"] == "agent_web_search"
 
 
@@ -186,7 +186,7 @@ def test_argv_fallback_when_metadata_missing(run_dir: Path) -> None:
     _write_attempt(
         run_dir,
         step="research-step",
-        item_key="CAVA",
+        item_key="item-a",
         session_id="s-codex-6",
         tool_use_id="t1",
         tool_name="Read",
@@ -204,7 +204,7 @@ def test_span_ids_are_deterministic_across_runs(run_dir: Path) -> None:
     _write_attempt(
         run_dir,
         step="research-step",
-        item_key="CAVA",
+        item_key="item-a",
         session_id="s-codex-7",
         tool_use_id="toolu_codex_1",
         tool_name="Read",

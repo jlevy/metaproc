@@ -52,9 +52,9 @@ from metaproc.models.resource_summary import (
 from metaproc.plugins.discovery import get_plugin_registry
 
 runner = CliRunner()
-_ROOT_PROCESS = "cohort"
-_ITEM_PROCESS = "author-ticker"
-_DEPTH_PROCESS = "depth-ticker"
+_ROOT_PROCESS = "pipeline"
+_ITEM_PROCESS = "author-item"
+_ENRICH_PROCESS = "enrich-item"
 
 
 # ── Fixture builders ──────────────────────────────────────────────
@@ -283,7 +283,7 @@ def _composite_run(root: Path, name: str = "run-1") -> Path:
                 "author": _step("10:00:10", "10:20:10", 1200.0),
                 "adopt": _step("10:20:10", "10:20:10", 0.0),
                 "gate": _step("10:20:10", "10:20:30", 20.0),
-                "depth": _step("10:20:30", "10:30:30", 600.0),
+                "enrich": _step("10:20:30", "10:30:30", 600.0),
                 "review": _step("10:30:30", "10:31:00", 30.0),
             },
         ),
@@ -292,7 +292,7 @@ def _composite_run(root: Path, name: str = "run-1") -> Path:
             ("author", "composite", "mapped", ["A", "B"]),
             ("adopt", "composite", "mapped", []),
             ("gate", "code", "scalar", []),
-            ("depth", "composite", "mapped", ["A", "B"]),
+            ("enrich", "composite", "mapped", ["A", "B"]),
             ("review", "code", "scalar", []),
         ],
     )
@@ -337,12 +337,12 @@ def _composite_run(root: Path, name: str = "run-1") -> Path:
             {"research": _step("10:00:10", "10:08:10", 480.0)},
         ),
     )
-    depth_a = _scope(
+    enrich_a = _scope(
         run_dir,
-        ["depth", "A"],
-        _DEPTH_PROCESS,
+        ["enrich", "A"],
+        _ENRICH_PROCESS,
         _status(
-            _DEPTH_PROCESS,
+            _ENRICH_PROCESS,
             "10:20:30",
             "10:25:30",
             {
@@ -353,15 +353,15 @@ def _composite_run(root: Path, name: str = "run-1") -> Path:
         [("fan", "code", "mapped", ["X"]), ("plan", "agent", "scalar", [])],
     )
     _yaml(
-        depth_a / ".state" / "tasks" / "fan" / "X" / "status.yaml",
+        enrich_a / ".state" / "tasks" / "fan" / "X" / "status.yaml",
         {"state": "completed", "started_at": _ts("10:20:30"), "completed_at": _ts("10:22:00")},
     )
-    depth_b = _scope(
+    enrich_b = _scope(
         run_dir,
-        ["depth", "B"],
-        _DEPTH_PROCESS,
+        ["enrich", "B"],
+        _ENRICH_PROCESS,
         _status(
-            _DEPTH_PROCESS, "10:20:40", "10:30:30", {"plan": _step("10:20:40", "10:30:30", 590.0)}
+            _ENRICH_PROCESS, "10:20:40", "10:30:30", {"plan": _step("10:20:40", "10:30:30", 590.0)}
         ),
         [("plan", "agent", "scalar", [])],
     )
@@ -404,7 +404,7 @@ def _composite_run(root: Path, name: str = "run-1") -> Path:
     _attempt(
         research_b / "attempts" / "att-6", step_id="research", number=2, disposition="succeeded"
     )
-    fan_x = depth_a / ".state" / "tasks" / "fan" / "X"
+    fan_x = enrich_a / ".state" / "tasks" / "fan" / "X"
     _attempt(
         fan_x / "attempts" / "att-7",
         step_id="fan",
@@ -415,7 +415,7 @@ def _composite_run(root: Path, name: str = "run-1") -> Path:
     )
     _attempt(fan_x / "attempts" / "att-8", step_id="fan", number=2, disposition="succeeded")
     _attempt(
-        depth_b / ".state" / "tasks" / "plan" / "attempts" / "att-9",
+        enrich_b / ".state" / "tasks" / "plan" / "attempts" / "att-9",
         step_id="plan",
         number=1,
         disposition=None,
@@ -436,12 +436,12 @@ def _composite_run(root: Path, name: str = "run-1") -> Path:
     )
     long_line = json.dumps({"type": "tool_result", "output": "x" * 6000})
     _transcript(
-        depth_a / ".logs" / "tasks" / "plan" / "plan_default_3.jsonl",
+        enrich_a / ".logs" / "tasks" / "plan" / "plan_default_3.jsonl",
         [{"type": "init"}, long_line, {"type": "message", "content": "cut off"}],
         {"metadata": {"execution_profile": "fast-model"}},
     )
     _transcript(
-        depth_b / ".logs" / "tasks" / "plan" / "plan_default_4.jsonl",
+        enrich_b / ".logs" / "tasks" / "plan" / "plan_default_4.jsonl",
         [{"type": "result", "duration_ms": 100_000, "modelUsage": {"claude-x": {}}}],
         {"argv": ["claude", "--model", "claude-x"]},
     )
@@ -478,7 +478,7 @@ def _composite_run(root: Path, name: str = "run-1") -> Path:
         [{"event": "auth_outcome", "ts": "2026-09-11T10:00:10+00:00"}],
     )
     _jsonl(
-        depth_b / ".logs" / "runpool" / "steps" / "plan" / "events.jsonl",
+        enrich_b / ".logs" / "runpool" / "steps" / "plan" / "events.jsonl",
         [
             {
                 "event": "host_admission_denied",
@@ -573,7 +573,7 @@ def test_run_setup_and_stage_figures(composite_run: Path) -> None:
 def test_per_item_chains_barriers_and_slowest(composite_run: Path) -> None:
     items = _summary(composite_run).items
     assert items is not None
-    assert items.stages == ["author", "depth"]
+    assert items.stages == ["author", "enrich"]
     chains = {chain.item_key: chain for chain in items.items}
 
     assert chains["A"].chain_running_s == 720 + 300
@@ -608,7 +608,7 @@ def test_steps_ignore_copied_state_and_split_agent_from_code(composite_run: Path
     rows = {(row.process, row.step_id): row for row in steps.rows}
 
     assert rows[(_ITEM_PROCESS, "research")].elapsed_s.count == 2
-    assert rows[(_DEPTH_PROCESS, "fan")].elapsed_s.total == 90.0
+    assert rows[(_ENRICH_PROCESS, "fan")].elapsed_s.total == 90.0
     assert rows[(_ROOT_PROCESS, "author")].elapsed_s.total == 720 + 1200
     assert steps.agent_total_s == 480 + 900 + 180 + 590
     assert steps.code_total_s == 240 + 300 + 90 + 20 + 30
@@ -633,7 +633,7 @@ def test_a_run_executed_inside_a_parent_run_keeps_its_nested_scopes(
 ) -> None:
     """Read in place or hydrated alone, the child run's scopes and transcripts are its own."""
     monkeypatch.setattr(ops, "TOOL_RESULT_CAP_BYTES", 4096)
-    prefix = ["cohorts", "week-1", "main", "run-1"]
+    prefix = ["batches", "batch-1", "main", "run-1"]
     in_place = _composite_run(tmp_path.joinpath("batch", *prefix[:-1]))
     _nest_under_parent_run(in_place, prefix)
     hydrated = tmp_path / "hydrated" / "run-1"
@@ -652,9 +652,9 @@ def test_a_run_executed_inside_a_parent_run_keeps_its_nested_scopes(
 
     # A scope whose plan names its path from the child run's own root, not the parent's,
     # is a copy from another tree and stays ignored.
-    stray = hydrated / "depth" / "B" / ".state" / "run-plan.yaml"
+    stray = hydrated / "enrich" / "B" / ".state" / "run-plan.yaml"
     document = yaml.safe_load(stray.read_text())
-    document["run_plan"]["scope_path"] = ["depth", "B"]
+    document["run_plan"]["scope_path"] = ["enrich", "B"]
     stray.write_text(to_yaml_string(document))
     steps = _summary(hydrated).steps
     assert steps is not None
@@ -706,7 +706,7 @@ def test_agents_read_transcript_results_models_and_capped_lines(composite_run: P
     }
     assert agents.model_mismatches == 1
     assert agents.tool_results_at_cap == 1
-    assert agents.oversized_transcripts == ["depth/A/.logs/tasks/plan/plan_default_3.jsonl"]
+    assert agents.oversized_transcripts == ["enrich/A/.logs/tasks/plan/plan_default_3.jsonl"]
     assert agents.tokens is not None
     assert agents.tokens.input_tokens == 1000
     assert [meter.coverage.value for meter in agents.meters] == ["measured", "unmeasured"]
@@ -785,25 +785,25 @@ def test_items_pair_stages_in_start_order_and_never_report_a_negative_wait(
     composite_run: Path,
 ) -> None:
     """Mapped stages with no edge between them may overlap or run out of declared order."""
-    # A's depth pass starts at 10:05:00, before A's authoring completes at 10:12:10.
-    _move_scope_window(composite_run / "depth" / "A", "plan", "10:05:00", "10:25:30")
-    # B's depth pass runs and completes before B's authoring starts at 10:00:10.
-    _move_scope_window(composite_run / "depth" / "B", "plan", "09:40:00", "09:50:00")
+    # A's enrich pass starts at 10:05:00, before A's authoring completes at 10:12:10.
+    _move_scope_window(composite_run / "enrich" / "A", "plan", "10:05:00", "10:25:30")
+    # B's enrich pass runs and completes before B's authoring starts at 10:00:10.
+    _move_scope_window(composite_run / "enrich" / "B", "plan", "09:40:00", "09:50:00")
 
     items = _summary(composite_run).items
     assert items is not None
     chains = {chain.item_key: chain for chain in items.items}
 
-    a_depth = next(stage for stage in chains["A"].stages if stage.stage == "depth")
-    assert a_depth.wait_before_s is None
-    assert a_depth.unavailable["wait_before_s"] == (
+    a_enrich = next(stage for stage in chains["A"].stages if stage.stage == "enrich")
+    assert a_enrich.wait_before_s is None
+    assert a_enrich.unavailable["wait_before_s"] == (
         "this stage started before the previous stage completed"
     )
     assert chains["A"].barrier_wait_s is None
     assert chains["A"].unavailable["barrier_wait_s"] == "stages overlap for this item"
     assert chains["A"].chain_span_s == 1520
 
-    assert [stage.stage for stage in chains["B"].stages] == ["depth", "author"]
+    assert [stage.stage for stage in chains["B"].stages] == ["enrich", "author"]
     assert chains["B"].stages[1].wait_before_s == 610
     assert chains["B"].barrier_wait_s == 610
 
@@ -837,7 +837,7 @@ def test_an_unreadable_root_plan_keeps_the_scopes_of_a_run_nested_in_a_parent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(ops, "TOOL_RESULT_CAP_BYTES", 4096)
-    prefix = ["cohorts", "week-1", "main", "run-1"]
+    prefix = ["batches", "batch-1", "main", "run-1"]
     run_dir = _composite_run(tmp_path.joinpath("batch", *prefix[:-1]))
     _nest_under_parent_run(run_dir, prefix)
     (run_dir / ".state" / "run-plan.yaml").write_text("run_plan: [unclosed\n")
@@ -898,7 +898,7 @@ def test_retries_count_attempts_beyond_the_first_and_keep_processes_apart(
     shutil.rmtree(research_a / "attempts" / "att-4")
     shutil.rmtree(research_b / "attempts" / "att-6")
     _attempt(
-        composite_run / "depth" / "B" / ".state" / "tasks" / "research" / "attempts" / "att-10",
+        composite_run / "enrich" / "B" / ".state" / "tasks" / "research" / "attempts" / "att-10",
         step_id="research",
         number=1,
         disposition="failed",
@@ -916,8 +916,8 @@ def test_retries_count_attempts_beyond_the_first_and_keep_processes_apart(
         rows[(_ITEM_PROCESS, "research")].not_succeeded,
     ) == (2, 2)
     assert (
-        rows[(_DEPTH_PROCESS, "research")].attempts,
-        rows[(_DEPTH_PROCESS, "research")].not_succeeded,
+        rows[(_ENRICH_PROCESS, "research")].attempts,
+        rows[(_ENRICH_PROCESS, "research")].not_succeeded,
     ) == (1, 1)
 
     ops.write_operations_summary(summary, composite_run)
@@ -981,7 +981,7 @@ def _wide_run(root: Path, item_count: int) -> Path:
             "12:00:00",
             {
                 "author": _step("10:00:00", "11:00:00", 3600.0),
-                "depth": _step("11:00:00", "12:00:00", 3600.0),
+                "enrich": _step("11:00:00", "12:00:00", 3600.0),
             },
         ),
     )
@@ -989,11 +989,11 @@ def _wide_run(root: Path, item_count: int) -> Path:
         run_dir / ".state" / "run-plan.yaml",
         _plan(
             [],
-            [("author", "composite", "mapped", keys), ("depth", "composite", "mapped", keys)],
+            [("author", "composite", "mapped", keys), ("enrich", "composite", "mapped", keys)],
         ),
     )
     item_steps = [(f"step-{index}", "agent", "scalar", []) for index in range(4)]
-    for stage, start, end in (("author", "10:00", "11:00"), ("depth", "11:00", "12:00")):
+    for stage, start, end in (("author", "10:00", "11:00"), ("enrich", "11:00", "12:00")):
         for key in keys:
             scope = run_dir / stage / key
             steps = {
@@ -1163,8 +1163,8 @@ def test_markdown_table_escapes_cells() -> None:
 _EARLIER_DOCUMENTS = Path(__file__).resolve().parent / "fixtures" / "operations_summary_v1"
 """A real run's artifacts, written before ``sample_source`` and ``RetryStepRow.process``.
 
-Only the process name and the item keys are replaced, so the document keeps the shape
-the earlier writer produced.
+Only identifiers are replaced (the process, run ID, step names, revision, and item keys),
+so the document keeps the shape the earlier writer produced.
 """
 
 
@@ -1202,7 +1202,7 @@ def test_a_summary_written_before_the_added_fields_still_reads(tmp_path: Path) -
     retries = summary.retries
     assert retries is not None
     assert [(row.process, row.step_id) for row in retries.by_step] == [
-        (None, "review-ticker"),
+        (None, "assess-item"),
         (None, "judge-fit-gemini-flash-38"),
         (None, "judge-fit-gemini-flash-36"),
     ]

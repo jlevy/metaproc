@@ -227,7 +227,7 @@ implementation of this pattern, manually orchestrated:
 - **Arms** are sweep variants.
   Each arm has a `variant` metaparameter (model or prompt version) and a list of
   `run_ids` produced by separate `run-process` invocations.
-- **Tiers** (dev / validation / production) are sweep cohorts at different scales and
+- **Tiers** (dev / validation / production) are sweep batches at different scales and
   sample sizes, each defined by its own downstream process spec.
 - **Measurement** comes from running the domain’s evaluation process against each run
   and folding its accuracy and cost metrics back into the manifest.

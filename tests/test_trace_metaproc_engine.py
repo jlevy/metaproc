@@ -125,7 +125,7 @@ def test_extract_subprocess_from_runpool_events(run_dir: Path):
                 "ts": "2026-05-12T00:00:01Z",
                 "pid": 1234,
                 "backend": "local",
-                "label": "ticker=MNDY",
+                "label": "ticker=item-b",
             },
             {
                 "event": "process_exit",
@@ -142,7 +142,7 @@ def test_extract_subprocess_from_runpool_events(run_dir: Path):
     assert len(subprocesses) == 1
     sp = subprocesses[0]
     assert sp.attributes["subprocess.pid"] == 1234
-    assert sp.attributes["subprocess.label"] == "ticker=MNDY"
+    assert sp.attributes["subprocess.label"] == "ticker=item-b"
     assert sp.status == "ok"
     assert sp.duration_ms == pytest.approx(59000.0)
 
@@ -175,7 +175,7 @@ def test_extract_subprocess_nonzero_exit_is_error(run_dir: Path):
 
 def test_extract_item_from_result_yaml(run_dir: Path):
     _write_yaml(
-        run_dir / ".state" / "tasks" / "research-step" / "MNDY" / "result.yaml",
+        run_dir / ".state" / "tasks" / "research-step" / "item-b" / "result.yaml",
         {
             "run_id": "run-x",
             "step_id": "research-step",
@@ -198,7 +198,7 @@ def test_extract_item_from_result_yaml(run_dir: Path):
     items = [s for s in spans if s.kind == "item"]
     assert len(items) == 2
     by_ticker = {s.attributes["item.key"]: s for s in items}
-    assert by_ticker["MNDY"].status == "ok"
+    assert by_ticker["item-b"].status == "ok"
     assert by_ticker["FAIL"].status == "error"
 
 

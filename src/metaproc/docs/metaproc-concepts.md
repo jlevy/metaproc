@@ -593,7 +593,7 @@ metrics; gates turn measurements into verdicts.*
   Every score is a measurement; not every measurement is a score.
   The word “score” signals “comparable across runs.”
 - **Metric:** an aggregation of measurements across a *set* of runs: pass rate across a
-  comparison set, p95 latency across a cohort, mean rubric score across a fan-out.
+  comparison set, p95 latency across a batch, mean rubric score across a fan-out.
   A single run does not have a “metric”; it has measurements.
 - **Verdict:** gate outcome (`pass | fail | force_advanced`), with provenance back to
   the measurements that drove it.

@@ -131,7 +131,7 @@ BROWSER_TRACKABLE_EXTS: frozenset[str] = frozenset(
 #   tracked artifacts get reviewed/grepped/PR-diffed constantly — losing
 #   GitHub's rendered view + git pack delta compression for ~50 KB of
 #   on-disk savings is the wrong trade. The 1 MiB floor leaves room for
-#   the genuine outlier (a multi-MB cohort report) without touching the
+#   the genuine outlier (a multi-MB batch report) without touching the
 #   thousands of small structured artifacts.
 #
 # Sentinels:

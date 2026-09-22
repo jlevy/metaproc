@@ -140,7 +140,8 @@ namespace. Descriptor-relative copying prevents symlink redirection, and the shi
 authentication, artifact, conventions, design, and operator docs define the current
 privacy and `.logs/` lifecycle.
 The branch passed `make verify` with 4,704 tests and the Python 3.12–3.14 CI matrix; a
-current GTIA v3.1 dry-run and retained-run compatibility checks also passed.
+dry run of a downstream production process and retained-run compatibility checks also
+passed.
 
 That foundation does not close `mp-83g2`. Attempt locators, raw pre-filter stdout and
 stderr, direct open and tail affordances, nonpooled providers, cloud and hydrated

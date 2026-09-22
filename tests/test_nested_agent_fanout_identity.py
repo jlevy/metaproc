@@ -1,6 +1,6 @@
 """An agent leaf inside a child process writes a result its own attempt validates.
 
-A cohort runs one child process per rostered company, and inside each child an agent
+A mapped composite runs one child process per rostered item, and inside each child an agent
 step fans out per item. The attempt and the result for that leaf are written from
 different scopes, so they must agree on how the run id is composed; when they do not,
 the step succeeds and the result write raises instead.

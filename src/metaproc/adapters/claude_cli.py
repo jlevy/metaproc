@@ -813,7 +813,7 @@ class ClaudeCodeCliAdapter:
         ``CLAUDE_CODE_OAUTH_TOKEN=<blob>`` plus ``DISABLE_UPDATES=1``.
         The static-bearer token is the credential; no
         ``.credentials.json`` is written. ``DISABLE_UPDATES`` stops the
-        CLI from auto-updating mid-cohort, which would mix unverified
+        CLI from auto-updating mid-dispatch, which would mix unverified
         versions into a running dispatch.
 
         ``CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`` is conditionally set:
@@ -1108,7 +1108,7 @@ class ClaudeCodeCliAdapter:
         # keyword anywhere in the session log — agents emit
         # ``authentication_error`` / ``invalid_grant`` in tool output and
         # model text routinely, and a substring match would falsely mark
-        # the credential expired and cost the cohort items per fan-out.
+        # the credential expired and fail items across the fan-out.
         oauth_refresh_failed = (
             signals.oauth_refresh_status is not None and signals.oauth_refresh_status >= 400
         )

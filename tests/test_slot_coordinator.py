@@ -750,14 +750,14 @@ class TestPreserveDiagnostics:
         (lease.slot_dir / "stub-trace.log").write_text("TRACE body\n")
 
         logs_dir = tmp_path / "r" / "s" / ".logs"
-        session_log = logs_dir / "predict-ticker_HLT_2026-04-27T18-07-20.jsonl"
+        session_log = logs_dir / "predict-ticker_item-m_2026-04-27T18-07-20.jsonl"
         coord.preserve_diagnostics(lease, session_log)
 
         # Naming: <session-stem>.<diagnostic-name>, lexically next to
         # the session log so the operator-facing logs tree shows
         # session + every adapter's diagnostic side-by-side.
-        debug_target = logs_dir / "predict-ticker_HLT_2026-04-27T18-07-20.stub-debug.log"
-        trace_target = logs_dir / "predict-ticker_HLT_2026-04-27T18-07-20.stub-trace.log"
+        debug_target = logs_dir / "predict-ticker_item-m_2026-04-27T18-07-20.stub-debug.log"
+        trace_target = logs_dir / "predict-ticker_item-m_2026-04-27T18-07-20.stub-trace.log"
         assert debug_target.read_text() == "DEBUG body\n"
         assert trace_target.read_text() == "TRACE body\n"
 
@@ -772,7 +772,7 @@ class TestPreserveDiagnostics:
         )
         assert lease is not None
         logs_dir = tmp_path / "r" / "s" / ".logs"
-        session_log = logs_dir / "predict-ticker_HLT_2026-04-27T18-07-20.jsonl"
+        session_log = logs_dir / "predict-ticker_item-m_2026-04-27T18-07-20.jsonl"
         coord.preserve_diagnostics(lease, session_log)
         assert not logs_dir.exists() or not list(logs_dir.iterdir())
 
@@ -790,7 +790,7 @@ class TestPreserveDiagnostics:
         assert (lease.slot_dir / "creds.json").exists()
 
         logs_dir = tmp_path / "r" / "s" / ".logs"
-        session_log = logs_dir / "predict-ticker_HLT_2026-04-27T18-07-20.jsonl"
+        session_log = logs_dir / "predict-ticker_item-m_2026-04-27T18-07-20.jsonl"
         coord.preserve_diagnostics(lease, session_log)
 
         if logs_dir.exists():
@@ -808,9 +808,9 @@ class TestPreserveDiagnostics:
         )
         assert lease is not None
         logs_dir = tmp_path / "r" / "s" / ".logs"
-        session_log = logs_dir / "predict-ticker_HLT_2026-04-27T18-07-20.jsonl"
+        session_log = logs_dir / "predict-ticker_item-m_2026-04-27T18-07-20.jsonl"
         coord.preserve_diagnostics(lease, session_log)  # must not raise
-        target = logs_dir / "predict-ticker_HLT_2026-04-27T18-07-20.stub-debug.log"
+        target = logs_dir / "predict-ticker_item-m_2026-04-27T18-07-20.stub-debug.log"
         assert not target.exists()
 
     def test_safe_after_teardown_wiped_slot(self, tmp_path, pool):
@@ -824,7 +824,7 @@ class TestPreserveDiagnostics:
         assert lease is not None
         coord.teardown(lease, failure=None)  # wipes the slot
         logs_dir = tmp_path / "r" / "s" / ".logs"
-        session_log = logs_dir / "predict-ticker_HLT_2026-04-27T18-07-20.jsonl"
+        session_log = logs_dir / "predict-ticker_item-m_2026-04-27T18-07-20.jsonl"
         coord.preserve_diagnostics(lease, session_log)  # must not raise
         assert not logs_dir.exists() or not list(logs_dir.iterdir())
 

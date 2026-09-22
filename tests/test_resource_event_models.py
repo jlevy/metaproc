@@ -310,7 +310,7 @@ def test_hierarchy_carries_execution_profile_and_lane_id() -> None:
     hierarchy = HierarchyRef(
         run_id="run-1",
         step_node_id="analysis-research",
-        item_key="CAVA",
+        item_key="item-a",
         execution_profile="codex-gpt55",
         lane_id="codex-gpt55",
     )

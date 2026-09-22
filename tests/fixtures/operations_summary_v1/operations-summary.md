@@ -6,7 +6,7 @@ softschema:
   status: enforced
 agent_operations:
   run_id:
-    example-roster-fit/run-20260914T153048Z.5501910000.vpjugu14bq-week39-fitreview
+    example-roster-fit/run-20260914T153048Z.0000000000.example001
   generated_at: '2026-09-14T16:44:00.314874Z'
   trigger: finalization
   extractor_version: 1
@@ -24,14 +24,14 @@ agent_operations:
     item_count: 16
     backend: local
     revisions:
-      git_sha: 8f2be0545
+      git_sha: abcdef012
   setup:
     unavailable:
       elapsed_s: a setup step has no elapsed time
       share_of_elapsed: a setup step has no elapsed time
     step_ids:
     - stage-roster
-    - summarize-fit-review
+    - summarize-fit
   stages:
   - unavailable:
       started_at: step has not started
@@ -43,7 +43,7 @@ agent_operations:
     task_shape: scalar
     state: completed
     item_count: 0
-  - step_id: review-ticker
+  - step_id: assess-item
     mode: composite
     task_shape: mapped
     state: failed
@@ -57,7 +57,7 @@ agent_operations:
       completed_at: step is completed
       elapsed_s: step is completed
       share_of_elapsed: step is completed
-    step_id: summarize-fit-review
+    step_id: summarize-fit
     mode: code
     task_shape: scalar
     state: completed
@@ -66,7 +66,7 @@ agent_operations:
     unavailable:
       barrier_wait_s: no item passed between two mapped stages
     stages:
-    - review-ticker
+    - assess-item
     item_count: 16
     chain_running_s:
       count: 16
@@ -83,7 +83,7 @@ agent_operations:
       mean: 1921.938
       total: 30751.0
     per_stage:
-    - stage: review-ticker
+    - stage: assess-item
       item_count: 16
       running_s:
         count: 16
@@ -118,19 +118,19 @@ agent_operations:
       stages:
       - unavailable:
           wait_before_s: first mapped stage for this item
-        stage: review-ticker
+        stage: assess-item
         state: failed
         started_at: '2026-09-14T16:03:11Z'
         completed_at: '2026-09-14T16:43:51Z'
         running_s: 2440.0
         slowest_step:
-          stage: review-ticker
+          stage: assess-item
           step_id: judge-fit-gemini-flash-38
           elapsed_s: 2437.8
       chain_running_s: 2440.0
       chain_span_s: 2440.0
       slowest_step:
-        stage: review-ticker
+        stage: assess-item
         step_id: judge-fit-gemini-flash-38
         elapsed_s: 2437.8
     items:
@@ -141,7 +141,7 @@ agent_operations:
       chain_running_s: 1579.0
       chain_span_s: 1579.0
       slowest_step:
-        stage: review-ticker
+        stage: assess-item
         step_id: reconcile-fit-decisions
         elapsed_s: 1153.0
     - unavailable:
@@ -151,7 +151,7 @@ agent_operations:
       chain_running_s: 1579.0
       chain_span_s: 1579.0
       slowest_step:
-        stage: review-ticker
+        stage: assess-item
         step_id: reconcile-fit-decisions
         elapsed_s: 1092.8
     - unavailable:
@@ -161,7 +161,7 @@ agent_operations:
       chain_running_s: 1577.0
       chain_span_s: 1577.0
       slowest_step:
-        stage: review-ticker
+        stage: assess-item
         step_id: reconcile-fit-decisions
         elapsed_s: 1182.9
     - unavailable:
@@ -171,7 +171,7 @@ agent_operations:
       chain_running_s: 1901.0
       chain_span_s: 1901.0
       slowest_step:
-        stage: review-ticker
+        stage: assess-item
         step_id: judge-fit-gemini-flash-38
         elapsed_s: 1897.2
     - unavailable:
@@ -181,7 +181,7 @@ agent_operations:
       chain_running_s: 1648.0
       chain_span_s: 1648.0
       slowest_step:
-        stage: review-ticker
+        stage: assess-item
         step_id: reconcile-fit-decisions
         elapsed_s: 971.8
     - unavailable:
@@ -191,7 +191,7 @@ agent_operations:
       chain_running_s: 2317.0
       chain_span_s: 2317.0
       slowest_step:
-        stage: review-ticker
+        stage: assess-item
         step_id: judge-fit-gemini-flash-38
         elapsed_s: 2314.7
     - unavailable:
@@ -201,7 +201,7 @@ agent_operations:
       chain_running_s: 1648.0
       chain_span_s: 1648.0
       slowest_step:
-        stage: review-ticker
+        stage: assess-item
         step_id: judge-fit-gemini-flash-38
         elapsed_s: 914.9
     - unavailable:
@@ -211,7 +211,7 @@ agent_operations:
       chain_running_s: 1971.0
       chain_span_s: 1971.0
       slowest_step:
-        stage: review-ticker
+        stage: assess-item
         step_id: judge-fit-gemini-flash-38
         elapsed_s: 1968.2
     - unavailable:
@@ -221,7 +221,7 @@ agent_operations:
       chain_running_s: 1902.0
       chain_span_s: 1902.0
       slowest_step:
-        stage: review-ticker
+        stage: assess-item
         step_id: judge-fit-gemini-flash-38
         elapsed_s: 1897.4
     - unavailable:
@@ -231,7 +231,7 @@ agent_operations:
       chain_running_s: 2430.0
       chain_span_s: 2430.0
       slowest_step:
-        stage: review-ticker
+        stage: assess-item
         step_id: judge-fit-gemini-flash-38
         elapsed_s: 2427.5
     - unavailable:
@@ -241,7 +241,7 @@ agent_operations:
       chain_running_s: 2440.0
       chain_span_s: 2440.0
       slowest_step:
-        stage: review-ticker
+        stage: assess-item
         step_id: judge-fit-gemini-flash-38
         elapsed_s: 2437.8
     - unavailable:
@@ -251,7 +251,7 @@ agent_operations:
       chain_running_s: 2155.0
       chain_span_s: 2155.0
       slowest_step:
-        stage: review-ticker
+        stage: assess-item
         step_id: judge-fit-gemini-flash-38
         elapsed_s: 2152.2
     - unavailable:
@@ -261,7 +261,7 @@ agent_operations:
       chain_running_s: 1901.0
       chain_span_s: 1901.0
       slowest_step:
-        stage: review-ticker
+        stage: assess-item
         step_id: judge-fit-gemini-flash-38
         elapsed_s: 1645.3
     - unavailable:
@@ -271,7 +271,7 @@ agent_operations:
       chain_running_s: 1901.0
       chain_span_s: 1901.0
       slowest_step:
-        stage: review-ticker
+        stage: assess-item
         step_id: judge-fit-gemini-flash-38
         elapsed_s: 1816.3
     - unavailable:
@@ -281,7 +281,7 @@ agent_operations:
       chain_running_s: 1901.0
       chain_span_s: 1901.0
       slowest_step:
-        stage: review-ticker
+        stage: assess-item
         step_id: judge-fit-gemini-flash-38
         elapsed_s: 1776.1
     - unavailable:
@@ -291,7 +291,7 @@ agent_operations:
       chain_running_s: 1901.0
       chain_span_s: 1901.0
       slowest_step:
-        stage: review-ticker
+        stage: assess-item
         step_id: judge-fit-gemini-flash-36
         elapsed_s: 1836.8
   steps:
@@ -299,7 +299,7 @@ agent_operations:
     ignored_state_dirs: 0
     rows:
     - process: example-roster-fit
-      step_id: review-ticker
+      step_id: assess-item
       mode: composite
       elapsed_s:
         count: 16
@@ -308,7 +308,7 @@ agent_operations:
         max: 2440.0
         mean: 1921.938
         total: 30751.0
-    - process: example-roster-fit-ticker
+    - process: example-roster-fit-item
       step_id: judge-fit-gemini-flash-38
       mode: agent
       elapsed_s:
@@ -318,7 +318,7 @@ agent_operations:
         max: 2437.8
         mean: 1565.356
         total: 25045.7
-    - process: example-roster-fit-ticker
+    - process: example-roster-fit-item
       step_id: judge-fit-gemini-flash-36
       mode: agent
       elapsed_s:
@@ -361,7 +361,7 @@ agent_operations:
       unknown: 16
     live_attempts: 0
     by_step:
-    - step_id: review-ticker
+    - step_id: assess-item
       attempts: 32
       not_succeeded: 19
       by_failure_class:
@@ -448,7 +448,7 @@ agent_operations:
 ---
 # Operations Summary
 
-Run `example-roster-fit/run-20260914T153048Z.5501910000.vpjugu14bq-week39-fitreview`
+Run `example-roster-fit/run-20260914T153048Z.0000000000.example001`
 ended `failed`. Machine-consumed values are in the validated YAML frontmatter; this body
 is explanatory, and `n/a` marks a figure listed under Unavailable Figures.
 
@@ -465,23 +465,23 @@ is explanatory, and `n/a` marks a figure listed under Unavailable Figures.
 | Variant | n/a |
 | Execution profile | n/a |
 | Backend | local |
-| Revisions | git_sha `8f2be0545` |
+| Revisions | git_sha `abcdef012` |
 | Setup | n/a |
 | Extraction | 0.82 s |
 
-Setup steps: `stage-roster`, `summarize-fit-review`.
+Setup steps: `stage-roster`, `summarize-fit`.
 
 ## Stages
 
 | Step | Shape | Items | State | Elapsed | Share |
 | --- | --- | ---: | --- | ---: | ---: |
 | `stage-roster` | scalar | 0 | completed | n/a | n/a |
-| `review-ticker` | mapped | 16 | failed | 2,441.0 s | 100.0% |
-| `summarize-fit-review` | scalar | 0 | completed | n/a | n/a |
+| `assess-item` | mapped | 16 | failed | 2,441.0 s | 100.0% |
+| `summarize-fit` | scalar | 0 | completed | n/a | n/a |
 
 ## Per Item
 
-16 items across mapped stages `review-ticker`. Chain running time sums each item’s
+16 items across mapped stages `assess-item`. Chain running time sums each item’s
 running time per stage; barrier wait is the time between an item’s completion in one
 stage and its start in the next.
 
@@ -495,15 +495,15 @@ stage and its start in the next.
 
 | Measure | Count | p50 | p90 | Max | Mean |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `review-ticker` item | 16 | 31.7 min | 39.6 min | 40.7 min | 32.0 min |
-| `review-ticker` / `judge-fit-gemini-flash-36` | 16 | 12.7 min | 29.4 min | 39.8 min | 15.4 min |
-| `review-ticker` / `judge-fit-gemini-flash-38` | 16 | 30.4 min | 39.5 min | 40.6 min | 26.1 min |
+| `assess-item` item | 16 | 31.7 min | 39.6 min | 40.7 min | 32.0 min |
+| `assess-item` / `judge-fit-gemini-flash-36` | 16 | 12.7 min | 29.4 min | 39.8 min | 15.4 min |
+| `assess-item` / `judge-fit-gemini-flash-38` | 16 | 30.4 min | 39.5 min | 40.6 min | 26.1 min |
 
 ### Slowest Items
 
 | Item | Chain running | Barrier wait | Chain span | Slowest step |
 | --- | ---: | ---: | ---: | --- |
-| `ITEM-11` | 40.7 min | n/a | 40.7 min | `review-ticker` / `judge-fit-gemini-flash-38` (40.6 min) |
+| `ITEM-11` | 40.7 min | n/a | 40.7 min | `assess-item` / `judge-fit-gemini-flash-38` (40.6 min) |
 
 ## Steps
 
@@ -513,9 +513,9 @@ sample per item.
 
 | Step | Process | Mode | Count | p50 | p90 | Max | Total |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| `review-ticker` | `example-roster-fit` | composite | 16 | 1,901.0 s | 2,373.5 s | 2,440.0 s | 30,751.0 s |
-| `judge-fit-gemini-flash-38` | `example-roster-fit-ticker` | agent | 16 | 1,821.5 s | 2,371.1 s | 2,437.8 s | 25,045.7 s |
-| `judge-fit-gemini-flash-36` | `example-roster-fit-ticker` | agent | 16 | 759.1 s | 1,766.2 s | 2,385.8 s | 14,781.3 s |
+| `assess-item` | `example-roster-fit` | composite | 16 | 1,901.0 s | 2,373.5 s | 2,440.0 s | 30,751.0 s |
+| `judge-fit-gemini-flash-38` | `example-roster-fit-item` | agent | 16 | 1,821.5 s | 2,371.1 s | 2,437.8 s | 25,045.7 s |
+| `judge-fit-gemini-flash-36` | `example-roster-fit-item` | agent | 16 | 759.1 s | 1,766.2 s | 2,385.8 s | 14,781.3 s |
 
 ## Parallelism
 
@@ -538,7 +538,7 @@ By failure class: timeout 16, unknown 16.
 
 | Step | Attempts | Not succeeded | Failure classes |
 | --- | ---: | ---: | --- |
-| `review-ticker` | 32 | 19 | timeout 3, unknown 16 |
+| `assess-item` | 32 | 19 | timeout 3, unknown 16 |
 | `judge-fit-gemini-flash-38` | 23 | 10 | timeout 10 |
 | `judge-fit-gemini-flash-36` | 34 | 3 | timeout 3 |
 

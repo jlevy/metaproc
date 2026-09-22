@@ -105,7 +105,7 @@ def test_detect_returns_true_when_jsonl_present(run_dir: Path):
     _write_minimal_attempt(
         run_dir,
         step="research-step",
-        item_key="MNDY",
+        item_key="item-b",
         session_id="s1",
         tool_use_id="t1",
     )
@@ -116,7 +116,7 @@ def test_extract_reads_compressed_jsonl_present(run_dir: Path):
     path = _write_minimal_attempt(
         run_dir,
         step="research-step",
-        item_key="MNDY",
+        item_key="item-b",
         session_id="s1",
         tool_use_id="t1",
     )
@@ -132,7 +132,7 @@ def test_extract_yields_attempt_session_and_tool_spans(run_dir: Path):
     _write_minimal_attempt(
         run_dir,
         step="research-step",
-        item_key="MNDY",
+        item_key="item-b",
         session_id="s1",
         tool_use_id="t1",
         tool_name="Read",
@@ -149,7 +149,7 @@ def test_extract_yields_attempt_session_and_tool_spans(run_dir: Path):
     tool = by_kind["tool_call"][0]
     session = by_kind["agent_session"][0]
     assert attempt.attributes["step.id"] == "research-step"
-    assert attempt.attributes["item.key"] == "MNDY"
+    assert attempt.attributes["item.key"] == "item-b"
     assert attempt.status == "ok"
     assert session.parent_span_id == attempt.span_id
     assert tool.parent_span_id == session.span_id
@@ -162,11 +162,11 @@ def test_extract_classifies_tool_error(run_dir: Path):
     _write_minimal_attempt(
         run_dir,
         step="research-step",
-        item_key="MNDY",
+        item_key="item-b",
         session_id="s1",
         tool_use_id="t1",
         tool_name="Bash",
-        tool_input={"command": "ep-arena trends MNDY"},
+        tool_input={"command": "example-cli fetch item-b"},
         is_error=True,
     )
     spans = list(ClaudeAgentExtractor().extract(run_dir, trace_id="run-abc"))
@@ -181,21 +181,21 @@ def test_extract_preserves_native_web_tool_inputs(run_dir: Path):
     _write_minimal_attempt(
         run_dir,
         step="deep-research",
-        item_key="MNDY",
+        item_key="item-b",
         session_id="s1",
         tool_use_id="search1",
         tool_name="WebSearch",
-        tool_input={"query": "MNDY earnings customer growth"},
+        tool_input={"query": "item-b customer growth"},
     )
     _write_minimal_attempt(
         run_dir,
         step="deep-research",
-        item_key="HMSY",
+        item_key="item-d",
         session_id="s2",
         tool_use_id="fetch1",
         tool_name="WebFetch",
         tool_input={
-            "url": "https://example.com/hims-q4",
+            "url": "https://example.com/item-d-q4",
             "prompt": "Summarize only revenue, guidance, and management commentary.",
         },
     )
@@ -207,16 +207,16 @@ def test_extract_preserves_native_web_tool_inputs(run_dir: Path):
     assert search.attributes["tool.family"] == "web"
     assert search.attributes["tool.operation"] == "search"
     assert search.attributes["tool.usage_role"] == "research"
-    assert search.attributes["tool.input.query"] == "MNDY earnings customer growth"
+    assert search.attributes["tool.input.query"] == "item-b customer growth"
     assert search.attributes["source_origin"] == "agent_web_search"
     assert fetch.attributes["tool.operation"] == "fetch"
-    assert fetch.attributes["tool.input.url"] == "https://example.com/hims-q4"
+    assert fetch.attributes["tool.input.url"] == "https://example.com/item-d-q4"
     assert "revenue" in fetch.attributes["tool.input.prompt_summary"]
     assert fetch.attributes["source_origin"] == "agent_web_fetch"
 
 
 def test_extract_emits_internal_span_for_compaction(run_dir: Path):
-    path = run_dir / ".logs" / "tasks" / "deep-market-research" / "CEVA" / "x.jsonl"
+    path = run_dir / ".logs" / "tasks" / "deep-market-research" / "item-c" / "x.jsonl"
     _write_jsonl(
         path,
         [
@@ -247,7 +247,7 @@ def test_extract_emits_internal_span_for_compaction(run_dir: Path):
 
 def test_extract_marks_attempt_error_when_no_result_block(run_dir: Path):
     """Crashed attempt: no 'type=result' line means the session didn't end cleanly."""
-    path = run_dir / ".logs" / "tasks" / "research-step" / "MNDY" / "x.jsonl"
+    path = run_dir / ".logs" / "tasks" / "research-step" / "item-b" / "x.jsonl"
     _write_jsonl(
         path,
         [
@@ -275,7 +275,7 @@ def test_extract_reads_invocation_json_sidecar(run_dir: Path):
     path = _write_minimal_attempt(
         run_dir,
         step="research-step",
-        item_key="MNDY",
+        item_key="item-b",
         session_id="s1",
         tool_use_id="t1",
     )
@@ -300,7 +300,7 @@ def test_invocation_sidecar_adapter_sets_agent_source(run_dir: Path):
     path = _write_minimal_attempt(
         run_dir,
         step="research-step",
-        item_key="MNDY",
+        item_key="item-b",
         session_id="s1",
         tool_use_id="t1",
     )
@@ -360,7 +360,7 @@ def test_attempt_carries_quota_exhausted_error_code_and_message(run_dir: Path):
     _write_failed_attempt(
         run_dir,
         step="price-attributed-timeline",
-        item_key="BABA",
+        item_key="item-e",
         result_text="You're out of extra usage · resets 3:10am (America/Los_Angeles)",
     )
     spans = list(ClaudeAgentExtractor().extract(run_dir, trace_id="run-abc"))
@@ -375,7 +375,7 @@ def test_attempt_carries_auth_required_error_code(run_dir: Path):
     _write_failed_attempt(
         run_dir,
         step="business-setup",
-        item_key="MNDY",
+        item_key="item-b",
         result_text="Authentication required: token expired",
     )
     spans = list(ClaudeAgentExtractor().extract(run_dir, trace_id="run-abc"))
@@ -388,7 +388,7 @@ def test_attempt_carries_agent_timeout_error_code(run_dir: Path):
     _write_failed_attempt(
         run_dir,
         step="market-timeline",
-        item_key="MNDY",
+        item_key="item-b",
         result_text="Operation timed out after 600s",
     )
     spans = list(ClaudeAgentExtractor().extract(run_dir, trace_id="run-abc"))
@@ -401,7 +401,7 @@ def test_attempt_carries_generic_agent_error_code(run_dir: Path):
     _write_failed_attempt(
         run_dir,
         step="market-timeline",
-        item_key="MNDY",
+        item_key="item-b",
         result_text="Some random failure that doesn't match any known pattern",
     )
     spans = list(ClaudeAgentExtractor().extract(run_dir, trace_id="run-abc"))
@@ -415,7 +415,7 @@ def test_attempt_has_no_error_when_is_error_false(run_dir: Path):
     _write_minimal_attempt(
         run_dir,
         step="research-step",
-        item_key="MNDY",
+        item_key="item-b",
         session_id="s1",
         tool_use_id="t1",
     )
@@ -428,7 +428,7 @@ def test_attempt_has_no_error_when_is_error_false(run_dir: Path):
 def test_attempt_crashed_no_result_event_classified_as_agent_error(run_dir: Path):
     """No 'type=result' line at all — crashed attempt. Status=error, code=agent_error,
     no message (since there's no result text to copy)."""
-    path = run_dir / ".logs" / "tasks" / "research-step" / "MNDY" / "x.jsonl"
+    path = run_dir / ".logs" / "tasks" / "research-step" / "item-b" / "x.jsonl"
     _write_jsonl(
         path,
         [
@@ -454,7 +454,7 @@ def test_span_ids_are_deterministic_across_runs(run_dir: Path):
     _write_minimal_attempt(
         run_dir,
         step="research-step",
-        item_key="MNDY",
+        item_key="item-b",
         session_id="s1",
         tool_use_id="toolu_xyz",
     )

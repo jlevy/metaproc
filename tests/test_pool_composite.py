@@ -121,7 +121,7 @@ def composite_run(tmp_path: Path) -> Path:
             {
                 "event": "process_exit",
                 "ts": "2026-05-19T00:00:05+00:00",
-                "label": "ticker=CAVA",
+                "label": "ticker=item-a",
                 "pid": 100,
                 "exit_code": 0,
             },

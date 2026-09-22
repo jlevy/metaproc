@@ -130,7 +130,7 @@ def test_linker_propagates_error_upward():
         kind="item",
         status="error",
         parent_span_id="parent00000000000",
-        attributes={"step.id": "research-step", "item.key": "MNDY"},
+        attributes={"step.id": "research-step", "item.key": "item-b"},
     )
     linked = link_and_propagate([parent, child])
     by_id = {s.span_id: s for s in linked}
@@ -174,13 +174,13 @@ def test_linker_links_attempt_to_item_cross_source():
         span_id="item0000",
         kind="item",
         source="metaproc-engine",
-        attributes={"step.id": "research-step", "item.key": "MNDY"},
+        attributes={"step.id": "research-step", "item.key": "item-b"},
     )
     attempt = _minimal_event(
         span_id="att00000",
         kind="attempt",
         source="claude-agent",
-        attributes={"step.id": "research-step", "item.key": "MNDY"},
+        attributes={"step.id": "research-step", "item.key": "item-b"},
     )
     linked = link_and_propagate([item, attempt])
     by_id = {s.span_id: s for s in linked}
@@ -266,13 +266,13 @@ def test_linker_links_provider_call_to_arena_by_bundle_path():
         span_id="arena00",
         kind="subprocess",
         source="arena-wrapper",
-        attributes={"subprocess.out_path": "/run/MNDY/web-research-bundle.json"},
+        attributes={"subprocess.out_path": "/run/item-b/web-research-bundle.json"},
     )
     provider = _minimal_event(
         span_id="prov000",
         kind="provider_call",
         source="web-bundle",
-        attributes={"subprocess.out_path": "/run/MNDY/web-research-bundle.json"},
+        attributes={"subprocess.out_path": "/run/item-b/web-research-bundle.json"},
     )
     linked = link_and_propagate([arena, provider])
     by_id = {s.span_id: s for s in linked}

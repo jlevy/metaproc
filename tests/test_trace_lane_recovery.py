@@ -77,7 +77,7 @@ def _write_attempt(
     run_dir: Path,
     *,
     step: str = "analysis-research",
-    item_key: str = "CAVA",
+    item_key: str = "item-a",
     session_id: str = "s1",
 ) -> Path:
     path = (
@@ -209,7 +209,7 @@ def test_lane_comparison_consumer_can_join_attempt_to_lane_metadata(
     codex_jsonl = _write_attempt(
         run_dir,
         step="analysis-research",
-        item_key="CAVA",
+        item_key="item-a",
         session_id="codex-s1",
     )
     _write_invocation_sidecar(
@@ -226,8 +226,8 @@ def test_lane_comparison_consumer_can_join_attempt_to_lane_metadata(
         / ".logs"
         / "tasks"
         / "analysis-research"
-        / "CAVA-claude"
-        / ("edge-research_CAVA-claude_2026-05-19T00-00-00.jsonl")
+        / "item-a-claude"
+        / ("edge-research_item-a-claude_2026-05-19T00-00-00.jsonl")
     )
     _write_jsonl(
         claude_jsonl,
@@ -240,7 +240,7 @@ def test_lane_comparison_consumer_can_join_attempt_to_lane_metadata(
                             "type": "tool_use",
                             "id": "toolu_y",
                             "name": "Write",
-                            "input": {"file_path": "/run/CAVA/edge-brief.md"},
+                            "input": {"file_path": "/run/item-a/edge-brief.md"},
                         }
                     ]
                 },
@@ -275,8 +275,8 @@ def test_lane_comparison_consumer_can_join_attempt_to_lane_metadata(
     # Two lanes, both addressable; same item.key, distinct execution_profile.
     assert set(by_lane) == {"codex-gpt55", "claude-opus"}
     assert {by_lane["codex-gpt55"]["item.key"], by_lane["claude-opus"]["item.key"]} == {
-        "CAVA",
-        "CAVA-claude",
+        "item-a",
+        "item-a-claude",
     }
     assert by_lane["codex-gpt55"]["execution_profile"] == "codex-gpt55"
     assert by_lane["claude-opus"]["execution_profile"] == "claude-opus"
