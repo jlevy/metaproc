@@ -53,7 +53,7 @@ class TestRepairFrontmatterFile:
         record.write_text(
             "---\n"
             "record:\n"
-            "  consensus_error_detail: Large beat suggests operational outperformance. NOTE: Data inconsistency - source shows eps_surprise of 0.04\n"
+            "  error_detail: Large gap suggests an upstream change. NOTE: Data inconsistency - source shows a delta of 0.04\n"
             "---\n"
             "# Body\n"
         )
@@ -67,9 +67,9 @@ class TestRepairFrontmatterFile:
         record = tmp_path / "record.md"
         record.write_text(
             "---\n"
-            "alt_data_research:\n"
-            "  ticker: OLLI\n"
-            '  strongest_alt_signal: "Ollies near me" Google Trends accelerated into May.\n'
+            "research_note:\n"
+            "  item: example-item\n"
+            '  strongest_signal: "store near me" search interest accelerated into May.\n'
             "---\n"
             "# Body\n"
         )
@@ -79,19 +79,19 @@ class TestRepairFrontmatterFile:
         _, meta = fmf_read(record)
         assert meta is not None
         assert (
-            meta["alt_data_research"]["strongest_alt_signal"]
-            == '"Ollies near me" Google Trends accelerated into May.'
+            meta["research_note"]["strongest_signal"]
+            == '"store near me" search interest accelerated into May.'
         )
 
     def test_repairs_nested_list_value_starting_with_quoted_phrase(self, tmp_path: Path) -> None:
         record = tmp_path / "record.md"
         record.write_text(
             "---\n"
-            "alt_data_research:\n"
-            "  ticker: M\n"
+            "research_note:\n"
+            "  item: example-item\n"
             "  source_gaps:\n"
-            "    - source: google_trends_reimagine\n"
-            '      gap: "Macy\'s Reimagine" is sparse across all windows.\n'
+            "    - source: search_interest\n"
+            '      gap: "Spring Relaunch" is sparse across all windows.\n'
             "---\n"
             "# Body\n"
         )
@@ -101,8 +101,8 @@ class TestRepairFrontmatterFile:
         _, meta = fmf_read(record)
         assert meta is not None
         assert (
-            meta["alt_data_research"]["source_gaps"][0]["gap"]
-            == '"Macy\'s Reimagine" is sparse across all windows.'
+            meta["research_note"]["source_gaps"][0]["gap"]
+            == '"Spring Relaunch" is sparse across all windows.'
         )
 
     def test_preserves_already_quoted_values(self, tmp_path: Path) -> None:

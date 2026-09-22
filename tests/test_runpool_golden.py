@@ -239,7 +239,7 @@ def _make_configs(labels: list[str]) -> list[ProcessConfig]:
     ]
 
 
-_TECH_MIX_15 = [
+_MIXED_15 = [
     "AAPL",
     "ALB",
     "AS",
@@ -313,7 +313,7 @@ class TestRunPoolGolden:
     def test_golden_15_item_success(self, tmp_path, request):
         """15-item local run — all succeed."""
         backend = MockBackend(default_behavior=MockBehavior(exit_code=0, run_duration_s=0.0))
-        configs = _make_configs(_TECH_MIX_15)
+        configs = _make_configs(_MIXED_15)
         actual = _run_scenario(tmp_path, backend, configs)
 
         name = "15_item_success"
@@ -334,7 +334,7 @@ class TestRunPoolGolden:
     def test_golden_15_item_mock_cloud(self, tmp_path, request):
         """15-item mock-cloud run with external_id fields."""
         backend = MockBackend(default_behavior=MockBehavior(exit_code=0, run_duration_s=0.0))
-        configs = _make_configs(_TECH_MIX_15)
+        configs = _make_configs(_MIXED_15)
         actual = _run_scenario(tmp_path, backend, configs)
 
         # Verify cloud metadata in events
@@ -366,7 +366,7 @@ class TestRunPoolGolden:
             },
             default_behavior=MockBehavior(exit_code=0, run_duration_s=0.0),
         )
-        configs = _make_configs(_TECH_MIX_15)
+        configs = _make_configs(_MIXED_15)
         actual = _run_scenario(tmp_path, backend, configs)
 
         assert actual["result_summary"]["failed"] == 3
@@ -396,7 +396,7 @@ class TestRunPoolGolden:
             },
             default_behavior=MockBehavior(exit_code=0, run_duration_s=0.0),
         )
-        configs = _make_configs(_TECH_MIX_15)
+        configs = _make_configs(_MIXED_15)
         actual = _run_scenario(tmp_path, backend, configs)
 
         assert actual["result_summary"]["failed"] == 2

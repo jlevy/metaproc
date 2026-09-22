@@ -19,8 +19,8 @@ from metaproc.runpool.mock_backend import MockBackend, MockBehavior
 from metaproc.runpool.pool import ProcessConfig, RunPool, RunPoolConfig
 
 
-def _make_tech_mix_15_configs() -> list[ProcessConfig]:
-    """Build 15 ProcessConfig items mimicking tech-mix-15 tickers."""
+def _make_mixed_15_configs() -> list[ProcessConfig]:
+    """Build 15 ProcessConfig items with mixed labels."""
     tickers = [
         "GOOGL",
         "AAPL",
@@ -62,7 +62,7 @@ class TestMockIntegrationDryRun:
             logs_dir=tmp_path / "logs",
         )
         pool = RunPool(config, backend=backend)
-        configs = _make_tech_mix_15_configs()
+        configs = _make_mixed_15_configs()
 
         async def run():
             results = await pool.submit_batch(configs)
@@ -127,7 +127,7 @@ class TestMockIntegrationDryRun:
             logs_dir=tmp_path / "logs",
         )
         pool = RunPool(config, backend=backend)
-        configs = _make_tech_mix_15_configs()
+        configs = _make_mixed_15_configs()
 
         async def run():
             results = await pool.submit_batch(configs)
@@ -160,7 +160,7 @@ class TestMockIntegrationDryRun:
             logs_dir=tmp_path / "logs",
         )
         pool = RunPool(config, backend=backend)
-        configs = _make_tech_mix_15_configs()
+        configs = _make_mixed_15_configs()
 
         async def run():
             await pool.submit_batch(configs)
@@ -210,7 +210,7 @@ class TestMockIntegrationDryRun:
             logs_dir=tmp_path / "logs",
         )
         pool = RunPool(config, backend=backend)
-        configs = _make_tech_mix_15_configs()
+        configs = _make_mixed_15_configs()
 
         async def run():
             await pool.submit_batch(configs)
@@ -234,7 +234,7 @@ class TestMockIntegrationDryRun:
             logs_dir=tmp_path / "logs",
         )
         pool = RunPool(config, backend=backend)
-        configs = _make_tech_mix_15_configs()
+        configs = _make_mixed_15_configs()
 
         async def run():
             await pool.submit_batch(configs)

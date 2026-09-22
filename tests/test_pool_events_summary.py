@@ -141,8 +141,8 @@ class TestSummarizeGeneric:
         # Mirrors the actual mix from a long-running pool.
         events = [
             {"event": "pool_start", "ts": "T1"},
-            {"event": "process_start", "label": "ticker=NVS", "ts": "T2"},
-            {"event": "process_exit", "label": "ticker=NVS", "ts": "T3"},
+            {"event": "process_start", "label": "ticker=item-h", "ts": "T2"},
+            {"event": "process_exit", "label": "ticker=item-h", "ts": "T3"},
             {"event": "concurrency_adjust", "ts": "T4"},
             {"event": "pressure_check", "ts": "T5"},
             {"event": "pressure_check", "ts": "T6"},
@@ -204,7 +204,7 @@ class TestSummarizeAuthLeaseAcquired:
         assert report["auth_lease_acquired"]["by_label"] == {"alt1": 2, "alt2": 3}
 
     def test_round_robin_balanced_distribution_visible(self):
-        # The shape that, run on a real cohort post-2026-05-03, would
+        # The shape that a real balanced run would
         # show alt1 and alt2 with comparable counts — the inverse of
         # the P0-10 239/0/0 fingerprint.
         events = [_lease_event(lbl) for lbl in ("alt1", "alt2") * 12]

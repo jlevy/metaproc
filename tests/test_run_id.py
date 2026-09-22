@@ -12,7 +12,7 @@ from metaproc.engine.run_id import generate_run_id, slugify
 
 
 def test_slugify_basic() -> None:
-    assert slugify("Tech Mix 500") == "tech-mix-500"
+    assert slugify("Sample Set 500") == "sample-set-500"
 
 
 def test_slugify_special_chars() -> None:
@@ -37,10 +37,10 @@ _TYPED_RUN_PATTERN = r"run-\d{8}T\d{6}Z\.\d+\.[a-z0-9]+"
 
 def test_generate_run_id_default_template() -> None:
     """Default generation produces only the compact timestamped identity."""
-    result = generate_run_id("mine", title="tech mix 500")
+    result = generate_run_id("mine", title="sample set 500")
     assert re.fullmatch(_TYPED_RUN_PATTERN, result)
     assert "mine" not in result
-    assert "tech-mix-500" not in result
+    assert "sample-set-500" not in result
 
 
 def test_generate_run_id_no_title() -> None:

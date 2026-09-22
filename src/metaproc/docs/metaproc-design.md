@@ -6,7 +6,7 @@ status: Approved
 ---
 # Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-09-16) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-09-22) **Status:** Approved
 
 Also readable as `metaproc help design`.
 
@@ -753,9 +753,9 @@ plan:
   process: example_plugin/process/mine/mine.process.md
   params:
     RUN_ID: doc-sync-demo
-    DATASET: tech-mix-5
+    DATASET: sample-5
     RUNS_DIR: runs/local/example-workflow
-    dataset: tech-mix-5
+    dataset: sample-5
   deps:
     roster:
       path: runs/local/example-workflow/doc-sync-demo/mine/progress.md
@@ -1618,7 +1618,7 @@ It only needs a declared items file whose parsed value is `list<map<...>>`.
 ---
 events:
   schema: "example_plugin:MineRosterDocument/0.1"
-  source_dataset: tech-mix-500
+  source_dataset: sample-500
   items:
     - event_id: AAPL_2025-Q1
       item: AAPL

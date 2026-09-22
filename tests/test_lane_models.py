@@ -65,8 +65,8 @@ class TestDeriveLaneId:
 class TestDeriveTaskId:
     def test_format(self) -> None:
         assert (
-            derive_task_id(step_id="predict", lane_id="codex-gpt55", item_key="CAVA")
-            == "predict:codex-gpt55:CAVA"
+            derive_task_id(step_id="predict", lane_id="codex-gpt55", item_key="item-a")
+            == "predict:codex-gpt55:item-a"
         )
 
 
@@ -146,12 +146,12 @@ class TestExecutionLane:
 class TestTaskInstance:
     def test_round_trip(self) -> None:
         task = TaskInstance(
-            task_id="predict:codex-gpt55:CAVA",
+            task_id="predict:codex-gpt55:item-a",
             step_id="predict",
             lane_id="codex-gpt55",
-            item_key="CAVA",
+            item_key="item-a",
             execution_profile="codex-gpt55",
-            item_context={"ticker": "CAVA"},
+            item_context={"ticker": "item-a"},
         )
         data = task.model_dump()
         again = TaskInstance.model_validate(data)

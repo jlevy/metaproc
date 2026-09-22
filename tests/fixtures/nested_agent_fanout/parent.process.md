@@ -3,7 +3,7 @@ process:
   name: nested-parent
   description: |
     Fixture for a mapped composite step whose child process runs an agent fan-out.
-    Reproduces the shape a cohort uses: one child process per item, and inside it a
+    Reproduces a common production shape: one child process per item, and inside it a
     per-item agent step, so the attempt and the result for that leaf are written from
     different scopes.
 

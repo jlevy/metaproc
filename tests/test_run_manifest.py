@@ -22,7 +22,7 @@ runner = CliRunner()
 VALID_MANIFEST: dict[str, Any] = {
     "run_id": "baseline-100-glm5-2026-04-17-p1a",
     "stage_class": "baseline",
-    "dataset": "tech-mix-100",
+    "dataset": "sample-100",
     "git_sha": "0123456789abcdef0123456789abcdef01234567",
     "image": "sha256:" + "0" * 64,
     "models": ["pi-glm-5"],
@@ -64,14 +64,14 @@ class TestRunManifestValidation:
     @pytest.mark.parametrize(
         "stage_class",
         [
-            "promotion-1000",
-            "promotion-nasdaq",
-            "predict-atoms",
-            "predict-bakeoff",
-            "predict-promotion",
+            "consumer-scan-1000",
+            "consumer-scan-wide",
+            "consumer-atoms",
+            "consumer-bakeoff",
+            "consumer-select",
         ],
     )
-    def test_rejects_earnings_specific_stage_classes(self, stage_class: str):
+    def test_rejects_consumer_specific_stage_classes(self, stage_class: str):
         bad = dict(VALID_MANIFEST, stage_class=stage_class)
         with pytest.raises(ValidationError):
             RunManifest(**bad)
@@ -124,7 +124,7 @@ class TestRunManifestCLI:
             "models": ["pi-glm-5"],
             "image": VALID_MANIFEST["image"],
             "git_sha": VALID_MANIFEST["git_sha"],
-            "dataset": "tech-mix-100",
+            "dataset": "sample-100",
             "stage_class": "baseline",
             "run_id": "scrambled",
         }
