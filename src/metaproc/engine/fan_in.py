@@ -45,10 +45,10 @@ def collect_item_outcomes(
     the expected set can express the third.
 
     ``upstream_chain`` is the ordered steps feeding this one. An item that never
-    arrived died somewhere in them, and a consumer needs to know where and why: a
-    ticker that raised and a ticker that silently produced nothing are different
-    problems with different owners. Without it the collection can only say the item is
-    absent, which is the least useful true thing it could report.
+    arrived died somewhere in them, and a consumer needs to know where and why: an item
+    that raised and an item that silently produced nothing are different problems with
+    different owners. Without it the collection can only say the item is absent, which
+    is the least useful true thing it could report.
 
     Sorted by key so the manifest is stable across runs and diffable.
     """

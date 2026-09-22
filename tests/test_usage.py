@@ -1338,13 +1338,13 @@ class TestToolUseModels:
             variant="pi-deepseek-v3.2",
             records=15,
             per_tool={
-                "earnings_reports": ToolCallStats(tool_name="earnings_reports", calls=30, ok=30)
+                "research_reports": ToolCallStats(tool_name="research_reports", calls=30, ok=30)
             },
             total_configs=15,
             live_mode_configs=0,
             cutoff_disc_pct=100.0,
         )
-        assert profile.per_tool["earnings_reports"].calls == 30
+        assert profile.per_tool["research_reports"].calls == 30
         assert profile.cutoff_disc_pct == 100.0
 
     def test_provider_rate_limit_stats_defaults(self) -> None:

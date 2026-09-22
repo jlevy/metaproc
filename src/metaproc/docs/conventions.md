@@ -39,7 +39,7 @@ Use dot-separated suffixes such as `name.template.md`, not `name-template.md`.
   Examples: `retrieval-kb.yaml`, `kb-index.yaml`, `mine-overview.md`, `qa-report.md`,
   `final-report.md`.
 - **Python modules and packages** use **snake_case** per PEP 8. Examples:
-  `build_retrieval_kb.py`, `mine_kb_fetch.py`, `arena_helpers.py`.
+  `run_manifest.py`, `yaml_repair.py`, `worker_dispatch.py`.
 - **YAML keys and field names** (data *inside* files) use **snake_case**; see §YAML
   field names. Do not confuse these with filename casing.
 - **Front-door files** keep their established names (`README.md`, `conventions.md`,

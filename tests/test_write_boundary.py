@@ -1,11 +1,10 @@
 """Tests for write-boundary validation (P3.5.5 regression coverage).
 
 Covers the typed ``WriteBoundaryOverlapError`` raised by ``build_plan`` when two
-agent steps declare writes into an overlapping tree. The 2026-04-23 earnings
-``learn`` process shipped such an overlap (``propose-form-improvements`` ->
-``process/predict/<v>/<v>-proposal.md`` vs ``apply-form-improvements`` ->
-``process/predict/<v>/``). The source-side fix landed separately; this test
-pins the framework-level guarantee so the bug class cannot recur as a soft
+agent steps declare writes into an overlapping tree. The shape that motivated it:
+one step declares a file under a versioned directory, a later step declares the
+directory itself, and the second step's output silently replaces the first's. This
+test pins the framework-level guarantee so the bug class cannot recur as a soft
 warning.
 """
 

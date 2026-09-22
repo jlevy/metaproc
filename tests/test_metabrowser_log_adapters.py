@@ -51,19 +51,19 @@ def test_runpool_detector_accepts_only_pool_start() -> None:
 
 def test_process_detector_requires_known_event_and_domain_marker() -> None:
     assert _is_process_event(PROCESS_STEP_START)
-    assert _is_process_event({"event": "process_start", "process": "earnings"})
+    assert _is_process_event({"event": "process_start", "process": "example"})
     assert _is_process_event({"event": "item_complete", "item": "AAPL"})
     # Known event name without a process/step_id/item_* marker is rejected.
     assert not _is_process_event({"event": "step_start"})
     # Unknown event names are rejected even with a marker present.
-    assert not _is_process_event({"event": "pool_start", "process": "earnings"})
+    assert not _is_process_event({"event": "pool_start", "process": "example"})
     assert not _is_process_event({})
 
 
 def test_to_browser_event_maps_every_field() -> None:
     source = MetaprocLogEvent(
         kind="result",
-        summary="[process_complete] earnings",
+        summary="[process_complete] example",
         adapter="process",
         provider="anthropic",
         timestamp="2026-07-14T00:00:02Z",
