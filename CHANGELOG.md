@@ -37,7 +37,10 @@ development series.
   differs from the pin, which moves from 0.55.1. On Vertex AI, 0.59.0 still rewrites an
   unrecognized model id ending in `flash` to `gemini-3.5-flash` unless
   `experimental.dynamicModelConfiguration` is on; with the settings metaproc writes, a
-  request for `gemini-3.6-flash` is served by `gemini-3.6-flash`.
+  request for `gemini-3.6-flash` is served by `gemini-3.6-flash`. 0.59.0 was published
+  on 2026-09-08 and clears the repository’s 14-day package cool-off on 2026-09-22; until
+  then `npm install` under the repository’s `.npmrc` refuses it.
+  0.60.0, the current npm `latest`, clears the cool-off on 2026-09-29 and is not pinned.
 
 ### Fixed
 
