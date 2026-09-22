@@ -59,6 +59,8 @@ All engine state lives under ``<run_dir>/.state/`` with stable sub-namespaces:
 - ``<run_dir>/.state/tasks/<step_id>/<item_key>/`` — per-task state
   (status.yaml, the legacy attempt.yaml snapshot, attempts/, result.yaml,
   manual-ack.yaml).
+- ``<run_dir>/.state/tasks/<step_id>/collected-inputs.yaml`` — digests of the
+  ``collect:`` documents last delivered to the step.
 """
 
 LOGS_DIR = ".logs"
@@ -113,6 +115,7 @@ ATTEMPT_FILE = "attempt.yaml"
 ATTEMPT_ANOMALIES_FILE = "accepted-anomalies.yaml"
 RESULT_FILE = "result.yaml"
 MANUAL_ACK_FILE = "manual-ack.yaml"
+COLLECTED_INPUTS_FILE = "collected-inputs.yaml"
 
 # ── Process spec ────────────────────────────────────────────────
 

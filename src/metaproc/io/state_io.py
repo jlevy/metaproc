@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from frontmatter_format import read_yaml_file, to_yaml_string
+from ruamel.yaml import YAMLError
 from strif import atomic_output_file
 
 from metaproc.engine.placeholders import resolve_templates
@@ -22,6 +23,7 @@ from metaproc.models.plan import RunPlanSnapshot
 from metaproc.models.runtime import (
     AttemptDisposition,
     AttemptRecord,
+    CollectedInputsRecord,
     ManualAckRecord,
     OutputFailure,
     ResultRecord,
@@ -33,6 +35,7 @@ from metaproc.paths import (
     ATTEMPT_ANOMALIES_FILE,
     ATTEMPT_FILE,
     ATTEMPTS_SUBDIR,
+    COLLECTED_INPUTS_FILE,
     MANUAL_ACK_FILE,
     POOL_STATUS_FILE,
     RESULT_FILE,
@@ -84,6 +87,12 @@ def write_result_at(state_dir: Path, record: ResultRecord) -> Path:
 
 def write_manual_ack_at(state_dir: Path, record: ManualAckRecord) -> Path:
     return _write_record_at(state_dir, MANUAL_ACK_FILE, record.model_dump())
+
+
+def write_collected_inputs_at(state_dir: Path, record: CollectedInputsRecord) -> Path:
+    return _write_record_at(
+        state_dir, COLLECTED_INPUTS_FILE, record.model_dump(mode="json", by_alias=True)
+    )
 
 
 def write_run_plan(run_dir: Path, record: RunPlanSnapshot) -> Path:
@@ -532,6 +541,15 @@ def read_result_at(state_dir: Path) -> ResultRecord | None:
     return ResultRecord.model_validate(raw)
 
 
+def read_collected_inputs_at(state_dir: Path) -> CollectedInputsRecord | None:
+    """Read ``state_dir/collected-inputs.yaml``. Returns None if absent."""
+    path = state_dir / COLLECTED_INPUTS_FILE
+    if not path.exists():
+        return None
+    raw: object = read_yaml_file(path)
+    return CollectedInputsRecord.model_validate(raw)
+
+
 def read_manual_ack_at(state_dir: Path) -> ManualAckRecord | None:
     ack_path = state_dir / MANUAL_ACK_FILE
     if not ack_path.exists():
@@ -839,6 +857,18 @@ def _validate_attempt_matches_task_address(
         )
 
 
+def _invalidated_attempt_id(state_dir: Path) -> str | None:
+    """The attempt an invalidated task's renamed ``status.yaml.stale`` names, if any."""
+    stale_status_path = (state_dir / STATUS_FILE).with_suffix(".yaml.stale")
+    if not stale_status_path.exists():
+        return None
+    try:
+        return StatusRecord.model_validate(read_yaml_file(stale_status_path)).attempt_id
+    except (OSError, ValueError, YAMLError) as exc:
+        log.warning("unreadable invalidated status %s: %s", stale_status_path, exc)
+        return None
+
+
 def reconcile_stale_running(run_dir: Path) -> int:
     """Reconcile orphaned attempts and mutable task-status projections.
 
@@ -846,8 +876,10 @@ def reconcile_stale_running(run_dir: Path) -> int:
     dead, any retained live attempt becomes ``lost``. The latest terminal attempt is
     then projected back into ``status.yaml``. Scanning attempt directories as well as
     status files covers both cross-file crash windows: attempt creation before status
-    and attempt finalization before terminal status. Returns the number of tasks whose
-    durable facts or status projection changed.
+    and attempt finalization before terminal status. A task invalidated by ``--force``
+    or a cascade (``status.yaml`` renamed to ``status.yaml.stale`` over a terminal
+    attempt) stays invalidated. Returns the number of tasks whose durable facts or
+    status projection changed.
     """
     run_pool_status = _find_pool_status(run_dir)
     if run_pool_status is not None and is_pool_alive(run_pool_status):
@@ -908,6 +940,14 @@ def reconcile_stale_running(run_dir: Path) -> int:
             changed = True
 
         latest = history[-1]
+        # ``--force`` or a cascade renamed this terminal attempt's projection aside so
+        # the task re-runs. Projecting the attempt back would undo that invalidation;
+        # the next attempt start accepts the renamed record instead.
+        invalidated = (
+            record is None
+            and latest.disposition is not None
+            and _invalidated_attempt_id(state_dir) == latest.attempt_id
+        )
         status_names_latest = record is not None and record.attempt_id == latest.attempt_id
         if record is not None and status_names_latest:
             _validate_attempt_matches_status(state_dir, latest, record)
@@ -935,7 +975,7 @@ def reconcile_stale_running(run_dir: Path) -> int:
             changed = True
 
         expected_status = _terminal_status_from_attempt(latest)
-        if record != expected_status:
+        if not invalidated and record != expected_status:
             write_status_at(state_dir, expected_status)
             changed = True
 

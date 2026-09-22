@@ -7,11 +7,16 @@ is what makes a dropped item read as full coverage.
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import yaml
 
-from metaproc.engine.fan_in import collect_item_outcomes, write_outcome_manifest
+from metaproc.engine.fan_in import (
+    build_outcome_manifest,
+    collect_item_outcomes,
+    write_outcome_manifest,
+)
 
 
 def _task(run_dir: Path, step: str, key: str, state: str, error: str = "") -> None:
@@ -178,3 +183,18 @@ class TestWriteOutcomeManifest:
         written = yaml.safe_load(dest.read_text())["fan_in_outcomes"]
         assert written["upstream_step"] == "s"
         assert [i["key"] for i in written["items"]] == ["A", "B", "C"]
+
+    def test_the_digest_is_of_the_delivered_bytes_and_stable(self, tmp_path: Path) -> None:
+        """A resume compares digests, so unchanged state must render identical bytes."""
+        _task(tmp_path, "s", "A", "completed")
+        _task(tmp_path, "s", "B", "failed", error="boom")
+        dest = tmp_path / "out" / "outcomes.yaml"
+        first = build_outcome_manifest(tmp_path, "s", expected_keys=["A", "B"])
+        first.write(dest)
+        assert first.sha256 == hashlib.sha256(dest.read_bytes()).hexdigest()
+        assert build_outcome_manifest(tmp_path, "s", expected_keys=["A", "B"]) == first
+
+        _task(tmp_path, "s", "B", "completed")
+        assert build_outcome_manifest(tmp_path, "s", expected_keys=["A", "B"]).sha256 != (
+            first.sha256
+        )

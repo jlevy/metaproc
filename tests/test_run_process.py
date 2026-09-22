@@ -1063,6 +1063,38 @@ class TestDownstreamInvalidation:
         assert "d" in invalidated
         assert "c" not in invalidated  # c doesn't depend on b
 
+    def test_invalidate_reaches_composite_child_scopes(self, tmp_path: Path) -> None:
+        """A composite's work lives in its child scopes; invalidating it renames those
+        per-task records too, including nested scopes, and leaves artifacts alone."""
+        plan = _make_plan(
+            _step("a"),
+            _step("promote", ["a"], mode="composite"),
+            _step("review", ["promote"], mode="composite"),
+            _step("unrelated", mode="composite"),
+        )
+        _write_completed_status(tmp_path, "a")
+        # Scalar child scope, a nested scope inside it, and one mapped item's scope.
+        _write_completed_status(tmp_path / "promote", "select")
+        _write_completed_status(tmp_path / "promote" / "inner", "leaf")
+        _write_completed_status(tmp_path / "review" / "AAA", "check")
+        _write_completed_status(tmp_path / "unrelated", "keep")
+        artifact = tmp_path / "promote" / "status.yaml"
+        artifact.write_text("an output that happens to share the name\n")
+
+        invalidated = _invalidate_downstream(tmp_path, "a", plan)
+
+        assert invalidated == ["a", "promote", "review"]
+        for scope, step_id in (
+            (tmp_path / "promote", "select"),
+            (tmp_path / "promote" / "inner", "leaf"),
+            (tmp_path / "review" / "AAA", "check"),
+        ):
+            state_dir = _task_state_dir_for(scope, step_id)
+            assert not (state_dir / STATUS_FILE).exists()
+            assert (state_dir / "status.yaml.stale").exists()
+        assert (_task_state_dir_for(tmp_path / "unrelated", "keep") / STATUS_FILE).exists()
+        assert artifact.exists()
+
     def test_invalidate_at_canonical_task_state(self, tmp_path: Path) -> None:
         """Invalidation renames status.yaml at the per-task state location.
 

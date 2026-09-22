@@ -1295,12 +1295,41 @@ cascades downstream through the dep graph.
 The visible consequence is that hand-editing a generated runbook does not re-run its
 consumer; `--from <step>` forces that.
 
+A step’s collected fan-in documents are a second invalidation signal, kept out of the
+fingerprint because they are execution state: the plan publishes fingerprints at launch,
+and a collected document changes as mapped items finish.
+Each time `_execute_step` hands a step its `collect:` documents, it records their
+SHA-256 digests in `.state/tasks/<step>/collected-inputs.yaml`
+(`CollectedInputsRecord`). On a later run against the same `RUN_ID`, the level walk
+rebuilds the documents before the completion check
+(`_maybe_cascade_for_collected_inputs`) and compares digests.
+A difference means the step last ran over outcomes that no longer hold, typically
+because a resume finished items that had failed, so the step and its descendants are
+invalidated through `_invalidate_downstream`, the same path the fingerprint cascade
+takes.
+The digests are recorded at delivery rather than at completion because a composite
+consumer has no per-task completion record of its own, and its child steps can consume a
+document while a sibling later fails the composite.
+Content digests, not modification times, are compared: re-entering a consumer rewrites
+its documents byte-identically when nothing changed.
+A step without the record is a legacy completion and is not invalidated by this rule.
+
+`_invalidate_downstream` renames `status.yaml` to `status.yaml.stale` for each affected
+task and, for a composite step, for every task in its child scopes, because a re-entered
+composite otherwise reuses each child step whose own fingerprint is unchanged.
+A renamed record persists until its task runs again: reconciliation at the next
+orchestrator entry projects a terminal attempt back into `status.yaml` only when no
+`status.yaml.stale` names that attempt.
+
 ## 10.4 Recovery Rules
 
 Recovery semantics are explicit:
 
-- `completed` with validated outputs and a matching fingerprint -> skip
+- `completed` with validated outputs, a matching fingerprint, and unchanged collected
+  inputs -> skip
 - `completed` with a fingerprint mismatch -> rerun this step and downstream
+- collected fan-in document differs from the one last delivered -> rerun this step and
+  downstream
 - `failed` -> retry (with retry policy if configured)
 - `cached` -> skip
 - `running` with live process -> do not reclaim
@@ -1501,6 +1530,8 @@ arrived would report three of four items as full coverage; reporting against the
 distinguishes succeeded, failed, and never-reached.
 The manifest is derived from durable per-item state on every read and never stored as
 truth, so it cannot drift from the state it describes.
+A resume that changes an item’s outcome therefore changes the manifest, and §10.3
+describes how that re-runs a consumer that already completed.
 
 ### Declared Retry on the Code Path
 

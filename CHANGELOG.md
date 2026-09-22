@@ -45,6 +45,23 @@ development series.
 
 ### Fixed
 
+- **A resume re-runs a consumer whose collected input changed.** A step that declares a
+  `collect:` input was reused on resume whenever its fingerprint matched, so after a
+  resume finished mapped items that had failed, the consumer and everything downstream
+  kept output computed over the partial outcomes, and the run reported success.
+  Metaproc now records the SHA-256 digest of each fan-in document it hands a step, in
+  `.state/tasks/<step>/collected-inputs.yaml`, and a later run against the same `RUN_ID`
+  compares it with the document rebuilt from per-item state.
+  When one differs, the step and its descendants are invalidated like a fingerprint
+  change, with a `collected input ... changed since the step last ran — invalidated:`
+  line, so backfilling failed items no longer needs `--only <step> --force`. An
+  unchanged resume reuses everything, and a step recorded before this change is not
+  invalidated. Invalidating a composite step now also invalidates the tasks in its child
+  scopes, whether triggered by `--force`, a fingerprint change, or a changed collected
+  input, so its child steps re-run instead of being reused.
+  An invalidated task also stays invalidated across an interrupted run: reconciliation
+  no longer projects the invalidated attempt back into `status.yaml`.
+
 - **A list cost that leaves out unpriced tokens says so.** An invocation whose model has
   no entry in the pricing table added its tokens to every total but nothing to
   `list_cost_usd`, so the total read as complete.

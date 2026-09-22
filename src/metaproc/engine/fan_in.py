@@ -6,12 +6,16 @@ which makes a missing artifact and a failed item indistinguishable, and makes pa
 success look like corruption.
 
 The manifest here is derived from durable per-item state, never stored as truth: it is
-rebuilt on every read, so it cannot drift from the state it describes.
+rebuilt on every read, so it cannot drift from the state it describes. Its rendering is
+deterministic, so an unchanged per-item state yields byte-identical text, and the digest
+of that text says whether a consumer's collected input changed since it last ran.
 """
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -136,14 +140,32 @@ def _absent_item_outcome(run_dir: Path, key: str, upstream_chain: Sequence[str])
     return record
 
 
-def write_outcome_manifest(
+@dataclass(frozen=True, slots=True)
+class OutcomeManifest:
+    """One fan-in document: its payload and the exact text a consumer is handed."""
+
+    payload: dict[str, Any]
+    text: str
+
+    @property
+    def sha256(self) -> str:
+        """Digest of the delivered bytes, the value a resume compares."""
+        return hashlib.sha256(self.text.encode("utf-8")).hexdigest()
+
+    def write(self, destination: Path) -> None:
+        """Deliver the document to *destination* atomically."""
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with atomic_output_file(destination) as tmp_path:
+            tmp_path.write_text(self.text, encoding="utf-8")
+
+
+def build_outcome_manifest(
     run_dir: Path,
     upstream_step_id: str,
-    destination: Path,
     expected_keys: Sequence[str] | None = None,
     upstream_chain: Sequence[str] = (),
-) -> dict[str, Any]:
-    """Build and write the fan-in manifest for one upstream step."""
+) -> OutcomeManifest:
+    """Build the fan-in manifest for one upstream step without writing it."""
     outcomes = collect_item_outcomes(run_dir, upstream_step_id, expected_keys, upstream_chain)
     succeeded = sum(1 for o in outcomes if o["succeeded"])
     payload = {
@@ -156,7 +178,17 @@ def write_outcome_manifest(
             "items": outcomes,
         }
     }
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    with atomic_output_file(destination) as tmp_path:
-        tmp_path.write_text(yaml.safe_dump(payload, sort_keys=False))
-    return payload
+    return OutcomeManifest(payload=payload, text=yaml.safe_dump(payload, sort_keys=False))
+
+
+def write_outcome_manifest(
+    run_dir: Path,
+    upstream_step_id: str,
+    destination: Path,
+    expected_keys: Sequence[str] | None = None,
+    upstream_chain: Sequence[str] = (),
+) -> dict[str, Any]:
+    """Build and write the fan-in manifest for one upstream step."""
+    manifest = build_outcome_manifest(run_dir, upstream_step_id, expected_keys, upstream_chain)
+    manifest.write(destination)
+    return manifest.payload

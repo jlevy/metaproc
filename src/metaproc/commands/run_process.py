@@ -102,7 +102,7 @@ from metaproc.engine.dep_state import (
     recorded_step_hash,
 )
 from metaproc.engine.discovery import discover_items_from_source
-from metaproc.engine.fan_in import collect_item_outcomes, write_outcome_manifest
+from metaproc.engine.fan_in import OutcomeManifest, build_outcome_manifest, collect_item_outcomes
 from metaproc.engine.graph import (
     downstream,
     item_aligned_chains,
@@ -183,12 +183,14 @@ from metaproc.io.state_io import (
     mark_failed_at,
     mark_failed_synthetic_at,
     mark_running_at,
+    read_collected_inputs_at,
     read_manual_ack_at,
     read_run_plan,
     read_status_at,
     reconcile_stale_running,
     validate_task_status_identity_at,
     write_attempt_at,
+    write_collected_inputs_at,
     write_result_at,
     write_run_plan,
 )
@@ -201,11 +203,14 @@ from metaproc.models.resource_snapshot import ResourceRunSnapshot
 from metaproc.models.runtime import (
     AttemptDisposition,
     AttemptRecord,
+    CollectedInput,
+    CollectedInputsRecord,
     OutputFailure,
     ResultRecord,
     StatusRecord,
 )
 from metaproc.paths import (
+    COLLECTED_INPUTS_FILE,
     LOGS_DIR,
     MANUAL_ACK_FILE,
     RUN_LAYOUT_VERSION,
@@ -1706,10 +1711,16 @@ def _invalidate_downstream(
     Walks all per-task state dirs under ``<run>/.state/tasks/<step_id>/``
     (covers both the non-fan-out ``status.yaml`` and the per-item
     fan-out ``<key>/status.yaml`` files).
+
+    A composite step's work lives in its child scopes, so for a composite the
+    per-task records inside ``<run>/<step_id>/`` (one scope, or one per mapped
+    item) are renamed too. Without that, a re-entered composite reuses every child
+    step whose own fingerprint is unchanged, and its outputs never move.
     """
     del variables  # state dirs are keyed by step_id, not by output template
     dep_ids = downstream(plan.steps, root_step_id)
     all_ids = [root_step_id, *dep_ids]
+    modes = {step.step_id: step.mode for step in plan.steps}
     invalidated: list[str] = []
 
     for step_id in all_ids:
@@ -1724,6 +1735,8 @@ def _invalidate_downstream(
                     fan_out_status = sub / STATUS_FILE
                     if fan_out_status.exists():
                         status_paths.append(fan_out_status)
+        if modes.get(step_id) == "composite":
+            status_paths.extend(_child_scope_status_paths(run_dir / step_id))
 
         step_invalidated = False
         for status_path in status_paths:
@@ -1734,6 +1747,30 @@ def _invalidate_downstream(
             invalidated.append(step_id)
 
     return invalidated
+
+
+def _child_scope_status_paths(scope_root: Path) -> list[Path]:
+    """Per-task ``status.yaml`` files in every process scope under *scope_root*.
+
+    Matches ``.state/tasks/<step>/status.yaml`` and
+    ``.state/tasks/<step>/<key>/status.yaml`` at any depth, which covers a scalar
+    composite's scope, each mapped item's scope, and the scopes nested inside them.
+    Artifacts that merely share the directory are never matched.
+    """
+    if not scope_root.is_dir():
+        return []
+    matches: list[Path] = []
+    for status_path in scope_root.rglob(STATUS_FILE):
+        parts = status_path.relative_to(scope_root).parts
+        for index in range(len(parts) - 3):
+            if (
+                parts[index] == _STATE_DIR
+                and parts[index + 1] == _TASKS_SUBDIR
+                and len(parts) - index in (4, 5)
+            ):
+                matches.append(status_path)
+                break
+    return sorted(matches)
 
 
 # ── Ancestor verification ─────────────────────────────────────────
@@ -4329,6 +4366,171 @@ async def _execute_manual_step(
     return True
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class _CollectedDocument:
+    """One ``collect:`` input's fan-in document, built but not yet delivered."""
+
+    input_name: str
+    upstream_step: str
+    path: Path
+    manifest: OutcomeManifest
+
+
+def _collected_documents(
+    target: ResolvedStep,
+    *,
+    step_map: Mapping[str, ResolvedStep] | None,
+    chains_by_member: Mapping[str, list[str]] | None,
+    variables: dict[str, str],
+    run_dir: Path,
+) -> list[_CollectedDocument]:
+    """Build each of *target*'s ``collect:`` documents from durable per-item state.
+
+    Writes nothing. The same call serves delivery, just before the consumer runs, and
+    the level walk's reuse decision, which compares what the consumer would be handed
+    now against what it was last handed.
+    """
+    documents: list[_CollectedDocument] = []
+    for input_name, io_spec in target.inputs.items():
+        if not io_spec.collect or not io_spec.path:
+            continue
+        # The expected roster comes from the collected step's own resolved fan-out, so
+        # an item that died before reaching it is still reported rather than absent.
+        collected_step = (step_map or {}).get(io_spec.collect)
+        expected_keys = None
+        if collected_step is not None and collected_step.fan_out is not None:
+            bind = collected_step.fan_out.bind
+            expected_keys = [
+                str(item[bind]) for item in collected_step.fan_out.items if bind in item
+            ]
+        # The chain feeding the collected step, so an item that never arrived can be
+        # reported with where it stopped rather than as a bare absence.
+        upstream_chain: list[str] = []
+        for candidate in (chains_by_member or {}).get(io_spec.collect, []):
+            upstream_chain.append(candidate)
+            if candidate == io_spec.collect:
+                break
+        documents.append(
+            _CollectedDocument(
+                input_name=input_name,
+                upstream_step=io_spec.collect,
+                path=Path(resolve_templates(io_spec.path, variables)),
+                manifest=build_outcome_manifest(
+                    run_dir, io_spec.collect, expected_keys, upstream_chain
+                ),
+            )
+        )
+    return documents
+
+
+def _read_collected_inputs(run_dir: Path, step_id: str) -> CollectedInputsRecord | None:
+    """Read a step's ``collected-inputs.yaml``; an unreadable record counts as absent."""
+    state_dir = _step_item_dir(run_dir, step_id)
+    try:
+        return read_collected_inputs_at(state_dir)
+    except (YAMLError, ValueError) as exc:
+        log.warning(
+            "step %r: unreadable %s in %s (%s); its collected inputs cannot be compared",
+            step_id,
+            COLLECTED_INPUTS_FILE,
+            state_dir,
+            exc,
+        )
+        return None
+
+
+def _record_collected_inputs(
+    run_dir: Path,
+    *,
+    run_id: str,
+    step_id: str,
+    documents: Sequence[_CollectedDocument],
+) -> None:
+    """Record the digests of the documents just delivered to *step_id*.
+
+    Recorded at delivery rather than at completion. A composite consumer's child
+    steps complete one by one, so a child can consume the document while a sibling
+    later fails the composite, and a scalar composite has no per-task completion
+    record at all. The document a step was last handed is what its reusable work
+    was computed over, whether or not the step then completed.
+    """
+    inputs = {
+        document.input_name: CollectedInput(
+            upstream_step=document.upstream_step,
+            path=str(document.path),
+            sha256=document.manifest.sha256,
+        )
+        for document in documents
+    }
+    prior = _read_collected_inputs(run_dir, step_id)
+    if prior is not None and prior.run_id == run_id and prior.inputs == inputs:
+        return
+    write_collected_inputs_at(
+        _step_item_dir(run_dir, step_id),
+        CollectedInputsRecord(
+            run_id=run_id,
+            step_id=step_id,
+            recorded_at=_now_iso(),
+            inputs=inputs,
+        ),
+    )
+
+
+def _maybe_cascade_for_collected_inputs(
+    run_dir: Path,
+    plan: Plan,
+    step: ResolvedStep,
+    *,
+    step_map: Mapping[str, ResolvedStep],
+    chains_by_member: Mapping[str, list[str]],
+    variables: dict[str, str],
+    out: Any,
+) -> list[str]:
+    """Invalidate *step* and everything downstream when a ``collect:`` document it
+    was last handed no longer matches what durable per-item state says now.
+
+    A fan-in document changes when a mapped item's outcome changes, typically when
+    a resume completes an item that had failed. The consumer's fingerprint does not
+    move, so without this its earlier completion, computed over the old outcomes,
+    would be reused along with everything downstream of it.
+
+    Compares content digests, never mtimes: every run that reaches the consumer
+    rewrites the documents, byte-identically when nothing changed. No-op when the
+    step declares no ``collect:`` input, when no record exists (the step last ran
+    before the record did), or when every digest matches. Returns the step IDs
+    whose per-task ``status.yaml`` files were renamed to ``.stale``.
+    """
+    if not any(spec.collect and spec.path for spec in step.inputs.values()):
+        return []
+    recorded = _read_collected_inputs(run_dir, step.step_id)
+    if recorded is None:
+        return []
+    documents = _collected_documents(
+        step,
+        step_map=step_map,
+        chains_by_member=chains_by_member,
+        variables=variables,
+        run_dir=run_dir,
+    )
+    changed = [
+        document
+        for document in documents
+        if document.input_name in recorded.inputs
+        and recorded.inputs[document.input_name].sha256 != document.manifest.sha256
+    ]
+    if not changed:
+        return []
+    invalidated = _invalidate_downstream(run_dir, step.step_id, plan, variables=variables)
+    if invalidated:
+        names = ", ".join(f"'{d.input_name}' from '{d.upstream_step}'" for d in changed)
+        noun = "input" if len(changed) == 1 else "inputs"
+        out.progress(
+            f"  Step '{step.step_id}': collected {noun} {names} changed since the step "
+            f"last ran — invalidated: {', '.join(invalidated)}"
+        )
+    return invalidated
+
+
 async def _execute_step(
     *,
     spec: ProcessSpec,
@@ -4354,38 +4556,23 @@ async def _execute_step(
     # Fan-in bindings are materialized from durable per-item state just before the
     # consumer runs, so the collection describes what actually happened rather than
     # what was true when the plan was built.
-    for input_name, io_spec in target.inputs.items():
-        if not io_spec.collect or not io_spec.path:
-            continue
-        # The expected roster comes from the collected step's own resolved fan-out, so
-        # an item that died before reaching it is still reported rather than absent.
-        collected_step = (step_map or {}).get(io_spec.collect)
-        expected_keys = None
-        if collected_step is not None and collected_step.fan_out is not None:
-            bind = collected_step.fan_out.bind
-            expected_keys = [
-                str(item[bind]) for item in collected_step.fan_out.items if bind in item
-            ]
-        # The chain feeding the collected step, so an item that never arrived can be
-        # reported with where it stopped rather than as a bare absence.
-        upstream_chain: list[str] = []
-        for candidate in (chains_by_member or {}).get(io_spec.collect, []):
-            upstream_chain.append(candidate)
-            if candidate == io_spec.collect:
-                break
-        manifest = write_outcome_manifest(
-            run_dir,
-            io_spec.collect,
-            Path(resolve_templates(io_spec.path, variables)),
-            expected_keys,
-            upstream_chain,
-        )
-        counts = manifest["fan_in_outcomes"]
+    collected = _collected_documents(
+        target,
+        step_map=step_map,
+        chains_by_member=chains_by_member,
+        variables=variables,
+        run_dir=run_dir,
+    )
+    for document in collected:
+        document.manifest.write(document.path)
+        counts = document.manifest.payload["fan_in_outcomes"]
         out.progress(
-            f"  Collected '{input_name}' from '{io_spec.collect}': "
+            f"  Collected '{document.input_name}' from '{document.upstream_step}': "
             f"{counts['succeeded']} succeeded, {counts['failed']} failed "
             f"of {counts['total']}"
         )
+    if collected:
+        _record_collected_inputs(run_dir, run_id=run_id, step_id=step_id, documents=collected)
 
     if target.mode == "composite":
         if target.fan_out is not None:
@@ -4805,6 +4992,20 @@ async def _orchestrate(
                 out.progress(f"  Step '{step_id}': satisfied via override — skipping")
                 continue
             target = step_map[step_id]
+            # A consumer whose collected fan-in documents changed since it last ran
+            # (a resume finished items that had failed) is invalidated with everything
+            # downstream before the completion check, so that check sees it as not
+            # completed. Chain heads never materialize collected documents.
+            if not force and step_id not in _chain_head_of:
+                _maybe_cascade_for_collected_inputs(
+                    run_dir,
+                    plan,
+                    target,
+                    step_map=step_map,
+                    chains_by_member=_chains_by_member,
+                    variables=variables,
+                    out=out,
+                )
             # The level walk reaches an item-aligned chain only through its head. Even
             # when the head is complete, the chain may contain incomplete tasks; the
             # chain executor's per-task checks decide what resume reuses.

@@ -317,7 +317,7 @@ def _scan_step_task_files(run_dir: Path, step_id: str) -> tuple[bool, bool, bool
 
     - ``is_running``: at least one ``status.yaml`` reports state=running.
     - ``has_stale``: at least one ``status.yaml.stale`` exists (renamed by
-      ``--force`` or by the fingerprint cascade).
+      ``--force``, the fingerprint cascade, or a changed collected input).
     - ``has_completed_status_yaml``: at least one ``status.yaml`` reports
       state=completed. Used as a fallback when ``process-status.yaml`` is
       absent (single-step runs / legacy layouts).
@@ -361,7 +361,8 @@ def compute_step_state(run_dir: Path, plan: Plan, step_id: str) -> StepState:
     1. ``in_flight``: any per-task ``status.yaml`` reports ``running``, or
        the process-status mirror says ``running``.
     2. ``invalidated``: any ``status.yaml.stale`` exists under the step's
-       task state dir (renamed by ``--force`` or the fingerprint cascade).
+       task state dir (renamed by ``--force``, the fingerprint cascade, or a
+       changed collected input).
     3. ``stale``: the step is otherwise considered completed AND a
        ``recorded_step_hash`` exists that differs from
        ``fingerprint_step(step)``.

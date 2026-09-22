@@ -818,6 +818,49 @@ class TestReconcileStaleRunning:
         assert projected.error == "canonical failure"
         assert projected.failure_class == "invalid_output"
 
+    def test_keeps_an_invalidated_task_invalidated(self, tmp_path):
+        """A task whose projection was renamed ``.stale`` must still re-run.
+
+        Invalidation renames ``status.yaml`` over a terminal attempt; projecting that
+        attempt back at the next orchestrator entry would silently reuse the task.
+        """
+        run_dir = tmp_path / "runs" / "demo"
+        state_dir = run_dir / STATE_DIR / TASKS_SUBDIR / "summarize"
+        running = mark_running_at(
+            state_dir, run_id="demo/r1", step_id="summarize", item={"step": "summarize"}
+        )
+        mark_completed_at(state_dir, running_record=running)
+        (state_dir / "status.yaml").rename(state_dir / "status.yaml.stale")
+
+        assert reconcile_stale_running(run_dir) == 0
+
+        assert read_status_at(state_dir) is None
+        # The next attempt starts from the invalidated record.
+        rerun = mark_running_at(
+            state_dir, run_id="demo/r1", step_id="summarize", item={"step": "summarize"}
+        )
+        assert rerun.attempt == 2
+
+    def test_projects_a_newer_attempt_than_the_invalidated_one(self, tmp_path):
+        run_dir = tmp_path / "runs" / "demo"
+        state_dir = run_dir / STATE_DIR / TASKS_SUBDIR / "summarize"
+        first = mark_running_at(
+            state_dir, run_id="demo/r1", step_id="summarize", item={"step": "summarize"}
+        )
+        mark_completed_at(state_dir, running_record=first)
+        (state_dir / "status.yaml").rename(state_dir / "status.yaml.stale")
+        # The re-run's attempt was created, then the process died before its status.
+        orphan = start_attempt_at(
+            state_dir, run_id="demo/r1", step_id="summarize", item={"step": "summarize"}
+        )
+
+        assert reconcile_stale_running(run_dir) == 1
+
+        projected = read_status_at(state_dir)
+        assert projected is not None
+        assert projected.state == "failed"
+        assert projected.attempt_id == orphan.attempt_id
+
     def test_ignores_run_level_status_and_reconciles_per_task_running(self, tmp_path):
 
         run_dir = tmp_path / "runs" / "demo"

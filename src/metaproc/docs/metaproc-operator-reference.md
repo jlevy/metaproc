@@ -483,6 +483,46 @@ Editing such a file by hand therefore does not re-run its consumer; changing the
 that *produces* it does, and the cascade carries that downstream.
 Use `--from <step>` to force a rerun after editing a generated runbook in place.
 
+### When a collected input changes
+
+A step that declares a `collect:` input is handed a fan-in document that the
+orchestrator rebuilds from the collected mapped step’s per-item state just before the
+step runs.
+Each time it hands a step these documents, it records their SHA-256 digests in
+`.state/tasks/<step>/collected-inputs.yaml`. On a later run against the same `RUN_ID`,
+before deciding whether the step is complete, the orchestrator rebuilds the documents
+and compares digests.
+A digest differs when an item’s outcome moved, typically because a resume finished items
+that had failed. The orchestrator then:
+
+1. Treats the step as not completed, although its fingerprint is unchanged.
+2. Renames the step’s and every downstream step’s `status.yaml` to `status.yaml.stale`,
+   the same cascade a fingerprint change triggers, and prints
+   `Step '<step>': collected input '<input>' from '<mapped step>' changed since the step last ran — invalidated: <steps>`.
+
+The comparison is by content, never modification time.
+Every composite and mapped step is re-entered on resume, and re-entering a consumer
+rewrites its documents, byte-identically when nothing changed, so an unchanged resume
+reuses everything. A step with no `collected-inputs.yaml` (one that last ran before
+Metaproc recorded these digests) is not invalidated by this rule.
+Backfilling failed items therefore needs no `--only <consumer> --force`: the resume
+re-runs the consumer and its downstream.
+
+Invalidation reaches into composites.
+For a composite step, the cascade also renames the per-task records inside its child
+scopes (`<run>/<step>/`, or `<run>/<step>/<key>/` for each mapped item), so a child step
+that reads the document through `with:` re-runs, and so do the child steps of every
+downstream composite.
+This holds for every invalidation: `--force`, the fingerprint cascade, and a changed
+collected input. A renamed record stays renamed until its task runs again, including
+across an interrupted run.
+
+`metaproc status --steps` does not predict this invalidation, because the orchestrator
+decides it at resume from per-item state.
+Two cases are outside the rule: a step that reads a mapped step’s outputs without
+declaring `collect:`, and the downstream of a composite whose own child collector
+re-ran. Use `--from <step> --force` for those.
+
 ### When to reach for a flag
 
 The fingerprint covers runbook bytes and the declared step contract.
@@ -493,6 +533,7 @@ decision:
 | Situation | Flag |
 | --- | --- |
 | Pure runbook / prompt edit | none — rerun with same `RUN_ID` |
+| Failed mapped items finished, feeding a `collect:` consumer | none — rerun with same `RUN_ID` |
 | Edited a `mode: code` handler (fingerprint-blind) | `--from <step>` |
 | Want to rerun only one step in isolation, ignore the cascade | `--only <step>` |
 | Skip a step you know is fine, override caching | `--skip <step>` |
@@ -764,8 +805,8 @@ policies as a contract change.
 - `stale` — completed, but the step’s runbook or contract changed since the last
   completion. Re-running against this RUN_ID will re-execute the step plus its
   downstream.
-- `invalidated` — a prior `status.yaml` was renamed `.stale` by `--force` or by the
-  fingerprint cascade.
+- `invalidated` — a prior `status.yaml` was renamed `.stale` by `--force`, the
+  fingerprint cascade, or a changed collected input.
   The step will rerun.
 - `missing` — never started, or started and failed without a recorded completion.
 - `in_flight` — actively running.
