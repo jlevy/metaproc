@@ -219,6 +219,9 @@ Useful dispatch selectors:
 - `--force` bypasses reuse checks throughout the run, including composite descendants
 - `--dry-run` prints the plan without launching work
 
+`--from` and `--only` narrow the walk; they do not re-run a step that is already
+complete. Add `--force` to re-run it.
+
 `--skip`, `--from`, and `--only` currently name root-process steps.
 They are not matched against same-named steps inside a composite child.
 
@@ -568,7 +571,7 @@ decision:
 | Pure runbook / prompt edit | none — rerun with same `RUN_ID` |
 | Failed mapped items finished, feeding a `collect:` consumer | none — rerun with same `RUN_ID` |
 | Edited a `mode: code` handler (fingerprint-blind) | `--from <step> --force` |
-| Want to rerun only one step in isolation, ignore the cascade | `--only <step>` |
+| Want to rerun only one step in isolation, ignore the cascade | `--only <step> --force` |
 | Skip a step you know is fine, override caching | `--skip <step>` |
 | Force a rerun the fingerprint thinks is unnecessary | `--force` |
 | Re-do a downstream mapped step’s completed items after a collected input changed | `--from <step> --force` |
