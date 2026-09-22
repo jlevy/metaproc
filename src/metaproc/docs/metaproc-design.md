@@ -527,37 +527,59 @@ A process-level input under `inputs:` also takes these fields:
 | `required` | Whether launch validation refuses a run that leaves a `param`-backed input unset. Defaults to `true`. |
 | `default` | Literal value for an optional, `param`-backed input the operator leaves unset. |
 
-`run-config.yaml` records every resolved input at launch, under both its logical name
-and its `param` alias.
-A resume may change any of them, including by adding or removing one or through an
-edited `default:`, and it may also change the run directory or the `--step-variant` set.
-The resume logs each change at WARNING and prints it to the operator as
-`Resume changes <field>: <old> -> <new>`, where the field is `variables.<NAME>`,
-`run_dir`, or `step_variants.<step>` and `<unset>` stands for an absent side.
+`run-config.yaml` records the launch config: every resolved input, under both its
+logical name and its `param` alias; the `--step-variant` overrides; the variant,
+execution profile, and artifact namespace; the execution profiles the plan’s steps
+resolve to, each with its adapter and configuration (`resolved_profiles`); the backend;
+and the `git_sha` of the checkout the launch ran from.
+A resume may change any of them, including by adding or removing an input or through an
+edited `default:`. The resume logs each change at INFO and warns the operator once per
+change as `Resume changes <field>: <old> -> <new>`, where the field is
+`variables.<NAME>`, `step_variants.<STEP>`, `variant`, `execution_profile`,
+`artifact_namespace`, `resolved_profiles`, `backend`, or `git_sha`, and `<unset>` stands
+for an absent side. The warning names only the profiles of a `resolved_profiles` change.
 It appends one `launch_config_change` event listing the changes to
 `.logs/dispatch-config-changes.jsonl` as `changes: [{field, diff}]`, each diff the flat
 `{old, new}` pair that the `max_concurrency` change of a `dispatch_config_change` event
-uses (that event’s `auth` diff is keyed by subfield instead).
-A log the resume cannot append to refuses the resume with an error naming it.
-It then rewrites `run-config.yaml` so that its variables and step variants hold the
-values the resume ran with.
-`run_dir` and every other field keep their creation values: the results projection
-rebases recorded result paths from the creation `run_dir`, so a resume in a different
-directory is recorded in the event and leaves that anchor alone.
-A resume that changes nothing writes no event and rewrites nothing.
-The two canonical cloud Filestore mount roots for `RUNS_DIR` normalize to one run
-directory and record no change.
-Validation refuses a process name that differs from the recorded one, because every task
-record’s identity is `<process>/<RUN_ID>` and a renamed process cannot own the existing
-task state (the refusal names the recorded name and the two ways out: resume under that
-name, or start a new `RUN_ID`), and a corrupt `run-config.yaml`: one that does not read
-as a YAML mapping, or whose `variables` is not a mapping of strings to strings.
+uses (that event’s `auth` diff is keyed by subfield instead); a `resolved_profiles` diff
+carries both profile lists in full, as JSON. A log the resume cannot append to refuses
+the resume with an error naming it, and nothing about the run changes: not its config,
+its task state, or its summaries.
+It then rewrites those fields in `run-config.yaml` to the values the resume ran with, so
+every reader of the config, `metaproc status` and the operations summary included, sees
+the run as it now executes, and the next resume compares against them.
+Every other field keeps its creation value, among them the process name, the run ID and
+run directory, the creation time, and the resource snapshot the terminal finalizer
+reads. A resume that changes nothing writes no event and rewrites nothing.
+
+Validation refuses a resume on three findings, each before anything is recorded or
+written:
+
+- A process name that differs from the recorded one.
+  Every task record’s identity is `<process>/<RUN_ID>`, and a renamed process cannot own
+  the existing task state.
+- A run directory that differs from the recorded one.
+  Result records are anchored to it: the results projection rebases a recorded result
+  path only from the recorded directory (§10.6, gate 8). Resuming a moved run would
+  re-run every step whose outputs sit under `{{run.dir}}`, since those paths are in its
+  fingerprint, and write result records the projection cannot accept.
+  A new `RUN_ID` costs the same work without the inconsistency.
+  The two canonical cloud Filestore mount roots for `RUNS_DIR` normalize to one run
+  directory, so resuming through either is neither refused nor recorded.
+- A corrupt `run-config.yaml`: one that does not read as a YAML mapping, or whose
+  `variables` is not a mapping of strings to strings.
+
+The first two refusals name the recorded and the current value and the two ways out:
+resume under the recorded name or at the recorded directory, or start a new `RUN_ID`.
 
 Recording a change does not decide what re-runs; step fingerprints do (§10.3). A value
-bound through a step’s `with:` stays a template in the resolved plan, so changing it
-leaves the fingerprint unchanged.
-A value substituted into a resolved field, such as `env:` or an output path, changes the
+substituted into a resolved field, such as `env:` or an output path, changes the
 fingerprint, and that step re-runs with its downstream on the next resume.
+A value bound through a step’s `with:` stays a template in the resolved plan, and a
+value a code handler reads at runtime from its `variables` never enters the plan, so
+changing either leaves the fingerprint unchanged.
+Such a step is reused with output computed over the old value until
+`--from <step> --force` re-does it.
 
 Scopes are explicit:
 
@@ -1315,7 +1337,8 @@ comparable.
 Nothing is lost: the producing step’s own fingerprint covers that content and
 cascades downstream through the dep graph.
 The visible consequence is that hand-editing a generated runbook does not re-run its
-consumer; `--from <step>` forces that.
+consumer; `--from <step> --force` forces that, since `--from` alone only narrows the
+walk and reuses a completed step it selects.
 
 A step’s collected fan-in documents are a second invalidation signal, kept out of the
 fingerprint because they are execution state: the plan publishes fingerprints at launch,
@@ -1338,11 +1361,10 @@ consumer has no per-task completion record of its own, and its child steps can c
 document while a sibling later fails the composite.
 Content digests, not modification times, are compared.
 A step without the record is a legacy completion and is not invalidated by this rule.
-A record that is present but unreadable, including one lacking `outcomes_sha256`,
-degrades the other way, toward changed: absent means a run that predates the record,
-while unreadable means the step ran over outcomes this process cannot compare, and
-re-running one consumer is cheaper than reusing output computed over outcomes that no
-longer hold.
+A record that is present but does not validate counts as unreadable, and degrades the
+other way, toward changed: absent means a run that predates the record, while unreadable
+means the step ran over outcomes this process cannot compare, and re-running one
+consumer is cheaper than reusing output computed over outcomes that no longer hold.
 
 `_invalidate_downstream` renames `status.yaml` to `status.yaml.stale` for each affected
 parent-level task. A composite invalidated that way is re-entered and reuses its
@@ -1364,7 +1386,7 @@ are reused. For a mapped non-composite step (`mode: code`, whether handler or co
 item on a routine backfill, which costs more than the manual sequence this rule
 replaces. Both mapped shapes are re-entered, so the items a new roster adds are
 discovered, and an item whose content changed under the same key is reused until
-`--force` or `--from` re-does it.
+`--from <step> --force` re-does it.
 The fingerprint cascade and `--force` keep the wider scope: they fire on an operator
 edit or an explicit force, where re-doing completed item work is the intent.
 Downstream composites keep their children on that path too; a downstream collector is
@@ -1457,6 +1479,8 @@ Gate 8 handles a run tree hydrated at a different path than it was written at.
 The `run_dir` recorded in `run-config.yaml` anchors the rebase, so a path recorded on
 another host resolves into the local tree; a path that genuinely points outside it stays
 unaccepted rather than being silently rewritten.
+Because the anchor is that one recorded directory, a resume refuses to run anywhere else
+(§6.5): the results it wrote there would fail this gate.
 
 **Coverage gaps.** Missing state must not read as complete coverage.
 When a snapshot declares an executable scalar task, a mapped item task, or a composite
