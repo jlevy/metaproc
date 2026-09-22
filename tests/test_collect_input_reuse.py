@@ -24,7 +24,8 @@ import pytest
 from typer.testing import CliRunner, Result
 
 from metaproc.cli import app
-from metaproc.io.state_io import read_collected_inputs_at
+from metaproc.io import read_yaml_file, to_yaml_string
+from metaproc.io.state_io import read_collected_inputs_at, read_status_at
 from metaproc.paths import COLLECTED_INPUTS_FILE, STATE_DIR, TASKS_SUBDIR
 
 _HANDLERS = '''\
@@ -58,8 +59,15 @@ def _write(step: object, name: str, text: str) -> None:
 def scan(variables: dict[str, str], step: object) -> None:  # noqa: ARG001
     item = variables["item"]
     _log(variables, f"scan:{item}")
-    if (Path(variables["RUNS_DIR"]) / f"fail-{item}").exists():
-        raise RuntimeError(f"{item}: failing while its marker exists")
+    marker = Path(variables["RUNS_DIR"]) / f"fail-{item}"
+    if marker.exists():
+        detail = ""
+        if marker.read_text().strip() == "vary":
+            # A marker reading `vary` makes each attempt fail with different wording.
+            root = Path(variables["RUNS_DIR"]) / variables["RUN_ID"].split("/")[0]
+            attempts = (root / "invocations.log").read_text().splitlines()
+            detail = f" (attempt {attempts.count(f'scan:{item}')})"
+        raise RuntimeError(f"{item}: failing while its marker exists{detail}")
     out = Path(variables["RUNS_DIR"]) / variables["RUN_ID"] / "scan" / f"{item}.txt"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(item + "\\n")
@@ -658,3 +666,92 @@ def test_a_fingerprint_change_keeps_composites_completed_child_steps(tmp_path: P
     assert "Step 'stage1': fingerprint changed" in resumed.output
     # The leaf downstream re-runs; no composite's completed child step does.
     assert _invocations(run_dir) == Counter({"s1:a": 1, "s1:b": 1, "s2": 1, "report": 2})
+
+
+def _item_error(run_dir: Path, step_id: str, key: str) -> str:
+    status = read_status_at(_record_dir(run_dir, step_id) / key)
+    assert status is not None
+    assert status.error is not None
+    return status.error
+
+
+def test_a_repeated_failure_yields_byte_identical_outcome_documents(tmp_path: Path) -> None:
+    """The attempt log path an item's error ends in is not copied into the document."""
+    process_path, runs_dir, run_dir = _setup(tmp_path, "composite", failing="b")
+    launched = _run(process_path, runs_dir, run_dir.name)
+    assert launched.exit_code != 0, _message(launched)
+    document = run_dir / "promotion" / "outcomes.yaml"
+    first_bytes = document.read_bytes()
+    first_error = _item_error(run_dir, "scan", "b")
+
+    # The item fails again the same way, under a new attempt. The composite consumer
+    # is re-entered, so its document is written again.
+    resumed = _run(process_path, runs_dir, run_dir.name)
+
+    assert resumed.exit_code != 0, _message(resumed)
+    second_error = _item_error(run_dir, "scan", "b")
+    assert "(traceback: " in first_error
+    assert first_error != second_error
+    assert document.read_bytes() == first_bytes
+    items = read_yaml_file(document)["fan_in_outcomes"]["items"]
+    failed = next(item for item in items if item["key"] == "b")
+    assert failed["error"] == "RuntimeError: b: failing while its marker exists"
+    assert "Step 'promotion': collected input" not in resumed.output
+    assert _invocations(run_dir) == Counter({"scan:a": 1, "scan:b": 2, "select": 1, "report": 1})
+
+
+@pytest.mark.parametrize(
+    ("shape", "consumer", "manifest"),
+    [
+        ("top-level", "summarize", "summary/outcomes.yaml"),
+        ("composite", "select", "promotion/outcomes.yaml"),
+    ],
+)
+def test_a_failed_item_that_fails_again_differently_does_not_rerun_its_consumer(
+    tmp_path: Path, shape: str, consumer: str, manifest: str
+) -> None:
+    """Invalidation follows what happened to each item, not how its error reads."""
+    process_path, runs_dir, run_dir = _setup(tmp_path, shape, failing="b")
+    (runs_dir / "fail-b").write_text("vary\n")
+    launched = _run(process_path, runs_dir, run_dir.name)
+    assert launched.exit_code != 0, _message(launched)
+    before = _invocations(run_dir)
+    first_error = _item_error(run_dir, "scan", "b")
+
+    resumed = _run(process_path, runs_dir, run_dir.name)
+
+    assert resumed.exit_code != 0, _message(resumed)
+    assert "(attempt 1)" in first_error
+    assert "(attempt 2)" in _item_error(run_dir, "scan", "b")
+    assert "collected input" not in resumed.output
+    assert _invocations(run_dir) == before + Counter({"scan:b": 1})
+    assert _invocations(run_dir)[consumer] == 1
+    if shape == "composite":
+        # The re-entered consumer was handed the new wording without re-running.
+        items = read_yaml_file(run_dir / manifest)["fan_in_outcomes"]["items"]
+        assert "(attempt 2)" in next(item for item in items if item["key"] == "b")["error"]
+
+
+def test_a_record_without_outcome_digests_does_not_cascade(tmp_path: Path) -> None:
+    """A record written before outcome digests existed is not compared."""
+    process_path, runs_dir, run_dir = _setup(tmp_path, "two-consumers", failing="b")
+    launched = _run(process_path, runs_dir, run_dir.name)
+    assert launched.exit_code != 0, _message(launched)
+
+    # Rewrite `summarize`'s record in the earlier shape, which held only the digest of
+    # the document's bytes; `tally` keeps the current shape.
+    record_path = _record_dir(run_dir, "summarize") / COLLECTED_INPUTS_FILE
+    record = read_yaml_file(record_path)
+    for entry in record["inputs"].values():
+        entry.pop("outcomes_sha256", None)
+    record_path.write_text(to_yaml_string(record), encoding="utf-8")
+    (runs_dir / "fail-b").unlink()
+    resumed = _run(process_path, runs_dir, run_dir.name)
+
+    assert resumed.exit_code == 0, _message(resumed)
+    assert "Step 'summarize': collected input" not in resumed.output
+    assert (run_dir / "report.txt").read_text() == "report:a\n"
+    assert "Step 'tally': collected input 'outcomes' from 'scan' changed" in resumed.output
+    assert _invocations(run_dir) == Counter(
+        {"scan:a": 1, "scan:b": 2, "summarize": 1, "report": 1, "tally": 2}
+    )

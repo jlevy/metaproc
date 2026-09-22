@@ -487,13 +487,16 @@ Use `--from <step>` to force a rerun after editing a generated runbook in place.
 
 A step that declares a `collect:` input is handed a fan-in document that the
 orchestrator rebuilds from the collected mapped step’s per-item state just before the
-step runs.
-Each time it hands a step these documents, it records their SHA-256 digests in
-`.state/tasks/<step>/collected-inputs.yaml`. On a later run against the same `RUN_ID`,
-before deciding whether the step is complete, the orchestrator rebuilds the documents
-and compares digests.
-A digest differs when an item’s outcome moved, typically because a resume finished items
-that had failed. The orchestrator then:
+step runs. Each time it hands a step these documents, it records two SHA-256 digests per
+document in `.state/tasks/<step>/collected-inputs.yaml`: `sha256`, of the document’s
+bytes, kept for audit, and `outcomes_sha256`, of what the document says happened (the
+upstream step, the totals, and each item’s key, state, and success).
+On a later run against the same `RUN_ID`, before deciding whether the step is complete,
+the orchestrator rebuilds the documents and compares `outcomes_sha256`. It differs when
+an item changed state or appeared or disappeared, typically because a resume finished
+items that had failed.
+An item that fails again, even with a different error message, is not a change.
+When the outcome digest differs, the orchestrator:
 
 1. Treats the step as not completed, although its fingerprint is unchanged.
 2. Renames the step’s and every downstream step’s `status.yaml` to `status.yaml.stale`,
@@ -502,9 +505,13 @@ that had failed. The orchestrator then:
 
 The comparison is by content, never modification time.
 Every composite and mapped step is re-entered on resume, and re-entering a consumer
-rewrites its documents, byte-identically when nothing changed, so an unchanged resume
-reuses everything. A step with no `collected-inputs.yaml` (one that last ran before
-Metaproc recorded these digests) is not invalidated by this rule.
+rewrites its documents, so an unchanged resume reuses everything.
+A fan-in document copies each item’s error without the attempt log paths it names (every
+`(traceback: <path>.log)` and every `; log: <path>.log`), so an item that fails again
+the same way writes a byte-identical document; the attempt log remains reachable from
+the item’s own task state (`.state/tasks/<step>/<key>/`). A step with no
+`collected-inputs.yaml`, or whose record has no `outcomes_sha256` (one that last ran
+before Metaproc recorded it), is not invalidated by this rule.
 Backfilling failed items therefore needs no `--only <consumer> --force`: the resume
 re-runs the consumer and its downstream.
 

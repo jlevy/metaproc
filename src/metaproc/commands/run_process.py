@@ -4466,6 +4466,7 @@ def _record_collected_inputs(
             upstream_step=document.upstream_step,
             path=str(document.path),
             sha256=document.manifest.sha256,
+            outcomes_sha256=document.manifest.outcomes_sha256,
         )
         for document in documents
     }
@@ -4506,10 +4507,11 @@ def _maybe_cascade_for_collected_inputs(
     level only, as the fingerprint cascade does, so downstream composites reuse
     their completed child steps.
 
-    Compares content digests, never mtimes: every run that reaches the consumer
-    rewrites the documents, byte-identically when nothing changed. No-op when the
-    step declares no ``collect:`` input, when no record exists (the step last ran
-    before the record did), or when every digest matches. Returns the step IDs
+    Compares outcome digests, never mtimes or error wording: each item's key, state
+    and success plus the totals, so an item that fails again with a different message
+    is not a change while an item that completes is. No-op when the step declares no
+    ``collect:`` input, when no record or no recorded outcome digest exists (the step
+    last ran before they did), or when every digest matches. Returns the step IDs
     whose per-task ``status.yaml`` files were renamed to ``.stale``.
     """
     if not any(spec.collect and spec.path for spec in step.inputs.values()):
@@ -4524,12 +4526,15 @@ def _maybe_cascade_for_collected_inputs(
         variables=variables,
         run_dir=run_dir,
     )
-    changed = [
-        document
-        for document in documents
-        if document.input_name in recorded.inputs
-        and recorded.inputs[document.input_name].sha256 != document.manifest.sha256
-    ]
+    changed: list[_CollectedDocument] = []
+    for document in documents:
+        prior = recorded.inputs.get(document.input_name)
+        # A record without the outcome digest predates it; like no record, it is
+        # not compared.
+        if prior is None or prior.outcomes_sha256 is None:
+            continue
+        if prior.outcomes_sha256 != document.manifest.outcomes_sha256:
+            changed.append(document)
     if not changed:
         return []
     invalidated = _invalidate_downstream(

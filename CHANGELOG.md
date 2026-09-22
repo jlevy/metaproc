@@ -49,20 +49,33 @@ development series.
   `collect:` input was reused on resume whenever its fingerprint matched, so after a
   resume finished mapped items that had failed, the consumer and everything downstream
   kept output computed over the partial outcomes, and the run reported success.
-  Metaproc now records the SHA-256 digest of each fan-in document it hands a step, in
-  `.state/tasks/<step>/collected-inputs.yaml`, and a later run against the same `RUN_ID`
-  compares it with the document rebuilt from per-item state.
-  When one differs, the step and its descendants are invalidated like a fingerprint
+  Metaproc now records, for each fan-in document it hands a step, a digest of what the
+  document says happened (the upstream step, the totals, and each item’s key, state, and
+  success) in `.state/tasks/<step>/collected-inputs.yaml`, beside a digest of the
+  document’s bytes kept for audit.
+  A later run against the same `RUN_ID` compares the outcome digest with the document
+  rebuilt from per-item state.
+  When it differs, the step and its descendants are invalidated like a fingerprint
   change, with a `collected input ... changed since the step last ran — invalidated:`
-  line, so backfilling failed items no longer needs `--only <step> --force`. An
-  unchanged resume reuses everything, and a step recorded before this change is not
-  invalidated. When the consumer is a composite, its own child steps re-run too, because
-  they read the document through `with:` paths.
+  line, so backfilling failed items no longer needs `--only <step> --force`. An item
+  that fails again with different wording is not a change, an unchanged resume reuses
+  everything, and a step recorded before this change is not invalidated.
+  When the consumer is a composite, its own child steps re-run too, because they read
+  the document through `with:` paths.
   Downstream composites are invalidated at the parent level and reuse their completed
   child steps, exactly as after a fingerprint change, so a downstream mapped composite
   does work only for the items its new roster adds.
   An invalidated task also stays invalidated across an interrupted run: reconciliation
   no longer projects the invalidated attempt back into `status.yaml`.
+
+- **Fan-in documents read the same when a failure recurs.** A failed item’s `error` in a
+  `metaproc:FanInOutcomes/0.1` document ended in the path of its attempt’s log, so a
+  retry that failed the same way rewrote the document with new bytes, and a publication
+  gate that seals these documents refused the run tree.
+  The document now copies each error without its attempt evidence paths, every
+  `(traceback: <path>.log)` and `; log: <path>.log` including those nested in a
+  composite’s error, and keeps the message text.
+  The item’s `status.yaml` keeps the full message, so the attempt log stays reachable.
 
 - **A list cost that leaves out unpriced tokens says so.** An invocation whose model has
   no entry in the pricing table added its tokens to every total but nothing to

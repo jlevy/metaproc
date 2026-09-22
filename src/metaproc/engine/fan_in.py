@@ -7,13 +7,16 @@ success look like corruption.
 
 The manifest here is derived from durable per-item state, never stored as truth: it is
 rebuilt on every read, so it cannot drift from the state it describes. Its rendering is
-deterministic, so an unchanged per-item state yields byte-identical text, and the digest
-of that text says whether a consumer's collected input changed since it last ran.
+deterministic: errors are copied without the attempt log paths they end in, so an item
+that fails again the same way yields byte-identical text. A resume decides whether a
+consumer's collected input changed from a digest of what the manifest says happened
+(each item's key, state and success, and the totals), not from its error wording.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +26,7 @@ import yaml
 from pydantic import ValidationError
 from strif import atomic_output_file
 
+from metaproc.engine.command_diagnostics import without_evidence_paths
 from metaproc.io.state_io import read_status_at
 from metaproc.models.runtime import StatusRecord
 
@@ -149,8 +153,31 @@ class OutcomeManifest:
 
     @property
     def sha256(self) -> str:
-        """Digest of the delivered bytes, the value a resume compares."""
+        """Digest of the delivered bytes, recorded for audit."""
         return hashlib.sha256(self.text.encode("utf-8")).hexdigest()
+
+    @property
+    def outcomes_sha256(self) -> str:
+        """Digest of what happened: the upstream step, the totals, and each item's key,
+        state and success.
+
+        This is the value a resume compares. Error wording is left out, so an item that
+        fails again with a different message digests the same, while an item that
+        changes state, or appears or disappears, does not.
+        """
+        block = self.payload["fan_in_outcomes"]
+        projection = {
+            "upstream_step": block["upstream_step"],
+            "total": block["total"],
+            "succeeded": block["succeeded"],
+            "failed": block["failed"],
+            "items": [
+                {"key": item["key"], "state": item["state"], "succeeded": item["succeeded"]}
+                for item in block["items"]
+            ],
+        }
+        encoded = json.dumps(projection, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
     def write(self, destination: Path) -> None:
         """Deliver the document to *destination* atomically."""
@@ -159,14 +186,31 @@ class OutcomeManifest:
             tmp_path.write_text(self.text, encoding="utf-8")
 
 
+def _without_attempt_paths(outcome: dict[str, Any]) -> dict[str, Any]:
+    """An item outcome with the attempt log paths removed from its error."""
+    error = outcome.get("error")
+    if not isinstance(error, str):
+        return outcome
+    return {**outcome, "error": without_evidence_paths(error)}
+
+
 def build_outcome_manifest(
     run_dir: Path,
     upstream_step_id: str,
     expected_keys: Sequence[str] | None = None,
     upstream_chain: Sequence[str] = (),
 ) -> OutcomeManifest:
-    """Build the fan-in manifest for one upstream step without writing it."""
-    outcomes = collect_item_outcomes(run_dir, upstream_step_id, expected_keys, upstream_chain)
+    """Build the fan-in manifest for one upstream step without writing it.
+
+    Each item's error is copied without its attempt evidence paths, so the document
+    reads the same whenever the same failure recurs.
+    """
+    outcomes = [
+        _without_attempt_paths(outcome)
+        for outcome in collect_item_outcomes(
+            run_dir, upstream_step_id, expected_keys, upstream_chain
+        )
+    ]
     succeeded = sum(1 for o in outcomes if o["succeeded"])
     payload = {
         "fan_in_outcomes": {

@@ -270,8 +270,14 @@ class CollectedInput(BaseModel):
     """Rendered path the document was written to."""
 
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    """Digest of the document's bytes. Content, not mtime: every resume that reaches
-    the consumer rewrites the document, byte-identically when nothing changed."""
+    """Digest of the document's bytes, kept for audit. Every resume that reaches the
+    consumer rewrites the document, byte-identically when nothing changed."""
+
+    outcomes_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    """Digest of what the document says happened: the upstream step, the totals, and
+    each item's key, state and success. A resume compares this value, so an item that
+    fails again with a different error message does not count as a change. A record
+    without it is treated like a step with no record: it is not compared."""
 
 
 class CollectedInputsRecord(BaseModel):
@@ -280,7 +286,7 @@ class CollectedInputsRecord(BaseModel):
     Written in the step's task state directory each time the orchestrator
     materializes the step's fan-in documents, before the step runs. A later run
     against the same ``RUN_ID`` rebuilds each document from durable per-item
-    state and compares digests: a difference means the step last ran over
+    state and compares outcome digests: a difference means the step last ran over
     outcomes that no longer hold, so the step (with a composite's own child
     steps) re-runs and its downstream steps are invalidated. A step with no
     record (one that last ran before the record existed) is not invalidated by

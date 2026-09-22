@@ -198,3 +198,48 @@ class TestWriteOutcomeManifest:
         assert build_outcome_manifest(tmp_path, "s", expected_keys=["A", "B"]).sha256 != (
             first.sha256
         )
+
+
+class TestDeterministicManifest:
+    def test_errors_are_copied_without_attempt_evidence_paths(self, tmp_path: Path) -> None:
+        """The same failure under a new attempt must render the same bytes."""
+        first = tmp_path / "first"
+        second = tmp_path / "second"
+        for run_dir, attempt in ((first, "att-1"), (second, "att-2")):
+            _task(run_dir, "s", "A", "completed")
+            _task(
+                run_dir,
+                "s",
+                "B",
+                "failed",
+                error=(
+                    "Process completed with failures: child: RuntimeError: refused "
+                    f"(traceback: .logs/tasks/child/process_{attempt}.log). Blocked: none "
+                    f"(traceback: .logs/tasks/s/B/process_{attempt}.log)"
+                ),
+            )
+        rendered = build_outcome_manifest(first, "s")
+        assert rendered.text == build_outcome_manifest(second, "s").text
+        failed = rendered.payload["fan_in_outcomes"]["items"][1]
+        assert failed["error"] == (
+            "Process completed with failures: child: RuntimeError: refused. Blocked: none"
+        )
+        # The per-item record itself keeps the path, for readers that need the log.
+        assert "(traceback: " in collect_item_outcomes(first, "s")[1]["error"]
+
+    def test_the_outcome_digest_follows_state_not_wording(self, tmp_path: Path) -> None:
+        _task(tmp_path, "s", "A", "completed")
+        _task(tmp_path, "s", "B", "failed", error="first wording")
+        first = build_outcome_manifest(tmp_path, "s", expected_keys=["A", "B"])
+
+        _task(tmp_path, "s", "B", "failed", error="second wording")
+        reworded = build_outcome_manifest(tmp_path, "s", expected_keys=["A", "B"])
+        assert reworded.sha256 != first.sha256
+        assert reworded.outcomes_sha256 == first.outcomes_sha256
+
+        _task(tmp_path, "s", "B", "completed")
+        completed = build_outcome_manifest(tmp_path, "s", expected_keys=["A", "B"])
+        assert completed.outcomes_sha256 != first.outcomes_sha256
+
+        widened = build_outcome_manifest(tmp_path, "s", expected_keys=["A", "B", "C"])
+        assert widened.outcomes_sha256 != completed.outcomes_sha256

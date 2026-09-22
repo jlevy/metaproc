@@ -64,7 +64,7 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
         "design",
         "metaproc-design",
         "How Metaproc is built: spec format, runtime artifacts, adapters, robustness.",
-        18500,
+        20500,
     ),
     Topic(
         "framework",

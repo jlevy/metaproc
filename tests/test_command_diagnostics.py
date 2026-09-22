@@ -9,6 +9,7 @@ from metaproc.engine.command_diagnostics import (
     failure_cause,
     handler_failure_message,
     summarize_failure_causes,
+    without_evidence_paths,
 )
 from metaproc.engine.retry import FailureClass, RetryVerdict
 
@@ -256,6 +257,33 @@ def test_failure_cause_drops_only_the_trailing_evidence_path() -> None:
         "output validation failed: report: path does not exist: report.md",
     ):
         assert failure_cause(unchanged) == unchanged
+
+
+def test_without_evidence_paths_drops_every_nested_attempt_path() -> None:
+    """A composite's error nests each failed child's message and its log path."""
+    child = handler_failure_message(
+        RuntimeError("staging refused"),
+        env={},
+        log_path=".logs/tasks/finalize/process_att-20260922T105447Z.1.aaa.log",
+    ).error
+    command = command_failure_message(
+        1, stdout=None, stderr="boom", env={}, log_path=".logs/tasks/fetch/process_att-2.log"
+    ).error
+    nested = (
+        f"Process completed with failures: finalize: {child}; fetch: {command}. "
+        "Blocked: none (traceback: .logs/tasks/research/BB/process_att-3.log)"
+    )
+    assert without_evidence_paths(nested) == (
+        "Process completed with failures: finalize: RuntimeError: staging refused; "
+        "fetch: command exit code 1 (stderr: boom). Blocked: none"
+    )
+    # Text that only resembles evidence is the message itself and stays.
+    for unchanged in (
+        "ProviderError: HTTP 503 (traceback: remote)",
+        "RuntimeError: upstream said; log: remote)",
+        "timeout after 600s",
+    ):
+        assert without_evidence_paths(unchanged) == unchanged
 
 
 def test_identical_item_failures_share_one_cause_across_evidence_paths() -> None:

@@ -1298,21 +1298,24 @@ consumer; `--from <step>` forces that.
 A step’s collected fan-in documents are a second invalidation signal, kept out of the
 fingerprint because they are execution state: the plan publishes fingerprints at launch,
 and a collected document changes as mapped items finish.
-Each time `_execute_step` hands a step its `collect:` documents, it records their
-SHA-256 digests in `.state/tasks/<step>/collected-inputs.yaml`
-(`CollectedInputsRecord`). On a later run against the same `RUN_ID`, the level walk
-rebuilds the documents before the completion check
-(`_maybe_cascade_for_collected_inputs`) and compares digests.
-A difference means the step last ran over outcomes that no longer hold, typically
-because a resume finished items that had failed, so the step and its descendants are
-invalidated through `_invalidate_downstream`, the same path the fingerprint cascade
-takes.
+Each time `_execute_step` hands a step its `collect:` documents, it records two digests
+per document in `.state/tasks/<step>/collected-inputs.yaml` (`CollectedInputsRecord`):
+`sha256` of the bytes, for audit, and `outcomes_sha256` of the outcome projection, which
+is the upstream step, the totals, and each item’s key, state, and `succeeded`. On a
+later run against the same `RUN_ID`, the level walk rebuilds the documents before the
+completion check (`_maybe_cascade_for_collected_inputs`) and compares the outcome
+digests. A difference means the step last ran over outcomes that no longer hold,
+typically because a resume finished items that had failed, so the step and its
+descendants are invalidated through `_invalidate_downstream`, the same path the
+fingerprint cascade takes.
+The projection leaves error wording out: an item whose retry fails again, whatever the
+message, does not re-run the consumer and everything downstream on every resume.
 The digests are recorded at delivery rather than at completion because a composite
 consumer has no per-task completion record of its own, and its child steps can consume a
 document while a sibling later fails the composite.
-Content digests, not modification times, are compared: re-entering a consumer rewrites
-its documents byte-identically when nothing changed.
-A step without the record is a legacy completion and is not invalidated by this rule.
+Content digests, not modification times, are compared.
+A step without the record, or whose record lacks `outcomes_sha256`, is a legacy
+completion and is not invalidated by this rule.
 
 `_invalidate_downstream` renames `status.yaml` to `status.yaml.stale` for each affected
 parent-level task. A composite invalidated that way is re-entered and reuses its
@@ -1536,8 +1539,13 @@ arrived would report three of four items as full coverage; reporting against the
 distinguishes succeeded, failed, and never-reached.
 The manifest is derived from durable per-item state on every read and never stored as
 truth, so it cannot drift from the state it describes.
-A resume that changes an item’s outcome therefore changes the manifest, and §10.3
-describes how that re-runs a consumer that already completed.
+It is also deterministic: an item’s `error` is copied without the attempt evidence paths
+its message names (every `(traceback: <path>.log)` and every `; log: <path>.log`,
+including those nested in a composite’s error), so the same failure under a new attempt
+renders identical bytes and a sealed copy of the document stays valid.
+The per-item `status.yaml` keeps the full message, so the attempt log stays reachable.
+A resume that changes an item’s outcome changes the manifest, and §10.3 describes how
+that re-runs a consumer that already completed.
 
 ### Declared Retry on the Code Path
 
