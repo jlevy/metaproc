@@ -15,7 +15,6 @@ import yaml
 from metaproc.engine.fan_in import (
     build_outcome_manifest,
     collect_item_outcomes,
-    write_outcome_manifest,
 )
 
 
@@ -171,13 +170,14 @@ class TestCollectItemOutcomes:
         assert by_key["B"]["succeeded"] is False
 
 
-class TestWriteOutcomeManifest:
+class TestOutcomeManifest:
     def test_manifest_counts_against_the_expected_roster(self, tmp_path: Path) -> None:
         _task(tmp_path, "s", "A", "completed")
         _task(tmp_path, "s", "B", "failed")
         dest = tmp_path / "out" / "outcomes.yaml"
-        payload = write_outcome_manifest(tmp_path, "s", dest, expected_keys=["A", "B", "C"])
-        block = payload["fan_in_outcomes"]
+        manifest = build_outcome_manifest(tmp_path, "s", expected_keys=["A", "B", "C"])
+        manifest.write(dest)
+        block = manifest.payload["fan_in_outcomes"]
         assert (block["total"], block["succeeded"], block["failed"]) == (3, 1, 2)
         assert dest.is_file()
         written = yaml.safe_load(dest.read_text())["fan_in_outcomes"]

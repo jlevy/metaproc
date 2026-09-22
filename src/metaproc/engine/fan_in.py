@@ -223,16 +223,3 @@ def build_outcome_manifest(
         }
     }
     return OutcomeManifest(payload=payload, text=yaml.safe_dump(payload, sort_keys=False))
-
-
-def write_outcome_manifest(
-    run_dir: Path,
-    upstream_step_id: str,
-    destination: Path,
-    expected_keys: Sequence[str] | None = None,
-    upstream_chain: Sequence[str] = (),
-) -> dict[str, Any]:
-    """Build and write the fan-in manifest for one upstream step."""
-    manifest = build_outcome_manifest(run_dir, upstream_step_id, expected_keys, upstream_chain)
-    manifest.write(destination)
-    return manifest.payload

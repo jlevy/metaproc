@@ -43,10 +43,31 @@ _JSON_STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
 _MAX_DETAIL_CHARS = 1_200
 _MAX_DETAIL_LINES = 12
 
-# Command and handler messages end by naming their own attempt's retained evidence.
+# Command and handler messages end by naming their own attempt's retained evidence:
+# each entry is the marker that introduces the path and the text that replaces the
+# reference once the path is removed. This table is the grammar; the regex below,
+# which finds the same references anywhere in a message rather than only at its end,
+# is derived from it, so a third evidence form is added here alone.
 _EVIDENCE_SUFFIXES: tuple[tuple[str, str], ...] = (("; log: ", ")"), (" (traceback: ", ""))
-# The same two references anywhere in a message, as nested process errors carry them.
-_EVIDENCE_REFERENCES = re.compile(r" \(traceback: [^()\n]*?\.log\)|; log: [^()\n]*?\.log(?=\))")
+
+
+def _evidence_reference_pattern(marker: str, replacement: str) -> str:
+    """One alternative matching *marker* and the path that runs to its closing paren.
+
+    A reference the suffix rule replaces with ``)`` keeps that paren, so the pattern
+    ends in a lookahead; one it replaces with nothing consumes the paren too.
+    """
+    closing = r"(?=\))" if replacement == ")" else r"\)"
+    return re.escape(marker) + r"[^()\n]*?\.log" + closing
+
+
+# The same references anywhere in a message, as nested process errors carry them.
+_EVIDENCE_REFERENCES = re.compile(
+    "|".join(
+        _evidence_reference_pattern(marker, replacement)
+        for marker, replacement in _EVIDENCE_SUFFIXES
+    )
+)
 _MAX_SUMMARY_CAUSES = 5
 _MAX_SUMMARY_CAUSE_CHARS = 1_500
 _MAX_SUMMARY_CHARS = 4_000
