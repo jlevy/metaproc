@@ -61,6 +61,7 @@ from metaproc.commands.run_process import (
     _finish_deferred_fan_out_attempts,
     _invalidate_downstream,
     _is_step_completed,
+    _maybe_cascade_for_collected_inputs,
     _maybe_cascade_for_fingerprint,
     _orchestrate,
     _preflight_plan_adapters,
@@ -75,7 +76,9 @@ from metaproc.commands.run_process import (
     _write_process_status,
 )
 from metaproc.commands.status import _load_plan_from_run
+from metaproc.engine.collected_inputs import CollectedDocument, record_collected_inputs
 from metaproc.engine.discovery import FanOutDiscovery
+from metaproc.engine.fan_in import build_outcome_manifest
 from metaproc.engine.graph import topo_sort
 from metaproc.engine.pathing import compute_task_state_dir
 from metaproc.engine.run_status import scan_run_status
@@ -84,6 +87,7 @@ from metaproc.io.state_io import (
     mark_completed_at,
     mark_running_at,
     read_attempt_history_at,
+    read_collected_inputs_at,
     read_manual_ack_at,
     read_run_plan,
     read_status_at,
@@ -105,7 +109,13 @@ from metaproc.models.runtime import (
     ManualAckRecord,
     StatusRecord,
 )
-from metaproc.paths import LOGS_DIR, ORCHESTRATOR_LEASE_FILE, STATE_DIR, STATUS_FILE
+from metaproc.paths import (
+    COLLECTED_INPUTS_FILE,
+    LOGS_DIR,
+    ORCHESTRATOR_LEASE_FILE,
+    STATE_DIR,
+    STATUS_FILE,
+)
 from metaproc.paths import STATE_DIR as _STATE_DIR
 from metaproc.paths import TASKS_SUBDIR as _TASKS_SUBDIR
 from metaproc.runpool.process_events import ProcessEventLogger
@@ -1129,6 +1139,69 @@ class TestDownstreamInvalidation:
         assert (_task_state_dir_for(tmp_path / "enrich" / "a", "fetch") / STATUS_FILE).exists()
         assert (tmp_path / "consume" / "status.yaml").exists()
 
+    @staticmethod
+    def _mapped_shapes(tmp_path: Path) -> Plan:
+        """A composite root with a mapped composite and a mapped ``code`` step
+        downstream, each with one completed item."""
+        fan_out = FanOut(over="roster", bind="item", source="roster.md", items=[{"item": "a"}])
+        plan = _make_plan(
+            _step("consume", mode="composite"),
+            ResolvedStep(
+                step_id="enrich",
+                mode="composite",
+                adapter=ResolvedAdapter(type="test", config={}),
+                needs=["consume"],
+                fan_out=fan_out,
+            ),
+            ResolvedStep(
+                step_id="fetch",
+                mode="code",
+                adapter=ResolvedAdapter(type="test", config={}),
+                needs=["consume"],
+                fan_out=fan_out,
+            ),
+        )
+        for step_id in ("enrich", "fetch"):
+            item_state = _task_state_dir_for(tmp_path, step_id) / "a"
+            item_state.mkdir(parents=True)
+            write_status_at(
+                item_state,
+                StatusRecord(
+                    run_id="test/run1",
+                    step_id=step_id,
+                    item={"key": "a"},
+                    state="completed",
+                    started_at="2026-04-09T00:00:00",
+                ),
+            )
+        return plan
+
+    def test_invalidate_renames_every_downstream_item_by_default(self, tmp_path: Path) -> None:
+        """The fingerprint cascade and ``--force`` re-do completed item work, which is
+        what an operator edit or an explicit force asks for."""
+        plan = self._mapped_shapes(tmp_path)
+
+        invalidated = _invalidate_downstream(tmp_path, "consume", plan)
+
+        assert set(invalidated) == {"enrich", "fetch"}
+        for step_id in ("enrich", "fetch"):
+            assert not (_task_state_dir_for(tmp_path, step_id) / "a" / STATUS_FILE).exists()
+
+    def test_keep_downstream_mapped_items_spares_non_composite_items(self, tmp_path: Path) -> None:
+        """The collected-input cascade keeps a downstream mapped ``code`` step's item
+        records, where the item record is the work itself rather than a parent level."""
+        plan = self._mapped_shapes(tmp_path)
+
+        invalidated = _invalidate_downstream(
+            tmp_path, "consume", plan, keep_downstream_mapped_items=True
+        )
+
+        # The mapped composite's parent-level items are still renamed: its children are
+        # reused when it is re-entered.
+        assert invalidated == ["enrich"]
+        assert not (_task_state_dir_for(tmp_path, "enrich") / "a" / STATUS_FILE).exists()
+        assert (_task_state_dir_for(tmp_path, "fetch") / "a" / STATUS_FILE).exists()
+
     def test_invalidate_at_canonical_task_state(self, tmp_path: Path) -> None:
         """Invalidation renames status.yaml at the per-task state location.
 
@@ -1171,6 +1244,133 @@ class TestDownstreamInvalidation:
         assert (qa_state / "status.yaml.stale").exists()
         outputs = plan.steps[1].outputs
         assert not _is_step_completed(run_dir, "qa-check", outputs=outputs, variables=variables)
+
+
+class TestCollectedInputRecordReads:
+    """What the collected-input check does with a record it cannot read.
+
+    An absent record means a run that predates the record and keeps its legacy reuse.
+    A record that is present but unreadable means the step ran over outcomes this
+    process cannot compare, and degrades the other way, toward changed.
+    """
+
+    @staticmethod
+    def _consumer_plan(run_dir: Path) -> tuple[Plan, ResolvedStep]:
+        consumer = ResolvedStep(
+            step_id="summarize",
+            mode="code",
+            adapter=ResolvedAdapter(type="test", config={}),
+            needs=["scan"],
+            inputs={
+                "outcomes": IOSpec(
+                    path=str(run_dir / "outcomes.yaml"), collect="scan", require="finished"
+                )
+            },
+        )
+        plan = _make_plan(_step("scan"), consumer, _step("report", ["summarize"]))
+        _write_completed_status(run_dir, "summarize")
+        _write_completed_status(run_dir, "report")
+        return plan, consumer
+
+    def _cascade(self, run_dir: Path, plan: Plan, consumer: ResolvedStep, out: FakeOut):
+        return _maybe_cascade_for_collected_inputs(
+            run_dir,
+            plan,
+            consumer,
+            step_map={step.step_id: step for step in plan.steps},
+            chains_by_member={},
+            variables={},
+            out=out,
+        )
+
+    @pytest.mark.parametrize(
+        ("label", "content"),
+        [
+            ("corrupt YAML", "inputs: [unterminated\n"),
+            # A record written by a later Metaproc with one more field: `extra="forbid"`
+            # makes an older reader reject it.
+            (
+                "unknown field",
+                (
+                    "schema: metaproc:CollectedInputs/0.1\nrun_id: r\nstep_id: summarize\n"
+                    "recorded_at: '2026-04-09T00:00:00'\ninputs: {}\nfuture_field: 1\n"
+                ),
+            ),
+        ],
+    )
+    def test_an_unreadable_record_invalidates_the_consumer(
+        self, tmp_path: Path, label: str, content: str
+    ) -> None:
+        plan, consumer = self._consumer_plan(tmp_path)
+        state_dir = _task_state_dir_for(tmp_path, "summarize")
+        (state_dir / COLLECTED_INPUTS_FILE).write_text(content, encoding="utf-8")
+        out = FakeOut()
+
+        invalidated = self._cascade(tmp_path, plan, consumer, out)
+
+        assert invalidated == ["summarize", "report"], label
+        for step_id in ("summarize", "report"):
+            assert not (_task_state_dir_for(tmp_path, step_id) / STATUS_FILE).exists()
+        # The operator sees the decision beside the other resume decisions, not only in
+        # a log: the line names the step, the record, and what it cost.
+        assert len(out.messages) == 1
+        message = out.messages[0]
+        assert "Step 'summarize'" in message
+        assert COLLECTED_INPUTS_FILE in message
+        assert str(state_dir) in message
+        assert "count as changed" in message
+        assert "invalidated: summarize, report" in message
+
+    def test_an_unreadable_record_is_replaced_by_the_next_delivery(self, tmp_path: Path) -> None:
+        """Recording the current documents overwrites a record that cannot be read."""
+        state_dir = _task_state_dir_for(tmp_path, "summarize")
+        state_dir.mkdir(parents=True)
+        (state_dir / COLLECTED_INPUTS_FILE).write_text("inputs: [unterminated\n", encoding="utf-8")
+        document = CollectedDocument(
+            input_name="outcomes",
+            upstream_step="scan",
+            path=tmp_path / "outcomes.yaml",
+            manifest=build_outcome_manifest(tmp_path, "scan"),
+        )
+
+        record_collected_inputs(
+            tmp_path, run_id="test/run1", step_id="summarize", documents=[document]
+        )
+
+        record = read_collected_inputs_at(state_dir)
+        assert record is not None
+        assert record.step_id == "summarize"
+        assert record.inputs["outcomes"].outcomes_sha256 == document.manifest.outcomes_sha256
+
+    def test_an_absent_record_keeps_the_legacy_reuse(self, tmp_path: Path) -> None:
+        plan, consumer = self._consumer_plan(tmp_path)
+        assert not (_task_state_dir_for(tmp_path, "summarize") / COLLECTED_INPUTS_FILE).exists()
+        out = FakeOut()
+
+        invalidated = self._cascade(tmp_path, plan, consumer, out)
+
+        assert invalidated == []
+        for step_id in ("summarize", "report"):
+            assert (_task_state_dir_for(tmp_path, step_id) / STATUS_FILE).exists()
+        assert out.messages == []
+
+    def test_an_unreadable_record_is_reported_even_with_nothing_to_rename(
+        self, tmp_path: Path
+    ) -> None:
+        """A consumer whose status records are already gone still reports the record."""
+        plan, consumer = self._consumer_plan(tmp_path)
+        for step_id in ("summarize", "report"):
+            (_task_state_dir_for(tmp_path, step_id) / STATUS_FILE).unlink()
+        state_dir = _task_state_dir_for(tmp_path, "summarize")
+        (state_dir / COLLECTED_INPUTS_FILE).write_text("inputs: [unterminated\n", encoding="utf-8")
+        out = FakeOut()
+
+        invalidated = self._cascade(tmp_path, plan, consumer, out)
+
+        assert invalidated == []
+        assert len(out.messages) == 1
+        assert "invalidated:" not in out.messages[0]
+        assert "count as changed" in out.messages[0]
 
 
 # ── Ancestor verification ────────────────────────────────────────
@@ -3762,7 +3962,7 @@ class TestProcessContractValidation:
             def build_command(self, prompt_file, merged_config, variables):
                 path = Path(prompt_file)
                 assert path.exists()
-                assert "write the declared output" in path.read_text()
+                assert "write the declared output" in path.read_text(encoding="utf-8")
                 script = (
                     "from pathlib import Path; "
                     f"target = Path({variables['OUTPUT_PATH']!r}); "
@@ -4089,7 +4289,7 @@ class TestProcessContractValidation:
             default_model = None
 
             def build_command(self, prompt_file, merged_config, variables):
-                prompt_text = Path(prompt_file).read_text()
+                prompt_text = Path(prompt_file).read_text(encoding="utf-8")
                 if "summary" in prompt_text:
                     target_path = variables["SUMMARY_PATH"]
                 else:
@@ -4437,7 +4637,7 @@ class TestNonFanOutContentRetry:
             default_model = None
 
             def build_command(self, prompt_file, merged_config, variables):  # noqa: ANN001, ARG002
-                prompt = Path(prompt_file).read_text()
+                prompt = Path(prompt_file).read_text(encoding="utf-8")
                 if observed_prompts is not None:
                     observed_prompts.append(prompt)
                 prompt_allows_success = (
@@ -4700,7 +4900,7 @@ class TestNonFanOutTransientRetry:
             default_model = None
 
             def build_command(self, prompt_file, merged_config, variables):  # noqa: ANN001, ARG002
-                observed_prompts.append(Path(prompt_file).read_text())
+                observed_prompts.append(Path(prompt_file).read_text(encoding="utf-8"))
                 target_path = variables["TARGET_PATH"]
                 script = (
                     "import sys, time; from pathlib import Path; "
@@ -4875,7 +5075,7 @@ class TestRunOwnedPoolExecutionProfiles:
             def build_command(self, prompt_file, merged_config, variables):  # noqa: ANN001, ARG002
                 target = next(
                     line.removeprefix("OUTPUT_FILE=")
-                    for line in Path(prompt_file).read_text().splitlines()
+                    for line in Path(prompt_file).read_text(encoding="utf-8").splitlines()
                     if line.startswith("OUTPUT_FILE=")
                 )
                 profile = str(variables["EXECUTION_PROFILE"])
@@ -5210,7 +5410,9 @@ class TestRunOwnedPoolExecutionProfiles:
         path = run_dir / LOGS_DIR / "dispatch-config-changes.jsonl"
         if not path.is_file():
             return []
-        events = [json.loads(line) for line in path.read_text().splitlines() if line]
+        events = [
+            json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line
+        ]
         return [event["changes"] for event in events if event["event"] == "launch_config_change"]
 
     def test_a_resume_reapplies_recorded_step_variants_and_records_a_different_set(
@@ -5270,8 +5472,8 @@ class TestRunOwnedPoolExecutionProfiles:
         ]
         # The judge's profile is in its fingerprint, so it re-runs on the new one; the
         # draft's is not affected and it is reused.
-        assert (run_dir / "judge.md").read_text().strip() == "run-a"
-        assert (run_dir / "draft.md").read_text().strip() == "run-a"
+        assert (run_dir / "judge.md").read_text(encoding="utf-8").strip() == "run-a"
+        assert (run_dir / "draft.md").read_text(encoding="utf-8").strip() == "run-a"
         assert read_yaml_file(run_dir / STATE_DIR / "run-config.yaml")["step_variants"] == {
             "judge": "run-a"
         }

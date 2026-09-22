@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import cast
 
 import typer
-from strif import atomic_output_file
+from strif import atomic_write_text
 
 from metaproc.adapters.base import Adapter, agent_seed_env
 from metaproc.adapters.registry import derive_variant, get_adapter
@@ -416,10 +416,8 @@ def run_step(
                     out.progress(proc.stdout.rstrip())
         except subprocess.CalledProcessError as exc:
             logs_dir = compute_task_logs_dir(run_dir, step_def, variables)
-            logs_dir.mkdir(parents=True, exist_ok=True)
             log_file = logs_dir / f"process_{running_record.attempt_id}.log"
-            with atomic_output_file(log_file) as tmp_path:
-                tmp_path.write_text((exc.stdout or "") + (exc.stderr or ""))
+            atomic_write_text(log_file, (exc.stdout or "") + (exc.stderr or ""), make_parents=True)
             failure = command_failure_message(
                 exc.returncode,
                 stdout=exc.stdout,
@@ -436,10 +434,8 @@ def run_step(
             raise CLIError(f"step '{step}' command failed: {failure.error}") from exc
         except Exception as exc:
             logs_dir = compute_task_logs_dir(run_dir, step_def, variables)
-            logs_dir.mkdir(parents=True, exist_ok=True)
             log_file = logs_dir / f"process_{running_record.attempt_id}.log"
-            with atomic_output_file(log_file) as tmp_path:
-                tmp_path.write_text(traceback.format_exc())
+            atomic_write_text(log_file, traceback.format_exc(), make_parents=True)
             failure = handler_failure_message(
                 exc, env=env, log_path=str(log_file.relative_to(run_dir))
             )
@@ -563,8 +559,7 @@ def run_step(
 
         ts = datetime.now(tz=UTC).strftime("%H%M%S")
         prompt_file = logs_dir / f"prompt-{step}-{context_label}-{ts}.txt"
-        with atomic_output_file(prompt_file) as tmp_path:
-            Path(tmp_path).write_text(resolved_prompt)
+        atomic_write_text(prompt_file, resolved_prompt)
 
         _write_attempt()
         running_record = mark_running_at(
@@ -588,7 +583,12 @@ def run_step(
         timeout_val = int(str(timeout_s)) if timeout_s is not None else None
         try:
             if use_filter:
-                with log_path.open("w", encoding="utf-8") as log_fh:
+                # The command prints `Log: <path>` to the operator above so they can
+                # tail it while the agent runs, and the filter thread writes into this
+                # handle for the whole subprocess lifetime.
+                with log_path.open(  # write-contract: live-stream -- tailed during the run
+                    "w", encoding="utf-8"
+                ) as log_fh:
                     fg_proc = subprocess.Popen(
                         cmd,
                         env=env,
@@ -601,7 +601,10 @@ def run_step(
                     fg_proc.wait(timeout=timeout_val)
                     ft.join(timeout=5.0)
             else:
-                with log_path.open("w", encoding="utf-8") as log_fh:
+                # The handle goes straight to the child as its stdout.
+                with log_path.open(  # write-contract: live-stream -- the child writes to it
+                    "w", encoding="utf-8"
+                ) as log_fh:
                     fg_proc = subprocess.run(
                         cmd,
                         env=env,

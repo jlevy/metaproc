@@ -17,6 +17,7 @@ import os
 import re
 import shlex
 import subprocess
+import textwrap
 import time
 import traceback
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
@@ -30,7 +31,7 @@ from typing import Any, cast
 import typer
 from prettyfmt import fmt_timedelta
 from ruamel.yaml import YAMLError
-from strif import atomic_output_file
+from strif import atomic_write_text
 
 from metaproc import paths as paths_mod
 from metaproc.adapters.base import (
@@ -93,6 +94,7 @@ from metaproc.dispatch.slot_coordinator import SlotCoordinator, SlotLease
 from metaproc.engine.build_plan import build_plan, merge_defaults
 from metaproc.engine.code_handler import resolve_code_handler
 from metaproc.engine.collected_inputs import (
+    COLLECTED_INPUTS_UNREADABLE,
     changed_collected_inputs,
     collected_documents,
     record_collected_inputs,
@@ -211,6 +213,7 @@ from metaproc.models.runtime import (
     StatusRecord,
 )
 from metaproc.paths import (
+    COLLECTED_INPUTS_FILE,
     LOGS_DIR,
     MANUAL_ACK_FILE,
     RUN_LAYOUT_VERSION,
@@ -742,7 +745,6 @@ def _write_process_status(
 ) -> Path:
     """Write derived process-status.yaml to {run_dir}/.state/."""
     state_dir = run_dir / STATE_DIR
-    state_dir.mkdir(parents=True, exist_ok=True)
     target = state_dir / "process-status.yaml"
 
     data: dict[str, Any] = {
@@ -770,8 +772,7 @@ def _write_process_status(
     else:
         data["state"] = "running"
 
-    with atomic_output_file(target) as tmp_path:
-        Path(tmp_path).write_text(to_yaml_string(data))
+    atomic_write_text(target, to_yaml_string(data), make_parents=True)
     return target
 
 
@@ -871,9 +872,6 @@ def _write_run_config(  # noqa: PLR0913
         )
         return _RunConfigWrite(path=config_path, resumed=True)
 
-    state_dir = paths_mod.run_state_dir(run_dir)
-    state_dir.mkdir(parents=True, exist_ok=True)
-
     # Persist process_spec as an absolute path so consumers like
     # `metaproc status --steps` can rebuild the plan regardless of which
     # cwd they run from. A relative string would resolve against the
@@ -912,8 +910,7 @@ def _write_run_config(  # noqa: PLR0913
     if resource_snapshot is not None:
         data["resources"] = resource_snapshot.model_dump(mode="json", by_alias=True)
 
-    with atomic_output_file(config_path) as tmp_path:
-        Path(tmp_path).write_text(to_yaml_string(data))
+    atomic_write_text(config_path, to_yaml_string(data), make_parents=True)
     log.info("Wrote run-config.yaml: %s", config_path)
     return _RunConfigWrite(path=config_path, resumed=False)
 
@@ -1318,8 +1315,7 @@ def _rewrite_launch_config(
             data["step_variants"] = dict(sorted(step_variants.items()))
         else:
             data.pop("step_variants", None)
-    with atomic_output_file(config_path) as tmp_path:
-        Path(tmp_path).write_text(to_yaml_string(data))
+    atomic_write_text(config_path, to_yaml_string(data))
     log.info("Rewrote run-config.yaml with this resume's launch config: %s", config_path)
 
 
@@ -1634,9 +1630,7 @@ def _record_process_output_failure(run_dir: Path, error: CLIError) -> None:
             failure.model_dump(mode="json", exclude_none=True) for failure in error.output_failures
         ]
     path = run_dir / STATE_DIR / "process-status.yaml"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with atomic_output_file(path) as temporary:
-        Path(temporary).write_text(to_yaml_string(data))
+    atomic_write_text(path, to_yaml_string(data), make_parents=True)
 
 
 def _read_recorded_step_hash(run_dir: Path, step_id: str) -> str | None:
@@ -1809,6 +1803,7 @@ def _invalidate_downstream(
     *,
     variables: dict[str, str] | None = None,
     invalidate_root_children: bool = False,
+    keep_downstream_mapped_items: bool = False,
 ) -> list[str]:
     """Rename status.yaml to .stale for root and all downstream steps.
 
@@ -1818,28 +1813,47 @@ def _invalidate_downstream(
     re-entered and reuses its completed child steps, so a downstream mapped
     composite re-does no work for an item whose inputs did not change.
 
-    *invalidate_root_children* also renames the per-task records inside a composite
-    root's child scopes (``<run>/<root>/``, or one scope per mapped item). Only the
+    *invalidate_root_children* also renames every per-task record inside a composite
+    root's child scopes (``<run>/<root>/``, or one scope per mapped item), nested
+    scopes included, whether or not the task reads the root's changed input. Only the
     collected-input cascade asks for it: the root's children read the changed fan-in
     document through ``with:`` paths, so reusing them would reuse work computed over
     the old outcomes. Downstream composites keep their children either way; a
     downstream collector is judged by its own digest check when the walk reaches it.
+
+    *keep_downstream_mapped_items* keeps the per-item records of every mapped
+    non-composite step downstream of the root, renaming only such a step's own
+    non-fan-out record. For a mapped composite the per-item record is a parent level
+    whose completed children are reused, but for a mapped ``code`` (handler or
+    command), ``agent``, or ``manual`` step the per-item record is the work itself, so
+    renaming it re-runs every completed item. The step is still re-entered, so its roster's new items are
+    discovered and run. Only the collected-input cascade asks for it; ``--force`` and
+    the fingerprint cascade fire on an explicit force or an operator edit, where
+    re-doing completed item work is the intent.
     """
     del variables  # state dirs are keyed by step_id, not by output template
     dep_ids = downstream(plan.steps, root_step_id)
     all_ids = [root_step_id, *dep_ids]
-    root_is_composite = any(
-        step.step_id == root_step_id and step.mode == "composite" for step in plan.steps
-    )
+    steps_by_id = {step.step_id: step for step in plan.steps}
+    root_step = steps_by_id.get(root_step_id)
+    root_is_composite = root_step is not None and root_step.mode == "composite"
     invalidated: list[str] = []
 
     for step_id in all_ids:
         step_state = _step_item_dir(run_dir, step_id)
+        step = steps_by_id.get(step_id)
+        keep_items = (
+            keep_downstream_mapped_items
+            and step_id != root_step_id
+            and step is not None
+            and step.fan_out is not None
+            and step.mode != "composite"
+        )
         status_paths: list[Path] = []
         non_fan_out_status = step_state / STATUS_FILE
         if non_fan_out_status.exists():
             status_paths.append(non_fan_out_status)
-        if step_state.exists():
+        if step_state.exists() and not keep_items:
             for sub in step_state.iterdir():
                 if sub.is_dir():
                     fan_out_status = sub / STATUS_FILE
@@ -2060,8 +2074,7 @@ async def _execute_code_step(
             if result.stderr:
                 output += result.stderr
             if output:
-                with atomic_output_file(log_file) as tmp_path:
-                    tmp_path.write_text(output)
+                atomic_write_text(log_file, output)
     except subprocess.CalledProcessError as exc:
         # Capture output even on failure
         output = ""
@@ -2070,8 +2083,7 @@ async def _execute_code_step(
         if exc.stderr:
             output += exc.stderr
         if output:
-            with atomic_output_file(log_file) as tmp_path:
-                tmp_path.write_text(output)
+            atomic_write_text(log_file, output)
         command_failure = command_failure_message(
             exc.returncode,
             stdout=exc.stdout,
@@ -2097,8 +2109,7 @@ async def _execute_code_step(
         raise
     except Exception as exc:
         tb = traceback.format_exc()
-        with atomic_output_file(log_file) as tmp_path:
-            tmp_path.write_text(tb)
+        atomic_write_text(log_file, tb)
         handler_failure = handler_failure_message(
             exc,
             env=env,
@@ -2113,8 +2124,7 @@ async def _execute_code_step(
         return False
     except BaseException as exc:
         tb = traceback.format_exc()
-        with atomic_output_file(log_file) as tmp_path:
-            tmp_path.write_text(tb)
+        atomic_write_text(log_file, tb)
         abort_error = f"{type(exc).__name__}: {str(exc) or 'code step aborted'}"
         mark_failed_at(
             state_dir,
@@ -2842,8 +2852,7 @@ async def _execute_agent_step(
             attempt_prompt = append_output_failure_feedback(
                 resolved_prompt, output_failure_feedback
             )
-            with atomic_output_file(prompt_file) as tmp_path:
-                Path(tmp_path).write_text(attempt_prompt)
+            atomic_write_text(prompt_file, attempt_prompt)
 
             cmd = adapter_obj.build_command(prompt_file, runtime_config, step_vars)
             env = adapter_obj.prepare_env(agent_seed_env(), runtime_config)
@@ -4476,6 +4485,29 @@ async def _execute_manual_step(
     return True
 
 
+def _cascade_invalidation(
+    run_dir: Path,
+    plan: Plan,
+    step_id: str,
+    *,
+    variables: dict[str, str],
+) -> list[str]:
+    """Invalidate a consumer whose collected input no longer holds, and its downstream.
+
+    The consumer's own child scopes go with it, and downstream mapped non-composite
+    steps keep their completed items' records: the cascade is there to discover work
+    the changed outcomes add, not to re-do item work that is already finished.
+    """
+    return _invalidate_downstream(
+        run_dir,
+        step_id,
+        plan,
+        variables=variables,
+        invalidate_root_children=True,
+        keep_downstream_mapped_items=True,
+    )
+
+
 def _maybe_cascade_for_collected_inputs(
     run_dir: Path,
     plan: Plan,
@@ -4490,24 +4522,53 @@ def _maybe_cascade_for_collected_inputs(
     was last handed no longer matches what durable per-item state says now.
 
     ``changed_collected_inputs`` decides whether a document changed, by its outcome
-    digest. A composite consumer's own child steps are invalidated too, since they
-    read the document through ``with:`` paths. Downstream steps are invalidated at the
-    parent level only, as the fingerprint cascade does, so downstream composites reuse
-    their completed child steps. Returns the step IDs whose per-task ``status.yaml``
-    files were renamed to ``.stale``.
+    digest. Every task in the consumer's own child scopes is invalidated, whether or
+    not it reads the document, since a composite's children read it through ``with:``
+    paths. Downstream steps are re-entered rather than re-done: a downstream composite
+    reuses its completed child steps, and a downstream mapped non-composite step keeps
+    its completed items' records, so in both mapped shapes the cascade discovers new
+    work without re-doing finished item work. An item whose inputs changed only in
+    content is reused; ``--force`` or ``--from <step>`` re-does those.
+
+    No-op when the step declares no ``collect:`` input, when it has no record (it last
+    ran before the record existed), or when every recorded digest matches. A record
+    that is present but unreadable, including one written in an earlier shape, counts
+    as changed. Returns the step IDs whose per-task ``status.yaml`` files were renamed
+    to ``.stale``.
     """
-    changed = changed_collected_inputs(
-        run_dir,
-        step,
-        step_map=step_map,
-        chains_by_member=chains_by_member,
-        variables=variables,
-    )
+    try:
+        changed = changed_collected_inputs(
+            run_dir,
+            step,
+            step_map=step_map,
+            chains_by_member=chains_by_member,
+            variables=variables,
+        )
+    except COLLECTED_INPUTS_UNREADABLE as exc:
+        # Absent means a run that predates the record, which keeps its legacy reuse.
+        # Present but unreadable means the step ran over outcomes this process cannot
+        # compare, so it degrades the other way: re-running one consumer is the cheap
+        # failure, reusing output computed over outcomes that no longer hold is the
+        # bug this check exists to catch.
+        state_dir = _step_item_dir(run_dir, step.step_id)
+        log.warning(
+            "step %r: unreadable %s in %s; treating its collected inputs as changed",
+            step.step_id,
+            COLLECTED_INPUTS_FILE,
+            state_dir,
+            exc_info=True,
+        )
+        invalidated = _cascade_invalidation(run_dir, plan, step.step_id, variables=variables)
+        suffix = f" — invalidated: {', '.join(invalidated)}" if invalidated else ""
+        detail = textwrap.shorten(f"{type(exc).__name__}: {exc}", width=160, placeholder=" ...")
+        out.progress(
+            f"  Step '{step.step_id}': unreadable {COLLECTED_INPUTS_FILE} in {state_dir} "
+            f"({detail}); its collected inputs count as changed{suffix}"
+        )
+        return invalidated
     if not changed:
         return []
-    invalidated = _invalidate_downstream(
-        run_dir, step.step_id, plan, variables=variables, invalidate_root_children=True
-    )
+    invalidated = _cascade_invalidation(run_dir, plan, step.step_id, variables=variables)
     if invalidated:
         names = ", ".join(f"'{d.input_name}' from '{d.upstream_step}'" for d in changed)
         noun = "input" if len(changed) == 1 else "inputs"

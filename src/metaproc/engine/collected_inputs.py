@@ -11,6 +11,12 @@ handed in ``collected-inputs.yaml``, and reports which documents changed since. 
 one digest is of the outcome projection (the upstream step, the totals, and each
 item's key, state and success); error wording and attempt log paths are not part of
 it. The orchestrator owns the invalidation a change triggers.
+
+An absent record and an unreadable one are different facts. Absent means the step
+last ran before the record existed, and it keeps its legacy reuse. Present but
+unreadable (corrupt YAML, a shape this reader rejects, or a file it may not open)
+raises one of ``COLLECTED_INPUTS_UNREADABLE``, and each caller degrades it in its own
+direction: the reuse decision counts it as changed, and the next delivery replaces it.
 """
 
 from __future__ import annotations
@@ -31,6 +37,11 @@ from metaproc.models.runtime import CollectedInput, CollectedInputsRecord
 from metaproc.paths import COLLECTED_INPUTS_FILE, STATE_DIR, TASKS_SUBDIR
 
 log = logging.getLogger(__name__)
+
+COLLECTED_INPUTS_UNREADABLE: tuple[type[Exception], ...] = (YAMLError, ValueError, OSError)
+"""What reading a present ``collected-inputs.yaml`` raises when it cannot be read:
+corrupt YAML, a shape this reader rejects (one written in an earlier shape, or by a
+later Metaproc), or a file it may not open."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,23 +112,12 @@ def collected_documents(
 
 
 def read_collected_inputs(run_dir: Path, step_id: str) -> CollectedInputsRecord | None:
-    """Read a step's ``collected-inputs.yaml``; an unreadable record counts as absent.
+    """Read a step's ``collected-inputs.yaml``. None when the step has no record.
 
-    A record that fails validation, including one written in an earlier shape, is
-    logged and treated as absent, so it is never compared.
+    Raises one of ``COLLECTED_INPUTS_UNREADABLE`` when a record is present but cannot
+    be read, including one written in an earlier shape (without ``outcomes_sha256``).
     """
-    state_dir = _record_dir(run_dir, step_id)
-    try:
-        return read_collected_inputs_at(state_dir)
-    except (YAMLError, ValueError) as exc:
-        log.warning(
-            "step %r: unreadable %s in %s (%s); its collected inputs cannot be compared",
-            step_id,
-            COLLECTED_INPUTS_FILE,
-            state_dir,
-            exc,
-        )
-        return None
+    return read_collected_inputs_at(_record_dir(run_dir, step_id))
 
 
 def record_collected_inputs(
@@ -134,7 +134,7 @@ def record_collected_inputs(
     later fails the composite, and a scalar composite has no per-task completion
     record at all. The document a step was last handed is what its reusable work
     was computed over, whether or not the step then completed. An unchanged record
-    for the same run is left as it is.
+    for the same run is left as it is, and an unreadable one is replaced.
     """
     inputs = {
         document.input_name: CollectedInput(
@@ -144,7 +144,13 @@ def record_collected_inputs(
         )
         for document in documents
     }
-    prior = read_collected_inputs(run_dir, step_id)
+    try:
+        prior = read_collected_inputs(run_dir, step_id)
+    except COLLECTED_INPUTS_UNREADABLE:
+        # An unreadable record has nothing to compare against, and writing the current
+        # one replaces it. The reuse decision reports the unreadable record itself.
+        log.debug("step %r: replacing unreadable %s", step_id, COLLECTED_INPUTS_FILE, exc_info=True)
+        prior = None
     if prior is not None and prior.run_id == run_id and prior.inputs == inputs:
         return
     write_collected_inputs_at(
@@ -178,9 +184,12 @@ def changed_collected_inputs(
     state and success plus the totals, so an item that fails again with a different
     message or a new attempt log is not a change while an item that completes is.
     Returns an empty list when the step declares no ``collect:`` input, when it has
-    no readable record (it last ran before the record existed, or the record fails
-    validation), or when every recorded digest matches. An input the record does not
-    name is not compared.
+    no record (it last ran before the record existed), or when every recorded digest
+    matches. An input the record does not name is not compared.
+
+    Raises one of ``COLLECTED_INPUTS_UNREADABLE`` when the step's record is present
+    but cannot be read, before any document is built: whether that counts as a change
+    is the caller's decision, and the orchestrator counts it as one.
     """
     if not any(spec.collect and spec.path for spec in step.inputs.values()):
         return []

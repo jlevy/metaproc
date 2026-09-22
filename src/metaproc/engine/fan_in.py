@@ -25,7 +25,7 @@ from typing import Any
 
 import yaml
 from pydantic import ValidationError
-from strif import atomic_output_file
+from strif import atomic_write_text
 
 from metaproc.io.state_io import read_status_at
 from metaproc.models.runtime import StatusRecord
@@ -182,9 +182,7 @@ class OutcomeManifest:
 
     def write(self, destination: Path) -> None:
         """Deliver the document to *destination* atomically."""
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        with atomic_output_file(destination) as tmp_path:
-            tmp_path.write_text(self.text, encoding="utf-8")
+        atomic_write_text(destination, self.text, make_parents=True)
 
 
 def build_outcome_manifest(
@@ -210,16 +208,3 @@ def build_outcome_manifest(
         }
     }
     return OutcomeManifest(payload=payload, text=yaml.safe_dump(payload, sort_keys=False))
-
-
-def write_outcome_manifest(
-    run_dir: Path,
-    upstream_step_id: str,
-    destination: Path,
-    expected_keys: Sequence[str] | None = None,
-    upstream_chain: Sequence[str] = (),
-) -> dict[str, Any]:
-    """Build and write the fan-in manifest for one upstream step."""
-    manifest = build_outcome_manifest(run_dir, upstream_step_id, expected_keys, upstream_chain)
-    manifest.write(destination)
-    return manifest.payload

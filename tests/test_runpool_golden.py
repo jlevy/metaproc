@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from strif import atomic_write_text
 
 from metaproc.paths import RUNPOOL_EVENTS_FILE
 from metaproc.runpool.backend import PreparedLaunch
@@ -221,9 +222,15 @@ def _read_golden(name: str) -> dict | None:
 
 
 def _write_golden(name: str, data: dict) -> None:
-    _GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
+    # The goldens are tracked in git, so `--update-golden` publishes repository state,
+    # not a throwaway fixture. An interrupted update would leave a truncated golden
+    # that the next run diffs against as a genuine behavior change.
     path = _GOLDEN_DIR / f"{name}.yaml"
-    path.write_text(yaml.dump(data, default_flow_style=False, sort_keys=True))
+    atomic_write_text(
+        path,
+        yaml.dump(data, default_flow_style=False, sort_keys=True),
+        make_parents=True,
+    )
 
 
 # ── Scenario runners ────────────────────────────────────────────

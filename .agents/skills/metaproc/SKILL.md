@@ -95,7 +95,7 @@ Available via `metaproc help <topic>`, in recommended reading order:
 - **operator** (~9.9k words): Runtime CLI reference: running, monitoring, and resuming processes.
 - **developer** (~1.4k words): Extending Metaproc and the 'Metaproc is the right wrapper' policy.
 - **conventions** (~4.6k words): Framework-level naming, structure, and file-format rules.
-- **artifacts** (~1.6k words): Every runtime artifact Metaproc writes or reads: format, schema, lifecycle.
+- **artifacts** (~2.1k words): Every runtime artifact Metaproc writes or reads: format, schema, lifecycle.
 - **execution-contracts** (~1.9k words): The durable contracts under task-level scheduling, and their rationale.
 - **credentials** (~2.4k words): Configuring credentials for each adapter: Claude, Codex, Gemini, pi, GCP.
 - **cloud-dispatch** (~1.5k words): Preparing, submitting, monitoring, and recovering GCP Batch workloads.
@@ -105,4 +105,4 @@ Available via `metaproc help <topic>`, in recommended reading order:
 - **arch-harness** (~2.9k words): Architecture: the Claude Code adapter harness and its wire format.
 - **arch-execution** (~2.6k words): Architecture: the executable reference model for scheduling, as implemented.
 - **arch-testing** (~1.1k words): Architecture: the test tiers, when to use each, and per-adapter credentials.
-- **arch-file-io** (~1.0k words): Architecture: the curated metaproc.io surface and frontmatter gotchas.
+- **arch-file-io** (~1.8k words): Architecture: the curated metaproc.io surface, write contracts, and frontmatter gotchas.

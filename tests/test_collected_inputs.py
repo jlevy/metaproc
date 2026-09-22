@@ -3,12 +3,14 @@
 A ``collect:`` consumer is reused on resume only while every document it was last
 handed still describes the same outcomes. These tests cover the engine half: the
 documents are built from durable per-item state, the record holds one digest per
-document, and a comparison reports a change only when an item's outcome moved.
+document, and a comparison reports a change only when an item's outcome moved. A
+record that is present but unreadable raises to the caller, which counts it as
+changed, and the next delivery replaces it.
 """
 
 from __future__ import annotations
 
-import logging
+import dataclasses
 import os
 from pathlib import Path
 
@@ -16,6 +18,7 @@ import pytest
 import yaml
 
 from metaproc.engine.collected_inputs import (
+    COLLECTED_INPUTS_UNREADABLE,
     changed_collected_inputs,
     collected_documents,
     read_collected_inputs,
@@ -27,8 +30,6 @@ from metaproc.io.state_io import read_collected_inputs_at
 from metaproc.models.authored import IOSpec
 from metaproc.models.plan import FanOut, ResolvedStep
 from metaproc.paths import COLLECTED_INPUTS_FILE, STATE_DIR, TASKS_SUBDIR
-
-_LOGGER = "metaproc.engine.collected_inputs"
 
 
 def _task(run_dir: Path, step: str, key: str, state: str, error: str = "") -> None:
@@ -43,7 +44,7 @@ def _task(run_dir: Path, step: str, key: str, state: str, error: str = "") -> No
     }
     if error:
         payload["error"] = error
-    (state_dir / "status.yaml").write_text(yaml.safe_dump(payload))
+    (state_dir / "status.yaml").write_text(yaml.safe_dump(payload), encoding="utf-8")
 
 
 def _scan(keys: tuple[str, ...] = ("a", "b")) -> ResolvedStep:
@@ -70,6 +71,28 @@ def _consumer() -> ResolvedStep:
 
 def _record_path(run_dir: Path, step_id: str) -> Path:
     return run_dir / STATE_DIR / TASKS_SUBDIR / step_id / COLLECTED_INPUTS_FILE
+
+
+# A record without the outcome digest (an earlier shape) and one that is not YAML.
+_UNREADABLE_RECORDS = pytest.mark.parametrize(
+    "text",
+    [
+        (
+            "schema: metaproc:CollectedInputs/0.1\nrun_id: r\nstep_id: summarize\n"
+            "recorded_at: '2026-09-22T00:00:00'\n"
+            "inputs:\n  outcomes:\n    upstream_step: scan\n    path: outcomes.yaml\n"
+        ),
+        "inputs: [unclosed\n",
+    ],
+    ids=["no-outcome-digest", "malformed-yaml"],
+)
+
+
+def _write_record(run_dir: Path, text: str) -> Path:
+    record_path = _record_path(run_dir, "summarize")
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    record_path.write_text(text, encoding="utf-8")
+    return record_path
 
 
 def _variables(run_dir: Path) -> dict[str, str]:
@@ -193,36 +216,32 @@ class TestRecordCollectedInputs:
         assert record is not None
         assert record.run_id == "other"
 
+    @_UNREADABLE_RECORDS
+    def test_an_unreadable_record_is_replaced(self, tmp_path: Path, text: str) -> None:
+        _task(tmp_path, "scan", "a", "completed")
+        _task(tmp_path, "scan", "b", "failed", error="boom")
+        record_path = _write_record(tmp_path, text)
+
+        _deliver(tmp_path)
+
+        record = read_collected_inputs_at(record_path.parent)
+        assert record is not None
+        assert record.inputs["outcomes"].outcomes_sha256 == (
+            build_outcome_manifest(tmp_path, "scan", ["a", "b"]).outcomes_sha256
+        )
+
 
 class TestReadCollectedInputs:
     def test_a_missing_record_reads_as_absent(self, tmp_path: Path) -> None:
         assert read_collected_inputs(tmp_path, "summarize") is None
 
-    @pytest.mark.parametrize(
-        "text",
-        [
-            (
-                "schema: metaproc:CollectedInputs/0.1\nrun_id: r\nstep_id: summarize\n"
-                "recorded_at: '2026-09-22T00:00:00'\n"
-                "inputs:\n  outcomes:\n    upstream_step: scan\n    path: outcomes.yaml\n"
-            ),
-            "inputs: [unclosed\n",
-        ],
-        ids=["no-outcome-digest", "malformed-yaml"],
-    )
-    def test_an_unreadable_record_is_logged_and_reads_as_absent(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture, text: str
-    ) -> None:
-        record_path = _record_path(tmp_path, "summarize")
-        record_path.parent.mkdir(parents=True)
-        record_path.write_text(text)
+    @_UNREADABLE_RECORDS
+    def test_an_unreadable_record_raises(self, tmp_path: Path, text: str) -> None:
+        """Absent and unreadable are different facts; only absent reads as None."""
+        _write_record(tmp_path, text)
 
-        with caplog.at_level(logging.WARNING, logger=_LOGGER):
-            assert read_collected_inputs(tmp_path, "summarize") is None
-
-        [message] = [r.getMessage() for r in caplog.records if r.name == _LOGGER]
-        assert message.startswith(f"step 'summarize': unreadable {COLLECTED_INPUTS_FILE}")
-        assert "cannot be compared" in message
+        with pytest.raises(COLLECTED_INPUTS_UNREADABLE):
+            read_collected_inputs(tmp_path, "summarize")
 
 
 class TestChangedCollectedInputs:
@@ -258,9 +277,9 @@ class TestChangedCollectedInputs:
 
         assert _changed(tmp_path) == []
 
-    def test_a_record_without_the_outcome_digest_is_not_compared(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_a_record_without_the_outcome_digest_raises_to_the_caller(self, tmp_path: Path) -> None:
+        """The comparison does not decide what an unreadable record means; the
+        orchestrator counts it as changed."""
         _task(tmp_path, "scan", "a", "completed")
         _task(tmp_path, "scan", "b", "failed", error="boom")
         _deliver(tmp_path)
@@ -268,21 +287,41 @@ class TestChangedCollectedInputs:
         record_path.write_text(
             "\n".join(
                 line
-                for line in record_path.read_text().splitlines()
+                for line in record_path.read_text(encoding="utf-8").splitlines()
                 if "outcomes_sha256" not in line
             )
-            + "\n"
+            + "\n",
+            encoding="utf-8",
         )
-        _task(tmp_path, "scan", "b", "completed")
 
-        with caplog.at_level(logging.WARNING, logger=_LOGGER):
-            assert _changed(tmp_path) == []
-        assert any("cannot be compared" in r.getMessage() for r in caplog.records)
+        with pytest.raises(COLLECTED_INPUTS_UNREADABLE, match="outcomes_sha256"):
+            _changed(tmp_path)
+
+    @_UNREADABLE_RECORDS
+    def test_an_unreadable_record_raises_to_the_caller(self, tmp_path: Path, text: str) -> None:
+        _task(tmp_path, "scan", "a", "completed")
+        _write_record(tmp_path, text)
+
+        with pytest.raises(COLLECTED_INPUTS_UNREADABLE):
+            _changed(tmp_path)
 
     def test_an_input_the_record_does_not_name_is_not_compared(self, tmp_path: Path) -> None:
         _task(tmp_path, "scan", "a", "completed")
         _task(tmp_path, "scan", "b", "failed", error="boom")
-        record_collected_inputs(tmp_path, run_id="r", step_id="summarize", documents=[])
+        # The record names only an input the consumer no longer declares.
+        [document] = collected_documents(
+            _consumer(),
+            step_map={"scan": _scan()},
+            chains_by_member={},
+            variables=_variables(tmp_path),
+            run_dir=tmp_path,
+        )
+        record_collected_inputs(
+            tmp_path,
+            run_id="r",
+            step_id="summarize",
+            documents=[dataclasses.replace(document, input_name="earlier")],
+        )
         _task(tmp_path, "scan", "b", "completed")
 
         assert _changed(tmp_path) == []

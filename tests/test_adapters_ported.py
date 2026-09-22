@@ -372,7 +372,7 @@ class TestGeminiCliAdapter:
         assert "GEMINI_SYSTEM_MD" in result
         system_md_path = Path(result["GEMINI_SYSTEM_MD"])
         assert system_md_path.exists()
-        assert system_md_path.read_text() == "Be helpful."
+        assert system_md_path.read_text(encoding="utf-8") == "Be helpful."
         second = self.adapter.prepare_env(env, {"append_system_prompt": "Be helpful."})
         assert Path(second["GEMINI_SYSTEM_MD"]) == system_md_path
 
@@ -388,7 +388,7 @@ class TestGeminiCliAdapter:
         assert "GEMINI_CLI_SYSTEM_SETTINGS_PATH" in result
         settings_path = Path(result["GEMINI_CLI_SYSTEM_SETTINGS_PATH"])
         assert settings_path.exists()
-        written = json.loads(settings_path.read_text())
+        written = json.loads(settings_path.read_text(encoding="utf-8"))
         assert written == GEMINI_DEFAULT_NATIVE_SETTINGS
         assert written["context"]["fileFiltering"]["respectGitIgnore"] is False
         assert written["agents"]["overrides"]["generalist"]["enabled"] is False
@@ -401,7 +401,7 @@ class TestGeminiCliAdapter:
         custom = {"agents": {"overrides": {"generalist": {"enabled": True}}}}
         result = self.adapter.prepare_env(env, {"native_settings": custom})
         settings_path = Path(result["GEMINI_CLI_SYSTEM_SETTINGS_PATH"])
-        written = json.loads(settings_path.read_text())
+        written = json.loads(settings_path.read_text(encoding="utf-8"))
         assert written["agents"]["overrides"]["generalist"]["enabled"] is True
 
     def test_prepare_env_default_disables_session_retention(self) -> None:
@@ -412,7 +412,9 @@ class TestGeminiCliAdapter:
         accumulated project bucket. See mp-858m.
         """
         result = self.adapter.prepare_env({"PATH": "/usr/bin"}, {})
-        written = json.loads(Path(result["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text())
+        written = json.loads(
+            Path(result["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text(encoding="utf-8")
+        )
         assert written["general"]["sessionRetention"]["enabled"] is False
 
     def test_prepare_env_partial_override_keeps_retention_guard(self) -> None:
@@ -423,7 +425,9 @@ class TestGeminiCliAdapter:
         """
         custom = {"agents": {"overrides": {"generalist": {"enabled": True}}}}
         result = self.adapter.prepare_env({"PATH": "/usr/bin"}, {"native_settings": custom})
-        written = json.loads(Path(result["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text())
+        written = json.loads(
+            Path(result["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text(encoding="utf-8")
+        )
         assert written["general"]["sessionRetention"]["enabled"] is False
         assert written["agents"]["overrides"]["generalist"]["enabled"] is True
         # Untouched defaults survive the override.
@@ -433,7 +437,9 @@ class TestGeminiCliAdapter:
         """Setting an unrelated `general` key does not displace the guard."""
         custom = {"general": {"vimMode": True}}
         result = self.adapter.prepare_env({"PATH": "/usr/bin"}, {"native_settings": custom})
-        written = json.loads(Path(result["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text())
+        written = json.loads(
+            Path(result["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text(encoding="utf-8")
+        )
         assert written["general"]["sessionRetention"]["enabled"] is False
         assert written["general"]["vimMode"] is True
 
@@ -441,7 +447,9 @@ class TestGeminiCliAdapter:
         """An operator who deliberately re-enables retention still wins."""
         custom = {"general": {"sessionRetention": {"enabled": True}}}
         result = self.adapter.prepare_env({"PATH": "/usr/bin"}, {"native_settings": custom})
-        written = json.loads(Path(result["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text())
+        written = json.loads(
+            Path(result["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text(encoding="utf-8")
+        )
         assert written["general"]["sessionRetention"]["enabled"] is True
 
     def test_prepare_env_native_settings_null_still_guards_retention(self) -> None:
@@ -453,18 +461,24 @@ class TestGeminiCliAdapter:
         """
         result = self.adapter.prepare_env({"PATH": "/usr/bin"}, {"native_settings": None})
         assert "GEMINI_CLI_SYSTEM_SETTINGS_PATH" in result
-        written = json.loads(Path(result["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text())
+        written = json.loads(
+            Path(result["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text(encoding="utf-8")
+        )
         assert written["general"]["sessionRetention"]["enabled"] is False
 
     def test_dynamic_model_configuration_is_asserted_by_default(self) -> None:
         """gemini-cli rewrites an unknown *flash id to its own default without it."""
         env = self.adapter.prepare_env({}, {})
-        emitted = json.loads(Path(env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text())
+        emitted = json.loads(
+            Path(env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text(encoding="utf-8")
+        )
         assert emitted["experimental"]["dynamicModelConfiguration"] is True
 
     def test_dynamic_model_configuration_survives_a_partial_override(self) -> None:
         env = self.adapter.prepare_env({}, {"native_settings": {"tools": {"core": ["read_file"]}}})
-        emitted = json.loads(Path(env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text())
+        emitted = json.loads(
+            Path(env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text(encoding="utf-8")
+        )
         assert emitted["experimental"]["dynamicModelConfiguration"] is True
         assert emitted["tools"] == {"core": ["read_file"]}
 

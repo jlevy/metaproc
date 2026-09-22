@@ -511,17 +511,29 @@ open its evidence. An item that fails again rewrites the document with its new a
 log path and still does not re-run the consumer, because the digest covers outcomes, not
 wording or paths.
 A step with no `collected-inputs.yaml` is not invalidated by this rule.
-A record that does not validate, such as one without `outcomes_sha256`, is logged as a
-warning and treated as absent.
+A record that is present but cannot be read — corrupt, in an earlier shape without
+`outcomes_sha256`, or written by a later Metaproc — counts as changed instead, and the
+resume prints the record it could not read beside its other decisions.
 Backfilling failed items therefore needs no `--only <consumer> --force`: the resume
 re-runs the consumer and its downstream.
+A run started before the release that added this rule has no record at all, so
+backfilling its failed items and resuming still reuses the consumer; run
+`--from <consumer>` once on such a run, and later resumes compare its record.
 
-When the consumer is a composite, this cascade also renames the per-task records inside
+When the consumer is a composite, this cascade also renames every per-task record inside
 the consumer’s own child scopes (`<run>/<step>/`, or `<run>/<step>/<key>/` for each
-mapped item), so its child steps, which read the document through `with:` paths, re-run.
-Downstream composites are invalidated only at the parent level, as after a fingerprint
-change: each is re-entered and reuses its completed child steps, so a downstream mapped
-composite does work only for the items its new roster adds.
+mapped item), nested scopes included, whether or not the task reads the document: a
+child step that fetches reference data and never opens the document re-runs too.
+Downstream steps are re-entered rather than re-done, in both mapped shapes.
+A downstream composite is invalidated at the parent level, as after a fingerprint
+change, so each is re-entered and reuses its completed child steps.
+A downstream mapped step that is not a composite (`mode: code`, whether handler or
+command, `agent`, or `manual`) keeps its completed items’ records, because there the
+per-item record is the work itself rather than a parent level over reusable children;
+renaming it would re-fetch every finished item on every backfill.
+Either way the step is re-entered and does work only for the items its new roster adds.
+The trade is that an item that keeps its key while the content behind it changes is
+reused; `--force` or `--from <step>` re-does those.
 A downstream step that itself collects a changed document is judged by its own digest
 comparison when the walk reaches it.
 An invalidated task stays invalidated until it runs again, including across an
@@ -532,10 +544,11 @@ decides it at resume from per-item state.
 The comparison runs only for steps the launch walks: a collector left out by `--only`,
 `--from`, or `--skip`, or satisfied by a `metaproc override`, is not compared, and
 `--force` re-runs the selected steps without comparing.
-Three cases are outside the rule: a step that reads a mapped step’s outputs without
+Four cases are outside the rule: a step that reads a mapped step’s outputs without
 declaring `collect:`, a downstream composite whose completed child steps read changed
-content through `with:` paths, and the downstream of a composite whose own child
-collector re-ran. Use `--from <step> --force` for those.
+content through `with:` paths, a downstream mapped step’s completed items whose content
+changed under the same key, and the downstream of a composite whose own child collector
+re-ran. Use `--from <step> --force` for those.
 
 ### When to reach for a flag
 
@@ -552,6 +565,7 @@ decision:
 | Want to rerun only one step in isolation, ignore the cascade | `--only <step>` |
 | Skip a step you know is fine, override caching | `--skip <step>` |
 | Force a rerun the fingerprint thinks is unnecessary | `--force` |
+| Re-do a downstream mapped step’s completed items after a collected input changed | `--from <step>` |
 
 Use `run-process --dry-run` or `metaproc deps <run>` to preview the cascade if you are
 unsure what the next launch will execute.
@@ -1106,7 +1120,7 @@ for unmarked old runs.
 
 | Artifact | Current path | Meaning |
 | --- | --- | --- |
-| Run config | `<run>/.state/run-config.yaml` | Run identity, variables, step variants, and layout marker; process, variables, and step variants rewritten by a resume that changes them, `run_dir` kept at its creation value |
+| Run config | `<run>/.state/run-config.yaml` | Run identity, variables, step variants, and layout marker; variables and step variants rewritten by a resume that changes them, `run_dir` kept at its creation value |
 | Run plan | `<scope>/.state/run-plan.yaml` | What this scope declared: step identity, shape, canonical mapped item keys, output ports, fingerprints |
 | Orchestrator lease | `<run>/.state/orchestrator-lease.yaml` | Owner and heartbeat for cross-host safety |
 | Process status | `<run>/.state/process-status.yaml` | Aggregated DAG state for status display |

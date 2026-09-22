@@ -217,7 +217,7 @@ class TestStateIO:
         ids=["missing", "byte-digest"],
     )
     def test_collected_inputs_without_the_outcome_digest_fail_validation(self, tmp_path, entry):
-        """The caller logs such a record and treats it as absent."""
+        """The reuse decision counts such a record as changed."""
         (tmp_path / COLLECTED_INPUTS_FILE).write_text(
             to_yaml_string(
                 {
@@ -227,7 +227,8 @@ class TestStateIO:
                     "recorded_at": "2026-09-22T00:00:00",
                     "inputs": {"outcomes": entry},
                 }
-            )
+            ),
+            encoding="utf-8",
         )
         with pytest.raises(ValidationError, match="outcomes_sha256"):
             read_collected_inputs_at(tmp_path)

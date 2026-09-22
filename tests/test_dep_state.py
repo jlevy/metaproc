@@ -821,7 +821,7 @@ class TestComputeStepState:
         fan_dir = run_dir / STATE_DIR / TASKS_SUBDIR / "fan-step"
         for key in ("a", "b"):
             (fan_dir / key).mkdir(parents=True)
-            (fan_dir / key / "status.yaml.stale").write_text("invalidated\n")
+            (fan_dir / key / "status.yaml.stale").write_text("invalidated\n", encoding="utf-8")
         rerun = StatusRecord(
             run_id="demo/run-1",
             step_id="fan-step",

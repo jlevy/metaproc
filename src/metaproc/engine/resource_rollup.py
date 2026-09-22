@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import cast
 
 from pydantic import TypeAdapter
-from strif import atomic_output_file
+from strif import atomic_write_text
 
 from metaproc.engine.resource_hierarchy import build_hierarchy_skeleton
 from metaproc.engine.resource_reconciliation import (
@@ -131,7 +131,7 @@ _RESOURCE_EVENT_ADAPTER: TypeAdapter[ResourceEvent] = TypeAdapter(ResourceEvent)
 def write_resource_artifacts(result: ResourceBuildResult) -> None:
     """Persist ``resources.json`` and ``resource-events.jsonl`` atomically.
 
-    Uses :func:`strif.atomic_output_file` so a crashed run never leaves a
+    Uses :func:`strif.atomic_write_text` so a crashed run never leaves a
     half-written ``resources.json`` that future ``metaproc resource-report``
     invocations would refuse to parse. Both paths must be set on
     ``result``; the caller is expected to populate them via the
@@ -141,16 +141,18 @@ def write_resource_artifacts(result: ResourceBuildResult) -> None:
     if result.document_path is None or result.events_path is None:
         msg = "ResourceBuildResult.document_path and events_path must be set to persist"
         raise ValueError(msg)
-    result.document_path.parent.mkdir(parents=True, exist_ok=True)
-    result.events_path.parent.mkdir(parents=True, exist_ok=True)
-    with atomic_output_file(result.events_path) as tmp:
-        tmp.write_text(
-            "".join(
-                _RESOURCE_EVENT_ADAPTER.dump_json(event).decode() + "\n" for event in result.events
-            )
-        )
-    with atomic_output_file(result.document_path) as tmp:
-        tmp.write_text(result.document.model_dump_json(by_alias=True, indent=2))
+    atomic_write_text(
+        result.events_path,
+        "".join(
+            _RESOURCE_EVENT_ADAPTER.dump_json(event).decode() + "\n" for event in result.events
+        ),
+        make_parents=True,
+    )
+    atomic_write_text(
+        result.document_path,
+        result.document.model_dump_json(by_alias=True, indent=2),
+        make_parents=True,
+    )
 
 
 def build_resources_document(

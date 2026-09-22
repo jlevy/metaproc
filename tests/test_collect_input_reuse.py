@@ -109,6 +109,16 @@ def fetch(variables: dict[str, str], step: object) -> None:
     _write(step, "fetched", variables["item"] + "\\n")
 
 
+def fetch_code(variables: dict[str, str], step: object) -> None:  # noqa: ARG001
+    # The same fetch as a mapped `code` step: a mapped step's declared output path still
+    # holds `{{item}}`, so the item's own path comes from its bound variables.
+    item = variables["item"]
+    _log(variables, f"fetch:{item}")
+    out = Path(variables["RUNS_DIR"]) / variables["RUN_ID"] / "enrich" / item / "fetched.txt"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(item + "\\n")
+
+
 def stage_one(variables: dict[str, str], step: object) -> None:
     _log(variables, f"s1:{variables['item']}")
     _write(step, "out", variables["item"] + "\\n")
@@ -290,6 +300,25 @@ _ENRICH = """\
     fetched: { path: "{{run.dir}}/enrich/{{item}}/fetched.txt", kind: file }
 """
 
+# The same downstream shape with a mapped `code` step in place of the mapped composite:
+# here the per-item record is the fetch itself, not a parent level over reusable children.
+_ENRICH_CODE = """\
+- id: enrich
+  mode: code
+  handler: "handlers.py:fetch_code"
+  needs: [consume]
+  on_failure: continue
+  inputs:
+    roster: { ref: consume.roster }
+  for_each:
+    over: roster
+    bind: item
+    bind_fields: [item]
+    key: "{{item}}"
+  outputs:
+    fetched: { path: "{{run.dir}}/enrich/{{item}}/fetched.txt", kind: file }
+"""
+
 _ENRICH_CHILD = """\
 process:
   name: enrich
@@ -387,6 +416,8 @@ def _write_process(process_dir: Path, shape: str) -> Path:
     - ``downstream-mapped``: ``scan`` -> ``consume`` (a composite collector whose
       child writes a roster) -> ``enrich`` (a mapped composite over that roster whose
       items each run a counted ``fetch``).
+    - ``downstream-mapped-code``: the same, with ``enrich`` a mapped ``code`` step
+      whose items each run the counted ``fetch`` directly.
     - ``fingerprint``: ``stage1`` (a mapped composite) -> ``stage2`` (a scalar
       composite) -> ``report``; no collector.
     """
@@ -428,6 +459,12 @@ def _write_process(process_dir: Path, shape: str) -> Path:
             + "enrich_process: { path: ./enrich.process.md, as: path }\n"
         )
         body = _process_block("collect-reuse", deps, [_SCAN, _ROSTER_CONSUME, _ENRICH])
+    elif shape == "downstream-mapped-code":
+        (process_dir / "consume.process.md").write_text(
+            _spec_document("Consume", _ROSTER_CONSUME_CHILD), encoding="utf-8"
+        )
+        deps = roster_dep + "consume_process: { path: ./consume.process.md, as: path }\n"
+        body = _process_block("collect-reuse", deps, [_SCAN, _ROSTER_CONSUME, _ENRICH_CODE])
     elif shape == "fingerprint":
         for name, child in (("stage1", _STAGE_ONE_CHILD), ("stage2", _STAGE_TWO_CHILD)):
             (process_dir / f"{name}.process.md").write_text(
@@ -665,6 +702,39 @@ def test_a_downstream_mapped_composite_reuses_its_completed_items_child_steps(
     assert (run_dir / "enrich" / "b" / "fetched.txt").read_text() == "b\n"
 
 
+def test_a_downstream_mapped_code_step_reuses_its_completed_items(tmp_path: Path) -> None:
+    """A downstream mapped non-composite step keeps its completed items' records.
+
+    For a mapped composite the per-item record is a parent level over child steps that
+    are reused; for a mapped non-composite step it is the work itself, so renaming it
+    would re-run every completed item's fetch on every routine backfill. The step is still re-entered, so the roster's new item is discovered.
+    """
+    process_path, runs_dir, run_dir = _setup(tmp_path, "downstream-mapped-code", failing="b")
+
+    launched = _run(process_path, runs_dir, run_dir.name)
+
+    assert launched.exit_code != 0, _message(launched)
+    assert _invocations(run_dir) == Counter({"scan:a": 1, "scan:b": 1, "roster": 1, "fetch:a": 1})
+
+    (runs_dir / "fail-b").unlink()
+    resumed = _run(process_path, runs_dir, run_dir.name)
+
+    assert resumed.exit_code == 0, _message(resumed)
+    # The mapped `code` step keeps every item record, so the cascade renames nothing of
+    # its own and it is not named among the invalidated steps.
+    assert (
+        "Step 'consume': collected input 'outcomes' from 'scan' changed since the step "
+        "last ran — invalidated: consume"
+    ) in resumed.output
+    # It is still re-entered, so the roster's added item is discovered and the completed
+    # item is reused rather than re-fetched.
+    assert "Step 'enrich': 1 actionable items (1 reused)" in resumed.output
+    assert _invocations(run_dir) == Counter(
+        {"scan:a": 1, "scan:b": 2, "roster": 2, "fetch:a": 1, "fetch:b": 1}
+    )
+    assert (run_dir / "enrich" / "b" / "fetched.txt").read_text() == "b\n"
+
+
 def test_a_fingerprint_change_keeps_composites_completed_child_steps(tmp_path: Path) -> None:
     """Editing a composite's process file invalidates it and its downstream, and the
     completed steps inside every composite are reused."""
@@ -754,18 +824,20 @@ def test_a_failed_item_that_fails_again_differently_does_not_rerun_its_consumer(
 
 
 @pytest.mark.parametrize("earlier_shape", [False, True], ids=["missing", "byte-digest"])
-def test_a_record_missing_the_outcome_digest_is_treated_as_absent(
+def test_a_record_missing_the_outcome_digest_counts_as_changed(
     tmp_path: Path, caplog: pytest.LogCaptureFixture, earlier_shape: bool
 ) -> None:
-    """A record without ``outcomes_sha256`` fails validation: it is logged and treated
-    like no record, so its consumer is not compared and does not cascade."""
+    """A record without ``outcomes_sha256`` fails validation. Present but unreadable
+    is not absent: its consumer cannot be compared, so it counts as changed and
+    re-runs with its downstream, and the next delivery replaces the record."""
     process_path, runs_dir, run_dir = _setup(tmp_path, "two-consumers", failing="b")
     launched = _run(process_path, runs_dir, run_dir.name)
     assert launched.exit_code != 0, _message(launched)
 
     # Rewrite `summarize`'s record without the outcome digest, or in the earlier shape
     # that held the digest of the document's bytes instead; `tally` keeps its record.
-    record_path = _record_dir(run_dir, "summarize") / COLLECTED_INPUTS_FILE
+    state_dir = _record_dir(run_dir, "summarize")
+    record_path = state_dir / COLLECTED_INPUTS_FILE
     record = read_yaml_file(record_path)
     for entry in record["inputs"].values():
         del entry["outcomes_sha256"]
@@ -775,16 +847,39 @@ def test_a_record_missing_the_outcome_digest_is_treated_as_absent(
     record_path.write_text(to_yaml_string(record), encoding="utf-8")
     (runs_dir / "fail-b").unlink()
 
-    with caplog.at_level(logging.WARNING, logger="metaproc.engine.collected_inputs"):
+    with caplog.at_level(logging.WARNING, logger="metaproc.commands.run_process"):
         resumed = _run(process_path, runs_dir, run_dir.name)
 
     assert resumed.exit_code == 0, _message(resumed)
-    warnings = [r.getMessage() for r in caplog.records if "cannot be compared" in r.getMessage()]
-    assert len(warnings) == 1
-    assert warnings[0].startswith(f"step 'summarize': unreadable {COLLECTED_INPUTS_FILE}")
+    # The operator sees the decision beside the other resume decisions, and the log
+    # keeps the traceback.
+    assert (
+        f"Step 'summarize': unreadable {COLLECTED_INPUTS_FILE} in {state_dir} (ValidationError: "
+    ) in resumed.output
+    assert (
+        "its collected inputs count as changed — invalidated: summarize, report"
+    ) in resumed.output
+    [warning] = [
+        r for r in caplog.records if "treating its collected inputs as changed" in r.getMessage()
+    ]
+    assert warning.getMessage().startswith(f"step 'summarize': unreadable {COLLECTED_INPUTS_FILE}")
+    assert warning.exc_info is not None
     assert "Step 'summarize': collected input" not in resumed.output
-    assert (run_dir / "report.txt").read_text() == "report:a\n"
     assert "Step 'tally': collected input 'outcomes' from 'scan' changed" in resumed.output
+    assert (run_dir / "report.txt").read_text(encoding="utf-8") == "report:a,b\n"
     assert _invocations(run_dir) == Counter(
-        {"scan:a": 1, "scan:b": 2, "summarize": 1, "report": 1, "tally": 2}
+        {"scan:a": 1, "scan:b": 2, "summarize": 2, "report": 2, "tally": 2}
     )
+    # The delivery that re-ran the consumer replaced the unreadable record.
+    replaced = read_collected_inputs_at(state_dir)
+    assert replaced is not None
+    assert replaced.inputs["outcomes"].outcomes_sha256 == (
+        build_outcome_manifest(run_dir, "scan", expected_keys=["a", "b"]).outcomes_sha256
+    )
+    assert (state_dir / "status.yaml.stale").exists()
+    assert _step_states(run_dir) == {
+        "scan": "current",
+        "summarize": "current",
+        "report": "current",
+        "tally": "current",
+    }

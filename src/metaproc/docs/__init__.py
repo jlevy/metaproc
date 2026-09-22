@@ -94,7 +94,7 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
         "artifacts",
         "artifact-catalog",
         "Every runtime artifact Metaproc writes or reads: format, schema, lifecycle.",
-        1600,
+        2100,
     ),
     Topic(
         "execution-contracts",
@@ -153,8 +153,8 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
     Topic(
         "arch-file-io",
         "arch-file-io-utilities",
-        "Architecture: the curated metaproc.io surface and frontmatter gotchas.",
-        1000,
+        "Architecture: the curated metaproc.io surface, write contracts, and frontmatter gotchas.",
+        1800,
     ),
 )
 

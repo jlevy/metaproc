@@ -103,6 +103,16 @@ retains historical framework [performance notes](performance-notes.md).
   follow [conventions.md](../src/metaproc/docs/conventions.md) § Template files and
   format status (one `*.template.md` suffix, `{{ }}` placeholders, `template.status`
   ladder).
+- **Every file write names its contract.** A write that creates and completes an output
+  file is published atomically — staged in the destination directory, committed in one
+  step — through `metaproc.io`’s `atomic_write_text`, `atomic_output_file`,
+  `write_secret_text`, `write_yaml_file`, or `fmf_write`. Append logs, live subprocess
+  streams, and private staging files are different contracts with their own primitives,
+  and routing them through replacement weakens them.
+  `devtools/check_atomic_writes.py` enforces this in `make lint`; where a non-atomic
+  write is right, say so in place with `# write-contract: <name> -- <reason>`. The
+  contracts and their helpers are in
+  [arch-file-io-utilities.md § Write Contracts](../src/metaproc/docs/arch-file-io-utilities.md#write-contracts).
 - **Schema tokens version every persisted artifact.** See
   [conventions.md](../src/metaproc/docs/conventions.md) §schema-tokens.
 - **One bead per significant change.** [`tbd`](https://github.com/jlevy/tbd) is the

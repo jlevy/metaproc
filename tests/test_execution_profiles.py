@@ -20,7 +20,7 @@ runner = CliRunner()
 
 def _write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(textwrap.dedent(text).lstrip())
+    path.write_text(textwrap.dedent(text).lstrip(), encoding="utf-8")
 
 
 def test_registry_resolves_extends_and_source_precedence(tmp_path: Path) -> None:

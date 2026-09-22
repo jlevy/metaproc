@@ -9,6 +9,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from strif import atomic_write_bytes
+
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_ROOTS = (
     ROOT / "tests" / "fixtures" / "log_compaction",
@@ -200,7 +202,10 @@ def run(*, check: bool) -> int:
             continue
         changed.append(path)
         if not check:
-            path.write_bytes(rendered)
+            # These fixtures are tracked in git. A `write_bytes` interrupted partway
+            # leaves a truncated file committed-looking on disk, and the next
+            # `--check` reports it as drift rather than as corruption.
+            atomic_write_bytes(path, rendered)
     if changed and check:
         for path in changed:
             print(path.relative_to(ROOT))

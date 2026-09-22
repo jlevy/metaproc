@@ -175,7 +175,7 @@ def _rate_limit_record(
 
 def _write_session_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w") as fh:
+    with path.open("w", encoding="utf-8") as fh:
         for rec in records:
             fh.write(json.dumps(rec) + "\n")
 

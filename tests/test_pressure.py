@@ -212,7 +212,7 @@ class TestMeasureLinux:
                     (),
                     {
                         "exists": lambda self: True,
-                        "read_text": lambda self: meminfo.read_text(),
+                        "read_text": lambda self, **_kwargs: meminfo.read_text(encoding="utf-8"),
                     },
                 )(),
                 "/proc/pressure/memory": type(
@@ -250,7 +250,7 @@ class TestMeasureLinux:
                 (),
                 {
                     "exists": lambda self: True,
-                    "read_text": lambda self: meminfo_text,
+                    "read_text": lambda self, **_kwargs: meminfo_text,
                 },
             )(),
             "/proc/pressure/memory": type(
@@ -258,7 +258,7 @@ class TestMeasureLinux:
                 (),
                 {
                     "exists": lambda self: True,
-                    "read_text": lambda self: psi_text,
+                    "read_text": lambda self, **_kwargs: psi_text,
                 },
             )(),
         }

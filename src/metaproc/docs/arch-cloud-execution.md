@@ -224,9 +224,9 @@ explicitly.
 
 Resume behavior: re-running `run-process` with the same `RUN_ID` skips completed steps
 and items based on on-disk status records.
-A resume whose process or variables differ from those `run-config.yaml` records is
-warned about and recorded, so an accidental collision between unrelated runs sharing a
-directory is visible rather than silent.
+A resume whose variables differ from those `run-config.yaml` records is warned about and
+recorded, and one whose process name differs is refused, so an accidental collision
+between unrelated runs sharing a directory is visible rather than silent.
 
 ### 2.5 LaunchBackend Protocol
 

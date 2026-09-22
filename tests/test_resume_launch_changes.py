@@ -22,7 +22,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
-from strif import atomic_output_file
+from strif import atomic_write_text
 from typer.testing import CliRunner, Result
 
 from metaproc.cli import app
@@ -43,19 +43,19 @@ from pathlib import Path
 def _log(variables: dict[str, str], entry: str) -> Path:
     run_dir = Path(variables["RUNS_DIR"]) / variables["RUN_ID"]
     run_dir.mkdir(parents=True, exist_ok=True)
-    with (run_dir / "invocations.log").open("a") as fh:
+    with (run_dir / "invocations.log").open("a", encoding="utf-8") as fh:
         fh.write(entry + "\\n")
     return run_dir
 
 
 def record(variables: dict[str, str], step: object) -> None:  # noqa: ARG001
     run_dir = _log(variables, "record")
-    (run_dir / "record.txt").write_text(variables["DATASET"] + "\\n")
+    (run_dir / "record.txt").write_text(variables["DATASET"] + "\\n", encoding="utf-8")
 
 
 def stamp(variables: dict[str, str], step: object) -> None:  # noqa: ARG001
     run_dir = _log(variables, "stamp")
-    (run_dir / "stamp.txt").write_text(variables["DATASET"] + "\\n")
+    (run_dir / "stamp.txt").write_text(variables["DATASET"] + "\\n", encoding="utf-8")
 '''
 
 _PROCESS_NAME = "launch-changes"
@@ -155,7 +155,7 @@ def _message(result: Result) -> str:
 
 
 def _invocations(run_dir: Path) -> list[str]:
-    return (run_dir / "invocations.log").read_text().splitlines()
+    return (run_dir / "invocations.log").read_text(encoding="utf-8").splitlines()
 
 
 def _config(run_dir: Path) -> dict[str, object]:
@@ -340,7 +340,7 @@ def test_a_changed_process_name_still_refuses(tmp_path: Path) -> None:
 def test_a_corrupt_run_config_still_refuses(tmp_path: Path) -> None:
     process_path, runs_dir, run_id = _launch(tmp_path)
     run_dir = runs_dir / run_id
-    (run_dir / STATE_DIR / RUN_CONFIG_FILE).write_text("process: [unterminated\n")
+    (run_dir / STATE_DIR / RUN_CONFIG_FILE).write_text("process: [unterminated\n", encoding="utf-8")
 
     refused = _run(process_path, runs_dir, run_id, DATASET="ds-1")
 
@@ -540,9 +540,7 @@ def test_an_unsatisfied_ancestor_refusal_names_the_override(tmp_path: Path) -> N
 
 def _write_config(config_dir: Path, data: dict[str, object]) -> Path:
     config_path = config_dir / STATE_DIR / RUN_CONFIG_FILE
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    with atomic_output_file(config_path) as tmp:
-        Path(tmp).write_text(to_yaml_string(data))
+    atomic_write_text(config_path, to_yaml_string(data), make_parents=True)
     return config_path
 
 
@@ -663,7 +661,7 @@ def test_a_process_name_mismatch_raises(tmp_path: Path) -> None:
 def test_a_corrupt_config_refuses(tmp_path: Path, text: str) -> None:
     config_path = tmp_path / STATE_DIR / RUN_CONFIG_FILE
     config_path.parent.mkdir(parents=True)
-    config_path.write_text(text)
+    config_path.write_text(text, encoding="utf-8")
 
     with pytest.raises(CLIError, match=r"Corrupt run-config\.yaml"):
         _validate_run_config(config_path, process_name="mine", run_dir=tmp_path, variables={})

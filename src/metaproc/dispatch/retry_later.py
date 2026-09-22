@@ -123,7 +123,7 @@ def write_checkpoint(
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     data = asdict(checkpoint)
     with atomic_output_file(path) as tmp:
-        Path(tmp).write_text(json.dumps(data, indent=2, sort_keys=False))
+        Path(tmp).write_text(json.dumps(data, indent=2, sort_keys=False), encoding="utf-8")
         Path(tmp).chmod(0o600)
 
     if env_snapshot is not None and checkpoint.env_snapshot_ref:
@@ -132,7 +132,7 @@ def write_checkpoint(
         # retry_later.env.json doesn't leak credentials.
         scrubbed = {k: v for k, v in env_snapshot.items() if not _looks_secret(k)}
         with atomic_output_file(env_path) as tmp:
-            Path(tmp).write_text(json.dumps(scrubbed, indent=2))
+            Path(tmp).write_text(json.dumps(scrubbed, indent=2), encoding="utf-8")
             Path(tmp).chmod(0o600)
 
 
@@ -168,7 +168,7 @@ def read_checkpoint(path: Path) -> RetryLaterCheckpoint:
     Raises ``FileNotFoundError`` when missing, ``ValueError`` on
     schema mismatch. Used by the resume daemon (P2c.5).
     """
-    raw = path.read_text()
+    raw = path.read_text(encoding="utf-8")
     data = json.loads(raw)
     if not isinstance(data, dict):
         msg = f"{path}: expected JSON object at top level"

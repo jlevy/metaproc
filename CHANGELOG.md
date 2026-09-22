@@ -49,6 +49,14 @@ development series.
   input) as its actual price and the standard rate from 2027-01-01 ($1.50, $7.50, $0.15)
   as its list price, so its invocations count toward `list_cost_usd`.
 
+### Changed
+
+- **The pinned gemini-cli is 0.59.0.** The version check warns when the `gemini` on PATH
+  differs from the pin, which moves from 0.55.1. On Vertex AI, 0.59.0 still rewrites an
+  unrecognized model id ending in `flash` to `gemini-3.5-flash` unless
+  `experimental.dynamicModelConfiguration` is on; with the settings metaproc writes, a
+  request for `gemini-3.6-flash` is served by `gemini-3.6-flash`.
+
 ### Fixed
 
 - **A resume re-runs a consumer whose collected input changed.** A step that declares a
@@ -66,13 +74,20 @@ development series.
   reuse follows the outcome digest, so an item that fails again with a different message
   or a new log path does not re-run its consumer.
   An unchanged resume reuses everything, and a step recorded before this change is not
-  invalidated. When the consumer is a composite, its own child steps re-run too, because
-  they read the document through `with:` paths.
-  Downstream composites are invalidated at the parent level and reuse their completed
-  child steps, exactly as after a fingerprint change, so a downstream mapped composite
-  does work only for the items its new roster adds.
-  An invalidated task also stays invalidated across an interrupted run: reconciliation
-  no longer projects the invalidated attempt back into `status.yaml`.
+  invalidated; a record that is present but unreadable counts as changed, and the resume
+  names it. When the consumer is a composite, every task in its own child scopes re-runs,
+  whether or not it reads the document.
+  Downstream steps are re-entered rather than re-done: a downstream composite is
+  invalidated at the parent level and reuses its completed child steps, exactly as after
+  a fingerprint change, and a downstream mapped non-composite step (`mode: code`,
+  `agent`, or `manual`) keeps its completed items’ records, since there the per-item
+  record is the work itself.
+  Either way the step does work only for the items its new roster adds, and an item that
+  keeps its key while the content behind it changes is reused until `--force` or
+  `--from <step>`. A run started before this release has no record, so backfilling its
+  failed items and resuming still reuses the consumer; run `--from <consumer>` once on
+  such a run. An invalidated task also stays invalidated across an interrupted run:
+  reconciliation no longer projects the invalidated attempt back into `status.yaml`.
   `metaproc status --steps` names a changed collected input among the causes of an
   `invalidated` step, and reports a step that has re-run since it was invalidated by its
   new completion instead of by the leftover `.stale` file.

@@ -20,6 +20,7 @@ from metaproc.adapters.cli_version import (
 )
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.config.model_catalog import resolve_model
+from metaproc.io import write_secret_text
 from metaproc.settings import (
     GEMINI_DEFAULT_MODEL,
     GEMINI_DEFAULT_NATIVE_SETTINGS,
@@ -30,7 +31,7 @@ from metaproc.settings import (
 
 log = logging.getLogger(__name__)
 
-PINNED_GEMINI_CLI_VERSION = "0.55.1"
+PINNED_GEMINI_CLI_VERSION = "0.59.0"
 GEMINI_CLI_INSTALL_HINT = f"Install: npm install -g @google/gemini-cli@{PINNED_GEMINI_CLI_VERSION}"
 
 
@@ -143,8 +144,7 @@ def _materialize_temp_file(*, prefix: str, suffix: str, content: str) -> Path:
             _temp_files_dir = tempfile.TemporaryDirectory(prefix="metaproc-gemini-")
         path = Path(_temp_files_dir.name) / f"{prefix}{digest}{suffix}"
         if not path.exists():
-            path.write_text(content, encoding="utf-8")
-            path.chmod(0o600)
+            write_secret_text(path, content)
     return path
 
 

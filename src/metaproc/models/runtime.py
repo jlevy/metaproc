@@ -288,9 +288,10 @@ class CollectedInputsRecord(BaseModel):
     totals, and each item's key, state and success; error wording and log paths
     are not part of it): a difference means the step last ran over outcomes that
     no longer hold, so the step (with a composite's own child steps) re-runs and
-    its downstream steps are invalidated. A step with no record, or with a record
-    that fails validation (such as one written in an earlier shape), is not
-    invalidated by this rule; the unreadable record is logged and treated as absent.
+    its downstream steps are invalidated. A step with no record (one that last
+    ran before the record existed) is not invalidated by this rule. A record that
+    is present but cannot be read, such as one written in an earlier shape, counts
+    as changed.
 
     Kept apart from ``fingerprint_step``, which is definition-only: the run plan
     publishes fingerprints at launch, and the collected documents are execution

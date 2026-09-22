@@ -100,7 +100,7 @@ def _make_claude_log(path: Path) -> None:
             }
         ),
     ]
-    path.write_text("\n".join(lines) + "\n")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def test_document_has_root_run_node_and_current_schema(tmp_path: Path) -> None:

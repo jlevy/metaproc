@@ -36,7 +36,7 @@ def _run_node(script: str) -> Any:
     """
     bootstrap = (
         "const window = { document: null, requestAnimationFrame: () => {} };\n"
-        f"{ICONS_JS.read_text()}\n"
+        f"{ICONS_JS.read_text(encoding='utf-8')}\n"
         f"{VIZ_JS.read_text()}\n"
         f"{script}\n"
         "process.stdout.write(JSON.stringify(window.__OUT__));\n"

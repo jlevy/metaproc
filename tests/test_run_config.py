@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from strif import atomic_output_file
+from strif import atomic_write_text
 
 from metaproc.commands.run_process import (
     _apply_resume_config_changes,
@@ -77,7 +77,9 @@ def _resume_run_config(  # noqa: PLR0913
 
 def _events(run_dir: Path) -> list[dict[str, object]]:
     path = run_dir / LOGS_DIR / DISPATCH_CONFIG_CHANGES_FILE
-    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
 class TestWriteRunConfig:
@@ -263,7 +265,7 @@ class TestWriteRunConfig:
             def rewrite() -> None:
                 data = read_yaml_file(config_path)
                 data["variables"]["DATASET"] = dataset
-                config_path.write_text(to_yaml_string(data))
+                atomic_write_text(config_path, to_yaml_string(data))
 
             return rewrite
 
@@ -457,7 +459,7 @@ class TestWriteRunConfig:
         config_path = run_dir / STATE_DIR / RUN_CONFIG_FILE
         data = read_yaml_file(config_path)
         data["run_dir"] = "/mnt/disks/filestore/runs/run-5b/mine"
-        config_path.write_text(to_yaml_string(data))
+        atomic_write_text(config_path, to_yaml_string(data))
 
         changes = _validate_run_config(
             config_path,
@@ -486,7 +488,7 @@ class TestWriteRunConfig:
         config_path = run_dir / STATE_DIR / RUN_CONFIG_FILE
         data = read_yaml_file(config_path)
         data["run_dir"] = "/mnt/filestore/runs/run-5c/mine"
-        config_path.write_text(to_yaml_string(data))
+        atomic_write_text(config_path, to_yaml_string(data))
 
         # Only the two root-level mount paths normalize; a workstation directory that
         # merely contains ``mnt/filestore`` is a different run directory.
@@ -520,7 +522,7 @@ class TestWriteRunConfig:
         config_path = run_dir / STATE_DIR / RUN_CONFIG_FILE
         data = read_yaml_file(config_path)
         data["run_dir"] = "/mnt/filestore/runs/run-5d/mine"
-        config_path.write_text(to_yaml_string(data))
+        atomic_write_text(config_path, to_yaml_string(data))
 
         changes = _validate_run_config(
             config_path,
@@ -567,7 +569,7 @@ class TestValidateRunConfig:
     def test_raises_on_corrupt_file(self, tmp_path: Path) -> None:
         config_path = tmp_path / STATE_DIR / RUN_CONFIG_FILE
         config_path.parent.mkdir(parents=True)
-        config_path.write_text("not valid yaml: [")
+        config_path.write_text("not valid yaml: [", encoding="utf-8")
 
         with pytest.raises(CLIError, match=r"Corrupt run-config\.yaml") as exc_info:
             _validate_run_config(
@@ -582,15 +584,13 @@ class TestValidateRunConfig:
         """No error when config matches."""
 
         config_path = tmp_path / STATE_DIR / RUN_CONFIG_FILE
-        config_path.parent.mkdir(parents=True)
         data = {
             "process": "mine",
             "run_dir": str(tmp_path),
             "run_id": "run-1",
             "variables": {},
         }
-        with atomic_output_file(config_path) as tmp:
-            Path(tmp).write_text(to_yaml_string(data))
+        atomic_write_text(config_path, to_yaml_string(data), make_parents=True)
 
         # Should not raise, and nothing changed.
         changes = _validate_run_config(
@@ -610,7 +610,7 @@ class TestValidateRunConfig:
             "run_id": "run-1",
             "variables": {"COUNT": 3},
         }
-        config_path.write_text(to_yaml_string(data))
+        atomic_write_text(config_path, to_yaml_string(data))
 
         with pytest.raises(CLIError, match="variables must be a string-to-string mapping"):
             _validate_run_config(
@@ -631,7 +631,8 @@ class TestValidateRunConfig:
                     "run_id": "run-1",
                 }
             )
-            + "variables: null\n"
+            + "variables: null\n",
+            encoding="utf-8",
         )
 
         with pytest.raises(CLIError, match="variables must be a string-to-string mapping"):
@@ -783,7 +784,11 @@ class TestAuthAndConcurrencyPersistence:
         )
 
         assert changes_path.exists()
-        events = [json.loads(line) for line in changes_path.read_text().splitlines() if line]
+        events = [
+            json.loads(line)
+            for line in changes_path.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
         assert len(events) == 1
         change = events[0]
         assert change["event"] == "dispatch_config_change"
@@ -821,7 +826,11 @@ class TestAuthAndConcurrencyPersistence:
 
         changes_path = run_dir / LOGS_DIR / DISPATCH_CONFIG_CHANGES_FILE
         assert changes_path.exists()
-        events = [json.loads(line) for line in changes_path.read_text().splitlines() if line]
+        events = [
+            json.loads(line)
+            for line in changes_path.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
         assert len(events) == 1
         change_fields = events[0]["changes"][0]["diff"]
         assert "selection_policy" in change_fields

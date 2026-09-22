@@ -1336,8 +1336,11 @@ consumer has no per-task completion record of its own, and its child steps can c
 document while a sibling later fails the composite.
 Content digests, not modification times, are compared.
 A step without the record is a legacy completion and is not invalidated by this rule.
-A record that does not validate, such as one lacking `outcomes_sha256`, is logged and
-treated as absent.
+A record that is present but unreadable, including one lacking `outcomes_sha256`,
+degrades the other way, toward changed: absent means a run that predates the record,
+while unreadable means the step ran over outcomes this process cannot compare, and
+re-running one consumer is cheaper than reusing output computed over outcomes that no
+longer hold.
 
 `_invalidate_downstream` renames `status.yaml` to `status.yaml.stale` for each affected
 parent-level task. A composite invalidated that way is re-entered and reuses its
@@ -1348,8 +1351,20 @@ selected composite re-runs its child steps, while a downstream composite outside
 selection is renamed at the parent level and reuses its completed child steps when a
 later run reaches it.
 The collected-input cascade alone passes `invalidate_root_children=True`, which also
-renames every task in the consumer’s own child scopes, because those children read the
-changed document through `with:` paths.
+renames every task in the consumer’s own child scopes, nested scopes included, whether
+or not that task reads the document: a composite’s children read it through `with:`
+paths, and the cascade does not distinguish the children that bind it from those that do
+not. That cascade also passes `keep_downstream_mapped_items=True`, which keeps the
+per-item records of every downstream mapped non-composite step.
+For a mapped composite the per-item record is a parent level whose completed children
+are reused. For a mapped non-composite step (`mode: code`, whether handler or command,
+`agent`, or `manual`) it is the work itself, so renaming it would re-run every finished
+item on a routine backfill, which costs more than the manual sequence this rule
+replaces. Both mapped shapes are re-entered, so the items a new roster adds are
+discovered, and an item whose content changed under the same key is reused until
+`--force` or `--from` re-does it.
+The fingerprint cascade and `--force` keep the wider scope: they fire on an operator
+edit or an explicit force, where re-doing completed item work is the intent.
 Downstream composites keep their children on that path too; a downstream collector is
 judged by its own digest comparison when the walk reaches it.
 An invalidation persists until its task runs again: reconciliation at the next
