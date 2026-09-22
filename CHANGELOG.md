@@ -15,12 +15,18 @@ development series.
   Resume validation leaves such an input out of the identity `run-config.yaml` records,
   under both its logical name and its `param:` alias, so a run can resume onto corrected
   code with every completed step reused.
-  The resume logs each provenance input that moved with its recorded and current value,
-  and records the move as a `provenance_advance` event in
-  `.logs/dispatch-config-changes.jsonl`, while `run-config.yaml` keeps the launch value.
-  Every other resolved variable is still identity: changing, adding, or removing one,
-  including through an edited `default:`, refuses the resume, and the refusal now names
-  the identity variables that changed and the inputs the process declares provenance.
+  The resume logs each provenance input that moved and records the move as a
+  `provenance_advance` event in `.logs/dispatch-config-changes.jsonl`, one entry per
+  input, using the same flat `{old, new}` diff as the `max_concurrency` config change.
+  `run-config.yaml` keeps the launch value, so `old` is the input’s last effective
+  value: the value the previous resume recorded, or the launch value when none has.
+  A resume that repeats the previous value writes nothing.
+  Every other resolved variable is still identity: changing, adding, or leaving one
+  unset, including through an edited `default:`, refuses the resume, and the refusal now
+  names the identity variables that changed, tags an added or dropped one, and lists the
+  inputs the process declares provenance.
+  Spec validation rejects a provenance input whose logical name or `param:` is also a
+  non-provenance input’s, which would drop that input out of resume identity.
 - **Every run writes an operations summary.** Run finalization writes
   `operations-summary.md` (`metaproc.operations:AgentOperationsSummary/v1`) beside
   `resource-usage-summary.md`: real elapsed time, setup, per-stage shares, per-item

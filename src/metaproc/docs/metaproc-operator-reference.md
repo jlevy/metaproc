@@ -502,13 +502,22 @@ Use `run-process --dry-run` or `metaproc deps <run>` to preview the cascade if y
 unsure what the next launch will execute.
 
 Keep every resolved `--var` value unchanged when resuming a run ID, other than inputs
-the process declares `provenance: true`. Metaproc rejects a changed, added, or removed
-identity variable before it reuses task state, including one that changed because an
-input’s `default:` was edited, and the refusal names each such variable; start a new run
-ID for a different input set.
+the process declares `provenance: true`. Metaproc rejects a changed, added, or newly
+unset identity variable before it reuses task state, including one that changed because
+an input’s `default:` was edited, and the refusal names each such variable, tagging it
+`(added)` or `(removed)` so you know whether to restore a value or stop passing one;
+start a new run ID for a different input set.
 A provenance input, such as a code revision, may advance on a resume: the resume logs
-its recorded and current values and appends a `provenance_advance` event to
+the move and appends a `provenance_advance` event to
 `.logs/dispatch-config-changes.jsonl`, and `run-config.yaml` keeps the launch value.
+Each event entry carries `old`, the value the previous resume ran with, and `new`, so
+the log’s last entry for an input says what the latest resume used; a resume that
+repeats the previous value writes nothing.
+Deleting a provenance input’s declaration makes its recorded value identity again, and a
+resume without it is refused.
+To stop supplying a value, keep the declaration (optional, with no value) or pass the
+launch value.
+
 Equivalent local and cloud Filestore mount aliases for `RUNS_DIR` are the sole
 normalization of an identity variable.
 

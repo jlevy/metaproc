@@ -528,18 +528,35 @@ A process-level input under `inputs:` also takes these fields:
 | `provenance` | `true` for an input that records how the run executed rather than what it is, such as the code revision that launched it. Defaults to `false`. |
 
 Every resolved input is part of a run’s identity unless it declares `provenance: true`.
-`run-config.yaml` records the resolved variables at launch, and a resume that changes,
-adds, or removes an identity variable is refused, including one whose value comes from
-an edited `default:`. A provenance input resolves and reaches the graph like any other,
-but it is left out of that comparison under both its logical name and its `param` alias,
-so a resume may advance it.
-`run-config.yaml` keeps the launch value; the resume logs each provenance input that
-moved with its recorded and current value, and appends one `provenance_advance` event
-listing those moves to `.logs/dispatch-config-changes.jsonl`, in the
-`changes: [{field, diff: {old, new}}]` shape the `dispatch_config_change` events use.
-A resume that moves none writes no event.
+`run-config.yaml` records the resolved variables at launch, and a resume that changes an
+identity variable, adds one, or leaves one unset is refused, including one whose value
+comes from an edited `default:`; the refusal tags an added or dropped name so an
+operator knows which way to correct it.
+A provenance input resolves and reaches the graph like any other, but it is left out of
+that comparison under both its logical name and its `param` alias, so a resume may
+advance it. A name may not be provenance for one input and identity for another; spec
+validation rejects a provenance input whose logical name or `param` is also a
+non-provenance input’s.
+
+`run-config.yaml` keeps the launch value and is never rewritten.
+Each resume that moves a provenance input logs the move and appends one
+`provenance_advance` event to `.logs/dispatch-config-changes.jsonl`, as
+`changes: [{field, param, diff: {old, new}}]` — one entry per input, `field` its logical
+name and `param` its alias, omitted for an input that declares none.
+The flat `{old, new}` diff is the one the `max_concurrency` `dispatch_config_change`
+uses; the `auth` change instead nests an `{old, new}` per subfield.
+`old` is the input’s last effective value: the `new` of the newest event naming it, or
+the launch value when no event has moved it yet.
+So a resume that repeats the previous resume’s value writes no event, a chain records
+`rev-b -> rev-c`, and a return to the launch value records `rev-c -> rev-a`. The log’s
+last entry for an input always states what the latest resume ran with, and a resume that
+moves nothing writes no event at all.
 Only the process knows what its inputs mean, so Metaproc marks no input as provenance on
-its own.
+its own. Which inputs are provenance comes from the resume-time spec, which is what lets
+a run launched before the field existed adopt it; the flip side is that deleting a
+provenance input’s declaration makes its recorded value identity again, so a resume
+without it is refused.
+Keep the declaration (optional, no value) or pass the launch value.
 
 Leaving resume identity does not exempt an input from step fingerprints (§10.3). A value
 bound through a step’s `with:` stays a template in the resolved plan, so advancing it
