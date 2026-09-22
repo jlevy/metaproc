@@ -195,11 +195,11 @@ class ProcessInput(_ProcessIOBase):
     - parsed-from-file via ``path:`` + ``parse:``
     - literal (caller fills ``path:`` with an absolute or run-relative location)
 
-    ``provenance: true`` marks an input that records how a run executed, such as the
-    code revision that launched it, rather than what the run is. It resolves and
-    reaches the graph like any other input, but it is left out of the resume identity
-    ``run-config.yaml`` records, so a resume may change its value. Every other resolved
-    input is identity, and changing one refuses the resume.
+    Every resolved input is recorded in ``run-config.yaml`` at launch. A resume may
+    change any of them, through a ``--var``, an edited ``default:``, or an input added or
+    removed. Each change is logged and recorded as a ``launch_config_change`` event, and
+    ``run-config.yaml`` then records the values the resume ran with. What re-runs is
+    decided by step fingerprints.
     """
 
     path: str | None = None
@@ -207,7 +207,6 @@ class ProcessInput(_ProcessIOBase):
     parse: ParseConfig | None = None
     required: bool = True
     default: str | None = None
-    provenance: bool = False
 
 
 class ProcessDep(_ProcessIOBase):
@@ -618,22 +617,6 @@ class ProcessSpec(BaseModel):
         names: set[str] = set()
         for name, decl in self.inputs.items():
             if decl.required:
-                continue
-            names.add(name)
-            if decl.param is not None:
-                names.add(decl.param)
-        return names
-
-    @property
-    def provenance_input_names(self) -> set[str]:
-        """Return provenance logical input names plus their backing param names.
-
-        Resolution writes an input's value under both names (``expand_param_aliases``
-        and literal ``default:`` filling), so both leave resume identity together.
-        """
-        names: set[str] = set()
-        for name, decl in self.inputs.items():
-            if not decl.provenance:
                 continue
             names.add(name)
             if decl.param is not None:

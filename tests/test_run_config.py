@@ -1,8 +1,9 @@
-"""Tests for run-config.yaml — immutable run identity and resume validation."""
+"""Tests for run-config.yaml — run identity, resume validation, and recorded changes."""
 
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from unittest.mock import patch
 
@@ -32,7 +33,7 @@ class TestWriteRunConfig:
         run_dir = tmp_path / "run-1" / "mine"
         run_dir.mkdir(parents=True)
 
-        config_path = _write_run_config(
+        written = _write_run_config(
             run_dir,
             process_name="mine",
             process_path=Path("example_plugin/process/mine/mine.process.md"),
@@ -41,7 +42,9 @@ class TestWriteRunConfig:
             backend="gcp-worker",
             variant="pi-glm-5",
         )
+        config_path = written.path
 
+        assert written.changes == {}
         assert config_path.exists()
         assert config_path == run_dir / STATE_DIR / RUN_CONFIG_FILE
 
@@ -86,11 +89,11 @@ class TestWriteRunConfig:
             variables={"RUN_ID": "run-3"},
             backend="local",
             variant=None,
-        )
-        first_data = read_yaml_file(first_path)
+        ).path
+        first_bytes = first_path.read_bytes()
 
         # Second call — should validate, not overwrite.
-        second_path = _write_run_config(
+        second = _write_run_config(
             run_dir,
             process_name="mine",
             process_path=Path("process/mine/mine.process.md"),
@@ -99,40 +102,61 @@ class TestWriteRunConfig:
             backend="local",
             variant=None,
         )
-        second_data = read_yaml_file(second_path)
 
-        assert first_data["created_at"] == second_data["created_at"]
+        assert second.changes == {}
+        assert second.path.read_bytes() == first_bytes
+        assert not (run_dir / LOGS_DIR / DISPATCH_CONFIG_CHANGES_FILE).exists()
 
-    def test_resume_rejects_changed_immutable_variables(self, tmp_path: Path) -> None:
+    def test_resume_records_and_adopts_a_changed_variable(self, tmp_path: Path) -> None:
         run_dir = tmp_path / "run-variable-change" / "mine"
         run_dir.mkdir(parents=True)
 
-        _write_run_config(
+        created = _write_run_config(
             run_dir,
             process_name="mine",
             process_path=Path("process/mine/mine.process.md"),
             run_id="run-variable-change",
             variables={"RUN_ID": "run-variable-change", "DATASET": "original-dataset"},
             backend="local",
-            variant=None,
+            variant="pi-glm-5",
+            max_concurrency=4,
+        )
+        before = read_yaml_file(created.path)
+
+        resumed = _write_run_config(
+            run_dir,
+            process_name="mine",
+            process_path=Path("process/mine/mine.process.md"),
+            run_id="run-variable-change",
+            variables={"RUN_ID": "run-variable-change", "DATASET": "replacement-dataset"},
+            backend="local",
+            variant="pi-glm-5",
+            max_concurrency=4,
         )
 
-        with pytest.raises(CLIError, match=r"identity variables changed: DATASET") as exc_info:
-            _write_run_config(
-                run_dir,
-                process_name="mine",
-                process_path=Path("process/mine/mine.process.md"),
-                run_id="run-variable-change",
-                variables={"RUN_ID": "run-variable-change", "DATASET": "replacement-dataset"},
-                backend="local",
-                variant=None,
-            )
+        assert resumed.changes == {"variables.DATASET": ("original-dataset", "replacement-dataset")}
+        events = [
+            json.loads(line)
+            for line in (run_dir / LOGS_DIR / DISPATCH_CONFIG_CHANGES_FILE).read_text().splitlines()
+        ]
+        assert [event["event"] for event in events] == ["launch_config_change"]
+        assert events[0]["changes"] == [
+            {
+                "field": "variables.DATASET",
+                "diff": {"old": "original-dataset", "new": "replacement-dataset"},
+            }
+        ]
+        # Only the variables are rewritten; every other field keeps its creation value.
+        after = read_yaml_file(resumed.path)
+        assert after["variables"] == {
+            "RUN_ID": "run-variable-change",
+            "DATASET": "replacement-dataset",
+        }
+        assert {key: value for key, value in after.items() if key != "variables"} == {
+            key: value for key, value in before.items() if key != "variables"
+        }
 
-        message = str(exc_info.value)
-        assert "original-dataset" not in message
-        assert "replacement-dataset" not in message
-
-    def test_resume_rejects_changed_resolved_optional_default(self, tmp_path: Path) -> None:
+    def test_resume_records_a_changed_resolved_optional_default(self, tmp_path: Path) -> None:
         run_dir = tmp_path / "run-default-change" / "mine"
         run_dir.mkdir(parents=True)
 
@@ -146,19 +170,93 @@ class TestWriteRunConfig:
             variant=None,
         )
 
-        with pytest.raises(CLIError, match=r"identity variables changed: OPTIONAL_MODE"):
-            _write_run_config(
+        resumed = _write_run_config(
+            run_dir,
+            process_name="mine",
+            process_path=Path("process/mine/mine.process.md"),
+            run_id="run-default-change",
+            variables={
+                "RUN_ID": "run-default-change",
+                "OPTIONAL_MODE": "replacement-default",
+            },
+            backend="local",
+            variant=None,
+        )
+
+        assert resumed.changes == {
+            "variables.OPTIONAL_MODE": ("original-default", "replacement-default")
+        }
+        assert read_yaml_file(resumed.path)["variables"]["OPTIONAL_MODE"] == ("replacement-default")
+
+    def test_resume_records_step_variant_changes_and_rewrites_the_set(self, tmp_path: Path) -> None:
+        run_dir = tmp_path / "run-step-variants" / "mine"
+        run_dir.mkdir(parents=True)
+
+        def write(step_variants: dict[str, str] | None) -> dict[str, tuple[str | None, str | None]]:
+            return _write_run_config(
                 run_dir,
                 process_name="mine",
                 process_path=Path("process/mine/mine.process.md"),
-                run_id="run-default-change",
-                variables={
-                    "RUN_ID": "run-default-change",
-                    "OPTIONAL_MODE": "replacement-default",
-                },
+                run_id="run-step-variants",
+                variables={"RUN_ID": "run-step-variants"},
                 backend="local",
                 variant=None,
-            )
+                step_variants=step_variants,
+            ).changes
+
+        config_path = run_dir / STATE_DIR / RUN_CONFIG_FILE
+        assert write({"judge": "judge-a"}) == {}
+        assert write({"judge": "judge-b", "draft": "draft-a"}) == {
+            "step_variants.draft": (None, "draft-a"),
+            "step_variants.judge": ("judge-a", "judge-b"),
+        }
+        assert read_yaml_file(config_path)["step_variants"] == {
+            "draft": "draft-a",
+            "judge": "judge-b",
+        }
+        # No overrides at all drops the field, as the first write omits an empty set.
+        assert write(None) == {
+            "step_variants.draft": ("draft-a", None),
+            "step_variants.judge": ("judge-b", None),
+        }
+        assert "step_variants" not in read_yaml_file(config_path)
+
+    def test_resume_of_a_moved_run_records_run_dir_and_keeps_its_creation_value(
+        self, tmp_path: Path
+    ) -> None:
+        """The results projection rebases recorded paths from the creation ``run_dir``."""
+        original = tmp_path / "before" / "run-moved"
+        original.mkdir(parents=True)
+        _write_run_config(
+            original,
+            process_name="mine",
+            process_path=Path("process/mine/mine.process.md"),
+            run_id="run-moved",
+            variables={"RUN_ID": "run-moved"},
+            backend="local",
+            variant=None,
+        )
+        moved = tmp_path / "after" / "run-moved"
+        shutil.copytree(original, moved)
+        config_bytes = (moved / STATE_DIR / RUN_CONFIG_FILE).read_bytes()
+
+        resumed = _write_run_config(
+            moved,
+            process_name="mine",
+            process_path=Path("process/mine/mine.process.md"),
+            run_id="run-moved",
+            variables={"RUN_ID": "run-moved"},
+            backend="local",
+            variant=None,
+        )
+
+        assert resumed.changes == {"run_dir": (str(original), str(moved))}
+        events = [
+            json.loads(line)
+            for line in (moved / LOGS_DIR / DISPATCH_CONFIG_CHANGES_FILE).read_text().splitlines()
+        ]
+        assert [event["event"] for event in events] == ["launch_config_change"]
+        assert resumed.path.read_bytes() == config_bytes
 
     def test_resume_accepts_equivalent_runs_dir_mount_alias(self, tmp_path: Path) -> None:
         run_dir = tmp_path / "run-mount-alias" / "mine"
@@ -177,7 +275,7 @@ class TestWriteRunConfig:
             variant=None,
         )
 
-        _write_run_config(
+        resumed = _write_run_config(
             run_dir,
             process_name="mine",
             process_path=Path("process/mine/mine.process.md"),
@@ -188,6 +286,12 @@ class TestWriteRunConfig:
             },
             backend="local",
             variant=None,
+        )
+
+        # Two spellings of one mount are one value: no change, nothing rewritten.
+        assert resumed.changes == {}
+        assert read_yaml_file(resumed.path)["variables"]["RUNS_DIR"] == (
+            "/mnt/disks/filestore/runs"
         )
 
     def test_resume_rejects_different_process(self, tmp_path: Path) -> None:
@@ -204,7 +308,8 @@ class TestWriteRunConfig:
             variant=None,
         )
 
-        with pytest.raises(CLIError, match="Resume mismatch.*process"):
+        config_bytes = (run_dir / STATE_DIR / RUN_CONFIG_FILE).read_bytes()
+        with pytest.raises(CLIError, match=r"Resume refused.*process.*run identity mine/run-4"):
             _write_run_config(
                 run_dir,
                 process_name="retro",
@@ -214,8 +319,10 @@ class TestWriteRunConfig:
                 backend="local",
                 variant=None,
             )
+        assert (run_dir / STATE_DIR / RUN_CONFIG_FILE).read_bytes() == config_bytes
+        assert not (run_dir / LOGS_DIR / DISPATCH_CONFIG_CHANGES_FILE).exists()
 
-    def test_resume_rejects_different_run_dir(self, tmp_path: Path) -> None:
+    def test_resume_records_different_run_dir(self, tmp_path: Path) -> None:
         run_dir = tmp_path / "run-5" / "mine"
         run_dir.mkdir(parents=True)
 
@@ -232,13 +339,13 @@ class TestWriteRunConfig:
         # Simulate a different run_dir by patching the validation.
         config_path = run_dir / STATE_DIR / RUN_CONFIG_FILE
         different_dir = tmp_path / "other-dir" / "mine"
-        with pytest.raises(CLIError, match="Resume mismatch.*run_dir"):
-            _validate_run_config(
-                config_path,
-                process_name="mine",
-                run_dir=different_dir,
-                variables={"RUN_ID": "run-5"},
-            )
+        changes = _validate_run_config(
+            config_path,
+            process_name="mine",
+            run_dir=different_dir,
+            variables={"RUN_ID": "run-5"},
+        )
+        assert changes == {"run_dir": (str(run_dir), str(different_dir))}
 
     def test_resume_accepts_legacy_filestore_mount_alias(self, tmp_path: Path) -> None:
         run_dir = tmp_path / "run-5b" / "mine"
@@ -259,14 +366,15 @@ class TestWriteRunConfig:
         data["run_dir"] = "/mnt/disks/filestore/runs/run-5b/mine"
         config_path.write_text(to_yaml_string(data))
 
-        _validate_run_config(
+        changes = _validate_run_config(
             config_path,
             process_name="mine",
             run_dir=Path("/mnt/filestore/runs/run-5b/mine"),
             variables={"RUN_ID": "run-5b"},
         )
+        assert changes == {}
 
-    def test_resume_rejects_workstation_path_containing_filestore_alias(
+    def test_resume_records_workstation_path_containing_filestore_alias(
         self, tmp_path: Path
     ) -> None:
         run_dir = tmp_path / "run-5c" / "mine"
@@ -287,17 +395,22 @@ class TestWriteRunConfig:
         data["run_dir"] = "/mnt/filestore/runs/run-5c/mine"
         config_path.write_text(to_yaml_string(data))
 
-        with pytest.raises(CLIError, match="Resume mismatch.*run_dir") as exc_info:
-            _validate_run_config(
-                config_path,
-                process_name="mine",
-                run_dir=Path("/workspace/user/mnt/filestore/runs/run-5c/mine"),
-                variables={"RUN_ID": "run-5c"},
+        # Only the two root-level mount paths normalize; a workstation directory that
+        # merely contains ``mnt/filestore`` is a different run directory.
+        changes = _validate_run_config(
+            config_path,
+            process_name="mine",
+            run_dir=Path("/workspace/user/mnt/filestore/runs/run-5c/mine"),
+            variables={"RUN_ID": "run-5c"},
+        )
+        assert changes == {
+            "run_dir": (
+                "/mnt/filestore/runs/run-5c/mine",
+                "/workspace/user/mnt/filestore/runs/run-5c/mine",
             )
-        assert "Workstation-mounted Filestore aliases are not supported" in str(exc_info.value)
-        assert "canonical cloud mount" in str(exc_info.value)
+        }
 
-    def test_resume_rejects_unrelated_local_runs_directory(self, tmp_path: Path) -> None:
+    def test_resume_records_unrelated_local_runs_directory(self, tmp_path: Path) -> None:
         run_dir = tmp_path / "run-5d" / "mine"
         run_dir.mkdir(parents=True)
 
@@ -316,13 +429,13 @@ class TestWriteRunConfig:
         data["run_dir"] = "/mnt/filestore/runs/run-5d/mine"
         config_path.write_text(to_yaml_string(data))
 
-        with pytest.raises(CLIError, match="Resume mismatch.*run_dir"):
-            _validate_run_config(
-                config_path,
-                process_name="mine",
-                run_dir=Path("/tmp/runs/run-5d/mine"),
-                variables={"RUN_ID": "run-5d"},
-            )
+        changes = _validate_run_config(
+            config_path,
+            process_name="mine",
+            run_dir=Path("/tmp/runs/run-5d/mine"),
+            variables={"RUN_ID": "run-5d"},
+        )
+        assert changes == {"run_dir": ("/mnt/filestore/runs/run-5d/mine", "/tmp/runs/run-5d/mine")}
 
     def test_includes_git_sha(self, tmp_path: Path) -> None:
         run_dir = tmp_path / "run-6" / "mine"
@@ -363,13 +476,14 @@ class TestValidateRunConfig:
         config_path.parent.mkdir(parents=True)
         config_path.write_text("not valid yaml: [")
 
-        with pytest.raises(Exception):  # noqa: B017
+        with pytest.raises(CLIError, match=r"Corrupt run-config\.yaml") as exc_info:
             _validate_run_config(
                 config_path,
                 process_name="mine",
                 run_dir=tmp_path,
                 variables={},
             )
+        assert exc_info.value.__cause__ is not None
 
     def test_passes_on_matching_config(self, tmp_path: Path) -> None:
         """No error when config matches."""
@@ -385,13 +499,14 @@ class TestValidateRunConfig:
         with atomic_output_file(config_path) as tmp:
             Path(tmp).write_text(to_yaml_string(data))
 
-        # Should not raise.
-        _validate_run_config(
+        # Should not raise, and nothing changed.
+        changes = _validate_run_config(
             config_path,
             process_name="mine",
             run_dir=tmp_path,
             variables={},
         )
+        assert changes == {}
 
     def test_rejects_non_string_variable_mapping(self, tmp_path: Path) -> None:
         config_path = tmp_path / STATE_DIR / RUN_CONFIG_FILE
@@ -466,7 +581,7 @@ class TestAuthAndConcurrencyPersistence:
             variant=None,
             auth_flags=flags,
             max_concurrency=25,
-        )
+        ).path
         data = read_yaml_file(config_path)
         assert isinstance(data, dict)
         assert "auth" in data
@@ -488,7 +603,7 @@ class TestAuthAndConcurrencyPersistence:
             backend="local",
             variant=None,
             auth_flags=AuthPoolFlags(),
-        )
+        ).path
         data = read_yaml_file(config_path)
         assert "auth" not in data
 
@@ -504,7 +619,7 @@ class TestAuthAndConcurrencyPersistence:
             backend="local",
             variant=None,
             max_concurrency=None,
-        )
+        ).path
         data = read_yaml_file(config_path)
         assert "concurrency" not in data
 
