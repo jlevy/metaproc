@@ -295,7 +295,7 @@ class TestGeminiCliAdapter:
 
     def test_existing_prompt_file_is_redirected(self, tmp_path: Path) -> None:
         prompt_file = tmp_path / "prompt.txt"
-        prompt_file.write_text("Analyze PAYX")
+        prompt_file.write_text("Analyze item-g")
         cmd = self.adapter.build_command(prompt_file, {}, {})
         assert cmd[4:6] == [str(prompt_file), "gemini"]
         assert "-p" not in cmd[5:]

@@ -661,15 +661,15 @@ class TestMarkTransitions:
             tmp_path,
             run_id="analysis-research/run-1",
             step_id="edge-candidate-ledger",
-            item={"ticker": "PVH", "company": "PVH Corp."},
+            item={"ticker": "item-n", "company": "Example Corp."},
             attempt=2,
-            item_key="PVH",
+            item_key="item-n",
             error="launch failed: token refresh timeout",
         )
 
         assert failed.state == "failed"
         assert failed.attempt == 2
-        assert failed.item["ticker"] == "PVH"
+        assert failed.item["ticker"] == "item-n"
         assert failed.error == "launch failed: token refresh timeout"
         assert failed.started_at is not None
         assert failed.completed_at == failed.started_at
@@ -681,7 +681,7 @@ class TestMarkTransitions:
         assert loaded.error == "launch failed: token refresh timeout"
         history = read_attempt_history_at(tmp_path)
         assert len(history) == 1
-        assert history[0].item_key == "PVH"
+        assert history[0].item_key == "item-n"
 
     def test_mark_completed_reads_from_disk(self, tmp_path):
         mark_running_at(tmp_path, run_id="r1", step_id="s1", item={"ticker": "AAPL"})

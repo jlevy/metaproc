@@ -35,10 +35,10 @@ def test_filter_by_step_id_via_attributes():
 
 
 def test_filter_combines_predicates():
-    a = _span("a", kind="tool_call", attributes={"item.key": "MNDY", "tool.name": "Read"})
-    b = _span("b", kind="tool_call", attributes={"item.key": "MNDY", "tool.name": "WebFetch"})
-    c = _span("c", kind="tool_call", attributes={"item.key": "CEVA", "tool.name": "Read"})
-    out = apply_filter([a, b, c], Filter(item_key="MNDY", tool="Read"))
+    a = _span("a", kind="tool_call", attributes={"item.key": "item-b", "tool.name": "Read"})
+    b = _span("b", kind="tool_call", attributes={"item.key": "item-b", "tool.name": "WebFetch"})
+    c = _span("c", kind="tool_call", attributes={"item.key": "item-c", "tool.name": "Read"})
+    out = apply_filter([a, b, c], Filter(item_key="item-b", tool="Read"))
     assert [s.span_id for s in out] == ["a"]
 
 
@@ -71,11 +71,11 @@ def test_format_table_empty():
 
 
 def test_format_table_includes_header_and_rows():
-    spans = [_span("a", name="Read", duration_ms=120.0, attributes={"item.key": "MNDY"})]
+    spans = [_span("a", name="Read", duration_ms=120.0, attributes={"item.key": "item-b"})]
     text = format_table(spans)
     assert "kind" in text
     assert "Read" in text
-    assert "MNDY" in text
+    assert "item-b" in text
     assert "120ms" in text
 
 
@@ -103,7 +103,7 @@ def test_format_tree_renders_parent_child():
         "c",
         kind="item",
         parent_span_id="p",
-        attributes={"step.id": "research-step", "item.key": "MNDY"},
+        attributes={"step.id": "research-step", "item.key": "item-b"},
         ts_start="2026-05-12T00:00:01Z",
     )
     text = format_tree([parent, child])

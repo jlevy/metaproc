@@ -104,8 +104,8 @@ Tool-use operational observability (the original design):
   `rate_limit_stats` fields and the §14.7 contract.
 - **Reading Guide**: new “Track tool-use telemetry or diagnose tool-call failures” row.
 
-Validated 2026-04-20 by the regenerated `_mine-tech-mix-100-2026-04-06-c` usage snapshot
-(`tool_profiles` frontmatter and `## Tool-use by Variant` table; see
+Validated 2026-04-20 by a regenerated usage snapshot (`tool_profiles` frontmatter and
+`## Tool-use by Variant` table; see
 [§14.7 Tool-Use Observability](#147-tool-use-observability)).
 
 ### rev2h (2026-04-19)

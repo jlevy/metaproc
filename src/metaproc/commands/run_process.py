@@ -3128,7 +3128,7 @@ async def _execute_agent_step(
                 # An exit code is one signal among three, and the least trustworthy of
                 # them. Some adapters emit a terminal success record, write every declared
                 # output, and then exit non-zero while shutting down; failing the step on
-                # that discards finished work. Measured over one week-36 night: 45 attempts
+                # that discards finished work. Measured over one night: 45 attempts
                 # reported success with all outputs present, and 37 steps failed
                 # permanently with their completed artifacts on disk, each retry also
                 # consuming a durable agent-call reservation.

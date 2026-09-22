@@ -6,7 +6,7 @@ softschema:
   status: enforced
 resource_usage:
   run_id:
-    example-roster-fit/run-20260914T153048Z.5501910000.vpjugu14bq-week39-fitreview
+    example-roster-fit/run-20260914T153048Z.0000000000.example001
   totals:
     wall_time_s: 104743.91100000002
     cpu_pct_avg: 82.70806451612904

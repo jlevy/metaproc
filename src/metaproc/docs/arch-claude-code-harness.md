@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: Claude Code Harness
 
-**Date:** 2026-04-30 (last updated 2026-09-10) **Status:** Approved
+**Date:** 2026-04-30 (last updated 2026-09-22) **Status:** Approved
 
 ## Overview
 
@@ -262,10 +262,10 @@ now prevented some other way.
 | Operator’s ambient `ANTHROPIC_AUTH_TOKEN` (or apiKeyHelper, cloud-provider flag, etc.) out-votes the pooled credential | Slot reports correct fingerprint but actual API call uses operator’s account | `credential_scrub_env` unsets the silently-overridable higher-precedence vars before spawn |
 | Operator’s ambient `ANTHROPIC_API_KEY` out-votes the pooled credential (enterprise key mode is an explicit choice that silent override would mask) | As above, but the harness can’t tell whether the operator meant to use enterprise key | Slot coordinator *refuses* acquisition with an explicit warning naming the conflict — distinct from scrub-and-continue |
 | Inner Claude inherits parent CLI’s `CLAUDECODE=1` and treats itself as nested-tool | CLI behavior changes (skips startup logging, alters output format) | `prepare_env` strips `CLAUDECODE` before spawn |
-| Inner CLI auto-updates mid-cohort, mixing versions across attempts | One attempt runs CLI 2.1.123, the next runs 2.1.124, with classifier surprises | `DISABLE_UPDATES=1` set in `credential_scope_env` |
+| Inner CLI auto-updates mid-dispatch, mixing versions across attempts | One attempt runs CLI 2.1.123, the next runs 2.1.124, with classifier surprises | `DISABLE_UPDATES=1` set in `credential_scope_env` |
 | Inner CLI persists session state from a previous attempt | Stale conversation context bleeds into the next attempt | `--no-session-persistence` always set |
 | Tool calls denied silently because CLI prompts in batch mode (stdin = /dev/null) | Agent reports SUCCESS while writing nothing; `invalid_outputs` failure | `--permission-mode bypassPermissions` is *required* in adapter config; raises ValueError if absent |
-| Bash/Write tool calls denied despite `bypassPermissions` because of `ENV_SCRUB=1` override (CLI 2.1.98+) | Cascading `permanent failure [known-bug:claude-startup-exit-1-silent]` across cohort; warning text in attempt log surfaces “Permission mode forced to default — CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is set” | `--allowedTools` flag with the trusted-dispatch tool set; works *with* the credential scrub |
+| Bash/Write tool calls denied despite `bypassPermissions` because of `ENV_SCRUB=1` override (CLI 2.1.98+) | Cascading `permanent failure [known-bug:claude-startup-exit-1-silent]` across a dispatch; warning text in attempt log surfaces “Permission mode forced to default — CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is set” | `--allowedTools` flag with the trusted-dispatch tool set; works *with* the credential scrub |
 | Agent writes outputs to a path outside the slot’s `CLAUDE_CONFIG_DIR` and the file scope blocks it | Output validator reports “file not found” while the agent reports success | `--add-dir <project-cwd>` extends file scope to the project root |
 | `{{run.variant}}` in output path renders as the literal token because the validator gets the wrong variables dict | `output validation failed: ops-review.md: file not found` (file is on disk at the resolved path) | `_execute_agent_step` passes `step_vars` (which sets `VARIANT=effective_variant`) to `validate_item_outputs`, not the run-level variables |
 

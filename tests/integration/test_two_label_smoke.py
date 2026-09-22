@@ -1,7 +1,7 @@
 """Two-label end-to-end smoke for the auth credential pool.
 
 Covers P2b.6 from `plan-2026-04-21-auth-credential-pool.md` and the four
-P0 framework fixes that landed on `dispatch/2026-04-28-tuesday`:
+P0 framework fixes that landed together on one dispatch branch:
 
 - the selector and fallback regressions — selector primary path used on every attempt
   and respects exclude_labels.
@@ -57,7 +57,7 @@ def _push(backend: LocalFilesystemBackend, label: str, *, fp: str, tag: str) -> 
 
 @pytest.fixture
 def two_label_pool(tmp_path: Path) -> LocalFilesystemBackend:
-    """A pool with two active labels (alt1, alt2) — Tuesday's worker pool shape."""
+    """A pool with two active labels (alt1, alt2), the usual worker pool shape."""
     backend = LocalFilesystemBackend(path=tmp_path / "credentials.json")
     _push(backend, "alt1", fp="3b9767a228fe", tag="alt1")
     _push(backend, "alt2", fp="f024c6aa58d9", tag="alt2")
@@ -256,7 +256,7 @@ class TestExhaustionAndRecovery:
             coordinator=SlotCoordinator(backend),
             adapter="claude-code-cli",
             runs_dir=tmp_path / "runs",
-            run_id="tuesday",
+            run_id="two-label",
             step="predict-ticker",
         )
         delay = _compute_pool_cooling_delay(config, floor_s=1.0, ceiling_s=1800.0, jitter_s=30.0)

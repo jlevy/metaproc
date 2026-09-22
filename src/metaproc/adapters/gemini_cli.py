@@ -104,8 +104,8 @@ def _gemini_version_drift() -> str | None:
                 f"{MIN_GEMINI_CLI_VERSION} metaproc can drive: the adapter passes "
                 "--skip-trust, which that CLI rejects, so every agent step would fail "
                 f"mid-run. Fix PATH to a gemini >= {MIN_GEMINI_CLI_VERSION} (pinned: "
-                f"{PINNED_GEMINI_CLI_VERSION}) or upgrade: "
-                "npm install -g @google/gemini-cli"
+                f"{PINNED_GEMINI_CLI_VERSION}) or install the pin: "
+                f"npm install -g @google/gemini-cli@{PINNED_GEMINI_CLI_VERSION}"
             )
     return drift
 

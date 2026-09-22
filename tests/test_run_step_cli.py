@@ -268,7 +268,7 @@ progress:
   - ticker: GOOG
     sector: communication_services
     earnings_date: '2026-01-29'
-  - ticker: BZH
+  - ticker: item-i
     sector: consumer_discretionary
     earnings_date: '2026-01-29'
 ---

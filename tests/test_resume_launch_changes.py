@@ -26,7 +26,11 @@ from strif import atomic_write_text
 from typer.testing import CliRunner, Result
 
 from metaproc.cli import app
+from metaproc.commands.helpers import load_process_spec
 from metaproc.commands.run_process import _validate_run_config
+from metaproc.engine.build_plan import build_plan
+from metaproc.engine.dep_state import fingerprint_step
+from metaproc.engine.process_scope import expand_process_vars
 from metaproc.errors import CLIError
 from metaproc.io import iter_jsonl_objects, read_yaml_file, to_yaml_string
 from metaproc.io.orchestrator_lease import acquire_lease, release_lease
@@ -458,6 +462,78 @@ def test_a_different_step_variant_set_resumes_and_is_recorded(tmp_path: Path) ->
     assert again.exit_code == 0, _message(again)
     assert len(_events(run_dir)) == 1
     assert sorted(_invocations(run_dir)) == ["draft", "judge", "judge"]
+
+
+def test_a_changed_variable_changes_only_the_fingerprints_that_bind_it(tmp_path: Path) -> None:
+    """Recording a change does not decide what re-runs; step fingerprints do.
+
+    A value bound through a composite step's ``with:`` stays a template in the resolved
+    plan, so changing it leaves that step's fingerprint alone. A value substituted into a
+    resolved field such as ``env:`` is in the payload, so the step re-runs with its
+    downstream on the next resume. Absolute fingerprint values are not asserted: a
+    composite step's payload carries its absolute ``uses_path``, so its hash depends on
+    where the process files live.
+    """
+    (tmp_path / "child.process.md").write_text(
+        textwrap.dedent(
+            """\
+            ---
+            process:
+              name: child
+              inputs:
+                rev: {param: REV, as: string}
+              steps:
+                - id: leaf
+                  mode: code
+                  command: "true"
+            ---
+            # Child
+            """
+        ),
+        encoding="utf-8",
+    )
+    process_path = tmp_path / "parent.process.md"
+    process_path.write_text(
+        textwrap.dedent(
+            """\
+            ---
+            process:
+              name: parent
+              inputs:
+                code_revision: {param: CODE_REVISION, as: string}
+              deps:
+                child: {path: ./child.process.md, as: path}
+              steps:
+                - id: via-with
+                  mode: composite
+                  uses: deps.child
+                  with:
+                    rev: "{{code_revision}}"
+                - id: via-env
+                  mode: code
+                  command: "true"
+                  env:
+                    REV: "{{code_revision}}"
+            ---
+            # Parent
+            """
+        ),
+        encoding="utf-8",
+    )
+    spec = load_process_spec(process_path)
+
+    def fingerprints(revision: str) -> dict[str, str]:
+        params = expand_process_vars(
+            spec,
+            {"CODE_REVISION": revision, "RUN_ID": "run-1", "RUNS_DIR": str(tmp_path / "runs")},
+        )
+        plan = build_plan(spec, params, process_path=process_path)
+        return {step.step_id: fingerprint_step(step) for step in plan.steps}
+
+    before, after = fingerprints("rev-a"), fingerprints("rev-b")
+
+    assert before["via-with"] == after["via-with"]
+    assert before["via-env"] != after["via-env"]
 
 
 # ── Nothing is recorded before the orchestrator lease ──────────────

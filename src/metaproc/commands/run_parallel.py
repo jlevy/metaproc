@@ -1962,7 +1962,7 @@ async def _run_agent_pool(  # noqa: PLR0913
 
         # When the error is a Claude quota exhaustion ("out of extra usage ·
         # resets 3:10am"), parse the reset clock so the pool can pause the
-        # whole cohort until the named window passes — replaces the 2026-05-13
+        # whole dispatch until the named window passes — replaces the 2026-05-13
         # per-task crash cascade. parse_quota_reset_at returns None for any
         # other error string; pool.record_failure_class then no-ops the pause.
         quota_reset_at = (

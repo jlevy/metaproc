@@ -6,7 +6,7 @@ status: Draft — partial currency notice below
 ---
 # Architecture: Authentication and Credentials
 
-**Date:** 2026-04-21 (last updated 2026-09-15) **Status:** Draft — partial currency
+**Date:** 2026-04-21 (last updated 2026-09-22) **Status:** Draft — partial currency
 notice below
 
 ## Currency notice (2026-04-28)
@@ -1021,9 +1021,8 @@ Sections 2.5 and 5.3 of the pre-extraction research note
 `research-2026-04-27-claude-code-oauth-multi-account-failover.md` walk through the
 empirical reproduction.
 
-**Mitigations in place** (Phase 10 of
-plan-2026-04-27-predict-dispatch-tuesday-2026-04-28.md), independent of whether the
-underlying CLI bug is fixed in 2.1.119:
+**Mitigations in place**, independent of whether the underlying CLI bug is fixed in
+2.1.119:
 
 - **Pre-flight probe gate** runs once per dispatch before any items launch and marks any
   label whose stored refresh token is stale as `expired` in the pool, removing it from
@@ -1175,7 +1174,7 @@ Two implications:
   for api-401 was over-conservative under the (incorrect) assumption that retry meant
   same-label retry. In the 2026-04-27 multi-label incident, that mistake caused 52/52
   items to permanently fail with `retry_count=0` even though `alt2` was eligible the
-  whole time. With `RETRY_AFTER_WAIT`, the cohort recovers within a single dispatch.
+  whole time. With `RETRY_AFTER_WAIT`, the batch recovers within a single dispatch.
 - **`mark_expired(label)` from a sibling teardown is a separate guard.** It flips the
   label ineligible for new acquisitions, independent of the retry path.
   The combination — `pool_exclude` for in-flight retries + `mark_expired` for new
@@ -1183,10 +1182,11 @@ Two implications:
   bad label is possible without operator action.
 
 The `LabelCircuit + canary-confirm migration` design is a future optimization that would
-cap wasted-compute on the failing label at ~3 items rather than cohort_size, by tripping
-a pool-level circuit and pausing new acquisitions before the entire cohort burns through
-the bad label. Deferred P2 because the failover semantics above already guarantee
-single-dispatch recovery.
+cap wasted-compute on the failing label at ~3 items rather than the batch size, by
+tripping a pool-level circuit and pausing new acquisitions before the entire batch burns
+through the bad label.
+Deferred P2 because the failover semantics above already guarantee single-dispatch
+recovery.
 
 ### §N.14 Vehicle A pool redesign (2026-04-28)
 

@@ -659,6 +659,30 @@ uv run metaproc variants <process.process.md>
 uv run metaproc auth-check --live --variant <execution-profile>
 ```
 
+### Agent CLI Versions
+
+Each adapter pins the CLI version it was tested against: Claude Code 2.1.234, Codex
+0.147.0, Gemini CLI 0.59.0 and Pi 0.84.2 (the `PINNED_*_VERSION` constants in
+`src/metaproc/adapters/`). At launch, `run-process` checks every adapter the plan’s
+agent steps use against its pin and prints a drift banner when they differ; drift does
+not stop the run. Gemini CLI older than 0.40.0 is refused, because the adapter passes
+`--skip-trust`, which older releases reject.
+A deployment image that installs a CLI moves with its pin.
+`METAPROC_SKIP_CLAUDE_VERSION_CHECK`, `METAPROC_SKIP_CODEX_VERSION_CHECK`,
+`METAPROC_SKIP_GEMINI_VERSION_CHECK` and `METAPROC_SKIP_PI_VERSION_CHECK` bypass the
+checks, for CI or tests where the binary is not on PATH.
+
+Gemini CLI answers a model id ending in `flash` that it does not know with its own
+default flash model, unless `experimental.dynamicModelConfiguration` is on.
+Metaproc turns it on in the settings it writes for every Gemini step.
+A step’s own `native_settings` override Metaproc’s, so a step or adapter config
+transform must not turn it off.
+To confirm the model a profile is actually served:
+
+```bash
+uv run metaproc auth-check --live --variant <execution-profile> --assert-model <model>
+```
+
 For Codex, `OPENAI_API_KEY` is an API-platform credential and uses API billing.
 It does not consume the ChatGPT Pro Codex allowance.
 To use the ChatGPT-plan Codex allowance, authenticate the CLI with `codex login`; for
@@ -982,7 +1006,7 @@ with `trigger: status`, recovering its resource artifacts first if they are stal
 It writes one only when the file is absent.
 Its frontmatter is `metaproc.operations:AgentOperationsSummary/v1`; the body renders the
 same values. Point it at a run root: a top-level run, a batch root, or a child run of a
-batch (one cohort, say), in place or copied elsewhere.
+batch, in place or copied elsewhere.
 A child run’s plans record their paths from the batch root and its own root plan names
 that prefix, which is how the summary tells its scopes from a copied `.state` tree.
 Tokens, meters and list cost come only from a run’s own `resource-usage-summary.md`,

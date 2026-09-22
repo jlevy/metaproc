@@ -797,7 +797,7 @@ class RunPool:
     ) -> None:
         """Pause new process submissions until ``reset_at + buffer_s``.
 
-        Replaces the per-task crash cascade with a single cohort-wide
+        Replaces the per-task crash cascade with a single pool-wide
         pause-and-resume. ``buffer_s`` adds a small grace period to avoid
         racing the reset; ``progress_interval_s`` controls how often the
         pause emits a "still paused" event (default every 5 minutes —

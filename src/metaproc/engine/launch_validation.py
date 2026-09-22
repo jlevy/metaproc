@@ -5,7 +5,7 @@ placeholders, unresolved operator parameters, missing or unreadable input
 files, and unresolvable execution profiles. Each check already aggregates
 within itself, but raising on the first non-empty one makes an operator
 discover a bad launch serially — one failed launch per class, four launches to
-bring up a cohort whose invocation was wrong in four ways from the start.
+bring up a run whose invocation was wrong in four ways from the start.
 
 These helpers run all four and render them as a single grouped message. The
 per-item text each check produces is unchanged; only the grouping is new.

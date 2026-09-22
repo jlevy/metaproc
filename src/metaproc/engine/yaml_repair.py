@@ -75,7 +75,7 @@ def _value_needs_quoting(value: str) -> bool:
     A value needs quoting if it contains `: ` (colon-space) which YAML
     would interpret as a nested mapping, or if it starts with a quoted phrase
     and then continues outside the quote. LLMs often write values such as
-    `"Ollies near me" Google Trends accelerated...`, which ruamel parses as
+    `"store near me" search interest accelerated...`, which ruamel parses as
     an unterminated double-quoted scalar.
     """
     stripped = value.strip()
