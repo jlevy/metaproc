@@ -16,7 +16,8 @@ development series.
   under both its logical name and its `param:` alias, so a run can resume onto corrected
   code with every completed step reused.
   The resume logs each provenance input that moved with its recorded and current value,
-  and `run-config.yaml` keeps the launch value.
+  and records the move as a `provenance_advance` event in
+  `.logs/dispatch-config-changes.jsonl`, while `run-config.yaml` keeps the launch value.
   Every other resolved variable is still identity: changing, adding, or removing one,
   including through an edited `default:`, refuses the resume, and the refusal now names
   the identity variables that changed and the inputs the process declares provenance.

@@ -1056,7 +1056,7 @@ for unmarked old runs.
 | Artifact | Current path | Meaning |
 | --- | --- | --- |
 | Process events | `<run>/.logs/process-events.jsonl` | Run-level DAG lifecycle events |
-| Dispatch config changes | `<run>/.logs/dispatch-config-changes.jsonl` | Append-only record of live dispatch config edits |
+| Dispatch config changes | `<run>/.logs/dispatch-config-changes.jsonl` | Append-only record of live dispatch config edits and of each provenance input a resume advanced |
 | Step runpool events | `<run>/.logs/runpool/steps/<step_id>/events.jsonl` | Per-step fan-out runner events |
 | Worker runpool events | `<run>/.logs/runpool/workers/<worker-id>/events.jsonl` | Worker-scoped runner events |
 | Agent session logs | `<run>/.logs/tasks/<step_id>/<item_key>/*.jsonl` | Per-attempt adapter stream JSONL |

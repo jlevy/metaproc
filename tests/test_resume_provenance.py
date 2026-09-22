@@ -27,9 +27,9 @@ from metaproc.commands.run_process import (
 )
 from metaproc.engine.process_scope import expand_process_vars
 from metaproc.errors import CLIError
-from metaproc.io import read_yaml_file, to_yaml_string
+from metaproc.io import iter_jsonl_objects, read_yaml_file, to_yaml_string
 from metaproc.models.authored import ProcessInput, ProcessSpec
-from metaproc.paths import RUN_CONFIG_FILE, STATE_DIR
+from metaproc.paths import RUN_CONFIG_FILE, STATE_DIR, dispatch_config_changes_log
 
 _HANDLERS = '''\
 """Code handler for the provenance resume tests."""
@@ -173,6 +173,24 @@ def test_changed_provenance_input_resumes(tmp_path: Path, caplog: pytest.LogCapt
     recorded = read_yaml_file(run_dir / STATE_DIR / RUN_CONFIG_FILE)["variables"]
     assert recorded["CODE_REVISION"] == "rev-a"
     assert recorded["code_revision"] == "rev-a"
+    # The run directory records the move durably, apart from the process output.
+    events = list(iter_jsonl_objects(dispatch_config_changes_log(run_dir)))
+    assert [event["event"] for event in events] == ["provenance_advance"]
+    assert events[0]["changes"] == [
+        {"field": "CODE_REVISION", "diff": {"old": "rev-a", "new": "rev-b"}},
+        {"field": "code_revision", "diff": {"old": "rev-a", "new": "rev-b"}},
+    ]
+
+
+def test_a_resume_with_the_launch_values_records_no_provenance_advance(tmp_path: Path) -> None:
+    process_path, runs_dir, run_id = _launch(tmp_path)
+
+    resumed = _run(process_path, runs_dir, run_id, DATASET="ds-1", CODE_REVISION="rev-a")
+
+    assert resumed.exit_code == 0, _message(resumed)
+    changes = dispatch_config_changes_log(runs_dir / run_id)
+    events = list(iter_jsonl_objects(changes)) if changes.is_file() else []
+    assert [event for event in events if event["event"] == "provenance_advance"] == []
 
 
 def test_changed_identity_input_still_refuses(tmp_path: Path) -> None:

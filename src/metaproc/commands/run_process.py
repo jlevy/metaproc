@@ -821,20 +821,23 @@ def _write_run_config(  # noqa: PLR0913
     run directory, and resolved identity variables (raises CLIError on
     mismatch) but accept changes to auth / concurrency as recorded events.
     ``provenance_names`` are the variables a resume may change; see
-    ``_validate_run_config``. The config keeps the values the run was launched with.
+    ``_validate_run_config``. The config keeps the values the run was launched with,
+    and each resume that changes one appends a ``provenance_advance`` event to the
+    same log.
     The one field a resume writes back is ``step_variants``, for a config that
     records none; see ``_adopt_step_variants``.
     """
     config_path = paths_mod.run_config_file(run_dir)
     logs_dir = paths_mod.run_logs_dir(run_dir)
     if config_path.exists():
-        _validate_run_config(
+        advances = _validate_run_config(
             config_path,
             process_name=process_name,
             run_dir=run_dir,
             variables=variables,
             provenance_names=provenance_names,
         )
+        _record_provenance_advances(logs_dir, advances)
         # Compute and record any auth/concurrency diff so the
         # aggregator can render the resume timeline.
         _record_resume_config_change(
@@ -1155,6 +1158,33 @@ def _record_resume_config_change(
     log.info("Recorded dispatch_config_change: %d field(s)", len(changes))
 
 
+def _record_provenance_advances(
+    logs_dir: Path, advances: Mapping[str, tuple[str | None, str | None]]
+) -> None:
+    """Append a ``provenance_advance`` event when a resume moves a provenance input.
+
+    ``run-config.yaml`` keeps the launch value of every provenance input, and the resume's
+    INFO line goes wherever the operator's shell sent it, so this event is the run
+    directory's record of when a resume advanced one and from what to what. It shares
+    ``.logs/dispatch-config-changes.jsonl`` with the other resume changes, in the same
+    ``changes: [{field, diff: {old, new}}]`` shape, so one timeline shows them all.
+    """
+    if not advances:
+        return
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    event = {
+        "event": "provenance_advance",
+        "ts": _now_iso(),
+        "changes": [
+            {"field": name, "diff": {"old": old, "new": new}}
+            for name, (old, new) in sorted(advances.items())
+        ],
+    }
+    target = logs_dir / paths_mod.DISPATCH_CONFIG_CHANGES_FILE
+    with target.open("a") as fh:
+        fh.write(_json_dumps(event) + "\n")
+
+
 def _diff_dicts(old: dict[str, object], new: dict[str, object]) -> dict[str, object]:
     """Return a flat ``{key: {"old": ..., "new": ...}}`` for differing keys.
 
@@ -1241,7 +1271,7 @@ def _validate_run_config(
     run_dir: Path,
     variables: Mapping[str, str],
     provenance_names: Collection[str] = frozenset(),
-) -> None:
+) -> dict[str, tuple[str | None, str | None]]:
     """Validate existing run-config.yaml matches immutable launch parameters.
 
     Backend topology, authentication, and concurrency may change on resume.
@@ -1251,7 +1281,8 @@ def _validate_run_config(
     ``provenance_names`` are the variables of inputs the process declares
     ``provenance: true`` (``ProcessSpec.provenance_input_names``). They are left out of
     the comparison, so a resume may change, add, or drop them; each one that moves is
-    logged with its recorded and current value.
+    logged with its recorded and current value and returned as ``name -> (recorded,
+    current)``, with ``None`` for an absent value.
     """
     raw = read_yaml_file(config_path)
     if not isinstance(raw, dict):
@@ -1307,10 +1338,12 @@ def _validate_run_config(
             f"`provenance: true` may change on a resume ({declared_clause})."
         )
 
+    advances: dict[str, tuple[str | None, str | None]] = {}
     for name in _changed_variable_names(
         {key: value for key, value in recorded_variables.items() if key in provenance_names},
         {key: value for key, value in variables.items() if key in provenance_names},
     ):
+        advances[name] = (recorded_variables.get(name), variables.get(name))
         log.info(
             "Resume advances provenance input %s: %s -> %s",
             name,
@@ -1319,6 +1352,7 @@ def _validate_run_config(
         )
 
     log.info("Resume validated against run-config.yaml (%s)", config_path)
+    return advances
 
 
 def _changed_variable_names(saved: Mapping[str, str], current: Mapping[str, str]) -> list[str]:
