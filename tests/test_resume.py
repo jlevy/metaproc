@@ -78,7 +78,7 @@ def _write_run_config_helper(
     run_dir: Path, *, backend: str = "local", variant: str | None = None
 ) -> Path:
     """Write a run-config for test setup."""
-    return _write_run_config(
+    written = _write_run_config(
         run_dir,
         process_name="mine",
         process_path=Path("process/mine/mine.process.md"),
@@ -87,6 +87,7 @@ def _write_run_config_helper(
         backend=backend,
         variant=variant,
     )
+    return written.path
 
 
 def _write_stale_lease(run_dir: Path) -> Path:
@@ -347,7 +348,7 @@ class TestBackendAgnosticResumeState:
         _write_run_config_helper(run_dir)
 
         config_path = run_dir / STATE_DIR / RUN_CONFIG_FILE
-        with pytest.raises(CLIError, match="Resume mismatch.*process"):
+        with pytest.raises(CLIError, match="Resume refused.*process"):
             _validate_run_config(
                 config_path,
                 process_name="retro",

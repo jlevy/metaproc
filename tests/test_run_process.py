@@ -5204,10 +5204,20 @@ class TestRunOwnedPoolExecutionProfiles:
         assert lanes == {"run-a": 1, "pin-b": 2, "leaf-c": 1}
         assert not (child / STATE_DIR / "runpool-status.yaml").exists()
 
-    def test_a_resume_reapplies_recorded_step_variants_and_refuses_a_different_set(
+    @staticmethod
+    def _launch_config_changes(run_dir: Path) -> list[list[dict[str, object]]]:
+        """Return the ``changes`` of every ``launch_config_change`` event the run recorded."""
+        path = run_dir / LOGS_DIR / "dispatch-config-changes.jsonl"
+        if not path.is_file():
+            return []
+        events = [json.loads(line) for line in path.read_text().splitlines() if line]
+        return [event["changes"] for event in events if event["event"] == "launch_config_change"]
+
+    def test_a_resume_reapplies_recorded_step_variants_and_records_a_different_set(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A step override is part of the run: a resume and `status` follow the recorded set."""
+        """A step override is part of the run: a resume and `status` follow the recorded set,
+        and a resume that passes a different set runs with it and records the change."""
         repo_dir, process_dir = self._repo(tmp_path)
         self._register_adapter(monkeypatch)
         same: dict[str, object] = {
@@ -5240,17 +5250,11 @@ class TestRunOwnedPoolExecutionProfiles:
             "judge": "judge-b"
         }
 
-        refused = self._invoke(spec, run_dir, "--variant", "run-a", "--step-variant", "judge=run-a")
-        assert refused.exit_code != 0
-        message = refused.output or str(refused.exception)
-        assert "Resume mismatch" in message
-        assert "judge=judge-b" in message and "judge=run-a" in message
-        assert not (run_dir / "judge.md").exists()
-
         resumed = self._invoke(spec, run_dir, "--variant", "run-a")
         assert resumed.exit_code == 0, resumed.output
         assert (run_dir / "draft.md").read_text().strip() == "run-a"
         assert (run_dir / "judge.md").read_text().strip() == "judge-b"
+        assert self._launch_config_changes(run_dir) == []
         plan = _load_plan_from_run(run_dir)
         assert plan is not None
         assert {step.step_id: step.execution_profile for step in plan.steps} == {
@@ -5258,13 +5262,32 @@ class TestRunOwnedPoolExecutionProfiles:
             "judge": "judge-b",
         }
 
+        changed = self._invoke(spec, run_dir, "--variant", "run-a", "--step-variant", "judge=run-a")
+        assert changed.exit_code == 0, changed.output
+        assert "Resume changes step_variants.judge: 'judge-b' -> 'run-a'" in changed.output
+        assert self._launch_config_changes(run_dir) == [
+            [{"field": "step_variants.judge", "diff": {"old": "judge-b", "new": "run-a"}}]
+        ]
+        # The judge's profile is in its fingerprint, so it re-runs on the new one; the
+        # draft's is not affected and it is reused.
+        assert (run_dir / "judge.md").read_text().strip() == "run-a"
+        assert (run_dir / "draft.md").read_text().strip() == "run-a"
+        assert read_yaml_file(run_dir / STATE_DIR / "run-config.yaml")["step_variants"] == {
+            "judge": "run-a"
+        }
+        plan = _load_plan_from_run(run_dir)
+        assert plan is not None
+        assert {step.step_id: step.execution_profile for step in plan.steps} == {
+            "draft": "run-a",
+            "judge": "run-a",
+        }
+
     def test_a_resume_adopts_the_step_variants_a_run_recorded_none_of(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """`--step-variant` shipped in v0.4.1 without a record, so a run from that
-        version carries none. Repeating the flag on a resume adopts and records it
-        rather than reading the absent record as a mismatch; a set once recorded still
-        refuses a different one."""
+        version carries none. Repeating the flag on a resume records it as a change from
+        no override, and later resumes compare against it."""
         repo_dir, process_dir = self._repo(tmp_path)
         self._register_adapter(monkeypatch)
         same: dict[str, object] = {
@@ -5305,16 +5328,20 @@ class TestRunOwnedPoolExecutionProfiles:
 
         assert resumed.exit_code == 0, resumed.output
         assert (run_dir / "judge.md").read_text().strip() == "judge-b"
+        assert self._launch_config_changes(run_dir) == [
+            [{"field": "step_variants.judge", "diff": {"old": None, "new": "judge-b"}}]
+        ]
         # Adopting rewrites the config, so every other field it carries must survive —
         # the resource snapshot the terminal finalizer reads from it above all.
         recorded = read_yaml_file(config_path)
         assert recorded["step_variants"] == {"judge": "judge-b"}
         assert set(recorded) == set(config) | {"step_variants"}
-        assert recorded["resources"] == config["resources"]
+        assert {key: value for key, value in recorded.items() if key != "step_variants"} == config
 
-        refused = self._invoke(spec, run_dir, "--variant", "run-a", "--step-variant", "judge=run-a")
+        changed = self._invoke(spec, run_dir, "--variant", "run-a", "--step-variant", "judge=run-a")
 
-        assert refused.exit_code != 0
-        message = refused.output or str(refused.exception)
-        assert "Resume mismatch" in message
-        assert "judge=judge-b" in message and "judge=run-a" in message
+        assert changed.exit_code == 0, changed.output
+        assert self._launch_config_changes(run_dir)[-1] == [
+            {"field": "step_variants.judge", "diff": {"old": "judge-b", "new": "run-a"}}
+        ]
+        assert read_yaml_file(config_path)["step_variants"] == {"judge": "run-a"}

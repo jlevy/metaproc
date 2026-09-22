@@ -19,7 +19,7 @@ import shlex
 import subprocess
 import time
 import traceback
-from collections.abc import AsyncGenerator, Callable, Collection, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -794,6 +794,33 @@ def _get_git_sha() -> str:
     return ""
 
 
+type _LaunchConfigChanges = dict[str, tuple[str | None, str | None]]
+"""What one resume changed in the launch config: ``field -> (recorded, current)``.
+
+``None`` marks an absent side. Fields are ``run_dir``, ``step_variants.<STEP>``, and
+``variables.<NAME>``, and the mapping is sorted by field.
+"""
+
+_REWRITTEN_LAUNCH_FIELDS = frozenset({"variables", "step_variants"})
+"""The ``run-config.yaml`` fields a resume rewrites to the values it runs with.
+
+``run_dir`` is not one: a change to it is recorded, and the field keeps its creation
+value; see ``_rewrite_launch_config``.
+"""
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _RunConfigWrite:
+    """The ``run-config.yaml`` that ``_write_run_config`` wrote or resumed against.
+
+    ``changes`` is empty for a first write and for a resume with the recorded values;
+    ``run_process_command`` prints one warning per entry.
+    """
+
+    path: Path
+    changes: _LaunchConfigChanges
+
+
 def _write_run_config(  # noqa: PLR0913
     run_dir: Path,
     *,
@@ -810,8 +837,7 @@ def _write_run_config(  # noqa: PLR0913
     max_concurrency: int | None = None,
     resource_snapshot: ResourceRunSnapshot | None = None,
     step_variants: Mapping[str, str] | None = None,
-    provenance_names: Collection[str] = frozenset(),
-) -> Path:
+) -> _RunConfigWrite:
     """Write run-config.yaml at run creation time; record changes on resume.
 
     Schema v2 adds an ``auth:`` block
@@ -822,27 +848,40 @@ def _write_run_config(  # noqa: PLR0913
     ``.logs/dispatch-config-changes.jsonl`` rather than mutating the
     original config — preserves the audit trail per spec.
 
-    Returns the path to the config file. Resume calls validate the process,
-    run directory, and resolved identity variables (raises CLIError on
-    mismatch) but accept changes to auth / concurrency as recorded events.
-    ``provenance_names`` are the variables a resume may change; see
-    ``_validate_run_config``. The config keeps the values the run was launched with,
-    and each resume that changes one appends a ``provenance_advance`` event to the
-    same log.
-    The one field a resume writes back is ``step_variants``, for a config that
-    records none; see ``_adopt_step_variants``.
+    A resume may also change the launch config: the run directory, any resolved
+    variable, or the ``--step-variant`` set (*step_variants*, where ``None`` means
+    none). ``_validate_run_config`` finds those changes, ``_record_launch_config_changes``
+    logs each one and appends them all as one ``launch_config_change`` event to the same
+    log, and ``_rewrite_launch_config`` then makes the config record the variables and
+    step variants this resume runs with. Every other field keeps its creation value,
+    ``run_dir`` included, because the results projection rebases recorded paths from
+    it. What re-runs is decided by step fingerprints, not here.
+
+    A resume refuses (``CLIError``) only when continuing would corrupt the run: a
+    corrupt config, or a process name other than the recorded one, since every task
+    record carries ``<process>/<RUN_ID>`` as its run identity.
+
+    Returns the config path and the launch-config changes, which are empty for a first
+    write and for a resume with the recorded values.
     """
     config_path = paths_mod.run_config_file(run_dir)
     logs_dir = paths_mod.run_logs_dir(run_dir)
     if config_path.exists():
-        advances = _validate_run_config(
+        resumed_step_variants = dict(step_variants or {})
+        changes = _validate_run_config(
             config_path,
             process_name=process_name,
             run_dir=run_dir,
             variables=variables,
-            provenance_names=provenance_names,
+            step_variants=resumed_step_variants,
         )
-        _record_provenance_advances(logs_dir, advances)
+        _record_launch_config_changes(logs_dir, changes)
+        _rewrite_launch_config(
+            config_path,
+            changes,
+            variables=variables,
+            step_variants=resumed_step_variants,
+        )
         # Compute and record any auth/concurrency diff so the
         # aggregator can render the resume timeline.
         _record_resume_config_change(
@@ -851,8 +890,7 @@ def _write_run_config(  # noqa: PLR0913
             new_auth_flags=auth_flags,
             new_max_concurrency=max_concurrency,
         )
-        _adopt_step_variants(config_path, step_variants)
-        return config_path
+        return _RunConfigWrite(path=config_path, changes=changes)
 
     state_dir = paths_mod.run_state_dir(run_dir)
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -898,7 +936,7 @@ def _write_run_config(  # noqa: PLR0913
     with atomic_output_file(config_path) as tmp_path:
         Path(tmp_path).write_text(to_yaml_string(data))
     log.info("Wrote run-config.yaml: %s", config_path)
-    return config_path
+    return _RunConfigWrite(path=config_path, changes={})
 
 
 def _publish_run_plan(
@@ -1163,31 +1201,82 @@ def _record_resume_config_change(
     log.info("Recorded dispatch_config_change: %d field(s)", len(changes))
 
 
-def _record_provenance_advances(
-    logs_dir: Path, advances: Mapping[str, tuple[str | None, str | None]]
-) -> None:
-    """Append a ``provenance_advance`` event when a resume moves a provenance input.
+def _record_launch_config_changes(logs_dir: Path, changes: _LaunchConfigChanges) -> None:
+    """Log each launch-config change of one resume and append them as one event.
 
-    ``run-config.yaml`` keeps the launch value of every provenance input, and the resume's
-    INFO line goes wherever the operator's shell sent it, so this event is the run
-    directory's record of when a resume advanced one and from what to what. It shares
-    ``.logs/dispatch-config-changes.jsonl`` with the other resume changes, in the same
-    ``changes: [{field, diff: {old, new}}]`` shape, so one timeline shows them all.
+    Each change is logged at WARNING (``_describe_launch_config_change``). The
+    ``launch_config_change`` event goes to ``.logs/dispatch-config-changes.jsonl`` beside
+    the ``dispatch_config_change`` events, in the same ``changes: [{field, diff: {old,
+    new}}]`` shape, so one timeline shows every resume change. It is the run directory's
+    record of the values a resume replaced, because ``_rewrite_launch_config`` then makes
+    ``run-config.yaml`` hold the new ones. A resume that changes nothing writes nothing.
     """
-    if not advances:
+    if not changes:
         return
+    ordered = sorted(changes.items())
+    for field, (old, new) in ordered:
+        log.warning("%s", _describe_launch_config_change(field, old, new))
     logs_dir.mkdir(parents=True, exist_ok=True)
     event = {
-        "event": "provenance_advance",
+        "event": "launch_config_change",
         "ts": _now_iso(),
         "changes": [
-            {"field": name, "diff": {"old": old, "new": new}}
-            for name, (old, new) in sorted(advances.items())
+            {"field": field, "diff": {"old": old, "new": new}} for field, (old, new) in ordered
         ],
     }
     target = logs_dir / paths_mod.DISPATCH_CONFIG_CHANGES_FILE
     with target.open("a") as fh:
         fh.write(_json_dumps(event) + "\n")
+
+
+def _describe_launch_config_change(field: str, old: str | None, new: str | None) -> str:
+    """Render one launch-config change for the resume log and the operator's warning."""
+    return f"Resume changes {field}: {_describe_config_value(old)} -> {_describe_config_value(new)}"
+
+
+def _describe_config_value(value: str | None) -> str:
+    """Render a launch-config value, marking an absent one."""
+    return "<unset>" if value is None else repr(value)
+
+
+def _rewrite_launch_config(
+    config_path: Path,
+    changes: _LaunchConfigChanges,
+    *,
+    variables: Mapping[str, str],
+    step_variants: Mapping[str, str],
+) -> None:
+    """Make ``run-config.yaml`` record the launch config a resume runs with.
+
+    Only the fields *changes* names are replaced (the whole ``variables`` mapping, the
+    whole ``step_variants`` mapping), each with this resume's value, so the config
+    describes the run as it now executes and the next resume compares against that.
+    Every other field keeps its creation value, the resource snapshot the terminal
+    finalizer reads above all. ``_record_launch_config_changes`` has already recorded
+    the values replaced. An empty ``step_variants`` drops the field, as the first write
+    omits it.
+
+    ``run_dir`` keeps its creation value even when the resume records a change to it,
+    because the results projection (``runtime_projection``) rebases every recorded
+    result path from that original root onto the directory the run now occupies.
+
+    The rewrite follows launch validation, so a value the run cannot accept never
+    reaches the config.
+    """
+    fields = {field.split(".", 1)[0] for field in changes} & _REWRITTEN_LAUNCH_FIELDS
+    if not fields:
+        return
+    data = _read_run_config(config_path)
+    if "variables" in fields:
+        data["variables"] = dict(variables)
+    if "step_variants" in fields:
+        if step_variants:
+            data["step_variants"] = dict(sorted(step_variants.items()))
+        else:
+            data.pop("step_variants", None)
+    with atomic_output_file(config_path) as tmp_path:
+        Path(tmp_path).write_text(to_yaml_string(data))
+    log.info("Rewrote run-config.yaml with this resume's launch config: %s", config_path)
 
 
 def _diff_dicts(old: dict[str, object], new: dict[str, object]) -> dict[str, object]:
@@ -1214,59 +1303,18 @@ def _json_dumps(value: object) -> str:
 def _resume_step_variants(run_dir: Path, requested: Mapping[str, str]) -> dict[str, str]:
     """Return the ``--step-variant`` overrides a launch or resume of *run_dir* runs with.
 
-    A run records its overrides in ``run-config.yaml`` at creation. The plan, its step
-    fingerprints, and ``metaproc status`` all follow that record, so a resume that passes
-    no overrides re-applies it and a resume that passes a different set is refused.
-
-    A config that records nothing holds no set to contradict: ``--step-variant`` shipped
-    before the record existed, so a run from that version applies its overrides with
-    nothing to resume from. Such a resume adopts what it passes, and ``_write_run_config``
-    records it once launch validation has accepted it.
+    A run records its overrides in ``run-config.yaml``. The plan, its step fingerprints,
+    and ``metaproc status`` all follow that record, so a resume that passes no overrides
+    re-applies it. A resume that passes overrides runs with exactly those. When they
+    differ from the record, ``_write_run_config`` records each difference as a
+    ``step_variants.<STEP>`` launch-config change and rewrites the record to the set the
+    resume runs with. That write follows launch validation, so an override the run cannot
+    accept never reaches the config.
     """
     config_path = paths_mod.run_config_file(run_dir)
-    if not config_path.exists():
+    if requested or not config_path.exists():
         return dict(requested)
-    raw = read_yaml_file(config_path)
-    recorded = recorded_step_variants(raw) if isinstance(raw, dict) else {}
-    if not requested:
-        return recorded
-    if not recorded:
-        return dict(requested)
-    if dict(requested) != recorded:
-        raise CLIError(
-            "Resume mismatch: run-config.yaml records "
-            f"{_format_step_variants(recorded)} but you launched with "
-            f"{_format_step_variants(requested)}. Resume without --step-variant to reuse "
-            "the recorded overrides, or use a different RUN_ID."
-        )
-    return recorded
-
-
-def _format_step_variants(overrides: Mapping[str, str]) -> str:
-    """Render a non-empty override set as the flags that produce it."""
-    return ", ".join(
-        f"--step-variant {step}={profile}" for step, profile in sorted(overrides.items())
-    )
-
-
-def _adopt_step_variants(config_path: Path, step_variants: Mapping[str, str] | None) -> None:
-    """Record the overrides a resume adopted, for a config that records none.
-
-    ``_resume_step_variants`` lets a resume adopt what it passes when the config holds no
-    set to contradict. Recording it here rather than there puts the write after launch
-    validation, so an override the run cannot accept never reaches the config and poisons
-    every later resume. A config that already records a set keeps it — the resume either
-    matched it or was refused.
-    """
-    if not step_variants:
-        return
-    raw = read_yaml_file(config_path)
-    if not isinstance(raw, dict) or recorded_step_variants(raw):
-        return
-    raw["step_variants"] = dict(sorted(step_variants.items()))
-    with atomic_output_file(config_path) as tmp_path:
-        Path(tmp_path).write_text(to_yaml_string(raw))
-    log.info("Recorded resumed --step-variant overrides in %s", config_path)
+    return recorded_step_variants(_read_run_config(config_path))
 
 
 def _validate_run_config(
@@ -1275,43 +1323,56 @@ def _validate_run_config(
     process_name: str,
     run_dir: Path,
     variables: Mapping[str, str],
-    provenance_names: Collection[str] = frozenset(),
-) -> dict[str, tuple[str | None, str | None]]:
-    """Validate existing run-config.yaml matches immutable launch parameters.
+    step_variants: Mapping[str, str] | None = None,
+) -> _LaunchConfigChanges:
+    """Compare a resume's launch config with the ``run-config.yaml`` it resumes.
 
-    Backend topology, authentication, and concurrency may change on resume.
-    Process identity, run directory, and resolved identity variables may not. Raises
-    CLIError on incompatible resume attempts.
+    A resume may change the run directory, any resolved variable (including through an
+    edited ``default:``, or an input added or removed), and the ``--step-variant`` set.
+    Each difference comes back as ``field -> (recorded, current)`` with ``None`` for an
+    absent side, sorted by field: ``run_dir``, ``step_variants.<STEP>`` (only when
+    *step_variants* is given), and ``variables.<NAME>``. What re-runs is decided by step
+    fingerprints, not here, and backend topology, authentication, and concurrency are
+    compared by ``_record_resume_config_change``.
 
-    ``provenance_names`` are the variables of inputs the process declares
-    ``provenance: true`` (``ProcessSpec.provenance_input_names``). They are left out of
-    the comparison, so a resume may change, add, or drop them; each one that moves is
-    logged with its recorded and current value and returned as ``name -> (recorded,
-    current)``, with ``None`` for an absent value.
+    The recorded ``run_dir`` and the ``RUNS_DIR`` variable compare across the two
+    Filestore mount aliases (``_normalize_filestore_runs_path``), so two spellings of one
+    mount record no change. A config written without a ``run_dir`` has none to compare.
+
+    The process name is the one launch value that still refuses. Every task's status,
+    attempts, and result carry the run identity ``<process>/<RUN_ID>``, and the state
+    layer rejects a record whose identity differs from the one the orchestrator
+    expects, as does the results projection, which reads the name from this config. A
+    resume under another name could not reuse, or even read, a step the run completed.
+
+    Raises CLIError for that mismatch and for a corrupt config: one ``_read_run_config``
+    refuses, one without a process name, or one whose ``variables`` field is not a
+    string-to-string mapping.
     """
-    raw = read_yaml_file(config_path)
-    if not isinstance(raw, dict):
-        raise CLIError(f"Corrupt run-config.yaml: {config_path}")
+    raw = _read_run_config(config_path)
 
-    saved_process = raw.get("process", "")
-    if saved_process != process_name:
+    saved_process = _recorded_str(raw.get("process"))
+    if not saved_process:
         raise CLIError(
-            f"Resume mismatch: run-config.yaml has process={saved_process!r} "
-            f"but you launched with process={process_name!r}. "
-            f"Use a different RUN_ID for a new process."
+            f"Corrupt run-config.yaml: {config_path}: process must be a non-empty string"
+        )
+    if saved_process != process_name:
+        run_identity = f"{saved_process}/{_recorded_str(raw.get('run_id')) or '<RUN_ID>'}"
+        raise CLIError(
+            f"Resume refused: run-config.yaml records process {saved_process!r} but you "
+            f"launched process {process_name!r}. Every task record in this run carries the "
+            f"run identity {run_identity}, so a process with another name cannot reuse or "
+            f"read them. Resume with the process spec named {saved_process!r}, or use a new "
+            "RUN_ID for this process."
         )
 
-    saved_run_dir = raw.get("run_dir", "")
+    changes: _LaunchConfigChanges = {}
+
+    saved_run_dir = _recorded_str(raw.get("run_dir"))
     if saved_run_dir and _resume_run_dir_identity(str(run_dir)) != _resume_run_dir_identity(
         saved_run_dir
     ):
-        raise CLIError(
-            f"Resume mismatch: run-config.yaml has run_dir={saved_run_dir!r} "
-            f"but current run_dir={str(run_dir)!r}. "
-            "Use the same locally visible RUNS_DIR and RUN_ID that created this run. "
-            "Workstation-mounted Filestore aliases are not supported resume identities; "
-            "resume on the canonical cloud mount or start a new local run."
-        )
+        changes["run_dir"] = (saved_run_dir, str(run_dir))
 
     # The YAML serializer omits empty mappings, so an absent field is the
     # persisted representation of no resolved variables in existing run trees.
@@ -1327,47 +1388,47 @@ def _validate_run_config(
         )
 
     recorded_variables = cast(dict[str, str], saved_variables)
-    saved_identity = _resume_variable_identity(recorded_variables, provenance_names)
-    current_identity = _resume_variable_identity(variables, provenance_names)
-    changed_variables = _changed_variable_names(saved_identity, current_identity)
-    if changed_variables:
-        declared_clause = (
-            f"this process declares: {', '.join(sorted(provenance_names))}"
-            if provenance_names
-            else "this process declares none"
-        )
-        raise CLIError(
-            "Resume mismatch: run-config.yaml identity variables changed: "
-            f"{', '.join(changed_variables)}. Resume with the original --var values and "
-            "input defaults, or use a new RUN_ID. Only an input the process declares "
-            f"`provenance: true` may change on a resume ({declared_clause})."
-        )
-
-    advances: dict[str, tuple[str | None, str | None]] = {}
-    for name in _changed_variable_names(
-        {key: value for key, value in recorded_variables.items() if key in provenance_names},
-        {key: value for key, value in variables.items() if key in provenance_names},
+    for name in _changed_keys(
+        _resume_variable_identity(recorded_variables), _resume_variable_identity(variables)
     ):
-        advances[name] = (recorded_variables.get(name), variables.get(name))
-        log.info(
-            "Resume advances provenance input %s: %s -> %s",
-            name,
-            _describe_variable_value(recorded_variables.get(name)),
-            _describe_variable_value(variables.get(name)),
-        )
+        changes[f"variables.{name}"] = (recorded_variables.get(name), variables.get(name))
+
+    if step_variants is not None:
+        recorded_overrides = recorded_step_variants(raw)
+        for step_id in _changed_keys(recorded_overrides, step_variants):
+            changes[f"step_variants.{step_id}"] = (
+                recorded_overrides.get(step_id),
+                step_variants.get(step_id),
+            )
 
     log.info("Resume validated against run-config.yaml (%s)", config_path)
-    return advances
+    return dict(sorted(changes.items()))
 
 
-def _changed_variable_names(saved: Mapping[str, str], current: Mapping[str, str]) -> list[str]:
-    """Return, sorted, every name added, removed, or given a different value."""
+def _read_run_config(config_path: Path) -> dict[object, object]:
+    """Read ``run-config.yaml`` as a mapping, refusing a corrupt one with CLIError.
+
+    Corrupt means text that is not UTF-8, does not parse as YAML, or parses to something
+    other than a mapping. Continuing would compare against, and then rewrite, a record
+    that no longer says what the run is.
+    """
+    try:
+        raw = read_yaml_file(config_path)
+    except (YAMLError, UnicodeDecodeError) as exc:
+        raise CLIError(f"Corrupt run-config.yaml: {config_path}: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise CLIError(f"Corrupt run-config.yaml: {config_path}")
+    return cast(dict[object, object], raw)
+
+
+def _recorded_str(value: object) -> str | None:
+    """Return a scalar ``run-config.yaml`` field as a string, or ``None`` when absent."""
+    return None if value is None else str(value)
+
+
+def _changed_keys(saved: Mapping[str, str], current: Mapping[str, str]) -> list[str]:
+    """Return, sorted, every key added, removed, or given a different value."""
     return sorted(key for key in set(saved) | set(current) if saved.get(key) != current.get(key))
-
-
-def _describe_variable_value(value: str | None) -> str:
-    """Render a variable value for the resume log, marking an absent one."""
-    return "<unset>" if value is None else repr(value)
 
 
 def _resume_run_dir_identity(run_dir: str) -> str:
@@ -1381,15 +1442,13 @@ def _resume_run_dir_identity(run_dir: str) -> str:
     return _normalize_filestore_runs_path(run_dir)
 
 
-def _resume_variable_identity(
-    variables: Mapping[str, str], provenance_names: Collection[str]
-) -> dict[str, str]:
-    """Return the identity variables, with known topology aliases normalized.
+def _resume_variable_identity(variables: Mapping[str, str]) -> dict[str, str]:
+    """Return the variables a resume compares, with known topology aliases normalized.
 
-    Every name in ``provenance_names`` is dropped: a provenance input records how the
-    run executed, not what it is, so a resume may change it.
+    ``RUNS_DIR`` spelled through either Filestore mount alias compares as one value, so
+    a resume on the other alias records no change.
     """
-    identity = {key: value for key, value in variables.items() if key not in provenance_names}
+    identity = dict(variables)
     if runs_dir := identity.get("RUNS_DIR"):
         identity["RUNS_DIR"] = _normalize_filestore_runs_path(runs_dir)
     return identity
@@ -5778,9 +5837,9 @@ def run_process_command(
         if paths_mod.run_config_file(run_dir).exists()
         else build_resource_run_snapshot(snapshot_bundle, run_id=run_id)
     )
-    # Write or validate run-config.yaml (immutable run identity +
-    # additive auth/concurrency capture per plan-2026-05-03 Phase 3).
-    _write_run_config(
+    # Write run-config.yaml, or on a resume record what changed against it
+    # (launch config, auth, concurrency) and rewrite the launch config it records.
+    run_config = _write_run_config(
         run_dir,
         process_name=spec.name,
         process_path=process_path,
@@ -5795,8 +5854,16 @@ def run_process_command(
         max_concurrency=max_concurrency,
         resource_snapshot=resource_snapshot,
         step_variants=step_profile_overrides,
-        provenance_names=spec.provenance_input_names,
     )
+    for field, (old, new) in run_config.changes.items():
+        out.warning(_describe_launch_config_change(field, old, new))
+    if run_config.changes:
+        out.warning(
+            f"Recorded {len(run_config.changes)} launch-config change(s) as a "
+            f"launch_config_change event in {paths_mod.dispatch_config_changes_log(run_dir)}; "
+            "run-config.yaml now records the variables and step variants this resume "
+            "runs with."
+        )
 
     out.progress(f"run-process: {spec.name} ({len(active_step_ids)} steps, {len(levels)} levels)")
     out.progress(f"Run dir: {run_dir}")
@@ -5972,7 +6039,9 @@ def run_process_command(
                 f"Unsatisfied ancestors for --{'from' if from_step else 'only'} "
                 f"{from_step or only_step}:\n"
                 + "\n".join(errors)
-                + "\nRun without --from/--only to execute the full process, or use --force."
+                + "\nRun without --from/--only to execute the full process, or use --force, "
+                "or record an override with: "
+                "metaproc override <RUN_ID> <step> --process <spec> --satisfied"
             )
 
     overall_start = time.monotonic()
