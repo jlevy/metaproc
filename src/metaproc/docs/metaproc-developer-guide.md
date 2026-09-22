@@ -43,7 +43,8 @@ forever.
 - **Resume is a normal operating mode.** A rerun against the same `RUN_ID` must be
   simple, resumable, transparent, idempotent, and flexible
   ([concepts](metaproc-concepts.md) §6.2, principle 7). Reuse follows content: a step
-  reruns when its definition, runbook, or inputs changed and is reused otherwise.
+  reruns when its fingerprint or, for a `collect:` consumer, the outcomes it was handed
+  changed, and is reused otherwise.
   A check on the resume path records and warns about operational change; it refuses only
   when continuing would corrupt durable state or clobber live work.
 

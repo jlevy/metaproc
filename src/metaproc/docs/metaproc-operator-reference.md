@@ -481,7 +481,9 @@ built, so hashing its bytes would give the same step two different fingerprints 
 planning and one at execution — and nothing could be compared against a recorded value.
 Editing such a file by hand therefore does not re-run its consumer; changing the step
 that *produces* it does, and the cascade carries that downstream.
-Use `--from <step>` to force a rerun after editing a generated runbook in place.
+Use `--from <step> --force` to re-run the consumer and its downstream after editing a
+generated runbook in place.
+`--from` alone only narrows the walk: a completed step it selects is still reused.
 
 ### When a collected input changes
 
@@ -511,14 +513,18 @@ open its evidence. An item that fails again rewrites the document with its new a
 log path and still does not re-run the consumer, because the digest covers outcomes, not
 wording or paths.
 A step with no `collected-inputs.yaml` is not invalidated by this rule.
-A record that is present but cannot be read — corrupt, in an earlier shape without
-`outcomes_sha256`, or written by a later Metaproc — counts as changed instead, and the
+A record that is present but does not read or validate, for example a corrupt one or one
+written by a later Metaproc, counts as unreadable and therefore as changed, and the
 resume prints the record it could not read beside its other decisions.
 Backfilling failed items therefore needs no `--only <consumer> --force`: the resume
 re-runs the consumer and its downstream.
 A run started before the release that added this rule has no record at all, so
-backfilling its failed items and resuming still reuses the consumer; run
-`--from <consumer>` once on such a run, and later resumes compare its record.
+backfilling its failed items and resuming still reuses the consumer.
+Run `--from <consumer> --force` once on such a run: it re-runs the consumer and its
+downstream, and writes the record that later resumes compare.
+`--only <consumer> --force` is not enough, because it records a fresh digest for the
+consumer without re-running the downstream, so the next resume reuses downstream output
+computed over the consumer’s old output.
 
 When the consumer is a composite, this cascade also renames every per-task record inside
 the consumer’s own child scopes (`<run>/<step>/`, or `<run>/<step>/<key>/` for each
@@ -533,7 +539,7 @@ per-item record is the work itself rather than a parent level over reusable chil
 renaming it would re-fetch every finished item on every backfill.
 Either way the step is re-entered and does work only for the items its new roster adds.
 The trade is that an item that keeps its key while the content behind it changes is
-reused; `--force` or `--from <step>` re-does those.
+reused; `--from <step> --force` re-does those.
 A downstream step that itself collects a changed document is judged by its own digest
 comparison when the walk reaches it.
 An invalidated task stays invalidated until it runs again, including across an
@@ -561,35 +567,58 @@ decision:
 | --- | --- |
 | Pure runbook / prompt edit | none — rerun with same `RUN_ID` |
 | Failed mapped items finished, feeding a `collect:` consumer | none — rerun with same `RUN_ID` |
-| Edited a `mode: code` handler (fingerprint-blind) | `--from <step>` |
+| Edited a `mode: code` handler (fingerprint-blind) | `--from <step> --force` |
 | Want to rerun only one step in isolation, ignore the cascade | `--only <step>` |
 | Skip a step you know is fine, override caching | `--skip <step>` |
 | Force a rerun the fingerprint thinks is unnecessary | `--force` |
-| Re-do a downstream mapped step’s completed items after a collected input changed | `--from <step>` |
+| Re-do a downstream mapped step’s completed items after a collected input changed | `--from <step> --force` |
+| Re-do a step that reads a changed variable at runtime or through `with:` | `--from <step> --force` |
 
 Use `run-process --dry-run` or `metaproc deps <run>` to preview the cascade if you are
 unsure what the next launch will execute.
 
-A resume may change any `--var` value, including by adding or removing one or through an
-edited input `default:`, and it may change the run directory or the `--step-variant`
-set. Metaproc prints a `Resume changes <field>: <old> -> <new>` warning for each change,
-appends one `launch_config_change` event listing them to
-`.logs/dispatch-config-changes.jsonl`, and rewrites the variables and step variants in
+A resume may change the launch config: any `--var` value, including by adding or
+removing one or through an edited input `default:`, the `--step-variant` set,
+`--variant`, `--artifact-namespace`, the execution profiles the plan resolves,
+`--backend`, and the Git commit it runs from.
+Metaproc prints a `Resume changes <field>: <old> -> <new>` warning for each change,
+where the field is `variables.<NAME>`, `step_variants.<STEP>`, `variant`,
+`execution_profile`, `artifact_namespace`, `resolved_profiles`, `backend`, or `git_sha`.
+It appends one `launch_config_change` event listing them to
+`.logs/dispatch-config-changes.jsonl` and then rewrites those fields in
 `run-config.yaml` to the values the resume ran with, so the file describes the latest
 launch and the event log holds its history.
-`run_dir` keeps its creation value; result paths recorded under it are rebased from that
-value. What re-runs still follows fingerprints: a value a step binds through `with:`
-leaves its fingerprint unchanged, while one substituted into `env:` or an output path
-re-runs that step and its downstream.
-Only two launch-config findings refuse the resume: a corrupt `run-config.yaml`, and a
-process name that differs from the recorded one, because every task record’s identity is
-`<process>/<RUN_ID>`; resume under the recorded name, or start a new `RUN_ID`. A resume
-that cannot append to `.logs/dispatch-config-changes.jsonl` also stops, with an error
-naming that file, before any step runs; a `launch_config_change` event it cannot append
-stops it before it rewrites `run-config.yaml`, because that event is the only record of
-the values the resume replaces.
-Equivalent Filestore mount aliases for `RUNS_DIR` normalize to one run directory, so
-resuming through either records no change.
+The event carries a `resolved_profiles` change in full; the warning names only the
+profiles. What re-runs still follows fingerprints.
+A value substituted into a resolved field such as `env:` or an output path re-runs that
+step and its downstream.
+A step that binds the value through `with:`, or reads it at runtime, as a code handler
+reads its `variables`, keeps its fingerprint and is reused with output computed over the
+old value; `--from <step> --force` re-does it.
+
+Three launch-config findings refuse the resume, each before anything is recorded:
+
+- A corrupt `run-config.yaml`.
+- A process name that differs from the recorded one, because every task record’s
+  identity is `<process>/<RUN_ID>`. Resume under the recorded name, or start a new
+  `RUN_ID`.
+- A run directory that differs from the recorded one, because result records are
+  anchored to the recorded directory.
+  A moved run would re-run every step whose outputs sit under `{{run.dir}}`, since those
+  paths are in its fingerprint, and write result records that the results projection
+  cannot accept. Resume at the recorded directory, or start a new `RUN_ID`, which costs
+  the same work without the inconsistency.
+  The two canonical Filestore mount roots for `RUNS_DIR` normalize to one run directory,
+  so resuming through either is neither refused nor recorded; any other path to the same
+  files, a workstation mount included, is a different directory.
+
+A resume that cannot append to `.logs/dispatch-config-changes.jsonl` also stops, with an
+error naming that file, before any step runs; a `launch_config_change` event it cannot
+append stops it before it rewrites `run-config.yaml`, because that event is the only
+record of the values the resume replaces.
+Nothing about the run changes when a resume stops this way: its config, its task state,
+and its summaries (`operations-summary.md` and `resource-usage-summary.md`) stay as they
+were.
 
 ### Worked example
 
@@ -648,9 +677,10 @@ command line; launch validation refuses such an id and lists the steps that can 
 The run records its overrides in `run-config.yaml`. A resume without `--step-variant`
 reuses them, a resume that passes a different set runs with it and records the change
 the way it records a changed `--var`, and `metaproc status --steps` plans the recorded
-overrides. A run launched by v0.4.1, which applied overrides without recording them, has
-no recorded set; a resume of one records the `--step-variant` set it passes from then
-on.
+overrides. A resume that passes any `--step-variant` replaces the whole recorded set, so
+repeat every override you want to keep.
+A run launched by v0.4.1, which applied overrides without recording them, has no
+recorded set; a resume of one records the `--step-variant` set it passes from then on.
 
 Preflight credentials before a live dispatch:
 
@@ -1148,7 +1178,7 @@ for unmarked old runs.
 
 | Artifact | Current path | Meaning |
 | --- | --- | --- |
-| Run config | `<run>/.state/run-config.yaml` | Run identity, variables, step variants, and layout marker; variables and step variants rewritten by a resume that changes them, `run_dir` kept at its creation value |
+| Run config | `<run>/.state/run-config.yaml` | Run identity, run directory, launch config, and layout marker; a resume that changes the launch config (variables, step variants, variant, execution profile, artifact namespace, resolved profiles, backend, `git_sha`) rewrites it after recording the change, and every other field keeps its creation value |
 | Run plan | `<scope>/.state/run-plan.yaml` | What this scope declared: step identity, shape, canonical mapped item keys, output ports, fingerprints |
 | Orchestrator lease | `<run>/.state/orchestrator-lease.yaml` | Owner and heartbeat for cross-host safety |
 | Process status | `<run>/.state/process-status.yaml` | Aggregated DAG state for status display |
