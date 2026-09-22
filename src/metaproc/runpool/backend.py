@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import psutil
+from strif import atomic_write_text
 
 log = logging.getLogger(__name__)
 
@@ -92,7 +93,6 @@ def write_invocation_sidecar(
     try:
         env_view = dict(os.environ) if env is None else dict(env)
         sanitized_env = {name: _redact_env_value(name, val) for name, val in env_view.items()}
-        target.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "argv": list(argv),
@@ -100,7 +100,7 @@ def write_invocation_sidecar(
             "env_redacted": sanitized_env,
             "metadata": dict(metadata) if metadata else {},
         }
-        target.write_text(json.dumps(payload, indent=2, sort_keys=True))
+        atomic_write_text(target, json.dumps(payload, indent=2, sort_keys=True), make_parents=True)
     except Exception:  # noqa: BLE001 — diagnostic must never block the caller
         log.debug("invocation sidecar write failed (target=%s)", target, exc_info=True)
 
@@ -261,7 +261,10 @@ class LocalBackend:
                 stdout_target = write_fd
                 stderr_target = asyncio.subprocess.STDOUT
             else:
-                log_file = open(prepared.log_path, "w")  # noqa: SIM115
+                # write-contract: live-stream -- the fd is the child's stdout, and
+                # `check_log_runaway` and the pool's health sampling both read this
+                # file's size while the step runs.
+                log_file = open(prepared.log_path, "w", encoding="utf-8")  # noqa: SIM115
                 stdout_target = log_file.fileno()
                 stderr_target = asyncio.subprocess.STDOUT
 
@@ -299,7 +302,9 @@ class LocalBackend:
             # Close our copy of the write end — the subprocess owns it now.
             os.close(write_fd)  # pyright: ignore[reportPossiblyUnboundVariable]
             pipe_reader = os.fdopen(read_fd, "rb")
-            log_file_for_filter = open(prepared.log_path, "w")  # noqa: SIM115
+            # write-contract: live-stream -- the filter thread flushes per line so an
+            # operator can tail the transcript while the step runs.
+            log_file_for_filter = open(prepared.log_path, "w", encoding="utf-8")  # noqa: SIM115
             filter_thread = start_log_filter_thread(pipe_reader, log_file_for_filter)
         elif log_file is not None:
             # Close our copy of the file descriptor — the subprocess owns it now.

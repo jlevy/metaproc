@@ -108,7 +108,7 @@ def test_read_events_skips_blank_lines(tmp_path: Path) -> None:
     with ResourceEventLogger(target) as logger:
         logger.write(SpanStartEvent(ts=_ts(), span_id="sp", hierarchy=_hier(), source=_src()))
     # Inject blank lines as might happen with editor-touched files.
-    with open(target, "a") as f:
+    with open(target, "a", encoding="utf-8") as f:
         f.write("\n\n   \n")
     parsed = read_events(target)
     assert len(parsed) == 1

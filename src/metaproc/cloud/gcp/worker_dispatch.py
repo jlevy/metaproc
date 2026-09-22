@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
-from strif import atomic_output_file
+from strif import atomic_write_text
 
 from metaproc import paths as paths_mod
 from metaproc.cloud.gcp.batch_backend import (
@@ -560,10 +560,8 @@ async def _submit_workers(
                     f"require a shared filesystem between orchestrator and workers"
                 )
             payload_dir = step_state_dir(run_dir, step) / "worker_payloads"
-            payload_dir.mkdir(parents=True, exist_ok=True)
             payload_path = payload_dir / f"worker-{wi}-item-contexts.json"
-            with atomic_output_file(payload_path) as tmp:
-                Path(tmp).write_text(contexts_json)
+            atomic_write_text(payload_path, contexts_json, make_parents=True)
             env_vars["METAPROC_ITEM_CONTEXTS_FILE"] = str(payload_path)
         else:
             env_vars["METAPROC_ITEM_CONTEXTS"] = contexts_json

@@ -162,7 +162,7 @@ SAMPLE_EVENTS_RAW = [
 
 
 def _write_events(events: list[dict[str, Any]]) -> Path:
-    f = tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False)
+    f = tempfile.NamedTemporaryFile(encoding="utf-8", mode="w", suffix=".jsonl", delete=False)
     for ev in events:
         f.write(json.dumps(ev) + "\n")
     f.close()

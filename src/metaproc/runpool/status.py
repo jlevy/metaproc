@@ -202,12 +202,11 @@ def write_status(path: Path, status: RunPoolStatus) -> None:
 
     Uses ``atomic_output_file`` so readers never see partial content.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
     data = status.model_dump(mode="json")
     content = _dump_status_yaml(data)
 
-    with atomic_output_file(path) as tmp:
-        Path(tmp).write_text(content)
+    with atomic_output_file(path, make_parents=True) as tmp:
+        Path(tmp).write_text(content, encoding="utf-8")
         # Promote to 0o644 so non-owner operators on the same host
         # (e.g., browser VM readers when the worker ran as root) can
         # read the status file.
@@ -222,12 +221,11 @@ def read_status(path: Path) -> RunPoolStatus:
 
 def write_scale_state(path: Path, scale_state: ScaleState) -> None:
     """Atomically write the adaptive controller state to YAML."""
-    path.parent.mkdir(parents=True, exist_ok=True)
     data = scale_state.model_dump(mode="json")
     content = _dump_status_yaml(data)
 
-    with atomic_output_file(path) as tmp:
-        Path(tmp).write_text(content)
+    with atomic_output_file(path, make_parents=True) as tmp:
+        Path(tmp).write_text(content, encoding="utf-8")
         os.chmod(tmp, 0o644)
 
 
@@ -253,12 +251,11 @@ def read_scale_override(path: Path) -> ScaleOverride:
 
 def write_scale_override(path: Path, scale_override: ScaleOverride) -> None:
     """Atomically write an operator scale-override file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
     data = scale_override.model_dump(mode="json", exclude_none=True)
     content = _dump_status_yaml(data)
 
-    with atomic_output_file(path) as tmp:
-        Path(tmp).write_text(content)
+    with atomic_output_file(path, make_parents=True) as tmp:
+        Path(tmp).write_text(content, encoding="utf-8")
         os.chmod(tmp, 0o644)
 
 

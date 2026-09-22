@@ -387,7 +387,7 @@ def _write_progress(path: Path, items_yaml: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     items_block = textwrap.indent(textwrap.dedent(items_yaml).strip(), "    ")
     content = f'---\ntickers:\n  date: "2026-03-24"\n  process: predict\n  items:\n{items_block}\n---\n# Tickers\n'
-    path.write_text(content)
+    path.write_text(content, encoding="utf-8")
 
 
 def test_discover_joins_state_completed_filters_item(tmp_path):

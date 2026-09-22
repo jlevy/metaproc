@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -260,7 +261,7 @@ def _make_pi_log_with_tool_call(path: Path) -> None:
             }
         ),
     ]
-    path.write_text("\n".join(lines) + "\n")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _make_gemini_log_with_residual_tool_count(path: Path) -> None:
@@ -296,7 +297,7 @@ def _make_gemini_log_with_residual_tool_count(path: Path) -> None:
             },
         },
     ]
-    path.write_text("".join(json.dumps(record) + "\n" for record in records))
+    path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
 
 
 def test_build_resource_artifacts_returns_events_alongside_document(tmp_path: Path) -> None:
@@ -663,8 +664,15 @@ def test_build_with_write_persists_both_artifacts(tmp_path: Path) -> None:
 
 
 def test_write_resource_artifacts_atomically_replaces(tmp_path: Path) -> None:
-    """A second write should leave the file in a consistent state — never empty."""
+    """A failure before the commit point must leave the previous artifacts intact.
 
+    This used to assert `second_size >= first_size`, which passes against a plainly
+    non-atomic implementation: it never observes the destination mid-write, so the
+    only way it could fail is if the rebuild shrank. `filesystem-rules` names that
+    shape directly — an atomicity test has to inject a failure before the commit and
+    assert two things: observers still see the original destination, and no success
+    was reported.
+    """
     parent = _write(tmp_path, "parent/test.process.md", _PARENT_PROCESS)
     bundle = load_plan_bundle(parent)
     run_dir = tmp_path / "runs" / "2026-04-21"
@@ -673,16 +681,67 @@ def test_write_resource_artifacts_atomically_replaces(tmp_path: Path) -> None:
     result = build_resource_artifacts(bundle=bundle, run_dir=run_dir, run_id="run-1")
     write_resource_artifacts(result)
     assert result.document_path is not None
-    first_size = result.document_path.stat().st_size
+    assert result.events_path is not None
+    original_document = result.document_path.read_bytes()
+    original_events = result.events_path.read_bytes()
 
-    # Touch one log and rebuild — still atomic.
-    new_log = run_dir / "predict" / "MSFT" / ".logs" / "session.jsonl"
-    _make_pi_log_with_tool_call(new_log)
+    # Rebuild over more evidence, so a non-atomic writer would produce different bytes.
+    _make_pi_log_with_tool_call(run_dir / "predict" / "MSFT" / ".logs" / "session.jsonl")
+    result2 = build_resource_artifacts(bundle=bundle, run_dir=run_dir, run_id="run-1")
+
+    # `atomic_write_text` stages through `Path.write_text`, so that is the layer at
+    # which a producer failure lands: a partial payload reaches the staged file, then it
+    # raises — before the rename that would publish it.
+    #
+    # The partial payload is a sentinel rather than a prefix of the real content, and
+    # that detail is load-bearing. A rebuild here *appends* a second item's events, so
+    # the first half of the new file is byte-identical to the old one; injecting
+    # `data[: len(data) // 2]` would leave a non-atomic writer's destination looking
+    # exactly unchanged, and this test would pass against the bug it exists to catch.
+    real_write_text = Path.write_text
+
+    def failing_write_text(self: Path, data: str, *args: object, **kwargs: object) -> int:
+        _ = real_write_text(self, "partial-write-sentinel", *args, **kwargs)  # pyright: ignore[reportCallIssue, reportArgumentType]
+        raise RuntimeError("injected failure before the commit point")
+
+    with (
+        mock.patch.object(Path, "write_text", failing_write_text),
+        pytest.raises(RuntimeError, match="injected"),
+    ):
+        write_resource_artifacts(result2)
+
+    # 1. Observers still see the previous artifacts, byte for byte.
+    assert result.document_path.read_bytes() == original_document
+    assert result.events_path.read_bytes() == original_events
+    # 2. No success was reported — the raise above is that assertion.
+    # 3. Nothing half-written was left at a published name.
+    published = {
+        path.name
+        for path in result.document_path.parent.iterdir()
+        if not path.name.endswith(".partial")
+    }
+    assert result.document_path.name in published
+
+
+def test_write_resource_artifacts_replacement_is_complete(tmp_path: Path) -> None:
+    """The ordinary path still replaces both artifacts with complete new contents."""
+    parent = _write(tmp_path, "parent/test.process.md", _PARENT_PROCESS)
+    bundle = load_plan_bundle(parent)
+    run_dir = tmp_path / "runs" / "2026-04-21"
+    _make_pi_log_with_tool_call(run_dir / "predict" / "AAPL" / ".logs" / "session.jsonl")
+
+    result = build_resource_artifacts(bundle=bundle, run_dir=run_dir, run_id="run-1")
+    write_resource_artifacts(result)
+    assert result.document_path is not None
+
+    _make_pi_log_with_tool_call(run_dir / "predict" / "MSFT" / ".logs" / "session.jsonl")
     result2 = build_resource_artifacts(bundle=bundle, run_dir=run_dir, run_id="run-1")
     write_resource_artifacts(result2)
     assert result2.document_path is not None
-    second_size = result2.document_path.stat().st_size
-    assert second_size >= first_size
+
+    # The document parses, which a truncated JSON file would not.
+    assert json.loads(result2.document_path.read_text(encoding="utf-8"))
+    assert not list(result2.document_path.parent.glob("*.partial"))
 
 
 # ── F5: file: and tool: leaf node creation ─────────────────────────

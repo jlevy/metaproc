@@ -243,7 +243,7 @@ def _measure_linux() -> MemoryPressure:
     source = "linux-meminfo"
 
     try:
-        text = meminfo_path.read_text()
+        text = meminfo_path.read_text(encoding="utf-8")
     except OSError as exc:
         raise UnsupportedTelemetryPlatformError(
             "failed to read required Linux telemetry: /proc/meminfo"
@@ -276,7 +276,7 @@ def _measure_linux() -> MemoryPressure:
     psi_path = Path("/proc/pressure/memory")
     if psi_path.exists():
         try:
-            text = psi_path.read_text()
+            text = psi_path.read_text(encoding="utf-8")
             # "some avg10=X.XX avg60=X.XX avg300=X.XX total=XXXX"
             m = re.search(r"some avg10=([\d.]+)", text)
             if m:

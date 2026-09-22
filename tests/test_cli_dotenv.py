@@ -28,7 +28,7 @@ def isolated_cwd(monkeypatch, tmp_path):
 def _run_loader_with(env_text: str, monkeypatch) -> None:
     """Drop a .env in cwd with *env_text* and run _load_dotenv."""
 
-    Path(".env").write_text(env_text)
+    Path(".env").write_text(env_text, encoding="utf-8")
     _load_dotenv()
 
 

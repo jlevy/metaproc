@@ -181,7 +181,7 @@ def load_item_contexts() -> list[dict[str, str]]:
         path = Path(contexts_path)
         if not path.exists():
             raise CLIError(f"METAPROC_ITEM_CONTEXTS_FILE not found: {path}")
-        return cast("list[dict[str, str]]", json.loads(path.read_text()))
+        return cast("list[dict[str, str]]", json.loads(path.read_text(encoding="utf-8")))
 
     return []
 

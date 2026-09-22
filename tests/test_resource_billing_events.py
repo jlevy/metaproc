@@ -60,7 +60,7 @@ def _make_runpool_log(path: Path, *, with_machine_type: bool = False) -> None:
         ),
         json.dumps(process_exit),
     ]
-    path.write_text("\n".join(lines) + "\n")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def test_runpool_process_exit_emits_sample_event(tmp_path: Path) -> None:

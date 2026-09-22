@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: File I/O Utilities (`metaproc.io`)
 
-**Date:** 2026-07-26 (last updated 2026-08-27) **Status:** Approved
+**Date:** 2026-07-26 (last updated 2026-09-22) **Status:** Approved
 
 `metaproc.io` is the curated public import surface for downstream callers and shared
 internal use. Every helper documented here is importable directly from `metaproc.io`:
@@ -46,7 +46,15 @@ local implementations.
 | `fmf_read_artifact` | `metaproc.io.frontmatter` | gz-aware `fmf_read` |
 | `fmf_read_frontmatter_artifact` | `metaproc.io.frontmatter` | gz-aware `fmf_read_frontmatter` |
 | `read_yaml_artifact` | `metaproc.io.frontmatter` | gz-aware `read_yaml_file` |
-| `atomic_output_file` | `strif` | Atomic write for arbitrary content |
+| `atomic_output_file` | `strif` | Stage a file and publish it in one step (context manager) |
+| `atomic_write_text` | `strif` | Publish a whole string atomically (UTF-8) |
+| `atomic_write_bytes` | `strif` | Publish a whole byte buffer atomically |
+| `copyfile_atomic` | `strif` | Copy a file and publish it in one step |
+| `copytree_atomic` | `strif` | Copy a directory tree and publish it in one step |
+| `temp_output_file` | `strif` | Private staging file with no published destination |
+| `temp_output_dir` | `strif` | Private staging directory with no published destination |
+| `write_secret_text` | `metaproc.io.secret_io` | Publish a file that is never readable beyond its owner |
+| `SECRET_FILE_MODE` | `metaproc.io.secret_io` | The mode `write_secret_text` publishes at (`0o600`) |
 | `render_template` | `metaproc.io.templating` | Render strict `{{name}}` placeholders from an explicit mapping |
 | `strip_template_frontmatter` | `metaproc.io.templating` | Remove the template contract from a rendered document |
 | `TemplateRenderError` | `metaproc.io.templating` | Error raised for missing or unused strict template values |
@@ -70,7 +78,12 @@ module.
 | Read frontmatter MD (gz-aware) | `metaproc.io.fmf_read_artifact(path)` |
 | Read frontmatter MD metadata only (gz-aware) | `metaproc.io.fmf_read_frontmatter_artifact(path)` |
 | Write frontmatter MD (atomic) | `metaproc.io.fmf_write(path, body, metadata)` |
-| Write JSON or text file (atomic) | `metaproc.io.atomic_output_file(path)` |
+| Write a JSON or text file | `metaproc.io.atomic_write_text(path, text, make_parents=True)` |
+| Write a file from a producer that needs a pathname | `metaproc.io.atomic_output_file(path, make_parents=True)` |
+| Write a credential or any owner-only file | `metaproc.io.write_secret_text(path, text)` |
+| Copy a file or tree into a published location | `metaproc.io.copyfile_atomic` / `copytree_atomic` |
+| Private scratch file with no published destination | `metaproc.io.temp_output_file()` |
+| Create-only claim (lock, lease, slot) | `metaproc.io.mkdir_lock.acquire_mkdir_lock` |
 | Iterate JSONL records as dicts (gz-aware) | `metaproc.io.iter_jsonl_objects(path)` |
 | Iterate JSONL with line numbers (gz-aware) | `metaproc.io.iter_jsonl_records(path)` |
 | Render a strict document template | `metaproc.io.render_template(text, values)` |
@@ -82,6 +95,73 @@ Metaproc implementation modules may import `frontmatter_format`, `strif`, or a
 specialized `metaproc.io` submodule directly when they need an internal symbol, avoid a
 circular import, or keep an implementation dependency explicit.
 Those internal import paths are not downstream compatibility guarantees.
+
+## Write Contracts
+
+Every write to a path has exactly one contract, and the code should make it obvious
+which. `tbd guidelines filesystem-rules` owns the definitions; this table says which
+helper expresses each one here.
+
+| Contract | What a reader may observe | Helper |
+| --- | --- | --- |
+| **Publish, replacement allowed** | No file, the old contents, or the complete new contents | `atomic_write_text`, `atomic_write_bytes`, `atomic_output_file`, `write_yaml_file`, `fmf_write`, `write_secret_text` |
+| **Publish, replacement forbidden** | An existing destination is preserved; otherwise the complete new file appears in one step | Stage the file, then use a no-replace commit primitive; no general helper is exported here |
+| **Exclusive name creation** | One creator reserves the name; file contents may still be incomplete | `mkdir_lock.acquire_mkdir_lock` for directory claims, `path.open("x")` for files |
+| **Append** | Records accumulate; concurrent writers do not race on the file position | `path.open("a")` |
+| **Live stream** | Output as the producer writes it, incomplete by design | `path.open("w")` handed to a subprocess or a tailing reader |
+| **Private staging** | Nothing — the file has no published destination | `temp_output_file`, `temp_output_dir` |
+
+Only the first two require atomic publication, and in practice that means every write
+that completes a file before a reader should see it: durable state, a report, an export,
+a cache entry, a prompt snapshot.
+Business importance is not the test.
+
+Exclusive creation is a separate contract: `open("x")` prevents overwriting an existing
+file, but exposes the new name before its contents are written.
+It is suitable for claims whose readers already handle incomplete initialization, not
+for publishing a completed document atomically.
+
+Routing an append or a live stream through replacement **weakens** it.
+An append forced through replace-the-whole-file has to read and rewrite the file, which
+loses the concurrency property that made append correct and turns an O(1) write into an
+O(size) one. A live log published atomically does not exist until the producer exits,
+which is the opposite of what `metaproc tail` and a subprocess transcript are for.
+
+`devtools/check_atomic_writes.py` enforces this and runs in `make lint`. It flags a
+truncating write (`write_text`, `write_bytes`, `open(..., "w")`) whose destination is
+not a staged temp path, and it recognizes staging through `atomic_output_file`,
+`temp_output_file`, `temp_output_dir` and `TemporaryDirectory`, including paths derived
+from them.
+This is a syntactic guard, not complete Python data-flow analysis; unsupported
+staging patterns need an explicit contract.
+Appends and `open("x")` are not flagged.
+
+Where a non-atomic write is correct, name the contract at the site rather than working
+around the check:
+
+```python
+log_fh = log_path.open("w")  # write-contract: live-stream -- the operator tails this
+```
+
+The contract must be one of `live-stream`, `private-staging`, `create-only`, or
+`external-tool`, and must carry a reason after `--`. A bare suppression is rejected:
+naming a contract records a decision, and that is the point of the escape hatch.
+
+Two things atomic publication here does **not** promise:
+
+- **Crash durability.** An atomic rename gives atomic visibility, not survival of power
+  loss. Only an explicit `fsync` gives that, and Strif does not do one.
+  `commands/gzip_text.py` does, and is the in-repo reference for a write that needs it.
+- **Mode preservation.** A staged file starts with the temp file’s mode, not the
+  destination’s, so replacing a file does not carry its permissions over.
+  Where the mode matters, set it on the staged path before the context exits — or use
+  `write_secret_text`, which creates the staged file at `0o600` before the first byte
+  lands rather than narrowing it afterwards.
+
+Do not pass `backup_suffix` for anything a reader polls.
+Strif moves the old destination to the backup before installing the new one, so the
+destination is briefly absent, and `status.yaml`, `process-status.yaml`,
+`runpool-status.yaml`, the orchestrator lease and the kill sentinel are all polled.
 
 ## YAML Parser Boundaries
 

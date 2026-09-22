@@ -20,7 +20,7 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures" / "trace_agents"
 
 def _load_jsonl(path: Path) -> list[dict[str, object]]:
     events: list[dict[str, object]] = []
-    with path.open() as fh:
+    with path.open(encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
             if not line:

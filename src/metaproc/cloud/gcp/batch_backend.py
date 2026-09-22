@@ -366,7 +366,7 @@ def build_pi_models_json(project: str) -> str:
     local_path = Path(_os.path.expanduser("~/.pi/agent/models.json"))
     if local_path.exists():
         try:
-            local_doc = _json.loads(local_path.read_text())
+            local_doc = _json.loads(local_path.read_text(encoding="utf-8"))
             merged_doc = _merge_pi_models_json(default_doc, local_doc)
             origin = f"packaged + overlay {local_path}"
         except Exception:

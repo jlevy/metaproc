@@ -43,7 +43,7 @@ _REDACTED_TOKENS: tuple[str, ...] = ("TOKEN", "KEY", "SECRET", "PASSWORD", "CRED
 
 def _read_int(path: Path) -> int | None:
     try:
-        text = path.read_text().strip()
+        text = path.read_text(encoding="utf-8").strip()
     except OSError:
         return None
     # cgroup files may say "max" for unbounded.
@@ -147,7 +147,7 @@ def _collect_host() -> HostInfo:
     meminfo = Path("/proc/meminfo")
     if meminfo.exists():
         try:
-            text = meminfo.read_text()
+            text = meminfo.read_text(encoding="utf-8")
             for line in text.splitlines():
                 parts = line.split()
                 if len(parts) < 2:

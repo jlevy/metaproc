@@ -690,16 +690,18 @@ def query_label_headroom(
     """
     if not runs_dir.exists() or not runs_dir.is_dir():
         return None, None
-    # Sorted by mtime descending — newest runs first.
-    candidates: list[Path] = []
+    # Sort newest first, retaining enumeration order for equal mtimes.
+    scored: list[tuple[float, Path]] = []
     for child in runs_dir.iterdir():
         if not child.is_dir():
             continue
         try:
-            candidates.append(child)
+            mtime = child.stat().st_mtime
         except OSError:
             continue
-    candidates.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
+        scored.append((mtime, child))
+    scored.sort(key=lambda entry: entry[0], reverse=True)
+    candidates: list[Path] = [child for _mtime, child in scored]
 
     five_hour: RateLimitWindow | None = None
     seven_day: RateLimitWindow | None = None

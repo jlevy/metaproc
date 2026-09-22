@@ -364,7 +364,7 @@ def _config(tmp_path: Path, variables: dict[str, str]) -> Path:
     config_path.parent.mkdir(parents=True, exist_ok=True)
     data = {"process": "mine", "run_dir": str(tmp_path), "run_id": "run-1", "variables": variables}
     with atomic_output_file(config_path) as tmp:
-        Path(tmp).write_text(to_yaml_string(data))
+        Path(tmp).write_text(to_yaml_string(data), encoding="utf-8")
     return config_path
 
 

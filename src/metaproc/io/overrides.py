@@ -15,7 +15,7 @@ from pathlib import Path
 
 from frontmatter_format import read_yaml_file, to_yaml_string
 from pydantic import BaseModel, ConfigDict, Field
-from strif import atomic_output_file
+from strif import atomic_write_text
 
 from metaproc.paths import OVERRIDES_FILE, STATE_DIR
 
@@ -70,10 +70,8 @@ def read_overrides(run_dir: Path) -> OverridesDocument | None:
 def _write_overrides(run_dir: Path, doc: OverridesDocument) -> None:
     """Atomically write the overrides document."""
     path = _overrides_path(run_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
     data = doc.model_dump(by_alias=True, exclude_none=True)
-    with atomic_output_file(path) as tmp:
-        Path(tmp).write_text(to_yaml_string(data), encoding="utf-8")
+    atomic_write_text(path, to_yaml_string(data), make_parents=True)
 
 
 def upsert_override(
