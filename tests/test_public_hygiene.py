@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import io
 import subprocess
 import tarfile
@@ -10,6 +11,9 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
+from devtools import public_hygiene
 from devtools.public_hygiene import (
     _git_ignored,
     find_binary_findings,
@@ -19,6 +23,37 @@ from devtools.public_hygiene import (
     scan_file,
     scan_git_history,
 )
+
+# The gate exists to keep a private vocabulary out of this repository, so its own
+# tests must not spell that vocabulary — not even split across string halves, which
+# hides a name from the tokenizer but not from a reader. Every "private" token below
+# is invented here and registered for the duration of one test, so the assertions
+# exercise the real lookup without the file carrying anything real. Split literals
+# remain only for the structural patterns (pull-request references, home paths,
+# credentials, emails), which name nobody.
+SYNTHETIC_PRIVATE_NAME = "synthetic-private-name"
+SYNTHETIC_TREE_NAME = "synthetic-tree-only-name"
+SYNTHETIC_ISSUE_PREFIX = "synthprefix"
+
+
+def _digest(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+@pytest.fixture
+def synthetic_private_vocabulary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Register invented tokens in each banned set for the duration of one test."""
+    monkeypatch.setitem(
+        public_hygiene.BANNED_TOKEN_HASHES, _digest(SYNTHETIC_PRIVATE_NAME), "private name"
+    )
+    monkeypatch.setitem(
+        public_hygiene.BANNED_TREE_TOKEN_HASHES, _digest(SYNTHETIC_TREE_NAME), "private name"
+    )
+    monkeypatch.setattr(
+        public_hygiene,
+        "PRIVATE_ISSUE_PREFIX_HASHES",
+        frozenset({_digest(SYNTHETIC_ISSUE_PREFIX)}),
+    )
 
 
 def test_public_metaproc_issue_tracking_language_is_allowed() -> None:
@@ -52,14 +87,15 @@ def test_real_pull_request_references_are_still_rejected() -> None:
     assert sum("private pull-request reference" in finding for finding in findings) == 2
 
 
-def test_private_names_issue_ids_paths_and_credentials_are_rejected() -> None:
-    private_package = "earnings" + "_predictions"
-    private_issue = "trad" + "ing-abcd"
+def test_private_names_issue_ids_paths_and_credentials_are_rejected(
+    synthetic_private_vocabulary: None,
+) -> None:
+    private_issue = f"{SYNTHETIC_ISSUE_PREFIX}-abcd"
     private_path = "/" + "Users/alice/work/repo"
     credential = "ghp_" + "a" * 32
 
     findings = find_hygiene_findings(
-        f"fixtures/{private_package}/record.json",
+        f"fixtures/{SYNTHETIC_PRIVATE_NAME}/record.json",
         f"{private_issue}\n{private_path}\n{credential}",
     )
 
@@ -67,6 +103,18 @@ def test_private_names_issue_ids_paths_and_credentials_are_rejected() -> None:
     assert any("copied issue identifier" in finding for finding in findings)
     assert any("private home path" in finding for finding in findings)
     assert any("credential material" in finding for finding in findings)
+
+
+def test_tree_tokens_are_rejected_in_files_but_not_in_reachable_git_metadata(
+    synthetic_private_vocabulary: None,
+) -> None:
+    """The tree-only class is what lets a token be banned without rewriting history."""
+    text = f"The {SYNTHETIC_TREE_NAME} pipeline drove this run."
+
+    assert any(
+        "private name" in finding for finding in find_hygiene_findings("docs/notes.md", text)
+    )
+    assert find_git_metadata_findings("git-commits", text) == []
 
 
 def test_synthetic_placeholders_are_allowed() -> None:
@@ -113,14 +161,18 @@ def test_git_metadata_allows_attribution_trailers_and_public_pr_references() -> 
     assert findings == ["git-commits:4: potential personal email address"]
 
 
-def test_binary_assets_are_scanned_for_printable_private_residue() -> None:
-    private_name = ("fin" + "term").encode()
+def test_binary_assets_are_scanned_for_printable_private_residue(
+    synthetic_private_vocabulary: None,
+) -> None:
+    private_name = SYNTHETIC_PRIVATE_NAME.encode()
     findings = find_binary_findings("static/image.bin", b"\x00\xff" + private_name + b"\x00")
     assert any("private name" in finding for finding in findings)
 
 
-def test_zip_and_tar_members_are_scanned(tmp_path: Path) -> None:
-    private_name = "earnings" + "-predictions"
+def test_zip_and_tar_members_are_scanned(
+    tmp_path: Path, synthetic_private_vocabulary: None
+) -> None:
+    private_name = SYNTHETIC_PRIVATE_NAME
     zip_path = tmp_path / "artifact.whl"
     with zipfile.ZipFile(zip_path, "w") as archive:
         archive.writestr("pkg/data.txt", private_name)
@@ -136,8 +188,10 @@ def test_zip_and_tar_members_are_scanned(tmp_path: Path) -> None:
     assert any("private name" in finding for finding in scan_file(tar_path))
 
 
-def test_nested_and_standalone_gzip_payloads_are_scanned(tmp_path: Path) -> None:
-    private_name = ("fin" + "term").encode()
+def test_nested_and_standalone_gzip_payloads_are_scanned(
+    tmp_path: Path, synthetic_private_vocabulary: None
+) -> None:
+    private_name = SYNTHETIC_PRIVATE_NAME.encode()
     gzip_path = tmp_path / "record.json.gz"
     gzip_path.write_bytes(gzip.compress(private_name))
     nested_path = tmp_path / "nested.zip"
@@ -194,15 +248,17 @@ def test_nonignored_untracked_files_are_scanned_but_ignored_files_are_not(
     assert ignored not in files
 
 
-def test_reachable_git_refs_and_commit_messages_are_scanned(tmp_path: Path) -> None:
+def test_reachable_git_refs_and_commit_messages_are_scanned(
+    tmp_path: Path, synthetic_private_vocabulary: None
+) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     _init_repo(root)
     (root / "public.txt").write_text("public")
     subprocess.run(["git", "-C", str(root), "add", "."], check=True)
-    private_message = "trad" + "ing-abcd private migration"
+    private_message = f"{SYNTHETIC_ISSUE_PREFIX}-abcd private migration"
     subprocess.run(["git", "-C", str(root), "commit", "-qm", private_message], check=True)
-    private_ref = "refs/tags/" + "earnings" + "-predictions"
+    private_ref = f"refs/tags/{SYNTHETIC_PRIVATE_NAME}"
     subprocess.run(
         ["git", "-C", str(root), "tag", private_ref.removeprefix("refs/tags/")], check=True
     )
@@ -212,7 +268,9 @@ def test_reachable_git_refs_and_commit_messages_are_scanned(tmp_path: Path) -> N
     assert any("private name" in finding for finding in findings)
 
 
-def test_unmerged_sibling_ref_is_not_part_of_current_history(tmp_path: Path) -> None:
+def test_unmerged_sibling_ref_is_not_part_of_current_history(
+    tmp_path: Path, synthetic_private_vocabulary: None
+) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     _init_repo(root)
@@ -220,7 +278,7 @@ def test_unmerged_sibling_ref_is_not_part_of_current_history(tmp_path: Path) -> 
     subprocess.run(["git", "-C", str(root), "add", "."], check=True)
     subprocess.run(["git", "-C", str(root), "commit", "-qm", "public commit"], check=True)
 
-    sibling_ref = "refs/remotes/origin/" + "earnings" + "-predictions"
+    sibling_ref = f"refs/remotes/origin/{SYNTHETIC_PRIVATE_NAME}"
     sibling_commit = subprocess.run(
         ["git", "-C", str(root), "commit-tree", "HEAD^{tree}", "-m", "sibling commit"],
         check=True,

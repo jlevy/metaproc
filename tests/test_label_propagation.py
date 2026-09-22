@@ -394,7 +394,9 @@ class TestOrchestratorDispatchLabelPropagation:
         assert env_vars["METAPROC_WORKSPACE_GCS"] == "gs://dispatch-bucket/job/workspace.tar.gz"
 
     def test_long_run_id_keeps_valid_orchestrator_job_suffix(self):
-
+        # The id has to exceed what `build_job_id` leaves for it: the orchestrator
+        # prefix and the timestamp-nonce suffix reserve 26 of the 63 characters, so
+        # anything at or under 37 is carried whole and truncation is never exercised.
         gcp_config = GCPBatchConfig(
             project="test-project",
             region="us-central1",
@@ -404,7 +406,7 @@ class TestOrchestratorDispatchLabelPropagation:
         config = OrchestratorDispatchConfig(
             gcp=gcp_config,
             process_spec_rel="example_plugin",
-            variables={"RUN_ID": "mine-smoke-20-2026-04-16-cloud-replay"},
+            variables={"RUN_ID": "example-run-smoke-20-2026-04-16-cloud-replay"},
             variant="deepseek",
             poll_interval=0,
         )
@@ -432,6 +434,8 @@ class TestOrchestratorDispatchLabelPropagation:
         assert request.job_id.endswith("-1776328315-abc123")
         assert len(request.job_id) <= 63
         assert not request.job_id.endswith("-")
+        # The run id was cut, not the uniqueness suffix.
+        assert "replay" not in request.job_id
 
     def test_worker_gcp_env_is_forwarded_to_orchestrator(self):
 

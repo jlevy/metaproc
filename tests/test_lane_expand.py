@@ -212,7 +212,7 @@ class TestCountTaskInstances:
             _step("scaffold"),
             _step(
                 "predict",
-                items=[{"ticker": "item-a"}, {"ticker": "item-b"}, {"ticker": "NVDA"}],
+                items=[{"ticker": "item-a"}, {"ticker": "item-b"}, {"ticker": "item-c"}],
             ),
         ]
         assert count_task_instances(steps, lanes) == {"scaffold": 2, "predict": 6}

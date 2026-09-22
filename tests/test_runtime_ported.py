@@ -2,8 +2,8 @@
 
 Validates StatusRecord/AttemptRecord/ResultRecord models,
 .state/ atomic I/O, harness transition helpers, and MapItem.
-Domain-specific tests (TickerItem, TERMINAL_PROGRESS_STATUSES,
-extract from earnings envelope, refresh_progress_summary) are skipped.
+Domain-specific tests (a consumer's item model and terminal progress
+statuses, domain-envelope extraction, progress-summary refresh) are skipped.
 """
 
 from __future__ import annotations

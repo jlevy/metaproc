@@ -1163,8 +1163,9 @@ def test_markdown_table_escapes_cells() -> None:
 _EARLIER_DOCUMENTS = Path(__file__).resolve().parent / "fixtures" / "operations_summary_v1"
 """A real run's artifacts, written before ``sample_source`` and ``RetryStepRow.process``.
 
-Only identifiers are replaced (the process, run ID, step names, revision, and item keys),
-so the document keeps the shape the earlier writer produced.
+The run ID, revision, item keys, item-level process name, and two step ids are
+replaced; the remaining step ids are the captured run's own, so the document keeps the
+shape the earlier writer produced.
 """
 
 

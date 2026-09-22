@@ -19,8 +19,9 @@ normalizer.
 `operations_summary_v1/` holds one real run's `operations-summary.md` and
 `resource-usage-summary.md`, written before `sample_source` and
 `RetryStepRow.process` joined `metaproc.operations:AgentOperationsSummary/v1`.
-Only identifiers are replaced (the process, run ID, step names, revision, and
-item keys); every field and every
-figure is as the writer produced it, which is what makes it evidence that the
-contract id still reads its own older documents. Edit it only to record another
-writer's shape.
+Some identifiers are replaced: the run ID, the code revision, the item keys, the
+item-level process name, and the two step ids that carried a domain noun. The
+remaining step ids and the process-family name are the captured run's own; they
+name no deployment on their own. Every field and every figure is as the writer
+produced it, which is what makes it evidence that the contract id still reads its
+own older documents. Edit it only to record another writer's shape.
