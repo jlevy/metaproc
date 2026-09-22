@@ -176,7 +176,7 @@ from metaproc.engine.write_boundary import (
     repo_changes_since,
 )
 from metaproc.errors import AttemptTerminalConflictError, CLIError, ValidationError
-from metaproc.io import read_yaml_file, to_yaml_string
+from metaproc.io import from_yaml_string, read_yaml_file, to_yaml_string
 from metaproc.io.orchestrator_lease import LeaseHeartbeat, acquire_lease, release_lease
 from metaproc.io.overrides import (
     OverridesDocument,
@@ -797,16 +797,52 @@ def _get_git_sha() -> str:
     return ""
 
 
-type _LaunchConfigChanges = dict[str, tuple[str | None, str | None]]
-"""What one resume changed in the launch config: ``field -> (recorded, current)``.
+@dataclasses.dataclass(frozen=True, slots=True)
+class _LaunchConfig:
+    """The ``run-config.yaml`` fields the first write derives from a launch.
 
-``None`` marks an absent side. Fields are ``step_variants.<STEP>`` and
-``variables.<NAME>``, and the mapping is sorted by field. A changed ``run_dir`` is never
-one: ``_validate_run_config`` refuses it.
+    ``_write_run_config`` records them when it creates a run. A resume passes the values
+    it runs with to ``_apply_resume_config_changes``, which compares every field with the
+    record, records each difference, and rewrites the fields that differ, so the config
+    describes the launch the run last ran with: ``metaproc status`` rebuilds the plan
+    from it, the operations summary reports its variant and profiles, and the next
+    resume compares against it. An empty value is absent, as the first write omits it.
+    """
+
+    variables: Mapping[str, str]
+    step_variants: Mapping[str, str]
+    variant: str | None
+    execution_profile: str | None
+    artifact_namespace: str | None
+    resolved_profiles: list[dict[str, object]]
+    backend: str
+    git_sha: str
+
+
+_LAUNCH_CONFIG_FIELDS: tuple[str, ...] = tuple(
+    field.name for field in dataclasses.fields(_LaunchConfig)
+)
+"""The launch-config fields of ``run-config.yaml``, which a resume compares, records, and
+rewrites; ``_LaunchConfig`` declares them."""
+
+_KEYED_LAUNCH_CONFIG_FIELDS = frozenset({"variables", "step_variants"})
+"""The launch-config mappings compared key by key, as ``<field>.<KEY>``; every other
+field is compared whole."""
+
+type _LaunchConfigValue = str | list[dict[str, object]] | None
+"""One launch-config value as ``run-config.yaml`` holds it, ``None`` when absent.
+
+``resolved_profiles`` is a list of profile mappings; every other value is a string.
 """
 
-_REWRITTEN_LAUNCH_FIELDS = frozenset({"variables", "step_variants"})
-"""The ``run-config.yaml`` fields a resume rewrites to the values it runs with."""
+type _LaunchConfigChanges = dict[str, tuple[_LaunchConfigValue, _LaunchConfigValue]]
+"""What one resume changed in the launch config: ``field -> (recorded, current)``.
+
+``None`` marks an absent side. A change to one of the ``_KEYED_LAUNCH_CONFIG_FIELDS`` is
+named ``variables.<NAME>`` or ``step_variants.<STEP>``, and a change to any other
+``_LAUNCH_CONFIG_FIELDS`` entry by the field itself. The mapping is sorted by field. A
+changed ``run_dir`` is never one: ``_validate_run_config`` refuses it.
+"""
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -838,6 +874,7 @@ def _write_run_config(  # noqa: PLR0913
     max_concurrency: int | None = None,
     resource_snapshot: ResourceRunSnapshot | None = None,
     step_variants: Mapping[str, str] | None = None,
+    git_sha: str | None = None,
 ) -> _RunConfigWrite:
     """Write run-config.yaml at run creation time; validate a resume against it.
 
@@ -846,31 +883,27 @@ def _write_run_config(  # noqa: PLR0913
     ``concurrency:`` block capturing the operator's max-concurrency
     intent.
 
-    On resume this function writes nothing. It validates the launch config against the
-    recorded one (``_validate_run_config``) only to refuse early, before auth preflight
-    and the ancestor check, a resume that cannot continue: a corrupt config, a process
-    name other than the recorded one, since every task record carries
-    ``<process>/<RUN_ID>`` as its run identity, or a run directory other than the
-    recorded one, since result records are anchored to it. The changes it would find are
-    not kept.
-    ``_apply_resume_config_changes`` validates again once ``run_process_command`` holds
-    the orchestrator lease, and records what it finds there, because only under the lease
-    is this resume the config's single writer. A launch refused before then, by the
-    ``--from``/``--only`` ancestor check or by another orchestrator's live lease,
-    therefore never touches the config or the event log of a run that may still be
-    executing. What re-runs is decided by step fingerprints, not here.
+    The first write records the launch-config fields (``_LaunchConfig``) with the rest of
+    the run's creation record. *git_sha* is the launch checkout's; ``None`` reads it here.
+
+    On resume this function writes nothing. It reads the recorded config
+    (``_read_resumable_run_config``) only to refuse early, before auth preflight and the
+    ancestor check, a resume that cannot continue: a corrupt config, a process name other
+    than the recorded one, since every task record carries ``<process>/<RUN_ID>`` as its
+    run identity, or a run directory other than the recorded one, since result records
+    are anchored to it. ``_apply_resume_config_changes`` checks again and compares the
+    launch config once ``run_process_command`` holds the orchestrator lease, and records
+    what it finds there, because only under the lease is this resume the config's single
+    writer. A launch refused before then, by the ``--from``/``--only`` ancestor check or
+    by another orchestrator's live lease, therefore never touches the config or the
+    event log of a run that may still be executing. What re-runs is decided by step
+    fingerprints, not here.
 
     Returns the config path and whether it already existed.
     """
     config_path = paths_mod.run_config_file(run_dir)
     if config_path.exists():
-        _validate_run_config(
-            config_path,
-            process_name=process_name,
-            run_dir=run_dir,
-            variables=variables,
-            step_variants=dict(step_variants or {}),
-        )
+        _read_resumable_run_config(config_path, process_name=process_name, run_dir=run_dir)
         return _RunConfigWrite(path=config_path, resumed=True)
 
     # Persist process_spec as an absolute path so consumers like
@@ -887,7 +920,7 @@ def _write_run_config(  # noqa: PLR0913
         "variables": variables,
         "backend": backend,
         "created_at": _now_iso(),
-        "git_sha": _get_git_sha(),
+        "git_sha": _get_git_sha() if git_sha is None else git_sha,
     }
     if variant:
         data["variant"] = variant
@@ -916,13 +949,12 @@ def _write_run_config(  # noqa: PLR0913
     return _RunConfigWrite(path=config_path, resumed=False)
 
 
-def _apply_resume_config_changes(  # noqa: PLR0913
+def _apply_resume_config_changes(
     run_dir: Path,
     run_config: _RunConfigWrite,
     *,
     process_name: str,
-    variables: Mapping[str, str],
-    step_variants: Mapping[str, str] | None,
+    launch: _LaunchConfig,
     auth_flags: AuthPoolFlags | None,
     max_concurrency: int | None,
 ) -> _LaunchConfigChanges:
@@ -936,7 +968,7 @@ def _apply_resume_config_changes(  # noqa: PLR0913
     another resume's values while this one runs with its own.
     ``_record_launch_config_changes`` then logs each change and appends them as one
     ``launch_config_change`` event, ``_rewrite_launch_config`` makes the config record
-    the variables and step variants this resume runs with, and
+    the launch config (*launch*) this resume runs with, and
     ``_record_resume_config_change`` appends a ``dispatch_config_change`` event for any
     auth or concurrency change. Both events go to ``.logs/dispatch-config-changes.jsonl``;
     a log this resume cannot append to raises ``CLIError`` naming it, and the caller's
@@ -954,21 +986,14 @@ def _apply_resume_config_changes(  # noqa: PLR0913
     """
     if not run_config.resumed:
         return {}
-    resumed_step_variants = dict(step_variants or {})
     changes = _validate_run_config(
         run_config.path,
         process_name=process_name,
         run_dir=run_dir,
-        variables=variables,
-        step_variants=resumed_step_variants,
+        launch=launch,
     )
     _record_launch_config_changes(paths_mod.run_logs_dir(run_dir), changes)
-    _rewrite_launch_config(
-        run_config.path,
-        changes,
-        variables=variables,
-        step_variants=resumed_step_variants,
-    )
+    _rewrite_launch_config(run_config.path, changes, launch=launch)
     # Compute and record any auth/concurrency diff for the resume timeline that
     # `metaproc auth usage` renders.
     _record_resume_config_change(
@@ -1293,32 +1318,41 @@ def _record_launch_config_changes(logs_dir: Path, changes: _LaunchConfigChanges)
     )
 
 
-def _describe_launch_config_change(field: str, old: str | None, new: str | None) -> str:
+def _describe_launch_config_change(
+    field: str, old: _LaunchConfigValue, new: _LaunchConfigValue
+) -> str:
     """Render one launch-config change for the resume log and the operator's warning."""
     return f"Resume changes {field}: {_describe_config_value(old)} -> {_describe_config_value(new)}"
 
 
-def _describe_config_value(value: str | None) -> str:
-    """Render a launch-config value, marking an absent one."""
-    return "<unset>" if value is None else repr(value)
+def _describe_config_value(value: _LaunchConfigValue) -> str:
+    """Render a launch-config value, marking an absent one.
+
+    A ``resolved_profiles`` list renders as its profile names; the event carries the
+    whole profiles.
+    """
+    if value is None:
+        return "<unset>"
+    if isinstance(value, list):
+        return repr([str(profile.get("name")) for profile in value])
+    return repr(value)
 
 
 def _rewrite_launch_config(
     config_path: Path,
     changes: _LaunchConfigChanges,
     *,
-    variables: Mapping[str, str],
-    step_variants: Mapping[str, str],
+    launch: _LaunchConfig,
 ) -> None:
     """Make ``run-config.yaml`` record the launch config a resume runs with.
 
-    Only the fields *changes* names are replaced (the whole ``variables`` mapping, the
-    whole ``step_variants`` mapping), each with this resume's value, so the config
-    describes the run as it now executes and the next resume compares against that.
-    Every other field keeps its creation value, the resource snapshot the terminal
-    finalizer reads above all. ``_record_launch_config_changes`` has already recorded
-    the values replaced. An empty ``step_variants`` drops the field, as the first write
-    omits it.
+    Only the ``_LAUNCH_CONFIG_FIELDS`` that *changes* names are replaced, each whole
+    (the ``variables`` mapping, not one variable), with this resume's value from
+    *launch*, so the config describes the run as it now executes and the next resume
+    compares against that. Every other field keeps its creation value, the resource
+    snapshot the terminal finalizer reads above all. ``_record_launch_config_changes``
+    has already recorded the values replaced. A field the resume leaves empty is
+    dropped, as the first write omits it.
 
     ``_apply_resume_config_changes`` calls this once the orchestrator lease is held,
     which is after launch validation, the ``--from``/``--only`` ancestor check, and the
@@ -1326,17 +1360,17 @@ def _rewrite_launch_config(
     the config, and a resume refused because another orchestrator is live never rewrites
     that orchestrator's config.
     """
-    fields = {field.split(".", 1)[0] for field in changes} & _REWRITTEN_LAUNCH_FIELDS
-    if not fields:
+    changed = {field.split(".", 1)[0] for field in changes}
+    if not changed:
         return
     data = _read_run_config(config_path)
-    if "variables" in fields:
-        data["variables"] = dict(variables)
-    if "step_variants" in fields:
-        if step_variants:
-            data["step_variants"] = dict(sorted(step_variants.items()))
+    for field, value in _recorded_launch_config(launch).items():
+        if field not in changed:
+            continue
+        if value is None:
+            data.pop(field, None)
         else:
-            data.pop("step_variants", None)
+            data[field] = value
     atomic_write_text(config_path, to_yaml_string(data))
     log.info("Rewrote run-config.yaml with this resume's launch config: %s", config_path)
 
@@ -1384,18 +1418,57 @@ def _validate_run_config(
     *,
     process_name: str,
     run_dir: Path,
-    variables: Mapping[str, str],
-    step_variants: Mapping[str, str] | None = None,
+    launch: _LaunchConfig,
 ) -> _LaunchConfigChanges:
     """Compare a resume's launch config with the ``run-config.yaml`` it resumes.
 
-    A resume may change any resolved variable (including through an edited
-    ``default:``, or an input added or removed) and the ``--step-variant`` set. Each
-    difference comes back as ``field -> (recorded, current)`` with ``None`` for an
-    absent side, sorted by field: ``step_variants.<STEP>`` (only when *step_variants* is
-    given), and ``variables.<NAME>``. What re-runs is decided by step fingerprints, not
-    here, and backend topology, authentication, and concurrency are compared by
-    ``_record_resume_config_change``.
+    A resume may change every ``_LAUNCH_CONFIG_FIELDS`` entry: any resolved variable
+    (including through an edited ``default:``, or an input added or removed), the
+    ``--step-variant`` set, the variant, execution profile, artifact namespace, and
+    resolved profiles, the backend, and the checkout's ``git_sha``. Each difference comes
+    back as ``field -> (recorded, current)`` with ``None`` for an absent side, sorted by
+    field (``_LaunchConfigChanges``). Both sides are compared as the file holds them
+    (``_recorded_launch_config``), so a value that differs only in what the YAML writer
+    omits is no change. What re-runs is decided by step fingerprints, not here, and
+    authentication and concurrency are compared by ``_record_resume_config_change``.
+
+    ``_read_resumable_run_config`` first refuses a resume that cannot continue.
+    """
+    raw, recorded_variables = _read_resumable_run_config(
+        config_path, process_name=process_name, run_dir=run_dir
+    )
+    current = _recorded_launch_config(launch)
+    changes: _LaunchConfigChanges = {}
+
+    for name in _changed_keys(
+        _resume_variable_identity(recorded_variables), _resume_variable_identity(launch.variables)
+    ):
+        changes[f"variables.{name}"] = (recorded_variables.get(name), launch.variables.get(name))
+
+    recorded_overrides = recorded_step_variants(raw)
+    for step_id in _changed_keys(recorded_overrides, launch.step_variants):
+        changes[f"step_variants.{step_id}"] = (
+            recorded_overrides.get(step_id),
+            launch.step_variants.get(step_id),
+        )
+
+    for field in _LAUNCH_CONFIG_FIELDS:
+        if field in _KEYED_LAUNCH_CONFIG_FIELDS:
+            continue
+        recorded = _persisted_launch_value(raw.get(field))
+        if recorded != current[field]:
+            changes[field] = (recorded, cast(_LaunchConfigValue, current[field]))
+
+    log.info("Resume validated against run-config.yaml (%s)", config_path)
+    return dict(sorted(changes.items()))
+
+
+def _read_resumable_run_config(
+    config_path: Path, *, process_name: str, run_dir: Path
+) -> tuple[dict[object, object], dict[str, str]]:
+    """Read the ``run-config.yaml`` a resume continues, refusing one it cannot continue.
+
+    Returns the config and its recorded variables.
 
     Two launch values refuse, because continuing would leave the run's durable state
     inconsistent:
@@ -1418,7 +1491,8 @@ def _validate_run_config(
     Raises CLIError for either mismatch and for a corrupt config: one
     ``_read_run_config`` refuses, one without a process name, or one whose ``variables``
     field is not a string-to-string mapping. Each refusal comes before the resume records
-    or rewrites anything.
+    or rewrites anything: ``_write_run_config`` calls this before the orchestrator lease,
+    and ``_validate_run_config`` again under it.
     """
     raw = _read_run_config(config_path)
 
@@ -1450,8 +1524,6 @@ def _validate_run_config(
             "created it), or start a new RUN_ID."
         )
 
-    changes: _LaunchConfigChanges = {}
-
     # The YAML serializer omits empty mappings, so an absent field is the
     # persisted representation of no resolved variables in existing run trees.
     if "variables" not in raw:
@@ -1465,22 +1537,41 @@ def _validate_run_config(
             f"Corrupt run-config.yaml: {config_path}: variables must be a string-to-string mapping"
         )
 
-    recorded_variables = cast(dict[str, str], saved_variables)
-    for name in _changed_keys(
-        _resume_variable_identity(recorded_variables), _resume_variable_identity(variables)
-    ):
-        changes[f"variables.{name}"] = (recorded_variables.get(name), variables.get(name))
+    return raw, cast(dict[str, str], saved_variables)
 
-    if step_variants is not None:
-        recorded_overrides = recorded_step_variants(raw)
-        for step_id in _changed_keys(recorded_overrides, step_variants):
-            changes[f"step_variants.{step_id}"] = (
-                recorded_overrides.get(step_id),
-                step_variants.get(step_id),
-            )
 
-    log.info("Resume validated against run-config.yaml (%s)", config_path)
-    return dict(sorted(changes.items()))
+def _recorded_launch_config(launch: _LaunchConfig) -> dict[str, object]:
+    """Return *launch* as ``run-config.yaml`` records it: field -> value, ``None`` if absent.
+
+    The two mappings keep their shape, ``step_variants`` sorted as the first write sorts
+    it; every other field goes through ``_persisted_launch_value``.
+    """
+    record: dict[str, object] = {
+        "variables": dict(launch.variables) or None,
+        "step_variants": dict(sorted(launch.step_variants.items())) or None,
+    }
+    for field in _LAUNCH_CONFIG_FIELDS:
+        if field not in _KEYED_LAUNCH_CONFIG_FIELDS:
+            record[field] = _persisted_launch_value(getattr(launch, field))
+    return record
+
+
+def _persisted_launch_value(value: object) -> _LaunchConfigValue:
+    """Return one whole launch-config value as ``run-config.yaml`` holds it.
+
+    The YAML writer drops ``None`` and empty mappings, and the first write omits an empty
+    variant, profile, namespace, or profile list. So a value passes through one
+    serializer round trip, as a later read would return it, and an empty result reads as
+    absent. Without this a resolved profile whose adapter config is empty would differ
+    from its own record, which has no ``config`` key.
+    """
+    persisted = from_yaml_string(to_yaml_string({"value": value})).get("value")
+    plain: object = _json.loads(_json_dumps(persisted))
+    if plain is None or plain in ("", [], {}):
+        return None
+    if isinstance(plain, list):
+        return cast(list[dict[str, object]], plain)
+    return str(plain)
 
 
 def _read_run_config(config_path: Path) -> dict[object, object]:
@@ -5853,8 +5944,19 @@ def run_process_command(
         if paths_mod.run_config_file(run_dir).exists()
         else build_resource_run_snapshot(snapshot_bundle, run_id=run_id)
     )
-    # Write run-config.yaml for a new run. A resume only validates against it here;
-    # its changes are recorded under the orchestrator lease below.
+    # The launch config this launch runs with: a new run records it, and a resume
+    # records how it differs from the record once it holds the orchestrator lease below.
+    launch_config = _LaunchConfig(
+        variables=variables,
+        step_variants=step_profile_overrides,
+        variant=plan.artifact_namespace or variant,
+        execution_profile=plan.execution_profile,
+        artifact_namespace=plan.artifact_namespace,
+        resolved_profiles=_serialize_plan_profiles(plan),
+        backend=backend,
+        git_sha=_get_git_sha(),
+    )
+    # Write run-config.yaml for a new run. A resume is only checked against it here.
     run_config = _write_run_config(
         run_dir,
         process_name=spec.name,
@@ -5862,14 +5964,15 @@ def run_process_command(
         run_id=run_context,
         variables=variables,
         backend=backend,
-        variant=plan.artifact_namespace or variant,
-        execution_profile=plan.execution_profile,
-        artifact_namespace=plan.artifact_namespace,
-        resolved_profiles=_serialize_plan_profiles(plan),
+        variant=launch_config.variant,
+        execution_profile=launch_config.execution_profile,
+        artifact_namespace=launch_config.artifact_namespace,
+        resolved_profiles=launch_config.resolved_profiles,
         auth_flags=auth_flags_for_config,
         max_concurrency=max_concurrency,
         resource_snapshot=resource_snapshot,
         step_variants=step_profile_overrides,
+        git_sha=launch_config.git_sha,
     )
 
     out.progress(f"run-process: {spec.name} ({len(active_step_ids)} steps, {len(levels)} levels)")
@@ -6089,8 +6192,7 @@ def run_process_command(
             run_dir,
             run_config,
             process_name=spec.name,
-            variables=variables,
-            step_variants=step_profile_overrides,
+            launch=launch_config,
             auth_flags=auth_flags_for_config,
             max_concurrency=max_concurrency,
         )
@@ -6101,7 +6203,7 @@ def run_process_command(
                 f"Recorded {len(launch_changes)} launch-config change(s) as a "
                 "launch_config_change event in "
                 f"{paths_mod.dispatch_config_changes_log(run_dir)}; run-config.yaml now "
-                "records the variables and step variants this resume runs with."
+                "records the launch config this resume runs with."
             )
         _publish_run_plan(
             run_dir,

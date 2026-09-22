@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,6 +14,7 @@ from strif import atomic_write_text
 from metaproc.commands.run_process import (
     _apply_resume_config_changes,
     _get_git_sha,
+    _LaunchConfig,
     _RunConfigWrite,
     _validate_run_config,
     _write_run_config,
@@ -30,24 +31,51 @@ from metaproc.paths import (
 )
 
 
+def _launch_config(
+    variables: dict[str, str],
+    *,
+    step_variants: dict[str, str] | None = None,
+    variant: str | None = None,
+    backend: str = "local",
+    git_sha: str | None = None,
+) -> _LaunchConfig:
+    """The launch config ``_write_run_config`` records for these arguments.
+
+    The other fields take ``_write_run_config``'s defaults, and ``git_sha`` defaults to
+    the checkout's, as the first write reads it.
+    """
+    return _LaunchConfig(
+        variables=variables,
+        step_variants=step_variants or {},
+        variant=variant,
+        execution_profile=None,
+        artifact_namespace=None,
+        resolved_profiles=[],
+        backend=backend,
+        git_sha=_get_git_sha() if git_sha is None else git_sha,
+    )
+
+
 def _resume_run_config(  # noqa: PLR0913
     run_dir: Path,
     *,
     process_name: str,
     variables: dict[str, str],
     variant: str | None = None,
+    backend: str = "local",
     auth_flags: AuthPoolFlags | None = None,
     max_concurrency: int | None = None,
     step_variants: dict[str, str] | None = None,
     before_lease: Callable[[], None] | None = None,
-) -> dict[str, tuple[str | None, str | None]]:
+) -> Mapping[str, tuple[object, object]]:
     """Resume the way ``run-process`` does: validate, then record once the lease is held.
 
     *before_lease* runs between the two, where ``run-process`` runs auth preflight and
     the ancestor check and another resume may still rewrite the config. Returns the
-    changes recorded under the lease. The resume-only arguments of ``_write_run_config``
-    (``process_path``, ``run_id``, ``backend``) are not compared, so fixed values stand
-    in for them.
+    changes recorded under the lease. The arguments of ``_write_run_config`` a resume
+    does not compare (``process_path``, ``run_id``) take fixed values, and the launch
+    config the resume runs with is the one the first write would record
+    (``_launch_config``).
     """
     run_config = _write_run_config(
         run_dir,
@@ -55,7 +83,7 @@ def _resume_run_config(  # noqa: PLR0913
         process_path=Path("process/mine/mine.process.md"),
         run_id="unused-on-resume",
         variables=variables,
-        backend="local",
+        backend=backend,
         variant=variant,
         auth_flags=auth_flags,
         max_concurrency=max_concurrency,
@@ -68,8 +96,9 @@ def _resume_run_config(  # noqa: PLR0913
         run_dir,
         run_config,
         process_name=process_name,
-        variables=variables,
-        step_variants=step_variants,
+        launch=_launch_config(
+            variables, step_variants=step_variants, variant=variant, backend=backend
+        ),
         auth_flags=auth_flags,
         max_concurrency=max_concurrency,
     )
@@ -191,8 +220,7 @@ class TestWriteRunConfig:
             run_dir,
             resumed,
             process_name="mine",
-            variables=resumed_variables,
-            step_variants=None,
+            launch=_launch_config(resumed_variables, variant="pi-glm-5"),
             auth_flags=None,
             max_concurrency=4,
         )
@@ -298,7 +326,7 @@ class TestWriteRunConfig:
         run_dir = tmp_path / "run-step-variants" / "mine"
         run_dir.mkdir(parents=True)
 
-        def write(step_variants: dict[str, str] | None) -> dict[str, tuple[str | None, str | None]]:
+        def write(step_variants: dict[str, str] | None) -> Mapping[str, tuple[object, object]]:
             return _resume_run_config(
                 run_dir,
                 process_name="mine",
@@ -389,6 +417,7 @@ class TestWriteRunConfig:
                 "RUN_ID": "run-mount-alias",
                 "RUNS_DIR": "/mnt/filestore/runs",
             },
+            backend="gcp-orchestrator",
         )
 
         # Two spellings of one mount are one value: no change, nothing rewritten.
@@ -446,8 +475,7 @@ class TestWriteRunConfig:
                 config_path,
                 process_name="mine",
                 run_dir=different_dir,
-                variables={"RUN_ID": "run-5"},
-                step_variants={},
+                launch=_launch_config({"RUN_ID": "run-5"}),
             )
 
     def test_resume_accepts_legacy_filestore_mount_alias(self, tmp_path: Path) -> None:
@@ -473,7 +501,7 @@ class TestWriteRunConfig:
             config_path,
             process_name="mine",
             run_dir=Path("/mnt/filestore/runs/run-5b/mine"),
-            variables={"RUN_ID": "run-5b"},
+            launch=_launch_config({"RUN_ID": "run-5b"}),
         )
         assert changes == {}
 
@@ -498,6 +526,8 @@ class TestWriteRunConfig:
                     "run_id": "run-1",
                     "run_dir": f"{recorded_root}/run-1",
                     "variables": {"RUNS_DIR": recorded_root, "RUN_ID": "run-1"},
+                    "backend": "gcp-orchestrator",
+                    "git_sha": "abc1234",
                 }
             ),
             make_parents=True,
@@ -508,8 +538,11 @@ class TestWriteRunConfig:
             Path(current_root) / "run-1",
             _RunConfigWrite(path=config_path, resumed=True),
             process_name="mine",
-            variables={"RUNS_DIR": current_root, "RUN_ID": "run-1"},
-            step_variants={},
+            launch=_launch_config(
+                {"RUNS_DIR": current_root, "RUN_ID": "run-1"},
+                backend="gcp-orchestrator",
+                git_sha="abc1234",
+            ),
             auth_flags=None,
             max_concurrency=None,
         )
@@ -545,8 +578,7 @@ class TestWriteRunConfig:
                 config_path,
                 process_name="mine",
                 run_dir=Path("/workspace/user/mnt/filestore/runs/run-5c/mine"),
-                variables={"RUN_ID": "run-5c"},
-                step_variants={},
+                launch=_launch_config({"RUN_ID": "run-5c"}),
             )
 
     def test_resume_refuses_unrelated_local_runs_directory(self, tmp_path: Path) -> None:
@@ -573,8 +605,7 @@ class TestWriteRunConfig:
                 config_path,
                 process_name="mine",
                 run_dir=Path("/tmp/runs/run-5d/mine"),
-                variables={"RUN_ID": "run-5d"},
-                step_variants={},
+                launch=_launch_config({"RUN_ID": "run-5d"}),
             )
 
     def test_includes_git_sha(self, tmp_path: Path) -> None:
@@ -621,7 +652,7 @@ class TestValidateRunConfig:
                 config_path,
                 process_name="mine",
                 run_dir=tmp_path,
-                variables={},
+                launch=_launch_config({}),
             )
         assert exc_info.value.__cause__ is not None
 
@@ -634,6 +665,8 @@ class TestValidateRunConfig:
             "run_dir": str(tmp_path),
             "run_id": "run-1",
             "variables": {},
+            "backend": "local",
+            "git_sha": "abc1234",
         }
         atomic_write_text(config_path, to_yaml_string(data), make_parents=True)
 
@@ -642,7 +675,7 @@ class TestValidateRunConfig:
             config_path,
             process_name="mine",
             run_dir=tmp_path,
-            variables={},
+            launch=_launch_config({}, git_sha="abc1234"),
         )
         assert changes == {}
 
@@ -662,7 +695,7 @@ class TestValidateRunConfig:
                 config_path,
                 process_name="mine",
                 run_dir=tmp_path,
-                variables={"COUNT": "3"},
+                launch=_launch_config({"COUNT": "3"}),
             )
 
     def test_rejects_explicit_null_variables(self, tmp_path: Path) -> None:
@@ -685,7 +718,7 @@ class TestValidateRunConfig:
                 config_path,
                 process_name="mine",
                 run_dir=tmp_path,
-                variables={},
+                launch=_launch_config({}),
             )
 
 
@@ -864,8 +897,7 @@ class TestAuthAndConcurrencyPersistence:
             run_dir,
             resumed,
             process_name="predict",
-            variables={},
-            step_variants=None,
+            launch=_launch_config({}),
             auth_flags=flags,
             max_concurrency=10,
         )

@@ -5446,6 +5446,15 @@ class TestRunOwnedPoolExecutionProfiles:
         ]
         return [event["changes"] for event in events if event["event"] == "launch_config_change"]
 
+    @staticmethod
+    def _resolved_profiles_change(old: list[str], new: list[str]) -> dict[str, object]:
+        """The ``resolved_profiles`` change between two sets of this class's profiles."""
+
+        def profiles(names: list[str]) -> list[dict[str, object]]:
+            return [{"name": name, "adapter": "profile-lane-test"} for name in names]
+
+        return {"field": "resolved_profiles", "diff": {"old": profiles(old), "new": profiles(new)}}
+
     def test_a_resume_reapplies_recorded_step_variants_and_records_a_different_set(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -5498,8 +5507,12 @@ class TestRunOwnedPoolExecutionProfiles:
         changed = self._invoke(spec, run_dir, "--variant", "run-a", "--step-variant", "judge=run-a")
         assert changed.exit_code == 0, changed.output
         assert "Resume changes step_variants.judge: 'judge-b' -> 'run-a'" in changed.output
+        # The plan no longer uses ``judge-b``, so its resolved profiles change with the set.
         assert self._launch_config_changes(run_dir) == [
-            [{"field": "step_variants.judge", "diff": {"old": "judge-b", "new": "run-a"}}]
+            [
+                self._resolved_profiles_change(["judge-b", "run-a"], ["run-a"]),
+                {"field": "step_variants.judge", "diff": {"old": "judge-b", "new": "run-a"}},
+            ]
         ]
         # The judge's profile is in its fingerprint, so it re-runs on the new one; the
         # draft's is not affected and it is reused.
@@ -5575,6 +5588,7 @@ class TestRunOwnedPoolExecutionProfiles:
 
         assert changed.exit_code == 0, changed.output
         assert self._launch_config_changes(run_dir)[-1] == [
-            {"field": "step_variants.judge", "diff": {"old": "judge-b", "new": "run-a"}}
+            self._resolved_profiles_change(["judge-b", "run-a"], ["run-a"]),
+            {"field": "step_variants.judge", "diff": {"old": "judge-b", "new": "run-a"}},
         ]
         assert read_yaml_file(config_path)["step_variants"] == {"judge": "run-a"}

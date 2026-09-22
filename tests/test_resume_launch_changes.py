@@ -1,10 +1,12 @@
 """A resume records launch-config changes instead of refusing them.
 
-A rerun against one ``RUN_ID`` may change a resolved variable (through ``--var``, an
-edited ``default:``, or an input added or removed) or the ``--step-variant`` set. Each
-change is printed as a warning and appended, with the other changes of that resume, as
-one ``launch_config_change`` event to ``.logs/dispatch-config-changes.jsonl``;
-``run-config.yaml`` then records the variables and step variants the resume ran with.
+A rerun against one ``RUN_ID`` may change any launch-config field of ``run-config.yaml``:
+a resolved variable (through ``--var``, an edited ``default:``, or an input added or
+removed), the ``--step-variant`` set, the variant, execution profile, artifact namespace,
+and resolved profiles, the backend, and the checkout's ``git_sha``. Each change is
+printed as a warning and appended, with the other changes of that resume, as one
+``launch_config_change`` event to ``.logs/dispatch-config-changes.jsonl``;
+``run-config.yaml`` then records the launch config the resume ran with.
 What re-runs follows step fingerprints. A resume refuses only when continuing would
 corrupt the run: a corrupt ``run-config.yaml``; a process name other than the recorded
 one, since every task record carries ``<process>/<RUN_ID>`` as its run identity; or a
@@ -19,15 +21,18 @@ from __future__ import annotations
 import json
 import logging
 import textwrap
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import pytest
 from strif import atomic_write_text
 from typer.testing import CliRunner, Result
 
 from metaproc.cli import app
+from metaproc.commands import run_process
 from metaproc.commands.helpers import load_process_spec
-from metaproc.commands.run_process import _validate_run_config
+from metaproc.commands.run_process import _LaunchConfig, _validate_run_config
 from metaproc.engine.build_plan import build_plan
 from metaproc.engine.dep_state import fingerprint_step
 from metaproc.engine.process_scope import expand_process_vars
@@ -166,7 +171,7 @@ def _config(run_dir: Path) -> dict[str, object]:
     return read_yaml_file(run_dir / STATE_DIR / RUN_CONFIG_FILE)
 
 
-def _events(run_dir: Path) -> list[dict[str, object]]:
+def _events(run_dir: Path) -> list[dict[str, Any]]:
     path = dispatch_config_changes_log(run_dir)
     return list(iter_jsonl_objects(path)) if path.is_file() else []
 
@@ -414,6 +419,108 @@ def test_a_moved_run_directory_refuses_and_leaves_the_run_as_it_was(tmp_path: Pa
     assert sorted(_invocations(moved)) == ["record", "stamp"]
 
 
+def _step_states(run_dir: Path) -> dict[str, str]:
+    """Return each step's state as ``metaproc status --steps`` reports it."""
+    status = CliRunner().invoke(app, ["status", str(run_dir), "--steps", "--format", "json"])
+    assert status.exit_code == 0, _message(status)
+    return {step["step_id"]: step["state"] for step in json.loads(status.output)["steps"]}
+
+
+def test_a_changed_artifact_namespace_is_recorded_and_the_config_describes_the_resume(
+    tmp_path: Path,
+) -> None:
+    """Every reader rebuilds from the rewritten config, so re-run steps read current."""
+    process_path = _write_process(tmp_path / "proc")
+    runs_dir = tmp_path / "runs"
+    run_id = "namespace-run"
+    run_dir = runs_dir / run_id
+    launched = _run(process_path, runs_dir, run_id, "--artifact-namespace", "ns-a", DATASET="ds-1")
+    assert launched.exit_code == 0, _message(launched)
+
+    resumed = _run(process_path, runs_dir, run_id, "--artifact-namespace", "ns-b", DATASET="ds-1")
+
+    assert resumed.exit_code == 0, _message(resumed)
+    assert "Warning: Resume changes artifact_namespace: 'ns-a' -> 'ns-b'" in resumed.output
+    assert [event["changes"] for event in _events(run_dir)] == [
+        [
+            _diff("artifact_namespace", "ns-a", "ns-b"),
+            _diff("variables.ARTIFACT_NAMESPACE", "ns-a", "ns-b"),
+            _diff("variables.VARIANT", "ns-a", "ns-b"),
+            _diff("variant", "ns-a", "ns-b"),
+        ]
+    ]
+    config = _config(run_dir)
+    assert (config["artifact_namespace"], config["variant"]) == ("ns-b", "ns-b")
+    variables = config["variables"]
+    assert isinstance(variables, dict)
+    assert variables["ARTIFACT_NAMESPACE"] == "ns-b"
+    # The namespace is in both fingerprints, so both steps re-ran, and status, which
+    # rebuilds the plan from the config, reports them current rather than stale.
+    assert sorted(_invocations(run_dir)) == ["record", "record", "stamp", "stamp"]
+    assert _step_states(run_dir) == {"record": "current", "stamp": "current"}
+
+
+def test_a_changed_variant_is_recorded_and_the_operations_summary_names_it(
+    tmp_path: Path,
+) -> None:
+    """The resolved profiles are recorded whole in the event and by name in the warning."""
+    spec, profiles = _write_profiled_process(tmp_path / "proc")
+    runs_dir = tmp_path / "runs"
+    run_id = "variant-run"
+    run_dir = runs_dir / run_id
+    profile_file = ("--profile-file", str(profiles))
+    launched = _run(spec, runs_dir, run_id, *profile_file, "--variant", "run-a")
+    assert launched.exit_code == 0, _message(launched)
+
+    resumed = _run(spec, runs_dir, run_id, *profile_file, "--variant", "judge-b")
+
+    assert resumed.exit_code == 0, _message(resumed)
+    assert "Warning: Resume changes variant: 'run-a' -> 'judge-b'" in resumed.output
+    assert "Warning: Resume changes execution_profile: 'run-a' -> 'judge-b'" in resumed.output
+    assert "Warning: Resume changes resolved_profiles: ['run-a'] -> ['judge-b']" in resumed.output
+    (event,) = _events(run_dir)
+    changes = {change["field"]: change["diff"] for change in event["changes"]}
+    assert changes["variant"] == {"old": "run-a", "new": "judge-b"}
+    assert changes["execution_profile"] == {"old": "run-a", "new": "judge-b"}
+    profile_diff = changes["resolved_profiles"]
+    assert isinstance(profile_diff, dict)
+    assert [profile["name"] for profile in profile_diff["old"]] == ["run-a"]
+    assert [profile["name"] for profile in profile_diff["new"]] == ["judge-b"]
+    assert profile_diff["new"][0]["adapter"] == "claude-code-cli"
+    config = _config(run_dir)
+    assert (config["variant"], config["execution_profile"]) == ("judge-b", "judge-b")
+    assert config["resolved_profiles"] == profile_diff["new"]
+    summary = (run_dir / "operations-summary.md").read_text(encoding="utf-8")
+    assert "| Variant | judge-b |" in summary
+    assert "| Execution profile | judge-b |" in summary
+    assert sorted(_invocations(run_dir)) == ["draft", "draft", "judge", "judge"]
+
+
+def test_a_resume_from_another_checkout_records_its_git_sha(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    process_path = _write_process(tmp_path / "proc")
+    runs_dir = tmp_path / "runs"
+    run_id = "checkout-run"
+    run_dir = runs_dir / run_id
+    monkeypatch.setattr(run_process, "_get_git_sha", lambda: "1111111")
+    launched = _run(process_path, runs_dir, run_id, DATASET="ds-1")
+    assert launched.exit_code == 0, _message(launched)
+    assert _config(run_dir)["git_sha"] == "1111111"
+
+    monkeypatch.setattr(run_process, "_get_git_sha", lambda: "2222222")
+    resumed = _run(process_path, runs_dir, run_id, DATASET="ds-1")
+
+    assert resumed.exit_code == 0, _message(resumed)
+    assert "Warning: Resume changes git_sha: '1111111' -> '2222222'" in resumed.output
+    assert [event["changes"] for event in _events(run_dir)] == [
+        [_diff("git_sha", "1111111", "2222222")]
+    ]
+    assert _config(run_dir)["git_sha"] == "2222222"
+    # No step's fingerprint reads the checkout, so nothing re-runs.
+    assert sorted(_invocations(run_dir)) == ["record", "stamp"]
+
+
 # ── The --step-variant set ─────────────────────────────────────────
 
 
@@ -488,9 +595,14 @@ def test_a_different_step_variant_set_resumes_and_is_recorded(tmp_path: Path) ->
     changed = _run(spec, runs_dir, run_id, *base, "--step-variant", "judge=run-a")
     assert changed.exit_code == 0, _message(changed)
     assert "Warning: Resume changes step_variants.judge: 'judge-b' -> 'run-a'" in changed.output
-    assert [event["changes"] for event in _events(run_dir)] == [
-        [_diff("step_variants.judge", "judge-b", "run-a")]
+    # The plan no longer uses ``judge-b``, so its resolved profiles change with the set.
+    assert "Resume changes resolved_profiles: ['judge-b', 'run-a'] -> ['run-a']" in changed.output
+    (event,) = _events(run_dir)
+    assert [change["field"] for change in event["changes"]] == [
+        "resolved_profiles",
+        "step_variants.judge",
     ]
+    assert event["changes"][1] == _diff("step_variants.judge", "judge-b", "run-a")
     assert _config(run_dir)["step_variants"] == {"judge": "run-a"}
     # Only the step whose profile changed re-runs.
     assert sorted(_invocations(run_dir)) == ["draft", "judge", "judge"]
@@ -680,6 +792,28 @@ def _write_config(config_dir: Path, data: dict[str, object]) -> Path:
     return config_path
 
 
+def _launch_config(
+    variables: dict[str, str],
+    *,
+    step_variants: dict[str, str] | None = None,
+    backend: str = "",
+) -> _LaunchConfig:
+    """The launch config of a config that records only these fields.
+
+    An empty value is absent, as in the hand-written configs these tests compare.
+    """
+    return _LaunchConfig(
+        variables=variables,
+        step_variants=step_variants or {},
+        variant=None,
+        execution_profile=None,
+        artifact_namespace=None,
+        resolved_profiles=[],
+        backend=backend,
+        git_sha="",
+    )
+
+
 def test_runs_dir_filestore_aliases_record_no_change(tmp_path: Path) -> None:
     config_path = _write_config(
         tmp_path,
@@ -694,7 +828,7 @@ def test_runs_dir_filestore_aliases_record_no_change(tmp_path: Path) -> None:
         config_path,
         process_name="mine",
         run_dir=Path("/mnt/filestore/runs/run-1"),
-        variables={"RUNS_DIR": "/mnt/filestore/runs", "RUN_ID": "run-1"},
+        launch=_launch_config({"RUNS_DIR": "/mnt/filestore/runs", "RUN_ID": "run-1"}),
     )
 
     assert changes == {}
@@ -715,8 +849,7 @@ def test_a_workstation_path_containing_a_filestore_alias_refuses(tmp_path: Path)
             config_path,
             process_name="mine",
             run_dir=Path("/workspace/user/mnt/filestore/runs/run-1"),
-            variables={"RUNS_DIR": "/workspace/user/mnt/filestore/runs"},
-            step_variants={},
+            launch=_launch_config({"RUNS_DIR": "/workspace/user/mnt/filestore/runs"}),
         )
 
 
@@ -728,6 +861,7 @@ def test_changes_are_returned_sorted_by_field(tmp_path: Path) -> None:
             "run_dir": str(tmp_path),
             "variables": {"ZONE": "z", "BETA": "b-1", "ALPHA": "a-1"},
             "step_variants": {"judge": "judge-a"},
+            "backend": "local",
         },
     )
 
@@ -735,11 +869,16 @@ def test_changes_are_returned_sorted_by_field(tmp_path: Path) -> None:
         config_path,
         process_name="mine",
         run_dir=tmp_path,
-        variables={"ZONE": "z", "ALPHA": "a-2", "GAMMA": "g-1"},
-        step_variants={"draft": "draft-b", "judge": "judge-a"},
+        launch=_launch_config(
+            {"ZONE": "z", "ALPHA": "a-2", "GAMMA": "g-1"},
+            step_variants={"draft": "draft-b", "judge": "judge-a"},
+            backend="gcp-worker",
+        ),
     )
 
+    # Whole fields and keyed ones sort together, by field.
     assert list(changes.items()) == [
+        ("backend", ("local", "gcp-worker")),
         ("step_variants.draft", (None, "draft-b")),
         ("variables.ALPHA", ("a-1", "a-2")),
         ("variables.BETA", ("b-1", None)),
@@ -747,7 +886,8 @@ def test_changes_are_returned_sorted_by_field(tmp_path: Path) -> None:
     ]
 
 
-def test_step_variants_are_compared_only_when_given(tmp_path: Path) -> None:
+def test_an_empty_step_variant_set_is_a_change_from_a_recorded_one(tmp_path: Path) -> None:
+    """A resume always states its set; ``_resume_step_variants`` re-applies the record."""
     config_path = _write_config(
         tmp_path,
         {
@@ -757,16 +897,15 @@ def test_step_variants_are_compared_only_when_given(tmp_path: Path) -> None:
         },
     )
 
-    def compare(step_variants: dict[str, str] | None) -> dict[str, tuple[str | None, str | None]]:
+    def compare(step_variants: dict[str, str]) -> Mapping[str, tuple[object, object]]:
         return _validate_run_config(
             config_path,
             process_name="mine",
             run_dir=tmp_path,
-            variables={},
-            step_variants=step_variants,
+            launch=_launch_config({}, step_variants=step_variants),
         )
 
-    assert compare(None) == {}
+    assert compare({"judge": "judge-a"}) == {}
     assert compare({}) == {"step_variants.judge": ("judge-a", None)}
 
 
@@ -776,7 +915,9 @@ def test_a_process_name_mismatch_raises(tmp_path: Path) -> None:
     )
 
     with pytest.raises(CLIError, match=r"run identity mine/run-1") as exc_info:
-        _validate_run_config(config_path, process_name="theirs", run_dir=tmp_path, variables={})
+        _validate_run_config(
+            config_path, process_name="theirs", run_dir=tmp_path, launch=_launch_config({})
+        )
     assert "Resume with the process spec named 'mine', or use a new RUN_ID" in str(exc_info.value)
 
 
@@ -796,4 +937,6 @@ def test_a_corrupt_config_refuses(tmp_path: Path, text: str) -> None:
     config_path.write_text(text, encoding="utf-8")
 
     with pytest.raises(CLIError, match=r"Corrupt run-config\.yaml"):
-        _validate_run_config(config_path, process_name="mine", run_dir=tmp_path, variables={})
+        _validate_run_config(
+            config_path, process_name="mine", run_dir=tmp_path, launch=_launch_config({})
+        )

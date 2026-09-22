@@ -15,7 +15,9 @@ import pytest
 from strif import atomic_output_file
 
 from metaproc.commands.run_process import (
+    _get_git_sha,
     _is_step_completed,
+    _LaunchConfig,
     _validate_run_config,
     _write_run_config,
 )
@@ -88,6 +90,20 @@ def _write_run_config_helper(
         variant=variant,
     )
     return written.path
+
+
+def _launch_config(*, backend: str = "local", variant: str | None = None) -> _LaunchConfig:
+    """The launch config ``_write_run_config_helper`` records for these arguments."""
+    return _LaunchConfig(
+        variables={"RUN_ID": "test-run", "DATASET": "test-data"},
+        step_variants={},
+        variant=variant,
+        execution_profile=None,
+        artifact_namespace=None,
+        resolved_profiles=[],
+        backend=backend,
+        git_sha=_get_git_sha(),
+    )
 
 
 def _write_stale_lease(run_dir: Path) -> Path:
@@ -304,7 +320,7 @@ class TestBackendAgnosticResumeState:
     """Run identity and state remain independent of the execution backend."""
 
     def test_run_config_allows_different_backend(self, tmp_path: Path) -> None:
-        """Run-config validates process + run_dir, not backend.
+        """Run-config refuses on process + run_dir, and records a changed backend.
 
         Backend is execution metadata rather than part of the durable run
         identity; supported launch paths enforce topology separately.
@@ -315,30 +331,31 @@ class TestBackendAgnosticResumeState:
         # Write config with local backend.
         _write_run_config_helper(run_dir, backend="local")
 
-        # Validate with different backend — should NOT raise.
+        # Validate with different backend — a change to record, not a refusal.
         config_path = run_dir / STATE_DIR / RUN_CONFIG_FILE
-        _validate_run_config(
+        changes = _validate_run_config(
             config_path,
             process_name="mine",
             run_dir=run_dir,
-            variables={"RUN_ID": "test-run", "DATASET": "test-data"},
+            launch=_launch_config(backend="gcp-worker"),
         )
+        assert changes == {"backend": ("local", "gcp-worker")}
 
     def test_run_config_allows_different_variant(self, tmp_path: Path) -> None:
-        """Variant is not part of the resume identity check."""
+        """Variant is not part of the resume identity check; a change is recorded."""
         run_dir = tmp_path / "run-1" / "mine"
         run_dir.mkdir(parents=True)
 
         _write_run_config_helper(run_dir, variant="pi-glm-5")
 
-        # Validate — variant is not checked.
         config_path = run_dir / STATE_DIR / RUN_CONFIG_FILE
-        _validate_run_config(
+        changes = _validate_run_config(
             config_path,
             process_name="mine",
             run_dir=run_dir,
-            variables={"RUN_ID": "test-run", "DATASET": "test-data"},
+            launch=_launch_config(variant="claude-opus"),
         )
+        assert changes == {"variant": ("pi-glm-5", "claude-opus")}
 
     def test_run_config_rejects_different_process(self, tmp_path: Path) -> None:
         """Cross-topology resume must still match the process identity."""
@@ -353,7 +370,7 @@ class TestBackendAgnosticResumeState:
                 config_path,
                 process_name="retro",
                 run_dir=run_dir,
-                variables={"RUN_ID": "test-run", "DATASET": "test-data"},
+                launch=_launch_config(),
             )
 
     def test_step_state_shared_across_topologies(self, tmp_path: Path) -> None:
@@ -393,11 +410,14 @@ class TestBackendAgnosticResumeState:
         # Phase 2: Resume from a replacement orchestrator.
         # Validate run identity.
         config_path = run_dir / STATE_DIR / RUN_CONFIG_FILE
-        _validate_run_config(
-            config_path,
-            process_name="mine",
-            run_dir=run_dir,
-            variables={"RUN_ID": "test-run", "DATASET": "test-data"},
+        assert (
+            _validate_run_config(
+                config_path,
+                process_name="mine",
+                run_dir=run_dir,
+                launch=_launch_config(backend="gcp-worker", variant="pi-glm-5"),
+            )
+            == {}
         )
 
         # Take over stale lease.
