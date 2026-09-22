@@ -177,7 +177,7 @@ PI_VALID_PROVIDERS: set[str] = set(_pi_valid_provider_names())
 # `cleanupExpiredSessions()` early-exits on a falsy
 # `general.sessionRetention.enabled` *before* enumerating, so this setting
 # prevents the scan rather than merely bounding it. Verified in 0.55.1
-# (upstream 41327e407) and still required at v0.60.0-nightly.20260904,
+# (upstream 41327e407) and 0.59.0, and still required at v0.60.0-nightly.20260904,
 # where the unbounded `Promise.all` remains -- upgrading does not fix it.
 #
 # Tradeoff: the same switch also gates `cleanupToolOutputFiles`, so Gemini no
@@ -193,8 +193,9 @@ GEMINI_SESSION_RETENTION_SETTINGS: dict[str, object] = {
     },
 }
 
-# gemini-cli resolves an unrecognized model id ending in "flash" to its own default
-# flash model instead of sending it, so a request for a model the CLI predates is
+# gemini-cli resolves a model id ending in "flash" (its `isFlashModel` test) to its own
+# default flash model instead of sending it whenever it considers 3.5 Flash available,
+# which under Vertex auth is always, so a request for a model the CLI predates is
 # silently answered by a different one. 0.55.1 has no knowledge of gemini-3.6-flash
 # and rewrites it to gemini-3.5-flash before any network call; 0.58.0, 0.59.0 and the
 # 0.60.0 nightly do the same, so upgrading is not a fix. This flag routes model resolution
