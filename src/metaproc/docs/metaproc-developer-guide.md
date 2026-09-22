@@ -40,6 +40,12 @@ forever.
 - **Small focused helpers are fine.** Single-purpose, non-orchestration helpers
   (calendar pull, item classification, template rendering) are healthy.
   A multi-step helper that calls metaproc in sequence is a process spec in disguise.
+- **Resume is a normal operating mode.** A rerun against the same `RUN_ID` must be
+  simple, resumable, transparent, idempotent, and flexible
+  ([concepts](metaproc-concepts.md) §6.2, principle 7). Reuse follows content: a step
+  reruns when its definition, runbook, or inputs changed and is reused otherwise.
+  A check on the resume path records and warns about operational change; it refuses only
+  when continuing would corrupt durable state or clobber live work.
 
 ## Antipatterns
 
@@ -54,6 +60,11 @@ forever.
    wrapper alongside the native path beyond the parity window.
 5. **Conditional process steps gated by a top-level flag** — express multiplicity and
    gating with the framework’s primitives, not an `if` inside a step.
+6. **Identity or hash checks that abort a resume** — a changed variable, a corrected
+   process file, or a rewritten artifact mid-flight is an event to record and warn
+   about, not a reason to demand a new `RUN_ID`. A digest is a cache key that decides
+   reuse; a digest nobody verifies independently is ceremony, and a digest that refuses
+   a resume is a seal. Remove both.
 
 ## When Tempted to Work Around Metaproc
 
