@@ -800,16 +800,13 @@ def _get_git_sha() -> str:
 type _LaunchConfigChanges = dict[str, tuple[str | None, str | None]]
 """What one resume changed in the launch config: ``field -> (recorded, current)``.
 
-``None`` marks an absent side. Fields are ``run_dir``, ``step_variants.<STEP>``, and
-``variables.<NAME>``, and the mapping is sorted by field.
+``None`` marks an absent side. Fields are ``step_variants.<STEP>`` and
+``variables.<NAME>``, and the mapping is sorted by field. A changed ``run_dir`` is never
+one: ``_validate_run_config`` refuses it.
 """
 
 _REWRITTEN_LAUNCH_FIELDS = frozenset({"variables", "step_variants"})
-"""The ``run-config.yaml`` fields a resume rewrites to the values it runs with.
-
-``run_dir`` is not one: a change to it is recorded, and the field keeps its creation
-value; see ``_rewrite_launch_config``.
-"""
+"""The ``run-config.yaml`` fields a resume rewrites to the values it runs with."""
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -851,9 +848,11 @@ def _write_run_config(  # noqa: PLR0913
 
     On resume this function writes nothing. It validates the launch config against the
     recorded one (``_validate_run_config``) only to refuse early, before auth preflight
-    and the ancestor check, a resume that cannot continue: a corrupt config, or a process
+    and the ancestor check, a resume that cannot continue: a corrupt config, a process
     name other than the recorded one, since every task record carries
-    ``<process>/<RUN_ID>`` as its run identity. The changes it would find are not kept.
+    ``<process>/<RUN_ID>`` as its run identity, or a run directory other than the
+    recorded one, since result records are anchored to it. The changes it would find are
+    not kept.
     ``_apply_resume_config_changes`` validates again once ``run_process_command`` holds
     the orchestrator lease, and records what it finds there, because only under the lease
     is this resume the config's single writer. A launch refused before then, by the
@@ -1321,10 +1320,6 @@ def _rewrite_launch_config(
     the values replaced. An empty ``step_variants`` drops the field, as the first write
     omits it.
 
-    ``run_dir`` keeps its creation value even when the resume records a change to it,
-    because the results projection (``runtime_projection``) rebases every recorded
-    result path from that original root onto the directory the run now occupies.
-
     ``_apply_resume_config_changes`` calls this once the orchestrator lease is held,
     which is after launch validation, the ``--from``/``--only`` ancestor check, and the
     lease itself have accepted the resume. A value the run cannot accept never reaches
@@ -1394,27 +1389,36 @@ def _validate_run_config(
 ) -> _LaunchConfigChanges:
     """Compare a resume's launch config with the ``run-config.yaml`` it resumes.
 
-    A resume may change the run directory, any resolved variable (including through an
-    edited ``default:``, or an input added or removed), and the ``--step-variant`` set.
-    Each difference comes back as ``field -> (recorded, current)`` with ``None`` for an
-    absent side, sorted by field: ``run_dir``, ``step_variants.<STEP>`` (only when
-    *step_variants* is given), and ``variables.<NAME>``. What re-runs is decided by step
-    fingerprints, not here, and backend topology, authentication, and concurrency are
-    compared by ``_record_resume_config_change``.
+    A resume may change any resolved variable (including through an edited
+    ``default:``, or an input added or removed) and the ``--step-variant`` set. Each
+    difference comes back as ``field -> (recorded, current)`` with ``None`` for an
+    absent side, sorted by field: ``step_variants.<STEP>`` (only when *step_variants* is
+    given), and ``variables.<NAME>``. What re-runs is decided by step fingerprints, not
+    here, and backend topology, authentication, and concurrency are compared by
+    ``_record_resume_config_change``.
 
-    The recorded ``run_dir`` and the ``RUNS_DIR`` variable compare across the two
-    Filestore mount aliases (``_normalize_filestore_runs_path``), so two spellings of one
-    mount record no change. A config written without a ``run_dir`` has none to compare.
+    Two launch values refuse, because continuing would leave the run's durable state
+    inconsistent:
 
-    The process name is the one launch value that still refuses. Every task's status,
-    attempts, and result carry the run identity ``<process>/<RUN_ID>``, and the state
-    layer rejects a record whose identity differs from the one the orchestrator
-    expects, as does the results projection, which reads the name from this config. A
-    resume under another name could not reuse, or even read, a step the run completed.
+    - The process name. Every task's status, attempts, and result carry the run
+      identity ``<process>/<RUN_ID>``, and the state layer rejects a record whose
+      identity differs from the one the orchestrator expects, as does the results
+      projection, which reads the name from this config. A resume under another name
+      could not reuse, or even read, a step the run completed.
+    - The run directory. Result records are anchored to the recorded ``run_dir``: the
+      results projection (``runtime_projection._rebase_portable_output_path``) rebases
+      only recorded paths under it. A moved run re-runs every step whose outputs sit
+      under ``{{run.dir}}``, since those paths are in its fingerprint, so continuing
+      would write result records the projection cannot accept. A new ``RUN_ID`` costs
+      the same work without the inconsistency. The recorded ``run_dir`` and the
+      ``RUNS_DIR`` variable compare across the two Filestore mount aliases
+      (``_normalize_filestore_runs_path``), so two spellings of one mount are neither
+      refused nor recorded. A config written without a ``run_dir`` has none to compare.
 
-    Raises CLIError for that mismatch and for a corrupt config: one ``_read_run_config``
-    refuses, one without a process name, or one whose ``variables`` field is not a
-    string-to-string mapping.
+    Raises CLIError for either mismatch and for a corrupt config: one
+    ``_read_run_config`` refuses, one without a process name, or one whose ``variables``
+    field is not a string-to-string mapping. Each refusal comes before the resume records
+    or rewrites anything.
     """
     raw = _read_run_config(config_path)
 
@@ -1433,13 +1437,20 @@ def _validate_run_config(
             "RUN_ID for this process."
         )
 
-    changes: _LaunchConfigChanges = {}
-
     saved_run_dir = _recorded_str(raw.get("run_dir"))
     if saved_run_dir and _resume_run_dir_identity(str(run_dir)) != _resume_run_dir_identity(
         saved_run_dir
     ):
-        changes["run_dir"] = (saved_run_dir, str(run_dir))
+        raise CLIError(
+            f"Resume refused: run-config.yaml records run directory {saved_run_dir!r} but "
+            f"this launch resolves to {str(run_dir)!r}. The run's result records are "
+            "anchored to the recorded directory, and a resume here would re-run every step "
+            "whose outputs sit under {{run.dir}} and write results the run's projection "
+            f"cannot accept. Resume at {saved_run_dir!r} (the RUNS_DIR and RUN_ID that "
+            "created it), or start a new RUN_ID."
+        )
+
+    changes: _LaunchConfigChanges = {}
 
     # The YAML serializer omits empty mappings, so an absent field is the
     # persisted representation of no resolved variables in existing run trees.

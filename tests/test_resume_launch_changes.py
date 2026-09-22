@@ -1,14 +1,14 @@
 """A resume records launch-config changes instead of refusing them.
 
 A rerun against one ``RUN_ID`` may change a resolved variable (through ``--var``, an
-edited ``default:``, or an input added or removed), the ``--step-variant`` set, or the
-run directory. Each change is printed as a warning and appended, with the other changes
-of that resume, as one ``launch_config_change`` event to
-``.logs/dispatch-config-changes.jsonl``; ``run-config.yaml`` then records the variables
-and step variants the resume ran with. What re-runs follows step fingerprints. A resume
-refuses only when continuing would corrupt the run: a corrupt ``run-config.yaml``, or a
-process name other than the recorded one, since every task record carries
-``<process>/<RUN_ID>`` as its run identity.
+edited ``default:``, or an input added or removed) or the ``--step-variant`` set. Each
+change is printed as a warning and appended, with the other changes of that resume, as
+one ``launch_config_change`` event to ``.logs/dispatch-config-changes.jsonl``;
+``run-config.yaml`` then records the variables and step variants the resume ran with.
+What re-runs follows step fingerprints. A resume refuses only when continuing would
+corrupt the run: a corrupt ``run-config.yaml``; a process name other than the recorded
+one, since every task record carries ``<process>/<RUN_ID>`` as its run identity; or a
+run directory other than the recorded one, since result records are anchored to it.
 
 The end-to-end tests drive ``metaproc run-process`` twice against one ``RUN_ID``: a
 launch, then a resume that changes the launch values or edits the process spec.
@@ -179,6 +179,10 @@ def _launch(tmp_path: Path) -> tuple[Path, Path, str]:
     assert launched.exit_code == 0, _message(launched)
     assert sorted(_invocations(runs_dir / run_id)) == ["record", "stamp"]
     return process_path, runs_dir, run_id
+
+
+_SUMMARIES = ("operations-summary.md", "resource-usage-summary.md")
+"""The run summaries finalization writes; a refused resume must leave both alone."""
 
 
 def _diff(field: str, old: str | None, new: str | None) -> dict[str, object]:
@@ -374,6 +378,40 @@ def test_a_corrupt_run_config_still_refuses(tmp_path: Path) -> None:
     assert "Corrupt run-config.yaml" in _message(refused)
     assert sorted(_invocations(run_dir)) == ["record", "stamp"]
     assert _events(run_dir) == []
+
+
+def test_a_moved_run_directory_refuses_and_leaves_the_run_as_it_was(tmp_path: Path) -> None:
+    """Result records are anchored to the recorded run directory, so a move refuses.
+
+    Resuming here would re-run both steps, whose outputs sit under ``{{run.dir}}``, and
+    write result records the projection cannot accept. The refusal names both
+    directories and both ways out, before anything is recorded, rewritten, or run.
+    """
+    process_path = _write_process(tmp_path / "proc")
+    run_id = "moved-run"
+    original = tmp_path / "runs-a" / run_id
+    launched = _run(process_path, tmp_path / "runs-a", run_id, DATASET="ds-1")
+    assert launched.exit_code == 0, _message(launched)
+    moved = tmp_path / "runs-b" / run_id
+    moved.parent.mkdir()
+    original.rename(moved)
+    config_bytes = (moved / STATE_DIR / RUN_CONFIG_FILE).read_bytes()
+    summaries = {name: (moved / name).read_bytes() for name in _SUMMARIES}
+
+    refused = _run(process_path, tmp_path / "runs-b", run_id, DATASET="ds-1")
+
+    assert refused.exit_code != 0
+    assert isinstance(refused.exception, CLIError), _message(refused)
+    message = str(refused.exception)
+    assert f"records run directory {str(original)!r}" in message
+    assert f"this launch resolves to {str(moved)!r}" in message
+    assert f"Resume at {str(original)!r}" in message
+    assert "or start a new RUN_ID" in message
+    assert "Resume changes" not in refused.output
+    assert (moved / STATE_DIR / RUN_CONFIG_FILE).read_bytes() == config_bytes
+    assert _events(moved) == []
+    assert {name: (moved / name).read_bytes() for name in _SUMMARIES} == summaries
+    assert sorted(_invocations(moved)) == ["record", "stamp"]
 
 
 # ── The --step-variant set ─────────────────────────────────────────
@@ -662,7 +700,7 @@ def test_runs_dir_filestore_aliases_record_no_change(tmp_path: Path) -> None:
     assert changes == {}
 
 
-def test_a_workstation_path_containing_a_filestore_alias_is_a_change(tmp_path: Path) -> None:
+def test_a_workstation_path_containing_a_filestore_alias_refuses(tmp_path: Path) -> None:
     config_path = _write_config(
         tmp_path,
         {
@@ -672,17 +710,14 @@ def test_a_workstation_path_containing_a_filestore_alias_is_a_change(tmp_path: P
         },
     )
 
-    changes = _validate_run_config(
-        config_path,
-        process_name="mine",
-        run_dir=Path("/workspace/user/mnt/filestore/runs/run-1"),
-        variables={"RUNS_DIR": "/workspace/user/mnt/filestore/runs"},
-    )
-
-    assert changes == {
-        "run_dir": ("/mnt/filestore/runs/run-1", "/workspace/user/mnt/filestore/runs/run-1"),
-        "variables.RUNS_DIR": ("/mnt/filestore/runs", "/workspace/user/mnt/filestore/runs"),
-    }
+    with pytest.raises(CLIError, match=r"records run directory '/mnt/filestore/runs/run-1'"):
+        _validate_run_config(
+            config_path,
+            process_name="mine",
+            run_dir=Path("/workspace/user/mnt/filestore/runs/run-1"),
+            variables={"RUNS_DIR": "/workspace/user/mnt/filestore/runs"},
+            step_variants={},
+        )
 
 
 def test_changes_are_returned_sorted_by_field(tmp_path: Path) -> None:
@@ -690,7 +725,7 @@ def test_changes_are_returned_sorted_by_field(tmp_path: Path) -> None:
         tmp_path,
         {
             "process": "mine",
-            "run_dir": str(tmp_path / "before"),
+            "run_dir": str(tmp_path),
             "variables": {"ZONE": "z", "BETA": "b-1", "ALPHA": "a-1"},
             "step_variants": {"judge": "judge-a"},
         },
@@ -699,13 +734,12 @@ def test_changes_are_returned_sorted_by_field(tmp_path: Path) -> None:
     changes = _validate_run_config(
         config_path,
         process_name="mine",
-        run_dir=tmp_path / "after",
+        run_dir=tmp_path,
         variables={"ZONE": "z", "ALPHA": "a-2", "GAMMA": "g-1"},
         step_variants={"draft": "draft-b", "judge": "judge-a"},
     )
 
     assert list(changes.items()) == [
-        ("run_dir", (str(tmp_path / "before"), str(tmp_path / "after"))),
         ("step_variants.draft", (None, "draft-b")),
         ("variables.ALPHA", ("a-1", "a-2")),
         ("variables.BETA", ("b-1", None)),

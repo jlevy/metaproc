@@ -333,10 +333,12 @@ class TestWriteRunConfig:
         }
         assert "step_variants" not in read_yaml_file(config_path)
 
-    def test_resume_of_a_moved_run_records_run_dir_and_keeps_its_creation_value(
-        self, tmp_path: Path
-    ) -> None:
-        """The results projection rebases recorded paths from the creation ``run_dir``."""
+    def test_resume_of_a_moved_run_refuses_before_recording_anything(self, tmp_path: Path) -> None:
+        """Result records are anchored to the recorded ``run_dir``, so a move refuses.
+
+        The refusal names both directories and both ways out, and comes before the
+        resume records or rewrites anything.
+        """
         original = tmp_path / "before" / "run-moved"
         original.mkdir(parents=True)
         _write_run_config(
@@ -352,10 +354,15 @@ class TestWriteRunConfig:
         shutil.copytree(original, moved)
         config_bytes = (moved / STATE_DIR / RUN_CONFIG_FILE).read_bytes()
 
-        applied = _resume_run_config(moved, process_name="mine", variables={"RUN_ID": "run-moved"})
+        with pytest.raises(CLIError, match=r"Resume refused: run-config\.yaml records run") as exc:
+            _resume_run_config(moved, process_name="mine", variables={"RUN_ID": "run-moved"})
 
-        assert applied == {"run_dir": (str(original), str(moved))}
-        assert [event["event"] for event in _events(moved)] == ["launch_config_change"]
+        message = str(exc.value)
+        assert repr(str(original)) in message
+        assert repr(str(moved)) in message
+        assert f"Resume at {str(original)!r}" in message
+        assert "or start a new RUN_ID" in message
+        assert _events(moved) == []
         assert (moved / STATE_DIR / RUN_CONFIG_FILE).read_bytes() == config_bytes
 
     def test_resume_accepts_equivalent_runs_dir_mount_alias(self, tmp_path: Path) -> None:
@@ -417,7 +424,7 @@ class TestWriteRunConfig:
         assert (run_dir / STATE_DIR / RUN_CONFIG_FILE).read_bytes() == config_bytes
         assert not (run_dir / LOGS_DIR / DISPATCH_CONFIG_CHANGES_FILE).exists()
 
-    def test_resume_records_different_run_dir(self, tmp_path: Path) -> None:
+    def test_resume_refuses_different_run_dir(self, tmp_path: Path) -> None:
         run_dir = tmp_path / "run-5" / "mine"
         run_dir.mkdir(parents=True)
 
@@ -434,13 +441,14 @@ class TestWriteRunConfig:
         # Simulate a different run_dir by patching the validation.
         config_path = run_dir / STATE_DIR / RUN_CONFIG_FILE
         different_dir = tmp_path / "other-dir" / "mine"
-        changes = _validate_run_config(
-            config_path,
-            process_name="mine",
-            run_dir=different_dir,
-            variables={"RUN_ID": "run-5"},
-        )
-        assert changes == {"run_dir": (str(run_dir), str(different_dir))}
+        with pytest.raises(CLIError, match=r"records run directory"):
+            _validate_run_config(
+                config_path,
+                process_name="mine",
+                run_dir=different_dir,
+                variables={"RUN_ID": "run-5"},
+                step_variants={},
+            )
 
     def test_resume_accepts_legacy_filestore_mount_alias(self, tmp_path: Path) -> None:
         run_dir = tmp_path / "run-5b" / "mine"
@@ -469,7 +477,47 @@ class TestWriteRunConfig:
         )
         assert changes == {}
 
-    def test_resume_records_workstation_path_containing_filestore_alias(
+    @pytest.mark.parametrize(
+        ("recorded_root", "current_root"),
+        [
+            ("/mnt/disks/filestore/runs", "/mnt/filestore/runs"),
+            ("/mnt/filestore/runs", "/mnt/disks/filestore/runs"),
+        ],
+        ids=["legacy-to-canonical", "canonical-to-legacy"],
+    )
+    def test_a_resume_on_the_other_filestore_mount_root_records_nothing(
+        self, tmp_path: Path, recorded_root: str, current_root: str
+    ) -> None:
+        """The two canonical mount roots are one share: no refusal, change, or rewrite."""
+        config_path = tmp_path / STATE_DIR / RUN_CONFIG_FILE
+        atomic_write_text(
+            config_path,
+            to_yaml_string(
+                {
+                    "process": "mine",
+                    "run_id": "run-1",
+                    "run_dir": f"{recorded_root}/run-1",
+                    "variables": {"RUNS_DIR": recorded_root, "RUN_ID": "run-1"},
+                }
+            ),
+            make_parents=True,
+        )
+        config_bytes = config_path.read_bytes()
+
+        applied = _apply_resume_config_changes(
+            Path(current_root) / "run-1",
+            _RunConfigWrite(path=config_path, resumed=True),
+            process_name="mine",
+            variables={"RUNS_DIR": current_root, "RUN_ID": "run-1"},
+            step_variants={},
+            auth_flags=None,
+            max_concurrency=None,
+        )
+
+        assert applied == {}
+        assert config_path.read_bytes() == config_bytes
+
+    def test_resume_refuses_workstation_path_containing_filestore_alias(
         self, tmp_path: Path
     ) -> None:
         run_dir = tmp_path / "run-5c" / "mine"
@@ -492,20 +540,16 @@ class TestWriteRunConfig:
 
         # Only the two root-level mount paths normalize; a workstation directory that
         # merely contains ``mnt/filestore`` is a different run directory.
-        changes = _validate_run_config(
-            config_path,
-            process_name="mine",
-            run_dir=Path("/workspace/user/mnt/filestore/runs/run-5c/mine"),
-            variables={"RUN_ID": "run-5c"},
-        )
-        assert changes == {
-            "run_dir": (
-                "/mnt/filestore/runs/run-5c/mine",
-                "/workspace/user/mnt/filestore/runs/run-5c/mine",
+        with pytest.raises(CLIError, match=r"records run directory"):
+            _validate_run_config(
+                config_path,
+                process_name="mine",
+                run_dir=Path("/workspace/user/mnt/filestore/runs/run-5c/mine"),
+                variables={"RUN_ID": "run-5c"},
+                step_variants={},
             )
-        }
 
-    def test_resume_records_unrelated_local_runs_directory(self, tmp_path: Path) -> None:
+    def test_resume_refuses_unrelated_local_runs_directory(self, tmp_path: Path) -> None:
         run_dir = tmp_path / "run-5d" / "mine"
         run_dir.mkdir(parents=True)
 
@@ -524,13 +568,14 @@ class TestWriteRunConfig:
         data["run_dir"] = "/mnt/filestore/runs/run-5d/mine"
         atomic_write_text(config_path, to_yaml_string(data))
 
-        changes = _validate_run_config(
-            config_path,
-            process_name="mine",
-            run_dir=Path("/tmp/runs/run-5d/mine"),
-            variables={"RUN_ID": "run-5d"},
-        )
-        assert changes == {"run_dir": ("/mnt/filestore/runs/run-5d/mine", "/tmp/runs/run-5d/mine")}
+        with pytest.raises(CLIError, match=r"records run directory"):
+            _validate_run_config(
+                config_path,
+                process_name="mine",
+                run_dir=Path("/tmp/runs/run-5d/mine"),
+                variables={"RUN_ID": "run-5d"},
+                step_variants={},
+            )
 
     def test_includes_git_sha(self, tmp_path: Path) -> None:
         run_dir = tmp_path / "run-6" / "mine"
