@@ -388,9 +388,19 @@ def task_logs_parent_dir(run_dir: Path, step_id: str) -> Path:
     return run_logs_dir(run_dir) / TASKS_SUBDIR / step_id
 
 
+def step_task_state_dir(run_dir: Path, step_id: str) -> Path:
+    """Return a step's task state dir: ``<run_dir>/.state/tasks/<step_id>/``.
+
+    A scalar step's ``status.yaml``, ``attempt.yaml``, and ``result.yaml`` sit here
+    directly, as does a ``collect:`` consumer's ``collected-inputs.yaml``; a mapped
+    step's per-item dirs (``task_state_dir``) sit under it.
+    """
+    return run_dir / STATE_DIR / TASKS_SUBDIR / step_id
+
+
 def task_state_dir(run_dir: Path, step_id: str, item_key: str) -> Path:
     """Return per-task state dir: ``<run_dir>/.state/tasks/<step_id>/<item_key>/``."""
-    return run_dir / STATE_DIR / TASKS_SUBDIR / step_id / item_key
+    return step_task_state_dir(run_dir, step_id) / item_key
 
 
 def task_logs_dir(run_dir: Path, step_id: str, item_key: str) -> Path:

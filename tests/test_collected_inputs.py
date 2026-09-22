@@ -29,6 +29,7 @@ from metaproc.io import read_yaml_file
 from metaproc.io.state_io import read_collected_inputs_at
 from metaproc.models.authored import IOSpec
 from metaproc.models.plan import FanOut, ResolvedStep
+from metaproc.models.runtime import CollectedInputsRecord
 from metaproc.paths import COLLECTED_INPUTS_FILE, STATE_DIR, TASKS_SUBDIR
 
 
@@ -100,12 +101,17 @@ def _variables(run_dir: Path) -> dict[str, str]:
 
 
 def _changed(run_dir: Path, *, keys: tuple[str, ...] = ("a", "b")) -> list[str]:
+    """Compare against the consumer's record, which the caller reads, as the
+    orchestrator does."""
+    recorded = read_collected_inputs(run_dir, "summarize")
+    assert recorded is not None
     documents = changed_collected_inputs(
         run_dir,
         _consumer(),
         step_map={"scan": _scan(keys)},
         chains_by_member={},
         variables=_variables(run_dir),
+        recorded=recorded,
     )
     return [document.input_name for document in documents]
 
@@ -271,42 +277,12 @@ class TestChangedCollectedInputs:
 
         assert _changed(tmp_path, keys=("a", "b", "c")) == ["outcomes"]
 
-    def test_no_record_is_not_compared(self, tmp_path: Path) -> None:
-        _task(tmp_path, "scan", "a", "completed")
-        _task(tmp_path, "scan", "b", "failed", error="boom")
+    def test_the_supplied_record_is_compared_without_reading_the_file(self, tmp_path: Path) -> None:
+        """The caller reads the record and passes it, so the file is not read again.
 
-        assert _changed(tmp_path) == []
-
-    def test_a_record_without_the_outcome_digest_raises_to_the_caller(self, tmp_path: Path) -> None:
-        """The comparison does not decide what an unreadable record means; the
-        orchestrator counts it as changed."""
-        _task(tmp_path, "scan", "a", "completed")
-        _task(tmp_path, "scan", "b", "failed", error="boom")
-        _deliver(tmp_path)
-        record_path = _record_path(tmp_path, "summarize")
-        record_path.write_text(
-            "\n".join(
-                line
-                for line in record_path.read_text(encoding="utf-8").splitlines()
-                if "outcomes_sha256" not in line
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-
-        with pytest.raises(COLLECTED_INPUTS_UNREADABLE, match="outcomes_sha256"):
-            _changed(tmp_path)
-
-    @_UNREADABLE_RECORDS
-    def test_an_unreadable_record_raises_to_the_caller(self, tmp_path: Path, text: str) -> None:
-        _task(tmp_path, "scan", "a", "completed")
-        _write_record(tmp_path, text)
-
-        with pytest.raises(COLLECTED_INPUTS_UNREADABLE):
-            _changed(tmp_path)
-
-    def test_a_supplied_record_is_compared_without_reading_the_file(self, tmp_path: Path) -> None:
-        """A caller that has read the record passes it, and the file is not read again."""
+        Whether an absent or unreadable record counts as a change is the caller's
+        decision (``TestReadCollectedInputs`` covers the read).
+        """
         _task(tmp_path, "scan", "a", "completed")
         _task(tmp_path, "scan", "b", "failed", error="boom")
         _deliver(tmp_path)
@@ -349,6 +325,9 @@ class TestChangedCollectedInputs:
         assert _changed(tmp_path) == []
 
     def test_a_step_without_collect_inputs_is_never_changed(self, tmp_path: Path) -> None:
+        recorded = CollectedInputsRecord(
+            run_id="r", step_id="scan", recorded_at="2026-09-22T00:00:00", inputs={}
+        )
         assert (
             changed_collected_inputs(
                 tmp_path,
@@ -356,6 +335,7 @@ class TestChangedCollectedInputs:
                 step_map={},
                 chains_by_member={},
                 variables=_variables(tmp_path),
+                recorded=recorded,
             )
             == []
         )

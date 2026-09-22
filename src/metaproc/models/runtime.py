@@ -290,8 +290,8 @@ class CollectedInputsRecord(BaseModel):
     no longer hold, so the step (with a composite's own child steps) re-runs and
     its downstream steps are invalidated. A step with no record (one that last
     ran before the record existed) is not invalidated by this rule. A record that
-    is present but cannot be read, such as one written in an earlier shape, counts
-    as changed.
+    is present but cannot be read, including one that does not validate, counts as
+    changed.
 
     Kept apart from ``fingerprint_step``, which is definition-only: the run plan
     publishes fingerprints at launch, and the collected documents are execution

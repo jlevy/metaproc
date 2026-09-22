@@ -804,7 +804,8 @@ def test_a_downstream_mapped_code_step_reuses_its_completed_items(tmp_path: Path
 
     For a mapped composite the per-item record is a parent level over child steps that
     are reused; for a mapped non-composite step it is the work itself, so renaming it
-    would re-run every completed item's fetch on every routine backfill. The step is still re-entered, so the roster's new item is discovered.
+    would re-run every completed item's fetch on every routine backfill. The step is
+    still re-entered, so the roster's new item is discovered.
     """
     process_path, runs_dir, run_dir = _setup(tmp_path, "downstream-mapped-code", failing="b")
 

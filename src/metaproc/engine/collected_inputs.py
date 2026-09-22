@@ -34,14 +34,13 @@ from metaproc.engine.placeholders import resolve_templates
 from metaproc.io.state_io import read_collected_inputs_at, write_collected_inputs_at
 from metaproc.models.plan import ResolvedStep
 from metaproc.models.runtime import CollectedInput, CollectedInputsRecord
-from metaproc.paths import COLLECTED_INPUTS_FILE, STATE_DIR, TASKS_SUBDIR
+from metaproc.paths import COLLECTED_INPUTS_FILE, step_task_state_dir
 
 log = logging.getLogger(__name__)
 
 COLLECTED_INPUTS_UNREADABLE: tuple[type[Exception], ...] = (YAMLError, ValueError, OSError)
 """What reading a present ``collected-inputs.yaml`` raises when it cannot be read:
-corrupt YAML, a shape this reader rejects (one written in an earlier shape, or by a
-later Metaproc), or a file it may not open."""
+corrupt YAML, a record that does not validate, or a file it may not open."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,12 +51,6 @@ class CollectedDocument:
     upstream_step: str
     path: Path
     manifest: OutcomeManifest
-
-
-def _record_dir(run_dir: Path, step_id: str) -> Path:
-    """The step's task state directory, ``<run>/.state/tasks/<step_id>/``, which holds
-    its ``collected-inputs.yaml``."""
-    return run_dir / STATE_DIR / TASKS_SUBDIR / step_id
 
 
 def _now_iso() -> str:
@@ -120,9 +113,9 @@ def read_collected_inputs(run_dir: Path, step_id: str) -> CollectedInputsRecord 
     """Read a step's ``collected-inputs.yaml``. None when the step has no record.
 
     Raises one of ``COLLECTED_INPUTS_UNREADABLE`` when a record is present but cannot
-    be read, including one written in an earlier shape (without ``outcomes_sha256``).
+    be read, including one that does not validate.
     """
-    return read_collected_inputs_at(_record_dir(run_dir, step_id))
+    return read_collected_inputs_at(step_task_state_dir(run_dir, step_id))
 
 
 def record_collected_inputs(
@@ -159,7 +152,7 @@ def record_collected_inputs(
     if prior is not None and prior.run_id == run_id and prior.inputs == inputs:
         return
     write_collected_inputs_at(
-        _record_dir(run_dir, step_id),
+        step_task_state_dir(run_dir, step_id),
         CollectedInputsRecord(
             run_id=run_id,
             step_id=step_id,
@@ -176,7 +169,7 @@ def changed_collected_inputs(
     step_map: Mapping[str, ResolvedStep],
     chains_by_member: Mapping[str, list[str]],
     variables: dict[str, str],
-    recorded: CollectedInputsRecord | None = None,
+    recorded: CollectedInputsRecord,
 ) -> list[CollectedDocument]:
     """The ``collect:`` documents *step* was last handed that durable per-item state
     no longer matches.
@@ -189,22 +182,16 @@ def changed_collected_inputs(
     Compares outcome digests, never mtimes, bytes, or error wording: each item's key,
     state and success plus the totals, so an item that fails again with a different
     message or a new attempt log is not a change while an item that completes is.
-    Returns an empty list when the step declares no ``collect:`` input, when it has
-    no record (it last ran before the record existed), or when every recorded digest
-    matches. An input the record does not name is not compared.
+    Returns an empty list when the step declares no ``collect:`` input or when every
+    recorded digest matches. An input the record does not name is not compared.
 
-    *recorded* is the step's record when the caller has already read it; the record
-    is then not read again. Without it, the record is read here, and a record that is
-    present but cannot be read raises one of ``COLLECTED_INPUTS_UNREADABLE`` before
-    any document is built: whether that counts as a change is the caller's decision.
-    The orchestrator reads the record itself, so that only the read, not rebuilding the
-    documents, is treated as an unreadable record, and counts it as a change.
+    *recorded* is the step's record, which the caller reads
+    (``read_collected_inputs``) and so decides itself what an absent or unreadable
+    one means. The orchestrator reuses a step with no record (it last ran before the
+    record existed), and counts an unreadable record as a change; reading it there
+    keeps an error rebuilding the documents from being taken for an unreadable record.
     """
     if not declares_collected_inputs(step):
-        return []
-    if recorded is None:
-        recorded = read_collected_inputs(run_dir, step.step_id)
-    if recorded is None:
         return []
     documents = collected_documents(
         step,

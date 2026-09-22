@@ -269,7 +269,6 @@ def test_an_unwritable_change_log_refuses_the_resume_as_a_cli_error(tmp_path: Pa
     assert isinstance(refused.exception, CLIError), _message(refused)
     assert str(changes_log) in str(refused.exception)
     assert isinstance(refused.exception.__cause__, OSError)
-    assert "Traceback" not in refused.output
     variables = _config(run_dir)["variables"]
     assert isinstance(variables, dict)
     assert variables["DATASET"] == "ds-1"

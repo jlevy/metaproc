@@ -251,6 +251,9 @@ MANUAL_ACK_TIMEOUT_S = 24 * 3600
 MANUAL_ACK_HEARTBEAT_S = 15 * 60
 _MIN_SYNC_EXECUTOR_WORKERS = 32
 _DEFAULT_MAPPED_SCOPE_CONCURRENCY = 32
+_UNREADABLE_RECORD_DETAIL_WIDTH = 160
+"""Columns of the read error an unreadable-record progress line quotes before it
+shortens the rest to `` ...``."""
 
 
 def _sync_executor_worker_count(max_concurrency: int | None) -> int:
@@ -1644,18 +1647,6 @@ def _normalize_filestore_runs_path(path: str) -> str:
 # ── Completion detection ──────────────────────────────────────────
 
 
-def _step_item_dir(run_dir: Path, step_id: str) -> Path:
-    """Per-task state directory for a step.
-
-    Under the new run-dir layout this is the directory that holds
-    ``status.yaml`` / ``attempt.yaml`` / ``result.yaml`` for a non-fan-out
-    step directly (no inner ``.state/`` subdir):
-    ``<run>/.state/tasks/<step_id>/``.
-    """
-
-    return run_dir / _STATE_DIR / _TASKS_SUBDIR / step_id
-
-
 def _resolve_step_item_dir(
     run_dir: Path,
     step_id: str,
@@ -1673,12 +1664,12 @@ def _resolve_step_item_dir(
     del outputs  # no longer used; state dir is derived from step + variables
     if step_def is not None:
         return compute_task_state_dir(run_dir, step_def, variables)
-    return _step_item_dir(run_dir, step_id)
+    return paths_mod.step_task_state_dir(run_dir, step_id)
 
 
 def _read_step_status(run_dir: Path, step_id: str) -> StatusRecord | None:
     """Read status.yaml for a step (non-fan-out)."""
-    return read_status_at(_step_item_dir(run_dir, step_id))
+    return read_status_at(paths_mod.step_task_state_dir(run_dir, step_id))
 
 
 def _read_step_failure_error(
@@ -1834,7 +1825,7 @@ def _is_step_completed(
     record = _read_step_status(run_dir, step_id)
     if record is not None and expected_run_id is not None:
         validate_task_status_identity_at(
-            _step_item_dir(run_dir, step_id),
+            paths_mod.step_task_state_dir(run_dir, step_id),
             record,
             run_id=expected_run_id,
             step_id=step_id,
@@ -1957,8 +1948,9 @@ def _invalidate_downstream(
     non-fan-out record. For a mapped composite the per-item record is a parent level
     whose completed children are reused, but for a mapped ``code`` (handler or
     command), ``agent``, or ``manual`` step the per-item record is the work itself, so
-    renaming it re-runs every completed item. The step is still re-entered, so its roster's new items are
-    discovered and run. Only the collected-input cascade asks for it; ``--force`` and
+    renaming it re-runs every completed item. The step is still re-entered, so its
+    roster's new items are discovered and run. Only the collected-input cascade asks for
+    it; ``--force`` and
     the fingerprint cascade fire on an explicit force or an operator edit, where
     re-doing completed item work is the intent.
     """
@@ -1971,7 +1963,7 @@ def _invalidate_downstream(
     invalidated: list[str] = []
 
     for step_id in all_ids:
-        step_state = _step_item_dir(run_dir, step_id)
+        step_state = paths_mod.step_task_state_dir(run_dir, step_id)
         step = steps_by_id.get(step_id)
         keep_items = (
             keep_downstream_mapped_items
@@ -4659,13 +4651,14 @@ def _maybe_cascade_for_collected_inputs(
     reuses its completed child steps, and a downstream mapped non-composite step keeps
     its completed items' records, so in both mapped shapes the cascade discovers new
     work without re-doing finished item work. An item whose inputs changed only in
-    content is reused; ``--force`` or ``--from <step>`` re-does those.
+    content is reused; ``--force`` or ``--from <step> --force`` re-does those, since
+    ``--from`` alone only narrows the walk.
 
     No-op when the step declares no ``collect:`` input, when it has no record (it last
     ran before the record existed), or when every recorded digest matches. A record
-    that is present but unreadable, including one written in an earlier shape, counts
-    as changed. Returns the step IDs whose per-task ``status.yaml`` files were renamed
-    to ``.stale``.
+    that is present but unreadable, including one that does not validate, counts as
+    changed. Returns the step IDs whose per-task ``status.yaml`` files were renamed to
+    ``.stale``.
     """
     if not declares_collected_inputs(step):
         return []
@@ -4679,7 +4672,7 @@ def _maybe_cascade_for_collected_inputs(
         # compare, so it degrades the other way: re-running one consumer is the cheap
         # failure, reusing output computed over outcomes that no longer hold is the
         # bug this check exists to catch.
-        state_dir = _step_item_dir(run_dir, step.step_id)
+        state_dir = paths_mod.step_task_state_dir(run_dir, step.step_id)
         log.warning(
             "step %r: unreadable %s in %s; treating its collected inputs as changed",
             step.step_id,
@@ -4689,7 +4682,11 @@ def _maybe_cascade_for_collected_inputs(
         )
         invalidated = _cascade_invalidation(run_dir, plan, step.step_id, variables=variables)
         suffix = f" — invalidated: {', '.join(invalidated)}" if invalidated else ""
-        detail = textwrap.shorten(f"{type(exc).__name__}: {exc}", width=160, placeholder=" ...")
+        detail = textwrap.shorten(
+            f"{type(exc).__name__}: {exc}",
+            width=_UNREADABLE_RECORD_DETAIL_WIDTH,
+            placeholder=" ...",
+        )
         out.progress(
             f"  Step '{step.step_id}': unreadable {COLLECTED_INPUTS_FILE} in {state_dir} "
             f"({detail}); its collected inputs count as changed{suffix}"
