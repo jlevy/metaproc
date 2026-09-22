@@ -487,14 +487,13 @@ Use `--from <step>` to force a rerun after editing a generated runbook in place.
 
 A step that declares a `collect:` input is handed a fan-in document that the
 orchestrator rebuilds from the collected mapped step’s per-item state just before the
-step runs. Each time it hands a step these documents, it records two SHA-256 digests per
-document in `.state/tasks/<step>/collected-inputs.yaml`: `sha256`, of the document’s
-bytes, kept for audit, and `outcomes_sha256`, of what the document says happened (the
-upstream step, the totals, and each item’s key, state, and success).
-On a later run against the same `RUN_ID`, before deciding whether the step is complete,
-the orchestrator rebuilds the documents and compares `outcomes_sha256`. It differs when
-an item changed state or appeared or disappeared, typically because a resume finished
-items that had failed.
+step runs. Each time it hands a step these documents, it records one SHA-256 digest per
+document in `.state/tasks/<step>/collected-inputs.yaml`: `outcomes_sha256`, of what the
+document says happened (the upstream step, the totals, and each item’s key, state, and
+success). On a later run against the same `RUN_ID`, before deciding whether the step is
+complete, the orchestrator rebuilds the documents and compares `outcomes_sha256`. It
+differs when an item changed state or appeared or disappeared, typically because a
+resume finished items that had failed.
 An item that fails again, even with a different error message, is not a change.
 When the outcome digest differs, the orchestrator:
 
@@ -506,12 +505,14 @@ When the outcome digest differs, the orchestrator:
 The comparison is by content, never modification time.
 Every composite and mapped step is re-entered on resume, and re-entering a consumer
 rewrites its documents, so an unchanged resume reuses everything.
-A fan-in document copies each item’s error without the attempt log paths it names (every
-`(traceback: <path>.log)` and every `; log: <path>.log`), so an item that fails again
-the same way writes a byte-identical document; the attempt log remains reachable from
-the item’s own task state (`.state/tasks/<step>/<key>/`). A step with no
-`collected-inputs.yaml`, or whose record has no `outcomes_sha256` (one that last ran
-before Metaproc recorded it), is not invalidated by this rule.
+A fan-in document keeps each item’s full error, including the attempt log path it names
+(`(traceback: <path>.log)` or `; log: <path>.log`), so a consumer reading a failure can
+open its evidence. An item that fails again rewrites the document with its new attempt’s
+log path and still does not re-run the consumer, because the digest covers outcomes, not
+wording or paths.
+A step with no `collected-inputs.yaml` is not invalidated by this rule.
+A record that does not validate, such as one without `outcomes_sha256`, is logged as a
+warning and treated as absent.
 Backfilling failed items therefore needs no `--only <consumer> --force`: the resume
 re-runs the consumer and its downstream.
 
@@ -555,16 +556,19 @@ decision:
 Use `run-process --dry-run` or `metaproc deps <run>` to preview the cascade if you are
 unsure what the next launch will execute.
 
-Keep every resolved `--var` value unchanged when resuming a run ID, other than inputs
-the process declares `provenance: true`. Metaproc rejects a changed, added, or removed
-identity variable before it reuses task state, including one that changed because an
-input’s `default:` was edited, and the refusal names each such variable; start a new run
-ID for a different input set.
-A provenance input, such as a code revision, may advance on a resume: the resume logs
-its recorded and current values and appends a `provenance_advance` event to
-`.logs/dispatch-config-changes.jsonl`, and `run-config.yaml` keeps the launch value.
-Equivalent local and cloud Filestore mount aliases for `RUNS_DIR` are the sole
-normalization of an identity variable.
+A resume may change any `--var` value, including by adding or removing one or through an
+edited input `default:`, and it may change the process name, the run directory, or the
+`--step-variant` set.
+Metaproc prints a `Resume changes <field>: <old> -> <new>` warning for each change,
+appends one `launch_config_change` event listing them to
+`.logs/dispatch-config-changes.jsonl`, and rewrites `run-config.yaml` to the values the
+resume ran with, so the file describes the latest launch and the event log holds its
+history. What re-runs still follows fingerprints: a value a step binds through `with:`
+leaves its fingerprint unchanged, while one substituted into `env:` or an output path
+re-runs that step and its downstream.
+Only a corrupt `run-config.yaml` refuses the resume.
+Equivalent Filestore mount aliases for `RUNS_DIR` normalize to one run directory, so
+resuming through either records no change.
 
 ### Worked example
 
@@ -621,11 +625,11 @@ composite step’s own authored `execution_profile:`, which then applies to its 
 subtree. Neither a composite step nor a step inside a child can be overridden from the
 command line; launch validation refuses such an id and lists the steps that can be.
 The run records its overrides in `run-config.yaml`. A resume without `--step-variant`
-reuses them, a resume that passes a different set is refused, and
-`metaproc status --steps` plans the recorded overrides.
-A run launched by v0.4.1, which applied overrides without recording them, has no
-recorded set; a resume of one adopts the `--step-variant` it passes and records it from
-then on.
+reuses them, a resume that passes a different set runs with it and records the change
+the way it records a changed `--var`, and `metaproc status --steps` plans the recorded
+overrides. A run launched by v0.4.1, which applied overrides without recording them, has
+no recorded set; a resume of one records the `--step-variant` set it passes from then
+on.
 
 Preflight credentials before a live dispatch:
 
@@ -822,8 +826,9 @@ policies as a contract change.
 - `invalidated` — a prior `status.yaml` was renamed `.stale` by `--force`, the
   fingerprint cascade, or a changed collected input.
   The step will rerun.
-  The `.stale` file stays beside the new `status.yaml`, so the step still reads
-  `invalidated` after that re-run completes.
+  A `status.yaml.stale` counts only while no `status.yaml` exists beside it, so after
+  the re-run completes the step reads `current` or `stale` by its new completion, and
+  the leftover `.stale` file is only the record of the earlier invalidation.
 - `missing` — never started, or started and failed without a recorded completion.
 - `in_flight` — actively running.
 
@@ -1098,7 +1103,7 @@ for unmarked old runs.
 
 | Artifact | Current path | Meaning |
 | --- | --- | --- |
-| Run config | `<run>/.state/run-config.yaml` | Frozen run identity, variables, and layout marker |
+| Run config | `<run>/.state/run-config.yaml` | Run identity, variables, step variants, and layout marker, rewritten by a resume that changes them |
 | Run plan | `<scope>/.state/run-plan.yaml` | What this scope declared: step identity, shape, canonical mapped item keys, output ports, fingerprints |
 | Orchestrator lease | `<run>/.state/orchestrator-lease.yaml` | Owner and heartbeat for cross-host safety |
 | Process status | `<run>/.state/process-status.yaml` | Aggregated DAG state for status display |
@@ -1113,7 +1118,7 @@ for unmarked old runs.
 | Artifact | Current path | Meaning |
 | --- | --- | --- |
 | Process events | `<run>/.logs/process-events.jsonl` | Run-level DAG lifecycle events |
-| Dispatch config changes | `<run>/.logs/dispatch-config-changes.jsonl` | Append-only record of live dispatch config edits and of each provenance input a resume advanced |
+| Dispatch config changes | `<run>/.logs/dispatch-config-changes.jsonl` | Append-only record of live dispatch config edits and of the launch-config changes each resume made |
 | Step runpool events | `<run>/.logs/runpool/steps/<step_id>/events.jsonl` | Per-step fan-out runner events |
 | Worker runpool events | `<run>/.logs/runpool/workers/<worker-id>/events.jsonl` | Worker-scoped runner events |
 | Agent session logs | `<run>/.logs/tasks/<step_id>/<item_key>/*.jsonl` | Per-attempt adapter stream JSONL |

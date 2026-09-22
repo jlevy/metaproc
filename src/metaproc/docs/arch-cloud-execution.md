@@ -181,10 +181,12 @@ subset.
 **`run-config.yaml`** (`{run_dir}/.state/run-config.yaml`): written at run creation time
 with the process name, run ID, resolved variables, creation-time backend and variant,
 git SHA, and timestamp.
-On resume, the process identity, run directory, and resolved variables must match,
-except inputs the process declares `provenance: true`, which a resume may advance.
-The two canonical cloud Filestore mount roots normalize to one identity; workstation
-paths do not. No other variable changes are accepted.
+On resume, a change to the process name, the run directory, or a resolved variable is
+logged and recorded rather than refused: the resume appends it as a
+`launch_config_change` event to `.logs/dispatch-config-changes.jsonl` and rewrites
+`run-config.yaml` to the values it ran with.
+The two canonical cloud Filestore mount roots normalize to one identity and record no
+change; a workstation mount path is a different run directory and is recorded as one.
 Cross-topology resume (for example, hybrid to full cloud) remains allowed because the
 backend is not part of resume identity and both topologies share the authoritative
 filesystem. Authentication and concurrency changes remain explicit timeline events.
@@ -220,8 +222,9 @@ explicitly.
 
 Resume behavior: re-running `run-process` with the same `RUN_ID` skips completed steps
 and items based on on-disk status records.
-`run-config.yaml` prevents accidental collision between unrelated runs sharing a
-directory.
+A resume whose process or variables differ from those `run-config.yaml` records is
+warned about and recorded, so an accidental collision between unrelated runs sharing a
+directory is visible rather than silent.
 
 ### 2.5 LaunchBackend Protocol
 

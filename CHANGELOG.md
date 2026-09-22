@@ -9,18 +9,21 @@ development series.
 
 ### Added
 
-- **A resume may advance a provenance input.** A process input may declare
-  `provenance: true` to mark a value that records how a run executed, such as the code
-  revision that launched it, rather than what the run is.
-  Resume validation leaves such an input out of the identity `run-config.yaml` records,
-  under both its logical name and its `param:` alias, so a run can resume onto corrected
-  code with every completed step reused.
-  The resume logs each provenance input that moved with its recorded and current value,
-  and records the move as a `provenance_advance` event in
-  `.logs/dispatch-config-changes.jsonl`, while `run-config.yaml` keeps the launch value.
-  Every other resolved variable is still identity: changing, adding, or removing one,
-  including through an edited `default:`, refuses the resume, and the refusal now names
-  the identity variables that changed and the inputs the process declares provenance.
+- **A resume records launch-config changes instead of refusing.** A resume may change
+  any resolved variable, including by adding or removing one or through an edited
+  `default:`, and it may change the process name, the run directory, or the
+  `--step-variant` set.
+  Each change is printed as a `Resume changes <field>: <old> -> <new>` warning.
+  All of one resume’s changes are appended, with their old and new values, as one
+  `launch_config_change` event in `.logs/dispatch-config-changes.jsonl`, and
+  `run-config.yaml` is then rewritten to the values the resume ran with.
+  Launch-config validation refuses only a corrupt `run-config.yaml`. What re-runs is
+  decided by step fingerprints as before: a value bound through `with:` stays a template
+  and does not re-run its step, while a value substituted into a resolved field such as
+  `env:` re-runs that step and its downstream.
+  A `--from` or `--only` launch refused for unsatisfied ancestors also names the
+  `metaproc override <RUN_ID> <step> --process <spec> --satisfied` command that records
+  an ancestor as satisfied.
 - **Every run writes an operations summary.** Run finalization writes
   `operations-summary.md` (`metaproc.operations:AgentOperationsSummary/v1`) beside
   `resource-usage-summary.md`: real elapsed time, setup, per-stage shares, per-item
@@ -51,33 +54,25 @@ development series.
   kept output computed over the partial outcomes, and the run reported success.
   Metaproc now records, for each fan-in document it hands a step, a digest of what the
   document says happened (the upstream step, the totals, and each item’s key, state, and
-  success) in `.state/tasks/<step>/collected-inputs.yaml`, beside a digest of the
-  document’s bytes kept for audit.
-  A later run against the same `RUN_ID` compares the outcome digest with the document
-  rebuilt from per-item state.
+  success) in `.state/tasks/<step>/collected-inputs.yaml`. A later run against the same
+  `RUN_ID` compares that digest with the document rebuilt from per-item state.
   When it differs, the step and its descendants are invalidated like a fingerprint
   change, with a `collected input ... changed since the step last ran — invalidated:`
-  line, so backfilling failed items no longer needs `--only <step> --force`. An item
-  that fails again with different wording is not a change, an unchanged resume reuses
-  everything, and a step recorded before this change is not invalidated.
-  When the consumer is a composite, its own child steps re-run too, because they read
-  the document through `with:` paths.
+  line, so backfilling failed items no longer needs `--only <step> --force`. The fan-in
+  document keeps each item’s full error, including its attempt log path, and consumer
+  reuse follows the outcome digest, so an item that fails again with a different message
+  or a new log path does not re-run its consumer.
+  An unchanged resume reuses everything, and a step recorded before this change is not
+  invalidated. When the consumer is a composite, its own child steps re-run too, because
+  they read the document through `with:` paths.
   Downstream composites are invalidated at the parent level and reuse their completed
   child steps, exactly as after a fingerprint change, so a downstream mapped composite
   does work only for the items its new roster adds.
   An invalidated task also stays invalidated across an interrupted run: reconciliation
   no longer projects the invalidated attempt back into `status.yaml`.
   `metaproc status --steps` names a changed collected input among the causes of an
-  `invalidated` step.
-
-- **Fan-in documents read the same when a failure recurs.** A failed item’s `error` in a
-  `metaproc:FanInOutcomes/0.1` document ended in the path of its attempt’s log, so a
-  retry that failed the same way rewrote the document with new bytes, and a downstream
-  reader that compares or seals these documents saw a change where there was none.
-  The document now copies each error without its attempt evidence paths, every
-  `(traceback: <path>.log)` and `; log: <path>.log` including those nested in a
-  composite’s error, and keeps the message text.
-  The item’s `status.yaml` keeps the full message, so the attempt log stays reachable.
+  `invalidated` step, and reports a step that has re-run since it was invalidated by its
+  new completion instead of by the leftover `.stale` file.
 
 - **A list cost that leaves out unpriced tokens says so.** An invocation whose model has
   no entry in the pricing table added its tokens to every total but nothing to
@@ -132,11 +127,10 @@ development series.
   ignored (or replaced the composite’s pin) and now fails launch validation with the
   steps that can be overridden.
   `run-config.yaml` records the overrides: a resume without `--step-variant` reuses
-  them, a resume with a different set is refused, and `metaproc status --steps` plans
-  them. A run launched by 0.4.1, which applied overrides without recording them, has no
-  recorded set to contradict, so a resume of one adopts the `--step-variant` it passes
-  and records it rather than refusing a run it cannot otherwise resume on its own
-  profiles.
+  them, a resume that passes a different set runs with it and records the change like
+  any other launch-config change, and `metaproc status --steps` plans them.
+  A run launched by 0.4.1, which applied overrides without recording them, has no
+  recorded set, so a resume of one records the `--step-variant` set it passes.
 
 - **Prelaunch and process-output refusals retain their causes.** Credential and input
   refusals now reach durable step status without creating an attempt; manual timeout
