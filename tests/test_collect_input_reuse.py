@@ -83,6 +83,29 @@ def tally(variables: dict[str, str], step: object) -> None:
 def report(variables: dict[str, str], step: object) -> None:
     _log(variables, "report")
     _write(step, "report", "report:" + Path(step.inputs["summary"].path).read_text())
+
+
+def roster_select(variables: dict[str, str], step: object) -> None:
+    _log(variables, "roster")
+    items = "".join(f"    - item: {key}\\n" for key in _succeeded(step))
+    header = "---\\nprogress:\\n  schema: metaproc:ProgressSpec/0.1\\n  process: depth\\n"
+    _write(step, "roster", header + "  items:\\n" + items + "---\\n# Depth Roster\\n")
+
+
+def fetch(variables: dict[str, str], step: object) -> None:
+    # Stands in for a paid provider call: re-running it for an unchanged item re-buys data.
+    _log(variables, f"fetch:{variables['item']}")
+    _write(step, "fetched", variables["item"] + "\\n")
+
+
+def stage_one(variables: dict[str, str], step: object) -> None:
+    _log(variables, f"s1:{variables['item']}")
+    _write(step, "out", variables["item"] + "\\n")
+
+
+def stage_two(variables: dict[str, str], step: object) -> None:
+    _log(variables, "s2")
+    _write(step, "summary", "s2\\n")
 '''
 
 _ROSTER = """\
@@ -202,6 +225,129 @@ _STAGE = """\
 """
 
 
+# A composite collector whose child writes the roster a downstream mapped composite
+# fans out over, and whose items each hold a counted provider-style fetch.
+_ROSTER_PROMOTION = """\
+- id: promotion
+  mode: composite
+  uses: deps.promotion_process
+  needs: [scan]
+  inputs:
+    outcomes:
+      path: "{{run.dir}}/promotion/outcomes.yaml"
+      collect: scan
+      require: finished
+  with:
+    outcomes: "{{run.dir}}/promotion/outcomes.yaml"
+  outputs:
+    roster: { path: "{{run.dir}}/promotion/depth-roster.md", kind: file }
+"""
+
+_ROSTER_PROMOTION_CHILD = """\
+process:
+  name: promotion
+  inputs:
+    outcomes: { param: OUTCOMES, as: path }
+  outputs:
+    roster: { ref: roster-select.roster, as: path }
+  steps:
+    - id: roster-select
+      mode: code
+      handler: "handlers.py:roster_select"
+      inputs:
+        outcomes: { path: "{{outcomes}}", kind: file }
+      outputs:
+        roster: { path: "{{run.dir}}/depth-roster.md", kind: file }
+"""
+
+_DEPTH = """\
+- id: depth
+  mode: composite
+  uses: deps.depth_process
+  needs: [promotion]
+  on_failure: continue
+  inputs:
+    roster: { ref: promotion.roster }
+  for_each:
+    over: roster
+    bind: item
+    bind_fields: [item]
+    key: "{{item}}"
+  with:
+    item: "{{item}}"
+  outputs:
+    fetched: { path: "{{run.dir}}/depth/{{item}}/fetched.txt", kind: file }
+"""
+
+_DEPTH_CHILD = """\
+process:
+  name: depth
+  inputs:
+    item: { param: ITEM, as: string }
+  outputs:
+    fetched: { ref: fetch.fetched, as: path }
+  steps:
+    - id: fetch
+      mode: code
+      handler: "handlers.py:fetch"
+      outputs:
+        fetched: { path: "{{run.dir}}/fetched.txt", kind: file }
+"""
+
+# A mapped composite, a scalar composite downstream of it, and a leaf after both.
+_STAGE_ONE = """\
+- id: stage1
+  mode: composite
+  uses: deps.stage1_process
+  for_each:
+    over: deps.roster
+    bind: item
+    bind_fields: [item]
+    key: "{{item}}"
+  with:
+    item: "{{item}}"
+  outputs:
+    out: { path: "{{run.dir}}/stage1/{{item}}/out.txt", kind: file }
+"""
+
+_STAGE_ONE_CHILD = """\
+process:
+  name: stage1
+  inputs:
+    item: { param: ITEM, as: string }
+  outputs:
+    out: { ref: s1.out, as: path }
+  steps:
+    - id: s1
+      mode: code
+      handler: "handlers.py:stage_one"
+      outputs:
+        out: { path: "{{run.dir}}/out.txt", kind: file }
+"""
+
+_STAGE_TWO = """\
+- id: stage2
+  mode: composite
+  uses: deps.stage2_process
+  needs: [stage1]
+  outputs:
+    summary: { path: "{{run.dir}}/stage2/summary.txt", kind: file }
+"""
+
+_STAGE_TWO_CHILD = """\
+process:
+  name: stage2
+  outputs:
+    summary: { ref: s2.summary, as: path }
+  steps:
+    - id: s2
+      mode: code
+      handler: "handlers.py:stage_two"
+      outputs:
+        summary: { path: "{{run.dir}}/summary.txt", kind: file }
+"""
+
+
 def _spec_document(name: str, body: str) -> str:
     return f"---\n{body}---\n# {name}\n"
 
@@ -227,6 +373,11 @@ def _write_process(process_dir: Path, shape: str) -> Path:
       hands the document to its child step ``select``) -> ``report``.
     - ``child-collector``: one composite ``stage`` whose child process is the
       ``top-level`` shape, so the collector is a child step.
+    - ``downstream-mapped``: ``scan`` -> ``promotion`` (a composite collector whose
+      child writes a roster) -> ``depth`` (a mapped composite over that roster whose
+      items each run a counted ``fetch``).
+    - ``fingerprint``: ``stage1`` (a mapped composite) -> ``stage2`` (a scalar
+      composite) -> ``report``; no collector.
     """
     process_dir.mkdir(parents=True, exist_ok=True)
     (process_dir / "handlers.py").write_text(_HANDLERS, encoding="utf-8")
@@ -255,6 +406,28 @@ def _write_process(process_dir: Path, shape: str) -> Path:
         )
         deps = "stage_process: { path: ./stage.process.md, as: path }\n"
         body = _process_block("collect-reuse", deps, [_STAGE])
+    elif shape == "downstream-mapped":
+        for name, child in (("promotion", _ROSTER_PROMOTION_CHILD), ("depth", _DEPTH_CHILD)):
+            (process_dir / f"{name}.process.md").write_text(
+                _spec_document(name.title(), child), encoding="utf-8"
+            )
+        deps = (
+            roster_dep
+            + "promotion_process: { path: ./promotion.process.md, as: path }\n"
+            + "depth_process: { path: ./depth.process.md, as: path }\n"
+        )
+        body = _process_block("collect-reuse", deps, [_SCAN, _ROSTER_PROMOTION, _DEPTH])
+    elif shape == "fingerprint":
+        for name, child in (("stage1", _STAGE_ONE_CHILD), ("stage2", _STAGE_TWO_CHILD)):
+            (process_dir / f"{name}.process.md").write_text(
+                _spec_document(name.title(), child), encoding="utf-8"
+            )
+        deps = (
+            roster_dep
+            + "stage1_process: { path: ./stage1.process.md, as: path }\n"
+            + "stage2_process: { path: ./stage2.process.md, as: path }\n"
+        )
+        body = _process_block("collect-reuse", deps, [_STAGE_ONE, _STAGE_TWO, _report("stage2")])
     else:
         raise ValueError(shape)
     path = process_dir / "collect-reuse.process.md"
@@ -435,3 +608,53 @@ def test_a_consumer_without_recorded_digests_is_not_invalidated(tmp_path: Path) 
     assert _invocations(run_dir) == Counter(
         {"scan:a": 1, "scan:b": 2, "summarize": 1, "report": 1, "tally": 2}
     )
+
+
+def test_a_downstream_mapped_composite_reuses_its_completed_items_child_steps(
+    tmp_path: Path,
+) -> None:
+    """Only the direct consumer's children re-run; downstream composites keep theirs.
+
+    Re-running an unchanged downstream item's fetch would re-buy provider data. Each
+    downstream item re-enters its composite and reuses its completed child steps, and
+    only an item the new roster adds does work.
+    """
+    process_path, runs_dir, run_dir = _setup(tmp_path, "downstream-mapped", failing="b")
+
+    launched = _run(process_path, runs_dir, run_dir.name)
+
+    assert launched.exit_code != 0, _message(launched)
+    assert _invocations(run_dir) == Counter({"scan:a": 1, "scan:b": 1, "roster": 1, "fetch:a": 1})
+
+    (runs_dir / "fail-b").unlink()
+    resumed = _run(process_path, runs_dir, run_dir.name)
+
+    assert resumed.exit_code == 0, _message(resumed)
+    assert (
+        "Step 'promotion': collected input 'outcomes' from 'scan' changed since the step "
+        "last ran — invalidated: promotion, depth"
+    ) in resumed.output
+    # The collector's child re-runs over the full outcomes; item a's fetch is reused and
+    # only the added item b fetches.
+    assert _invocations(run_dir) == Counter(
+        {"scan:a": 1, "scan:b": 2, "roster": 2, "fetch:a": 1, "fetch:b": 1}
+    )
+    assert (run_dir / "depth" / "b" / "fetched.txt").read_text() == "b\n"
+
+
+def test_a_fingerprint_change_keeps_composites_completed_child_steps(tmp_path: Path) -> None:
+    """Editing a composite's process file invalidates it and its downstream, and the
+    completed steps inside every composite are reused."""
+    process_path, runs_dir, run_dir = _setup(tmp_path, "fingerprint", failing=None)
+    launched = _run(process_path, runs_dir, run_dir.name)
+    assert launched.exit_code == 0, _message(launched)
+    assert _invocations(run_dir) == Counter({"s1:a": 1, "s1:b": 1, "s2": 1, "report": 1})
+
+    child_spec = process_path.parent / "stage1.process.md"
+    child_spec.write_text(child_spec.read_text() + "\nEdited prose.\n", encoding="utf-8")
+    resumed = _run(process_path, runs_dir, run_dir.name)
+
+    assert resumed.exit_code == 0, _message(resumed)
+    assert "Step 'stage1': fingerprint changed" in resumed.output
+    # The leaf downstream re-runs; no composite's completed child step does.
+    assert _invocations(run_dir) == Counter({"s1:a": 1, "s1:b": 1, "s2": 1, "report": 2})

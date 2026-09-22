@@ -56,9 +56,11 @@ development series.
   change, with a `collected input ... changed since the step last ran — invalidated:`
   line, so backfilling failed items no longer needs `--only <step> --force`. An
   unchanged resume reuses everything, and a step recorded before this change is not
-  invalidated. Invalidating a composite step now also invalidates the tasks in its child
-  scopes, whether triggered by `--force`, a fingerprint change, or a changed collected
-  input, so its child steps re-run instead of being reused.
+  invalidated. When the consumer is a composite, its own child steps re-run too, because
+  they read the document through `with:` paths.
+  Downstream composites are invalidated at the parent level and reuse their completed
+  child steps, exactly as after a fingerprint change, so a downstream mapped composite
+  does work only for the items its new roster adds.
   An invalidated task also stays invalidated across an interrupted run: reconciliation
   no longer projects the invalidated attempt back into `status.yaml`.
 

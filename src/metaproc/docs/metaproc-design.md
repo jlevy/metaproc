@@ -1315,8 +1315,14 @@ its documents byte-identically when nothing changed.
 A step without the record is a legacy completion and is not invalidated by this rule.
 
 `_invalidate_downstream` renames `status.yaml` to `status.yaml.stale` for each affected
-task and, for a composite step, for every task in its child scopes, because a re-entered
-composite otherwise reuses each child step whose own fingerprint is unchanged.
+parent-level task. A composite invalidated that way is re-entered and reuses its
+completed child steps, on the fingerprint and `--force` paths alike, so a downstream
+mapped composite re-does no work for an item whose inputs did not change.
+The collected-input cascade alone passes `invalidate_root_children=True`, which also
+renames every task in the consumer’s own child scopes, because those children read the
+changed document through `with:` paths.
+Downstream composites keep their children on that path too; a downstream collector is
+judged by its own digest comparison when the walk reaches it.
 A renamed record persists until its task runs again: reconciliation at the next
 orchestrator entry projects a terminal attempt back into `status.yaml` only when no
 `status.yaml.stale` names that attempt.

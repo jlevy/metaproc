@@ -1705,22 +1705,29 @@ def _invalidate_downstream(
     plan: Plan,
     *,
     variables: dict[str, str] | None = None,
+    invalidate_root_children: bool = False,
 ) -> list[str]:
     """Rename status.yaml to .stale for root and all downstream steps.
 
     Walks all per-task state dirs under ``<run>/.state/tasks/<step_id>/``
     (covers both the non-fan-out ``status.yaml`` and the per-item
-    fan-out ``<key>/status.yaml`` files).
+    fan-out ``<key>/status.yaml`` files). A composite step invalidated this way is
+    re-entered and reuses its completed child steps, so a downstream mapped
+    composite re-does no work for an item whose inputs did not change.
 
-    A composite step's work lives in its child scopes, so for a composite the
-    per-task records inside ``<run>/<step_id>/`` (one scope, or one per mapped
-    item) are renamed too. Without that, a re-entered composite reuses every child
-    step whose own fingerprint is unchanged, and its outputs never move.
+    *invalidate_root_children* also renames the per-task records inside a composite
+    root's child scopes (``<run>/<root>/``, or one scope per mapped item). Only the
+    collected-input cascade asks for it: the root's children read the changed fan-in
+    document through ``with:`` paths, so reusing them would reuse work computed over
+    the old outcomes. Downstream composites keep their children either way; a
+    downstream collector is judged by its own digest check when the walk reaches it.
     """
     del variables  # state dirs are keyed by step_id, not by output template
     dep_ids = downstream(plan.steps, root_step_id)
     all_ids = [root_step_id, *dep_ids]
-    modes = {step.step_id: step.mode for step in plan.steps}
+    root_is_composite = any(
+        step.step_id == root_step_id and step.mode == "composite" for step in plan.steps
+    )
     invalidated: list[str] = []
 
     for step_id in all_ids:
@@ -1735,7 +1742,7 @@ def _invalidate_downstream(
                     fan_out_status = sub / STATUS_FILE
                     if fan_out_status.exists():
                         status_paths.append(fan_out_status)
-        if modes.get(step_id) == "composite":
+        if invalidate_root_children and root_is_composite and step_id == root_step_id:
             status_paths.extend(_child_scope_status_paths(run_dir / step_id))
 
         step_invalidated = False
@@ -4494,6 +4501,11 @@ def _maybe_cascade_for_collected_inputs(
     move, so without this its earlier completion, computed over the old outcomes,
     would be reused along with everything downstream of it.
 
+    A composite consumer's own child steps are invalidated too, since they read the
+    document through ``with:`` paths. Downstream steps are invalidated at the parent
+    level only, as the fingerprint cascade does, so downstream composites reuse
+    their completed child steps.
+
     Compares content digests, never mtimes: every run that reaches the consumer
     rewrites the documents, byte-identically when nothing changed. No-op when the
     step declares no ``collect:`` input, when no record exists (the step last ran
@@ -4520,7 +4532,9 @@ def _maybe_cascade_for_collected_inputs(
     ]
     if not changed:
         return []
-    invalidated = _invalidate_downstream(run_dir, step.step_id, plan, variables=variables)
+    invalidated = _invalidate_downstream(
+        run_dir, step.step_id, plan, variables=variables, invalidate_root_children=True
+    )
     if invalidated:
         names = ", ".join(f"'{d.input_name}' from '{d.upstream_step}'" for d in changed)
         noun = "input" if len(changed) == 1 else "inputs"

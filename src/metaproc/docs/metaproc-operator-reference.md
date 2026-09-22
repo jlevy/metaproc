@@ -508,20 +508,23 @@ Metaproc recorded these digests) is not invalidated by this rule.
 Backfilling failed items therefore needs no `--only <consumer> --force`: the resume
 re-runs the consumer and its downstream.
 
-Invalidation reaches into composites.
-For a composite step, the cascade also renames the per-task records inside its child
-scopes (`<run>/<step>/`, or `<run>/<step>/<key>/` for each mapped item), so a child step
-that reads the document through `with:` re-runs, and so do the child steps of every
-downstream composite.
-This holds for every invalidation: `--force`, the fingerprint cascade, and a changed
-collected input. A renamed record stays renamed until its task runs again, including
-across an interrupted run.
+When the consumer is a composite, this cascade also renames the per-task records inside
+the consumer’s own child scopes (`<run>/<step>/`, or `<run>/<step>/<key>/` for each
+mapped item), so its child steps, which read the document through `with:` paths, re-run.
+Downstream composites are invalidated only at the parent level, as after a fingerprint
+change: each is re-entered and reuses its completed child steps, so a downstream mapped
+composite does work only for the items its new roster adds.
+A downstream step that itself collects a changed document is judged by its own digest
+comparison when the walk reaches it.
+A renamed record stays renamed until its task runs again, including across an
+interrupted run.
 
 `metaproc status --steps` does not predict this invalidation, because the orchestrator
 decides it at resume from per-item state.
-Two cases are outside the rule: a step that reads a mapped step’s outputs without
-declaring `collect:`, and the downstream of a composite whose own child collector
-re-ran. Use `--from <step> --force` for those.
+Three cases are outside the rule: a step that reads a mapped step’s outputs without
+declaring `collect:`, a downstream composite whose completed child steps read changed
+content through `with:` paths, and the downstream of a composite whose own child
+collector re-ran. Use `--from <step> --force` for those.
 
 ### When to reach for a flag
 

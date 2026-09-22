@@ -281,9 +281,10 @@ class CollectedInputsRecord(BaseModel):
     materializes the step's fan-in documents, before the step runs. A later run
     against the same ``RUN_ID`` rebuilds each document from durable per-item
     state and compares digests: a difference means the step last ran over
-    outcomes that no longer hold, so it and everything downstream re-run. A step
-    with no record (one that last ran before the record existed) is not
-    invalidated by this rule.
+    outcomes that no longer hold, so the step (with a composite's own child
+    steps) re-runs and its downstream steps are invalidated. A step with no
+    record (one that last ran before the record existed) is not invalidated by
+    this rule.
 
     Kept apart from ``fingerprint_step``, which is definition-only: the run plan
     publishes fingerprints at launch, and the collected documents are execution

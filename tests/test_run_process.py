@@ -1063,37 +1063,71 @@ class TestDownstreamInvalidation:
         assert "d" in invalidated
         assert "c" not in invalidated  # c doesn't depend on b
 
-    def test_invalidate_reaches_composite_child_scopes(self, tmp_path: Path) -> None:
-        """A composite's work lives in its child scopes; invalidating it renames those
-        per-task records too, including nested scopes, and leaves artifacts alone."""
+    @staticmethod
+    def _composite_scopes(tmp_path: Path) -> Plan:
+        """A composite root and a downstream mapped composite, each with completed
+        child steps, plus an artifact sharing the root's scope directory."""
         plan = _make_plan(
-            _step("a"),
-            _step("promote", ["a"], mode="composite"),
-            _step("review", ["promote"], mode="composite"),
-            _step("unrelated", mode="composite"),
+            _step("promote", mode="composite"),
+            _step("depth", ["promote"], mode="composite"),
         )
-        _write_completed_status(tmp_path, "a")
-        # Scalar child scope, a nested scope inside it, and one mapped item's scope.
         _write_completed_status(tmp_path / "promote", "select")
         _write_completed_status(tmp_path / "promote" / "inner", "leaf")
-        _write_completed_status(tmp_path / "review" / "AAA", "check")
-        _write_completed_status(tmp_path / "unrelated", "keep")
-        artifact = tmp_path / "promote" / "status.yaml"
-        artifact.write_text("an output that happens to share the name\n")
+        _write_completed_status(tmp_path / "depth" / "AAA", "fetch")
+        # Parent-level per-item record of the mapped composite.
+        item_state = _task_state_dir_for(tmp_path, "depth") / "AAA"
+        item_state.mkdir(parents=True)
+        write_status_at(
+            item_state,
+            StatusRecord(
+                run_id="test/run1",
+                step_id="depth",
+                item={"key": "AAA"},
+                state="completed",
+                started_at="2026-04-09T00:00:00",
+            ),
+        )
+        (tmp_path / "promote" / "status.yaml").write_text("an output sharing the name\n")
+        return plan
 
-        invalidated = _invalidate_downstream(tmp_path, "a", plan)
+    def test_invalidate_keeps_composite_child_scopes_by_default(self, tmp_path: Path) -> None:
+        """The fingerprint cascade and ``--force``: a re-entered composite reuses its
+        completed child steps, root or downstream."""
+        plan = self._composite_scopes(tmp_path)
 
-        assert invalidated == ["a", "promote", "review"]
+        invalidated = _invalidate_downstream(tmp_path, "promote", plan)
+
+        assert invalidated == ["depth"]
+        assert not (_task_state_dir_for(tmp_path, "depth") / "AAA" / STATUS_FILE).exists()
         for scope, step_id in (
             (tmp_path / "promote", "select"),
             (tmp_path / "promote" / "inner", "leaf"),
-            (tmp_path / "review" / "AAA", "check"),
+            (tmp_path / "depth" / "AAA", "fetch"),
+        ):
+            assert (_task_state_dir_for(scope, step_id) / STATUS_FILE).exists()
+
+    def test_invalidate_root_children_reaches_only_the_roots_child_scopes(
+        self, tmp_path: Path
+    ) -> None:
+        """The collected-input cascade re-runs the consumer's own children, nested
+        scopes included, and leaves downstream composites' children and artifacts."""
+        plan = self._composite_scopes(tmp_path)
+
+        invalidated = _invalidate_downstream(
+            tmp_path, "promote", plan, invalidate_root_children=True
+        )
+
+        assert invalidated == ["promote", "depth"]
+        for scope, step_id in (
+            (tmp_path / "promote", "select"),
+            (tmp_path / "promote" / "inner", "leaf"),
         ):
             state_dir = _task_state_dir_for(scope, step_id)
             assert not (state_dir / STATUS_FILE).exists()
             assert (state_dir / "status.yaml.stale").exists()
-        assert (_task_state_dir_for(tmp_path / "unrelated", "keep") / STATUS_FILE).exists()
-        assert artifact.exists()
+        assert not (_task_state_dir_for(tmp_path, "depth") / "AAA" / STATUS_FILE).exists()
+        assert (_task_state_dir_for(tmp_path / "depth" / "AAA", "fetch") / STATUS_FILE).exists()
+        assert (tmp_path / "promote" / "status.yaml").exists()
 
     def test_invalidate_at_canonical_task_state(self, tmp_path: Path) -> None:
         """Invalidation renames status.yaml at the per-task state location.
