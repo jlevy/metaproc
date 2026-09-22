@@ -57,6 +57,17 @@ BANNED_TOKEN_HASHES: dict[str, str] = {
     "4443ebe6787ef8c1d6c4be955c4f783171707c0d3a10bc19af8a8e98115f6244": "private name",
     "28afbf0889041b38ca15dfdb65e8bd7b657646923e806223b978f2a49cd66519": "private name",
 }
+# Vocabulary that must stay out of the tree and out of every published artifact, but
+# that commit messages already on `main` still carry. Rewriting published history to
+# add these to the list above would fail the gate on every existing commit, so they are
+# scanned everywhere except reachable Git metadata, which `find_git_metadata_findings`
+# opts out of. The public commit log therefore still contains them; this class is about
+# what ships and what gets added from here on.
+BANNED_TREE_TOKEN_HASHES: dict[str, str] = {
+    "0a72b58c6786431ad43fd7d8cfc060f5463e264b12cfe00ba903091f2e89b3d9": "private name",
+    "960ff3f23a27a638abea6dc0bac1937ee8209e883a54cb4d81781205ef7ed364": "private name",
+    "a7da27da0a08f7e6d03797a2cb7d73584e12e52dc4d6d8149e04755e9597ae28": "private name",
+}
 PRIVATE_ISSUE_PREFIX_HASHES = frozenset(
     {"0035e3bed3a10ebe81bc85bbf80cc092871ba344926efa491f195e36cc7e003b"}
 )
@@ -88,15 +99,20 @@ BANNED_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 
-def _token_findings(source: str, text: str) -> list[str]:
+def _token_findings(source: str, text: str, *, include_tree_tokens: bool = True) -> list[str]:
     findings: list[str] = []
+    banned = (
+        {**BANNED_TOKEN_HASHES, **BANNED_TREE_TOKEN_HASHES}
+        if include_tree_tokens
+        else BANNED_TOKEN_HASHES
+    )
     combined = f"{source}\n{text}"
     matches = list(TOKEN_PATTERN.finditer(combined)) + list(
         TOKEN_COMPONENT_PATTERN.finditer(combined)
     )
     for match in matches:
         digest = hashlib.sha256(match.group(0).lower().encode()).hexdigest()
-        label = BANNED_TOKEN_HASHES.get(digest)
+        label = banned.get(digest)
         if label is not None:
             offset = max(0, match.start() - len(source) - 1)
             line = text.count("\n", 0, offset) + 1
@@ -119,9 +135,9 @@ def _token_findings(source: str, text: str) -> list[str]:
     return findings
 
 
-def find_hygiene_findings(source: str, text: str) -> list[str]:
+def find_hygiene_findings(source: str, text: str, *, include_tree_tokens: bool = True) -> list[str]:
     """Return public-hygiene findings for a path, text file, or archive member."""
-    findings = _token_findings(source, text)
+    findings = _token_findings(source, text, include_tree_tokens=include_tree_tokens)
     combined = ADVISORY_ID_PATTERN.sub(lambda m: "x" * len(m.group(0)), f"{source}\n{text}")
     for label, pattern in BANNED_PATTERNS:
         for match in pattern.finditer(combined):
@@ -141,13 +157,16 @@ def find_git_metadata_findings(source: str, text: str) -> list[str]:
     Applies to both ref names and commit text: pull-request numbers are ordinary in
     each, so the private-pull-request rule stays for repository content, where a
     number really can name a private tracker.
+
+    ``BANNED_TREE_TOKEN_HASHES`` is skipped for the same reason: those tokens were
+    removed from the tree without rewriting the commits that introduced them.
     """
     normalized = GIT_ATTRIBUTION_EMAIL_PATTERN.sub(
         r"\g<prefix>agent@users.noreply.github.com\g<suffix>", text
     )
     return [
         finding
-        for finding in find_hygiene_findings(source, normalized)
+        for finding in find_hygiene_findings(source, normalized, include_tree_tokens=False)
         if not finding.endswith(": private pull-request reference")
     ]
 
