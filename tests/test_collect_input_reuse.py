@@ -27,6 +27,7 @@ from typer.testing import CliRunner, Result
 
 from metaproc.cli import app
 from metaproc.engine.fan_in import build_outcome_manifest
+from metaproc.errors import CLIError
 from metaproc.io import read_yaml_file, to_yaml_string
 from metaproc.io.state_io import read_collected_inputs_at, read_status_at
 from metaproc.paths import COLLECTED_INPUTS_FILE, STATE_DIR, TASKS_SUBDIR
@@ -72,6 +73,16 @@ def scan(variables: dict[str, str], step: object) -> None:  # noqa: ARG001
             detail = f" (attempt {attempts.count(f'scan:{item}')})"
         raise RuntimeError(f"{item}: failing while its marker exists{detail}")
     out = Path(variables["RUNS_DIR"]) / variables["RUN_ID"] / "scan" / f"{item}.txt"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(item + "\\n")
+
+
+def prep(variables: dict[str, str], step: object) -> None:  # noqa: ARG001
+    item = variables["item"]
+    _log(variables, f"prep:{item}")
+    if (Path(variables["RUNS_DIR"]) / f"fail-{item}").exists():
+        raise RuntimeError(f"{item}: prep failing while its marker exists")
+    out = Path(variables["RUNS_DIR"]) / variables["RUN_ID"] / "prep" / f"{item}.txt"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(item + "\\n")
 
@@ -182,6 +193,48 @@ _TALLY = """\
       require: finished
   outputs:
     tally: { path: "{{run.dir}}/tally/tally.txt", kind: file }
+"""
+
+
+# `scan` item-aligned under `prep`: an item whose `prep` fails never reaches `scan`, so
+# the fan-in document reports it `not_reached` and names where its chain stopped.
+_ALIGNED_CHAIN = """\
+- id: prep
+  mode: code
+  handler: "handlers.py:prep"
+  on_failure: continue
+  for_each:
+    over: deps.roster
+    bind: item
+    bind_fields: [item]
+    key: "{{item}}"
+  outputs:
+    out: { path: "{{run.dir}}/prep/{{item}}.txt", kind: file }
+- id: scan
+  mode: code
+  handler: "handlers.py:scan"
+  needs: [prep]
+  on_failure: continue
+  for_each:
+    over: deps.roster
+    bind: item
+    bind_fields: [item]
+    key: "{{item}}"
+    align: same_key
+  outputs:
+    out: { path: "{{run.dir}}/scan/{{item}}.txt", kind: file }
+- id: summarize
+  mode: code
+  handler: "handlers.py:summarize"
+  needs: [scan]
+  on_failure: continue
+  inputs:
+    outcomes:
+      path: "{{run.dir}}/summary/outcomes.yaml"
+      collect: scan
+      require: finished
+  outputs:
+    summary: { path: "{{run.dir}}/summary/summary.txt", kind: file }
 """
 
 
@@ -420,6 +473,8 @@ def _write_process(process_dir: Path, shape: str) -> Path:
       whose items each run the counted ``fetch`` directly.
     - ``fingerprint``: ``stage1`` (a mapped composite) -> ``stage2`` (a scalar
       composite) -> ``report``; no collector.
+    - ``aligned-chain``: ``prep`` -> ``scan`` (item-aligned under ``prep``) ->
+      ``summarize`` (collects scan) -> ``report``.
     """
     process_dir.mkdir(parents=True, exist_ok=True)
     (process_dir / "handlers.py").write_text(_HANDLERS, encoding="utf-8")
@@ -465,6 +520,8 @@ def _write_process(process_dir: Path, shape: str) -> Path:
         )
         deps = roster_dep + "consume_process: { path: ./consume.process.md, as: path }\n"
         body = _process_block("collect-reuse", deps, [_SCAN, _ROSTER_CONSUME, _ENRICH_CODE])
+    elif shape == "aligned-chain":
+        body = _process_block("collect-reuse", roster_dep, [_ALIGNED_CHAIN, _report("summarize")])
     elif shape == "fingerprint":
         for name, child in (("stage1", _STAGE_ONE_CHILD), ("stage2", _STAGE_TWO_CHILD)):
             (process_dir / f"{name}.process.md").write_text(
@@ -483,7 +540,7 @@ def _write_process(process_dir: Path, shape: str) -> Path:
     return path
 
 
-def _run(process_path: Path, runs_dir: Path, run_id: str) -> Result:
+def _run(process_path: Path, runs_dir: Path, run_id: str, *options: str) -> Result:
     return CliRunner().invoke(
         app,
         [
@@ -495,6 +552,7 @@ def _run(process_path: Path, runs_dir: Path, run_id: str) -> Result:
             f"RUN_ID={run_id}",
             "--backend",
             "local",
+            *options,
         ],
     )
 
@@ -595,6 +653,45 @@ def test_unchanged_resume_reuses_every_step(
         # A composite is re-entered on every resume and rewrites its document: the mtime
         # moves while the content does not, and the step is still reused.
         assert document.stat().st_mtime_ns != 0
+
+
+@pytest.mark.parametrize("selection", ["--only", "--from"])
+def test_a_selected_collector_is_handed_the_document_a_full_walk_builds(
+    tmp_path: Path, selection: str
+) -> None:
+    """A ``--only``/``--from`` selection does not change a collector's fan-in document.
+
+    ``prep:b`` fails on every attempt, so ``b`` never reaches ``scan``, and nothing about
+    ``scan`` changes between launches. Built from the selection, which leaves ``scan``
+    and its chain out, the document dropped ``b``; the collector then read as changed
+    and re-ran, and the next plain resume re-ran it and ``report`` back.
+    """
+    process_path, runs_dir, run_dir = _setup(tmp_path, "aligned-chain", failing="b")
+    outputs: list[str] = []
+    for options in ((), (selection, "summarize"), (), (selection, "summarize"), ()):
+        result = _run(process_path, runs_dir, run_dir.name, *options)
+        assert result.exception is None or isinstance(result.exception, (SystemExit, CLIError)), (
+            _message(result)
+        )
+        outputs.append(result.output)
+
+    assert not [output for output in outputs if "changed since the step last ran" in output]
+    invocations = _invocations(run_dir)
+    assert (invocations["summarize"], invocations["report"]) == (1, 1)
+
+    # Forced, the collector runs over the whole roster, `b` included.
+    forced = _run(process_path, runs_dir, run_dir.name, selection, "summarize", "--force")
+    assert forced.exception is None or isinstance(forced.exception, (SystemExit, CLIError)), (
+        _message(forced)
+    )
+    assert _invocations(run_dir)["summarize"] == 2
+    assert "Collected 'outcomes' from 'scan': 1 succeeded, 1 failed of 2" in forced.output
+    outcomes = read_yaml_file(run_dir / "summary" / "outcomes.yaml")["fan_in_outcomes"]
+    assert outcomes["total"] == 2
+    assert {item["key"]: item["state"] for item in outcomes["items"]} == {
+        "a": "completed",
+        "b": "not_reached",
+    }
 
 
 def test_resume_reruns_a_composite_consumers_child_steps(tmp_path: Path) -> None:

@@ -4874,10 +4874,25 @@ async def _execute_step(
 # ── Orchestration loop ────────────────────────────────────────────
 
 
+def _code_item_aligned_chains(steps: Sequence[ResolvedStep]) -> list[list[str]]:
+    """Return the item-aligned chains of *steps* whose members are all ``code`` steps.
+
+    Only these run per item under their head, since the agent path carries dispatch
+    machinery the chain executor does not reproduce.
+    """
+    modes = {step.step_id: step.mode for step in steps}
+    return [
+        chain
+        for chain in item_aligned_chains(steps)
+        if all(modes[step_id] == "code" for step_id in chain)
+    ]
+
+
 async def _orchestrate(
     *,
     spec: ProcessSpec,
     plan: Plan,
+    collection_plan: Plan | None = None,
     variables: dict[str, str],
     process_path: Path,
     process_dir: Path,
@@ -4894,6 +4909,15 @@ async def _orchestrate(
     `scope_execution_profile` is the profile override this scope plans its composite
     children and unpinned agent leaves with: the launch `--variant` at the root, or the
     nearest enclosing composite step's `execution_profile:` below it.
+
+    `collection_plan` is the unrestricted plan a `--only`/`--from` launch selected
+    *plan* from, and defaults to *plan*. Collected fan-in documents, both the ones
+    delivered and the ones the reuse comparison rebuilds, come from its step map and
+    item-aligned chains, so the selection cannot change what a consumer is handed. A
+    collected step outside the selection still gives the document its expected roster,
+    and its chain still says where an item that never reached it stopped. Built from
+    the selection instead, the document would drop that item, report a change that did
+    not happen, and re-run the consumer, and the next plain resume would re-run it back.
     """
     backend_name = execution_context.backend_name
     max_concurrency = execution_context.max_concurrency
@@ -4921,18 +4945,16 @@ async def _orchestrate(
 
     # Item-aligned chains run per item under their head, so the level walk must not
     # also run the absorbed members: their edges are item-scoped and the barrier
-    # between them is exactly what alignment removes. Chains of code steps only, since
-    # the agent path carries dispatch machinery this executor does not reproduce.
-    _chains = [
-        chain
-        for chain in item_aligned_chains(plan.steps)
-        if all(step_map[sid].mode == "code" for sid in chain)
-    ]
+    # between them is exactly what alignment removes.
+    _chains = _code_item_aligned_chains(plan.steps)
     _chain_head_of: dict[str, list[str]] = {chain[0]: chain for chain in _chains}
-    _chains_by_member: dict[str, list[str]] = {
-        member: chain for chain in _chains for member in chain
-    }
     _absorbed: set[str] = {sid for chain in _chains for sid in chain[1:]}
+    # Collected documents are built from the unrestricted plan (see the docstring).
+    collection_steps = plan.steps if collection_plan is None else collection_plan.steps
+    collection_step_map = {s.step_id: s for s in collection_steps}
+    collection_chains_by_member: dict[str, list[str]] = {
+        member: chain for chain in _code_item_aligned_chains(collection_steps) for member in chain
+    }
 
     events.process_start(spec.name, run_id, backend_name, len(step_map))
 
@@ -5045,8 +5067,8 @@ async def _orchestrate(
 
         success = await _execute_step(
             spec=spec,
-            step_map=step_map,
-            chains_by_member=_chains_by_member,
+            step_map=collection_step_map,
+            chains_by_member=collection_chains_by_member,
             step_def=step_def,
             target=target,
             variables=variables,
@@ -5188,8 +5210,8 @@ async def _orchestrate(
                     run_dir,
                     plan,
                     target,
-                    step_map=step_map,
-                    chains_by_member=_chains_by_member,
+                    step_map=collection_step_map,
+                    chains_by_member=collection_chains_by_member,
                     variables=variables,
                     out=out,
                 )
@@ -6251,6 +6273,7 @@ def run_process_command(
                     await _orchestrate(
                         spec=spec,
                         plan=active_plan,
+                        collection_plan=plan,
                         variables=variables,
                         process_path=process_path,
                         process_dir=process_dir,
