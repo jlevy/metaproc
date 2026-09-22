@@ -106,6 +106,16 @@ def fetch(variables: dict[str, str], step: object) -> None:
     _write(step, "fetched", variables["item"] + "\\n")
 
 
+def fetch_code(variables: dict[str, str], step: object) -> None:  # noqa: ARG001
+    # The same fetch as a mapped `code` step: a mapped step's declared output path still
+    # holds `{{item}}`, so the item's own path comes from its bound variables.
+    item = variables["item"]
+    _log(variables, f"fetch:{item}")
+    out = Path(variables["RUNS_DIR"]) / variables["RUN_ID"] / "enrich" / item / "fetched.txt"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(item + "\\n")
+
+
 def stage_one(variables: dict[str, str], step: object) -> None:
     _log(variables, f"s1:{variables['item']}")
     _write(step, "out", variables["item"] + "\\n")
@@ -287,6 +297,25 @@ _ENRICH = """\
     fetched: { path: "{{run.dir}}/enrich/{{item}}/fetched.txt", kind: file }
 """
 
+# The same downstream shape with a mapped `code` step in place of the mapped composite:
+# here the per-item record is the fetch itself, not a parent level over reusable children.
+_ENRICH_CODE = """\
+- id: enrich
+  mode: code
+  handler: "handlers.py:fetch_code"
+  needs: [consume]
+  on_failure: continue
+  inputs:
+    roster: { ref: consume.roster }
+  for_each:
+    over: roster
+    bind: item
+    bind_fields: [item]
+    key: "{{item}}"
+  outputs:
+    fetched: { path: "{{run.dir}}/enrich/{{item}}/fetched.txt", kind: file }
+"""
+
 _ENRICH_CHILD = """\
 process:
   name: enrich
@@ -384,6 +413,8 @@ def _write_process(process_dir: Path, shape: str) -> Path:
     - ``downstream-mapped``: ``scan`` -> ``consume`` (a composite collector whose
       child writes a roster) -> ``enrich`` (a mapped composite over that roster whose
       items each run a counted ``fetch``).
+    - ``downstream-mapped-code``: the same, with ``enrich`` a mapped ``code`` step
+      whose items each run the counted ``fetch`` directly.
     - ``fingerprint``: ``stage1`` (a mapped composite) -> ``stage2`` (a scalar
       composite) -> ``report``; no collector.
     """
@@ -425,6 +456,12 @@ def _write_process(process_dir: Path, shape: str) -> Path:
             + "enrich_process: { path: ./enrich.process.md, as: path }\n"
         )
         body = _process_block("collect-reuse", deps, [_SCAN, _ROSTER_CONSUME, _ENRICH])
+    elif shape == "downstream-mapped-code":
+        (process_dir / "consume.process.md").write_text(
+            _spec_document("Consume", _ROSTER_CONSUME_CHILD), encoding="utf-8"
+        )
+        deps = roster_dep + "consume_process: { path: ./consume.process.md, as: path }\n"
+        body = _process_block("collect-reuse", deps, [_SCAN, _ROSTER_CONSUME, _ENRICH_CODE])
     elif shape == "fingerprint":
         for name, child in (("stage1", _STAGE_ONE_CHILD), ("stage2", _STAGE_TWO_CHILD)):
             (process_dir / f"{name}.process.md").write_text(
@@ -644,6 +681,39 @@ def test_a_downstream_mapped_composite_reuses_its_completed_items_child_steps(
     ) in resumed.output
     # The collector's child re-runs over the full outcomes; item a's fetch is reused and
     # only the added item b fetches.
+    assert _invocations(run_dir) == Counter(
+        {"scan:a": 1, "scan:b": 2, "roster": 2, "fetch:a": 1, "fetch:b": 1}
+    )
+    assert (run_dir / "enrich" / "b" / "fetched.txt").read_text() == "b\n"
+
+
+def test_a_downstream_mapped_code_step_reuses_its_completed_items(tmp_path: Path) -> None:
+    """A downstream mapped non-composite step keeps its completed items' records.
+
+    For a mapped composite the per-item record is a parent level over child steps that
+    are reused; for a mapped non-composite step it is the work itself, so renaming it
+    would re-run every completed item's fetch on every routine backfill. The step is still re-entered, so the roster's new item is discovered.
+    """
+    process_path, runs_dir, run_dir = _setup(tmp_path, "downstream-mapped-code", failing="b")
+
+    launched = _run(process_path, runs_dir, run_dir.name)
+
+    assert launched.exit_code != 0, _message(launched)
+    assert _invocations(run_dir) == Counter({"scan:a": 1, "scan:b": 1, "roster": 1, "fetch:a": 1})
+
+    (runs_dir / "fail-b").unlink()
+    resumed = _run(process_path, runs_dir, run_dir.name)
+
+    assert resumed.exit_code == 0, _message(resumed)
+    # The mapped `code` step keeps every item record, so the cascade renames nothing of
+    # its own and it is not named among the invalidated steps.
+    assert (
+        "Step 'consume': collected input 'outcomes' from 'scan' changed since the step "
+        "last ran — invalidated: consume"
+    ) in resumed.output
+    # It is still re-entered, so the roster's added item is discovered and the completed
+    # item is reused rather than re-fetched.
+    assert "Step 'enrich': 1 actionable items (1 reused)" in resumed.output
     assert _invocations(run_dir) == Counter(
         {"scan:a": 1, "scan:b": 2, "roster": 2, "fetch:a": 1, "fetch:b": 1}
     )

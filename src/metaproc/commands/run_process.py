@@ -17,6 +17,7 @@ import os
 import re
 import shlex
 import subprocess
+import textwrap
 import time
 import traceback
 from collections.abc import AsyncGenerator, Callable, Collection, Mapping, Sequence
@@ -1706,6 +1707,7 @@ def _invalidate_downstream(
     *,
     variables: dict[str, str] | None = None,
     invalidate_root_children: bool = False,
+    keep_downstream_mapped_items: bool = False,
 ) -> list[str]:
     """Rename status.yaml to .stale for root and all downstream steps.
 
@@ -1715,28 +1717,47 @@ def _invalidate_downstream(
     re-entered and reuses its completed child steps, so a downstream mapped
     composite re-does no work for an item whose inputs did not change.
 
-    *invalidate_root_children* also renames the per-task records inside a composite
-    root's child scopes (``<run>/<root>/``, or one scope per mapped item). Only the
+    *invalidate_root_children* also renames every per-task record inside a composite
+    root's child scopes (``<run>/<root>/``, or one scope per mapped item), nested
+    scopes included, whether or not the task reads the root's changed input. Only the
     collected-input cascade asks for it: the root's children read the changed fan-in
     document through ``with:`` paths, so reusing them would reuse work computed over
     the old outcomes. Downstream composites keep their children either way; a
     downstream collector is judged by its own digest check when the walk reaches it.
+
+    *keep_downstream_mapped_items* keeps the per-item records of every mapped
+    non-composite step downstream of the root, renaming only such a step's own
+    non-fan-out record. For a mapped composite the per-item record is a parent level
+    whose completed children are reused, but for a mapped ``code`` (handler or
+    command), ``agent``, or ``manual`` step the per-item record is the work itself, so
+    renaming it re-runs every completed item. The step is still re-entered, so its roster's new items are
+    discovered and run. Only the collected-input cascade asks for it; ``--force`` and
+    the fingerprint cascade fire on an explicit force or an operator edit, where
+    re-doing completed item work is the intent.
     """
     del variables  # state dirs are keyed by step_id, not by output template
     dep_ids = downstream(plan.steps, root_step_id)
     all_ids = [root_step_id, *dep_ids]
-    root_is_composite = any(
-        step.step_id == root_step_id and step.mode == "composite" for step in plan.steps
-    )
+    steps_by_id = {step.step_id: step for step in plan.steps}
+    root_step = steps_by_id.get(root_step_id)
+    root_is_composite = root_step is not None and root_step.mode == "composite"
     invalidated: list[str] = []
 
     for step_id in all_ids:
         step_state = _step_item_dir(run_dir, step_id)
+        step = steps_by_id.get(step_id)
+        keep_items = (
+            keep_downstream_mapped_items
+            and step_id != root_step_id
+            and step is not None
+            and step.fan_out is not None
+            and step.mode != "composite"
+        )
         status_paths: list[Path] = []
         non_fan_out_status = step_state / STATUS_FILE
         if non_fan_out_status.exists():
             status_paths.append(non_fan_out_status)
-        if step_state.exists():
+        if step_state.exists() and not keep_items:
             for sub in step_state.iterdir():
                 if sub.is_dir():
                     fan_out_status = sub / STATUS_FILE
@@ -4430,20 +4451,19 @@ def _collected_documents(
     return documents
 
 
+# A record that is present but cannot be read: corrupt YAML, a shape this reader
+# rejects (one written by a later Metaproc), or a file it may not open.
+_COLLECTED_INPUTS_UNREADABLE = (YAMLError, ValueError, OSError)
+
+
 def _read_collected_inputs(run_dir: Path, step_id: str) -> CollectedInputsRecord | None:
-    """Read a step's ``collected-inputs.yaml``; an unreadable record counts as absent."""
-    state_dir = _step_item_dir(run_dir, step_id)
-    try:
-        return read_collected_inputs_at(state_dir)
-    except (YAMLError, ValueError) as exc:
-        log.warning(
-            "step %r: unreadable %s in %s (%s); its collected inputs cannot be compared",
-            step_id,
-            COLLECTED_INPUTS_FILE,
-            state_dir,
-            exc,
-        )
-        return None
+    """Read a step's ``collected-inputs.yaml``. None when the step has no record.
+
+    Raises ``_COLLECTED_INPUTS_UNREADABLE`` when a record is present but cannot be
+    read. Absent and unreadable are different facts, and each caller degrades them in
+    its own direction.
+    """
+    return read_collected_inputs_at(_step_item_dir(run_dir, step_id))
 
 
 def _record_collected_inputs(
@@ -4470,7 +4490,13 @@ def _record_collected_inputs(
         )
         for document in documents
     }
-    prior = _read_collected_inputs(run_dir, step_id)
+    try:
+        prior = _read_collected_inputs(run_dir, step_id)
+    except _COLLECTED_INPUTS_UNREADABLE:
+        # An unreadable record has nothing to compare against, and writing the current
+        # one replaces it. The reuse decision reports the unreadable record itself.
+        log.debug("step %r: replacing unreadable %s", step_id, COLLECTED_INPUTS_FILE, exc_info=True)
+        prior = None
     if prior is not None and prior.run_id == run_id and prior.inputs == inputs:
         return
     write_collected_inputs_at(
@@ -4481,6 +4507,29 @@ def _record_collected_inputs(
             recorded_at=_now_iso(),
             inputs=inputs,
         ),
+    )
+
+
+def _cascade_invalidation(
+    run_dir: Path,
+    plan: Plan,
+    step_id: str,
+    *,
+    variables: dict[str, str],
+) -> list[str]:
+    """Invalidate a consumer whose collected input no longer holds, and its downstream.
+
+    The consumer's own child scopes go with it, and downstream mapped non-composite
+    steps keep their completed items' records: the cascade is there to discover work
+    the changed outcomes add, not to re-do item work that is already finished.
+    """
+    return _invalidate_downstream(
+        run_dir,
+        step_id,
+        plan,
+        variables=variables,
+        invalidate_root_children=True,
+        keep_downstream_mapped_items=True,
     )
 
 
@@ -4502,21 +4551,48 @@ def _maybe_cascade_for_collected_inputs(
     move, so without this its earlier completion, computed over the old outcomes,
     would be reused along with everything downstream of it.
 
-    A composite consumer's own child steps are invalidated too, since they read the
-    document through ``with:`` paths. Downstream steps are invalidated at the parent
-    level only, as the fingerprint cascade does, so downstream composites reuse
-    their completed child steps.
+    Every task in the consumer's own child scopes is invalidated, whether or not it
+    reads the document, since a composite's children read it through ``with:`` paths.
+    Downstream steps are re-entered rather than re-done: a downstream composite reuses
+    its completed child steps, and a downstream mapped non-composite step keeps its
+    completed items' records, so in both mapped shapes the cascade discovers new work
+    without re-doing finished item work. An item whose inputs changed only in content
+    is reused; ``--force`` or ``--from <step>`` re-does those.
 
     Compares outcome digests, never mtimes or error wording: each item's key, state
     and success plus the totals, so an item that fails again with a different message
     is not a change while an item that completes is. No-op when the step declares no
     ``collect:`` input, when no record or no recorded outcome digest exists (the step
-    last ran before they did), or when every digest matches. Returns the step IDs
-    whose per-task ``status.yaml`` files were renamed to ``.stale``.
+    last ran before they did), or when every digest matches. A record that is present
+    but unreadable counts as changed. Returns the step IDs whose per-task
+    ``status.yaml`` files were renamed to ``.stale``.
     """
     if not any(spec.collect and spec.path for spec in step.inputs.values()):
         return []
-    recorded = _read_collected_inputs(run_dir, step.step_id)
+    try:
+        recorded = _read_collected_inputs(run_dir, step.step_id)
+    except _COLLECTED_INPUTS_UNREADABLE as exc:
+        # Absent means a run that predates the record, which keeps its legacy reuse.
+        # Present but unreadable means the step ran over outcomes this process cannot
+        # compare, so it degrades the other way: re-running one consumer is the cheap
+        # failure, reusing output computed over outcomes that no longer hold is the
+        # bug this check exists to catch.
+        state_dir = _step_item_dir(run_dir, step.step_id)
+        log.warning(
+            "step %r: unreadable %s in %s; treating its collected inputs as changed",
+            step.step_id,
+            COLLECTED_INPUTS_FILE,
+            state_dir,
+            exc_info=True,
+        )
+        invalidated = _cascade_invalidation(run_dir, plan, step.step_id, variables=variables)
+        suffix = f" — invalidated: {', '.join(invalidated)}" if invalidated else ""
+        detail = textwrap.shorten(f"{type(exc).__name__}: {exc}", width=160, placeholder=" ...")
+        out.progress(
+            f"  Step '{step.step_id}': unreadable {COLLECTED_INPUTS_FILE} in {state_dir} "
+            f"({detail}); its collected inputs count as changed{suffix}"
+        )
+        return invalidated
     if recorded is None:
         return []
     documents = _collected_documents(
@@ -4537,9 +4613,7 @@ def _maybe_cascade_for_collected_inputs(
             changed.append(document)
     if not changed:
         return []
-    invalidated = _invalidate_downstream(
-        run_dir, step.step_id, plan, variables=variables, invalidate_root_children=True
-    )
+    invalidated = _cascade_invalidation(run_dir, plan, step.step_id, variables=variables)
     if invalidated:
         names = ", ".join(f"'{d.input_name}' from '{d.upstream_step}'" for d in changed)
         noun = "input" if len(changed) == 1 else "inputs"
