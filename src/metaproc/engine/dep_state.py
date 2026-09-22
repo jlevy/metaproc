@@ -316,8 +316,11 @@ def _scan_step_task_files(run_dir: Path, step_id: str) -> tuple[bool, bool, bool
     Returns ``(is_running, has_stale, has_completed_status_yaml)``:
 
     - ``is_running``: at least one ``status.yaml`` reports state=running.
-    - ``has_stale``: at least one ``status.yaml.stale`` exists (renamed by
-      ``--force``, the fingerprint cascade, or a changed collected input).
+    - ``has_stale``: at least one ``status.yaml.stale`` (renamed by ``--force``,
+      the fingerprint cascade, or a changed collected input) has no ``status.yaml``
+      beside it. The rename is pending until the task re-runs; once the re-run
+      writes a new ``status.yaml``, the ``.stale`` left beside it is the record of
+      a past invalidation and no longer counts.
     - ``has_completed_status_yaml``: at least one ``status.yaml`` reports
       state=completed. Used as a fallback when ``process-status.yaml`` is
       absent (single-step runs / legacy layouts).
@@ -343,9 +346,10 @@ def _scan_step_task_files(run_dir: Path, step_id: str) -> tuple[bool, bool, bool
         elif rec.state == "completed":
             has_completed = True
 
-    for _ in tasks_root.rglob("*" + _STALE_SUFFIX):
-        has_stale = True
-        break
+    for stale_path in tasks_root.rglob("*" + _STALE_SUFFIX):
+        if not stale_path.with_suffix("").exists():
+            has_stale = True
+            break
 
     return is_running, has_stale, has_completed
 
@@ -360,9 +364,11 @@ def compute_step_state(run_dir: Path, plan: Plan, step_id: str) -> StepState:
 
     1. ``in_flight``: any per-task ``status.yaml`` reports ``running``, or
        the process-status mirror says ``running``.
-    2. ``invalidated``: any ``status.yaml.stale`` exists under the step's
-       task state dir (renamed by ``--force``, the fingerprint cascade, or a
-       changed collected input).
+    2. ``invalidated``: a ``status.yaml.stale`` under the step's task state
+       dir (renamed by ``--force``, the fingerprint cascade, or a changed
+       collected input) has no ``status.yaml`` beside it. A ``.stale`` beside a
+       newer ``status.yaml`` records a past invalidation the re-run already
+       answered, so the step is then judged by its new record.
     3. ``stale``: the step is otherwise considered completed AND a
        ``recorded_step_hash`` exists that differs from
        ``fingerprint_step(step)``.

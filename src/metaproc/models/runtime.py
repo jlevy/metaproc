@@ -29,8 +29,10 @@ class StepState(StrEnum):
       fingerprint differs from the recorded one (operator edited the
       runbook since the last completion).
     - ``invalidated``: a prior completion record was renamed ``.stale`` by
-      ``--force``, a fingerprint cascade, or a changed collected input — the step
-      will rerun.
+      ``--force``, a fingerprint cascade, or a changed collected input, and no
+      ``status.yaml`` has been written beside it since — the step will rerun. Once
+      the re-run writes a new ``status.yaml``, the leftover ``.stale`` is the
+      record of a past invalidation and the step reads by its new record.
     - ``missing``: never started, or started and failed without a
       recorded completion.
     - ``in_flight``: actively running.
@@ -269,15 +271,11 @@ class CollectedInput(BaseModel):
     path: str
     """Rendered path the document was written to."""
 
-    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    """Digest of the document's bytes, kept for audit. Every resume that reaches the
-    consumer rewrites the document, byte-identically when nothing changed."""
-
-    outcomes_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    """Digest of what the document says happened: the upstream step, the totals, and
-    each item's key, state and success. A resume compares this value, so an item that
-    fails again with a different error message does not count as a change. A record
-    without it is treated like a step with no record: it is not compared."""
+    outcomes_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    """The document's one digest, of its outcome projection: the upstream step, the
+    totals, and each item's key, state and success. Error wording and attempt log
+    paths are not part of it, so an item that fails again with a different message or
+    a new log does not count as a change, while an item that changes state does."""
 
 
 class CollectedInputsRecord(BaseModel):
@@ -286,11 +284,13 @@ class CollectedInputsRecord(BaseModel):
     Written in the step's task state directory each time the orchestrator
     materializes the step's fan-in documents, before the step runs. A later run
     against the same ``RUN_ID`` rebuilds each document from durable per-item
-    state and compares outcome digests: a difference means the step last ran over
-    outcomes that no longer hold, so the step (with a composite's own child
-    steps) re-runs and its downstream steps are invalidated. A step with no
-    record (one that last ran before the record existed) is not invalidated by
-    this rule.
+    state and compares its one digest, of the outcome projection (upstream step,
+    totals, and each item's key, state and success; error wording and log paths
+    are not part of it): a difference means the step last ran over outcomes that
+    no longer hold, so the step (with a composite's own child steps) re-runs and
+    its downstream steps are invalidated. A step with no record, or with a record
+    that fails validation (such as one written in an earlier shape), is not
+    invalidated by this rule; the unreadable record is logged and treated as absent.
 
     Kept apart from ``fingerprint_step``, which is definition-only: the run plan
     publishes fingerprints at launch, and the collected documents are execution

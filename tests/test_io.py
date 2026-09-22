@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from frontmatter_format import read_yaml_file
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from metaproc.io import to_yaml_string
 from metaproc.io.frontmatter import (
@@ -27,6 +27,7 @@ from metaproc.io.state_io import (
     mark_failed_synthetic_at,
     mark_running_at,
     read_attempt_history_at,
+    read_collected_inputs_at,
     read_result_at,
     read_status_at,
     read_task_attempt_at,
@@ -34,6 +35,7 @@ from metaproc.io.state_io import (
     start_attempt_at,
     validate_result_attempt_identity_at,
     write_attempt_at,
+    write_collected_inputs_at,
     write_result_at,
     write_status_at,
 )
@@ -41,6 +43,8 @@ from metaproc.models.authored import IOSpec
 from metaproc.models.runtime import (
     AttemptDisposition,
     AttemptRecord,
+    CollectedInput,
+    CollectedInputsRecord,
     MapItem,
     ResultRecord,
     StatusRecord,
@@ -50,6 +54,7 @@ from metaproc.paths import (
     ATTEMPT_ANOMALIES_FILE,
     ATTEMPT_FILE,
     ATTEMPTS_SUBDIR,
+    COLLECTED_INPUTS_FILE,
     STATE_DIR,
     TASKS_SUBDIR,
     attempt_state_dir,
@@ -173,6 +178,59 @@ class TestStateIO:
         result = read_result_at(tmp_path)
         assert result is not None
         assert result.attempt_id is None
+
+    def test_collected_inputs_round_trip_with_one_outcome_digest(self, tmp_path):
+        record = CollectedInputsRecord(
+            run_id="r1",
+            step_id="summarize",
+            recorded_at="2026-09-22T00:00:00",
+            inputs={
+                "outcomes": CollectedInput(
+                    upstream_step="scan",
+                    path="runs/r1/summary/outcomes.yaml",
+                    outcomes_sha256="a" * 64,
+                )
+            },
+        )
+        write_collected_inputs_at(tmp_path, record)
+
+        raw = read_yaml_file(tmp_path / COLLECTED_INPUTS_FILE)
+        assert raw["schema"] == "metaproc:CollectedInputs/0.1"
+        assert raw["inputs"] == {
+            "outcomes": {
+                "upstream_step": "scan",
+                "path": "runs/r1/summary/outcomes.yaml",
+                "outcomes_sha256": "a" * 64,
+            }
+        }
+        assert read_collected_inputs_at(tmp_path) == record
+
+    def test_read_missing_collected_inputs_returns_none(self, tmp_path):
+        assert read_collected_inputs_at(tmp_path) is None
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            {"upstream_step": "scan", "path": "outcomes.yaml"},
+            {"upstream_step": "scan", "path": "outcomes.yaml", "sha256": "b" * 64},
+        ],
+        ids=["missing", "byte-digest"],
+    )
+    def test_collected_inputs_without_the_outcome_digest_fail_validation(self, tmp_path, entry):
+        """The caller logs such a record and treats it as absent."""
+        (tmp_path / COLLECTED_INPUTS_FILE).write_text(
+            to_yaml_string(
+                {
+                    "schema": "metaproc:CollectedInputs/0.1",
+                    "run_id": "r1",
+                    "step_id": "summarize",
+                    "recorded_at": "2026-09-22T00:00:00",
+                    "inputs": {"outcomes": entry},
+                }
+            )
+        )
+        with pytest.raises(ValidationError, match="outcomes_sha256"):
+            read_collected_inputs_at(tmp_path)
 
     def test_result_persists_exact_attempt_and_rejects_stale_retry(self, tmp_path):
         first = mark_running_at(

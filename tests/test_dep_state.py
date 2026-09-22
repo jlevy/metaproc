@@ -803,6 +803,38 @@ class TestComputeStepState:
         (sd / STATUS_FILE).rename(sd / "status.yaml.stale")
         assert compute_step_state(run_dir, plan, "step-a") == StepState.invalidated
 
+    def test_a_stale_file_beside_a_newer_status_is_a_past_invalidation(
+        self, tmp_path: Path
+    ) -> None:
+        """A re-run leaves the renamed record beside its new ``status.yaml``; the step
+        then reads by the new record, while an item with no successor stays pending."""
+        run_dir = tmp_path / "runs" / "demo"
+        run_dir.mkdir(parents=True)
+        plan = Plan(process="demo", steps=[_step("step-a"), _step("fan-step")])
+        _write_status_for(run_dir, "step-a", "completed")
+        sd = run_dir / STATE_DIR / TASKS_SUBDIR / "step-a"
+        (sd / STATUS_FILE).rename(sd / "status.yaml.stale")
+        _write_status_for(run_dir, "step-a", "completed")
+        assert compute_step_state(run_dir, plan, "step-a") == StepState.current
+
+        # Per-item records of a mapped step: both invalidated, then item a re-runs.
+        fan_dir = run_dir / STATE_DIR / TASKS_SUBDIR / "fan-step"
+        for key in ("a", "b"):
+            (fan_dir / key).mkdir(parents=True)
+            (fan_dir / key / "status.yaml.stale").write_text("invalidated\n")
+        rerun = StatusRecord(
+            run_id="demo/run-1",
+            step_id="fan-step",
+            item={"key": "a"},
+            state="completed",
+            started_at="2026-05-20T00:02:00",
+            completed_at="2026-05-20T00:03:00",
+        )
+        write_status_at(fan_dir / "a", rerun)
+        assert compute_step_state(run_dir, plan, "fan-step") == StepState.invalidated
+        write_status_at(fan_dir / "b", rerun.model_copy(update={"item": {"key": "b"}}))
+        assert compute_step_state(run_dir, plan, "fan-step") == StepState.current
+
     def test_current_when_fingerprint_matches(self, tmp_path: Path) -> None:
         run_dir = tmp_path / "runs" / "demo"
         run_dir.mkdir(parents=True)
