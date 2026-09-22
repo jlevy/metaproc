@@ -599,4 +599,4 @@ def read_resources_document_json(raw: str) -> ReadableResourcesDocument:
 
 def read_resources_document(path: Path) -> ReadableResourcesDocument:
     """Read a current or strict historical resource document from ``path``."""
-    return read_resources_document_json(path.read_text())
+    return read_resources_document_json(path.read_text(encoding="utf-8"))

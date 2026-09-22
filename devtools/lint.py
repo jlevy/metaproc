@@ -9,6 +9,10 @@ from rich import print as rprint
 SRC_PATHS = ["src", "tests", "devtools", "examples"]
 DOC_PATHS = ["README.md"]
 PLC0415_CHECKER = str(Path(__file__).with_name("check_plc0415_justifications.py"))
+ATOMIC_WRITE_CHECKER = str(Path(__file__).with_name("check_atomic_writes.py"))
+# Scoped to the shipped package: tests and devtools write throwaway fixtures, which
+# are private staging, not publication. See the checker's module docstring.
+ATOMIC_WRITE_PATHS = ["src/metaproc"]
 VENDORED_PATHS = ["src/metaproc/metabrowser_plugin/plugin/elk.bundled.js"]
 
 
@@ -38,6 +42,7 @@ def main():
         errcount += run(["ruff", "check", "--fix", *SRC_PATHS])
         errcount += run(["ruff", "format", *SRC_PATHS])
     errcount += run(["python", PLC0415_CHECKER, *SRC_PATHS])
+    errcount += run(["python", ATOMIC_WRITE_CHECKER, *ATOMIC_WRITE_PATHS])
     errcount += run(["basedpyright", "--stats", *SRC_PATHS])
 
     rprint()

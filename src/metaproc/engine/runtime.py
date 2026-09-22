@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO
 
-from strif import atomic_output_file
+from strif import atomic_write_text
 
 from metaproc.adapters.base import agent_seed_env
 from metaproc.adapters.registry import get_adapter
@@ -100,7 +100,7 @@ def prepare_step(
         variables["step.prompt_paths"] = ", ".join(resolved_prompt_paths)
         variables["step.prompt_path"] = resolved_prompt_paths[0]
         for resolved_prompt_path in resolved_prompt_paths:
-            prompt_content = Path(resolved_prompt_path).read_text()
+            prompt_content = Path(resolved_prompt_path).read_text(encoding="utf-8")
             prompt = (
                 f"{prompt.rstrip()}\n\n"
                 f'<prompt-file path="{resolved_prompt_path}">\n'
@@ -257,8 +257,7 @@ def launch_step(
 
     ts = datetime.now(tz=UTC).strftime("%H%M%S")
     prompt_file = logs_dir / f"prompt-{step_id}-{context_label}-{ts}.txt"
-    with atomic_output_file(prompt_file) as tmp_path:
-        Path(tmp_path).write_text(resolved_prompt)
+    atomic_write_text(prompt_file, resolved_prompt)
 
     env = adapter.prepare_env(agent_seed_env(), merged_config)
     if step_env:
@@ -267,7 +266,12 @@ def launch_step(
     cwd = adapter.working_directory(merged_config)
 
     use_filter = adapter_type == "pi-cli"
-    log_fh = log_path.open("w")
+    # The handle goes either straight to a detached child as its stdout, or to the log
+    # filter thread, which flushes per line. Either way an operator tails this while the
+    # agent runs, so it has to appear incrementally.
+    log_fh = log_path.open(
+        "w", encoding="utf-8"
+    )  # write-contract: live-stream -- tailed during the run
     filter_thread: threading.Thread | None = None
     try:
         if use_filter:
@@ -300,8 +304,7 @@ def launch_step(
 
     pid_filename = f"{step_id}_{context_label}.pid"
     pid_path = logs_dir / pid_filename
-    with atomic_output_file(pid_path) as tmp_path:
-        Path(tmp_path).write_text(str(proc.pid))
+    atomic_write_text(pid_path, str(proc.pid))
 
     return LaunchResult(
         proc=proc,

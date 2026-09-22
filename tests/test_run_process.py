@@ -3762,7 +3762,7 @@ class TestProcessContractValidation:
             def build_command(self, prompt_file, merged_config, variables):
                 path = Path(prompt_file)
                 assert path.exists()
-                assert "write the declared output" in path.read_text()
+                assert "write the declared output" in path.read_text(encoding="utf-8")
                 script = (
                     "from pathlib import Path; "
                     f"target = Path({variables['OUTPUT_PATH']!r}); "
@@ -4089,7 +4089,7 @@ class TestProcessContractValidation:
             default_model = None
 
             def build_command(self, prompt_file, merged_config, variables):
-                prompt_text = Path(prompt_file).read_text()
+                prompt_text = Path(prompt_file).read_text(encoding="utf-8")
                 if "summary" in prompt_text:
                     target_path = variables["SUMMARY_PATH"]
                 else:
@@ -4437,7 +4437,7 @@ class TestNonFanOutContentRetry:
             default_model = None
 
             def build_command(self, prompt_file, merged_config, variables):  # noqa: ANN001, ARG002
-                prompt = Path(prompt_file).read_text()
+                prompt = Path(prompt_file).read_text(encoding="utf-8")
                 if observed_prompts is not None:
                     observed_prompts.append(prompt)
                 prompt_allows_success = (
@@ -4700,7 +4700,7 @@ class TestNonFanOutTransientRetry:
             default_model = None
 
             def build_command(self, prompt_file, merged_config, variables):  # noqa: ANN001, ARG002
-                observed_prompts.append(Path(prompt_file).read_text())
+                observed_prompts.append(Path(prompt_file).read_text(encoding="utf-8"))
                 target_path = variables["TARGET_PATH"]
                 script = (
                     "import sys, time; from pathlib import Path; "
@@ -4875,7 +4875,7 @@ class TestRunOwnedPoolExecutionProfiles:
             def build_command(self, prompt_file, merged_config, variables):  # noqa: ANN001, ARG002
                 target = next(
                     line.removeprefix("OUTPUT_FILE=")
-                    for line in Path(prompt_file).read_text().splitlines()
+                    for line in Path(prompt_file).read_text(encoding="utf-8").splitlines()
                     if line.startswith("OUTPUT_FILE=")
                 )
                 profile = str(variables["EXECUTION_PROFILE"])

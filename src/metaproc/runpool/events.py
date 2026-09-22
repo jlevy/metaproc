@@ -32,7 +32,7 @@ class EventLogger:
     def open(self) -> None:
         """Open the event log for appending."""
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._file = open(self._path, "a")  # noqa: SIM115
+        self._file = open(self._path, "a", encoding="utf-8")  # noqa: SIM115
 
     def close(self) -> None:
         if self._file is not None:

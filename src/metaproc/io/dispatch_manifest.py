@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from frontmatter_format import read_yaml_file, to_yaml_string
-from strif import atomic_output_file
+from strif import atomic_write_text
 
 from metaproc.paths import DISPATCH_MANIFEST_FILE, step_state_dir
 
@@ -39,7 +39,6 @@ def write_dispatch_manifest(
     and ``items``.
     """
     path = _manifest_path(run_dir, step_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
 
     data: dict[str, object] = {
         "step_id": step_id,
@@ -50,8 +49,7 @@ def write_dispatch_manifest(
         "workers": worker_jobs,
     }
 
-    with atomic_output_file(path) as tmp:
-        Path(tmp).write_text(to_yaml_string(data), encoding="utf-8")
+    atomic_write_text(path, to_yaml_string(data), make_parents=True)
 
     log.info("Wrote dispatch manifest: %s (%d workers)", path, len(worker_jobs))
     return path
@@ -94,7 +92,5 @@ def append_dispatch_manifest(
     data["num_workers"] = len(merged_workers)
 
     path = _manifest_path(run_dir, step_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with atomic_output_file(path) as tmp:
-        Path(tmp).write_text(to_yaml_string(data), encoding="utf-8")
+    atomic_write_text(path, to_yaml_string(data), make_parents=True)
     return path

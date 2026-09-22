@@ -142,7 +142,7 @@ def _write(path: Path, data: bytes | str) -> Path:
     if isinstance(data, bytes):
         path.write_bytes(data)
     else:
-        path.write_text(data)
+        path.write_text(data, encoding="utf-8")
     return path
 
 

@@ -11,6 +11,16 @@ Use this catalog when adding a new artifact, renaming one, or auditing format
 consistency. The companion programmatic registry is `src/metaproc/paths.py`, which holds
 the filename constants.
 
+Each section below is also a write contract, and the contract is what decides how the
+artifact may be written.
+State artifacts and structured documents are *published*: staged in the destination
+directory and committed in one step, so a reader sees the previous file or the complete
+new one. Stream artifacts are *appended*, and plain-text captures taken from a running
+subprocess are *live streams* — both would be weakened by replacement, not strengthened.
+See
+[arch-file-io-utilities.md § Write Contracts](arch-file-io-utilities.md#write-contracts)
+for the helper that expresses each one and for the check that enforces it.
+
 ## Summary by format
 
 | Format | Count | Where it lives |
@@ -24,7 +34,9 @@ the filename constants.
 ## State artifacts (YAML)
 
 Durable engine bookkeeping under `<run>/.state/`. Machine-internal records; agents must
-not hand-edit them. Atomic writes via `strif.atomic_output_file`.
+not hand-edit them. Every one is published atomically through `metaproc.io`’s
+`atomic_write_text` / `atomic_output_file`; none uses `backup_suffix`, because a backup
+makes the destination briefly absent and several of these are polled continuously.
 
 | Filename | Path | Schema (Pydantic) | Lifecycle | Writer | Primary readers |
 | --- | --- | --- | --- | --- | --- |
@@ -120,11 +132,27 @@ The `usage.md` envelope is registered in `metaproc.io.frontmatter.ENVELOPE_MAP`;
 
 | Filename | Path | Writer | Notes |
 | --- | --- | --- | --- |
-| `process_<attempt_id>.log` | `<run>/.logs/tasks/<step>/` or `<run>/.logs/tasks/<step>/<item>/` | `runpool/backend.py` | Captured subprocess stdout and stderr; gzip on close |
+| `process_<attempt_id>.log` | `<run>/.logs/tasks/<step>/` or `<run>/.logs/tasks/<step>/<item>/` | `runpool/backend.py` | Live stream: the fd is handed to the child, so an operator can tail it while the step runs. Gzip on close |
 | `probe.stderr` | `<run>/.state/steps/<step>/...` | `dispatch/pool_dispatch.py` | Captured stderr from a failed preflight probe |
 | `prompt-<step>-attempt<N>-<HHMMSS>.txt` | `<run>/.logs/tasks/<step>/` | `commands/run_process.py:_execute_agent_step` | Resolved prompt for one scalar agent attempt; atomic, once before launch |
 | `<step>_<context>_<ts>-attempt<N>.prompt.md` | `<run>/.logs/tasks/<step>/<item>/` | `commands/run_parallel.py:_build_prepare_launch` | Resolved prompt for one fan-out agent attempt; atomic, once before launch |
-| `prompt-<step>-<context>-<HHMMSS>.txt` | `<run>/.logs/tasks/<step>/` or `<run>/.logs/tasks/<step>/<item>/` | `commands/run_step.py` or `engine/runtime.py:launch_step` | Resolved prompt for a direct `run-step` launch |
+| `prompt-<step>-<context>-<HHMMSS>.txt` | `<run>/.logs/tasks/<step>/` or `<run>/.logs/tasks/<step>/<item>/` | `commands/run_step.py` or `engine/runtime.py:launch_step` | Resolved prompt for a direct `run-step` launch; atomic, once before launch |
+
+## Credential files
+
+Written outside the run directory, into an agent CLI’s own configuration location or a
+per-dispatch slot. Published through `metaproc.io.write_secret_text`, which creates the
+staged file at mode `0o600` before the first byte lands and commits it by rename, so the
+file is never readable beyond its owner at any instant.
+
+| Filename | Path | Writer | Notes |
+| --- | --- | --- | --- |
+| `.credentials.json` | `~/.claude/` or `<slot_dir>/` | `adapters/claude_cli.py` | Claude Code OAuth blob |
+| `.claude.json` | `<slot_dir>/` | `adapters/claude_cli.py` | Onboarding marker |
+| `settings.json` | `<slot_dir>/` | `adapters/claude_cli.py` | Sandbox network allowlist |
+| `auth.json` | `~/.codex/` or `<slot_dir>/.codex/` | `adapters/codex_cli.py` | Codex CLI credential |
+| `config.toml` | `<slot_dir>/.codex/` | `adapters/codex_cli.py` | Pins the credential store; a truncated copy would let codex fall back to the OS keychain |
+| `models.json` | `~/.pi/agent/` | `cloud/gcp/container_bootstrap.py` | May carry a literal provider key |
 
 ## Pending renames
 

@@ -24,7 +24,7 @@ def _isolate_runtime_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content)
+    path.write_text(content, encoding="utf-8")
 
 
 def _runs_var(tmp_path: Path) -> list[str]:

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from frontmatter_format import read_yaml_file, to_yaml_string
 from ruamel.yaml import YAMLError
-from strif import atomic_output_file
+from strif import atomic_write_text
 
 from metaproc.engine.placeholders import resolve_templates
 from metaproc.errors import AttemptTerminalConflictError
@@ -57,10 +57,8 @@ def _write_record_at(state_dir: Path, filename: str, data: dict[str, object]) ->
     *state_dir* is the directory the state file lives in directly — there
     is no inner ``.state/`` subdir.
     """
-    state_dir.mkdir(parents=True, exist_ok=True)
     target = state_dir / filename
-    with atomic_output_file(target) as tmp_path:
-        Path(tmp_path).write_text(to_yaml_string(data), encoding="utf-8")
+    atomic_write_text(target, to_yaml_string(data), make_parents=True)
     return target
 
 

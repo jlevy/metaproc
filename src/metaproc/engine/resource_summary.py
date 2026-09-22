@@ -6,7 +6,7 @@ from importlib import resources
 from pathlib import Path
 
 from frontmatter_format import fmf_write
-from strif import atomic_output_file
+from strif import atomic_output_file, atomic_write_text
 
 from metaproc.models.resource_budget import BudgetStatus
 from metaproc.models.resource_summary import (
@@ -57,9 +57,7 @@ def _write_schema_sidecar(target: Path) -> None:
         "resource-usage-summary.v1.schema.yaml",
     )
     content = source.read_text(encoding="utf-8")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with atomic_output_file(target) as tmp_path:
-        Path(tmp_path).write_text(content)
+    atomic_write_text(target, content, make_parents=True)
 
 
 def _render_summary(summary: ResourceUsageSummary) -> str:

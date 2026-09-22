@@ -13,7 +13,7 @@ from metaproc.models.authored import ProcessSpec
 
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(textwrap.dedent(content).lstrip())
+    path.write_text(textwrap.dedent(content).lstrip(), encoding="utf-8")
 
 
 def _bare_spec_with_matrix(lane_matrix: dict[str, Any] | None = None) -> ProcessSpec:

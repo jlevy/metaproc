@@ -71,8 +71,8 @@ def _write_sentinel(
     content = buf.getvalue()
     sentinel_path = state_dir / POOL_KILL_SENTINEL_FILE
 
-    with atomic_output_file(sentinel_path) as tmp:
-        Path(tmp).write_text(content)
+    with atomic_output_file(sentinel_path, make_parents=True) as tmp:
+        Path(tmp).write_text(content, encoding="utf-8")
 
     return sentinel_path
 

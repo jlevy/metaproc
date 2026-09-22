@@ -907,7 +907,7 @@ class LocalFilesystemBackend:
         with contextlib.suppress(OSError):
             self._path.parent.chmod(0o700)
         with atomic_output_file(self._path) as tmp:
-            Path(tmp).write_text(_json.dumps(doc, indent=2))
+            Path(tmp).write_text(_json.dumps(doc, indent=2), encoding="utf-8")
             Path(tmp).chmod(0o600)
 
     def upsert_entry(

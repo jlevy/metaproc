@@ -90,7 +90,7 @@ def _make_pi_log_with_tool_call(path: Path) -> None:
             }
         ),
     ]
-    path.write_text("\n".join(lines) + "\n")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _write(tmp_path: Path, rel: str, content: str) -> Path:

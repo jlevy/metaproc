@@ -454,7 +454,7 @@ def _load_sidecar(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        payload = json.loads(path.read_text())
+        payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     return payload if isinstance(payload, dict) else {}
@@ -496,7 +496,7 @@ def _adapter_type_from_sidecar(sidecar: Path) -> str | None:
     if not sidecar.exists():
         return None
     try:
-        payload = json.loads(sidecar.read_text())
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     if not isinstance(payload, dict):

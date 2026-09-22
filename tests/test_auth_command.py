@@ -605,7 +605,7 @@ class TestAuthProbe:
                 debug_idx = cmd.index("--debug-file")
                 slot_path = Path(cmd[debug_idx + 1])
                 if debug_log:
-                    slot_path.write_text(debug_log)
+                    slot_path.write_text(debug_log, encoding="utf-8")
             except (ValueError, IndexError):
                 pass
             return _CompletedProcess(returncode, stdout, stderr)

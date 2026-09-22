@@ -58,7 +58,7 @@ def test_pi_compaction_removes_streaming_events(pi_log: Path) -> None:
 
     # Verify no message_update, message_start, tool_execution_update,
     # turn_start, turn_end remain.
-    compacted_lines = pi_log.read_text().splitlines()
+    compacted_lines = pi_log.read_text(encoding="utf-8").splitlines()
     drop_types = {
         "message_update",
         "message_start",
@@ -80,7 +80,7 @@ def test_pi_compaction_removes_streaming_events(pi_log: Path) -> None:
 def test_pi_compaction_preserves_important_events(pi_log: Path) -> None:
     # Catalog original events we expect to keep.
     original_keep_types: set[str] = set()
-    for line in pi_log.read_text().splitlines():
+    for line in pi_log.read_text(encoding="utf-8").splitlines():
         try:
             event = json.loads(line)
             if isinstance(event, dict):
@@ -100,7 +100,7 @@ def test_pi_compaction_preserves_important_events(pi_log: Path) -> None:
 
     # Verify those event types are still present.
     compacted_types: set[str] = set()
-    for line in pi_log.read_text().splitlines():
+    for line in pi_log.read_text(encoding="utf-8").splitlines():
         try:
             event = json.loads(line)
             if isinstance(event, dict):
@@ -115,7 +115,7 @@ def test_pi_compaction_preserves_important_events(pi_log: Path) -> None:
 
 def test_pi_compaction_has_header(pi_log: Path) -> None:
     compact_log(pi_log)
-    first_line = pi_log.read_text().splitlines()[0]
+    first_line = pi_log.read_text(encoding="utf-8").splitlines()[0]
     header = json.loads(first_line)
     assert header["type"] == COMPACTION_TYPE
     assert header["version"] == 1
@@ -130,7 +130,7 @@ def test_pi_compaction_has_header(pi_log: Path) -> None:
 
 def test_pi_round_trip_parse_equivalence(pi_log: Path) -> None:
     """PiLogParser should produce the same LogEvents from compacted vs original."""
-    original_text = pi_log.read_text()
+    original_text = pi_log.read_text(encoding="utf-8")
 
     # Parse original.
     parser_orig = PiLogParser()
@@ -145,7 +145,7 @@ def test_pi_round_trip_parse_equivalence(pi_log: Path) -> None:
     # Parse compacted.
     parser_compact = PiLogParser()
     events_compact = []
-    for line in pi_log.read_text().splitlines():
+    for line in pi_log.read_text(encoding="utf-8").splitlines():
         events_compact.extend(parser_compact.parse_line(line))
     events_compact.extend(parser_compact.flush())
 
@@ -169,10 +169,10 @@ def test_pi_round_trip_parse_equivalence(pi_log: Path) -> None:
 
 def test_idempotency(pi_log: Path) -> None:
     compact_log(pi_log)
-    content_after_first = pi_log.read_text()
+    content_after_first = pi_log.read_text(encoding="utf-8")
 
     result2 = compact_log(pi_log)
-    content_after_second = pi_log.read_text()
+    content_after_second = pi_log.read_text(encoding="utf-8")
 
     assert result2.already_compact
     assert content_after_first == content_after_second
@@ -276,7 +276,7 @@ def test_codex_compaction_preserves_real_error_events(tmp_path: Path) -> None:
 
 
 def test_claude_is_noop(claude_log: Path) -> None:
-    original_content = claude_log.read_text()
+    original_content = claude_log.read_text(encoding="utf-8")
     original_line_count = len(original_content.splitlines())
 
     result = compact_log(claude_log)
@@ -288,7 +288,7 @@ def test_claude_is_noop(claude_log: Path) -> None:
 
 
 def test_gemini_is_noop(gemini_log: Path) -> None:
-    original_content = gemini_log.read_text()
+    original_content = gemini_log.read_text(encoding="utf-8")
     original_line_count = len(original_content.splitlines())
 
     result = compact_log(gemini_log)
@@ -302,7 +302,7 @@ def test_gemini_is_noop(gemini_log: Path) -> None:
 
 
 def test_keep_original_creates_backup(pi_log: Path) -> None:
-    original_content = pi_log.read_text()
+    original_content = pi_log.read_text(encoding="utf-8")
     compact_log(pi_log, keep_original=True)
 
     backup = pi_log.with_suffix(".jsonl.bak")
@@ -320,17 +320,17 @@ def test_no_keep_original_removes_backup(pi_log: Path) -> None:
 
 
 def test_detect_pi_adapter() -> None:
-    lines = Path(FIXTURES / "pi_sample.jsonl").read_text().splitlines()[:20]
+    lines = Path(FIXTURES / "pi_sample.jsonl").read_text(encoding="utf-8").splitlines()[:20]
     assert detect_adapter(lines) == "pi"
 
 
 def test_detect_claude_adapter() -> None:
-    lines = Path(FIXTURES / "claude_sample.jsonl").read_text().splitlines()[:20]
+    lines = Path(FIXTURES / "claude_sample.jsonl").read_text(encoding="utf-8").splitlines()[:20]
     assert detect_adapter(lines) == "claude"
 
 
 def test_detect_gemini_adapter() -> None:
-    lines = Path(FIXTURES / "gemini_sample.jsonl").read_text().splitlines()[:20]
+    lines = Path(FIXTURES / "gemini_sample.jsonl").read_text(encoding="utf-8").splitlines()[:20]
     assert detect_adapter(lines) == "gemini"
 
 
@@ -341,7 +341,7 @@ def test_pi_compaction_no_message_final_when_end_has_thinking(pi_log: Path) -> N
     """Opus-style: message_end has thinking, so no message_final should be emitted."""
     compact_log(pi_log)
 
-    compacted_lines = pi_log.read_text().splitlines()
+    compacted_lines = pi_log.read_text(encoding="utf-8").splitlines()
     final_types = [
         json.loads(line).get("type")
         for line in compacted_lines

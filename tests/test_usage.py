@@ -1529,7 +1529,8 @@ class TestWriteUsageArenaToolsDiscovery:
                     "failure_kind": None,
                 }
             )
-            + "\n"
+            + "\n",
+            encoding="utf-8",
         )
 
     def test_native_agent_transcripts_are_not_parsed_as_captured_streams(

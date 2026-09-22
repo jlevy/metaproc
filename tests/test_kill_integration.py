@@ -97,7 +97,7 @@ def test_kill_cli_orchestrator_only(tmp_path: Path) -> None:
         "command_summary": "run-process test",
     }
     with atomic_output_file(lease_path) as tmp:
-        Path(tmp).write_text(to_yaml_string(data))
+        Path(tmp).write_text(to_yaml_string(data), encoding="utf-8")
 
     def fake_kill(pid: int, sig: signal.Signals | int) -> None:
         assert pid == 424242

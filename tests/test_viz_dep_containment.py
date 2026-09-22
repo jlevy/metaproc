@@ -29,7 +29,7 @@ def _python_files(root: Path) -> list[Path]:
 
 
 def _collect_imports(py_file: Path) -> list[str]:
-    tree = ast.parse(py_file.read_text())
+    tree = ast.parse(py_file.read_text(encoding="utf-8"))
     modules: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
