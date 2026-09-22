@@ -34,6 +34,7 @@ from metaproc.config.model_catalog import resolve_model
 from metaproc.dispatch.auth_usage import query_label_headroom
 from metaproc.dispatch.credential_pool import Vehicle
 from metaproc.dispatch.known_bugs import detect_known_bug
+from metaproc.io import write_secret_text
 from metaproc.settings import (
     CLAUDE_DEFAULT_EFFORT,
     CLAUDE_DEFAULT_MODEL,
@@ -743,8 +744,7 @@ class ClaudeCodeCliAdapter:
         claude_dir.mkdir(mode=0o700, exist_ok=True)
         claude_dir.chmod(0o700)
         creds_file = claude_dir / ".credentials.json"
-        creds_file.write_text(creds_json)
-        creds_file.chmod(0o600)
+        write_secret_text(creds_file, creds_json)
         log.info("claude-code auth: materialized ~/.claude/.credentials.json")
 
     # ── AuthCapableCliAdapter methods ───────────────────────────────
@@ -939,8 +939,7 @@ class ClaudeCodeCliAdapter:
         #
         # Reference: https://code.claude.com/docs/en/sandboxing
         onboarding_marker = slot_dir / ".claude.json"
-        onboarding_marker.write_text('{"hasCompletedOnboarding": true}\n')
-        onboarding_marker.chmod(0o600)
+        write_secret_text(onboarding_marker, '{"hasCompletedOnboarding": true}\n')
         # Sandbox allowlist (must mirror Dockerfile.agent's bake). The probe
         # path no longer activates the sandbox (IS_SANDBOX moved out of
         # global env into per-invocation prepare_env), so the probe doesn't
@@ -951,7 +950,8 @@ class ClaudeCodeCliAdapter:
         # #37970 — in which case fan-out process-item calls will need
         # operator follow-up. The probe path is unaffected.)
         sandbox_settings = slot_dir / "settings.json"
-        sandbox_settings.write_text(
+        write_secret_text(
+            sandbox_settings,
             '{"sandbox": {"network": {"allowedDomains": ['
             '"api.anthropic.com", "*.anthropic.com", '
             '"claude.ai", "*.claude.ai", '
@@ -960,9 +960,8 @@ class ClaudeCodeCliAdapter:
             '"*.googleapis.com", '
             '"github.com", "*.github.com", '
             '"raw.githubusercontent.com"'
-            "]}}}\n"
+            "]}}}\n",
         )
-        sandbox_settings.chmod(0o600)
         if vehicle is Vehicle.OAUTH_TOKEN:
             # Verify nothing in the slot would silently out-vote the
             # static token. The slot is fresh per dispatch, so this
@@ -997,8 +996,7 @@ class ClaudeCodeCliAdapter:
         # Vehicle B (legacy default): write the snapshot blob.
         _validate_claude_creds_blob(blob)
         creds_file = slot_dir / self.slot_credential_filename
-        creds_file.write_text(blob)
-        creds_file.chmod(0o600)
+        write_secret_text(creds_file, blob)
 
     def capture_credential(self) -> str:
         """Read the live Claude credential from the macOS Keychain.
@@ -1370,7 +1368,7 @@ def _extract_oauth_access_token(creds_path: Path) -> str | None:
     if not creds_path.is_file():
         return None
     try:
-        raw = json.loads(creds_path.read_text())
+        raw = json.loads(creds_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return None
     if not isinstance(raw, dict):

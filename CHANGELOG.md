@@ -33,6 +33,36 @@ development series.
 
 ### Changed
 
+- **A resume records launch-config changes instead of refusing them.** 0.4.1 refused a
+  resume whose resolved variables differed from those `run-config.yaml` recorded, and
+  one in a different run directory; only the run-directory refusal remains.
+  A resume may now change the launch config: any resolved variable, including by adding
+  or removing one or through an edited `default:`, the `--step-variant` set,
+  `--variant`, `--artifact-namespace`, the execution profiles the plan resolves,
+  `--backend`, and the `git_sha` of the checkout it runs from.
+  Each change is printed once as a `Resume changes <field>: <old> -> <new>` warning.
+  All of one resume’s changes are appended, with their old and new values, as one
+  `launch_config_change` event in `.logs/dispatch-config-changes.jsonl`, and
+  `run-config.yaml` is then rewritten to hold the values the resume ran with, so
+  `metaproc status --steps` and `operations-summary.md` describe the run as it now
+  executes. A resume that cannot append to that file stops with an error naming it,
+  before any step runs, and nothing about the run changes, its summaries included.
+  Launch-config validation still refuses a resume on three findings, before anything is
+  recorded: a corrupt `run-config.yaml`; a process name that differs from the recorded
+  one, because every task record’s identity is `<process>/<RUN_ID>`; and a run directory
+  that differs from the recorded one, apart from the two canonical Filestore mount
+  roots, because result records are anchored to it and a moved run would re-run every
+  step whose outputs sit under `{{run.dir}}`, writing result records the results
+  projection cannot accept.
+  The last two refusals name the recorded value and the two ways out.
+  What re-runs is decided by step fingerprints as before: a value substituted into a
+  resolved field such as `env:` re-runs that step and its downstream, while a step that
+  binds the value through `with:` or reads it at runtime, as a code handler reads its
+  `variables`, is reused with output computed over the old value until
+  `--from <step> --force` re-does it.
+  A `--from` or `--only` launch refused for unsatisfied ancestors also names the
+  `metaproc override <RUN_ID> <step> --process <spec> --satisfied` command that records
+  an ancestor as satisfied.
 - **The pinned gemini-cli is 0.59.0.** The version check warns when the `gemini` on PATH
   differs from the pin, which moves from 0.55.1. On Vertex AI, 0.59.0 still rewrites
   every model id ending in `flash`, `gemini-3.5-flash` itself excepted, to
@@ -42,6 +72,11 @@ development series.
   14-day package cool-off on 2026-09-22; until then `npm install` under the repository’s
   `.npmrc` refuses it.
   0.60.0, the current npm `latest`, clears the cool-off on 2026-09-29 and is not pinned.
+
+### Removed
+
+- **`metaproc.engine.fan_in.write_outcome_manifest`**, shipped in 0.4.1, is removed.
+  Build and write a fan-in document with `build_outcome_manifest(...).write(...)`.
 
 ### Fixed
 
@@ -54,6 +89,44 @@ development series.
   refuses a Gemini result on; a probe whose terminal event reports no served model fails
   instead of passing. The other adapters are unchanged: they report only the model they
   were asked for.
+
+- **A resume re-runs a consumer whose collected input changed.** A step that declares a
+  `collect:` input was reused on resume whenever its fingerprint matched, so after a
+  resume finished mapped items that had failed, the consumer and everything downstream
+  kept output computed over the partial outcomes, and the run reported success.
+  Metaproc now records, for each fan-in document it hands a step, a digest of what the
+  document says happened (the upstream step, the totals, and each item’s key, state, and
+  success) in `.state/tasks/<step>/collected-inputs.yaml`. A later run against the same
+  `RUN_ID` compares that digest with the document rebuilt from per-item state.
+  When it differs, the step and its descendants are invalidated like a fingerprint
+  change, with a `collected input ... changed since the step last ran — invalidated:`
+  line, so backfilling failed items no longer needs `--only <step> --force`. The fan-in
+  document keeps each item’s full error, including its attempt log path, and consumer
+  reuse follows the outcome digest, so an item that fails again with a different message
+  or a new log path does not re-run its consumer.
+  An unchanged resume reuses everything, and a step recorded before this change is not
+  invalidated; a record that is present but does not read or validate counts as
+  unreadable and therefore changed, and the resume names it.
+  When the consumer is a composite, every task in its own child scopes re-runs, whether
+  or not it reads the document.
+  Downstream steps are re-entered rather than re-done: a downstream composite is
+  invalidated at the parent level and reuses its completed child steps, exactly as after
+  a fingerprint change, and a downstream mapped non-composite step (`mode: code`,
+  `agent`, or `manual`) keeps its completed items’ records, since there the per-item
+  record is the work itself.
+  Either way the step does work only for the items its new roster adds, and an item that
+  keeps its key while the content behind it changes is reused until
+  `--from <step> --force` re-does it.
+  A run started before this release has no record, so backfilling its failed items and
+  resuming still reuses the consumer; run `--from <consumer> --force` once on such a
+  run, which re-runs the consumer and its downstream and writes the record.
+  `--only <consumer> --force` is not enough: it records a fresh digest without
+  re-running the downstream, so the next resume reuses output computed over the old
+  consumer output. An invalidated task also stays invalidated across an interrupted run:
+  reconciliation no longer projects the invalidated attempt back into `status.yaml`.
+  `metaproc status --steps` names a changed collected input among the causes of an
+  `invalidated` step, and reports a step that has re-run since it was invalidated by its
+  new completion instead of by the leftover `.stale` file.
 
 - **A list cost that leaves out unpriced tokens says so.** An invocation whose model has
   no entry in the pricing table added its tokens to every total but nothing to
@@ -108,11 +181,10 @@ development series.
   ignored (or replaced the composite’s pin) and now fails launch validation with the
   steps that can be overridden.
   `run-config.yaml` records the overrides: a resume without `--step-variant` reuses
-  them, a resume with a different set is refused, and `metaproc status --steps` plans
-  them. A run launched by 0.4.1, which applied overrides without recording them, has no
-  recorded set to contradict, so a resume of one adopts the `--step-variant` it passes
-  and records it rather than refusing a run it cannot otherwise resume on its own
-  profiles.
+  them, a resume that passes a different set runs with it and records the change like
+  any other launch-config change, and `metaproc status --steps` plans them.
+  A run launched by 0.4.1, which applied overrides without recording them, has no
+  recorded set, so a resume of one records the `--step-variant` set it passes.
 
 - **Prelaunch and process-output refusals retain their causes.** Credential and input
   refusals now reach durable step status without creating an attempt; manual timeout

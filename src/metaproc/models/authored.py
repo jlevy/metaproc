@@ -194,6 +194,12 @@ class ProcessInput(_ProcessIOBase):
     - operator-supplied parameter via ``param: <CLI_OR_ENV_NAME>``
     - parsed-from-file via ``path:`` + ``parse:``
     - literal (caller fills ``path:`` with an absolute or run-relative location)
+
+    Every resolved input is recorded in ``run-config.yaml`` at launch. A resume may
+    change any of them, through a ``--var``, an edited ``default:``, or an input added or
+    removed. Each change is logged and recorded as a ``launch_config_change`` event, and
+    ``run-config.yaml`` then records the values the resume ran with. What re-runs is
+    decided by step fingerprints.
     """
 
     path: str | None = None

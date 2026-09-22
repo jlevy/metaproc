@@ -12,12 +12,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import tempfile
 import time
 from pathlib import Path
 
 import typer
+from strif import temp_output_file
 
 from metaproc.adapters.base import agent_seed_env
 from metaproc.adapters.pi_cli import resolve_pi_binary
@@ -356,7 +358,7 @@ def _run_live_check(
     label = f"{adapter_type}" + (f" ({variant})" if variant else "")
 
     # Write a trivial prompt to a temp file
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
+    with tempfile.NamedTemporaryFile(encoding="utf-8", mode="w", suffix=".md", delete=False) as f:
         f.write("Respond with exactly: OK")
         prompt_path = Path(f.name)
 
@@ -700,7 +702,9 @@ def _run_claude_secret_live_check(
         creds_file.write_text(payload)
         creds_file.chmod(0o600)
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as prompt_f:
+        with tempfile.NamedTemporaryFile(
+            encoding="utf-8", mode="w", suffix=".md", delete=False
+        ) as prompt_f:
             prompt_f.write("Respond with exactly: OK")
             prompt_path = Path(prompt_f.name)
 
@@ -777,11 +781,15 @@ def _run_readiness_check(run_dir: Path) -> list[tuple[bool, str]]:
     else:
         results.append((False, "progress: no progress.md found"))
 
-    # Check output dir is writable
+    # Check output dir is writable. The probe name must be unique: a fixed one lets
+    # two concurrent checks unlink each other's file, and the loser then reports a
+    # perfectly writable directory as unwritable. Clean up even when the write fails.
     try:
-        test_file = run_dir / ".auth-check-write-test"
-        test_file.write_text("test")
-        test_file.unlink()
+        with temp_output_file(prefix=".auth-check-write-test-", dir=run_dir, always_clean=True) as (
+            fd,
+            _probe,
+        ):
+            _ = os.write(fd, b"test")
         results.append((True, "output dir: writable"))
     except OSError as exc:
         results.append((False, f"output dir: not writable — {exc}"))

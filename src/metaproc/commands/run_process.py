@@ -17,6 +17,7 @@ import os
 import re
 import shlex
 import subprocess
+import textwrap
 import time
 import traceback
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
@@ -30,7 +31,7 @@ from typing import Any, cast
 import typer
 from prettyfmt import fmt_timedelta
 from ruamel.yaml import YAMLError
-from strif import atomic_output_file
+from strif import atomic_write_text
 
 from metaproc import paths as paths_mod
 from metaproc.adapters.base import (
@@ -92,6 +93,14 @@ from metaproc.dispatch.preflight import (
 from metaproc.dispatch.slot_coordinator import SlotCoordinator, SlotLease
 from metaproc.engine.build_plan import build_plan, merge_defaults
 from metaproc.engine.code_handler import resolve_code_handler
+from metaproc.engine.collected_inputs import (
+    COLLECTED_INPUTS_UNREADABLE,
+    changed_collected_inputs,
+    collected_documents,
+    declares_collected_inputs,
+    read_collected_inputs,
+    record_collected_inputs,
+)
 from metaproc.engine.command_diagnostics import (
     command_failure_message,
     handler_failure_message,
@@ -102,7 +111,7 @@ from metaproc.engine.dep_state import (
     recorded_step_hash,
 )
 from metaproc.engine.discovery import discover_items_from_source
-from metaproc.engine.fan_in import collect_item_outcomes, write_outcome_manifest
+from metaproc.engine.fan_in import collect_item_outcomes
 from metaproc.engine.graph import (
     downstream,
     item_aligned_chains,
@@ -167,7 +176,7 @@ from metaproc.engine.write_boundary import (
     repo_changes_since,
 )
 from metaproc.errors import AttemptTerminalConflictError, CLIError, ValidationError
-from metaproc.io import read_yaml_file, to_yaml_string
+from metaproc.io import from_yaml_string, read_yaml_file, to_yaml_string
 from metaproc.io.orchestrator_lease import LeaseHeartbeat, acquire_lease, release_lease
 from metaproc.io.overrides import (
     OverridesDocument,
@@ -206,6 +215,7 @@ from metaproc.models.runtime import (
     StatusRecord,
 )
 from metaproc.paths import (
+    COLLECTED_INPUTS_FILE,
     LOGS_DIR,
     MANUAL_ACK_FILE,
     RUN_LAYOUT_VERSION,
@@ -241,6 +251,9 @@ MANUAL_ACK_TIMEOUT_S = 24 * 3600
 MANUAL_ACK_HEARTBEAT_S = 15 * 60
 _MIN_SYNC_EXECUTOR_WORKERS = 32
 _DEFAULT_MAPPED_SCOPE_CONCURRENCY = 32
+_UNREADABLE_RECORD_DETAIL_WIDTH = 160
+"""Columns of the read error an unreadable-record progress line quotes before it
+shortens the rest to `` ...``."""
 
 
 def _sync_executor_worker_count(max_concurrency: int | None) -> int:
@@ -737,7 +750,6 @@ def _write_process_status(
 ) -> Path:
     """Write derived process-status.yaml to {run_dir}/.state/."""
     state_dir = run_dir / STATE_DIR
-    state_dir.mkdir(parents=True, exist_ok=True)
     target = state_dir / "process-status.yaml"
 
     data: dict[str, Any] = {
@@ -765,8 +777,7 @@ def _write_process_status(
     else:
         data["state"] = "running"
 
-    with atomic_output_file(target) as tmp_path:
-        Path(tmp_path).write_text(to_yaml_string(data))
+    atomic_write_text(target, to_yaml_string(data), make_parents=True)
     return target
 
 
@@ -789,6 +800,67 @@ def _get_git_sha() -> str:
     return ""
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class _LaunchConfig:
+    """The ``run-config.yaml`` fields the first write derives from a launch.
+
+    ``_write_run_config`` records them when it creates a run. A resume passes the values
+    it runs with to ``_apply_resume_config_changes``, which compares every field with the
+    record, records each difference, and rewrites the fields that differ, so the config
+    describes the launch the run last ran with: ``metaproc status`` rebuilds the plan
+    from it, the operations summary reports its variant and profiles, and the next
+    resume compares against it. An empty value is absent, as the first write omits it.
+    """
+
+    variables: Mapping[str, str]
+    step_variants: Mapping[str, str]
+    variant: str | None
+    execution_profile: str | None
+    artifact_namespace: str | None
+    resolved_profiles: list[dict[str, object]]
+    backend: str
+    git_sha: str
+
+
+_LAUNCH_CONFIG_FIELDS: tuple[str, ...] = tuple(
+    field.name for field in dataclasses.fields(_LaunchConfig)
+)
+"""The launch-config fields of ``run-config.yaml``, which a resume compares, records, and
+rewrites; ``_LaunchConfig`` declares them."""
+
+_KEYED_LAUNCH_CONFIG_FIELDS = frozenset({"variables", "step_variants"})
+"""The launch-config mappings compared key by key, as ``<field>.<KEY>``; every other
+field is compared whole."""
+
+type _LaunchConfigValue = str | list[dict[str, object]] | None
+"""One launch-config value as ``run-config.yaml`` holds it, ``None`` when absent.
+
+``resolved_profiles`` is a list of profile mappings; every other value is a string.
+"""
+
+type _LaunchConfigChanges = dict[str, tuple[_LaunchConfigValue, _LaunchConfigValue]]
+"""What one resume changed in the launch config: ``field -> (recorded, current)``.
+
+``None`` marks an absent side. A change to one of the ``_KEYED_LAUNCH_CONFIG_FIELDS`` is
+named ``variables.<NAME>`` or ``step_variants.<STEP>``, and a change to any other
+``_LAUNCH_CONFIG_FIELDS`` entry by the field itself. The mapping is sorted by field. A
+changed ``run_dir`` is never one: ``_validate_run_config`` refuses it.
+"""
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _RunConfigWrite:
+    """The ``run-config.yaml`` that ``_write_run_config`` wrote or validated a resume against.
+
+    ``resumed`` is true when the config already existed, so the launch is a resume whose
+    changes ``_apply_resume_config_changes`` finds and records once the orchestrator
+    lease is held.
+    """
+
+    path: Path
+    resumed: bool
+
+
 def _write_run_config(  # noqa: PLR0913
     run_dir: Path,
     *,
@@ -805,45 +877,37 @@ def _write_run_config(  # noqa: PLR0913
     max_concurrency: int | None = None,
     resource_snapshot: ResourceRunSnapshot | None = None,
     step_variants: Mapping[str, str] | None = None,
-) -> Path:
-    """Write run-config.yaml at run creation time; record changes on resume.
+    git_sha: str | None = None,
+) -> _RunConfigWrite:
+    """Write run-config.yaml at run creation time; validate a resume against it.
 
     Schema v2 adds an ``auth:`` block
     capturing the dispatch's auth-pool configuration and a
     ``concurrency:`` block capturing the operator's max-concurrency
-    intent. On resume, compares the new flags against the persisted
-    values and appends a ``dispatch_config_change`` event to
-    ``.logs/dispatch-config-changes.jsonl`` rather than mutating the
-    original config — preserves the audit trail per spec.
+    intent.
 
-    Returns the path to the config file. Resume calls validate the process,
-    run directory, and resolved immutable variables (raises CLIError on
-    mismatch) but accept changes to auth / concurrency as recorded events.
-    The one field a resume writes back is ``step_variants``, for a config that
-    records none; see ``_adopt_step_variants``.
+    The first write records the launch-config fields (``_LaunchConfig``) with the rest of
+    the run's creation record. *git_sha* is the launch checkout's; ``None`` reads it here.
+
+    On resume this function writes nothing. It reads the recorded config
+    (``_read_resumable_run_config``) only to refuse early, before auth preflight and the
+    ancestor check, a resume that cannot continue: a corrupt config, a process name other
+    than the recorded one, since every task record carries ``<process>/<RUN_ID>`` as its
+    run identity, or a run directory other than the recorded one, since result records
+    are anchored to it. ``_apply_resume_config_changes`` checks again and compares the
+    launch config once ``run_process_command`` holds the orchestrator lease, and records
+    what it finds there, because only under the lease is this resume the config's single
+    writer. A launch refused before then, by the ``--from``/``--only`` ancestor check or
+    by another orchestrator's live lease, therefore never touches the config or the
+    event log of a run that may still be executing. What re-runs is decided by step
+    fingerprints, not here.
+
+    Returns the config path and whether it already existed.
     """
     config_path = paths_mod.run_config_file(run_dir)
-    logs_dir = paths_mod.run_logs_dir(run_dir)
     if config_path.exists():
-        _validate_run_config(
-            config_path,
-            process_name=process_name,
-            run_dir=run_dir,
-            variables=variables,
-        )
-        # Compute and record any auth/concurrency diff so the
-        # aggregator can render the resume timeline.
-        _record_resume_config_change(
-            config_path,
-            logs_dir=logs_dir,
-            new_auth_flags=auth_flags,
-            new_max_concurrency=max_concurrency,
-        )
-        _adopt_step_variants(config_path, step_variants)
-        return config_path
-
-    state_dir = paths_mod.run_state_dir(run_dir)
-    state_dir.mkdir(parents=True, exist_ok=True)
+        _read_resumable_run_config(config_path, process_name=process_name, run_dir=run_dir)
+        return _RunConfigWrite(path=config_path, resumed=True)
 
     # Persist process_spec as an absolute path so consumers like
     # `metaproc status --steps` can rebuild the plan regardless of which
@@ -859,7 +923,7 @@ def _write_run_config(  # noqa: PLR0913
         "variables": variables,
         "backend": backend,
         "created_at": _now_iso(),
-        "git_sha": _get_git_sha(),
+        "git_sha": _get_git_sha() if git_sha is None else git_sha,
     }
     if variant:
         data["variant"] = variant
@@ -883,10 +947,66 @@ def _write_run_config(  # noqa: PLR0913
     if resource_snapshot is not None:
         data["resources"] = resource_snapshot.model_dump(mode="json", by_alias=True)
 
-    with atomic_output_file(config_path) as tmp_path:
-        Path(tmp_path).write_text(to_yaml_string(data))
+    atomic_write_text(config_path, to_yaml_string(data), make_parents=True)
     log.info("Wrote run-config.yaml: %s", config_path)
-    return config_path
+    return _RunConfigWrite(path=config_path, resumed=False)
+
+
+def _apply_resume_config_changes(
+    run_dir: Path,
+    run_config: _RunConfigWrite,
+    *,
+    process_name: str,
+    launch: _LaunchConfig,
+    auth_flags: AuthPoolFlags | None,
+    max_concurrency: int | None,
+) -> _LaunchConfigChanges:
+    """Find and record what a resume changes, once it holds the orchestrator lease.
+
+    ``_validate_run_config`` compares the launch config with ``run-config.yaml`` as it
+    stands now. That result is authoritative, not the check ``_write_run_config`` made
+    before the lease: between the two, another resume may have finished and rewritten
+    the config, and recording changes computed against the older config would give the
+    event stale old values, or, when that list came out empty, leave the config naming
+    another resume's values while this one runs with its own.
+    ``_record_launch_config_changes`` then logs each change and appends them as one
+    ``launch_config_change`` event, ``_rewrite_launch_config`` makes the config record
+    the launch config (*launch*) this resume runs with, and
+    ``_record_resume_config_change`` appends a ``dispatch_config_change`` event for any
+    auth or concurrency change. Both events go to ``.logs/dispatch-config-changes.jsonl``;
+    a log this resume cannot append to raises ``CLIError`` naming it.
+
+    ``run_process_command`` calls this immediately after ``acquire_lease`` succeeds.
+    Before that point the launch can still be refused, by the ``--from``/``--only``
+    ancestor check or by a live lease another orchestrator holds, and a refused launch
+    must leave a run that may still be executing exactly as it found it. Under the lease
+    this resume is the run's only writer. The caller releases the lease when this raises,
+    without finalizing the run: a resume refused here has run nothing, so the run's
+    summaries stay as the last run left them.
+
+    Returns the launch-config changes it recorded, for the operator's warnings: empty for
+    a first write (``run_config.resumed`` false) and for a resume with the recorded
+    values.
+    """
+    if not run_config.resumed:
+        return {}
+    changes = _validate_run_config(
+        run_config.path,
+        process_name=process_name,
+        run_dir=run_dir,
+        launch=launch,
+    )
+    _record_launch_config_changes(paths_mod.run_logs_dir(run_dir), changes)
+    _rewrite_launch_config(run_config.path, changes, launch=launch)
+    # Compute and record any auth/concurrency diff for the resume timeline that
+    # `metaproc auth usage` renders.
+    _record_resume_config_change(
+        run_config.path,
+        logs_dir=paths_mod.run_logs_dir(run_dir),
+        new_auth_flags=auth_flags,
+        new_max_concurrency=max_concurrency,
+    )
+    return changes
 
 
 def _publish_run_plan(
@@ -1139,16 +1259,125 @@ def _record_resume_config_change(
     if not changes:
         return
 
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    event = {
-        "event": "dispatch_config_change",
-        "ts": _now_iso(),
-        "changes": changes,
-    }
-    target = logs_dir / paths_mod.DISPATCH_CONFIG_CHANGES_FILE
-    with target.open("a") as fh:
-        fh.write(_json_dumps(event) + "\n")
+    _append_config_change_event(
+        logs_dir,
+        {
+            "event": "dispatch_config_change",
+            "ts": _now_iso(),
+            "changes": changes,
+        },
+    )
     log.info("Recorded dispatch_config_change: %d field(s)", len(changes))
+
+
+def _append_config_change_event(logs_dir: Path, event: Mapping[str, object]) -> None:
+    """Append one event to ``.logs/dispatch-config-changes.jsonl``.
+
+    The file is an append-only timeline, so each event is appended, never published by
+    replacing the file. A resume calls this under the orchestrator lease
+    (``_apply_resume_config_changes``), and a log it cannot write refuses the resume as
+    a ``CLIError`` that names the file, with the ``OSError`` as its cause: the event is
+    the run's only record of the values a resume replaces.
+    """
+    target = logs_dir / paths_mod.DISPATCH_CONFIG_CHANGES_FILE
+    try:
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding="utf-8") as fh:
+            fh.write(_json_dumps(event) + "\n")
+    except OSError as exc:
+        raise CLIError(
+            f"Cannot record this resume's {event['event']} event: appending to {target} "
+            f"failed ({type(exc).__name__}: {exc}). Make it appendable and resume again."
+        ) from exc
+
+
+def _record_launch_config_changes(logs_dir: Path, changes: _LaunchConfigChanges) -> None:
+    """Log each launch-config change of one resume and append them as one event.
+
+    Each change is logged at INFO (``_describe_launch_config_change``), for the run's
+    log; ``run_process_command`` shows the operator each one once, as a warning. The
+    ``launch_config_change`` event goes to ``.logs/dispatch-config-changes.jsonl`` beside
+    the ``dispatch_config_change`` events, so one timeline shows every resume change.
+    It lists ``changes: [{field, diff}]`` with the flat ``{old, new}`` diff that the
+    ``max_concurrency`` change of a ``dispatch_config_change`` event uses; that event's
+    ``auth`` diff is instead keyed by subfield. The event is the run directory's record
+    of the values a resume replaced, because ``_rewrite_launch_config`` then makes
+    ``run-config.yaml`` hold the new ones. A resume that changes nothing writes nothing.
+    A log it cannot append to refuses the resume before the config is rewritten
+    (``_append_config_change_event``).
+    """
+    if not changes:
+        return
+    ordered = sorted(changes.items())
+    for field, (old, new) in ordered:
+        log.info("%s", _describe_launch_config_change(field, old, new))
+    _append_config_change_event(
+        logs_dir,
+        {
+            "event": "launch_config_change",
+            "ts": _now_iso(),
+            "changes": [
+                {"field": field, "diff": {"old": old, "new": new}} for field, (old, new) in ordered
+            ],
+        },
+    )
+
+
+def _describe_launch_config_change(
+    field: str, old: _LaunchConfigValue, new: _LaunchConfigValue
+) -> str:
+    """Render one launch-config change for the resume log and the operator's warning."""
+    return f"Resume changes {field}: {_describe_config_value(old)} -> {_describe_config_value(new)}"
+
+
+def _describe_config_value(value: _LaunchConfigValue) -> str:
+    """Render a launch-config value, marking an absent one.
+
+    A ``resolved_profiles`` list renders as its profile names; the event carries the
+    whole profiles.
+    """
+    if value is None:
+        return "<unset>"
+    if isinstance(value, list):
+        return repr([str(profile.get("name")) for profile in value])
+    return repr(value)
+
+
+def _rewrite_launch_config(
+    config_path: Path,
+    changes: _LaunchConfigChanges,
+    *,
+    launch: _LaunchConfig,
+) -> None:
+    """Make ``run-config.yaml`` record the launch config a resume runs with.
+
+    Only the ``_LAUNCH_CONFIG_FIELDS`` that *changes* names are replaced, each whole
+    (the ``variables`` mapping, not one variable), with this resume's value from
+    *launch*, so the config describes the run as it now executes and the next resume
+    compares against that. Every other field keeps its creation value, the resource
+    snapshot the terminal finalizer reads above all. ``_record_launch_config_changes``
+    has already recorded the values replaced. A field the resume leaves empty is
+    dropped, as the first write omits it.
+
+    ``_apply_resume_config_changes`` calls this once the orchestrator lease is held,
+    which is after launch validation, the ``--from``/``--only`` ancestor check, and the
+    lease itself have accepted the resume. A value the run cannot accept never reaches
+    the config, and a resume refused because another orchestrator is live never rewrites
+    that orchestrator's config.
+    """
+    changed = {field.split(".", 1)[0] for field in changes}
+    if not changed:
+        return
+    data = _read_run_config(config_path)
+    for field, value in _recorded_launch_config(launch).items():
+        if field not in changed:
+            continue
+        if value is None:
+            data.pop(field, None)
+        else:
+            data[field] = value
+    atomic_write_text(config_path, to_yaml_string(data))
+    log.info("Rewrote run-config.yaml with this resume's launch config: %s", config_path)
 
 
 def _diff_dicts(old: dict[str, object], new: dict[str, object]) -> dict[str, object]:
@@ -1175,59 +1404,18 @@ def _json_dumps(value: object) -> str:
 def _resume_step_variants(run_dir: Path, requested: Mapping[str, str]) -> dict[str, str]:
     """Return the ``--step-variant`` overrides a launch or resume of *run_dir* runs with.
 
-    A run records its overrides in ``run-config.yaml`` at creation. The plan, its step
-    fingerprints, and ``metaproc status`` all follow that record, so a resume that passes
-    no overrides re-applies it and a resume that passes a different set is refused.
-
-    A config that records nothing holds no set to contradict: ``--step-variant`` shipped
-    before the record existed, so a run from that version applies its overrides with
-    nothing to resume from. Such a resume adopts what it passes, and ``_write_run_config``
-    records it once launch validation has accepted it.
+    A run records its overrides in ``run-config.yaml``. The plan, its step fingerprints,
+    and ``metaproc status`` all follow that record, so a resume that passes no overrides
+    re-applies it. A resume that passes overrides runs with exactly those. When they
+    differ from the record, ``_apply_resume_config_changes`` records each difference as
+    a ``step_variants.<STEP>`` launch-config change and rewrites the record to the set
+    the resume runs with, once the resume holds the orchestrator lease. An override the
+    run cannot accept never reaches the config.
     """
     config_path = paths_mod.run_config_file(run_dir)
-    if not config_path.exists():
+    if requested or not config_path.exists():
         return dict(requested)
-    raw = read_yaml_file(config_path)
-    recorded = recorded_step_variants(raw) if isinstance(raw, dict) else {}
-    if not requested:
-        return recorded
-    if not recorded:
-        return dict(requested)
-    if dict(requested) != recorded:
-        raise CLIError(
-            "Resume mismatch: run-config.yaml records "
-            f"{_format_step_variants(recorded)} but you launched with "
-            f"{_format_step_variants(requested)}. Resume without --step-variant to reuse "
-            "the recorded overrides, or use a different RUN_ID."
-        )
-    return recorded
-
-
-def _format_step_variants(overrides: Mapping[str, str]) -> str:
-    """Render a non-empty override set as the flags that produce it."""
-    return ", ".join(
-        f"--step-variant {step}={profile}" for step, profile in sorted(overrides.items())
-    )
-
-
-def _adopt_step_variants(config_path: Path, step_variants: Mapping[str, str] | None) -> None:
-    """Record the overrides a resume adopted, for a config that records none.
-
-    ``_resume_step_variants`` lets a resume adopt what it passes when the config holds no
-    set to contradict. Recording it here rather than there puts the write after launch
-    validation, so an override the run cannot accept never reaches the config and poisons
-    every later resume. A config that already records a set keeps it — the resume either
-    matched it or was refused.
-    """
-    if not step_variants:
-        return
-    raw = read_yaml_file(config_path)
-    if not isinstance(raw, dict) or recorded_step_variants(raw):
-        return
-    raw["step_variants"] = dict(sorted(step_variants.items()))
-    with atomic_output_file(config_path) as tmp_path:
-        Path(tmp_path).write_text(to_yaml_string(raw))
-    log.info("Recorded resumed --step-variant overrides in %s", config_path)
+    return recorded_step_variants(_read_run_config(config_path))
 
 
 def _validate_run_config(
@@ -1235,36 +1423,110 @@ def _validate_run_config(
     *,
     process_name: str,
     run_dir: Path,
-    variables: Mapping[str, str],
-) -> None:
-    """Validate existing run-config.yaml matches immutable launch parameters.
+    launch: _LaunchConfig,
+) -> _LaunchConfigChanges:
+    """Compare a resume's launch config with the ``run-config.yaml`` it resumes.
 
-    Backend topology, authentication, and concurrency may change on resume.
-    Process identity, run directory, and resolved variables may not. Raises
-    CLIError on incompatible resume attempts.
+    A resume may change every ``_LAUNCH_CONFIG_FIELDS`` entry: any resolved variable
+    (including through an edited ``default:``, or an input added or removed), the
+    ``--step-variant`` set, the variant, execution profile, artifact namespace, and
+    resolved profiles, the backend, and the checkout's ``git_sha``. Each difference comes
+    back as ``field -> (recorded, current)`` with ``None`` for an absent side, sorted by
+    field (``_LaunchConfigChanges``). Both sides are compared as the file holds them
+    (``_recorded_launch_config``), so a value that differs only in what the YAML writer
+    omits is no change. What re-runs is decided by step fingerprints, not here, and
+    authentication and concurrency are compared by ``_record_resume_config_change``.
+
+    ``_read_resumable_run_config`` first refuses a resume that cannot continue.
     """
-    raw = read_yaml_file(config_path)
-    if not isinstance(raw, dict):
-        raise CLIError(f"Corrupt run-config.yaml: {config_path}")
+    raw, recorded_variables = _read_resumable_run_config(
+        config_path, process_name=process_name, run_dir=run_dir
+    )
+    current = _recorded_launch_config(launch)
+    changes: _LaunchConfigChanges = {}
 
-    saved_process = raw.get("process", "")
-    if saved_process != process_name:
-        raise CLIError(
-            f"Resume mismatch: run-config.yaml has process={saved_process!r} "
-            f"but you launched with process={process_name!r}. "
-            f"Use a different RUN_ID for a new process."
+    for name in _changed_keys(
+        _resume_variable_identity(recorded_variables), _resume_variable_identity(launch.variables)
+    ):
+        changes[f"variables.{name}"] = (recorded_variables.get(name), launch.variables.get(name))
+
+    recorded_overrides = recorded_step_variants(raw)
+    for step_id in _changed_keys(recorded_overrides, launch.step_variants):
+        changes[f"step_variants.{step_id}"] = (
+            recorded_overrides.get(step_id),
+            launch.step_variants.get(step_id),
         )
 
-    saved_run_dir = raw.get("run_dir", "")
+    for field in _LAUNCH_CONFIG_FIELDS:
+        if field in _KEYED_LAUNCH_CONFIG_FIELDS:
+            continue
+        recorded = _persisted_launch_value(raw.get(field))
+        if recorded != current[field]:
+            changes[field] = (recorded, cast(_LaunchConfigValue, current[field]))
+
+    log.info("Resume validated against run-config.yaml (%s)", config_path)
+    return dict(sorted(changes.items()))
+
+
+def _read_resumable_run_config(
+    config_path: Path, *, process_name: str, run_dir: Path
+) -> tuple[dict[object, object], dict[str, str]]:
+    """Read the ``run-config.yaml`` a resume continues, refusing one it cannot continue.
+
+    Returns the config and its recorded variables.
+
+    Two launch values refuse, because continuing would leave the run's durable state
+    inconsistent:
+
+    - The process name. Every task's status, attempts, and result carry the run
+      identity ``<process>/<RUN_ID>``, and the state layer rejects a record whose
+      identity differs from the one the orchestrator expects, as does the results
+      projection, which reads the name from this config. A resume under another name
+      could not reuse, or even read, a step the run completed.
+    - The run directory. Result records are anchored to the recorded ``run_dir``: the
+      results projection (``runtime_projection._rebase_portable_output_path``) rebases
+      only recorded paths under it. A moved run re-runs every step whose outputs sit
+      under ``{{run.dir}}``, since those paths are in its fingerprint, so continuing
+      would write result records the projection cannot accept. A new ``RUN_ID`` costs
+      the same work without the inconsistency. The recorded ``run_dir`` and the
+      ``RUNS_DIR`` variable compare across the two Filestore mount aliases
+      (``_normalize_filestore_runs_path``), so two spellings of one mount are neither
+      refused nor recorded. A config written without a ``run_dir`` has none to compare.
+
+    Raises CLIError for either mismatch and for a corrupt config: one
+    ``_read_run_config`` refuses, one without a process name, or one whose ``variables``
+    field is not a string-to-string mapping. Each refusal comes before the resume records
+    or rewrites anything: ``_write_run_config`` calls this before the orchestrator lease,
+    and ``_validate_run_config`` again under it.
+    """
+    raw = _read_run_config(config_path)
+
+    saved_process = _recorded_str(raw.get("process"))
+    if not saved_process:
+        raise CLIError(
+            f"Corrupt run-config.yaml: {config_path}: process must be a non-empty string"
+        )
+    if saved_process != process_name:
+        run_identity = f"{saved_process}/{_recorded_str(raw.get('run_id')) or '<RUN_ID>'}"
+        raise CLIError(
+            f"Resume refused: run-config.yaml records process {saved_process!r} but you "
+            f"launched process {process_name!r}. Every task record in this run carries the "
+            f"run identity {run_identity}, so a process with another name cannot reuse or "
+            f"read them. Resume with the process spec named {saved_process!r}, or use a new "
+            "RUN_ID for this process."
+        )
+
+    saved_run_dir = _recorded_str(raw.get("run_dir"))
     if saved_run_dir and _resume_run_dir_identity(str(run_dir)) != _resume_run_dir_identity(
         saved_run_dir
     ):
         raise CLIError(
-            f"Resume mismatch: run-config.yaml has run_dir={saved_run_dir!r} "
-            f"but current run_dir={str(run_dir)!r}. "
-            "Use the same locally visible RUNS_DIR and RUN_ID that created this run. "
-            "Workstation-mounted Filestore aliases are not supported resume identities; "
-            "resume on the canonical cloud mount or start a new local run."
+            f"Resume refused: run-config.yaml records run directory {saved_run_dir!r} but "
+            f"this launch resolves to {str(run_dir)!r}. The run's result records are "
+            "anchored to the recorded directory, and a resume here would re-run every step "
+            "whose outputs sit under {{run.dir}} and write results the run's projection "
+            f"cannot accept. Resume at {saved_run_dir!r} (the RUNS_DIR and RUN_ID that "
+            "created it), or start a new RUN_ID."
         )
 
     # The YAML serializer omits empty mappings, so an absent field is the
@@ -1280,21 +1542,67 @@ def _validate_run_config(
             f"Corrupt run-config.yaml: {config_path}: variables must be a string-to-string mapping"
         )
 
-    saved_identity = _resume_variable_identity(cast(dict[str, str], saved_variables))
-    current_identity = _resume_variable_identity(variables)
-    changed_variables = sorted(
-        key
-        for key in set(saved_identity) | set(current_identity)
-        if saved_identity.get(key) != current_identity.get(key)
-    )
-    if changed_variables:
-        changed_names = ", ".join(changed_variables)
-        raise CLIError(
-            "Resume mismatch: run-config.yaml immutable variables changed: "
-            f"{changed_names}. Use the original --var values or a new RUN_ID."
-        )
+    return raw, cast(dict[str, str], saved_variables)
 
-    log.info("Resume validated against run-config.yaml (%s)", config_path)
+
+def _recorded_launch_config(launch: _LaunchConfig) -> dict[str, object]:
+    """Return *launch* as ``run-config.yaml`` records it: field -> value, ``None`` if absent.
+
+    The two mappings keep their shape, ``step_variants`` sorted as the first write sorts
+    it; every other field goes through ``_persisted_launch_value``.
+    """
+    record: dict[str, object] = {
+        "variables": dict(launch.variables) or None,
+        "step_variants": dict(sorted(launch.step_variants.items())) or None,
+    }
+    for field in _LAUNCH_CONFIG_FIELDS:
+        if field not in _KEYED_LAUNCH_CONFIG_FIELDS:
+            record[field] = _persisted_launch_value(getattr(launch, field))
+    return record
+
+
+def _persisted_launch_value(value: object) -> _LaunchConfigValue:
+    """Return one whole launch-config value as ``run-config.yaml`` holds it.
+
+    The YAML writer drops ``None`` and empty mappings, and the first write omits an empty
+    variant, profile, namespace, or profile list. So a value passes through one
+    serializer round trip, as a later read would return it, and an empty result reads as
+    absent. Without this a resolved profile whose adapter config is empty would differ
+    from its own record, which has no ``config`` key.
+    """
+    persisted = from_yaml_string(to_yaml_string({"value": value})).get("value")
+    plain: object = _json.loads(_json_dumps(persisted))
+    if plain is None or plain in ("", [], {}):
+        return None
+    if isinstance(plain, list):
+        return cast(list[dict[str, object]], plain)
+    return str(plain)
+
+
+def _read_run_config(config_path: Path) -> dict[object, object]:
+    """Read ``run-config.yaml`` as a mapping, refusing a corrupt one with CLIError.
+
+    Corrupt means text that is not UTF-8, does not parse as YAML, or parses to something
+    other than a mapping. Continuing would compare against, and then rewrite, a record
+    that no longer says what the run is.
+    """
+    try:
+        raw = read_yaml_file(config_path)
+    except (YAMLError, UnicodeDecodeError) as exc:
+        raise CLIError(f"Corrupt run-config.yaml: {config_path}: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise CLIError(f"Corrupt run-config.yaml: {config_path}")
+    return cast(dict[object, object], raw)
+
+
+def _recorded_str(value: object) -> str | None:
+    """Return a scalar ``run-config.yaml`` field as a string, or ``None`` when absent."""
+    return None if value is None else str(value)
+
+
+def _changed_keys(saved: Mapping[str, str], current: Mapping[str, str]) -> list[str]:
+    """Return, sorted, every key added, removed, or given a different value."""
+    return sorted(key for key in set(saved) | set(current) if saved.get(key) != current.get(key))
 
 
 def _resume_run_dir_identity(run_dir: str) -> str:
@@ -1309,7 +1617,11 @@ def _resume_run_dir_identity(run_dir: str) -> str:
 
 
 def _resume_variable_identity(variables: Mapping[str, str]) -> dict[str, str]:
-    """Return immutable variables with known topology aliases normalized."""
+    """Return the variables a resume compares, with known topology aliases normalized.
+
+    ``RUNS_DIR`` spelled through either Filestore mount alias compares as one value, so
+    a resume on the other alias records no change.
+    """
     identity = dict(variables)
     if runs_dir := identity.get("RUNS_DIR"):
         identity["RUNS_DIR"] = _normalize_filestore_runs_path(runs_dir)
@@ -1335,18 +1647,6 @@ def _normalize_filestore_runs_path(path: str) -> str:
 # ── Completion detection ──────────────────────────────────────────
 
 
-def _step_item_dir(run_dir: Path, step_id: str) -> Path:
-    """Per-task state directory for a step.
-
-    Under the new run-dir layout this is the directory that holds
-    ``status.yaml`` / ``attempt.yaml`` / ``result.yaml`` for a non-fan-out
-    step directly (no inner ``.state/`` subdir):
-    ``<run>/.state/tasks/<step_id>/``.
-    """
-
-    return run_dir / _STATE_DIR / _TASKS_SUBDIR / step_id
-
-
 def _resolve_step_item_dir(
     run_dir: Path,
     step_id: str,
@@ -1364,12 +1664,12 @@ def _resolve_step_item_dir(
     del outputs  # no longer used; state dir is derived from step + variables
     if step_def is not None:
         return compute_task_state_dir(run_dir, step_def, variables)
-    return _step_item_dir(run_dir, step_id)
+    return paths_mod.step_task_state_dir(run_dir, step_id)
 
 
 def _read_step_status(run_dir: Path, step_id: str) -> StatusRecord | None:
     """Read status.yaml for a step (non-fan-out)."""
-    return read_status_at(_step_item_dir(run_dir, step_id))
+    return read_status_at(paths_mod.step_task_state_dir(run_dir, step_id))
 
 
 def _read_step_failure_error(
@@ -1452,9 +1752,7 @@ def _record_process_output_failure(run_dir: Path, error: CLIError) -> None:
             failure.model_dump(mode="json", exclude_none=True) for failure in error.output_failures
         ]
     path = run_dir / STATE_DIR / "process-status.yaml"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with atomic_output_file(path) as temporary:
-        Path(temporary).write_text(to_yaml_string(data))
+    atomic_write_text(path, to_yaml_string(data), make_parents=True)
 
 
 def _read_recorded_step_hash(run_dir: Path, step_id: str) -> str | None:
@@ -1527,7 +1825,7 @@ def _is_step_completed(
     record = _read_step_status(run_dir, step_id)
     if record is not None and expected_run_id is not None:
         validate_task_status_identity_at(
-            _step_item_dir(run_dir, step_id),
+            paths_mod.step_task_state_dir(run_dir, step_id),
             record,
             run_id=expected_run_id,
             step_id=step_id,
@@ -1626,30 +1924,66 @@ def _invalidate_downstream(
     plan: Plan,
     *,
     variables: dict[str, str] | None = None,
+    invalidate_root_children: bool = False,
+    keep_downstream_mapped_items: bool = False,
 ) -> list[str]:
     """Rename status.yaml to .stale for root and all downstream steps.
 
     Walks all per-task state dirs under ``<run>/.state/tasks/<step_id>/``
     (covers both the non-fan-out ``status.yaml`` and the per-item
-    fan-out ``<key>/status.yaml`` files).
+    fan-out ``<key>/status.yaml`` files). A composite step invalidated this way is
+    re-entered and reuses its completed child steps, so a downstream mapped
+    composite re-does no work for an item whose inputs did not change.
+
+    *invalidate_root_children* also renames every per-task record inside a composite
+    root's child scopes (``<run>/<root>/``, or one scope per mapped item), nested
+    scopes included, whether or not the task reads the root's changed input. Only the
+    collected-input cascade asks for it: the root's children read the changed fan-in
+    document through ``with:`` paths, so reusing them would reuse work computed over
+    the old outcomes. Downstream composites keep their children either way; a
+    downstream collector is judged by its own digest check when the walk reaches it.
+
+    *keep_downstream_mapped_items* keeps the per-item records of every mapped
+    non-composite step downstream of the root, renaming only such a step's own
+    non-fan-out record. For a mapped composite the per-item record is a parent level
+    whose completed children are reused, but for a mapped ``code`` (handler or
+    command), ``agent``, or ``manual`` step the per-item record is the work itself, so
+    renaming it re-runs every completed item. The step is still re-entered, so its
+    roster's new items are discovered and run. Only the collected-input cascade asks for
+    it; ``--force`` and
+    the fingerprint cascade fire on an explicit force or an operator edit, where
+    re-doing completed item work is the intent.
     """
     del variables  # state dirs are keyed by step_id, not by output template
     dep_ids = downstream(plan.steps, root_step_id)
     all_ids = [root_step_id, *dep_ids]
+    steps_by_id = {step.step_id: step for step in plan.steps}
+    root_step = steps_by_id.get(root_step_id)
+    root_is_composite = root_step is not None and root_step.mode == "composite"
     invalidated: list[str] = []
 
     for step_id in all_ids:
-        step_state = _step_item_dir(run_dir, step_id)
+        step_state = paths_mod.step_task_state_dir(run_dir, step_id)
+        step = steps_by_id.get(step_id)
+        keep_items = (
+            keep_downstream_mapped_items
+            and step_id != root_step_id
+            and step is not None
+            and step.fan_out is not None
+            and step.mode != "composite"
+        )
         status_paths: list[Path] = []
         non_fan_out_status = step_state / STATUS_FILE
         if non_fan_out_status.exists():
             status_paths.append(non_fan_out_status)
-        if step_state.exists():
+        if step_state.exists() and not keep_items:
             for sub in step_state.iterdir():
                 if sub.is_dir():
                     fan_out_status = sub / STATUS_FILE
                     if fan_out_status.exists():
                         status_paths.append(fan_out_status)
+        if invalidate_root_children and root_is_composite and step_id == root_step_id:
+            status_paths.extend(_child_scope_status_paths(run_dir / step_id))
 
         step_invalidated = False
         for status_path in status_paths:
@@ -1660,6 +1994,30 @@ def _invalidate_downstream(
             invalidated.append(step_id)
 
     return invalidated
+
+
+def _child_scope_status_paths(scope_root: Path) -> list[Path]:
+    """Per-task ``status.yaml`` files in every process scope under *scope_root*.
+
+    Matches ``.state/tasks/<step>/status.yaml`` and
+    ``.state/tasks/<step>/<key>/status.yaml`` at any depth, which covers a scalar
+    composite's scope, each mapped item's scope, and the scopes nested inside them.
+    Artifacts that merely share the directory are never matched.
+    """
+    if not scope_root.is_dir():
+        return []
+    matches: list[Path] = []
+    for status_path in scope_root.rglob(STATUS_FILE):
+        parts = status_path.relative_to(scope_root).parts
+        for index in range(len(parts) - 3):
+            if (
+                parts[index] == _STATE_DIR
+                and parts[index + 1] == _TASKS_SUBDIR
+                and len(parts) - index in (4, 5)
+            ):
+                matches.append(status_path)
+                break
+    return sorted(matches)
 
 
 # ── Ancestor verification ─────────────────────────────────────────
@@ -1839,8 +2197,7 @@ async def _execute_code_step(
             if result.stderr:
                 output += result.stderr
             if output:
-                with atomic_output_file(log_file) as tmp_path:
-                    tmp_path.write_text(output)
+                atomic_write_text(log_file, output)
     except subprocess.CalledProcessError as exc:
         # Capture output even on failure
         output = ""
@@ -1849,8 +2206,7 @@ async def _execute_code_step(
         if exc.stderr:
             output += exc.stderr
         if output:
-            with atomic_output_file(log_file) as tmp_path:
-                tmp_path.write_text(output)
+            atomic_write_text(log_file, output)
         command_failure = command_failure_message(
             exc.returncode,
             stdout=exc.stdout,
@@ -1876,8 +2232,7 @@ async def _execute_code_step(
         raise
     except Exception as exc:
         tb = traceback.format_exc()
-        with atomic_output_file(log_file) as tmp_path:
-            tmp_path.write_text(tb)
+        atomic_write_text(log_file, tb)
         handler_failure = handler_failure_message(
             exc,
             env=env,
@@ -1892,8 +2247,7 @@ async def _execute_code_step(
         return False
     except BaseException as exc:
         tb = traceback.format_exc()
-        with atomic_output_file(log_file) as tmp_path:
-            tmp_path.write_text(tb)
+        atomic_write_text(log_file, tb)
         abort_error = f"{type(exc).__name__}: {str(exc) or 'code step aborted'}"
         mark_failed_at(
             state_dir,
@@ -2621,8 +2975,7 @@ async def _execute_agent_step(
             attempt_prompt = append_output_failure_feedback(
                 resolved_prompt, output_failure_feedback
             )
-            with atomic_output_file(prompt_file) as tmp_path:
-                Path(tmp_path).write_text(attempt_prompt)
+            atomic_write_text(prompt_file, attempt_prompt)
 
             cmd = adapter_obj.build_command(prompt_file, runtime_config, step_vars)
             env = adapter_obj.prepare_env(agent_seed_env(), runtime_config)
@@ -4255,6 +4608,113 @@ async def _execute_manual_step(
     return True
 
 
+def _cascade_invalidation(
+    run_dir: Path,
+    plan: Plan,
+    step_id: str,
+    *,
+    variables: dict[str, str],
+) -> list[str]:
+    """Invalidate a consumer whose collected input no longer holds, and its downstream.
+
+    The consumer's own child scopes go with it, and downstream mapped non-composite
+    steps keep their completed items' records: the cascade is there to discover work
+    the changed outcomes add, not to re-do item work that is already finished.
+    """
+    return _invalidate_downstream(
+        run_dir,
+        step_id,
+        plan,
+        variables=variables,
+        invalidate_root_children=True,
+        keep_downstream_mapped_items=True,
+    )
+
+
+def _maybe_cascade_for_collected_inputs(
+    run_dir: Path,
+    plan: Plan,
+    step: ResolvedStep,
+    *,
+    step_map: Mapping[str, ResolvedStep],
+    chains_by_member: Mapping[str, list[str]],
+    variables: dict[str, str],
+    out: Any,
+) -> list[str]:
+    """Invalidate *step* and everything downstream when a ``collect:`` document it
+    was last handed no longer matches what durable per-item state says now.
+
+    ``changed_collected_inputs`` decides whether a document changed, by its outcome
+    digest. Every task in the consumer's own child scopes is invalidated, whether or
+    not it reads the document, since a composite's children read it through ``with:``
+    paths. Downstream steps are re-entered rather than re-done: a downstream composite
+    reuses its completed child steps, and a downstream mapped non-composite step keeps
+    its completed items' records, so in both mapped shapes the cascade discovers new
+    work without re-doing finished item work. An item whose inputs changed only in
+    content is reused; ``--force`` or ``--from <step> --force`` re-does those, since
+    ``--from`` alone only narrows the walk.
+
+    No-op when the step declares no ``collect:`` input, when it has no record (it last
+    ran before the record existed), or when every recorded digest matches. A record
+    that is present but unreadable, including one that does not validate, counts as
+    changed. Returns the step IDs whose per-task ``status.yaml`` files were renamed to
+    ``.stale``.
+    """
+    if not declares_collected_inputs(step):
+        return []
+    # Only the record read is guarded: an error rebuilding the documents from per-item
+    # state is not an unreadable record and propagates.
+    try:
+        recorded = read_collected_inputs(run_dir, step.step_id)
+    except COLLECTED_INPUTS_UNREADABLE as exc:
+        # Absent means a run that predates the record, which keeps its legacy reuse.
+        # Present but unreadable means the step ran over outcomes this process cannot
+        # compare, so it degrades the other way: re-running one consumer is the cheap
+        # failure, reusing output computed over outcomes that no longer hold is the
+        # bug this check exists to catch.
+        state_dir = paths_mod.step_task_state_dir(run_dir, step.step_id)
+        log.warning(
+            "step %r: unreadable %s in %s; treating its collected inputs as changed",
+            step.step_id,
+            COLLECTED_INPUTS_FILE,
+            state_dir,
+            exc_info=True,
+        )
+        invalidated = _cascade_invalidation(run_dir, plan, step.step_id, variables=variables)
+        suffix = f" — invalidated: {', '.join(invalidated)}" if invalidated else ""
+        detail = textwrap.shorten(
+            f"{type(exc).__name__}: {exc}",
+            width=_UNREADABLE_RECORD_DETAIL_WIDTH,
+            placeholder=" ...",
+        )
+        out.progress(
+            f"  Step '{step.step_id}': unreadable {COLLECTED_INPUTS_FILE} in {state_dir} "
+            f"({detail}); its collected inputs count as changed{suffix}"
+        )
+        return invalidated
+    if recorded is None:
+        return []
+    changed = changed_collected_inputs(
+        run_dir,
+        step,
+        step_map=step_map,
+        chains_by_member=chains_by_member,
+        variables=variables,
+        recorded=recorded,
+    )
+    if not changed:
+        return []
+    invalidated = _cascade_invalidation(run_dir, plan, step.step_id, variables=variables)
+    if invalidated:
+        names = ", ".join(f"'{d.input_name}' from '{d.upstream_step}'" for d in changed)
+        noun = "input" if len(changed) == 1 else "inputs"
+        out.progress(
+            f"  Step '{step.step_id}': collected {noun} {names} changed since the step "
+            f"last ran — invalidated: {', '.join(invalidated)}"
+        )
+    return invalidated
+
+
 async def _execute_step(
     *,
     spec: ProcessSpec,
@@ -4280,38 +4740,23 @@ async def _execute_step(
     # Fan-in bindings are materialized from durable per-item state just before the
     # consumer runs, so the collection describes what actually happened rather than
     # what was true when the plan was built.
-    for input_name, io_spec in target.inputs.items():
-        if not io_spec.collect or not io_spec.path:
-            continue
-        # The expected roster comes from the collected step's own resolved fan-out, so
-        # an item that died before reaching it is still reported rather than absent.
-        collected_step = (step_map or {}).get(io_spec.collect)
-        expected_keys = None
-        if collected_step is not None and collected_step.fan_out is not None:
-            bind = collected_step.fan_out.bind
-            expected_keys = [
-                str(item[bind]) for item in collected_step.fan_out.items if bind in item
-            ]
-        # The chain feeding the collected step, so an item that never arrived can be
-        # reported with where it stopped rather than as a bare absence.
-        upstream_chain: list[str] = []
-        for candidate in (chains_by_member or {}).get(io_spec.collect, []):
-            upstream_chain.append(candidate)
-            if candidate == io_spec.collect:
-                break
-        manifest = write_outcome_manifest(
-            run_dir,
-            io_spec.collect,
-            Path(resolve_templates(io_spec.path, variables)),
-            expected_keys,
-            upstream_chain,
-        )
-        counts = manifest["fan_in_outcomes"]
+    collected = collected_documents(
+        target,
+        step_map=step_map,
+        chains_by_member=chains_by_member,
+        variables=variables,
+        run_dir=run_dir,
+    )
+    for document in collected:
+        document.manifest.write(document.path)
+        counts = document.manifest.payload["fan_in_outcomes"]
         out.progress(
-            f"  Collected '{input_name}' from '{io_spec.collect}': "
+            f"  Collected '{document.input_name}' from '{document.upstream_step}': "
             f"{counts['succeeded']} succeeded, {counts['failed']} failed "
             f"of {counts['total']}"
         )
+    if collected:
+        record_collected_inputs(run_dir, run_id=run_id, step_id=step_id, documents=collected)
 
     if target.mode == "composite":
         if target.fan_out is not None:
@@ -4426,10 +4871,25 @@ async def _execute_step(
 # ── Orchestration loop ────────────────────────────────────────────
 
 
+def _code_item_aligned_chains(steps: Sequence[ResolvedStep]) -> list[list[str]]:
+    """Return the item-aligned chains of *steps* whose members are all ``code`` steps.
+
+    Only these run per item under their head, since the agent path carries dispatch
+    machinery the chain executor does not reproduce.
+    """
+    modes = {step.step_id: step.mode for step in steps}
+    return [
+        chain
+        for chain in item_aligned_chains(steps)
+        if all(modes[step_id] == "code" for step_id in chain)
+    ]
+
+
 async def _orchestrate(
     *,
     spec: ProcessSpec,
     plan: Plan,
+    collection_plan: Plan | None = None,
     variables: dict[str, str],
     process_path: Path,
     process_dir: Path,
@@ -4446,6 +4906,15 @@ async def _orchestrate(
     `scope_execution_profile` is the profile override this scope plans its composite
     children and unpinned agent leaves with: the launch `--variant` at the root, or the
     nearest enclosing composite step's `execution_profile:` below it.
+
+    `collection_plan` is the unrestricted plan a `--only`/`--from` launch selected
+    *plan* from, and defaults to *plan*. Collected fan-in documents, both the ones
+    delivered and the ones the reuse comparison rebuilds, come from its step map and
+    item-aligned chains, so the selection cannot change what a consumer is handed. A
+    collected step outside the selection still gives the document its expected roster,
+    and its chain still says where an item that never reached it stopped. Built from
+    the selection instead, the document would drop that item, report a change that did
+    not happen, and re-run the consumer, and the next plain resume would re-run it back.
     """
     backend_name = execution_context.backend_name
     max_concurrency = execution_context.max_concurrency
@@ -4473,18 +4942,16 @@ async def _orchestrate(
 
     # Item-aligned chains run per item under their head, so the level walk must not
     # also run the absorbed members: their edges are item-scoped and the barrier
-    # between them is exactly what alignment removes. Chains of code steps only, since
-    # the agent path carries dispatch machinery this executor does not reproduce.
-    _chains = [
-        chain
-        for chain in item_aligned_chains(plan.steps)
-        if all(step_map[sid].mode == "code" for sid in chain)
-    ]
+    # between them is exactly what alignment removes.
+    _chains = _code_item_aligned_chains(plan.steps)
     _chain_head_of: dict[str, list[str]] = {chain[0]: chain for chain in _chains}
-    _chains_by_member: dict[str, list[str]] = {
-        member: chain for chain in _chains for member in chain
-    }
     _absorbed: set[str] = {sid for chain in _chains for sid in chain[1:]}
+    # Collected documents are built from the unrestricted plan (see the docstring).
+    collection_steps = plan.steps if collection_plan is None else collection_plan.steps
+    collection_step_map = {s.step_id: s for s in collection_steps}
+    collection_chains_by_member: dict[str, list[str]] = {
+        member: chain for chain in _code_item_aligned_chains(collection_steps) for member in chain
+    }
 
     events.process_start(spec.name, run_id, backend_name, len(step_map))
 
@@ -4597,8 +5064,8 @@ async def _orchestrate(
 
         success = await _execute_step(
             spec=spec,
-            step_map=step_map,
-            chains_by_member=_chains_by_member,
+            step_map=collection_step_map,
+            chains_by_member=collection_chains_by_member,
             step_def=step_def,
             target=target,
             variables=variables,
@@ -4731,6 +5198,20 @@ async def _orchestrate(
                 out.progress(f"  Step '{step_id}': satisfied via override — skipping")
                 continue
             target = step_map[step_id]
+            # A consumer whose collected fan-in documents changed since it last ran
+            # (a resume finished items that had failed) is invalidated with everything
+            # downstream before the completion check, so that check sees it as not
+            # completed. Chain heads never materialize collected documents.
+            if not force and step_id not in _chain_head_of:
+                _maybe_cascade_for_collected_inputs(
+                    run_dir,
+                    plan,
+                    target,
+                    step_map=collection_step_map,
+                    chains_by_member=collection_chains_by_member,
+                    variables=variables,
+                    out=out,
+                )
             # The level walk reaches an item-aligned chain only through its head. Even
             # when the head is complete, the chain may contain incomplete tasks; the
             # chain executor's per-task checks decide what resume reuses.
@@ -5484,23 +5965,35 @@ def run_process_command(
         if paths_mod.run_config_file(run_dir).exists()
         else build_resource_run_snapshot(snapshot_bundle, run_id=run_id)
     )
-    # Write or validate run-config.yaml (immutable run identity +
-    # additive auth/concurrency capture per plan-2026-05-03 Phase 3).
-    _write_run_config(
+    # The launch config this launch runs with: a new run records it, and a resume
+    # records how it differs from the record once it holds the orchestrator lease below.
+    launch_config = _LaunchConfig(
+        variables=variables,
+        step_variants=step_profile_overrides,
+        variant=plan.artifact_namespace or variant,
+        execution_profile=plan.execution_profile,
+        artifact_namespace=plan.artifact_namespace,
+        resolved_profiles=_serialize_plan_profiles(plan),
+        backend=backend,
+        git_sha=_get_git_sha(),
+    )
+    # Write run-config.yaml for a new run. A resume is only checked against it here.
+    run_config = _write_run_config(
         run_dir,
         process_name=spec.name,
         process_path=process_path,
         run_id=run_context,
         variables=variables,
         backend=backend,
-        variant=plan.artifact_namespace or variant,
-        execution_profile=plan.execution_profile,
-        artifact_namespace=plan.artifact_namespace,
-        resolved_profiles=_serialize_plan_profiles(plan),
+        variant=launch_config.variant,
+        execution_profile=launch_config.execution_profile,
+        artifact_namespace=launch_config.artifact_namespace,
+        resolved_profiles=launch_config.resolved_profiles,
         auth_flags=auth_flags_for_config,
         max_concurrency=max_concurrency,
         resource_snapshot=resource_snapshot,
         step_variants=step_profile_overrides,
+        git_sha=launch_config.git_sha,
     )
 
     out.progress(f"run-process: {spec.name} ({len(active_step_ids)} steps, {len(levels)} levels)")
@@ -5677,7 +6170,9 @@ def run_process_command(
                 f"Unsatisfied ancestors for --{'from' if from_step else 'only'} "
                 f"{from_step or only_step}:\n"
                 + "\n".join(errors)
-                + "\nRun without --from/--only to execute the full process, or use --force."
+                + "\nRun without --from/--only to execute the full process, or use --force, "
+                "or record an override with: "
+                "metaproc override <RUN_ID> <step> --process <spec> --satisfied"
             )
 
     overall_start = time.monotonic()
@@ -5702,6 +6197,34 @@ def run_process_command(
     if initial_concurrency is not None:
         command_summary += f" --initial-concurrency {initial_concurrency}"
     acquire_lease(run_dir, owner_type="local", command_summary=command_summary, force=force)
+
+    # Find and record a resume's changes only now that this orchestrator holds the lease:
+    # a launch refused above left the run as it found it, and the config compared here is
+    # the one no other resume can rewrite until this run ends. A resume refused here has
+    # run nothing, so it releases the lease without the finalization below, which would
+    # rewrite the run's summaries as a failed run.
+    try:
+        launch_changes = _apply_resume_config_changes(
+            run_dir,
+            run_config,
+            process_name=spec.name,
+            launch=launch_config,
+            auth_flags=auth_flags_for_config,
+            max_concurrency=max_concurrency,
+        )
+    except BaseException:
+        release_lease(run_dir)
+        raise
+    # The operator sees the changes once recorded.
+    for field, (old, new) in launch_changes.items():
+        out.warning(_describe_launch_config_change(field, old, new))
+    if launch_changes:
+        out.warning(
+            f"Recorded {len(launch_changes)} launch-config change(s) as a "
+            "launch_config_change event in "
+            f"{paths_mod.dispatch_config_changes_log(run_dir)}; run-config.yaml now "
+            "records the launch config this resume runs with."
+        )
 
     # Leave SIGINT at Python's default so asyncio.Runner translates Ctrl-C into
     # cooperative task cancellation. SIGTERM retains the hard descendant reaper.
@@ -5747,6 +6270,7 @@ def run_process_command(
                     await _orchestrate(
                         spec=spec,
                         plan=active_plan,
+                        collection_plan=plan,
                         variables=variables,
                         process_path=process_path,
                         process_dir=process_dir,

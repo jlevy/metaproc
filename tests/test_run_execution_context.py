@@ -592,9 +592,12 @@ def test_mapped_composite_rejects_gcp_worker_partitioning(tmp_path: Path) -> Non
 
 
 def test_recursive_evaluator_accepts_only_scope_local_arguments() -> None:
+    # ``collection_plan`` is the scope's own plan before a ``--only``/``--from``
+    # selection, which collected documents are built from; a child scope defaults it.
     assert set(inspect.signature(_orchestrate).parameters) == {
         "spec",
         "plan",
+        "collection_plan",
         "variables",
         "process_path",
         "process_dir",
@@ -1472,7 +1475,10 @@ def _write_blocking_process_tree_script(
 async def _wait_for_process_tree(path: Path) -> dict[str, int]:
     for _ in range(200):
         try:
-            return {key: int(value) for key, value in json.loads(path.read_text()).items()}
+            return {
+                key: int(value)
+                for key, value in json.loads(path.read_text(encoding="utf-8")).items()
+            }
         except (FileNotFoundError, json.JSONDecodeError):
             await asyncio.sleep(0.01)
     raise AssertionError(f"process tree did not publish its pids at {path}")

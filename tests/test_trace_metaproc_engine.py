@@ -22,14 +22,14 @@ def run_dir(tmp_path: Path) -> Path:
 
 def _write_jsonl(path: Path, lines: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w") as f:
+    with path.open("w", encoding="utf-8") as f:
         for line in lines:
             f.write(json.dumps(line) + "\n")
 
 
 def _write_yaml(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(payload))
+    path.write_text(yaml.safe_dump(payload), encoding="utf-8")
 
 
 def test_detect_false_when_no_engine_logs(run_dir: Path):

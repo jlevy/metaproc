@@ -158,7 +158,7 @@ def test_validate_values_alias() -> None:
 
 
 def _write_doc(path: Path, frontmatter_yaml: str, body: str = "# title\n\nbody.\n") -> None:
-    path.write_text(f"---\n{frontmatter_yaml}\n---\n{body}")
+    path.write_text(f"---\n{frontmatter_yaml}\n---\n{body}", encoding="utf-8")
 
 
 def test_validate_values_combines_model_and_schema(tmp_path: Path) -> None:

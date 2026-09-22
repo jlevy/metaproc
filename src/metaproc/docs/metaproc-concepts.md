@@ -842,14 +842,43 @@ Reliability comes from absence of moving parts.
 
 7. **Idempotent resume must be easy.** Resuming a partial run must be a normal operating
    mode, not a special recovery path.
-   Specifically:
+   Simple must be simple and complex must be possible: a plain rerun against the same
+   `RUN_ID` does the right thing with no flags, and an operator who must change, patch,
+   or partially redo a run mid-flight can always do so without discarding completed
+   work. Every run is:
 
-   - the unit of resumability is the item-step run
-   - rerunning a process must safely skip completed work
-   - failed work must be retryable without manual cleanup in the normal case
-   - stale `running` work must be reclaimable by the harness
-   - completion must be determined by harness-owned atomic state plus output validation
-   - partial outputs alone must not count as success
+   - **Simple.** Rerunning a process with the same `RUN_ID` skips completed work,
+     retries failed work, and reclaims stale `running` work, with no manual cleanup in
+     the normal case.
+   - **Resumable.** The unit of resumability is the item-step run.
+     Incremental progress is recorded cleanly and accurately in harness-owned atomic
+     state plus output validation; partial outputs alone never count as success.
+   - **Transparent.** The run directory records the launch config the run last ran with
+     (`run-config.yaml`), each launch-config change a resume makes, with its old and new
+     values (`.logs/dispatch-config-changes.jsonl`), and the step fingerprints each
+     scope was planned with (`run-plan.yaml`). Provenance is recorded so it can be read,
+     never so it can refuse.
+   - **Idempotent.** Reuse follows content.
+     A step is reused while its fingerprint (its definition, its runbook bytes, and its
+     resolved fields) is unchanged and, for a `collect:` consumer, while the outcomes it
+     was handed still hold; it reruns when either changes.
+     A value a step reads at runtime or binds through `with:` is not in its fingerprint,
+     so such a step is reused when that value changes, and `--from <step> --force`
+     re-does it. Reuse must close that gap by following the content of what a step reads,
+     through content digests of its inputs ([metaproc-design.md](metaproc-design.md)
+     §10.3), not by refusing the change.
+     A digest is a cache key that decides reuse, never a seal that aborts a run.
+   - **Flexible.** Operational change mid-flight is normal: a corrected process file, a
+     changed variable, a patched artifact, a forced or narrowed rerun.
+     The harness records and warns about what changed; it refuses only when continuing
+     would corrupt durable state or clobber live work.
+
+   The corollary for validation: a check on the resume path that cannot name the state
+   it protects is ceremony to remove, and a check that protects only operator intent
+   informs rather than aborts.
+   Sealing or hashing inputs to make provenance feel strict makes every workflow
+   clumsier to resume and adjust while protecting nothing; record provenance and let
+   content-based reuse decide what runs.
 
 8. **Shared mutable state belongs to the harness.** Many agents must not write the same
    shared items file. Specifically:

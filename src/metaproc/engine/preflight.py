@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import configparser
 import logging
+import os
 import shutil
 import subprocess
 from pathlib import Path
+
+from strif import temp_output_file
 
 from metaproc.config.env_enum import InvalidEnvVar
 from metaproc.config.env_vars import MetaprocEnv
@@ -131,11 +134,16 @@ def check_filestore_mount() -> tuple[bool, str]:
         return False, f"Filestore: mount path {mount_path} does not exist"
     if not p.is_dir():
         return False, f"Filestore: {mount_path} is not a directory"
-    # Check writable by attempting to create a temp file.
-    test_file = p / ".preflight-write-test"
+    # Check writable by attempting to create a temp file. The name must be unique:
+    # this mount is shared across every orchestrator and worker, and a fixed name lets
+    # two concurrent preflights unlink each other's probe — the loser then reports a
+    # healthy mount as unwritable. Clean up even when the write fails.
     try:
-        test_file.write_text("ok")
-        test_file.unlink()
+        with temp_output_file(prefix=".preflight-write-test-", dir=p, always_clean=True) as (
+            fd,
+            _probe,
+        ):
+            _ = os.write(fd, b"ok")
     except OSError as exc:
         return False, f"Filestore: {mount_path} is not writable — {exc}"
     return True, f"Filestore: {mount_path} mounted and writable"

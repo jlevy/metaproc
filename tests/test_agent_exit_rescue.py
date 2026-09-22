@@ -99,7 +99,7 @@ def _install_launch(
         lines = ['{"type":"message","role":"assistant","content":"done"}']
         if claim is not None:
             lines.append(json.dumps({"type": "result", "status": claim}))
-        log_path.write_text("\n".join(lines) + "\n")
+        log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         for path, text in writes.items():
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text)

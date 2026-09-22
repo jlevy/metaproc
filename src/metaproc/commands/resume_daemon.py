@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 import typer
+from strif import atomic_output_file
 
 from metaproc.cli import app, get_output
 from metaproc.dispatch.retry_later import (
@@ -72,8 +73,9 @@ def _archive_checkpoint(
     checkpoint_path.rename(archived)
     # Drop a tombstone so the next daemon scan doesn't re-pick-up.
     reason_path = checkpoint_path.parent / f"{archive_name}.reason"
-    reason_path.write_text(reason)
-    reason_path.chmod(0o600)
+    with atomic_output_file(reason_path) as tmp:
+        tmp.write_text(reason, encoding="utf-8")
+        tmp.chmod(0o600)
     return archived
 
 

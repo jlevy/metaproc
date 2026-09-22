@@ -182,7 +182,7 @@ def test_snapshot_reader_reads_strict_v1_with_legacy_mapping_behavior(tmp_path: 
         backend="local",
         variant=None,
         resource_snapshot=snapshot,
-    )
+    ).path
     raw = read_yaml_file(config_path)
     raw["resources"]["schema"] = "metaproc.resource-snapshot/v1"
     raw["resources"].pop("mapped_composite_step_ids")
@@ -223,7 +223,7 @@ def test_snapshot_reader_rejects_v2_field_under_v1_token(tmp_path: Path) -> None
         backend="local",
         variant=None,
         resource_snapshot=snapshot,
-    )
+    ).path
     raw = read_yaml_file(config_path)
     raw["resources"]["schema"] = "metaproc.resource-snapshot/v1"
     config_path.write_text(to_yaml_string(raw))
@@ -255,7 +255,7 @@ def test_snapshot_reader_rejects_missing_schema_token(tmp_path: Path) -> None:
         backend="local",
         variant=None,
         resource_snapshot=snapshot,
-    )
+    ).path
     raw = read_yaml_file(config_path)
     raw["resources"].pop("schema")
     config_path.write_text(to_yaml_string(raw))

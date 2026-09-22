@@ -62,7 +62,7 @@ _ENRICH_PROCESS = "enrich-item"
 
 def _yaml(path: Path, data: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(to_yaml_string(data))
+    path.write_text(to_yaml_string(data), encoding="utf-8")
 
 
 def _ts(clock: str) -> str:
@@ -167,7 +167,7 @@ def _transcript(path: Path, lines: list[dict[str, Any] | str], invocation: dict[
             stream.write(body)
         logical = path.with_name(path.name[: -len(".gz")])
     else:
-        path.write_text(body)
+        path.write_text(body, encoding="utf-8")
         logical = path
     logical.with_name(logical.name + ".invocation.json").write_text(json.dumps(invocation))
 
@@ -182,7 +182,7 @@ def _gemini_result(duration_ms: int, *models: str) -> dict[str, Any]:
 
 def _jsonl(path: Path, events: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("".join(json.dumps(event) + "\n" for event in events))
+    path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
 
 
 def _resource_summary(
@@ -763,9 +763,9 @@ def test_a_null_figure_without_a_reason_is_rejected() -> None:
 
 
 def _edit_yaml(path: Path, edit: Callable[[dict[str, Any]], None]) -> None:
-    document = yaml.safe_load(path.read_text())
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
     edit(document)
-    path.write_text(to_yaml_string(document))
+    path.write_text(to_yaml_string(document), encoding="utf-8")
 
 
 def _move_scope_window(scope: Path, step_id: str, started: str, completed: str) -> None:
@@ -971,7 +971,7 @@ def _wide_run(root: Path, item_count: int) -> Path:
 
     def write(path: Path, data: object) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data))
+        path.write_text(json.dumps(data), encoding="utf-8")
 
     write(
         run_dir / ".state" / "process-status.yaml",

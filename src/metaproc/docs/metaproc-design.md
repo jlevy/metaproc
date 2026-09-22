@@ -213,6 +213,7 @@ Per-task state (one runtime task per fan-out item, keyed by for_each.key):
   {run_dir}/.state/tasks/{step_id}/<item_key>/result.yaml
   {run_dir}/.state/tasks/{step_id}/<item_key>/manual-ack.yaml   (manual steps only)
   {run_dir}/.state/tasks/{step_id}/status.yaml                  (non-fan-out steps)
+  {run_dir}/.state/tasks/{step_id}/collected-inputs.yaml        (steps with collect: inputs)
 
 Logs use producer and writer scope rather than mirroring every `.state/` branch:
   {run_dir}/.logs/process-events.jsonl
@@ -517,6 +518,68 @@ Sources of values:
 - process-relative authored files in the source tree
 - files produced earlier in the same run
 - child process specs referenced by composite steps
+
+A process-level input under `inputs:` also takes these fields:
+
+| Field | Purpose |
+| --- | --- |
+| `param` | Operator-facing name, set with `--var NAME=value`. Resolution writes the value under both this name and the input’s logical name. |
+| `required` | Whether launch validation refuses a run that leaves a `param`-backed input unset. Defaults to `true`. |
+| `default` | Literal value for an optional, `param`-backed input the operator leaves unset. |
+
+`run-config.yaml` records the launch config: every resolved input, under both its
+logical name and its `param` alias; the `--step-variant` overrides; the variant,
+execution profile, and artifact namespace; the execution profiles the plan’s steps
+resolve to, each with its adapter and configuration (`resolved_profiles`); the backend;
+and the `git_sha` of the checkout the launch ran from.
+A resume may change any of them, including by adding or removing an input or through an
+edited `default:`. The resume logs each change at INFO and warns the operator once per
+change as `Resume changes <field>: <old> -> <new>`, where the field is
+`variables.<NAME>`, `step_variants.<STEP>`, `variant`, `execution_profile`,
+`artifact_namespace`, `resolved_profiles`, `backend`, or `git_sha`, and `<unset>` stands
+for an absent side. The warning names only the profiles of a `resolved_profiles` change.
+It appends one `launch_config_change` event listing the changes to
+`.logs/dispatch-config-changes.jsonl` as `changes: [{field, diff}]`, each diff the flat
+`{old, new}` pair that the `max_concurrency` change of a `dispatch_config_change` event
+uses (that event’s `auth` diff is keyed by subfield instead); a `resolved_profiles` diff
+carries both profile lists in full, as JSON. A log the resume cannot append to refuses
+the resume with an error naming it, and nothing about the run changes: not its config,
+its task state, or its summaries.
+It then rewrites those fields in `run-config.yaml` to the values the resume ran with, so
+every reader of the config, `metaproc status` and the operations summary included, sees
+the run as it now executes, and the next resume compares against them.
+Every other field keeps its creation value, among them the process name, the run ID and
+run directory, the creation time, and the resource snapshot the terminal finalizer
+reads. A resume that changes nothing writes no event and rewrites nothing.
+
+Validation refuses a resume on three findings, each before anything is recorded or
+written:
+
+- A process name that differs from the recorded one.
+  Every task record’s identity is `<process>/<RUN_ID>`, and a renamed process cannot own
+  the existing task state.
+- A run directory that differs from the recorded one.
+  Result records are anchored to it: the results projection rebases a recorded result
+  path only from the recorded directory (§10.6, gate 8). Resuming a moved run would
+  re-run every step whose outputs sit under `{{run.dir}}`, since those paths are in its
+  fingerprint, and write result records the projection cannot accept.
+  A new `RUN_ID` costs the same work without the inconsistency.
+  The two canonical cloud Filestore mount roots for `RUNS_DIR` normalize to one run
+  directory, so resuming through either is neither refused nor recorded.
+- A corrupt `run-config.yaml`: one that does not read as a YAML mapping, or whose
+  `variables` is not a mapping of strings to strings.
+
+The first two refusals name the recorded and the current value and the two ways out:
+resume under the recorded name or at the recorded directory, or start a new `RUN_ID`.
+
+Recording a change does not decide what re-runs; step fingerprints do (§10.3). A value
+substituted into a resolved field, such as `env:` or an output path, changes the
+fingerprint, and that step re-runs with its downstream on the next resume.
+A value bound through a step’s `with:` stays a template in the resolved plan, and a
+value a code handler reads at runtime from its `variables` never enters the plan, so
+changing either leaves the fingerprint unchanged.
+Such a step is reused with output computed over the old value until
+`--from <step> --force` re-does it.
 
 Scopes are explicit:
 
@@ -1204,6 +1267,12 @@ The fallback is read-only and never written back.
 
 ## 10. Resumability and Publication Semantics
 
+These sections implement principle 7 of [metaproc-concepts.md](metaproc-concepts.md)
+§6.2: a rerun against the same `RUN_ID` is a normal operating mode that is simple,
+resumable, transparent, idempotent, and flexible.
+Reuse follows content, provenance is recorded and never used to refuse, and the harness
+records and warns about operational change rather than aborting on it.
+
 ## 10.1 Harness-Owned Publication
 
 Completion is published by the harness, not inferred from partial output presence.
@@ -1268,14 +1337,76 @@ comparable.
 Nothing is lost: the producing step’s own fingerprint covers that content and
 cascades downstream through the dep graph.
 The visible consequence is that hand-editing a generated runbook does not re-run its
-consumer; `--from <step>` forces that.
+consumer; `--from <step> --force` forces that, since `--from` alone only narrows the
+walk and reuses a completed step it selects.
+
+A step’s collected fan-in documents are a second invalidation signal, kept out of the
+fingerprint because they are execution state: the plan publishes fingerprints at launch,
+and a collected document changes as mapped items finish.
+Each time `_execute_step` hands a step its `collect:` documents, it records one digest
+per document in `.state/tasks/<step>/collected-inputs.yaml` (`CollectedInputsRecord`):
+`outcomes_sha256`, of the outcome projection, which is the upstream step, the totals,
+and each item’s key, state, and `succeeded`. On a later run against the same `RUN_ID`,
+the level walk rebuilds the documents before the completion check
+(`_maybe_cascade_for_collected_inputs`, through `changed_collected_inputs` in
+`engine/collected_inputs.py`) and compares the digests.
+A difference means the step last ran over outcomes that no longer hold, typically
+because a resume finished items that had failed, so the step and its descendants are
+invalidated through `_invalidate_downstream`, the same path the fingerprint cascade
+takes. Error wording and attempt log paths are not part of the projection: the document
+carries each item’s full error, but an item whose retry fails again, whatever the
+message or log, does not re-run the consumer and everything downstream on every resume.
+The digests are recorded at delivery rather than at completion because a composite
+consumer has no per-task completion record of its own, and its child steps can consume a
+document while a sibling later fails the composite.
+Content digests, not modification times, are compared.
+A step without the record is a legacy completion and is not invalidated by this rule.
+A record that is present but does not validate counts as unreadable, and degrades the
+other way, toward changed: absent means a run that predates the record, while unreadable
+means the step ran over outcomes this process cannot compare, and re-running one
+consumer is cheaper than reusing output computed over outcomes that no longer hold.
+
+`_invalidate_downstream` renames `status.yaml` to `status.yaml.stale` for each affected
+parent-level task. A composite invalidated that way is re-entered and reuses its
+completed child steps, so a downstream mapped composite re-does no work for an item
+whose inputs did not change.
+`--force` differs only inside the selected steps: it applies in child scopes too, so a
+selected composite re-runs its child steps, while a downstream composite outside the
+selection is renamed at the parent level and reuses its completed child steps when a
+later run reaches it.
+The collected-input cascade alone passes `invalidate_root_children=True`, which also
+renames every task in the consumer’s own child scopes, nested scopes included, whether
+or not that task reads the document: a composite’s children read it through `with:`
+paths, and the cascade does not distinguish the children that bind it from those that do
+not. That cascade also passes `keep_downstream_mapped_items=True`, which keeps the
+per-item records of every downstream mapped non-composite step.
+For a mapped composite the per-item record is a parent level whose completed children
+are reused. For a mapped non-composite step (`mode: code`, whether handler or command,
+`agent`, or `manual`) it is the work itself, so renaming it would re-run every finished
+item on a routine backfill, which costs more than the manual sequence this rule
+replaces. Both mapped shapes are re-entered, so the items a new roster adds are
+discovered, and an item whose content changed under the same key is reused until
+`--from <step> --force` re-does it.
+The fingerprint cascade and `--force` keep the wider scope: they fire on an operator
+edit or an explicit force, where re-doing completed item work is the intent.
+Downstream composites keep their children on that path too; a downstream collector is
+judged by its own digest comparison when the walk reaches it.
+An invalidation persists until its task runs again: reconciliation at the next
+orchestrator entry projects a terminal attempt back into `status.yaml` only when no
+`status.yaml.stale` names that attempt.
+A `status.yaml.stale` counts as `invalidated` only while no `status.yaml` exists beside
+it; once the task has run again, the `.stale` file is the record of a past invalidation,
+not a pending one, and the step reads by its new completion.
 
 ## 10.4 Recovery Rules
 
 Recovery semantics are explicit:
 
-- `completed` with validated outputs and a matching fingerprint -> skip
+- `completed` with validated outputs, a matching fingerprint, and unchanged collected
+  outcomes -> skip
 - `completed` with a fingerprint mismatch -> rerun this step and downstream
+- collected fan-in document reports outcomes other than those last delivered -> rerun
+  this step and downstream
 - `failed` -> retry (with retry policy if configured)
 - `cached` -> skip
 - `running` with live process -> do not reclaim
@@ -1345,9 +1476,11 @@ recorded artifact to the step that actually produced it.
 identity to compare.)
 
 Gate 8 handles a run tree hydrated at a different path than it was written at.
-The immutable `run_dir` in `run-config.yaml` anchors the rebase, so a path recorded on
+The `run_dir` recorded in `run-config.yaml` anchors the rebase, so a path recorded on
 another host resolves into the local tree; a path that genuinely points outside it stays
 unaccepted rather than being silently rewritten.
+Because the anchor is that one recorded directory, a resume refuses to run anywhere else
+(§6.5): the results it wrote there would fail this gate.
 
 **Coverage gaps.** Missing state must not read as complete coverage.
 When a snapshot declares an executable scalar task, a mapped item task, or a composite
@@ -1476,6 +1609,11 @@ arrived would report three of four items as full coverage; reporting against the
 distinguishes succeeded, failed, and never-reached.
 The manifest is derived from durable per-item state on every read and never stored as
 truth, so it cannot drift from the state it describes.
+The document copies each item’s full error, including its attempt log path.
+The outcome projection, not the document’s bytes, decides consumer reuse (§10.3): a
+resume that changes an item’s outcome re-runs a consumer that already completed, while
+the same failure under a new attempt rewrites the document with that attempt’s log path
+and re-runs nothing.
 
 ### Declared Retry on the Code Path
 

@@ -219,6 +219,9 @@ Useful dispatch selectors:
 - `--force` bypasses reuse checks throughout the run, including composite descendants
 - `--dry-run` prints the plan without launching work
 
+`--from` and `--only` narrow the walk; they do not re-run a step that is already
+complete. Add `--force` to re-run it.
+
 `--skip`, `--from`, and `--only` currently name root-process steps.
 They are not matched against same-named steps inside a composite child.
 
@@ -481,7 +484,80 @@ built, so hashing its bytes would give the same step two different fingerprints 
 planning and one at execution — and nothing could be compared against a recorded value.
 Editing such a file by hand therefore does not re-run its consumer; changing the step
 that *produces* it does, and the cascade carries that downstream.
-Use `--from <step>` to force a rerun after editing a generated runbook in place.
+Use `--from <step> --force` to re-run the consumer and its downstream after editing a
+generated runbook in place.
+`--from` alone only narrows the walk: a completed step it selects is still reused.
+
+### When a collected input changes
+
+A step that declares a `collect:` input is handed a fan-in document that the
+orchestrator rebuilds from the collected mapped step’s per-item state just before the
+step runs. Each time it hands a step these documents, it records one SHA-256 digest per
+document in `.state/tasks/<step>/collected-inputs.yaml`: `outcomes_sha256`, of what the
+document says happened (the upstream step, the totals, and each item’s key, state, and
+success). On a later run against the same `RUN_ID`, before deciding whether the step is
+complete, the orchestrator rebuilds the documents and compares `outcomes_sha256`. It
+differs when an item changed state or appeared or disappeared, typically because a
+resume finished items that had failed.
+An item that fails again, even with a different error message, is not a change.
+When the outcome digest differs, the orchestrator:
+
+1. Treats the step as not completed, although its fingerprint is unchanged.
+2. Renames the step’s and every downstream step’s `status.yaml` to `status.yaml.stale`,
+   the same cascade a fingerprint change triggers, and prints
+   `Step '<step>': collected input '<input>' from '<mapped step>' changed since the step last ran — invalidated: <steps>`.
+
+The comparison is by content, never modification time.
+Every composite and mapped step is re-entered on resume, and re-entering a consumer
+rewrites its documents, so an unchanged resume reuses everything.
+A fan-in document keeps each item’s full error, including the attempt log path it names
+(`(traceback: <path>.log)` or `; log: <path>.log`), so a consumer reading a failure can
+open its evidence. An item that fails again rewrites the document with its new attempt’s
+log path and still does not re-run the consumer, because the digest covers outcomes, not
+wording or paths.
+A step with no `collected-inputs.yaml` is not invalidated by this rule.
+A record that is present but does not read or validate, for example a corrupt one or one
+written by a later Metaproc, counts as unreadable and therefore as changed, and the
+resume prints the record it could not read beside its other decisions.
+Backfilling failed items therefore needs no `--only <consumer> --force`: the resume
+re-runs the consumer and its downstream.
+A run started before the release that added this rule has no record at all, so
+backfilling its failed items and resuming still reuses the consumer.
+Run `--from <consumer> --force` once on such a run: it re-runs the consumer and its
+downstream, and writes the record that later resumes compare.
+`--only <consumer> --force` is not enough, because it records a fresh digest for the
+consumer without re-running the downstream, so the next resume reuses downstream output
+computed over the consumer’s old output.
+
+When the consumer is a composite, this cascade also renames every per-task record inside
+the consumer’s own child scopes (`<run>/<step>/`, or `<run>/<step>/<key>/` for each
+mapped item), nested scopes included, whether or not the task reads the document: a
+child step that fetches reference data and never opens the document re-runs too.
+Downstream steps are re-entered rather than re-done, in both mapped shapes.
+A downstream composite is invalidated at the parent level, as after a fingerprint
+change, so each is re-entered and reuses its completed child steps.
+A downstream mapped step that is not a composite (`mode: code`, whether handler or
+command, `agent`, or `manual`) keeps its completed items’ records, because there the
+per-item record is the work itself rather than a parent level over reusable children;
+renaming it would re-fetch every finished item on every backfill.
+Either way the step is re-entered and does work only for the items its new roster adds.
+The trade is that an item that keeps its key while the content behind it changes is
+reused; `--from <step> --force` re-does those.
+A downstream step that itself collects a changed document is judged by its own digest
+comparison when the walk reaches it.
+An invalidated task stays invalidated until it runs again, including across an
+interrupted run.
+
+`metaproc status --steps` does not predict this invalidation, because the orchestrator
+decides it at resume from per-item state.
+The comparison runs only for steps the launch walks: a collector left out by `--only`,
+`--from`, or `--skip`, or satisfied by a `metaproc override`, is not compared, and
+`--force` re-runs the selected steps without comparing.
+Four cases are outside the rule: a step that reads a mapped step’s outputs without
+declaring `collect:`, a downstream composite whose completed child steps read changed
+content through `with:` paths, a downstream mapped step’s completed items whose content
+changed under the same key, and the downstream of a composite whose own child collector
+re-ran. Use `--from <step> --force` for those.
 
 ### When to reach for a flag
 
@@ -493,19 +569,59 @@ decision:
 | Situation | Flag |
 | --- | --- |
 | Pure runbook / prompt edit | none — rerun with same `RUN_ID` |
-| Edited a `mode: code` handler (fingerprint-blind) | `--from <step>` |
-| Want to rerun only one step in isolation, ignore the cascade | `--only <step>` |
+| Failed mapped items finished, feeding a `collect:` consumer | none — rerun with same `RUN_ID` |
+| Edited a `mode: code` handler (fingerprint-blind) | `--from <step> --force` |
+| Want to rerun only one step in isolation, ignore the cascade | `--only <step> --force` |
 | Skip a step you know is fine, override caching | `--skip <step>` |
 | Force a rerun the fingerprint thinks is unnecessary | `--force` |
+| Re-do a downstream mapped step’s completed items after a collected input changed | `--from <step> --force` |
+| Re-do a step that reads a changed variable at runtime or through `with:` | `--from <step> --force` |
 
 Use `run-process --dry-run` or `metaproc deps <run>` to preview the cascade if you are
 unsure what the next launch will execute.
 
-Keep every resolved `--var` value unchanged when resuming a run ID. Metaproc rejects a
-changed, added, or removed variable before it reuses task state; start a new run ID for
-a different input set.
-Equivalent local and cloud Filestore mount aliases for `RUNS_DIR` are the sole
-normalization exception.
+A resume may change the launch config: any `--var` value, including by adding or
+removing one or through an edited input `default:`, the `--step-variant` set,
+`--variant`, `--artifact-namespace`, the execution profiles the plan resolves,
+`--backend`, and the Git commit it runs from.
+Metaproc prints a `Resume changes <field>: <old> -> <new>` warning for each change,
+where the field is `variables.<NAME>`, `step_variants.<STEP>`, `variant`,
+`execution_profile`, `artifact_namespace`, `resolved_profiles`, `backend`, or `git_sha`.
+It appends one `launch_config_change` event listing them to
+`.logs/dispatch-config-changes.jsonl` and then rewrites those fields in
+`run-config.yaml` to the values the resume ran with, so the file describes the latest
+launch and the event log holds its history.
+The event carries a `resolved_profiles` change in full; the warning names only the
+profiles. What re-runs still follows fingerprints.
+A value substituted into a resolved field such as `env:` or an output path re-runs that
+step and its downstream.
+A step that binds the value through `with:`, or reads it at runtime, as a code handler
+reads its `variables`, keeps its fingerprint and is reused with output computed over the
+old value; `--from <step> --force` re-does it.
+
+Three launch-config findings refuse the resume, each before anything is recorded:
+
+- A corrupt `run-config.yaml`.
+- A process name that differs from the recorded one, because every task record’s
+  identity is `<process>/<RUN_ID>`. Resume under the recorded name, or start a new
+  `RUN_ID`.
+- A run directory that differs from the recorded one, because result records are
+  anchored to the recorded directory.
+  A moved run would re-run every step whose outputs sit under `{{run.dir}}`, since those
+  paths are in its fingerprint, and write result records that the results projection
+  cannot accept. Resume at the recorded directory, or start a new `RUN_ID`, which costs
+  the same work without the inconsistency.
+  The two canonical Filestore mount roots for `RUNS_DIR` normalize to one run directory,
+  so resuming through either is neither refused nor recorded; any other path to the same
+  files, a workstation mount included, is a different directory.
+
+A resume that cannot append to `.logs/dispatch-config-changes.jsonl` also stops, with an
+error naming that file, before any step runs; a `launch_config_change` event it cannot
+append stops it before it rewrites `run-config.yaml`, because that event is the only
+record of the values the resume replaces.
+Nothing about the run changes when a resume stops this way: its config, its task state,
+and its summaries (`operations-summary.md` and `resource-usage-summary.md`) stay as they
+were.
 
 ### Worked example
 
@@ -562,11 +678,12 @@ composite step’s own authored `execution_profile:`, which then applies to its 
 subtree. Neither a composite step nor a step inside a child can be overridden from the
 command line; launch validation refuses such an id and lists the steps that can be.
 The run records its overrides in `run-config.yaml`. A resume without `--step-variant`
-reuses them, a resume that passes a different set is refused, and
-`metaproc status --steps` plans the recorded overrides.
+reuses them, a resume that passes a different set runs with it and records the change
+the way it records a changed `--var`, and `metaproc status --steps` plans the recorded
+overrides. A resume that passes any `--step-variant` replaces the whole recorded set, so
+repeat every override you want to keep.
 A run launched by v0.4.1, which applied overrides without recording them, has no
-recorded set; a resume of one adopts the `--step-variant` it passes and records it from
-then on.
+recorded set; a resume of one records the `--step-variant` set it passes from then on.
 
 Preflight credentials before a live dispatch:
 
@@ -797,9 +914,12 @@ policies as a contract change.
 - `stale` — completed, but the step’s runbook or contract changed since the last
   completion. Re-running against this RUN_ID will re-execute the step plus its
   downstream.
-- `invalidated` — a prior `status.yaml` was renamed `.stale` by `--force` or by the
-  fingerprint cascade.
+- `invalidated` — a prior `status.yaml` was renamed `.stale` by `--force`, the
+  fingerprint cascade, or a changed collected input.
   The step will rerun.
+  A `status.yaml.stale` counts only while no `status.yaml` exists beside it, so after
+  the re-run completes the step reads `current` or `stale` by its new completion, and
+  the leftover `.stale` file is only the record of the earlier invalidation.
 - `missing` — never started, or started and failed without a recorded completion.
 - `in_flight` — actively running.
 
@@ -1074,7 +1194,7 @@ for unmarked old runs.
 
 | Artifact | Current path | Meaning |
 | --- | --- | --- |
-| Run config | `<run>/.state/run-config.yaml` | Frozen run identity, variables, and layout marker |
+| Run config | `<run>/.state/run-config.yaml` | Run identity, run directory, launch config, and layout marker; a resume that changes the launch config (variables, step variants, variant, execution profile, artifact namespace, resolved profiles, backend, `git_sha`) rewrites it after recording the change, and every other field keeps its creation value |
 | Run plan | `<scope>/.state/run-plan.yaml` | What this scope declared: step identity, shape, canonical mapped item keys, output ports, fingerprints |
 | Orchestrator lease | `<run>/.state/orchestrator-lease.yaml` | Owner and heartbeat for cross-host safety |
 | Process status | `<run>/.state/process-status.yaml` | Aggregated DAG state for status display |
@@ -1089,7 +1209,7 @@ for unmarked old runs.
 | Artifact | Current path | Meaning |
 | --- | --- | --- |
 | Process events | `<run>/.logs/process-events.jsonl` | Run-level DAG lifecycle events |
-| Dispatch config changes | `<run>/.logs/dispatch-config-changes.jsonl` | Append-only record of live dispatch config edits |
+| Dispatch config changes | `<run>/.logs/dispatch-config-changes.jsonl` | Append-only record of live dispatch config edits and of the launch-config changes each resume made |
 | Step runpool events | `<run>/.logs/runpool/steps/<step_id>/events.jsonl` | Per-step fan-out runner events |
 | Worker runpool events | `<run>/.logs/runpool/workers/<worker-id>/events.jsonl` | Worker-scoped runner events |
 | Agent session logs | `<run>/.logs/tasks/<step_id>/<item_key>/*.jsonl` | Per-attempt adapter stream JSONL |

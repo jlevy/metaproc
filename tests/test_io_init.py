@@ -13,15 +13,21 @@ import strif
 import metaproc.io as io_mod
 from metaproc.io import frontmatter as _io_frontmatter
 from metaproc.io import gz_io as _io_gz_io
+from metaproc.io import secret_io as _io_secret_io
 from metaproc.io import templating as _io_templating
 
 EXPECTED_PUBLIC = {
     "ArtifactPath",
     "FmFormatError",
+    "SECRET_FILE_MODE",
     "TemplateRenderError",
     "YamlSerializationError",
     "artifact_exists",
     "atomic_output_file",
+    "atomic_write_bytes",
+    "atomic_write_text",
+    "copyfile_atomic",
+    "copytree_atomic",
     "fmf_read",
     "fmf_read_artifact",
     "fmf_read_frontmatter",
@@ -40,7 +46,10 @@ EXPECTED_PUBLIC = {
     "render_template",
     "resolve_existing_artifact",
     "strip_template_frontmatter",
+    "temp_output_dir",
+    "temp_output_file",
     "to_yaml_string",
+    "write_secret_text",
     "write_yaml_file",
 }
 
@@ -101,9 +110,30 @@ def test_templating_helpers_resolve_to_source_module() -> None:
         assert getattr(io_mod, name) is getattr(_io_templating, name)
 
 
-def test_atomic_output_file_resolves_to_strif() -> None:
+def test_strif_reexports_resolve_to_source() -> None:
+    """One named helper per write contract, all re-exported without rewrapping.
 
-    assert io_mod.atomic_output_file is strif.atomic_output_file
+    `filesystem-rules` asks that choosing something other than atomic publication be a
+    visible decision with a name on it. That only works if each contract has a name on
+    offer here: publish-replace (`atomic_write_text` / `atomic_write_bytes` /
+    `atomic_output_file`), copy-and-publish (`copyfile_atomic` / `copytree_atomic`),
+    and private staging (`temp_output_file` / `temp_output_dir`).
+    """
+    for name in (
+        "atomic_output_file",
+        "atomic_write_bytes",
+        "atomic_write_text",
+        "copyfile_atomic",
+        "copytree_atomic",
+        "temp_output_dir",
+        "temp_output_file",
+    ):
+        assert getattr(io_mod, name) is getattr(strif, name), name
+
+
+def test_secret_helpers_resolve_to_source_module() -> None:
+    for name in ("SECRET_FILE_MODE", "write_secret_text"):
+        assert getattr(io_mod, name) is getattr(_io_secret_io, name)
 
 
 def test_yaml_mapping_serialization_is_alias_free() -> None:

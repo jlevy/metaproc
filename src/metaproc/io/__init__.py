@@ -19,7 +19,15 @@ from frontmatter_format import (
     to_yaml_string,
     write_yaml_file,
 )
-from strif import atomic_output_file
+from strif import (
+    atomic_output_file,
+    atomic_write_bytes,
+    atomic_write_text,
+    copyfile_atomic,
+    copytree_atomic,
+    temp_output_dir,
+    temp_output_file,
+)
 
 from metaproc.io.frontmatter import (
     fmf_read_artifact,
@@ -36,6 +44,7 @@ from metaproc.io.gz_io import (
     logical_path,
     resolve_existing_artifact,
 )
+from metaproc.io.secret_io import SECRET_FILE_MODE, write_secret_text
 from metaproc.io.templating import (
     TemplateRenderError,
     render_template,
@@ -45,10 +54,15 @@ from metaproc.io.templating import (
 __all__ = [
     "ArtifactPath",
     "FmFormatError",
+    "SECRET_FILE_MODE",
     "TemplateRenderError",
     "YamlSerializationError",
     "artifact_exists",
     "atomic_output_file",
+    "atomic_write_bytes",
+    "atomic_write_text",
+    "copyfile_atomic",
+    "copytree_atomic",
     "fmf_read",
     "fmf_read_artifact",
     "fmf_read_frontmatter",
@@ -67,6 +81,9 @@ __all__ = [
     "render_template",
     "resolve_existing_artifact",
     "strip_template_frontmatter",
+    "temp_output_dir",
+    "temp_output_file",
     "to_yaml_string",
+    "write_secret_text",
     "write_yaml_file",
 ]

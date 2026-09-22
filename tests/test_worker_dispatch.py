@@ -550,7 +550,7 @@ class TestWorkerDispatchRuntimeVars:
             payload_path
             == step_state_dir(tmp_path, "mine") / "worker_payloads" / "worker-0-item-contexts.json"
         )
-        assert json.loads(payload_path.read_text()) == large_contexts
+        assert json.loads(payload_path.read_text(encoding="utf-8")) == large_contexts
 
 
 # ── Worker-scoped pool state aggregation (RF-3) ─────────────────

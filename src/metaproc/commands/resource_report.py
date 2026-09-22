@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 
 import typer
-from strif import atomic_output_file
+from strif import atomic_write_text
 
 from metaproc.cli import app, get_output
 from metaproc.engine.resource_finalization import (
@@ -170,14 +170,14 @@ def _build_and_persist(
 
 def _persist_document_atomic(document: ResourcesDocument, cache_path: Path) -> None:
     """Persist just the document atomically (no events file rewrite)."""
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    with atomic_output_file(cache_path) as tmp:
-        tmp.write_text(document.model_dump_json(by_alias=True, indent=2))
+    atomic_write_text(
+        cache_path, document.model_dump_json(by_alias=True, indent=2), make_parents=True
+    )
 
 
 def _read_cached(cache_path: Path) -> ReadableResourcesDocument:
     try:
-        raw = cache_path.read_text()
+        raw = cache_path.read_text(encoding="utf-8")
     except OSError as exc:
         raise CLIError(f"Failed to read {cache_path}: {exc}") from exc
     try:

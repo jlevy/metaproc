@@ -9,7 +9,7 @@ from pathlib import Path
 
 from frontmatter_format import read_yaml_file, to_yaml_string
 from pydantic import BaseModel, Field
-from strif import atomic_output_file
+from strif import atomic_write_text
 
 from metaproc.io.mkdir_lock import MkdirLockTimeoutError, mkdir_lock
 from metaproc.paths import CLAIMED_ITEMS_FILE, step_state_dir
@@ -61,13 +61,8 @@ def write_claimed_items(
 ) -> Path:
     """Atomically write one worker's claim registry."""
     path = claimed_items_path(run_dir, step_id, worker_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
     record = ClaimedItemsRecord(worker_id=worker_id, updated_at=_now_iso(), items=items)
-    with atomic_output_file(path) as tmp_path:
-        Path(tmp_path).write_text(
-            to_yaml_string(record.model_dump()),
-            encoding="utf-8",
-        )
+    atomic_write_text(path, to_yaml_string(record.model_dump()), make_parents=True)
     return path
 
 

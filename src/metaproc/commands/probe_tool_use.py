@@ -140,7 +140,9 @@ def _run_probe(
     probe_dir = Path.cwd() / ".metaproc-probe" / secrets.token_hex(4)
     probe_dir.mkdir(parents=True, exist_ok=True)
     probe_file = probe_dir / "probe-target.txt"
-    probe_file.write_text(f"{sentinel}\nLine 2\nLine 3\n")
+    # write-contract: private-staging -- scratch inside the randomized probe dir that
+    # `_cleanup_probe_dir` removes; it has no published destination.
+    probe_file.write_text(f"{sentinel}\nLine 2\nLine 3\n", encoding="utf-8")
 
     rel_path = probe_file.relative_to(Path.cwd())
     # Phrase the prompt as a direct user question (not an imperative instruction
@@ -155,7 +157,8 @@ def _run_probe(
         f"Read it and reply with that line only, exactly as it appears.\n"
     )
     prompt_file = probe_dir / "probe-prompt.md"
-    prompt_file.write_text(prompt_text)
+    # write-contract: private-staging -- same throwaway probe dir as probe_file above.
+    prompt_file.write_text(prompt_text, encoding="utf-8")
 
     adapter = ADAPTER_REGISTRY[harness]
     merged_config = _build_probe_config(harness, model, provider)
