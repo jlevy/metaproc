@@ -30,7 +30,7 @@ from metaproc.settings import (
 
 log = logging.getLogger(__name__)
 
-PINNED_GEMINI_CLI_VERSION = "0.55.1"
+PINNED_GEMINI_CLI_VERSION = "0.59.0"
 GEMINI_CLI_INSTALL_HINT = f"Install: npm install -g @google/gemini-cli@{PINNED_GEMINI_CLI_VERSION}"
 
 
