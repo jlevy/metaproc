@@ -507,7 +507,8 @@ identity variable before it reuses task state, including one that changed becaus
 input’s `default:` was edited, and the refusal names each such variable; start a new run
 ID for a different input set.
 A provenance input, such as a code revision, may advance on a resume: the resume logs
-its recorded and current values, and `run-config.yaml` keeps the launch value.
+its recorded and current values and appends a `provenance_advance` event to
+`.logs/dispatch-config-changes.jsonl`, and `run-config.yaml` keeps the launch value.
 Equivalent local and cloud Filestore mount aliases for `RUNS_DIR` are the sole
 normalization of an identity variable.
 

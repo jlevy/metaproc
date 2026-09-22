@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: Cloud Execution
 
-**Date:** 2026-04-12 (last updated 2026-08-27) **Status:** Approved
+**Date:** 2026-04-12 (last updated 2026-09-22) **Status:** Approved
 
 For the overall metaproc framework design, see [metaproc-design.md](metaproc-design.md);
 for the run pool process management subsystem, see [arch-runpool.md](arch-runpool.md).
@@ -181,7 +181,8 @@ subset.
 **`run-config.yaml`** (`{run_dir}/.state/run-config.yaml`): written at run creation time
 with the process name, run ID, resolved variables, creation-time backend and variant,
 git SHA, and timestamp.
-On resume, the process identity, run directory, and resolved variables must match.
+On resume, the process identity, run directory, and resolved variables must match,
+except inputs the process declares `provenance: true`, which a resume may advance.
 The two canonical cloud Filestore mount roots normalize to one identity; workstation
 paths do not. No other variable changes are accepted.
 Cross-topology resume (for example, hybrid to full cloud) remains allowed because the
