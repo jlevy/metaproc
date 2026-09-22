@@ -666,6 +666,8 @@ def probe_credential(
         stderr_full = proc.stderr or ""
         stderr_artifact = slot_dir / "probe.stderr"
         try:
+            # write-contract: private-staging -- scratch probe output; mp-uy5y tracks
+            # its use after the TemporaryDirectory has already been removed.
             stderr_artifact.write_text(stderr_full)
         except OSError:
             pass  # slot may already be torn down on the cleanup race

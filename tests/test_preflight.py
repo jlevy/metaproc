@@ -7,6 +7,9 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from metaproc.commands.auth_check import _run_readiness_check
 from metaproc.engine.preflight import (
     DEFAULT_PER_ITEM_BUDGET_MB,
     check_cli,
@@ -245,6 +248,39 @@ class TestCheckFilestoreMount:
         finally:
             # Restore permissions for cleanup
             read_only.chmod(0o755)
+
+
+@pytest.mark.parametrize("check", ["filestore", "readiness"])
+def test_failed_write_probe_closes_descriptor_and_removes_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, check: str
+) -> None:
+    descriptors: list[int] = []
+
+    def fail_write(fd: int, data: bytes) -> int:
+        descriptors.append(fd)
+        raise OSError("injected write failure")
+
+    monkeypatch.setattr(os, "write", fail_write)
+    monkeypatch.setenv("METAPROC_GCP_FILESTORE_SERVER", "10.0.0.1")
+    monkeypatch.setenv("METAPROC_GCP_FILESTORE_MOUNT_PATH", str(tmp_path))
+    if check == "filestore":
+        ok, message = check_filestore_mount()
+        assert not ok and "injected write failure" in message
+    else:
+        results = _run_readiness_check(tmp_path)
+        assert any(not ok and "injected write failure" in message for ok, message in results)
+
+    assert len(descriptors) == 1
+    try:
+        with pytest.raises(OSError):
+            os.fstat(descriptors[0])
+    finally:
+        # Keep the deliberately failing baseline run from leaking into other tests.
+        try:
+            os.close(descriptors[0])
+        except OSError:
+            pass
+    assert list(tmp_path.iterdir()) == []
 
 
 class TestRunCloudPreflight:

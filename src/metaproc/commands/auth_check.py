@@ -673,11 +673,9 @@ def _run_readiness_check(run_dir: Path) -> list[tuple[bool, str]]:
     results.append((True, f"run dir: {run_dir} exists"))
 
     # Look for progress.md in the run dir or one level down
-    # Glob sorted by path: the first existing candidate is the one parsed and reported,
-    # so with several phase dirs the result would follow enumeration order.
     progress_candidates = [
         run_dir / "progress.md",
-        *sorted(run_dir.glob("*/progress.md")),
+        *run_dir.glob("*/progress.md"),
     ]
     progress_file = next((p for p in progress_candidates if p.exists()), None)
 
@@ -696,11 +694,12 @@ def _run_readiness_check(run_dir: Path) -> list[tuple[bool, str]]:
 
     # Check output dir is writable. The probe name must be unique: a fixed one lets
     # two concurrent checks unlink each other's file, and the loser then reports a
-    # perfectly writable directory as unwritable. `temp_output_file` also removes the
-    # probe itself, so a crash between write and delete leaves no litter in the
-    # operator's run directory.
+    # perfectly writable directory as unwritable. Clean up even when the write fails.
     try:
-        with temp_output_file(prefix=".auth-check-write-test-", dir=run_dir) as (fd, _probe):
+        with temp_output_file(prefix=".auth-check-write-test-", dir=run_dir, always_clean=True) as (
+            fd,
+            _probe,
+        ):
             _ = os.write(fd, b"test")
         results.append((True, "output dir: writable"))
     except OSError as exc:

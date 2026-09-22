@@ -99,9 +99,7 @@ def load_gitignore(root: Path) -> IgnoreFilter:
 
     # Walk for nested .gitignore files (skip .git itself).
     for dirpath, dirnames, filenames in os.walk(root):
-        # Sorted in place by name: os.walk descends in dirnames order and the last
-        # matching pattern wins, so walk order decides which files end up ignored.
-        dirnames[:] = sorted(d for d in dirnames if d != ".git")
+        dirnames[:] = [d for d in dirnames if d != ".git"]
         if dirpath == str(root):
             continue  # already handled above
         if ".gitignore" in filenames:

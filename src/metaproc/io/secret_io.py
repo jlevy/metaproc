@@ -62,6 +62,8 @@ def write_secret_text(
         # somebody else made, which is the whole reason a fixed staging name is unsafe.
         fd = os.open(staged, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
         try:
+            # Creation mode is filtered by umask; restore owner access before writing.
+            os.fchmod(fd, mode)
             written = 0
             while written < len(data):
                 written += os.write(fd, data[written:])

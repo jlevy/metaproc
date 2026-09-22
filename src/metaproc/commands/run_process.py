@@ -1728,9 +1728,7 @@ def _invalidate_downstream(
         if non_fan_out_status.exists():
             status_paths.append(non_fan_out_status)
         if step_state.exists():
-            # Sorted by path: the rename loop below mutates status files in this order,
-            # which is observable when it fails partway.
-            for sub in sorted(step_state.iterdir()):
+            for sub in step_state.iterdir():
                 if sub.is_dir():
                     fan_out_status = sub / STATUS_FILE
                     if fan_out_status.exists():

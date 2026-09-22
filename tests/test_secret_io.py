@@ -34,14 +34,15 @@ def test_published_file_is_owner_only(tmp_path: Path) -> None:
     assert _mode(dest) == SECRET_FILE_MODE
 
 
-def test_mode_holds_under_a_permissive_umask(tmp_path: Path) -> None:
+@pytest.mark.parametrize("mask", [0, 0o777])
+def test_mode_holds_under_any_umask(tmp_path: Path, mask: int) -> None:
     """The published mode must not depend on what the umask happens to allow.
 
     This is a steady-state check and a `write_text` + `chmod` pair would satisfy it
     too — the two tests below are the ones that separate them, by observing the write
     rather than its result.
     """
-    previous = os.umask(0)
+    previous = os.umask(mask)
     try:
         dest = tmp_path / "credentials.json"
         write_secret_text(dest, "blob")

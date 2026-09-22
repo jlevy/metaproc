@@ -137,10 +137,12 @@ def check_filestore_mount() -> tuple[bool, str]:
     # Check writable by attempting to create a temp file. The name must be unique:
     # this mount is shared across every orchestrator and worker, and a fixed name lets
     # two concurrent preflights unlink each other's probe — the loser then reports a
-    # healthy mount as unwritable. `temp_output_file` also removes the probe itself, so
-    # a crash between write and delete does not leave litter on a shared mount.
+    # healthy mount as unwritable. Clean up even when the write fails.
     try:
-        with temp_output_file(prefix=".preflight-write-test-", dir=p) as (fd, _probe):
+        with temp_output_file(prefix=".preflight-write-test-", dir=p, always_clean=True) as (
+            fd,
+            _probe,
+        ):
             _ = os.write(fd, b"ok")
     except OSError as exc:
         return False, f"Filestore: {mount_path} is not writable — {exc}"

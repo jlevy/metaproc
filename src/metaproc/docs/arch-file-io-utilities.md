@@ -105,7 +105,8 @@ helper expresses each one here.
 | Contract | What a reader may observe | Helper |
 | --- | --- | --- |
 | **Publish, replacement allowed** | No file, the old contents, or the complete new contents | `atomic_write_text`, `atomic_write_bytes`, `atomic_output_file`, `write_yaml_file`, `fmf_write`, `write_secret_text` |
-| **Publish, replacement forbidden** | An existing destination is preserved; otherwise the complete new file appears in one step | `mkdir_lock.acquire_mkdir_lock`, `path.open("x")` |
+| **Publish, replacement forbidden** | An existing destination is preserved; otherwise the complete new file appears in one step | Stage the file, then use a no-replace commit primitive; no general helper is exported here |
+| **Exclusive name creation** | One creator reserves the name; file contents may still be incomplete | `mkdir_lock.acquire_mkdir_lock` for directory claims, `path.open("x")` for files |
 | **Append** | Records accumulate; concurrent writers do not race on the file position | `path.open("a")` |
 | **Live stream** | Output as the producer writes it, incomplete by design | `path.open("w")` handed to a subprocess or a tailing reader |
 | **Private staging** | Nothing — the file has no published destination | `temp_output_file`, `temp_output_dir` |
@@ -114,6 +115,11 @@ Only the first two require atomic publication, and in practice that means every 
 that completes a file before a reader should see it: durable state, a report, an export,
 a cache entry, a prompt snapshot.
 Business importance is not the test.
+
+Exclusive creation is a separate contract: `open("x")` prevents overwriting an existing
+file, but exposes the new name before its contents are written.
+It is suitable for claims whose readers already handle incomplete initialization, not
+for publishing a completed document atomically.
 
 Routing an append or a live stream through replacement **weakens** it.
 An append forced through replace-the-whole-file has to read and rewrite the file, which
@@ -125,7 +131,10 @@ which is the opposite of what `metaproc tail` and a subprocess transcript are fo
 truncating write (`write_text`, `write_bytes`, `open(..., "w")`) whose destination is
 not a staged temp path, and it recognizes staging through `atomic_output_file`,
 `temp_output_file`, `temp_output_dir` and `TemporaryDirectory`, including paths derived
-from them. Appends and `open("x")` are not flagged.
+from them.
+This is a syntactic guard, not complete Python data-flow analysis; unsupported
+staging patterns need an explicit contract.
+Appends and `open("x")` are not flagged.
 
 Where a non-atomic write is correct, name the contract at the site rather than working
 around the check:

@@ -1447,10 +1447,8 @@ def _pool_override_paths(
 ) -> tuple[list[Path], list[Path]]:
     """Return active scale-state files and all candidate override paths."""
     override_paths = [paths_mod.run_state_dir(run_dir) / scale_override_file]
-    # Sorted by path: callers print one line per override path as they write or remove
-    # it, so rglob order is operator-visible.
-    state_files = sorted(run_dir.rglob("scale-state.yaml"))
-    state_roots = sorted(state_dir for state_dir in run_dir.rglob(STATE_DIR) if state_dir.is_dir())
+    state_files = list(run_dir.rglob("scale-state.yaml"))
+    state_roots = [state_dir for state_dir in run_dir.rglob(STATE_DIR) if state_dir.is_dir()]
     override_paths.extend(state_root / scale_override_file for state_root in state_roots)
     for state_file in state_files:
         for candidate in (state_file.parent, *state_file.parents):

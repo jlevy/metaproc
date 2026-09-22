@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
-from strif import copyfile_atomic
+from strif import atomic_output_file
 
 from metaproc.adapters.base import (
     AuthCapableCliAdapter,
@@ -73,6 +73,7 @@ from metaproc.dispatch.credential_pool import (
     write_back_rotated,
 )
 from metaproc.dispatch.credential_pool import Vehicle as _Vehicle
+from metaproc.io import SECRET_FILE_MODE
 from metaproc.io.mkdir_lock import (
     MkdirLockTimeoutError,
     acquire_mkdir_lock,
@@ -562,7 +563,11 @@ class SlotCoordinator:
                 continue
             target = target_dir / f"{target_log_path.stem}.{name}"
             try:
-                copyfile_atomic(src, target, make_parents=True)
+                with atomic_output_file(target, make_parents=True) as staged:
+                    # Keep partial copies private until copy2 applies source metadata.
+                    staged.touch(mode=SECRET_FILE_MODE, exist_ok=False)
+                    staged.chmod(SECRET_FILE_MODE)
+                    shutil.copy2(src, staged)
             except OSError:
                 log.warning(
                     "slot_coordinator: failed to copy %s -> %s",

@@ -36,6 +36,38 @@ REJECTED = [
     pytest.param('with open(dest, "w") as fh:\n    fh.write(body)', id="builtin-open-w"),
     pytest.param('with open(dest, mode="w") as fh:\n    fh.write(body)', id="open-mode-kwarg"),
     pytest.param('with os.fdopen(fd, "w") as fh:\n    fh.write(body)', id="fdopen-w"),
+    pytest.param('io.open(dest, "w")', id="qualified-open"),
+    pytest.param('builtins.open(file=dest, mode="w")', id="qualified-open-keywords"),
+    pytest.param(
+        "def first():\n    with atomic_output_file(dest) as path:\n        pass\n"
+        "def second(path):\n    path.write_text(body)",
+        id="staging-does-not-leak-between-functions",
+    ),
+    pytest.param(
+        "with atomic_output_file(dest) as path:\n    path = dest\n    path.write_text(body)",
+        id="rebound-staging-name",
+    ),
+    pytest.param(
+        "with atomic_output_file(dest) as path:\n    pass\npath.write_text(body)",
+        id="expired-staging-context",
+    ),
+    pytest.param(
+        "with atomic_output_file(dest) as tmp:\n    dest = choose_destination(tmp)\n"
+        "    dest.write_text(body)",
+        id="unknown-call-is-not-a-staged-path",
+    ),
+    pytest.param(
+        'with temp_output_dir() as tmp:\n    (tmp / "/published").write_text(body)',
+        id="absolute-path-discards-staging-root",
+    ),
+    pytest.param(
+        'dest.write_text(body)\nlog.open("w")  # write-contract: live-stream -- tailed',
+        id="later-statement-cannot-suppress-earlier-write",
+    ),
+    pytest.param(
+        'dest.write_text("# write-contract: private-staging -- not a comment")',
+        id="string-is-not-a-suppression",
+    ),
 ]
 
 

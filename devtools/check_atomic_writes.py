@@ -43,7 +43,9 @@ that will eventually remind someone it is here.
 from __future__ import annotations
 
 import ast
+import io
 import sys
+import tokenize
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -88,6 +90,7 @@ class Finding:
     lineno: int
     what: str
     line: str
+    end_lineno: int = 0
 
 
 def _is_truncating_mode(node: ast.expr | None) -> bool:
@@ -110,29 +113,78 @@ class _Scanner(ast.NodeVisitor):
         self.staged: set[str] = set()
         self.findings: list[Finding] = []
 
+    def visit_FunctionDef(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        outer = self.staged
+        self.staged = set()
+        self.generic_visit(node)
+        self.staged = outer
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        outer = self.staged
+        self.staged = set()
+        self.generic_visit(node)
+        self.staged = outer
+
     # `with atomic_output_file(dest) as tmp:` and friends bind a staged name.
     # So does `staged = tmp_dir / "part.yaml"` once `tmp_dir` is staged, which
     # is why assignment is tracked as well as the `with` binding.
-    def visit_With(self, node: ast.With) -> None:
+    def visit_With(self, node: ast.With | ast.AsyncWith) -> None:
+        outer = self.staged.copy()
+        bound: set[str] = set()
         for item in node.items:
             call = item.context_expr
-            if isinstance(call, ast.Call) and _callee_name(call.func) in STAGING_BINDERS:
-                if item.optional_vars is not None:
-                    self.staged.update(_bound_names(item.optional_vars))
-        self.generic_visit(node)
+            self.visit(call)
+            if item.optional_vars is not None:
+                names = _bound_names(item.optional_vars)
+                bound.update(names)
+                self.staged.difference_update(names)
+                if isinstance(call, ast.Call) and _callee_name(call.func) in STAGING_BINDERS:
+                    self.staged.update(names)
+        for statement in node.body:
+            self.visit(statement)
+        self.staged.intersection_update(outer - bound)
 
-    visit_AsyncWith = visit_With  # pyright: ignore[reportAssignmentType]
+    visit_AsyncWith = visit_With
 
     def visit_Assign(self, node: ast.Assign) -> None:
-        if self._is_staging_expr(node.value):
-            for target in node.targets:
-                self.staged.update(_bound_names(target))
-        self.generic_visit(node)
+        self.visit(node.value)
+        staged = self._is_staging_expr(node.value)
+        for target in node.targets:
+            self._bind(target, staged)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
-        if node.value is not None and self._is_staging_expr(node.value):
-            self.staged.update(_bound_names(node.target))
-        self.generic_visit(node)
+        if node.value is not None:
+            self.visit(node.value)
+            self._bind(node.target, self._is_staging_expr(node.value))
+
+    def _bind(self, target: ast.expr, staged: bool) -> None:
+        names = _bound_names(target)
+        self.staged.difference_update(names)
+        if staged:
+            self.staged.update(names)
+
+    def visit_If(self, node: ast.If) -> None:
+        self.visit(node.test)
+        before = self.staged.copy()
+        for statement in node.body:
+            self.visit(statement)
+        body = self.staged
+        self.staged = before.copy()
+        for statement in node.orelse:
+            self.visit(statement)
+        self.staged.intersection_update(body)
+
+    def visit_For(self, node: ast.For | ast.AsyncFor) -> None:
+        self.visit(node.iter)
+        self._bind(node.target, False)
+        before = self.staged.copy()
+        for statement in [*node.body, *node.orelse]:
+            self.visit(statement)
+        self.staged.intersection_update(before)
+
+    visit_AsyncFor = visit_For
 
     def _is_staging_expr(self, node: ast.expr) -> bool:
         """True when an assigned value is, or derives from, a staged path.
@@ -142,12 +194,21 @@ class _Scanner(ast.NodeVisitor):
         its lifetime outlives one block, and the paths under it are as private
         as those from a `with`.
         """
-        if self._mentions_staged(node):
-            return True
-        return any(
-            isinstance(child, ast.Call) and _callee_name(child.func) in STAGING_BINDERS
-            for child in ast.walk(node)
-        )
+        if isinstance(node, ast.Name):
+            return node.id in self.staged
+        if isinstance(node, ast.Attribute):
+            return node.attr == "name" and self._is_staging_expr(node.value)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+            return self._is_staging_expr(node.left) and _is_relative_literal(node.right)
+        if isinstance(node, ast.Call):
+            name = _callee_name(node.func)
+            if name in STAGING_BINDERS:
+                return True
+            if name == "Path" and node.args:
+                return self._is_staging_expr(node.args[0]) and all(
+                    _is_relative_literal(part) for part in node.args[1:]
+                )
+        return False
 
     def visit_Call(self, node: ast.Call) -> None:
         self._check_call(node)
@@ -157,13 +218,18 @@ class _Scanner(ast.NodeVisitor):
         func = node.func
         # `dest.write_text(...)` / `dest.write_bytes(...)`
         if isinstance(func, ast.Attribute) and func.attr in TRUNCATING_METHODS:
-            if not self._mentions_staged(func.value):
+            if not self._is_staging_expr(func.value):
                 self._record(node, f"`.{func.attr}(...)` on a published path")
             return
         # `dest.open("w")`
-        if isinstance(func, ast.Attribute) and func.attr == "open":
+        qualified_open = (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id in {"io", "builtins"}
+        )
+        if isinstance(func, ast.Attribute) and func.attr == "open" and not qualified_open:
             mode = node.args[0] if node.args else _keyword(node, "mode")
-            if _is_truncating_mode(mode) and not self._mentions_staged(func.value):
+            if _is_truncating_mode(mode) and not self._is_staging_expr(func.value):
                 self._record(node, '`.open("w", ...)` on a published path')
             return
         # `open(dest, "w")` and `os.fdopen(fd, "w")`
@@ -175,24 +241,20 @@ class _Scanner(ast.NodeVisitor):
             # `os.fdopen` writes to an already-open descriptor, so the safety
             # question was settled at the `os.open` that produced it. Judge it
             # by the descriptor's name rather than guessing at the syscall.
-            target = node.args[0] if node.args else None
-            if target is not None and self._mentions_staged(target):
+            target = node.args[0] if node.args else _keyword(node, "file")
+            if target is not None and self._is_staging_expr(target):
                 return
             self._record(node, f'`{name}(..., "w")` on a published path')
 
-    def _mentions_staged(self, node: ast.expr) -> bool:
-        """True when a staged name appears anywhere in the expression.
-
-        `tmp_path`, `tmp_path / "x.yaml"`, and `Path(tmp_path)` are all the
-        same staged destination, so the test is containment rather than an
-        exact name match.
-        """
-        return any(
-            isinstance(child, ast.Name) and child.id in self.staged for child in ast.walk(node)
-        )
-
     def _record(self, node: ast.Call, what: str) -> None:
-        self.findings.append(Finding(Path(), node.lineno, what, ""))
+        self.findings.append(Finding(Path(), node.lineno, what, "", node.end_lineno or node.lineno))
+
+
+def _is_relative_literal(node: ast.expr) -> bool:
+    if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+        return False
+    path = Path(node.value)
+    return not path.is_absolute() and ".." not in path.parts
 
 
 def _callee_name(func: ast.expr) -> str | None:
@@ -212,7 +274,11 @@ def _keyword(node: ast.Call, name: str) -> ast.expr | None:
 
 def _bound_names(target: ast.expr) -> set[str]:
     """Every simple name bound by an assignment or `as` target."""
-    return {child.id for child in ast.walk(target) if isinstance(child, ast.Name)}
+    if isinstance(target, ast.Name):
+        return {target.id}
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return set().union(*(_bound_names(child) for child in target.elts))
+    return set()
 
 
 # A contract reason that needs more than one line is the normal case, not the
@@ -222,14 +288,17 @@ def _bound_names(target: ast.expr) -> set[str]:
 MAX_COMMENT_BLOCK_LINES = 12
 
 
-def _suppression(lines: list[str], lineno: int) -> str | None:
+def _suppression(
+    lines: list[str], comments: dict[int, str], lineno: int, end_lineno: int
+) -> str | None:
     """Return the contract text suppressing the finding, if there is one.
 
     Looked for in three places: on the statement's own first line, on its
     continuation lines (a call can span several), and anywhere in the
     unbroken run of comment lines directly above it.
     """
-    for line in lines[lineno - 1 : lineno + 4]:
+    for line_number in range(lineno, end_lineno + 1):
+        line = comments.get(line_number, "")
         if SUPPRESSION in line:
             return line.split(SUPPRESSION, 1)[1].strip()
 
@@ -241,8 +310,9 @@ def _suppression(lines: list[str], lineno: int) -> str | None:
         stripped = lines[index].strip()
         if not stripped.startswith("#"):
             break
-        if SUPPRESSION in stripped:
-            return stripped.split(SUPPRESSION, 1)[1].strip()
+        comment = comments.get(index + 1, "")
+        if SUPPRESSION in comment:
+            return comment.split(SUPPRESSION, 1)[1].strip()
         index -= 1
         scanned += 1
     return None
@@ -262,10 +332,15 @@ def scan_file(path: Path) -> list[Finding]:
     scanner.visit(tree)
 
     lines = text.splitlines()
+    comments = {
+        token.start[0]: token.string
+        for token in tokenize.generate_tokens(io.StringIO(text).readline)
+        if token.type == tokenize.COMMENT
+    }
     findings: list[Finding] = []
     for finding in scanner.findings:
         line = lines[finding.lineno - 1] if finding.lineno <= len(lines) else ""
-        claim = _suppression(lines, finding.lineno)
+        claim = _suppression(lines, comments, finding.lineno, finding.end_lineno)
         if claim is not None:
             contract, _, reason = claim.partition("--")
             contract = contract.strip()

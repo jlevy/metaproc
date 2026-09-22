@@ -154,7 +154,7 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
         "arch-file-io",
         "arch-file-io-utilities",
         "Architecture: the curated metaproc.io surface, write contracts, and frontmatter gotchas.",
-        1700,
+        1800,
     ),
 )
 
