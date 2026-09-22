@@ -533,8 +533,12 @@ Every resolved input is part of a run’s identity unless it declares `provenanc
 adds, or removes an identity variable is refused, including one whose value comes from
 an edited `default:`. A provenance input resolves and reaches the graph like any other,
 but it is left out of that comparison under both its logical name and its `param` alias,
-so a resume may advance it; the resume logs each provenance input that moved with its
-recorded and current value, and `run-config.yaml` keeps the launch value.
+so a resume may advance it.
+`run-config.yaml` keeps the launch value; the resume logs each provenance input that
+moved with its recorded and current value, and appends one `provenance_advance` event
+listing those moves to `.logs/dispatch-config-changes.jsonl`, in the
+`changes: [{field, diff: {old, new}}]` shape the `dispatch_config_change` events use.
+A resume that moves none writes no event.
 Only the process knows what its inputs mean, so Metaproc marks no input as provenance on
 its own.
 
