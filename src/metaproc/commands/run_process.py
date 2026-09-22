@@ -811,14 +811,15 @@ value; see ``_rewrite_launch_config``.
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class _RunConfigWrite:
-    """The ``run-config.yaml`` that ``_write_run_config`` wrote or resumed against.
+    """The ``run-config.yaml`` that ``_write_run_config`` wrote or validated a resume against.
 
-    ``changes`` is empty for a first write and for a resume with the recorded values;
-    ``run_process_command`` prints one warning per entry.
+    ``resumed`` is true when the config already existed, so the launch is a resume whose
+    changes ``_apply_resume_config_changes`` finds and records once the orchestrator
+    lease is held.
     """
 
     path: Path
-    changes: _LaunchConfigChanges
+    resumed: bool
 
 
 def _write_run_config(  # noqa: PLR0913
@@ -838,59 +839,37 @@ def _write_run_config(  # noqa: PLR0913
     resource_snapshot: ResourceRunSnapshot | None = None,
     step_variants: Mapping[str, str] | None = None,
 ) -> _RunConfigWrite:
-    """Write run-config.yaml at run creation time; record changes on resume.
+    """Write run-config.yaml at run creation time; validate a resume against it.
 
     Schema v2 adds an ``auth:`` block
     capturing the dispatch's auth-pool configuration and a
     ``concurrency:`` block capturing the operator's max-concurrency
-    intent. On resume, compares the new flags against the persisted
-    values and appends a ``dispatch_config_change`` event to
-    ``.logs/dispatch-config-changes.jsonl`` rather than mutating the
-    original config — preserves the audit trail per spec.
+    intent.
 
-    A resume may also change the launch config: the run directory, any resolved
-    variable, or the ``--step-variant`` set (*step_variants*, where ``None`` means
-    none). ``_validate_run_config`` finds those changes, ``_record_launch_config_changes``
-    logs each one and appends them all as one ``launch_config_change`` event to the same
-    log, and ``_rewrite_launch_config`` then makes the config record the variables and
-    step variants this resume runs with. Every other field keeps its creation value,
-    ``run_dir`` included, because the results projection rebases recorded paths from
-    it. What re-runs is decided by step fingerprints, not here.
+    On resume this function writes nothing. It validates the launch config against the
+    recorded one (``_validate_run_config``) only to refuse early, before auth preflight
+    and the ancestor check, a resume that cannot continue: a corrupt config, or a process
+    name other than the recorded one, since every task record carries
+    ``<process>/<RUN_ID>`` as its run identity. The changes it would find are not kept.
+    ``_apply_resume_config_changes`` validates again once ``run_process_command`` holds
+    the orchestrator lease, and records what it finds there, because only under the lease
+    is this resume the config's single writer. A launch refused before then, by the
+    ``--from``/``--only`` ancestor check or by another orchestrator's live lease,
+    therefore never touches the config or the event log of a run that may still be
+    executing. What re-runs is decided by step fingerprints, not here.
 
-    A resume refuses (``CLIError``) only when continuing would corrupt the run: a
-    corrupt config, or a process name other than the recorded one, since every task
-    record carries ``<process>/<RUN_ID>`` as its run identity.
-
-    Returns the config path and the launch-config changes, which are empty for a first
-    write and for a resume with the recorded values.
+    Returns the config path and whether it already existed.
     """
     config_path = paths_mod.run_config_file(run_dir)
-    logs_dir = paths_mod.run_logs_dir(run_dir)
     if config_path.exists():
-        resumed_step_variants = dict(step_variants or {})
-        changes = _validate_run_config(
+        _validate_run_config(
             config_path,
             process_name=process_name,
             run_dir=run_dir,
             variables=variables,
-            step_variants=resumed_step_variants,
+            step_variants=dict(step_variants or {}),
         )
-        _record_launch_config_changes(logs_dir, changes)
-        _rewrite_launch_config(
-            config_path,
-            changes,
-            variables=variables,
-            step_variants=resumed_step_variants,
-        )
-        # Compute and record any auth/concurrency diff so the
-        # aggregator can render the resume timeline.
-        _record_resume_config_change(
-            config_path,
-            logs_dir=logs_dir,
-            new_auth_flags=auth_flags,
-            new_max_concurrency=max_concurrency,
-        )
-        return _RunConfigWrite(path=config_path, changes=changes)
+        return _RunConfigWrite(path=config_path, resumed=True)
 
     state_dir = paths_mod.run_state_dir(run_dir)
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -936,7 +915,69 @@ def _write_run_config(  # noqa: PLR0913
     with atomic_output_file(config_path) as tmp_path:
         Path(tmp_path).write_text(to_yaml_string(data))
     log.info("Wrote run-config.yaml: %s", config_path)
-    return _RunConfigWrite(path=config_path, changes={})
+    return _RunConfigWrite(path=config_path, resumed=False)
+
+
+def _apply_resume_config_changes(  # noqa: PLR0913
+    run_dir: Path,
+    run_config: _RunConfigWrite,
+    *,
+    process_name: str,
+    variables: Mapping[str, str],
+    step_variants: Mapping[str, str] | None,
+    auth_flags: AuthPoolFlags | None,
+    max_concurrency: int | None,
+) -> _LaunchConfigChanges:
+    """Find and record what a resume changes, once it holds the orchestrator lease.
+
+    ``_validate_run_config`` compares the launch config with ``run-config.yaml`` as it
+    stands now. That result is authoritative, not the check ``_write_run_config`` made
+    before the lease: between the two, another resume may have finished and rewritten
+    the config, and recording changes computed against the older config would give the
+    event stale old values, or, when that list came out empty, leave the config naming
+    another resume's values while this one runs with its own.
+    ``_record_launch_config_changes`` then logs each change and appends them as one
+    ``launch_config_change`` event, ``_rewrite_launch_config`` makes the config record
+    the variables and step variants this resume runs with, and
+    ``_record_resume_config_change`` appends a ``dispatch_config_change`` event for any
+    auth or concurrency change. Both events go to ``.logs/dispatch-config-changes.jsonl``.
+
+    ``run_process_command`` calls this immediately after ``acquire_lease`` succeeds and
+    inside the block that releases it. Before that point the launch can still be refused,
+    by the ``--from``/``--only`` ancestor check or by a live lease another orchestrator
+    holds, and a refused launch must leave a run that may still be executing exactly as
+    it found it. Under the lease this resume is the run's only writer.
+
+    Returns the launch-config changes it recorded, for the operator's warnings: empty for
+    a first write (``run_config.resumed`` false) and for a resume with the recorded
+    values.
+    """
+    if not run_config.resumed:
+        return {}
+    resumed_step_variants = dict(step_variants or {})
+    changes = _validate_run_config(
+        run_config.path,
+        process_name=process_name,
+        run_dir=run_dir,
+        variables=variables,
+        step_variants=resumed_step_variants,
+    )
+    _record_launch_config_changes(paths_mod.run_logs_dir(run_dir), changes)
+    _rewrite_launch_config(
+        run_config.path,
+        changes,
+        variables=variables,
+        step_variants=resumed_step_variants,
+    )
+    # Compute and record any auth/concurrency diff so the
+    # aggregator can render the resume timeline.
+    _record_resume_config_change(
+        run_config.path,
+        logs_dir=paths_mod.run_logs_dir(run_dir),
+        new_auth_flags=auth_flags,
+        new_max_concurrency=max_concurrency,
+    )
+    return changes
 
 
 def _publish_run_plan(
@@ -1260,8 +1301,11 @@ def _rewrite_launch_config(
     because the results projection (``runtime_projection``) rebases every recorded
     result path from that original root onto the directory the run now occupies.
 
-    The rewrite follows launch validation, so a value the run cannot accept never
-    reaches the config.
+    ``_apply_resume_config_changes`` calls this once the orchestrator lease is held,
+    which is after launch validation, the ``--from``/``--only`` ancestor check, and the
+    lease itself have accepted the resume. A value the run cannot accept never reaches
+    the config, and a resume refused because another orchestrator is live never rewrites
+    that orchestrator's config.
     """
     fields = {field.split(".", 1)[0] for field in changes} & _REWRITTEN_LAUNCH_FIELDS
     if not fields:
@@ -1306,10 +1350,10 @@ def _resume_step_variants(run_dir: Path, requested: Mapping[str, str]) -> dict[s
     A run records its overrides in ``run-config.yaml``. The plan, its step fingerprints,
     and ``metaproc status`` all follow that record, so a resume that passes no overrides
     re-applies it. A resume that passes overrides runs with exactly those. When they
-    differ from the record, ``_write_run_config`` records each difference as a
-    ``step_variants.<STEP>`` launch-config change and rewrites the record to the set the
-    resume runs with. That write follows launch validation, so an override the run cannot
-    accept never reaches the config.
+    differ from the record, ``_apply_resume_config_changes`` records each difference as
+    a ``step_variants.<STEP>`` launch-config change and rewrites the record to the set
+    the resume runs with, once the resume holds the orchestrator lease. An override the
+    run cannot accept never reaches the config.
     """
     config_path = paths_mod.run_config_file(run_dir)
     if requested or not config_path.exists():
@@ -5702,8 +5746,8 @@ def run_process_command(
         if paths_mod.run_config_file(run_dir).exists()
         else build_resource_run_snapshot(snapshot_bundle, run_id=run_id)
     )
-    # Write run-config.yaml, or on a resume record what changed against it
-    # (launch config, auth, concurrency) and rewrite the launch config it records.
+    # Write run-config.yaml for a new run. A resume only validates against it here;
+    # its changes are recorded under the orchestrator lease below.
     run_config = _write_run_config(
         run_dir,
         process_name=spec.name,
@@ -5720,15 +5764,6 @@ def run_process_command(
         resource_snapshot=resource_snapshot,
         step_variants=step_profile_overrides,
     )
-    for field, (old, new) in run_config.changes.items():
-        out.warning(_describe_launch_config_change(field, old, new))
-    if run_config.changes:
-        out.warning(
-            f"Recorded {len(run_config.changes)} launch-config change(s) as a "
-            f"launch_config_change event in {paths_mod.dispatch_config_changes_log(run_dir)}; "
-            "run-config.yaml now records the variables and step variants this resume "
-            "runs with."
-        )
 
     out.progress(f"run-process: {spec.name} ({len(active_step_ids)} steps, {len(levels)} levels)")
     out.progress(f"Run dir: {run_dir}")
@@ -5939,6 +5974,28 @@ def run_process_command(
     finalization_state = FinalizationState.COMPLETED
     terminal_error: BaseException | None = None
     try:
+        # Find and record a resume's changes only now that this orchestrator holds the
+        # lease, and inside the block that releases it: a launch refused above left the
+        # run as it found it, and the config compared here is the one no other resume can
+        # rewrite until this run ends. The operator sees the changes once recorded.
+        launch_changes = _apply_resume_config_changes(
+            run_dir,
+            run_config,
+            process_name=spec.name,
+            variables=variables,
+            step_variants=step_profile_overrides,
+            auth_flags=auth_flags_for_config,
+            max_concurrency=max_concurrency,
+        )
+        for field, (old, new) in launch_changes.items():
+            out.warning(_describe_launch_config_change(field, old, new))
+        if launch_changes:
+            out.warning(
+                f"Recorded {len(launch_changes)} launch-config change(s) as a "
+                "launch_config_change event in "
+                f"{paths_mod.dispatch_config_changes_log(run_dir)}; run-config.yaml now "
+                "records the variables and step variants this resume runs with."
+            )
         _publish_run_plan(
             run_dir,
             run_id=run_id,
