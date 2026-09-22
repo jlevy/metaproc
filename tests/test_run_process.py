@@ -5054,8 +5054,8 @@ class TestNonFanOutTransientRetry:
         assert status is not None
         assert status.state == "failed"
         assert status.attempt == 1
-        # The recorded error carries the log line, not a bare exit code: diagnosing
-        # week 35 cost hours precisely because `exit code 1` said nothing.
+        # The recorded error carries the log line, not a bare exit code: a bare
+        # `exit code 1` says nothing about why the adapter stopped.
         assert "quota" in (status.error or "")
 
 
@@ -5189,7 +5189,7 @@ class TestRunOwnedPoolExecutionProfiles:
                 """\
                 ---
                 process:
-                  name: review
+                  name: judge-each
                   deps:
                     roster:
                       path: "{{run.dir}}/roster.md"
@@ -5208,16 +5208,16 @@ class TestRunOwnedPoolExecutionProfiles:
                           format: frontmatter-md
                       command: >-
                         /bin/sh -c 'mkdir -p "{{run.dir}}";
-                        printf "%s\\n" "---" "progress:" "  schema: metaproc:ProgressSpec/0.1" "  process: review" "  items:" "    - ticker: alfa" "    - ticker: brvo" "---" > "{{run.dir}}/roster.md"'
-                    - id: review-ticker
+                        printf "%s\\n" "---" "progress:" "  schema: metaproc:ProgressSpec/0.1" "  process: judge-each" "  items:" "    - item: alfa" "    - item: brvo" "---" > "{{run.dir}}/roster.md"'
+                    - id: judge-item
                       mode: composite
                       uses: deps.child
                       needs: [write-roster]
                       for_each:
                         over: deps.roster
-                        bind: ticker
-                        bind_fields: [ticker]
-                        key: "{{ticker}}"
+                        bind: item
+                        bind_fields: [item]
+                        key: "{{item}}"
                 ---
                 """
             ),
@@ -5228,9 +5228,9 @@ class TestRunOwnedPoolExecutionProfiles:
         result = self._invoke(process_dir / "parent.process.md", run_dir)
 
         assert result.exit_code == 0, result.output
-        for ticker in ("alfa", "brvo"):
+        for item in ("alfa", "brvo"):
             for step_id in ("judge-a", "judge-b"):
-                assert (run_dir / "review-ticker" / ticker / f"{step_id}.md").is_file()
+                assert (run_dir / "judge-item" / item / f"{step_id}.md").is_file()
         status = read_yaml_file(run_dir / STATE_DIR / "runpool-status.yaml")
         lanes = {lane["lane_id"]: lane for lane in status["lanes"]}
         assert set(lanes) == {"judge-a", "judge-b"}
@@ -5364,7 +5364,7 @@ class TestRunOwnedPoolExecutionProfiles:
                           format: frontmatter-md
                       command: >-
                         /bin/sh -c 'mkdir -p "{{run.dir}}";
-                        printf "%s\\n" "---" "progress:" "  schema: metaproc:ProgressSpec/0.1" "  process: pinned" "  items:" "    - cohort: alfa" "---" > "{{run.dir}}/roster.md"'
+                        printf "%s\\n" "---" "progress:" "  schema: metaproc:ProgressSpec/0.1" "  process: pinned" "  items:" "    - batch: alfa" "---" > "{{run.dir}}/roster.md"'
                     - id: pinned
                       mode: composite
                       uses: deps.child
@@ -5372,9 +5372,9 @@ class TestRunOwnedPoolExecutionProfiles:
                       needs: [write-roster]
                       for_each:
                         over: deps.roster
-                        bind: cohort
-                        bind_fields: [cohort]
-                        key: "{{cohort}}"
+                        bind: batch
+                        bind_fields: [batch]
+                        key: "{{batch}}"
                 """
             )
             + self._agent_step("root-leaf", None)

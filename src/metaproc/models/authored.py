@@ -7,7 +7,7 @@ before plan resolution: steps, IO contracts, adapter config, fan-out.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import ClassVar, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -526,7 +526,7 @@ class ProcessStep(BaseModel):
             "Default `block`: the step is skipped (state=blocked) when any direct "
             "dependency failed — current behavior. `continue`: the step runs even "
             "if its upstream failed. Used for end-of-run rollup / post-mortem "
-            "steps (e.g. run-stats) that must emit on partial-failure cohorts. "
+            "steps (e.g. run-stats) that must emit on partly failed runs. "
             "Note: this only affects the step's direct gating; transitive "
             "dependents through a continue-marked step still follow normal "
             "blocking through other (default) needs."
@@ -625,20 +625,23 @@ class ProcessSpec(BaseModel):
         return names
 
     @property
+    def provenance_inputs(self) -> dict[str, str | None]:
+        """Return each provenance input's logical name mapped to its ``param:`` alias.
+
+        The alias is ``None`` for an input that declares no ``param:``. This is the
+        per-input view a resume log entry needs; ``provenance_input_names`` flattens it
+        to the variable names resolution writes.
+        """
+        return {name: decl.param for name, decl in self.inputs.items() if decl.provenance}
+
+    @property
     def provenance_input_names(self) -> set[str]:
         """Return provenance logical input names plus their backing param names.
 
         Resolution writes an input's value under both names (``expand_param_aliases``
         and literal ``default:`` filling), so both leave resume identity together.
         """
-        names: set[str] = set()
-        for name, decl in self.inputs.items():
-            if not decl.provenance:
-                continue
-            names.add(name)
-            if decl.param is not None:
-                names.add(decl.param)
-        return names
+        return provenance_variable_names(self.provenance_inputs)
 
     def expand_param_aliases(self, variables: dict[str, str]) -> dict[str, str]:
         """Mirror declared ``param:`` values onto logical input names and vice versa."""
@@ -679,3 +682,18 @@ class ProcessSpec(BaseModel):
         if not isinstance(raw, dict):
             return raw
         return {str(key): value for key, value in raw.items()}
+
+
+def provenance_variable_names(provenance_inputs: Mapping[str, str | None]) -> set[str]:
+    """Flatten logical-name-to-``param:``-alias pairs to the names resolution writes.
+
+    Takes the mapping rather than the spec so a caller holding only the mapping —
+    ``run-config.yaml`` resume validation, which is threaded the pairs so it can name
+    each input in its log — derives the flat name set the same way.
+    """
+    names: set[str] = set()
+    for name, param in provenance_inputs.items():
+        names.add(name)
+        if param is not None:
+            names.add(param)
+    return names

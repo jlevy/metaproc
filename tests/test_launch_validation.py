@@ -1,6 +1,6 @@
 """Launch validation reports every class of missing input at once.
 
-Bringing up a cohort used to take one failed launch per class of missing input:
+Bringing up a run used to take one failed launch per class of missing input:
 the unresolved ``{{run.dir}}``, then the parameter nobody passed, then the file
 that was not there, then the profile the registry did not know. Validation
 aggregated within each class but raised on the first non-empty one, so an

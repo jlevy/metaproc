@@ -118,6 +118,37 @@ def _placeholder_error(
     )
 
 
+def _provenance_identity_collisions(spec: ProcessSpec) -> list[str]:
+    """Reject a name that is provenance for one input and identity for another.
+
+    Resume validation excludes a provenance input's logical name and its ``param:``
+    alias from the identity comparison. When one of those names is also a
+    non-provenance input's logical name or alias, that identity input silently leaves
+    the comparison too, so a resume could change it without refusing — the guarantee
+    the exclusion exists to keep. A name means one thing or the other, never both.
+    """
+    identity_names: set[str] = set()
+    for name, decl in spec.inputs.items():
+        if decl.provenance:
+            continue
+        identity_names.add(name)
+        if decl.param is not None:
+            identity_names.add(decl.param)
+
+    errors: list[str] = []
+    for name, decl in sorted(spec.inputs.items()):
+        if not decl.provenance:
+            continue
+        candidates = {name} | ({decl.param} if decl.param is not None else set())
+        errors.extend(
+            f"provenance input '{name}': name '{candidate}' is also used by an input "
+            f"that is not `provenance: true`, which would drop that input out of "
+            f"resume identity"
+            for candidate in sorted(candidates & identity_names)
+        )
+    return errors
+
+
 def validate_scope_collisions(spec: ProcessSpec) -> list[str]:
     """Reject authored names that would collide across process/item scopes."""
     process_scope = set(spec.inputs)
@@ -130,6 +161,8 @@ def validate_scope_collisions(spec: ProcessSpec) -> list[str]:
                 f"process name '{name}' collides with reserved framework variable "
                 f"'{{{{{reserved_target}}}}}'"
             )
+
+    errors.extend(_provenance_identity_collisions(spec))
 
     for step in spec.steps:
         for_each = step.for_each

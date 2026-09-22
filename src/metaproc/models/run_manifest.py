@@ -54,7 +54,7 @@ class RunManifest(BaseModel):
 
     run_id: str = Field(..., description="Unique ID for this run (matches RUNS_DIR subdir).")
     stage_class: StageClass
-    dataset: str = Field(..., description="Dataset slug: smoke-us-traded-20, tech-mix-100, …")
+    dataset: str = Field(..., description="Dataset slug, such as smoke-20 or sample-100.")
 
     git_sha: str = Field(..., description="Full git SHA of the code dispatched.")
     image: str = Field(

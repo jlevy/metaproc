@@ -85,12 +85,12 @@ def test_aggregate_groups_by_multiple_keys():
 
 def test_aggregate_missing_key_bucketed_as_none():
     spans = [
-        _span(span_id="a", attributes={"item.key": "MNDY"}),
+        _span(span_id="a", attributes={"item.key": "item-b"}),
         _span(span_id="b", attributes={}),
     ]
     rows = aggregate(spans, group_keys=["item.key"], metrics=["count"])
     by_ticker = {r["item.key"]: r["count"] for r in rows}
-    assert by_ticker["MNDY"] == 1
+    assert by_ticker["item-b"] == 1
     assert by_ticker["(none)"] == 1
 
 

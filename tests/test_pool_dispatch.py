@@ -1374,7 +1374,7 @@ class TestTeardownRecordsAuthOutcome:
         # Real-shape session log path under .logs/ (this is what
         # prepare_step / runtime.py builds for live runs).
         logs_dir = tmp_path / "predict-run" / "predict" / ".logs"
-        session_log = logs_dir / "predict-ticker_HLT_2026-04-27T18-07-20.jsonl"
+        session_log = logs_dir / "predict-ticker_item-m_2026-04-27T18-07-20.jsonl"
         recorder = _RecordingPool()
         shared: dict[str, Any] = {
             "slot_lease": lease,
@@ -1393,7 +1393,7 @@ class TestTeardownRecordsAuthOutcome:
         assert not lease.slot_dir.exists()
         # And the debug log lives next to where the session log would
         # be, with the session-log stem prefix so it sorts adjacent.
-        preserved = logs_dir / "predict-ticker_HLT_2026-04-27T18-07-20.claude-code-debug.log"
+        preserved = logs_dir / "predict-ticker_item-m_2026-04-27T18-07-20.claude-code-debug.log"
         assert preserved.exists(), "claude-code-debug.log must be preserved next to session log"
         assert preserved.read_text() == debug_content
 

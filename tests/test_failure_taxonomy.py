@@ -223,7 +223,7 @@ class TestClaudeClassifierTaxonomy:
         # and the next acquire picks the alt. ``mark_expired`` from a
         # sibling teardown also flips the label ineligible for new
         # acquisitions in parallel. Earlier ``ABORT`` semantics burned
-        # the cohort with retry_count=0 (the multi-label failure
+        # the batch with retry_count=0 (the multi-label failure
         # mode); fixed so a single dispatch can recover end-to-end.
         debug_text = "[ERROR] API error (attempt 1/11): 401 authentication_error\n"
         r = self.adapter.classify_failure(None, debug_text, None)
@@ -310,7 +310,7 @@ class TestClaudeClassifierTaxonomy:
 
     def test_api_401_via_stream_json_is_expired_not_known_bug(self, tmp_path):
         # API rejection: stream-json result event with api_error_status=401.
-        # Severity ``RETRY_AFTER_WAIT`` so cohort items rotate to the
+        # Severity ``RETRY_AFTER_WAIT`` so batch items rotate to the
         # alt label rather than burning at retry_count=0.
         session_log = tmp_path / "session.jsonl"
         session_log.write_text(

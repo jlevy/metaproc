@@ -72,9 +72,8 @@ profiles:
       # and capped medium-sized Codex lanes to multi-hour wall-clock. The later
       # host_max=6 setting was still too low for normal large workflow batch posture. Current
       # codex-cli runs at observed 0.8-1.2 GB RSS per agent under large workflow
-      # analysis-research load. Predecessor logbook (2026-05-23 mon-thru-wed)
-      # flagged "codex-gpt55 still open" in the per-adapter RSS benchmark
-      # work. The adaptive controller still clamps under genuine pressure.
+      # research load. The adaptive controller still clamps under genuine
+      # pressure.
       estimated_process_rss_mb: 1024
       initial_memory_budget_fraction: 0.25
       max_concurrency_hint: 20
@@ -147,8 +146,7 @@ profiles:
     notes: |
       Gemini 3.6 Flash (GA 2026-07-21) via gemini-cli through Vertex AI.
       Current stable Flash profile for bounded agentic workflows. A direct
-      model check and bounded CAT and NAGE Google Trends keyword runs passed
-      on 2026-07-24.
+      model check and bounded agent runs passed on 2026-07-24.
     capabilities:
       native_tools: [Read, Write, Edit, Bash, WebSearch, Glob, Grep, LS]
       native_web_search: true

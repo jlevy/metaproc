@@ -493,7 +493,7 @@ def agent_reported_success(log_path: Path, tail_lines: int = 30) -> bool:
 
     Some adapters end their stream with ``{"type":"result","status":"success"}`` and then
     exit non-zero anyway, during shutdown rather than during the work. Treating the exit
-    code as the verdict discards finished work: across one week-36 night, 45 attempts
+    code as the verdict discards finished work: across one night, 45 attempts
     reported success and wrote every declared output, and 37 steps then failed
     permanently with their completed artifacts on disk.
 

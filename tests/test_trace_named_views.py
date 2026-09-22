@@ -256,8 +256,8 @@ def test_source_tool_rows_group_tool_usage_attrs_and_raw_log_ref_coverage():
             source="web-bundle",
             status="ok",
             attributes={
-                "item.key": "MNDY",
-                "item.ticker": "MNDY",
+                "item.key": "item-b",
+                "item.ticker": "item-b",
                 "step.id": "analysis-research",
                 "execution_profile": "codex-gpt55",
                 "tool.family": "web",
@@ -275,8 +275,8 @@ def test_source_tool_rows_group_tool_usage_attrs_and_raw_log_ref_coverage():
             source="web-bundle",
             status="ok",
             attributes={
-                "item.key": "MNDY",
-                "item.ticker": "MNDY",
+                "item.key": "item-b",
+                "item.ticker": "item-b",
                 "step.id": "analysis-research",
                 "execution_profile": "codex-gpt55",
                 "tool.family": "web",
@@ -292,7 +292,7 @@ def test_source_tool_rows_group_tool_usage_attrs_and_raw_log_ref_coverage():
     rows = source_tool_rows(spans)
     assert len(rows) == 1
     row = rows[0]
-    assert row["item.key"] == "MNDY"
+    assert row["item.key"] == "item-b"
     assert row["source"] == "web-bundle"
     assert row["tool.family"] == "web"
     assert row["tool.operation"] == "search"

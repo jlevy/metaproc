@@ -15,12 +15,18 @@ development series.
   Resume validation leaves such an input out of the identity `run-config.yaml` records,
   under both its logical name and its `param:` alias, so a run can resume onto corrected
   code with every completed step reused.
-  The resume logs each provenance input that moved with its recorded and current value,
-  and records the move as a `provenance_advance` event in
-  `.logs/dispatch-config-changes.jsonl`, while `run-config.yaml` keeps the launch value.
-  Every other resolved variable is still identity: changing, adding, or removing one,
-  including through an edited `default:`, refuses the resume, and the refusal now names
-  the identity variables that changed and the inputs the process declares provenance.
+  The resume logs each provenance input that moved and records the move as a
+  `provenance_advance` event in `.logs/dispatch-config-changes.jsonl`, one entry per
+  input, using the same flat `{old, new}` diff as the `max_concurrency` config change.
+  `run-config.yaml` keeps the launch value, so `old` is the input’s last effective
+  value: the value the previous resume recorded, or the launch value when none has.
+  A resume that repeats the previous value writes nothing.
+  Every other resolved variable is still identity: changing, adding, or leaving one
+  unset, including through an edited `default:`, refuses the resume, and the refusal now
+  names the identity variables that changed, tags an added or dropped one, and lists the
+  inputs the process declares provenance.
+  Spec validation rejects a provenance input whose logical name or `param:` is also a
+  non-provenance input’s, which would drop that input out of resume identity.
 - **Every run writes an operations summary.** Run finalization writes
   `operations-summary.md` (`metaproc.operations:AgentOperationsSummary/v1`) beside
   `resource-usage-summary.md`: real elapsed time, setup, per-stage shares, per-item
@@ -49,7 +55,10 @@ development series.
   differs from the pin, which moves from 0.55.1. On Vertex AI, 0.59.0 still rewrites an
   unrecognized model id ending in `flash` to `gemini-3.5-flash` unless
   `experimental.dynamicModelConfiguration` is on; with the settings metaproc writes, a
-  request for `gemini-3.6-flash` is served by `gemini-3.6-flash`.
+  request for `gemini-3.6-flash` is served by `gemini-3.6-flash`. 0.59.0 was published
+  on 2026-09-08 and clears the repository’s 14-day package cool-off on 2026-09-22; until
+  then `npm install` under the repository’s `.npmrc` refuses it.
+  0.60.0, the current npm `latest`, clears the cool-off on 2026-09-29 and is not pinned.
 
 ### Fixed
 
@@ -426,7 +435,7 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
   `run-step`, `plan`, and `deps` now collect unresolved template placeholders, unset
   operator parameters, missing input files, and unusable execution profiles together and
   report them as one grouped message, instead of raising on the first non-empty class.
-  Bringing up a cohort took four launches to learn about four problems, and `--dry-run`
+  Bringing up a run took four launches to learn about four problems, and `--dry-run`
   reported the same single class.
   Process-input errors are additionally tagged as a parameter or a file, because “pass a
   `--var`” and “produce a file” are different fixes.
@@ -666,7 +675,7 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
   estimate 250 MB per process with a 0.5 initial memory budget fraction, replacing the
   500 MB and 0.25 clean-state figures.
   With session retention off, a Gemini process measures 113 MB mean across a run tree
-  and 187 MB on its own; the old estimate held cohorts at 7 of 20 lanes.
+  and 187 MB on its own; the old estimate held a batch at 7 of 20 lanes.
   Claude profiles are unchanged.
 
 - **Agent CLI adapter module names**: the four source modules now follow one

@@ -168,7 +168,7 @@ from metaproc.engine.write_boundary import (
     repo_changes_since,
 )
 from metaproc.errors import AttemptTerminalConflictError, CLIError, ValidationError
-from metaproc.io import read_yaml_file, to_yaml_string
+from metaproc.io import iter_jsonl_objects, read_yaml_file, to_yaml_string
 from metaproc.io.orchestrator_lease import LeaseHeartbeat, acquire_lease, release_lease
 from metaproc.io.overrides import (
     OverridesDocument,
@@ -196,7 +196,13 @@ from metaproc.io.state_io import (
     write_run_plan,
 )
 from metaproc.logutil.compaction import try_compact_log
-from metaproc.models.authored import IOSpec, ProcessSpec, ProcessStep, StepContext
+from metaproc.models.authored import (
+    IOSpec,
+    ProcessSpec,
+    ProcessStep,
+    StepContext,
+    provenance_variable_names,
+)
 from metaproc.models.lane import ExecutionLane
 from metaproc.models.plan import Plan, ResolvedStep, RunPlanSnapshot, RunPlanStep
 from metaproc.models.resource_budget import FinalizationState
@@ -809,7 +815,7 @@ def _write_run_config(  # noqa: PLR0913
     max_concurrency: int | None = None,
     resource_snapshot: ResourceRunSnapshot | None = None,
     step_variants: Mapping[str, str] | None = None,
-    provenance_names: Collection[str] = frozenset(),
+    provenance_inputs: Mapping[str, str | None] | None = None,
 ) -> Path:
     """Write run-config.yaml at run creation time; record changes on resume.
 
@@ -824,24 +830,30 @@ def _write_run_config(  # noqa: PLR0913
     Returns the path to the config file. Resume calls validate the process,
     run directory, and resolved identity variables (raises CLIError on
     mismatch) but accept changes to auth / concurrency as recorded events.
-    ``provenance_names`` are the variables a resume may change; see
-    ``_validate_run_config``. The config keeps the values the run was launched with,
-    and each resume that changes one appends a ``provenance_advance`` event to the
-    same log.
+    ``provenance_inputs`` maps each provenance input's logical name to its ``param:``
+    alias (``ProcessSpec.provenance_inputs``); those are the variables a resume may
+    change, see ``_validate_run_config``. The config keeps the values the run was
+    launched with, and each resume that moves one appends a ``provenance_advance``
+    event to the same log.
     The one field a resume writes back is ``step_variants``, for a config that
     records none; see ``_adopt_step_variants``.
     """
     config_path = paths_mod.run_config_file(run_dir)
     logs_dir = paths_mod.run_logs_dir(run_dir)
+    declared_provenance = dict(provenance_inputs or {})
     if config_path.exists():
-        advances = _validate_run_config(
+        launch_and_current = _validate_run_config(
             config_path,
             process_name=process_name,
             run_dir=run_dir,
             variables=variables,
-            provenance_names=provenance_names,
+            provenance_names=provenance_variable_names(declared_provenance),
         )
-        _record_provenance_advances(logs_dir, advances)
+        _record_provenance_advances(
+            logs_dir,
+            provenance_inputs=declared_provenance,
+            launch_and_current=launch_and_current,
+        )
         # Compute and record any auth/concurrency diff so the
         # aggregator can render the resume timeline.
         _record_resume_config_change(
@@ -1146,43 +1158,137 @@ def _record_resume_config_change(
     if not changes:
         return
 
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    event = {
-        "event": "dispatch_config_change",
-        "ts": _now_iso(),
-        "changes": changes,
-    }
-    target = logs_dir / paths_mod.DISPATCH_CONFIG_CHANGES_FILE
-    with target.open("a") as fh:
-        fh.write(_json_dumps(event) + "\n")
+    _append_dispatch_config_change_event(
+        logs_dir,
+        {"event": "dispatch_config_change", "ts": _now_iso(), "changes": changes},
+    )
     log.info("Recorded dispatch_config_change: %d field(s)", len(changes))
 
 
+def _append_dispatch_config_change_event(logs_dir: Path, event: Mapping[str, object]) -> None:
+    """Append one resume-change event to ``.logs/dispatch-config-changes.jsonl``.
+
+    Both resume events go through here so a log the process cannot write fails the
+    resume with a message naming the path, rather than an ``OSError`` traceback out of
+    the middle of run-config validation.
+    """
+    target = logs_dir / paths_mod.DISPATCH_CONFIG_CHANGES_FILE
+    try:
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        with target.open("a") as fh:
+            fh.write(_json_dumps(event) + "\n")
+    except OSError as exc:
+        raise CLIError(f"Cannot record the resume change event in {target}: {exc}") from exc
+
+
 def _record_provenance_advances(
-    logs_dir: Path, advances: Mapping[str, tuple[str | None, str | None]]
+    logs_dir: Path,
+    *,
+    provenance_inputs: Mapping[str, str | None],
+    launch_and_current: Mapping[str, tuple[str | None, str | None]],
 ) -> None:
     """Append a ``provenance_advance`` event when a resume moves a provenance input.
 
-    ``run-config.yaml`` keeps the launch value of every provenance input, and the resume's
-    INFO line goes wherever the operator's shell sent it, so this event is the run
-    directory's record of when a resume advanced one and from what to what. It shares
-    ``.logs/dispatch-config-changes.jsonl`` with the other resume changes, in the same
-    ``changes: [{field, diff: {old, new}}]`` shape, so one timeline shows them all.
+    ``run-config.yaml`` keeps the launch value and is never rewritten, so this event is
+    the run directory's record of what each later resume ran with. ``old`` is therefore
+    the input's *last effective* value — the ``new`` of the newest event in the log that
+    names it, or the launch value when no event has moved it yet. A resume that repeats
+    the value the previous one recorded writes nothing, a chain records ``rev-b ->
+    rev-c``, and a return to the launch value records ``rev-c -> rev-a``, so the log's
+    last entry for an input always states what the latest resume ran with.
+
+    One entry per input rather than per variable name, since the logical name and the
+    ``param:`` alias are one input: ``{"field": <logical name>, "param": <alias, absent
+    when the input declares none>, "diff": {"old": ..., "new": ...}}``. That flat
+    ``{old, new}`` diff is the one the ``max_concurrency`` ``dispatch_config_change``
+    uses, and the event shares ``.logs/dispatch-config-changes.jsonl`` with those, so
+    one timeline shows them all.
     """
-    if not advances:
+    if not provenance_inputs:
         return
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    event = {
-        "event": "provenance_advance",
-        "ts": _now_iso(),
-        "changes": [
-            {"field": name, "diff": {"old": old, "new": new}}
-            for name, (old, new) in sorted(advances.items())
-        ],
-    }
+    launch = {name: pair[0] for name, pair in launch_and_current.items()}
+    current = {name: pair[1] for name, pair in launch_and_current.items()}
+    last_effective = _last_effective_provenance_values(logs_dir)
+
+    changes: list[dict[str, object]] = []
+    for name in sorted(provenance_inputs):
+        param = provenance_inputs[name]
+        new = _input_side_value(current, name, param)
+        old = (
+            last_effective[name]
+            if name in last_effective
+            else _input_side_value(launch, name, param)
+        )
+        if old == new:
+            continue
+        entry: dict[str, object] = {"field": name}
+        if param is not None:
+            entry["param"] = param
+        entry["diff"] = {"old": old, "new": new}
+        changes.append(entry)
+        log.info(
+            "Resume advances provenance input %s: %s -> %s",
+            name if param is None else f"{name} ({param})",
+            _describe_variable_value(old),
+            _describe_variable_value(new),
+        )
+
+    if not changes:
+        return
+    _append_dispatch_config_change_event(
+        logs_dir,
+        {"event": "provenance_advance", "ts": _now_iso(), "changes": changes},
+    )
+
+
+def _input_side_value(values: Mapping[str, str | None], name: str, param: str | None) -> str | None:
+    """Return one input's value from a per-variable map, preferring the logical name.
+
+    Resolution writes the value under both names, so either carries it; the fallback
+    covers a run-config recorded under only one of them.
+    """
+    value = values.get(name)
+    if value is None and param is not None:
+        return values.get(param)
+    return value
+
+
+def _last_effective_provenance_values(logs_dir: Path) -> dict[str, str | None]:
+    """Fold the log's ``provenance_advance`` events into each input's last value.
+
+    The newest event naming a field wins. A missing log, an unreadable one, a malformed
+    line, and an entry whose shape this reader does not recognize all mean "nothing
+    recorded yet" for the fields they would have carried — never a failed resume. The
+    log is the record of what happened, not an input to the resume decision, so a
+    damaged one must not stop a resume every earlier gate accepted.
+    """
     target = logs_dir / paths_mod.DISPATCH_CONFIG_CHANGES_FILE
-    with target.open("a") as fh:
-        fh.write(_json_dumps(event) + "\n")
+    if not target.is_file():
+        return {}
+    try:
+        events = list(iter_jsonl_objects(target))
+    except OSError as exc:
+        log.warning("Cannot read %s for provenance history: %s", target, exc)
+        return {}
+
+    last: dict[str, str | None] = {}
+    for event in events:
+        if event.get("event") != "provenance_advance":
+            continue
+        changes = event.get("changes")
+        if not isinstance(changes, list):
+            continue
+        for entry in changes:
+            if not isinstance(entry, dict):
+                continue
+            field = entry.get("field")
+            diff = entry.get("diff")
+            if not isinstance(field, str) or not isinstance(diff, dict) or "new" not in diff:
+                continue
+            new = diff["new"]
+            if new is None or isinstance(new, str):
+                last[field] = new
+    return last
 
 
 def _diff_dicts(old: dict[str, object], new: dict[str, object]) -> dict[str, object]:
@@ -1279,9 +1385,11 @@ def _validate_run_config(
 
     ``provenance_names`` are the variables of inputs the process declares
     ``provenance: true`` (``ProcessSpec.provenance_input_names``). They are left out of
-    the comparison, so a resume may change, add, or drop them; each one that moves is
-    logged with its recorded and current value and returned as ``name -> (recorded,
-    current)``, with ``None`` for an absent value.
+    the comparison, so a resume may change, add, or leave one unset. Every one of them
+    present in the launch record or the current variables is returned as ``name ->
+    (launch, current)``, with ``None`` for an absent side. Returning all of them, not
+    only those that differ from launch, is what lets ``_record_provenance_advances``
+    recognize a resume that returns an input to its launch value.
     """
     raw = read_yaml_file(config_path)
     if not isinstance(raw, dict):
@@ -1330,33 +1438,43 @@ def _validate_run_config(
             if provenance_names
             else "this process declares none"
         )
+        labels = [
+            _describe_variable_change(name, saved_identity, current_identity)
+            for name in changed_variables
+        ]
         raise CLIError(
             "Resume mismatch: run-config.yaml identity variables changed: "
-            f"{', '.join(changed_variables)}. Resume with the original --var values and "
+            f"{', '.join(labels)}. Resume with the original --var values and "
             "input defaults, or use a new RUN_ID. Only an input the process declares "
             f"`provenance: true` may change on a resume ({declared_clause})."
         )
 
-    advances: dict[str, tuple[str | None, str | None]] = {}
-    for name in _changed_variable_names(
-        {key: value for key, value in recorded_variables.items() if key in provenance_names},
-        {key: value for key, value in variables.items() if key in provenance_names},
-    ):
-        advances[name] = (recorded_variables.get(name), variables.get(name))
-        log.info(
-            "Resume advances provenance input %s: %s -> %s",
-            name,
-            _describe_variable_value(recorded_variables.get(name)),
-            _describe_variable_value(variables.get(name)),
-        )
-
     log.info("Resume validated against run-config.yaml (%s)", config_path)
-    return advances
+    return {
+        name: (recorded_variables.get(name), variables.get(name))
+        for name in sorted(provenance_names)
+        if name in recorded_variables or name in variables
+    }
 
 
 def _changed_variable_names(saved: Mapping[str, str], current: Mapping[str, str]) -> list[str]:
     """Return, sorted, every name added, removed, or given a different value."""
     return sorted(key for key in set(saved) | set(current) if saved.get(key) != current.get(key))
+
+
+def _describe_variable_change(
+    name: str, saved: Mapping[str, str], current: Mapping[str, str]
+) -> str:
+    """Label a changed identity variable, tagging one the resume added or dropped.
+
+    Values are deliberately kept out of the refusal, so without the tag an operator
+    given no values cannot tell whether to restore a value or to stop passing one.
+    """
+    if name not in saved:
+        return f"{name} (added)"
+    if name not in current:
+        return f"{name} (removed)"
+    return name
 
 
 def _describe_variable_value(value: str | None) -> str:
@@ -2996,7 +3114,7 @@ async def _execute_agent_step(
                 # An exit code is one signal among three, and the least trustworthy of
                 # them. Some adapters emit a terminal success record, write every declared
                 # output, and then exit non-zero while shutting down; failing the step on
-                # that discards finished work. Measured over one week-36 night: 45 attempts
+                # that discards finished work. Measured over one night: 45 attempts
                 # reported success with all outputs present, and 37 steps failed
                 # permanently with their completed artifacts on disk, each retry also
                 # consuming a durable agent-call reservation.
@@ -5855,7 +5973,7 @@ def run_process_command(
         max_concurrency=max_concurrency,
         resource_snapshot=resource_snapshot,
         step_variants=step_profile_overrides,
-        provenance_names=spec.provenance_input_names,
+        provenance_inputs=spec.provenance_inputs,
     )
 
     out.progress(f"run-process: {spec.name} ({len(active_step_ids)} steps, {len(levels)} levels)")

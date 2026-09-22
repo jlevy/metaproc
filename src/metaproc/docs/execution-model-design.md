@@ -219,7 +219,7 @@ The compiler persists, and resume executes: the static template graph and every 
 dependency clause, including what each piece of shorthand resolved to and why; each
 step’s expansion contract; every expansion record materialized so far; and the semantics
 version in force. This is what makes `metaproc plan` meaningful under dynamic width, and
-it is what lets `metaproc status` say “waiting for roster `depth_roster` generation 2 to
+it is what lets `metaproc status` say “waiting for roster `item_roster` generation 2 to
 close” instead of a generic pending state.
 
 ## Outcomes
