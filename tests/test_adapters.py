@@ -27,7 +27,7 @@ from metaproc.adapters.base import (
     validate_terminal_result_log,
 )
 from metaproc.adapters.claude_cli import CLAUDE_CREDS_ENV_VAR, ClaudeCodeCliAdapter
-from metaproc.adapters.gemini_cli import GeminiCliAdapter
+from metaproc.adapters.gemini_cli import GeminiCliAdapter, served_models
 from metaproc.adapters.pi_cli import PI_CLI_INSTALL_HINT, PiCliAdapter, _build_pi_flags
 from metaproc.adapters.registry import (
     ADAPTER_REGISTRY,
@@ -732,6 +732,42 @@ class TestGeminiCliAdapter:
         }
 
         assert self.adapter.validate_result_event(event, {"model": "gemini-3.6-flash"}) is None
+
+    def test_a_requested_model_that_billed_no_tokens_is_refused_beside_a_fallback(self):
+        """A request that failed still gets a zero-token `stats.models` entry.
+
+        Gemini CLI records the failed request's model with no tokens, and a silent
+        fallback answers. The requested id is present, but it did not answer.
+        """
+        event: dict[str, object] = {
+            "type": "result",
+            "status": "success",
+            "stats": {
+                "models": {
+                    "gemini-3.1-flash-lite": {"total_tokens": 0, "input_tokens": 0},
+                    "gemini-3.5-flash": {"total_tokens": 11815, "input_tokens": 11678},
+                }
+            },
+        }
+
+        error = self.adapter.validate_result_event(event, {"model": "gemini-3.1-flash-lite"})
+
+        assert error is not None
+        assert "requested model 'gemini-3.1-flash-lite'" in error
+        assert "reported gemini-3.5-flash (11815 tokens)." in error
+
+    def test_a_two_model_result_passes_when_the_requested_model_billed(self):
+        """The trace fixture's result: the requested model and a utility model both billed."""
+        fixture = _Path(__file__).parent / "fixtures" / "trace_agents" / "gemini-sample.jsonl"
+        events = [json.loads(line) for line in fixture.read_text(encoding="utf-8").splitlines()]
+        result = next(event for event in reversed(events) if event.get("type") == "result")
+        assert set(result["stats"]["models"]) == {"gemini-3.5-flash", "gemini-3-flash-preview"}
+
+        assert served_models(result) == {
+            "gemini-3.5-flash": 1650379,
+            "gemini-3-flash-preview": 23966,
+        }
+        assert self.adapter.validate_result_event(result, {"model": "gemini-3.5-flash"}) is None
 
     def test_unsuccessful_result_keeps_its_original_failure(self):
         event: dict[str, object] = {

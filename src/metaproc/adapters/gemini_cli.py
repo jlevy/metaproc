@@ -223,6 +223,59 @@ def _resolved_gemini_model(merged_config: dict[str, object]) -> str:
     return resolve_model("gemini-cli", merged_config.get("model"))
 
 
+def _token_count(value: object) -> int | None:
+    """Return *value* as a token count, or None when it is not a non-negative integer."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _billed_tokens(entry: object) -> int:
+    """Return the tokens one `result.stats.models` entry billed.
+
+    Gemini CLI reports each model's `total_tokens` (input, output, and reasoning
+    together). An entry without it counts its `input_tokens` plus `output_tokens`.
+    """
+    if not isinstance(entry, dict):
+        return 0
+    counts = cast("dict[str, object]", entry)
+    total = _token_count(counts.get("total_tokens"))
+    if total is not None:
+        return total
+    input_tokens = _token_count(counts.get("input_tokens")) or 0
+    output_tokens = _token_count(counts.get("output_tokens")) or 0
+    return input_tokens + output_tokens
+
+
+def served_models(event: dict[str, object]) -> dict[str, int]:
+    """Return the models a terminal `result` event says billed the call, with their tokens.
+
+    `stats.models` lists every model the CLI sent a request to, and a request that
+    failed still gets an entry, with zero tokens. A zero-token entry is a model that
+    was tried, not one that answered, so it is left out: a silent fallback from the
+    requested model then shows up as the fallback alone. Several models can bill one
+    call, because utility and sub-agent requests go to other models. The run path's
+    `validate_result_event` and `auth-check --assert-model` both decide which model
+    served through this function, so they apply one rule.
+    """
+    stats = event.get("stats")
+    models = cast("dict[str, object]", stats).get("models") if isinstance(stats, dict) else None
+    if not isinstance(models, dict):
+        return {}
+    billed: dict[str, int] = {}
+    for name, entry in cast("dict[str, object]", models).items():
+        tokens = _billed_tokens(entry)
+        if name and tokens > 0:
+            billed[name] = tokens
+    return billed
+
+
+def format_served_models(served: dict[str, int]) -> str:
+    """Render *served* as `model (N tokens)` items, the largest bill first."""
+    ranked = sorted(served.items(), key=lambda item: (-item[1], item[0]))
+    return ", ".join(f"{name} ({tokens} tokens)" for name, tokens in ranked)
+
+
 class GeminiCliAdapter:
     """Adapter for Gemini CLI (``gemini``)."""
 
@@ -346,18 +399,16 @@ class GeminiCliAdapter:
         event: dict[str, object],
         merged_config: dict[str, object],
     ) -> str | None:
-        """Reject a successful result that does not account for the requested model."""
+        """Reject a successful result the requested model did not bill tokens for."""
         if event.get("status") != "success":
             return None
 
         expected = _resolved_gemini_model(merged_config)
-        stats = event.get("stats")
-        models = stats.get("models") if isinstance(stats, dict) else None
-        observed = sorted(str(name) for name in models) if isinstance(models, dict) else []
-        if expected in observed:
+        served = served_models(event)
+        if expected in served:
             return None
 
-        reported = ", ".join(observed) if observed else "none"
+        reported = format_served_models(served) if served else "no model that billed tokens"
         return (
             "Gemini terminal result contract violation: "
             f"requested model {expected!r}, but result.stats.models reported {reported}. "

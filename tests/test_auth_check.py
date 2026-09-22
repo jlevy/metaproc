@@ -735,26 +735,47 @@ _GEMINI_HONORED_STDOUT = (
 )
 
 
+# A requested model whose request failed, answered by a silent fallback. Gemini CLI
+# still gives the failed model a `stats.models` entry, with zero tokens.
+_GEMINI_FALLBACK_STDOUT = (
+    '{"type":"init","model":"gemini-3.1-flash-lite"}\n'
+    '{"type":"result","status":"success","stats":{"total_tokens":11815,"models":{'
+    '"gemini-3.1-flash-lite":{"total_tokens":0,"input_tokens":0,"output_tokens":0},'
+    '"gemini-3.5-flash":{"total_tokens":11815,"input_tokens":11678,"output_tokens":2}}}}\n'
+)
+
+# The terminal event of tests/fixtures/trace_agents/gemini-sample.jsonl: the
+# requested gemini-3.5-flash and a utility model both billed the call.
+_GEMINI_TWO_MODEL_STDOUT = (
+    '{"type":"init","model":"gemini-3.5-flash"}\n'
+    '{"type":"result","status":"success","stats":{"total_tokens":1674345,"models":{'
+    '"gemini-3-flash-preview":{"input_tokens":18131,"output_tokens":2204,'
+    '"total_tokens":23966},'
+    '"gemini-3.5-flash":{"input_tokens":1625601,"output_tokens":9429,'
+    '"total_tokens":1650379}}}}\n'
+)
+
+
 class TestExtractServedModels:
-    """`stats.models` on the terminal event is keyed by the model that billed
-    the call, so it reports what answered rather than what was asked for.
+    """`stats.models` on the terminal event lists every model the CLI sent a
+    request to; the entries that billed tokens are what answered.
     """
 
     def test_gemini_result_event_yields_served_model(self):
-        assert _extract_served_models("gemini-cli", _GEMINI_REWRITTEN_STDOUT) == [
-            "gemini-3.5-flash"
-        ]
+        assert _extract_served_models("gemini-cli", _GEMINI_REWRITTEN_STDOUT) == {
+            "gemini-3.5-flash": 12091
+        }
 
     def test_gemini_reports_every_model_that_billed(self):
-        stdout = (
-            '{"type":"init","model":"gemini-3-pro"}\n'
-            '{"type":"result","status":"success","stats":{"models":'
-            '{"gemini-3-pro":{"total_tokens":1},"gemini-3.5-flash":{"total_tokens":2}}}}\n'
-        )
-        assert _extract_served_models("gemini-cli", stdout) == [
-            "gemini-3-pro",
-            "gemini-3.5-flash",
-        ]
+        assert _extract_served_models("gemini-cli", _GEMINI_TWO_MODEL_STDOUT) == {
+            "gemini-3.5-flash": 1650379,
+            "gemini-3-flash-preview": 23966,
+        }
+
+    def test_a_zero_token_entry_is_tried_not_served(self):
+        assert _extract_served_models("gemini-cli", _GEMINI_FALLBACK_STDOUT) == {
+            "gemini-3.5-flash": 11815
+        }
 
     def test_missing_terminal_event_is_none(self):
         stdout = '{"type":"init","model":"gemini-3.6-flash"}\n'
@@ -766,7 +787,7 @@ class TestExtractServedModels:
             '{"type":"init","model":"gemini-3.6-flash"}\n'
             '{"type":"result","status":"success","stats":{"total_tokens":11}}\n'
         )
-        assert _extract_served_models("gemini-cli", stdout) == []
+        assert _extract_served_models("gemini-cli", stdout) == {}
 
     def test_garbage_jsonl_is_ignored(self):
         assert _extract_served_models("gemini-cli", "not json\n{broken\n") is None
@@ -801,6 +822,30 @@ class TestEvaluateModelAssertion:
         )
         assert ok
         assert "served model 'gemini-3.6-flash'" in msg
+
+    def test_gemini_zero_token_requested_model_beside_a_fallback_fails(self):
+        """The requested id is in `stats.models`, but only the fallback billed."""
+        ok, msg = _evaluate_model_assertion(
+            "gemini-cli", _GEMINI_FALLBACK_STDOUT, "gemini-3.1-flash-lite", "gemini-cli"
+        )
+        assert not ok
+        assert msg == (
+            "gemini-cli: no served model matches expected 'gemini-3.1-flash-lite' "
+            "(requested 'gemini-3.1-flash-lite') — the CLI answered with a different "
+            "model; billed: gemini-3.5-flash (11815 tokens)"
+        )
+
+    def test_gemini_two_model_result_passes_and_lists_both_bills(self):
+        """A utility model billing beside the requested one does not fail the check."""
+        ok, msg = _evaluate_model_assertion(
+            "gemini-cli", _GEMINI_TWO_MODEL_STDOUT, "gemini-3.5-flash", "gemini-cli"
+        )
+        assert ok
+        assert msg == (
+            "gemini-cli: served model 'gemini-3.5-flash' matches expected "
+            "'gemini-3.5-flash'; billed: gemini-3.5-flash (1650379 tokens), "
+            "gemini-3-flash-preview (23966 tokens)"
+        )
 
     def test_gemini_missing_terminal_event_fails_rather_than_passes(self):
         stdout = '{"type":"init","model":"gemini-3.6-flash"}\n'

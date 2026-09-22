@@ -84,11 +84,14 @@ development series.
   For gemini-cli the assertion read the `init` event, which the CLI emits from its
   configured model before any request leaves the process, so a call the CLI rewrote to
   another model still reported a match — the routing change the flag exists to detect.
-  The assertion now reads the terminal result event’s `stats.models`, the token
-  accounting keyed by the model that billed the call, which is the field a run already
-  refuses a Gemini result on; a probe whose terminal event reports no served model fails
-  instead of passing. The other adapters are unchanged: they report only the model they
-  were asked for.
+  The assertion now reads the terminal result event’s `stats.models`, counts only the
+  models whose entry billed tokens, and lists each with its token count; a probe whose
+  terminal event reports no model that billed fails instead of passing.
+  A run refuses a Gemini result by the same rule.
+  `stats.models` also lists a request that failed, with zero tokens, so until now a
+  silent fallback from the requested model passed both the probe and a run’s check; both
+  now refuse a result in which the requested model billed no tokens.
+  The other adapters are unchanged: they report only the model they were asked for.
 
 - **A resume re-runs a consumer whose collected input changed.** A step that declares a
   `collect:` input was reused on resume whenever its fingerprint matched, so after a

@@ -721,11 +721,13 @@ To confirm which model actually served a profile:
 uv run metaproc auth-check --live --variant <execution-profile> --assert-model <model>
 ```
 
-For Gemini that assertion reads the terminal result event’s `stats.models`, the token
-accounting keyed by the model that billed the call, so a request the CLI rewrote fails
-it; when no served model is reported the check fails rather than passes.
-A run holds every Gemini step to the same rule and refuses a result whose `stats.models`
-does not account for the requested model.
+For Gemini that assertion reads the terminal result event’s `stats.models` and counts
+only the models whose entry billed tokens, because a request that failed is still listed
+there, with zero. A request the CLI rewrote, or answered with a fallback after the
+requested model failed, therefore fails the check, and so does a terminal event in which
+no model billed. The pass and fail lines list each model that billed with its token
+count. A run holds every Gemini step to the same rule and refuses a result in which the
+requested model billed no tokens.
 The other adapters report only the model they were asked for, and the assertion reads
 that.
 

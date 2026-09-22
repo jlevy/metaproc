@@ -86,17 +86,18 @@ The helper parses the CLI’s JSONL stdout for the event that names the model:
 | Adapter | Event | Model path | Smoke expected substring |
 | --- | --- | --- | --- |
 | `claude-code-cli` | `system.init` | `model` | `opus` |
-| `gemini-cli` | terminal `result` | `stats.models` keys | `gemini-3` |
+| `gemini-cli` | terminal `result` | `stats.models` keys that billed tokens | `gemini-3` |
 | `pi-cli` | `message_start` (first assistant) | `message.model` | `glm-5-maas` |
 | `codex-cli` | none — codex-cli’s stream doesn’t carry a model ID | n/a | informational only |
 
 Gemini CLI is the one adapter whose terminal event accounts for the model that served
 and billed the call.
 Its `init` event is emitted from the configured model before any request leaves the
-process, so asserting on it would pass a call the CLI rewrote to another model;
-`stats.models` is the field a run already refuses a Gemini result on.
-A probe whose terminal event is missing, or reports no served model, fails the assertion
-rather than passing it.
+process, so asserting on it would pass a call the CLI rewrote to another model.
+`stats.models` also lists a request that failed, with zero tokens, so the check counts
+only the entries that billed tokens, and a run refuses a Gemini result by the same rule.
+A probe whose terminal event is missing, or in which no model billed, fails the
+assertion rather than passing it.
 Every other adapter reports only the model it was asked for.
 
 For codex, `--assert-model` emits an informational line rather than a hard assertion.

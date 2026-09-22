@@ -16,12 +16,15 @@ import os
 import subprocess
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import typer
 from strif import temp_output_file
 
-from metaproc.adapters.base import agent_seed_env
+from metaproc.adapters.base import agent_seed_env, parse_jsonl_event
+from metaproc.adapters.gemini_cli import format_served_models
+from metaproc.adapters.gemini_cli import served_models as gemini_served_models
 from metaproc.adapters.pi_cli import resolve_pi_binary
 from metaproc.adapters.registry import ADAPTER_REGISTRY
 from metaproc.cli import app, get_output
@@ -203,8 +206,8 @@ def _pi_validate_registration(
 # no `type` field. The first JSONL line matching both type/subtype (when
 # specified) and containing a non-empty string at *model_path* wins.
 #
-# An identity event names the model the CLI was *asked for*, which is not
-# always the model that answered: see `_SERVED_MODEL_ADAPTERS` below.
+# An identity event is not billing accounting, so it need not name the model
+# that answered: see `_SERVED_MODEL_READERS` below.
 _MODEL_EVENT_MATCHERS: dict[str, tuple[str | None, str | None, tuple[str, ...]]] = {
     "claude-code-cli": ("system", "init", ("model",)),
     "gemini-cli": ("init", None, ("model",)),
@@ -258,44 +261,40 @@ def _extract_observed_model(adapter_type: str, stdout: str) -> str | None:
     return None
 
 
-# Adapters whose terminal event accounts for the model that actually served the
-# call, rather than the one the CLI was asked for.
+# Adapters whose terminal `result` event accounts for the models that billed the
+# call, each mapped to the adapter's own reader of that accounting.
 #
 # Gemini CLI emits its `init` event with `config.getModel()` before any request
 # leaves the process, so that event echoes the requested id even on a call the
 # CLI rewrote to a different model — exactly the routing change `--assert-model`
-# exists to catch. Its terminal `result` event keys `stats.models` by the model
-# that served and billed the call, which is the field
-# `GeminiCliAdapter.validate_result_event` refuses a run's result on. The live
-# check asserts on the same field so it agrees with the run path.
-_SERVED_MODEL_ADAPTERS: frozenset[str] = frozenset({"gemini-cli"})
+# exists to catch. Its terminal `result` event keys `stats.models` by every model
+# it sent a request to, and `gemini_cli.served_models` keeps the ones that billed
+# tokens. `GeminiCliAdapter.validate_result_event` refuses a run's result through
+# the same function, so the probe and the run path decide which model served by
+# one rule. They still compare differently: the run path requires the resolved
+# requested id itself, while `--assert-model` takes an operator-supplied substring.
+_SERVED_MODEL_READERS: dict[str, Callable[[dict[str, object]], dict[str, int]]] = {
+    "gemini-cli": gemini_served_models,
+}
 
 
-def _extract_served_models(adapter_type: str, stdout: str) -> list[str] | None:
-    """Return the models a CLI's terminal event says served the call.
+def _extract_served_models(adapter_type: str, stdout: str) -> dict[str, int] | None:
+    """Return the models a CLI's terminal event says billed the call, with their tokens.
 
     Returns None when the adapter reports no served-model accounting, or when
-    *stdout* carries no terminal event at all. Returns an empty list when the
-    terminal event is present but names no model — a case the caller must
-    report rather than pass, because nothing then establishes what answered.
+    *stdout* carries no terminal event at all. Returns an empty dict when the
+    terminal event is present but no model in it billed tokens — a case the
+    caller must report rather than pass, because nothing then establishes what
+    answered.
     """
-    if adapter_type not in _SERVED_MODEL_ADAPTERS:
+    reader = _SERVED_MODEL_READERS.get(adapter_type)
+    if reader is None:
         return None
 
     for line in reversed(stdout.splitlines()):
-        if not line.strip():
-            continue
-        try:
-            event = json.loads(line)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if not isinstance(event, dict) or event.get("type") != "result":
-            continue
-        stats = event.get("stats")
-        models = stats.get("models") if isinstance(stats, dict) else None
-        if not isinstance(models, dict):
-            return []
-        return sorted(str(name) for name in models if str(name))
+        event = parse_jsonl_event(line, "result")
+        if event is not None:
+            return reader(event)
     return None
 
 
@@ -568,12 +567,12 @@ def _evaluate_model_assertion(
 ) -> tuple[bool, str]:
     """Compare the model that answered the probe against *expected* substring.
 
-    For an adapter in `_SERVED_MODEL_ADAPTERS` this reads the terminal event's
+    For an adapter in `_SERVED_MODEL_READERS` this reads the terminal event's
     served-model accounting, so a CLI that rewrites the request to another model
-    fails the assertion. Every other adapter reports only an identity event, and
-    the assertion reads that.
+    fails the assertion. Every other adapter's assertion reads the model named by
+    its identity event in `_MODEL_EVENT_MATCHERS`.
     """
-    if adapter_type in _SERVED_MODEL_ADAPTERS:
+    if adapter_type in _SERVED_MODEL_READERS:
         return _evaluate_served_model_assertion(adapter_type, stdout, expected, label)
 
     observed = _extract_observed_model(adapter_type, stdout)
@@ -599,7 +598,13 @@ def _evaluate_served_model_assertion(
     expected: str,
     label: str,
 ) -> tuple[bool, str]:
-    """Assert *expected* against the models the terminal event says served the call."""
+    """Assert *expected* against the models the terminal event says billed the call.
+
+    Any one billing model matching passes, because utility and sub-agent requests
+    legitimately bill other models beside the requested one. Both the pass and the
+    fail line list every billing model with its token count, so a fallback that
+    answered beside or instead of the requested model is visible either way.
+    """
     served = _extract_served_models(adapter_type, stdout)
     requested = _extract_observed_model(adapter_type, stdout)
     asked = f" (requested {requested!r})" if requested else ""
@@ -612,17 +617,24 @@ def _evaluate_served_model_assertion(
         return (False, missing)
     if not served:
         unaccounted = (
-            f"{label}: terminal result event reported no served model{asked}; cannot "
-            f"confirm a model containing {expected!r}"
+            f"{label}: terminal result event reported no served model (no model billed "
+            f"tokens){asked}; cannot confirm a model containing {expected!r}"
         )
         return (False, unaccounted)
 
-    reported = ", ".join(served)
-    if any(expected in name for name in served):
-        return (True, f"{label}: served model {reported!r} matches expected {expected!r}")
+    billed = format_served_models(served)
+    matching = sorted(
+        (name for name in served if expected in name),
+        key=lambda name: (-served[name], name),
+    )
+    if matching:
+        passed = (
+            f"{label}: served model {matching[0]!r} matches expected {expected!r}; billed: {billed}"
+        )
+        return (True, passed)
     mismatch = (
-        f"{label}: served model {reported!r} does not match expected "
-        f"{expected!r}{asked} — the CLI answered with a different model"
+        f"{label}: no served model matches expected {expected!r}{asked} — the CLI "
+        f"answered with a different model; billed: {billed}"
     )
     return (False, mismatch)
 
