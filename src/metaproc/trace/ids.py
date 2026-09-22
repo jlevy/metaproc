@@ -6,7 +6,7 @@ IDs, which makes cross-source parent reconciliation in the linker idempotent
 and lets the CLI cache extracted traces safely.
 
 16 hex chars = 64 bits of namespace = ~10^19 distinct values. Per
-``trace_id`` we expect at most ~10^4 spans (a typical large cohort run
+``trace_id`` we expect at most ~10^4 spans (a typical large batch run
 produces O(thousands) of spans — agent attempts × tool calls each).
 Birthday-collision probability at 10^4 against 10^19 is negligible
 (~5e-12).

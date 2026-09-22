@@ -9,7 +9,7 @@ status: Approved
 Module-level notes, including using RunPool as a library, are in
 [`runpool/README.md`](../runpool/README.md).
 
-**Date:** 2026-04-06 (last updated 2026-09-16) **Status:** Approved
+**Date:** 2026-04-06 (last updated 2026-09-22) **Status:** Approved
 
 RunPool is Metaproc’s local agent process manager.
 It owns subprocess lifecycle, adaptive concurrency, host-level coordination, health
@@ -327,10 +327,10 @@ limits, no pending retries, and a prior operator cap below the current
 It describes the host, and the host is free to have changed completely since the state
 was written. A ceiling of 79 earned on a quiet machine says nothing about a machine that
 now has headroom for three processes, and restoring it is the burst-on-resume shape
-behind the crash history in the consuming project’s cohort runbook: measured on a 34 GB
-host, a saved ceiling of 79 against a fresh estimate of 3 is 118 GB of intent on 34 GB
-of RAM. The pool enforces whatever ceiling it holds, faithfully and immediately, so
-nothing downstream catches an over-large one.
+behind earlier host crashes: measured on a 34 GB host, a saved ceiling of 79 against a
+fresh estimate of 3 is 118 GB of intent on 34 GB of RAM. The pool enforces whatever
+ceiling it holds, faithfully and immediately, so nothing downstream catches an
+over-large one.
 
 Every run therefore opens at the fresh estimate and re-earns its ceiling by ramping.
 That costs a ramp, which is fast, and it composes correctly with a resume: processes

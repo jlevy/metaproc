@@ -52,7 +52,7 @@ host admission slots its processes hold — and a stranded slot is invisible cap
 for every other run on the machine.
 
 Choose `max_concurrency` from measured workload memory and host headroom, and use
-`initial_concurrency` to bound the first launch cohort.
+`initial_concurrency` to bound the first launch wave.
 A lower maximum constrains throughput without disabling the adaptive governor.
 The controller samples pressure periodically and does not reserve startup memory or
 provide independent host containment; see the

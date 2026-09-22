@@ -373,7 +373,7 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
   `run-step`, `plan`, and `deps` now collect unresolved template placeholders, unset
   operator parameters, missing input files, and unusable execution profiles together and
   report them as one grouped message, instead of raising on the first non-empty class.
-  Bringing up a cohort took four launches to learn about four problems, and `--dry-run`
+  Bringing up a run took four launches to learn about four problems, and `--dry-run`
   reported the same single class.
   Process-input errors are additionally tagged as a parameter or a file, because “pass a
   `--var`” and “produce a file” are different fixes.
@@ -613,7 +613,7 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
   estimate 250 MB per process with a 0.5 initial memory budget fraction, replacing the
   500 MB and 0.25 clean-state figures.
   With session retention off, a Gemini process measures 113 MB mean across a run tree
-  and 187 MB on its own; the old estimate held cohorts at 7 of 20 lanes.
+  and 187 MB on its own; the old estimate held a batch at 7 of 20 lanes.
   Claude profiles are unchanged.
 
 - **Agent CLI adapter module names**: the four source modules now follow one

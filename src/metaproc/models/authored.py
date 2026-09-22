@@ -519,7 +519,7 @@ class ProcessStep(BaseModel):
             "Default `block`: the step is skipped (state=blocked) when any direct "
             "dependency failed — current behavior. `continue`: the step runs even "
             "if its upstream failed. Used for end-of-run rollup / post-mortem "
-            "steps (e.g. run-stats) that must emit on partial-failure cohorts. "
+            "steps (e.g. run-stats) that must emit on partly failed runs. "
             "Note: this only affects the step's direct gating; transitive "
             "dependents through a continue-marked step still follow normal "
             "blocking through other (default) needs."

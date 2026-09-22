@@ -1542,7 +1542,7 @@ make the result depend on step order in the spec.
 Failure follows the same granularity.
 An item failing partway through a chain skips its own remaining steps and touches no
 sibling, so the chain finishes with partial coverage instead of blocking the graph.
-Measured on a four-item cohort where one item fails at the second of three stages: under
+Measured on a four-item run where one item fails at the second of three stages: under
 the level walk no item completes the third stage, because the step failure blocks it
 wholesale; under an aligned chain three of four complete.
 

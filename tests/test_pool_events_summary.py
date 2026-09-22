@@ -92,7 +92,7 @@ class TestSummarizeAuthOutcomes:
         assert report["last_ts"] == "2026-04-27T14:00:00+00:00"
 
     def test_http_axis_rollup(self):
-        # HTTP-axis aggregation: the leading indicator of cohort loss is
+        # HTTP-axis aggregation: the leading indicator of item loss is
         # rising counts of oauth_refresh_status >= 400 on a label. Rollup
         # surfaces by_api_status / by_oauth_refresh_status counters and
         # a per-label cross-section so operators can see "alt1 is taking

@@ -34,7 +34,7 @@ The span store is written only when an operator types
 document that two runs can be compared through.
 
 So questions about agent behaviour still get answered after the fact by re-reading
-`.logs/tasks/**/*.jsonl`. On a large cohort that is hundreds of megabytes, including
+`.logs/tasks/**/*.jsonl`. On a large run that is hundreds of megabytes, including
 individual transcripts in the tens of megabytes.
 The scan runs when the data is cold and may already have been pruned, and each new
 question needs its own throwaway script.
@@ -93,7 +93,7 @@ get asked.
 
 ## Motivation
 
-An internal two-arm model comparison over one cohort, run sequentially with a single
+An internal two-arm model comparison over one batch, run sequentially with a single
 variable, needed roughly a day of ad-hoc scripting to answer questions the run already
 held the answers to.
 Four findings came out of it, and none was visible in any emitted artifact:
@@ -411,7 +411,7 @@ coverage, so it is not an acceptance gate.
 
 ### Phase 1: Turn On What Exists
 
-- [ ] Measure automatic extraction on a large cohort and choose the enablement policy
+- [ ] Measure automatic extraction on a large run and choose the enablement policy
   before shipping it.
 - [ ] Implement independent primary-evidence freshness for trace and resource
   projections, including attempt records and missing trace files; exclude derived
@@ -525,8 +525,8 @@ logged and does not fail the run, on the same footing as `ResourceUsageSummary` 
 
 ## Open Questions
 
-- **What does automatic extraction cost on a large cohort?** Unmeasured, and it gates
-  Phase 1. If it is material, extraction moves behind a process-level setting or runs
+- **What does automatic extraction cost on a large run?** Unmeasured, and it gates Phase
+  1\. If it is material, extraction moves behind a process-level setting or runs
   per-step as transcripts complete rather than once at the end.
 - **Does a composite run emit one summary or several?** A process that spawns child
   processes has a summary-shaped question at each level.

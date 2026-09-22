@@ -498,7 +498,7 @@ def _summarize_events(
         retries: Counter[int] = Counter()
         fallback_policies: Counter[str] = Counter()
         per_label_classification: dict[str, Counter[str]] = {}
-        # HTTP-axis rollups — leading indicators of imminent cohort loss.
+        # HTTP-axis rollups — leading indicators of imminent item loss across a dispatch.
         api_statuses: Counter[str] = Counter()
         oauth_refresh_statuses: Counter[str] = Counter()
         per_label_oauth_refresh: dict[str, Counter[str]] = {}
@@ -698,7 +698,7 @@ def _render_summary(report: dict[str, Any], *, out: Any) -> None:
             out.data(f"  retry={retries}  {n}")
         out.data(f"\nRotations: {ao['rotated']}")
         out.data(f"Fallback policy: {ao['fallback_policy']}")
-        # HTTP-axis rollups: leading indicators of upcoming cohort loss
+        # HTTP-axis rollups: leading indicators of upcoming item loss
         # (e.g. an uptick in oauth_refresh_status=400 on a label is the
         # signal that refresh tokens are rotating server-side faster
         # than the pool can capture).
