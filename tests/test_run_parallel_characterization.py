@@ -264,7 +264,7 @@ class TestPoolPrepareEnv:
     @patch("metaproc.commands.run_parallel.enforce_no_unresolved_placeholders")
     @patch("metaproc.commands.run_parallel.mark_running_at")
     @patch("metaproc.commands.run_parallel.write_attempt_at")
-    @patch("metaproc.commands.run_parallel.atomic_output_file")
+    @patch("metaproc.commands.run_parallel.atomic_write_text")
     def test_build_prepare_launch_calls_prepare_env(
         self,
         mock_atomic: MagicMock,
@@ -289,9 +289,8 @@ class TestPoolPrepareEnv:
         log_path = str(tmp_path / "logs" / "AAPL.log")
         mock_prepare_step.return_value = ("prompt text", str(tmp_path / "logs"), log_path)
 
-        # Make atomic_output_file a no-op context manager
-        mock_atomic.return_value.__enter__ = MagicMock(return_value=str(tmp_path / "prompt.md"))
-        mock_atomic.return_value.__exit__ = MagicMock(return_value=False)
+        # atomic_write_text is patched to a no-op: prepare_step is mocked, so the
+        # logs directory the prompt file lives in was never created.
 
         shared = _make_shared("AAPL", tmp_path)
         item_dir = tmp_path / "AAPL"
@@ -341,7 +340,7 @@ class TestPoolPrepareEnv:
     @patch("metaproc.commands.run_parallel.enforce_no_unresolved_placeholders")
     @patch("metaproc.commands.run_parallel.mark_running_at")
     @patch("metaproc.commands.run_parallel.write_attempt_at")
-    @patch("metaproc.commands.run_parallel.atomic_output_file")
+    @patch("metaproc.commands.run_parallel.atomic_write_text")
     def test_build_prepare_launch_removes_stale_directory_outputs(
         self,
         mock_atomic: MagicMock,
@@ -361,8 +360,6 @@ class TestPoolPrepareEnv:
 
         log_path = str(tmp_path / "logs" / "AAPL.log")
         mock_prepare_step.return_value = ("prompt text", str(tmp_path / "logs"), log_path)
-        mock_atomic.return_value.__enter__ = MagicMock(return_value=str(tmp_path / "prompt.md"))
-        mock_atomic.return_value.__exit__ = MagicMock(return_value=False)
 
         shared = _make_shared("AAPL", tmp_path)
         item_dir = tmp_path / "AAPL"
@@ -420,7 +417,7 @@ class TestPoolPrepareEnv:
 
         def _capture_prompt(prompt_file: Path, *_args: Any) -> list[str]:
             observed_prompt_paths.append(Path(prompt_file))
-            observed_prompts.append(Path(prompt_file).read_text())
+            observed_prompts.append(Path(prompt_file).read_text(encoding="utf-8"))
             return ["echo", "hello"]
 
         mock_adapter.build_command.side_effect = _capture_prompt

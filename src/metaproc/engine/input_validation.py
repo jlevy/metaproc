@@ -199,7 +199,9 @@ def _check_output_path(
         getattr(declared_type, "kind", None) == "list"
         and getattr(getattr(declared_type, "element", None), "kind", None) == "path"
     ):
-        matches = [Path(match) for match in glob_mod.glob(str(resolved))]
+        # Sorted by path: this order becomes the order of the OutputFailure entries
+        # persisted into status.yaml.
+        matches = [Path(match) for match in sorted(glob_mod.glob(str(resolved)))]
         if not matches:
             return [
                 OutputFailure(

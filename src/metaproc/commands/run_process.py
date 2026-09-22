@@ -30,7 +30,7 @@ from typing import Any, cast
 import typer
 from prettyfmt import fmt_timedelta
 from ruamel.yaml import YAMLError
-from strif import atomic_output_file
+from strif import atomic_write_text
 
 from metaproc import paths as paths_mod
 from metaproc.adapters.base import (
@@ -742,7 +742,6 @@ def _write_process_status(
 ) -> Path:
     """Write derived process-status.yaml to {run_dir}/.state/."""
     state_dir = run_dir / STATE_DIR
-    state_dir.mkdir(parents=True, exist_ok=True)
     target = state_dir / "process-status.yaml"
 
     data: dict[str, Any] = {
@@ -770,8 +769,7 @@ def _write_process_status(
     else:
         data["state"] = "running"
 
-    with atomic_output_file(target) as tmp_path:
-        Path(tmp_path).write_text(to_yaml_string(data))
+    atomic_write_text(target, to_yaml_string(data), make_parents=True)
     return target
 
 
@@ -854,9 +852,6 @@ def _write_run_config(  # noqa: PLR0913
         _adopt_step_variants(config_path, step_variants)
         return config_path
 
-    state_dir = paths_mod.run_state_dir(run_dir)
-    state_dir.mkdir(parents=True, exist_ok=True)
-
     # Persist process_spec as an absolute path so consumers like
     # `metaproc status --steps` can rebuild the plan regardless of which
     # cwd they run from. A relative string would resolve against the
@@ -895,8 +890,7 @@ def _write_run_config(  # noqa: PLR0913
     if resource_snapshot is not None:
         data["resources"] = resource_snapshot.model_dump(mode="json", by_alias=True)
 
-    with atomic_output_file(config_path) as tmp_path:
-        Path(tmp_path).write_text(to_yaml_string(data))
+    atomic_write_text(config_path, to_yaml_string(data), make_parents=True)
     log.info("Wrote run-config.yaml: %s", config_path)
     return config_path
 
@@ -1264,8 +1258,7 @@ def _adopt_step_variants(config_path: Path, step_variants: Mapping[str, str] | N
     if not isinstance(raw, dict) or recorded_step_variants(raw):
         return
     raw["step_variants"] = dict(sorted(step_variants.items()))
-    with atomic_output_file(config_path) as tmp_path:
-        Path(tmp_path).write_text(to_yaml_string(raw))
+    atomic_write_text(config_path, to_yaml_string(raw))
     log.info("Recorded resumed --step-variant overrides in %s", config_path)
 
 
@@ -1531,9 +1524,7 @@ def _record_process_output_failure(run_dir: Path, error: CLIError) -> None:
             failure.model_dump(mode="json", exclude_none=True) for failure in error.output_failures
         ]
     path = run_dir / STATE_DIR / "process-status.yaml"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with atomic_output_file(path) as temporary:
-        Path(temporary).write_text(to_yaml_string(data))
+    atomic_write_text(path, to_yaml_string(data), make_parents=True)
 
 
 def _read_recorded_step_hash(run_dir: Path, step_id: str) -> str | None:
@@ -1737,7 +1728,9 @@ def _invalidate_downstream(
         if non_fan_out_status.exists():
             status_paths.append(non_fan_out_status)
         if step_state.exists():
-            for sub in step_state.iterdir():
+            # Sorted by path: the rename loop below mutates status files in this order,
+            # which is observable when it fails partway.
+            for sub in sorted(step_state.iterdir()):
                 if sub.is_dir():
                     fan_out_status = sub / STATUS_FILE
                     if fan_out_status.exists():
@@ -1957,8 +1950,7 @@ async def _execute_code_step(
             if result.stderr:
                 output += result.stderr
             if output:
-                with atomic_output_file(log_file) as tmp_path:
-                    tmp_path.write_text(output)
+                atomic_write_text(log_file, output)
     except subprocess.CalledProcessError as exc:
         # Capture output even on failure
         output = ""
@@ -1967,8 +1959,7 @@ async def _execute_code_step(
         if exc.stderr:
             output += exc.stderr
         if output:
-            with atomic_output_file(log_file) as tmp_path:
-                tmp_path.write_text(output)
+            atomic_write_text(log_file, output)
         command_failure = command_failure_message(
             exc.returncode,
             stdout=exc.stdout,
@@ -1994,8 +1985,7 @@ async def _execute_code_step(
         raise
     except Exception as exc:
         tb = traceback.format_exc()
-        with atomic_output_file(log_file) as tmp_path:
-            tmp_path.write_text(tb)
+        atomic_write_text(log_file, tb)
         handler_failure = handler_failure_message(
             exc,
             env=env,
@@ -2010,8 +2000,7 @@ async def _execute_code_step(
         return False
     except BaseException as exc:
         tb = traceback.format_exc()
-        with atomic_output_file(log_file) as tmp_path:
-            tmp_path.write_text(tb)
+        atomic_write_text(log_file, tb)
         abort_error = f"{type(exc).__name__}: {str(exc) or 'code step aborted'}"
         mark_failed_at(
             state_dir,
@@ -2739,8 +2728,7 @@ async def _execute_agent_step(
             attempt_prompt = append_output_failure_feedback(
                 resolved_prompt, output_failure_feedback
             )
-            with atomic_output_file(prompt_file) as tmp_path:
-                Path(tmp_path).write_text(attempt_prompt)
+            atomic_write_text(prompt_file, attempt_prompt)
 
             cmd = adapter_obj.build_command(prompt_file, runtime_config, step_vars)
             env = adapter_obj.prepare_env(agent_seed_env(), runtime_config)

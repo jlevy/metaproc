@@ -52,7 +52,7 @@ class IgnoreChecker:
     @classmethod
     def from_file(cls, path: Path) -> IgnoreChecker:
         """Load patterns from a gitignore-format file."""
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             lines = f.readlines()
         log.info("Loaded ignore patterns (%s lines) from %s", len(lines), path)
         return cls(lines)
@@ -94,18 +94,20 @@ def load_gitignore(root: Path) -> IgnoreFilter:
 
     root_gitignore = root / ".gitignore"
     if root_gitignore.is_file():
-        with open(root_gitignore) as f:
+        with open(root_gitignore, encoding="utf-8") as f:
             all_lines.extend(f.readlines())
 
     # Walk for nested .gitignore files (skip .git itself).
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d != ".git"]
+        # Sorted in place by name: os.walk descends in dirnames order and the last
+        # matching pattern wins, so walk order decides which files end up ignored.
+        dirnames[:] = sorted(d for d in dirnames if d != ".git")
         if dirpath == str(root):
             continue  # already handled above
         if ".gitignore" in filenames:
             rel_dir = os.path.relpath(dirpath, root)
             nested_path = Path(dirpath) / ".gitignore"
-            with open(nested_path) as f:
+            with open(nested_path, encoding="utf-8") as f:
                 for line in f:
                     stripped = line.strip()
                     # Skip blank lines and comments.

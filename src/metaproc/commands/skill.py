@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 import typer
+from strif import atomic_write_text
 
 from metaproc.cli import app
 from metaproc.skill.compose import compose_skill
@@ -96,8 +97,7 @@ def _handle_install(spec: SkillSpec) -> None:
     written: list[str] = []
     for root in (".agents", ".claude"):
         target_dir = Path.cwd() / root / "skills" / spec.name
-        target_dir.mkdir(parents=True, exist_ok=True)
         target_file = target_dir / "SKILL.md"
-        target_file.write_text(composed)
+        atomic_write_text(target_file, composed, make_parents=True)
         written.append(str(target_file))
     typer.echo("Installed:\n  " + "\n  ".join(written))

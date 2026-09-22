@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Self
 
 from frontmatter_format import read_yaml_file, to_yaml_string
-from strif import atomic_output_file
+from strif import atomic_output_file, atomic_write_text
 
 from metaproc.errors import CLIError
 from metaproc.io.mkdir_lock import (
@@ -293,8 +293,6 @@ def acquire_lease(
     Set ``force=True`` to take over regardless.
     """
     path = _lease_path(run_dir)
-    state_dir = run_dir / STATE_DIR
-    state_dir.mkdir(parents=True, exist_ok=True)
 
     owner_token = secrets.token_hex(16)
     with _LeaseWriteLock(run_dir):
@@ -324,8 +322,7 @@ def acquire_lease(
             "command_summary": command_summary,
         }
 
-        with atomic_output_file(path) as tmp:
-            Path(tmp).write_text(to_yaml_string(data), encoding="utf-8")
+        atomic_write_text(path, to_yaml_string(data), make_parents=True)
 
     _remember_owned_lease(path, owner_token)
 
@@ -342,8 +339,7 @@ def update_heartbeat(run_dir: Path) -> None:
             return
 
         raw["last_heartbeat_at"] = _now_iso()
-        with atomic_output_file(path) as tmp:
-            Path(tmp).write_text(to_yaml_string(raw), encoding="utf-8")
+        atomic_write_text(path, to_yaml_string(raw), make_parents=True)
 
 
 def release_lease(run_dir: Path) -> None:

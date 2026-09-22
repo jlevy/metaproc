@@ -75,7 +75,7 @@ def review(variables: dict[str, str], step: ProcessStep) -> None:
     if collected is None or not collected.path:
         msg = "review expects a resolved 'outcomes' input path"
         raise RuntimeError(msg)
-    with Path(collected.path).open() as handle:
+    with Path(collected.path).open(encoding="utf-8") as handle:
         manifest = yaml.safe_load(handle)["fan_in_outcomes"]
 
     verdict = {

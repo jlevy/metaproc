@@ -28,7 +28,7 @@ from typing import Any, Literal, Protocol
 
 import yaml
 from frontmatter_format import fmf_split_frontmatter, fmf_write
-from strif import atomic_output_file
+from strif import atomic_output_file, atomic_write_text
 
 from metaproc import paths as paths_mod
 from metaproc.engine.operations_render import render_summary_markdown
@@ -1892,6 +1892,4 @@ def _write_schema_sidecar(target: Path) -> None:
         "data", "schemas", "agent-operations-summary.v1.schema.yaml"
     )
     content = source.read_text(encoding="utf-8")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with atomic_output_file(target) as tmp_path:
-        Path(tmp_path).write_text(content)
+    atomic_write_text(target, content, make_parents=True)

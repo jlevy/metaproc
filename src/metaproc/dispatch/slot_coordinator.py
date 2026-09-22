@@ -47,6 +47,8 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
+from strif import copyfile_atomic
+
 from metaproc.adapters.base import (
     AuthCapableCliAdapter,
     AuthFailureClassification,
@@ -554,18 +556,13 @@ class SlotCoordinator:
         if not filenames:
             return
         target_dir = target_log_path.parent
-        try:
-            target_dir.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            log.warning("slot_coordinator: failed to create logs dir %s", target_dir, exc_info=True)
-            return
         for name in filenames:
             src = lease.slot_dir / name
             if not src.exists():
                 continue
             target = target_dir / f"{target_log_path.stem}.{name}"
             try:
-                shutil.copy2(src, target)
+                copyfile_atomic(src, target, make_parents=True)
             except OSError:
                 log.warning(
                     "slot_coordinator: failed to copy %s -> %s",

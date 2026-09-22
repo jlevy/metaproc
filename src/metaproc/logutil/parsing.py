@@ -1830,7 +1830,9 @@ def discover_files(
         if not d.is_dir():
             continue
         try:
-            for entry in os.scandir(d):
+            # Sorted by entry name: colours are handed out in enumeration order, so a
+            # file's tail colour would otherwise differ between runs.
+            for entry in sorted(os.scandir(d), key=lambda e: e.name):
                 if entry.name.endswith(".jsonl") and entry.is_file():
                     p = Path(entry.path)
                     if p not in known:

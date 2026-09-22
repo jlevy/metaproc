@@ -30,7 +30,7 @@ from typing import Any
 
 import typer
 from ruamel.yaml import YAMLError
-from strif import atomic_output_file
+from strif import atomic_write_text
 
 from metaproc.errors import CLIError
 from metaproc.io import read_yaml_file
@@ -1414,15 +1414,13 @@ def gcp_cancel(
     if _is_run_dir(target):
         run_dir = Path(target)
         sentinel_dir = run_dir / STATE_DIR
-        sentinel_dir.mkdir(parents=True, exist_ok=True)
         sentinel_path = sentinel_dir / POOL_KILL_SENTINEL_FILE
         sentinel_body = (
             f"reason: gcp cancel\n"
             f"cancelled_at: {datetime.now(UTC).isoformat(timespec='seconds')}\n"
             f"jobs_cancelled: {cancelled}\n"
         )
-        with atomic_output_file(sentinel_path) as tmp_path:
-            tmp_path.write_text(sentinel_body)
+        atomic_write_text(sentinel_path, sentinel_body, make_parents=True)
         out.data(f"Wrote pool kill sentinel: {sentinel_path}")
 
 

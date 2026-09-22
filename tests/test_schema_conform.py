@@ -48,7 +48,7 @@ def _artifact(tmp_path: Path, frontmatter: str, body: str = "\n# Title\n\nProse.
 
 def _reload(path: Path) -> dict[str, Any]:
     """Read the frontmatter back the way a downstream consumer would."""
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     end = text.index("\n---\n", 4)
     return new_yaml(typ="safe").load(StringIO(text[4 : end + 1]))
 

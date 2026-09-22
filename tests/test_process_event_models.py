@@ -171,6 +171,6 @@ def test_read_process_events_skips_blank_lines(tmp_path: Path) -> None:
     target = tmp_path / "process-events.jsonl"
     with ProcessEventLogger(target) as logger:
         logger.process_start("mine", "run-1", "local", 1)
-    with open(target, "a") as f:
+    with open(target, "a", encoding="utf-8") as f:
         f.write("\n\n   \n")
     assert len(read_process_events(target)) == 1

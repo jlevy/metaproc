@@ -26,6 +26,7 @@ from metaproc.adapters.base import (
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.config.model_catalog import resolve_model
 from metaproc.dispatch.known_bugs import detect_known_bug
+from metaproc.io import write_secret_text
 from metaproc.settings import (
     CODEX_DEFAULT_EFFORT,
     CODEX_DEFAULT_MODEL,
@@ -585,8 +586,7 @@ class CodexCliAdapter:
         codex_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         codex_dir.chmod(0o700)
         auth_file = codex_dir / "auth.json"
-        auth_file.write_text(creds_json)
-        auth_file.chmod(0o600)
+        write_secret_text(auth_file, creds_json)
         log.info("codex auth: materialized %s", auth_file)
 
     # ── AuthCapableCliAdapter methods ───────────────────────────────
@@ -690,11 +690,9 @@ class CodexCliAdapter:
         codex_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         codex_dir.chmod(0o700)
         auth_file = codex_dir / "auth.json"
-        auth_file.write_text(blob)
-        auth_file.chmod(0o600)
+        write_secret_text(auth_file, blob)
         config_file = codex_dir / "config.toml"
-        config_file.write_text(_CODEX_SLOT_CONFIG_TOML)
-        config_file.chmod(0o600)
+        write_secret_text(config_file, _CODEX_SLOT_CONFIG_TOML)
 
     def capture_credential(self) -> str:
         """Read the operator's live ``~/.codex/auth.json`` for a pool push.
@@ -843,7 +841,7 @@ class CodexCliAdapter:
 def _inspect_auth_json(path: Path) -> tuple[str, str]:
     """Classify an auth.json file for check_auth reporting."""
     try:
-        doc: Any = json.loads(path.read_text())
+        doc: Any = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return ("unknown", f"{path} exists but could not be parsed")
     if not isinstance(doc, dict):

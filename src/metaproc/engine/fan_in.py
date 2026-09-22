@@ -24,7 +24,7 @@ from typing import Any
 
 import yaml
 from pydantic import ValidationError
-from strif import atomic_output_file
+from strif import atomic_write_text
 
 from metaproc.engine.command_diagnostics import without_evidence_paths
 from metaproc.io.state_io import read_status_at
@@ -181,9 +181,7 @@ class OutcomeManifest:
 
     def write(self, destination: Path) -> None:
         """Deliver the document to *destination* atomically."""
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        with atomic_output_file(destination) as tmp_path:
-            tmp_path.write_text(self.text, encoding="utf-8")
+        atomic_write_text(destination, self.text, make_parents=True)
 
 
 def _without_attempt_paths(outcome: dict[str, Any]) -> dict[str, Any]:

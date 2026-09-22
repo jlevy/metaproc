@@ -175,7 +175,9 @@ def glob_resolve_path(
         return candidate if candidate.exists() else None
 
     glob_pattern = re.sub(r"\{\{\w+\}\}", "*", resolved)
-    matches = glob_mod.glob(str(base_dir / glob_pattern))
+    # Sorted by path: the first match is the path the step resolves to, so without it
+    # the winning file depends on scandir order.
+    matches = sorted(glob_mod.glob(str(base_dir / glob_pattern)))
     if matches:
         return Path(matches[0])
     return None
@@ -187,7 +189,9 @@ def find_item_dir(run_dir: Path, item: str) -> Path | None:
     if direct.is_dir():
         return direct
     # Fallback: category-based layout
-    matches = glob_mod.glob(str(run_dir / "*" / item))
+    # Sorted by path: the first match is the item dir returned, so without it the
+    # winning directory depends on scandir order.
+    matches = sorted(glob_mod.glob(str(run_dir / "*" / item)))
     if matches and Path(matches[0]).is_dir():
         return Path(matches[0])
     return None

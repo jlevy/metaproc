@@ -1472,7 +1472,10 @@ def _write_blocking_process_tree_script(
 async def _wait_for_process_tree(path: Path) -> dict[str, int]:
     for _ in range(200):
         try:
-            return {key: int(value) for key, value in json.loads(path.read_text()).items()}
+            return {
+                key: int(value)
+                for key, value in json.loads(path.read_text(encoding="utf-8")).items()
+            }
         except (FileNotFoundError, json.JSONDecodeError):
             await asyncio.sleep(0.01)
     raise AssertionError(f"process tree did not publish its pids at {path}")

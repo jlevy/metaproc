@@ -383,7 +383,7 @@ class TestValidateRunConfig:
             "variables": {},
         }
         with atomic_output_file(config_path) as tmp:
-            Path(tmp).write_text(to_yaml_string(data))
+            Path(tmp).write_text(to_yaml_string(data), encoding="utf-8")
 
         # Should not raise.
         _validate_run_config(

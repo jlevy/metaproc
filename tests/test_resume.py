@@ -103,7 +103,7 @@ def _write_stale_lease(run_dir: Path) -> Path:
         "command_summary": "run-process mine --backend gcp-worker",
     }
     with atomic_output_file(lease_path) as tmp:
-        Path(tmp).write_text(to_yaml_string(data))
+        Path(tmp).write_text(to_yaml_string(data), encoding="utf-8")
     return lease_path
 
 

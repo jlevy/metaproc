@@ -145,7 +145,7 @@ def repair_frontmatter_file(path: Path) -> bool:
     if not path.exists():
         return False
 
-    content = path.read_text()
+    content = path.read_text(encoding="utf-8")
 
     # Find frontmatter boundaries
     if not content.startswith("---\n"):
@@ -198,6 +198,6 @@ def repair_frontmatter_file(path: Path) -> bool:
     # Write repaired content back
     repaired_content = f"---\n{repaired_frontmatter}---\n{content[end_idx + 5 :]}"
     with atomic_output_file(path) as tmp:
-        Path(tmp).write_text(repaired_content)
+        Path(tmp).write_text(repaired_content, encoding="utf-8")
     log.info("Repaired YAML frontmatter in %s", path)
     return True

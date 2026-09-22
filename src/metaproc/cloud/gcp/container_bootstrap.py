@@ -42,6 +42,7 @@ from tempfile import TemporaryDirectory
 
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.dispatch.repo_sync_payload import RepoSyncPayload
+from metaproc.io import atomic_write_text, write_secret_text
 from metaproc.io.digests import verify_file_sha256
 from metaproc.io.safe_archive import safe_extract_tar
 
@@ -165,10 +166,11 @@ def bootstrap_container() -> BootstrapResult:
     # Write pi CLI models config if provided.
     if pi_models_json:
         pi_config_dir = os.path.expanduser("~/.pi/agent")
-        os.makedirs(pi_config_dir, exist_ok=True)
+        # models.json can carry a literal provider API key, so neither the
+        # directory nor the file may be readable by anyone else.
+        os.makedirs(pi_config_dir, mode=0o700, exist_ok=True)
         models_path = os.path.join(pi_config_dir, "models.json")
-        with open(models_path, "w") as f:
-            f.write(pi_models_json)
+        write_secret_text(Path(models_path), pi_models_json)
         log.info("Wrote pi models config to %s (%d bytes)", models_path, len(pi_models_json))
 
     return BootstrapResult(work_dir=work_dir)
@@ -301,7 +303,7 @@ def _strip_uv_sources(pyproject_path: str) -> None:
     """
     if not os.path.isfile(pyproject_path):
         return
-    with open(pyproject_path) as f:
+    with open(pyproject_path, encoding="utf-8") as f:
         lines = f.readlines()
     out: list[str] = []
     skip = False
@@ -315,8 +317,10 @@ def _strip_uv_sources(pyproject_path: str) -> None:
             skip = False
         if not skip:
             out.append(line)
-    with open(pyproject_path, "w") as f:
-        f.writelines(out)
+    # Atomic publish: a crash leaves the original pyproject.toml intact rather
+    # than an empty file. The staged file's mode is what lands, so the original
+    # file's mode is not preserved (0644 either way in practice).
+    atomic_write_text(pyproject_path, "".join(out))
     log.info("Stripped [tool.uv.sources] from %s", pyproject_path)
 
 

@@ -79,7 +79,7 @@ class ProcessEventLogger:
 
     def open(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._file = open(self._path, "a")  # noqa: SIM115
+        self._file = open(self._path, "a", encoding="utf-8")  # noqa: SIM115
 
     def close(self) -> None:
         if self._file is not None:
@@ -374,7 +374,7 @@ def read_process_events(path: Path) -> list[ProcessEvent]:
     surfaces depend on.
     """
     out: list[ProcessEvent] = []
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             stripped = line.strip()
             if not stripped:
@@ -385,7 +385,7 @@ def read_process_events(path: Path) -> list[ProcessEvent]:
 
 def iter_process_events_raw(path: Path):
     """Yield raw dicts for every event line — used by the legacy parser."""
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             stripped = line.strip()
             if not stripped:
