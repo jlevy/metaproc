@@ -561,9 +561,11 @@ edited input `default:`, and it may change the process name, the run directory, 
 `--step-variant` set.
 Metaproc prints a `Resume changes <field>: <old> -> <new>` warning for each change,
 appends one `launch_config_change` event listing them to
-`.logs/dispatch-config-changes.jsonl`, and rewrites `run-config.yaml` to the values the
-resume ran with, so the file describes the latest launch and the event log holds its
-history. What re-runs still follows fingerprints: a value a step binds through `with:`
+`.logs/dispatch-config-changes.jsonl`, and rewrites the process, variables, and step
+variants in `run-config.yaml` to the values the resume ran with, so the file describes
+the latest launch and the event log holds its history.
+`run_dir` keeps its creation value; result paths recorded under it are rebased from that
+value. What re-runs still follows fingerprints: a value a step binds through `with:`
 leaves its fingerprint unchanged, while one substituted into `env:` or an output path
 re-runs that step and its downstream.
 Only a corrupt `run-config.yaml` refuses the resume.
@@ -1103,7 +1105,7 @@ for unmarked old runs.
 
 | Artifact | Current path | Meaning |
 | --- | --- | --- |
-| Run config | `<run>/.state/run-config.yaml` | Run identity, variables, step variants, and layout marker, rewritten by a resume that changes them |
+| Run config | `<run>/.state/run-config.yaml` | Run identity, variables, step variants, and layout marker; process, variables, and step variants rewritten by a resume that changes them, `run_dir` kept at its creation value |
 | Run plan | `<scope>/.state/run-plan.yaml` | What this scope declared: step identity, shape, canonical mapped item keys, output ports, fingerprints |
 | Orchestrator lease | `<run>/.state/orchestrator-lease.yaml` | Owner and heartbeat for cross-host safety |
 | Process status | `<run>/.state/process-status.yaml` | Aggregated DAG state for status display |

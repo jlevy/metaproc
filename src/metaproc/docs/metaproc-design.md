@@ -538,9 +538,12 @@ The resume logs each change at WARNING and prints it to the operator as
 It appends one `launch_config_change` event listing the changes to
 `.logs/dispatch-config-changes.jsonl`, in the `changes: [{field, diff: {old, new}}]`
 shape the `dispatch_config_change` events use.
-It then rewrites `run-config.yaml` so that its process, run directory, variables, and
-step variants hold the values the resume ran with; every other field keeps its creation
-value. A resume that changes nothing writes no event and rewrites nothing.
+It then rewrites `run-config.yaml` so that its process, variables, and step variants
+hold the values the resume ran with.
+`run_dir` and every other field keep their creation values: the results projection
+rebases recorded result paths from the creation `run_dir`, so a resume in a different
+directory is recorded in the event and leaves that anchor alone.
+A resume that changes nothing writes no event and rewrites nothing.
 The two canonical cloud Filestore mount roots for `RUNS_DIR` normalize to one run
 directory and record no change.
 Validation refuses only a corrupt `run-config.yaml`: one that does not read as a YAML

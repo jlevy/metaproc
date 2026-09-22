@@ -16,7 +16,9 @@ development series.
   Each change is printed as a `Resume changes <field>: <old> -> <new>` warning.
   All of one resume’s changes are appended, with their old and new values, as one
   `launch_config_change` event in `.logs/dispatch-config-changes.jsonl`, and
-  `run-config.yaml` is then rewritten to the values the resume ran with.
+  `run-config.yaml` is then rewritten so its process, variables, and step variants hold
+  the values the resume ran with; `run_dir` keeps its creation value, because recorded
+  result paths are rebased from it.
   Launch-config validation refuses only a corrupt `run-config.yaml`. What re-runs is
   decided by step fingerprints as before: a value bound through `with:` stays a template
   and does not re-run its step, while a value substituted into a resolved field such as
