@@ -141,7 +141,12 @@ line-length = 100
 extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
-select = ["E", "F", "UP", "B", "I", "PLC0415", "FURB", "G", "ICN", "ISC", "LOG", "PIE", "PYI", "RET", "TID"]
+# PLW1514 is still a Ruff preview rule. `explicit-preview-rules` keeps that opt-in
+# narrow: only preview rules named in `select` activate, so enabling this one does
+# not quietly turn on every other preview rule in the selected families.
+preview = true
+explicit-preview-rules = true
+select = ["E", "F", "UP", "B", "I", "PLC0415", "PLW1514", "FURB", "G", "ICN", "ISC", "LOG", "PIE", "PYI", "RET", "TID"]
 ignore = [
     "E501",  # line too long (handled by formatter)
     "E402",  # module import not at top of file
