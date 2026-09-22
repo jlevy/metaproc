@@ -20,7 +20,7 @@ runner = CliRunner()
 # pattern RunManifest(**VALID_MANIFEST) stays typed — Pydantic's __init__ takes
 # heterogeneous typed kwargs that need Any to flow cleanly.
 VALID_MANIFEST: dict[str, Any] = {
-    "run_id": "baseline-100-glm5-2026-04-17-p1a",
+    "run_id": "example-run-001",
     "stage_class": "baseline",
     "dataset": "sample-100",
     "git_sha": "0123456789abcdef0123456789abcdef01234567",
@@ -40,7 +40,7 @@ class TestRunManifestValidation:
         path = tmp_path / "manifest.yaml"
         path.write_text(yaml.safe_dump(VALID_MANIFEST))
         manifest = RunManifest.from_yaml_file(path)
-        assert manifest.run_id == "baseline-100-glm5-2026-04-17-p1a"
+        assert manifest.run_id == "example-run-001"
         assert manifest.models == ["pi-glm-5"]
 
         # Write back and re-load — equality holds through canonicalization.
@@ -56,22 +56,22 @@ class TestRunManifestValidation:
         first_key = text.splitlines()[0].split(":")[0]
         assert first_key == "run_id"
 
-    def test_rejects_unknown_stage_class(self):
-        bad = dict(VALID_MANIFEST, stage_class="phase-0c-blocker")
-        with pytest.raises(ValidationError):
-            RunManifest(**bad)
-
     @pytest.mark.parametrize(
         "stage_class",
         [
-            "consumer-scan-1000",
-            "consumer-scan-wide",
-            "consumer-atoms",
-            "consumer-bakeoff",
-            "consumer-select",
+            "phase-0c-blocker",
+            # Near misses of real members: the Literal is exact, not a prefix or
+            # case-insensitive match, and it admits no empty or padded value.
+            "baselines",
+            "Baseline",
+            " baseline",
+            "",
+            # A deployment's own stage vocabulary stays out of the framework enum.
+            "scan-1000",
+            "atoms",
         ],
     )
-    def test_rejects_consumer_specific_stage_classes(self, stage_class: str):
+    def test_rejects_unknown_stage_class(self, stage_class: str):
         bad = dict(VALID_MANIFEST, stage_class=stage_class)
         with pytest.raises(ValidationError):
             RunManifest(**bad)
