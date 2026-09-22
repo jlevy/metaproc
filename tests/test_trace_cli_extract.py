@@ -62,7 +62,7 @@ def run_dir(tmp_path: Path) -> Path:
         )
 
     # Item result.yaml
-    item_dir = d / ".state" / "tasks" / "research-step" / "MNDY"
+    item_dir = d / ".state" / "tasks" / "research-step" / "item-b"
     item_dir.mkdir(parents=True)
     (item_dir / "result.yaml").write_text(
         yaml.safe_dump(
@@ -77,7 +77,7 @@ def run_dir(tmp_path: Path) -> Path:
     )
 
     # Claude attempt
-    jsonl = d / ".logs" / "tasks" / "research-step" / "MNDY" / "x.jsonl"
+    jsonl = d / ".logs" / "tasks" / "research-step" / "item-b" / "x.jsonl"
     jsonl.parent.mkdir(parents=True)
     with jsonl.open("w") as f:
         f.write(
@@ -145,7 +145,7 @@ def run_dir(tmp_path: Path) -> Path:
                     "timestamp": "2026-05-12T00:00:05Z",
                     "tool_name": "trends",
                     "tier": "live",
-                    "command": ["arena", "tool", "trends", "MNDY"],
+                    "command": ["arena", "tool", "fetch", "item-b"],
                     "extra_args": [],
                     "exit_code": 0,
                     "duration_s": 1.5,
@@ -156,14 +156,14 @@ def run_dir(tmp_path: Path) -> Path:
         )
 
     # Web bundle JSON
-    bundle = d / "analysis-research" / "v0" / "MNDY" / "web-research-bundle.json"
+    bundle = d / "analysis-research" / "v0" / "item-b" / "web-research-bundle.json"
     bundle.parent.mkdir(parents=True)
     bundle.write_text(
         json.dumps(
             {
                 "success": True,
                 "bundle": {
-                    "ticker": "MNDY",
+                    "ticker": "item-b",
                     "providers": ["exa", "perplexity"],
                     "execution": {
                         "executedAt": "2026-05-12T00:00:00Z",

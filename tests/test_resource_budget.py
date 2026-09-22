@@ -81,7 +81,7 @@ def test_budget_requires_typed_id_and_exactly_one_target() -> None:
                 "metric": "api_requests",
                 "meter": {
                     "provider": "serpapi",
-                    "product": "google-trends",
+                    "product": "web-search",
                     "meter": "credits",
                     "unit": "credit",
                 },
@@ -138,7 +138,7 @@ def test_zero_threshold_allows_only_measured_zero(
 def test_incomplete_meter_cannot_report_exceeded() -> None:
     key = MeterKey(
         provider="serpapi",
-        product="google-trends",
+        product="web-search",
         meter="credits",
         unit="credit",
     )

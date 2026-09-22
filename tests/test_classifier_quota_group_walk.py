@@ -341,7 +341,7 @@ class TestUnknownClassificationDoesNotExcludeLabel:
     failures on the same item exhausted the per-item label set
     permanently, sending the worker into a 60-second-cycle "pool
     exhausted -- waiting 60s for slot recovery" loop with no escape.
-    Witnessed 2026-05-21 tier5 BULL/CAE: 53 min stuck before the fix.
+    Witnessed on a tier5 pool: 53 min stuck before the fix.
     """
 
     def test_unknown_status_does_not_exclude_label(self) -> None:
