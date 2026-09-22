@@ -43,6 +43,14 @@ development series.
   input) as its actual price and the standard rate from 2027-01-01 ($1.50, $7.50, $0.15)
   as its list price, so its invocations count toward `list_cost_usd`.
 
+### Changed
+
+- **The pinned gemini-cli is 0.59.0.** The version check warns when the `gemini` on PATH
+  differs from the pin, which moves from 0.55.1. On Vertex AI, 0.59.0 still rewrites an
+  unrecognized model id ending in `flash` to `gemini-3.5-flash` unless
+  `experimental.dynamicModelConfiguration` is on; with the settings metaproc writes, a
+  request for `gemini-3.6-flash` is served by `gemini-3.6-flash`.
+
 ### Fixed
 
 - **A list cost that leaves out unpriced tokens says so.** An invocation whose model has
