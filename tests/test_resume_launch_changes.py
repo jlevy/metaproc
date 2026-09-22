@@ -208,7 +208,7 @@ def test_a_changed_variable_resumes_and_is_recorded(
     process_path, runs_dir, run_id = _launch(tmp_path)
     run_dir = runs_dir / run_id
 
-    with caplog.at_level(logging.WARNING, logger="metaproc.commands.run_process"):
+    with caplog.at_level(logging.INFO, logger="metaproc.commands.run_process"):
         resumed = _run(process_path, runs_dir, run_id, DATASET="ds-2")
 
     assert resumed.exit_code == 0, _message(resumed)
@@ -220,9 +220,16 @@ def test_a_changed_variable_resumes_and_is_recorded(
         resumed.output
     )
     assert str(dispatch_config_changes_log(run_dir)) in resumed.output
-    warned = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
-    assert "Resume changes variables.DATASET: 'ds-1' -> 'ds-2'" in warned
-    assert "Resume changes variables.dataset: 'ds-1' -> 'ds-2'" in warned
+    # The log keeps each change at INFO, so the operator's warning is the only one.
+    logged = [
+        (r.levelno, r.getMessage())
+        for r in caplog.records
+        if r.getMessage().startswith("Resume changes ")
+    ]
+    assert logged == [
+        (logging.INFO, "Resume changes variables.DATASET: 'ds-1' -> 'ds-2'"),
+        (logging.INFO, "Resume changes variables.dataset: 'ds-1' -> 'ds-2'"),
+    ]
     # One event holds every change of the resume.
     events = _events(run_dir)
     assert [event["event"] for event in events] == ["launch_config_change"]

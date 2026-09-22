@@ -1291,7 +1291,8 @@ def _append_config_change_event(logs_dir: Path, event: Mapping[str, object]) -> 
 def _record_launch_config_changes(logs_dir: Path, changes: _LaunchConfigChanges) -> None:
     """Log each launch-config change of one resume and append them as one event.
 
-    Each change is logged at WARNING (``_describe_launch_config_change``). The
+    Each change is logged at INFO (``_describe_launch_config_change``), for the run's
+    log; ``run_process_command`` shows the operator each one once, as a warning. The
     ``launch_config_change`` event goes to ``.logs/dispatch-config-changes.jsonl`` beside
     the ``dispatch_config_change`` events, so one timeline shows every resume change.
     It lists ``changes: [{field, diff}]`` with the flat ``{old, new}`` diff that the
@@ -1306,7 +1307,7 @@ def _record_launch_config_changes(logs_dir: Path, changes: _LaunchConfigChanges)
         return
     ordered = sorted(changes.items())
     for field, (old, new) in ordered:
-        log.warning("%s", _describe_launch_config_change(field, old, new))
+        log.info("%s", _describe_launch_config_change(field, old, new))
     _append_config_change_event(
         logs_dir,
         {
