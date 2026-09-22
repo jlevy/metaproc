@@ -31,7 +31,9 @@ from metaproc.settings import (
 log = logging.getLogger(__name__)
 
 PINNED_GEMINI_CLI_VERSION = "0.59.0"
-GEMINI_CLI_INSTALL_HINT = f"Install: npm install -g @google/gemini-cli@{PINNED_GEMINI_CLI_VERSION}"
+# The auth hint and the version refusal quote one command, so a pin bump moves both.
+GEMINI_CLI_INSTALL_COMMAND = f"npm install -g @google/gemini-cli@{PINNED_GEMINI_CLI_VERSION}"
+GEMINI_CLI_INSTALL_HINT = f"Install: {GEMINI_CLI_INSTALL_COMMAND}"
 
 
 class GeminiCliVersionMismatch(CliVersionMismatch):
@@ -104,7 +106,7 @@ def _gemini_version_drift() -> str | None:
                 "--skip-trust, which that CLI rejects, so every agent step would fail "
                 f"mid-run. Fix PATH to a gemini >= {MIN_GEMINI_CLI_VERSION} (pinned: "
                 f"{PINNED_GEMINI_CLI_VERSION}) or install the pin: "
-                f"npm install -g @google/gemini-cli@{PINNED_GEMINI_CLI_VERSION}"
+                f"{GEMINI_CLI_INSTALL_COMMAND}"
             )
     return drift
 

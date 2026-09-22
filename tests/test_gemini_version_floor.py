@@ -12,6 +12,8 @@ import pytest
 
 from metaproc.adapters import gemini_cli
 from metaproc.adapters.gemini_cli import (
+    GEMINI_CLI_INSTALL_COMMAND,
+    GEMINI_CLI_INSTALL_HINT,
     MIN_GEMINI_CLI_VERSION,
     PINNED_GEMINI_CLI_VERSION,
     GeminiCliVersionMismatch,
@@ -90,6 +92,22 @@ def test_a_cli_below_the_minimum_raises(monkeypatch: pytest.MonkeyPatch) -> None
     assert "0.34.0" in message
     assert MIN_GEMINI_CLI_VERSION in message
     assert "--skip-trust" in message
+
+
+def test_the_refusal_names_the_pinned_version_in_its_install_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An operator who runs the hint verbatim must land on the pin, not `latest`."""
+    monkeypatch.setattr(gemini_cli, "check_cli_version", lambda _spec: _drift_message("0.34.0"))
+    with pytest.raises(GeminiCliVersionMismatch) as excinfo:
+        _gemini_version_drift()
+    assert f"@google/gemini-cli@{PINNED_GEMINI_CLI_VERSION}" in str(excinfo.value)
+
+
+def test_the_refusal_and_the_auth_hint_quote_one_install_command() -> None:
+    """Two places named the package; one constant keeps them in step on a bump."""
+    assert GEMINI_CLI_INSTALL_COMMAND in GEMINI_CLI_INSTALL_HINT
+    assert GEMINI_CLI_INSTALL_COMMAND.endswith(f"@{PINNED_GEMINI_CLI_VERSION}")
 
 
 def test_a_cli_at_the_minimum_warns_but_does_not_raise(

@@ -200,6 +200,9 @@ def _pi_validate_registration(
 # codex-cli, whose config-dump preamble carries `{"model": ..., ...}` with
 # no `type` field. The first JSONL line matching both type/subtype (when
 # specified) and containing a non-empty string at *model_path* wins.
+#
+# An identity event names the model the CLI was *asked for*, which is not
+# always the model that answered: see `_SERVED_MODEL_ADAPTERS` below.
 _MODEL_EVENT_MATCHERS: dict[str, tuple[str | None, str | None, tuple[str, ...]]] = {
     "claude-code-cli": ("system", "init", ("model",)),
     "gemini-cli": ("init", None, ("model",)),
@@ -253,6 +256,47 @@ def _extract_observed_model(adapter_type: str, stdout: str) -> str | None:
     return None
 
 
+# Adapters whose terminal event accounts for the model that actually served the
+# call, rather than the one the CLI was asked for.
+#
+# Gemini CLI emits its `init` event with `config.getModel()` before any request
+# leaves the process, so that event echoes the requested id even on a call the
+# CLI rewrote to a different model — exactly the routing change `--assert-model`
+# exists to catch. Its terminal `result` event keys `stats.models` by the model
+# that served and billed the call, which is the field
+# `GeminiCliAdapter.validate_result_event` refuses a run's result on. The live
+# check asserts on the same field so it agrees with the run path.
+_SERVED_MODEL_ADAPTERS: frozenset[str] = frozenset({"gemini-cli"})
+
+
+def _extract_served_models(adapter_type: str, stdout: str) -> list[str] | None:
+    """Return the models a CLI's terminal event says served the call.
+
+    Returns None when the adapter reports no served-model accounting, or when
+    *stdout* carries no terminal event at all. Returns an empty list when the
+    terminal event is present but names no model — a case the caller must
+    report rather than pass, because nothing then establishes what answered.
+    """
+    if adapter_type not in _SERVED_MODEL_ADAPTERS:
+        return None
+
+    for line in reversed(stdout.splitlines()):
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(event, dict) or event.get("type") != "result":
+            continue
+        stats = event.get("stats")
+        models = stats.get("models") if isinstance(stats, dict) else None
+        if not isinstance(models, dict):
+            return []
+        return sorted(str(name) for name in models if str(name))
+    return None
+
+
 def _run_live_check(
     adapter_type: str,
     variant: str | None,
@@ -263,10 +307,11 @@ def _run_live_check(
 ) -> list[tuple[bool, str]]:
     """Send a trivial prompt to an adapter and report success + latency.
 
-    When *assert_model* is set, also parse the subprocess stdout for the
-    adapter's identity event and verify the observed model contains the
-    expected substring. codex-cli does not emit a model ID in its JSONL
-    stream; for that adapter, an informational line is emitted instead.
+    When *assert_model* is set, also parse the subprocess stdout and verify the
+    model that answered contains the expected substring: the terminal event's
+    served-model accounting for gemini-cli, the identity event otherwise.
+    codex-cli does not emit a model ID in its JSONL stream; for that adapter, an
+    informational line is emitted instead.
     """
 
     adapter = ADAPTER_REGISTRY[adapter_type]
@@ -296,7 +341,8 @@ def _run_live_check(
         merged_config["verbose"] = merged_config["output_format"] == "stream-json"
         merged_config["no_session_persistence"] = True
     if adapter_type == "gemini-cli" and assert_model:
-        # Same reasoning: need the `init` event carrying `model`.
+        # Same reasoning: need the terminal `result` event carrying
+        # `stats.models`, which only stream-json emits.
         merged_config.setdefault("output_format", "stream-json")
     if adapter_type == "codex-cli":
         # Codex refuses to dispatch without a permission signal because it
@@ -518,7 +564,16 @@ def _evaluate_model_assertion(
     expected: str,
     label: str,
 ) -> tuple[bool, str]:
-    """Compare observed model from stdout against *expected* substring."""
+    """Compare the model that answered the probe against *expected* substring.
+
+    For an adapter in `_SERVED_MODEL_ADAPTERS` this reads the terminal event's
+    served-model accounting, so a CLI that rewrites the request to another model
+    fails the assertion. Every other adapter reports only an identity event, and
+    the assertion reads that.
+    """
+    if adapter_type in _SERVED_MODEL_ADAPTERS:
+        return _evaluate_served_model_assertion(adapter_type, stdout, expected, label)
+
     observed = _extract_observed_model(adapter_type, stdout)
     if observed is None:
         return (
@@ -534,6 +589,40 @@ def _evaluate_model_assertion(
         False,
         f"{label}: observed model {observed!r} does not match expected {expected!r}",
     )
+
+
+def _evaluate_served_model_assertion(
+    adapter_type: str,
+    stdout: str,
+    expected: str,
+    label: str,
+) -> tuple[bool, str]:
+    """Assert *expected* against the models the terminal event says served the call."""
+    served = _extract_served_models(adapter_type, stdout)
+    requested = _extract_observed_model(adapter_type, stdout)
+    asked = f" (requested {requested!r})" if requested else ""
+
+    if served is None:
+        missing = (
+            f"{label}: no terminal result event in stdout, so the served model is "
+            f"unknown{asked}; cannot confirm a model containing {expected!r}"
+        )
+        return (False, missing)
+    if not served:
+        unaccounted = (
+            f"{label}: terminal result event reported no served model{asked}; cannot "
+            f"confirm a model containing {expected!r}"
+        )
+        return (False, unaccounted)
+
+    reported = ", ".join(served)
+    if any(expected in name for name in served):
+        return (True, f"{label}: served model {reported!r} matches expected {expected!r}")
+    mismatch = (
+        f"{label}: served model {reported!r} does not match expected "
+        f"{expected!r}{asked} — the CLI answered with a different model"
+    )
+    return (False, mismatch)
 
 
 def _claude_local_live_probe_passed(results: list[tuple[bool, str]]) -> bool:
@@ -746,8 +835,11 @@ def auth_check(
         None,
         "--assert-model",
         help=(
-            "Verify the --live probe's observed model identity contains this substring. "
+            "Verify the model the --live probe was answered by contains this substring. "
             "Detects upstream CLI alias resolution or routing changes. "
+            "For gemini-cli this reads the terminal result event's served-model "
+            "accounting, so a CLI that rewrites the request to another model fails; "
+            "the other adapters report only the model they were asked for. "
             "codex-cli's event stream does not carry model ID, so for codex "
             "this emits an informational line rather than a hard assertion; "
             "the codex guarantee is covered by a separate negative-control smoke."

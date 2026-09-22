@@ -34,15 +34,26 @@ development series.
 ### Changed
 
 - **The pinned gemini-cli is 0.59.0.** The version check warns when the `gemini` on PATH
-  differs from the pin, which moves from 0.55.1. On Vertex AI, 0.59.0 still rewrites an
-  unrecognized model id ending in `flash` to `gemini-3.5-flash` unless
-  `experimental.dynamicModelConfiguration` is on; with the settings metaproc writes, a
-  request for `gemini-3.6-flash` is served by `gemini-3.6-flash`. 0.59.0 was published
-  on 2026-09-08 and clears the repository’s 14-day package cool-off on 2026-09-22; until
-  then `npm install` under the repository’s `.npmrc` refuses it.
+  differs from the pin, which moves from 0.55.1. On Vertex AI, 0.59.0 still rewrites
+  every model id ending in `flash`, `gemini-3.5-flash` itself excepted, to
+  `gemini-3.5-flash` unless `experimental.dynamicModelConfiguration` is on; with the
+  settings metaproc writes, a request for `gemini-3.6-flash` is served by
+  `gemini-3.6-flash`. 0.59.0 was published on 2026-09-08 and clears the repository’s
+  14-day package cool-off on 2026-09-22; until then `npm install` under the repository’s
+  `.npmrc` refuses it.
   0.60.0, the current npm `latest`, clears the cool-off on 2026-09-29 and is not pinned.
 
 ### Fixed
+
+- **`auth-check --assert-model` checks which model answered, not which was asked for.**
+  For gemini-cli the assertion read the `init` event, which the CLI emits from its
+  configured model before any request leaves the process, so a call the CLI rewrote to
+  another model still reported a match — the routing change the flag exists to detect.
+  The assertion now reads the terminal result event’s `stats.models`, the token
+  accounting keyed by the model that billed the call, which is the field a run already
+  refuses a Gemini result on; a probe whose terminal event reports no served model fails
+  instead of passing. The other adapters are unchanged: they report only the model they
+  were asked for.
 
 - **A list cost that leaves out unpriced tokens says so.** An invocation whose model has
   no entry in the pricing table added its tokens to every total but nothing to

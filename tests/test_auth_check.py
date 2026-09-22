@@ -20,7 +20,9 @@ from metaproc.cli import app
 from metaproc.commands.auth_check import (
     _check_adapter,
     _check_gcloud_token,
+    _evaluate_model_assertion,
     _extract_observed_model,
+    _extract_served_models,
     _infer_pi_provider,
     _pi_list_models,
     _pi_validate_registration,
@@ -709,6 +711,120 @@ class TestExtractObservedModel:
     def test_unknown_adapter_returns_none(self):
         stdout = '{"type":"init","model":"x"}\n'
         assert _extract_observed_model("unknown-adapter", stdout) is None
+
+
+# Captured from gemini-cli 0.59.0 on Vertex AI with a trivial prompt. The `init`
+# event echoes the requested id; `result.stats.models` names the model that
+# served and billed the call.
+_GEMINI_REWRITTEN_STDOUT = (
+    '{"type":"init","timestamp":"2026-09-22T18:49:34.286Z","session_id":"b1f2382f",'
+    '"model":"gemini-3.6-flash"}\n'
+    '{"type":"message","role":"assistant","content":"OK","delta":true}\n'
+    '{"type":"result","timestamp":"2026-09-22T18:49:38.348Z","status":"success",'
+    '"stats":{"total_tokens":12091,"tool_calls":0,'
+    '"models":{"gemini-3.5-flash":{"total_tokens":12091,"input_tokens":11679}}}}\n'
+)
+
+_GEMINI_HONORED_STDOUT = (
+    '{"type":"init","timestamp":"2026-09-22T18:49:55.567Z","session_id":"42df203c",'
+    '"model":"gemini-3.6-flash"}\n'
+    '{"type":"message","role":"assistant","content":"OK","delta":true}\n'
+    '{"type":"result","timestamp":"2026-09-22T18:49:58.234Z","status":"success",'
+    '"stats":{"total_tokens":11815,"tool_calls":0,'
+    '"models":{"gemini-3.6-flash":{"total_tokens":11815,"input_tokens":11678}}}}\n'
+)
+
+
+class TestExtractServedModels:
+    """`stats.models` on the terminal event is keyed by the model that billed
+    the call, so it reports what answered rather than what was asked for.
+    """
+
+    def test_gemini_result_event_yields_served_model(self):
+        assert _extract_served_models("gemini-cli", _GEMINI_REWRITTEN_STDOUT) == [
+            "gemini-3.5-flash"
+        ]
+
+    def test_gemini_reports_every_model_that_billed(self):
+        stdout = (
+            '{"type":"init","model":"gemini-3-pro"}\n'
+            '{"type":"result","status":"success","stats":{"models":'
+            '{"gemini-3-pro":{"total_tokens":1},"gemini-3.5-flash":{"total_tokens":2}}}}\n'
+        )
+        assert _extract_served_models("gemini-cli", stdout) == [
+            "gemini-3-pro",
+            "gemini-3.5-flash",
+        ]
+
+    def test_missing_terminal_event_is_none(self):
+        stdout = '{"type":"init","model":"gemini-3.6-flash"}\n'
+        assert _extract_served_models("gemini-cli", stdout) is None
+
+    def test_terminal_event_without_accounting_is_empty(self):
+        """Distinct from None: the event arrived but names no served model."""
+        stdout = (
+            '{"type":"init","model":"gemini-3.6-flash"}\n'
+            '{"type":"result","status":"success","stats":{"total_tokens":11}}\n'
+        )
+        assert _extract_served_models("gemini-cli", stdout) == []
+
+    def test_garbage_jsonl_is_ignored(self):
+        assert _extract_served_models("gemini-cli", "not json\n{broken\n") is None
+
+    def test_adapters_without_served_accounting_return_none(self):
+        stdout = '{"type":"result","stats":{"models":{"x":{}}}}\n'
+        assert _extract_served_models("claude-code-cli", stdout) is None
+        assert _extract_served_models("unknown-adapter", stdout) is None
+
+
+class TestEvaluateModelAssertion:
+    """`--assert-model` must fail when the CLI answers with a model other than
+    the one requested. gemini-cli's `init` event echoes `config.getModel()`
+    before any request is sent, so asserting on it passes a rewritten call.
+    """
+
+    def test_gemini_rewrite_fails_the_assertion(self):
+        ok, msg = _evaluate_model_assertion(
+            "gemini-cli", _GEMINI_REWRITTEN_STDOUT, "gemini-3.6-flash", "gemini-cli"
+        )
+        assert not ok
+        assert "gemini-3.5-flash" in msg
+        assert "answered with a different model" in msg
+
+    def test_gemini_identity_event_alone_would_have_passed(self):
+        """Pins the gap this assertion closes: the requested id is still there."""
+        assert _extract_observed_model("gemini-cli", _GEMINI_REWRITTEN_STDOUT) == "gemini-3.6-flash"
+
+    def test_gemini_honored_request_passes_the_assertion(self):
+        ok, msg = _evaluate_model_assertion(
+            "gemini-cli", _GEMINI_HONORED_STDOUT, "gemini-3.6-flash", "gemini-cli"
+        )
+        assert ok
+        assert "served model 'gemini-3.6-flash'" in msg
+
+    def test_gemini_missing_terminal_event_fails_rather_than_passes(self):
+        stdout = '{"type":"init","model":"gemini-3.6-flash"}\n'
+        ok, msg = _evaluate_model_assertion("gemini-cli", stdout, "gemini-3.6-flash", "gemini-cli")
+        assert not ok
+        assert "no terminal result event" in msg
+
+    def test_gemini_terminal_event_without_accounting_fails(self):
+        stdout = (
+            '{"type":"init","model":"gemini-3.6-flash"}\n'
+            '{"type":"result","status":"success","stats":{"total_tokens":11}}\n'
+        )
+        ok, msg = _evaluate_model_assertion("gemini-cli", stdout, "gemini-3.6-flash", "gemini-cli")
+        assert not ok
+        assert "no served model" in msg
+
+    def test_other_adapters_still_assert_on_the_identity_event(self):
+        stdout = (
+            '{"type":"system","subtype":"init","model":"claude-sonnet-4-5"}\n'
+            '{"type":"result","is_error":false}\n'
+        )
+        ok, msg = _evaluate_model_assertion("claude-code-cli", stdout, "sonnet", "claude-code-cli")
+        assert ok
+        assert "observed model 'claude-sonnet-4-5'" in msg
 
 
 class TestInferPiProvider:
