@@ -67,14 +67,21 @@ development series.
   change, with a `collected input ... changed since the step last ran — invalidated:`
   line, so backfilling failed items no longer needs `--only <step> --force`. An item
   that fails again with different wording is not a change, an unchanged resume reuses
-  everything, and a step recorded before this change is not invalidated.
-  When the consumer is a composite, its own child steps re-run too, because they read
-  the document through `with:` paths.
-  Downstream composites are invalidated at the parent level and reuse their completed
-  child steps, exactly as after a fingerprint change, so a downstream mapped composite
-  does work only for the items its new roster adds.
-  An invalidated task also stays invalidated across an interrupted run: reconciliation
-  no longer projects the invalidated attempt back into `status.yaml`.
+  everything, and a step recorded before this change is not invalidated; a record that
+  is present but unreadable counts as changed, and the resume names it.
+  When the consumer is a composite, every task in its own child scopes re-runs, whether
+  or not it reads the document.
+  Downstream steps are re-entered rather than re-done: a downstream composite is
+  invalidated at the parent level and reuses its completed child steps, exactly as after
+  a fingerprint change, and a downstream mapped non-composite step (`mode: code`,
+  `agent`, or `manual`) keeps its completed items’ records, since there the per-item
+  record is the work itself.
+  Either way the step does work only for the items its new roster adds, and an item that
+  keeps its key while the content behind it changes is reused until `--force` or
+  `--from <step>`. A run started before this release has no record, so backfilling its
+  failed items and resuming still reuses the consumer; run `--from <consumer>` once on
+  such a run. An invalidated task also stays invalidated across an interrupted run:
+  reconciliation no longer projects the invalidated attempt back into `status.yaml`.
   `metaproc status --steps` names a changed collected input among the causes of an
   `invalidated` step.
 
