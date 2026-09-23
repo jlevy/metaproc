@@ -16,12 +16,16 @@ import os
 import subprocess
 import tempfile
 import time
+from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import NamedTuple
 
 import typer
 from strif import temp_output_file
 
-from metaproc.adapters.base import agent_seed_env
+from metaproc.adapters.base import agent_seed_env, parse_jsonl_event
+from metaproc.adapters.gemini_cli import format_served_models
+from metaproc.adapters.gemini_cli import served_models as gemini_served_models
 from metaproc.adapters.pi_cli import resolve_pi_binary
 from metaproc.adapters.registry import ADAPTER_REGISTRY
 from metaproc.cli import app, get_output
@@ -93,14 +97,28 @@ def _find_repo_root(start: Path) -> Path | None:
     return None
 
 
+class _VariantTarget(NamedTuple):
+    """What `--variant` names: an adapter, and for a profile its model, provider and config."""
+
+    adapter: str | None
+    model: str | None
+    provider: str | None
+    config: dict[str, object]
+
+
 def _resolve_variant_target(
     variant: str | None,
     *,
     profile_files: list[Path] | tuple[Path, ...] = (),
-) -> tuple[str | None, str | None, str | None]:
-    """Resolve a profile or raw adapter name to (adapter_type, model, provider)."""
+) -> _VariantTarget:
+    """Resolve a profile or raw adapter name to its adapter, model, provider and config.
+
+    For an execution profile, `config` is a copy of the profile's own adapter config,
+    the same block a run seeds each of the profile's steps from; a raw adapter name
+    has none.
+    """
     if not variant:
-        return None, None, None
+        return _VariantTarget(None, None, None, {})
 
     registry = ExecutionProfileRegistry.load(
         repo_root=_find_repo_root(Path.cwd()),
@@ -109,14 +127,15 @@ def _resolve_variant_target(
     if variant in registry.entries:
         resolved = registry.resolve(variant)
         profile = resolved.profile
-        return (
+        return _VariantTarget(
             profile.adapter,
             str(profile.config.get("model") or profile.model or "") or None,
             str(profile.config.get("provider") or profile.provider or "") or None,
+            dict(profile.config),
         )
 
     if variant in ADAPTER_REGISTRY:
-        return variant, None, None
+        return _VariantTarget(variant, None, None, {})
 
     available = ", ".join(registry.names) or "<none>"
     raise CLIError(f"unknown execution profile for --variant: {variant!r} (available: {available})")
@@ -202,6 +221,9 @@ def _pi_validate_registration(
 # codex-cli, whose config-dump preamble carries `{"model": ..., ...}` with
 # no `type` field. The first JSONL line matching both type/subtype (when
 # specified) and containing a non-empty string at *model_path* wins.
+#
+# An identity event is not billing accounting, so it need not name the model
+# that answered: see `_SERVED_MODEL_READERS` below.
 _MODEL_EVENT_MATCHERS: dict[str, tuple[str | None, str | None, tuple[str, ...]]] = {
     "claude-code-cli": ("system", "init", ("model",)),
     "gemini-cli": ("init", None, ("model",)),
@@ -255,6 +277,43 @@ def _extract_observed_model(adapter_type: str, stdout: str) -> str | None:
     return None
 
 
+# Adapters whose terminal `result` event accounts for the models that billed the
+# call, each mapped to the adapter's own reader of that accounting.
+#
+# Gemini CLI emits its `init` event with `config.getModel()` before any request
+# leaves the process, so that event echoes the requested id even on a call the
+# CLI rewrote to a different model — exactly the routing change `--assert-model`
+# exists to catch. Its terminal `result` event keys `stats.models` by every model
+# it sent a request to, and `gemini_cli.served_models` keeps the ones that billed
+# tokens. `GeminiCliAdapter.validate_result_event` refuses a run's result through
+# the same function, so the probe and the run path decide which model served by
+# one rule. They still compare differently: the run path requires the resolved
+# requested id itself, while `--assert-model` takes an operator-supplied substring.
+_SERVED_MODEL_READERS: dict[str, Callable[[dict[str, object]], dict[str, int]]] = {
+    "gemini-cli": gemini_served_models,
+}
+
+
+def _extract_served_models(adapter_type: str, stdout: str) -> dict[str, int] | None:
+    """Return the models a CLI's terminal event says billed the call, with their tokens.
+
+    Returns None when the adapter reports no served-model accounting, or when
+    *stdout* carries no terminal event at all. Returns an empty dict when the
+    terminal event is present but no model in it billed tokens — a case the
+    caller must report rather than pass, because nothing then establishes what
+    answered.
+    """
+    reader = _SERVED_MODEL_READERS.get(adapter_type)
+    if reader is None:
+        return None
+
+    for line in reversed(stdout.splitlines()):
+        event = parse_jsonl_event(line, "result")
+        if event is not None:
+            return reader(event)
+    return None
+
+
 def _run_live_check(
     adapter_type: str,
     variant: str | None,
@@ -262,13 +321,27 @@ def _run_live_check(
     provider: str | None = None,
     *,
     assert_model: str | None = None,
+    profile_config: Mapping[str, object] | None = None,
 ) -> list[tuple[bool, str]]:
     """Send a trivial prompt to an adapter and report success + latency.
 
-    When *assert_model* is set, also parse the subprocess stdout for the
-    adapter's identity event and verify the observed model contains the
-    expected substring. codex-cli does not emit a model ID in its JSONL
-    stream; for that adapter, an informational line is emitted instead.
+    *profile_config* is the adapter config of the execution profile `--variant`
+    named, if any. The probe starts from it, as a run starts a step from it, and
+    then sets what the probe itself needs.
+
+    When *assert_model* is set, also parse the subprocess stdout and fail unless
+    the model it names contains the expected substring. Where that model is read
+    differs by adapter:
+
+    - gemini-cli: the terminal `result` event's `stats.models`, the models that
+      billed the call, so a request the CLI rewrote or answered with a fallback
+      fails.
+    - claude-code-cli: `system.init.model`, the model Claude Code resolved the
+      request to. Its `result.modelUsage` carries the models that billed but is
+      not read yet.
+    - pi-cli: `message.model` on the first assistant `message_start` event.
+    - codex-cli: the `model` field of the untyped config preamble it prints
+      before its event stream; the assertion fails when the preamble is absent.
     """
 
     adapter = ADAPTER_REGISTRY[adapter_type]
@@ -276,12 +349,16 @@ def _run_live_check(
     if not status.cli_found or not status.credentials_found:
         return [(False, f"{adapter_type}: skipping live check (no binary or credentials)")]
 
-    # Build a minimal config — just enough for a trivial prompt.
+    # Start from the profile's own adapter config, as a run seeds a step's config
+    # from it (`engine/build_plan.py`), so a profile setting that changes routing —
+    # a Gemini `native_settings` block above all — reaches the probe. Without a
+    # profile this is a minimal config, just enough for a trivial prompt. The
+    # probe's own requirements are layered on top.
     # For pi-cli, pin the provider explicitly so the live check exercises the
     # requested provider rather than falling back to pi-cli's default — that
     # fallback is what produced the vertex-maas false-green (see Phase 0c
     # blocker report).
-    merged_config: dict[str, object] = {}
+    merged_config: dict[str, object] = dict(profile_config or {})
     if variant is not None:
         merged_config["model"] = variant
     effective_provider = provider
@@ -292,21 +369,29 @@ def _run_live_check(
     if adapter_type == "claude-code-cli":
         merged_config.setdefault("permission_mode", "bypassPermissions")
         # assert_model needs the `system.init` event, which only appears
-        # under stream-json. Plain text output carries no model marker.
-        default_format = "stream-json" if assert_model else "text"
-        merged_config.setdefault("output_format", default_format)
+        # under stream-json. Plain text output carries no model marker, so the
+        # assertion overrides a profile's format rather than defaulting it.
+        if assert_model:
+            merged_config["output_format"] = "stream-json"
+        else:
+            merged_config.setdefault("output_format", "text")
         merged_config["verbose"] = merged_config["output_format"] == "stream-json"
         merged_config["no_session_persistence"] = True
     if adapter_type == "gemini-cli" and assert_model:
-        # Same reasoning: need the `init` event carrying `model`.
-        merged_config.setdefault("output_format", "stream-json")
-    if adapter_type == "codex-cli":
+        # Same reasoning: need the terminal `result` event carrying
+        # `stats.models`, which only stream-json emits. A profile whose
+        # `output_format` is `text` would otherwise leave no terminal event.
+        merged_config["output_format"] = "stream-json"
+    if adapter_type == "codex-cli" and not any(
+        merged_config.get(key) for key in ("permission_mode", "sandbox", "approval_policy")
+    ):
         # Codex refuses to dispatch without a permission signal because it
         # would otherwise prompt for approval on every tool call and
         # deadlock in batch mode (stdin=DEVNULL). A trivial "Respond with
         # exactly: OK" prompt never executes tools, so bypassing approvals
-        # is the minimum safe default for the live probe.
-        merged_config.setdefault("permission_mode", "bypassPermissions")
+        # is the minimum safe default for the live probe. A profile that
+        # already gives a signal keeps it: bypass would override its sandbox.
+        merged_config["permission_mode"] = "bypassPermissions"
 
     results: list[tuple[bool, str]] = []
     label = f"{adapter_type}" + (f" ({variant})" if variant else "")
@@ -520,7 +605,16 @@ def _evaluate_model_assertion(
     expected: str,
     label: str,
 ) -> tuple[bool, str]:
-    """Compare observed model from stdout against *expected* substring."""
+    """Compare the model the probe's output names against *expected* substring.
+
+    For an adapter in `_SERVED_MODEL_READERS` this reads the terminal event's
+    served-model accounting, so a CLI that rewrites the request to another model
+    fails the assertion. Every other adapter's assertion reads the model named by
+    its identity event in `_MODEL_EVENT_MATCHERS`.
+    """
+    if adapter_type in _SERVED_MODEL_READERS:
+        return _evaluate_served_model_assertion(adapter_type, stdout, expected, label)
+
     observed = _extract_observed_model(adapter_type, stdout)
     if observed is None:
         return (
@@ -536,6 +630,53 @@ def _evaluate_model_assertion(
         False,
         f"{label}: observed model {observed!r} does not match expected {expected!r}",
     )
+
+
+def _evaluate_served_model_assertion(
+    adapter_type: str,
+    stdout: str,
+    expected: str,
+    label: str,
+) -> tuple[bool, str]:
+    """Assert *expected* against the models the terminal event says billed the call.
+
+    Any one billing model matching passes, because utility and sub-agent requests
+    legitimately bill other models beside the requested one. Both the pass and the
+    fail line list every billing model with its token count, so a fallback that
+    answered beside or instead of the requested model is visible either way.
+    """
+    served = _extract_served_models(adapter_type, stdout)
+    requested = _extract_observed_model(adapter_type, stdout)
+    asked = f" (requested {requested!r})" if requested else ""
+
+    if served is None:
+        missing = (
+            f"{label}: no terminal result event in stdout, so the served model is "
+            f"unknown{asked}; cannot confirm a model containing {expected!r}"
+        )
+        return (False, missing)
+    if not served:
+        unaccounted = (
+            f"{label}: terminal result event reported no served model (no model billed "
+            f"tokens){asked}; cannot confirm a model containing {expected!r}"
+        )
+        return (False, unaccounted)
+
+    billed = format_served_models(served)
+    matching = sorted(
+        (name for name in served if expected in name),
+        key=lambda name: (-served[name], name),
+    )
+    if matching:
+        passed = (
+            f"{label}: served model {matching[0]!r} matches expected {expected!r}; billed: {billed}"
+        )
+        return (True, passed)
+    mismatch = (
+        f"{label}: no served model matches expected {expected!r}{asked} — the CLI "
+        f"answered with a different model; billed: {billed}"
+    )
+    return (False, mismatch)
 
 
 def _claude_local_live_probe_passed(results: list[tuple[bool, str]]) -> bool:
@@ -754,11 +895,17 @@ def auth_check(
         None,
         "--assert-model",
         help=(
-            "Verify the --live probe's observed model identity contains this substring. "
-            "Detects upstream CLI alias resolution or routing changes. "
-            "codex-cli's event stream does not carry model ID, so for codex "
-            "this emits an informational line rather than a hard assertion; "
-            "the codex guarantee is covered by a separate negative-control smoke."
+            "Fail the --live probe unless the model its output names contains this "
+            "substring. Where that model is read differs by adapter. "
+            "gemini-cli: the terminal result event's stats.models, the models that "
+            "billed the call, so a request the CLI rewrote or answered with a "
+            "fallback fails. "
+            "claude-code-cli: system.init.model, the model Claude Code resolved the "
+            "request to; its result.modelUsage carries the models that billed but is "
+            "not read yet. "
+            "pi-cli: message.model on the first assistant message_start event. "
+            "codex-cli: the model field of the config preamble it prints before its "
+            "event stream; the check fails when the preamble is absent."
         ),
     ),
     adapter: str | None = typer.Option(  # noqa: UP007
@@ -810,7 +957,7 @@ def auth_check(
 
     # Adapter checks. When a variant or --adapter is supplied, scope Phase 1
     # to the relevant adapter instead of failing on unrelated CLIs.
-    scoped_adapter, scoped_model, scoped_provider = _resolve_variant_target(
+    scoped_adapter, scoped_model, scoped_provider, scoped_config = _resolve_variant_target(
         variant,
         profile_files=[*variant_file, *profile_file],
     )
@@ -839,6 +986,7 @@ def auth_check(
                     timeout,
                     provider=provider or scoped_provider,
                     assert_model=assert_model,
+                    profile_config=scoped_config,
                 )
             )
         else:

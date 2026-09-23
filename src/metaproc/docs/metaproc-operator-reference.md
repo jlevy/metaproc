@@ -712,25 +712,52 @@ uv run metaproc auth-check --live --variant <execution-profile>
 
 Each adapter pins the CLI version it was tested against: Claude Code 2.1.234, Codex
 0.147.0, Gemini CLI 0.59.0 and Pi 0.84.2 (the `PINNED_*_VERSION` constants in
-`src/metaproc/adapters/`). At launch, `run-process` checks every adapter the plan’s
-agent steps use against its pin and prints a drift banner when they differ; drift does
-not stop the run. Gemini CLI older than 0.40.0 is refused, because the adapter passes
-`--skip-trust`, which older releases reject.
-A deployment image that installs a CLI moves with its pin.
+`src/metaproc/adapters/`). At launch, `run-process` checks every adapter the launched
+process’s own agent steps use against its pin and prints a drift banner when they
+differ; drift does not stop the run.
+A composite step’s child plan is built when the child runs, so an adapter used only
+inside a child is checked then, not in the launch banner.
+Gemini CLI older than 0.40.0 is refused, because the adapter passes `--skip-trust`,
+which older releases reject.
+A deployment image that installs a CLI must be rebuilt when its pin moves.
 `METAPROC_SKIP_CLAUDE_VERSION_CHECK`, `METAPROC_SKIP_CODEX_VERSION_CHECK`,
 `METAPROC_SKIP_GEMINI_VERSION_CHECK` and `METAPROC_SKIP_PI_VERSION_CHECK` bypass the
-checks, for CI or tests where the binary is not on PATH.
+drift banner and, for Gemini, the minimum-version refusal as well; use them only where
+the binary is never launched, such as CI or tests.
 
-Gemini CLI answers a model id ending in `flash` that it does not know with its own
-default flash model, unless `experimental.dynamicModelConfiguration` is on.
-Metaproc turns it on in the settings it writes for every Gemini step.
-A step’s own `native_settings` override Metaproc’s, so a step or adapter config
+Gemini CLI answers any model id ending in `flash`, other than its own flash default,
+with that default, unless `experimental.dynamicModelConfiguration` is on.
+Whether it recognizes the id is not the test: ids it ships a definition for are
+rewritten too. Metaproc turns the flag on in the settings it writes for every Gemini
+step. A step’s own `native_settings` override Metaproc’s, so a step or adapter config
 transform must not turn it off.
-To confirm the model a profile is actually served:
+To confirm which model actually served a profile:
 
 ```bash
 uv run metaproc auth-check --live --variant <execution-profile> --assert-model <model>
 ```
+
+The probe runs with the profile’s own adapter config, `native_settings` included, so a
+profile that turns the flag off fails it.
+A step’s own adapter config and a config transform apply only inside a run, where the
+run’s terminal-result check still refuses a rewritten result.
+For Gemini that assertion reads the terminal result event’s `stats.models` and counts
+only the models whose entry billed tokens, because a request that failed is still listed
+there, with zero. A request the CLI rewrote, or answered with a fallback after the
+requested model failed, therefore fails the check, and so does a terminal event in which
+no model billed. The pass and fail lines list each model that billed with its token
+count. A run holds every Gemini step to the same rule and refuses a result in which the
+requested model billed no tokens.
+
+For the other adapters the assertion reads a model the CLI names for the call, not the
+models that billed it:
+
+- Claude Code: `system.init.model`, the model Claude Code resolved the request to.
+  Its terminal `result.modelUsage` carries the models that billed, but the assertion
+  does not read it yet.
+- Pi: `message.model` on the first assistant `message_start` event.
+- Codex: the `model` field of the config preamble codex-cli prints before its event
+  stream. The check fails when the preamble is absent.
 
 For Codex, `OPENAI_API_KEY` is an API-platform credential and uses API billing.
 It does not consume the ChatGPT Pro Codex allowance.

@@ -33,8 +33,10 @@ process:
         bash -lc "GEMINI_ORIG_HOME=\"$HOME\" && export HOME=\"$(mktemp -d -t gemini-smoke-XXXXXX)\" && trap 'rm -rf \"$HOME\"' EXIT && export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && export GOOGLE_APPLICATION_CREDENTIALS=\"${GOOGLE_APPLICATION_CREDENTIALS:-$GEMINI_ORIG_HOME/.config/gcloud/application_default_credentials.json}\" && cd \"${METAPROC_SMOKE_WORKDIR:-$GEMINI_ORIG_HOME}\" && SMOKE_MODEL=\"${GEMINI_SMOKE_MODEL:-gemini-3.1-pro-preview-customtools}\" && SMOKE_ASSERT=\"${GEMINI_SMOKE_ASSERT_MODEL:-$SMOKE_MODEL}\" && uv run metaproc auth-check --live --variant \"gemini-cli-$SMOKE_MODEL\" --assert-model \"$SMOKE_ASSERT\""
       description: >-
         Send a trivial "Respond with exactly: OK" prompt via
-        `gemini -p` and assert the `model` field in the stream-json
-        `init` event matches the expected ID. Defaults to
+        `gemini -p` and assert that a model the terminal `result`
+        event's `stats.models` shows billing tokens contains the
+        expected ID. The `init` event only echoes the requested ID, so
+        it cannot show a rewrite or a fallback. Defaults to
         GEMINI_DEFAULT_MODEL (`gemini-3.1-pro-preview-customtools`)
         with the assertion pinned to that same ID. Override per cell
         by exporting `GEMINI_SMOKE_MODEL=<id>` (and optionally
@@ -78,9 +80,10 @@ for Batch dispatch and Vertex MaaS.
    `GOOGLE_GENAI_USE_VERTEXAI=true` + `GOOGLE_CLOUD_PROJECT=$METAPROC_GCP_PROJECT`.
    Exercises the adapter’s own credential-detection logic.
 3. **live-probe** — Isolated-HOME + `gemini -p` against Vertex AI (see below), with
-   `--assert-model <model>` to verify the `init` event’s `model` field matches the
-   expected ID. Defaults to GEMINI_DEFAULT_MODEL; override with `GEMINI_SMOKE_MODEL` to
-   exercise a specific cell of the matrix.
+   `--assert-model <model>` to verify that a model the terminal `result` event’s
+   `stats.models` shows billing tokens contains the expected ID. Defaults to
+   GEMINI_DEFAULT_MODEL; override with `GEMINI_SMOKE_MODEL` to exercise a specific cell
+   of the matrix.
 4. **tool-probe** — `metaproc probe-tool-use --harness gemini-cli` issues a single
    file-read tool call and verifies both the tool event and the sentinel-string
    round-trip in the model’s response.
