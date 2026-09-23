@@ -86,7 +86,7 @@ The helper parses the CLI’s JSONL stdout for the event that names the model:
 | Adapter | Event | Model path | Smoke expected substring |
 | --- | --- | --- | --- |
 | `claude-code-cli` | `system.init` | `model` | `opus` |
-| `gemini-cli` | terminal `result` | `stats.models` keys that billed tokens | `gemini-3` |
+| `gemini-cli` | terminal `result` | `stats.models` keys that billed tokens | `gemini-3.1-pro-preview-customtools` |
 | `pi-cli` | `message_start` (first assistant) | `message.model` | `glm-5-maas` |
 | `codex-cli` | untyped config preamble (the first line carrying `model`) | `model` | `gpt` |
 
