@@ -187,6 +187,14 @@ class _ProcessIOBase(BaseModel):
         return raw
 
 
+InputChangePolicy = Literal["record", "new_run"]
+"""What a launch that resolves a different value for an input does (``on_change:``).
+
+``record`` records the change and continues; ``new_run`` refuses, because the scope's
+durable state describes the value it was bound to.
+"""
+
+
 class ProcessInput(_ProcessIOBase):
     """A declared input on ``ProcessSpec.inputs``.
 
@@ -195,18 +203,52 @@ class ProcessInput(_ProcessIOBase):
     - parsed-from-file via ``path:`` + ``parse:``
     - literal (caller fills ``path:`` with an absolute or run-relative location)
 
-    Every resolved input is recorded in ``run-config.yaml`` at launch. A resume may
-    change any of them, through a ``--var``, an edited ``default:``, or an input added or
-    removed. Each change is logged and recorded as a ``launch_config_change`` event, and
-    ``run-config.yaml`` then records the values the resume ran with. What re-runs is
-    decided by step fingerprints.
+    Every resolved input is recorded in ``run-config.yaml`` at launch. ``on_change``
+    says what a later launch that resolves a different value does:
+
+    - ``record`` (the default): the change is logged and recorded as a
+      ``launch_config_change`` event, ``run-config.yaml`` then records the value the
+      resume ran with, and what re-runs is decided by step fingerprints. A value that
+      records how a run executed, such as the code revision that launched it, wants
+      this.
+    - ``new_run``: the scope holds one value for the input for its whole life, because
+      its task state, results, and summaries all describe that value. The value is
+      recorded in the scope's ``input-bindings.yaml`` when the scope is first entered,
+      and every later entry compares against it before anything is written: a
+      ``run-process`` resume, a composite child scope after ``with:`` resolution, and
+      ``run-step`` and ``run-parallel``. A different value refuses, naming the recorded
+      and the new value and the two ways out: the recorded value, or a new ``RUN_ID``.
+      Declare it for a value whose change makes the run a different run, such as the
+      date anchor or the roster a run covers, and sparingly: a bound value cannot be
+      corrected under the same ``RUN_ID``.
+
+    ``new_run`` needs a ``param``-backed input. The binding is the value the launch
+    resolves, compared under the input's logical name whatever its ``param`` alias is
+    called, so it is the path string of an ``as: path`` input, never the file's
+    contents; reuse follows contents through step fingerprints. A file-backed input
+    (``path:`` without ``param:``) has no launch value to bind and is rejected.
     """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(populate_by_name=True, extra="forbid")
 
     path: str | None = None
     param: str | None = None
     parse: ParseConfig | None = None
     required: bool = True
     default: str | None = None
+    on_change: InputChangePolicy = "record"
+
+    @model_validator(mode="after")
+    def _new_run_binds_a_param(self) -> ProcessInput:
+        """A ``new_run`` binding is a launch value, so only a ``param``-backed input has one."""
+        if self.on_change == "new_run" and self.param is None:
+            msg = (
+                "on_change: new_run needs a param-backed input: the binding is the value "
+                "the launch resolves, and a file-backed input (path: without param:) has "
+                "none; reuse follows a file's contents through step fingerprints"
+            )
+            raise ValueError(msg)
+        return self
 
 
 class ProcessDep(_ProcessIOBase):
@@ -622,6 +664,16 @@ class ProcessSpec(BaseModel):
             if decl.param is not None:
                 names.add(decl.param)
         return names
+
+    @property
+    def new_run_inputs(self) -> dict[str, ProcessInput]:
+        """Return the inputs declared ``on_change: new_run``, by logical name.
+
+        A scope binds each of them to one value for its whole life
+        (``engine.input_bindings``); the logical name is the binding's key, so a
+        renamed ``param`` alias changes nothing.
+        """
+        return {name: decl for name, decl in self.inputs.items() if decl.on_change == "new_run"}
 
     def expand_param_aliases(self, variables: dict[str, str]) -> dict[str, str]:
         """Mirror declared ``param:`` values onto logical input names and vice versa."""

@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: Cloud Execution
 
-**Date:** 2026-04-12 (last updated 2026-09-22) **Status:** Approved
+**Date:** 2026-04-12 (last updated 2026-09-23) **Status:** Approved
 
 For the overall metaproc framework design, see [metaproc-design.md](metaproc-design.md);
 for the run pool process management subsystem, see [arch-runpool.md](arch-runpool.md).
@@ -189,6 +189,10 @@ A different process name still refuses, because every task record’s identity i
 `<process>/<RUN_ID>`. A different run directory refuses too, because result records are
 anchored to the recorded one: a moved run would re-run every step whose outputs sit
 under `{{run.dir}}` and write result records the results projection cannot accept.
+A value other than the recorded one for an input the process binds `on_change: new_run`
+refuses as well, because the scope that binds such an input holds one value for it for
+the life of the run; the check is the same at every entry point, the `run-parallel` a
+worker runs included.
 The two canonical cloud Filestore mount roots normalize to one run directory and record
 no change; a workstation mount path is a different run directory and is refused.
 Cross-topology resume (for example, hybrid to full cloud) remains allowed because both
@@ -228,9 +232,9 @@ explicitly.
 Resume behavior: re-running `run-process` with the same `RUN_ID` skips completed steps
 and items based on on-disk status records.
 A resume whose launch config differs from the one `run-config.yaml` records is warned
-about and recorded, and one whose process name or run directory differs is refused, so
-an accidental collision between unrelated runs sharing a directory is visible rather
-than silent.
+about and recorded, and one whose process name, run directory, or bound
+(`on_change: new_run`) input value differs is refused, so an accidental collision
+between unrelated runs sharing a directory is visible rather than silent.
 
 ### 2.5 LaunchBackend Protocol
 

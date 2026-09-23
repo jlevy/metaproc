@@ -118,6 +118,14 @@ from metaproc.engine.graph import (
     propagate_failure,
     topo_sort,
 )
+from metaproc.engine.input_bindings import (
+    InputBindingChanges,
+    compare_input_bindings,
+    declared_input_bindings,
+    describe_bound_value,
+    input_binding_refusal,
+    recorded_input_bindings,
+)
 from metaproc.engine.input_validation import (
     validate_process_inputs,
     validate_process_outputs,
@@ -136,6 +144,7 @@ from metaproc.engine.pathing import (
     compute_run_dir,
     compute_task_logs_dir,
     compute_task_state_dir,
+    normalize_filestore_runs_path,
     resolve_item_key,
 )
 from metaproc.engine.placeholders import (
@@ -198,6 +207,7 @@ from metaproc.io.state_io import (
     reconcile_stale_running,
     validate_task_status_identity_at,
     write_attempt_at,
+    write_input_bindings,
     write_result_at,
     write_run_plan,
 )
@@ -210,6 +220,8 @@ from metaproc.models.resource_snapshot import ResourceRunSnapshot
 from metaproc.models.runtime import (
     AttemptDisposition,
     AttemptRecord,
+    InputBinding,
+    InputBindingsRecord,
     OutputFailure,
     ResultRecord,
     StatusRecord,
@@ -219,6 +231,7 @@ from metaproc.paths import (
     LOGS_DIR,
     MANUAL_ACK_FILE,
     RUN_LAYOUT_VERSION,
+    RUN_PLAN_FILE,
     STATE_DIR,
     STATUS_FILE,
 )
@@ -832,19 +845,23 @@ _KEYED_LAUNCH_CONFIG_FIELDS = frozenset({"variables", "step_variants"})
 """The launch-config mappings compared key by key, as ``<field>.<KEY>``; every other
 field is compared whole."""
 
-type _LaunchConfigValue = str | list[dict[str, object]] | None
-"""One launch-config value as ``run-config.yaml`` holds it, ``None`` when absent.
+type _LaunchConfigValue = str | list[dict[str, object]] | dict[str, object] | None
+"""One launch-config value as the run records it, ``None`` when absent.
 
-``resolved_profiles`` is a list of profile mappings; every other value is a string.
+``resolved_profiles`` is a list of profile mappings, an ``input_bindings.<NAME>`` value
+is one ``InputBinding`` as a mapping (``{on_change, value}``), and every other value is
+a string.
 """
 
 type _LaunchConfigChanges = dict[str, tuple[_LaunchConfigValue, _LaunchConfigValue]]
 """What one resume changed in the launch config: ``field -> (recorded, current)``.
 
 ``None`` marks an absent side. A change to one of the ``_KEYED_LAUNCH_CONFIG_FIELDS`` is
-named ``variables.<NAME>`` or ``step_variants.<STEP>``, and a change to any other
-``_LAUNCH_CONFIG_FIELDS`` entry by the field itself. The mapping is sorted by field. A
-changed ``run_dir`` is never one: ``_validate_run_config`` refuses it.
+named ``variables.<NAME>`` or ``step_variants.<STEP>``, a change to any other
+``_LAUNCH_CONFIG_FIELDS`` entry by the field itself, and a binding the resume adopts or
+releases (``engine.input_bindings``) ``input_bindings.<NAME>``. The mapping is sorted by
+field. A changed ``run_dir``, and a changed value of an input the process binds
+``on_change: new_run``, are never one: ``_read_resumable_run_config`` refuses both.
 """
 
 
@@ -878,6 +895,7 @@ def _write_run_config(  # noqa: PLR0913
     resource_snapshot: ResourceRunSnapshot | None = None,
     step_variants: Mapping[str, str] | None = None,
     git_sha: str | None = None,
+    spec: ProcessSpec | None = None,
 ) -> _RunConfigWrite:
     """Write run-config.yaml at run creation time; validate a resume against it.
 
@@ -888,25 +906,35 @@ def _write_run_config(  # noqa: PLR0913
 
     The first write records the launch-config fields (``_LaunchConfig``) with the rest of
     the run's creation record. *git_sha* is the launch checkout's; ``None`` reads it here.
+    It also binds the root scope's ``on_change: new_run`` inputs, when *spec* declares
+    any, by writing ``input-bindings.yaml`` beside the config
+    (``engine.input_bindings``); *spec* absent means a process declaring none.
 
     On resume this function writes nothing. It reads the recorded config
     (``_read_resumable_run_config``) only to refuse early, before auth preflight and the
-    ancestor check, a resume that cannot continue: a corrupt config, a process name other
-    than the recorded one, since every task record carries ``<process>/<RUN_ID>`` as its
-    run identity, or a run directory other than the recorded one, since result records
-    are anchored to it. ``_apply_resume_config_changes`` checks again and compares the
-    launch config once ``run_process_command`` holds the orchestrator lease, and records
-    what it finds there, because only under the lease is this resume the config's single
-    writer. A launch refused before then, by the ``--from``/``--only`` ancestor check or
-    by another orchestrator's live lease, therefore never touches the config or the
-    event log of a run that may still be executing. What re-runs is decided by step
-    fingerprints, not here.
+    ancestor check, a resume that cannot continue: a corrupt config or bindings record,
+    a process name other than the recorded one, since every task record carries
+    ``<process>/<RUN_ID>`` as its run identity, a run directory other than the recorded
+    one, since result records are anchored to it, or a value other than the recorded one
+    for an input the root scope binds. ``_apply_resume_config_changes`` checks again and
+    compares the launch config once ``run_process_command`` holds the orchestrator
+    lease, and records what it finds there, because only under the lease is this resume
+    the config's single writer. A launch refused before then, by the ``--from``/``--only``
+    ancestor check or by another orchestrator's live lease, therefore never touches the
+    config or the event log of a run that may still be executing. What re-runs is
+    decided by step fingerprints, not here.
 
     Returns the config path and whether it already existed.
     """
     config_path = paths_mod.run_config_file(run_dir)
     if config_path.exists():
-        _read_resumable_run_config(config_path, process_name=process_name, run_dir=run_dir)
+        _read_resumable_run_config(
+            config_path,
+            process_name=process_name,
+            run_dir=run_dir,
+            spec=spec,
+            variables=variables,
+        )
         return _RunConfigWrite(path=config_path, resumed=True)
 
     # Persist process_spec as an absolute path so consumers like
@@ -949,6 +977,13 @@ def _write_run_config(  # noqa: PLR0913
 
     atomic_write_text(config_path, to_yaml_string(data), make_parents=True)
     log.info("Wrote run-config.yaml: %s", config_path)
+    bindings = declared_input_bindings(spec, variables) if spec is not None else {}
+    if bindings:
+        write_input_bindings(
+            run_dir,
+            InputBindingsRecord(run_id=f"{process_name}/{run_id}", bindings=bindings),
+        )
+        log.info("Bound %d input(s): %s", len(bindings), paths_mod.input_bindings_file(run_dir))
     return _RunConfigWrite(path=config_path, resumed=False)
 
 
@@ -960,6 +995,7 @@ def _apply_resume_config_changes(
     launch: _LaunchConfig,
     auth_flags: AuthPoolFlags | None,
     max_concurrency: int | None,
+    spec: ProcessSpec | None = None,
 ) -> _LaunchConfigChanges:
     """Find and record what a resume changes, once it holds the orchestrator lease.
 
@@ -971,7 +1007,8 @@ def _apply_resume_config_changes(
     another resume's values while this one runs with its own.
     ``_record_launch_config_changes`` then logs each change and appends them as one
     ``launch_config_change`` event, ``_rewrite_launch_config`` makes the config record
-    the launch config (*launch*) this resume runs with, and
+    the launch config (*launch*) this resume runs with, ``_rewrite_input_bindings``
+    makes ``input-bindings.yaml`` hold the bindings the resume adopted or released, and
     ``_record_resume_config_change`` appends a ``dispatch_config_change`` event for any
     auth or concurrency change. Both events go to ``.logs/dispatch-config-changes.jsonl``;
     a log this resume cannot append to raises ``CLIError`` naming it.
@@ -995,9 +1032,17 @@ def _apply_resume_config_changes(
         process_name=process_name,
         run_dir=run_dir,
         launch=launch,
+        spec=spec,
     )
     _record_launch_config_changes(paths_mod.run_logs_dir(run_dir), changes)
     _rewrite_launch_config(run_config.path, changes, launch=launch)
+    recorded_run_id = _recorded_str(_read_run_config(run_config.path).get("run_id"))
+    _rewrite_input_bindings(
+        run_dir,
+        changes,
+        record_id=f"{process_name}/{recorded_run_id or run_dir.name}",
+        scope_path=(),
+    )
     # Compute and record any auth/concurrency diff for the resume timeline that
     # `metaproc auth usage` renders.
     _record_resume_config_change(
@@ -1334,12 +1379,15 @@ def _describe_config_value(value: _LaunchConfigValue) -> str:
     """Render a launch-config value, marking an absent one.
 
     A ``resolved_profiles`` list renders as its profile names; the event carries the
-    whole profiles.
+    whole profiles. An input binding renders as its policy and value, ``new_run 'v'``.
     """
     if value is None:
         return "<unset>"
     if isinstance(value, list):
         return repr([str(profile.get("name")) for profile in value])
+    if isinstance(value, dict):
+        bound = value.get("value")
+        return f"{value.get('on_change')} {describe_bound_value(None if bound is None else str(bound))}"
     return repr(value)
 
 
@@ -1365,7 +1413,7 @@ def _rewrite_launch_config(
     the config, and a resume refused because another orchestrator is live never rewrites
     that orchestrator's config.
     """
-    changed = {field.split(".", 1)[0] for field in changes}
+    changed = {field.split(".", 1)[0] for field in changes} & set(_LAUNCH_CONFIG_FIELDS)
     if not changed:
         return
     data = _read_run_config(config_path)
@@ -1378,6 +1426,120 @@ def _rewrite_launch_config(
             data[field] = value
     atomic_write_text(config_path, to_yaml_string(data))
     log.info("Rewrote run-config.yaml with this resume's launch config: %s", config_path)
+
+
+_INPUT_BINDINGS_FIELD = "input_bindings"
+"""The launch-config field under which a resume's adopted and released bindings are
+recorded, as ``input_bindings.<NAME>``; ``input-bindings.yaml`` holds them, not
+``run-config.yaml``."""
+
+
+def _input_binding_launch_changes(changes: InputBindingChanges) -> _LaunchConfigChanges:
+    """Render the bindings a launch adopts and releases as launch-config changes.
+
+    An adopted binding is ``None -> {on_change, value}`` and a released one the reverse,
+    so each is visible as a change whatever value it binds, an unset one included.
+    """
+    launch_changes: _LaunchConfigChanges = {}
+    for name, binding in changes.released.items():
+        launch_changes[f"{_INPUT_BINDINGS_FIELD}.{name}"] = (binding.model_dump(mode="json"), None)
+    for name, binding in changes.adopted.items():
+        launch_changes[f"{_INPUT_BINDINGS_FIELD}.{name}"] = (None, binding.model_dump(mode="json"))
+    return launch_changes
+
+
+def _rewrite_input_bindings(
+    scope_dir: Path,
+    changes: _LaunchConfigChanges,
+    *,
+    record_id: str,
+    scope_path: Sequence[str],
+) -> None:
+    """Make ``input-bindings.yaml`` hold the bindings a resume adopted or released.
+
+    The ``input_bindings.<NAME>`` entries of *changes* say which: a ``None`` new side
+    drops the binding, a mapping binds it. Every other binding keeps its recorded value;
+    a resume that changes a bound value never reaches here. The record is rewritten
+    whole, an empty one included, so a scope that released every binding still shows it
+    once bound some.
+    """
+    bound = {
+        field.split(".", 1)[1]: new
+        for field, (_old, new) in changes.items()
+        if field.startswith(f"{_INPUT_BINDINGS_FIELD}.")
+    }
+    if not bound:
+        return
+    bindings = _recorded_input_bindings_or_refuse(scope_dir)
+    for name, new in bound.items():
+        if new is None:
+            bindings.pop(name, None)
+        else:
+            bindings[name] = InputBinding.model_validate(new)
+    write_input_bindings(
+        scope_dir,
+        InputBindingsRecord(run_id=record_id, scope_path=list(scope_path), bindings=bindings),
+    )
+    log.info("Rewrote input-bindings.yaml: %s", paths_mod.input_bindings_file(scope_dir))
+
+
+def _recorded_input_bindings_or_refuse(scope_dir: Path) -> dict[str, InputBinding]:
+    """Return the bindings *scope_dir* records, refusing a corrupt record with CLIError."""
+    try:
+        return recorded_input_bindings(scope_dir)
+    except (YAMLError, UnicodeDecodeError, ValueError) as exc:
+        raise CLIError(
+            f"Corrupt input-bindings.yaml: {paths_mod.input_bindings_file(scope_dir)}: {exc}"
+        ) from exc
+
+
+def _enter_scope_input_bindings(  # noqa: PLR0913
+    scope_dir: Path,
+    *,
+    record_id: str,
+    scope_path: Sequence[str],
+    spec: ProcessSpec,
+    variables: Mapping[str, str],
+    first_entry: bool,
+    launch: str,
+    out: Any,
+) -> None:
+    """Bind a composite child scope's ``new_run`` inputs on entry, or hold it to them.
+
+    The scope's first entry writes ``input-bindings.yaml`` when *spec* binds an input,
+    before the scope's plan is published. Every later entry compares the values
+    *variables* resolve with the record, before anything in the scope is written: a
+    changed value refuses with ``CLIError`` (``input_binding_refusal``), which the level
+    walk records as the composite step's failure; a binding the child process no longer
+    declares is released and one it newly declares adopted, each recorded as a
+    ``launch_config_change`` event in the scope's own ``.logs/`` and shown to the
+    operator as a warning, and the record rewritten. The orchestrator holds the run's
+    lease throughout, so this entry is the scope's only writer.
+    """
+    if first_entry:
+        bindings = declared_input_bindings(spec, variables)
+        if bindings:
+            write_input_bindings(
+                scope_dir,
+                InputBindingsRecord(
+                    run_id=record_id, scope_path=list(scope_path), bindings=bindings
+                ),
+            )
+        return
+    recorded = _recorded_input_bindings_or_refuse(scope_dir)
+    changes = compare_input_bindings(recorded, spec, variables)
+    refusal = input_binding_refusal(
+        changes, spec=spec, record_path=paths_mod.input_bindings_file(scope_dir), launch=launch
+    )
+    if refusal:
+        raise CLIError(refusal)
+    if not changes.rewrites:
+        return
+    launch_changes = _input_binding_launch_changes(changes)
+    _record_launch_config_changes(paths_mod.run_logs_dir(scope_dir), launch_changes)
+    for field, (old, new) in sorted(launch_changes.items()):
+        out.warning(f"{launch}: {_describe_launch_config_change(field, old, new)}")
+    _rewrite_input_bindings(scope_dir, launch_changes, record_id=record_id, scope_path=scope_path)
 
 
 def _diff_dicts(old: dict[str, object], new: dict[str, object]) -> dict[str, object]:
@@ -1424,26 +1586,35 @@ def _validate_run_config(
     process_name: str,
     run_dir: Path,
     launch: _LaunchConfig,
+    spec: ProcessSpec | None = None,
 ) -> _LaunchConfigChanges:
     """Compare a resume's launch config with the ``run-config.yaml`` it resumes.
 
     A resume may change every ``_LAUNCH_CONFIG_FIELDS`` entry: any resolved variable
-    (including through an edited ``default:``, or an input added or removed), the
-    ``--step-variant`` set, the variant, execution profile, artifact namespace, and
-    resolved profiles, the backend, and the checkout's ``git_sha``. Each difference comes
-    back as ``field -> (recorded, current)`` with ``None`` for an absent side, sorted by
-    field (``_LaunchConfigChanges``). Both sides are compared as the file holds them
+    (including through an edited ``default:``, or an input added or removed) other than
+    one the root scope binds ``on_change: new_run``, the ``--step-variant`` set, the
+    variant, execution profile, artifact namespace, and resolved profiles, the backend,
+    and the checkout's ``git_sha``. Each difference comes back as
+    ``field -> (recorded, current)`` with ``None`` for an absent side, sorted by field
+    (``_LaunchConfigChanges``). Both sides are compared as the file holds them
     (``_recorded_launch_config``), so a value that differs only in what the YAML writer
-    omits is no change. What re-runs is decided by step fingerprints, not here, and
-    authentication and concurrency are compared by ``_record_resume_config_change``.
+    omits is no change. A binding the resume adopts or releases (``engine.input_bindings``)
+    comes back as ``input_bindings.<NAME>``. What re-runs is decided by step
+    fingerprints, not here, and authentication and concurrency are compared by
+    ``_record_resume_config_change``.
 
-    ``_read_resumable_run_config`` first refuses a resume that cannot continue.
+    ``_read_resumable_run_config`` first refuses a resume that cannot continue, a changed
+    bound value among them, so no such change reaches the changes returned here.
     """
-    raw, recorded_variables = _read_resumable_run_config(
-        config_path, process_name=process_name, run_dir=run_dir
+    raw, recorded_variables, binding_changes = _read_resumable_run_config(
+        config_path,
+        process_name=process_name,
+        run_dir=run_dir,
+        spec=spec,
+        variables=launch.variables,
     )
     current = _recorded_launch_config(launch)
-    changes: _LaunchConfigChanges = {}
+    changes: _LaunchConfigChanges = dict(_input_binding_launch_changes(binding_changes))
 
     for name in _changed_keys(
         _resume_variable_identity(recorded_variables), _resume_variable_identity(launch.variables)
@@ -1469,13 +1640,20 @@ def _validate_run_config(
 
 
 def _read_resumable_run_config(
-    config_path: Path, *, process_name: str, run_dir: Path
-) -> tuple[dict[object, object], dict[str, str]]:
+    config_path: Path,
+    *,
+    process_name: str,
+    run_dir: Path,
+    spec: ProcessSpec | None = None,
+    variables: Mapping[str, str] | None = None,
+) -> tuple[dict[object, object], dict[str, str], InputBindingChanges]:
     """Read the ``run-config.yaml`` a resume continues, refusing one it cannot continue.
 
-    Returns the config and its recorded variables.
+    Returns the config, its recorded variables, and how this launch's values relate to
+    the root scope's recorded input bindings (``compare_input_bindings``: what it
+    adopts and releases; nothing it changes, since that refuses here).
 
-    Two launch values refuse, because continuing would leave the run's durable state
+    Three launch values refuse, because continuing would leave the run's durable state
     inconsistent:
 
     - The process name. Every task's status, attempts, and result carry the run
@@ -1490,14 +1668,23 @@ def _read_resumable_run_config(
       would write result records the projection cannot accept. A new ``RUN_ID`` costs
       the same work without the inconsistency. The recorded ``run_dir`` and the
       ``RUNS_DIR`` variable compare across the two Filestore mount aliases
-      (``_normalize_filestore_runs_path``), so two spellings of one mount are neither
+      (``normalize_filestore_runs_path``), so two spellings of one mount are neither
       refused nor recorded. A config written without a ``run_dir`` has none to compare.
+    - The bound inputs. ``input-bindings.yaml`` beside the config records the value the
+      root scope bound each ``on_change: new_run`` input to, under its logical name;
+      *spec* is the process this launch runs (absent means one binding nothing) and
+      *variables* its resolved variables. A bound input holds one value for the life of
+      the run, because the run's task state, results, and summaries all describe it, so
+      a launch that resolves another is refused (``input_binding_refusal``), whether or
+      not the process still declares the input; a binding is released only at its
+      recorded value. Every other variable is recorded and continues.
 
-    Raises CLIError for either mismatch and for a corrupt config: one
+    Raises CLIError for any of those mismatches, for a corrupt config (one
     ``_read_run_config`` refuses, one without a process name, or one whose ``variables``
-    field is not a string-to-string mapping. Each refusal comes before the resume records
-    or rewrites anything: ``_write_run_config`` calls this before the orchestrator lease,
-    and ``_validate_run_config`` again under it.
+    field is not a string-to-string mapping), and for a corrupt bindings record. Each
+    refusal comes before the resume records or rewrites anything: ``_write_run_config``
+    calls this before the orchestrator lease, and ``_validate_run_config`` again under
+    it.
     """
     raw = _read_run_config(config_path)
 
@@ -1542,7 +1729,21 @@ def _read_resumable_run_config(
             f"Corrupt run-config.yaml: {config_path}: variables must be a string-to-string mapping"
         )
 
-    return raw, cast(dict[str, str], saved_variables)
+    recorded_variables = cast(dict[str, str], saved_variables)
+    process = spec if spec is not None else ProcessSpec(name=process_name)
+    binding_changes = compare_input_bindings(
+        _recorded_input_bindings_or_refuse(run_dir), process, variables or {}
+    )
+    refusal = input_binding_refusal(
+        binding_changes,
+        spec=process,
+        record_path=paths_mod.input_bindings_file(run_dir),
+        launch="Resume",
+    )
+    if refusal:
+        raise CLIError(refusal)
+
+    return raw, recorded_variables, binding_changes
 
 
 def _recorded_launch_config(launch: _LaunchConfig) -> dict[str, object]:
@@ -1613,7 +1814,7 @@ def _resume_run_dir_identity(run_dir: str) -> str:
     paths keep their full normalized form so workstation directories that happen
     to contain ``mnt/filestore`` cannot impersonate the cloud run tree.
     """
-    return _normalize_filestore_runs_path(run_dir)
+    return normalize_filestore_runs_path(run_dir)
 
 
 def _resume_variable_identity(variables: Mapping[str, str]) -> dict[str, str]:
@@ -1624,24 +1825,8 @@ def _resume_variable_identity(variables: Mapping[str, str]) -> dict[str, str]:
     """
     identity = dict(variables)
     if runs_dir := identity.get("RUNS_DIR"):
-        identity["RUNS_DIR"] = _normalize_filestore_runs_path(runs_dir)
+        identity["RUNS_DIR"] = normalize_filestore_runs_path(runs_dir)
     return identity
-
-
-def _normalize_filestore_runs_path(path: str) -> str:
-    """Normalize known Filestore run-root aliases while preserving descendants."""
-    normalized = os.path.normpath(path)
-    canonical_root = f"{os.sep}mnt{os.sep}filestore{os.sep}runs"
-    aliases = (
-        f"{os.sep}mnt{os.sep}disks{os.sep}filestore{os.sep}runs",
-        canonical_root,
-    )
-    for alias in aliases:
-        if normalized == alias:
-            return canonical_root
-        if normalized.startswith(alias + os.sep):
-            return canonical_root + normalized[len(alias) :]
-    return normalized
 
 
 # ── Completion detection ──────────────────────────────────────────
@@ -3580,6 +3765,19 @@ def _prepare_composite_scope(
     if profile_pinned and child_plan.artifact_namespace:
         child_vars.setdefault("ARTIFACT_NAMESPACE", child_plan.artifact_namespace)
         child_vars.setdefault("VARIANT", child_plan.artifact_namespace)
+    # The scope's bound inputs are checked before its first write, the plan below. A
+    # scope that has published a plan has been entered before; one that has not is
+    # entered for the first time and binds its inputs now.
+    _enter_scope_input_bindings(
+        child_identity.run_dir,
+        record_id=child_identity.record_id,
+        scope_path=child_identity.scope_path,
+        spec=child_spec,
+        variables=child_vars,
+        first_entry=not (paths_mod.run_state_dir(child_identity.run_dir) / RUN_PLAN_FILE).exists(),
+        launch=f"Step '{step_id}'",
+        out=out,
+    )
     _publish_run_plan(
         child_identity.run_dir,
         run_id=child_identity.record_id,
@@ -5994,6 +6192,7 @@ def run_process_command(
         resource_snapshot=resource_snapshot,
         step_variants=step_profile_overrides,
         git_sha=launch_config.git_sha,
+        spec=spec,
     )
 
     out.progress(f"run-process: {spec.name} ({len(active_step_ids)} steps, {len(levels)} levels)")
@@ -6211,6 +6410,7 @@ def run_process_command(
             launch=launch_config,
             auth_flags=auth_flags_for_config,
             max_concurrency=max_concurrency,
+            spec=spec,
         )
     except BaseException:
         release_lease(run_dir)

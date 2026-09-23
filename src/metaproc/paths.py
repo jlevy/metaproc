@@ -162,6 +162,9 @@ RUN_CONFIG_FILE = "run-config.yaml"
 RUN_PLAN_FILE = "run-plan.yaml"
 """Current exact resolved plan for one root or nested process scope."""
 
+INPUT_BINDINGS_FILE = "input-bindings.yaml"
+"""The values a root or nested scope binds its ``on_change: new_run`` inputs to."""
+
 ORCHESTRATOR_LEASE_FILE = "orchestrator-lease.yaml"
 """Active orchestrator lease — heartbeat, owner identity, stale takeover."""
 
@@ -263,6 +266,11 @@ def iter_composite_run_dirs(run_dir: Path) -> Iterable[Path]:
 def run_config_file(run_dir: Path) -> Path:
     """Return run config path: ``<run_dir>/.state/run-config.yaml``."""
     return run_state_dir(run_dir) / RUN_CONFIG_FILE
+
+
+def input_bindings_file(scope_dir: Path) -> Path:
+    """Return one scope's input bindings: ``<scope_dir>/.state/input-bindings.yaml``."""
+    return run_state_dir(scope_dir) / INPUT_BINDINGS_FILE
 
 
 def process_events_log(run_dir: Path) -> Path:

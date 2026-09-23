@@ -58,13 +58,13 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
         "concepts",
         "metaproc-concepts",
         "Start here. Vocabulary, ownership boundaries, step modes, optimization loops.",
-        7700,
+        8100,
     ),
     Topic(
         "design",
         "metaproc-design",
         "How Metaproc is built: spec format, runtime artifacts, adapters, robustness.",
-        20500,
+        22000,
     ),
     Topic(
         "framework",
@@ -76,7 +76,7 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
         "operator",
         "metaproc-operator-reference",
         "Runtime CLI reference: running, monitoring, and resuming processes.",
-        10900,
+        11300,
     ),
     Topic(
         "developer",
@@ -94,13 +94,13 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
         "artifacts",
         "artifact-catalog",
         "Every runtime artifact Metaproc writes or reads: format, schema, lifecycle.",
-        2100,
+        2200,
     ),
     Topic(
         "execution-contracts",
         "execution-model-design",
         "The durable contracts under task-level scheduling, and their rationale.",
-        1900,
+        2300,
     ),
     Topic(
         "credentials",
@@ -124,7 +124,7 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
         "arch-cloud",
         "arch-cloud-execution",
         "Architecture: GCP Batch dispatch, orchestrator and worker placement.",
-        5500,
+        5700,
     ),
     Topic(
         "arch-runpool",

@@ -89,18 +89,18 @@ kickoff sequence and defer to the metaproc CLI for execution.
 
 Available via `metaproc help <topic>`, in recommended reading order:
 
-- **concepts** (~7.7k words): Start here. Vocabulary, ownership boundaries, step modes, optimization loops.
-- **design** (~20.5k words): How Metaproc is built: spec format, runtime artifacts, adapters, robustness.
+- **concepts** (~8.1k words): Start here. Vocabulary, ownership boundaries, step modes, optimization loops.
+- **design** (~22.0k words): How Metaproc is built: spec format, runtime artifacts, adapters, robustness.
 - **framework** (~7.3k words): Background theory: the general model beneath any process framework, and Metaproc's mapping.
-- **operator** (~10.9k words): Runtime CLI reference: running, monitoring, and resuming processes.
+- **operator** (~11.3k words): Runtime CLI reference: running, monitoring, and resuming processes.
 - **developer** (~1.4k words): Extending Metaproc and the 'Metaproc is the right wrapper' policy.
 - **conventions** (~4.6k words): Framework-level naming, structure, and file-format rules.
-- **artifacts** (~2.1k words): Every runtime artifact Metaproc writes or reads: format, schema, lifecycle.
-- **execution-contracts** (~1.9k words): The durable contracts under task-level scheduling, and their rationale.
+- **artifacts** (~2.2k words): Every runtime artifact Metaproc writes or reads: format, schema, lifecycle.
+- **execution-contracts** (~2.3k words): The durable contracts under task-level scheduling, and their rationale.
 - **credentials** (~2.4k words): Configuring credentials for each adapter: Claude, Codex, Gemini, pi, GCP.
 - **cloud-dispatch** (~1.5k words): Preparing, submitting, monitoring, and recovering GCP Batch workloads.
 - **arch-auth** (~8.9k words): Architecture: credential pools, adapter auth modes, and secret handling.
-- **arch-cloud** (~5.5k words): Architecture: GCP Batch dispatch, orchestrator and worker placement.
+- **arch-cloud** (~5.7k words): Architecture: GCP Batch dispatch, orchestrator and worker placement.
 - **arch-runpool** (~4.6k words): Architecture: local process manager, adaptive concurrency, memory pressure.
 - **arch-harness** (~2.9k words): Architecture: the Claude Code adapter harness and its wire format.
 - **arch-execution** (~2.6k words): Architecture: the executable reference model for scheduling, as implemented.

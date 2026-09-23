@@ -26,6 +26,27 @@ development series.
   the next `metaproc status` on it, whether or not its resource artifacts also need
   recovering. A list cost that leaves out unpriced models reads `at least` in the summary
   and the rollup.
+- **A process input can bind itself to one value for the life of a run.**
+  `on_change: new_run` on an entry of a process’s `inputs:` block says the scope that
+  resolves the input holds one value for it, because its task state, results, and
+  summaries all describe that value.
+  The value is recorded in the scope’s `.state/input-bindings.yaml`
+  (`metaproc:InputBindings/0.1`) when the scope is first entered, under the input’s
+  logical name, and every later entry compares against it before anything is written: a
+  `run-process` resume, a composite child scope after `with:` resolution, and `run-step`
+  and `run-parallel`. A launch that resolves another value is refused, naming each
+  changed input, its recorded and its new value, and the two ways out: the recorded
+  value, or a new `RUN_ID`. A renamed `param` alias is not a change.
+  Removing the declaration does not erase the promise: a binding is released only at its
+  recorded value, and the release, like the adoption of a binding on a run that predates
+  it, is recorded as an `input_bindings.<NAME>` launch-config change.
+  `on_change` defaults to `record`, which is unchanged behavior: the change is recorded
+  as a `launch_config_change` event and the resume continues, which is what a value such
+  as the code revision a run launched from wants.
+  `new_run` needs a `param`-backed input; a file-backed input is rejected when the spec
+  loads, since its contents are outside the launch config and reuse follows them through
+  step fingerprints. An `inputs:` entry now rejects a field the model does not declare
+  instead of ignoring it.
 - **`gemini-3.8-flash` has a list price.** The pricing table records Google’s
   introductory rate through 2026-12-31 ($0.75/M input, $3.75/M output, $0.075/M cached
   input) as its actual price and the standard rate from 2027-01-01 ($1.50, $7.50, $0.15)
@@ -47,9 +68,9 @@ development series.
   `metaproc status --steps` and `operations-summary.md` describe the run as it now
   executes. A resume that cannot append to that file stops with an error naming it,
   before any step runs, and nothing about the run changes, its summaries included.
-  Launch-config validation still refuses a resume on three findings, before anything is
-  recorded: a corrupt `run-config.yaml`; a process name that differs from the recorded
-  one, because every task record’s identity is `<process>/<RUN_ID>`; and a run directory
+  Launch-config validation still refuses a resume, before anything is recorded, on a
+  corrupt `run-config.yaml`; on a process name that differs from the recorded one,
+  because every task record’s identity is `<process>/<RUN_ID>`; and on a run directory
   that differs from the recorded one, apart from the two canonical Filestore mount
   roots, because result records are anchored to it and a moved run would re-run every
   step whose outputs sit under `{{run.dir}}`, writing result records the results

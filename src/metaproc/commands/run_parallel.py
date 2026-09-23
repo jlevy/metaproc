@@ -77,6 +77,7 @@ from metaproc.commands.helpers import (
     load_process_spec,
     parse_adapter_config,
     parse_var_args,
+    refuse_changed_input_bindings,
     require_runtime_runs_dir,
     resolve_gcp_worker_runs_dir,
     resolve_process_path,
@@ -704,6 +705,9 @@ def run_parallel(
     run_dir = compute_run_dir(spec, variables)
     run_context = variables.get("RUN_ID", variables.get("DATE", variables.get("SCOPE", "")))
     run_id = f"{spec.name}/{run_context}"
+    # The scope may bind inputs (`on_change: new_run`); hold this launch to them before
+    # the reconciliation below, the first write into the scope's task state.
+    refuse_changed_input_bindings(run_dir, spec, variables, launch="run-parallel")
     stale_count = reconcile_stale_running(run_dir)
     if stale_count:
         out.progress(f"Reconciled {stale_count} stale running item(s) from dead pool")

@@ -310,6 +310,49 @@ class CollectedInputsRecord(BaseModel):
     """Keyed by the consumer's declared input name."""
 
 
+INPUT_BINDINGS_CONTRACT = "metaproc:InputBindings/0.1"
+INPUT_BINDINGS_ENVELOPE = "input_bindings"
+
+
+class InputBinding(BaseModel):
+    """One input a scope binds to one value for its whole life."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    on_change: Literal["new_run"]
+    """The policy that established the binding; the only one that binds."""
+
+    value: str | None = None
+    """The value the scope resolved when it bound the input; ``None`` when it was unset."""
+
+
+class InputBindingsRecord(BaseModel):
+    """The inputs one scope binds — ``input-bindings.yaml`` in the scope's ``.state/``.
+
+    Written when the scope is first entered: by ``run-process`` when it creates a run,
+    and by the orchestrator when it first prepares a composite child scope. Each entry
+    is keyed by the input's logical name, whatever ``param`` alias the operator spells
+    it with, and holds the value the scope resolved and the policy that bound it. Every
+    later entry into the scope compares its resolved values against this record before
+    it writes anything, and refuses when a bound value differs; an input the process no
+    longer binds is released, and one it newly binds is adopted, each recorded as a
+    ``launch_config_change``. A scope whose process binds no input has no record.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", populate_by_name=True)
+
+    schema_: Literal["metaproc:InputBindings/0.1"] = Field(
+        default=INPUT_BINDINGS_CONTRACT, alias="schema"
+    )
+    run_id: str = Field(min_length=1)
+    """The scope's record identity: ``<process>/<RUN_ID>`` at the root, the child
+    record id below it, as ``run-plan.yaml`` carries it."""
+
+    scope_path: list[str] = Field(default_factory=list)
+    bindings: dict[str, InputBinding] = Field(default_factory=dict)
+    """Keyed by the input's logical name."""
+
+
 # ── Generic map-reduce item models ────────────────────────────────
 
 

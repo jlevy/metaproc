@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import glob as glob_mod
 import logging
+import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -123,6 +124,28 @@ def compute_run_dir(spec: ProcessSpec, variables: dict[str, str]) -> Path:
 def compute_logs_dir(spec: ProcessSpec, variables: dict[str, str]) -> Path:
     """Return the run-level .logs/ directory: ``<RUNS_DIR>/<RUN_ID>/.logs/``."""
     return compute_run_dir(spec, variables) / LOGS_DIR
+
+
+def normalize_filestore_runs_path(path: str) -> str:
+    """Normalize known Filestore run-root aliases while preserving descendants.
+
+    Cloud images have used ``/mnt/disks/filestore`` and ``/mnt/filestore`` for the same
+    share. Only those two root-level mount paths normalize, to the latter. All other
+    paths keep their full normalized form, so a workstation directory that happens to
+    contain ``mnt/filestore`` cannot impersonate the cloud run tree.
+    """
+    normalized = os.path.normpath(path)
+    canonical_root = f"{os.sep}mnt{os.sep}filestore{os.sep}runs"
+    aliases = (
+        f"{os.sep}mnt{os.sep}disks{os.sep}filestore{os.sep}runs",
+        canonical_root,
+    )
+    for alias in aliases:
+        if normalized == alias:
+            return canonical_root
+        if normalized.startswith(alias + os.sep):
+            return canonical_root + normalized[len(alias) :]
+    return normalized
 
 
 def common_path(left: Path, right: Path) -> str:
