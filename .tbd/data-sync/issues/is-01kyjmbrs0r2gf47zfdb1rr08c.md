@@ -5,13 +5,13 @@ title: Remove human-facing repository workflow scaffolding
 kind: task
 status: closed
 priority: 2
-version: 4
-spec_path: docs/project/specs/active/plan-2026-07-26-standalone-extraction.md
+version: 6
+spec_path: docs/project/specs/done/plan-2026-07-26-standalone-extraction.md
 labels: []
 dependencies: []
 parent_id: is-01kygat035xcheze599f3yxqrb
 created_at: 2026-07-27T20:30:48.604Z
-updated_at: 2026-07-27T20:43:46.744Z
+updated_at: 2026-08-09T18:57:23.188Z
 closed_at: 2026-07-27T20:43:46.743Z
 close_reason: "Agent-facing workflow cleanup is committed, pushed, documented, and fully verified on PR #1."
 ---

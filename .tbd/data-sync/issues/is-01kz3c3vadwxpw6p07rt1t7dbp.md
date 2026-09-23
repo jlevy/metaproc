@@ -1,0 +1,22 @@
+---
+type: is
+id: is-01kz3c3vadwxpw6p07rt1t7dbp
+title: Emit validated resource summary and operator projections
+kind: feature
+status: closed
+priority: 1
+version: 5
+spec_path: docs/project/specs/done/plan-2026-08-03-focused-resource-observability.md
+labels:
+  - resources
+  - pr-10
+dependencies:
+  - type: blocks
+    target: is-01kz3c48tgnj1qvg3z9m18wc4v
+parent_id: is-01kz3c2j1me5ng0pkjym3k42rr
+created_at: 2026-08-03T08:33:45.805Z
+updated_at: 2026-08-09T18:56:51.782Z
+closed_at: 2026-08-03T10:07:21.550Z
+close_reason: "Implemented and reviewed in Metaproc commit 6dcb522: strict contracts, canonical evidence, usage/meters, ledger projection, immutable budgets, summary/operator views, causal finalization, and inactive local recovery."
+---
+Generate resource-usage-summary.md with the complete SoftSchema quartet and all machine values in YAML frontmatter; compile/check its package schema. Extend resource-report and Metabrowser views for terminal outcome, actual versus list cost, exact meters, coverage gaps, and reporting budgets without parsing Markdown body content.

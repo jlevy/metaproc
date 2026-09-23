@@ -5,13 +5,13 @@ title: "PR #1 review CLI-08: Avoid blocking sleeps in async retry paths"
 kind: bug
 status: closed
 priority: 3
-version: 2
-spec_path: docs/project/specs/active/plan-2026-07-26-standalone-extraction.md
+version: 3
+spec_path: docs/project/specs/done/plan-2026-07-26-standalone-extraction.md
 labels: []
 dependencies: []
 parent_id: is-01kyje203wwq9b8jqxgwe7574v
 created_at: 2026-07-27T18:41:36.745Z
-updated_at: 2026-07-27T19:59:55.054Z
+updated_at: 2026-08-09T18:57:27.248Z
 closed_at: 2026-07-27T19:59:55.054Z
 close_reason: "Accepted by design after call-path review: these operations run only in synchronous command/probe paths, not concurrently in the asynchronous execution path."
 ---

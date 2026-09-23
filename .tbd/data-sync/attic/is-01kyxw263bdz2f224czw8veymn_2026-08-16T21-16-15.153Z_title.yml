@@ -1,0 +1,11 @@
+entity_id: is-01kyxw263bdz2f224czw8veymn
+timestamp: 2026-08-16T21:16:15.153Z
+field: title
+lost_value: '"CONFLICT: title set in Linear"'
+winner_source: local
+loser_source: remote
+context:
+  local_version: 9
+  remote_version: 0
+  local_updated_at: 2026-08-16T21:16:13.596Z
+  remote_updated_at: 2026-08-16T21:16:13.190Z

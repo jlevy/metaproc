@@ -5,13 +5,13 @@ title: Open the standalone migration pull request
 kind: task
 status: closed
 priority: 1
-version: 3
-spec_path: docs/project/specs/active/plan-2026-07-26-standalone-extraction.md
+version: 5
+spec_path: docs/project/specs/done/plan-2026-07-26-standalone-extraction.md
 labels: []
 dependencies: []
 parent_id: is-01kygat035xcheze599f3yxqrb
 created_at: 2026-07-27T05:54:10.509Z
-updated_at: 2026-07-27T05:59:16.579Z
+updated_at: 2026-08-09T18:57:02.075Z
 closed_at: 2026-07-27T05:59:16.579Z
 close_reason: "Opened ready-for-review jlevy/metaproc PR #1 from codex/standalone-extraction at a89af85c058eebe85b4978df707a52b1cd828b2f against the new main base; all GitHub CI checks passed."
 ---

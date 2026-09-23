@@ -1,0 +1,15 @@
+base:
+  assignee: null
+  description_hash: sha256v7:81195a0fc760624ebb8f7be8470ce1a81b1e455b3898daa82ae4e2ecd1efb943
+  labels: []
+  priority: 2
+  status: open
+  title: Post-release quality ratchets
+bead_id: is-01kzky2kj5g9f2rxfq0wp15q5j
+external_id: 183d3df7-4221-46b0-b2d1-a68e60b12612
+external_key: OS-253
+external_url: https://linear.app/finterm-ai/issue/OS-253/post-release-quality-ratchets
+remote_updated_at: 2026-08-16T08:00:38.665Z
+state: linked
+synced_at: 2026-08-16T08:00:39.052Z
+type: lk

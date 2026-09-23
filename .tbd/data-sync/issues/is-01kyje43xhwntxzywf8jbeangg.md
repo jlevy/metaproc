@@ -5,13 +5,13 @@ title: "PR #1 review GAP-05: Verify exact-revision downstream integration before
 kind: bug
 status: closed
 priority: 2
-version: 2
-spec_path: docs/project/specs/active/plan-2026-07-26-standalone-extraction.md
+version: 3
+spec_path: docs/project/specs/done/plan-2026-07-26-standalone-extraction.md
 labels: []
 dependencies: []
 parent_id: is-01kyje203wwq9b8jqxgwe7574v
 created_at: 2026-07-27T18:41:46.417Z
-updated_at: 2026-07-27T20:14:14.117Z
+updated_at: 2026-08-09T18:57:21.863Z
 closed_at: 2026-07-27T20:14:14.116Z
 close_reason: "Fixed: the downstream branch now pins standalone review commit 8aacb14 in commit e68de4a16, after merging the latest upstream main and passing local integration validation."
 ---

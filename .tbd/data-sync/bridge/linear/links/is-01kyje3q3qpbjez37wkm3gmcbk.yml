@@ -1,0 +1,15 @@
+base:
+  assignee: null
+  description_hash: sha256v7:da0eba00c1be8405fa95c2ed02553edb41c1414a2e34fb1dc2a6a12f9942c1bd
+  labels: []
+  priority: 2
+  status: deferred
+  title: "PR #1 review TST-04: Replace timing sleeps with condition polling"
+bead_id: is-01kyje3q3qpbjez37wkm3gmcbk
+external_id: 44b81877-046a-48e8-9407-ebc93f68cd97
+external_key: OS-252
+external_url: https://linear.app/finterm-ai/issue/OS-252/pr-1-review-tst-04-replace-timing-sleeps-with-condition-polling
+remote_updated_at: 2026-08-16T08:00:32.233Z
+state: linked
+synced_at: 2026-08-16T08:00:33.075Z
+type: lk
