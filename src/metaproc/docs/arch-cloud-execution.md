@@ -189,8 +189,10 @@ A different process name still refuses, because every task record’s identity i
 `<process>/<RUN_ID>`. A different run directory refuses too, because result records are
 anchored to the recorded one: a moved run would re-run every step whose outputs sit
 under `{{run.dir}}` and write result records the results projection cannot accept.
-The two canonical cloud Filestore mount roots normalize to one run directory and record
-no change; a workstation mount path is a different run directory and is refused.
+A changed value for an input the process declares `identity: true` refuses as well,
+because such an input is part of what the run is and one `RUN_ID` holds one value for
+it. The two canonical cloud Filestore mount roots normalize to one run directory and
+record no change; a workstation mount path is a different run directory and is refused.
 Cross-topology resume (for example, hybrid to full cloud) remains allowed because both
 topologies share the authoritative filesystem; a changed backend is recorded like any
 other launch-config change.
@@ -228,9 +230,9 @@ explicitly.
 Resume behavior: re-running `run-process` with the same `RUN_ID` skips completed steps
 and items based on on-disk status records.
 A resume whose launch config differs from the one `run-config.yaml` records is warned
-about and recorded, and one whose process name or run directory differs is refused, so
-an accidental collision between unrelated runs sharing a directory is visible rather
-than silent.
+about and recorded, and one whose process name, run directory, or `identity: true` input
+value differs is refused, so an accidental collision between unrelated runs sharing a
+directory is visible rather than silent.
 
 ### 2.5 LaunchBackend Protocol
 

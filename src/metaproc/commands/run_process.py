@@ -20,7 +20,7 @@ import subprocess
 import textwrap
 import time
 import traceback
-from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Collection, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -844,7 +844,8 @@ type _LaunchConfigChanges = dict[str, tuple[_LaunchConfigValue, _LaunchConfigVal
 ``None`` marks an absent side. A change to one of the ``_KEYED_LAUNCH_CONFIG_FIELDS`` is
 named ``variables.<NAME>`` or ``step_variants.<STEP>``, and a change to any other
 ``_LAUNCH_CONFIG_FIELDS`` entry by the field itself. The mapping is sorted by field. A
-changed ``run_dir`` is never one: ``_validate_run_config`` refuses it.
+changed ``run_dir``, and a changed variable of an input the process declares
+``identity: true``, are never one: ``_validate_run_config`` refuses both.
 """
 
 
@@ -878,6 +879,7 @@ def _write_run_config(  # noqa: PLR0913
     resource_snapshot: ResourceRunSnapshot | None = None,
     step_variants: Mapping[str, str] | None = None,
     git_sha: str | None = None,
+    identity_names: Collection[str] = (),
 ) -> _RunConfigWrite:
     """Write run-config.yaml at run creation time; validate a resume against it.
 
@@ -893,8 +895,10 @@ def _write_run_config(  # noqa: PLR0913
     (``_read_resumable_run_config``) only to refuse early, before auth preflight and the
     ancestor check, a resume that cannot continue: a corrupt config, a process name other
     than the recorded one, since every task record carries ``<process>/<RUN_ID>`` as its
-    run identity, or a run directory other than the recorded one, since result records
-    are anchored to it. ``_apply_resume_config_changes`` checks again and compares the
+    run identity, a run directory other than the recorded one, since result records are
+    anchored to it, or a changed value for one of *identity_names*, the variables of the
+    inputs the process declares ``identity: true`` (``ProcessSpec.identity_input_names``).
+    ``_apply_resume_config_changes`` checks again and compares the
     launch config once ``run_process_command`` holds the orchestrator lease, and records
     what it finds there, because only under the lease is this resume the config's single
     writer. A launch refused before then, by the ``--from``/``--only`` ancestor check or
@@ -906,7 +910,13 @@ def _write_run_config(  # noqa: PLR0913
     """
     config_path = paths_mod.run_config_file(run_dir)
     if config_path.exists():
-        _read_resumable_run_config(config_path, process_name=process_name, run_dir=run_dir)
+        _read_resumable_run_config(
+            config_path,
+            process_name=process_name,
+            run_dir=run_dir,
+            identity_names=identity_names,
+            variables=variables,
+        )
         return _RunConfigWrite(path=config_path, resumed=True)
 
     # Persist process_spec as an absolute path so consumers like
@@ -960,6 +970,7 @@ def _apply_resume_config_changes(
     launch: _LaunchConfig,
     auth_flags: AuthPoolFlags | None,
     max_concurrency: int | None,
+    identity_names: Collection[str] = (),
 ) -> _LaunchConfigChanges:
     """Find and record what a resume changes, once it holds the orchestrator lease.
 
@@ -995,6 +1006,7 @@ def _apply_resume_config_changes(
         process_name=process_name,
         run_dir=run_dir,
         launch=launch,
+        identity_names=identity_names,
     )
     _record_launch_config_changes(paths_mod.run_logs_dir(run_dir), changes)
     _rewrite_launch_config(run_config.path, changes, launch=launch)
@@ -1424,23 +1436,31 @@ def _validate_run_config(
     process_name: str,
     run_dir: Path,
     launch: _LaunchConfig,
+    identity_names: Collection[str] = (),
 ) -> _LaunchConfigChanges:
     """Compare a resume's launch config with the ``run-config.yaml`` it resumes.
 
-    A resume may change every ``_LAUNCH_CONFIG_FIELDS`` entry: any resolved variable
-    (including through an edited ``default:``, or an input added or removed), the
-    ``--step-variant`` set, the variant, execution profile, artifact namespace, and
-    resolved profiles, the backend, and the checkout's ``git_sha``. Each difference comes
-    back as ``field -> (recorded, current)`` with ``None`` for an absent side, sorted by
-    field (``_LaunchConfigChanges``). Both sides are compared as the file holds them
-    (``_recorded_launch_config``), so a value that differs only in what the YAML writer
-    omits is no change. What re-runs is decided by step fingerprints, not here, and
-    authentication and concurrency are compared by ``_record_resume_config_change``.
+    A resume may change every ``_LAUNCH_CONFIG_FIELDS`` entry that *identity_names* does
+    not name: any resolved variable (including through an edited ``default:``, or an
+    input added or removed), the ``--step-variant`` set, the variant, execution profile,
+    artifact namespace, and resolved profiles, the backend, and the checkout's
+    ``git_sha``. Each difference comes back as ``field -> (recorded, current)`` with
+    ``None`` for an absent side, sorted by field (``_LaunchConfigChanges``). Both sides
+    are compared as the file holds them (``_recorded_launch_config``), so a value that
+    differs only in what the YAML writer omits is no change. What re-runs is decided by
+    step fingerprints, not here, and authentication and concurrency are compared by
+    ``_record_resume_config_change``.
 
-    ``_read_resumable_run_config`` first refuses a resume that cannot continue.
+    ``_read_resumable_run_config`` first refuses a resume that cannot continue, a changed
+    identity variable among them, so no identity change reaches the changes returned
+    here.
     """
     raw, recorded_variables = _read_resumable_run_config(
-        config_path, process_name=process_name, run_dir=run_dir
+        config_path,
+        process_name=process_name,
+        run_dir=run_dir,
+        identity_names=identity_names,
+        variables=launch.variables,
     )
     current = _recorded_launch_config(launch)
     changes: _LaunchConfigChanges = {}
@@ -1469,7 +1489,12 @@ def _validate_run_config(
 
 
 def _read_resumable_run_config(
-    config_path: Path, *, process_name: str, run_dir: Path
+    config_path: Path,
+    *,
+    process_name: str,
+    run_dir: Path,
+    identity_names: Collection[str] = (),
+    variables: Mapping[str, str] | None = None,
 ) -> tuple[dict[object, object], dict[str, str]]:
     """Read the ``run-config.yaml`` a resume continues, refusing one it cannot continue.
 
@@ -1492,8 +1517,14 @@ def _read_resumable_run_config(
       ``RUNS_DIR`` variable compare across the two Filestore mount aliases
       (``_normalize_filestore_runs_path``), so two spellings of one mount are neither
       refused nor recorded. A config written without a ``run_dir`` has none to compare.
+    - The identity variables. *identity_names* are the variables of the inputs the
+      process declares ``identity: true`` (``ProcessSpec.identity_input_names``), and
+      *variables* are this launch's resolved variables. Such an input declares what the
+      run is, so one ``RUN_ID`` holds one value for it and a resume that resolves
+      another is a different run under a taken identity
+      (``_identity_input_refusal``). Every other variable is recorded and continues.
 
-    Raises CLIError for either mismatch and for a corrupt config: one
+    Raises CLIError for any of those mismatches and for a corrupt config: one
     ``_read_run_config`` refuses, one without a process name, or one whose ``variables``
     field is not a string-to-string mapping. Each refusal comes before the resume records
     or rewrites anything: ``_write_run_config`` calls this before the orchestrator lease,
@@ -1542,7 +1573,61 @@ def _read_resumable_run_config(
             f"Corrupt run-config.yaml: {config_path}: variables must be a string-to-string mapping"
         )
 
-    return raw, cast(dict[str, str], saved_variables)
+    recorded_variables = cast(dict[str, str], saved_variables)
+    refusal = _identity_input_refusal(
+        config_path,
+        identity_names=identity_names,
+        recorded_variables=recorded_variables,
+        variables=variables or {},
+    )
+    if refusal:
+        raise CLIError(refusal)
+
+    return raw, recorded_variables
+
+
+def _identity_input_refusal(
+    config_path: Path,
+    *,
+    identity_names: Collection[str],
+    recorded_variables: Mapping[str, str],
+    variables: Mapping[str, str],
+) -> str | None:
+    """Return why a resume changing an identity variable is refused, or ``None``.
+
+    *identity_names* holds the variables of the inputs the process declares
+    ``identity: true``, each input's logical name and its ``param`` alias together, since
+    resolution writes one value under both. A name absent from a side compares as unset,
+    so adding or removing an identity input is a change like any other. Both sides go
+    through ``_resume_variable_identity``, so a ``RUNS_DIR`` declared an identity input
+    compares across the Filestore mount aliases as it does everywhere else.
+
+    The message names every changed input with the recorded and the new value, and the
+    two ways out: resolve the recorded values, or run the new ones under a new
+    ``RUN_ID``.
+    """
+    if not identity_names:
+        return None
+    recorded = _resume_variable_identity(recorded_variables)
+    current = _resume_variable_identity(variables)
+    changed = sorted(name for name in identity_names if recorded.get(name) != current.get(name))
+    if not changed:
+        return None
+    lines = "\n".join(
+        f"  {name}: {_describe_config_value(recorded.get(name))} -> "
+        f"{_describe_config_value(current.get(name))}"
+        for name in changed
+    )
+    inputs = "input" if len(changed) == 1 else "inputs"
+    return (
+        f"Resume refused: this launch changes {len(changed)} identity {inputs} of "
+        f"{config_path}:\n{lines}\n"
+        f"The process declares {'it' if len(changed) == 1 else 'them'} `identity: true`, "
+        "so one RUN_ID holds one value: the run's task state, results, and summaries all "
+        "describe the recorded value. Resume with the recorded value"
+        f"{'' if len(changed) == 1 else 's'}, or start a new RUN_ID for the new "
+        f"{'one' if len(changed) == 1 else 'ones'}."
+    )
 
 
 def _recorded_launch_config(launch: _LaunchConfig) -> dict[str, object]:
@@ -5994,6 +6079,7 @@ def run_process_command(
         resource_snapshot=resource_snapshot,
         step_variants=step_profile_overrides,
         git_sha=launch_config.git_sha,
+        identity_names=spec.identity_input_names,
     )
 
     out.progress(f"run-process: {spec.name} ({len(active_step_ids)} steps, {len(levels)} levels)")
@@ -6211,6 +6297,7 @@ def run_process_command(
             launch=launch_config,
             auth_flags=auth_flags_for_config,
             max_concurrency=max_concurrency,
+            identity_names=spec.identity_input_names,
         )
     except BaseException:
         release_lease(run_dir)

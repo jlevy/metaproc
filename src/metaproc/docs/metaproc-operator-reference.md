@@ -580,10 +580,10 @@ decision:
 Use `run-process --dry-run` or `metaproc deps <run>` to preview the cascade if you are
 unsure what the next launch will execute.
 
-A resume may change the launch config: any `--var` value, including by adding or
-removing one or through an edited input `default:`, the `--step-variant` set,
-`--variant`, `--artifact-namespace`, the execution profiles the plan resolves,
-`--backend`, and the Git commit it runs from.
+A resume may change the launch config, except for an input the process declares
+`identity: true`: any `--var` value, including by adding or removing one or through an
+edited input `default:`, the `--step-variant` set, `--variant`, `--artifact-namespace`,
+the execution profiles the plan resolves, `--backend`, and the Git commit it runs from.
 Metaproc prints a `Resume changes <field>: <old> -> <new>` warning for each change,
 where the field is `variables.<NAME>`, `step_variants.<STEP>`, `variant`,
 `execution_profile`, `artifact_namespace`, `resolved_profiles`, `backend`, or `git_sha`.
@@ -599,12 +599,20 @@ A step that binds the value through `with:`, or reads it at runtime, as a code h
 reads its `variables`, keeps its fingerprint and is reused with output computed over the
 old value; `--from <step> --force` re-does it.
 
-Three launch-config findings refuse the resume, each before anything is recorded:
+Four launch-config findings refuse the resume, each before anything is recorded:
 
 - A corrupt `run-config.yaml`.
 - A process name that differs from the recorded one, because every task record’s
   identity is `<process>/<RUN_ID>`. Resume under the recorded name, or start a new
   `RUN_ID`.
+- A changed value for an input the process declares `identity: true`, because such an
+  input is part of what the run is: one `RUN_ID` holds one value for it, and the run’s
+  task state, results, and summaries all describe the recorded value.
+  The refusal names each changed input with its recorded and its new value.
+  Resume with the recorded values, or start a new `RUN_ID` for the new ones.
+  Read a process’s `inputs:` block to see which of its inputs are identity; a value that
+  records how a run executed, such as the code revision it launched from, is not one and
+  is recorded like any other change.
 - A run directory that differs from the recorded one, because result records are
   anchored to the recorded directory.
   A moved run would re-run every step whose outputs sit under `{{run.dir}}`, since those
@@ -1181,7 +1189,7 @@ for unmarked old runs.
 
 | Artifact | Current path | Meaning |
 | --- | --- | --- |
-| Run config | `<run>/.state/run-config.yaml` | Run identity, run directory, launch config, and layout marker; a resume that changes the launch config (variables, step variants, variant, execution profile, artifact namespace, resolved profiles, backend, `git_sha`) rewrites it after recording the change, and every other field keeps its creation value |
+| Run config | `<run>/.state/run-config.yaml` | Run identity, run directory, launch config, and layout marker; a resume that changes the launch config (variables, step variants, variant, execution profile, artifact namespace, resolved profiles, backend, `git_sha`) rewrites it after recording the change, and every other field keeps its creation value; a resume that changes an `identity: true` input, or the run directory, is refused instead |
 | Run plan | `<scope>/.state/run-plan.yaml` | What this scope declared: step identity, shape, canonical mapped item keys, output ports, fingerprints |
 | Orchestrator lease | `<run>/.state/orchestrator-lease.yaml` | Owner and heartbeat for cross-host safety |
 | Process status | `<run>/.state/process-status.yaml` | Aggregated DAG state for status display |

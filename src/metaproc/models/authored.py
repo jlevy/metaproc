@@ -200,6 +200,18 @@ class ProcessInput(_ProcessIOBase):
     removed. Each change is logged and recorded as a ``launch_config_change`` event, and
     ``run-config.yaml`` then records the values the resume ran with. What re-runs is
     decided by step fingerprints.
+
+    ``identity: true`` takes one input out of that: it declares the input part of what
+    the run *is*, so one ``RUN_ID`` holds one value for it. A resume that resolves a
+    different value is refused before anything runs, beside the refusal of a moved run
+    directory, and records nothing. Declare it for a value whose change makes the run a
+    different run, such as the date or the roster a run covers; leave it off for a value
+    that records how a run executed, such as the code revision that launched it.
+
+    A composite step's child scope has no ``run-config.yaml``: the launched process's
+    record is the run's only launch config, so only that process's ``identity:``
+    declarations guard a resume. A value a child derives through ``with:`` is guarded
+    through the launched process's input it comes from.
     """
 
     path: str | None = None
@@ -207,6 +219,7 @@ class ProcessInput(_ProcessIOBase):
     parse: ParseConfig | None = None
     required: bool = True
     default: str | None = None
+    identity: bool = False
 
 
 class ProcessDep(_ProcessIOBase):
@@ -617,6 +630,23 @@ class ProcessSpec(BaseModel):
         names: set[str] = set()
         for name, decl in self.inputs.items():
             if decl.required:
+                continue
+            names.add(name)
+            if decl.param is not None:
+                names.add(decl.param)
+        return names
+
+    @property
+    def identity_input_names(self) -> set[str]:
+        """Return ``identity: true`` logical input names plus their backing param names.
+
+        Resolution writes an input's value under both names (``expand_param_aliases``
+        and literal ``default:`` filling), so both name the run's identity together and
+        a resume that changes either is refused.
+        """
+        names: set[str] = set()
+        for name, decl in self.inputs.items():
+            if not decl.identity:
                 continue
             names.add(name)
             if decl.param is not None:

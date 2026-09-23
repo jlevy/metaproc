@@ -26,6 +26,21 @@ development series.
   the next `metaproc status` on it, whether or not its resource artifacts also need
   recovering. A list cost that leaves out unpriced models reads `at least` in the summary
   and the rollup.
+- **A process input can declare itself part of the run’s identity.** `identity: true` on
+  an entry of a process’s `inputs:` block says one `RUN_ID` holds one value for that
+  input, because the run’s task state, results, and summaries all describe it.
+  A resume that resolves a different value is refused before anything runs, beside the
+  refusal of a moved run directory, with a message naming each changed input, its
+  recorded and its new value, and the two ways out: resume with the recorded values, or
+  start a new `RUN_ID` for the new ones.
+  A refused launch records and rewrites nothing.
+  The logical input name and its `param` alias are compared together, since resolution
+  writes one value under both, and a name absent from either side compares as unset.
+  The default is unchanged: an input without `identity:` records a change as a
+  `launch_config_change` event and the resume continues, which is what a value such as
+  the code revision a run launched from wants.
+  A composite step’s child scope has no `run-config.yaml` of its own, so the launched
+  process’s declarations are the run’s only identity check.
 - **`gemini-3.8-flash` has a list price.** The pricing table records Google’s
   introductory rate through 2026-12-31 ($0.75/M input, $3.75/M output, $0.075/M cached
   input) as its actual price and the standard rate from 2027-01-01 ($1.50, $7.50, $0.15)
@@ -47,9 +62,9 @@ development series.
   `metaproc status --steps` and `operations-summary.md` describe the run as it now
   executes. A resume that cannot append to that file stops with an error naming it,
   before any step runs, and nothing about the run changes, its summaries included.
-  Launch-config validation still refuses a resume on three findings, before anything is
-  recorded: a corrupt `run-config.yaml`; a process name that differs from the recorded
-  one, because every task record’s identity is `<process>/<RUN_ID>`; and a run directory
+  Launch-config validation still refuses a resume, before anything is recorded, on a
+  corrupt `run-config.yaml`; on a process name that differs from the recorded one,
+  because every task record’s identity is `<process>/<RUN_ID>`; and on a run directory
   that differs from the recorded one, apart from the two canonical Filestore mount
   roots, because result records are anchored to it and a moved run would re-run every
   step whose outputs sit under `{{run.dir}}`, writing result records the results

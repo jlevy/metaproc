@@ -526,18 +526,20 @@ A process-level input under `inputs:` also takes these fields:
 | `param` | Operator-facing name, set with `--var NAME=value`. Resolution writes the value under both this name and the input’s logical name. |
 | `required` | Whether launch validation refuses a run that leaves a `param`-backed input unset. Defaults to `true`. |
 | `default` | Literal value for an optional, `param`-backed input the operator leaves unset. |
+| `identity` | Whether the input is part of the run’s identity, so a resume that resolves a different value is refused. Defaults to `false`, which records the change and continues. |
 
 `run-config.yaml` records the launch config: every resolved input, under both its
 logical name and its `param` alias; the `--step-variant` overrides; the variant,
 execution profile, and artifact namespace; the execution profiles the plan’s steps
 resolve to, each with its adapter and configuration (`resolved_profiles`); the backend;
 and the `git_sha` of the checkout the launch ran from.
-A resume may change any of them, including by adding or removing an input or through an
-edited `default:`. The resume logs each change at INFO and warns the operator once per
-change as `Resume changes <field>: <old> -> <new>`, where the field is
-`variables.<NAME>`, `step_variants.<STEP>`, `variant`, `execution_profile`,
-`artifact_namespace`, `resolved_profiles`, `backend`, or `git_sha`, and `<unset>` stands
-for an absent side. The warning names only the profiles of a `resolved_profiles` change.
+A resume may change any of them that the process does not declare `identity: true`,
+including by adding or removing an input or through an edited `default:`. The resume
+logs each change at INFO and warns the operator once per change as
+`Resume changes <field>: <old> -> <new>`, where the field is `variables.<NAME>`,
+`step_variants.<STEP>`, `variant`, `execution_profile`, `artifact_namespace`,
+`resolved_profiles`, `backend`, or `git_sha`, and `<unset>` stands for an absent side.
+The warning names only the profiles of a `resolved_profiles` change.
 It appends one `launch_config_change` event listing the changes to
 `.logs/dispatch-config-changes.jsonl` as `changes: [{field, diff}]`, each diff the flat
 `{old, new}` pair that the `max_concurrency` change of a `dispatch_config_change` event
@@ -548,11 +550,12 @@ its task state, or its summaries.
 It then rewrites those fields in `run-config.yaml` to the values the resume ran with, so
 every reader of the config, `metaproc status` and the operations summary included, sees
 the run as it now executes, and the next resume compares against them.
-Every other field keeps its creation value, among them the process name, the run ID and
-run directory, the creation time, and the resource snapshot the terminal finalizer
-reads. A resume that changes nothing writes no event and rewrites nothing.
+Every other field keeps its creation value, among them the process name, the process
+spec path, the run ID and run directory, the creation time, the `auth:` and
+`concurrency:` blocks, and the resource snapshot the terminal finalizer reads.
+A resume that changes nothing writes no event and rewrites nothing.
 
-Validation refuses a resume on three findings, each before anything is recorded or
+Validation refuses a resume on four findings, each before anything is recorded or
 written:
 
 - A process name that differs from the recorded one.
@@ -566,11 +569,24 @@ written:
   A new `RUN_ID` costs the same work without the inconsistency.
   The two canonical cloud Filestore mount roots for `RUNS_DIR` normalize to one run
   directory, so resuming through either is neither refused nor recorded.
+- A changed value for an input the process declares `identity: true`. Such an input is
+  part of what the run is, so one `RUN_ID` holds one value for it: the run’s task state,
+  results, and summaries all describe the recorded value, and a launch that resolves
+  another is a different run under a taken identity.
+  The logical input name and its `param` alias are compared together, since resolution
+  writes one value under both, and a name absent from either side compares as unset, so
+  adding or removing an identity input is a change like any other.
+  Leave `identity` off for a value that records how a run executed, such as the code
+  revision that launched it; a change to it is recorded and the resume continues.
+  A composite step’s child scope has no `run-config.yaml` of its own, so the launched
+  process’s declarations are the run’s only identity check; a value a child derives
+  through `with:` is guarded through the launched process’s input it comes from.
 - A corrupt `run-config.yaml`: one that does not read as a YAML mapping, or whose
   `variables` is not a mapping of strings to strings.
 
-The first two refusals name the recorded and the current value and the two ways out:
-resume under the recorded name or at the recorded directory, or start a new `RUN_ID`.
+The first three refusals name the recorded and the current value and the two ways out:
+resume under the recorded name, at the recorded directory, or with the recorded identity
+values, or start a new `RUN_ID`.
 
 Recording a change does not decide what re-runs; step fingerprints do (§10.3). A value
 substituted into a resolved field, such as `env:` or an output path, changes the
@@ -1270,8 +1286,9 @@ The fallback is read-only and never written back.
 These sections implement principle 7 of [metaproc-concepts.md](metaproc-concepts.md)
 §6.2: a rerun against the same `RUN_ID` is a normal operating mode that is simple,
 resumable, transparent, idempotent, and flexible.
-Reuse follows content, provenance is recorded and never used to refuse, and the harness
-records and warns about operational change rather than aborting on it.
+Reuse follows content, and the harness records and warns about operational change rather
+than aborting on it; it refuses only what an input declared `identity: true` reserves,
+and what continuing would corrupt.
 
 ## 10.1 Harness-Owned Publication
 

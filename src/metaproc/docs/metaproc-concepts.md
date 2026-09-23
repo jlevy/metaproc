@@ -856,8 +856,9 @@ Reliability comes from absence of moving parts.
    - **Transparent.** The run directory records the launch config the run last ran with
      (`run-config.yaml`), each launch-config change a resume makes, with its old and new
      values (`.logs/dispatch-config-changes.jsonl`), and the step fingerprints each
-     scope was planned with (`run-plan.yaml`). Provenance is recorded so it can be read,
-     never so it can refuse.
+     scope was planned with (`run-plan.yaml`). A value is recorded so it can be read; it
+     refuses a resume only where the process declares it `identity: true`, part of what
+     the run is.
    - **Idempotent.** Reuse follows content.
      A step is reused while its fingerprint (its definition, its runbook bytes, and its
      resolved fields) is unchanged and, for a `collect:` consumer, while the outcomes it
@@ -871,14 +872,18 @@ Reliability comes from absence of moving parts.
    - **Flexible.** Operational change mid-flight is normal: a corrected process file, a
      changed variable, a patched artifact, a forced or narrowed rerun.
      The harness records and warns about what changed; it refuses only when continuing
-     would corrupt durable state or clobber live work.
+     would corrupt durable state, clobber live work, or change a value the process
+     declares part of the run’s identity (`identity: true`).
 
    The corollary for validation: a check on the resume path that cannot name the state
    it protects is ceremony to remove, and a check that protects only operator intent
    informs rather than aborts.
    Sealing or hashing inputs to make provenance feel strict makes every workflow
-   clumsier to resume and adjust while protecting nothing; record provenance and let
+   clumsier to resume and adjust while protecting nothing; record the values and let
    content-based reuse decide what runs.
+   The exception a process declares for itself is `identity: true` on an input, which
+   names a value a rerun under one `RUN_ID` cannot move, because the run’s durable state
+   describes it.
 
 8. **Shared mutable state belongs to the harness.** Many agents must not write the same
    shared items file. Specifically:

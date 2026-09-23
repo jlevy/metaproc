@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from pathlib import Path
 from unittest.mock import patch
 
@@ -66,6 +66,7 @@ def _resume_run_config(  # noqa: PLR0913
     auth_flags: AuthPoolFlags | None = None,
     max_concurrency: int | None = None,
     step_variants: dict[str, str] | None = None,
+    identity_names: Collection[str] = (),
     before_lease: Callable[[], None] | None = None,
 ) -> Mapping[str, tuple[object, object]]:
     """Resume the way ``run-process`` does: validate, then record once the lease is held.
@@ -88,6 +89,7 @@ def _resume_run_config(  # noqa: PLR0913
         auth_flags=auth_flags,
         max_concurrency=max_concurrency,
         step_variants=step_variants,
+        identity_names=identity_names,
     )
     assert run_config == _RunConfigWrite(path=run_dir / STATE_DIR / RUN_CONFIG_FILE, resumed=True)
     if before_lease is not None:
@@ -101,6 +103,7 @@ def _resume_run_config(  # noqa: PLR0913
         ),
         auth_flags=auth_flags,
         max_concurrency=max_concurrency,
+        identity_names=identity_names,
     )
 
 
@@ -628,6 +631,164 @@ class TestWriteRunConfig:
 
         data = read_yaml_file(run_dir / STATE_DIR / RUN_CONFIG_FILE)
         assert data["git_sha"] == "abc1234"
+
+
+class TestIdentityInputs:
+    """A resume that changes an ``identity: true`` input is refused, and records nothing.
+
+    Every other variable keeps the recorded-and-continue default. ``identity_names``
+    carries the variables of the inputs the process declares ``identity: true``, each
+    input's logical name and its ``param`` alias together.
+    """
+
+    def _launch(self, tmp_path: Path, variables: dict[str, str]) -> Path:
+        run_dir = tmp_path / variables["RUN_ID"] / "mine"
+        run_dir.mkdir(parents=True)
+        _write_run_config(
+            run_dir,
+            process_name="mine",
+            process_path=Path("process/mine/mine.process.md"),
+            run_id=variables["RUN_ID"],
+            variables=variables,
+            backend="local",
+            variant=None,
+            identity_names=("as_of", "AS_OF"),
+        )
+        return run_dir
+
+    def test_a_changed_identity_input_refuses_and_leaves_the_run_untouched(
+        self, tmp_path: Path
+    ) -> None:
+        """The message names each changed input, both values, and the two ways out."""
+        run_dir = self._launch(
+            tmp_path,
+            {"RUN_ID": "run-identity", "AS_OF": "2026-09-22", "as_of": "2026-09-22"},
+        )
+        config_bytes = (run_dir / STATE_DIR / RUN_CONFIG_FILE).read_bytes()
+
+        with pytest.raises(CLIError, match=r"Resume refused: this launch changes") as exc:
+            _resume_run_config(
+                run_dir,
+                process_name="mine",
+                variables={"RUN_ID": "run-identity", "AS_OF": "2026-09-29", "as_of": "2026-09-29"},
+                identity_names=("as_of", "AS_OF"),
+            )
+
+        message = str(exc.value)
+        assert "2 identity inputs" in message
+        assert "  AS_OF: '2026-09-22' -> '2026-09-29'" in message
+        assert "  as_of: '2026-09-22' -> '2026-09-29'" in message
+        assert str(run_dir / STATE_DIR / RUN_CONFIG_FILE) in message
+        assert "Resume with the recorded values, or start a new RUN_ID" in message
+        # A refused launch records nothing and rewrites nothing.
+        assert _events(run_dir) == []
+        assert (run_dir / STATE_DIR / RUN_CONFIG_FILE).read_bytes() == config_bytes
+
+    def test_an_identity_input_added_on_resume_refuses_naming_the_unset_side(
+        self, tmp_path: Path
+    ) -> None:
+        run_dir = self._launch(tmp_path, {"RUN_ID": "run-identity-added"})
+
+        with pytest.raises(CLIError) as exc:
+            _resume_run_config(
+                run_dir,
+                process_name="mine",
+                variables={"RUN_ID": "run-identity-added", "AS_OF": "2026-09-29"},
+                identity_names=("as_of", "AS_OF"),
+            )
+
+        message = str(exc.value)
+        assert "1 identity input" in message
+        assert "  AS_OF: <unset> -> '2026-09-29'" in message
+        assert "Resume with the recorded value, or start a new RUN_ID" in message
+
+    def test_a_non_identity_change_beside_an_identity_input_is_still_recorded(
+        self, tmp_path: Path
+    ) -> None:
+        """The identity input holds; every other variable records and continues."""
+        run_dir = self._launch(
+            tmp_path,
+            {"RUN_ID": "run-identity-mixed", "AS_OF": "2026-09-22", "CODE_REV": "abc1234"},
+        )
+
+        applied = _resume_run_config(
+            run_dir,
+            process_name="mine",
+            variables={
+                "RUN_ID": "run-identity-mixed",
+                "AS_OF": "2026-09-22",
+                "CODE_REV": "def5678",
+            },
+            identity_names=("as_of", "AS_OF"),
+        )
+
+        assert applied == {"variables.CODE_REV": ("abc1234", "def5678")}
+        events = _events(run_dir)
+        assert [event["event"] for event in events] == ["launch_config_change"]
+        variables = read_yaml_file(run_dir / STATE_DIR / RUN_CONFIG_FILE)["variables"]
+        assert variables == {
+            "RUN_ID": "run-identity-mixed",
+            "AS_OF": "2026-09-22",
+            "CODE_REV": "def5678",
+        }
+
+    def test_a_process_declaring_no_identity_input_records_every_change(
+        self, tmp_path: Path
+    ) -> None:
+        """The default is #93's behavior exactly: nothing is identity unless declared."""
+        run_dir = self._launch(tmp_path, {"RUN_ID": "run-no-identity", "AS_OF": "2026-09-22"})
+
+        applied = _resume_run_config(
+            run_dir,
+            process_name="mine",
+            variables={"RUN_ID": "run-no-identity", "AS_OF": "2026-09-29"},
+        )
+
+        assert applied == {"variables.AS_OF": ("2026-09-22", "2026-09-29")}
+
+    def test_a_resume_resolving_the_recorded_identity_value_continues(self, tmp_path: Path) -> None:
+        run_dir = self._launch(tmp_path, {"RUN_ID": "run-identity-same", "AS_OF": "2026-09-22"})
+        config_bytes = (run_dir / STATE_DIR / RUN_CONFIG_FILE).read_bytes()
+
+        applied = _resume_run_config(
+            run_dir,
+            process_name="mine",
+            variables={"RUN_ID": "run-identity-same", "AS_OF": "2026-09-22"},
+            identity_names=("as_of", "AS_OF"),
+        )
+
+        assert applied == {}
+        assert _events(run_dir) == []
+        assert (run_dir / STATE_DIR / RUN_CONFIG_FILE).read_bytes() == config_bytes
+
+    def test_an_identity_runs_dir_compares_across_the_filestore_mount_aliases(
+        self, tmp_path: Path
+    ) -> None:
+        """Identity comparison normalizes the mount aliases as every other one does."""
+        run_dir = tmp_path / "run-identity-mount" / "mine"
+        run_dir.mkdir(parents=True)
+        _write_run_config(
+            run_dir,
+            process_name="mine",
+            process_path=Path("process/mine/mine.process.md"),
+            run_id="run-identity-mount",
+            variables={
+                "RUN_ID": "run-identity-mount",
+                "RUNS_DIR": "/mnt/disks/filestore/runs",
+            },
+            backend="gcp-orchestrator",
+            variant=None,
+        )
+
+        applied = _resume_run_config(
+            run_dir,
+            process_name="mine",
+            variables={"RUN_ID": "run-identity-mount", "RUNS_DIR": "/mnt/filestore/runs"},
+            backend="gcp-orchestrator",
+            identity_names=("RUNS_DIR",),
+        )
+
+        assert applied == {}
 
 
 class TestGetGitSha:

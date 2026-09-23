@@ -9,8 +9,10 @@ printed as a warning and appended, with the other changes of that resume, as one
 ``run-config.yaml`` then records the launch config the resume ran with.
 What re-runs follows step fingerprints. A resume refuses only when continuing would
 corrupt the run: a corrupt ``run-config.yaml``; a process name other than the recorded
-one, since every task record carries ``<process>/<RUN_ID>`` as its run identity; or a
-run directory other than the recorded one, since result records are anchored to it.
+one, since every task record carries ``<process>/<RUN_ID>`` as its run identity; a
+run directory other than the recorded one, since result records are anchored to it; or
+a changed value for an input the process declares ``identity: true``, since one
+``RUN_ID`` holds one value for such an input.
 
 The end-to-end tests drive ``metaproc run-process`` twice against one ``RUN_ID``: a
 launch, then a resume that changes the launch values or edits the process spec.
@@ -436,6 +438,90 @@ def test_a_moved_run_directory_refuses_and_leaves_the_run_as_it_was(tmp_path: Pa
     assert _events(moved) == []
     assert {name: (moved / name).read_bytes() for name in _SUMMARIES} == summaries
     assert sorted(_invocations(moved)) == ["record", "stamp"]
+
+
+_IDENTITY_INPUT = """\
+as_of:
+  param: AS_OF
+  as: string
+  identity: true
+"""
+"""An input the process declares part of the run's identity, beside the fixture's own."""
+
+
+def _launch_with_identity(tmp_path: Path) -> tuple[Path, Path, str]:
+    """Launch the fixture with an ``identity: true`` input at ``AS_OF=2026-09-22``."""
+    process_path = _write_process(tmp_path / "proc", extra_inputs=_IDENTITY_INPUT)
+    runs_dir = tmp_path / "runs"
+    run_id = "identity-run"
+    launched = _run(process_path, runs_dir, run_id, DATASET="ds-1", AS_OF="2026-09-22")
+    assert launched.exit_code == 0, _message(launched)
+    assert sorted(_invocations(runs_dir / run_id)) == ["record", "stamp"]
+    return process_path, runs_dir, run_id
+
+
+def test_an_identity_input_declaration_round_trips_through_the_spec_loader(
+    tmp_path: Path,
+) -> None:
+    process_path = _write_process(tmp_path / "proc", extra_inputs=_IDENTITY_INPUT)
+
+    spec = load_process_spec(process_path)
+
+    assert spec.inputs["as_of"].identity is True
+    assert spec.inputs["dataset"].identity is False
+    # The logical name and its ``param`` alias name the run's identity together.
+    assert spec.identity_input_names == {"as_of", "AS_OF"}
+
+
+def test_a_changed_identity_input_refuses_and_leaves_the_run_as_it_was(tmp_path: Path) -> None:
+    """One ``RUN_ID`` holds one value for an ``identity: true`` input.
+
+    The refusal names each changed input, both values, and the two ways out, before
+    anything is recorded, rewritten, or run.
+    """
+    process_path, runs_dir, run_id = _launch_with_identity(tmp_path)
+    run_dir = runs_dir / run_id
+    config_bytes = (run_dir / STATE_DIR / RUN_CONFIG_FILE).read_bytes()
+    summaries = {name: (run_dir / name).read_bytes() for name in _SUMMARIES}
+
+    refused = _run(process_path, runs_dir, run_id, DATASET="ds-1", AS_OF="2026-09-29")
+
+    assert refused.exit_code != 0
+    assert isinstance(refused.exception, CLIError), _message(refused)
+    message = str(refused.exception)
+    assert "Resume refused: this launch changes 2 identity inputs" in message
+    assert str(run_dir / STATE_DIR / RUN_CONFIG_FILE) in message
+    assert "  AS_OF: '2026-09-22' -> '2026-09-29'" in message
+    assert "  as_of: '2026-09-22' -> '2026-09-29'" in message
+    assert "Resume with the recorded values, or start a new RUN_ID" in message
+    assert "Resume changes" not in refused.output
+    assert (run_dir / STATE_DIR / RUN_CONFIG_FILE).read_bytes() == config_bytes
+    assert _events(run_dir) == []
+    assert {name: (run_dir / name).read_bytes() for name in _SUMMARIES} == summaries
+    assert sorted(_invocations(run_dir)) == ["record", "stamp"]
+
+
+def test_a_non_identity_change_beside_an_identity_input_is_still_recorded(
+    tmp_path: Path,
+) -> None:
+    """Declaring one input identity leaves every other variable recording and continuing."""
+    process_path, runs_dir, run_id = _launch_with_identity(tmp_path)
+    run_dir = runs_dir / run_id
+
+    resumed = _run(process_path, runs_dir, run_id, DATASET="ds-2", AS_OF="2026-09-22")
+
+    assert resumed.exit_code == 0, _message(resumed)
+    assert "Warning: Resume changes variables.DATASET: 'ds-1' -> 'ds-2'" in resumed.output
+    events = _events(run_dir)
+    assert [event["event"] for event in events] == ["launch_config_change"]
+    assert events[0]["changes"] == [
+        _diff("variables.DATASET", "ds-1", "ds-2"),
+        _diff("variables.dataset", "ds-1", "ds-2"),
+    ]
+    variables = _config(run_dir)["variables"]
+    assert isinstance(variables, dict)
+    assert variables["DATASET"] == "ds-2"
+    assert variables["AS_OF"] == "2026-09-22"
 
 
 def _step_states(run_dir: Path) -> dict[str, str]:

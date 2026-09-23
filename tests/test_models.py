@@ -224,6 +224,30 @@ class TestProcessSpec:
         spec = ProcessSpec(name="test")
         assert spec.outputs == {}
 
+    def test_identity_input_names_carry_the_param_alias(self):
+        """An ``identity: true`` input names the run's identity under both its names.
+
+        Resolution writes one value under the logical name and the ``param`` alias, so
+        a resume that changes either is refused. Every other input is left out.
+        """
+        spec = ProcessSpec.model_validate(
+            {
+                "name": "cohort",
+                "inputs": {
+                    "as_of": {"param": "AS_OF", "as": "string", "identity": True},
+                    "scope": {"as": "string", "identity": True},
+                    "code_rev": {"param": "CODE_REV", "as": "string"},
+                },
+            }
+        )
+        assert spec.identity_input_names == {"as_of", "AS_OF", "scope"}
+
+    def test_identity_input_names_empty_without_a_declaration(self):
+        spec = ProcessSpec.model_validate(
+            {"name": "cohort", "inputs": {"code_rev": {"param": "CODE_REV", "as": "string"}}}
+        )
+        assert spec.identity_input_names == set()
+
     def test_inputs_declared(self):
         """Process-level inputs parse into ProcessInput entries."""
         spec = ProcessSpec.model_validate(
@@ -367,6 +391,15 @@ class TestProcessInput:
         assert pi.path == "knowledge-base/kb-index.yaml"
         assert pi.parse is not None
         assert pi.parse.format == "yaml"
+
+    def test_identity_defaults_false(self):
+        """An input records and continues on a resume unless it declares otherwise."""
+        pi = ProcessInput.model_validate({"param": "CODE_REV", "as": "string"})
+        assert pi.identity is False
+
+    def test_identity_declared(self):
+        pi = ProcessInput.model_validate({"param": "AS_OF", "as": "string", "identity": True})
+        assert pi.identity is True
 
 
 class TestProcessOutput:
