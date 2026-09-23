@@ -115,7 +115,7 @@ def test_the_refusal_and_the_auth_hint_quote_one_install_command(
     monkeypatch.setattr(gemini_cli, "check_cli_version", lambda _spec: _drift_message("0.34.0"))
     with pytest.raises(GeminiCliVersionMismatch) as excinfo:
         _gemini_version_drift()
-    monkeypatch.setattr(gemini_cli.shutil, "which", lambda _name: None)
+    monkeypatch.setattr("metaproc.adapters.gemini_cli.shutil.which", lambda _name: None)
     status = GeminiCliAdapter().check_auth()
 
     assert not status.cli_found
