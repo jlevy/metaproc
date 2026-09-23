@@ -26,9 +26,23 @@ from metaproc.adapters.base import (
     resolve_templates,
     validate_terminal_result_log,
 )
-from metaproc.adapters.claude_cli import CLAUDE_CREDS_ENV_VAR, ClaudeCodeCliAdapter
-from metaproc.adapters.gemini_cli import GeminiCliAdapter, served_models
-from metaproc.adapters.pi_cli import PI_CLI_INSTALL_HINT, PiCliAdapter, _build_pi_flags
+from metaproc.adapters.claude_cli import (
+    CLAUDE_CREDS_ENV_VAR,
+    PINNED_CLAUDE_CODE_CLI_VERSION,
+    ClaudeCodeCliAdapter,
+)
+from metaproc.adapters.codex_cli import PINNED_CODEX_CLI_VERSION
+from metaproc.adapters.gemini_cli import (
+    PINNED_GEMINI_CLI_VERSION,
+    GeminiCliAdapter,
+    served_models,
+)
+from metaproc.adapters.pi_cli import (
+    PI_CLI_INSTALL_HINT,
+    PINNED_PI_CODING_AGENT_VERSION,
+    PiCliAdapter,
+    _build_pi_flags,
+)
 from metaproc.adapters.registry import (
     ADAPTER_REGISTRY,
     derive_variant,
@@ -36,6 +50,7 @@ from metaproc.adapters.registry import (
     get_auth_capable,
 )
 from metaproc.config.providers import providers_with_api_keys
+from metaproc.docs import topic_markdown
 from metaproc.settings import CLAUDE_DEFAULT_MODEL, GEMINI_DEFAULT_MODEL, PI_DEFAULT_MODEL
 
 # ── Base / shared ────────────────────────────────────────────────
@@ -1040,6 +1055,40 @@ class TestResolveGcpToken:
             )
 
             resolve_gcp_token()
+
+
+# ── Pinned CLI versions ──────────────────────────────────────────
+
+
+class TestPinnedCliVersionsAreDocumented:
+    """The operator reference names each adapter's pinned CLI version in prose.
+
+    Those strings are copies of the `PINNED_*_VERSION` constants, so a pin bump
+    that leaves the document behind would tell operators to install the wrong CLI.
+    """
+
+    @staticmethod
+    def _versions_section() -> str:
+        operator = topic_markdown("operator")
+        start = operator.index("### Agent CLI Versions")
+        end = operator.index("\n#", start + 1)
+        return " ".join(operator[start:end].split())
+
+    @pytest.mark.parametrize(
+        ("label", "pinned"),
+        [
+            ("Claude Code", PINNED_CLAUDE_CODE_CLI_VERSION),
+            ("Codex", PINNED_CODEX_CLI_VERSION),
+            ("Gemini CLI", PINNED_GEMINI_CLI_VERSION),
+            ("Pi", PINNED_PI_CODING_AGENT_VERSION),
+        ],
+    )
+    def test_the_operator_reference_names_the_pin(self, label: str, pinned: str) -> None:
+        section = self._versions_section()
+        assert f"{label} {pinned}" in section, (
+            f"metaproc-operator-reference.md § Agent CLI Versions must say "
+            f"'{label} {pinned}' to match the adapter's pin"
+        )
 
 
 # ── Registry ─────────────────────────────────────────────────────
