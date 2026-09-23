@@ -803,6 +803,83 @@ class TestRunLiveCheckCodex:
             )
         ), f"codex command must include a permission flag; got: {cmd}"
 
+    @pytest.mark.parametrize(
+        ("profile_config", "expected_flags", "absent_flag"),
+        [
+            ({}, ["--dangerously-bypass-approvals-and-sandbox"], "--sandbox"),
+            (
+                {"sandbox": "read-only"},
+                ["--sandbox", "read-only"],
+                "--dangerously-bypass-approvals-and-sandbox",
+            ),
+        ],
+    )
+    def test_the_bypass_default_yields_to_a_profile_permission_signal(
+        self,
+        profile_config: dict[str, object],
+        expected_flags: list[str],
+        absent_flag: str,
+    ) -> None:
+        """Bypass would override a profile's sandbox, so it applies only without one."""
+        real_codex = CodexCliAdapter()
+        mock_status = MagicMock()
+        mock_status.cli_found = True
+        mock_status.credentials_found = True
+
+        with (
+            patch.dict(
+                "metaproc.commands.auth_check.ADAPTER_REGISTRY",
+                {"codex-cli": real_codex},
+                clear=False,
+            ),
+            patch.object(real_codex, "check_auth", return_value=mock_status),
+            patch("metaproc.adapters.codex_cli._codex_version_drift", return_value=None),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+
+            results = _run_live_check(
+                "codex-cli", "gpt-5.6-luna", timeout_s=5, profile_config=profile_config
+            )
+
+        assert results[0][0], results[0][1]
+        cmd = mock_run.call_args.args[0]
+        start = cmd.index(expected_flags[0])
+        assert cmd[start : start + len(expected_flags)] == expected_flags
+        assert absent_flag not in cmd
+
+
+class TestClaudeLiveCheckFormat:
+    """`--assert-model` reads Claude Code's `system.init`, which only stream-json emits."""
+
+    @pytest.mark.parametrize(
+        ("assert_model", "expected_format"),
+        [("opus", "stream-json"), (None, "text")],
+    )
+    def test_assert_model_overrides_a_profile_text_format(
+        self, assert_model: str | None, expected_format: str
+    ) -> None:
+        adapter = MagicMock()
+        adapter.check_auth.return_value = MagicMock(cli_found=True, credentials_found=True)
+        adapter.build_command.return_value = ["echo", "OK"]
+        adapter.prepare_env.return_value = {}
+        with (
+            patch("metaproc.commands.auth_check.ADAPTER_REGISTRY") as mock_registry,
+            patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="")),
+        ):
+            mock_registry.__getitem__ = MagicMock(return_value=adapter)
+            _run_live_check(
+                "claude-code-cli",
+                None,
+                timeout_s=5,
+                assert_model=assert_model,
+                profile_config={"output_format": "text"},
+            )
+
+        merged_config = adapter.build_command.call_args.kwargs["merged_config"]
+        assert merged_config["output_format"] == expected_format
+        assert merged_config["verbose"] is (expected_format == "stream-json")
+
 
 class TestExtractObservedModel:
     """The live probe parses the CLI's JSONL output for the identity event
