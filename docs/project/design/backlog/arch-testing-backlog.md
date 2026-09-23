@@ -12,8 +12,11 @@ Where it might go is a project record and lives here.
   Does this affect `smoke-core` wall clock when run with `--max-concurrency 4`?
   (Composite children in `smoke-adapters-all` already parallelize, so only code-mode
   aggregators are affected.)
-- The codex-cli JSONL stream still does not carry a model ID. If a future codex release
-  adds one, `--assert-model` for codex should move from informational to hard assertion.
+- The codex-cli typed event stream still does not carry a model ID, so `--assert-model`
+  for codex reads the untyped config preamble, which names the configured model, and
+  fails hard when the preamble is absent.
+  If a future codex release reports the model that answered, the assertion should read
+  that instead.
 - A live, standalone cloud execution smoke still needs a published image and an
   operator-provided GCP project.
   The committed cloud tier intentionally stops at job rendering so repository

@@ -104,5 +104,5 @@ Available via `metaproc help <topic>`, in recommended reading order:
 - **arch-runpool** (~4.6k words): Architecture: local process manager, adaptive concurrency, memory pressure.
 - **arch-harness** (~2.9k words): Architecture: the Claude Code adapter harness and its wire format.
 - **arch-execution** (~2.6k words): Architecture: the executable reference model for scheduling, as implemented.
-- **arch-testing** (~1.1k words): Architecture: the test tiers, when to use each, and per-adapter credentials.
+- **arch-testing** (~1.3k words): Architecture: the test tiers, when to use each, and per-adapter credentials.
 - **arch-file-io** (~1.8k words): Architecture: the curated metaproc.io surface, write contracts, and frontmatter gotchas.

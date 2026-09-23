@@ -148,7 +148,7 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
         "arch-testing",
         "arch-testing",
         "Architecture: the test tiers, when to use each, and per-adapter credentials.",
-        1100,
+        1300,
     ),
     Topic(
         "arch-file-io",

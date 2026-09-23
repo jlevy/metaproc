@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: Testing
 
-**Date:** 2026-04-24 (last updated 2026-09-22) **Status:** Approved
+**Date:** 2026-04-24 (last updated 2026-09-23) **Status:** Approved
 
 Testing is organized into tiers by cost and scope.
 Each tier is a named process spec you run via `metaproc run-process`; the table below
@@ -88,22 +88,29 @@ The helper parses the CLI’s JSONL stdout for the event that names the model:
 | `claude-code-cli` | `system.init` | `model` | `opus` |
 | `gemini-cli` | terminal `result` | `stats.models` keys that billed tokens | `gemini-3` |
 | `pi-cli` | `message_start` (first assistant) | `message.model` | `glm-5-maas` |
-| `codex-cli` | none — codex-cli’s stream doesn’t carry a model ID | n/a | informational only |
+| `codex-cli` | untyped config preamble (the first line carrying `model`) | `model` | `gpt` |
 
-Gemini CLI is the one adapter whose terminal event accounts for the model that served
-and billed the call.
+Only the Gemini check reads which model billed the call.
 Its `init` event is emitted from the configured model before any request leaves the
 process, so asserting on it would pass a call the CLI rewrote to another model.
 `stats.models` also lists a request that failed, with zero tokens, so the check counts
 only the entries that billed tokens, and a run refuses a Gemini result by the same rule.
 A probe whose terminal event is missing, or in which no model billed, fails the
 assertion rather than passing it.
-Every other adapter reports only the model it was asked for.
 
-For codex, `--assert-model` emits an informational line rather than a hard assertion.
-The codex model guarantee is covered by the separate negative-control smoke (invalid
-`-m <model>` must exit non-zero) — see
-[`smoke-adapters-negative-control.process.md`](https://github.com/jlevy/metaproc/blob/main/process/self-test/smoke-adapters-negative-control.process.md).
+The other three read a model the CLI names for the call, and fail when the event is
+missing:
+
+- Claude Code’s `system.init.model` is the model Claude Code resolved the request to,
+  before any response arrives.
+  Its terminal `result.modelUsage` carries the models that billed, but the assertion
+  does not read it yet.
+- Pi’s is `message.model` on the first assistant `message_start` event.
+- Codex’s is the `model` field of the untyped config preamble codex-cli prints before
+  its typed event stream, which carries no model ID. The preamble names the configured
+  model, not the one that answered, so the codex model guarantee rests on the separate
+  negative-control smoke (invalid `-m <model>` must exit non-zero) — see
+  [`smoke-adapters-negative-control.process.md`](https://github.com/jlevy/metaproc/blob/main/process/self-test/smoke-adapters-negative-control.process.md).
 
 ### Cloud-dispatch claude credential (Phase 2b)
 
@@ -198,10 +205,10 @@ Add `-k <pattern>` to run a subset.
 - `auth-check --variant <non-claude>` correctly scopes Phase 2b out; setting
   `METAPROC_GCP_SECRET_CLAUDE_CREDS` alongside a non-claude variant no longer pollutes
   the per-adapter signal.
-- `--assert-model` is informational-only for `codex-cli`. codex-cli 0.124.0’s JSONL
-  stream does not carry a model ID, so the assertion’s “pass” line indicates the `-m`
-  flag was accepted (the model guarantee for codex comes from the separate
-  negative-control smoke, not from stream parsing).
+- `--assert-model` for `codex-cli` reads the untyped config preamble, the only line of
+  codex-cli’s stdout that carries a model ID, and fails hard when that line is absent.
+  The preamble names the configured model, so the model guarantee for codex comes from
+  the separate negative-control smoke, not from stream parsing.
   See
   [`smoke-adapters-negative-control.process.md`](https://github.com/jlevy/metaproc/blob/main/process/self-test/smoke-adapters-negative-control.process.md).
 - `--max-concurrency` is not yet honored for sibling code-mode steps.

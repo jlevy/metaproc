@@ -732,8 +732,16 @@ requested model failed, therefore fails the check, and so does a terminal event 
 no model billed. The pass and fail lines list each model that billed with its token
 count. A run holds every Gemini step to the same rule and refuses a result in which the
 requested model billed no tokens.
-The other adapters report only the model they were asked for, and the assertion reads
-that.
+
+For the other adapters the assertion reads a model the CLI names for the call, not the
+models that billed it:
+
+- Claude Code: `system.init.model`, the model Claude Code resolved the request to.
+  Its terminal `result.modelUsage` carries the models that billed, but the assertion
+  does not read it yet.
+- Pi: `message.model` on the first assistant `message_start` event.
+- Codex: the `model` field of the config preamble codex-cli prints before its event
+  stream. The check fails when the preamble is absent.
 
 For Codex, `OPENAI_API_KEY` is an API-platform credential and uses API billing.
 It does not consume the ChatGPT Pro Codex allowance.

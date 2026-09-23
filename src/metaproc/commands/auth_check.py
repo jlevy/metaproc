@@ -329,11 +329,19 @@ def _run_live_check(
     named, if any. The probe starts from it, as a run starts a step from it, and
     then sets what the probe itself needs.
 
-    When *assert_model* is set, also parse the subprocess stdout and verify the
-    model that answered contains the expected substring: the terminal event's
-    served-model accounting for gemini-cli, the identity event otherwise.
-    codex-cli does not emit a model ID in its JSONL stream; for that adapter, an
-    informational line is emitted instead.
+    When *assert_model* is set, also parse the subprocess stdout and fail unless
+    the model it names contains the expected substring. Where that model is read
+    differs by adapter:
+
+    - gemini-cli: the terminal `result` event's `stats.models`, the models that
+      billed the call, so a request the CLI rewrote or answered with a fallback
+      fails.
+    - claude-code-cli: `system.init.model`, the model Claude Code resolved the
+      request to. Its `result.modelUsage` carries the models that billed but is
+      not read yet.
+    - pi-cli: `message.model` on the first assistant `message_start` event.
+    - codex-cli: the `model` field of the untyped config preamble it prints
+      before its event stream; the assertion fails when the preamble is absent.
     """
 
     adapter = ADAPTER_REGISTRY[adapter_type]
@@ -597,7 +605,7 @@ def _evaluate_model_assertion(
     expected: str,
     label: str,
 ) -> tuple[bool, str]:
-    """Compare the model that answered the probe against *expected* substring.
+    """Compare the model the probe's output names against *expected* substring.
 
     For an adapter in `_SERVED_MODEL_READERS` this reads the terminal event's
     served-model accounting, so a CLI that rewrites the request to another model
@@ -887,14 +895,17 @@ def auth_check(
         None,
         "--assert-model",
         help=(
-            "Verify the model the --live probe was answered by contains this substring. "
-            "Detects upstream CLI alias resolution or routing changes. "
-            "For gemini-cli this reads the terminal result event's served-model "
-            "accounting, so a CLI that rewrites the request to another model fails; "
-            "the other adapters report only the model they were asked for. "
-            "codex-cli's event stream does not carry model ID, so for codex "
-            "this emits an informational line rather than a hard assertion; "
-            "the codex guarantee is covered by a separate negative-control smoke."
+            "Fail the --live probe unless the model its output names contains this "
+            "substring. Where that model is read differs by adapter. "
+            "gemini-cli: the terminal result event's stats.models, the models that "
+            "billed the call, so a request the CLI rewrote or answered with a "
+            "fallback fails. "
+            "claude-code-cli: system.init.model, the model Claude Code resolved the "
+            "request to; its result.modelUsage carries the models that billed but is "
+            "not read yet. "
+            "pi-cli: message.model on the first assistant message_start event. "
+            "codex-cli: the model field of the config preamble it prints before its "
+            "event stream; the check fails when the preamble is absent."
         ),
     ),
     adapter: str | None = typer.Option(  # noqa: UP007

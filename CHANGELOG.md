@@ -80,13 +80,13 @@ development series.
 
 ### Fixed
 
-- **`auth-check --assert-model` checks which model answered, not which was asked for.**
-  For gemini-cli the assertion read the `init` event, which the CLI emits from its
-  configured model before any request leaves the process, so a call the CLI rewrote to
-  another model still reported a match — the routing change the flag exists to detect.
-  The assertion now reads the terminal result event’s `stats.models`, counts only the
-  models whose entry billed tokens, and lists each with its token count; a probe whose
-  terminal event reports no model that billed fails instead of passing.
+- **`auth-check --assert-model` checks which Gemini model answered, not which was asked
+  for.** For gemini-cli the assertion read the `init` event, which the CLI emits from
+  its configured model before any request leaves the process, so a call the CLI rewrote
+  to another model still reported a match — the routing change the flag exists to
+  detect. The assertion now reads the terminal result event’s `stats.models`, counts only
+  the models whose entry billed tokens, and lists each with its token count; a probe
+  whose terminal event reports no model that billed fails instead of passing.
   A run refuses a Gemini result by the same rule.
   `stats.models` also lists a request that failed, with zero tokens, so until now a
   silent fallback from the requested model passed both the probe and a run’s check; both
@@ -94,8 +94,10 @@ development series.
   `auth-check --live --variant <profile>` now probes with the profile’s own adapter
   config, `native_settings` included, as a run does; before, a profile that turned off
   `experimental.dynamicModelConfiguration` passed the probe and then had every Gemini
-  result refused. The other adapters are unchanged: they report only the model they were
-  asked for.
+  result refused. The other adapters’ assertion is unchanged: Claude Code’s reads
+  `system.init.model`, the model Claude Code resolved the request to; Pi’s reads
+  `message.model` on the first assistant `message_start`; Codex’s reads the `model`
+  field of its config preamble and fails when the preamble is absent.
 
 - **A resume re-runs a consumer whose collected input changed.** A step that declares a
   `collect:` input was reused on resume whenever its fingerprint matched, so after a
