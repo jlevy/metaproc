@@ -23,6 +23,7 @@ from metaproc.commands.helpers import (
     load_process_spec,
     parse_adapter_config,
     parse_var_args,
+    refuse_changed_input_bindings,
     require_runtime_runs_dir,
     resolve_process_path,
     resolve_record_output_paths,
@@ -153,6 +154,13 @@ def run_step(
     merged = merge_defaults(step_def, spec.defaults)
     effective_outputs = target.outputs
     step_hash = fingerprint_step(target)
+
+    # A step runs inside the scope its run directory resolves to, and that scope may
+    # bind inputs (`on_change: new_run`). Hold this launch to them before any branch
+    # below writes task state; a dry run reports the refusal the real launch would.
+    refuse_changed_input_bindings(
+        compute_run_dir(spec, variables), spec, variables, launch="run-step"
+    )
 
     # ── for_each item enrichment ──────────────────────────────────────
     if step_def.for_each and item:

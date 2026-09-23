@@ -381,6 +381,8 @@ The child declares all outputs required for its own completion, while the parent
 declares the subset published downstream.
 Automatic child-port projection is not yet implemented.
 Resume revalidates both boundaries before reusing a completed mapped item.
+A child process’s `on_change: new_run` inputs are bound per child scope, after `with:`
+resolution (§9.8).
 
 Mapped scopes share the root `RunExecutionContext`; they do not launch `run-process`,
 acquire child orchestrator leases, or hold an executable-leaf permit while waiting
@@ -526,20 +528,21 @@ A process-level input under `inputs:` also takes these fields:
 | `param` | Operator-facing name, set with `--var NAME=value`. Resolution writes the value under both this name and the input’s logical name. |
 | `required` | Whether launch validation refuses a run that leaves a `param`-backed input unset. Defaults to `true`. |
 | `default` | Literal value for an optional, `param`-backed input the operator leaves unset. |
-| `identity` | Whether the input is part of the run’s identity, so a resume that resolves a different value is refused. Defaults to `false`, which records the change and continues. |
+| `on_change` | What a later launch that resolves a different value does. `record`, the default, records the change and continues. `new_run` binds the input to one value for the life of the scope that resolves it and refuses a launch that resolves another (§9.8); it needs a `param`-backed input. |
 
 `run-config.yaml` records the launch config: every resolved input, under both its
 logical name and its `param` alias; the `--step-variant` overrides; the variant,
 execution profile, and artifact namespace; the execution profiles the plan’s steps
 resolve to, each with its adapter and configuration (`resolved_profiles`); the backend;
 and the `git_sha` of the checkout the launch ran from.
-A resume may change any of them that the process does not declare `identity: true`,
-including by adding or removing an input or through an edited `default:`. The resume
-logs each change at INFO and warns the operator once per change as
-`Resume changes <field>: <old> -> <new>`, where the field is `variables.<NAME>`,
-`step_variants.<STEP>`, `variant`, `execution_profile`, `artifact_namespace`,
-`resolved_profiles`, `backend`, or `git_sha`, and `<unset>` stands for an absent side.
-The warning names only the profiles of a `resolved_profiles` change.
+A resume may change any of them, other than an input the process binds
+`on_change: new_run` (below), including by adding or removing an input or through an
+edited `default:`. The resume logs each change at INFO and warns the operator once per
+change as `Resume changes <field>: <old> -> <new>`, where the field is
+`variables.<NAME>`, `step_variants.<STEP>`, `variant`, `execution_profile`,
+`artifact_namespace`, `resolved_profiles`, `backend`, `git_sha`, or, for a binding the
+resume adopts or releases, `input_bindings.<NAME>`, and `<unset>` stands for an absent
+side. The warning names only the profiles of a `resolved_profiles` change.
 It appends one `launch_config_change` event listing the changes to
 `.logs/dispatch-config-changes.jsonl` as `changes: [{field, diff}]`, each diff the flat
 `{old, new}` pair that the `max_concurrency` change of a `dispatch_config_change` event
@@ -569,23 +572,27 @@ written:
   A new `RUN_ID` costs the same work without the inconsistency.
   The two canonical cloud Filestore mount roots for `RUNS_DIR` normalize to one run
   directory, so resuming through either is neither refused nor recorded.
-- A changed value for an input the process declares `identity: true`. Such an input is
-  part of what the run is, so one `RUN_ID` holds one value for it: the run’s task state,
-  results, and summaries all describe the recorded value, and a launch that resolves
-  another is a different run under a taken identity.
-  The logical input name and its `param` alias are compared together, since resolution
-  writes one value under both, and a name absent from either side compares as unset, so
-  adding or removing an identity input is a change like any other.
-  Leave `identity` off for a value that records how a run executed, such as the code
-  revision that launched it; a change to it is recorded and the resume continues.
-  A composite step’s child scope has no `run-config.yaml` of its own, so the launched
-  process’s declarations are the run’s only identity check; a value a child derives
-  through `with:` is guarded through the launched process’s input it comes from.
+- A value other than the recorded one for an input the process binds
+  `on_change: new_run`. Such an input holds one value for the life of the scope that
+  binds it, because the scope’s task state, results, and summaries all describe that
+  value. `run-process` records the root scope’s bound inputs in `input-bindings.yaml`
+  when it creates the run (§9.8), under each input’s logical name, and every later entry
+  compares against that record before it writes anything.
+  A launch that resolves another value is refused, whether or not the process still
+  declares the input `new_run`; a binding is released only at its recorded value.
+  The comparison is by logical name after alias resolution, so a renamed `param` alias
+  changes nothing. Leave the default, `record`, for a value that records how a run
+  executed, such as the code revision that launched it.
+  The same check holds at every other entry into a scope: `run-step` and `run-parallel`
+  compare against the record of the scope their run directory resolves to before they
+  touch task state, and a composite child scope binds its own `new_run` inputs, after
+  `with:` resolution, and is held to them each time the orchestrator prepares it.
 - A corrupt `run-config.yaml`: one that does not read as a YAML mapping, or whose
   `variables` is not a mapping of strings to strings.
+  A corrupt `input-bindings.yaml` refuses the same way.
 
 The first three refusals name the recorded and the current value and the two ways out:
-resume under the recorded name, at the recorded directory, or with the recorded identity
+resume under the recorded name, at the recorded directory, or with the recorded bound
 values, or start a new `RUN_ID`.
 
 Recording a change does not decide what re-runs; step fingerprints do (§10.3). A value
@@ -1281,14 +1288,63 @@ Those fall back to a projection of the loaded plan bundle, which cannot supply c
 mapped keys — that is what `item_keys: null` marks.
 The fallback is read-only and never written back.
 
+## 9.8 `input-bindings.yaml`
+
+`run-plan.yaml` records what a scope declared; `input-bindings.yaml` records what it
+promised. One record is written per scope that binds at least one input
+`on_change: new_run`, at `<scope>/.state/input-bindings.yaml`, carrying the schema token
+`metaproc:InputBindings/0.1`. It holds the scope’s record identity and scope path, as
+the run plan does, and one entry per bound input, keyed by the input’s logical name: the
+policy that bound it and the value the scope resolved when it was first entered.
+A scope whose process binds nothing has no record.
+
+**Lifecycle.** `run-process` writes the root record when it creates the run, beside
+`run-config.yaml`. The orchestrator writes a composite child scope’s record the first
+time it prepares that scope, after `with:` resolution and before it publishes the
+scope’s plan; a mapped composite’s item scopes each have their own.
+Every later entry into a scope compares the values it resolves with the record before it
+writes anything: a `run-process` resume before and again under the orchestrator lease, a
+composite child scope before its plan is republished, `run-step` and `run-parallel`
+before they touch task state.
+Each recorded and each declared input falls into one of three outcomes:
+
+- **Changed:** a recorded binding the launch resolves differently.
+  The launch is refused, naming the input, both values, the record, and the two ways
+  out, whether or not the process still declares the input `new_run`; editing the spec
+  cannot erase the promise.
+- **Released:** a recorded binding resolved at its recorded value by a process that no
+  longer declares the input `new_run`. Recorded as a `launch_config_change` of
+  `input_bindings.<NAME>` and dropped from the record.
+- **Adopted:** an input the process declares `new_run` that the record does not hold,
+  because the run predates the declaration or the record.
+  Bound at the value the launch resolves and recorded the same way; the run acquires no
+  guarantee about earlier launches.
+
+Only `run-process` and composite scope entry establish, release, and adopt bindings;
+`run-step` and `run-parallel` honor a record and change nothing in it.
+A child scope’s adoption and release events go to that scope’s own
+`.logs/dispatch-config-changes.jsonl`. A refused `run-process` resume records and
+rewrites nothing. A child scope refused mid-run fails its composite step with the
+refusal, which the level walk records as any other step failure, and the scope itself is
+untouched; a scalar composite is re-entered on every resume that reaches it, so the
+check runs on every resume, not only on a forced one.
+A record that cannot be read refuses, as a corrupt `run-config.yaml` does.
+
+**What a binding is not.** It is the value the launch resolved, compared as a string:
+for an `as: path` input set by `param`, the path, never the file’s contents, which reuse
+follows through step fingerprints (§10.3). It does not decide what re-runs.
+A value bound through a step’s `with:` or read by a handler at runtime is outside the
+fingerprint whether or not it is bound; a `new_run` binding only keeps such a value from
+changing under one `RUN_ID`.
+
 ## 10. Resumability and Publication Semantics
 
 These sections implement principle 7 of [metaproc-concepts.md](metaproc-concepts.md)
 §6.2: a rerun against the same `RUN_ID` is a normal operating mode that is simple,
 resumable, transparent, idempotent, and flexible.
 Reuse follows content, and the harness records and warns about operational change rather
-than aborting on it; it refuses only what an input declared `identity: true` reserves,
-and what continuing would corrupt.
+than aborting on it; it refuses only what an input bound `on_change: new_run` reserves
+(§9.8), and what continuing would corrupt.
 
 ## 10.1 Harness-Owned Publication
 

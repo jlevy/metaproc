@@ -267,7 +267,7 @@ def _project_input(name: str, decl: ProcessInput) -> InputSpec:
         parse=decl.parse.model_copy() if decl.parse is not None else None,
         required=decl.required,
         default=decl.default,
-        identity=decl.identity,
+        on_change=decl.on_change,
         description=decl.description,
     )
 

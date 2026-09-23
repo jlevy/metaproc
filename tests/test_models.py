@@ -224,29 +224,32 @@ class TestProcessSpec:
         spec = ProcessSpec(name="test")
         assert spec.outputs == {}
 
-    def test_identity_input_names_carry_the_param_alias(self):
-        """An ``identity: true`` input names the run's identity under both its names.
+    def test_new_run_inputs_are_keyed_by_logical_name(self):
+        """The inputs declared ``on_change: new_run``, under the name a binding is keyed by.
 
-        Resolution writes one value under the logical name and the ``param`` alias, so
-        a resume that changes either is refused. Every other input is left out.
+        The ``param`` alias is how the operator spells the value; the logical name is
+        what the scope binds, so a renamed alias changes nothing. Every other input is
+        left out.
         """
         spec = ProcessSpec.model_validate(
             {
                 "name": "cohort",
                 "inputs": {
-                    "as_of": {"param": "AS_OF", "as": "string", "identity": True},
-                    "scope": {"as": "string", "identity": True},
-                    "code_rev": {"param": "CODE_REV", "as": "string"},
+                    "as_of": {"param": "AS_OF", "as": "string", "on_change": "new_run"},
+                    "scope": {"param": "SCOPE", "as": "string", "on_change": "new_run"},
+                    "code_rev": {"param": "CODE_REV", "as": "string", "on_change": "record"},
+                    "mode": {"param": "MODE", "as": "string"},
                 },
             }
         )
-        assert spec.identity_input_names == {"as_of", "AS_OF", "scope"}
+        assert sorted(spec.new_run_inputs) == ["as_of", "scope"]
+        assert spec.new_run_inputs["as_of"].param == "AS_OF"
 
-    def test_identity_input_names_empty_without_a_declaration(self):
+    def test_new_run_inputs_empty_without_a_declaration(self):
         spec = ProcessSpec.model_validate(
             {"name": "cohort", "inputs": {"code_rev": {"param": "CODE_REV", "as": "string"}}}
         )
-        assert spec.identity_input_names == set()
+        assert spec.new_run_inputs == {}
 
     def test_inputs_declared(self):
         """Process-level inputs parse into ProcessInput entries."""
@@ -392,14 +395,39 @@ class TestProcessInput:
         assert pi.parse is not None
         assert pi.parse.format == "yaml"
 
-    def test_identity_defaults_false(self):
+    def test_on_change_defaults_to_record(self):
         """An input records and continues on a resume unless it declares otherwise."""
         pi = ProcessInput.model_validate({"param": "CODE_REV", "as": "string"})
-        assert pi.identity is False
+        assert pi.on_change == "record"
 
-    def test_identity_declared(self):
-        pi = ProcessInput.model_validate({"param": "AS_OF", "as": "string", "identity": True})
-        assert pi.identity is True
+    def test_on_change_new_run_declared(self):
+        pi = ProcessInput.model_validate({"param": "AS_OF", "as": "string", "on_change": "new_run"})
+        assert pi.on_change == "new_run"
+
+    def test_on_change_new_run_needs_a_param_backed_input(self):
+        """A file-backed input has no launch value to bind, so the declaration is rejected.
+
+        Silently accepting it would promise a protection the launch config cannot give:
+        the file's contents are outside it, and reuse follows them through fingerprints.
+        """
+        with pytest.raises(ValidationError, match=r"on_change: new_run needs a param-backed"):
+            ProcessInput.model_validate(
+                {"path": "rosters/{{AS_OF}}.yaml", "as": "string", "on_change": "new_run"}
+            )
+
+    def test_on_change_new_run_on_a_param_backed_path_binds_the_path_string(self):
+        """An ``as: path`` input set by ``param`` is a launch value like any other."""
+        pi = ProcessInput.model_validate({"param": "ROSTER", "as": "path", "on_change": "new_run"})
+        assert pi.on_change == "new_run"
+
+    def test_on_change_accepts_only_the_named_policies(self):
+        with pytest.raises(ValidationError, match=r"on_change"):
+            ProcessInput.model_validate({"param": "AS_OF", "as": "string", "on_change": "rerun"})
+
+    def test_an_unknown_input_field_is_rejected(self):
+        """A field the model does not declare fails loudly instead of doing nothing."""
+        with pytest.raises(ValidationError, match=r"identity"):
+            ProcessInput.model_validate({"param": "AS_OF", "as": "string", "identity": True})
 
 
 class TestProcessOutput:

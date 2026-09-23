@@ -21,9 +21,11 @@ from metaproc.ids import new_timestamped_typed_id, require_typed_id
 from metaproc.models.authored import IOSpec
 from metaproc.models.plan import RunPlanSnapshot
 from metaproc.models.runtime import (
+    INPUT_BINDINGS_ENVELOPE,
     AttemptDisposition,
     AttemptRecord,
     CollectedInputsRecord,
+    InputBindingsRecord,
     ManualAckRecord,
     OutputFailure,
     ResultRecord,
@@ -36,6 +38,7 @@ from metaproc.paths import (
     ATTEMPT_FILE,
     ATTEMPTS_SUBDIR,
     COLLECTED_INPUTS_FILE,
+    INPUT_BINDINGS_FILE,
     MANUAL_ACK_FILE,
     POOL_STATUS_FILE,
     RESULT_FILE,
@@ -120,6 +123,31 @@ def read_run_plan(run_dir: Path) -> RunPlanSnapshot | None:
     if not isinstance(raw, dict) or "run_plan" not in raw:
         raise ValueError(f"{path}: expected a run_plan envelope")
     return RunPlanSnapshot.model_validate(raw["run_plan"])
+
+
+def write_input_bindings(scope_dir: Path, record: InputBindingsRecord) -> Path:
+    """Publish the inputs one process scope binds (``input-bindings.yaml``)."""
+    return _write_record_at(
+        scope_dir / STATE_DIR,
+        INPUT_BINDINGS_FILE,
+        {INPUT_BINDINGS_ENVELOPE: record.model_dump(mode="json", by_alias=True)},
+    )
+
+
+def read_input_bindings(scope_dir: Path) -> InputBindingsRecord | None:
+    """Read one scope's input bindings, or ``None`` when the scope binds nothing.
+
+    Raises ``ValueError`` (a pydantic validation error is one) for a record that is
+    present but does not read as an ``input_bindings`` envelope, and the YAML parser's
+    error for one that does not parse; the caller decides what a corrupt record means.
+    """
+    path = scope_dir / STATE_DIR / INPUT_BINDINGS_FILE
+    if not path.exists():
+        return None
+    raw: object = read_yaml_file(path)
+    if not isinstance(raw, dict) or INPUT_BINDINGS_ENVELOPE not in raw:
+        raise ValueError(f"{path}: expected an {INPUT_BINDINGS_ENVELOPE} envelope")
+    return InputBindingsRecord.model_validate(raw[INPUT_BINDINGS_ENVELOPE])
 
 
 def read_attempt_at(state_dir: Path) -> AttemptRecord | None:

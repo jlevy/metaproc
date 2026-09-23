@@ -580,17 +580,18 @@ decision:
 Use `run-process --dry-run` or `metaproc deps <run>` to preview the cascade if you are
 unsure what the next launch will execute.
 
-A resume may change the launch config, except for an input the process declares
-`identity: true`: any `--var` value, including by adding or removing one or through an
-edited input `default:`, the `--step-variant` set, `--variant`, `--artifact-namespace`,
-the execution profiles the plan resolves, `--backend`, and the Git commit it runs from.
+A resume may change the launch config, except for an input the process binds
+`on_change: new_run`: any `--var` value, including by adding or removing one or through
+an edited input `default:`, the `--step-variant` set, `--variant`,
+`--artifact-namespace`, the execution profiles the plan resolves, `--backend`, and the
+Git commit it runs from.
 Metaproc prints a `Resume changes <field>: <old> -> <new>` warning for each change,
 where the field is `variables.<NAME>`, `step_variants.<STEP>`, `variant`,
-`execution_profile`, `artifact_namespace`, `resolved_profiles`, `backend`, or `git_sha`.
-It appends one `launch_config_change` event listing them to
-`.logs/dispatch-config-changes.jsonl` and then rewrites those fields in
-`run-config.yaml` to the values the resume ran with, so the file describes the latest
-launch and the event log holds its history.
+`execution_profile`, `artifact_namespace`, `resolved_profiles`, `backend`, `git_sha`,
+or, for a binding the resume adopts or releases, `input_bindings.<NAME>`. It appends one
+`launch_config_change` event listing them to `.logs/dispatch-config-changes.jsonl` and
+then rewrites those fields in `run-config.yaml` to the values the resume ran with, so
+the file describes the latest launch and the event log holds its history.
 The event carries a `resolved_profiles` change in full; the warning names only the
 profiles. What re-runs still follows fingerprints.
 A value substituted into a resolved field such as `env:` or an output path re-runs that
@@ -605,14 +606,21 @@ Four launch-config findings refuse the resume, each before anything is recorded:
 - A process name that differs from the recorded one, because every task record’s
   identity is `<process>/<RUN_ID>`. Resume under the recorded name, or start a new
   `RUN_ID`.
-- A changed value for an input the process declares `identity: true`, because such an
-  input is part of what the run is: one `RUN_ID` holds one value for it, and the run’s
-  task state, results, and summaries all describe the recorded value.
+- A value other than the recorded one for an input the process binds
+  `on_change: new_run`, because such an input holds one value for the life of the run:
+  its task state, results, and summaries all describe the recorded value, which
+  `.state/input-bindings.yaml` holds under the input’s logical name.
   The refusal names each changed input with its recorded and its new value.
   Resume with the recorded values, or start a new `RUN_ID` for the new ones.
-  Read a process’s `inputs:` block to see which of its inputs are identity; a value that
-  records how a run executed, such as the code revision it launched from, is not one and
-  is recorded like any other change.
+  A renamed `param` alias is not a change.
+  Removing the declaration is not a way out: a binding is released only at its recorded
+  value, and the release, like the adoption of a binding on a run that predates it, is
+  recorded as an `input_bindings.<NAME>` change.
+  Read a process’s `inputs:` block to see which inputs it binds; a value that records
+  how a run executed, such as the code revision it launched from, is recorded like any
+  other change. `run-step` and `run-parallel` make the same check against the run they
+  target before they touch task state, and a composite child scope holds its own
+  bindings (`metaproc help design`, §9.8).
 - A run directory that differs from the recorded one, because result records are
   anchored to the recorded directory.
   A moved run would re-run every step whose outputs sit under `{{run.dir}}`, since those
@@ -1189,8 +1197,9 @@ for unmarked old runs.
 
 | Artifact | Current path | Meaning |
 | --- | --- | --- |
-| Run config | `<run>/.state/run-config.yaml` | Run identity, run directory, launch config, and layout marker; a resume that changes the launch config (variables, step variants, variant, execution profile, artifact namespace, resolved profiles, backend, `git_sha`) rewrites it after recording the change, and every other field keeps its creation value; a resume that changes an `identity: true` input, or the run directory, is refused instead |
+| Run config | `<run>/.state/run-config.yaml` | Run identity, run directory, launch config, and layout marker; a resume that changes the launch config (variables, step variants, variant, execution profile, artifact namespace, resolved profiles, backend, `git_sha`) rewrites it after recording the change, and every other field keeps its creation value; a resume from another run directory is refused instead |
 | Run plan | `<scope>/.state/run-plan.yaml` | What this scope declared: step identity, shape, canonical mapped item keys, output ports, fingerprints |
+| Input bindings | `<scope>/.state/input-bindings.yaml` | The inputs this scope binds `on_change: new_run`, by logical name, with the value each holds for the life of the scope; a launch that resolves another value is refused, and a binding the process adopts or releases is recorded as a launch-config change |
 | Orchestrator lease | `<run>/.state/orchestrator-lease.yaml` | Owner and heartbeat for cross-host safety |
 | Process status | `<run>/.state/process-status.yaml` | Aggregated DAG state for status display |
 | Overrides | `<run>/.state/overrides.yaml` | Operator dependency overrides |

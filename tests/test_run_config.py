@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from unittest.mock import patch
 
@@ -22,8 +22,12 @@ from metaproc.commands.run_process import (
 from metaproc.dispatch.auth_pool_flags import AuthPoolFlags
 from metaproc.errors import CLIError
 from metaproc.io import read_yaml_file, to_yaml_string
+from metaproc.io.state_io import read_input_bindings
+from metaproc.models.authored import ProcessSpec
+from metaproc.models.runtime import InputBinding
 from metaproc.paths import (
     DISPATCH_CONFIG_CHANGES_FILE,
+    INPUT_BINDINGS_FILE,
     LOGS_DIR,
     RUN_CONFIG_FILE,
     RUN_LAYOUT_VERSION,
@@ -66,7 +70,7 @@ def _resume_run_config(  # noqa: PLR0913
     auth_flags: AuthPoolFlags | None = None,
     max_concurrency: int | None = None,
     step_variants: dict[str, str] | None = None,
-    identity_names: Collection[str] = (),
+    spec: ProcessSpec | None = None,
     before_lease: Callable[[], None] | None = None,
 ) -> Mapping[str, tuple[object, object]]:
     """Resume the way ``run-process`` does: validate, then record once the lease is held.
@@ -76,7 +80,8 @@ def _resume_run_config(  # noqa: PLR0913
     changes recorded under the lease. The arguments of ``_write_run_config`` a resume
     does not compare (``process_path``, ``run_id``) take fixed values, and the launch
     config the resume runs with is the one the first write would record
-    (``_launch_config``).
+    (``_launch_config``). *spec* is the process the resume runs, for the inputs it
+    binds ``on_change: new_run``; ``None`` is a process binding nothing.
     """
     run_config = _write_run_config(
         run_dir,
@@ -89,7 +94,7 @@ def _resume_run_config(  # noqa: PLR0913
         auth_flags=auth_flags,
         max_concurrency=max_concurrency,
         step_variants=step_variants,
-        identity_names=identity_names,
+        spec=spec,
     )
     assert run_config == _RunConfigWrite(path=run_dir / STATE_DIR / RUN_CONFIG_FILE, resumed=True)
     if before_lease is not None:
@@ -103,7 +108,7 @@ def _resume_run_config(  # noqa: PLR0913
         ),
         auth_flags=auth_flags,
         max_concurrency=max_concurrency,
-        identity_names=identity_names,
+        spec=spec,
     )
 
 
@@ -633,15 +638,54 @@ class TestWriteRunConfig:
         assert data["git_sha"] == "abc1234"
 
 
-class TestIdentityInputs:
-    """A resume that changes an ``identity: true`` input is refused, and records nothing.
+_BOUND_SPEC = ProcessSpec.model_validate(
+    {
+        "name": "mine",
+        "inputs": {
+            "as_of": {"param": "AS_OF", "as": "string", "on_change": "new_run"},
+            "code_rev": {"param": "CODE_REV", "as": "string", "required": False},
+        },
+    }
+)
+"""A process that binds ``as_of`` and records ``code_rev``."""
 
-    Every other variable keeps the recorded-and-continue default. ``identity_names``
-    carries the variables of the inputs the process declares ``identity: true``, each
-    input's logical name and its ``param`` alias together.
+_RECORD_ONLY_SPEC = ProcessSpec.model_validate(
+    {
+        "name": "mine",
+        "inputs": {
+            "as_of": {"param": "AS_OF", "as": "string"},
+            "code_rev": {"param": "CODE_REV", "as": "string", "required": False},
+        },
+    }
+)
+"""The same process with the binding removed."""
+
+_RENAMED_ALIAS_SPEC = ProcessSpec.model_validate(
+    {
+        "name": "mine",
+        "inputs": {"as_of": {"param": "AS_OF_DATE", "as": "string", "on_change": "new_run"}},
+    }
+)
+"""The same binding, spelled with another ``param`` alias."""
+
+
+def _binding(value: str | None) -> dict[str, object]:
+    """An ``InputBinding`` as a launch-config change carries it."""
+    return {"on_change": "new_run", "value": value}
+
+
+class TestBoundInputs:
+    """A resume that changes an input the run binds ``on_change: new_run`` is refused.
+
+    The first write records each bound input in ``input-bindings.yaml`` beside the
+    config, under its logical name; a resume compares against that record before it
+    records or rewrites anything. Every other variable keeps the record-and-continue
+    default. Removing or adding a binding is a recorded transition, never a silent one.
     """
 
-    def _launch(self, tmp_path: Path, variables: dict[str, str]) -> Path:
+    def _launch(
+        self, tmp_path: Path, variables: dict[str, str], *, spec: ProcessSpec | None = _BOUND_SPEC
+    ) -> Path:
         run_dir = tmp_path / variables["RUN_ID"] / "mine"
         run_dir.mkdir(parents=True)
         _write_run_config(
@@ -652,143 +696,333 @@ class TestIdentityInputs:
             variables=variables,
             backend="local",
             variant=None,
-            identity_names=("as_of", "AS_OF"),
+            spec=spec,
         )
         return run_dir
 
-    def test_a_changed_identity_input_refuses_and_leaves_the_run_untouched(
+    @staticmethod
+    def _record(run_dir: Path) -> Path:
+        return run_dir / STATE_DIR / INPUT_BINDINGS_FILE
+
+    def test_the_first_write_binds_the_declared_inputs_by_logical_name(
         self, tmp_path: Path
     ) -> None:
-        """The message names each changed input, both values, and the two ways out."""
         run_dir = self._launch(
             tmp_path,
-            {"RUN_ID": "run-identity", "AS_OF": "2026-09-22", "as_of": "2026-09-22"},
+            {
+                "RUN_ID": "run-bound",
+                "AS_OF": "2026-09-22",
+                "as_of": "2026-09-22",
+                "CODE_REV": "abc1234",
+                "code_rev": "abc1234",
+            },
+        )
+
+        record = read_input_bindings(run_dir)
+
+        assert record is not None
+        assert record.run_id == "mine/run-bound"
+        assert record.scope_path == []
+        assert record.bindings == {"as_of": InputBinding(on_change="new_run", value="2026-09-22")}
+        raw = read_yaml_file(self._record(run_dir))
+        assert raw["input_bindings"]["schema"] == "metaproc:InputBindings/0.1"
+        # The alias is how the operator spelled the value; the binding is the input.
+        assert "AS_OF" not in self._record(run_dir).read_text(encoding="utf-8")
+
+    def test_a_process_binding_nothing_writes_no_record_and_records_every_change(
+        self, tmp_path: Path
+    ) -> None:
+        """The default is exactly the record-and-continue behavior: nothing binds unless declared."""
+        run_dir = self._launch(
+            tmp_path, {"RUN_ID": "run-unbound", "AS_OF": "2026-09-22"}, spec=None
+        )
+        assert not self._record(run_dir).exists()
+
+        applied = _resume_run_config(
+            run_dir,
+            process_name="mine",
+            variables={"RUN_ID": "run-unbound", "AS_OF": "2026-09-29"},
+        )
+
+        assert applied == {"variables.AS_OF": ("2026-09-22", "2026-09-29")}
+        assert not self._record(run_dir).exists()
+
+    def test_a_changed_bound_input_refuses_and_leaves_the_run_untouched(
+        self, tmp_path: Path
+    ) -> None:
+        """The message names the input once, both values, the record, and the two ways out."""
+        run_dir = self._launch(
+            tmp_path, {"RUN_ID": "run-bound", "AS_OF": "2026-09-22", "as_of": "2026-09-22"}
         )
         config_bytes = (run_dir / STATE_DIR / RUN_CONFIG_FILE).read_bytes()
+        record_bytes = self._record(run_dir).read_bytes()
 
-        with pytest.raises(CLIError, match=r"Resume refused: this launch changes") as exc:
+        with pytest.raises(
+            CLIError, match=r"Resume refused: this launch changes 1 input bound"
+        ) as exc:
             _resume_run_config(
                 run_dir,
                 process_name="mine",
-                variables={"RUN_ID": "run-identity", "AS_OF": "2026-09-29", "as_of": "2026-09-29"},
-                identity_names=("as_of", "AS_OF"),
+                variables={"RUN_ID": "run-bound", "AS_OF": "2026-09-29", "as_of": "2026-09-29"},
+                spec=_BOUND_SPEC,
             )
 
         message = str(exc.value)
-        assert "2 identity inputs" in message
-        assert "  AS_OF: '2026-09-22' -> '2026-09-29'" in message
+        assert f"`on_change: new_run` in {self._record(run_dir)}:" in message
         assert "  as_of: '2026-09-22' -> '2026-09-29'" in message
-        assert str(run_dir / STATE_DIR / RUN_CONFIG_FILE) in message
-        assert "Resume with the recorded values, or start a new RUN_ID" in message
+        # The logical input is compared once; its alias is not a second finding.
+        assert message.count(" -> ") == 1
+        assert "Resume with the recorded value, or start a new RUN_ID for the new one." in message
         # A refused launch records nothing and rewrites nothing.
         assert _events(run_dir) == []
         assert (run_dir / STATE_DIR / RUN_CONFIG_FILE).read_bytes() == config_bytes
+        assert self._record(run_dir).read_bytes() == record_bytes
 
-    def test_an_identity_input_added_on_resume_refuses_naming_the_unset_side(
+    def test_a_renamed_param_alias_keeps_the_binding(self, tmp_path: Path) -> None:
+        """The binding is the logical input; how the operator spells it is not identity."""
+        run_dir = self._launch(
+            tmp_path, {"RUN_ID": "run-renamed", "AS_OF": "2026-09-22", "as_of": "2026-09-22"}
+        )
+        record_bytes = self._record(run_dir).read_bytes()
+
+        applied = _resume_run_config(
+            run_dir,
+            process_name="mine",
+            variables={"RUN_ID": "run-renamed", "AS_OF_DATE": "2026-09-22", "as_of": "2026-09-22"},
+            spec=_RENAMED_ALIAS_SPEC,
+        )
+
+        # The alias rename is an ordinary recorded variable change; the binding holds.
+        assert applied == {
+            "variables.AS_OF": ("2026-09-22", None),
+            "variables.AS_OF_DATE": (None, "2026-09-22"),
+        }
+        assert self._record(run_dir).read_bytes() == record_bytes
+
+    def test_a_non_bound_change_beside_a_bound_input_is_still_recorded(
         self, tmp_path: Path
     ) -> None:
-        run_dir = self._launch(tmp_path, {"RUN_ID": "run-identity-added"})
-
-        with pytest.raises(CLIError) as exc:
-            _resume_run_config(
-                run_dir,
-                process_name="mine",
-                variables={"RUN_ID": "run-identity-added", "AS_OF": "2026-09-29"},
-                identity_names=("as_of", "AS_OF"),
-            )
-
-        message = str(exc.value)
-        assert "1 identity input" in message
-        assert "  AS_OF: <unset> -> '2026-09-29'" in message
-        assert "Resume with the recorded value, or start a new RUN_ID" in message
-
-    def test_a_non_identity_change_beside_an_identity_input_is_still_recorded(
-        self, tmp_path: Path
-    ) -> None:
-        """The identity input holds; every other variable records and continues."""
+        """The bound input holds; every other variable records and continues."""
         run_dir = self._launch(
             tmp_path,
-            {"RUN_ID": "run-identity-mixed", "AS_OF": "2026-09-22", "CODE_REV": "abc1234"},
+            {
+                "RUN_ID": "run-mixed",
+                "AS_OF": "2026-09-22",
+                "as_of": "2026-09-22",
+                "CODE_REV": "abc1234",
+                "code_rev": "abc1234",
+            },
         )
 
         applied = _resume_run_config(
             run_dir,
             process_name="mine",
             variables={
-                "RUN_ID": "run-identity-mixed",
+                "RUN_ID": "run-mixed",
                 "AS_OF": "2026-09-22",
+                "as_of": "2026-09-22",
                 "CODE_REV": "def5678",
+                "code_rev": "def5678",
             },
-            identity_names=("as_of", "AS_OF"),
+            spec=_BOUND_SPEC,
         )
 
-        assert applied == {"variables.CODE_REV": ("abc1234", "def5678")}
+        assert applied == {
+            "variables.CODE_REV": ("abc1234", "def5678"),
+            "variables.code_rev": ("abc1234", "def5678"),
+        }
         events = _events(run_dir)
         assert [event["event"] for event in events] == ["launch_config_change"]
         variables = read_yaml_file(run_dir / STATE_DIR / RUN_CONFIG_FILE)["variables"]
-        assert variables == {
-            "RUN_ID": "run-identity-mixed",
-            "AS_OF": "2026-09-22",
-            "CODE_REV": "def5678",
-        }
+        assert (variables["AS_OF"], variables["CODE_REV"]) == ("2026-09-22", "def5678")
 
-    def test_a_process_declaring_no_identity_input_records_every_change(
-        self, tmp_path: Path
-    ) -> None:
-        """The default is #93's behavior exactly: nothing is identity unless declared."""
-        run_dir = self._launch(tmp_path, {"RUN_ID": "run-no-identity", "AS_OF": "2026-09-22"})
-
-        applied = _resume_run_config(
-            run_dir,
-            process_name="mine",
-            variables={"RUN_ID": "run-no-identity", "AS_OF": "2026-09-29"},
+    def test_a_resume_resolving_the_bound_value_continues(self, tmp_path: Path) -> None:
+        run_dir = self._launch(
+            tmp_path, {"RUN_ID": "run-same", "AS_OF": "2026-09-22", "as_of": "2026-09-22"}
         )
-
-        assert applied == {"variables.AS_OF": ("2026-09-22", "2026-09-29")}
-
-    def test_a_resume_resolving_the_recorded_identity_value_continues(self, tmp_path: Path) -> None:
-        run_dir = self._launch(tmp_path, {"RUN_ID": "run-identity-same", "AS_OF": "2026-09-22"})
         config_bytes = (run_dir / STATE_DIR / RUN_CONFIG_FILE).read_bytes()
+        record_bytes = self._record(run_dir).read_bytes()
 
         applied = _resume_run_config(
             run_dir,
             process_name="mine",
-            variables={"RUN_ID": "run-identity-same", "AS_OF": "2026-09-22"},
-            identity_names=("as_of", "AS_OF"),
+            variables={"RUN_ID": "run-same", "AS_OF": "2026-09-22", "as_of": "2026-09-22"},
+            spec=_BOUND_SPEC,
         )
 
         assert applied == {}
         assert _events(run_dir) == []
         assert (run_dir / STATE_DIR / RUN_CONFIG_FILE).read_bytes() == config_bytes
+        assert self._record(run_dir).read_bytes() == record_bytes
 
-    def test_an_identity_runs_dir_compares_across_the_filestore_mount_aliases(
+    def test_a_binding_is_released_only_at_its_recorded_value(self, tmp_path: Path) -> None:
+        """Editing the spec cannot erase the promise; releasing it is a recorded transition."""
+        run_dir = self._launch(
+            tmp_path, {"RUN_ID": "run-release", "AS_OF": "2026-09-22", "as_of": "2026-09-22"}
+        )
+        record_bytes = self._record(run_dir).read_bytes()
+
+        # Dropping the declaration and moving the value in one launch still refuses.
+        with pytest.raises(CLIError) as exc:
+            _resume_run_config(
+                run_dir,
+                process_name="mine",
+                variables={"RUN_ID": "run-release", "AS_OF": "2026-09-29", "as_of": "2026-09-29"},
+                spec=_RECORD_ONLY_SPEC,
+            )
+        assert (
+            "  as_of: '2026-09-22' -> '2026-09-29' (no longer declared `on_change: new_run`; "
+            "a binding is released only at its recorded value)"
+        ) in str(exc.value)
+        assert _events(run_dir) == []
+        assert self._record(run_dir).read_bytes() == record_bytes
+
+        # At the recorded value the binding is released, and the release is recorded.
+        released = _resume_run_config(
+            run_dir,
+            process_name="mine",
+            variables={"RUN_ID": "run-release", "AS_OF": "2026-09-22", "as_of": "2026-09-22"},
+            spec=_RECORD_ONLY_SPEC,
+        )
+        assert released == {"input_bindings.as_of": (_binding("2026-09-22"), None)}
+        assert [event["changes"] for event in _events(run_dir)] == [
+            [
+                {
+                    "field": "input_bindings.as_of",
+                    "diff": {"old": _binding("2026-09-22"), "new": None},
+                }
+            ]
+        ]
+        record = read_input_bindings(run_dir)
+        assert record is not None
+        assert record.bindings == {}
+
+        # Once released, the value records and continues like any other.
+        moved = _resume_run_config(
+            run_dir,
+            process_name="mine",
+            variables={"RUN_ID": "run-release", "AS_OF": "2026-09-29", "as_of": "2026-09-29"},
+            spec=_RECORD_ONLY_SPEC,
+        )
+        assert moved == {
+            "variables.AS_OF": ("2026-09-22", "2026-09-29"),
+            "variables.as_of": ("2026-09-22", "2026-09-29"),
+        }
+
+    def test_a_binding_declared_on_an_existing_run_is_adopted_at_the_resume_value(
         self, tmp_path: Path
     ) -> None:
-        """Identity comparison normalizes the mount aliases as every other one does."""
-        run_dir = tmp_path / "run-identity-mount" / "mine"
+        """A run without a record acquires no guarantee about the launches before it."""
+        run_dir = self._launch(tmp_path, {"RUN_ID": "run-adopt", "AS_OF": "2026-09-22"}, spec=None)
+        assert not self._record(run_dir).exists()
+
+        adopted = _resume_run_config(
+            run_dir,
+            process_name="mine",
+            variables={"RUN_ID": "run-adopt", "AS_OF": "2026-09-29", "as_of": "2026-09-29"},
+            spec=_BOUND_SPEC,
+        )
+
+        assert adopted == {
+            "input_bindings.as_of": (None, _binding("2026-09-29")),
+            "variables.AS_OF": ("2026-09-22", "2026-09-29"),
+            "variables.as_of": (None, "2026-09-29"),
+        }
+        record = read_input_bindings(run_dir)
+        assert record is not None
+        assert record.run_id == "mine/run-adopt"
+        assert record.bindings == {"as_of": InputBinding(on_change="new_run", value="2026-09-29")}
+        # From that launch on, the binding holds.
+        with pytest.raises(CLIError, match=r"  as_of: '2026-09-29' -> '2026-09-22'"):
+            _resume_run_config(
+                run_dir,
+                process_name="mine",
+                variables={"RUN_ID": "run-adopt", "AS_OF": "2026-09-22", "as_of": "2026-09-22"},
+                spec=_BOUND_SPEC,
+            )
+
+    def test_an_unset_optional_bound_input_binds_to_unset(self, tmp_path: Path) -> None:
+        spec = ProcessSpec.model_validate(
+            {
+                "name": "mine",
+                "inputs": {
+                    "as_of": {
+                        "param": "AS_OF",
+                        "as": "string",
+                        "required": False,
+                        "on_change": "new_run",
+                    }
+                },
+            }
+        )
+        run_dir = self._launch(tmp_path, {"RUN_ID": "run-unset"}, spec=spec)
+        record = read_input_bindings(run_dir)
+        assert record is not None
+        assert record.bindings == {"as_of": InputBinding(on_change="new_run", value=None)}
+
+        with pytest.raises(CLIError, match=r"  as_of: <unset> -> '2026-09-29'"):
+            _resume_run_config(
+                run_dir,
+                process_name="mine",
+                variables={"RUN_ID": "run-unset", "AS_OF": "2026-09-29", "as_of": "2026-09-29"},
+                spec=spec,
+            )
+
+    def test_a_bound_runs_dir_input_compares_across_the_filestore_mount_aliases(
+        self, tmp_path: Path
+    ) -> None:
+        """A binding normalizes the mount aliases as the run directory does."""
+        spec = ProcessSpec.model_validate(
+            {
+                "name": "mine",
+                "inputs": {"runs_dir": {"param": "RUNS_DIR", "as": "path", "on_change": "new_run"}},
+            }
+        )
+        run_dir = tmp_path / "run-mount" / "mine"
         run_dir.mkdir(parents=True)
         _write_run_config(
             run_dir,
             process_name="mine",
             process_path=Path("process/mine/mine.process.md"),
-            run_id="run-identity-mount",
+            run_id="run-mount",
             variables={
-                "RUN_ID": "run-identity-mount",
+                "RUN_ID": "run-mount",
                 "RUNS_DIR": "/mnt/disks/filestore/runs",
+                "runs_dir": "/mnt/disks/filestore/runs",
             },
             backend="gcp-orchestrator",
             variant=None,
+            spec=spec,
         )
 
         applied = _resume_run_config(
             run_dir,
             process_name="mine",
-            variables={"RUN_ID": "run-identity-mount", "RUNS_DIR": "/mnt/filestore/runs"},
+            variables={
+                "RUN_ID": "run-mount",
+                "RUNS_DIR": "/mnt/filestore/runs",
+                "runs_dir": "/mnt/filestore/runs",
+            },
             backend="gcp-orchestrator",
-            identity_names=("RUNS_DIR",),
+            spec=spec,
         )
 
-        assert applied == {}
+        assert not any(field.startswith("input_bindings.") for field in applied)
+
+    def test_a_corrupt_bindings_record_refuses(self, tmp_path: Path) -> None:
+        run_dir = self._launch(
+            tmp_path, {"RUN_ID": "run-corrupt", "AS_OF": "2026-09-22", "as_of": "2026-09-22"}
+        )
+        self._record(run_dir).write_text("input_bindings: [unterminated\n", encoding="utf-8")
+
+        with pytest.raises(CLIError, match=r"Corrupt input-bindings\.yaml"):
+            _resume_run_config(
+                run_dir,
+                process_name="mine",
+                variables={"RUN_ID": "run-corrupt", "AS_OF": "2026-09-22", "as_of": "2026-09-22"},
+                spec=_BOUND_SPEC,
+            )
+        assert _events(run_dir) == []
 
 
 class TestGetGitSha:

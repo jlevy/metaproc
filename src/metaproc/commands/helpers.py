@@ -7,8 +7,15 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
+from ruamel.yaml import YAMLError
+
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.engine.discovery import discover_items_from_source, normalize_item_fields
+from metaproc.engine.input_bindings import (
+    compare_input_bindings,
+    input_binding_refusal,
+    recorded_input_bindings,
+)
 from metaproc.engine.placeholders import (
     check_unresolved_placeholders,
     resolve_output_paths,
@@ -17,7 +24,7 @@ from metaproc.engine.placeholders import (
 from metaproc.errors import CLIError, ValidationError
 from metaproc.io.frontmatter import ProcessEnvelope, load_frontmatter_typed
 from metaproc.models.authored import IOSpec, ProcessSpec, ProcessStep
-from metaproc.paths import PROCESS_SPEC_SUFFIX
+from metaproc.paths import PROCESS_SPEC_SUFFIX, input_bindings_file
 from metaproc.runtime_paths import RunSettingsError, resolve_runtime_runs_dir
 
 
@@ -307,3 +314,37 @@ def relpath(p: Path) -> Path:
         return p.resolve().relative_to(Path.cwd().resolve())
     except ValueError:
         return p
+
+
+def refuse_changed_input_bindings(
+    scope_dir: Path,
+    spec: ProcessSpec,
+    variables: Mapping[str, str],
+    *,
+    launch: str,
+) -> None:
+    """Refuse *launch* when it resolves a value other than one *scope_dir* binds.
+
+    The check ``run-step`` and ``run-parallel`` make before they touch task state
+    (``engine.input_bindings``): they honor the record a ``run-process`` launch or a
+    composite scope entry wrote for the scope their run directory resolves to, and
+    change nothing in it, so neither adopts, releases, nor establishes a binding. A
+    scope with no record is not held to anything. A record that cannot be read refuses,
+    as a corrupt ``run-config.yaml`` does.
+    """
+    try:
+        recorded = recorded_input_bindings(scope_dir)
+    except (YAMLError, UnicodeDecodeError, ValueError) as exc:
+        raise CLIError(
+            f"Corrupt input-bindings.yaml: {input_bindings_file(scope_dir)}: {exc}"
+        ) from exc
+    if not recorded:
+        return
+    refusal = input_binding_refusal(
+        compare_input_bindings(recorded, spec, variables),
+        spec=spec,
+        record_path=input_bindings_file(scope_dir),
+        launch=launch,
+    )
+    if refusal:
+        raise CLIError(refusal)

@@ -187,6 +187,43 @@ On a filesystem this is a create-only commit record under a scheduler-owned
 claim, or an atomic rename plus epoch check; on an object store, a generation
 precondition. The storage primitive may vary; the semantic requirement does not.
 
+## Inputs: Identity, Reuse, and Evidence
+
+A changed input can mean three different things, and the authored contract names which:
+`on_change` on a process input is `record`, `rerun`, or `new_run`.
+
+- **`record`** (the default): the value is execution evidence.
+  The change is recorded and the run continues; nothing about it decides reuse.
+  A launch timestamp, or the checkout revision a run was launched from, is this.
+- **`rerun`**: the value is a reuse input.
+  A change invalidates the tasks that consumed it and their descendants, along the same
+  dependency mappings scheduling uses, and the run continues.
+  A corrected roster, a refreshed dataset, or an as-of value that is a computational
+  input rather than a study identity is this.
+- **`new_run`**: the value is work identity.
+  The scope that binds it holds one value for its whole life, because its task state,
+  results, and summaries are stated in terms of it, and a launch that resolves another
+  is refused: the new value is a different run.
+  Used sparingly; being important does not make a value immutable.
+
+`record` and `new_run` are implemented: a scope’s bound inputs are recorded in
+`input-bindings.yaml` when it is first entered and compared at every entry
+(`metaproc help design`, §9.8). `rerun` is not shipped until it changes reuse behavior;
+today a value bound through `with:` or read by a handler at runtime is outside the step
+fingerprint, and the operator’s remedy is `--from <step> --force`. The target is that a
+`rerun` input becomes a fingerprint input of every task that consumes it, so a changed
+value increments those tasks’ generations exactly as far as the data reaches.
+Making it the default for declared inputs is a migration, not a flip.
+
+All three policies keep provenance.
+The target evidence chain is per attempt: each attempt references the launch context
+actually dispatched to it and its effective input bindings; each commit references its
+producing attempt and the upstream commits it consumed.
+Mixing versions inside one run is then legitimate, and old output is never relabeled
+with the latest config.
+Today’s attempt records preserve lifecycle facts and a step hash; the launch context and
+the effective bindings are the next facts to attach.
+
 ## Admission
 
 Readiness is a dependency fact: every clause is satisfied.

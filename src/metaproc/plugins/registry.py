@@ -21,6 +21,11 @@ from metaproc.models.resource_summary import (
     ResourceUsageSummary,
 )
 from metaproc.models.resources import RESOURCES_DOCUMENT_CONTRACT, ResourcesDocument
+from metaproc.models.runtime import (
+    INPUT_BINDINGS_CONTRACT,
+    INPUT_BINDINGS_ENVELOPE,
+    InputBindingsRecord,
+)
 from metaproc.models.usage import UsageReport
 from metaproc.plugins.protocol import (
     AdapterConfigTransform,
@@ -121,6 +126,16 @@ class PluginRegistryImpl:
                 id=RUN_PLAN_SNAPSHOT_CONTRACT,
                 model=RunPlanSnapshot,
                 envelope_key="run_plan",
+                profile=SchemaProfile.pure_yaml,
+                status=SchemaStatus.enforced,
+            )
+        )
+
+        self.register_softschema(
+            Contract(
+                id=INPUT_BINDINGS_CONTRACT,
+                model=InputBindingsRecord,
+                envelope_key=INPUT_BINDINGS_ENVELOPE,
                 profile=SchemaProfile.pure_yaml,
                 status=SchemaStatus.enforced,
             )

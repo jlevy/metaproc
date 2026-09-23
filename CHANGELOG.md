@@ -26,21 +26,27 @@ development series.
   the next `metaproc status` on it, whether or not its resource artifacts also need
   recovering. A list cost that leaves out unpriced models reads `at least` in the summary
   and the rollup.
-- **A process input can declare itself part of the run’s identity.** `identity: true` on
-  an entry of a process’s `inputs:` block says one `RUN_ID` holds one value for that
-  input, because the run’s task state, results, and summaries all describe it.
-  A resume that resolves a different value is refused before anything runs, beside the
-  refusal of a moved run directory, with a message naming each changed input, its
-  recorded and its new value, and the two ways out: resume with the recorded values, or
-  start a new `RUN_ID` for the new ones.
-  A refused launch records and rewrites nothing.
-  The logical input name and its `param` alias are compared together, since resolution
-  writes one value under both, and a name absent from either side compares as unset.
-  The default is unchanged: an input without `identity:` records a change as a
-  `launch_config_change` event and the resume continues, which is what a value such as
-  the code revision a run launched from wants.
-  A composite step’s child scope has no `run-config.yaml` of its own, so the launched
-  process’s declarations are the run’s only identity check.
+- **A process input can bind itself to one value for the life of a run.**
+  `on_change: new_run` on an entry of a process’s `inputs:` block says the scope that
+  resolves the input holds one value for it, because its task state, results, and
+  summaries all describe that value.
+  The value is recorded in the scope’s `.state/input-bindings.yaml`
+  (`metaproc:InputBindings/0.1`) when the scope is first entered, under the input’s
+  logical name, and every later entry compares against it before anything is written: a
+  `run-process` resume, a composite child scope after `with:` resolution, and `run-step`
+  and `run-parallel`. A launch that resolves another value is refused, naming each
+  changed input, its recorded and its new value, and the two ways out: the recorded
+  value, or a new `RUN_ID`. A renamed `param` alias is not a change.
+  Removing the declaration does not erase the promise: a binding is released only at its
+  recorded value, and the release, like the adoption of a binding on a run that predates
+  it, is recorded as an `input_bindings.<NAME>` launch-config change.
+  `on_change` defaults to `record`, which is unchanged behavior: the change is recorded
+  as a `launch_config_change` event and the resume continues, which is what a value such
+  as the code revision a run launched from wants.
+  `new_run` needs a `param`-backed input; a file-backed input is rejected when the spec
+  loads, since its contents are outside the launch config and reuse follows them through
+  step fingerprints. An `inputs:` entry now rejects a field the model does not declare
+  instead of ignoring it.
 - **`gemini-3.8-flash` has a list price.** The pricing table records Google’s
   introductory rate through 2026-12-31 ($0.75/M input, $3.75/M output, $0.075/M cached
   input) as its actual price and the standard rate from 2027-01-01 ($1.50, $7.50, $0.15)
