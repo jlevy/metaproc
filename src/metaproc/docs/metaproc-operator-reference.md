@@ -721,6 +721,10 @@ To confirm which model actually served a profile:
 uv run metaproc auth-check --live --variant <execution-profile> --assert-model <model>
 ```
 
+The probe runs with the profile’s own adapter config, `native_settings` included, so a
+profile that turns the flag off fails it.
+A step’s own adapter config and a config transform apply only inside a run, where the
+run’s terminal-result check still refuses a rewritten result.
 For Gemini that assertion reads the terminal result event’s `stats.models` and counts
 only the models whose entry billed tokens, because a request that failed is still listed
 there, with zero. A request the CLI rewrote, or answered with a fallback after the

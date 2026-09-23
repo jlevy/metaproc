@@ -16,8 +16,9 @@ import os
 import subprocess
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import NamedTuple
 
 import typer
 from strif import temp_output_file
@@ -96,14 +97,28 @@ def _find_repo_root(start: Path) -> Path | None:
     return None
 
 
+class _VariantTarget(NamedTuple):
+    """What `--variant` names: an adapter, and for a profile its model, provider and config."""
+
+    adapter: str | None
+    model: str | None
+    provider: str | None
+    config: dict[str, object]
+
+
 def _resolve_variant_target(
     variant: str | None,
     *,
     profile_files: list[Path] | tuple[Path, ...] = (),
-) -> tuple[str | None, str | None, str | None]:
-    """Resolve a profile or raw adapter name to (adapter_type, model, provider)."""
+) -> _VariantTarget:
+    """Resolve a profile or raw adapter name to its adapter, model, provider and config.
+
+    For an execution profile, `config` is a copy of the profile's own adapter config,
+    the same block a run seeds each of the profile's steps from; a raw adapter name
+    has none.
+    """
     if not variant:
-        return None, None, None
+        return _VariantTarget(None, None, None, {})
 
     registry = ExecutionProfileRegistry.load(
         repo_root=_find_repo_root(Path.cwd()),
@@ -112,14 +127,15 @@ def _resolve_variant_target(
     if variant in registry.entries:
         resolved = registry.resolve(variant)
         profile = resolved.profile
-        return (
+        return _VariantTarget(
             profile.adapter,
             str(profile.config.get("model") or profile.model or "") or None,
             str(profile.config.get("provider") or profile.provider or "") or None,
+            dict(profile.config),
         )
 
     if variant in ADAPTER_REGISTRY:
-        return variant, None, None
+        return _VariantTarget(variant, None, None, {})
 
     available = ", ".join(registry.names) or "<none>"
     raise CLIError(f"unknown execution profile for --variant: {variant!r} (available: {available})")
@@ -305,8 +321,13 @@ def _run_live_check(
     provider: str | None = None,
     *,
     assert_model: str | None = None,
+    profile_config: Mapping[str, object] | None = None,
 ) -> list[tuple[bool, str]]:
     """Send a trivial prompt to an adapter and report success + latency.
+
+    *profile_config* is the adapter config of the execution profile `--variant`
+    named, if any. The probe starts from it, as a run starts a step from it, and
+    then sets what the probe itself needs.
 
     When *assert_model* is set, also parse the subprocess stdout and verify the
     model that answered contains the expected substring: the terminal event's
@@ -320,12 +341,16 @@ def _run_live_check(
     if not status.cli_found or not status.credentials_found:
         return [(False, f"{adapter_type}: skipping live check (no binary or credentials)")]
 
-    # Build a minimal config — just enough for a trivial prompt.
+    # Start from the profile's own adapter config, as a run seeds a step's config
+    # from it (`engine/build_plan.py`), so a profile setting that changes routing —
+    # a Gemini `native_settings` block above all — reaches the probe. Without a
+    # profile this is a minimal config, just enough for a trivial prompt. The
+    # probe's own requirements are layered on top.
     # For pi-cli, pin the provider explicitly so the live check exercises the
     # requested provider rather than falling back to pi-cli's default — that
     # fallback is what produced the vertex-maas false-green (see Phase 0c
     # blocker report).
-    merged_config: dict[str, object] = {}
+    merged_config: dict[str, object] = dict(profile_config or {})
     if variant is not None:
         merged_config["model"] = variant
     effective_provider = provider
@@ -336,22 +361,29 @@ def _run_live_check(
     if adapter_type == "claude-code-cli":
         merged_config.setdefault("permission_mode", "bypassPermissions")
         # assert_model needs the `system.init` event, which only appears
-        # under stream-json. Plain text output carries no model marker.
-        default_format = "stream-json" if assert_model else "text"
-        merged_config.setdefault("output_format", default_format)
+        # under stream-json. Plain text output carries no model marker, so the
+        # assertion overrides a profile's format rather than defaulting it.
+        if assert_model:
+            merged_config["output_format"] = "stream-json"
+        else:
+            merged_config.setdefault("output_format", "text")
         merged_config["verbose"] = merged_config["output_format"] == "stream-json"
         merged_config["no_session_persistence"] = True
     if adapter_type == "gemini-cli" and assert_model:
         # Same reasoning: need the terminal `result` event carrying
-        # `stats.models`, which only stream-json emits.
-        merged_config.setdefault("output_format", "stream-json")
-    if adapter_type == "codex-cli":
+        # `stats.models`, which only stream-json emits. A profile whose
+        # `output_format` is `text` would otherwise leave no terminal event.
+        merged_config["output_format"] = "stream-json"
+    if adapter_type == "codex-cli" and not any(
+        merged_config.get(key) for key in ("permission_mode", "sandbox", "approval_policy")
+    ):
         # Codex refuses to dispatch without a permission signal because it
         # would otherwise prompt for approval on every tool call and
         # deadlock in batch mode (stdin=DEVNULL). A trivial "Respond with
         # exactly: OK" prompt never executes tools, so bypassing approvals
-        # is the minimum safe default for the live probe.
-        merged_config.setdefault("permission_mode", "bypassPermissions")
+        # is the minimum safe default for the live probe. A profile that
+        # already gives a signal keeps it: bypass would override its sandbox.
+        merged_config["permission_mode"] = "bypassPermissions"
 
     results: list[tuple[bool, str]] = []
     label = f"{adapter_type}" + (f" ({variant})" if variant else "")
@@ -914,7 +946,7 @@ def auth_check(
 
     # Adapter checks. When a variant or --adapter is supplied, scope Phase 1
     # to the relevant adapter instead of failing on unrelated CLIs.
-    scoped_adapter, scoped_model, scoped_provider = _resolve_variant_target(
+    scoped_adapter, scoped_model, scoped_provider, scoped_config = _resolve_variant_target(
         variant,
         profile_files=[*variant_file, *profile_file],
     )
@@ -943,6 +975,7 @@ def auth_check(
                     timeout,
                     provider=provider or scoped_provider,
                     assert_model=assert_model,
+                    profile_config=scoped_config,
                 )
             )
         else:

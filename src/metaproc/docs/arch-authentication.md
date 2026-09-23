@@ -6,7 +6,7 @@ status: Draft — partial currency notice below
 ---
 # Architecture: Authentication and Credentials
 
-**Date:** 2026-04-21 (last updated 2026-09-22) **Status:** Draft — partial currency
+**Date:** 2026-04-21 (last updated 2026-09-23) **Status:** Draft — partial currency
 notice below
 
 ## Currency notice (2026-04-28)
@@ -295,8 +295,10 @@ The single operator-facing verification tool:
 
 Key helpers:
 
-- `_resolve_variant_target(variant)` — splits a variant like `pi-cli-glm-5-maas` into
-  `(adapter_type, model_name)`. Unknown prefixes fall back to `pi-cli`.
+- `_resolve_variant_target(variant)` — resolves an execution-profile name, or a raw
+  adapter name, to its adapter, model, provider, and the profile’s adapter config, which
+  the live probe starts from as a run starts a step from it.
+  An unknown name is an error.
 - `_infer_pi_provider(model_name)` — maps `*-maas` → `vertex-maas`, `gemini-*` /
   `google/gemini*` → `google-vertex`, `claude-*` → `anthropic`, etc.
   Prevents false-greens when the operator specifies only a model.

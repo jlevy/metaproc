@@ -91,7 +91,11 @@ development series.
   `stats.models` also lists a request that failed, with zero tokens, so until now a
   silent fallback from the requested model passed both the probe and a run’s check; both
   now refuse a result in which the requested model billed no tokens.
-  The other adapters are unchanged: they report only the model they were asked for.
+  `auth-check --live --variant <profile>` now probes with the profile’s own adapter
+  config, `native_settings` included, as a run does; before, a profile that turned off
+  `experimental.dynamicModelConfiguration` passed the probe and then had every Gemini
+  result refused. The other adapters are unchanged: they report only the model they were
+  asked for.
 
 - **A resume re-runs a consumer whose collected input changed.** A step that declares a
   `collect:` input was reused on resume whenever its fingerprint matched, so after a

@@ -535,6 +535,7 @@ profiles:
         "codex-cli",
         "gpt-5.5",
         "openai",
+        {"model": "gpt-5.5"},
     )
 
     with pytest.raises(Exception, match="unknown execution profile"):

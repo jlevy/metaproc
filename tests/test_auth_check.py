@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess as sp
 import sys
@@ -106,10 +107,11 @@ class TestCheckAdapter:
 
 class TestResolveVariantTarget:
     def test_exact_adapter_name_keeps_adapter(self):
-        adapter_type, model_name, provider = _resolve_variant_target("claude-code-cli")
+        adapter_type, model_name, provider, config = _resolve_variant_target("claude-code-cli")
         assert adapter_type == "claude-code-cli"
         assert model_name is None
         assert provider is None
+        assert config == {}
 
 
 # ── Phase 3: _run_readiness_check ──
@@ -597,6 +599,153 @@ class TestRunLiveCheckAssertModel:
         assert result.exit_code == 0, result.output
         assert mock_live.call_count == 1
         assert mock_live.call_args.kwargs.get("assert_model") == "sonnet"
+
+
+class TestLiveCheckUsesTheProfileConfig:
+    """`--variant <profile>` must probe with the profile's own adapter config.
+
+    A run seeds each step's config from the profile, and Gemini's
+    `native_settings` decide whether it rewrites a `*flash` id. A probe that
+    ignored them could pass a profile whose every run is then refused.
+    """
+
+    _PROFILE = "gemini-flash-probe"
+
+    @staticmethod
+    def _write_profile(tmp_path: Path, config_lines: str) -> Path:
+        profile_file = tmp_path / "profiles.yaml"
+        profile_file.write_text(
+            "profiles:\n"
+            "  gemini-flash-probe:\n"
+            "    adapter: gemini-cli\n"
+            "    model: gemini-3.6-flash\n"
+            "    config:\n"
+            "      model: gemini-3.6-flash\n" + config_lines,
+            encoding="utf-8",
+        )
+        return profile_file
+
+    @staticmethod
+    def _stub_gemini(calls: list[dict[str, object]]):
+        """Stand in for gemini-cli 0.59.0's routing: with dynamic model configuration
+        off, an id ending in `flash` is answered by `gemini-3.5-flash`.
+        """
+
+        def run(cmd: list[str], **kwargs: object) -> MagicMock:
+            env = kwargs["env"]
+            assert isinstance(env, dict)
+            settings = json.loads(Path(env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text("utf-8"))
+            dynamic = settings.get("experimental", {}).get("dynamicModelConfiguration") is True
+            model = cmd[cmd.index("-m") + 1]
+            output_format = cmd[cmd.index("--output-format") + 1]
+            served = model if dynamic or not model.endswith("flash") else "gemini-3.5-flash"
+            calls.append({"dynamic": dynamic, "output_format": output_format})
+            proc = MagicMock()
+            proc.returncode = 0
+            proc.stderr = ""
+            proc.stdout = (
+                "OK\n"
+                if output_format != "stream-json"
+                else (
+                    json.dumps({"type": "init", "model": model})
+                    + "\n"
+                    + json.dumps(
+                        {
+                            "type": "result",
+                            "status": "success",
+                            "stats": {"models": {served: {"total_tokens": 10}}},
+                        }
+                    )
+                    + "\n"
+                )
+            )
+            return proc
+
+        return run
+
+    def _invoke(self, profile_file: Path, calls: list[dict[str, object]]):
+        gemini = ADAPTER_REGISTRY["gemini-cli"]
+        status = AuthStatus(
+            adapter_type="gemini-cli",
+            cli_found=True,
+            cli_path="/usr/bin/gemini",
+            credentials_found=True,
+            auth_mode="gemini-api-key",
+            details="stub",
+            setup_hint="",
+        )
+        with (
+            patch(
+                "metaproc.commands.auth_check.check_disk_space",
+                return_value=(True, "Disk ok"),
+            ),
+            patch(
+                "metaproc.commands.auth_check._check_gcloud_token",
+                return_value=(True, "GCP ok"),
+            ),
+            patch.object(gemini, "check_auth", return_value=status),
+            patch("metaproc.adapters.gemini_cli._gemini_version_drift", return_value=None),
+            patch(
+                "metaproc.commands.auth_check.subprocess.run",
+                side_effect=self._stub_gemini(calls),
+            ),
+        ):
+            return runner.invoke(
+                app,
+                [
+                    "auth-check",
+                    "--live",
+                    "--variant",
+                    self._PROFILE,
+                    "--profile-file",
+                    str(profile_file),
+                    "--assert-model",
+                    "gemini-3.6-flash",
+                ],
+            )
+
+    def test_profile_native_settings_reach_the_probe(self, tmp_path: Path) -> None:
+        """A profile that turns dynamic model configuration off fails the probe."""
+        profile_file = self._write_profile(
+            tmp_path,
+            "      native_settings:\n"
+            "        experimental:\n"
+            "          dynamicModelConfiguration: false\n",
+        )
+        calls: list[dict[str, object]] = []
+
+        result = self._invoke(profile_file, calls)
+
+        assert calls == [{"dynamic": False, "output_format": "stream-json"}]
+        assert result.exit_code == 1, result.output
+        assert (
+            "no served model matches expected 'gemini-3.6-flash' (requested "
+            "'gemini-3.6-flash') — the CLI answered with a different model; billed: "
+            "gemini-3.5-flash (10 tokens)"
+        ) in result.output
+
+    def test_a_profile_without_the_override_keeps_metaproc_settings(self, tmp_path: Path) -> None:
+        """The control: the same stub serves the request when the flag stays on."""
+        profile_file = self._write_profile(tmp_path, "")
+        calls: list[dict[str, object]] = []
+
+        result = self._invoke(profile_file, calls)
+
+        assert calls == [{"dynamic": True, "output_format": "stream-json"}]
+        assert result.exit_code == 0, result.output
+        assert "served model 'gemini-3.6-flash' matches expected 'gemini-3.6-flash'" in (
+            result.output
+        )
+
+    def test_assert_model_overrides_a_profile_text_format(self, tmp_path: Path) -> None:
+        """Text output carries no terminal event, so the probe forces stream-json."""
+        profile_file = self._write_profile(tmp_path, "      output_format: text\n")
+        calls: list[dict[str, object]] = []
+
+        result = self._invoke(profile_file, calls)
+
+        assert calls == [{"dynamic": True, "output_format": "stream-json"}]
+        assert result.exit_code == 0, result.output
 
 
 class TestRunLiveCheckCodex:
