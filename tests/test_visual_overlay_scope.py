@@ -169,7 +169,7 @@ def _harness_script(domain_views_js_path: Path) -> str:
           }});
 
           // 2) Rendering any visual with nothing attached passes zero decorators.
-          api.setVisualLoadedForPath('earnings/process/mine/mine.process.md');
+          api.setVisualLoadedForPath('example/process/mine/mine.process.md');
           captured.decorators = null;
           await api.renderVizPayload({{}}, {{viz: {{nodes: [], edges: []}}}});
           results.push({{
@@ -179,7 +179,7 @@ def _harness_script(domain_views_js_path: Path) -> str:
           }});
 
           // 3) Attaching the payload to process path P applies the decorator ONLY for P.
-          const procA = 'earnings/process/mine/mine.process.md';
+          const procA = 'example/process/mine/mine.process.md';
           api.attachVisualResources(runAPayload, procA);
 
           api.setVisualLoadedForPath(procA);
@@ -192,7 +192,7 @@ def _harness_script(domain_views_js_path: Path) -> str:
           }});
 
           // 4) Opening a DIFFERENT visual (run B's process) must NOT inherit the overlay.
-          const procB = 'earnings/process/predict/predict.process.md';
+          const procB = 'example/process/predict/predict.process.md';
           api.setVisualLoadedForPath(procB);
           captured.decorators = null;
           await api.renderVizPayload({{}}, {{viz: {{nodes: [], edges: []}}}});

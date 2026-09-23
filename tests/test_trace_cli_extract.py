@@ -143,7 +143,7 @@ def run_dir(tmp_path: Path) -> Path:
             json.dumps(
                 {
                     "timestamp": "2026-05-12T00:00:05Z",
-                    "tool_name": "trends",
+                    "tool_name": "fetch",
                     "tier": "live",
                     "command": ["arena", "tool", "fetch", "item-b"],
                     "extra_args": [],

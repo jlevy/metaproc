@@ -41,7 +41,7 @@ def test_metaproc_does_not_import_domain_packages() -> None:
     )
 
 
-def test_metaproc_cli_has_no_earnings_eval_or_items_commands() -> None:
+def test_metaproc_cli_has_no_domain_eval_or_items_commands() -> None:
     cli_source = (SRC_ROOT / "cli.py").read_text()
     command_sources = "\n".join(path.read_text() for path in COMMANDS_ROOT.rglob("*.py"))
     source = f"{cli_source}\n{command_sources}"
@@ -59,7 +59,7 @@ def test_metaproc_cli_has_no_earnings_eval_or_items_commands() -> None:
     assert not leaks
 
 
-def test_frontmatter_does_not_statically_own_earnings_eval_envelopes() -> None:
+def test_frontmatter_does_not_statically_own_domain_eval_envelopes() -> None:
     source = (SRC_ROOT / "io" / "frontmatter.py").read_text()
     banned = ["scoreboard_models", "judge_verdicts_v2", "scoreboard_v2"]
     leaks = [token for token in banned if token in source]

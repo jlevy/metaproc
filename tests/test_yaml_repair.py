@@ -91,7 +91,7 @@ class TestRepairFrontmatterFile:
             "  item: example-item\n"
             "  source_gaps:\n"
             "    - source: search_interest\n"
-            '      gap: "Spring Relaunch" is sparse across all windows.\n'
+            '      gap: "Partner\'s Relaunch" is sparse across all windows.\n'
             "---\n"
             "# Body\n"
         )
@@ -102,7 +102,7 @@ class TestRepairFrontmatterFile:
         assert meta is not None
         assert (
             meta["research_note"]["source_gaps"][0]["gap"]
-            == '"Spring Relaunch" is sparse across all windows.'
+            == '"Partner\'s Relaunch" is sparse across all windows.'
         )
 
     def test_preserves_already_quoted_values(self, tmp_path: Path) -> None:

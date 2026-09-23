@@ -498,6 +498,8 @@ class TestWorkerDispatchRuntimeVars:
         assert request.job_id.endswith("-w0-1776328315-abc123")
         assert len(request.job_id) <= 63
         assert not request.job_id.endswith("-")
+        # The run id was cut, not the worker index or the uniqueness suffix.
+        assert "replay" not in request.job_id
 
     def test_submit_workers_spills_large_context_payload_to_file(self, tmp_path: Path):
 
