@@ -8,12 +8,15 @@ minimum stays a warning, because those runs can still succeed.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from metaproc.adapters import gemini_cli
 from metaproc.adapters.gemini_cli import (
     MIN_GEMINI_CLI_VERSION,
     PINNED_GEMINI_CLI_VERSION,
+    GeminiCliAdapter,
     GeminiCliVersionMismatch,
     _below_minimum,
     _gemini_version_drift,
@@ -90,6 +93,35 @@ def test_a_cli_below_the_minimum_raises(monkeypatch: pytest.MonkeyPatch) -> None
     assert "0.34.0" in message
     assert MIN_GEMINI_CLI_VERSION in message
     assert "--skip-trust" in message
+
+
+def test_the_refusal_names_the_pinned_version_in_its_install_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An operator who runs the hint verbatim must land on the pin, not `latest`."""
+    monkeypatch.setattr(gemini_cli, "check_cli_version", lambda _spec: _drift_message("0.34.0"))
+    with pytest.raises(GeminiCliVersionMismatch) as excinfo:
+        _gemini_version_drift()
+    assert f"@google/gemini-cli@{PINNED_GEMINI_CLI_VERSION}" in str(excinfo.value)
+
+
+def test_the_refusal_and_the_auth_hint_quote_one_install_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The version refusal and the missing-binary hint must name the same command,
+    so an operator lands on one version whichever message sent them to npm.
+    """
+    install_command = re.compile(r"npm install -g \S+")
+    monkeypatch.setattr(gemini_cli, "check_cli_version", lambda _spec: _drift_message("0.34.0"))
+    with pytest.raises(GeminiCliVersionMismatch) as excinfo:
+        _gemini_version_drift()
+    monkeypatch.setattr("metaproc.adapters.gemini_cli.shutil.which", lambda _name: None)
+    status = GeminiCliAdapter().check_auth()
+
+    assert not status.cli_found
+    refusal_commands = install_command.findall(str(excinfo.value))
+    assert len(refusal_commands) == 1, str(excinfo.value)
+    assert install_command.findall(status.setup_hint) == refusal_commands
 
 
 def test_a_cli_at_the_minimum_warns_but_does_not_raise(

@@ -85,9 +85,12 @@ For a given `(harness, model)`:
 
 1. **Auth + dispatch** —
    `metaproc auth-check --live --adapter <h> --model <m> --assert-model <m>` issues a
-   trivial prompt and verifies the observed model ID in the harness’s identity event
-   matches the requested one (substring match; passing the bare model ID is tight enough
-   to catch silent fallback to the harness default).
+   trivial prompt and verifies the model the harness reports matches the requested one
+   (substring match; passing the bare model ID is tight enough to catch silent fallback
+   to the harness default).
+   For `gemini-cli` that is a model the terminal `result` event’s `stats.models` shows
+   billing tokens; for `pi-cli`, `message.model` on the first assistant `message_start`
+   event.
 2. **Tool round-trip** — `metaproc probe-tool-use --harness <h> --model <m>` writes a
    unique sentinel string to a tempfile under `.metaproc-probe/<hash>/`, asks the model
    to read it, and asserts the sentinel appears in the model’s response (parsing

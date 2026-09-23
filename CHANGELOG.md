@@ -64,12 +64,13 @@ development series.
   `metaproc override <RUN_ID> <step> --process <spec> --satisfied` command that records
   an ancestor as satisfied.
 - **The pinned gemini-cli is 0.59.0.** The version check warns when the `gemini` on PATH
-  differs from the pin, which moves from 0.55.1. On Vertex AI, 0.59.0 still rewrites an
-  unrecognized model id ending in `flash` to `gemini-3.5-flash` unless
-  `experimental.dynamicModelConfiguration` is on; with the settings metaproc writes, a
-  request for `gemini-3.6-flash` is served by `gemini-3.6-flash`. 0.59.0 was published
-  on 2026-09-08 and clears the repository’s 14-day package cool-off on 2026-09-22; until
-  then `npm install` under the repository’s `.npmrc` refuses it.
+  differs from the pin, which moves from 0.55.1. On Vertex AI, 0.59.0 still rewrites
+  every model id ending in `flash`, `gemini-3.5-flash` itself excepted, to
+  `gemini-3.5-flash` unless `experimental.dynamicModelConfiguration` is on; with the
+  settings metaproc writes, a request for `gemini-3.6-flash` is served by
+  `gemini-3.6-flash`. 0.59.0 was published on 2026-09-08 and clears the repository’s
+  14-day package cool-off on 2026-09-22; until then `npm install` under the repository’s
+  `.npmrc` refuses it.
   0.60.0, the current npm `latest`, clears the cool-off on 2026-09-29 and is not pinned.
 
 ### Removed
@@ -78,6 +79,25 @@ development series.
   Build and write a fan-in document with `build_outcome_manifest(...).write(...)`.
 
 ### Fixed
+
+- **`auth-check --assert-model` checks which Gemini model answered, not which was asked
+  for.** For gemini-cli the assertion read the `init` event, which the CLI emits from
+  its configured model before any request leaves the process, so a call the CLI rewrote
+  to another model still reported a match — the routing change the flag exists to
+  detect. The assertion now reads the terminal result event’s `stats.models`, counts only
+  the models whose entry billed tokens, and lists each with its token count; a probe
+  whose terminal event reports no model that billed fails instead of passing.
+  A run refuses a Gemini result by the same rule.
+  `stats.models` also lists a request that failed, with zero tokens, so until now a
+  silent fallback from the requested model passed both the probe and a run’s check; both
+  now refuse a result in which the requested model billed no tokens.
+  `auth-check --live --variant <profile>` now probes with the profile’s own adapter
+  config, `native_settings` included, as a run does; before, a profile that turned off
+  `experimental.dynamicModelConfiguration` passed the probe and then had every Gemini
+  result refused. The other adapters’ assertion is unchanged: Claude Code’s reads
+  `system.init.model`, the model Claude Code resolved the request to; Pi’s reads
+  `message.model` on the first assistant `message_start`; Codex’s reads the `model`
+  field of its config preamble and fails when the preamble is absent.
 
 - **A resume re-runs a consumer whose collected input changed.** A step that declares a
   `collect:` input was reused on resume whenever its fingerprint matched, so after a

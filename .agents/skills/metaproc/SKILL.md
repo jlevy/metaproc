@@ -92,7 +92,7 @@ Available via `metaproc help <topic>`, in recommended reading order:
 - **concepts** (~7.7k words): Start here. Vocabulary, ownership boundaries, step modes, optimization loops.
 - **design** (~20.5k words): How Metaproc is built: spec format, runtime artifacts, adapters, robustness.
 - **framework** (~7.3k words): Background theory: the general model beneath any process framework, and Metaproc's mapping.
-- **operator** (~9.9k words): Runtime CLI reference: running, monitoring, and resuming processes.
+- **operator** (~10.9k words): Runtime CLI reference: running, monitoring, and resuming processes.
 - **developer** (~1.4k words): Extending Metaproc and the 'Metaproc is the right wrapper' policy.
 - **conventions** (~4.6k words): Framework-level naming, structure, and file-format rules.
 - **artifacts** (~2.1k words): Every runtime artifact Metaproc writes or reads: format, schema, lifecycle.
@@ -104,5 +104,5 @@ Available via `metaproc help <topic>`, in recommended reading order:
 - **arch-runpool** (~4.6k words): Architecture: local process manager, adaptive concurrency, memory pressure.
 - **arch-harness** (~2.9k words): Architecture: the Claude Code adapter harness and its wire format.
 - **arch-execution** (~2.6k words): Architecture: the executable reference model for scheduling, as implemented.
-- **arch-testing** (~1.1k words): Architecture: the test tiers, when to use each, and per-adapter credentials.
+- **arch-testing** (~1.3k words): Architecture: the test tiers, when to use each, and per-adapter credentials.
 - **arch-file-io** (~1.8k words): Architecture: the curated metaproc.io surface, write contracts, and frontmatter gotchas.

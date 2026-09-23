@@ -46,9 +46,10 @@ Three-step gate for pi-cli: binary → credential → live prompt on Vertex MaaS
 1. **binary-check** — `pi --version`.
 2. **auth-check-dry** — `metaproc auth-check --variant pi-cli`.
 3. **live-probe-vertex-maas** — live probe against `glm-5-maas` on `vertex-maas`, with
-   `--assert-model glm-5-maas` to verify the observed `agent_start` event’s `model`
-   field (substring match so provider-prefixed IDs like `zai-org/glm-5-maas` still
-   pass). Requires GCP Application Default Credentials
+   `--assert-model glm-5-maas` to verify the `message.model` field of the first
+   assistant `message_start` event (substring match so provider-prefixed IDs like
+   `zai-org/glm-5-maas` still pass).
+   Requires GCP Application Default Credentials
    (`gcloud auth application-default login`) or `GCP_CREDENTIALS_BASE64` /
    `GOOGLE_APPLICATION_CREDENTIALS`.
 
