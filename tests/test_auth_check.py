@@ -1031,23 +1031,23 @@ class TestEvaluateModelAssertion:
     """
 
     def test_gemini_rewrite_fails_the_assertion(self):
+        """The `init` event still names the requested id; the message must say so
+        beside the model that billed, so the rewrite is visible in one line.
+        """
         ok, msg = _evaluate_model_assertion(
             "gemini-cli", _GEMINI_REWRITTEN_STDOUT, "gemini-3.6-flash", "gemini-cli"
         )
         assert not ok
+        assert "(requested 'gemini-3.6-flash')" in msg
         assert "gemini-3.5-flash" in msg
         assert "answered with a different model" in msg
-
-    def test_gemini_identity_event_alone_would_have_passed(self):
-        """Pins the gap this assertion closes: the requested id is still there."""
-        assert _extract_observed_model("gemini-cli", _GEMINI_REWRITTEN_STDOUT) == "gemini-3.6-flash"
 
     def test_gemini_honored_request_passes_the_assertion(self):
         ok, msg = _evaluate_model_assertion(
             "gemini-cli", _GEMINI_HONORED_STDOUT, "gemini-3.6-flash", "gemini-cli"
         )
         assert ok
-        assert "served model 'gemini-3.6-flash'" in msg
+        assert msg.startswith("gemini-cli: served model 'gemini-3.6-flash' matches")
 
     def test_gemini_zero_token_requested_model_beside_a_fallback_fails(self):
         """The requested id is in `stats.models`, but only the fallback billed."""
