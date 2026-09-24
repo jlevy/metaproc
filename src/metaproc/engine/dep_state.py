@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import functools
 import glob as glob_mod
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -86,16 +88,37 @@ def fingerprint_step(step: ResolvedStep) -> str:
     The same authored step may be fingerprinted before and after a generated
     roster exists, and discovery results are execution state rather than part
     of the step definition.
+
+    A path inside the step's ``checkout_root`` is hashed relative to that root,
+    wherever it appears in the resolved step: a composite's ``uses_path``, its
+    ``prompt_paths``, and any path a resolved field such as ``inputs``, ``env``
+    or ``prompt_prefix`` carries. A plan resolves ``./`` and ``../`` references
+    against its process file, so without this every composite and every step
+    that loads a runbook would change fingerprint when the same revision is
+    planned from a second checkout, and a resume from a fresh checkout would
+    re-run them all. Where the checkout sits is not part of what a step is; the
+    bytes it reads are, and those are still hashed. A path outside the checkout,
+    such as a run directory or a launch input kept beside the runs, is hashed as
+    it is.
     """
     # ``produced_refs`` is derived from the plan's deps rather than authored, and
     # excluding it keeps the contract hash of every step that has none exactly
-    # what it was before the field existed.
+    # what it was before the field existed. ``checkout_root`` is excluded because
+    # it is where the step was planned from, which the hash must not depend on.
     payload = step.model_dump(
         mode="json",
         exclude_none=True,
-        exclude={"fan_out": {"items", "filtered_count"}, "produced_refs": True},
+        exclude={
+            "fan_out": {"items", "filtered_count"},
+            "produced_refs": True,
+            "checkout_root": True,
+        },
     )
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    root_pattern = _checkout_root_pattern(step.checkout_root) if step.checkout_root else None
+    hashed: object = (
+        payload if root_pattern is None else _relative_to_checkout(payload, root_pattern)
+    )
+    encoded = json.dumps(hashed, sort_keys=True, separators=(",", ":")).encode("utf-8")
     hasher = hashlib.sha256(encoded)
     for path_str in _referenced_runbook_paths(step):
         path = Path(path_str)
@@ -118,6 +141,43 @@ def fingerprint_step(step: ResolvedStep) -> str:
         hasher.update(b"\x00")
         hasher.update(content)
     return hasher.hexdigest()[:16]
+
+
+_CHECKOUT_TOKEN = "<checkout>"
+"""What a checkout root is replaced with in a fingerprint payload."""
+
+# A root is matched only where its name ends: at a separator, at whitespace or one of
+# the delimiters a command or a path list puts after a path, or at the end of the value.
+# So `/work/repo` never matches inside a sibling such as `/work/repo-2`.
+_ROOT_END = r"(?=[/\s:;,=)\]}\"']|$)"
+
+
+@functools.lru_cache(maxsize=64)
+def _checkout_root_pattern(checkout_root: str) -> re.Pattern[str] | None:
+    """Return the pattern matching *checkout_root*, or ``None`` for a filesystem root.
+
+    A checkout at ``/`` would make every absolute path checkout-relative, so it is
+    hashed as it is.
+    """
+    root = checkout_root.rstrip("/")
+    if not root:
+        return None
+    return re.compile(re.escape(root) + _ROOT_END)
+
+
+def _relative_to_checkout(value: object, pattern: re.Pattern[str]) -> object:
+    """Return *value* with every occurrence of the checkout root replaced by one token.
+
+    Walks the JSON payload and rewrites string values only; keys are field and input
+    names, never paths.
+    """
+    if isinstance(value, str):
+        return pattern.sub(_CHECKOUT_TOKEN, value)
+    if isinstance(value, list):
+        return [_relative_to_checkout(item, pattern) for item in value]
+    if isinstance(value, dict):
+        return {key: _relative_to_checkout(item, pattern) for key, item in value.items()}
+    return value
 
 
 def _referenced_runbook_paths(step: ResolvedStep) -> list[str]:

@@ -127,6 +127,10 @@ def _relativize_viz_paths(viz: Any) -> None:
             node.step.source_path = relativize_path(node.step.source_path) or node.step.source_path
             if node.step.uses_path is not None:
                 node.step.uses_path = relativize_path(node.step.uses_path)
+            if node.step.checkout_root is not None:
+                node.step.checkout_root = (
+                    relativize_path(node.step.checkout_root) or node.step.checkout_root
+                )
             if node.step.output_root is not None:
                 node.step.output_root = relativize_path(node.step.output_root)
             node.step.prompt_paths = [relativize_path(p) or p for p in node.step.prompt_paths]

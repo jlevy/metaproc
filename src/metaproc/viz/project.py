@@ -326,6 +326,7 @@ def _project_step_details(
         uses_path=step.uses_path,
         prompt_paths=list(step.prompt_paths),
         produced_refs=list(step.produced_refs),
+        checkout_root=step.checkout_root,
         prompt_prefix=step.prompt_prefix,
         inputs=_clone_io_map(step.inputs),
         outputs=_clone_io_map(step.outputs),
