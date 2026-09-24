@@ -101,6 +101,29 @@ development series.
 
 ### Fixed
 
+- **A resume from a fresh checkout of the same revision reuses what the run completed.**
+  A plan resolves a process’s `./` and `../` references to absolute paths, and a step’s
+  fingerprint hashed them, so planning the same revision from a checkout at another path
+  changed the fingerprint of every composite (through `uses`) and every step that loads
+  a runbook (through `prompt_paths`). A resume from that checkout re-ran all of them and
+  the steps downstream of them, although nothing about the steps had changed.
+  `build_plan` now records on each resolved step the checkout its process was loaded
+  from (`ResolvedStep.checkout_root`, the nearest directory above the process file that
+  holds `.git`), and `fingerprint_step` hashes every path inside it relative to it,
+  wherever the path appears in the resolved step: `uses_path`, `prompt_paths`, `inputs`,
+  `env` or `prompt_prefix`. The root itself is not hashed.
+  A path outside the checkout, such as a run directory or a launch input kept beside the
+  runs, is hashed as before, and so is every path of a process that is not inside a
+  checkout. The bytes a step references are still hashed, so an edit in the new checkout
+  still re-runs the steps it touches.
+  A value that names a file inside the checkout should name it in the checkout the
+  resume runs from; a path into the old checkout is outside the new one and changes the
+  fingerprint of a step whose resolved fields carry it.
+  Upgrading changes the fingerprint of every step whose resolved definition names a path
+  inside its checkout, once: a run recorded at an earlier release re-runs those steps
+  and their downstream on its first resume at this one, as it would after an edit to
+  each. Resume such a run at the release it launched with to avoid that.
+
 - **`auth-check --assert-model` checks which Gemini model answered, not which was asked
   for.** For gemini-cli the assertion read the `init` event, which the CLI emits from
   its configured model before any request leaves the process, so a call the CLI rewrote
