@@ -21,7 +21,13 @@ from typing import ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from metaproc.models.authored import IOSpec, ParseConfig, RetryPolicy
+from metaproc.models.authored import (
+    DispatchBreaker,
+    IOSpec,
+    ParseConfig,
+    RetryPolicy,
+    StepSpend,
+)
 
 OutputRejectionReason = Literal[
     "task-not-successful",
@@ -72,6 +78,7 @@ class FanOutDetails(BaseModel):
     filtered_count: int = 0
     align: Literal["same_key"] | None = None
     max_concurrency: int | None = None
+    breaker: DispatchBreaker | None = None
 
 
 class InputSpec(BaseModel):
@@ -177,6 +184,7 @@ class StepDetails(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     max_budget_usd: float | None = None
     token_budget: int | None = None
+    spend: StepSpend | None = None
     reuse_policy: Literal["validated_outputs", "exact_inputs", "never"] | None = None
     on_failure: Literal["block", "continue"] = "block"
     execution_profile: str | None = None

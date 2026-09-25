@@ -175,6 +175,10 @@ def _format_text(status: RunStatus, *, steps_only: bool = False, stale_only: boo
         status_label = "RUNNING"
     elif status.process_execution_state == "running":
         status_label = "RUNNING"
+    elif status.process_execution_state == "failed" and status.dispatch_stops:
+        # A spend cap or breaker stop is a deliberate halt, not a crash; the run
+        # resumes, the cap stop with a higher --max-spend-usd.
+        status_label = "/".join(dict.fromkeys(stop.label.upper() for stop in status.dispatch_stops))
     elif status.process_execution_state == "failed":
         status_label = "FAILED"
     elif status.process_execution_state == "cancelled":
@@ -190,6 +194,12 @@ def _format_text(status: RunStatus, *, steps_only: bool = False, stale_only: boo
     )
     if status.process_error is not None and terminal_execution:
         lines.append(f"Failure: {status.process_error}")
+    if terminal_execution:
+        lines.extend(
+            f"Stopped: step '{stop.step_id}' is {stop.label} ({stop.phase}), "
+            f"{stop.not_dispatched} items not dispatched"
+            for stop in status.dispatch_stops
+        )
     if status.process_state is not None and not terminal_execution:
         non_current = sum(
             1 for entry in status.steps if entry.state in (StepState.stale, StepState.invalidated)

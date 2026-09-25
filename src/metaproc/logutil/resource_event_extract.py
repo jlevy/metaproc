@@ -427,6 +427,19 @@ def _wait_event(span: ThrottleSpan, hierarchy: HierarchyRef, source: SourceRef) 
     )
 
 
+def log_list_cost_usd(log_file: LogFile) -> float | None:
+    """Return the list cost one agent log adds to every `list_cost_usd` total.
+
+    `None` means the log carries no basis for a price: no reported cost and either no
+    token usage or a model with no list price. Resource projection and the run spend
+    ledger (`metaproc.engine.spend_cap`) both read this, so the two agree.
+    """
+    stats = log_file.usage_stats
+    if stats is None:
+        return log_file.cost_usd
+    return estimate_list_cost(stats)
+
+
 def _usage_event_for_file(
     log_file: LogFile,
     hierarchy: HierarchyRef,
@@ -444,7 +457,7 @@ def _usage_event_for_file(
             return None
         metrics = Metrics(
             wall_time_s=log_file.duration_s,
-            list_cost_usd=log_file.cost_usd,
+            list_cost_usd=log_list_cost_usd(log_file),
             input_tokens=log_file.input_tokens,
             output_tokens=log_file.output_tokens,
             tool_calls=_tool_call_residual(log_file.tool_calls, granular_tool_calls),
@@ -473,7 +486,7 @@ def _usage_event_for_file(
             granular_tool_calls,
         ),
     )
-    metrics.list_cost_usd = estimate_list_cost(stats)
+    metrics.list_cost_usd = log_list_cost_usd(log_file)
 
     taxonomy = TaxonomyPaths(
         provider_path=["provider", stats.provider] if stats.provider else None,

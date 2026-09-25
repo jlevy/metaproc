@@ -1214,6 +1214,23 @@ uv run metaproc pool status <run-dir>
 `status` should report `is_active: false`. `pool status` may legitimately say no pool
 status file exists if the run stopped before fan-out started.
 
+### Spend Cap and Breaker Stops
+
+A run launched with `--max-spend-usd X` stops itself.
+A priced mapped step refuses to start when the spend already measured plus its worst
+case exceeds the cap, and mapped composite and code steps stop starting items once the
+measured spend reaches it; a step with `for_each.breaker` stops once too many of its
+items fail. Running items finish either way, and the items not dispatched stay pending.
+
+`metaproc status` shows such a run as `BUDGET-STOPPED` or `BREAKER-STOPPED`, not
+`FAILED`, with a `Stopped:` line per step; `process-status.yaml` keeps `state: failed`
+and adds a `stopped` record with the numbers.
+The cap covers the run’s whole life and a resume keeps the recorded cap, so a
+budget-stopped run resumed without a higher `--max-spend-usd` refuses again and names
+the cap it needs. Fix whatever tripped a breaker before resuming.
+The mechanism is described in
+[metaproc-design.md](metaproc-design.md#spend-cap-and-dispatch-breaker).
+
 ## Runtime Layout
 
 Operator-facing summary of where to look for a running or completed run.
@@ -1238,12 +1255,13 @@ for unmarked old runs.
 
 | Artifact | Current path | Meaning |
 | --- | --- | --- |
-| Run config | `<run>/.state/run-config.yaml` | Run identity, run directory, launch config, and layout marker; a resume that changes the launch config (variables, step variants, variant, execution profile, artifact namespace, resolved profiles, backend, `git_sha`) rewrites it after recording the change, and every other field keeps its creation value; a resume from another run directory is refused instead |
+| Run config | `<run>/.state/run-config.yaml` | Run identity, run directory, launch config, and layout marker; a resume that changes the launch config (variables, step variants, variant, execution profile, artifact namespace, resolved profiles, backend, `git_sha`, spend cap) rewrites it after recording the change, and every other field keeps its creation value; a resume from another run directory is refused instead |
 | Run plan | `<scope>/.state/run-plan.yaml` | What this scope declared: step identity, shape, canonical mapped item keys, output ports, fingerprints |
 | Input bindings | `<scope>/.state/input-bindings.yaml` | The inputs this scope binds `on_change: new_run`, by logical name, with the value each holds for the life of the scope; a launch that resolves another value is refused, and a binding the process adopts or releases is recorded as a launch-config change |
 | Orchestrator lease | `<run>/.state/orchestrator-lease.yaml` | Owner and heartbeat for cross-host safety |
 | Process status | `<run>/.state/process-status.yaml` | Aggregated DAG state for status display |
 | Overrides | `<run>/.state/overrides.yaml` | Operator dependency overrides |
+| Spend ledger | `<run>/.state/spend-ledger.yaml` | Present when the run has a spend cap: the cap and the list cost measured against it, carried across resumes |
 | Step runner state | `<run>/.state/steps/<step_id>/` | Runpool status, scale state, dispatch manifest, claimed items |
 | Worker runner state | `<run>/.state/workers/<worker-id>/` | Worker-scoped runpool status for cloud or worker fan-out |
 | Task state | `<run>/.state/tasks/<step_id>/<item_key>/` | Current attempt, status, result, and manual acknowledgments |

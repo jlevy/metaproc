@@ -29,6 +29,7 @@ from metaproc.io import read_yaml_file
 from metaproc.io.orchestrator_lease import is_orchestrator_alive
 from metaproc.io.state_io import read_run_plan, read_status_at
 from metaproc.models.authored import ProgressCounts
+from metaproc.models.dispatch_stop import DispatchStop
 from metaproc.models.plan import Plan, ResolvedStep
 from metaproc.models.runtime import StatusRecord, StepState
 from metaproc.models.viz import NodeProgress, ProgressSnapshot
@@ -125,6 +126,9 @@ class RunStatus(BaseModel):
     # the current process definition matches prior completed work.
     process_execution_state: Literal["running", "completed", "failed", "cancelled"] | None = None
     process_error: str | None = None
+    # Set when a spend cap or a dispatch breaker stopped a mapped step. The execution
+    # state stays "failed"; these records say why, with the numbers that decided it.
+    dispatch_stops: list[DispatchStop] = []
     # Activity sub-flags. ``items_running`` is True iff any fan-out item
     # is currently in-flight; ``orchestrator_alive`` is True iff a
     # parent run-process / composite engine still holds its lease.
@@ -541,6 +545,7 @@ def scan_run_status(
     is_active = any_running or (pending_retries > 0 and pool_alive) or orchestrator_alive
 
     process_execution_state, process_error, step_errors = _read_process_execution(run_dir)
+    dispatch_stops = _read_dispatch_stops(run_dir) if process_execution_state == "failed" else []
     step_entries: list[StepStatusEntry] = []
     process_state: Literal["current", "stale"] | None = None
     if plan is not None:
@@ -573,6 +578,7 @@ def scan_run_status(
         process_state=process_state,
         process_execution_state=process_execution_state,
         process_error=process_error,
+        dispatch_stops=dispatch_stops,
         items_running=any_running,
         orchestrator_alive=orchestrator_alive,
     )
@@ -681,6 +687,23 @@ def _read_process_execution(
     elif execution_state == "cancelled":
         process_error = "process was cancelled"
     return execution_state, process_error, step_errors
+
+
+def _read_dispatch_stops(run_dir: Path) -> list[DispatchStop]:
+    """Return the spend-cap and breaker stops the process status records, if any."""
+    path = run_dir / STATE_DIR / "process-status.yaml"
+    try:
+        raw = read_yaml_file(path)
+    except (OSError, YAMLError, ValueError):
+        return []
+    records = raw.get("stopped") if isinstance(raw, dict) else None
+    if not isinstance(records, list):
+        return []
+    stops: list[DispatchStop] = []
+    for record in records:
+        with contextlib.suppress(ValueError):
+            stops.append(DispatchStop.model_validate(record))
+    return stops
 
 
 # ── Wait ─────────────────────────────────────────────────────────

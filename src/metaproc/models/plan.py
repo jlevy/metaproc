@@ -10,7 +10,14 @@ from typing import ClassVar, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from metaproc.models.authored import IOSpec, ParseConfig, RetryPolicy, ValueType
+from metaproc.models.authored import (
+    DispatchBreaker,
+    IOSpec,
+    ParseConfig,
+    RetryPolicy,
+    StepSpend,
+    ValueType,
+)
 from metaproc.models.lane import ExecutionLane, LaneMatrix
 from metaproc.models.resource_budget import ResourceBudgetSpec
 
@@ -44,6 +51,7 @@ class FanOut(BaseModel):
     retry: RetryPolicy | None = None
     align: Literal["same_key"] | None = None
     max_concurrency: int | None = None
+    breaker: DispatchBreaker | None = None
 
 
 class ResolvedStep(BaseModel):
@@ -95,6 +103,7 @@ class ResolvedStep(BaseModel):
     output_root: str | None = None
     max_budget_usd: float | None = None
     token_budget: int | None = None
+    spend: StepSpend | None = None
 
 
 class ResolvedDep(BaseModel):

@@ -213,7 +213,7 @@ def build_resource_artifacts(
     generated_events_path = run_dir / source_events_path
     resource_sources = get_plugin_registry().resource_event_sources
     external_paths = {path for source in resource_sources for path in source.discover(run_dir)}
-    discovered = _discover_log_files(
+    discovered = discover_log_files(
         run_dir,
         exclude=[generated_events_path, *external_paths],
     )
@@ -233,7 +233,7 @@ def build_resource_artifacts(
             hierarchy=root,
             mapped_composite_step_ids=mapped_composite_step_ids,
         )
-        log_file, events = _parse_file(log_path)
+        log_file, events = parse_log_file(log_path)
         if log_file is None:
             continue
 
@@ -505,7 +505,8 @@ def _hierarchy_for_log(run_id: str, owner: LogOwner, log_path: Path, run_dir: Pa
 # ── Discovery / parsing ────────────────────────────────────────────
 
 
-def _discover_log_files(run_dir: Path, *, exclude: Iterable[Path] = ()) -> list[Path]:
+def discover_log_files(run_dir: Path, *, exclude: Iterable[Path] = ()) -> list[Path]:
+    """Return every JSONL log under *run_dir* resource projection reads, native logs excluded."""
     if not run_dir.exists():
         return []
     excluded = {_normalized_path(p) for p in exclude}
@@ -525,7 +526,8 @@ def _normalized_path(path: Path) -> str:
     return str(logical_path(path).resolve())
 
 
-def _parse_file(log_path: Path) -> tuple[LogFile | None, list[LogEvent]]:
+def parse_log_file(log_path: Path) -> tuple[LogFile | None, list[LogEvent]]:
+    """Parse one log to its end; `(None, [])` when it cannot be read."""
     try:
         log_file = LogFile(log_path, color_idx=0)
         events = log_file.read_new_events()

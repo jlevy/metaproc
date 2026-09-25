@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
+from typing import Protocol
 
 # (step_id, item variables) -> succeeded. Async because a step is usually a subprocess
 # or an agent call; the caller owns everything about how that happens.
@@ -33,6 +34,20 @@ RetryDecision = Callable[[str, dict[str, str]], bool]
 # Resolved per step because a chain runs several, each with its own declared budget;
 # one budget for the whole walk would apply the first step's policy to all of them.
 RetryBudget = Callable[[str], tuple[int, Callable[[int], float]] | None]
+
+
+class DispatchGate(Protocol):
+    """Admits or holds back each mapped item and hears how each one ended.
+
+    `admit` is asked once an item holds every concurrency gate, just before it would
+    run, so a stop decided while items wait on a gate holds back every one of them.
+    An item it refuses is never invoked and counts as not succeeded. The caller owns
+    what a refusal means (a spend cap, a failure-rate breaker) and reports it.
+    """
+
+    def admit(self) -> bool: ...
+
+    def record(self, *, succeeded: bool) -> None: ...
 
 
 def with_retry(
@@ -97,25 +112,37 @@ async def run_fan_out(
     max_concurrency: int | None = None,
     step_concurrency: int | None = None,
     external_semaphore: asyncio.Semaphore | None = None,
+    dispatch: DispatchGate | None = None,
 ) -> tuple[int, int]:
     """Run one step once per item. Returns (succeeded, total).
 
     Every item is awaited even after a sibling fails, so partial coverage stays
     readable: a caller that cancelled the rest would leave the per-item records
     ambiguous about which items were tried.
+
+    A *dispatch* gate may hold items back. A held-back item is not invoked and
+    counts toward the total but not the successes; items already running finish.
     """
     if not item_contexts:
         return (0, 0)
 
     gate = _gate(max_concurrency, step_concurrency, len(item_contexts))
 
+    async def _admitted(item_vars: dict[str, str]) -> bool:
+        if dispatch is not None and not dispatch.admit():
+            return False
+        ok = await invoke(step_id, item_vars)
+        if dispatch is not None:
+            dispatch.record(succeeded=ok)
+        return ok
+
     async def _one(item_context: dict[str, str]) -> bool:
         item_vars = {**variables, **item_context}
         async with gate:
             if external_semaphore is not None:
                 async with external_semaphore:
-                    return await invoke(step_id, item_vars)
-            return await invoke(step_id, item_vars)
+                    return await _admitted(item_vars)
+            return await _admitted(item_vars)
 
     results = await asyncio.gather(
         *(_one(ctx) for ctx in item_contexts),

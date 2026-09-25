@@ -104,14 +104,18 @@ def fingerprint_step(step: ResolvedStep) -> str:
     # ``produced_refs`` is derived from the plan's deps rather than authored, and
     # excluding it keeps the contract hash of every step that has none exactly
     # what it was before the field existed. ``checkout_root`` is excluded because
-    # it is where the step was planned from, which the hash must not depend on.
+    # it is where the step was planned from, which the hash must not depend on. The
+    # declared item price (``spend``) and the dispatch breaker govern whether items
+    # start, not what an item produces, so repricing a step or retuning its breaker
+    # must not invalidate completed work.
     payload = step.model_dump(
         mode="json",
         exclude_none=True,
         exclude={
-            "fan_out": {"items", "filtered_count"},
+            "fan_out": {"items", "filtered_count", "breaker"},
             "produced_refs": True,
             "checkout_root": True,
+            "spend": True,
         },
     )
     root_pattern = _checkout_root_pattern(step.checkout_root) if step.checkout_root else None
