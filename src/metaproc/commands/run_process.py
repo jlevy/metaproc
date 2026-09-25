@@ -172,6 +172,13 @@ from metaproc.engine.retry import (
 )
 from metaproc.engine.runtime import prepare_step, resolve_batch_size, validate_step_inputs_exist
 from metaproc.engine.schema_conform import conform_declared_outputs
+from metaproc.engine.spend_cap import (
+    DispatchStopped,
+    MappedDispatch,
+    SpendCeiling,
+    SpendLedger,
+    check_worst_case,
+)
 from metaproc.engine.validation import (
     repair_declared_outputs,
     validate_item_outputs,
@@ -212,7 +219,7 @@ from metaproc.io.state_io import (
     write_run_plan,
 )
 from metaproc.logutil.compaction import try_compact_log
-from metaproc.models.authored import IOSpec, ProcessSpec, ProcessStep, StepContext
+from metaproc.models.authored import IOSpec, ProcessSpec, ProcessStep, RetryPolicy, StepContext
 from metaproc.models.lane import ExecutionLane
 from metaproc.models.plan import Plan, ResolvedStep, RunPlanSnapshot, RunPlanStep
 from metaproc.models.resource_budget import FinalizationState
@@ -445,6 +452,7 @@ class RunExecutionContext:
     cancellation_event: asyncio.Event
     sync_executor: ThreadPoolExecutor
     run_pool_owner: RunPoolOwner | None
+    spend_ledger: SpendLedger | None = None
 
     @classmethod
     def create(
@@ -466,6 +474,7 @@ class RunExecutionContext:
         preflight_quota_guard: str = "warn",
         run_dir: Path | None = None,
         enable_run_pool: bool = False,
+        spend_ledger: SpendLedger | None = None,
     ) -> RunExecutionContext:
         """Create the references that must remain identical through recursion."""
         if max_concurrency is not None and max_concurrency < 1:
@@ -502,6 +511,7 @@ class RunExecutionContext:
                 if enable_run_pool and run_dir is not None
                 else None
             ),
+            spend_ledger=spend_ledger,
         )
 
     def agent_pool(
@@ -781,6 +791,18 @@ def _write_process_status(
         data["state"] = "running"
     elif "failed" in states:
         data["state"] = "failed"
+        # A spend cap or breaker stop keeps the state `failed`, which every reader
+        # already treats as unfinished and resumable; `stopped` says why and with
+        # which numbers, so `metaproc status` can tell it apart from a crash.
+        stops = [
+            state["stopped"]
+            for step_id, state in step_states.items()
+            if (active_step_ids is None or step_id in active_step_ids)
+            and state.get("state") == "failed"
+            and isinstance(state.get("stopped"), dict)
+        ]
+        if stops:
+            data["stopped"] = stops
     elif "cancelled" in states:
         data["state"] = "cancelled"
         data["completed_at"] = _now_iso()
@@ -833,6 +855,7 @@ class _LaunchConfig:
     resolved_profiles: list[dict[str, object]]
     backend: str
     git_sha: str
+    max_spend_usd: float | None = None
 
 
 _LAUNCH_CONFIG_FIELDS: tuple[str, ...] = tuple(
@@ -896,6 +919,7 @@ def _write_run_config(  # noqa: PLR0913
     step_variants: Mapping[str, str] | None = None,
     git_sha: str | None = None,
     spec: ProcessSpec | None = None,
+    max_spend_usd: float | None = None,
 ) -> _RunConfigWrite:
     """Write run-config.yaml at run creation time; validate a resume against it.
 
@@ -972,6 +996,8 @@ def _write_run_config(  # noqa: PLR0913
             "initial": int(max_concurrency),
             "effective": int(max_concurrency),
         }
+    if max_spend_usd is not None:
+        data["max_spend_usd"] = float(max_spend_usd)
     if resource_snapshot is not None:
         data["resources"] = resource_snapshot.model_dump(mode="json", by_alias=True)
 
@@ -2718,6 +2744,14 @@ async def _execute_code_fan_out_step(
     out.progress(
         f"  Step '{step_id}': {len(item_contexts)} actionable items ({reused_count} reused)"
     )
+    dispatch = _prepare_mapped_dispatch(
+        spec=spec,
+        step_def=step_def,
+        target=target,
+        actionable_items=len(item_contexts),
+        execution_context=execution_context,
+        out=out,
+    )
 
     async def _invoke(_step_id: str, item_vars: dict[str, str]) -> bool:
         return await _execute_mapped_code_item(
@@ -2747,9 +2781,12 @@ async def _execute_code_fan_out_step(
         external_semaphore=(
             execution_context.leaf_semaphore if execution_context is not None else None
         ),
+        dispatch=dispatch,
     )
     if succeeded != total:
         out.progress(f"  Step '{step_id}': {total - succeeded} of {total} items failed")
+    if dispatch is not None:
+        dispatch.raise_if_stopped()
     return succeeded == total
 
 
@@ -3873,6 +3910,169 @@ async def _execute_composite_step(
     return True
 
 
+def _declared_attempts(spec: ProcessSpec, step: ProcessStep) -> int:
+    """Most attempts one run of an agent step makes: one plus its resolved retries.
+
+    Exit-code and invalid-output retries share one attempt counter, so neither class can
+    take a step past ``1 + max_retries`` attempts.
+    """
+    policy = (
+        (step.for_each.retry if step.for_each is not None else None)
+        or spec.defaults.retry
+        or RetryPolicy()
+    )
+    return 1 + max(0, policy.max_retries)
+
+
+def _composite_item_attempts(
+    child_path: Path, *, step_id: str, seen: frozenset[Path] = frozenset()
+) -> int:
+    """Most attempts any agent step in one pass of a composite child can make.
+
+    The declared per-item price is one pass with no retries; every agent step in the
+    child retrying to its limit multiplies that pass by at most this number.
+    """
+    resolved = child_path.resolve()
+    if resolved in seen:
+        return 1
+    child = load_process_spec(resolved)
+    attempts = 1
+    for child_step in child.steps:
+        if child_step.mode == "agent":
+            attempts = max(attempts, _declared_attempts(child, child_step))
+            continue
+        if child_step.mode != "composite" or child_step.uses is None:
+            continue
+        dep = child.deps.get(child_step.uses.removeprefix("deps."))
+        if dep is None or "{{" in dep.path:
+            raise CLIError(
+                f"step '{step_id}': cannot derive the attempts of nested child "
+                f"'{child_step.id}' in {resolved.name}; declare spend.max_attempts"
+            )
+        nested = Path(dep.path)
+        nested = nested if nested.is_absolute() else resolved.parent / nested
+        attempts = max(
+            attempts,
+            _composite_item_attempts(nested, step_id=step_id, seen=seen | {resolved}),
+        )
+    return attempts
+
+
+def _prepare_mapped_dispatch(
+    *,
+    spec: ProcessSpec | None,
+    step_def: ProcessStep,
+    target: ResolvedStep,
+    actionable_items: int,
+    execution_context: RunExecutionContext | None,
+    out: Any,
+) -> MappedDispatch | None:
+    """Check a priced step's worst case against the cap, then gate its dispatch.
+
+    Runs after reuse has decided which items are actionable and before any of them
+    starts, so a refusal costs nothing and a resume is priced only for the work it will
+    actually do. Returns the per-item gate the in-run stop and the breaker share, or
+    ``None`` when the run has no cap and the step no breaker.
+    """
+    ledger = execution_context.spend_ledger if execution_context is not None else None
+    breaker = target.fan_out.breaker if target.fan_out is not None else None
+    spend = target.spend
+    if spend is not None and actionable_items > 0:
+        if spend.max_attempts is not None:
+            attempts = spend.max_attempts
+        elif target.mode == "composite":
+            if not target.uses_path:
+                raise CLIError(f"step '{target.step_id}': composite has no resolved child")
+            attempts = _composite_item_attempts(Path(target.uses_path), step_id=target.step_id)
+        elif spec is not None:
+            attempts = _declared_attempts(spec, step_def)
+        else:
+            attempts = 1
+        worst = SpendCeiling(
+            actionable_items=actionable_items,
+            max_attempts=attempts,
+            per_item_usd=spend.per_item_usd,
+        )
+        if ledger is None:
+            out.warning(
+                f"Step '{target.step_id}': worst case {worst.usd:.2f} USD "
+                f"({actionable_items} items x {attempts} attempts x "
+                f"{spend.per_item_usd:g} USD) is not capped; pass --max-spend-usd to cap it"
+            )
+        else:
+            check_worst_case(ledger, step_id=target.step_id, worst=worst, source=spend.source)
+            out.progress(
+                f"  Step '{target.step_id}': worst case {worst.usd:.2f} USD plus "
+                f"{ledger.measured_usd:.2f} USD measured is within the "
+                f"{ledger.cap_usd:.2f} USD spend cap"
+            )
+    if ledger is None and breaker is None:
+        return None
+    return MappedDispatch(step_id=target.step_id, ledger=ledger, breaker=breaker)
+
+
+def _recorded_spend_cap(value: object) -> float | None:
+    """Read ``max_spend_usd`` as ``run-config.yaml`` holds it: a number, or its string."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    try:
+        return float(str(value))
+    except ValueError as exc:
+        raise CLIError(f"run-config.yaml records an unreadable max_spend_usd: {value!r}") from exc
+
+
+def _resolve_spend_cap(
+    spec: ProcessSpec,
+    *,
+    run_dir: Path,
+    flag: float | None,
+    cloud: bool,
+) -> float | None:
+    """Return the cap this launch runs with, or refuse a launch that needs one.
+
+    The flag wins; a resume without it keeps the cap its run recorded; a run with
+    neither takes the process's declared default. A process that declares the cap
+    required refuses a launch left with none, before any step runs.
+    """
+    if flag is not None and flag <= 0:
+        raise ValidationError(f"--max-spend-usd must be positive, got {flag:g}")
+    if cloud and flag is not None:
+        raise ValidationError(
+            "--max-spend-usd is not forwarded to a --cloud orchestrator; launch the "
+            "orchestrator on this host or run without a cap"
+        )
+    cap = flag
+    config_path = paths_mod.run_config_file(run_dir)
+    if cap is None and config_path.exists():
+        cap = _recorded_spend_cap(_read_run_config(config_path).get("max_spend_usd"))
+    policy = spec.spend_cap
+    if cap is None and policy is not None:
+        cap = policy.default_usd
+    if cap is None and policy is not None and policy.required:
+        detail = (
+            "--cloud cannot forward one yet, so launch the orchestrator on this host"
+            if cloud
+            else "pass --max-spend-usd, or resume a run that recorded one"
+        )
+        raise ValidationError(f"process '{spec.name}' requires a spend cap: {detail}")
+    return cap
+
+
+def _observe_spend(ledger: SpendLedger, root: Path, *, out: Any) -> None:
+    """Count the spend a finished task left under *root* toward the run's cap.
+
+    A failure to read a log must not replace the task's own outcome, so it is reported
+    rather than raised; the ledger then undercounts that task until a later scan.
+    """
+    try:
+        _ = ledger.observe(root)
+    except Exception as exc:  # noqa: BLE001 - measurement cannot replace the task outcome
+        log.exception("spend ledger could not read %s", root)
+        out.warning(f"Spend ledger could not read {root}: {exc}")
+
+
 async def _execute_composite_fan_out_step(
     *,
     step_def: ProcessStep,
@@ -3976,6 +4176,14 @@ async def _execute_composite_fan_out_step(
     out.progress(
         f"  Step '{step_id}': {len(item_contexts)} actionable item scopes "
         f"({retained_count} retained)"
+    )
+    dispatch = _prepare_mapped_dispatch(
+        spec=None,
+        step_def=step_def,
+        target=target,
+        actionable_items=len(item_contexts),
+        execution_context=execution_context,
+        out=out,
     )
     step_hash = fingerprint_step(target)
 
@@ -4138,10 +4346,20 @@ async def _execute_composite_fan_out_step(
         _emit_terminal()
         return True
 
+    ledger = execution_context.spend_ledger
+
+    async def _invoke_and_measure(invoked_step_id: str, item_vars: dict[str, str]) -> bool:
+        try:
+            return await _invoke(invoked_step_id, item_vars)
+        finally:
+            if ledger is not None:
+                item_key = compute_task_state_dir(run_dir, step_def, item_vars).name
+                _observe_spend(ledger, run_dir / step_id / item_key, out=out)
+
     succeeded, total = await run_fan_out(
         item_contexts=item_contexts,
         variables=variables,
-        invoke=_invoke,
+        invoke=_invoke_and_measure,
         step_id=step_id,
         # A mapped composite is a cheap structural scope. Executable leaves inside
         # every scope acquire the run-owned admission authority themselves; making
@@ -4149,9 +4367,12 @@ async def _execute_composite_fan_out_step(
         # child stages and can deadlock at a run limit of one.
         max_concurrency=_DEFAULT_MAPPED_SCOPE_CONCURRENCY,
         step_concurrency=fan_out.max_concurrency,
+        dispatch=dispatch,
     )
     if succeeded != total:
         out.progress(f"  Step '{step_id}': {total - succeeded} of {total} item scopes failed")
+    if dispatch is not None:
+        dispatch.raise_if_stopped()
     return succeeded == total
 
 
@@ -4376,6 +4597,17 @@ async def _execute_fan_out_step(
     out.progress(
         f"  Step '{step_id}': {len(item_contexts)} actionable items "
         f"({len(discovery.filtered_items)} filtered)"
+    )
+    # The run pool schedules an agent fan-out's items itself, so this path takes the
+    # pre-dispatch worst-case check only; the in-run stop and the breaker gate mapped
+    # composite and code steps.
+    _ = _prepare_mapped_dispatch(
+        spec=spec,
+        step_def=step_def,
+        target=target,
+        actionable_items=len(item_contexts),
+        execution_context=execution_context,
+        out=out,
     )
 
     # ── gcp-worker dispatch path ─────────────────────────────────
@@ -5023,8 +5255,9 @@ async def _execute_step(
             )
 
     if target.mode == "agent":
-        if target.fan_out is not None:
-            return await _execute_fan_out_step(
+        ledger = execution_context.spend_ledger
+        try:
+            return await _execute_agent_mode_step(
                 spec=spec,
                 step_def=step_def,
                 target=target,
@@ -5033,37 +5266,75 @@ async def _execute_step(
                 process_dir=process_dir,
                 run_dir=run_dir,
                 run_id=run_id,
-                backend_name=execution_context.backend_name,
-                max_concurrency=execution_context.max_concurrency,
-                initial_concurrency=execution_context.initial_concurrency,
-                num_workers=execution_context.num_workers,
-                machine_type=execution_context.machine_type,
-                spot=execution_context.spot,
-                variant_override=scope_execution_profile,
                 execution_context=execution_context,
+                scope_execution_profile=scope_execution_profile,
                 peer_allowed_targets=peer_allowed_targets,
                 events=events,
                 out=out,
-                pool_dispatch_template=execution_context.pool_dispatch_template,
-                auth_flags=execution_context.auth_flags,
-                preflight_quota_guard=execution_context.preflight_quota_guard,
             )
-        return await _execute_agent_step(
+        finally:
+            if ledger is not None:
+                _observe_spend(ledger, paths_mod.task_logs_parent_dir(run_dir, step_id), out=out)
+
+    raise CLIError(f"step '{step_id}': unsupported mode '{target.mode}'")
+
+
+async def _execute_agent_mode_step(
+    *,
+    spec: ProcessSpec,
+    step_def: ProcessStep,
+    target: ResolvedStep,
+    variables: dict[str, str],
+    process_path: Path,
+    process_dir: Path,
+    run_dir: Path,
+    run_id: str,
+    execution_context: RunExecutionContext,
+    scope_execution_profile: str | None,
+    peer_allowed_targets: list[WriteTarget] | None,
+    events: ProcessEventLogger | None,
+    out: Any,
+) -> bool:
+    """Run one agent step, mapped through the run pool or as a single task."""
+    if target.fan_out is not None:
+        return await _execute_fan_out_step(
             spec=spec,
             step_def=step_def,
             target=target,
             variables=variables,
+            process_path=process_path,
             process_dir=process_dir,
             run_dir=run_dir,
             run_id=run_id,
-            variant_override=scope_execution_profile,
-            peer_allowed_targets=peer_allowed_targets,
             backend_name=execution_context.backend_name,
+            max_concurrency=execution_context.max_concurrency,
+            initial_concurrency=execution_context.initial_concurrency,
+            num_workers=execution_context.num_workers,
+            machine_type=execution_context.machine_type,
+            spot=execution_context.spot,
+            variant_override=scope_execution_profile,
             execution_context=execution_context,
+            peer_allowed_targets=peer_allowed_targets,
+            events=events,
             out=out,
+            pool_dispatch_template=execution_context.pool_dispatch_template,
+            auth_flags=execution_context.auth_flags,
+            preflight_quota_guard=execution_context.preflight_quota_guard,
         )
-
-    raise CLIError(f"step '{step_id}': unsupported mode '{target.mode}'")
+    return await _execute_agent_step(
+        spec=spec,
+        step_def=step_def,
+        target=target,
+        variables=variables,
+        process_dir=process_dir,
+        run_dir=run_dir,
+        run_id=run_id,
+        variant_override=scope_execution_profile,
+        peer_allowed_targets=peer_allowed_targets,
+        backend_name=execution_context.backend_name,
+        execution_context=execution_context,
+        out=out,
+    )
 
 
 # ── Orchestration loop ────────────────────────────────────────────
@@ -5347,6 +5618,11 @@ async def _orchestrate(
                     failure.model_dump(mode="json", exclude_none=True)
                     for failure in exc.output_failures
                 ]
+            if isinstance(exc, DispatchStopped):
+                step_states[step_id]["stopped"] = exc.stop.model_dump(
+                    mode="json", exclude_none=True
+                )
+                out.warning(f"Step '{step_id}' is {exc.stop.label}: {exc.stop.message}")
             events.step_fail(step_id, elapsed, error=str(exc))
             _write_process_status(
                 run_dir, spec.name, step_states, started_at, active_step_ids=active_ids
@@ -5793,6 +6069,16 @@ def run_process_command(
             "synthesis); off skips the gate."
         ),
     ),
+    max_spend_usd: float | None = typer.Option(  # noqa: UP007
+        None,
+        "--max-spend-usd",
+        help=(
+            "Cap on the run's measured list cost in USD, over its whole life. A priced "
+            "mapped step refuses to start when the spend measured so far plus its worst "
+            "case exceeds the cap, and mapped steps stop starting items once the "
+            "measured spend reaches it. A resume without the flag keeps the recorded cap."
+        ),
+    ),
 ) -> None:
     """Execute a process spec DAG — all steps in dependency order."""
     logging.basicConfig(
@@ -5882,6 +6168,12 @@ def run_process_command(
     )
     if launch_errors:
         raise ValidationError(format_launch_errors(launch_errors))
+    spend_cap_usd = _resolve_spend_cap(
+        spec,
+        run_dir=compute_run_dir(spec, variables),
+        flag=max_spend_usd,
+        cloud=cloud,
+    )
 
     try:
         plan = build_plan(
@@ -6174,6 +6466,7 @@ def run_process_command(
         resolved_profiles=_serialize_plan_profiles(plan),
         backend=backend,
         git_sha=_get_git_sha(),
+        max_spend_usd=spend_cap_usd,
     )
     # Write run-config.yaml for a new run. A resume is only checked against it here.
     run_config = _write_run_config(
@@ -6193,6 +6486,7 @@ def run_process_command(
         step_variants=step_profile_overrides,
         git_sha=launch_config.git_sha,
         spec=spec,
+        max_spend_usd=spend_cap_usd,
     )
 
     out.progress(f"run-process: {spec.name} ({len(active_step_ids)} steps, {len(levels)} levels)")
@@ -6426,6 +6720,21 @@ def run_process_command(
             "records the launch config this resume runs with."
         )
 
+    # The spend ledger writes `.state/`, so it opens under the lease. It counts what the
+    # run has already spent: the larger of its record and the logs present here.
+    spend_ledger: SpendLedger | None = None
+    if spend_cap_usd is not None:
+        try:
+            spend_ledger = SpendLedger.open(run_dir, cap_usd=spend_cap_usd)
+        except BaseException:
+            release_lease(run_dir)
+            raise
+        unpriced = spend_ledger.unpriced_logs
+        out.progress(
+            f"Spend cap: {spend_cap_usd:.2f} USD; {spend_ledger.measured_usd:.2f} USD "
+            "measured so far" + (f" ({unpriced} logs have no list price)" if unpriced else "")
+        )
+
     # Leave SIGINT at Python's default so asyncio.Runner translates Ctrl-C into
     # cooperative task cancellation. SIGTERM retains the hard descendant reaper.
     install_subprocess_reaper_signal_handlers(include_sigint=False)
@@ -6464,6 +6773,7 @@ def run_process_command(
                     preflight_quota_guard=auth_preflight_quota_guard,
                     run_dir=run_dir,
                     enable_run_pool=backend == "local",
+                    spend_ledger=spend_ledger,
                 )
                 primary_error: BaseException | None = None
                 try:

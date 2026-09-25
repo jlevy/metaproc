@@ -422,6 +422,74 @@ class RetryPolicy(BaseModel):
     max_backoff_s: float = 600.0
 
 
+# ── Spend and dispatch policy ────────────────────────────────────
+
+
+class StepSpend(BaseModel):
+    """The list price a mapped step declares for one of its items.
+
+    A run with a spend cap reads it before the step dispatches anything: the worst case
+    is the actionable items times ``max_attempts`` times ``per_item_usd``, and the step
+    refuses to start when that plus the spend already measured exceeds the cap. The
+    price is dispatch policy, not step contract, so changing it never invalidates
+    completed work.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    per_item_usd: float = Field(
+        gt=0,
+        allow_inf_nan=False,
+        description=(
+            "List cost of one item when no attempt is retried: for an agent fan-out one "
+            "agent invocation, for a mapped composite one pass through the child scope."
+        ),
+    )
+    source: str = Field(
+        min_length=1,
+        description="Where the price comes from, such as the measured runs it averages.",
+    )
+    max_attempts: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Most attempts one item can make. Omitted, it is one plus the largest "
+            "resolved `retry.max_retries` among the agent steps the item runs."
+        ),
+    )
+
+
+class DispatchBreaker(BaseModel):
+    """Stop dispatching a mapped step's items once too many of them have failed.
+
+    The rate counts items this invocation finished. Once at least ``min_finished`` have
+    finished and more than ``max_failure_fraction`` of them failed, no further item
+    starts; items already running finish, and the rest stay pending for a resume.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    max_failure_fraction: float = Field(gt=0, lt=1, allow_inf_nan=False)
+    min_finished: int = Field(ge=1)
+
+
+class SpendCapPolicy(BaseModel):
+    """How a process treats the run-level spend cap (``run-process --max-spend-usd``)."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    required: bool = Field(
+        default=False,
+        description="Refuse a launch that has no cap from the flag, the run record or a default.",
+    )
+    default_usd: float | None = Field(
+        default=None,
+        gt=0,
+        allow_inf_nan=False,
+        description="The cap a launch without the flag and without a recorded cap runs with.",
+    )
+
+
 # ── Fan-out ──────────────────────────────────────────────────────
 
 
@@ -446,6 +514,14 @@ class ForEach(BaseModel):
             "model, so expressing a per-step ceiling through either conflates it with "
             "something else and leaves the limit invisible in the spec that describes "
             "the work. Omitted, the step is bounded only by the run-wide cap."
+        ),
+    )
+
+    breaker: DispatchBreaker | None = Field(
+        default=None,
+        description=(
+            "Stop dispatching new items once the failed fraction of finished items "
+            "exceeds `max_failure_fraction` after `min_finished` have finished."
         ),
     )
 
@@ -555,6 +631,7 @@ class ProcessStep(BaseModel):
     # budget
     max_budget_usd: float | None = None
     token_budget: int | None = None
+    spend: StepSpend | None = None
 
     # reuse policy
     reuse_policy: str | None = None
@@ -593,6 +670,12 @@ class ProcessStep(BaseModel):
             if len(set(field_names)) != len(field_names):
                 msg = f"step '{self.id}': for_each.bind_fields must be unique"
                 raise ValueError(msg)
+        if self.spend is not None and self.for_each is None:
+            msg = f"step '{self.id}': spend prices a mapped step's items and requires for_each"
+            raise ValueError(msg)
+        if self.spend is not None and self.mode not in {"agent", "code", "composite"}:
+            msg = f"step '{self.id}': spend is not valid on a {self.mode} step"
+            raise ValueError(msg)
         return self
 
     @field_validator("inputs", mode="before")
@@ -625,6 +708,13 @@ class ProcessSpec(BaseModel):
     deps: dict[str, ProcessDep] = Field(default_factory=dict)
     outputs: dict[str, ProcessOutput] = Field(default_factory=dict)
     resource_budgets: list[ResourceBudgetSpec] = Field(default_factory=list)
+    spend_cap: SpendCapPolicy | None = Field(
+        default=None,
+        description=(
+            "Run-level spend cap policy. Read only when this process is the launched "
+            "root; a composite child's declaration is ignored."
+        ),
+    )
     steps: list[ProcessStep] = Field(default_factory=list)
     lane_matrix: LaneMatrix | None = Field(
         default=None,

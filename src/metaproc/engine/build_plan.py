@@ -1054,6 +1054,7 @@ def build_plan(
                 ),
                 align=step.for_each.align,
                 max_concurrency=step.for_each.max_concurrency,
+                breaker=step.for_each.breaker,
             )
 
         resolved_env: dict[str, str] = {}
@@ -1114,6 +1115,7 @@ def build_plan(
                 output_root=step.output_root,
                 max_budget_usd=step.max_budget_usd,
                 token_budget=step.token_budget,
+                spend=step.spend,
             )
         )
 

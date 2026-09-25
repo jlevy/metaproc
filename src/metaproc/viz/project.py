@@ -337,6 +337,7 @@ def _project_step_details(
         env=dict(step.env),
         max_budget_usd=step.max_budget_usd,
         token_budget=step.token_budget,
+        spend=step.spend,
         reuse_policy=reuse,
         on_failure=step.on_failure,
         execution_profile=step.execution_profile,
@@ -454,6 +455,7 @@ def _project_fan_out(fan_out: FanOut | None) -> FanOutDetails | None:
         filtered_count=fan_out.filtered_count,
         align=fan_out.align,
         max_concurrency=fan_out.max_concurrency,
+        breaker=fan_out.breaker,
     )
 
 

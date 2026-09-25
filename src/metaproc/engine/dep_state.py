@@ -89,11 +89,17 @@ def fingerprint_step(step: ResolvedStep) -> str:
     """
     # ``produced_refs`` is derived from the plan's deps rather than authored, and
     # excluding it keeps the contract hash of every step that has none exactly
-    # what it was before the field existed.
+    # what it was before the field existed. The declared item price (``spend``) and
+    # the dispatch breaker govern whether items start, not what an item produces, so
+    # repricing a step or retuning its breaker must not invalidate completed work.
     payload = step.model_dump(
         mode="json",
         exclude_none=True,
-        exclude={"fan_out": {"items", "filtered_count"}, "produced_refs": True},
+        exclude={
+            "fan_out": {"items", "filtered_count", "breaker"},
+            "produced_refs": True,
+            "spend": True,
+        },
     )
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     hasher = hashlib.sha256(encoded)

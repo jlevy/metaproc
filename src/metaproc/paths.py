@@ -50,7 +50,7 @@ STATE_DIR = ".state"
 All engine state lives under ``<run_dir>/.state/`` with stable sub-namespaces:
 
 - ``<run_dir>/.state/`` — run-level files (run-config.yaml, process-status.yaml,
-  orchestrator-lease.yaml, overrides.yaml).
+  orchestrator-lease.yaml, overrides.yaml, spend-ledger.yaml when a spend cap is set).
 - ``<run_dir>/.state/steps/<step_id>/`` — per-step fan-out runner state
   (runpool-status.yaml, scale-state.yaml, scale-override.yaml,
   dispatch-manifest.yaml, claimed-items.yaml).
@@ -180,6 +180,9 @@ OVERRIDES_FILE = "overrides.yaml"
 TRACE_FILE = "trace.jsonl"
 """Derived trace stream filename."""
 
+SPEND_LEDGER_FILE = "spend-ledger.yaml"
+"""Run-level measured spend under a spend cap (`metaproc.engine.spend_cap`)."""
+
 RESOURCE_EVENTS_FILE = "resource-events.jsonl"
 """Run resource-event JSONL stream filename.
 
@@ -199,6 +202,11 @@ def run_state_dir(run_dir: Path) -> Path:
 def run_logs_dir(run_dir: Path) -> Path:
     """Return ``<run_dir>/.logs/`` (run-level engine logs branch)."""
     return run_dir / LOGS_DIR
+
+
+def spend_ledger_file(run_dir: Path) -> Path:
+    """Return ``<run_dir>/.state/spend-ledger.yaml``, the measured spend under a cap."""
+    return run_state_dir(run_dir) / SPEND_LEDGER_FILE
 
 
 def iter_composite_run_dirs(run_dir: Path) -> Iterable[Path]:
