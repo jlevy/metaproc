@@ -89,6 +89,14 @@ class ResolvedStep(BaseModel):
     the plan-time and execution-time hashes must be comparable, and two callers
     disagreeing about the set would silently produce two different hashes.
     """
+    checkout_root: str | None = None
+    """The checkout the step's process was loaded from: its nearest ancestor holding ``.git``.
+
+    Set by ``build_plan`` and read by ``fingerprint_step``, which hashes every path under
+    it relative to it and leaves the root itself out of the hash, so the same step planned
+    from two checkouts of one revision has one fingerprint. ``None`` when the process is
+    not inside a checkout; its paths are then hashed as they are.
+    """
     execution_profile: str | None = None
     artifact_namespace: str | None = None
     variant: str | None = None

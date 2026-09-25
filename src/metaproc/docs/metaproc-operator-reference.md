@@ -477,6 +477,20 @@ The cascade only fires when the recorded fingerprint disagrees with the current 
 Runs whose completion records carry no `recorded_step_hash` (legacy completions) are
 kept as completed and are *not* re-executed.
 
+Where the checkout sits is not part of a fingerprint.
+A plan resolves a process’s `./` and `../` references to absolute paths, so a
+composite’s `uses`, a step’s `prompt_paths`, and any resolved field that names a file
+inside the checkout carry the checkout’s location.
+The fingerprint counts each path inside the checkout relative to it (the nearest
+directory above the process file that holds `.git`), and counts a path outside it, such
+as a run directory, as it is.
+So a resume can run from a fresh checkout of the same revision at another path and reuse
+everything the run completed; an edit made in that checkout still re-runs the steps it
+touches. Pass a value that names a file inside the checkout in the checkout the resume
+runs from: a path into the old checkout is outside the new one, so a step whose resolved
+fields carry it re-runs.
+A process that is not inside a checkout has its paths counted as they are.
+
 One class of runbook is deliberately outside the fingerprint: a file the run itself
 produces, referenced through a dep that declares `produced_by`. A step may load a
 runbook an earlier step generates, and that file does not exist yet when the plan is

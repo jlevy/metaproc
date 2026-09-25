@@ -63,7 +63,8 @@ def _coerce_config_value(key: str, value: str) -> object:
 
 
 def _find_repo_root(start: Path) -> Path | None:
-    """Return the nearest git repo root for registry discovery."""
+    """Return the nearest git repo root: where profiles are discovered, and the checkout
+    root step fingerprints are taken relative to (``ResolvedStep.checkout_root``)."""
     current = start.resolve()
     if current.is_file():
         current = current.parent
@@ -777,6 +778,8 @@ def build_plan(
     """
 
     profile_registry = _load_profile_registry(process_path, profile_files)
+    found_root = _find_repo_root(process_path)
+    checkout_root = str(found_root) if found_root is not None else None
     if adapter_override is not None:
         run_profile = _resolve_profile(profile_registry, adapter_override)
     elif spec.defaults.default_execution_profile:
@@ -1109,6 +1112,7 @@ def build_plan(
                 # this step's transitive ancestors, and a step's `needs` is only final
                 # once every step has resolved its ref-derived edges.
                 produced_refs=[],
+                checkout_root=checkout_root,
                 execution_profile=step_execution_profile,
                 artifact_namespace=step_artifact_namespace,
                 variant=step.variant,

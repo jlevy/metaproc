@@ -164,6 +164,13 @@ class StepDetails(BaseModel):
     Surfaced so a reader can tell why an edit to one referenced runbook re-runs
     the step and an edit to another does not; see ``fingerprint_step``.
     """
+    checkout_root: str | None = None
+    """The checkout the step's process was loaded from.
+
+    Its fingerprint counts every path under this root relative to it, so the step keeps
+    its fingerprint when the same revision is planned from another checkout; see
+    ``fingerprint_step``.
+    """
     prompt_prefix: str | None = None
 
     inputs: dict[str, IOSpec] = Field(default_factory=dict)
