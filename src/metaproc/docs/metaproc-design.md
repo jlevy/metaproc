@@ -1752,7 +1752,7 @@ A mapped step declares what one of its items costs:
   uses: deps.child
   spend:
     per_item_usd: 0.065  # one item, no attempt retried
-    source: "measured: 6.02 USD over 93 invocations"
+    source: "measured: 6.50 USD over 100 invocations"
     max_attempts: 2  # optional
   for_each: { ... }
 ```
