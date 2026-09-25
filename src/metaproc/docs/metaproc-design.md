@@ -1733,6 +1733,70 @@ In a chain the gate is per step rather than shared across the walk, so a tight c
 on one stage does not throttle the others an item passes through.
 Omitted, the step is bounded only by the run-wide cap.
 
+### Spend Cap and Dispatch Breaker
+
+Resource budgets report; they do not stop work.
+A run launched with `run-process --max-spend-usd X` carries one cap on its measured list
+cost, shared by every scope it enters.
+The cap is cumulative over the run’s life, recorded as `max_spend_usd` in
+`run-config.yaml`, and kept by a resume that does not pass the flag.
+A process may declare `spend_cap: {required: true}`, which refuses a launch left with no
+cap before any step runs, or `spend_cap: {default_usd: X}`, the cap a launch without the
+flag and without a recorded cap runs with.
+
+A mapped step declares what one of its items costs:
+
+```yaml
+- id: label
+  mode: composite
+  uses: deps.child
+  spend:
+    per_item_usd: 0.065  # one item, no attempt retried
+    source: "measured: 6.02 USD over 93 invocations"
+    max_attempts: 2  # optional
+  for_each: { ... }
+```
+
+Three mechanisms read the cap:
+
+- **Pre-dispatch check.** After reuse has chosen the actionable items and before any of
+  them starts, a priced step refuses when the spend already measured plus actionable
+  items × `max_attempts` × `per_item_usd` exceeds the cap.
+  The refusal names each number and the cap that would admit the step.
+  Only actionable items count, so a resume is priced for the work it will run, not for
+  the whole plan. `max_attempts` defaults to one plus the largest resolved
+  `retry.max_retries` among the agent steps an item runs: the step itself for an agent
+  fan-out, every agent step of the child (and of nested children) for a mapped
+  composite. Exit-code and invalid-output retries share one attempt counter, so no step
+  exceeds that number.
+  A priced step in a run without a cap prints its worst case and runs.
+- **In-run stop.** Mapped composite and code steps ask a per-step gate before each item
+  starts. Once measured spend reaches the cap, no further item starts; items already
+  running finish, and the rest keep no task record, so a resume picks them up.
+  Steps running in parallel share the cap but check it independently, so a run can
+  overshoot by at most the items already running in each step when the cap is reached.
+  An agent fan-out is scheduled by the run pool and takes the pre-dispatch check only.
+- **Dispatch breaker.** `for_each.breaker: {max_failure_fraction, min_finished}` stops a
+  mapped composite or code step once more than that fraction of the items it finished in
+  this invocation failed, after at least `min_finished` finished.
+
+Measured spend is list cost as resource projection computes it (`log_list_cost_usd`): an
+estimate at list prices, and a lower bound where a log’s model has no price.
+The ledger counts each agent log once under its logical path, adds a finished task’s
+logs as it ends, and records its total in `.state/spend-ledger.yaml`. At launch it takes
+the larger of that record and a rescan of the logs present, so a resume on a machine
+without the earlier logs still counts their spend.
+
+A stop keeps the step and the process `failed`, which every reader already treats as
+unfinished and resumable, and adds a `stopped` record to `process-status.yaml` with the
+reason (`spend-cap` or `failure-rate`), the phase (`pre-dispatch` or `in-run`), the
+numbers that decided it, and how many items were not dispatched.
+`metaproc status` shows the run as `BUDGET-STOPPED` or `BREAKER-STOPPED`. A
+budget-stopped run resumed with the same cap refuses again at the pre-dispatch check; a
+higher cap continues it.
+Neither the price nor the breaker enters the step fingerprint, so retuning either never
+invalidates completed work.
+
 ### Item-Aligned Chains
 
 `for_each.align: same_key` declares a step’s `needs` edge item-scoped rather than
