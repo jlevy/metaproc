@@ -125,6 +125,7 @@ class RunStatus(BaseModel):
     # intentionally separate from process_state, which describes whether
     # the current process definition matches prior completed work.
     process_execution_state: Literal["running", "completed", "failed", "cancelled"] | None = None
+    selected_scope_step: str | None = None
     process_error: str | None = None
     # Set when a spend cap or a dispatch breaker stopped a mapped step. The execution
     # state stays "failed"; these records say why, with the numbers that decided it.
@@ -544,7 +545,9 @@ def scan_run_status(
     # pool OR an orchestrator lease is still heartbeating.
     is_active = any_running or (pending_retries > 0 and pool_alive) or orchestrator_alive
 
-    process_execution_state, process_error, step_errors = _read_process_execution(run_dir)
+    process_execution_state, process_error, step_errors, selected_scope_step = (
+        _read_process_execution(run_dir)
+    )
     dispatch_stops = _read_dispatch_stops(run_dir) if process_execution_state == "failed" else []
     step_entries: list[StepStatusEntry] = []
     process_state: Literal["current", "stale"] | None = None
@@ -577,6 +580,7 @@ def scan_run_status(
         steps=step_entries,
         process_state=process_state,
         process_execution_state=process_execution_state,
+        selected_scope_step=selected_scope_step,
         process_error=process_error,
         dispatch_stops=dispatch_stops,
         items_running=any_running,
@@ -648,19 +652,28 @@ def _read_process_execution(
     Literal["running", "completed", "failed", "cancelled"] | None,
     str | None,
     dict[str, str],
+    str | None,
 ]:
     """Return the execution state, summary error, and per-step errors."""
     path = run_dir / STATE_DIR / "process-status.yaml"
     if not path.exists():
-        return None, None, {}
+        return None, None, {}, None
     try:
         raw = read_yaml_file(path)
     except (OSError, YAMLError, ValueError):
-        return None, None, {}
+        return None, None, {}, None
     if not isinstance(raw, dict):
-        return None, None, {}
+        return None, None, {}, None
 
     raw_state = raw.get("state")
+    selected_scope_step = None
+    if "selected_scope_step" in raw:
+        raw_selection = raw["selected_scope_step"]
+        selected_scope_step = (
+            raw_selection
+            if isinstance(raw_selection, str) and raw_selection.strip()
+            else "<invalid selected_scope_step>"
+        )
     execution_state = (
         raw_state if raw_state in {"running", "completed", "failed", "cancelled"} else None
     )
@@ -686,7 +699,7 @@ def _read_process_execution(
         process_error = "; ".join(causes) or "process failed without a recorded step error"
     elif execution_state == "cancelled":
         process_error = "process was cancelled"
-    return execution_state, process_error, step_errors
+    return execution_state, process_error, step_errors, selected_scope_step
 
 
 def _read_dispatch_stops(run_dir: Path) -> list[DispatchStop]:
@@ -729,6 +742,8 @@ def wait_for_completion(
 
         if not status.is_active and status.process_execution_state in ("failed", "cancelled"):
             return status, 1
+        if not status.is_active and status.selected_scope_step is not None:
+            return status, 2
 
         # Terminal: nothing running or pending, and not active (which accounts
         # for pending retries with a live pool).
@@ -769,6 +784,12 @@ def check_completion(status: RunStatus, condition: str) -> CheckResult:
             passed=False,
             exit_code=1,
             reason=status.process_error or f"Process {status.process_execution_state}",
+        )
+    if status.selected_scope_step is not None:
+        return CheckResult(
+            passed=False,
+            exit_code=2,
+            reason=f"Only selected nested scope {status.selected_scope_step} was evaluated",
         )
 
     if condition == "completed":

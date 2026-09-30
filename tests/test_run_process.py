@@ -2100,6 +2100,204 @@ def test_run_plan_refresh_preserves_authored_reason_key(tmp_path: Path) -> None:
 
 
 class TestCompositeStepExecution:
+    def test_selected_nested_fetch_preserves_planner_and_pending_sibling(
+        self, tmp_path: Path
+    ) -> None:
+        process_dir = tmp_path / "process"
+        process_dir.mkdir()
+        (process_dir / "roster.md").write_text(
+            "---\nprogress:\n  items:\n    - ticker: AFL\n    - ticker: BBB\n---\n",
+            encoding="utf-8",
+        )
+        (process_dir / "postprocess.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: synthetic-postprocess
+                  outputs:
+                    done: { path: "{{run.dir}}/done.txt", as: path }
+                  steps:
+                    - id: write-done
+                      mode: code
+                      outputs:
+                        done: { path: "{{run.dir}}/done.txt", kind: file }
+                      command: /bin/sh -c 'printf done > "{{run.dir}}/done.txt"'
+                ---
+                Nested deterministic descendant.
+                """
+            ),
+            encoding="utf-8",
+        )
+        (process_dir / "fetch.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: synthetic-fetch
+                  inputs:
+                    ticker: { param: TICKER, as: string }
+                    prior_report_file: { param: PRIOR_REPORT_FILE, as: string, required: false, default: none }
+                  deps:
+                    postprocess: { path: ./postprocess.process.md, as: path }
+                  outputs:
+                    report: { path: "{{run.dir}}/report.txt", as: path }
+                  steps:
+                    - id: build-plan
+                      mode: code
+                      outputs:
+                        plan: { path: "{{run.dir}}/plan.txt", kind: file }
+                      command: /bin/sh -c 'printf plan > "{{run.dir}}/plan.txt"'
+                    - id: collect
+                      mode: code
+                      needs: [build-plan]
+                      outputs:
+                        report: { path: "{{run.dir}}/report.txt", kind: file }
+                      command: /bin/sh -c 'printf x >> "{{run.dir}}/calls.txt"; printf report > "{{run.dir}}/report.txt"; printf "%s" "{{PRIOR_REPORT_FILE}}" > "{{run.dir}}/prior-used.txt"'
+                    - id: postprocess
+                      mode: composite
+                      uses: deps.postprocess
+                      needs: [collect]
+                      outputs:
+                        done: { path: "{{run.dir}}/postprocess/done.txt", kind: file }
+                ---
+                Provider-free fetch surrogate.
+                """
+            ),
+            encoding="utf-8",
+        )
+        (process_dir / "ticker.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: synthetic-ticker
+                  inputs:
+                    ticker: { param: TICKER, as: string }
+                  deps:
+                    fetch: { path: ./fetch.process.md, as: path }
+                  outputs:
+                    final: { path: "{{run.dir}}/final.txt", as: path }
+                  steps:
+                    - id: paid-plan-surrogate
+                      mode: code
+                      outputs:
+                        query: { path: "{{run.dir}}/query.txt", kind: file }
+                      command: /bin/sh -c 'printf x >> "{{run.dir}}/plan-calls.txt"; printf query > "{{run.dir}}/query.txt"'
+                    - id: fetch
+                      mode: composite
+                      uses: deps.fetch
+                      needs: [paid-plan-surrogate]
+                      with:
+                        TICKER: "{{TICKER}}"
+                      outputs:
+                        report: { path: "{{run.dir}}/fetch/report.txt", kind: file }
+                    - id: interpret
+                      mode: code
+                      needs: [fetch]
+                      outputs:
+                        measurement: { path: "{{run.dir}}/measurement.txt", kind: file }
+                      command: /bin/sh -c 'printf x >> "{{run.dir}}/interpret-calls.txt"; printf measurement > "{{run.dir}}/measurement.txt"'
+                    - id: seal
+                      mode: code
+                      needs: [interpret]
+                      outputs:
+                        final: { path: "{{run.dir}}/final.txt", kind: file }
+                      command: /bin/sh -c 'printf final > "{{run.dir}}/final.txt"'
+                ---
+                Provider-free ticker surrogate.
+                """
+            ),
+            encoding="utf-8",
+        )
+        (process_dir / "parent.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: synthetic-parent
+                  deps:
+                    roster: { path: ./roster.md, as: path }
+                    ticker: { path: ./ticker.process.md, as: path }
+                  steps:
+                    - id: depth
+                      mode: composite
+                      uses: deps.ticker
+                      for_each:
+                        over: deps.roster
+                        bind: ticker
+                        bind_fields: [ticker]
+                        key: "{{ticker}}"
+                      with:
+                        TICKER: "{{ticker}}"
+                      outputs:
+                        final: { path: "{{run.dir}}/depth/{{ticker}}/final.txt", kind: file }
+                ---
+                Provider-free mapped parent.
+                """
+            ),
+            encoding="utf-8",
+        )
+        runs_dir = tmp_path / "runs"
+        args = [
+            "run-process",
+            str(process_dir / "parent.process.md"),
+            "--var",
+            f"RUNS_DIR={runs_dir}",
+            "--var",
+            "RUN_ID=synthetic-run",
+            "--only",
+            "depth",
+        ]
+        runner = CliRunner()
+        preview = runner.invoke(app, [*args, "--only-scope-step", "depth/AFL/fetch", "--dry-run"])
+        assert preview.exit_code != 0
+        assert preview.exception is not None
+        assert "root-only dry-run cannot preview the selected nested plan" in str(preview.exception)
+        assert not runs_dir.exists()
+        first = runner.invoke(app, [*args, "--only-scope-step", "depth/AFL/paid-plan-surrogate"])
+        assert first.exit_code == 0, first.output
+        run_dir = runs_dir / "synthetic-run"
+        afl = run_dir / "depth" / "AFL"
+        bbb = run_dir / "depth" / "BBB"
+        assert not bbb.exists()
+        root_status = read_yaml_file(run_dir / STATE_DIR / "process-status.yaml")
+        assert root_status["steps"]["depth"]["state"] == "skipped"
+        assert "only selected nested scope" in root_status["steps"]["depth"]["note"]
+        assert (afl / "plan-calls.txt").read_text() == "x"
+        assert (afl / "fetch" / "calls.txt").read_text() == "x"
+        assert (afl / "interpret-calls.txt").read_text() == "x"
+
+        prior_report = afl / "fetch" / "report.txt"
+        selected = runner.invoke(
+            app,
+            [
+                *args,
+                "--var",
+                f"PRIOR_REPORT_FILE={prior_report}",
+                "--only-scope-step",
+                "depth/AFL/fetch",
+            ],
+        )
+        assert selected.exit_code == 0, selected.output
+        assert not bbb.exists()
+        assert (afl / "plan-calls.txt").read_text() == "x"
+        assert (afl / "fetch" / "calls.txt").read_text() == "xx"
+        assert (afl / "fetch" / "postprocess" / "done.txt").read_text() == "done"
+        assert (afl / "fetch" / "prior-used.txt").read_text() == str(prior_report)
+        assert (afl / "interpret-calls.txt").read_text() == "xx"
+        fetch_plan = read_run_plan(afl / "fetch")
+        assert fetch_plan is not None
+        assert fetch_plan.run_id == "synthetic-parent/synthetic-run/depth/AFL/fetch"
+
+        ordinary = runner.invoke(app, args)
+        assert ordinary.exit_code == 0, ordinary.output
+        assert (bbb / "final.txt").read_text() == "final"
+        assert (afl / "plan-calls.txt").read_text() == "x"
+        assert (afl / "fetch" / "calls.txt").read_text() == "xx"
+        root_status = read_yaml_file(run_dir / STATE_DIR / "process-status.yaml")
+        assert root_status["steps"]["depth"]["state"] == "completed"
+
     def test_composite_loads_child_spec(self, tmp_path: Path) -> None:
         """Composite step resolves uses path and loads child spec."""
 
@@ -2693,6 +2891,23 @@ class TestCompositeStepExecution:
             == expected_error
         )
 
+        # A targeted retry of one completed child must neither enter the failed
+        # sibling nor spend work on another completed sibling.
+        selected = runner.invoke(
+            app,
+            [
+                *args,
+                "--only",
+                "ticker-flow",
+                "--only-scope-step",
+                "ticker-flow/alfa/write-report",
+            ],
+        )
+        assert selected.exit_code == 0, selected.output
+        assert len(read_attempt_history_at(state_root / "alfa")) == 2
+        assert len(read_attempt_history_at(state_root / "brvo")) == 1
+        assert len(read_attempt_history_at(state_root / "chrl")) == 1
+
         fail_marker.unlink()
         second = runner.invoke(app, args)
         assert second.exit_code == 0, second.output
@@ -2709,7 +2924,8 @@ class TestCompositeStepExecution:
             if output.reason == "step-mismatch"
         ]
         assert [record.disposition for record in read_attempt_history_at(state_root / "alfa")] == [
-            AttemptDisposition.succeeded
+            AttemptDisposition.succeeded,
+            AttemptDisposition.succeeded,
         ]
         assert [record.disposition for record in read_attempt_history_at(state_root / "brvo")] == [
             AttemptDisposition.permanent,
@@ -2742,6 +2958,7 @@ class TestCompositeStepExecution:
         assert third.exit_code == 0, third.output
         assert (run_dir / "ticker-flow" / "alfa" / "internal-index.txt").exists()
         assert [record.disposition for record in read_attempt_history_at(state_root / "alfa")] == [
+            AttemptDisposition.succeeded,
             AttemptDisposition.succeeded,
             AttemptDisposition.succeeded,
         ]

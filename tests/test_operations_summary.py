@@ -558,6 +558,42 @@ def test_run_setup_and_stage_figures(composite_run: Path) -> None:
         "local",
     )
 
+
+def test_scoped_run_does_not_claim_full_finalization(composite_run: Path) -> None:
+    status_path = composite_run / ".state" / "process-status.yaml"
+    status = yaml.safe_load(status_path.read_text(encoding="utf-8"))
+    status["selected_scope_step"] = "depth/AFL/fetch"
+    _yaml(status_path, status)
+
+    summary = ops.build_operations_summary(
+        composite_run,
+        outcome=FinalizationState.COMPLETED,
+        generated_at=datetime(2026, 9, 12, tzinfo=UTC),
+    )
+    assert summary.run is not None
+    assert summary.run.state is None
+    assert summary.run.state_source is None
+    assert "depth/AFL/fetch" in summary.run.unavailable["state"]
+
+
+@pytest.mark.parametrize("raw_marker", [None, "", []])
+def test_malformed_scope_marker_does_not_claim_full_finalization(
+    composite_run: Path, raw_marker: object
+) -> None:
+    status_path = composite_run / ".state" / "process-status.yaml"
+    status = yaml.safe_load(status_path.read_text(encoding="utf-8"))
+    status["selected_scope_step"] = raw_marker
+    status_path.write_text(yaml.safe_dump(status, sort_keys=False), encoding="utf-8")
+
+    summary = ops.build_operations_summary(
+        composite_run,
+        outcome=FinalizationState.COMPLETED,
+        generated_at=datetime(2026, 9, 12, tzinfo=UTC),
+    )
+    assert summary.run is not None
+    assert summary.run.state is None
+    assert "invalid selected_scope_step" in summary.run.unavailable["state"]
+
     setup = summary.setup
     assert setup is not None
     assert setup.step_ids == ["intake", "gate", "review"]

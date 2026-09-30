@@ -173,6 +173,8 @@ def _format_text(status: RunStatus, *, steps_only: bool = False, stale_only: boo
         # Legacy backstop: is_active is True but neither sub-flag fired
         # (e.g. RunStatus came from a reader without the sub-flags).
         status_label = "RUNNING"
+    elif status.selected_scope_step is not None:
+        status_label = "SCOPED"
     elif status.process_execution_state == "running":
         status_label = "RUNNING"
     elif status.process_execution_state == "failed" and status.dispatch_stops:
@@ -188,6 +190,8 @@ def _format_text(status: RunStatus, *, steps_only: bool = False, stale_only: boo
     if status.pending_retries > 0:
         status_label += f" ({status.pending_retries} retries pending)"
     lines.append(f"Status: {status_label}")
+    if status.selected_scope_step is not None:
+        lines.append(f"Selected scope: {status.selected_scope_step} (full run not evaluated)")
     terminal_execution = not status.is_active and status.process_execution_state in (
         "failed",
         "cancelled",

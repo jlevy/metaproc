@@ -391,7 +391,7 @@ def _plan_names_scope(
 
 
 _PLAN_STEP_KEYS = ("step_id", "mode", "task_shape", "item_keys")
-_STATUS_KEYS = ("process", "state", "started_at", "completed_at")
+_STATUS_KEYS = ("process", "state", "started_at", "completed_at", "selected_scope_step")
 _STATUS_STEP_KEYS = ("state", "started_at", "completed_at", "elapsed_s")
 
 
@@ -472,7 +472,16 @@ def _run_figures(evidence: _Evidence, outcome: FinalizationState | None) -> RunF
         _first_str(finalization.get("state")) if isinstance(finalization, Mapping) else None
     )
     status_state = _first_str(status.get("state")) if status else None
-    if outcome is not None:
+    if status is not None and "selected_scope_step" in status:
+        selected_scope_step = _first_str(status["selected_scope_step"])
+        reason = (
+            f"only selected nested scope {selected_scope_step} was evaluated"
+            if selected_scope_step is not None
+            else "invalid selected_scope_step in process status"
+        )
+        unavailable["state"] = reason
+        unavailable["state_source"] = reason
+    elif outcome is not None:
         state, state_source = outcome.value, "finalization"
     elif finalized_state is not None:
         state, state_source = finalized_state, "resource_summary"

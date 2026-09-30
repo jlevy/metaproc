@@ -215,6 +215,7 @@ Useful dispatch selectors:
 
 - `--from <step>` starts at a step and lets downstream dependencies run
 - `--only <step>` runs only the named step
+- `--only-scope-step <path>` enters one nested step through its parent process
 - `--skip <step>` marks a step skipped for this invocation
 - `--force` bypasses reuse checks throughout the run, including composite descendants
 - `--dry-run` prints the plan without launching work
@@ -222,8 +223,22 @@ Useful dispatch selectors:
 `--from` and `--only` narrow the walk; they do not re-run a step that is already
 complete. Add `--force` to re-run it.
 
-`--skip`, `--from`, and `--only` currently name root-process steps.
-They are not matched against same-named steps inside a composite child.
+`--skip`, `--from`, and `--only` name root-process steps.
+To retry one nested step, pair `--only <root-step>` with `--only-scope-step` and its
+exact scope path, for example `--only depth --only-scope-step depth/ACME/fetch`. The
+path includes each composite step and mapped item key.
+The runner enters only that item, verifies that omitted ancestors completed, and reruns
+the selected step and its descendants.
+Other items, including pending items, remain untouched.
+A selected composite reruns its child process; inspect that child and its downstream
+steps before invoking one that makes external requests or agent calls.
+
+The scoped invocation writes `selected_scope_step` to `process-status.yaml`; native
+status shows `SCOPED`, and completion checks do not certify the full run.
+An ordinary resume without the selector clears that marker and processes remaining work.
+The selector cannot be combined with `--from`, `--force`, `--skip`, `--cloud`, or
+`--dry-run`. Its dry run is refused because a root-only preview cannot show the selected
+child plan.
 
 A local run serves the execution profiles its scalar agent steps pin from one run-owned
 pool, as long as those profiles’ `max_concurrency_hint`, `estimated_process_rss_bytes`,
