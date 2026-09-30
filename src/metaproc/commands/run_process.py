@@ -774,6 +774,7 @@ def _write_process_status(
     *,
     active_step_ids: set[str] | None = None,
     selected_scope_step: tuple[str, ...] | None = None,
+    clear_selected_scope_step: bool = False,
 ) -> Path:
     """Write derived process-status.yaml to {run_dir}/.state/."""
     state_dir = run_dir / STATE_DIR
@@ -786,6 +787,16 @@ def _write_process_status(
     }
     if selected_scope_step is not None:
         data["selected_scope_step"] = "/".join(selected_scope_step)
+    elif not clear_selected_scope_step:
+        # A later --only/--from invocation cannot certify work left outside its
+        # selected plan. Keep even an invalid marker so every reader fails closed
+        # until an unrestricted successful evaluation replaces it.
+        prior = _read_process_status_yaml(run_dir)
+        if isinstance(prior, dict) and "selected_scope_step" in prior:
+            # The YAML writer drops None values. Normalize a null marker to an
+            # invalid retained value instead of silently restoring authority.
+            prior_marker = prior["selected_scope_step"]
+            data["selected_scope_step"] = "" if prior_marker is None else prior_marker
 
     # Determine overall state
     states = {
@@ -5497,7 +5508,12 @@ async def _orchestrate(
     # Item-aligned chains run per item under their head, so the level walk must not
     # also run the absorbed members: their edges are item-scoped and the barrier
     # between them is exactly what alignment removes.
-    _chains = _code_item_aligned_chains(plan.steps)
+    # Execution chains must start inside this invocation's selected subgraph.
+    # Otherwise an aligned member selected in the middle of a → b → c stays
+    # absorbed under excluded head a, so neither b nor c runs.
+    _chains = _code_item_aligned_chains(
+        [step for step in plan.steps if step.step_id in selected_ids]
+    )
     _chain_head_of: dict[str, list[str]] = {chain[0]: chain for chain in _chains}
     _absorbed: set[str] = {sid for chain in _chains for sid in chain[1:]}
     # Collected documents are built from the unrestricted plan (see the docstring).
@@ -5958,6 +5974,11 @@ async def _orchestrate(
         started_at,
         active_step_ids=active_ids,
         selected_scope_step=selection,
+        clear_selected_scope_step=(
+            selection is None
+            and set(step_map) == {step.id for step in spec.steps}
+            and all(step_states[step_id].get("state") == "completed" for step_id in step_map)
+        ),
     )
 
     completed_count = sum(1 for s in step_states.values() if s.get("state") == "completed")

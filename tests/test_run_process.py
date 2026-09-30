@@ -1690,6 +1690,52 @@ class TestProcessStatusFile:
 
         assert read_yaml_file(path)["state"] == "cancelled"
 
+    @pytest.mark.parametrize("marker", [None, [], "", "depth/AFL/fetch"])
+    def test_partial_status_preserves_any_scope_marker_until_explicit_clear(
+        self, tmp_path: Path, marker: object
+    ) -> None:
+        path = _write_process_status(
+            tmp_path,
+            "test",
+            {"depth": {"state": "skipped"}},
+            "2026-04-09T00:00:00",
+            selected_scope_step=("depth", "AFL", "fetch"),
+        )
+        prior = read_yaml_file(path)
+        prior["selected_scope_step"] = marker
+        if marker is None:
+            prior.pop("selected_scope_step")
+            path.write_text(to_yaml_string(prior) + "selected_scope_step: null\n", encoding="utf-8")
+        else:
+            path.write_text(to_yaml_string(prior), encoding="utf-8")
+
+        partial = _write_process_status(
+            tmp_path,
+            "test",
+            {"depth": {"state": "skipped"}, "review": {"state": "completed"}},
+            "2026-04-09T00:00:00",
+            active_step_ids={"review"},
+        )
+        retained_marker = "" if marker is None else marker
+        assert read_yaml_file(partial)["selected_scope_step"] == retained_marker
+
+        failed = _write_process_status(
+            tmp_path,
+            "test",
+            {"depth": {"state": "completed"}, "review": {"state": "failed"}},
+            "2026-04-09T00:00:00",
+        )
+        assert read_yaml_file(failed)["selected_scope_step"] == retained_marker
+
+        complete = _write_process_status(
+            tmp_path,
+            "test",
+            {"depth": {"state": "completed"}, "review": {"state": "completed"}},
+            "2026-04-09T00:00:00",
+            clear_selected_scope_step=True,
+        )
+        assert "selected_scope_step" not in read_yaml_file(complete)
+
 
 # ── Fan-out execution ────────────────────────────────────────────
 
@@ -2100,6 +2146,111 @@ def test_run_plan_refresh_preserves_authored_reason_key(tmp_path: Path) -> None:
 
 
 class TestCompositeStepExecution:
+    def test_selected_middle_of_aligned_code_chain_executes_it_and_descendants(
+        self, tmp_path: Path
+    ) -> None:
+        process_dir = tmp_path / "process"
+        process_dir.mkdir()
+        (process_dir / "roster.md").write_text(
+            "---\nprogress:\n  items:\n    - item: AFL\n---\n", encoding="utf-8"
+        )
+        (process_dir / "chain.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: selected-aligned-chain
+                  deps:
+                    roster: { path: ./roster.md, as: path }
+                  outputs:
+                    final: { path: "{{run.dir}}/c.txt", as: path }
+                  steps:
+                    - id: a
+                      mode: code
+                      for_each:
+                        over: deps.roster
+                        bind: item
+                        bind_fields: [item]
+                        key: "{{item}}"
+                      outputs:
+                        out: { path: "{{run.dir}}/a.txt", kind: file }
+                      command: /bin/sh -c 'printf a >> "{{run.dir}}/calls.txt"; printf a > "{{run.dir}}/a.txt"'
+                    - id: b
+                      mode: code
+                      needs: [a]
+                      for_each:
+                        over: deps.roster
+                        bind: item
+                        bind_fields: [item]
+                        key: "{{item}}"
+                        align: same_key
+                      outputs:
+                        out: { path: "{{run.dir}}/b.txt", kind: file }
+                      command: /bin/sh -c 'printf b >> "{{run.dir}}/calls.txt"; printf b > "{{run.dir}}/b.txt"'
+                    - id: c
+                      mode: code
+                      needs: [b]
+                      for_each:
+                        over: deps.roster
+                        bind: item
+                        bind_fields: [item]
+                        key: "{{item}}"
+                        align: same_key
+                      outputs:
+                        out: { path: "{{run.dir}}/c.txt", kind: file }
+                      command: /bin/sh -c 'printf c >> "{{run.dir}}/calls.txt"; printf c > "{{run.dir}}/c.txt"'
+                ---
+                Provider-free aligned chain.
+                """
+            ),
+            encoding="utf-8",
+        )
+        (process_dir / "parent.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: selected-aligned-parent
+                  deps:
+                    chain: { path: ./chain.process.md, as: path }
+                  steps:
+                    - id: depth
+                      mode: composite
+                      uses: deps.chain
+                      outputs:
+                        final: { path: "{{run.dir}}/depth/c.txt", kind: file }
+                ---
+                Provider-free parent.
+                """
+            ),
+            encoding="utf-8",
+        )
+        runs_dir = tmp_path / "runs"
+        run_dir = runs_dir / "aligned-selected"
+        args = [
+            "run-process",
+            str(process_dir / "parent.process.md"),
+            "--var",
+            f"RUNS_DIR={runs_dir}",
+            "--var",
+            "RUN_ID=aligned-selected",
+        ]
+        runner = CliRunner()
+        initial = runner.invoke(app, args)
+        assert initial.exit_code == 0, initial.output
+        assert (run_dir / "depth/calls.txt").read_text() == "abc"
+
+        selected_head = runner.invoke(
+            app, [*args, "--only", "depth", "--only-scope-step", "depth/a"]
+        )
+        assert selected_head.exit_code == 0, selected_head.output
+        assert (run_dir / "depth/calls.txt").read_text() == "abcabc"
+
+        selected = runner.invoke(app, [*args, "--only", "depth", "--only-scope-step", "depth/b"])
+        assert selected.exit_code == 0, selected.output
+        assert (run_dir / "depth/calls.txt").read_text() == "abcabcbc"
+        assert (run_dir / "depth/a.txt").read_text() == "a"
+
     def test_selected_nested_fetch_preserves_planner_and_pending_sibling(
         self, tmp_path: Path
     ) -> None:
@@ -2232,6 +2383,11 @@ class TestCompositeStepExecution:
                         TICKER: "{{ticker}}"
                       outputs:
                         final: { path: "{{run.dir}}/depth/{{ticker}}/final.txt", kind: file }
+                    - id: review
+                      mode: code
+                      outputs:
+                        note: { path: "{{run.dir}}/review.txt", kind: file }
+                      command: /bin/sh -c 'printf reviewed > "{{run.dir}}/review.txt"'
                 ---
                 Provider-free mapped parent.
                 """
@@ -2290,13 +2446,22 @@ class TestCompositeStepExecution:
         assert fetch_plan is not None
         assert fetch_plan.run_id == "synthetic-parent/synthetic-run/depth/AFL/fetch"
 
-        ordinary = runner.invoke(app, args)
+        # A later partial invocation cannot turn a scoped result into a
+        # whole-run completion while the other mapped item remains untouched.
+        review_only = runner.invoke(app, [*args[:-2], "--only", "review"])
+        assert review_only.exit_code == 0, review_only.output
+        root_status = read_yaml_file(run_dir / STATE_DIR / "process-status.yaml")
+        assert root_status["selected_scope_step"] == "depth/AFL/fetch"
+        assert scan_run_status(run_dir).selected_scope_step == "depth/AFL/fetch"
+
+        ordinary = runner.invoke(app, args[:-2])
         assert ordinary.exit_code == 0, ordinary.output
         assert (bbb / "final.txt").read_text() == "final"
         assert (afl / "plan-calls.txt").read_text() == "x"
         assert (afl / "fetch" / "calls.txt").read_text() == "xx"
         root_status = read_yaml_file(run_dir / STATE_DIR / "process-status.yaml")
         assert root_status["steps"]["depth"]["state"] == "completed"
+        assert "selected_scope_step" not in root_status
 
     def test_composite_loads_child_spec(self, tmp_path: Path) -> None:
         """Composite step resolves uses path and loads child spec."""
