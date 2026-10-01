@@ -475,3 +475,126 @@ def test_code_bootstrap_does_not_inherit_first_agent_resource_hint(tmp_path: Pat
             await context.aclose()
 
     asyncio.run(check())
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_due_retry_yields_when_sibling_holds_shared_capacity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel: bool
+) -> None:
+    async def check() -> None:
+        context = RunExecutionContext.create(
+            max_concurrency=1, initial_concurrency=1, run_dir=tmp_path, enable_run_pool=True
+        )
+        pool = context.agent_pool(resource_config={}, execution_profile="fixture")
+        assert pool is not None
+        first_started = asyncio.Event()
+        code_entered = asyncio.Event()
+        release_code = asyncio.Event()
+        launches = 0
+        snapshots = 0
+        original_status = pool._build_status
+
+        def bounded_status() -> Any:
+            nonlocal snapshots
+            snapshots += 1
+            # A synchronous starvation defect must fail rather than hang pytest.
+            assert snapshots < 1000, "due retry spins without yielding to sibling work"
+            return original_status()
+
+        async def fake_launch(config: ProcessConfig, **_kwargs: object) -> ProcessResult:
+            nonlocal launches
+            launches += 1
+            first_started.set()
+            await asyncio.sleep(0.01)
+            return ProcessResult(
+                config,
+                None,
+                None,
+                "fake",
+                1 if launches == 1 else 0,
+                "stalled" if launches == 1 else None,
+                0,
+                None,
+                None,
+                None,
+            )
+
+        async def no_host_slot(_config: ProcessConfig) -> None:
+            return None
+
+        async def sibling() -> None:
+            await first_started.wait()
+            async with _leaf_slot(context):
+                code_entered.set()
+                await release_code.wait()
+
+        monkeypatch.setattr(pool, "_build_status", bounded_status)
+        monkeypatch.setattr(pool, "_launch_and_monitor", fake_launch)
+        monkeypatch.setattr(pool, "_acquire_host_slot", no_host_slot)
+        monkeypatch.setattr(run_parallel, "_POOL_FILL_POLL_INTERVAL_S", 0.01)
+        monkeypatch.setattr(run_parallel, "compute_backoff", lambda *_args: 0.01)
+        monkeypatch.setattr(run_parallel, "mark_failed_at", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(run_parallel, "_build_prepare_launch", lambda **_kwargs: None)
+        monkeypatch.setattr(run_parallel, "compute_run_dir", lambda *_args: tmp_path)
+        monkeypatch.setattr(
+            run_parallel, "compute_task_state_dir", lambda *_args: tmp_path / "item"
+        )
+        monkeypatch.setattr(
+            run_parallel, "_handle_success", lambda *args, **_kwargs: args[13].append((args[1], 0))
+        )
+        holder = asyncio.create_task(sibling())
+        task = asyncio.create_task(
+            run_parallel._run_agent_pool(
+                spec=ProcessSpec(name="fixture"),
+                step_def=ProcessStep(id="agent", mode="agent"),
+                step="agent",
+                each="ticker",
+                variables={"RUN_ID": "test"},
+                item_contexts=[{"ticker": "AFL"}],
+                adapter_type="fixture",
+                merged_config={},
+                effective_outputs=None,
+                effective_variant="",
+                allowed_runtime=set(),
+                retry_policy=RetryPolicy(max_retries=1),
+                process_dir=tmp_path,
+                refresh_token_fn=None,
+                pool_config=pool._config,
+                backend=None,
+                out=MagicMock(),
+                shared_pool=pool,
+            )
+        )
+        try:
+            await asyncio.wait_for(code_entered.wait(), timeout=2)
+
+            async def retry_is_queued() -> None:
+                while pool.snapshot.pending_retries == 0:
+                    if task.done():
+                        await task
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(retry_is_queued(), timeout=2)
+            await asyncio.sleep(0.08)
+            if task.done():
+                await task
+            assert launches == 1
+            assert not holder.done()
+            if cancel:
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+                assert not holder.done()
+                assert not pool.shutting_down
+            else:
+                release_code.set()
+                assert await asyncio.wait_for(task, timeout=2) == [("AFL", 0)]
+                assert launches == 2
+        finally:
+            monkeypatch.setattr(pool, "_build_status", original_status)
+            release_code.set()
+            await asyncio.gather(holder, task, return_exceptions=True)
+            await context.aclose()
+        assert pool._semaphore.held == 0
+
+    asyncio.run(check())

@@ -2398,10 +2398,11 @@ async def _run_agent_pool(  # noqa: PLR0913
                     # cancellation remain responsive.
                     await _process_completion_off_loop(future, shared)
             elif retry_heap:
-                # No active futures, but retries are waiting for backoff.
-                sleep_time = max(0, retry_heap[0][0] - time.monotonic())
-                if sleep_time > 0:
-                    await asyncio.sleep(sleep_time)
+                # A due retry can still be waiting for shared capacity held by
+                # sibling steps. Always yield so those holders, the pressure
+                # monitor, and cancellation can make progress.
+                sleep_time = max(_POOL_FILL_POLL_INTERVAL_S, retry_heap[0][0] - time.monotonic())
+                await asyncio.sleep(sleep_time)
             elif not_started:
                 # A shared controller can be full of other steps or code leaves.
                 # Yield until their permits drain or adaptive capacity increases.
