@@ -205,6 +205,7 @@ from metaproc.io.state_io import (
     compute_item_dir,
     end_status_attempt_at,
     mark_completed_at,
+    mark_deferred_at,
     mark_failed_at,
     mark_failed_synthetic_at,
     mark_running_at,
@@ -3921,13 +3922,25 @@ async def _execute_composite_step(
         out.progress(f"  Step '{step_id}': inner CLIError — {exc}")
         raise
 
-    validation = validate_process_outputs_detailed(
-        prepared.spec,
-        prepared.variables,
-        prepared.process_dir,
-        plan=prepared.plan,
+    # A selected descendant evaluates only part of this child. Its unselected
+    # siblings may own declared process outputs, so validate those outputs only
+    # after a whole-child invocation. Selected steps still validate their own ports.
+    selected_descendant = (
+        child_context.only_scope_step is not None
+        and len(child_context.only_scope_step) > len(child_path)
+        and child_context.only_scope_step[: len(child_path)] == child_path
     )
-    if validation.errors:
+    validation = (
+        validate_process_outputs_detailed(
+            prepared.spec,
+            prepared.variables,
+            prepared.process_dir,
+            plan=prepared.plan,
+        )
+        if not selected_descendant
+        else None
+    )
+    if validation is not None and validation.errors:
         error = CLIError(
             f"Step '{step_id}': child process output validation failed:\n  "
             + "\n  ".join(validation.errors),
@@ -4360,7 +4373,15 @@ async def _execute_composite_fan_out_step(
             return False
 
         artifact_dir = compute_item_dir(target.outputs, item_vars)
-        if target.outputs and artifact_dir is not None:
+        # The mapped item's ports describe its whole child process. A selected
+        # descendant can finish while later child outputs are intentionally absent.
+        selected_descendant = (
+            selection is not None
+            and len(selection) > len((*scope_path, step_id, state_dir.name))
+            and selection[: len((*scope_path, step_id, state_dir.name))]
+            == (*scope_path, step_id, state_dir.name)
+        )
+        if target.outputs and artifact_dir is not None and not selected_descendant:
             output_failures = validate_item_outputs_detailed(
                 artifact_dir,
                 target.outputs,
@@ -4383,20 +4404,25 @@ async def _execute_composite_fan_out_step(
                 )
                 return False
 
-        completed = mark_completed_at(state_dir, running_record=running_record)
-        write_result_at(
-            state_dir,
-            ResultRecord(
-                run_id=run_id,
-                step_id=step_id,
-                attempt_id=completed.attempt_id,
-                state="completed",
-                validated=True,
-                outputs=resolve_record_output_paths(target.outputs, item_vars),
-                published_at=completed.completed_at or _now_iso(),
-                step_hash=step_hash,
-            ),
-        )
+        if selected_descendant:
+            # Keep the selected child's validated result in its own scope. This
+            # mapped item is not a full success for fan-in or output projection.
+            mark_deferred_at(state_dir, running_record=running_record)
+        else:
+            completed = mark_completed_at(state_dir, running_record=running_record)
+            write_result_at(
+                state_dir,
+                ResultRecord(
+                    run_id=run_id,
+                    step_id=step_id,
+                    attempt_id=completed.attempt_id,
+                    state="completed",
+                    validated=True,
+                    outputs=resolve_record_output_paths(target.outputs, item_vars),
+                    published_at=completed.completed_at or _now_iso(),
+                    step_hash=step_hash,
+                ),
+            )
         _emit_terminal()
         return True
 
@@ -6975,8 +7001,14 @@ def run_process_command(
 
             asyncio.run(_run_local_process())
 
-        validation = validate_process_outputs_detailed(spec, variables, process_dir, plan=plan)
-        if validation.errors:
+        # A nested selector evaluated only one branch of the root process.
+        # Whole-process outputs may belong to unselected sibling steps.
+        validation = (
+            validate_process_outputs_detailed(spec, variables, process_dir, plan=plan)
+            if scope_selection is None
+            else None
+        )
+        if validation is not None and validation.errors:
             error = CLIError(
                 "process output validation failed:\n  " + "\n  ".join(validation.errors),
                 output_failures=validation.output_failures,
