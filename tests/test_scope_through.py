@@ -401,6 +401,56 @@ def test_batched_through_target_runs_only_named_planner_scopes(
     assert root_status["selected_scope_steps"] == ["depth/AFL/query", "depth/BBB/query"]
     assert root_status["selected_scope_mode"] == "through"
 
+    # The mapped item itself is a valid through-target once its child outputs can
+    # be completed. Invalid allowlists must reject before touching either item.
+    for rejected in (
+        ["depth/DDD", "depth/AFL"],
+        ["depth/AFL", "depth/AFL"],
+        ["depth/AFL", "depth/BBB/query"],
+    ):
+        invalid_args = [*args, "--only", "depth", "--scope-through-target"]
+        for path in rejected:
+            invalid_args.extend(["--only-scope-step", path])
+        invalid = runner.invoke(app, invalid_args)
+        assert invalid.exit_code != 0
+        assert (run / "depth/AFL/query/planner-calls.txt").read_text() == "x"
+        assert (run / "depth/BBB/query/planner-calls.txt").read_text() == "x"
+        assert not (run / "depth/CCC").exists()
+
+    whole_items = [
+        *args,
+        "--only",
+        "depth",
+        "--scope-through-target",
+        "--only-scope-step",
+        "depth/AFL",
+        "--only-scope-step",
+        "depth/BBB",
+    ]
+    for _ in range(2):
+        full = runner.invoke(app, whole_items)
+        assert full.exit_code == 0, full.output
+    for ticker in ("AFL", "BBB"):
+        child = run / "depth" / ticker
+        assert (child / "query/planner-calls.txt").read_text() == "x"
+        assert (child / "provider-calls.txt").read_text() == "x"
+        mapped = read_status_at(run / ".state/tasks/depth" / ticker)
+        assert mapped is not None and mapped.state == "completed"
+        result = read_yaml_file(run / ".state/tasks/depth" / ticker / "result.yaml")
+        assert result["validated"] is True
+    assert not (run / "depth/CCC").exists()
+    scoped = read_yaml_file(run / ".state/process-status.yaml")
+    assert scoped["selected_scope_steps"] == ["depth/AFL", "depth/BBB"]
+    assert scoped["selected_scope_mode"] == "through"
+    ordinary = runner.invoke(app, args)
+    assert ordinary.exit_code == 0, ordinary.output
+    assert (run / "depth/CCC/final.txt").read_text() == "final"
+    assert (run / "depth/AFL/query/planner-calls.txt").read_text() == "x"
+    assert (run / "depth/BBB/query/planner-calls.txt").read_text() == "x"
+    assert (run / "depth/AFL/provider-calls.txt").read_text() == "x"
+    assert (run / "depth/BBB/provider-calls.txt").read_text() == "x"
+    assert "selected_scope_step" not in read_yaml_file(run / ".state/process-status.yaml")
+
 
 def test_partial_status_preserves_even_invalid_prior_scope_mode(tmp_path: Path) -> None:
     status_path = tmp_path / ".state/process-status.yaml"

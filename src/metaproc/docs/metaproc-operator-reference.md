@@ -242,8 +242,11 @@ For example, repeat `depth/ACME/fetch` and `depth/BETA/fetch` with `--only depth
 runner validates the entire allowlist before dispatch, runs only those children under
 one root lease and one resource finalization, and uses `--max-concurrency` to bound
 their executable leaves.
-Each child retains its own canonical scope identity and remains deferred at the parent
-until an ordinary full resume validates the mapped output.
+Each child retains its own canonical scope identity.
+A selector that stops inside a child leaves the mapped parent item deferred.
+A selector naming the mapped item itself, such as `depth/ACME`, runs its whole child and
+validates the mapped output; if every required output passes, that item completes while
+the root remains scoped.
 A missing, duplicate, terminal, or differently shaped selection fails rather than
 widening the run.
 

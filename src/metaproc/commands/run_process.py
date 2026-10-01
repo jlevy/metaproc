@@ -6427,8 +6427,7 @@ def run_process_command(
             )
     if batch_scope_selections:
         if (
-            any(len(path) < 3 for path in batch_scope_selections)
-            or len({path[0] for path in batch_scope_selections}) != 1
+            len({path[0] for path in batch_scope_selections}) != 1
             or len({path[1] for path in batch_scope_selections}) != len(batch_scope_selections)
             or len({path[2:] for path in batch_scope_selections}) != 1
         ):
