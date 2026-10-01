@@ -219,7 +219,8 @@ events:
   external_id: mock-XOM
   label: XOM
   pid: 0
-- available_pct: 0.0
+- active_code_count: 0
+  available_pct: 0.0
   event: pressure_check
   level: normalized
 - completed: 13
@@ -232,6 +233,7 @@ result_summary:
   succeeded: 13
   total: 15
 status:
+  active_code_count: 0
   active_count: 0
   backend: mock
   completed_count: 13
@@ -276,6 +278,7 @@ status:
   killed_count: 0
   lanes: []
   max_concurrency: 15
+  pending_code_count: 0
   pending_count: 0
   pending_retries: 0
   pid: 0
@@ -505,3 +508,4 @@ status:
     pid: 0
     rss_bytes: 0
     status: completed
+  stopped_at: NORMALIZED

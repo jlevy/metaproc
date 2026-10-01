@@ -136,6 +136,9 @@ class RunPoolStatus(BaseModel):
     max_concurrency: int
     current_concurrency: int
     active_count: int
+    stopped_at: str | None = None
+    active_code_count: int = 0
+    pending_code_count: int = 0
     pending_count: int
     completed_count: int
     failed_count: int
@@ -261,6 +264,8 @@ def write_scale_override(path: Path, scale_override: ScaleOverride) -> None:
 
 def is_pool_alive(status: RunPoolStatus) -> bool:
     """Check if the pool process is still running."""
+    if status.stopped_at is not None:
+        return False
     try:
         proc = psutil.Process(status.pid)
         return proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE

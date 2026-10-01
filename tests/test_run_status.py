@@ -315,6 +315,15 @@ class TestCheckCompletion:
         assert result.passed is True
         assert result.exit_code == 0
 
+    def test_selected_nested_scope_cannot_satisfy_completion(self) -> None:
+        status = self._make_run_status(completed=10, failed=0, running=0, pending=0)
+        status = status.model_copy(update={"selected_scope_step": "depth/AFL/fetch"})
+        for condition in ("completed", "no-failures"):
+            result = check_completion(status, condition)
+            assert result.passed is False
+            assert result.exit_code == 2
+            assert "depth/AFL/fetch" in result.reason
+
     def test_completed_has_failures(self) -> None:
         status = self._make_run_status(completed=8, failed=2, running=0, pending=0)
         result = check_completion(status, "completed")
@@ -520,6 +529,21 @@ class TestScanRunStatus:
 
 
 class TestWaitForCompletion:
+    def test_selected_scope_returns_incomplete_even_when_tasks_are_done(
+        self, tmp_path: Path
+    ) -> None:
+        scoped = RunStatus(
+            run_dir=tmp_path,
+            is_active=False,
+            process_execution_state="completed",
+            selected_scope_step="depth/AFL/fetch",
+            totals=ProgressCounts(total=1, completed=1),
+        )
+        with patch("metaproc.engine.run_status.scan_run_status", return_value=scoped):
+            status, exit_code = wait_for_completion(tmp_path, interval=0)
+        assert status is scoped
+        assert exit_code == 2
+
     def test_live_resume_outlasts_a_carried_terminal_projection(self, tmp_path: Path) -> None:
         active = RunStatus(
             run_dir=tmp_path,
@@ -883,6 +907,34 @@ class TestRunStatusSteps:
         assert result.process_execution_state == "completed"
         assert result.process_error is None
         assert result.steps[0].reason == "last execution failed: prior failure"
+
+    def test_selected_scope_marker_is_read_from_native_process_status(self, tmp_path: Path) -> None:
+        run_dir = tmp_path / "run"
+        state_dir = run_dir / STATE_DIR
+        state_dir.mkdir(parents=True)
+        (state_dir / "process-status.yaml").write_text(
+            "process: demo\nstate: completed\nselected_scope_step: depth/AFL/fetch\nsteps: {}\n",
+            encoding="utf-8",
+        )
+        result = scan_run_status(run_dir, include_system=False)
+        assert result.selected_scope_step == "depth/AFL/fetch"
+        assert check_completion(result, "completed").passed is False
+
+    @pytest.mark.parametrize("raw_marker", ["null", "''", "[]"])
+    def test_malformed_scope_marker_cannot_certify_completion(
+        self, tmp_path: Path, raw_marker: str
+    ) -> None:
+        run_dir = tmp_path / "run"
+        state_dir = run_dir / STATE_DIR
+        state_dir.mkdir(parents=True)
+        (state_dir / "process-status.yaml").write_text(
+            f"process: demo\nstate: completed\nselected_scope_step: {raw_marker}\nsteps: {{}}\n",
+            encoding="utf-8",
+        )
+        result = scan_run_status(run_dir, include_system=False)
+        assert result.selected_scope_step is not None
+        assert "invalid" in result.selected_scope_step
+        assert check_completion(result, "completed").passed is False
 
     def test_process_state_stale_when_any_step_stale(self, tmp_path: Path) -> None:
 

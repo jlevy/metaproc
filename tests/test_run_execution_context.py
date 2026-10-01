@@ -35,6 +35,7 @@ from metaproc.commands.run_process import (
     _orchestrate,
     _run_agent_subprocess,
     _run_sync,
+    _scope_selected_steps,
 )
 from metaproc.errors import CLIError
 from metaproc.io import read_yaml_file
@@ -56,6 +57,40 @@ _PROCESS_TREE_TEST_TIMEOUT_S = 2.0
 class _Out:
     def progress(self, _message: str) -> None:
         pass
+
+
+def test_scope_selection_enters_only_named_branch_and_downstream() -> None:
+    root = [
+        ResolvedStep(step_id="depth", mode="composite"),
+        ResolvedStep(step_id="review", mode="agent", needs=["depth"]),
+    ]
+    child = [
+        ResolvedStep(step_id="query-plan", mode="agent"),
+        ResolvedStep(step_id="fetch", mode="composite", needs=["query-plan"]),
+        ResolvedStep(step_id="interpret", mode="code", needs=["fetch"]),
+        ResolvedStep(step_id="seal", mode="code", needs=["interpret"]),
+        ResolvedStep(step_id="unrelated", mode="agent"),
+    ]
+    selection = ("depth", "AFL", "fetch")
+    assert _scope_selected_steps(root, (), selection) == {"depth"}
+    assert _scope_selected_steps(child, ("depth", "AFL"), selection) == {
+        "fetch",
+        "interpret",
+        "seal",
+    }
+    assert _scope_selected_steps(child, selection, selection) == {
+        "query-plan",
+        "fetch",
+        "interpret",
+        "seal",
+        "unrelated",
+    }
+
+
+def test_scope_selection_rejects_traversal_through_non_composite_step() -> None:
+    steps = [ResolvedStep(step_id="fetch", mode="code")]
+    with pytest.raises(CLIError, match="not composite"):
+        _scope_selected_steps(steps, (), ("fetch", "nested"))
 
 
 def _run_pool_owner(tmp_path: Path) -> RunPoolOwner:

@@ -91,6 +91,7 @@ from metaproc.io.state_io import (
     read_manual_ack_at,
     read_run_plan,
     read_status_at,
+    reconcile_stale_running,
     write_manual_ack_at,
     write_run_plan,
     write_status_at,
@@ -1690,6 +1691,52 @@ class TestProcessStatusFile:
 
         assert read_yaml_file(path)["state"] == "cancelled"
 
+    @pytest.mark.parametrize("marker", [None, [], "", "depth/AFL/fetch"])
+    def test_partial_status_preserves_any_scope_marker_until_explicit_clear(
+        self, tmp_path: Path, marker: object
+    ) -> None:
+        path = _write_process_status(
+            tmp_path,
+            "test",
+            {"depth": {"state": "skipped"}},
+            "2026-04-09T00:00:00",
+            selected_scope_step=("depth", "AFL", "fetch"),
+        )
+        prior = read_yaml_file(path)
+        prior["selected_scope_step"] = marker
+        if marker is None:
+            prior.pop("selected_scope_step")
+            path.write_text(to_yaml_string(prior) + "selected_scope_step: null\n", encoding="utf-8")
+        else:
+            path.write_text(to_yaml_string(prior), encoding="utf-8")
+
+        partial = _write_process_status(
+            tmp_path,
+            "test",
+            {"depth": {"state": "skipped"}, "review": {"state": "completed"}},
+            "2026-04-09T00:00:00",
+            active_step_ids={"review"},
+        )
+        retained_marker = "" if marker is None else marker
+        assert read_yaml_file(partial)["selected_scope_step"] == retained_marker
+
+        failed = _write_process_status(
+            tmp_path,
+            "test",
+            {"depth": {"state": "completed"}, "review": {"state": "failed"}},
+            "2026-04-09T00:00:00",
+        )
+        assert read_yaml_file(failed)["selected_scope_step"] == retained_marker
+
+        complete = _write_process_status(
+            tmp_path,
+            "test",
+            {"depth": {"state": "completed"}, "review": {"state": "completed"}},
+            "2026-04-09T00:00:00",
+            clear_selected_scope_step=True,
+        )
+        assert "selected_scope_step" not in read_yaml_file(complete)
+
 
 # ── Fan-out execution ────────────────────────────────────────────
 
@@ -2100,6 +2147,523 @@ def test_run_plan_refresh_preserves_authored_reason_key(tmp_path: Path) -> None:
 
 
 class TestCompositeStepExecution:
+    def test_selected_middle_of_aligned_code_chain_executes_it_and_descendants(
+        self, tmp_path: Path
+    ) -> None:
+        process_dir = tmp_path / "process"
+        process_dir.mkdir()
+        (process_dir / "roster.md").write_text(
+            "---\nprogress:\n  items:\n    - item: AFL\n---\n", encoding="utf-8"
+        )
+        (process_dir / "chain.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: selected-aligned-chain
+                  deps:
+                    roster: { path: ./roster.md, as: path }
+                  outputs:
+                    final: { path: "{{run.dir}}/c.txt", as: path }
+                  steps:
+                    - id: a
+                      mode: code
+                      for_each:
+                        over: deps.roster
+                        bind: item
+                        bind_fields: [item]
+                        key: "{{item}}"
+                      outputs:
+                        out: { path: "{{run.dir}}/a.txt", kind: file }
+                      command: /bin/sh -c 'printf a >> "{{run.dir}}/calls.txt"; printf a > "{{run.dir}}/a.txt"'
+                    - id: b
+                      mode: code
+                      needs: [a]
+                      for_each:
+                        over: deps.roster
+                        bind: item
+                        bind_fields: [item]
+                        key: "{{item}}"
+                        align: same_key
+                      outputs:
+                        out: { path: "{{run.dir}}/b.txt", kind: file }
+                      command: /bin/sh -c 'printf b >> "{{run.dir}}/calls.txt"; printf b > "{{run.dir}}/b.txt"'
+                    - id: c
+                      mode: code
+                      needs: [b]
+                      for_each:
+                        over: deps.roster
+                        bind: item
+                        bind_fields: [item]
+                        key: "{{item}}"
+                        align: same_key
+                      outputs:
+                        out: { path: "{{run.dir}}/c.txt", kind: file }
+                      command: /bin/sh -c 'printf c >> "{{run.dir}}/calls.txt"; printf c > "{{run.dir}}/c.txt"'
+                ---
+                Provider-free aligned chain.
+                """
+            ),
+            encoding="utf-8",
+        )
+        (process_dir / "parent.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: selected-aligned-parent
+                  deps:
+                    chain: { path: ./chain.process.md, as: path }
+                  steps:
+                    - id: depth
+                      mode: composite
+                      uses: deps.chain
+                      outputs:
+                        final: { path: "{{run.dir}}/depth/c.txt", kind: file }
+                ---
+                Provider-free parent.
+                """
+            ),
+            encoding="utf-8",
+        )
+        runs_dir = tmp_path / "runs"
+        run_dir = runs_dir / "aligned-selected"
+        args = [
+            "run-process",
+            str(process_dir / "parent.process.md"),
+            "--var",
+            f"RUNS_DIR={runs_dir}",
+            "--var",
+            "RUN_ID=aligned-selected",
+        ]
+        runner = CliRunner()
+        initial = runner.invoke(app, args)
+        assert initial.exit_code == 0, initial.output
+        assert (run_dir / "depth/calls.txt").read_text() == "abc"
+
+        selected_head = runner.invoke(
+            app, [*args, "--only", "depth", "--only-scope-step", "depth/a"]
+        )
+        assert selected_head.exit_code == 0, selected_head.output
+        assert (run_dir / "depth/calls.txt").read_text() == "abcabc"
+
+        selected = runner.invoke(app, [*args, "--only", "depth", "--only-scope-step", "depth/b"])
+        assert selected.exit_code == 0, selected.output
+        assert (run_dir / "depth/calls.txt").read_text() == "abcabcbc"
+        assert (run_dir / "depth/a.txt").read_text() == "a"
+
+    def test_selected_nested_planner_preserves_unselected_parent_outputs(
+        self, tmp_path: Path
+    ) -> None:
+        """A planner-only scope need not produce later ticker or mapped outputs."""
+
+        process_dir = tmp_path / "process"
+        process_dir.mkdir()
+        (process_dir / "roster.md").write_text(
+            "---\nprogress:\n  items:\n    - ticker: AFL\n    - ticker: BBB\n---\n",
+            encoding="utf-8",
+        )
+        (process_dir / "planner.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: planner
+                  outputs:
+                    plan: { path: "{{run.dir}}/plan.txt", as: path }
+                  steps:
+                    - id: plan-queries
+                      mode: code
+                      outputs:
+                        draft: { path: "{{run.dir}}/draft.txt", kind: file }
+                      command: /bin/sh -c 'printf x >> "{{run.dir}}/plan-calls.txt"; printf draft > "{{run.dir}}/draft.txt"'
+                    - id: publish
+                      mode: code
+                      needs: [plan-queries]
+                      outputs:
+                        plan: { path: "{{run.dir}}/plan.txt", kind: file }
+                      command: /bin/sh -c 'printf plan > "{{run.dir}}/plan.txt"'
+                ---
+                Provider-free planner surrogate.
+                """
+            ),
+            encoding="utf-8",
+        )
+        (process_dir / "ticker.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: ticker
+                  deps:
+                    planner: { path: ./planner.process.md, as: path }
+                  outputs:
+                    final: { path: "{{run.dir}}/final.txt", as: path }
+                  steps:
+                    - id: query-plan
+                      mode: composite
+                      uses: deps.planner
+                      outputs:
+                        plan: { path: "{{run.dir}}/query-plan/plan.txt", kind: file }
+                    - id: fetch
+                      mode: code
+                      needs: [query-plan]
+                      outputs:
+                        final: { path: "{{run.dir}}/final.txt", kind: file }
+                      command: /bin/sh -c 'printf fetched > "{{run.dir}}/final.txt"'
+                ---
+                Provider-free ticker surrogate.
+                """
+            ),
+            encoding="utf-8",
+        )
+        (process_dir / "parent.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: parent
+                  deps:
+                    roster: { path: ./roster.md, as: path }
+                    ticker: { path: ./ticker.process.md, as: path }
+                  outputs:
+                    final: { path: "{{run.dir}}/depth/AFL/final.txt", as: path }
+                  steps:
+                    - id: depth
+                      mode: composite
+                      uses: deps.ticker
+                      for_each:
+                        over: deps.roster
+                        bind: ticker
+                        bind_fields: [ticker]
+                        key: "{{ticker}}"
+                      outputs:
+                        final: { path: "{{run.dir}}/depth/{{ticker}}/final.txt", kind: file }
+                ---
+                Provider-free mapped parent.
+                """
+            ),
+            encoding="utf-8",
+        )
+        runs_dir = tmp_path / "runs"
+        run_dir = runs_dir / "selected-planner"
+        args = [
+            "run-process",
+            str(process_dir / "parent.process.md"),
+            "--var",
+            f"RUNS_DIR={runs_dir}",
+            "--var",
+            "RUN_ID=selected-planner",
+        ]
+        runner = CliRunner()
+        selected = runner.invoke(
+            app,
+            [*args, "--only", "depth", "--only-scope-step", "depth/AFL/query-plan/plan-queries"],
+        )
+        assert selected.exit_code == 0, selected.output
+        assert (run_dir / "depth/AFL/query-plan/plan.txt").read_text() == "plan"
+        assert (run_dir / "depth/AFL/query-plan/plan-calls.txt").read_text() == "x"
+        assert not (run_dir / "depth/AFL/final.txt").exists()
+        assert not (run_dir / "depth/BBB").exists()
+        root_status = read_yaml_file(run_dir / STATE_DIR / "process-status.yaml")
+        assert root_status["selected_scope_step"] == "depth/AFL/query-plan/plan-queries"
+        assert root_status["steps"]["depth"]["state"] == "skipped"
+        item_dir = run_dir / STATE_DIR / "tasks/depth/AFL"
+
+        def _item_status() -> StatusRecord:
+            status = read_status_at(item_dir)
+            assert status is not None
+            return status
+
+        assert _item_status().state == "deferred"
+        assert not (item_dir / "result.yaml").exists()
+        reconcile_stale_running(run_dir)
+        assert _item_status().state == "deferred"
+        outcomes = build_outcome_manifest(run_dir, "depth", ["AFL", "BBB"]).payload[
+            "fan_in_outcomes"
+        ]
+        assert outcomes["succeeded"] == 0
+        assert {item["key"]: item["state"] for item in outcomes["items"]} == {
+            "AFL": "deferred",
+            "BBB": "not_reached",
+        }
+
+        ordinary = runner.invoke(app, args)
+        assert ordinary.exit_code == 0, ordinary.output
+        assert (run_dir / "depth/AFL/final.txt").read_text() == "fetched"
+        assert (run_dir / "depth/BBB/final.txt").read_text() == "fetched"
+        assert (run_dir / "depth/AFL/query-plan/plan-calls.txt").read_text() == "x"
+        assert _item_status().state == "completed"
+        assert read_yaml_file(item_dir / "result.yaml")["validated"] is True
+        root_status = read_yaml_file(run_dir / STATE_DIR / "process-status.yaml")
+        assert "selected_scope_step" not in root_status
+
+        # A scoped retry over a previously complete item must not reuse its old
+        # whole-item result as proof that the new attempt accepted every output.
+        prior_result = read_yaml_file(item_dir / "result.yaml")
+        rescoped = runner.invoke(
+            app,
+            [*args, "--only", "depth", "--only-scope-step", "depth/AFL/query-plan/plan-queries"],
+        )
+        assert rescoped.exit_code == 0, rescoped.output
+        assert _item_status().state == "deferred"
+        assert read_yaml_file(item_dir / "result.yaml") == prior_result
+        assert _item_status().attempt_id != prior_result["attempt_id"]
+        (item_dir / "status.yaml").unlink()
+        reconcile_stale_running(run_dir)
+        assert _item_status().state == "deferred"
+        outcomes = build_outcome_manifest(run_dir, "depth", ["AFL", "BBB"]).payload[
+            "fan_in_outcomes"
+        ]
+        assert outcomes["succeeded"] == 1
+        assert {item["key"]: item["state"] for item in outcomes["items"]} == {
+            "AFL": "deferred",
+            "BBB": "completed",
+        }
+        second_ordinary = runner.invoke(app, args)
+        assert second_ordinary.exit_code == 0, second_ordinary.output
+        assert _item_status().state == "completed"
+        assert read_yaml_file(item_dir / "result.yaml")["attempt_id"] != prior_result["attempt_id"]
+
+        # Selection relaxes only ancestor contracts. The selected leaf still
+        # has to publish its own declared output.
+        planner_path = process_dir / "planner.process.md"
+        planner_path.write_text(
+            planner_path.read_text(encoding="utf-8").replace(
+                'printf draft > "{{run.dir}}/draft.txt"', "true"
+            ),
+            encoding="utf-8",
+        )
+        missing_draft = runner.invoke(
+            app,
+            [
+                "run-process",
+                str(process_dir / "parent.process.md"),
+                "--var",
+                f"RUNS_DIR={runs_dir}",
+                "--var",
+                "RUN_ID=selected-missing-draft",
+                "--only",
+                "depth",
+                "--only-scope-step",
+                "depth/AFL/query-plan/plan-queries",
+            ],
+        )
+        assert missing_draft.exit_code != 0
+        assert "draft.txt" in missing_draft.output
+
+    def test_selected_nested_fetch_preserves_planner_and_pending_sibling(
+        self, tmp_path: Path
+    ) -> None:
+        process_dir = tmp_path / "process"
+        process_dir.mkdir()
+        (process_dir / "roster.md").write_text(
+            "---\nprogress:\n  items:\n    - ticker: AFL\n    - ticker: BBB\n---\n",
+            encoding="utf-8",
+        )
+        (process_dir / "postprocess.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: synthetic-postprocess
+                  outputs:
+                    done: { path: "{{run.dir}}/done.txt", as: path }
+                  steps:
+                    - id: write-done
+                      mode: code
+                      outputs:
+                        done: { path: "{{run.dir}}/done.txt", kind: file }
+                      command: /bin/sh -c 'printf done > "{{run.dir}}/done.txt"'
+                ---
+                Nested deterministic descendant.
+                """
+            ),
+            encoding="utf-8",
+        )
+        (process_dir / "fetch.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: synthetic-fetch
+                  inputs:
+                    ticker: { param: TICKER, as: string }
+                    prior_report_file: { param: PRIOR_REPORT_FILE, as: string, required: false, default: none }
+                  deps:
+                    postprocess: { path: ./postprocess.process.md, as: path }
+                  outputs:
+                    report: { path: "{{run.dir}}/report.txt", as: path }
+                  steps:
+                    - id: build-plan
+                      mode: code
+                      outputs:
+                        plan: { path: "{{run.dir}}/plan.txt", kind: file }
+                      command: /bin/sh -c 'printf plan > "{{run.dir}}/plan.txt"'
+                    - id: collect
+                      mode: code
+                      needs: [build-plan]
+                      outputs:
+                        report: { path: "{{run.dir}}/report.txt", kind: file }
+                      command: /bin/sh -c 'printf x >> "{{run.dir}}/calls.txt"; printf report > "{{run.dir}}/report.txt"; printf "%s" "{{PRIOR_REPORT_FILE}}" > "{{run.dir}}/prior-used.txt"'
+                    - id: postprocess
+                      mode: composite
+                      uses: deps.postprocess
+                      needs: [collect]
+                      outputs:
+                        done: { path: "{{run.dir}}/postprocess/done.txt", kind: file }
+                ---
+                Provider-free fetch surrogate.
+                """
+            ),
+            encoding="utf-8",
+        )
+        (process_dir / "ticker.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: synthetic-ticker
+                  inputs:
+                    ticker: { param: TICKER, as: string }
+                  deps:
+                    fetch: { path: ./fetch.process.md, as: path }
+                  outputs:
+                    final: { path: "{{run.dir}}/final.txt", as: path }
+                  steps:
+                    - id: paid-plan-surrogate
+                      mode: code
+                      outputs:
+                        query: { path: "{{run.dir}}/query.txt", kind: file }
+                      command: /bin/sh -c 'printf x >> "{{run.dir}}/plan-calls.txt"; printf query > "{{run.dir}}/query.txt"'
+                    - id: fetch
+                      mode: composite
+                      uses: deps.fetch
+                      needs: [paid-plan-surrogate]
+                      with:
+                        TICKER: "{{TICKER}}"
+                      outputs:
+                        report: { path: "{{run.dir}}/fetch/report.txt", kind: file }
+                    - id: interpret
+                      mode: code
+                      needs: [fetch]
+                      outputs:
+                        measurement: { path: "{{run.dir}}/measurement.txt", kind: file }
+                      command: /bin/sh -c 'printf x >> "{{run.dir}}/interpret-calls.txt"; printf measurement > "{{run.dir}}/measurement.txt"'
+                    - id: seal
+                      mode: code
+                      needs: [interpret]
+                      outputs:
+                        final: { path: "{{run.dir}}/final.txt", kind: file }
+                      command: /bin/sh -c 'printf final > "{{run.dir}}/final.txt"'
+                ---
+                Provider-free ticker surrogate.
+                """
+            ),
+            encoding="utf-8",
+        )
+        (process_dir / "parent.process.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                process:
+                  name: synthetic-parent
+                  deps:
+                    roster: { path: ./roster.md, as: path }
+                    ticker: { path: ./ticker.process.md, as: path }
+                  steps:
+                    - id: depth
+                      mode: composite
+                      uses: deps.ticker
+                      for_each:
+                        over: deps.roster
+                        bind: ticker
+                        bind_fields: [ticker]
+                        key: "{{ticker}}"
+                      with:
+                        TICKER: "{{ticker}}"
+                      outputs:
+                        final: { path: "{{run.dir}}/depth/{{ticker}}/final.txt", kind: file }
+                    - id: review
+                      mode: code
+                      outputs:
+                        note: { path: "{{run.dir}}/review.txt", kind: file }
+                      command: /bin/sh -c 'printf reviewed > "{{run.dir}}/review.txt"'
+                ---
+                Provider-free mapped parent.
+                """
+            ),
+            encoding="utf-8",
+        )
+        runs_dir = tmp_path / "runs"
+        args = [
+            "run-process",
+            str(process_dir / "parent.process.md"),
+            "--var",
+            f"RUNS_DIR={runs_dir}",
+            "--var",
+            "RUN_ID=synthetic-run",
+            "--only",
+            "depth",
+        ]
+        runner = CliRunner()
+        preview = runner.invoke(app, [*args, "--only-scope-step", "depth/AFL/fetch", "--dry-run"])
+        assert preview.exit_code != 0
+        assert preview.exception is not None
+        assert "root-only dry-run cannot preview the selected nested plan" in str(preview.exception)
+        assert not runs_dir.exists()
+        first = runner.invoke(app, [*args, "--only-scope-step", "depth/AFL/paid-plan-surrogate"])
+        assert first.exit_code == 0, first.output
+        run_dir = runs_dir / "synthetic-run"
+        afl = run_dir / "depth" / "AFL"
+        bbb = run_dir / "depth" / "BBB"
+        assert not bbb.exists()
+        root_status = read_yaml_file(run_dir / STATE_DIR / "process-status.yaml")
+        assert root_status["steps"]["depth"]["state"] == "skipped"
+        assert "only selected nested scope" in root_status["steps"]["depth"]["note"]
+        assert (afl / "plan-calls.txt").read_text() == "x"
+        assert (afl / "fetch" / "calls.txt").read_text() == "x"
+        assert (afl / "interpret-calls.txt").read_text() == "x"
+
+        prior_report = afl / "fetch" / "report.txt"
+        selected = runner.invoke(
+            app,
+            [
+                *args,
+                "--var",
+                f"PRIOR_REPORT_FILE={prior_report}",
+                "--only-scope-step",
+                "depth/AFL/fetch",
+            ],
+        )
+        assert selected.exit_code == 0, selected.output
+        assert not bbb.exists()
+        assert (afl / "plan-calls.txt").read_text() == "x"
+        assert (afl / "fetch" / "calls.txt").read_text() == "xx"
+        assert (afl / "fetch" / "postprocess" / "done.txt").read_text() == "done"
+        assert (afl / "fetch" / "prior-used.txt").read_text() == str(prior_report)
+        assert (afl / "interpret-calls.txt").read_text() == "xx"
+        fetch_plan = read_run_plan(afl / "fetch")
+        assert fetch_plan is not None
+        assert fetch_plan.run_id == "synthetic-parent/synthetic-run/depth/AFL/fetch"
+
+        # A later partial invocation cannot turn a scoped result into a
+        # whole-run completion while the other mapped item remains untouched.
+        review_only = runner.invoke(app, [*args[:-2], "--only", "review"])
+        assert review_only.exit_code == 0, review_only.output
+        root_status = read_yaml_file(run_dir / STATE_DIR / "process-status.yaml")
+        assert root_status["selected_scope_step"] == "depth/AFL/fetch"
+        assert scan_run_status(run_dir).selected_scope_step == "depth/AFL/fetch"
+
+        ordinary = runner.invoke(app, args[:-2])
+        assert ordinary.exit_code == 0, ordinary.output
+        assert (bbb / "final.txt").read_text() == "final"
+        assert (afl / "plan-calls.txt").read_text() == "x"
+        assert (afl / "fetch" / "calls.txt").read_text() == "xx"
+        root_status = read_yaml_file(run_dir / STATE_DIR / "process-status.yaml")
+        assert root_status["steps"]["depth"]["state"] == "completed"
+        assert "selected_scope_step" not in root_status
+
     def test_composite_loads_child_spec(self, tmp_path: Path) -> None:
         """Composite step resolves uses path and loads child spec."""
 
@@ -2693,6 +3257,23 @@ class TestCompositeStepExecution:
             == expected_error
         )
 
+        # A targeted retry of one completed child must neither enter the failed
+        # sibling nor spend work on another completed sibling.
+        selected = runner.invoke(
+            app,
+            [
+                *args,
+                "--only",
+                "ticker-flow",
+                "--only-scope-step",
+                "ticker-flow/alfa/write-report",
+            ],
+        )
+        assert selected.exit_code == 0, selected.output
+        assert len(read_attempt_history_at(state_root / "alfa")) == 2
+        assert len(read_attempt_history_at(state_root / "brvo")) == 1
+        assert len(read_attempt_history_at(state_root / "chrl")) == 1
+
         fail_marker.unlink()
         second = runner.invoke(app, args)
         assert second.exit_code == 0, second.output
@@ -2708,8 +3289,12 @@ class TestCompositeStepExecution:
             for output in task.unaccepted_outputs
             if output.reason == "step-mismatch"
         ]
+        # The scoped attempt did not validate the whole mapped item. Ordinary
+        # resume evaluates that item once more without rerunning its child leaf.
         assert [record.disposition for record in read_attempt_history_at(state_root / "alfa")] == [
-            AttemptDisposition.succeeded
+            AttemptDisposition.succeeded,
+            AttemptDisposition.succeeded,
+            AttemptDisposition.succeeded,
         ]
         assert [record.disposition for record in read_attempt_history_at(state_root / "brvo")] == [
             AttemptDisposition.permanent,
@@ -2742,6 +3327,8 @@ class TestCompositeStepExecution:
         assert third.exit_code == 0, third.output
         assert (run_dir / "ticker-flow" / "alfa" / "internal-index.txt").exists()
         assert [record.disposition for record in read_attempt_history_at(state_root / "alfa")] == [
+            AttemptDisposition.succeeded,
+            AttemptDisposition.succeeded,
             AttemptDisposition.succeeded,
             AttemptDisposition.succeeded,
         ]

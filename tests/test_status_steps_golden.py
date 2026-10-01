@@ -236,6 +236,19 @@ def test_status_label_complete_when_fully_terminal() -> None:
     assert "Status: COMPLETE" in _format_text(rs)
 
 
+def test_status_label_scoped_when_only_nested_scope_was_evaluated() -> None:
+    rs = _bare_run_status(is_active=False).model_copy(
+        update={
+            "process_execution_state": "completed",
+            "selected_scope_step": "depth/AFL/fetch",
+        }
+    )
+    rendered = _format_text(rs)
+    assert "Status: SCOPED" in rendered
+    assert "Selected scope: depth/AFL/fetch (full run not evaluated)" in rendered
+    assert "Status: COMPLETE" not in rendered
+
+
 def test_status_label_failed_includes_error_and_hides_definition_summary() -> None:
     rs = _bare_run_status(is_active=False).model_copy(
         update={

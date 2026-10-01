@@ -8,12 +8,13 @@ from unittest import mock
 
 import pytest
 
+from metaproc.engine.resource_reconciliation import reconcile_resource_events
 from metaproc.engine.resource_rollup import (
     ResourceBuildResult,
     build_resource_artifacts,
     write_resource_artifacts,
 )
-from metaproc.logutil.parsing import LogEvent, LogFile
+from metaproc.logutil.parsing import GeminiLogParser, LogEvent, LogFile
 from metaproc.logutil.resource_event_extract import extract_resource_events
 from metaproc.logutil.tool_failures import FailureKind
 from metaproc.models.resources import (
@@ -770,3 +771,51 @@ def test_tool_call_event_creates_file_and_tool_leaf(tmp_path: Path) -> None:
     assert tool_node.self_metrics.tool_calls == 1
     assert tool_node.self_metrics.tool_exec_s == pytest.approx(2.0)
     assert result.document.hierarchy_root.total_metrics.tool_calls == 1
+
+
+def test_reused_tool_id_keeps_distinct_occurrences_and_replay_deduplication(tmp_path: Path) -> None:
+    """GOLF emitted the same producer ID for two successful sequential calls."""
+    records = []
+    for start, end in (("03.921", "04.243"), ("37.744", "38.338")):
+        records.extend(
+            [
+                {
+                    "type": "tool_use",
+                    "timestamp": f"2026-09-30T08:32:{start}Z",
+                    "tool_id": "run_shell_command__call_214453",
+                    "tool_name": "run_shell_command",
+                },
+                {
+                    "type": "tool_result",
+                    "timestamp": f"2026-09-30T08:32:{end}Z",
+                    "tool_id": "run_shell_command__call_214453",
+                    "status": "success",
+                },
+            ]
+        )
+    path = tmp_path / "gemini.jsonl"
+    parser = GeminiLogParser()
+    parsed = [event for record in records for event in parser.parse_line(json.dumps(record))]
+
+    def extract():
+        return extract_resource_events(
+            log_path=path,
+            log_file=LogFile(path, color_idx=0),
+            log_events=parsed,
+            hierarchy=HierarchyRef(run_id="run-1"),
+            source_kind="agent_log",
+            source_path="gemini.jsonl",
+        )
+
+    reconciled = reconcile_resource_events(extract())
+    assert len(reconciled) == 2
+    assert reconciled[0].span_id == "tool:gemini:run_shell_command__call_214453"
+    assert reconciled[0].event_id != reconciled[1].event_id
+    assert sum(event.metrics.tool_exec_s or 0 for event in reconciled) == pytest.approx(0.916)
+    assert len(reconcile_resource_events([*reconciled, *extract()])) == 2
+    parsed.extend(list(parsed))
+    assert len(reconcile_resource_events(extract())) == 2
+    conflicting = reconciled[1].model_copy(deep=True)
+    conflicting.metrics.tool_exec_s = 99
+    with pytest.raises(ValueError, match="conflicts"):
+        reconcile_resource_events([*reconciled, conflicting])
