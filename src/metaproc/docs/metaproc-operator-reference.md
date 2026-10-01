@@ -217,6 +217,8 @@ Useful dispatch selectors:
 - `--only <step>` runs only the named step
 - `--only-scope-step <path>` enters a nested step through its parent process; repeat it
   for mapped items
+- `--scope-through-target` with a nested selector runs the target and its prerequisite
+  closure, stopping before dependent steps
 - `--skip <step>` marks a step skipped for this invocation
 - `--force` bypasses reuse checks throughout the run, including composite descendants
 - `--dry-run` prints the plan without launching work
@@ -245,10 +247,26 @@ until an ordinary full resume validates the mapped output.
 A missing, duplicate, terminal, or differently shaped selection fails rather than
 widening the run.
 
+To prepare a bounded stage without starting its downstream fetch, add
+`--scope-through-target` to the same selector.
+At the target’s immediate containing scope, Metaproc runs the target and its transitive
+prerequisites in dependency order; it omits unrelated siblings and downstream steps.
+A selected composite runs its whole child process using normal completion reuse, so a
+second invocation preserves a completed agent result.
+For example,
+`--only depth --only-scope-step depth/ACME/query-plan --scope-through-target` can
+prepare a query plan and stop before `fetch`. This mode also accepts a repeated
+mapped-item allowlist.
+Prerequisites in earlier containing scopes must already be complete; a deeper leaf
+selection does not implicitly initialize those outer scopes.
+Verify the resolved target and its child plan before use, especially when they contain
+paid steps.
+
 The scoped invocation writes `selected_scope_step` to `process-status.yaml`; a batch
 also writes the exact `selected_scope_steps` list and a nonempty batch marker in
-`selected_scope_step`. Native status shows `SCOPED`, and completion checks do not
-certify the full run.
+`selected_scope_step`. It records `selected_scope_mode` as `downstream` or `through`;
+that mode remains with the marker through partial resumes.
+Native status shows `SCOPED`, and completion checks do not certify the full run.
 A successful unrestricted full evaluation clears the marker after processing remaining
 work; a failed or still-partial resume retains it.
 The selector cannot be combined with `--from`, `--force`, `--skip`, `--cloud`, or

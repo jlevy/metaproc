@@ -447,6 +447,7 @@ class RunExecutionContext:
     force: bool
     only_scope_step: tuple[str, ...] | None
     only_scope_steps: tuple[tuple[str, ...], ...]
+    scope_through_target: bool
     continue_on_error: bool
     continue_on_step_failure: bool
     pool_dispatch_template: PoolDispatchConfig | None
@@ -473,6 +474,7 @@ class RunExecutionContext:
         force: bool = False,
         only_scope_step: tuple[str, ...] | None = None,
         only_scope_steps: tuple[tuple[str, ...], ...] = (),
+        scope_through_target: bool = False,
         continue_on_error: bool = True,
         continue_on_step_failure: bool = False,
         pool_dispatch_template: PoolDispatchConfig | None = None,
@@ -498,6 +500,7 @@ class RunExecutionContext:
             force=force,
             only_scope_step=only_scope_step,
             only_scope_steps=only_scope_steps,
+            scope_through_target=scope_through_target,
             continue_on_error=continue_on_error,
             continue_on_step_failure=continue_on_step_failure,
             pool_dispatch_template=pool_dispatch_template,
@@ -780,6 +783,7 @@ def _write_process_status(
     active_step_ids: set[str] | None = None,
     selected_scope_step: tuple[str, ...] | None = None,
     selected_scope_steps: tuple[tuple[str, ...], ...] = (),
+    selected_scope_mode: str | None = None,
     clear_selected_scope_step: bool = False,
 ) -> Path:
     """Write derived process-status.yaml to {run_dir}/.state/."""
@@ -793,6 +797,7 @@ def _write_process_status(
     }
     if selected_scope_step is not None:
         data["selected_scope_step"] = "/".join(selected_scope_step)
+        data["selected_scope_mode"] = selected_scope_mode or "downstream"
         if selected_scope_steps:
             data["selected_scope_steps"] = ["/".join(path) for path in selected_scope_steps]
     elif not clear_selected_scope_step:
@@ -807,6 +812,10 @@ def _write_process_status(
             data["selected_scope_step"] = "" if prior_marker is None else prior_marker
             if "selected_scope_steps" in prior:
                 data["selected_scope_steps"] = prior["selected_scope_steps"]
+            if "selected_scope_mode" in prior:
+                # Preserve even malformed evidence while the scoped marker remains.
+                prior_mode = prior["selected_scope_mode"]
+                data["selected_scope_mode"] = "" if prior_mode is None else prior_mode
 
     # Determine overall state
     states = {
@@ -3907,7 +3916,11 @@ async def _execute_composite_step(
         # This composite is downstream of the selected step, not on the path
         # toward it. The parent already selected this branch; force its child
         # descendants without applying the path selector inside that child.
-        child_context = dataclasses.replace(execution_context, only_scope_step=None, force=True)
+        child_context = dataclasses.replace(
+            execution_context,
+            only_scope_step=None,
+            force=not execution_context.scope_through_target,
+        )
 
     try:
         with ProcessEventLogger(paths_mod.process_events_log(prepared.identity.run_dir)) as events:
@@ -5475,8 +5488,10 @@ def _scope_selected_steps(
     steps: Sequence[ResolvedStep],
     scope_path: tuple[str, ...],
     selection: tuple[str, ...],
+    *,
+    through_target: bool = False,
 ) -> set[str]:
-    """Select one canonical nested branch and, at its target, its descendants."""
+    """Select a canonical nested branch, through its target or its descendants."""
     step_ids = {step.step_id for step in steps}
     if scope_path == selection:
         return step_ids
@@ -5488,6 +5503,18 @@ def _scope_selected_steps(
             f"selected scope step {next_step!r} does not exist in {'/'.join(scope_path) or 'root'}"
         )
     if len(selection) == len(scope_path) + 1:
+        if through_target:
+            # The target's transitive prerequisites must run in this scope, but
+            # unrelated siblings and provider-bearing descendants must not.
+            by_id = {step.step_id: step for step in steps}
+            selected = {next_step}
+            pending = [next_step]
+            while pending:
+                for needed in by_id[pending.pop()].needs:
+                    if needed not in selected:
+                        selected.add(needed)
+                        pending.append(needed)
+            return selected
         return {next_step, *downstream(steps, next_step)}
     selected_step = next(step for step in steps if step.step_id == next_step)
     if selected_step.mode != "composite":
@@ -5535,12 +5562,17 @@ async def _orchestrate(
     selection = execution_context.only_scope_step
     batch_paths = execution_context.only_scope_steps if not scope_path else ()
     status_selection = selection
+    status_mode = "through" if execution_context.scope_through_target else "downstream"
     if batch_paths:
         digest = hashlib.sha256(
             "\n".join("/".join(path) for path in batch_paths).encode()
         ).hexdigest()[:16]
         status_selection = (batch_paths[0][0], f"batch-{digest}")
-    force = execution_context.force or (selection is not None and scope_path == selection)
+    force = execution_context.force or (
+        selection is not None
+        and scope_path == selection
+        and not execution_context.scope_through_target
+    )
     # A scope is a DAG, not a step. Its independent branches answer to the same policy
     # as the root walk: a failure blocks its true dependents through `propagate_failure`
     # and leaves the rest of the graph to run, and the scope still reports failed at the
@@ -5562,7 +5594,12 @@ async def _orchestrate(
     selected_ids = (
         {batch_paths[0][0]}
         if batch_paths
-        else _scope_selected_steps(plan.steps, scope_path, selection)
+        else _scope_selected_steps(
+            plan.steps,
+            scope_path,
+            selection,
+            through_target=execution_context.scope_through_target,
+        )
         if selection is not None
         else {step.step_id for step in plan.steps}
     )
@@ -5635,6 +5672,7 @@ async def _orchestrate(
         active_step_ids=active_ids,
         selected_scope_step=status_selection,
         selected_scope_steps=batch_paths,
+        selected_scope_mode=status_mode,
     )
 
     blocked_steps: set[str] = set()
@@ -5656,6 +5694,7 @@ async def _orchestrate(
             active_step_ids=active_ids,
             selected_scope_step=status_selection,
             selected_scope_steps=batch_paths,
+            selected_scope_mode=status_mode,
         )
 
         step_start = time.monotonic()
@@ -5704,6 +5743,7 @@ async def _orchestrate(
                 active_step_ids=active_ids,
                 selected_scope_step=status_selection,
                 selected_scope_steps=batch_paths,
+                selected_scope_mode=status_mode,
             )
             failed_members = [m for m, ok in chain_results.items() if not ok]
             for member_id in failed_members:
@@ -5827,6 +5867,7 @@ async def _orchestrate(
                 active_step_ids=active_ids,
                 selected_scope_step=status_selection,
                 selected_scope_steps=batch_paths,
+                selected_scope_mode=status_mode,
             )
             out.progress(f"  Step '{step_id}': FAILED ({fmt_timedelta(elapsed)}): {exc}")
             return step_id, False
@@ -5858,7 +5899,11 @@ async def _orchestrate(
                 events.step_skip(step_id, "--skip")
                 out.progress(f"  Step '{step_id}': skipped (--skip)")
                 continue
-            step_force = force or (selection is not None and (*scope_path, step_id) == selection)
+            step_force = force or (
+                selection is not None
+                and (*scope_path, step_id) == selection
+                and not execution_context.scope_through_target
+            )
             if (
                 not step_force
                 and level_overrides_doc is not None
@@ -5994,6 +6039,7 @@ async def _orchestrate(
                 active_step_ids=active_ids,
                 selected_scope_step=status_selection,
                 selected_scope_steps=batch_paths,
+                selected_scope_mode=status_mode,
             )
             raise
         events.level_complete(_level_idx, time.monotonic() - level_start_t)
@@ -6015,6 +6061,7 @@ async def _orchestrate(
                         active_step_ids=active_ids,
                         selected_scope_step=status_selection,
                         selected_scope_steps=batch_paths,
+                        selected_scope_mode=status_mode,
                     )
                     detail = step_states[step_id].get("error")
                     detail_text = f" Error: {detail}." if detail else ""
@@ -6043,6 +6090,7 @@ async def _orchestrate(
                 active_step_ids=active_ids,
                 selected_scope_step=status_selection,
                 selected_scope_steps=batch_paths,
+                selected_scope_mode=status_mode,
             )
 
     # Final status
@@ -6054,6 +6102,7 @@ async def _orchestrate(
         active_step_ids=active_ids,
         selected_scope_step=status_selection,
         selected_scope_steps=batch_paths,
+        selected_scope_mode=status_mode,
         clear_selected_scope_step=(
             status_selection is None
             and set(step_map) == {step.id for step in spec.steps}
@@ -6105,6 +6154,11 @@ def run_process_command(
         [],
         "--only-scope-step",
         help="Within --only STEP, select a canonical nested path and descendants; repeat for mapped items",
+    ),
+    scope_through_target: bool = typer.Option(
+        False,
+        "--scope-through-target",
+        help="With --only-scope-step, run the target and prerequisites, omitting downstream steps",
     ),
     skip: list[str] = typer.Option([], "--skip", help="Skip specific steps (repeatable)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show execution plan without running"),
@@ -6351,6 +6405,8 @@ def run_process_command(
 
     spec = load_process_spec(process_path)
     scope_selections = tuple(tuple(path.split("/")) for path in only_scope_step)
+    if scope_through_target and not scope_selections:
+        raise CLIError("--scope-through-target requires --only-scope-step")
     scope_selection = scope_selections[0] if len(scope_selections) == 1 else None
     batch_scope_selections = scope_selections if len(scope_selections) > 1 else ()
     for selected_path in scope_selections:
@@ -7031,6 +7087,7 @@ def run_process_command(
                     force=force,
                     only_scope_step=scope_selection,
                     only_scope_steps=batch_scope_selections,
+                    scope_through_target=scope_through_target,
                     continue_on_error=continue_on_error,
                     continue_on_step_failure=continue_on_step_failure,
                     pool_dispatch_template=pool_dispatch_template,
