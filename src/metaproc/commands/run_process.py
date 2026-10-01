@@ -347,6 +347,7 @@ class RunPoolOwner:
     initial_concurrency: int | None
     pool: RunPool | None = None
     sizing_profile: str | None = None
+    provisional_code_policy: bool = False
     sizing_resources: RunPoolResources | None = None
     lane_profiles: set[str] = dataclasses.field(default_factory=set)
 
@@ -355,15 +356,18 @@ class RunPoolOwner:
         *,
         resource_config: Mapping[str, object],
         execution_profile: str,
+        code_only: bool = False,
     ) -> RunPool:
         """Return the run pool with ``execution_profile`` registered as one of its lanes."""
+        if self.pool is not None and code_only:
+            return self.pool
         if self.pool is not None and execution_profile in self.lane_profiles:
             return self.pool
 
         resources = RunPoolResources.resolve(
             resource_config, ceiling=self.max_concurrency or POOL_MAX_CONCURRENCY
         )
-        if self.pool is not None:
+        if self.pool is not None and not self.provisional_code_policy:
             differences = (
                 self.sizing_resources.differences(resources)
                 if self.sizing_resources is not None
@@ -400,8 +404,8 @@ class RunPoolOwner:
             initial_memory_budget_fraction=resources.initial_memory_budget_fraction,
             state_dir=paths_mod.run_state_dir(self.run_dir),
             logs_dir=paths_mod.runpool_logs_dir(self.run_dir),
-            # Agent leaves enter the shared run leaf gate before submitting; reacquiring
-            # it here would deadlock at a ceiling of one.
+            # Agents acquire the shared adaptive permit inside this pool; code
+            # handlers use admit_code on that same controller.
             external_semaphore=None,
             # A leaf takes its host slot here, once the pool admits its process, so slots
             # count running agents rather than leaves queued behind adaptive capacity or
@@ -415,10 +419,14 @@ class RunPoolOwner:
             cli_max_concurrency=self.max_concurrency,
             profile_max_concurrency_hint=resources.max_concurrency_hint,
         )
-        self.pool = RunPool(config, backend=get_backend(self.backend_name))
+        if self.pool is None:
+            self.pool = RunPool(config, backend=get_backend(self.backend_name))
+        else:
+            self.pool.configure_first_process_profile(config)
+        self.provisional_code_policy = code_only
         self.sizing_profile = execution_profile
         self.sizing_resources = resources
-        self.lane_profiles.add(execution_profile)
+        self.lane_profiles = set() if code_only else {execution_profile}
         return self.pool
 
     async def close(self) -> None:
@@ -670,10 +678,22 @@ async def _run_sync[SyncResult](
 @asynccontextmanager
 async def _leaf_slot(
     execution_context: RunExecutionContext | None,
+    target: ResolvedStep | None = None,
 ) -> AsyncGenerator[None]:
-    """Admit one executable leaf through the run-wide concurrency ceiling."""
+    """Admit code through the shared controller, with a fixed remote fallback."""
     if execution_context is None:
         yield
+        return
+    if execution_context.run_pool_owner is not None:
+        pool = execution_context.run_pool_owner.get_pool(
+            # Agent profile hints never governed code handlers. Bootstrap from the
+            # run envelope; explicit code fan-out limits remain at the step gate.
+            resource_config={},
+            execution_profile=(target.execution_profile if target is not None else None) or "code",
+            code_only=True,
+        )
+        async with pool.admit_code():
+            yield
         return
     semaphore = execution_context.leaf_semaphore
     if semaphore is None:
@@ -2697,17 +2717,18 @@ async def _execute_mapped_code_item(
     to the whole step, while its siblings finish.
     """
     try:
-        return await _execute_code_step(
-            spec=spec,
-            step_def=step_def,
-            target=target,
-            variables=variables,
-            process_dir=process_dir,
-            run_dir=run_dir,
-            run_id=run_id,
-            execution_context=execution_context,
-            out=out,
-        )
+        async with _leaf_slot(execution_context, target):
+            return await _execute_code_step(
+                spec=spec,
+                step_def=step_def,
+                target=target,
+                variables=variables,
+                process_dir=process_dir,
+                run_dir=run_dir,
+                run_id=run_id,
+                execution_context=execution_context,
+                out=out,
+            )
     except CLIError as exc:
         state_dir = compute_task_state_dir(run_dir, step_def, variables)
         state_dir.mkdir(parents=True, exist_ok=True)
@@ -2812,11 +2833,12 @@ async def _execute_code_fan_out_step(
             run_dir=run_dir,
         ),
         step_id=step_id,
-        max_concurrency=max_concurrency,
-        step_concurrency=target.fan_out.max_concurrency,
-        external_semaphore=(
-            execution_context.leaf_semaphore if execution_context is not None else None
+        max_concurrency=(
+            None
+            if execution_context is not None and execution_context.run_pool_owner is not None
+            else max_concurrency
         ),
+        step_concurrency=target.fan_out.max_concurrency,
         dispatch=dispatch,
     )
     if succeeded != total:
@@ -2902,9 +2924,8 @@ async def _execute_item_aligned_chain(
             run_dir=run_dir,
         ),
         is_done=_is_done,
-        max_concurrency=max_concurrency,
+        max_concurrency=None if execution_context.run_pool_owner is not None else max_concurrency,
         step_concurrency=_step_concurrency,
-        external_semaphore=execution_context.leaf_semaphore,
     )
 
     results: dict[str, bool] = {}
@@ -3307,7 +3328,7 @@ async def _execute_agent_step(
                 timed_out = False
                 boundary_before = None
                 try:
-                    async with _leaf_slot(execution_context):
+                    async with _leaf_slot(execution_context if scalar_pool is None else None):
                         async with admitted_launch(
                             event_logger=auth_events,
                             enabled=backend_name == "local" and scalar_pool is None,
@@ -4914,6 +4935,15 @@ async def _execute_fan_out_step(
         preflight_quota_guard=preflight_quota_guard,
         step_hash=step_hash,
         defer_success_transition=defer_success_transition,
+        shared_pool=(
+            execution_context.agent_pool(
+                resource_config=resource_config,
+                execution_profile=effective_execution_profile,
+            )
+            if execution_context is not None
+            else None
+        ),
+        step_concurrency=target.fan_out.max_concurrency,
     )
 
     boundary_error: str | None = None
@@ -5371,7 +5401,7 @@ async def _execute_step(
                 execution_context=execution_context,
                 out=out,
             )
-        async with _leaf_slot(execution_context):
+        async with _leaf_slot(execution_context, target):
             return await _execute_code_step(
                 spec=spec,
                 step_def=step_def,

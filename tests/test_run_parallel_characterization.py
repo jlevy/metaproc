@@ -573,7 +573,9 @@ class TestPoolSubmitAndShutdown:
                 )
             )
             mock_pool.submit.side_effect = [RuntimeError("pool full"), submit_future]
-            mock_pool.snapshot = MagicMock(current_concurrency=2, active_count=0, pending_count=0)
+            mock_pool.snapshot = MagicMock(
+                current_concurrency=2, active_count=0, active_code_count=0, pending_count=0
+            )
 
             async def _noop_shutdown():
                 pass
@@ -1673,7 +1675,9 @@ class TestPoolSubmitAndShutdown:
         async def _run() -> None:
             mock_pool = MagicMock()
             mock_pool.submit.side_effect = KeyboardInterrupt("user cancelled")
-            mock_pool.snapshot = MagicMock(current_concurrency=2, active_count=0, pending_count=0)
+            mock_pool.snapshot = MagicMock(
+                current_concurrency=2, active_count=0, active_code_count=0, pending_count=0
+            )
             shutdown_called = asyncio.Event()
 
             async def mock_shutdown():

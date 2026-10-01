@@ -6,7 +6,7 @@ a mock adapter and asserts the on-disk shape:
 - a single run dir at ``<RUNS_DIR>/<RUN_ID>/`` (no inferred parent)
 - ``<run>/.state/`` and ``<run>/.logs/`` as the only engine-bookkeeping
   branches
-- per-step pool state under ``<run>/.state/steps/<step_id>/``
+- one shared run-owned pool under ``<run>/.state/``
 - per-task state under ``<run>/.state/tasks/<step_id>/<item_key>/``
   (non-fan-out steps write status.yaml directly under
   ``<run>/.state/tasks/<step_id>/``)
@@ -19,6 +19,7 @@ artifact tree at ``<run>/<step_id>/.state/`` or
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from collections.abc import Iterator
@@ -39,6 +40,7 @@ from metaproc.paths import (
     RUN_LAYOUT_VERSION,
     STATE_DIR,
     STATUS_FILE,
+    runpool_events,
     runpool_step_events,
     step_state_dir,
     task_state_dir,
@@ -217,21 +219,25 @@ def test_run_dir_has_three_top_level_branches(smoke_run: Path) -> None:
     )
 
 
-def test_per_step_state_lives_under_state_steps(smoke_run: Path) -> None:
-    """Per-step fan-out pool state must live at <run>/.state/steps/<step_id>/."""
-    expected_pool_status = step_state_dir(smoke_run, "write-artifact") / POOL_STATUS_FILE
+def test_run_owned_pool_state_lives_at_run_level(smoke_run: Path) -> None:
+    """Scalar code and mapped agents share one run-owned pool status."""
+    expected_pool_status = smoke_run / STATE_DIR / POOL_STATUS_FILE
     assert expected_pool_status.exists(), (
-        f"per-step pool status not at expected path: {expected_pool_status}"
+        f"run-owned pool status not at expected path: {expected_pool_status}"
     )
 
+    assert not (step_state_dir(smoke_run, "write-artifact") / POOL_STATUS_FILE).exists()
     legacy_path = smoke_run / "write-artifact" / STATE_DIR / POOL_STATUS_FILE
     assert not legacy_path.exists(), f"per-step pool state regressed to legacy path: {legacy_path}"
 
 
-def test_per_step_logs_live_under_logs_runpool_steps(smoke_run: Path) -> None:
-    """Per-step pool event logs must live at <run>/.logs/runpool/steps/<step_id>/."""
-    events_path = runpool_step_events(smoke_run, "write-artifact")
-    assert events_path.exists(), f"per-step events not at expected path: {events_path}"
+def test_run_owned_pool_logs_share_one_controller(smoke_run: Path) -> None:
+    """Scalar and mapped execution append to the same controller event log."""
+    events_path = runpool_events(smoke_run)
+    assert events_path.exists(), f"run-owned events not at expected path: {events_path}"
+    events = [json.loads(line) for line in events_path.read_text().splitlines()]
+    assert sum(event["event"] == "pool_start" for event in events) == 1
+    assert not runpool_step_events(smoke_run, "write-artifact").exists()
 
     old_step_events = smoke_run / LOGS_DIR / "steps" / "write-artifact" / "runpool-events.jsonl"
     assert not old_step_events.exists(), (
@@ -292,7 +298,7 @@ def test_run_level_state_files_are_present(smoke_run: Path) -> None:
         "an unscoped status.yaml at the run-level .state/ root indicates step state "
         "is escaping the per-task path"
     )
-    assert (run_state / "steps").is_dir(), "expected .state/steps/ namespace"
+    assert (run_state / POOL_STATUS_FILE).exists(), "expected shared run pool status"
     assert (run_state / "tasks").is_dir(), "expected .state/tasks/ namespace"
 
 
@@ -400,9 +406,9 @@ def test_state_tree_snapshot_matches_expected_shape(smoke_run: Path) -> None:
         "run-plan.yaml",
         "schemas/resource-usage-summary.v1.schema.yaml",
         "schemas/agent-operations-summary.v1.schema.yaml",
-        # Per-step (fan-out runner pool)
-        "steps/write-artifact/runpool-status.yaml",
-        "steps/write-artifact/scale-state.yaml",
+        # One shared run-owned controller for code and mapped agents.
+        "runpool-status.yaml",
+        "scale-state.yaml",
         # Per-task — fan-out items each get their own subdir
         "tasks/write-artifact/AAA/attempt.yaml",
         "tasks/write-artifact/AAA/attempts/<attempt-id>/attempt.yaml",

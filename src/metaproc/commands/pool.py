@@ -161,6 +161,10 @@ def _render_pool_status_block(status: Any, *, out: Any) -> None:
         f"Concurrency: {status.current_concurrency}/{status.max_concurrency} "
         f"(active={status.active_count}, pending={status.pending_count})"
     )
+    if status.active_code_count or status.pending_code_count:
+        out.data(
+            f"Code leaves: active={status.active_code_count}, pending={status.pending_code_count}"
+        )
     plan_summary = _format_concurrency_plan_summary(status.concurrency_plan)
     if plan_summary:
         out.data(f"Plan: {plan_summary}")
@@ -354,6 +358,8 @@ def pool_events(
             active = (
                 f" active={ev.get('active_count')}" if ev.get("active_count") is not None else ""
             )
+            if ev.get("active_code_count") is not None:
+                active += f" code_active={ev['active_code_count']}"
             bottleneck = (
                 f" bottleneck={ev.get('bottleneck')}" if ev.get("bottleneck") is not None else ""
             )
@@ -458,7 +464,7 @@ def pool_health(
             f"swap_delta={sample.get('swap_delta_gb_per_min'):.1f}GB/min "
             f"disk_free={sample.get('disk_free_gb'):.1f}GB "
             f"cap={sample.get('current_concurrency')}/{sample.get('effective_target')} "
-            f"active={sample.get('active_count')}"
+            f"active={sample.get('active_count')} code_active={sample.get('active_code_count', 0)}"
         )
         out.data(line)
 
@@ -618,6 +624,7 @@ def _summarize_pressure_samples(samples: list[dict[str, Any]]) -> dict[str, Any]
     swap_delta = _numbers("swap_delta_gb_per_min")
     disk_free = _numbers("disk_free_gb")
     active = _numbers("active_count")
+    active_code = _numbers("active_code_count")
     concurrency = _numbers("current_concurrency")
     memory_levels = Counter(str(sample.get("memory_level", "unknown")) for sample in samples)
     swap_levels = Counter(str(sample.get("swap_level", "unknown")) for sample in samples)
@@ -636,6 +643,7 @@ def _summarize_pressure_samples(samples: list[dict[str, Any]]) -> dict[str, Any]
         "min_disk_free_gb": min(disk_free) if disk_free else None,
         "disk_pressure_causes": dict(disk_causes),
         "max_active_count": int(max(active)) if active else None,
+        "max_active_code_count": int(max(active_code)) if active_code else None,
         "max_concurrency": int(max(concurrency)) if concurrency else None,
     }
 
@@ -662,7 +670,7 @@ def _render_health_summary(report: dict[str, Any], *, out: Any) -> None:
         "Disk/pool: "
         f"disk_free min={_format_float(report.get('min_disk_free_gb'), suffix='GB')} "
         f"disk_causes={report.get('disk_pressure_causes', {})} "
-        f"active max={report.get('max_active_count')} "
+        f"active max={report.get('max_active_count')} code_active max={report.get('max_active_code_count')} "
         f"cap max={report.get('max_concurrency')}"
     )
     out.data(disk_line)
@@ -749,7 +757,7 @@ def _render_summary(report: dict[str, Any], *, out: Any) -> None:
         )
         out.data(
             "Pool: "
-            f"active max={pressure.get('max_active_count')} "
+            f"active max={pressure.get('max_active_count')} code_active max={pressure.get('max_active_code_count')} "
             f"cap max={pressure.get('max_concurrency')}"
         )
         return
@@ -1148,6 +1156,8 @@ def _build_rollup(
     failed = 0
     killed = 0
     active = 0
+    active_code = 0
+    pending_code = 0
     pending_retries = 0
     per_step: list[dict[str, Any]] = []
     lane_totals: dict[str, dict[str, Any]] = {}
@@ -1164,6 +1174,8 @@ def _build_rollup(
         failed += int(status.get("failed_count", 0) or 0)
         killed += int(status.get("killed_count", 0) or 0)
         active += int(status.get("active_count", 0) or 0)
+        active_code += int(status.get("active_code_count", 0) or 0)
+        pending_code += int(status.get("pending_code_count", 0) or 0)
         pending_retries += int(status.get("pending_retries", 0) or 0)
         step_summary.update(
             {
@@ -1223,6 +1235,9 @@ def _build_rollup(
         },
         "per_step": per_step,
     }
+    if active_code or pending_code:
+        rollup["totals"]["active_code"] = active_code
+        rollup["totals"]["pending_code"] = pending_code
     if lane_totals:
         rollup["lanes"] = list(lane_totals.values())
 
@@ -1267,6 +1282,10 @@ def _render_rollup(rollup: dict[str, Any], *, out: Any, with_auth_outcomes: bool
         f"killed={totals['killed']}  active={totals['active']}  "
         f"pending_retries={totals['pending_retries']}"
     )
+    if totals.get("active_code") or totals.get("pending_code"):
+        out.data(
+            f"Code leaves: active={totals.get('active_code', 0)}, pending={totals.get('pending_code', 0)}"
+        )
     out.data("\nPer step:")
     for step in rollup["per_step"]:
         if "error" in step:

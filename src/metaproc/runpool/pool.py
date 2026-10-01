@@ -16,7 +16,7 @@ import shutil
 import time
 import uuid
 from collections import deque
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncGenerator, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -544,6 +544,10 @@ class RunPool:
         # Tracking state.
         self._active: dict[int | str, _ActiveProcess] = {}  # keyed by pid or external_id
         self._pending_count = 0
+        self._stopped_at: str | None = None
+        self._code_tasks: set[asyncio.Task[object]] = set()
+        self._active_code_count = 0
+        self._pending_code_count = 0
         self._completed_count = 0
         self._failed_count = 0
         self._killed_count = 0
@@ -978,6 +982,104 @@ class RunPool:
         self._monitor_task = asyncio.create_task(self._pressure_monitor_loop())
         self._write_status()
 
+    def configure_first_process_profile(self, config: RunPoolConfig) -> None:
+        """Bind a provisional code controller to its first agent resource policy.
+
+        Code startup has no agent profile. Binding before the first submission
+        retains the controller and its live permits, never increases admission on
+        the transition, and lets existing code holders drain if the profile lowers
+        the ceiling. Subsequent profiles are checked by the owning process runner.
+        """
+        if self._submission_tasks or self._active or self._completed_count or self._failed_count:
+            raise RuntimeError("process resource policy is already in use")
+        if config.state_dir != self._config.state_dir or config.logs_dir != self._config.logs_dir:
+            raise ValueError("first profile cannot move the controller's state")
+        self._config = config
+        pressure = measure()
+        estimate = estimate_initial_concurrency(
+            config.max_concurrency,
+            config.estimated_process_rss_bytes,
+            budget_fraction=config.initial_memory_budget_fraction,
+            pressure=pressure,
+        )
+        target = max(
+            config.min_concurrency,
+            min(self.current_max_concurrency, self._operator_cap, config.max_concurrency, estimate),
+        )
+        self._memory_ceiling = min(self._memory_ceiling, target)
+        self._provider_ceiling = min(self._provider_ceiling, target)
+        limit = config.host_admission_limit or config.max_concurrency
+        self._host_admission = (
+            HostAdmissionGate(
+                root_dir=config.host_admission_dir,
+                namespace=config.host_admission_namespace,
+                limit=limit,
+                poll_interval_s=config.host_admission_poll_interval_s,
+                acquire_timeout_s=config.host_admission_acquire_timeout_s,
+            )
+            if config.host_admission_enabled and self._backend_name == "local"
+            else None
+        )
+        self._lane_registry = _build_lane_registry(config)
+        self._lane_counters = {
+            lane: {"active": 0, "completed": 0, "failed": 0, "killed": 0}
+            for lane in self._lane_registry
+        }
+        self._concurrency_plan = build_concurrency_plan(
+            backend=self._backend_name,
+            execution_profile=config.execution_profile,
+            cli_max_concurrency=config.cli_max_concurrency,
+            batch_size=config.batch_size,
+            profile_max_concurrency_hint=config.profile_max_concurrency_hint,
+            host_max_concurrency=limit,
+            configured_max_concurrency=config.max_concurrency,
+            min_concurrency=config.min_concurrency,
+            initial_concurrency_override=config.initial_concurrency or None,
+            initial_concurrency_estimate=estimate,
+            selected_initial_concurrency=target,
+            estimated_process_rss_bytes=config.estimated_process_rss_bytes,
+            initial_memory_budget_fraction=config.initial_memory_budget_fraction,
+            pressure=pressure,
+            operator_cap=self._operator_cap_override,
+        )
+        self._set_capacity(target, reason="first_process_profile")
+        self._write_status()
+
+    @contextlib.asynccontextmanager
+    async def admit_code(self) -> AsyncGenerator[None]:
+        """Admit an in-process executable leaf through the process controller.
+
+        Code and submitted agent processes consume the same adaptive permits. A
+        cancelled waiter never releases a permit it did not acquire; a capacity
+        reduction lets existing holders drain without admitting replacement work.
+        """
+        if self._shutdown_event.is_set():
+            raise RuntimeError("cannot admit code after RunPool shutdown has started")
+        self._start()
+        acquired = False
+        self._pending_code_count += 1
+        task = asyncio.current_task()
+        assert task is not None
+        self._code_tasks.add(task)
+        try:
+            await self._await_quota_pause()
+            await self._semaphore.acquire()
+            acquired = True
+            self._pending_code_count -= 1
+            self._active_code_count += 1
+            if self._shutdown_event.is_set():
+                raise asyncio.CancelledError
+            self._write_status()
+            yield
+        finally:
+            if acquired:
+                self._active_code_count -= 1
+                self._semaphore.release()
+            else:
+                self._pending_code_count -= 1
+            self._code_tasks.discard(task)
+            self._write_status()
+
     def submit(self, config: ProcessConfig) -> asyncio.Future[ProcessResult]:
         """Queue one process and return a future that resolves on completion."""
         if self._shutdown_event.is_set():
@@ -1081,9 +1183,9 @@ class RunPool:
 
         # Wait for every submitted task, including work queued behind quota or host
         # admission. A pool owns submissions from enqueue through terminal cleanup.
-        if self._submission_tasks:
+        if self._submission_tasks or self._code_tasks:
             deadline = time.monotonic() + timeout_s
-            while self._submission_tasks and time.monotonic() < deadline:
+            while (self._submission_tasks or self._code_tasks) and time.monotonic() < deadline:
                 await asyncio.sleep(0.1)
 
         for active in self._active.values():
@@ -1093,7 +1195,7 @@ class RunPool:
         try:
             # Cancellation unwinds queued admission and drives active launches through
             # the same kill-and-record path as any other cancelled submission.
-            remaining_tasks = tuple(self._submission_tasks)
+            remaining_tasks = tuple(self._submission_tasks | self._code_tasks)
             for task in remaining_tasks:
                 task.cancel()
             if remaining_tasks:
@@ -1127,6 +1229,8 @@ class RunPool:
                 with contextlib.suppress(asyncio.CancelledError):
                     await self._monitor_task
 
+            if not self._code_tasks and not self._submission_tasks:
+                self._stopped_at = datetime.now(UTC).isoformat(timespec="seconds")
             self._write_status()
             try:
                 if self._event_logger is not None:
@@ -1676,6 +1780,7 @@ class RunPool:
                         source=health.source,
                         current_concurrency=self._semaphore.capacity,
                         active_count=len(self._active),
+                        active_code_count=self._active_code_count,
                         pending_count=self._pending_count,
                         consecutive_normal=self._consecutive_normal,
                         consecutive_elevated=self._consecutive_elevated,
@@ -1789,7 +1894,8 @@ class RunPool:
         """
         override = self._max_concurrency_override
         if override is not None and override > self._config.max_concurrency:
-            return override
+            hint = self._config.profile_max_concurrency_hint
+            return min(override, hint) if hint is not None else override
         return self._config.max_concurrency
 
     def _health_disk_path(self) -> Path:
@@ -1896,6 +2002,8 @@ class RunPool:
             "source": health.source,
             "current_concurrency": self._semaphore.capacity,
             "active_count": len(self._active),
+            "active_code_count": self._active_code_count,
+            "pending_code_count": self._pending_code_count,
             "pending_count": self._pending_count,
             "consecutive_normal": self._consecutive_normal,
             "consecutive_elevated": self._consecutive_elevated,
@@ -1923,7 +2031,7 @@ class RunPool:
         """Effective operator cap — override if set, else config max_concurrency."""
         if self._operator_cap_override is not None:
             return self._operator_cap_override
-        return self._config.max_concurrency
+        return self._effective_max_concurrency()
 
     def _effective_target(self) -> int:
         """Current effective cap after memory/provider/operator ceilings."""
@@ -2022,7 +2130,7 @@ class RunPool:
         provider_changed = False
 
         if level == PressureLevel.NORMAL:
-            if len(self._active) > self._semaphore.capacity:
+            if self._semaphore.held > self._semaphore.capacity:
                 self._consecutive_normal = 0
             else:
                 self._consecutive_normal += 1
@@ -2184,6 +2292,9 @@ class RunPool:
             max_concurrency=self._config.max_concurrency,
             current_concurrency=self._semaphore.capacity,
             active_count=len(self._active),
+            stopped_at=self._stopped_at,
+            active_code_count=self._active_code_count,
+            pending_code_count=self._pending_code_count,
             pending_count=self._pending_count,
             completed_count=self._completed_count,
             failed_count=self._failed_count,
