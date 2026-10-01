@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import hashlib
 import json
 import json as _json
 import logging
@@ -445,6 +446,7 @@ class RunExecutionContext:
     skip_steps: frozenset[str]
     force: bool
     only_scope_step: tuple[str, ...] | None
+    only_scope_steps: tuple[tuple[str, ...], ...]
     continue_on_error: bool
     continue_on_step_failure: bool
     pool_dispatch_template: PoolDispatchConfig | None
@@ -470,6 +472,7 @@ class RunExecutionContext:
         skip_steps: set[str] | frozenset[str] = frozenset(),
         force: bool = False,
         only_scope_step: tuple[str, ...] | None = None,
+        only_scope_steps: tuple[tuple[str, ...], ...] = (),
         continue_on_error: bool = True,
         continue_on_step_failure: bool = False,
         pool_dispatch_template: PoolDispatchConfig | None = None,
@@ -494,6 +497,7 @@ class RunExecutionContext:
             skip_steps=frozenset(skip_steps),
             force=force,
             only_scope_step=only_scope_step,
+            only_scope_steps=only_scope_steps,
             continue_on_error=continue_on_error,
             continue_on_step_failure=continue_on_step_failure,
             pool_dispatch_template=pool_dispatch_template,
@@ -775,6 +779,7 @@ def _write_process_status(
     *,
     active_step_ids: set[str] | None = None,
     selected_scope_step: tuple[str, ...] | None = None,
+    selected_scope_steps: tuple[tuple[str, ...], ...] = (),
     clear_selected_scope_step: bool = False,
 ) -> Path:
     """Write derived process-status.yaml to {run_dir}/.state/."""
@@ -788,6 +793,8 @@ def _write_process_status(
     }
     if selected_scope_step is not None:
         data["selected_scope_step"] = "/".join(selected_scope_step)
+        if selected_scope_steps:
+            data["selected_scope_steps"] = ["/".join(path) for path in selected_scope_steps]
     elif not clear_selected_scope_step:
         # A later --only/--from invocation cannot certify work left outside its
         # selected plan. Keep even an invalid marker so every reader fails closed
@@ -798,6 +805,8 @@ def _write_process_status(
             # invalid retained value instead of silently restoring authority.
             prior_marker = prior["selected_scope_step"]
             data["selected_scope_step"] = "" if prior_marker is None else prior_marker
+            if "selected_scope_steps" in prior:
+                data["selected_scope_steps"] = prior["selected_scope_steps"]
 
     # Determine overall state
     states = {
@@ -4168,6 +4177,8 @@ async def _execute_composite_fan_out_step(
     item_contexts = list(discovery.actionable_contexts)
     retained_count = sum(item.reason != "terminal" for item in discovery.filtered_items)
     selection = execution_context.only_scope_step
+    batch_paths = execution_context.only_scope_steps if not scope_path else ()
+    batch_by_key = {path[1]: path for path in batch_paths}
     selected_item: str | None = None
     if (
         selection is not None
@@ -4190,8 +4201,26 @@ async def _execute_composite_fan_out_step(
             )
         item_contexts = [matches[0][0]]
         retained_count = len(candidates) - 1
+    if batch_paths:
+        candidates = [(context, None) for context in discovery.actionable_contexts] + [
+            (item.context, item.reason) for item in discovery.filtered_items
+        ]
+        item_contexts = []
+        for key in batch_by_key:
+            matches = [
+                (context, reason)
+                for context, reason in candidates
+                if compute_task_state_dir(run_dir, step_def, {**variables, **context}).name == key
+            ]
+            if len(matches) != 1 or matches[0][1] == "terminal":
+                raise CLIError(
+                    f"selected scope item {key!r} is absent, duplicate, or terminal "
+                    f"in step {step_id!r}"
+                )
+            item_contexts.append(matches[0][0])
+        retained_count = len(candidates) - len(batch_by_key)
     for filtered_item in discovery.filtered_items:
-        if selected_item is not None:
+        if selected_item is not None or batch_paths:
             continue
         if filtered_item.reason not in {"completed", "cached"}:
             continue
@@ -4258,6 +4287,14 @@ async def _execute_composite_fan_out_step(
         item_started = time.monotonic()
         state_dir = compute_task_state_dir(run_dir, step_def, item_vars)
         item_key = state_dir.name
+        item_selection = batch_by_key.get(item_key, selection)
+        item_execution_context = (
+            dataclasses.replace(
+                execution_context, only_scope_step=item_selection, only_scope_steps=()
+            )
+            if batch_paths
+            else execution_context
+        )
         if events is not None:
             events.item_start(step_id, item_key, worker_id=_current_worker_id())
 
@@ -4304,7 +4341,7 @@ async def _execute_composite_fan_out_step(
                 run_dir=run_dir,
                 run_id=run_id,
                 scope_path=scope_path,
-                execution_context=execution_context,
+                execution_context=item_execution_context,
                 scope_execution_profile=scope_execution_profile,
                 mapped_item_key=state_dir.name,
                 out=out,
@@ -4376,9 +4413,9 @@ async def _execute_composite_fan_out_step(
         # The mapped item's ports describe its whole child process. A selected
         # descendant can finish while later child outputs are intentionally absent.
         selected_descendant = (
-            selection is not None
-            and len(selection) > len((*scope_path, step_id, state_dir.name))
-            and selection[: len((*scope_path, step_id, state_dir.name))]
+            item_selection is not None
+            and len(item_selection) > len((*scope_path, step_id, state_dir.name))
+            and item_selection[: len((*scope_path, step_id, state_dir.name))]
             == (*scope_path, step_id, state_dir.name)
         )
         if target.outputs and artifact_dir is not None and not selected_descendant:
@@ -5496,6 +5533,13 @@ async def _orchestrate(
     max_concurrency = execution_context.max_concurrency
     skip_steps = execution_context.skip_steps if not scope_path else frozenset()
     selection = execution_context.only_scope_step
+    batch_paths = execution_context.only_scope_steps if not scope_path else ()
+    status_selection = selection
+    if batch_paths:
+        digest = hashlib.sha256(
+            "\n".join("/".join(path) for path in batch_paths).encode()
+        ).hexdigest()[:16]
+        status_selection = (batch_paths[0][0], f"batch-{digest}")
     force = execution_context.force or (selection is not None and scope_path == selection)
     # A scope is a DAG, not a step. Its independent branches answer to the same policy
     # as the root walk: a failure blocks its true dependents through `propagate_failure`
@@ -5516,17 +5560,19 @@ async def _orchestrate(
     step_map = {s.step_id: s for s in plan.steps}
     step_def_map = {s.id: s for s in spec.steps}
     selected_ids = (
-        _scope_selected_steps(plan.steps, scope_path, selection)
+        {batch_paths[0][0]}
+        if batch_paths
+        else _scope_selected_steps(plan.steps, scope_path, selection)
         if selection is not None
         else {step.step_id for step in plan.steps}
     )
-    if selection is not None:
+    if selection is not None or batch_paths:
         errors = _verify_ancestors(
             run_dir, plan, selected_ids, spec, variables, expected_run_id=run_id
         )
         if errors:
             raise CLIError(
-                f"Unsatisfied ancestors for selected scope {'/'.join(selection)}:\n"
+                f"Unsatisfied ancestors for selected scope {'/'.join(status_selection or ())}:\n"
                 + "\n".join(errors)
             )
     levels = topo_sort(plan.steps, step_ids=selected_ids)
@@ -5587,7 +5633,8 @@ async def _orchestrate(
         step_states,
         started_at,
         active_step_ids=active_ids,
-        selected_scope_step=selection,
+        selected_scope_step=status_selection,
+        selected_scope_steps=batch_paths,
     )
 
     blocked_steps: set[str] = set()
@@ -5607,7 +5654,8 @@ async def _orchestrate(
             step_states,
             started_at,
             active_step_ids=active_ids,
-            selected_scope_step=selection,
+            selected_scope_step=status_selection,
+            selected_scope_steps=batch_paths,
         )
 
         step_start = time.monotonic()
@@ -5654,7 +5702,8 @@ async def _orchestrate(
                 step_states,
                 started_at,
                 active_step_ids=active_ids,
-                selected_scope_step=selection,
+                selected_scope_step=status_selection,
+                selected_scope_steps=batch_paths,
             )
             failed_members = [m for m, ok in chain_results.items() if not ok]
             for member_id in failed_members:
@@ -5686,11 +5735,11 @@ async def _orchestrate(
                 selection is not None
                 and selection[: len(scope_path) + 1] == (*scope_path, step_id)
                 and len(selection) > len(scope_path) + 1
-            )
-            if selected_ancestor and selection is not None:
+            ) or (bool(batch_paths) and not scope_path and step_id == batch_paths[0][0])
+            if selected_ancestor:
                 step_states[step_id] = {
                     "state": "skipped",
-                    "note": f"only selected nested scope {'/'.join(selection)} was evaluated",
+                    "note": f"only selected nested scope {'/'.join(status_selection or ())} was evaluated",
                     "elapsed_s": round(elapsed, 1),
                 }
                 events.step_skip(step_id, "only selected nested scope evaluated")
@@ -5776,7 +5825,8 @@ async def _orchestrate(
                 step_states,
                 started_at,
                 active_step_ids=active_ids,
-                selected_scope_step=selection,
+                selected_scope_step=status_selection,
+                selected_scope_steps=batch_paths,
             )
             out.progress(f"  Step '{step_id}': FAILED ({fmt_timedelta(elapsed)}): {exc}")
             return step_id, False
@@ -5942,7 +5992,8 @@ async def _orchestrate(
                 step_states,
                 started_at,
                 active_step_ids=active_ids,
-                selected_scope_step=selection,
+                selected_scope_step=status_selection,
+                selected_scope_steps=batch_paths,
             )
             raise
         events.level_complete(_level_idx, time.monotonic() - level_start_t)
@@ -5962,7 +6013,8 @@ async def _orchestrate(
                         step_states,
                         started_at,
                         active_step_ids=active_ids,
-                        selected_scope_step=selection,
+                        selected_scope_step=status_selection,
+                        selected_scope_steps=batch_paths,
                     )
                     detail = step_states[step_id].get("error")
                     detail_text = f" Error: {detail}." if detail else ""
@@ -5989,7 +6041,8 @@ async def _orchestrate(
                 step_states,
                 started_at,
                 active_step_ids=active_ids,
-                selected_scope_step=selection,
+                selected_scope_step=status_selection,
+                selected_scope_steps=batch_paths,
             )
 
     # Final status
@@ -5999,9 +6052,10 @@ async def _orchestrate(
         step_states,
         started_at,
         active_step_ids=active_ids,
-        selected_scope_step=selection,
+        selected_scope_step=status_selection,
+        selected_scope_steps=batch_paths,
         clear_selected_scope_step=(
-            selection is None
+            status_selection is None
             and set(step_map) == {step.id for step in spec.steps}
             and all(step_states[step_id].get("state") == "completed" for step_id in step_map)
         ),
@@ -6047,10 +6101,10 @@ def run_process_command(
     only_step: str | None = typer.Option(  # noqa: UP007
         None, "--only", help="Run only this single step (no downstream)"
     ),
-    only_scope_step: str | None = typer.Option(  # noqa: UP007
-        None,
+    only_scope_step: list[str] = typer.Option(
+        [],
         "--only-scope-step",
-        help="Within --only STEP, enter just this canonical nested step path and its descendants",
+        help="Within --only STEP, select a canonical nested path and descendants; repeat for mapped items",
     ),
     skip: list[str] = typer.Option([], "--skip", help="Skip specific steps (repeatable)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show execution plan without running"),
@@ -6296,13 +6350,14 @@ def run_process_command(
     process_dir = process_path.parent
 
     spec = load_process_spec(process_path)
-    scope_selection: tuple[str, ...] | None = None
-    if only_scope_step is not None:
-        scope_selection = tuple(only_scope_step.split("/"))
+    scope_selections = tuple(tuple(path.split("/")) for path in only_scope_step)
+    scope_selection = scope_selections[0] if len(scope_selections) == 1 else None
+    batch_scope_selections = scope_selections if len(scope_selections) > 1 else ()
+    for selected_path in scope_selections:
         if (
-            len(scope_selection) < 2
-            or any(part in {"", ".", ".."} for part in scope_selection)
-            or only_step != scope_selection[0]
+            len(selected_path) < 2
+            or any(part in {"", ".", ".."} for part in selected_path)
+            or only_step != selected_path[0]
             or from_step is not None
             or force
             or skip
@@ -6314,6 +6369,26 @@ def run_process_command(
                 "at least one nested component, and no --from/--force/--skip/--cloud/--dry-run; "
                 "a root-only dry-run cannot preview the selected nested plan"
             )
+    if batch_scope_selections:
+        if (
+            any(len(path) < 3 for path in batch_scope_selections)
+            or len({path[0] for path in batch_scope_selections}) != 1
+            or len({path[1] for path in batch_scope_selections}) != len(batch_scope_selections)
+            or len({path[2:] for path in batch_scope_selections}) != 1
+        ):
+            raise CLIError(
+                "repeated --only-scope-step paths must name distinct mapped items "
+                "under one root step with the same descendant suffix"
+            )
+        selected_root = next(
+            (step for step in spec.steps if step.id == batch_scope_selections[0][0]), None
+        )
+        if (
+            selected_root is None
+            or selected_root.mode != "composite"
+            or selected_root.for_each is None
+        ):
+            raise CLIError("repeated --only-scope-step paths require a mapped root composite step")
     variables = seed_runtime_vars(parse_var_args(var))
     config_overrides = parse_adapter_config(adapter_config)
     profile_files = [*variant_file, *profile_file]
@@ -6392,8 +6467,8 @@ def run_process_command(
         raise CLIError(
             f"--only '{only_step}' not found. Available: {', '.join(sorted(all_step_ids))}"
         )
-    if scope_selection is not None and scope_selection[0] not in all_step_ids:
-        raise CLIError(f"selected root step {scope_selection[0]!r} does not exist")
+    if scope_selections and scope_selections[0][0] not in all_step_ids:
+        raise CLIError(f"selected root step {scope_selections[0][0]!r} does not exist")
 
     # Determine active step IDs (subgraph)
     active_step_ids = set(all_step_ids)
@@ -6869,8 +6944,8 @@ def run_process_command(
 
     # Acquire orchestrator lease (prevents concurrent orchestrators on the same run).
     command_summary = f"run-process {spec.name} --backend {backend}"
-    if only_scope_step is not None:
-        command_summary += f" --only-scope-step {only_scope_step}"
+    for selected_path in only_scope_step:
+        command_summary += f" --only-scope-step {selected_path}"
     if variant:
         command_summary += f" --variant {variant}"
     if artifact_namespace:
@@ -6955,6 +7030,7 @@ def run_process_command(
                     skip_steps=skip_set,
                     force=force,
                     only_scope_step=scope_selection,
+                    only_scope_steps=batch_scope_selections,
                     continue_on_error=continue_on_error,
                     continue_on_step_failure=continue_on_step_failure,
                     pool_dispatch_template=pool_dispatch_template,
@@ -7005,7 +7081,7 @@ def run_process_command(
         # Whole-process outputs may belong to unselected sibling steps.
         validation = (
             validate_process_outputs_detailed(spec, variables, process_dir, plan=plan)
-            if scope_selection is None
+            if not scope_selections
             else None
         )
         if validation is not None and validation.errors:

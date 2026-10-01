@@ -215,7 +215,8 @@ Useful dispatch selectors:
 
 - `--from <step>` starts at a step and lets downstream dependencies run
 - `--only <step>` runs only the named step
-- `--only-scope-step <path>` enters one nested step through its parent process
+- `--only-scope-step <path>` enters a nested step through its parent process; repeat it
+  for mapped items
 - `--skip <step>` marks a step skipped for this invocation
 - `--force` bypasses reuse checks throughout the run, including composite descendants
 - `--dry-run` prints the plan without launching work
@@ -233,9 +234,23 @@ Other items, including pending items, remain untouched.
 A selected composite reruns its child process; inspect that child and its downstream
 steps before invoking one that makes external requests or agent calls.
 
-The scoped invocation writes `selected_scope_step` to `process-status.yaml`; native
-status shows `SCOPED`, and completion checks do not certify the full run.
-An ordinary resume without the selector clears that marker and processes remaining work.
+Repeat `--only-scope-step` to select distinct item keys under the same root mapped
+composite, with the same descendant suffix for every item.
+For example, repeat `depth/ACME/fetch` and `depth/BETA/fetch` with `--only depth`. The
+runner validates the entire allowlist before dispatch, runs only those children under
+one root lease and one resource finalization, and uses `--max-concurrency` to bound
+their executable leaves.
+Each child retains its own canonical scope identity and remains deferred at the parent
+until an ordinary full resume validates the mapped output.
+A missing, duplicate, terminal, or differently shaped selection fails rather than
+widening the run.
+
+The scoped invocation writes `selected_scope_step` to `process-status.yaml`; a batch
+also writes the exact `selected_scope_steps` list and a nonempty batch marker in
+`selected_scope_step`. Native status shows `SCOPED`, and completion checks do not
+certify the full run.
+A successful unrestricted full evaluation clears the marker after processing remaining
+work; a failed or still-partial resume retains it.
 The selector cannot be combined with `--from`, `--force`, `--skip`, `--cloud`, or
 `--dry-run`. Its dry run is refused because a root-only preview cannot show the selected
 child plan.
