@@ -796,6 +796,22 @@ Whether it recognizes the id is not the test: ids it ships a definition for are
 rewritten too. Metaproc turns the flag on in the settings it writes for every Gemini
 step. A step’s own `native_settings` override Metaproc’s, so a step or adapter config
 transform must not turn it off.
+For Gemini installations that require root ownership for system settings, opt in to
+`--adapter-config native_settings_scope=workspace` on a run whose Gemini steps each set
+`working_directory` to their own run scope.
+The adapter writes the merged native settings to that directory’s
+`.gemini/settings.json`; the existing `--skip-trust` flag allows Gemini to load them.
+It preserves global authentication, hooks and instructions, and refuses a conflicting
+existing settings file or a symlink.
+The default scope remains `system`. Workspace settings remain after the invocation so
+retries use the same bytes.
+
+To serialize local agents while investigating shared Gemini project-registry startup
+contention, set `METAPROC_HOST_MAX_LOCAL_AGENTS=1` in the launcher environment.
+This bounds agent admission across participating child pools and profiles; it does not
+govern Gemini processes launched outside Metaproc or orchestrators without that
+environment. It changes concurrency, not the model, prompt, timeout or retry policy.
+
 To confirm which model actually served a profile:
 
 ```bash
