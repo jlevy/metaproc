@@ -53,6 +53,8 @@ from metaproc.runpool.status import RunPoolStatus, is_pool_alive, read_status
 
 log = logging.getLogger(__name__)
 
+_SELECTED_DESCENDANT_PARTIAL = "selected descendant completed; whole mapped output not evaluated"
+
 
 def _write_record_at(state_dir: Path, filename: str, data: dict[str, object]) -> Path:
     """Write a YAML record atomically to ``state_dir/filename``.
@@ -539,6 +541,11 @@ def _terminal_status_from_attempt(attempt: TaskAttemptRecord) -> StatusRecord:
         "completed_at": attempt.ended_at,
     }
     if attempt.disposition is AttemptDisposition.succeeded:
+        if _SELECTED_DESCENDANT_PARTIAL in attempt.anomalies:
+            # The child leaf succeeded, but the enclosing mapped item did not
+            # validate all of its outputs. Reconciliation must not promote it.
+            common.pop("completed_at")
+            return StatusRecord(state="deferred", **common)  # pyright: ignore[reportArgumentType]
         return StatusRecord(state="completed", **common)  # pyright: ignore[reportArgumentType]
     return StatusRecord(
         state="failed",
@@ -716,6 +723,38 @@ def mark_completed_at(
     )
     end_status_attempt_at(
         state_dir, current, disposition=AttemptDisposition.succeeded, anomalies=anomalies
+    )
+    write_status_at(state_dir, record)
+    return record
+
+
+def mark_deferred_at(
+    state_dir: Path,
+    *,
+    running_record: StatusRecord | None = None,
+) -> StatusRecord:
+    """Finish a selected child attempt without accepting its whole mapped item.
+
+    The selected descendant completed, but sibling outputs remain unevaluated.
+    Fan-in and ordinary resume must see the mapped item as nonterminal.
+    """
+    current = _read_or_use_at(state_dir, running_record)
+    record = StatusRecord(
+        run_id=current.run_id,
+        step_id=current.step_id,
+        item=current.item,
+        state="deferred",
+        attempt=current.attempt,
+        attempt_id=current.attempt_id,
+        generation=current.generation,
+        fence_epoch=current.fence_epoch,
+        started_at=current.started_at,
+    )
+    end_status_attempt_at(
+        state_dir,
+        current,
+        disposition=AttemptDisposition.succeeded,
+        anomalies=[_SELECTED_DESCENDANT_PARTIAL],
     )
     write_status_at(state_dir, record)
     return record

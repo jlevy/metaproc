@@ -24,6 +24,7 @@ from metaproc.trace.extractors.gemini_agent import (
     _is_gemini_log,
     _looks_like_gemini,
 )
+from metaproc.trace.ids import compute_span_id
 from metaproc.trace.runner import extract_trace
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "trace_agents"
@@ -794,3 +795,52 @@ def test_fixture_last_tool_is_list_directory(gemini_run_dir: Path) -> None:
     tool_calls = [s for s in spans if s.kind == "tool_call"]
     names = [s.attributes.get("tool.name") for s in tool_calls]
     assert "list_directory" in names
+
+
+def test_sequential_reused_tool_id_has_stable_distinct_trace_spans(tmp_path: Path) -> None:
+    path = tmp_path / ".logs/tasks/step/ITEM/session.jsonl"
+    path.parent.mkdir(parents=True)
+    records = []
+    for start, end in (("03.921", "04.243"), ("37.744", "38.338")):
+        records.extend(
+            [
+                {
+                    "type": "tool_use",
+                    "timestamp": f"2026-09-30T08:32:{start}Z",
+                    "tool_id": "repeat",
+                    "tool_name": "run_shell_command",
+                },
+                {
+                    "type": "tool_result",
+                    "timestamp": f"2026-09-30T08:32:{end}Z",
+                    "tool_id": "repeat",
+                    "status": "success",
+                },
+            ]
+        )
+    path.write_text("\n".join(json.dumps(record) for record in records), encoding="utf-8")
+    extractor = GeminiAgentExtractor()
+
+    def extract():
+        return [
+            s
+            for s in extractor._extract_one(path, trace_id="test", run_dir=tmp_path)
+            if s.kind == "tool_call"
+        ]
+
+    spans = extract()
+    assert len(spans) == 2
+    assert spans[0].span_id == compute_span_id(extractor.source, str(path), "repeat")
+    assert len({s.span_id for s in spans}) == 2
+    assert [s.span_id for s in spans] == [s.span_id for s in extract()]
+    path.write_text("\n".join(json.dumps(record) for record in records * 2), encoding="utf-8")
+    replayed = extract()
+    assert len(replayed) == 2
+    assert [s.span_id for s in replayed] == [s.span_id for s in spans]
+    conflicting_result = {**records[1], "timestamp": "2026-09-30T08:32:05.000Z"}
+    path.write_text(
+        "\n".join(json.dumps(record) for record in [*records, records[0], conflicting_result]),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="conflicting Gemini tool occurrence"):
+        extract()

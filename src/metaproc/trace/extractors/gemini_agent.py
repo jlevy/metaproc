@@ -181,7 +181,9 @@ class GeminiAgentExtractor:
             )
 
         # Per-tool spans: pair tool_use + tool_result by tool_id.
-        yield from self._tool_spans(
+        tool_occurrences: dict[str, dict[str, int]] = {}
+        seen_tool_spans: dict[str, TraceEvent] = {}
+        for span in self._tool_spans(
             events,
             trace_id=trace_id,
             parent_span_id=session_span_id or attempt_span_id,
@@ -189,7 +191,23 @@ class GeminiAgentExtractor:
             step_id=step_id,
             item_key=item_key,
             recovered_errors=status == "ok",
-        )
+        ):
+            # Sequential calls can reuse a producer ID. Preserve the first
+            # historical span ID and qualify later occurrences on each replay.
+            original_span_id = span.span_id
+            starts = tool_occurrences.setdefault(original_span_id, {})
+            occurrence = starts.setdefault(span.ts_start, len(starts) + 1)
+            if occurrence > 1:
+                span.span_id = compute_span_id(
+                    self.source, original_span_id, "occurrence", occurrence
+                )
+            previous = seen_tool_spans.get(span.span_id)
+            if previous is not None:
+                if previous != span:
+                    raise ValueError(f"conflicting Gemini tool occurrence: {span.span_id}")
+                continue
+            seen_tool_spans[span.span_id] = span
+            yield span
 
         # Internal spans (compaction).
         for idx, ev in enumerate(events):

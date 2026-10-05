@@ -74,8 +74,18 @@ def extract_resource_events(
     # Tool calls. Pair exactly once so terminal aggregates can contribute only
     # the positive residual beyond these canonical invocations.
     tool_spans = pair_tool_events(log_events)
+    # Producer IDs correlate call/result pairs but may be reused after a pair
+    # completes. Qualify repeats within this source stream; keep the first ID
+    # unchanged so extracted and already persisted events still deduplicate.
+    tool_occurrences: dict[tuple[str, str], dict[datetime | None, int]] = {}
     for tool_span in tool_spans:
-        out.append(_tool_call_event(tool_span, hierarchy, base_source))
+        key = (tool_span.adapter, tool_span.invocation_id)
+        starts = tool_occurrences.setdefault(key, {})
+        # Replayed evidence retains its occurrence. Different results for the
+        # same start still reach strict reconciliation with the same identity.
+        start = tool_span.started_at or tool_span.ended_at
+        occurrence = starts.setdefault(start, len(starts) + 1)
+        out.append(_tool_call_event(tool_span, hierarchy, base_source, occurrence=occurrence))
 
     # Throttling windows.
     for throttle_span in attribute_throttling(log_events):
@@ -373,7 +383,9 @@ def _int_or_none(value: object) -> int | None:
     return None
 
 
-def _tool_call_event(span: ToolSpan, hierarchy: HierarchyRef, source: SourceRef) -> ResourceEvent:
+def _tool_call_event(
+    span: ToolSpan, hierarchy: HierarchyRef, source: SourceRef, *, occurrence: int = 1
+) -> ResourceEvent:
     metrics = Metrics(
         tool_calls=1,
         tool_failures=1 if span.is_error else 0,
@@ -383,7 +395,7 @@ def _tool_call_event(span: ToolSpan, hierarchy: HierarchyRef, source: SourceRef)
     span_hierarchy = hierarchy.model_copy(update={"tool_name": span.tool_name})
     return ToolCallEvent(
         ts=span.ended_at or span.started_at or _UNKNOWN_EVIDENCE_TS,
-        span_id=_tool_span_id(span),
+        span_id=_tool_span_id(span, occurrence=occurrence),
         hierarchy=span_hierarchy,
         metrics=metrics,
         failure_kind=_tool_failure_kind(span),
@@ -533,8 +545,11 @@ def _provider_meter_event(
     )
 
 
-def _tool_span_id(span: ToolSpan) -> str:
-    return f"tool:{span.adapter}:{span.invocation_id}"
+def _tool_span_id(span: ToolSpan, *, occurrence: int = 1) -> str:
+    if occurrence == 1:
+        return f"tool:{span.adapter}:{span.invocation_id}"
+    # A separate prefix avoids collision with a producer ID containing a suffix.
+    return f"tool-occurrence:{occurrence}:{span.adapter}:{span.invocation_id}"
 
 
 def _throttle_span_id(span: ThrottleSpan) -> str:

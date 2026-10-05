@@ -152,6 +152,8 @@ def _normalize_status(status: dict) -> dict:
     normalized = dict(status)
     normalized.pop("started_at", None)
     normalized.pop("updated_at", None)
+    if normalized.get("stopped_at") is not None:
+        normalized["stopped_at"] = "NORMALIZED"
     if "pool_id" in normalized:
         normalized["pool_id"] = "pool-NORMALIZED"
     if "pid" in normalized:

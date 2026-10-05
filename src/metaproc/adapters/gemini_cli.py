@@ -20,7 +20,8 @@ from metaproc.adapters.cli_version import (
 )
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.config.model_catalog import resolve_model
-from metaproc.io import write_secret_text
+from metaproc.io import temp_output_dir, write_secret_text
+from metaproc.io.mkdir_lock import mkdir_lock
 from metaproc.settings import (
     GEMINI_DEFAULT_MODEL,
     GEMINI_DEFAULT_NATIVE_SETTINGS,
@@ -123,6 +124,7 @@ _GEMINI_ALLOWED_KEYS = frozenset(
         "max_budget_usd",
         "model",
         "native_settings",
+        "native_settings_scope",
         "output_format",
         "permission_mode",
         "sandbox",
@@ -148,6 +150,41 @@ def _materialize_temp_file(*, prefix: str, suffix: str, content: str) -> Path:
         if not path.exists():
             write_secret_text(path, content)
     return path
+
+
+def _materialize_workspace_settings(directory: Path, content: str) -> None:
+    """Publish native settings without overwriting operator-authored configuration.
+
+    Recent Gemini versions require system settings and every parent to be root-owned.
+    An explicitly selected, trusted workspace remains a supported user-owned scope.
+    """
+    settings_dir = directory / ".gemini"
+    settings_path = settings_dir / "settings.json"
+    if settings_dir.is_symlink():
+        raise ValueError("Gemini workspace settings directory must not be a symlink")
+    settings_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with mkdir_lock(settings_dir / ".metaproc-settings.lock", stale_after=None):
+        if settings_path.is_symlink():
+            raise ValueError("Gemini workspace settings file must not be a symlink")
+        if settings_path.exists():
+            if json.loads(settings_path.read_text(encoding="utf-8")) != json.loads(content):
+                raise ValueError(
+                    f"Refusing to replace existing Gemini workspace settings: {settings_path}"
+                )
+            return
+        with temp_output_dir(
+            dir=settings_dir, prefix=".metaproc-settings-", always_clean=True
+        ) as stage:
+            staged_settings = stage / "settings.json"
+            write_secret_text(staged_settings, content)
+            try:
+                # A non-Metaproc writer does not take our lock. Linking publishes
+                # complete owner-only bytes without replacing a file it just created.
+                settings_path.hardlink_to(staged_settings)
+            except FileExistsError as exc:
+                raise ValueError(
+                    f"Refusing to replace existing Gemini workspace settings: {settings_path}"
+                ) from exc
 
 
 def _deep_merge_settings(
@@ -341,6 +378,21 @@ class GeminiCliAdapter:
                         reason=f"unknown gemini-cli model {value!r}",
                     )
                 )
+        scope = merged_config.get("native_settings_scope", "system")
+        if scope not in ("system", "workspace"):
+            rejections.append(
+                ConfigRejection(
+                    key="native_settings_scope",
+                    reason="native_settings_scope must be 'system' or 'workspace'",
+                )
+            )
+        if scope == "workspace" and not merged_config.get("working_directory"):
+            rejections.append(
+                ConfigRejection(
+                    key="native_settings_scope",
+                    reason="native_settings_scope 'workspace' requires working_directory",
+                )
+            )
         return rejections
 
     def prepare_env(
@@ -378,13 +430,22 @@ class GeminiCliAdapter:
             )
         if native_settings:
             content = json.dumps(native_settings, sort_keys=True, separators=(",", ":"))
-            env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = str(
-                _materialize_temp_file(
-                    prefix="settings-",
-                    suffix=".json",
-                    content=content,
+            scope = merged_config.get("native_settings_scope", "system")
+            if scope == "workspace":
+                directory = self.working_directory(merged_config)
+                if directory is None:
+                    raise ValueError("native_settings_scope 'workspace' requires working_directory")
+                _materialize_workspace_settings(directory, content)
+            elif scope == "system":
+                env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = str(
+                    _materialize_temp_file(
+                        prefix="settings-",
+                        suffix=".json",
+                        content=content,
+                    )
                 )
-            )
+            else:
+                raise ValueError("native_settings_scope must be 'system' or 'workspace'")
         return env
 
     def working_directory(self, merged_config: dict[str, object]) -> Path | None:

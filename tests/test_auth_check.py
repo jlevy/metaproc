@@ -634,7 +634,14 @@ class TestLiveCheckUsesTheProfileConfig:
         def run(cmd: list[str], **kwargs: object) -> MagicMock:
             env = kwargs["env"]
             assert isinstance(env, dict)
-            settings = json.loads(Path(env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text("utf-8"))
+            system_path = env.get("GEMINI_CLI_SYSTEM_SETTINGS_PATH")
+            if system_path:
+                settings_path = Path(system_path)
+            else:
+                cwd = kwargs.get("cwd")
+                assert isinstance(cwd, Path), "workspace settings require the profile cwd"
+                settings_path = cwd / ".gemini/settings.json"
+            settings = json.loads(settings_path.read_text("utf-8"))
             dynamic = settings.get("experimental", {}).get("dynamicModelConfiguration") is True
             model = cmd[cmd.index("-m") + 1]
             output_format = cmd[cmd.index("--output-format") + 1]
@@ -723,6 +730,27 @@ class TestLiveCheckUsesTheProfileConfig:
             "'gemini-3.6-flash') — the CLI answered with a different model; billed: "
             "gemini-3.5-flash (10 tokens)"
         ) in result.output
+
+    def test_workspace_native_settings_reach_the_probe(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "workspace"
+        profile_file = self._write_profile(
+            tmp_path,
+            "      native_settings_scope: workspace\n"
+            f"      working_directory: {json.dumps(str(workspace))}\n"
+            "      native_settings:\n"
+            "        experimental:\n"
+            "          dynamicModelConfiguration: false\n",
+        )
+        calls: list[dict[str, object]] = []
+
+        result = self._invoke(profile_file, calls)
+
+        assert result.exception is None or isinstance(result.exception, SystemExit), (
+            result.exception
+        )
+        assert calls == [{"dynamic": False, "output_format": "stream-json"}]
+        assert result.exit_code == 1, result.output
+        assert "no served model matches expected" in result.output
 
     def test_a_profile_without_the_override_keeps_metaproc_settings(self, tmp_path: Path) -> None:
         """The control: the same stub serves the request when the flag stays on."""

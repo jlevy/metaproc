@@ -160,6 +160,18 @@ The previous waiver, `GHSA-g6cj-pr64-35w5` / `CVE-2026-69247` (high, CVSS 8.2) i
 `cryptography` `pkcs7` `EnvelopedData` decryption path, was removed for the 0.3.0
 release: its fix, `cryptography` 50.0.0, cleared the cool-off and is now locked.
 
+The September 2026 `urllib3` security release is locked at `2.8.0`, replacing `2.7.0`
+without an advisory waiver.
+It fixes `GHSA-8988-9cw3-xx77`, `GHSA-vxq7-64xx-v4gw`, and `GHSA-gh4c-6fx4-qh6g`. The
+[PyPI release](https://pypi.org/project/urllib3/2.8.0/) uploaded its wheel and source
+distribution on September 15, more than 14 days before adoption; both carry
+trusted-publishing attestations from `urllib3/urllib3`. The
+[upstream release](https://github.com/urllib3/urllib3/releases/tag/2.8.0) has a signed,
+immutable tag and documents the HTTPS proxy TLS behavior correction.
+The package keeps the MIT license, Python `>=3.10` floor, and dependency metadata of
+`2.7.0`; the lock change replaces only its version and two artifact records, with no
+transitive growth.
+
 Re-review a waiver whenever the closure changes such that the affected code could become
 reachable.
 

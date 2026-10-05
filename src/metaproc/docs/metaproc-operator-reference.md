@@ -215,6 +215,10 @@ Useful dispatch selectors:
 
 - `--from <step>` starts at a step and lets downstream dependencies run
 - `--only <step>` runs only the named step
+- `--only-scope-step <path>` enters a nested step through its parent process; repeat it
+  for mapped items
+- `--scope-through-target` with a nested selector runs the target and its prerequisite
+  closure, stopping before dependent steps
 - `--skip <step>` marks a step skipped for this invocation
 - `--force` bypasses reuse checks throughout the run, including composite descendants
 - `--dry-run` prints the plan without launching work
@@ -222,8 +226,55 @@ Useful dispatch selectors:
 `--from` and `--only` narrow the walk; they do not re-run a step that is already
 complete. Add `--force` to re-run it.
 
-`--skip`, `--from`, and `--only` currently name root-process steps.
-They are not matched against same-named steps inside a composite child.
+`--skip`, `--from`, and `--only` name root-process steps.
+To retry one nested step, pair `--only <root-step>` with `--only-scope-step` and its
+exact scope path, for example `--only depth --only-scope-step depth/ACME/fetch`. The
+path includes each composite step and mapped item key.
+The runner enters only that item, verifies that omitted ancestors completed, and reruns
+the selected step and its descendants.
+Other items, including pending items, remain untouched.
+A selected composite reruns its child process; inspect that child and its downstream
+steps before invoking one that makes external requests or agent calls.
+
+Repeat `--only-scope-step` to select distinct item keys under the same root mapped
+composite, with the same descendant suffix for every item.
+For example, repeat `depth/ACME/fetch` and `depth/BETA/fetch` with `--only depth`. The
+runner validates the entire allowlist before dispatch, runs only those children under
+one root lease and one resource finalization, and uses `--max-concurrency` to bound
+their executable leaves.
+Each child retains its own canonical scope identity.
+A selector that stops inside a child leaves the mapped parent item deferred.
+A selector naming the mapped item itself, such as `depth/ACME`, runs its whole child and
+validates the mapped output; if every required output passes, that item completes while
+the root remains scoped.
+A missing, duplicate, terminal, or differently shaped selection fails rather than
+widening the run.
+
+To prepare a bounded stage without starting its downstream fetch, add
+`--scope-through-target` to the same selector.
+At the target’s immediate containing scope, Metaproc runs the target and its transitive
+prerequisites in dependency order; it omits unrelated siblings and downstream steps.
+A selected composite runs its whole child process using normal completion reuse, so a
+second invocation preserves a completed agent result.
+For example,
+`--only depth --only-scope-step depth/ACME/query-plan --scope-through-target` can
+prepare a query plan and stop before `fetch`. This mode also accepts a repeated
+mapped-item allowlist.
+Prerequisites in earlier containing scopes must already be complete; a deeper leaf
+selection does not implicitly initialize those outer scopes.
+Verify the resolved target and its child plan before use, especially when they contain
+paid steps.
+
+The scoped invocation writes `selected_scope_step` to `process-status.yaml`; a batch
+also writes the exact `selected_scope_steps` list and a nonempty batch marker in
+`selected_scope_step`. It records `selected_scope_mode` as `downstream` or `through`;
+that mode remains with the marker through partial resumes.
+Native status shows `SCOPED`, and completion checks do not certify the full run.
+A successful unrestricted full evaluation clears the marker after processing remaining
+work; a failed or still-partial resume retains it.
+The selector cannot be combined with `--from`, `--force`, `--skip`, `--cloud`, or
+`--dry-run`. Its dry run is refused because a root-only preview cannot show the selected
+child plan.
 
 A local run serves the execution profiles its scalar agent steps pin from one run-owned
 pool, as long as those profiles’ `max_concurrency_hint`, `estimated_process_rss_bytes`,
@@ -745,6 +796,22 @@ Whether it recognizes the id is not the test: ids it ships a definition for are
 rewritten too. Metaproc turns the flag on in the settings it writes for every Gemini
 step. A step’s own `native_settings` override Metaproc’s, so a step or adapter config
 transform must not turn it off.
+For Gemini installations that require root ownership for system settings, opt in to
+`--adapter-config native_settings_scope=workspace` on a run whose Gemini steps each set
+`working_directory` to their own run scope.
+The adapter writes the merged native settings to that directory’s
+`.gemini/settings.json`; the existing `--skip-trust` flag allows Gemini to load them.
+It preserves global authentication, hooks and instructions, and refuses a conflicting
+existing settings file or a symlink.
+The default scope remains `system`. Workspace settings remain after the invocation so
+retries use the same bytes.
+
+To serialize local agents while investigating shared Gemini project-registry startup
+contention, set `METAPROC_HOST_MAX_LOCAL_AGENTS=1` in the launcher environment.
+This bounds agent admission across participating child pools and profiles; it does not
+govern Gemini processes launched outside Metaproc or orchestrators without that
+environment. It changes concurrency, not the model, prompt, timeout or retry policy.
+
 To confirm which model actually served a profile:
 
 ```bash

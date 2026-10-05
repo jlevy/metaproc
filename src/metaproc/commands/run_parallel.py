@@ -1613,6 +1613,8 @@ async def _run_agent_pool(  # noqa: PLR0913
     pool_dispatch: Any | None = None,
     preflight_quota_guard: str = "warn",
     defer_success_transition: bool = False,
+    shared_pool: RunPool | None = None,
+    step_concurrency: int | None = None,
 ) -> list[tuple[str, int]]:
     """Run agent-mode items through RunPool with adaptive concurrency.
 
@@ -1641,7 +1643,7 @@ async def _run_agent_pool(  # noqa: PLR0913
         POOL_STALL_TIMEOUT_MINUTES * 60 if POOL_STALL_TIMEOUT_MINUTES is not None else None
     )
 
-    pool = RunPool(pool_config, backend=backend)
+    pool = shared_pool or RunPool(pool_config, backend=backend)
     all_results: list[tuple[str, int]] = []
     worker_id = MetaprocEnv.METAPROC_WORKER_ID.read_str(default="")
 
@@ -2294,8 +2296,14 @@ async def _run_agent_pool(  # noqa: PLR0913
         # but waiting on the semaphore.  We want to fill up to current_concurrency
         # without over-queuing on the semaphore (the orchestrator IS the queue).
         capacity = max(
-            0, snapshot.current_concurrency - snapshot.active_count - snapshot.pending_count
+            0,
+            snapshot.current_concurrency
+            - snapshot.active_count
+            - getattr(snapshot, "active_code_count", 0)
+            - snapshot.pending_count,
         )
+        if step_concurrency is not None:
+            capacity = min(capacity, max(0, step_concurrency - len(active)))
 
         while capacity > 0 and (retry_heap or not_started):
             # Priority 1: retries whose backoff has elapsed.
@@ -2390,12 +2398,23 @@ async def _run_agent_pool(  # noqa: PLR0913
                     # cancellation remain responsive.
                     await _process_completion_off_loop(future, shared)
             elif retry_heap:
-                # No active futures, but retries are waiting for backoff.
-                sleep_time = max(0, retry_heap[0][0] - time.monotonic())
-                if sleep_time > 0:
-                    await asyncio.sleep(sleep_time)
+                # A due retry can still be waiting for shared capacity held by
+                # sibling steps. Always yield so those holders, the pressure
+                # monitor, and cancellation can make progress.
+                sleep_time = max(_POOL_FILL_POLL_INTERVAL_S, retry_heap[0][0] - time.monotonic())
+                await asyncio.sleep(sleep_time)
+            elif not_started:
+                # A shared controller can be full of other steps or code leaves.
+                # Yield until their permits drain or adaptive capacity increases.
+                await asyncio.sleep(_POOL_FILL_POLL_INTERVAL_S)
     finally:
-        await pool.shutdown()
+        if shared_pool is None:
+            await pool.shutdown()
+        else:
+            # Own only this scheduler's submissions; cancelling one mapped step
+            # must not terminate sibling code or agent work sharing the run pool.
+            for future in tuple(active):
+                await pool.cancel_submission(future)
         # Shutdown normally resolves or cancels every submitted future. Consume those
         # terminal futures here when the outer scheduler itself was cancelled, so item
         # state and credential teardown do not depend on returning to the main loop.
@@ -2407,6 +2426,12 @@ async def _run_agent_pool(  # noqa: PLR0913
                 await _process_completion_off_loop(future, shared)
             except Exception:
                 log.exception("Could not finalize item after pool shutdown")
+        # Finalizing cancelled submissions can itself schedule retries. Retire
+        # every remaining entry owned by this scheduler after that cleanup;
+        # siblings retain their own queued retry counts in the shared pool.
+        while retry_heap:
+            _, _, shared, _ = heapq.heappop(retry_heap)
+            pool.record_retry_consumed(f"{each}={shared['item']}")
 
     return all_results
 
