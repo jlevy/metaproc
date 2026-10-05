@@ -3,17 +3,21 @@ type: is
 id: is-01m46y3ptre83dcd9vyjcf7tcq
 title: "Review outstanding PRs #99 and #100 for merge readiness"
 kind: task
-status: in_progress
+status: closed
 priority: 1
-version: 3
+version: 4
 delegate: codex@spud10.local
 labels: []
 dependencies: []
 hold: null
 hold_until: null
 created_at: 2026-10-05T21:04:27.990Z
-updated_at: 2026-10-05T21:12:30.856Z
+updated_at: 2026-10-05T21:17:23.359Z
 started_at: 2026-10-05T21:04:43.417Z
+closed_at: 2026-10-05T21:17:23.348Z
+close_reason: "Both outstanding PRs reviewed at unchanged heads with no remaining source findings; prior findings verified fixed. Required local gates and all five exact-head CI checks pass on both after limited runner-acquisition retries. Both GitHub merge states CLEAN/MERGEABLE. Published review/disposition reports; drafts preserved and no merge performed. #100 depends on #99 in registered stack 101."
+resolution: null
+duplicate_of: null
 ---
 
 ## Notes
