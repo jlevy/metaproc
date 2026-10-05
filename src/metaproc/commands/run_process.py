@@ -4909,6 +4909,20 @@ async def _execute_fan_out_step(
             item_contexts=item_contexts,
         )
 
+    # A shared controller owns the run-wide ceiling, but the former per-step
+    # pool also supplied a batch-size fallback and an adapter limit. Preserve
+    # those local bounds without freezing an explicit run cap that operators
+    # can raise through live scaling.
+    step_limits = [
+        limit
+        for limit in (
+            target.fan_out.max_concurrency,
+            effective_batch_size if max_concurrency is None else None,
+            adapter_max_int,
+        )
+        if limit is not None
+    ]
+
     all_results = await _run_agent_pool(
         spec=spec,
         step_def=step_def,
@@ -4943,7 +4957,7 @@ async def _execute_fan_out_step(
             if execution_context is not None
             else None
         ),
-        step_concurrency=target.fan_out.max_concurrency,
+        step_concurrency=min(step_limits, default=None),
     )
 
     boundary_error: str | None = None

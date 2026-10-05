@@ -581,15 +581,21 @@ def test_due_retry_yields_when_sibling_holds_shared_capacity(
             assert launches == 1
             assert not holder.done()
             if cancel:
+                # This scheduler owns only its retry heap. Preserve another
+                # scheduler's queued retry while retiring the cancelled one.
+                pool.record_retry_scheduled("sibling", 2, 60)
                 task.cancel()
                 with pytest.raises(asyncio.CancelledError):
                     await task
                 assert not holder.done()
                 assert not pool.shutting_down
+                assert pool.snapshot.pending_retries == 1
+                pool.record_retry_consumed("sibling")
             else:
                 release_code.set()
                 assert await asyncio.wait_for(task, timeout=2) == [("AFL", 0)]
                 assert launches == 2
+            assert pool.snapshot.pending_retries == 0
         finally:
             monkeypatch.setattr(pool, "_build_status", original_status)
             release_code.set()

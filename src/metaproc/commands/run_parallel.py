@@ -2426,6 +2426,12 @@ async def _run_agent_pool(  # noqa: PLR0913
                 await _process_completion_off_loop(future, shared)
             except Exception:
                 log.exception("Could not finalize item after pool shutdown")
+        # Finalizing cancelled submissions can itself schedule retries. Retire
+        # every remaining entry owned by this scheduler after that cleanup;
+        # siblings retain their own queued retry counts in the shared pool.
+        while retry_heap:
+            _, _, shared, _ = heapq.heappop(retry_heap)
+            pool.record_retry_consumed(f"{each}={shared['item']}")
 
     return all_results
 

@@ -22,7 +22,7 @@ import textwrap
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -30,6 +30,7 @@ from typer.testing import CliRunner, Result
 
 from metaproc.adapters.registry import ADAPTER_REGISTRY
 from metaproc.cli import app
+from metaproc.commands import run_parallel
 from metaproc.commands.run_process import run_process_command
 from metaproc.dispatch.auth_pool_flags import AuthPoolFlags
 from metaproc.dispatch.pool_dispatch import PoolDispatchConfig
@@ -5780,6 +5781,102 @@ class TestRunOwnedPoolExecutionProfiles:
                 *options,
             ],
         )
+
+    @pytest.mark.parametrize(
+        ("run_limit", "step_limit", "profile_limit", "expected_per_step", "expected_total"),
+        [(None, None, None, 1, 2), (3, None, None, 3, 3), (3, 2, None, 2, 3), (3, None, 2, 2, 2)],
+    )
+    def test_mapped_agent_shared_pool_preserves_step_admission_limits(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        run_limit: int | None,
+        step_limit: int | None,
+        profile_limit: int | None,
+        expected_per_step: int,
+        expected_total: int,
+    ) -> None:
+        repo_dir, process_dir = self._repo(tmp_path)
+        self._register_adapter(monkeypatch)
+        resources: dict[str, object] = (
+            {"max_concurrency_hint": profile_limit} if profile_limit is not None else {}
+        )
+        self._write_repo_profiles(repo_dir, {"fixture": resources})
+        (process_dir / "roster.md").write_text(
+            "---\nprogress:\n  items:\n    - item: alfa\n    - item: brvo\n    - item: charlie\n---\n",
+            encoding="utf-8",
+        )
+        steps = []
+        for step_id in ("first", "second"):
+            steps.append(
+                {
+                    "id": step_id,
+                    "mode": "agent",
+                    "execution_profile": "fixture",
+                    "prompt_prefix": f"OUTPUT_FILE={{{{run.dir}}}}/{step_id}/{{{{item}}}}.txt",
+                    "outputs": {
+                        "result": {
+                            "path": f"{{{{run.dir}}}}/{step_id}/{{{{item}}}}.txt",
+                            "kind": "file",
+                        }
+                    },
+                    "for_each": {
+                        "over": "deps.roster",
+                        "bind": "item",
+                        "bind_fields": ["item"],
+                        "key": "{{item}}",
+                        "batch_size": 1,
+                        **({"max_concurrency": step_limit} if step_limit is not None else {}),
+                    },
+                }
+            )
+        spec = process_dir / "mapped.process.md"
+        spec.write_text(
+            "---\n"
+            + json.dumps(
+                {
+                    "process": {
+                        "name": "mapped-admission",
+                        "deps": {"roster": {"path": "./roster.md", "as": "path"}},
+                        "steps": steps,
+                    }
+                }
+            )
+            + "\n---\n",
+            encoding="utf-8",
+        )
+        active = {"first": 0, "second": 0}
+        peaks = dict(active)
+        total_peak = 0
+        original_launch = RunPool._launch_and_monitor
+
+        async def measured_launch(pool: RunPool, config: Any, **kwargs: Any) -> Any:
+            nonlocal total_peak
+            step_id = config.metadata["shared"]["state_dir"].parent.name
+            active[step_id] += 1
+            peaks[step_id] = max(peaks[step_id], active[step_id])
+            total_peak = max(total_peak, sum(active.values()))
+            try:
+                # Keep admitted provider-free processes overlapping long enough
+                # for both sibling schedulers to fill their available slots.
+                await asyncio.sleep(0.05)
+                return await original_launch(pool, config, **kwargs)
+            finally:
+                active[step_id] -= 1
+
+        async def no_host_slot(_pool: RunPool, _config: Any) -> None:
+            return None
+
+        monkeypatch.setattr(RunPool, "_launch_and_monitor", measured_launch)
+        monkeypatch.setattr(RunPool, "_acquire_host_slot", no_host_slot)
+        monkeypatch.setattr(run_parallel, "_POOL_FILL_POLL_INTERVAL_S", 0.01)
+        options = ["--initial-concurrency", "3"]
+        if run_limit is not None:
+            options.extend(["--max-concurrency", str(run_limit)])
+        result = self._invoke(spec, tmp_path / "runs" / "mapped-limits", *options)
+        assert result.exit_code == 0, result.output
+        assert peaks == {"first": expected_per_step, "second": expected_per_step}
+        assert total_peak == expected_total
 
     def test_mapped_composite_leaves_on_two_equal_profiles_share_one_pool(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
