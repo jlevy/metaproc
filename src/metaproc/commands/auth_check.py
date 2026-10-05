@@ -467,6 +467,7 @@ def _run_live_check(
                 text=True,
                 timeout=timeout_s,
                 env=env,
+                cwd=adapter.working_directory(merged_config),
             )
             elapsed = time.monotonic() - t0
             # pi-cli reports terminal errors as JSONL events with

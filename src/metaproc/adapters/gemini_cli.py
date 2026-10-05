@@ -20,7 +20,7 @@ from metaproc.adapters.cli_version import (
 )
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.config.model_catalog import resolve_model
-from metaproc.io import write_secret_text
+from metaproc.io import temp_output_dir, write_secret_text
 from metaproc.io.mkdir_lock import mkdir_lock
 from metaproc.settings import (
     GEMINI_DEFAULT_MODEL,
@@ -172,7 +172,19 @@ def _materialize_workspace_settings(directory: Path, content: str) -> None:
                     f"Refusing to replace existing Gemini workspace settings: {settings_path}"
                 )
             return
-        write_secret_text(settings_path, content)
+        with temp_output_dir(
+            dir=settings_dir, prefix=".metaproc-settings-", always_clean=True
+        ) as stage:
+            staged_settings = stage / "settings.json"
+            write_secret_text(staged_settings, content)
+            try:
+                # A non-Metaproc writer does not take our lock. Linking publishes
+                # complete owner-only bytes without replacing a file it just created.
+                settings_path.hardlink_to(staged_settings)
+            except FileExistsError as exc:
+                raise ValueError(
+                    f"Refusing to replace existing Gemini workspace settings: {settings_path}"
+                ) from exc
 
 
 def _deep_merge_settings(

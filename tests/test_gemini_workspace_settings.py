@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from metaproc.adapters.gemini_cli import GeminiCliAdapter
+from metaproc.io import write_secret_text
 
 
 def test_workspace_settings_preserve_environment_and_native_overrides(
@@ -81,3 +82,22 @@ def test_workspace_settings_do_not_follow_directory_symlink(tmp_path: Path) -> N
             {}, {"native_settings_scope": "workspace", "working_directory": str(workspace)}
         )
     assert not (target / "settings.json").exists()
+
+
+def test_workspace_settings_refuse_file_created_during_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings_path = tmp_path / ".gemini/settings.json"
+    original = '{"operatorAuthored":true}\n'
+
+    def write_with_collision(path: Path, content: str) -> None:
+        settings_path.write_text(original, encoding="utf-8")
+        write_secret_text(path, content)
+
+    monkeypatch.setattr("metaproc.adapters.gemini_cli.write_secret_text", write_with_collision)
+    with pytest.raises(ValueError, match="existing Gemini workspace settings"):
+        GeminiCliAdapter().prepare_env(
+            {}, {"native_settings_scope": "workspace", "working_directory": str(tmp_path)}
+        )
+    assert settings_path.read_text(encoding="utf-8") == original
+    assert sorted(path.name for path in settings_path.parent.iterdir()) == ["settings.json"]
