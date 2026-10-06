@@ -5783,8 +5783,21 @@ class TestRunOwnedPoolExecutionProfiles:
         )
 
     @pytest.mark.parametrize(
-        ("run_limit", "step_limit", "profile_limit", "expected_per_step", "expected_total"),
-        [(None, None, None, 1, 2), (3, None, None, 3, 3), (3, 2, None, 2, 3), (3, None, 2, 2, 2)],
+        (
+            "run_limit",
+            "step_limit",
+            "profile_limit",
+            "expected_per_step",
+            "expected_total",
+            "free_disk_gb",
+        ),
+        [
+            (None, None, None, 1, 2, 50),
+            (3, None, None, 3, 3, 50),
+            (3, 2, None, 2, 3, 50),
+            (3, None, 2, 2, 2, 50),
+            pytest.param(None, None, None, 0, 0, 2, id="below-disk-floor"),
+        ],
     )
     def test_mapped_agent_shared_pool_preserves_step_admission_limits(
         self,
@@ -5795,7 +5808,19 @@ class TestRunOwnedPoolExecutionProfiles:
         profile_limit: int | None,
         expected_per_step: int,
         expected_total: int,
+        free_disk_gb: int,
     ) -> None:
+        # Exercise the real preflight with deterministic disk samples, independent
+        # of the test host. The low-space case must refuse before any launch.
+        monkeypatch.delenv("METAPROC_PREFLIGHT_MIN_DISK_GB", raising=False)
+        monkeypatch.setattr(
+            "metaproc.engine.preflight.shutil.disk_usage",
+            lambda _path: MagicMock(
+                total=100 * 1024**3,
+                used=(100 - free_disk_gb) * 1024**3,
+                free=free_disk_gb * 1024**3,
+            ),
+        )
         repo_dir, process_dir = self._repo(tmp_path)
         self._register_adapter(monkeypatch)
         resources: dict[str, object] = (
@@ -5874,6 +5899,12 @@ class TestRunOwnedPoolExecutionProfiles:
         if run_limit is not None:
             options.extend(["--max-concurrency", str(run_limit)])
         result = self._invoke(spec, tmp_path / "runs" / "mapped-limits", *options)
+        if expected_total == 0:
+            assert result.exit_code != 0, result.output
+            assert "Disk: 2.0 GB free — below 5.0 GB minimum" in result.output
+            assert peaks == {"first": 0, "second": 0}
+            assert total_peak == 0
+            return
         assert result.exit_code == 0, result.output
         assert peaks == {"first": expected_per_step, "second": expected_per_step}
         assert total_peak == expected_total

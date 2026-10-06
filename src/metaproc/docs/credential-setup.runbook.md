@@ -344,6 +344,53 @@ laptop already set up for Batch dispatch — see
 [docs/arch/arch-testing.md](arch-testing.md) and
 [process/self-test/smoke-adapter-gemini.process.md](https://github.com/jlevy/metaproc/blob/main/process/self-test/smoke-adapter-gemini.process.md).
 
+#### Isolated Native Settings
+
+Use `native_settings_scope: user` when concurrent steps share a working directory but
+need different Gemini settings.
+Recent Gemini releases require system settings files and their parent directories to be
+root-owned; a user-owned system settings file can be ignored.
+An isolated user home supplies native settings without changing the task’s working
+directory or relative artifact paths.
+
+The adapter requires an explicit `native_settings_home_template`, containing
+`.gemini/settings.json` as a JSON object.
+Prepare this small template with the operator instructions, authentication
+configuration, policies, hooks and their dependencies, skills, and other assets the
+workflow requires. It must contain only regular files and directories; symlinks and
+special files are rejected.
+Do not include historical session state or caches.
+The adapter does not copy the ambient operator home or choose an authentication
+fallback.
+
+```yaml
+config:
+  native_settings_scope: user
+  native_settings_home_template: /path/to/prepared-home
+```
+
+Each launch gets a separate private copy.
+Resolved `native_settings` are deep-merged over the template settings, preserving
+unrelated template keys.
+The adapter sets `GEMINI_CLI_HOME` for that child while retaining `HOME`, the working
+directory, provider environment, and any inherited `GEMINI_CLI_SYSTEM_SETTINGS_PATH`.
+Gemini’s existing workspace and system precedence still applies; inspect effective
+settings before relying on model pins or limits.
+This option does not bypass administrator policy.
+
+Private directories are owner-only; copied files are owner-readable and writable, with
+the owner’s executable bit preserved for scripts.
+Homes live in the adapter’s temporary directory until its process exits.
+Use an appropriate `TMPDIR`, and retain required session evidence before cleanup.
+This scope requires POSIX no-follow directory descriptors and is rejected on platforms
+without them.
+
+For composite processes, put these scalar settings in an execution profile supplied to
+the run. Profile selection and profile files propagate to child scopes; a root
+`--adapter-config` override does not.
+Verify explicit child profile pins and per-step overrides in the resolved plans.
+Keep each step’s own `native_settings` tool definitions.
+
 ## GCP Cloud Infrastructure
 
 These are the current GCP resources used by metaproc cloud execution.
