@@ -67,8 +67,8 @@ def test_workspace_settings_do_not_follow_settings_symlink(tmp_path: Path) -> No
 
 
 def test_workspace_settings_reject_unknown_scope() -> None:
-    rejections = GeminiCliAdapter().validate_config({"native_settings_scope": "user"})
-    assert any("must be 'system' or 'workspace'" in row.reason for row in rejections)
+    rejections = GeminiCliAdapter().validate_config({"native_settings_scope": "unknown"})
+    assert any("must be 'system', 'workspace', or 'user'" in row.reason for row in rejections)
 
 
 def test_workspace_settings_do_not_follow_directory_symlink(tmp_path: Path) -> None:
