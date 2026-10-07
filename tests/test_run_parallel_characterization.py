@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -551,6 +552,137 @@ class TestPoolSubmitAndShutdown:
     and pool.shutdown() IS in a finally block (line 1145-1146). This test
     pins that behavior.
     """
+
+    @pytest.mark.parametrize(
+        ("errors", "max_retries", "expected_attempts", "expected_exit", "force_abort"),
+        [
+            (["quota"] * 3, 0, [1], 1, False),
+            (["quota"] * 3, 1, [1, 2], 1, False),
+            (["quota"], 1, [1, 2], 0, False),
+            (["quota", "timeout", "quota"], 2, [1, 2, 3], 1, False),
+            (["pool"], 0, [1, 1], 0, False),
+            (["quota"], 3, [1], 1, True),
+        ],
+    )
+    def test_launched_quota_failures_consume_retry_budget(
+        self,
+        tmp_path: Path,
+        errors: list[str],
+        max_retries: int,
+        expected_attempts: list[int],
+        expected_exit: int,
+        force_abort: bool,
+    ) -> None:
+        """A reset-clock failure cannot relaunch indefinitely at attempt one."""
+
+        async def _run() -> None:
+            attempts: list[int] = []
+            scheduled: list[int] = []
+            state_dir = tmp_path / "state" / "AAPL"
+
+            def _prepare(*, shared: dict[str, Any], **_kwargs: Any) -> MagicMock:
+                if len(attempts) < len(errors) and errors[len(attempts)] == "pool":
+                    # An unavailable slot never executes the launch preparer.
+                    return MagicMock()
+                shared["running_record"] = mark_running_at(
+                    state_dir,
+                    run_id=str(_kwargs["run_id"]),
+                    step_id="predict",
+                    item={"ticker": "AAPL"},
+                    item_key="AAPL",
+                    attempt=shared["attempt_number"],
+                )
+                return MagicMock()
+
+            class FakePool:
+                _status_path = None
+                snapshot = SimpleNamespace(current_concurrency=1, active_count=0, pending_count=0)
+
+                def submit(self, config: Any) -> asyncio.Future[Any]:
+                    attempts.append(config.metadata["shared"]["attempt_number"])
+                    future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+                    # Finite transport script ends the old loop rather than hang.
+                    error = errors[len(attempts) - 1] if len(attempts) <= len(errors) else None
+                    if error == "pool":
+                        future.set_exception(RuntimeError("no eligible pool label"))
+                    else:
+                        future.set_result(
+                            SimpleNamespace(
+                                exit_code=1 if error else 0,
+                                kill_reason="out of extra usage · resets 3:10am"
+                                if error == "quota"
+                                else error,
+                                elapsed_s=0.01,
+                            )
+                        )
+                    return future
+
+                async def shutdown(self) -> None:
+                    pass
+
+                def record_failure_class(self, *_args: Any, **_kwargs: Any) -> None:
+                    pass
+
+                def record_retry_scheduled(self, _label: str, attempt: int, _delay: float) -> None:
+                    scheduled.append(attempt)
+
+                def record_retry_consumed(self, *_args: Any, **_kwargs: Any) -> None:
+                    pass
+
+            with (
+                patch("metaproc.commands.run_parallel.RunPool", return_value=FakePool()),
+                patch("metaproc.commands.run_parallel._build_prepare_launch", side_effect=_prepare),
+                patch("metaproc.commands.run_parallel.compute_item_dir", return_value=None),
+                patch(
+                    "metaproc.commands.run_parallel.compute_task_state_dir",
+                    return_value=state_dir,
+                ),
+                patch("metaproc.commands.run_parallel._teardown_pool_slot", return_value=None),
+                patch("metaproc.commands.run_parallel.auth_forces_abort", return_value=force_abort),
+                patch("metaproc.commands.run_parallel._compute_pool_cooling_delay", return_value=0),
+                patch(
+                    "metaproc.commands.run_parallel.parse_quota_reset_at",
+                    return_value=datetime.now(UTC) - timedelta(hours=1),
+                ),
+            ):
+                results = await _run_agent_pool(
+                    spec=_make_spec(),
+                    step_def=_make_step_def(),
+                    step="predict",
+                    each="ticker",
+                    variables={"RUN_ID": "test/run", "VARIANT": "v1"},
+                    item_contexts=[{"ticker": "AAPL"}],
+                    adapter_type="claude-code-cli",
+                    merged_config={"model": "claude-3"},
+                    effective_outputs=None,
+                    effective_variant="v1",
+                    allowed_runtime=set(),
+                    retry_policy=RetryPolicy(max_retries=max_retries, initial_backoff_s=0),
+                    process_dir=tmp_path,
+                    target_env=None,
+                    refresh_token_fn=None,
+                    pool_config=RunPoolConfig(),
+                    backend=MagicMock(),
+                    out=MagicMock(),
+                    pool_dispatch=MagicMock(adapter="claude-code-cli"),
+                    preflight_quota_guard="off",
+                )
+            assert attempts == expected_attempts
+            assert scheduled == expected_attempts[1:]
+            assert results == [("AAPL", expected_exit)]
+            history = read_attempt_history_at(state_dir)
+            assert [row.attempt_number for row in history] == list(range(1, len(history) + 1))
+            expected_dispositions = [AttemptDisposition.retryable] * len(history)
+            if "pool" in errors:
+                # Existing unlaunched wait facts are superseded on recovery.
+                expected_dispositions[0] = AttemptDisposition.lost
+            if force_abort:
+                expected_dispositions[-1] = AttemptDisposition.permanent
+            elif expected_exit == 0:
+                expected_dispositions[-1] = AttemptDisposition.succeeded
+            assert [row.disposition for row in history] == expected_dispositions
+
+        asyncio.run(_run())
 
     def test_run_agent_pool_handles_submit_failure(self, tmp_path: Path) -> None:
         """_run_agent_pool catches exceptions from pool.submit().
