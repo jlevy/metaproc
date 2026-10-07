@@ -2217,6 +2217,61 @@ class TestQuotaPauseResume:
     are marked permanent_failure, then submissions resume cleanly.
     """
 
+    def test_worker_quota_signal_resumes_on_owner_loop(self, pool_config):
+        """Completion classification runs in a worker, not the pool's loop."""
+
+        async def _run():
+            pool = RunPool(pool_config)
+            reset_at = datetime.now(UTC) - timedelta(minutes=1)
+            try:
+                await asyncio.to_thread(
+                    pool.record_failure_class, "quota_exhausted", quota_reset_at=reset_at
+                )
+                await asyncio.wait_for(pool._await_quota_pause(), timeout=1.0)
+                assert pool._quota_paused_until is None
+                assert pool._failure_class_counts["quota_exhausted"] == 1
+            finally:
+                await pool.shutdown()
+
+        asyncio.run(_run())
+
+    def test_sync_constructor_captures_owner_and_serializes_workers(self, pool_config):
+        pool = RunPool(pool_config)
+
+        async def _run():
+            try:
+                pool._start()
+                assert pool._owner_loop is asyncio.get_running_loop()
+                await asyncio.gather(
+                    *(asyncio.to_thread(pool.record_failure_class, "timeout") for _ in range(16))
+                )
+                assert pool._failure_class_counts["timeout"] == 16
+            finally:
+                await pool.shutdown()
+
+        asyncio.run(_run())
+
+    def test_worker_governor_exception_propagates(self, pool_config, monkeypatch):
+        async def _run():
+            pool = RunPool(pool_config)
+
+            def _broken_pause(_reset_at):
+                assert asyncio.get_running_loop() is pool._owner_loop
+                raise ValueError("governor bookkeeping failed")
+
+            monkeypatch.setattr(pool, "pause_for_quota", _broken_pause)
+            try:
+                with pytest.raises(ValueError, match="governor bookkeeping failed"):
+                    await asyncio.to_thread(
+                        pool.record_failure_class,
+                        "quota_exhausted",
+                        quota_reset_at=datetime.now(UTC),
+                    )
+            finally:
+                await pool.shutdown()
+
+        asyncio.run(_run())
+
     def test_pause_blocks_submissions_until_reset(self, pool_config):
         """Submissions made while the pool is paused don't run until pause lifts."""
 

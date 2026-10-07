@@ -670,6 +670,10 @@ class RunPool:
         self._quota_paused_until: datetime | None = None
         self._quota_paused_event: asyncio.Event | None = None
         self._quota_pause_task: asyncio.Task[None] | None = None
+        try:
+            self._owner_loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+        except RuntimeError:
+            self._owner_loop = None
 
         # Restore governor state from a previous run if available.
         #
@@ -784,6 +788,24 @@ class RunPool:
         reset window passes. Without it, the quota count is recorded but no
         pause occurs (caller couldn't parse a reset time).
         """
+        if self._owner_loop is not None:
+            try:
+                current_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                current_loop = None
+            if current_loop is not self._owner_loop:
+                # Completion classifiers run off-loop for filesystem/auth I/O.
+                # Governor events and quota resume tasks belong to the pool loop.
+                if not self._owner_loop.is_running():
+                    raise RuntimeError("pool owner event loop is not running")
+
+                async def _record_on_owner() -> None:
+                    self.record_failure_class(failure_class, quota_reset_at=quota_reset_at)
+
+                # Finish before the scheduler can submit a queued retry, and
+                # propagate governor errors to its completion classifier.
+                asyncio.run_coroutine_threadsafe(_record_on_owner(), self._owner_loop).result()
+                return
         self._failure_class_counts[failure_class] = (
             self._failure_class_counts.get(failure_class, 0) + 1
         )
@@ -967,6 +989,7 @@ class RunPool:
         """One-time startup: open event log, start monitor, write initial status."""
         if self._started:
             return
+        self._owner_loop = asyncio.get_running_loop()
         self._started = True
         if self._event_logger is not None:
             self._event_logger.open()

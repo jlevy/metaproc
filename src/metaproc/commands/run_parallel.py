@@ -1996,22 +1996,21 @@ async def _run_agent_pool(  # noqa: PLR0913
             raise
         force_abort = auth_forces_abort(auth_classification)
         # When the item itself hit quota exhaustion with a parsed reset
-        # clock, schedule a retry-after-reset rather than burning a normal
-        # backoff attempt or permanent-failing. Mirrors the pool-cooling
-        # retry path below: don't increment attempt_number because the
-        # item never had a real shot at landing — the upstream cap blocked
-        # it. Without this branch, classify_error returns FAIL for quota
-        # patterns and the very item that discovered the cap gets lost
-        # while the pool quietly pauses for everything else (upstream change review
-        # finding #1).
+        # clock, retain the reset-aware wait, but count the launched session
+        # against the same retry budget as other process failures. Unlike a
+        # pre-launch pool wait, a quota failure can follow paid model work.
+        # Otherwise repeated reset-clock failures relaunch forever at attempt one.
         is_quota_exhausted_retry = quota_reset_at is not None and not force_abort
-        if is_quota_exhausted_retry:
+        if is_quota_exhausted_retry and shared["attempt_number"] <= max_retries_for(
+            fc, retry_policy.max_retries
+        ):
             assert quota_reset_at is not None  # noqa: S101 — narrow the type for mypy/basedpyright
             _finish_attempt(AttemptDisposition.retryable)
             now_local = datetime.now(quota_reset_at.tzinfo)
             quota_delay = max(
                 0.0, (quota_reset_at - now_local).total_seconds() + _QUOTA_RESET_BUFFER_S
             )
+            shared["attempt_number"] += 1
             retry_seq += 1
             heapq.heappush(
                 retry_heap,
@@ -2069,7 +2068,7 @@ async def _run_agent_pool(  # noqa: PLR0913
         else:
             _finish_attempt(
                 AttemptDisposition.retryable
-                if not force_abort and verdict is RetryVerdict.RETRY
+                if not force_abort and (verdict is RetryVerdict.RETRY or is_quota_exhausted_retry)
                 else AttemptDisposition.permanent
             )
             all_results.append((item, 1))
