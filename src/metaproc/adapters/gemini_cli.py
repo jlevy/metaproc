@@ -115,6 +115,28 @@ def _gemini_version_drift() -> str | None:
     return drift
 
 
+GEMINI_NATIVE_SETTINGS_SCOPES = ("user", "workspace")
+GEMINI_DEFAULT_NATIVE_SETTINGS_SCOPE = "user"
+"""Where the adapter hands Gemini its native settings when a config names no scope.
+
+`user` gives each launch a private Gemini home. It works on every CLI the adapter can
+drive and needs no working directory or root-owned file.
+"""
+
+_SYSTEM_SCOPE_REFUSAL = (
+    "native_settings_scope 'system' is not supported: gemini-cli 0.60.0 and later load a "
+    "system settings file only when it and every directory above it are owned by root and "
+    "writable by neither group nor others, so the file Metaproc writes would be skipped "
+    "with a warning and every setting in it lost. Remove the key to use the default "
+    "'user' scope, a private Gemini home per launch, or set 'workspace'"
+)
+
+
+def native_settings_scope(merged_config: dict[str, object]) -> object:
+    """Return the scope a config resolves to, which ``validate_config`` checks."""
+    return merged_config.get("native_settings_scope", GEMINI_DEFAULT_NATIVE_SETTINGS_SCOPE)
+
+
 _GEMINI_ALLOWED_KEYS = frozenset(
     {
         "append_system_prompt",
@@ -158,8 +180,7 @@ def _materialize_temp_file(*, prefix: str, suffix: str, content: str) -> Path:
 def _materialize_workspace_settings(directory: Path, content: str) -> None:
     """Publish native settings without overwriting operator-authored configuration.
 
-    Recent Gemini versions require system settings and every parent to be root-owned.
-    An explicitly selected, trusted workspace remains a supported user-owned scope.
+    A trusted workspace's settings carry no ownership rule, unlike system settings.
     """
     settings_dir = directory / ".gemini"
     settings_path = settings_dir / "settings.json"
@@ -220,36 +241,49 @@ def _copy_user_template(source_fd: int, destination: Path) -> None:
             os.close(child_fd)
 
 
-def _materialize_user_settings(template: Path, native_settings: dict[str, object]) -> Path:
-    """Prepare a private home; never borrow the operator's mutable runtime state."""
+def _template_settings(settings_path: Path) -> dict[str, object]:
+    if not settings_path.is_file():
+        raise ValueError("Gemini home template requires .gemini/settings.json")
+    try:
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError("Gemini home template settings.json must be a JSON object") from exc
+    if not isinstance(settings, dict):
+        raise ValueError("Gemini home template settings.json must be a JSON object")
+    return cast("dict[str, object]", settings)
+
+
+def _materialize_user_settings(template: Path | None, native_settings: dict[str, object]) -> Path:
+    """Prepare a private home; never borrow the operator's mutable runtime state.
+
+    Without a template the home holds only ``.gemini/settings.json`` with the native
+    settings, so Gemini takes its authentication from the launch environment.
+    """
     global _temp_files_dir
-    if (
-        not hasattr(os, "O_NOFOLLOW")
-        or os.open not in os.supports_dir_fd
-        or os.listdir not in os.supports_fd
-    ):
-        raise ValueError("Gemini user settings require no-follow directory descriptor support")
-    if template.is_symlink():
-        raise ValueError("Gemini home template must not be a symlink")
-    source_fd = os.open(template, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    source_fd: int | None = None
+    if template is not None:
+        if (
+            not hasattr(os, "O_NOFOLLOW")
+            or os.open not in os.supports_dir_fd
+            or os.listdir not in os.supports_fd
+        ):
+            raise ValueError("Gemini home templates require no-follow directory descriptor support")
+        if template.is_symlink():
+            raise ValueError("Gemini home template must not be a symlink")
+        source_fd = os.open(template, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         with _TEMP_FILES_LOCK:
             if _temp_files_dir is None:
                 _temp_files_dir = tempfile.TemporaryDirectory(prefix="metaproc-gemini-")
             home = Path(tempfile.mkdtemp(prefix="home-", dir=_temp_files_dir.name))
         try:
-            _copy_user_template(source_fd, home)
             settings_path = home / ".gemini" / "settings.json"
-            if not settings_path.is_file():
-                raise ValueError("Gemini home template requires .gemini/settings.json")
-            try:
-                settings = json.loads(settings_path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError as exc:
-                raise ValueError(
-                    "Gemini home template settings.json must be a JSON object"
-                ) from exc
-            if not isinstance(settings, dict):
-                raise ValueError("Gemini home template settings.json must be a JSON object")
+            settings: dict[str, object] = {}
+            if source_fd is None:
+                settings_path.parent.mkdir(mode=0o700)
+            else:
+                _copy_user_template(source_fd, home)
+                settings = _template_settings(settings_path)
             merged = _deep_merge_settings(settings, native_settings)
             write_secret_text(settings_path, json.dumps(merged, sort_keys=True))
             return home
@@ -258,7 +292,8 @@ def _materialize_user_settings(template: Path, native_settings: dict[str, object
             shutil.rmtree(home)
             raise
     finally:
-        os.close(source_fd)
+        if source_fd is not None:
+            os.close(source_fd)
 
 
 def _deep_merge_settings(
@@ -452,12 +487,16 @@ class GeminiCliAdapter:
                         reason=f"unknown gemini-cli model {value!r}",
                     )
                 )
-        scope = merged_config.get("native_settings_scope", "system")
-        if scope not in ("system", "workspace", "user"):
+        scope = native_settings_scope(merged_config)
+        if scope == "system":
+            rejections.append(
+                ConfigRejection(key="native_settings_scope", reason=_SYSTEM_SCOPE_REFUSAL)
+            )
+        elif scope not in GEMINI_NATIVE_SETTINGS_SCOPES:
             rejections.append(
                 ConfigRejection(
                     key="native_settings_scope",
-                    reason="native_settings_scope must be 'system', 'workspace', or 'user'",
+                    reason="native_settings_scope must be 'user' or 'workspace'",
                 )
             )
         if scope == "workspace" and not merged_config.get("working_directory"):
@@ -465,13 +504,6 @@ class GeminiCliAdapter:
                 ConfigRejection(
                     key="native_settings_scope",
                     reason="native_settings_scope 'workspace' requires working_directory",
-                )
-            )
-        if scope == "user" and not merged_config.get("native_settings_home_template"):
-            rejections.append(
-                ConfigRejection(
-                    key="native_settings_home_template",
-                    reason="native_settings_scope 'user' requires native_settings_home_template",
                 )
             )
         if merged_config.get("native_settings_home_template") and scope != "user":
@@ -516,34 +548,26 @@ class GeminiCliAdapter:
                 native_settings,
                 cast("dict[str, object]", override),
             )
-        if native_settings:
-            content = json.dumps(native_settings, sort_keys=True, separators=(",", ":"))
-            scope = merged_config.get("native_settings_scope", "system")
-            if scope == "workspace":
-                directory = self.working_directory(merged_config)
-                if directory is None:
-                    raise ValueError("native_settings_scope 'workspace' requires working_directory")
-                _materialize_workspace_settings(directory, content)
-            elif scope == "system":
-                env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = str(
-                    _materialize_temp_file(
-                        prefix="settings-",
-                        suffix=".json",
-                        content=content,
-                    )
+        scope = native_settings_scope(merged_config)
+        if scope == "workspace":
+            directory = self.working_directory(merged_config)
+            if directory is None:
+                raise ValueError("native_settings_scope 'workspace' requires working_directory")
+            _materialize_workspace_settings(
+                directory, json.dumps(native_settings, sort_keys=True, separators=(",", ":"))
+            )
+        elif scope == "user":
+            template = merged_config.get("native_settings_home_template")
+            env["GEMINI_CLI_HOME"] = str(
+                _materialize_user_settings(
+                    Path(str(template)) if template else None, native_settings
                 )
-            elif scope == "user":
-                template = merged_config.get("native_settings_home_template")
-                if not template:
-                    raise ValueError(
-                        "native_settings_scope 'user' requires native_settings_home_template"
-                    )
-                env["GEMINI_CLI_HOME"] = str(
-                    _materialize_user_settings(Path(str(template)), native_settings)
-                )
-                # Preserve inherited system policy. This scope creates no system override.
-            else:
-                raise ValueError("native_settings_scope must be 'system', 'workspace', or 'user'")
+            )
+            # Preserve inherited system policy. This scope creates no system override.
+        elif scope == "system":
+            raise ValueError(_SYSTEM_SCOPE_REFUSAL)
+        else:
+            raise ValueError("native_settings_scope must be 'user' or 'workspace'")
         return env
 
     def working_directory(self, merged_config: dict[str, object]) -> Path | None:

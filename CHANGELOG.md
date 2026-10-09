@@ -93,6 +93,23 @@ development series.
   14-day package cool-off on 2026-09-22; until then `npm install` under the repository’s
   `.npmrc` refuses it.
   0.60.0, the current npm `latest`, clears the cool-off on 2026-09-29 and is not pinned.
+- **Gemini native settings reach the CLI through a private home by default.** The
+  adapter wrote its native settings to a file in its temporary directory and named it
+  with `GEMINI_CLI_SYSTEM_SETTINGS_PATH`. gemini-cli 0.60.0 and later read a system
+  settings file only when it and every directory above it are owned by root and writable
+  by neither group nor others, so the CLI skipped that file with a `Security Warning`
+  transcript line, and every session ran without session-retention disabled, dynamic
+  model configuration, the step’s tool restrictions or the subagent overrides.
+  `native_settings_scope` now defaults to `user`: each launch gets a private Gemini home
+  whose `.gemini/settings.json` holds the resolved native settings, and
+  `native_settings_home_template` is optional.
+  Without a template, nothing from the operator’s `~/.gemini` is visible, so
+  authentication comes from the launch environment (`GEMINI_API_KEY`, or
+  `GOOGLE_GENAI_USE_VERTEXAI` with `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`),
+  and hooks, instructions and logins kept there no longer apply.
+  `native_settings_scope: system` is rejected; remove it to take the default, or set
+  `workspace` to keep the operator’s `~/.gemini`. `native_settings_scope()` returns the
+  scope a config resolves to.
 
 ### Removed
 
