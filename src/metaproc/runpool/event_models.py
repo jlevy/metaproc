@@ -184,6 +184,19 @@ class QuotaPauseStartedEvent(BaseModel):
     buffer_s: float
 
 
+class QuotaBackoffEvent(BaseModel):
+    """The provider governor's response to one quota-exhausted failure."""
+
+    event: Literal["quota_backoff"]
+    ts: datetime
+    action: Literal["cut", "hold"]
+    old_provider_ceiling: int
+    provider_ceiling: int
+    effective_target: int
+    hold_s: float
+    elapsed_s: float | None = None
+
+
 class QuotaPauseTickEvent(BaseModel):
     event: Literal["quota_pause_tick"]
     ts: datetime
@@ -300,6 +313,7 @@ RunPoolEvent = Annotated[
     | ConcurrencyAdjustEvent
     | PressureCheckEvent
     | HealthSampleEvent
+    | QuotaBackoffEvent
     | QuotaPauseStartedEvent
     | QuotaPauseTickEvent
     | QuotaPauseResumedEvent

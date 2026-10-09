@@ -193,6 +193,44 @@ _QUOTA_EXHAUSTED_PATTERNS: list[str] = [
     "out of usage",
 ]
 
+# Quota exhaustion that lifts on a retry timescale. A per-minute throughput quota
+# refuses requests while the account is saturated and serves them again once the window
+# rolls over, so the failure is the pool's concurrency, not the item. Gemini CLI on
+# Vertex reports it as "TPM quota exhausted. No spare capacity is currently available
+# ..." after spending its own internal retries. These still classify as
+# QUOTA_EXHAUSTED; they are exempt only from the permanent "quota" pattern.
+_RATE_QUOTA_PATTERNS: list[str] = [
+    "tpm quota",
+    "rpm quota",
+    "tokens per minute",
+    "requests per minute",
+    "per_minute",
+    "no spare capacity",
+    "retryablequotaerror",
+]
+
+# A quota failure carrying any of these will not lift within a retry budget, whatever
+# per-minute wording accompanies it.
+_HARD_QUOTA_PATTERNS: list[str] = [
+    "per day",
+    "per_day",
+    "daily",
+    "monthly",
+    "out of usage",
+    "out of extra usage",
+    "billing",
+    "credits",
+    "terminalquotaerror",
+]
+
+
+def _is_rate_quota(lower: str) -> bool:
+    """Whether a lowercased error reads as a per-minute quota refusal, not a hard cap."""
+    return any(pattern in lower for pattern in _RATE_QUOTA_PATTERNS) and not any(
+        pattern in lower for pattern in _HARD_QUOTA_PATTERNS
+    )
+
+
 # Checked second — if any match, the error is transient (retryable).
 _TRANSIENT_PATTERNS: list[str] = [
     "timeout",
@@ -256,17 +294,24 @@ def classify_error(error: str) -> RetryVerdict:
     """Classify an error string as retryable or permanent.
 
     Priority:
-    1. Permanent patterns (blocklist) — checked first
+    1. Permanent patterns (blocklist) — checked first. A per-minute quota refusal
+       is exempt from the generic ``quota`` pattern only, and then retries.
     2. Transient patterns — checked second
     3. Bare "exit code N" — RETRY (most are transient API errors)
     4. "output validation failed" — RETRY (usually transient; exhausts retries if not)
     5. Default — FAIL
     """
     lower = error.lower()
+    rate_quota = _is_rate_quota(lower)
 
     for pattern in _PERMANENT_PATTERNS:
+        if rate_quota and pattern == "quota":
+            continue
         if pattern in lower:
             return RetryVerdict.FAIL
+
+    if rate_quota:
+        return RetryVerdict.RETRY
 
     for pattern in _TRANSIENT_PATTERNS:
         if pattern in lower:
@@ -651,3 +696,24 @@ def compute_backoff(attempt: int, policy: RetryPolicy) -> float:
     """
     delay = policy.initial_backoff_s * (policy.backoff_multiplier ** (attempt - 1))
     return min(delay, policy.max_backoff_s)
+
+
+QUOTA_RETRY_MIN_BACKOFF_S = 60.0
+"""Shortest wait before relaunching after a quota refusal.
+
+A per-minute quota refills on a one-minute window, and the refusing agent has usually
+spent minutes in its own internal retries already. Relaunching sooner re-enters the same
+exhausted window and pays for another session's work to learn nothing new.
+"""
+
+
+def retry_backoff_s(failure_class: FailureClass, retry_index: int, policy: RetryPolicy) -> float:
+    """Return the wait before retry *retry_index* (1-indexed) of a *failure_class* failure.
+
+    The policy's exponential backoff, except that a quota failure waits at least
+    :data:`QUOTA_RETRY_MIN_BACKOFF_S`.
+    """
+    delay = compute_backoff(retry_index, policy)
+    if failure_class == FailureClass.QUOTA_EXHAUSTED:
+        return max(delay, QUOTA_RETRY_MIN_BACKOFF_S)
+    return delay

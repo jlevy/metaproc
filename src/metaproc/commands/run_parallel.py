@@ -114,6 +114,7 @@ from metaproc.engine.retry import (
     compute_backoff,
     extract_log_error,
     max_retries_for,
+    retry_backoff_s,
 )
 from metaproc.engine.run_id import generate_run_id
 from metaproc.engine.runtime import (
@@ -1008,7 +1009,7 @@ def run_parallel(
                                 failure_class=str(failure.failure_class),
                                 error=error_str,
                             )
-                            backoff = compute_backoff(attempt, retry_policy)
+                            backoff = retry_backoff_s(failure.failure_class, attempt, retry_policy)
                             out.progress(
                                 f"  {each}={item}: retryable ({error_str}), "
                                 f"retry in {backoff:.0f}s (attempt {attempt}/{cap + 1})"
@@ -1974,7 +1975,13 @@ async def _run_agent_pool(  # noqa: PLR0913
         quota_reset_at = (
             parse_quota_reset_at(error_str) if fc == FailureClass.QUOTA_EXHAUSTED else None
         )
-        pool.record_failure_class(fc, quota_reset_at=quota_reset_at)
+        # How long the failed process ran lets the provider governor tell a failure
+        # admitted under its current ceiling from one admitted before its last cut.
+        pool.record_failure_class(
+            fc,
+            quota_reset_at=quota_reset_at,
+            elapsed_s=shared.pop("process_elapsed_s", None),
+        )
         verdict = (
             classify_output_failures(output_failures, effective_outputs)
             if output_failures
@@ -2054,7 +2061,7 @@ async def _run_agent_pool(  # noqa: PLR0913
                 shared["output_failure_feedback"] = tuple(output_failures)
             shared["attempt_number"] += 1
             retry_index = shared["attempt_number"] - 1
-            delay = compute_backoff(retry_index, retry_policy)
+            delay = retry_backoff_s(fc, retry_index, retry_policy)
             retry_seq += 1
             heapq.heappush(
                 retry_heap,
@@ -2191,6 +2198,7 @@ async def _run_agent_pool(  # noqa: PLR0913
             _classify_and_maybe_retry(shared, error_str)
             return
 
+        shared["process_elapsed_s"] = result.elapsed_s
         if result.kill_reason is None and log_path is not None:
             item_runtime_config = cast(
                 "dict[str, object]",

@@ -170,6 +170,7 @@ from metaproc.engine.retry import (
     compute_backoff,
     extract_log_error,
     max_retries_for,
+    retry_backoff_s,
 )
 from metaproc.engine.runtime import prepare_step, resolve_batch_size, validate_step_inputs_exist
 from metaproc.engine.schema_conform import conform_declared_outputs
@@ -2969,6 +2970,16 @@ async def _run_agent_subprocess(
         raise subprocess.TimeoutExpired(cmd, timeout_s) from exc
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class _ScalarLaunchResult:
+    """How one scalar adapter process ended."""
+
+    exit_code: int
+    kill_reason: str | None
+    elapsed_s: float | None
+    """Seconds the process ran under the run pool; ``None`` when no pool launched it."""
+
+
 async def _run_scalar_agent_subprocess(  # noqa: PLR0913
     cmd: list[str],
     *,
@@ -2982,7 +2993,7 @@ async def _run_scalar_agent_subprocess(  # noqa: PLR0913
     run_id: str,
     step_id: str,
     execution_profile: str,
-) -> tuple[int, str | None]:
+) -> _ScalarLaunchResult:
     """Run one scalar adapter through the run pool, with a legacy fallback."""
     if pool is None:
         exit_code = await _run_agent_subprocess(
@@ -2994,7 +3005,7 @@ async def _run_scalar_agent_subprocess(  # noqa: PLR0913
             use_filter=use_filter,
             execution_context=execution_context,
         )
-        return exit_code, None
+        return _ScalarLaunchResult(exit_code=exit_code, kill_reason=None, elapsed_s=None)
 
     future = pool.submit(
         ProcessConfig(
@@ -3025,7 +3036,11 @@ async def _run_scalar_agent_subprocess(  # noqa: PLR0913
         raise
     if result.kill_reason == "timeout":
         raise subprocess.TimeoutExpired(cmd, timeout_s or 0)
-    return result.exit_code if result.exit_code is not None else 1, result.kill_reason
+    return _ScalarLaunchResult(
+        exit_code=result.exit_code if result.exit_code is not None else 1,
+        kill_reason=result.kill_reason,
+        elapsed_s=result.elapsed_s,
+    )
 
 
 def _bind_pool_dispatch(
@@ -3061,6 +3076,19 @@ def _bind_pool_dispatch(
         return bind_pool_dispatch_scope(template, run_dir=run_dir, step=step_id)
     except ValueError as exc:
         raise CLIError(f"step '{step_id}': {exc}") from exc
+
+
+def _report_scalar_failure(
+    pool: RunPool | None, failure_class: FailureClass, *, elapsed_s: float | None
+) -> None:
+    """Report one classified scalar-leaf failure to the run pool's governors.
+
+    The provider governor reads scalar leaves exactly as it reads mapped ones: a quota
+    refusal here lowers the ceiling that admits this step's siblings, not only this
+    step's own retry.
+    """
+    if pool is not None:
+        pool.record_failure_class(failure_class, elapsed_s=elapsed_s)
 
 
 def _mark_scalar_prelaunch_failure_after_retry(state_dir: Path, *, error: str) -> None:
@@ -3238,6 +3266,8 @@ async def _execute_agent_step(
             # Reset per attempt: an anomaly accepted on an attempt that went on to fail
             # describes that attempt, not the retry that replaced it.
             accepted_anomalies: list[str] = []
+            # How long this attempt's process ran under the run pool, when one ran it.
+            process_elapsed_s: float | None = None
             # Each retry keeps its own log, so the attempt that failed its contract stays
             # readable beside the one that replaced it.
             attempt_log_path = (
@@ -3456,7 +3486,7 @@ async def _execute_agent_step(
                             boundary_before = capture_repo_snapshot(
                                 process_dir, observation_zone=[run_dir]
                             )
-                            exit_code, pool_kill_reason = await _run_scalar_agent_subprocess(
+                            launch = await _run_scalar_agent_subprocess(
                                 cmd,
                                 env=env,
                                 cwd=cwd,
@@ -3469,6 +3499,9 @@ async def _execute_agent_step(
                                 step_id=step_id,
                                 execution_profile=effective_execution_profile,
                             )
+                            exit_code = launch.exit_code
+                            pool_kill_reason = launch.kill_reason
+                            process_elapsed_s = launch.elapsed_s
                 except subprocess.TimeoutExpired:
                     if running_record is None:
                         raise
@@ -3564,12 +3597,15 @@ async def _execute_agent_step(
                     # Credential classification must read the sealed, original log before
                     # compaction can rewrite or gzip it. Fan-out follows the same ordering.
                     try_compact_log(attempt_log_path)
+                    failure_class = classify_failure(exit_error)
+                    _report_scalar_failure(scalar_pool, failure_class, elapsed_s=process_elapsed_s)
                     # A response-body timeout returns no tokens at all and is the most
                     # retryable failure an agent produces. classify_error checks the
-                    # permanent patterns first, so quota, OOM, and permission failures
-                    # still fail on the first attempt.
+                    # permanent patterns first, so hard quota caps, OOM, and permission
+                    # failures still fail on the first attempt; a per-minute quota
+                    # refusal retries after at least one quota window.
                     verdict = classify_error(exit_error)
-                    cap = max_retries_for(classify_failure(exit_error), retry_policy.max_retries)
+                    cap = max_retries_for(failure_class, retry_policy.max_retries)
                     if (
                         not auth_forces_abort(auth_classification)
                         and verdict == RetryVerdict.RETRY
@@ -3579,10 +3615,10 @@ async def _execute_agent_step(
                             state_dir,
                             running_record,
                             disposition=AttemptDisposition.retryable,
-                            failure_class=str(classify_failure(exit_error)),
+                            failure_class=str(failure_class),
                             error=exit_error,
                         )
-                        backoff = compute_backoff(attempt, retry_policy)
+                        backoff = retry_backoff_s(failure_class, attempt, retry_policy)
                         out.progress(
                             f"  Step '{step_id}': retryable ({exit_error}), "
                             f"retry in {backoff:.0f}s (attempt {attempt}/{cap + 1})"
@@ -3594,7 +3630,7 @@ async def _execute_agent_step(
                         state_dir,
                         error=exit_error,
                         running_record=running_record,
-                        failure_class=str(classify_failure(exit_error)),
+                        failure_class=str(failure_class),
                         attempt_disposition=(
                             AttemptDisposition.retryable
                             if verdict is RetryVerdict.RETRY
@@ -3654,6 +3690,9 @@ async def _execute_agent_step(
                         error_str = f"output validation failed: {'; '.join(output_errors)}"
                         auth_classification = await _complete_auth_attempt(error_str)
                         try_compact_log(attempt_log_path)
+                        _report_scalar_failure(
+                            scalar_pool, FailureClass.INVALID_OUTPUT, elapsed_s=process_elapsed_s
+                        )
                         verdict = classify_output_failures(output_failures, effective_outputs)
                         if (
                             not auth_forces_abort(auth_classification)

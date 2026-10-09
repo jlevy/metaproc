@@ -9,7 +9,7 @@ status: Approved
 Module-level notes, including using RunPool as a library, are in
 [`runpool/README.md`](../runpool/README.md).
 
-**Date:** 2026-04-06 (last updated 2026-09-22) **Status:** Approved
+**Date:** 2026-04-06 (last updated 2026-10-09) **Status:** Approved
 
 RunPool is Metaproc’s local agent process manager.
 It owns subprocess lifecycle, adaptive concurrency, host-level coordination, health
@@ -253,6 +253,20 @@ RunPool does not kill active work solely because of system pressure.
 Provider pressure is separate from memory pressure.
 Bursts of provider rate-limit failures reduce the provider ceiling, and provider
 recovery can raise it again after clear samples.
+
+A single quota-exhausted failure, from a scalar or a mapped agent step, cuts the
+provider ceiling to half the current capacity at once, with no burst threshold and no
+floor above `min_concurrency`. By the time an agent CLI reports quota exhaustion it has
+usually spent minutes in its own internal retries, so one report is already a sustained
+signal. One saturation episode still surfaces as several failures, because every process
+admitted under the old ceiling can fail after the cut.
+A failure therefore cuts again only when its process launched after the latest cut,
+which means the lowered ceiling was itself too high; the others only hold recovery.
+Provider recovery resumes at the ordinary ramp once `quota_backoff_hold_s` (300 seconds
+by default) passes without another quota failure.
+Each response is logged as a `quota_backoff` event with `action: cut` or `action: hold`,
+and a cut that changes capacity also logs `concurrency_adjust` with reason
+`quota_backoff`.
 
 Operator caps are an emergency brake and local testing tool.
 They are useful when a live run is already harming host stability, but they should be
