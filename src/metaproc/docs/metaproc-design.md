@@ -6,7 +6,7 @@ status: Approved
 ---
 # Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-09-25) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-10-09) **Status:** Approved
 
 Also readable as `metaproc help design`.
 
@@ -412,6 +412,10 @@ Required execution reference (exactly one):
 - `handler` -- a file path relative to the process spec’s directory with a `:function`
   suffix (e.g., `scaffold_day.py:scaffold_day`). The engine loads the `.py` file via
   `importlib.util.spec_from_file_location` and calls the named function.
+  While the file loads, `sys.path` starts with the handler’s directory, the process
+  directory, and each enclosing directory that holds `pyproject.toml` or `.git`, nearest
+  first, up to the checkout root (the nearest directory holding `.git`). A checkout
+  nested inside another, such as a linked worktree, imports only its own code.
   This keeps handlers co-located with runbooks and process specs -- they travel together
   when process directories are moved or shared across codebases.
 - `command` -- a shell command string, executed as a subprocess.

@@ -101,6 +101,23 @@ development series.
 
 ### Fixed
 
+- **A file handler in a checkout nested inside another imports its own checkout’s
+  code.** While a file handler loaded, every enclosing directory holding
+  `pyproject.toml` or `.git` was put on `sys.path` with the outermost first, so a linked
+  worktree created inside another checkout imported that checkout’s same-named packages,
+  usually an older revision.
+  A handler then failed with an `ImportError` for a name its own checkout defines, or
+  ran the other revision’s code without any error.
+  The roots are now ordered nearest first: the handler’s directory, the process
+  directory, then each enclosing project root.
+  They stop at the checkout root, the nearest directory holding `.git`, which is the
+  same root `ResolvedStep.checkout_root` records.
+  Code that exists only in an enclosing checkout is no longer importable from a handler.
+  A tree with no `.git` above the process, such as a workspace bundle, still puts every
+  enclosing project root on the path, nearest first.
+  Within one checkout, a module beside the handler or under a sub-project root now takes
+  precedence over a same-named one further out.
+
 - **A resume from a fresh checkout of the same revision reuses what the run completed.**
   A plan resolves a process’s `./` and `../` references to absolute paths, and a step’s
   fingerprint hashed them, so planning the same revision from a checkout at another path
