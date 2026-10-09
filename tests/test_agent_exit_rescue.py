@@ -21,7 +21,7 @@ from typing import Any
 import pytest
 
 from metaproc.adapters.registry import ADAPTER_REGISTRY
-from metaproc.commands.run_process import _execute_agent_step
+from metaproc.commands.run_process import _execute_agent_step, _ScalarLaunchResult
 from metaproc.engine.pathing import compute_task_state_dir
 from metaproc.io.state_io import read_attempt_history_at
 from metaproc.models.authored import IOSpec, ProcessDefaults, ProcessSpec, ProcessStep, RetryPolicy
@@ -93,7 +93,7 @@ def _install_launch(
 ) -> None:
     """Stand in for the agent launch: write what the agent would have written."""
 
-    async def _fake_launch(*_args: Any, **kwargs: Any) -> tuple[int, str | None]:
+    async def _fake_launch(*_args: Any, **kwargs: Any) -> _ScalarLaunchResult:
         log_path = Path(kwargs["log_path"])
         log_path.parent.mkdir(parents=True, exist_ok=True)
         lines = ['{"type":"message","role":"assistant","content":"done"}']
@@ -105,7 +105,7 @@ def _install_launch(
             path.write_text(text)
         if kill_reason == "timeout":
             raise subprocess.TimeoutExpired(_args[0], kwargs["timeout_s"] or 0)
-        return exit_code, kill_reason
+        return _ScalarLaunchResult(exit_code=exit_code, kill_reason=kill_reason, elapsed_s=None)
 
     monkeypatch.setattr("metaproc.commands.run_process._run_scalar_agent_subprocess", _fake_launch)
 

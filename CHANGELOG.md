@@ -101,6 +101,28 @@ development series.
 
 ### Fixed
 
+- **A provider quota refusal backs the run pool off and retries the item.** An agent
+  that exhausted a per-minute quota, such as Gemini CLI on Vertex reporting
+  `TPM quota exhausted. No spare capacity is currently available`, failed permanently
+  because its message contained `quota`, and a scalar agent step never reported the
+  failure to the run pool, so the provider ceiling stayed at full width while sibling
+  leaves failed the same way and an operator had to lower the cap and resume by hand.
+  A per-minute quota refusal (`tpm quota`, `rpm quota`, `tokens per minute`,
+  `requests per minute`, `per_minute`, `no spare capacity`, `RetryableQuotaError`) now
+  retries within the step’s declared `max_retries`, waiting at least 60 seconds, and
+  still records `failure_class: quota_exhausted`; a message that also names a daily,
+  monthly, billing, or credit limit stays permanent.
+  Scalar agent steps now report every classified failure to the run pool, as mapped
+  agent steps already did.
+  Any `quota_exhausted` failure halves the pool’s provider ceiling at once; failures
+  from processes admitted before that cut only hold recovery, a failure from a process
+  launched after it cuts again, and recovery resumes at the ordinary provider ramp after
+  `quota_backoff_hold_s` (300 seconds) without another quota failure.
+  Each response is a `quota_backoff` event in the pool event log.
+  The retry stays inside the step’s declared attempt budget, so the spend-cap worst case
+  and a declared `max_retries: 0` are unchanged, and the retried attempt writes its own
+  log, which the spend ledger counts once.
+
 - **A resume from a fresh checkout of the same revision reuses what the run completed.**
   A plan resolves a process’s `./` and `../` references to absolute paths, and a step’s
   fingerprint hashed them, so planning the same revision from a checkout at another path

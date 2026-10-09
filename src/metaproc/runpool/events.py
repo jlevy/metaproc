@@ -385,6 +385,33 @@ class EventLogger:
             }
         )
 
+    def quota_backoff(
+        self,
+        *,
+        action: str,
+        old_provider_ceiling: int,
+        provider_ceiling: int,
+        effective_target: int,
+        hold_s: float,
+        elapsed_s: float | None,
+    ) -> None:
+        """Record the provider governor's response to one quota-exhausted failure.
+
+        ``action`` is ``cut`` when the provider ceiling fell, or ``hold`` when the failure
+        belonged to an episode an earlier cut already answered and only held recovery.
+        """
+        self._write(
+            {
+                "event": "quota_backoff",
+                "action": action,
+                "old_provider_ceiling": old_provider_ceiling,
+                "provider_ceiling": provider_ceiling,
+                "effective_target": effective_target,
+                "hold_s": hold_s,
+                "elapsed_s": round(elapsed_s, 1) if elapsed_s is not None else None,
+            }
+        )
+
     def quota_pause_tick(self, remaining_s: float) -> None:
         self._write({"event": "quota_pause_tick", "remaining_s": remaining_s})
 

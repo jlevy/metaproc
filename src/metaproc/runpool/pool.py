@@ -360,6 +360,10 @@ class RunPoolConfig(BaseModel):
     rate_limit_burst_threshold: int = 3
     rate_limit_burst_window_s: float = 30.0
     rate_limit_down_factor: float = 0.5
+    quota_down_factor: float = 0.5
+    """Share of current capacity one quota-exhausted failure removes from the provider ceiling."""
+    quota_backoff_hold_s: float = 300.0
+    """Seconds after the latest quota-exhausted failure before provider recovery resumes."""
     state_dir: Path | None = None
     logs_dir: Path | None = None
     recent_completions_limit: int = 20
@@ -663,6 +667,10 @@ class RunPool:
         self._latest_health: SystemHealthSample | None = None
         self._memory_ceiling = starting
         self._provider_ceiling = starting
+        # Quota backoff state (monotonic seconds): when the provider ceiling was last cut
+        # for a quota failure, and until when provider recovery is held.
+        self._quota_cut_at: float | None = None
+        self._quota_hold_until: float | None = None
 
         # Quota pause state. Set by `pause_for_quota` when a quota-exhausted
         # signal lands; submissions block on `_quota_paused_event` until the
@@ -777,16 +785,18 @@ class RunPool:
         failure_class: str,
         *,
         quota_reset_at: datetime | None = None,
+        elapsed_s: float | None = None,
     ) -> None:
-        """Record a failure classification for status reporting.
+        """Record a failure classification and let the provider governor act on it.
 
-        Called by run-parallel after classifying error strings. The pool
+        Called by the agent executors after classifying a failed attempt. The pool
         itself only sees exit codes; the caller has access to error details.
 
-        ``quota_reset_at`` (optional) is honored when ``failure_class`` is
-        ``"quota_exhausted"`` — the pool pauses submissions until the named
-        reset window passes. Without it, the quota count is recorded but no
-        pause occurs (caller couldn't parse a reset time).
+        ``quota_exhausted`` lowers the provider ceiling (see
+        :meth:`_apply_quota_backoff`); ``elapsed_s`` is how long the failed process ran,
+        from which the pool tells a failure admitted under the current ceiling from one
+        admitted before the last cut. ``quota_reset_at`` (optional) additionally pauses
+        submissions until the named reset window passes.
         """
         if self._owner_loop is not None:
             try:
@@ -800,7 +810,9 @@ class RunPool:
                     raise RuntimeError("pool owner event loop is not running")
 
                 async def _record_on_owner() -> None:
-                    self.record_failure_class(failure_class, quota_reset_at=quota_reset_at)
+                    self.record_failure_class(
+                        failure_class, quota_reset_at=quota_reset_at, elapsed_s=elapsed_s
+                    )
 
                 # Finish before the scheduler can submit a queued retry, and
                 # propagate governor errors to its completion classifier.
@@ -811,8 +823,10 @@ class RunPool:
         )
         if failure_class == "rate_limited":
             self._apply_rate_limit_backoff()
-        elif failure_class == "quota_exhausted" and quota_reset_at is not None:
-            self.pause_for_quota(quota_reset_at)
+        elif failure_class == "quota_exhausted":
+            self._apply_quota_backoff(elapsed_s)
+            if quota_reset_at is not None:
+                self.pause_for_quota(quota_reset_at)
 
     def pause_for_quota(
         self,
@@ -938,6 +952,62 @@ class RunPool:
         self._consecutive_normal = 0
         self._consecutive_elevated = 0
         self._set_capacity(new_cap, reason="rate_limit_burst")
+        self._write_status()
+
+    def _apply_quota_backoff(self, elapsed_s: float | None) -> None:
+        """Lower the provider ceiling after a quota-exhausted failure, and hold it there.
+
+        Unlike a single 429, a quota-exhausted failure arrives after the agent CLI has
+        already retried internally for minutes, so one is enough to act on: no burst
+        threshold, and no floor above ``min_concurrency``.
+
+        One saturation episode still surfaces as several failures, because every process
+        admitted under the old ceiling can fail after the cut. A failure cuts again only
+        when its process was launched after the latest cut, which means the lowered
+        ceiling was itself too high; earlier failures, and failures whose launch time is
+        unknown while a hold is active, only extend the hold. Provider recovery resumes
+        once ``quota_backoff_hold_s`` passes without another quota failure, at the
+        ordinary provider ramp.
+        """
+        now = time.monotonic()
+        holding = self._quota_hold_until is not None and now < self._quota_hold_until
+        if elapsed_s is None:
+            cut = not holding
+        else:
+            cut = self._quota_cut_at is None or now - elapsed_s >= self._quota_cut_at
+        self._quota_hold_until = now + self._config.quota_backoff_hold_s
+        self._consecutive_provider_clear = 0
+
+        old_cap = self._semaphore.capacity
+        old_provider_ceiling = self._provider_ceiling
+        if cut:
+            decrement = max(1, math.ceil(old_cap * self._config.quota_down_factor))
+            self._provider_ceiling = max(
+                self._config.min_concurrency,
+                min(self._provider_ceiling, old_cap - decrement),
+            )
+            self._quota_cut_at = now
+        log.warning(
+            "RunPool: quota exhausted; provider ceiling %d -> %d (%s), recovery held %.0fs",
+            old_provider_ceiling,
+            self._provider_ceiling,
+            "cut" if cut else "hold",
+            self._config.quota_backoff_hold_s,
+        )
+        if self._event_logger is not None:
+            self._event_logger.quota_backoff(
+                action="cut" if cut else "hold",
+                old_provider_ceiling=old_provider_ceiling,
+                provider_ceiling=self._provider_ceiling,
+                effective_target=self._effective_target(),
+                hold_s=self._config.quota_backoff_hold_s,
+                elapsed_s=elapsed_s,
+            )
+        new_cap = self._effective_target()
+        if new_cap != old_cap:
+            self._consecutive_normal = 0
+            self._consecutive_elevated = 0
+            self._set_capacity(new_cap, reason="quota_backoff")
         self._write_status()
 
     def record_retry_scheduled(self, label: str, attempt: int, backoff_s: float) -> None:
@@ -2207,8 +2277,10 @@ class RunPool:
         self._prune_recent_rate_limits(now)
         retries_growing = self._pending_retries > self._prev_pending_retries
         self._prev_pending_retries = self._pending_retries
-        if retries_growing or self._recent_rate_limits:
-            # Retries growing or recent rate limits in burst window — not clear.
+        quota_holding = self._quota_hold_until is not None and now < self._quota_hold_until
+        if retries_growing or self._recent_rate_limits or quota_holding:
+            # Retries growing, recent rate limits in burst window, or a quota
+            # backoff still holding — not clear.
             self._consecutive_provider_clear = 0
         else:
             self._consecutive_provider_clear += 1

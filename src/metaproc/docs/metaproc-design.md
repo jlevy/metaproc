@@ -6,7 +6,7 @@ status: Approved
 ---
 # Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-09-25) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-10-09) **Status:** Approved
 
 Also readable as `metaproc help design`.
 
@@ -2193,14 +2193,17 @@ classifiers and one enum:
   of the concepts doc’s rule: silently retrying an unrecognized failure hides a new
   failure mode.
 
-Handling follows the class: retriable classes retry per `RetryPolicy` on the pool path,
-and `quota_exhausted` pauses submissions until the provider’s named reset time rather
-than burning attempts against a closed window.
+Handling follows the class: retriable classes retry per `RetryPolicy` on the pool path.
+Every `quota_exhausted` failure lowers the run pool’s provider ceiling.
+A per-minute quota refusal retries within the declared budget, waiting at least
+`QUOTA_RETRY_MIN_BACKOFF_S` (60 seconds), and one with a named reset time also pauses
+submissions until then rather than burning attempts against a closed window.
 
 The execution paths apply these policies at different boundaries.
-Scalar agent steps classify operational and output failures and retry within the
-resolved budget. Mapped code steps and aligned code chains apply each step’s declared
-`fan_out.retry` budget to retryable contract failures.
+Scalar agent steps classify operational and output failures, report each to the run pool
+as mapped agent steps do, and retry within the resolved budget.
+Mapped code steps and aligned code chains apply each step’s declared `fan_out.retry`
+budget to retryable contract failures.
 Scalar code steps run once.
 Pool status counts some failure classes, but `invalid_output` remains a single bucket
 and run-level step summaries do not retain item failure classes.
@@ -2275,8 +2278,8 @@ the field have an empty mapping and require their step events or task records fo
 detail. A missing error or roster is explicitly reported as unavailable rather than
 inferred from a numeric exit code or omitted as an empty successful result.
 
-**The typed event reader.** `RunPoolEvent` includes lifecycle, quota-pause, pressure,
-and health-sample events.
+**The typed event reader.** `RunPoolEvent` includes lifecycle, quota-pause,
+quota-backoff, pressure, and health-sample events.
 The pressure and concurrency models retain the controller ceilings, effective target,
 and bottleneck written to the log.
 Optional fields allow older records without those measurements to remain readable.
@@ -2381,7 +2384,10 @@ prose back. `classify_output_failures()` owns that one.
 
 1. **Permanent patterns** (checked first): `enospc`, `enomem`, `quota`,
    `permission denied`, `billing`, `credits`, exit code 137/143, `cancelled` -- always
-   `FAIL`.
+   `FAIL`. A per-minute quota refusal (`tpm quota`, `rpm quota`, `tokens per minute`,
+   `requests per minute`, `per_minute`, `no spare capacity`, `RetryableQuotaError`) is
+   exempt from `quota` alone and produces `RETRY`, unless it also names a daily,
+   monthly, billing, or credit limit.
 2. **Transient patterns**: `timeout`, `rate limit`, `429`, `truncated_headers`,
    `gcloud auth`, `unavailable`, `503`/`502`, `econnrefused`/`econnreset`, `connection`,
    `log_runaway` -- produce `RETRY`.
@@ -2414,7 +2420,8 @@ failure into a `FailureClass` enum for observability and aggregation:
 
 | FailureClass | Patterns |
 | --- | --- |
-| `RATE_LIMITED` | rate limit, 429, quota |
+| `QUOTA_EXHAUSTED` | quota, monthly usage limit, out of usage (checked first) |
+| `RATE_LIMITED` | rate limit, 429, too many requests |
 | `TIMEOUT` | timeout, stalled, log_runaway |
 | `SERVER_ERROR` | 503, 502, connection errors |
 | `INVALID_OUTPUT` | output validation failed |

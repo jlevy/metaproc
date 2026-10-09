@@ -532,7 +532,7 @@ def test_due_retry_yields_when_sibling_holds_shared_capacity(
         monkeypatch.setattr(pool, "_launch_and_monitor", fake_launch)
         monkeypatch.setattr(pool, "_acquire_host_slot", no_host_slot)
         monkeypatch.setattr(run_parallel, "_POOL_FILL_POLL_INTERVAL_S", 0.01)
-        monkeypatch.setattr(run_parallel, "compute_backoff", lambda *_args: 0.01)
+        monkeypatch.setattr(run_parallel, "retry_backoff_s", lambda *_args: 0.01)
         monkeypatch.setattr(run_parallel, "mark_failed_at", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(run_parallel, "_build_prepare_launch", lambda **_kwargs: None)
         monkeypatch.setattr(run_parallel, "compute_run_dir", lambda *_args: tmp_path)

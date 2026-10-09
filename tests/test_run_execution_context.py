@@ -1096,7 +1096,7 @@ def test_scalar_agent_steps_use_one_run_owned_pool(tmp_path: Path) -> None:
         assert launch is not None and launch.log_path is not None
         launch.log_path.write_text("", encoding="utf-8")
         future = asyncio.get_running_loop().create_future()
-        future.set_result(SimpleNamespace(exit_code=0, kill_reason=None))
+        future.set_result(SimpleNamespace(exit_code=0, kill_reason=None, elapsed_s=0.0))
         return future
 
     pool.submit.side_effect = submit
@@ -1377,7 +1377,7 @@ def test_agent_leaf_host_limit_precedence_under_a_run_owned_pool(
         assert launch is not None and launch.log_path is not None
         launch.log_path.write_text("", encoding="utf-8")
         future = asyncio.get_running_loop().create_future()
-        future.set_result(SimpleNamespace(exit_code=0, kill_reason=None))
+        future.set_result(SimpleNamespace(exit_code=0, kill_reason=None, elapsed_s=0.0))
         return future
 
     async def exercise() -> list[bool]:
