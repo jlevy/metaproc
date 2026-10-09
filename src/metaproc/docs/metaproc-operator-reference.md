@@ -796,15 +796,21 @@ Whether it recognizes the id is not the test: ids it ships a definition for are
 rewritten too. Metaproc turns the flag on in the settings it writes for every Gemini
 step. A step’s own `native_settings` override Metaproc’s, so a step or adapter config
 transform must not turn it off.
-For Gemini installations that require root ownership for system settings, opt in to
+
+By default each Gemini launch reads those settings from a private Gemini home
+(`native_settings_scope: user`), never the operator’s `~/.gemini`; authentication then
+comes from the launch environment.
+Gemini CLI 0.60.0 and later skip a system settings file that is not root-owned, so the
+adapter never writes one and rejects `native_settings_scope: system`. A template for the
+home, and what the home contains, are described under Isolated Native Settings in the
+`credentials` topic.
+To keep global authentication, hooks and instructions instead, opt in to
 `--adapter-config native_settings_scope=workspace` on a run whose Gemini steps each set
 `working_directory` to their own run scope.
 The adapter writes the merged native settings to that directory’s
 `.gemini/settings.json`; the existing `--skip-trust` flag allows Gemini to load them.
-It preserves global authentication, hooks and instructions, and refuses a conflicting
-existing settings file or a symlink.
-The default scope remains `system`. Workspace settings remain after the invocation so
-retries use the same bytes.
+It refuses a conflicting existing settings file or a symlink.
+Workspace settings remain after the invocation so retries use the same bytes.
 
 To serialize local agents while investigating shared Gemini project-registry startup
 contention, set `METAPROC_HOST_MAX_LOCAL_AGENTS=1` in the launcher environment.

@@ -290,8 +290,10 @@ native settings, which makes cleanup return before it enumerates anything.
 Two consequences follow.
 Gemini no longer prunes its own `chats/` and `tool-outputs/` directories, so bounded
 retention is an external operation and those directories grow until something else trims
-them. And the low Gemini memory estimate is only meaningful while the guard is in place:
-an operator who re-enables retention through `native_settings` is choosing the
+them. Under the default private Gemini home they are removed with the home when the
+Metaproc process exits; under `workspace` scope they accumulate in the operator’s
+`~/.gemini`. And the low Gemini memory estimate is only meaningful while the guard is in
+place: an operator who re-enables retention through `native_settings` is choosing the
 high-spike regime and should raise the profile’s estimate to match.
 
 Two mitigations that look plausible are not.

@@ -100,11 +100,17 @@ def test_user_settings_are_private_for_concurrent_different_steps(tmp_path: Path
     ] == [["read_file"], ["write_file"]]
 
 
-def test_user_settings_require_explicit_template_and_scope(tmp_path: Path) -> None:
+def test_user_settings_template_is_optional_and_needs_user_scope(tmp_path: Path) -> None:
     adapter = GeminiCliAdapter()
-    errors = adapter.validate_config({"native_settings_scope": "user"})
-    assert any("requires native_settings_home_template" in error.reason for error in errors)
-    errors = adapter.validate_config({"native_settings_home_template": str(tmp_path)})
+    assert adapter.validate_config({"native_settings_scope": "user"}) == []
+    assert adapter.validate_config({"native_settings_home_template": str(tmp_path)}) == []
+    errors = adapter.validate_config(
+        {
+            "native_settings_scope": "workspace",
+            "working_directory": str(tmp_path),
+            "native_settings_home_template": str(tmp_path),
+        }
+    )
     assert any("requires native_settings_scope 'user'" in error.reason for error in errors)
 
 

@@ -346,22 +346,26 @@ laptop already set up for Batch dispatch — see
 
 #### Isolated Native Settings
 
-Use `native_settings_scope: user` when concurrent steps share a working directory but
-need different Gemini settings.
-Recent Gemini releases require system settings files and their parent directories to be
-root-owned; a user-owned system settings file can be ignored.
-An isolated user home supplies native settings without changing the task’s working
-directory or relative artifact paths.
+Every Gemini launch gets a private Gemini home (`native_settings_scope: user`, the
+default). The adapter writes its resolved native settings to that home’s
+`.gemini/settings.json` and sets `GEMINI_CLI_HOME` for the child, while retaining
+`HOME`, the working directory, provider environment, and any inherited
+`GEMINI_CLI_SYSTEM_SETTINGS_PATH`. Concurrent steps that share a working directory can
+therefore run with different settings, and no launch reads or writes the operator’s
+`~/.gemini`: its login, hooks, instructions, project registry and session history.
 
-The adapter requires an explicit `native_settings_home_template`, containing
-`.gemini/settings.json` as a JSON object.
-Prepare this small template with the operator instructions, authentication
-configuration, policies, hooks and their dependencies, skills, and other assets the
-workflow requires. It must contain only regular files and directories; symlinks and
-special files are rejected.
-Do not include historical session state or caches.
-The adapter does not copy the ambient operator home or choose an authentication
-fallback.
+The adapter never writes Gemini’s system settings file.
+Since gemini-cli 0.60.0 the CLI reads that file only when it and every directory above
+it are owned by root and writable by neither group nor others, and otherwise skips it
+with a `Security Warning` line in the transcript, so a file Metaproc wrote would be lost
+without an error. `native_settings_scope: system` is rejected.
+
+Without a template, the home holds only the native settings.
+Gemini then takes its authentication from the launch environment, one of the modes
+above, because the settings name no auth type.
+A login or auth type stored in the operator’s `~/.gemini` is not visible.
+
+When the workflow needs more, name a template:
 
 ```yaml
 config:
@@ -369,21 +373,27 @@ config:
   native_settings_home_template: /path/to/prepared-home
 ```
 
-Each launch gets a separate private copy.
-Resolved `native_settings` are deep-merged over the template settings, preserving
-unrelated template keys.
-The adapter sets `GEMINI_CLI_HOME` for that child while retaining `HOME`, the working
-directory, provider environment, and any inherited `GEMINI_CLI_SYSTEM_SETTINGS_PATH`.
-Gemini’s existing workspace and system precedence still applies; inspect effective
-settings before relying on model pins or limits.
+The template contains `.gemini/settings.json` as a JSON object, plus the operator
+instructions, authentication configuration, policies, hooks and their dependencies,
+skills, and other assets the workflow requires.
+It must contain only regular files and directories; symlinks and special files are
+rejected. Do not include historical session state or caches.
+The adapter does not copy the ambient operator home or choose an authentication
+fallback. Each launch gets a separate private copy, and resolved `native_settings` are
+deep-merged over the template settings, preserving unrelated template keys.
+
+Gemini’s workspace and system precedence still applies: settings in a trusted working
+directory’s `.gemini/settings.json`, and an administrator’s system settings, override
+the home’s. Inspect effective settings before relying on model pins or limits.
 This option does not bypass administrator policy.
 
 Private directories are owner-only; copied files are owner-readable and writable, with
 the owner’s executable bit preserved for scripts.
-Homes live in the adapter’s temporary directory until its process exits.
-Use an appropriate `TMPDIR`, and retain required session evidence before cleanup.
-This scope requires POSIX no-follow directory descriptors and is rejected on platforms
-without them.
+Homes live in the adapter’s temporary directory until its process exits, and each
+collects that launch’s Gemini session state.
+Use a `TMPDIR` on a volume with room for it, and retain required session evidence before
+cleanup. A template requires POSIX no-follow directory descriptors and is rejected on
+platforms without them.
 
 For composite processes, put these scalar settings in an execution profile supplied to
 the run. Profile selection and profile files propagate to child scopes; a root

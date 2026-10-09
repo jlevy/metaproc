@@ -707,7 +707,8 @@ class TestGeminiCliAdapter:
     def test_prepare_env_injects_native_settings(self):
         env = {"PATH": "/bin"}
         result = self.adapter.prepare_env(env, {})
-        assert "GEMINI_CLI_SYSTEM_SETTINGS_PATH" in result
+        assert "GEMINI_CLI_SYSTEM_SETTINGS_PATH" not in result
+        assert (_Path(result["GEMINI_CLI_HOME"]) / ".gemini" / "settings.json").is_file()
 
     def test_working_directory_absent(self):
         assert self.adapter.working_directory({}) is None
