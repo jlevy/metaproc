@@ -627,14 +627,21 @@ class _StubAdapter:
 class _RecordedSleep:
     """Stand in for ``asyncio`` inside ``run_process`` so backoff is recorded, not slept."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, cancel: bool = False) -> None:
         self.delays: list[float] = []
+        self.pending_retries: list[int] = []
+        self.pool: RunPool | None = None
+        self.cancel = cancel
 
     def __getattr__(self, name: str) -> Any:
         return getattr(asyncio, name)
 
     async def sleep(self, delay: float, result: Any = None) -> Any:
         self.delays.append(delay)
+        if self.pool is not None:
+            self.pending_retries.append(self.pool.snapshot.pending_retries)
+        if self.cancel:
+            raise asyncio.CancelledError
         return result
 
 
@@ -644,6 +651,7 @@ def _scalar_run(
     *,
     outcomes: list[str],
     max_retries: int,
+    cancel_in_backoff: bool = False,
 ) -> SimpleNamespace:
     """Run one scalar agent step whose attempts end as *outcomes* say."""
     monkeypatch.setitem(ADAPTER_REGISTRY, SCALAR_ADAPTER, _StubAdapter())
@@ -676,7 +684,7 @@ def _scalar_run(
         return _ScalarLaunchResult(exit_code=0, kill_reason=None, admitted_at=time.monotonic())
 
     monkeypatch.setattr(run_process_module, "_run_scalar_agent_subprocess", _fake_launch)
-    sleeper = _RecordedSleep()
+    sleeper = _RecordedSleep(cancel=cancel_in_backoff)
     monkeypatch.setattr(run_process_module, "asyncio", sleeper)
 
     step_def = ProcessStep(id="scalar-agent", mode="agent", prompt_prefix="test", outputs=outputs)
@@ -703,6 +711,7 @@ def _scalar_run(
 
     async def _run() -> bool:
         pools.append(_pool(tmp_path / "pool"))
+        sleeper.pool = pools[0]
         context = RunExecutionContext.create(max_concurrency=None)
         try:
             return await _execute_agent_step(
@@ -720,7 +729,13 @@ def _scalar_run(
             context.close()
             await pools[0].shutdown()
 
-    succeeded = asyncio.run(_run())
+    cancelled = False
+    try:
+        succeeded = asyncio.run(_run())
+    except asyncio.CancelledError:
+        if not cancel_in_backoff:
+            raise
+        succeeded, cancelled = False, True
     state_dir = compute_task_state_dir(run_dir, step_def, {**variables, "VARIANT": ""})
     prompts = sorted(
         launches[0].parent.glob("prompt-scalar-agent-attempt*.txt"),
@@ -731,6 +746,8 @@ def _scalar_run(
         history=read_attempt_history_at(state_dir),
         pool=pools[0],
         delays=sleeper.delays,
+        pending_retries=sleeper.pending_retries,
+        cancelled=cancelled,
         prompts=prompts,
         launches=launches,
         out=out,
@@ -827,6 +844,31 @@ class TestScalarAgentQuotaRetry:
         assert [row.disposition for row in result.history] == [AttemptDisposition.retryable] * (
             1 + MAX_QUOTA_RETRIES_DEFAULT
         )
+
+    def test_a_scalar_retry_wait_is_a_pending_retry_of_the_pool(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``pool status`` shows a scalar leaf waiting out its backoff, as a mapped one."""
+        result = _scalar_run(tmp_path, monkeypatch, outcomes=["quota", "success"], max_retries=2)
+
+        assert result.succeeded is True
+        assert result.pending_retries == [1]
+        assert result.pool.snapshot.pending_retries == 0
+
+    def test_a_cancelled_scalar_retry_wait_is_no_longer_pending(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result = _scalar_run(
+            tmp_path,
+            monkeypatch,
+            outcomes=["quota", "success"],
+            max_retries=2,
+            cancel_in_backoff=True,
+        )
+
+        assert result.cancelled is True
+        assert result.pending_retries == [1]
+        assert result.pool.snapshot.pending_retries == 0
 
     def test_no_retry_budget_means_no_automatic_retry(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

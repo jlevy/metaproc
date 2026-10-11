@@ -3105,6 +3105,24 @@ def _report_scalar_failure(
     )
 
 
+async def _wait_scalar_retry_backoff(
+    pool: RunPool | None, label: str, *, attempt: int, backoff_s: float
+) -> None:
+    """Wait out one scalar retry's backoff as a pending retry of the run pool.
+
+    Mapped retries wait on the scheduler's heap, where the pool counts them; a scalar
+    retry waits here, so it registers itself for ``pool status`` and for the provider
+    governor's growing-retries signal, and deregisters however the wait ends.
+    """
+    if pool is not None:
+        pool.record_retry_scheduled(label, attempt, backoff_s)
+    try:
+        await asyncio.sleep(backoff_s)
+    finally:
+        if pool is not None:
+            pool.record_retry_consumed(label)
+
+
 def _mark_scalar_prelaunch_failure_after_retry(state_dir: Path, *, error: str) -> None:
     """Make a previously launched attempt terminal when its retry cannot launch."""
     current = read_status_at(state_dir)
@@ -3639,7 +3657,12 @@ async def _execute_agent_step(
                             f"  Step '{step_id}': retryable ({exit_error}), "
                             f"retry in {backoff:.0f}s (attempt {attempt}/{cap + 1})"
                         )
-                        await asyncio.sleep(backoff)
+                        await _wait_scalar_retry_backoff(
+                            scalar_pool,
+                            f"{run_id}/{step_id}",
+                            attempt=attempt + 1,
+                            backoff_s=backoff,
+                        )
                         attempt += 1
                         continue
                     mark_failed_at(
@@ -3733,7 +3756,12 @@ async def _execute_agent_step(
                                 f"retry in {backoff:.0f}s "
                                 f"(attempt {attempt}/{content_retry_cap + 1})"
                             )
-                            await asyncio.sleep(backoff)
+                            await _wait_scalar_retry_backoff(
+                                scalar_pool,
+                                f"{run_id}/{step_id}",
+                                attempt=attempt + 1,
+                                backoff_s=backoff,
+                            )
                             attempt += 1
                             continue
                         mark_failed_at(
