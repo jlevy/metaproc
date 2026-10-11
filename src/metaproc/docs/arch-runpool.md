@@ -278,6 +278,13 @@ credential, or unrelated text such as `Disk quota exceeded`) say nothing about
 concurrency and leave the provider ceiling alone.
 One with a named reset time pauses submissions until that time passes.
 
+The refused item itself retries, at most `MAX_QUOTA_RETRIES_DEFAULT` (3) times and at
+least `QUOTA_RETRY_MIN_BACKOFF_S` (60 seconds) apart, inside the step’s declared
+`max_retries`. Each retry is a full agent session that spends the CLI’s own internal
+retries again, so under the default policy an item that keeps meeting the refusal stops
+after four sessions and ends `retryable`, and the step’s spend-cap worst case
+(`1 + max_retries`) still bounds it.
+
 Operator caps are an emergency brake and local testing tool.
 They are useful when a live run is already harming host stability, but they should be
 cleared after the incident with `uv run metaproc pool override <run-dir> --clear`.

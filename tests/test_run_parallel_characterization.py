@@ -560,6 +560,8 @@ class TestPoolSubmitAndShutdown:
             (["quota"] * 3, 1, [1, 2], 1, False),
             (["quota"], 1, [1, 2], 0, False),
             (["quota", "timeout", "quota"], 2, [1, 2, 3], 1, False),
+            # The reset-clock wait keeps the declared budget, above the per-minute cap.
+            (["quota"] * 6, 5, [1, 2, 3, 4, 5, 6], 1, False),
             (["pool"], 0, [1, 1], 0, False),
             (["quota"], 3, [1], 1, True),
         ],

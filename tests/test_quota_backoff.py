@@ -37,6 +37,7 @@ from metaproc.commands.run_process import (
 from metaproc.engine.pathing import compute_task_state_dir
 from metaproc.engine.retry import (
     INVALID_OUTPUT_RETRY_HEADER,
+    MAX_QUOTA_RETRIES_DEFAULT,
     QUOTA_RETRY_MIN_BACKOFF_S,
     FailureClass,
     RetryVerdict,
@@ -808,6 +809,22 @@ class TestScalarAgentQuotaRetry:
         assert result.pool._quota_paused_until.strftime("%H:%M") == "03:10"
         assert result.pool.current_max_concurrency == 30
 
+    def test_quota_retries_are_capped_below_the_default_budget(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Each quota retry is a full paid agent session, so it gets a small budget.
+
+        The framework default of 12 retries suits failures that cost nothing to retry;
+        a refusal that persists past a few windows will not clear on a twelfth session.
+        """
+        result = _scalar_run(tmp_path, monkeypatch, outcomes=["quota"] * 13, max_retries=12)
+
+        assert result.succeeded is False
+        assert len(result.launches) == 1 + MAX_QUOTA_RETRIES_DEFAULT
+        assert [row.disposition for row in result.history] == [AttemptDisposition.retryable] * (
+            1 + MAX_QUOTA_RETRIES_DEFAULT
+        )
+
     def test_no_retry_budget_means_no_automatic_retry(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -824,132 +841,157 @@ class TestScalarAgentQuotaRetry:
 # ── Mapped agent step ─────────────────────────────────────────────────────
 
 
+def _mapped_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    outcomes: list[str],
+    max_retries: int,
+) -> SimpleNamespace:
+    """Run one mapped agent item whose attempts end as *outcomes* say."""
+    monkeypatch.setattr("metaproc.commands.run_parallel._POOL_FILL_POLL_INTERVAL_S", 0.01)
+    monkeypatch.setattr("metaproc.engine.retry.QUOTA_RETRY_MIN_BACKOFF_S", 0.05, raising=False)
+    state_dir = tmp_path / "state" / "synthetic-a"
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    attempts: list[int] = []
+    scheduled: list[tuple[int, float]] = []
+    recorded: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def _prepare(*, shared: dict[str, Any], **kwargs: Any) -> MagicMock:
+        log_path = logs_dir / f"attempt-{shared['attempt_number']}.jsonl"
+        if outcomes[shared["attempt_number"] - 1] == "quota":
+            log_path.write_text(_quota_transcript(), encoding="utf-8")
+        else:
+            log_path.write_text(json.dumps({"type": "message"}) + "\n", encoding="utf-8")
+        shared["log_path"] = log_path
+        shared["running_record"] = mark_running_at(
+            state_dir,
+            run_id=str(kwargs["run_id"]),
+            step_id="author",
+            item={"item": "synthetic-a"},
+            item_key="synthetic-a",
+            attempt=shared["attempt_number"],
+        )
+        return MagicMock()
+
+    class FakePool:
+        _status_path = None
+        snapshot = SimpleNamespace(current_concurrency=1, active_count=0, pending_count=0)
+
+        def submit(self, config: Any) -> asyncio.Future[Any]:
+            shared = config.metadata["shared"]
+            attempts.append(shared["attempt_number"])
+            outcome = outcomes[shared["attempt_number"] - 1]
+            future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+            future.set_result(
+                SimpleNamespace(
+                    exit_code=173 if outcome == "quota" else 0,
+                    kill_reason=None,
+                    elapsed_s=397.0,
+                    admitted_at=1_234.5,
+                )
+            )
+            return future
+
+        async def shutdown(self) -> None:
+            pass
+
+        def record_failure_class(self, *args: Any, **kwargs: Any) -> None:
+            recorded.append((args, kwargs))
+
+        def record_retry_scheduled(self, _label: str, attempt: int, delay: float) -> None:
+            scheduled.append((attempt, delay))
+
+        def record_retry_consumed(self, *_args: Any, **_kwargs: Any) -> None:
+            pass
+
+    step_def = MagicMock()
+    step_def.for_each = MagicMock()
+    step_def.for_each.item = "item"
+    step_def.for_each.bind = "item"
+    step_def.for_each.key = "{{item}}"
+    step_def.for_each.retry = None
+    step_def.outputs = {}
+    step_def.variant = None
+    step_def.id = "author"
+    step_def.adapter = {"type": "gemini-cli", "config": {}}
+    spec = MagicMock()
+    spec.name = "quota-backoff"
+    spec.steps = [step_def]
+
+    async def _run() -> list[tuple[str, int]]:
+        with (
+            patch("metaproc.commands.run_parallel.RunPool", return_value=FakePool()),
+            patch("metaproc.commands.run_parallel._build_prepare_launch", side_effect=_prepare),
+            patch("metaproc.commands.run_parallel.compute_item_dir", return_value=None),
+            patch(
+                "metaproc.commands.run_parallel.compute_task_state_dir",
+                return_value=state_dir,
+            ),
+            patch("metaproc.commands.run_parallel._teardown_pool_slot", return_value=None),
+        ):
+            return await _run_agent_pool(
+                spec=spec,
+                step_def=step_def,
+                step="author",
+                each="item",
+                variables={"RUN_ID": "test/run", "VARIANT": "v1"},
+                item_contexts=[{"item": "synthetic-a"}],
+                adapter_type="gemini-cli",
+                merged_config={"model": "gemini-test"},
+                effective_outputs=None,
+                effective_variant="v1",
+                allowed_runtime=set(),
+                retry_policy=RetryPolicy(max_retries=max_retries, initial_backoff_s=0),
+                process_dir=tmp_path,
+                target_env=None,
+                refresh_token_fn=None,
+                pool_config=RunPoolConfig(),
+                backend=MagicMock(),
+                out=MagicMock(),
+                pool_dispatch=None,
+                preflight_quota_guard="off",
+            )
+
+    started = time.monotonic()
+    results = asyncio.run(_run())
+    return SimpleNamespace(
+        results=results,
+        attempts=attempts,
+        scheduled=scheduled,
+        recorded=recorded,
+        history=read_attempt_history_at(state_dir),
+        elapsed_s=time.monotonic() - started,
+    )
+
+
 class TestMappedAgentQuotaRetry:
     def test_a_quota_refusal_is_rescheduled_with_backoff_and_reported_to_the_pool(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr("metaproc.commands.run_parallel._POOL_FILL_POLL_INTERVAL_S", 0.01)
-        monkeypatch.setattr("metaproc.engine.retry.QUOTA_RETRY_MIN_BACKOFF_S", 0.05, raising=False)
-        state_dir = tmp_path / "state" / "synthetic-a"
-        logs_dir = tmp_path / "logs"
-        logs_dir.mkdir()
-        attempts: list[int] = []
-        scheduled: list[tuple[int, float]] = []
-        recorded: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
-        outcomes = ["quota", "success"]
+        run = _mapped_run(tmp_path, monkeypatch, outcomes=["quota", "success"], max_retries=2)
 
-        def _prepare(*, shared: dict[str, Any], **kwargs: Any) -> MagicMock:
-            log_path = logs_dir / f"attempt-{shared['attempt_number']}.jsonl"
-            if outcomes[shared["attempt_number"] - 1] == "quota":
-                log_path.write_text(_quota_transcript(), encoding="utf-8")
-            else:
-                log_path.write_text(json.dumps({"type": "message"}) + "\n", encoding="utf-8")
-            shared["log_path"] = log_path
-            shared["running_record"] = mark_running_at(
-                state_dir,
-                run_id=str(kwargs["run_id"]),
-                step_id="author",
-                item={"item": "synthetic-a"},
-                item_key="synthetic-a",
-                attempt=shared["attempt_number"],
-            )
-            return MagicMock()
-
-        class FakePool:
-            _status_path = None
-            snapshot = SimpleNamespace(current_concurrency=1, active_count=0, pending_count=0)
-
-            def submit(self, config: Any) -> asyncio.Future[Any]:
-                shared = config.metadata["shared"]
-                attempts.append(shared["attempt_number"])
-                outcome = outcomes[shared["attempt_number"] - 1]
-                future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
-                future.set_result(
-                    SimpleNamespace(
-                        exit_code=173 if outcome == "quota" else 0,
-                        kill_reason=None,
-                        elapsed_s=397.0,
-                        admitted_at=1_234.5,
-                    )
-                )
-                return future
-
-            async def shutdown(self) -> None:
-                pass
-
-            def record_failure_class(self, *args: Any, **kwargs: Any) -> None:
-                recorded.append((args, kwargs))
-
-            def record_retry_scheduled(self, _label: str, attempt: int, delay: float) -> None:
-                scheduled.append((attempt, delay))
-
-            def record_retry_consumed(self, *_args: Any, **_kwargs: Any) -> None:
-                pass
-
-        step_def = MagicMock()
-        step_def.for_each = MagicMock()
-        step_def.for_each.item = "item"
-        step_def.for_each.bind = "item"
-        step_def.for_each.key = "{{item}}"
-        step_def.for_each.retry = None
-        step_def.outputs = {}
-        step_def.variant = None
-        step_def.id = "author"
-        step_def.adapter = {"type": "gemini-cli", "config": {}}
-        spec = MagicMock()
-        spec.name = "quota-backoff"
-        spec.steps = [step_def]
-
-        async def _run() -> list[tuple[str, int]]:
-            with (
-                patch("metaproc.commands.run_parallel.RunPool", return_value=FakePool()),
-                patch("metaproc.commands.run_parallel._build_prepare_launch", side_effect=_prepare),
-                patch("metaproc.commands.run_parallel.compute_item_dir", return_value=None),
-                patch(
-                    "metaproc.commands.run_parallel.compute_task_state_dir",
-                    return_value=state_dir,
-                ),
-                patch("metaproc.commands.run_parallel._teardown_pool_slot", return_value=None),
-            ):
-                return await _run_agent_pool(
-                    spec=spec,
-                    step_def=step_def,
-                    step="author",
-                    each="item",
-                    variables={"RUN_ID": "test/run", "VARIANT": "v1"},
-                    item_contexts=[{"item": "synthetic-a"}],
-                    adapter_type="gemini-cli",
-                    merged_config={"model": "gemini-test"},
-                    effective_outputs=None,
-                    effective_variant="v1",
-                    allowed_runtime=set(),
-                    retry_policy=RetryPolicy(max_retries=2, initial_backoff_s=0),
-                    process_dir=tmp_path,
-                    target_env=None,
-                    refresh_token_fn=None,
-                    pool_config=RunPoolConfig(),
-                    backend=MagicMock(),
-                    out=MagicMock(),
-                    pool_dispatch=None,
-                    preflight_quota_guard="off",
-                )
-
-        started = time.monotonic()
-        results = asyncio.run(_run())
-
-        assert results == [("synthetic-a", 0)]
-        assert attempts == [1, 2]
-        assert scheduled == [(2, 0.05)]
-        assert time.monotonic() - started >= 0.05
-        assert recorded == [
+        assert run.results == [("synthetic-a", 0)]
+        assert run.attempts == [1, 2]
+        assert run.scheduled == [(2, 0.05)]
+        assert run.elapsed_s >= 0.05
+        assert run.recorded == [
             (
                 ("quota_exhausted",),
                 {"quota_reset_at": None, "rate_quota": True, "admitted_at": 1_234.5},
             )
         ]
-        history = read_attempt_history_at(state_dir)
-        assert [row.disposition for row in history] == [
+        assert [row.disposition for row in run.history] == [
             AttemptDisposition.retryable,
             AttemptDisposition.succeeded,
         ]
-        assert history[0].failure_class == "quota_exhausted"
+        assert run.history[0].failure_class == "quota_exhausted"
+
+    def test_quota_retries_are_capped_below_the_default_budget(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run = _mapped_run(tmp_path, monkeypatch, outcomes=["quota"] * 13, max_retries=12)
+
+        assert run.results == [("synthetic-a", 1)]
+        assert run.attempts == list(range(1, MAX_QUOTA_RETRIES_DEFAULT + 2))

@@ -2200,9 +2200,10 @@ classifiers and one enum:
 Handling follows the class: retriable classes retry per `RetryPolicy` on the pool path.
 A per-minute quota refusal lowers or holds the run pool’s provider ceiling; other
 `quota_exhausted` failures (hard caps, a capped credential, a full disk) do not move it.
-A per-minute quota refusal retries within the declared budget, waiting at least
-`QUOTA_RETRY_MIN_BACKOFF_S` (60 seconds), and one with a named reset time also pauses
-submissions until then rather than burning attempts against a closed window.
+A per-minute quota refusal retries at most `MAX_QUOTA_RETRIES_DEFAULT` (3) times within
+the declared budget, waiting at least `QUOTA_RETRY_MIN_BACKOFF_S` (60 seconds), and a
+quota failure with a named reset time also pauses submissions until then rather than
+burning attempts against a closed window.
 
 The execution paths apply these policies at different boundaries.
 Scalar agent steps classify operational and output failures, report each to the run pool
@@ -2466,6 +2467,10 @@ produced no validation facts; a later retry retains any still-pending feedback f
 earlier content failure.
 The content-failure budget is capped separately at `MAX_CONTENT_FAILURE_RETRIES_DEFAULT`
 (3) however large `max_retries` is.
+A per-minute quota refusal is capped the same way at `MAX_QUOTA_RETRIES_DEFAULT` (3),
+because each retry relaunches a full agent session; the mapped reset-clock wait keeps
+the declared `max_retries`, since it waits out a named reset instead of relaunching into
+the window that refused it.
 
 #### Policy Resolution
 

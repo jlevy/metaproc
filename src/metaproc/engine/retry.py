@@ -528,6 +528,13 @@ def classify_failure(error: str) -> FailureClass:
 # RetryPolicy.max_retries default (12).
 MAX_CONTENT_FAILURE_RETRIES_DEFAULT = 3
 
+# A per-minute quota retry relaunches a full agent session, which spends the agent
+# CLI's own internal retries (minutes of paid calls) before it can fail again, and it
+# waits at least QUOTA_RETRY_MIN_BACKOFF_S first. A refusal that outlasts a few windows
+# is held by load the run pool cannot relieve, such as another tenant on the same
+# project quota, and will not clear on a twelfth session.
+MAX_QUOTA_RETRIES_DEFAULT = 3
+
 
 def max_retries_for(failure_class: FailureClass, default_max_retries: int) -> int:
     """Return the per-failure-class retry budget.
@@ -536,9 +543,15 @@ def max_retries_for(failure_class: FailureClass, default_max_retries: int) -> in
     typically 12). ``INVALID_OUTPUT`` is capped at
     :data:`MAX_CONTENT_FAILURE_RETRIES_DEFAULT` because re-running the same
     prompt with correction feedback rarely changes the outcome after a few attempts.
+    ``QUOTA_EXHAUSTED`` is capped at :data:`MAX_QUOTA_RETRIES_DEFAULT` because each
+    retry is a full paid session. The mapped reset-clock wait, which waits out a named
+    reset instead of relaunching into the same window, keeps the declared budget and
+    does not come through here.
     """
     if failure_class == FailureClass.INVALID_OUTPUT:
         return min(default_max_retries, MAX_CONTENT_FAILURE_RETRIES_DEFAULT)
+    if failure_class == FailureClass.QUOTA_EXHAUSTED:
+        return min(default_max_retries, MAX_QUOTA_RETRIES_DEFAULT)
     return default_max_retries
 
 

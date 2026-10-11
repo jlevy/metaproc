@@ -11,6 +11,7 @@ from metaproc.commands.run_parallel import _resolve_retry_policy
 from metaproc.engine.retry import (
     MAX_CONTENT_FAILURE_RETRIES_DEFAULT,
     MAX_OUTPUT_FAILURE_FEEDBACK_CHARS,
+    MAX_QUOTA_RETRIES_DEFAULT,
     FailureClass,
     RetryVerdict,
     agent_reported_success,
@@ -648,9 +649,18 @@ class TestMaxRetriesFor:
         ):
             assert max_retries_for(fc, 12) == 12, f"{fc} should use default budget"
 
-    def test_quota_exhausted_uses_default(self) -> None:
-        """QUOTA_EXHAUSTED uses the operator's full budget (waits for reset)."""
-        assert max_retries_for(FailureClass.QUOTA_EXHAUSTED, 12) == 12
+    def test_quota_exhausted_is_capped(self) -> None:
+        """A quota retry relaunches a full agent session, so it gets a small budget.
+
+        The reset-clock wait on the mapped path keeps the declared budget, because it
+        waits out a named reset rather than relaunching into the same window; that path
+        does not go through this function.
+        """
+        assert max_retries_for(FailureClass.QUOTA_EXHAUSTED, 12) == MAX_QUOTA_RETRIES_DEFAULT
+
+    def test_quota_floor_when_max_is_smaller(self) -> None:
+        """A declared budget below the quota cap wins, so ``max_retries: 1`` stays 1."""
+        assert max_retries_for(FailureClass.QUOTA_EXHAUSTED, 1) == 1
 
 
 # ── agent_reported_success ────────────────────────────────────

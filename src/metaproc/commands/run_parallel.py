@@ -2009,10 +2009,10 @@ async def _run_agent_pool(  # noqa: PLR0913
         # against the same retry budget as other process failures. Unlike a
         # pre-launch pool wait, a quota failure can follow paid model work.
         # Otherwise repeated reset-clock failures relaunch forever at attempt one.
+        # The declared budget, not the smaller per-minute quota cap: this retry waits
+        # out a named reset rather than relaunching into the window that refused it.
         is_quota_exhausted_retry = quota_reset_at is not None and not force_abort
-        if is_quota_exhausted_retry and shared["attempt_number"] <= max_retries_for(
-            fc, retry_policy.max_retries
-        ):
+        if is_quota_exhausted_retry and shared["attempt_number"] <= retry_policy.max_retries:
             assert quota_reset_at is not None  # noqa: S101 — narrow the type for mypy/basedpyright
             _finish_attempt(AttemptDisposition.retryable)
             now_local = datetime.now(quota_reset_at.tzinfo)
