@@ -579,6 +579,32 @@ class TestQuotaBackoffGovernor:
         assert resumed._provider_ceiling == 15
         assert resumed.current_max_concurrency == 15
 
+    def test_clearing_an_operator_cap_restores_the_width_a_cut_halves(
+        self, tmp_path: Path, clock: dict[str, float]
+    ) -> None:
+        """``pool override --clear`` takes effect on the next tick.
+
+        The cut halves current capacity, so a capacity left at a cleared cap would make
+        that stale value the new provider ceiling.
+        """
+        pool = _pool(tmp_path)
+        override = tmp_path / "state" / "scale-override.yaml"
+        write_scale_override(override, ScaleOverride(operator_cap=6))
+
+        def _tick() -> None:
+            pool._read_overrides()
+            pool._adjust_concurrency(PressureLevel.NORMAL)
+            pool._apply_operator_target()
+
+        _tick()
+        assert pool.current_max_concurrency == 6
+        override.unlink()
+        _tick()
+        assert pool.current_max_concurrency == 30
+
+        pool.record_failure_class("quota_exhausted", rate_quota=True, admitted_at=999.0)
+        assert pool.current_max_concurrency == 15
+
     def test_other_failure_classes_leave_the_provider_ceiling_alone(self, tmp_path: Path) -> None:
         pool = _pool(tmp_path)
         for failure_class in ("timeout", "server_error", "crash", "invalid_output", "unknown"):

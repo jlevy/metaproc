@@ -2278,12 +2278,21 @@ class RunPool:
                 log.exception("Failed to record concurrency adjustment %d -> %d", old_cap, new_cap)
 
     def _apply_operator_target(self) -> None:
-        """Apply an explicit operator cap change during adaptive mode."""
-        if self._operator_cap_override is None:
-            return
+        """Bring capacity to the effective target after the adaptive governors run.
+
+        The governors set capacity only when a ceiling moves, so an operator change that
+        moves no ceiling, such as clearing an override, would otherwise leave capacity at
+        the old cap until some later ceiling change.
+        """
         target = self._effective_target()
-        if self._semaphore.capacity != target:
-            self._set_capacity(target, reason="operator_override")
+        if self._semaphore.capacity == target:
+            return
+        overridden = (
+            self._operator_cap_override is not None or self._max_concurrency_override is not None
+        )
+        self._set_capacity(
+            target, reason="operator_override" if overridden else "operator_override_cleared"
+        )
 
     def _adjust_concurrency(self, level: PressureLevel) -> None:
         """Adjust semaphore capacity based on memory pressure.
