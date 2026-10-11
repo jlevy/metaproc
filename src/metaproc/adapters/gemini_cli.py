@@ -318,6 +318,116 @@ def _materialize_user_settings(template: Path | None, native_settings: dict[str,
             os.close(source_fd)
 
 
+def _strip_json_comments(text: str) -> str:
+    """Remove ``//`` and ``/* */`` comments outside strings, as gemini-cli does."""
+    kept: list[str] = []
+    index = 0
+    in_string = False
+    while index < len(text):
+        char = text[index]
+        pair = text[index : index + 2]
+        if in_string:
+            kept.append(text[index : index + 2] if char == "\\" else char)
+            index += 2 if char == "\\" else 1
+            in_string = char != '"'
+        elif char == '"':
+            in_string = True
+            kept.append(char)
+            index += 1
+        elif pair == "//":
+            newline = text.find("\n", index)
+            index = len(text) if newline == -1 else newline
+        elif pair == "/*":
+            close = text.find("*/", index + 2)
+            index = len(text) if close == -1 else close + 2
+        else:
+            kept.append(char)
+            index += 1
+    return "".join(kept)
+
+
+# The settings object gemini-cli merges with its `shallow_merge` strategy: a higher
+# source replaces each named entry whole instead of merging into it.
+_SHALLOW_MERGE_SETTINGS = frozenset({("mcpServers",)})
+
+
+def _overridden_settings(
+    asserted: dict[str, object],
+    workspace: dict[str, object],
+    path: tuple[str, ...] = (),
+) -> list[str]:
+    """Return the dotted paths of asserted settings that ``workspace`` would replace.
+
+    gemini-cli merges plain objects key by key and lets a higher source replace
+    anything else, so a workspace overrides an asserted value when it sets that path
+    to a different value or replaces an enclosing object. Keys Metaproc does not
+    assert are not compared.
+    """
+    overridden: list[str] = []
+    for key, value in asserted.items():
+        if key not in workspace:
+            continue
+        child = (*path, key)
+        other = workspace[key]
+        if (
+            isinstance(value, dict)
+            and isinstance(other, dict)
+            and path not in _SHALLOW_MERGE_SETTINGS
+        ):
+            overridden.extend(
+                _overridden_settings(
+                    cast("dict[str, object]", value), cast("dict[str, object]", other), child
+                )
+            )
+        elif json.dumps(other, sort_keys=True) != json.dumps(value, sort_keys=True):
+            overridden.append(".".join(child))
+    return overridden
+
+
+def _refuse_overriding_workspace_settings(
+    directory: Path, native_settings: dict[str, object]
+) -> None:
+    """Refuse a user-scope launch whose working directory overrides Metaproc's settings.
+
+    Gemini ranks a trusted workspace's ``.gemini/settings.json`` above the user settings
+    in the private home, and ``--skip-trust`` trusts every working directory, so such a
+    file would silently replace the step's tool list, subagent overrides or session
+    retention. Like the workspace scope's refusal to replace a conflicting file, the
+    launch stops; equal values and keys Metaproc does not set pass.
+    """
+    settings_path = directory / ".gemini" / "settings.json"
+    try:
+        text = settings_path.read_text(encoding="utf-8")
+    except (FileNotFoundError, NotADirectoryError):
+        return
+    except OSError as exc:
+        raise ValueError(
+            f"Cannot read Gemini workspace settings {settings_path} to confirm they leave "
+            f"Metaproc's native settings in effect: {exc}"
+        ) from exc
+    try:
+        workspace = json.loads(_strip_json_comments(text))
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"Gemini workspace settings {settings_path} are not a JSON object, so Gemini "
+            "would refuse them too"
+        ) from exc
+    if not isinstance(workspace, dict):
+        raise ValueError(
+            f"Gemini workspace settings {settings_path} are not a JSON object, so Gemini "
+            "would refuse them too"
+        )
+    overridden = _overridden_settings(native_settings, cast("dict[str, object]", workspace))
+    if overridden:
+        raise ValueError(
+            f"Refusing to launch Gemini: {settings_path} sets {', '.join(overridden)} to "
+            "values other than the native settings Metaproc writes to the private Gemini "
+            "home. Gemini ranks a trusted working directory's settings above that home, and "
+            "every Metaproc launch trusts its working directory. Remove those keys or give "
+            "them the step's values, or set working_directory to a directory without them"
+        )
+
+
 def _deep_merge_settings(
     base: dict[str, object],
     override: dict[str, object],
@@ -590,6 +700,10 @@ class GeminiCliAdapter:
                 directory, json.dumps(native_settings, sort_keys=True, separators=(",", ":"))
             )
         elif scope == "user":
+            # Popen with no cwd inherits this process's working directory.
+            _refuse_overriding_workspace_settings(
+                self.working_directory(merged_config) or Path.cwd(), native_settings
+            )
             template = merged_config.get("native_settings_home_template")
             env["GEMINI_CLI_HOME"] = str(
                 _materialize_user_settings(

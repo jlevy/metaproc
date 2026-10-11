@@ -800,6 +800,9 @@ transform must not turn it off.
 By default each Gemini launch reads those settings from a private Gemini home
 (`native_settings_scope: user`), never the operator’s `~/.gemini`; authentication then
 comes from the launch environment.
+Gemini ranks a trusted working directory’s `.gemini/settings.json` above that home, so
+the adapter refuses a launch whose working directory sets a setting Metaproc asserts to
+another value; that directory must be operator-authored.
 Gemini CLI 0.60.0 and later skip a system settings file that is not root-owned, so the
 adapter never writes one and rejects `native_settings_scope: system`. A template for the
 home, and what the home contains, are described under Isolated Native Settings in the

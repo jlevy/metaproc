@@ -170,3 +170,119 @@ def test_system_scope_is_refused_because_gemini_would_skip_it(tmp_path: Path) ->
     assert "'user'" in rejections[0].reason
     with pytest.raises(ValueError, match="owned by root"):
         adapter.prepare_env({"HOME": str(tmp_path)}, config)
+
+
+def _write_workspace_settings(directory: Path, content: str) -> Path:
+    settings = directory / ".gemini" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(content, encoding="utf-8")
+    return settings
+
+
+def test_working_directory_settings_cannot_override_metaproc_settings(tmp_path: Path) -> None:
+    """A trusted working directory outranks the private home, so a conflict stops the launch.
+
+    Without the refusal, the merge below hands Gemini the working directory's wider tool
+    list and its re-enabled subagent instead of the step's.
+    """
+    cwd = tmp_path / "task"
+    settings = _write_workspace_settings(
+        cwd,
+        json.dumps(
+            {
+                "tools": {"core": ["run_shell_command", "write_file", "read_file"]},
+                "agents": {"overrides": {"generalist": {"enabled": True}}},
+                "ui": {"theme": "Default"},
+            }
+        ),
+    )
+    config: dict[str, object] = {
+        "working_directory": str(cwd),
+        "native_settings": {"tools": {"core": ["read_file"]}},
+    }
+    adapter = GeminiCliAdapter()
+    home = tmp_path / "unrefused-home"
+    home.mkdir()
+    loaded, _ = _settings_gemini_loads({"HOME": str(home)}, cwd)
+    assert loaded["tools"] == {"core": ["run_shell_command", "write_file", "read_file"]}
+
+    with pytest.raises(ValueError) as refusal:
+        adapter.prepare_env({"HOME": str(tmp_path)}, config)
+
+    message = str(refusal.value)
+    assert str(settings) in message
+    assert "agents.overrides.generalist.enabled" in message
+    assert "tools.core" in message
+    assert "ui.theme" not in message
+
+
+def test_working_directory_settings_that_agree_are_accepted(tmp_path: Path) -> None:
+    """Equal values and keys Metaproc does not set leave its settings in effect."""
+    cwd = tmp_path / "task"
+    _write_workspace_settings(
+        cwd,
+        json.dumps(
+            {
+                "context": {"fileFiltering": {"respectGitIgnore": False}},
+                "tools": {"core": ["read_file"]},
+                "ui": {"theme": "Default"},
+            }
+        ),
+    )
+    config: dict[str, object] = {
+        "working_directory": str(cwd),
+        "native_settings": {"tools": {"core": ["read_file"]}},
+    }
+    adapter = GeminiCliAdapter()
+
+    env = adapter.prepare_env({"HOME": str(tmp_path)}, config)
+    loaded, skipped = _settings_gemini_loads(env, cwd)
+
+    assert skipped == []
+    assert loaded["tools"] == {"core": ["read_file"]}
+    general = cast("dict[str, dict[str, object]]", loaded["general"])
+    assert general["sessionRetention"]["enabled"] is False
+    assert loaded["agents"] == GEMINI_DEFAULT_NATIVE_SETTINGS["agents"]
+
+
+def test_working_directory_settings_with_comments_are_read_as_gemini_reads_them(
+    tmp_path: Path,
+) -> None:
+    """Gemini strips comments before parsing, so the check does too, outside strings."""
+    cwd = tmp_path / "task"
+    _write_workspace_settings(
+        cwd,
+        '{\n  // the theme a developer prefers\n  "ui": {"theme": "a // b /* c */"},\n'
+        '  /* the step\'s own value */ "experimental": {"dynamicModelConfiguration": true}\n}\n',
+    )
+    adapter = GeminiCliAdapter()
+    adapter.prepare_env({"HOME": str(tmp_path)}, {"working_directory": str(cwd)})
+
+    (cwd / ".gemini" / "settings.json").write_text(
+        '{\n  // turned off locally\n  "experimental": {"dynamicModelConfiguration": false}\n}\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"experimental\.dynamicModelConfiguration"):
+        adapter.prepare_env({"HOME": str(tmp_path)}, {"working_directory": str(cwd)})
+
+
+def test_process_working_directory_is_checked_when_the_step_sets_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without working_directory the CLI inherits Metaproc's own working directory."""
+    _write_workspace_settings(
+        tmp_path, json.dumps({"general": {"sessionRetention": {"enabled": True}}})
+    )
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match=r"general\.sessionRetention\.enabled"):
+        GeminiCliAdapter().prepare_env({"HOME": str(tmp_path)}, {})
+
+
+def test_unreadable_working_directory_settings_are_refused(tmp_path: Path) -> None:
+    """Gemini stops on a settings file it cannot parse; the adapter says so first."""
+    cwd = tmp_path / "task"
+    _write_workspace_settings(cwd, '{"tools": ')
+
+    with pytest.raises(ValueError, match="not a JSON object"):
+        GeminiCliAdapter().prepare_env({"HOME": str(tmp_path)}, {"working_directory": str(cwd)})

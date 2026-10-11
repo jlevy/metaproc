@@ -382,9 +382,17 @@ The adapter does not copy the ambient operator home or choose an authentication
 fallback. Each launch gets a separate private copy, and resolved `native_settings` are
 deep-merged over the template settings, preserving unrelated template keys.
 
-Gemini’s workspace and system precedence still applies: settings in a trusted working
-directory’s `.gemini/settings.json`, and an administrator’s system settings, override
-the home’s. Inspect effective settings before relying on model pins or limits.
+Gemini ranks a trusted working directory’s `.gemini/settings.json`, and an
+administrator’s system settings, above the home, and every Metaproc launch trusts its
+working directory: the step’s `working_directory`, or Metaproc’s own when unset.
+A working directory file that sets one of the native settings Metaproc asserts to a
+different value would undo the step’s tool list, subagent overrides or session
+retention, so the adapter refuses that launch and names the file and the keys, as
+`workspace` scope refuses a conflicting file.
+Equal values and keys Metaproc does not set pass.
+Gemini takes everything else in that directory’s `.gemini/`, and the `.env` files it
+finds from there, as trusted too, so a Gemini step’s working directory must be
+operator-authored: never writable by agent steps and never a third-party checkout.
 This option does not bypass administrator policy.
 
 Private directories are owner-only; copied files are owner-readable and writable, with
