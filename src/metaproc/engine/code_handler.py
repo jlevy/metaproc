@@ -110,10 +110,12 @@ def _load_from_file(file_part: str, process_dir: Path) -> types.ModuleType:
 
 @contextlib.contextmanager
 def _handler_import_roots_ctx(process_dir: Path, handler_path: Path) -> Generator[None]:
-    """Temporarily add import roots to ``sys.path``, restoring it afterward."""
+    """Temporarily put the handler's import roots at the front of ``sys.path``, in
+    precedence order, restoring it afterward."""
     roots = _handler_import_roots(process_dir, handler_path)
     added: list[str] = []
-    for candidate in roots:
+    # Insert lowest precedence first so the first root ends up at sys.path[0].
+    for candidate in reversed(roots):
         root_str = str(candidate)
         if root_str not in sys.path:
             sys.path.insert(0, root_str)
@@ -127,22 +129,30 @@ def _handler_import_roots_ctx(process_dir: Path, handler_path: Path) -> Generato
 
 
 def _handler_import_roots(process_dir: Path, handler_path: Path) -> list[Path]:
-    """Return directories worth adding to ``sys.path`` for a file-based handler."""
-    roots: list[Path] = []
-    seen: set[Path] = set()
-    explicit = [handler_path.parent.resolve(), process_dir.resolve()]
-    for path in explicit:
-        if path not in seen:
-            roots.append(path)
-            seen.add(path)
+    """Return the ``sys.path`` roots for a file-based handler, highest precedence first.
 
-    for candidate in process_dir.resolve().parents:
-        if not ((candidate / "pyproject.toml").exists() or (candidate / ".git").exists()):
-            continue
-        if candidate in seen:
-            continue
-        roots.append(candidate)
-        seen.add(candidate)
+    The handler's directory and the process directory come first, then each project
+    root enclosing the process directory (a directory holding ``pyproject.toml`` or
+    ``.git``), innermost first, so the nearest root wins when two define the same name.
+
+    The walk stops at the innermost repository root, the nearest directory holding a
+    ``.git`` entry: a directory in a primary checkout, a file in a linked worktree or
+    submodule. A checkout nested inside another therefore imports only its own code,
+    never a different revision from the enclosing checkout. Without repository
+    metadata, as in a source bundle, every enclosing project root is included.
+    """
+    roots: list[Path] = []
+    for path in (handler_path.parent.resolve(), process_dir.resolve()):
+        if path not in roots:
+            roots.append(path)
+
+    process_root = process_dir.resolve()
+    for candidate in (process_root, *process_root.parents):
+        repository_root = (candidate / ".git").exists()
+        if candidate not in roots and (repository_root or (candidate / "pyproject.toml").exists()):
+            roots.append(candidate)
+        if repository_root:
+            break
     return roots
 
 
