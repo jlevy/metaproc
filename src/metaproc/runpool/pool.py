@@ -878,7 +878,12 @@ class RunPool:
             buffer_s,
         )
         if self._event_logger is not None:
-            self._event_logger.quota_pause_started(reset_at.isoformat(), buffer_s)
+            try:
+                self._event_logger.quota_pause_started(reset_at.isoformat(), buffer_s)
+            except OSError:
+                # The pause above already holds; a failed diagnostic sink must not
+                # replace the verdict of the item that reported the quota.
+                log.exception("Failed to record quota pause start")
         # Spawn a task to wait out the pause + emit progress events. Skip
         # spawning if there's no running loop (e.g. tests that exercise
         # pause logic synchronously); the gate still blocks submissions
@@ -922,13 +927,21 @@ class RunPool:
                     continue
                 remaining = (paused_until - datetime.now(paused_until.tzinfo)).total_seconds()
                 if remaining > 0:
-                    self._event_logger.quota_pause_tick(round(remaining, 1))
+                    try:
+                        self._event_logger.quota_pause_tick(round(remaining, 1))
+                    except OSError:
+                        log.exception("Failed to record quota pause progress")
         except asyncio.CancelledError:
             return
         # Clear pause state and unblock submissions.
         self._quota_paused_until = None
         if self._event_logger is not None:
-            self._event_logger.quota_pause_resumed()
+            try:
+                self._event_logger.quota_pause_resumed()
+            except OSError:
+                # Reopening the gate below is what matters; without it every later
+                # submission would wait forever.
+                log.exception("Failed to record quota pause resume")
         log.info("RunPool: quota pause resumed")
         if self._quota_paused_event is not None:
             self._quota_paused_event.set()
@@ -1076,13 +1089,19 @@ class RunPool:
     def record_retry_scheduled(self, label: str, attempt: int, backoff_s: float) -> None:
         """Record that an item has been scheduled for retry after backoff.
 
-        Increments the pending retries counter, emits a retry_scheduled event,
+        Emits a retry_scheduled event, increments the pending retries counter,
         and triggers a status write.  Called by the orchestrator when pushing
-        to the retry heap.
+        to the retry heap, and by a scalar leaf before it waits out its backoff.
+        A failed event write is logged and the retry still counts.  The counter
+        moves after the write, so anything the write raises leaves no pending retry
+        behind for a caller to deregister.
         """
-        self._pending_retries += 1
         if self._event_logger is not None:
-            self._event_logger.retry_scheduled(label, attempt, backoff_s)
+            try:
+                self._event_logger.retry_scheduled(label, attempt, backoff_s)
+            except OSError:
+                log.exception("Failed to record retry scheduled for %s", label)
+        self._pending_retries += 1
         self._write_status()
 
     def record_retry_consumed(self, label: str) -> None:

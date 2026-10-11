@@ -60,6 +60,7 @@ from metaproc.osutils.memory_pressure import PressureLevel
 from metaproc.runpool.backend import PreparedLaunch
 from metaproc.runpool.event_models import ConcurrencyAdjustEvent, QuotaBackoffEvent
 from metaproc.runpool.event_reader import read_runpool_events
+from metaproc.runpool.events import EventLogger
 from metaproc.runpool.mock_backend import MockBackend, MockBehavior
 from metaproc.runpool.pool import ProcessConfig, RunPool, RunPoolConfig
 from metaproc.runpool.status import ScaleOverride, write_scale_override
@@ -208,6 +209,19 @@ class TestQuotaRetryBackoff:
 
 
 # ── Provider ceiling ──────────────────────────────────────────────────────
+
+
+class _FailingSink(io.StringIO):
+    """An event log file whose writes of the named events fail as on a full disk."""
+
+    def __init__(self, failing_events: set[str]) -> None:
+        super().__init__()
+        self._failing_events = failing_events
+
+    def write(self, text: str) -> int:
+        if json.loads(text)["event"] in self._failing_events:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return super().write(text)
 
 
 def _pool(tmp_path: Path, **overrides: Any) -> RunPool:
@@ -544,6 +558,50 @@ class TestQuotaBackoffGovernor:
         assert pool.current_max_concurrency == 15
         assert pool._semaphore.capacity == pool._effective_target()
 
+    def test_a_failing_event_sink_cannot_strand_a_scheduled_retry(self, tmp_path: Path) -> None:
+        """A retry whose event cannot be written is still pending, and still ends."""
+        pool = _pool(tmp_path)
+        assert pool._event_logger is not None
+        pool._event_logger._file = _FailingSink({"retry_scheduled"})
+
+        pool.record_retry_scheduled("leaf", 1, 60.0)
+        assert pool.snapshot.pending_retries == 1
+        pool.record_retry_consumed("leaf")
+
+        assert pool.snapshot.pending_retries == 0
+
+    @pytest.mark.parametrize(
+        "failing_event", ["quota_pause_started", "quota_pause_tick", "quota_pause_resumed"]
+    )
+    def test_a_failing_event_sink_cannot_hold_a_quota_pause_shut(
+        self, tmp_path: Path, failing_event: str
+    ) -> None:
+        """The pause is set, waited out and lifted whichever of its events fails to write.
+
+        A failed ``quota_pause_resumed`` write used to kill the pause task before it
+        reopened the gate, so every later submission waited forever.
+        """
+
+        async def _run() -> None:
+            pool = _pool(tmp_path)
+            assert pool._event_logger is not None
+            pool._event_logger._file = _FailingSink({failing_event})
+            try:
+                pool.pause_for_quota(
+                    datetime.now(UTC) + timedelta(seconds=0.3),
+                    buffer_s=0.0,
+                    progress_interval_s=0.05,
+                )
+                assert pool._quota_paused_until is not None
+                await asyncio.wait_for(pool._await_quota_pause(), timeout=5.0)
+                assert pool._quota_paused_until is None
+            finally:
+                if pool._quota_pause_task is not None:
+                    pool._quota_pause_task.cancel()
+                await pool.shutdown()
+
+        asyncio.run(_run())
+
     def test_manual_mode_freezes_the_quota_governor(
         self, tmp_path: Path, clock: dict[str, float]
     ) -> None:
@@ -724,9 +782,19 @@ def _scalar_run(
     outcomes: list[str],
     max_retries: int,
     cancel_in_backoff: bool = False,
+    failing_events: tuple[str, ...] = (),
 ) -> SimpleNamespace:
-    """Run one scalar agent step whose attempts end as *outcomes* say."""
+    """Run one scalar agent step whose attempts end as *outcomes* say.
+
+    Each event named in *failing_events* fails to write as on a full disk.
+    """
     monkeypatch.setitem(ADAPTER_REGISTRY, SCALAR_ADAPTER, _StubAdapter())
+
+    def _full_disk(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    for event_name in failing_events:
+        monkeypatch.setattr(EventLogger, event_name, _full_disk)
     runs_dir = tmp_path / "runs"
     run_id = "quota-run"
     run_dir = runs_dir / run_id
@@ -941,6 +1009,45 @@ class TestScalarAgentQuotaRetry:
         assert result.cancelled is True
         assert result.pending_retries == [1]
         assert result.pool.snapshot.pending_retries == 0
+
+    def test_a_failing_retry_event_neither_fails_the_step_nor_strands_a_retry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The retry runs and deregisters although its ``retry_scheduled`` event is lost."""
+        result = _scalar_run(
+            tmp_path,
+            monkeypatch,
+            outcomes=["quota", "success"],
+            max_retries=2,
+            failing_events=("retry_scheduled",),
+        )
+
+        assert result.succeeded is True
+        assert [row.disposition for row in result.history] == [
+            AttemptDisposition.retryable,
+            AttemptDisposition.succeeded,
+        ]
+        assert result.pending_retries == [1]
+        assert result.pool.snapshot.pending_retries == 0
+
+    def test_a_failing_pause_event_keeps_the_quota_verdict(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A lost ``quota_pause_started`` event leaves the pause and the attempt's verdict."""
+        result = _scalar_run(
+            tmp_path,
+            monkeypatch,
+            outcomes=["reset_clock"],
+            max_retries=2,
+            failing_events=("quota_pause_started",),
+        )
+
+        assert result.succeeded is False
+        assert len(result.launches) == 1
+        assert [(row.failure_class, row.disposition) for row in result.history] == [
+            ("quota_exhausted", AttemptDisposition.permanent)
+        ]
+        assert result.pool._quota_paused_until is not None
 
     def test_no_retry_budget_means_no_automatic_retry(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

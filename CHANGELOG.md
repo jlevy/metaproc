@@ -157,9 +157,14 @@ development series.
   override was set. It now brings capacity to the effective target whenever they differ.
 
 - **A failing pool event log no longer replaces an item’s outcome.** A failed write of a
-  `concurrency_adjust` or `quota_backoff` event raised out of the governor after it had
-  lowered a ceiling, before the semaphore enforced it, and failed the item that reported
-  the refusal. The capacity change now comes first and the write failure is logged.
+  `quota_backoff` event raised out of the governor after it had lowered a ceiling and
+  before the semaphore enforced it, and a failed `concurrency_adjust` write raised
+  after; either failed the item that reported the refusal.
+  The capacity change now comes first and the write failure is logged.
+  Failed writes of `retry_scheduled` and of the quota pause events
+  (`quota_pause_started`, `quota_pause_tick`, `quota_pause_resumed`) are logged the same
+  way: the retry still runs and leaves no pending retry behind, and a quota pause still
+  lifts, where a failed progress or resume write left every later submission waiting.
 
 - **A resume from a fresh checkout of the same revision reuses what the run completed.**
   A plan resolves a process’s `./` and `../` references to absolute paths, and a step’s
