@@ -395,7 +395,7 @@ class EventLogger:
         hold_s: float,
         admitted_s_ago: float | None,
     ) -> None:
-        """Record the provider governor's response to one quota-exhausted failure.
+        """Record the provider governor's response to one per-minute quota refusal.
 
         ``action`` is ``cut`` when the provider ceiling fell, or ``hold`` when the failure
         belonged to an episode an earlier cut already answered and only held recovery.

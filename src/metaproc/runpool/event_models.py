@@ -185,7 +185,7 @@ class QuotaPauseStartedEvent(BaseModel):
 
 
 class QuotaBackoffEvent(BaseModel):
-    """The provider governor's response to one quota-exhausted failure."""
+    """The provider governor's response to one per-minute quota refusal."""
 
     event: Literal["quota_backoff"]
     ts: datetime

@@ -228,8 +228,16 @@ _HARD_QUOTA_PATTERNS: list[str] = [
 ]
 
 
-def _is_rate_quota(lower: str) -> bool:
-    """Whether a lowercased error reads as a per-minute quota refusal, not a hard cap."""
+def is_rate_quota(error: str) -> bool:
+    """Whether *error* reads as a per-minute quota refusal rather than a hard cap.
+
+    A per-minute refusal is the one quota failure that says the run pool is running too
+    wide for the provider, so it is what the pool's provider governor acts on. A hard
+    cap (daily, monthly, billing), a capped credential, or unrelated ``quota`` text such
+    as a full disk (``Disk quota exceeded``) classifies as ``QUOTA_EXHAUSTED`` too but
+    says nothing about concurrency.
+    """
+    lower = error.lower()
     return any(pattern in lower for pattern in _RATE_QUOTA_PATTERNS) and not any(
         pattern in lower for pattern in _HARD_QUOTA_PATTERNS
     )
@@ -306,7 +314,7 @@ def classify_error(error: str) -> RetryVerdict:
     5. Default — FAIL
     """
     lower = error.lower()
-    rate_quota = _is_rate_quota(lower)
+    rate_quota = is_rate_quota(error)
 
     for pattern in _PERMANENT_PATTERNS:
         if rate_quota and pattern == "quota":

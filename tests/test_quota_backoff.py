@@ -42,6 +42,7 @@ from metaproc.engine.retry import (
     classify_failure,
     compute_backoff,
     extract_log_error,
+    is_rate_quota,
     retry_backoff_s,
 )
 from metaproc.io.state_io import mark_running_at, read_attempt_history_at
@@ -68,8 +69,8 @@ GEMINI_TPM_QUOTA_MESSAGE = (
 )
 
 
-def _quota_transcript() -> str:
-    """A Gemini stream that ends in the per-minute quota refusal."""
+def _quota_transcript(message: str = GEMINI_TPM_QUOTA_MESSAGE) -> str:
+    """A Gemini stream that ends in a quota refusal, the per-minute one by default."""
     return (
         "\n".join(
             [
@@ -83,7 +84,7 @@ def _quota_transcript() -> str:
                     {
                         "type": "result",
                         "status": "error",
-                        "error": {"type": "unknown", "message": GEMINI_TPM_QUOTA_MESSAGE},
+                        "error": {"type": "unknown", "message": message},
                         "stats": {"total_tokens": 1000, "input_tokens": 900, "tool_calls": 3},
                     }
                 ),
@@ -133,6 +134,7 @@ class TestRateQuotaClassification:
     def test_other_per_minute_quota_wordings_are_retryable(self, error: str) -> None:
         assert classify_failure(error) == FailureClass.QUOTA_EXHAUSTED
         assert classify_error(error) == RetryVerdict.RETRY
+        assert is_rate_quota(error) is True
 
     @pytest.mark.parametrize(
         "error",
@@ -159,6 +161,18 @@ class TestRateQuotaClassification:
     )
     def test_hard_quota_failures_stay_permanent(self, error: str) -> None:
         assert classify_error(error) == RetryVerdict.FAIL
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            "TerminalQuotaError: You have exhausted your daily quota on this model",
+            "You're out of extra usage · resets 3:10am (America/Los_Angeles)",
+            "OSError: [Errno 122] Disk quota exceeded",
+            "You exceeded your current quota",
+        ],
+    )
+    def test_only_a_per_minute_refusal_reads_as_a_rate_quota(self, error: str) -> None:
+        assert is_rate_quota(error) is False
 
 
 class TestQuotaRetryBackoff:
@@ -215,7 +229,7 @@ class TestQuotaBackoffGovernor:
         pool = _pool(tmp_path)
         assert pool.current_max_concurrency == 30
 
-        pool.record_failure_class("quota_exhausted")
+        pool.record_failure_class("quota_exhausted", rate_quota=True, admitted_at=time.monotonic())
 
         status = pool.snapshot
         assert pool.current_max_concurrency == 15
@@ -233,13 +247,19 @@ class TestQuotaBackoffGovernor:
         the old ceiling, so its failure says nothing about the new one.
         """
         pool = _pool(tmp_path)
-        pool.record_failure_class("quota_exhausted", admitted_at=clock["value"] - 400.0)
+        pool.record_failure_class(
+            "quota_exhausted", rate_quota=True, admitted_at=clock["value"] - 400.0
+        )
         assert pool.current_max_concurrency == 15
 
         clock["value"] += 70.0
-        pool.record_failure_class("quota_exhausted", admitted_at=clock["value"] - 420.0)
+        pool.record_failure_class(
+            "quota_exhausted", rate_quota=True, admitted_at=clock["value"] - 420.0
+        )
         clock["value"] += 100.0
-        pool.record_failure_class("quota_exhausted", admitted_at=clock["value"] - 580.0)
+        pool.record_failure_class(
+            "quota_exhausted", rate_quota=True, admitted_at=clock["value"] - 580.0
+        )
         assert pool.current_max_concurrency == 15
 
     def test_a_late_report_does_not_make_an_earlier_admission_look_recent(
@@ -249,12 +269,16 @@ class TestQuotaBackoffGovernor:
         delays the report, never the admission the pool stamped."""
         pool = _pool(tmp_path)
         sibling_admitted_at = clock["value"] - 1.0
-        pool.record_failure_class("quota_exhausted", admitted_at=clock["value"] - 400.0)
+        pool.record_failure_class(
+            "quota_exhausted", rate_quota=True, admitted_at=clock["value"] - 400.0
+        )
         assert pool.current_max_concurrency == 15
 
         # The sibling ran 301 s and its report reached the pool 3 s after it exited.
         clock["value"] += 303.0
-        pool.record_failure_class("quota_exhausted", admitted_at=sibling_admitted_at)
+        pool.record_failure_class(
+            "quota_exhausted", rate_quota=True, admitted_at=sibling_admitted_at
+        )
         assert pool.current_max_concurrency == 15
 
     def test_the_pool_stamps_admission_before_launch(self, tmp_path: Path) -> None:
@@ -299,38 +323,74 @@ class TestQuotaBackoffGovernor:
     ) -> None:
         pool = _pool(tmp_path)
         cut_at = clock["value"]
-        pool.record_failure_class("quota_exhausted", admitted_at=cut_at - 400.0)
+        pool.record_failure_class("quota_exhausted", rate_quota=True, admitted_at=cut_at - 400.0)
         assert pool.current_max_concurrency == 15
 
         clock["value"] += 200.0
         # Admitted 100s after the cut, under the reduced ceiling, and still refused.
-        pool.record_failure_class("quota_exhausted", admitted_at=cut_at + 100.0)
+        pool.record_failure_class("quota_exhausted", rate_quota=True, admitted_at=cut_at + 100.0)
         assert pool.current_max_concurrency == 7
 
-    def test_an_unknown_launch_time_holds_without_cutting_again(
+    def test_an_unknown_admission_holds_recovery_without_cutting(
         self, tmp_path: Path, clock: dict[str, float]
     ) -> None:
-        pool = _pool(tmp_path)
-        pool.record_failure_class("quota_exhausted")
-        clock["value"] += 10.0
-        pool.record_failure_class("quota_exhausted")
+        """No pool slot admitted it (a pre-launch failure), so it says nothing about the
+        ceiling; it still says the provider is refusing, so recovery waits."""
+        pool = _pool(tmp_path, quota_backoff_hold_s=300.0)
+        pool.record_failure_class("quota_exhausted", rate_quota=True)
+        assert pool.current_max_concurrency == 30
+
+        pool.record_failure_class("quota_exhausted", rate_quota=True, admitted_at=900.0)
         assert pool.current_max_concurrency == 15
+        clock["value"] = 1_301.0
+        pool.record_failure_class("quota_exhausted", rate_quota=True)
+        assert pool.current_max_concurrency == 15
+        clock["value"] = 1_400.0
+        for _ in range(3):
+            pool._adjust_concurrency(PressureLevel.NORMAL)
+        assert pool.current_max_concurrency == 15
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            "You're out of extra usage · resets 3:10am (America/Los_Angeles)",
+            "You exceeded your current quota, please check your plan and billing details",
+            "OSError: [Errno 122] Disk quota exceeded: 'runs/out/summary.md'",
+        ],
+    )
+    def test_a_quota_failure_that_is_not_a_per_minute_refusal_leaves_the_ceiling(
+        self, tmp_path: Path, error: str
+    ) -> None:
+        """A capped credential or a full disk is not a concurrency signal.
+
+        The caller reads the message and reports it as not a per-minute refusal.
+        """
+        assert classify_failure(error) == FailureClass.QUOTA_EXHAUSTED
+        pool = _pool(tmp_path)
+
+        pool.record_failure_class("quota_exhausted", admitted_at=time.monotonic())
+
+        assert pool.current_max_concurrency == 30
 
     def test_the_ceiling_never_falls_below_min_concurrency(
         self, tmp_path: Path, clock: dict[str, float]
     ) -> None:
         pool = _pool(tmp_path, initial_concurrency=2, min_concurrency=1)
-        pool.record_failure_class("quota_exhausted", admitted_at=clock["value"] - 1.0)
+        pool.record_failure_class(
+            "quota_exhausted", rate_quota=True, admitted_at=clock["value"] - 1.0
+        )
         assert pool.current_max_concurrency == 1
         clock["value"] += 10.0
-        pool.record_failure_class("quota_exhausted", admitted_at=clock["value"] - 1.0)
+        pool.record_failure_class(
+            "quota_exhausted", rate_quota=True, admitted_at=clock["value"] - 1.0
+        )
         assert pool.current_max_concurrency == 1
 
     def test_recovery_waits_out_the_hold_then_ramps_gradually(
         self, tmp_path: Path, clock: dict[str, float]
     ) -> None:
         pool = _pool(tmp_path, quota_backoff_hold_s=300.0)
-        pool.record_failure_class("quota_exhausted")
+        pool.record_failure_class("quota_exhausted", rate_quota=True, admitted_at=600.0)
         assert pool.current_max_concurrency == 15
 
         for _ in range(6):
@@ -348,9 +408,9 @@ class TestQuotaBackoffGovernor:
         self, tmp_path: Path, clock: dict[str, float]
     ) -> None:
         pool = _pool(tmp_path, quota_backoff_hold_s=300.0)
-        pool.record_failure_class("quota_exhausted", admitted_at=600.0)
+        pool.record_failure_class("quota_exhausted", rate_quota=True, admitted_at=600.0)
         clock["value"] = 1_200.0
-        pool.record_failure_class("quota_exhausted", admitted_at=700.0)
+        pool.record_failure_class("quota_exhausted", rate_quota=True, admitted_at=700.0)
 
         clock["value"] = 1_400.0
         for _ in range(3):
@@ -362,16 +422,22 @@ class TestQuotaBackoffGovernor:
             pool._adjust_concurrency(PressureLevel.NORMAL)
         assert pool.current_max_concurrency == 16
 
-    def test_a_reset_clock_quota_still_pauses(self, tmp_path: Path) -> None:
-        """The reset-clock pause is unchanged; the ceiling cut applies alongside it."""
+    def test_a_reset_clock_quota_pauses_without_cutting(self, tmp_path: Path) -> None:
+        """A capped account with a named reset pauses submissions until it passes.
+
+        Claude's ``out of extra usage · resets 3:10am`` is a hard cap, not a sign that
+        the pool runs too wide, so the ceiling stays where it was.
+        """
 
         async def _run() -> None:
             pool = _pool(tmp_path)
             reset_at = datetime.now(UTC) + timedelta(hours=1)
             try:
-                pool.record_failure_class("quota_exhausted", quota_reset_at=reset_at)
+                pool.record_failure_class(
+                    "quota_exhausted", quota_reset_at=reset_at, admitted_at=time.monotonic()
+                )
                 assert pool._quota_paused_until == reset_at
-                assert pool.current_max_concurrency == 15
+                assert pool.current_max_concurrency == 30
             finally:
                 if pool._quota_pause_task is not None:
                     pool._quota_pause_task.cancel()
@@ -384,8 +450,12 @@ class TestQuotaBackoffGovernor:
         assert pool._event_logger is not None
         pool._event_logger.open()
         try:
-            pool.record_failure_class("quota_exhausted", admitted_at=time.monotonic() - 30.0)
-            pool.record_failure_class("quota_exhausted", admitted_at=time.monotonic() - 300.0)
+            pool.record_failure_class(
+                "quota_exhausted", rate_quota=True, admitted_at=time.monotonic() - 30.0
+            )
+            pool.record_failure_class(
+                "quota_exhausted", rate_quota=True, admitted_at=time.monotonic() - 300.0
+            )
         finally:
             pool._event_logger.close()
 
@@ -408,6 +478,12 @@ class TestQuotaBackoffGovernor:
 # ── Scalar agent step ─────────────────────────────────────────────────────
 
 SCALAR_ADAPTER = "quota-backoff-test"
+
+# Terminal messages a scalar attempt can end in, by outcome name.
+SCALAR_FAILURE_MESSAGES = {
+    "quota": GEMINI_TPM_QUOTA_MESSAGE,
+    "disk_quota": "OSError: [Errno 122] Disk quota exceeded: 'runs/out/summary.md'",
+}
 
 
 class _Out:
@@ -494,8 +570,10 @@ def _scalar_run(
         log_path.parent.mkdir(parents=True, exist_ok=True)
         launches.append(log_path)
         outcome = outcomes[len(launches) - 1]
-        if outcome == "quota":
-            log_path.write_text(_quota_transcript(), encoding="utf-8")
+        if outcome in SCALAR_FAILURE_MESSAGES:
+            log_path.write_text(
+                _quota_transcript(SCALAR_FAILURE_MESSAGES[outcome]), encoding="utf-8"
+            )
             # Each attempt is admitted when it launches, so a relaunch after backoff is
             # admitted after any cut an earlier attempt caused.
             return _ScalarLaunchResult(
@@ -612,6 +690,20 @@ class TestScalarAgentQuotaRetry:
         assert {row.failure_class for row in result.history} == {"quota_exhausted"}
         # The second refusal came from a launch admitted under the lowered ceiling.
         assert result.pool.current_max_concurrency == 7
+
+    def test_a_quota_failure_that_is_not_a_per_minute_refusal_leaves_the_ceiling(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A full disk reads as ``quota_exhausted`` but says nothing about the provider."""
+        result = _scalar_run(
+            tmp_path, monkeypatch, outcomes=["disk_quota", "success"], max_retries=2
+        )
+
+        assert result.succeeded is False
+        assert len(result.launches) == 1
+        assert result.history[0].failure_class == "quota_exhausted"
+        assert result.history[0].disposition == AttemptDisposition.permanent
+        assert result.pool.current_max_concurrency == 30
 
     def test_no_retry_budget_means_no_automatic_retry(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -747,7 +839,10 @@ class TestMappedAgentQuotaRetry:
         assert scheduled == [(2, 0.05)]
         assert time.monotonic() - started >= 0.05
         assert recorded == [
-            (("quota_exhausted",), {"quota_reset_at": None, "admitted_at": 1_234.5})
+            (
+                ("quota_exhausted",),
+                {"quota_reset_at": None, "rate_quota": True, "admitted_at": 1_234.5},
+            )
         ]
         history = read_attempt_history_at(state_dir)
         assert [row.disposition for row in history] == [

@@ -361,9 +361,9 @@ class RunPoolConfig(BaseModel):
     rate_limit_burst_window_s: float = 30.0
     rate_limit_down_factor: float = 0.5
     quota_down_factor: float = 0.5
-    """Share of current capacity one quota-exhausted failure removes from the provider ceiling."""
+    """Share of current capacity one per-minute quota refusal removes from the provider ceiling."""
     quota_backoff_hold_s: float = 300.0
-    """Seconds after the latest quota-exhausted failure before provider recovery resumes."""
+    """Seconds after the latest per-minute quota refusal before provider recovery resumes."""
     state_dir: Path | None = None
     logs_dir: Path | None = None
     recent_completions_limit: int = 20
@@ -792,6 +792,7 @@ class RunPool:
         failure_class: str,
         *,
         quota_reset_at: datetime | None = None,
+        rate_quota: bool = False,
         admitted_at: float | None = None,
     ) -> None:
         """Record a failure classification and let the provider governor act on it.
@@ -799,12 +800,14 @@ class RunPool:
         Called by the agent executors after classifying a failed attempt. The pool
         itself only sees exit codes; the caller has access to error details.
 
-        ``quota_exhausted`` lowers the provider ceiling (see
-        :meth:`_apply_quota_backoff`); ``admitted_at`` is the failed process's
-        :attr:`ProcessResult.admitted_at`, from which the pool tells a failure admitted
-        under the current ceiling from one admitted before the last cut.
-        ``quota_reset_at`` (optional) additionally pauses submissions until the named
-        reset window passes.
+        A ``quota_exhausted`` failure the caller read as a per-minute refusal
+        (``rate_quota``, see :func:`metaproc.engine.retry.is_rate_quota`) lowers the
+        provider ceiling (see :meth:`_apply_quota_backoff`); ``admitted_at`` is the
+        failed process's :attr:`ProcessResult.admitted_at`, from which the pool tells a
+        failure admitted under the current ceiling from one admitted before the last
+        cut. Any other quota failure, such as a hard cap or a full disk, is only
+        counted. ``quota_reset_at`` (optional) pauses submissions until the named reset
+        window passes.
         """
         if self._owner_loop is not None:
             try:
@@ -819,7 +822,10 @@ class RunPool:
 
                 async def _record_on_owner() -> None:
                     self.record_failure_class(
-                        failure_class, quota_reset_at=quota_reset_at, admitted_at=admitted_at
+                        failure_class,
+                        quota_reset_at=quota_reset_at,
+                        rate_quota=rate_quota,
+                        admitted_at=admitted_at,
                     )
 
                 # Finish before the scheduler can submit a queued retry, and
@@ -832,7 +838,8 @@ class RunPool:
         if failure_class == "rate_limited":
             self._apply_rate_limit_backoff()
         elif failure_class == "quota_exhausted":
-            self._apply_quota_backoff(admitted_at)
+            if rate_quota:
+                self._apply_quota_backoff(admitted_at)
             if quota_reset_at is not None:
                 self.pause_for_quota(quota_reset_at)
 
@@ -963,28 +970,27 @@ class RunPool:
         self._write_status()
 
     def _apply_quota_backoff(self, admitted_at: float | None) -> None:
-        """Lower the provider ceiling after a quota-exhausted failure, and hold it there.
+        """Lower the provider ceiling after a per-minute quota refusal, and hold it there.
 
-        Unlike a single 429, a quota-exhausted failure arrives after the agent CLI has
+        Unlike a single 429, a per-minute quota refusal arrives after the agent CLI has
         already retried internally for minutes, so one is enough to act on: no burst
         threshold, and no floor above ``min_concurrency``.
 
         One saturation episode still surfaces as several failures, because every process
         admitted under the old ceiling can fail after the cut. A failure cuts again only
         when its process was admitted after the latest cut, which means the lowered
-        ceiling was itself too high; earlier failures, and failures whose admission time
-        is unknown while a hold is active, only extend the hold. The admission time is
-        stamped by the pool, so a late report cannot make an earlier admission look
-        recent. Provider recovery resumes
+        ceiling was itself too high; earlier failures only extend the hold. A failure
+        with no admission time never cuts: no pool slot admitted it (a pre-launch
+        failure), so it says nothing about the ceiling, and it only extends the hold.
+        The admission time is stamped by the pool, so a late report cannot make an
+        earlier admission look recent. Provider recovery resumes
         once ``quota_backoff_hold_s`` passes without another quota failure, at the
         ordinary provider ramp.
         """
         now = time.monotonic()
-        holding = self._quota_hold_until is not None and now < self._quota_hold_until
-        if admitted_at is None:
-            cut = not holding
-        else:
-            cut = self._quota_cut_at is None or admitted_at >= self._quota_cut_at
+        cut = admitted_at is not None and (
+            self._quota_cut_at is None or admitted_at >= self._quota_cut_at
+        )
         self._quota_hold_until = now + self._config.quota_backoff_hold_s
         self._consecutive_provider_clear = 0
 

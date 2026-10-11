@@ -169,6 +169,7 @@ from metaproc.engine.retry import (
     classify_output_failures,
     compute_backoff,
     extract_log_error,
+    is_rate_quota,
     max_retries_for,
     retry_backoff_s,
 )
@@ -3079,16 +3080,24 @@ def _bind_pool_dispatch(
 
 
 def _report_scalar_failure(
-    pool: RunPool | None, failure_class: FailureClass, *, admitted_at: float | None
+    pool: RunPool | None,
+    failure_class: FailureClass,
+    error: str,
+    *,
+    admitted_at: float | None,
 ) -> None:
     """Report one classified scalar-leaf failure to the run pool's governors.
 
-    The provider governor reads scalar leaves exactly as it reads mapped ones: a quota
-    refusal here lowers the ceiling that admits this step's siblings, not only this
-    step's own retry.
+    The provider governor reads scalar leaves exactly as it reads mapped ones: a
+    per-minute quota refusal here lowers the ceiling that admits this step's siblings,
+    not only this step's own retry.
     """
     if pool is not None:
-        pool.record_failure_class(failure_class, admitted_at=admitted_at)
+        pool.record_failure_class(
+            failure_class,
+            rate_quota=failure_class == FailureClass.QUOTA_EXHAUSTED and is_rate_quota(error),
+            admitted_at=admitted_at,
+        )
 
 
 def _mark_scalar_prelaunch_failure_after_retry(state_dir: Path, *, error: str) -> None:
@@ -3599,7 +3608,7 @@ async def _execute_agent_step(
                     try_compact_log(attempt_log_path)
                     failure_class = classify_failure(exit_error)
                     _report_scalar_failure(
-                        scalar_pool, failure_class, admitted_at=process_admitted_at
+                        scalar_pool, failure_class, exit_error, admitted_at=process_admitted_at
                     )
                     # A response-body timeout returns no tokens at all and is the most
                     # retryable failure an agent produces. classify_error checks the
@@ -3695,6 +3704,7 @@ async def _execute_agent_step(
                         _report_scalar_failure(
                             scalar_pool,
                             FailureClass.INVALID_OUTPUT,
+                            error_str,
                             admitted_at=process_admitted_at,
                         )
                         verdict = classify_output_failures(output_failures, effective_outputs)

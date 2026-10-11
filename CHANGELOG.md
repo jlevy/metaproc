@@ -131,8 +131,9 @@ development series.
   monthly, billing, or credit limit stays permanent.
   Scalar agent steps now report every classified failure to the run pool, as mapped
   agent steps already did.
-  Any `quota_exhausted` failure halves the pool’s provider ceiling at once; failures
-  from processes admitted before that cut only hold recovery, a failure from a process
+  A per-minute quota refusal halves the pool’s provider ceiling at once, while hard caps
+  and unrelated `quota` text such as `Disk quota exceeded` leave it alone; failures from
+  processes admitted before that cut only hold recovery, a failure from a process
   admitted after it cuts again, and recovery resumes at the ordinary provider ramp after
   `quota_backoff_hold_s` (300 seconds) without another quota failure.
   Each response is a `quota_backoff` event in the pool event log.

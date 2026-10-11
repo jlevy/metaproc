@@ -113,6 +113,7 @@ from metaproc.engine.retry import (
     classify_output_failures,
     compute_backoff,
     extract_log_error,
+    is_rate_quota,
     max_retries_for,
     retry_backoff_s,
 )
@@ -1972,14 +1973,15 @@ async def _run_agent_pool(  # noqa: PLR0913
         # whole dispatch until the named window passes — replaces the 2026-05-13
         # per-task crash cascade. parse_quota_reset_at returns None for any
         # other error string; pool.record_failure_class then no-ops the pause.
-        quota_reset_at = (
-            parse_quota_reset_at(error_str) if fc == FailureClass.QUOTA_EXHAUSTED else None
-        )
-        # When the pool admitted the failed process lets the provider governor tell a
-        # failure admitted under its current ceiling from one admitted before its last cut.
+        is_quota = fc == FailureClass.QUOTA_EXHAUSTED
+        quota_reset_at = parse_quota_reset_at(error_str) if is_quota else None
+        # Only a per-minute refusal says the pool runs too wide. When the pool admitted
+        # the failed process lets the provider governor tell a failure admitted under
+        # its current ceiling from one admitted before its last cut.
         pool.record_failure_class(
             fc,
             quota_reset_at=quota_reset_at,
+            rate_quota=is_quota and is_rate_quota(error_str),
             admitted_at=shared.pop("process_admitted_at", None),
         )
         verdict = (

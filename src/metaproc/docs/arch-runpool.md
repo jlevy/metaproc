@@ -254,7 +254,7 @@ Provider pressure is separate from memory pressure.
 Bursts of provider rate-limit failures reduce the provider ceiling, and provider
 recovery can raise it again after clear samples.
 
-A single quota-exhausted failure, from a scalar or a mapped agent step, cuts the
+A single per-minute quota refusal, from a scalar or a mapped agent step, cuts the
 provider ceiling to half the current capacity at once, with no burst threshold and no
 floor above `min_concurrency`. By the time an agent CLI reports quota exhaustion it has
 usually spent minutes in its own internal retries, so one report is already a sustained
@@ -264,11 +264,17 @@ A failure therefore cuts again only when its process was admitted after the late
 which means the lowered ceiling was itself too high; the others only hold recovery.
 The pool stamps that admission when the process takes a pool slot, before any host-slot
 wait or launch, so a slow launch or a late report cannot move it.
+A refusal that no pool slot admitted, such as a pre-launch failure, only holds recovery.
 Provider recovery resumes at the ordinary ramp once `quota_backoff_hold_s` (300 seconds
-by default) passes without another quota failure.
+by default) passes without another quota refusal.
 Each response is logged as a `quota_backoff` event with `action: cut` or `action: hold`,
 and a cut that changes capacity also logs `concurrency_adjust` with reason
 `quota_backoff`.
+
+Other failures classified `quota_exhausted` (a daily, monthly, or billing cap, a capped
+credential, or unrelated text such as `Disk quota exceeded`) say nothing about
+concurrency and leave the provider ceiling alone.
+One with a named reset time pauses submissions until that time passes.
 
 Operator caps are an emergency brake and local testing tool.
 They are useful when a live run is already harming host stability, but they should be

@@ -2198,7 +2198,8 @@ classifiers and one enum:
   failure mode.
 
 Handling follows the class: retriable classes retry per `RetryPolicy` on the pool path.
-Every `quota_exhausted` failure lowers the run pool’s provider ceiling.
+A per-minute quota refusal lowers or holds the run pool’s provider ceiling; other
+`quota_exhausted` failures (hard caps, a capped credential, a full disk) do not move it.
 A per-minute quota refusal retries within the declared budget, waiting at least
 `QUOTA_RETRY_MIN_BACKOFF_S` (60 seconds), and one with a named reset time also pauses
 submissions until then rather than burning attempts against a closed window.
