@@ -10,6 +10,7 @@ import shutil
 import stat
 import tempfile
 import threading
+from collections.abc import Mapping
 from hashlib import sha256
 from pathlib import Path
 from typing import cast
@@ -115,6 +116,49 @@ def _gemini_version_drift() -> str | None:
     return drift
 
 
+GEMINI_NATIVE_SETTINGS_SCOPES = ("user", "workspace")
+GEMINI_DEFAULT_NATIVE_SETTINGS_SCOPE = "user"
+"""Where the adapter hands Gemini its native settings when a config names no scope.
+
+`user` gives each launch a private Gemini home. It works on every CLI the adapter can
+drive and needs no working directory or root-owned file.
+"""
+
+_SYSTEM_SCOPE_REFUSAL = (
+    "native_settings_scope 'system' is not supported: gemini-cli 0.60.0 and later load a "
+    "system settings file only when it and every directory above it are owned by root and "
+    "writable by neither group nor others, so the file Metaproc writes would be skipped "
+    "with a warning and every setting in it lost. Remove the key to use the default "
+    "'user' scope, a private Gemini home per launch, or set 'workspace'"
+)
+
+
+def native_settings_scope(merged_config: dict[str, object]) -> object:
+    """Return the scope a config resolves to, which ``validate_config`` checks."""
+    return merged_config.get("native_settings_scope", GEMINI_DEFAULT_NATIVE_SETTINGS_SCOPE)
+
+
+_SETTINGS_SOURCE_REFUSAL = (
+    "names a Gemini settings file, and the adapter owns where Gemini reads its "
+    "settings; set native_settings instead"
+)
+_OWNED_STEP_ENV: dict[str, str] = {
+    "GEMINI_CLI_SYSTEM_SETTINGS_PATH": _SETTINGS_SOURCE_REFUSAL,
+    "GEMINI_CLI_SYSTEM_DEFAULTS_PATH": _SETTINGS_SOURCE_REFUSAL,
+    "GEMINI_SYSTEM_MD": (
+        "the adapter owns Gemini's system prompt file; set append_system_prompt instead"
+    ),
+}
+_OWNED_USER_SCOPE_STEP_ENV: dict[str, str] = {
+    "GEMINI_CLI_HOME": (
+        "the adapter gives each launch a private Gemini home holding its native settings, "
+        "and a step that names another home loses every one of them; set "
+        "native_settings_home_template for a prepared home, or native_settings_scope "
+        "'workspace'"
+    ),
+}
+
+
 _GEMINI_ALLOWED_KEYS = frozenset(
     {
         "append_system_prompt",
@@ -158,8 +202,7 @@ def _materialize_temp_file(*, prefix: str, suffix: str, content: str) -> Path:
 def _materialize_workspace_settings(directory: Path, content: str) -> None:
     """Publish native settings without overwriting operator-authored configuration.
 
-    Recent Gemini versions require system settings and every parent to be root-owned.
-    An explicitly selected, trusted workspace remains a supported user-owned scope.
+    A trusted workspace's settings carry no ownership rule, unlike system settings.
     """
     settings_dir = directory / ".gemini"
     settings_path = settings_dir / "settings.json"
@@ -220,36 +263,49 @@ def _copy_user_template(source_fd: int, destination: Path) -> None:
             os.close(child_fd)
 
 
-def _materialize_user_settings(template: Path, native_settings: dict[str, object]) -> Path:
-    """Prepare a private home; never borrow the operator's mutable runtime state."""
+def _template_settings(settings_path: Path) -> dict[str, object]:
+    if not settings_path.is_file():
+        raise ValueError("Gemini home template requires .gemini/settings.json")
+    try:
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError("Gemini home template settings.json must be a JSON object") from exc
+    if not isinstance(settings, dict):
+        raise ValueError("Gemini home template settings.json must be a JSON object")
+    return cast("dict[str, object]", settings)
+
+
+def _materialize_user_settings(template: Path | None, native_settings: dict[str, object]) -> Path:
+    """Prepare a private home; never borrow the operator's mutable runtime state.
+
+    Without a template the home holds only ``.gemini/settings.json`` with the native
+    settings, so Gemini takes its authentication from the launch environment.
+    """
     global _temp_files_dir
-    if (
-        not hasattr(os, "O_NOFOLLOW")
-        or os.open not in os.supports_dir_fd
-        or os.listdir not in os.supports_fd
-    ):
-        raise ValueError("Gemini user settings require no-follow directory descriptor support")
-    if template.is_symlink():
-        raise ValueError("Gemini home template must not be a symlink")
-    source_fd = os.open(template, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    source_fd: int | None = None
+    if template is not None:
+        if (
+            not hasattr(os, "O_NOFOLLOW")
+            or os.open not in os.supports_dir_fd
+            or os.listdir not in os.supports_fd
+        ):
+            raise ValueError("Gemini home templates require no-follow directory descriptor support")
+        if template.is_symlink():
+            raise ValueError("Gemini home template must not be a symlink")
+        source_fd = os.open(template, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         with _TEMP_FILES_LOCK:
             if _temp_files_dir is None:
                 _temp_files_dir = tempfile.TemporaryDirectory(prefix="metaproc-gemini-")
             home = Path(tempfile.mkdtemp(prefix="home-", dir=_temp_files_dir.name))
         try:
-            _copy_user_template(source_fd, home)
             settings_path = home / ".gemini" / "settings.json"
-            if not settings_path.is_file():
-                raise ValueError("Gemini home template requires .gemini/settings.json")
-            try:
-                settings = json.loads(settings_path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError as exc:
-                raise ValueError(
-                    "Gemini home template settings.json must be a JSON object"
-                ) from exc
-            if not isinstance(settings, dict):
-                raise ValueError("Gemini home template settings.json must be a JSON object")
+            settings: dict[str, object] = {}
+            if source_fd is None:
+                settings_path.parent.mkdir(mode=0o700)
+            else:
+                _copy_user_template(source_fd, home)
+                settings = _template_settings(settings_path)
             merged = _deep_merge_settings(settings, native_settings)
             write_secret_text(settings_path, json.dumps(merged, sort_keys=True))
             return home
@@ -258,7 +314,147 @@ def _materialize_user_settings(template: Path, native_settings: dict[str, object
             shutil.rmtree(home)
             raise
     finally:
-        os.close(source_fd)
+        if source_fd is not None:
+            os.close(source_fd)
+
+
+def _strip_json_comments(text: str) -> str:
+    """Remove ``//`` and ``/* */`` comments outside strings, as gemini-cli does."""
+    kept: list[str] = []
+    index = 0
+    in_string = False
+    while index < len(text):
+        char = text[index]
+        pair = text[index : index + 2]
+        if in_string:
+            kept.append(text[index : index + 2] if char == "\\" else char)
+            index += 2 if char == "\\" else 1
+            in_string = char != '"'
+        elif char == '"':
+            in_string = True
+            kept.append(char)
+            index += 1
+        elif pair == "//":
+            newline = text.find("\n", index)
+            index = len(text) if newline == -1 else newline
+        elif pair == "/*":
+            close = text.find("*/", index + 2)
+            index = len(text) if close == -1 else close + 2
+        else:
+            kept.append(char)
+            index += 1
+    return "".join(kept)
+
+
+# The settings object gemini-cli merges with its `shallow_merge` strategy: a higher
+# source replaces each named entry whole instead of merging into it.
+_SHALLOW_MERGE_SETTINGS = frozenset({("mcpServers",)})
+
+
+def _overridden_settings(
+    asserted: dict[str, object],
+    workspace: dict[str, object],
+    path: tuple[str, ...] = (),
+) -> list[str]:
+    """Return the dotted paths of asserted settings that ``workspace`` would replace.
+
+    gemini-cli merges plain objects key by key and lets a higher source replace
+    anything else, so a workspace overrides an asserted value when it sets that path
+    to a different value or replaces an enclosing object. Keys Metaproc does not
+    assert are not compared.
+    """
+    overridden: list[str] = []
+    for key, value in asserted.items():
+        if key not in workspace:
+            continue
+        child = (*path, key)
+        other = workspace[key]
+        if (
+            isinstance(value, dict)
+            and isinstance(other, dict)
+            and path not in _SHALLOW_MERGE_SETTINGS
+        ):
+            overridden.extend(
+                _overridden_settings(
+                    cast("dict[str, object]", value), cast("dict[str, object]", other), child
+                )
+            )
+        elif json.dumps(other, sort_keys=True) != json.dumps(value, sort_keys=True):
+            overridden.append(".".join(child))
+    return overridden
+
+
+def _checked_workspace_settings(
+    directory: Path, native_settings: dict[str, object]
+) -> dict[str, object]:
+    """Return a user-scope launch's workspace settings, refusing ones that override Metaproc's.
+
+    Gemini ranks a trusted workspace's ``.gemini/settings.json`` above the user settings
+    in the private home, and ``--skip-trust`` trusts every working directory, so such a
+    file would silently replace the step's tool list, subagent overrides or session
+    retention. Like the workspace scope's refusal to replace a conflicting file, the
+    launch stops; equal values and keys Metaproc does not set pass.
+    """
+    settings_path = directory / ".gemini" / "settings.json"
+    try:
+        text = settings_path.read_text(encoding="utf-8")
+    except (FileNotFoundError, NotADirectoryError):
+        return {}
+    except OSError as exc:
+        raise ValueError(
+            f"Cannot read Gemini workspace settings {settings_path} to confirm they leave "
+            f"Metaproc's native settings in effect: {exc}"
+        ) from exc
+    try:
+        workspace = json.loads(_strip_json_comments(text))
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"Gemini workspace settings {settings_path} are not a JSON object, so Gemini "
+            "would refuse them too"
+        ) from exc
+    if not isinstance(workspace, dict):
+        raise ValueError(
+            f"Gemini workspace settings {settings_path} are not a JSON object, so Gemini "
+            "would refuse them too"
+        )
+    overridden = _overridden_settings(native_settings, cast("dict[str, object]", workspace))
+    if overridden:
+        raise ValueError(
+            f"Refusing to launch Gemini: {settings_path} sets {', '.join(overridden)} to "
+            "values other than the native settings Metaproc writes to the private Gemini "
+            "home. Gemini ranks a trusted working directory's settings above that home, and "
+            "every Metaproc launch trusts its working directory. Remove those keys or give "
+            "them the step's values, or set working_directory to a directory without them"
+        )
+    return cast("dict[str, object]", workspace)
+
+
+# gemini-cli's Login with Google reads a cached login from the Gemini home, the file
+# GOOGLE_APPLICATION_CREDENTIALS names, or GOOGLE_CLOUD_ACCESS_TOKEN.
+# GEMINI_FORCE_ENCRYPTED_FILE_STORAGE is not a source on its own: it reads the OS keychain
+# when the host has a usable one, and otherwise an encrypted file inside the Gemini home.
+_GCA_LOGIN_SOURCES = ("GOOGLE_CLOUD_ACCESS_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS")
+_GCA_REMEDY = (
+    "Unset GOOGLE_GENAI_USE_GCA to authenticate with GEMINI_API_KEY or Vertex AI, set "
+    "GOOGLE_CLOUD_ACCESS_TOKEN, carry oauth_creds.json in a native_settings_home_template, "
+    "or set native_settings_scope 'workspace' to use the operator's ~/.gemini login. "
+    "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE=true supplies a login only when the host's OS "
+    "keychain holds one made under that flag (without a usable keychain the CLI keeps it "
+    "inside the Gemini home); where it does, name security.auth.selectedType "
+    "'oauth-personal' in the step's native_settings"
+)
+
+
+def _gca_login_source(env: Mapping[str, str]) -> str | None:
+    """Name what supplies a Login with Google outside the Gemini home, if anything does."""
+    return next((name for name in _GCA_LOGIN_SOURCES if env.get(name)), None)
+
+
+def _names_auth_type(settings: dict[str, object]) -> bool:
+    """Whether ``settings`` choose an auth type, which outranks the environment fallback."""
+    security = settings.get("security")
+    auth = cast("dict[str, object]", security).get("auth") if isinstance(security, dict) else None
+    return isinstance(auth, dict) and bool(cast("dict[str, object]", auth).get("selectedType"))
 
 
 def _deep_merge_settings(
@@ -452,12 +648,16 @@ class GeminiCliAdapter:
                         reason=f"unknown gemini-cli model {value!r}",
                     )
                 )
-        scope = merged_config.get("native_settings_scope", "system")
-        if scope not in ("system", "workspace", "user"):
+        scope = native_settings_scope(merged_config)
+        if scope == "system":
+            rejections.append(
+                ConfigRejection(key="native_settings_scope", reason=_SYSTEM_SCOPE_REFUSAL)
+            )
+        elif scope not in GEMINI_NATIVE_SETTINGS_SCOPES:
             rejections.append(
                 ConfigRejection(
                     key="native_settings_scope",
-                    reason="native_settings_scope must be 'system', 'workspace', or 'user'",
+                    reason="native_settings_scope must be 'user' or 'workspace'",
                 )
             )
         if scope == "workspace" and not merged_config.get("working_directory"):
@@ -465,13 +665,6 @@ class GeminiCliAdapter:
                 ConfigRejection(
                     key="native_settings_scope",
                     reason="native_settings_scope 'workspace' requires working_directory",
-                )
-            )
-        if scope == "user" and not merged_config.get("native_settings_home_template"):
-            rejections.append(
-                ConfigRejection(
-                    key="native_settings_home_template",
-                    reason="native_settings_scope 'user' requires native_settings_home_template",
                 )
             )
         if merged_config.get("native_settings_home_template") and scope != "user":
@@ -482,6 +675,17 @@ class GeminiCliAdapter:
                 )
             )
         return rejections
+
+    def validate_step_env(
+        self,
+        env: Mapping[str, str],
+        merged_config: dict[str, object],
+    ) -> list[ConfigRejection]:
+        """Refuse step ``env`` keys that would replace what ``prepare_env`` sets up."""
+        owned = dict(_OWNED_STEP_ENV)
+        if native_settings_scope(merged_config) == "user":
+            owned.update(_OWNED_USER_SCOPE_STEP_ENV)
+        return [ConfigRejection(key=key, reason=owned[key]) for key in env if key in owned]
 
     def prepare_env(
         self,
@@ -516,34 +720,52 @@ class GeminiCliAdapter:
                 native_settings,
                 cast("dict[str, object]", override),
             )
-        if native_settings:
-            content = json.dumps(native_settings, sort_keys=True, separators=(",", ":"))
-            scope = merged_config.get("native_settings_scope", "system")
-            if scope == "workspace":
-                directory = self.working_directory(merged_config)
-                if directory is None:
-                    raise ValueError("native_settings_scope 'workspace' requires working_directory")
-                _materialize_workspace_settings(directory, content)
-            elif scope == "system":
-                env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = str(
-                    _materialize_temp_file(
-                        prefix="settings-",
-                        suffix=".json",
-                        content=content,
-                    )
+        scope = native_settings_scope(merged_config)
+        if scope == "workspace":
+            directory = self.working_directory(merged_config)
+            if directory is None:
+                raise ValueError("native_settings_scope 'workspace' requires working_directory")
+            _materialize_workspace_settings(
+                directory, json.dumps(native_settings, sort_keys=True, separators=(",", ":"))
+            )
+        elif scope == "user":
+            # Popen with no cwd inherits this process's working directory.
+            workspace = _checked_workspace_settings(
+                self.working_directory(merged_config) or Path.cwd(), native_settings
+            )
+            template = merged_config.get("native_settings_home_template")
+            if (
+                not template
+                and env.get("GOOGLE_GENAI_USE_GCA") == "true"
+                and _gca_login_source(env) is None
+                and not _names_auth_type(native_settings)
+                and not _names_auth_type(workspace)
+            ):
+                raise ValueError(
+                    "GOOGLE_GENAI_USE_GCA=true makes gemini-cli use Login with Google ahead of "
+                    "GEMINI_API_KEY and Vertex AI, and the private Gemini home holds no login, "
+                    "so the session would fail to authenticate or wait for a browser login. "
+                    + _GCA_REMEDY
                 )
-            elif scope == "user":
-                template = merged_config.get("native_settings_home_template")
-                if not template:
-                    raise ValueError(
-                        "native_settings_scope 'user' requires native_settings_home_template"
-                    )
-                env["GEMINI_CLI_HOME"] = str(
-                    _materialize_user_settings(Path(str(template)), native_settings)
+            home = str(
+                _materialize_user_settings(
+                    Path(str(template)) if template else None, native_settings
                 )
-                # Preserve inherited system policy. This scope creates no system override.
-            else:
-                raise ValueError("native_settings_scope must be 'system', 'workspace', or 'user'")
+            )
+            inherited = env.get("GEMINI_CLI_HOME")
+            if inherited:
+                log.info(
+                    "Replacing the inherited GEMINI_CLI_HOME %s with the private Gemini home "
+                    "%s, where this launch's Gemini state now goes",
+                    inherited,
+                    home,
+                )
+            env["GEMINI_CLI_HOME"] = home
+            # Preserve inherited system policy. This scope creates no system override.
+        elif scope == "system":
+            raise ValueError(_SYSTEM_SCOPE_REFUSAL)
+        else:
+            raise ValueError("native_settings_scope must be 'user' or 'workspace'")
         return env
 
     def working_directory(self, merged_config: dict[str, object]) -> Path | None:
@@ -575,10 +797,13 @@ class GeminiCliAdapter:
         )
 
     def check_auth(self) -> AuthStatus:
-        cli_path = shutil.which("gemini")
-        gemini_api_key = MetaprocEnv.GEMINI_API_KEY.read_str(default=None)
-        vertex_ai = MetaprocEnv.GOOGLE_GENAI_USE_VERTEXAI.read_bool(default=False)
+        """Report the auth mode gemini-cli will select from the environment.
 
+        The private Gemini home names no auth type, so the CLI falls back to its
+        environment order: ``GOOGLE_GENAI_USE_GCA``, ``GOOGLE_GENAI_USE_VERTEXAI``
+        (each exactly ``true``), ``GOOGLE_GEMINI_BASE_URL``, then ``GEMINI_API_KEY``.
+        """
+        cli_path = shutil.which("gemini")
         if not cli_path:
             return AuthStatus(
                 adapter_type=self.adapter_type,
@@ -590,44 +815,66 @@ class GeminiCliAdapter:
                 setup_hint=GEMINI_CLI_INSTALL_HINT,
             )
 
-        if gemini_api_key:
+        def status(mode: str, ready: bool, details: str, hint: str = "") -> AuthStatus:
             return AuthStatus(
                 adapter_type=self.adapter_type,
                 cli_found=True,
                 cli_path=cli_path,
-                credentials_found=True,
-                auth_mode="gemini-api-key",
-                details="GEMINI_API_KEY is set",
-                setup_hint="",
+                credentials_found=ready,
+                auth_mode=mode,
+                details=details,
+                setup_hint=hint,
             )
 
-        if vertex_ai:
+        gemini_api_key = MetaprocEnv.GEMINI_API_KEY.read_str(default=None)
+        if MetaprocEnv.GOOGLE_GENAI_USE_GCA.read_str(default="") == "true":
+            login = _gca_login_source(
+                {
+                    member.name: member.read_str(default="")
+                    for member in (
+                        MetaprocEnv.GOOGLE_CLOUD_ACCESS_TOKEN,
+                        MetaprocEnv.GOOGLE_APPLICATION_CREDENTIALS,
+                    )
+                }
+            )
+            if login is not None:
+                return status("oauth-personal", True, f"GOOGLE_GENAI_USE_GCA=true with {login}")
+            return status(
+                "oauth-personal",
+                False,
+                "GOOGLE_GENAI_USE_GCA=true selects Login with Google ahead of "
+                "GEMINI_API_KEY and Vertex AI, and the default private Gemini home holds "
+                "no login",
+                _GCA_REMEDY,
+            )
+
+        if MetaprocEnv.GOOGLE_GENAI_USE_VERTEXAI.read_str(default="") == "true":
             google_api_key = MetaprocEnv.GOOGLE_API_KEY.read_str(default=None)
             has_project = bool(MetaprocEnv.GOOGLE_CLOUD_PROJECT.read_str(default=None))
-            return AuthStatus(
-                adapter_type=self.adapter_type,
-                cli_found=True,
-                cli_path=cli_path,
-                credentials_found=bool(google_api_key) or has_project,
-                auth_mode="vertex-ai-express" if google_api_key else "vertex-ai",
-                details="Vertex AI mode configured",
-                setup_hint="",
+            return status(
+                "vertex-ai-express" if google_api_key else "vertex-ai",
+                bool(google_api_key) or has_project,
+                "Vertex AI mode configured",
             )
 
-        return AuthStatus(
-            adapter_type=self.adapter_type,
-            cli_found=True,
-            cli_path=cli_path,
-            credentials_found=False,
-            auth_mode="none",
-            details="No credentials configured",
-            setup_hint=(
-                "Pick one auth mode: "
-                "(1) export GEMINI_API_KEY=AIza... for the direct API, or "
-                "(2) export GOOGLE_GENAI_USE_VERTEXAI=true GOOGLE_CLOUD_PROJECT=<project> "
-                "for Vertex AI + ADC (reuses `gcloud auth application-default login`). "
-                "See src/metaproc/docs/credential-setup.runbook.md#gemini-cli for all three modes."
-            ),
+        if MetaprocEnv.GOOGLE_GEMINI_BASE_URL.read_str(default=""):
+            key = "with GEMINI_API_KEY" if gemini_api_key else "without GEMINI_API_KEY"
+            return status(
+                "gateway", True, f"GOOGLE_GEMINI_BASE_URL is set; requests go there {key}"
+            )
+
+        if gemini_api_key:
+            return status("gemini-api-key", True, "GEMINI_API_KEY is set")
+
+        return status(
+            "none",
+            False,
+            "No credentials configured",
+            "Pick one auth mode: "
+            "(1) export GEMINI_API_KEY=AIza... for the direct API, or "
+            "(2) export GOOGLE_GENAI_USE_VERTEXAI=true GOOGLE_CLOUD_PROJECT=<project> "
+            "for Vertex AI + ADC (reuses `gcloud auth application-default login`). "
+            "See src/metaproc/docs/credential-setup.runbook.md#gemini-cli for all three modes.",
         )
 
     def auth_info(self) -> str:
@@ -636,7 +883,12 @@ class GeminiCliAdapter:
             "\n"
             "  1. AI Studio API key: export GEMINI_API_KEY=AIza...\n"
             "  2. Vertex AI express: export GOOGLE_GENAI_USE_VERTEXAI=true + GOOGLE_API_KEY\n"
-            "  3. Personal OAuth: gemini (interactive login)\n"
+            "  3. Vertex AI + ADC: export GOOGLE_GENAI_USE_VERTEXAI=true "
+            "GOOGLE_CLOUD_PROJECT=<project>\n"
+            "\n"
+            "Each launch gets a private Gemini home, so a login made with an interactive\n"
+            "`gemini` session is not visible to it. To use one, carry oauth_creds.json in a\n"
+            "native_settings_home_template or set native_settings_scope: workspace.\n"
         )
 
     def bootstrap(self, home: Path) -> None:  # pyright: ignore[reportUnusedParameter]

@@ -93,6 +93,50 @@ development series.
   14-day package cool-off on 2026-09-22; until then `npm install` under the repository’s
   `.npmrc` refuses it.
   0.60.0, the current npm `latest`, clears the cool-off on 2026-09-29 and is not pinned.
+- **Gemini native settings reach the CLI through a private home by default.** The
+  adapter wrote its native settings to a file in its temporary directory and named it
+  with `GEMINI_CLI_SYSTEM_SETTINGS_PATH`. gemini-cli 0.60.0 and later read a system
+  settings file only when it and every directory above it are owned by root and writable
+  by neither group nor others, so the CLI skipped that file with a `Security Warning`
+  transcript line, and every session ran without session-retention disabled, dynamic
+  model configuration, the step’s tool restrictions or the subagent overrides.
+  `native_settings_scope` now defaults to `user`: each launch gets a private Gemini home
+  whose `.gemini/settings.json` holds the resolved native settings, and
+  `native_settings_home_template` is optional.
+  Without a template, the settings, login, hooks, instructions, extensions and MCP
+  servers in the operator’s `~/.gemini` no longer apply, so authentication comes from
+  the launch environment (`GEMINI_API_KEY`, or `GOOGLE_GENAI_USE_VERTEXAI` with
+  `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`). gemini-cli still finds `.env`
+  files by walking up from the working directory and resolves its sandbox policy file
+  against the real home, so keep provider keys in the shell environment or the project
+  `.env` rather than `~/.gemini/.env`. Each private home has its own project registry,
+  so launches no longer contend for a shared one.
+  `native_settings_scope: system` is rejected; remove it to take the default, or set
+  `workspace` to keep the operator’s `~/.gemini`. `native_settings_scope()` returns the
+  scope a config resolves to.
+- **A Gemini working directory whose settings override the private home is refused.**
+  gemini-cli ranks a trusted working directory’s `.gemini/settings.json` above the
+  private home, and every Metaproc launch trusts its working directory, so a file there
+  could widen a step’s `tools.core`, re-enable subagents or turn session retention back
+  on. Under `user` scope a launch whose working directory sets a setting Metaproc asserts
+  to a different value now fails with the file and the keys, as `workspace` scope
+  already refused a conflicting file; equal values and other keys pass.
+- **A Gemini step’s `env` cannot replace the adapter’s settings variables.** Adapters
+  may implement `validate_step_env`, and planning treats a rejected key in an agent
+  step’s `env` like a rejected adapter-config key: dropped with a warning, or refused
+  under `METAPROC_ADAPTER_STRICT` or across adapter families.
+  The Gemini adapter rejects `GEMINI_CLI_SYSTEM_SETTINGS_PATH`,
+  `GEMINI_CLI_SYSTEM_DEFAULTS_PATH`, `GEMINI_SYSTEM_MD`, and `GEMINI_CLI_HOME` under
+  `user` scope.
+- **Gemini auth checks follow gemini-cli’s environment order.** `check_auth` evaluates
+  `GOOGLE_GENAI_USE_GCA`, `GOOGLE_GENAI_USE_VERTEXAI` (each exactly `true`),
+  `GOOGLE_GEMINI_BASE_URL`, then `GEMINI_API_KEY`, as the CLI does, and reports a
+  gateway as `gateway`. Login with Google is ready only when `GOOGLE_CLOUD_ACCESS_TOKEN`
+  or `GOOGLE_APPLICATION_CREDENTIALS` supplies a login, and without one a template-less
+  `user`-scope launch is refused, unless its settings name an auth type, instead of
+  failing authentication or waiting for a browser login.
+  `GEMINI_FORCE_ENCRYPTED_FILE_STORAGE` alone does not count, because without a usable
+  OS keychain the CLI keeps that login inside the Gemini home.
 
 ### Removed
 
@@ -100,6 +144,11 @@ development series.
   Build and write a fan-in document with `build_outcome_manifest(...).write(...)`.
 
 ### Fixed
+
+- **`auth-check --live` reports an adapter config it refuses.** A profile the adapter
+  refuses at launch, such as one still carrying Gemini’s
+  `native_settings_scope: system`, raised a traceback and stopped the remaining
+  adapters’ live checks; it is now a failed `invalid adapter configuration` result.
 
 - **A file handler in a checkout nested inside another imports its own checkout’s
   code.** While a file handler loaded, every enclosing directory holding

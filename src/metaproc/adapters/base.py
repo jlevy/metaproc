@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Final, Literal, Protocol, cast, runtime_checkable
@@ -25,7 +26,7 @@ class AuthStatus:
 
 @dataclass(frozen=True)
 class ConfigRejection:
-    """One adapter-config key rejected during planner validation."""
+    """One adapter-config or step-env key rejected during planner validation."""
 
     key: str
     reason: str
@@ -114,6 +115,22 @@ class Adapter(Protocol):
         this. Called once per worker task after env is populated.
         """
         ...
+
+
+@runtime_checkable
+class StepEnvValidator(Protocol):
+    """Optional adapter hook naming the authored step ``env`` keys it refuses.
+
+    A step's ``env`` is applied after :meth:`Adapter.prepare_env`, so a key the
+    adapter itself sets there would silently replace the adapter's value. Planning
+    treats each rejection like a rejected adapter-config key.
+    """
+
+    def validate_step_env(
+        self,
+        env: Mapping[str, str],
+        merged_config: dict[str, object],
+    ) -> list[ConfigRejection]: ...
 
 
 @runtime_checkable

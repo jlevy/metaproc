@@ -634,13 +634,13 @@ class TestLiveCheckUsesTheProfileConfig:
         def run(cmd: list[str], **kwargs: object) -> MagicMock:
             env = kwargs["env"]
             assert isinstance(env, dict)
-            system_path = env.get("GEMINI_CLI_SYSTEM_SETTINGS_PATH")
-            if system_path:
-                settings_path = Path(system_path)
-            else:
-                cwd = kwargs.get("cwd")
-                assert isinstance(cwd, Path), "workspace settings require the profile cwd"
+            cwd = kwargs.get("cwd")
+            if isinstance(cwd, Path) and (cwd / ".gemini/settings.json").is_file():
                 settings_path = cwd / ".gemini/settings.json"
+            else:
+                home = env.get("GEMINI_CLI_HOME")
+                assert home, "user settings require the private Gemini home"
+                settings_path = Path(home) / ".gemini/settings.json"
             settings = json.loads(settings_path.read_text("utf-8"))
             dynamic = settings.get("experimental", {}).get("dynamicModelConfiguration") is True
             model = cmd[cmd.index("-m") + 1]
@@ -774,6 +774,23 @@ class TestLiveCheckUsesTheProfileConfig:
 
         assert calls == [{"dynamic": True, "output_format": "stream-json"}]
         assert result.exit_code == 0, result.output
+
+    def test_a_refused_profile_is_reported_as_a_failed_check(self, tmp_path: Path) -> None:
+        """A config the adapter refuses at launch is a failed result, not a traceback."""
+        profile_file = self._write_profile(tmp_path, "      native_settings_scope: system\n")
+        calls: list[dict[str, object]] = []
+
+        result = self._invoke(profile_file, calls)
+
+        assert result.exception is None or isinstance(result.exception, SystemExit), (
+            result.exception
+        )
+        assert calls == []
+        assert result.exit_code == 1, result.output
+        assert "[-] gemini-cli (gemini-3.6-flash): invalid adapter configuration:" in (
+            result.output
+        )
+        assert "owned by root" in result.output
 
 
 class TestRunLiveCheckCodex:

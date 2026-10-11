@@ -2023,6 +2023,13 @@ Adapters do not apply this policy themselves; they receive the seeded environmen
 add their own keys to it.
 A step’s authored `env` block is applied after `prepare_env`, so deliberate
 configuration still wins; only the ambient operator environment loses.
+The exception is a key the adapter itself sets there: an adapter that implements
+`validate_step_env` names those keys, and planning treats each one an agent step’s `env`
+sets like a rejected adapter-config key, dropped with a warning in non-strict
+same-family planning and refused under `METAPROC_ADAPTER_STRICT` or across adapter
+families. The Gemini adapter names its settings and system-prompt variables
+(`GEMINI_CLI_SYSTEM_SETTINGS_PATH`, `GEMINI_CLI_SYSTEM_DEFAULTS_PATH`,
+`GEMINI_SYSTEM_MD`, and `GEMINI_CLI_HOME` under `user` scope).
 
 `command:` steps are deliberately excluded.
 They run author-controlled programs rather than agent CLIs, and those programs may be
