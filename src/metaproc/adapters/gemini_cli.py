@@ -744,11 +744,20 @@ class GeminiCliAdapter:
                     "so the session would fail to authenticate or wait for a browser login. "
                     + _GCA_REMEDY
                 )
-            env["GEMINI_CLI_HOME"] = str(
+            home = str(
                 _materialize_user_settings(
                     Path(str(template)) if template else None, native_settings
                 )
             )
+            inherited = env.get("GEMINI_CLI_HOME")
+            if inherited:
+                log.info(
+                    "Replacing the inherited GEMINI_CLI_HOME %s with the private Gemini home "
+                    "%s, where this launch's Gemini state now goes",
+                    inherited,
+                    home,
+                )
+            env["GEMINI_CLI_HOME"] = home
             # Preserve inherited system policy. This scope creates no system override.
         elif scope == "system":
             raise ValueError(_SYSTEM_SCOPE_REFUSAL)

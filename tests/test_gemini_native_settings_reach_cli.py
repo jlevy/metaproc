@@ -16,6 +16,7 @@ Metaproc launches Gemini with.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import stat
 from pathlib import Path
@@ -286,3 +287,20 @@ def test_unreadable_working_directory_settings_are_refused(tmp_path: Path) -> No
 
     with pytest.raises(ValueError, match="not a JSON object"):
         GeminiCliAdapter().prepare_env({"HOME": str(tmp_path)}, {"working_directory": str(cwd)})
+
+
+def test_an_inherited_gemini_home_is_replaced_with_a_note(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An operator who set GEMINI_CLI_HOME to move Gemini's state is told where it went."""
+    caplog.set_level(logging.INFO, logger="metaproc.adapters.gemini_cli")
+    inherited = tmp_path / "relocated-gemini"
+
+    env = GeminiCliAdapter().prepare_env(
+        {"HOME": str(tmp_path), "GEMINI_CLI_HOME": str(inherited)},
+        {"working_directory": str(tmp_path)},
+    )
+
+    assert env["GEMINI_CLI_HOME"] != str(inherited)
+    assert str(inherited) in caplog.text
+    assert env["GEMINI_CLI_HOME"] in caplog.text
