@@ -301,7 +301,7 @@ the modes below and are easy to leave set by accident:
 
 | Variable | Effect |
 | --- | --- |
-| `GOOGLE_GENAI_USE_GCA` | `true` selects Login with Google ahead of every mode below. The default private Gemini home holds no login, so the adapter refuses the launch unless `GOOGLE_CLOUD_ACCESS_TOKEN` or `GOOGLE_APPLICATION_CREDENTIALS` supplies one, a home template carries `oauth_creds.json`, or the settings name an auth type. `GEMINI_FORCE_ENCRYPTED_FILE_STORAGE=true` alone does not count: the CLI reads that login from the OS keychain only where the host has a usable one, and otherwise from inside the Gemini home. Where the keychain holds it, set `security.auth.selectedType: oauth-personal` in the step’s `native_settings`. |
+| `GOOGLE_GENAI_USE_GCA` | `true` selects Login with Google ahead of every mode below. The default private Gemini home holds no login, so the adapter refuses the launch unless `GOOGLE_CLOUD_ACCESS_TOKEN` or `GOOGLE_APPLICATION_CREDENTIALS` supplies one, a home template carries `oauth_creds.json`, or the settings name an auth type. `GEMINI_FORCE_ENCRYPTED_FILE_STORAGE=true` alone does not count: the CLI reads that login from the OS keychain only where the host has a usable one, and otherwise from inside the Gemini home. Where the keychain holds it, set `security.auth.selectedType: oauth-personal` in the step’s `native_settings`. The check reads the launch environment before a step’s `env` is applied, so a step `env` that sets `GOOGLE_GENAI_USE_GCA=true` is not checked and one that clears it does not lift the refusal. |
 | `GOOGLE_GEMINI_BASE_URL` | Selects gateway auth ahead of Mode 1: requests go to that URL, with `GEMINI_API_KEY` if it is set. |
 
 **Mode 1 — Direct Gemini API (personal key).** One env var, no GCP needed.
