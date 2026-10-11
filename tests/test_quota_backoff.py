@@ -124,6 +124,8 @@ class TestRateQuotaClassification:
                 "Quota exceeded for aiplatform.googleapis.com/"
                 "generate_content_requests_per_minute_per_project_per_base_model"
             ),
+            # Google quota ids are camel case, so "per minute" arrives without a separator.
+            "Quota exceeded for quota id GenerateContentRequestsPerMinutePerProjectPerModel",
         ],
     )
     def test_other_per_minute_quota_wordings_are_retryable(self, error: str) -> None:
@@ -140,6 +142,11 @@ class TestRateQuotaClassification:
             "Quota exceeded: generate_content_requests_per_minute and requests_per_day",
             "You've hit your org's monthly usage limit (tokens per minute quota)",
             "TPM quota exhausted; billing account is disabled",
+            # A camel-case daily quota id is a daily cap, whatever else the message says.
+            (
+                "Quota exceeded for quota metric 'Generate Content requests per minute', "
+                "quota id GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+            ),
             # Unrelated permanent signals keep priority over the quota exemption.
             "exit code 137 (log: TPM quota exhausted. No spare capacity is available)",
             "exit code 143 (log: TPM quota exhausted. No spare capacity is available)",

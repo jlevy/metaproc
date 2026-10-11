@@ -198,13 +198,16 @@ _QUOTA_EXHAUSTED_PATTERNS: list[str] = [
 # rolls over, so the failure is the pool's concurrency, not the item. Gemini CLI on
 # Vertex reports it as "TPM quota exhausted. No spare capacity is currently available
 # ..." after spending its own internal retries. These still classify as
-# QUOTA_EXHAUSTED; they are exempt only from the permanent "quota" pattern.
+# QUOTA_EXHAUSTED; they are exempt only from the permanent "quota" pattern. Google quota
+# ids are camel case (``...RequestsPerMinutePerProject...``), so each limit is matched
+# spaced, underscored, and run together.
 _RATE_QUOTA_PATTERNS: list[str] = [
     "tpm quota",
     "rpm quota",
     "tokens per minute",
     "requests per minute",
     "per_minute",
+    "perminute",
     "no spare capacity",
     "retryablequotaerror",
 ]
@@ -214,6 +217,7 @@ _RATE_QUOTA_PATTERNS: list[str] = [
 _HARD_QUOTA_PATTERNS: list[str] = [
     "per day",
     "per_day",
+    "perday",
     "daily",
     "monthly",
     "out of usage",

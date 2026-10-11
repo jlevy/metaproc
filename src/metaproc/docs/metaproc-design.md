@@ -2389,9 +2389,10 @@ prose back. `classify_output_failures()` owns that one.
 1. **Permanent patterns** (checked first): `enospc`, `enomem`, `quota`,
    `permission denied`, `billing`, `credits`, exit code 137/143, `cancelled` -- always
    `FAIL`. A per-minute quota refusal (`tpm quota`, `rpm quota`, `tokens per minute`,
-   `requests per minute`, `per_minute`, `no spare capacity`, `RetryableQuotaError`) is
-   exempt from `quota` alone and produces `RETRY`, unless it also names a daily,
-   monthly, billing, or credit limit.
+   `requests per minute`, `per_minute` or camel-case `PerMinute`, `no spare capacity`,
+   `RetryableQuotaError`) is exempt from `quota` alone and produces `RETRY`, unless it
+   also names a daily (including camel-case `PerDay`), monthly, billing, or credit
+   limit.
 2. **Transient patterns**: `timeout`, `rate limit`, `429`, `truncated_headers`,
    `gcloud auth`, `unavailable`, `503`/`502`, `econnrefused`/`econnreset`, `connection`,
    `log_runaway` -- produce `RETRY`.
