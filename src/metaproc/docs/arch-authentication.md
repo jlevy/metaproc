@@ -6,7 +6,7 @@ status: Draft — partial currency notice below
 ---
 # Architecture: Authentication and Credentials
 
-**Date:** 2026-04-21 (last updated 2026-09-23) **Status:** Draft — partial currency
+**Date:** 2026-04-21 (last updated 2026-10-11) **Status:** Draft — partial currency
 notice below
 
 ## Currency notice (2026-04-28)
