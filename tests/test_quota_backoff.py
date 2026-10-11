@@ -29,6 +29,7 @@ from typer.testing import CliRunner
 
 import metaproc.commands.run_parallel as run_parallel_module
 import metaproc.commands.run_process as run_process_module
+import metaproc.runpool.pool as pool_module
 from metaproc.adapters.registry import ADAPTER_REGISTRY
 from metaproc.cli import app
 from metaproc.commands.run_parallel import _run_agent_pool
@@ -223,11 +224,34 @@ def _pool(tmp_path: Path, **overrides: Any) -> RunPool:
     return RunPool(RunPoolConfig(**config))
 
 
+class _PoolClock:
+    """Stand in for the ``time`` module inside ``runpool.pool`` only.
+
+    Patching ``time.monotonic`` itself would replace the stdlib clock for the whole
+    process, asyncio's event loop included, so a test that combined this clock with a
+    running loop would never wake its timers.
+    """
+
+    def __init__(self, now: dict[str, float]) -> None:
+        self._now = now
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(time, name)
+
+    def monotonic(self) -> float:
+        return self._now["value"]
+
+
 @pytest.fixture
 def clock(monkeypatch: pytest.MonkeyPatch) -> dict[str, float]:
     now = {"value": 1_000.0}
-    monkeypatch.setattr("metaproc.runpool.pool.time.monotonic", lambda: now["value"])
+    monkeypatch.setattr(pool_module, "time", _PoolClock(now))
     return now
+
+
+def test_the_clock_fixture_leaves_the_stdlib_clock_alone(clock: dict[str, float]) -> None:
+    """The governor tests below show the pool's clock moves; nothing else's may."""
+    assert time.monotonic() != clock["value"]
 
 
 class TestQuotaBackoffGovernor:
