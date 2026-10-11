@@ -41,6 +41,7 @@ from metaproc.adapters.base import (
     validate_terminal_result_log,
 )
 from metaproc.adapters.registry import derive_variant, get_adapter, get_auth_capable
+from metaproc.agent_errors import parse_quota_reset_at
 from metaproc.cli import app, get_output
 from metaproc.cloud.gcp.resolve_token import resolve_gcp_token
 from metaproc.cloud.gcp.worker_dispatch import (
@@ -169,7 +170,9 @@ from metaproc.engine.retry import (
     classify_output_failures,
     compute_backoff,
     extract_log_error,
+    is_rate_quota,
     max_retries_for,
+    retry_backoff_s,
 )
 from metaproc.engine.runtime import prepare_step, resolve_batch_size, validate_step_inputs_exist
 from metaproc.engine.schema_conform import conform_declared_outputs
@@ -2969,6 +2972,16 @@ async def _run_agent_subprocess(
         raise subprocess.TimeoutExpired(cmd, timeout_s) from exc
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class _ScalarLaunchResult:
+    """How one scalar adapter process ended."""
+
+    exit_code: int
+    kill_reason: str | None
+    admitted_at: float | None
+    """The run pool's :attr:`ProcessResult.admitted_at`; ``None`` when no pool ran it."""
+
+
 async def _run_scalar_agent_subprocess(  # noqa: PLR0913
     cmd: list[str],
     *,
@@ -2982,7 +2995,7 @@ async def _run_scalar_agent_subprocess(  # noqa: PLR0913
     run_id: str,
     step_id: str,
     execution_profile: str,
-) -> tuple[int, str | None]:
+) -> _ScalarLaunchResult:
     """Run one scalar adapter through the run pool, with a legacy fallback."""
     if pool is None:
         exit_code = await _run_agent_subprocess(
@@ -2994,7 +3007,7 @@ async def _run_scalar_agent_subprocess(  # noqa: PLR0913
             use_filter=use_filter,
             execution_context=execution_context,
         )
-        return exit_code, None
+        return _ScalarLaunchResult(exit_code=exit_code, kill_reason=None, admitted_at=None)
 
     future = pool.submit(
         ProcessConfig(
@@ -3025,7 +3038,11 @@ async def _run_scalar_agent_subprocess(  # noqa: PLR0913
         raise
     if result.kill_reason == "timeout":
         raise subprocess.TimeoutExpired(cmd, timeout_s or 0)
-    return result.exit_code if result.exit_code is not None else 1, result.kill_reason
+    return _ScalarLaunchResult(
+        exit_code=result.exit_code if result.exit_code is not None else 1,
+        kill_reason=result.kill_reason,
+        admitted_at=result.admitted_at,
+    )
 
 
 def _bind_pool_dispatch(
@@ -3061,6 +3078,49 @@ def _bind_pool_dispatch(
         return bind_pool_dispatch_scope(template, run_dir=run_dir, step=step_id)
     except ValueError as exc:
         raise CLIError(f"step '{step_id}': {exc}") from exc
+
+
+def _report_scalar_failure(
+    pool: RunPool | None,
+    failure_class: FailureClass,
+    error: str,
+    *,
+    admitted_at: float | None,
+) -> None:
+    """Report one classified scalar-leaf failure to the run pool's governors.
+
+    The pool reads scalar leaves exactly as it reads mapped ones: a per-minute quota
+    refusal here lowers the ceiling that admits this step's siblings, not only this
+    step's own retry, and a quota failure that names its reset time pauses their
+    submissions until then.
+    """
+    if pool is None:
+        return
+    is_quota = failure_class == FailureClass.QUOTA_EXHAUSTED
+    pool.record_failure_class(
+        failure_class,
+        quota_reset_at=parse_quota_reset_at(error) if is_quota else None,
+        rate_quota=is_quota and is_rate_quota(error),
+        admitted_at=admitted_at,
+    )
+
+
+async def _wait_scalar_retry_backoff(
+    pool: RunPool | None, label: str, *, attempt: int, backoff_s: float
+) -> None:
+    """Wait out one scalar retry's backoff as a pending retry of the run pool.
+
+    Mapped retries wait on the scheduler's heap, where the pool counts them; a scalar
+    retry waits here, so it registers itself for ``pool status`` and for the provider
+    governor's growing-retries signal, and deregisters however the wait ends.
+    """
+    if pool is not None:
+        pool.record_retry_scheduled(label, attempt, backoff_s)
+    try:
+        await asyncio.sleep(backoff_s)
+    finally:
+        if pool is not None:
+            pool.record_retry_consumed(label)
 
 
 def _mark_scalar_prelaunch_failure_after_retry(state_dir: Path, *, error: str) -> None:
@@ -3238,6 +3298,8 @@ async def _execute_agent_step(
             # Reset per attempt: an anomaly accepted on an attempt that went on to fail
             # describes that attempt, not the retry that replaced it.
             accepted_anomalies: list[str] = []
+            # When the run pool admitted this attempt's process, when a pool ran it.
+            process_admitted_at: float | None = None
             # Each retry keeps its own log, so the attempt that failed its contract stays
             # readable beside the one that replaced it.
             attempt_log_path = (
@@ -3456,7 +3518,7 @@ async def _execute_agent_step(
                             boundary_before = capture_repo_snapshot(
                                 process_dir, observation_zone=[run_dir]
                             )
-                            exit_code, pool_kill_reason = await _run_scalar_agent_subprocess(
+                            launch = await _run_scalar_agent_subprocess(
                                 cmd,
                                 env=env,
                                 cwd=cwd,
@@ -3469,6 +3531,9 @@ async def _execute_agent_step(
                                 step_id=step_id,
                                 execution_profile=effective_execution_profile,
                             )
+                            exit_code = launch.exit_code
+                            pool_kill_reason = launch.kill_reason
+                            process_admitted_at = launch.admitted_at
                 except subprocess.TimeoutExpired:
                     if running_record is None:
                         raise
@@ -3564,12 +3629,17 @@ async def _execute_agent_step(
                     # Credential classification must read the sealed, original log before
                     # compaction can rewrite or gzip it. Fan-out follows the same ordering.
                     try_compact_log(attempt_log_path)
+                    failure_class = classify_failure(exit_error)
+                    _report_scalar_failure(
+                        scalar_pool, failure_class, exit_error, admitted_at=process_admitted_at
+                    )
                     # A response-body timeout returns no tokens at all and is the most
                     # retryable failure an agent produces. classify_error checks the
-                    # permanent patterns first, so quota, OOM, and permission failures
-                    # still fail on the first attempt.
+                    # permanent patterns first, so hard quota caps, OOM, and permission
+                    # failures still fail on the first attempt; a per-minute quota
+                    # refusal retries after at least one quota window.
                     verdict = classify_error(exit_error)
-                    cap = max_retries_for(classify_failure(exit_error), retry_policy.max_retries)
+                    cap = max_retries_for(failure_class, retry_policy.max_retries)
                     if (
                         not auth_forces_abort(auth_classification)
                         and verdict == RetryVerdict.RETRY
@@ -3579,22 +3649,27 @@ async def _execute_agent_step(
                             state_dir,
                             running_record,
                             disposition=AttemptDisposition.retryable,
-                            failure_class=str(classify_failure(exit_error)),
+                            failure_class=str(failure_class),
                             error=exit_error,
                         )
-                        backoff = compute_backoff(attempt, retry_policy)
+                        backoff = retry_backoff_s(failure_class, attempt, retry_policy)
                         out.progress(
                             f"  Step '{step_id}': retryable ({exit_error}), "
                             f"retry in {backoff:.0f}s (attempt {attempt}/{cap + 1})"
                         )
-                        await asyncio.sleep(backoff)
+                        await _wait_scalar_retry_backoff(
+                            scalar_pool,
+                            f"{run_id}/{step_id}",
+                            attempt=attempt + 1,
+                            backoff_s=backoff,
+                        )
                         attempt += 1
                         continue
                     mark_failed_at(
                         state_dir,
                         error=exit_error,
                         running_record=running_record,
-                        failure_class=str(classify_failure(exit_error)),
+                        failure_class=str(failure_class),
                         attempt_disposition=(
                             AttemptDisposition.retryable
                             if verdict is RetryVerdict.RETRY
@@ -3654,6 +3729,12 @@ async def _execute_agent_step(
                         error_str = f"output validation failed: {'; '.join(output_errors)}"
                         auth_classification = await _complete_auth_attempt(error_str)
                         try_compact_log(attempt_log_path)
+                        _report_scalar_failure(
+                            scalar_pool,
+                            FailureClass.INVALID_OUTPUT,
+                            error_str,
+                            admitted_at=process_admitted_at,
+                        )
                         verdict = classify_output_failures(output_failures, effective_outputs)
                         if (
                             not auth_forces_abort(auth_classification)
@@ -3675,7 +3756,12 @@ async def _execute_agent_step(
                                 f"retry in {backoff:.0f}s "
                                 f"(attempt {attempt}/{content_retry_cap + 1})"
                             )
-                            await asyncio.sleep(backoff)
+                            await _wait_scalar_retry_backoff(
+                                scalar_pool,
+                                f"{run_id}/{step_id}",
+                                attempt=attempt + 1,
+                                backoff_s=backoff,
+                            )
                             attempt += 1
                             continue
                         mark_failed_at(

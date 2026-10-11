@@ -193,6 +193,56 @@ _QUOTA_EXHAUSTED_PATTERNS: list[str] = [
     "out of usage",
 ]
 
+# Quota exhaustion that lifts on a retry timescale. A per-minute throughput quota
+# refuses requests while the account is saturated and serves them again once the window
+# rolls over, so the failure is the pool's concurrency, not the item. Gemini CLI on
+# Vertex reports it as "TPM quota exhausted. No spare capacity is currently available
+# ..." after spending its own internal retries. These still classify as
+# QUOTA_EXHAUSTED; they are exempt only from the permanent "quota" pattern. Google quota
+# ids are camel case (``...RequestsPerMinutePerProject...``), so each limit is matched
+# spaced, underscored, and run together.
+_RATE_QUOTA_PATTERNS: list[str] = [
+    "tpm quota",
+    "rpm quota",
+    "tokens per minute",
+    "requests per minute",
+    "per_minute",
+    "perminute",
+    "no spare capacity",
+    "retryablequotaerror",
+]
+
+# A quota failure carrying any of these will not lift within a retry budget, whatever
+# per-minute wording accompanies it.
+_HARD_QUOTA_PATTERNS: list[str] = [
+    "per day",
+    "per_day",
+    "perday",
+    "daily",
+    "monthly",
+    "out of usage",
+    "out of extra usage",
+    "billing",
+    "credits",
+    "terminalquotaerror",
+]
+
+
+def is_rate_quota(error: str) -> bool:
+    """Whether *error* reads as a per-minute quota refusal rather than a hard cap.
+
+    A per-minute refusal is the one quota failure that says the run pool is running too
+    wide for the provider, so it is what the pool's provider governor acts on. A hard
+    cap (daily, monthly, billing), a capped credential, or unrelated ``quota`` text such
+    as a full disk (``Disk quota exceeded``) classifies as ``QUOTA_EXHAUSTED`` too but
+    says nothing about concurrency.
+    """
+    lower = error.lower()
+    return any(pattern in lower for pattern in _RATE_QUOTA_PATTERNS) and not any(
+        pattern in lower for pattern in _HARD_QUOTA_PATTERNS
+    )
+
+
 # Checked second — if any match, the error is transient (retryable).
 _TRANSIENT_PATTERNS: list[str] = [
     "timeout",
@@ -256,17 +306,24 @@ def classify_error(error: str) -> RetryVerdict:
     """Classify an error string as retryable or permanent.
 
     Priority:
-    1. Permanent patterns (blocklist) — checked first
+    1. Permanent patterns (blocklist) — checked first. A per-minute quota refusal
+       is exempt from the generic ``quota`` pattern only, and then retries.
     2. Transient patterns — checked second
     3. Bare "exit code N" — RETRY (most are transient API errors)
     4. "output validation failed" — RETRY (usually transient; exhausts retries if not)
     5. Default — FAIL
     """
     lower = error.lower()
+    rate_quota = is_rate_quota(error)
 
     for pattern in _PERMANENT_PATTERNS:
+        if rate_quota and pattern == "quota":
+            continue
         if pattern in lower:
             return RetryVerdict.FAIL
+
+    if rate_quota:
+        return RetryVerdict.RETRY
 
     for pattern in _TRANSIENT_PATTERNS:
         if pattern in lower:
@@ -471,6 +528,13 @@ def classify_failure(error: str) -> FailureClass:
 # RetryPolicy.max_retries default (12).
 MAX_CONTENT_FAILURE_RETRIES_DEFAULT = 3
 
+# A per-minute quota retry relaunches a full agent session, which spends the agent
+# CLI's own internal retries (minutes of paid calls) before it can fail again, and it
+# waits at least QUOTA_RETRY_MIN_BACKOFF_S first. A refusal that outlasts a few windows
+# is held by load the run pool cannot relieve, such as another tenant on the same
+# project quota, and will not clear on a twelfth session.
+MAX_QUOTA_RETRIES_DEFAULT = 3
+
 
 def max_retries_for(failure_class: FailureClass, default_max_retries: int) -> int:
     """Return the per-failure-class retry budget.
@@ -479,9 +543,15 @@ def max_retries_for(failure_class: FailureClass, default_max_retries: int) -> in
     typically 12). ``INVALID_OUTPUT`` is capped at
     :data:`MAX_CONTENT_FAILURE_RETRIES_DEFAULT` because re-running the same
     prompt with correction feedback rarely changes the outcome after a few attempts.
+    ``QUOTA_EXHAUSTED`` is capped at :data:`MAX_QUOTA_RETRIES_DEFAULT` because each
+    retry is a full paid session. The mapped reset-clock wait, which waits out a named
+    reset instead of relaunching into the same window, keeps the declared budget and
+    does not come through here.
     """
     if failure_class == FailureClass.INVALID_OUTPUT:
         return min(default_max_retries, MAX_CONTENT_FAILURE_RETRIES_DEFAULT)
+    if failure_class == FailureClass.QUOTA_EXHAUSTED:
+        return min(default_max_retries, MAX_QUOTA_RETRIES_DEFAULT)
     return default_max_retries
 
 
@@ -651,3 +721,25 @@ def compute_backoff(attempt: int, policy: RetryPolicy) -> float:
     """
     delay = policy.initial_backoff_s * (policy.backoff_multiplier ** (attempt - 1))
     return min(delay, policy.max_backoff_s)
+
+
+QUOTA_RETRY_MIN_BACKOFF_S = 60.0
+"""Shortest wait before relaunching after a quota refusal.
+
+A per-minute quota refills on a one-minute window, and the refusing agent has usually
+spent minutes in its own internal retries already. Relaunching sooner re-enters the same
+exhausted window and pays for another session's work to learn nothing new.
+"""
+
+
+def retry_backoff_s(failure_class: FailureClass, retry_index: int, policy: RetryPolicy) -> float:
+    """Return the wait before agent retry *retry_index* (1-indexed) of a *failure_class* failure.
+
+    The policy's exponential backoff, except that a quota failure waits at least
+    :data:`QUOTA_RETRY_MIN_BACKOFF_S`. For agent steps only: the floor assumes the agent
+    CLI already spent its own internal retries, which a code handler has not.
+    """
+    delay = compute_backoff(retry_index, policy)
+    if failure_class == FailureClass.QUOTA_EXHAUSTED:
+        return max(delay, QUOTA_RETRY_MIN_BACKOFF_S)
+    return delay

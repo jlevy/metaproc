@@ -397,8 +397,11 @@ class RetryPolicy(BaseModel):
 
     Retriable errors (see ``engine.retry.classify_error`` — rate limits,
     stream-idle / timeout, 5xx, connection drops, transient API failures) are
-    retried across all fan-out steps. Permanent errors (OOM, quota, cancellation,
-    permission denied) are never retried.
+    retried across all fan-out steps. Permanent errors (OOM, hard quota caps such as a
+    daily, monthly, or billing limit, cancellation, permission denied) are never
+    retried. A per-minute quota refusal retries, but at most
+    ``engine.retry.MAX_QUOTA_RETRIES_DEFAULT`` times and at least a minute apart,
+    because each retry is a full paid agent session.
 
     Defaults give upstream infra enough time to recover from the realistic
     range of transient failures — from a burst of 429s (clears in seconds) to a

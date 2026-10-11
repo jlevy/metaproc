@@ -402,3 +402,42 @@ def test_pool_override_writes_nested_run_state_overrides_for_future_pools(
     nested_override = read_scale_override(nested_state_dir / paths_mod.SCALE_OVERRIDE_FILE)
     assert root_override.operator_cap == 3
     assert nested_override.operator_cap == 3
+
+
+def test_pool_events_formats_quota_backoff(tmp_path: Path) -> None:
+    _mark_v2(tmp_path)
+    _write_jsonl(
+        paths_mod.runpool_step_events(tmp_path, "fanout"),
+        [
+            {
+                "event": "quota_backoff",
+                "ts": "2026-05-14T00:00:00+00:00",
+                "action": "cut",
+                "old_provider_ceiling": 30,
+                "provider_ceiling": 15,
+                "effective_target": 15,
+                "hold_s": 300.0,
+                "admitted_s_ago": 412.3,
+            },
+            {
+                "event": "quota_backoff",
+                "ts": "2026-05-14T00:01:00+00:00",
+                "action": "hold",
+                "old_provider_ceiling": 15,
+                "provider_ceiling": 15,
+                "effective_target": 15,
+                "hold_s": 300.0,
+                "admitted_s_ago": None,
+            },
+        ],
+    )
+
+    result = runner.invoke(app, ["pool", "events", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "quota_backoff  cut provider 30 -> 15 target=15 hold=300s admitted=412s ago" in (
+        result.output
+    )
+    assert "quota_backoff  hold provider 15 -> 15 target=15 hold=300s admitted=unknown" in (
+        result.output
+    )
