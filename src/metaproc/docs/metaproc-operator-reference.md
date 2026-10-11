@@ -807,9 +807,12 @@ Gemini CLI 0.60.0 and later skip a system settings file that is not root-owned, 
 adapter never writes one and rejects `native_settings_scope: system`. A template for the
 home, and what the home contains, are described under Isolated Native Settings in the
 `credentials` topic.
-To keep global authentication, hooks and instructions instead, opt in to
-`--adapter-config native_settings_scope=workspace` on a run whose Gemini steps each set
-`working_directory` to their own run scope.
+The home is removed when the Metaproc process that created it exits normally, so run a
+Gemini step alone with `metaproc run-step --wait`: a detached `run-step` exits at once
+and takes the running agent’s home with it, while `run-process` and `run-parallel` stay
+alive for the run. To keep global authentication, hooks and instructions instead, opt in
+to `--adapter-config native_settings_scope=workspace` on a run whose Gemini steps each
+set `working_directory` to their own run scope.
 The adapter writes the merged native settings to that directory’s
 `.gemini/settings.json`; the existing `--skip-trust` flag allows Gemini to load them.
 It refuses a conflicting existing settings file or a symlink.
