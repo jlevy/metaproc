@@ -775,6 +775,23 @@ class TestLiveCheckUsesTheProfileConfig:
         assert calls == [{"dynamic": True, "output_format": "stream-json"}]
         assert result.exit_code == 0, result.output
 
+    def test_a_refused_profile_is_reported_as_a_failed_check(self, tmp_path: Path) -> None:
+        """A config the adapter refuses at launch is a failed result, not a traceback."""
+        profile_file = self._write_profile(tmp_path, "      native_settings_scope: system\n")
+        calls: list[dict[str, object]] = []
+
+        result = self._invoke(profile_file, calls)
+
+        assert result.exception is None or isinstance(result.exception, SystemExit), (
+            result.exception
+        )
+        assert calls == []
+        assert result.exit_code == 1, result.output
+        assert "[-] gemini-cli (gemini-3.6-flash): invalid adapter configuration:" in (
+            result.output
+        )
+        assert "owned by root" in result.output
+
 
 class TestRunLiveCheckCodex:
     """_run_live_check must hand the codex adapter a permission config.

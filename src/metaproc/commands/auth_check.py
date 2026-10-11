@@ -408,6 +408,9 @@ def _run_live_check(
                 merged_config=merged_config,
                 variables={},
             )
+            # The live check never runs planning's validation, so a config the adapter
+            # refuses at launch, such as Gemini's removed system scope, surfaces here.
+            env = adapter.prepare_env(agent_seed_env(), merged_config)
         except ValueError as exc:
             return [(False, f"{label}: invalid adapter configuration: {exc}")]
 
@@ -441,8 +444,6 @@ def _run_live_check(
                     pass  # GCP extra not installed — skip token injection
                 except Exception:
                     log.warning("Failed to inject GCP token for live check", exc_info=True)
-
-        env = adapter.prepare_env(agent_seed_env(), merged_config)
 
         # Pre-flight: confirm pi-cli actually knows the requested provider/model
         # before we dispatch a trivial prompt. Without this gate, pi-cli
