@@ -14,6 +14,8 @@ provider ceiling, the scalar agent retry, and the mapped agent retry.
 from __future__ import annotations
 
 import asyncio
+import errno
+import io
 import json
 import time
 from datetime import UTC, datetime, timedelta
@@ -467,6 +469,51 @@ class TestQuotaBackoffGovernor:
         ]
         adjusts = [event for event in events if isinstance(event, ConcurrencyAdjustEvent)]
         assert [(e.old, e.new, e.reason) for e in adjusts] == [(30, 15, "quota_backoff")]
+
+    def test_a_refusal_at_the_floor_is_logged_as_a_hold(
+        self, tmp_path: Path, clock: dict[str, float]
+    ) -> None:
+        """The action names what happened to the ceiling, not what the governor tried."""
+        pool = _pool(tmp_path, initial_concurrency=2, min_concurrency=1)
+        assert pool._event_logger is not None
+        pool._event_logger.open()
+        try:
+            pool.record_failure_class("quota_exhausted", rate_quota=True, admitted_at=999.0)
+            first_cut_at = pool._quota_cut_at
+            clock["value"] += 10.0
+            # Admitted after the cut, but the ceiling is already at its floor.
+            pool.record_failure_class("quota_exhausted", rate_quota=True, admitted_at=1_005.0)
+        finally:
+            pool._event_logger.close()
+
+        events = read_runpool_events(tmp_path / "logs" / "events.jsonl")
+        backoffs = [event for event in events if isinstance(event, QuotaBackoffEvent)]
+        assert [(e.action, e.old_provider_ceiling, e.provider_ceiling) for e in backoffs] == [
+            ("cut", 2, 1),
+            ("hold", 1, 1),
+        ]
+        assert pool._quota_cut_at == first_cut_at
+
+    def test_a_failing_event_sink_cannot_undo_the_cut(self, tmp_path: Path) -> None:
+        """Enforcement comes before diagnostics, and a full disk does not fail the item.
+
+        The governor runs inside the executors' failure handling, so an exception here
+        would replace the item's own verdict.
+        """
+
+        class _FullDisk(io.StringIO):
+            def write(self, _text: str) -> int:
+                raise OSError(errno.ENOSPC, "No space left on device")
+
+        pool = _pool(tmp_path)
+        assert pool._event_logger is not None
+        pool._event_logger._file = _FullDisk()
+
+        pool.record_failure_class("quota_exhausted", rate_quota=True, admitted_at=time.monotonic())
+
+        assert pool._provider_ceiling == 15
+        assert pool.current_max_concurrency == 15
+        assert pool._semaphore.capacity == pool._effective_target()
 
     def test_other_failure_classes_leave_the_provider_ceiling_alone(self, tmp_path: Path) -> None:
         pool = _pool(tmp_path)

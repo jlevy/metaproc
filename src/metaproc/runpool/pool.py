@@ -988,7 +988,7 @@ class RunPool:
         ordinary provider ramp.
         """
         now = time.monotonic()
-        cut = admitted_at is not None and (
+        admitted_after_cut = admitted_at is not None and (
             self._quota_cut_at is None or admitted_at >= self._quota_cut_at
         )
         self._quota_hold_until = now + self._config.quota_backoff_hold_s
@@ -996,13 +996,26 @@ class RunPool:
 
         old_cap = self._semaphore.capacity
         old_provider_ceiling = self._provider_ceiling
-        if cut:
+        if admitted_after_cut:
             decrement = max(1, math.ceil(old_cap * self._config.quota_down_factor))
             self._provider_ceiling = max(
                 self._config.min_concurrency,
                 min(self._provider_ceiling, old_cap - decrement),
             )
+        # A ceiling already at min_concurrency cannot fall, so that refusal only holds.
+        cut = self._provider_ceiling < old_provider_ceiling
+        if cut:
             self._quota_cut_at = now
+
+        # Enforce before recording: a failed diagnostic write must neither leave the
+        # lowered ceiling unenforced nor replace the failed item's own verdict.
+        new_cap = self._effective_target()
+        if new_cap != old_cap:
+            self._consecutive_normal = 0
+            self._consecutive_elevated = 0
+            self._set_capacity(new_cap, reason="quota_backoff")
+        self._write_status()
+
         log.warning(
             "RunPool: quota exhausted; provider ceiling %d -> %d (%s), recovery held %.0fs",
             old_provider_ceiling,
@@ -1011,20 +1024,17 @@ class RunPool:
             self._config.quota_backoff_hold_s,
         )
         if self._event_logger is not None:
-            self._event_logger.quota_backoff(
-                action="cut" if cut else "hold",
-                old_provider_ceiling=old_provider_ceiling,
-                provider_ceiling=self._provider_ceiling,
-                effective_target=self._effective_target(),
-                hold_s=self._config.quota_backoff_hold_s,
-                admitted_s_ago=now - admitted_at if admitted_at is not None else None,
-            )
-        new_cap = self._effective_target()
-        if new_cap != old_cap:
-            self._consecutive_normal = 0
-            self._consecutive_elevated = 0
-            self._set_capacity(new_cap, reason="quota_backoff")
-        self._write_status()
+            try:
+                self._event_logger.quota_backoff(
+                    action="cut" if cut else "hold",
+                    old_provider_ceiling=old_provider_ceiling,
+                    provider_ceiling=self._provider_ceiling,
+                    effective_target=new_cap,
+                    hold_s=self._config.quota_backoff_hold_s,
+                    admitted_s_ago=now - admitted_at if admitted_at is not None else None,
+                )
+            except OSError:
+                log.exception("Failed to record quota backoff")
 
     def record_retry_scheduled(self, label: str, attempt: int, backoff_s: float) -> None:
         """Record that an item has been scheduled for retry after backoff.
@@ -2212,18 +2222,23 @@ class RunPool:
             self._provider_ceiling,
         )
         if self._event_logger is not None:
-            self._event_logger.concurrency_adjust(
-                old_cap,
-                new_cap,
-                reason,
-                self._consecutive_normal,
-                self._consecutive_elevated,
-                memory_ceiling=self._memory_ceiling,
-                provider_ceiling=self._provider_ceiling,
-                operator_cap=self._operator_cap,
-                effective_target=self._effective_target(),
-                bottleneck=self._classify_bottleneck(),
-            )
+            try:
+                self._event_logger.concurrency_adjust(
+                    old_cap,
+                    new_cap,
+                    reason,
+                    self._consecutive_normal,
+                    self._consecutive_elevated,
+                    memory_ceiling=self._memory_ceiling,
+                    provider_ceiling=self._provider_ceiling,
+                    operator_cap=self._operator_cap,
+                    effective_target=self._effective_target(),
+                    bottleneck=self._classify_bottleneck(),
+                )
+            except OSError:
+                # The capacity change above already took effect; a failed diagnostic
+                # sink must not undo it or replace the caller's own outcome.
+                log.exception("Failed to record concurrency adjustment %d -> %d", old_cap, new_cap)
 
     def _apply_operator_target(self) -> None:
         """Apply an explicit operator cap change during adaptive mode."""

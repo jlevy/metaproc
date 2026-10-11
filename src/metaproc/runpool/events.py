@@ -397,8 +397,9 @@ class EventLogger:
     ) -> None:
         """Record the provider governor's response to one per-minute quota refusal.
 
-        ``action`` is ``cut`` when the provider ceiling fell, or ``hold`` when the failure
-        belonged to an episode an earlier cut already answered and only held recovery.
+        ``action`` is ``cut`` when the provider ceiling fell, or ``hold`` when it did not:
+        the failure belonged to an episode an earlier cut already answered, or the
+        ceiling was already at ``min_concurrency``, so it only held recovery.
         ``admitted_s_ago`` is how long before this response the failed process was
         admitted, or ``None`` when its admission time is unknown.
         """
