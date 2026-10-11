@@ -374,6 +374,20 @@ def pool_events(
                 f"{ts}  retry_scheduled  {label} "
                 f"attempt={ev.get('attempt')} backoff={ev.get('backoff_s')}s"
             )
+        elif event_name == "quota_backoff":
+            hold_s = ev.get("hold_s")
+            hold = f"{hold_s:.0f}s" if isinstance(hold_s, (int, float)) else "?"
+            admitted_s_ago = ev.get("admitted_s_ago")
+            admitted = (
+                f"{admitted_s_ago:.0f}s ago"
+                if isinstance(admitted_s_ago, (int, float))
+                else "unknown"
+            )
+            out.data(
+                f"{ts}  quota_backoff  {ev.get('action')} "
+                f"provider {ev.get('old_provider_ceiling')} -> {ev.get('provider_ceiling')} "
+                f"target={ev.get('effective_target')} hold={hold} admitted={admitted}"
+            )
         else:
             out.data(f"{ts}  {event_name}  {json.dumps(ev)}")
 

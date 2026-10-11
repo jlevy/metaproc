@@ -385,6 +385,39 @@ class EventLogger:
             }
         )
 
+    def quota_backoff(
+        self,
+        *,
+        action: str,
+        old_provider_ceiling: int,
+        provider_ceiling: int,
+        effective_target: int,
+        hold_s: float,
+        admitted_s_ago: float | None,
+    ) -> None:
+        """Record the provider governor's response to one per-minute quota refusal.
+
+        ``action`` is ``cut`` when the provider ceiling fell, or ``hold`` when it did not:
+        the failure belonged to an episode an earlier cut already answered, or the
+        ceiling was already at ``min_concurrency``, so it only held recovery. In manual
+        mode the governor is frozen and ``action`` is ``ignored``.
+        ``admitted_s_ago`` is how long before this response the failed process was
+        admitted, or ``None`` when its admission time is unknown.
+        """
+        self._write(
+            {
+                "event": "quota_backoff",
+                "action": action,
+                "old_provider_ceiling": old_provider_ceiling,
+                "provider_ceiling": provider_ceiling,
+                "effective_target": effective_target,
+                "hold_s": hold_s,
+                "admitted_s_ago": (
+                    round(admitted_s_ago, 1) if admitted_s_ago is not None else None
+                ),
+            }
+        )
+
     def quota_pause_tick(self, remaining_s: float) -> None:
         self._write({"event": "quota_pause_tick", "remaining_s": remaining_s})
 

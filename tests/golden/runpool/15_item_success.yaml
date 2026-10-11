@@ -265,6 +265,7 @@ status:
     operator_cap: 15
     pending_retries: 0
     provider_ceiling: 0
+    quota_hold_remaining_s: 0.0
     recent_rate_limits: 0
   current_concurrency: 0
   failed_count: 0

@@ -113,7 +113,9 @@ from metaproc.engine.retry import (
     classify_output_failures,
     compute_backoff,
     extract_log_error,
+    is_rate_quota,
     max_retries_for,
+    retry_backoff_s,
 )
 from metaproc.engine.run_id import generate_run_id
 from metaproc.engine.runtime import (
@@ -1008,6 +1010,10 @@ def run_parallel(
                                 failure_class=str(failure.failure_class),
                                 error=error_str,
                             )
+                            # The policy backoff, without the agent quota floor: a handler
+                            # has not waited through an agent CLI's internal retries, and
+                            # this loop runs items in sequence, so a floor would stall every
+                            # sibling item behind each quota retry.
                             backoff = compute_backoff(attempt, retry_policy)
                             out.progress(
                                 f"  {each}={item}: retryable ({error_str}), "
@@ -1971,10 +1977,17 @@ async def _run_agent_pool(  # noqa: PLR0913
         # whole dispatch until the named window passes — replaces the 2026-05-13
         # per-task crash cascade. parse_quota_reset_at returns None for any
         # other error string; pool.record_failure_class then no-ops the pause.
-        quota_reset_at = (
-            parse_quota_reset_at(error_str) if fc == FailureClass.QUOTA_EXHAUSTED else None
+        is_quota = fc == FailureClass.QUOTA_EXHAUSTED
+        quota_reset_at = parse_quota_reset_at(error_str) if is_quota else None
+        # Only a per-minute refusal says the pool runs too wide. When the pool admitted
+        # the failed process lets the provider governor tell a failure admitted under
+        # its current ceiling from one admitted before its last cut.
+        pool.record_failure_class(
+            fc,
+            quota_reset_at=quota_reset_at,
+            rate_quota=is_quota and is_rate_quota(error_str),
+            admitted_at=shared.pop("process_admitted_at", None),
         )
-        pool.record_failure_class(fc, quota_reset_at=quota_reset_at)
         verdict = (
             classify_output_failures(output_failures, effective_outputs)
             if output_failures
@@ -2000,10 +2013,10 @@ async def _run_agent_pool(  # noqa: PLR0913
         # against the same retry budget as other process failures. Unlike a
         # pre-launch pool wait, a quota failure can follow paid model work.
         # Otherwise repeated reset-clock failures relaunch forever at attempt one.
+        # The declared budget, not the smaller per-minute quota cap: this retry waits
+        # out a named reset rather than relaunching into the window that refused it.
         is_quota_exhausted_retry = quota_reset_at is not None and not force_abort
-        if is_quota_exhausted_retry and shared["attempt_number"] <= max_retries_for(
-            fc, retry_policy.max_retries
-        ):
+        if is_quota_exhausted_retry and shared["attempt_number"] <= retry_policy.max_retries:
             assert quota_reset_at is not None  # noqa: S101 — narrow the type for mypy/basedpyright
             _finish_attempt(AttemptDisposition.retryable)
             now_local = datetime.now(quota_reset_at.tzinfo)
@@ -2054,7 +2067,7 @@ async def _run_agent_pool(  # noqa: PLR0913
                 shared["output_failure_feedback"] = tuple(output_failures)
             shared["attempt_number"] += 1
             retry_index = shared["attempt_number"] - 1
-            delay = compute_backoff(retry_index, retry_policy)
+            delay = retry_backoff_s(fc, retry_index, retry_policy)
             retry_seq += 1
             heapq.heappush(
                 retry_heap,
@@ -2191,6 +2204,7 @@ async def _run_agent_pool(  # noqa: PLR0913
             _classify_and_maybe_retry(shared, error_str)
             return
 
+        shared["process_admitted_at"] = result.admitted_at
         if result.kill_reason is None and log_path is not None:
             item_runtime_config = cast(
                 "dict[str, object]",

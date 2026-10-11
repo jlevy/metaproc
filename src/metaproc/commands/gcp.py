@@ -919,6 +919,9 @@ def _aggregate_worker_controller(run_dir: Path) -> tuple[ControllerStatus | None
             bottleneck=bottleneck,
             recent_rate_limits=sum(controller.recent_rate_limits for controller in controllers),
             pending_retries=sum(controller.pending_retries for controller in controllers),
+            quota_hold_remaining_s=max(
+                controller.quota_hold_remaining_s for controller in controllers
+            ),
         ),
         live_caps,
     )

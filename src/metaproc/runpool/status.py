@@ -114,6 +114,8 @@ class ControllerStatus(BaseModel):
     bottleneck: str
     recent_rate_limits: int = 0
     pending_retries: int = 0
+    quota_hold_remaining_s: float = 0.0
+    """Seconds left on the provider governor's quota hold when this was written."""
 
 
 class ScaleBounds(BaseModel):

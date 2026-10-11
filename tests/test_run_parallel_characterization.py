@@ -560,6 +560,8 @@ class TestPoolSubmitAndShutdown:
             (["quota"] * 3, 1, [1, 2], 1, False),
             (["quota"], 1, [1, 2], 0, False),
             (["quota", "timeout", "quota"], 2, [1, 2, 3], 1, False),
+            # The reset-clock wait keeps the declared budget, above the per-minute cap.
+            (["quota"] * 6, 5, [1, 2, 3, 4, 5, 6], 1, False),
             (["pool"], 0, [1, 1], 0, False),
             (["quota"], 3, [1], 1, True),
         ],
@@ -613,6 +615,7 @@ class TestPoolSubmitAndShutdown:
                                 if error == "quota"
                                 else error,
                                 elapsed_s=0.01,
+                                admitted_at=None,
                             )
                         )
                     return future
@@ -777,7 +780,9 @@ class TestPoolSubmitAndShutdown:
                 def submit(self, _config: Any) -> asyncio.Future[Any]:
                     future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
                     future.set_result(
-                        SimpleNamespace(exit_code=0, kill_reason=None, elapsed_s=0.01)
+                        SimpleNamespace(
+                            exit_code=0, kill_reason=None, elapsed_s=0.01, admitted_at=None
+                        )
                     )
                     return future
 
@@ -1177,6 +1182,7 @@ class TestPoolSubmitAndShutdown:
                             exit_code=1 if self.submission_count == 2 else 0,
                             kill_reason=None,
                             elapsed_s=0.01,
+                            admitted_at=None,
                         )
                     )
                     return future
@@ -1301,7 +1307,9 @@ class TestPoolSubmitAndShutdown:
                     config.resolve_launch()
                     future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
                     future.set_result(
-                        SimpleNamespace(exit_code=exit_code, kill_reason=None, elapsed_s=0.01)
+                        SimpleNamespace(
+                            exit_code=exit_code, kill_reason=None, elapsed_s=0.01, admitted_at=None
+                        )
                     )
                     return future
 
@@ -1436,6 +1444,7 @@ class TestPoolSubmitAndShutdown:
                             exit_code=exit_code,
                             kill_reason=kill_reason,
                             elapsed_s=0.01,
+                            admitted_at=None,
                         )
                     )
                     return future
@@ -1593,7 +1602,9 @@ class TestPoolSubmitAndShutdown:
                     config.resolve_launch()
                     future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
                     future.set_result(
-                        SimpleNamespace(exit_code=0, kill_reason=None, elapsed_s=0.01)
+                        SimpleNamespace(
+                            exit_code=0, kill_reason=None, elapsed_s=0.01, admitted_at=None
+                        )
                     )
                     return future
 

@@ -9,7 +9,7 @@ status: Approved
 Module-level notes, including using RunPool as a library, are in
 [`runpool/README.md`](../runpool/README.md).
 
-**Date:** 2026-04-06 (last updated 2026-09-22) **Status:** Approved
+**Date:** 2026-04-06 (last updated 2026-10-11) **Status:** Approved
 
 RunPool is Metaproc’s local agent process manager.
 It owns subprocess lifecycle, adaptive concurrency, host-level coordination, health
@@ -254,6 +254,37 @@ Provider pressure is separate from memory pressure.
 Bursts of provider rate-limit failures reduce the provider ceiling, and provider
 recovery can raise it again after clear samples.
 
+A single per-minute quota refusal, from a scalar or a mapped agent step, cuts the
+provider ceiling to half the current capacity at once, with no burst threshold and no
+floor above `min_concurrency`. By the time an agent CLI reports quota exhaustion it has
+usually spent minutes in its own internal retries, so one report is already a sustained
+signal. One saturation episode still surfaces as several failures, because every process
+admitted under the old ceiling can fail after the cut.
+A failure therefore cuts again only when its process was admitted after the latest cut,
+which means the lowered ceiling was itself too high; the others only hold recovery.
+The pool stamps that admission when the process takes a pool slot, before any host-slot
+wait or launch, so a slow launch or a late report cannot move it.
+A refusal that no pool slot admitted, such as a pre-launch failure, only holds recovery.
+Provider recovery resumes at the ordinary ramp once `quota_backoff_hold_s` (300 seconds
+by default) passes without another quota refusal.
+Each response is logged as a `quota_backoff` event with `action: cut` or `action: hold`,
+and a cut that changes capacity also logs `concurrency_adjust` with reason
+`quota_backoff`. Manual mode (`pool override --mode manual`) freezes both governors, so
+there a refusal is logged with `action: ignored` and the provider ceiling stays where
+the operator left it.
+
+Other failures classified `quota_exhausted` (a daily, monthly, or billing cap, a capped
+credential, or unrelated text such as `Disk quota exceeded`) say nothing about
+concurrency and leave the provider ceiling alone.
+One with a named reset time pauses submissions until that time passes.
+
+The refused item itself retries, at most `MAX_QUOTA_RETRIES_DEFAULT` (3) times and at
+least `QUOTA_RETRY_MIN_BACKOFF_S` (60 seconds) apart, inside the step’s declared
+`max_retries`. Each retry is a full agent session that spends the CLI’s own internal
+retries again, so under the default policy an item that keeps meeting the refusal stops
+after four sessions and ends `retryable`, and the step’s spend-cap worst case
+(`1 + max_retries`) still bounds it.
+
 Operator caps are an emergency brake and local testing tool.
 They are useful when a live run is already harming host stability, but they should be
 cleared after the incident with `uv run metaproc pool override <run-dir> --clear`.
@@ -320,8 +351,9 @@ are treated differently on purpose.
 Provider pressure is a property of the run and the account, so a resume that reopens at
 full width against an API that was rate-limiting a minute ago has learned nothing.
 It is discarded only when the saved state shows the pressure is stale: no recent rate
-limits, no pending retries, and a prior operator cap below the current
-`max_concurrency`.
+limits, no pending retries, no quota hold still running, and a prior operator cap below
+the current `max_concurrency`. The hold itself is not restored, so after a resume
+provider recovery starts at once.
 
 `memory_ceiling` is never restored.
 It describes the host, and the host is free to have changed completely since the state
