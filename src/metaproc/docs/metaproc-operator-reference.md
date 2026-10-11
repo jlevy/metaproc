@@ -132,6 +132,9 @@ behavior [`arch-runpool.md`](arch-runpool.md), and for naming rules
    fan-out pools, scalar steps, and composite scopes.
    A `gcp-worker` launch applies it independently inside each worker.
    The adaptive memory and provider ceilings are what actively govern under pressure.
+   A per-minute provider quota refusal halves the provider ceiling by itself and holds
+   recovery for `quota_backoff_hold_s`, so a quota episode does not call for
+   `pool override --cap`; `pool events` shows each response as a `quota_backoff` line.
    Command-backed `mode: code` steps also use the shared launch cap and may execute
    concurrently at one DAG level; fan-out paths retain their step caps.
    The run-owned synchronous executor defaults to 32 workers and grows to an explicit
