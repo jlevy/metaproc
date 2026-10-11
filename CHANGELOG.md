@@ -125,21 +125,41 @@ development series.
   failure to the run pool, so the provider ceiling stayed at full width while sibling
   leaves failed the same way and an operator had to lower the cap and resume by hand.
   A per-minute quota refusal (`tpm quota`, `rpm quota`, `tokens per minute`,
-  `requests per minute`, `per_minute`, `no spare capacity`, `RetryableQuotaError`) now
-  retries within the step’s declared `max_retries`, waiting at least 60 seconds, and
-  still records `failure_class: quota_exhausted`; a message that also names a daily,
-  monthly, billing, or credit limit stays permanent.
+  `requests per minute`, `per_minute` or camel-case `PerMinute`, `no spare capacity`,
+  `RetryableQuotaError`) now retries and still records `failure_class: quota_exhausted`;
+  a message that also names a daily (including `PerDay`), monthly, billing, or credit
+  limit stays permanent.
+  The retry waits at least 60 seconds on an agent step, takes at most three retries
+  (`MAX_QUOTA_RETRIES_DEFAULT`) inside the declared `max_retries`, because each one is a
+  full paid agent session, and keeps the policy backoff on a mapped code step, whose
+  items run in sequence.
   Scalar agent steps now report every classified failure to the run pool, as mapped
-  agent steps already did.
+  agent steps already did, including a named reset time that pauses submissions, and a
+  scalar retry wait now shows in pool status as a pending retry.
   A per-minute quota refusal halves the pool’s provider ceiling at once, while hard caps
-  and unrelated `quota` text such as `Disk quota exceeded` leave it alone; failures from
-  processes admitted before that cut only hold recovery, a failure from a process
-  admitted after it cuts again, and recovery resumes at the ordinary provider ramp after
-  `quota_backoff_hold_s` (300 seconds) without another quota failure.
-  Each response is a `quota_backoff` event in the pool event log.
-  The retry stays inside the step’s declared attempt budget, so the spend-cap worst case
-  and a declared `max_retries: 0` are unchanged, and the retried attempt writes its own
-  log, which the spend ledger counts once.
+  and unrelated `quota` text such as `Disk quota exceeded` leave it alone.
+  Failures from processes the pool admitted before that cut only hold recovery, a
+  failure from a process admitted after it cuts again, and recovery resumes at the
+  ordinary provider ramp after `quota_backoff_hold_s` (300 seconds) without another
+  refusal. The pool stamps each process’s admission itself (`ProcessResult.admitted_at`)
+  so a slow launch or a late report cannot turn one episode into a second cut.
+  In manual mode a refusal leaves the operator’s ceiling alone.
+  A resume during a hold keeps the cut ceiling even when the saved state carries an
+  operator cap (`ControllerStatus.quota_hold_remaining_s`). Each response is a
+  `quota_backoff` event in the pool event log, formatted by `metaproc pool events`. The
+  retry stays inside the step’s declared attempt budget, so the spend-cap worst case and
+  a declared `max_retries: 0` are unchanged, and the retried attempt writes its own log,
+  which the spend ledger counts once.
+
+- **Clearing an operator cap restores capacity on the next pool tick.** After
+  `metaproc pool override --clear`, capacity stayed at the old cap until some later
+  ceiling change, because the adaptive tick applied the operator target only while an
+  override was set. It now brings capacity to the effective target whenever they differ.
+
+- **A failing pool event log no longer replaces an item’s outcome.** A failed write of a
+  `concurrency_adjust` or `quota_backoff` event raised out of the governor after it had
+  lowered a ceiling, before the semaphore enforced it, and failed the item that reported
+  the refusal. The capacity change now comes first and the write failure is logged.
 
 - **A resume from a fresh checkout of the same revision reuses what the run completed.**
   A plan resolves a process’s `./` and `../` references to absolute paths, and a step’s
