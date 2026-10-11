@@ -133,7 +133,7 @@ development series.
   agent steps already did.
   Any `quota_exhausted` failure halves the pool’s provider ceiling at once; failures
   from processes admitted before that cut only hold recovery, a failure from a process
-  launched after it cuts again, and recovery resumes at the ordinary provider ramp after
+  admitted after it cuts again, and recovery resumes at the ordinary provider ramp after
   `quota_backoff_hold_s` (300 seconds) without another quota failure.
   Each response is a `quota_backoff` event in the pool event log.
   The retry stays inside the step’s declared attempt budget, so the spend-cap worst case

@@ -260,8 +260,10 @@ floor above `min_concurrency`. By the time an agent CLI reports quota exhaustion
 usually spent minutes in its own internal retries, so one report is already a sustained
 signal. One saturation episode still surfaces as several failures, because every process
 admitted under the old ceiling can fail after the cut.
-A failure therefore cuts again only when its process launched after the latest cut,
+A failure therefore cuts again only when its process was admitted after the latest cut,
 which means the lowered ceiling was itself too high; the others only hold recovery.
+The pool stamps that admission when the process takes a pool slot, before any host-slot
+wait or launch, so a slow launch or a late report cannot move it.
 Provider recovery resumes at the ordinary ramp once `quota_backoff_hold_s` (300 seconds
 by default) passes without another quota failure.
 Each response is logged as a `quota_backoff` event with `action: cut` or `action: hold`,

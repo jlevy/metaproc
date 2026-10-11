@@ -2976,8 +2976,8 @@ class _ScalarLaunchResult:
 
     exit_code: int
     kill_reason: str | None
-    elapsed_s: float | None
-    """Seconds the process ran under the run pool; ``None`` when no pool launched it."""
+    admitted_at: float | None
+    """The run pool's :attr:`ProcessResult.admitted_at`; ``None`` when no pool ran it."""
 
 
 async def _run_scalar_agent_subprocess(  # noqa: PLR0913
@@ -3005,7 +3005,7 @@ async def _run_scalar_agent_subprocess(  # noqa: PLR0913
             use_filter=use_filter,
             execution_context=execution_context,
         )
-        return _ScalarLaunchResult(exit_code=exit_code, kill_reason=None, elapsed_s=None)
+        return _ScalarLaunchResult(exit_code=exit_code, kill_reason=None, admitted_at=None)
 
     future = pool.submit(
         ProcessConfig(
@@ -3039,7 +3039,7 @@ async def _run_scalar_agent_subprocess(  # noqa: PLR0913
     return _ScalarLaunchResult(
         exit_code=result.exit_code if result.exit_code is not None else 1,
         kill_reason=result.kill_reason,
-        elapsed_s=result.elapsed_s,
+        admitted_at=result.admitted_at,
     )
 
 
@@ -3079,7 +3079,7 @@ def _bind_pool_dispatch(
 
 
 def _report_scalar_failure(
-    pool: RunPool | None, failure_class: FailureClass, *, elapsed_s: float | None
+    pool: RunPool | None, failure_class: FailureClass, *, admitted_at: float | None
 ) -> None:
     """Report one classified scalar-leaf failure to the run pool's governors.
 
@@ -3088,7 +3088,7 @@ def _report_scalar_failure(
     step's own retry.
     """
     if pool is not None:
-        pool.record_failure_class(failure_class, elapsed_s=elapsed_s)
+        pool.record_failure_class(failure_class, admitted_at=admitted_at)
 
 
 def _mark_scalar_prelaunch_failure_after_retry(state_dir: Path, *, error: str) -> None:
@@ -3266,8 +3266,8 @@ async def _execute_agent_step(
             # Reset per attempt: an anomaly accepted on an attempt that went on to fail
             # describes that attempt, not the retry that replaced it.
             accepted_anomalies: list[str] = []
-            # How long this attempt's process ran under the run pool, when one ran it.
-            process_elapsed_s: float | None = None
+            # When the run pool admitted this attempt's process, when a pool ran it.
+            process_admitted_at: float | None = None
             # Each retry keeps its own log, so the attempt that failed its contract stays
             # readable beside the one that replaced it.
             attempt_log_path = (
@@ -3501,7 +3501,7 @@ async def _execute_agent_step(
                             )
                             exit_code = launch.exit_code
                             pool_kill_reason = launch.kill_reason
-                            process_elapsed_s = launch.elapsed_s
+                            process_admitted_at = launch.admitted_at
                 except subprocess.TimeoutExpired:
                     if running_record is None:
                         raise
@@ -3598,7 +3598,9 @@ async def _execute_agent_step(
                     # compaction can rewrite or gzip it. Fan-out follows the same ordering.
                     try_compact_log(attempt_log_path)
                     failure_class = classify_failure(exit_error)
-                    _report_scalar_failure(scalar_pool, failure_class, elapsed_s=process_elapsed_s)
+                    _report_scalar_failure(
+                        scalar_pool, failure_class, admitted_at=process_admitted_at
+                    )
                     # A response-body timeout returns no tokens at all and is the most
                     # retryable failure an agent produces. classify_error checks the
                     # permanent patterns first, so hard quota caps, OOM, and permission
@@ -3691,7 +3693,9 @@ async def _execute_agent_step(
                         auth_classification = await _complete_auth_attempt(error_str)
                         try_compact_log(attempt_log_path)
                         _report_scalar_failure(
-                            scalar_pool, FailureClass.INVALID_OUTPUT, elapsed_s=process_elapsed_s
+                            scalar_pool,
+                            FailureClass.INVALID_OUTPUT,
+                            admitted_at=process_admitted_at,
                         )
                         verdict = classify_output_failures(output_failures, effective_outputs)
                         if (

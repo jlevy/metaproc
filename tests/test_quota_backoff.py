@@ -49,9 +49,11 @@ from metaproc.models.authored import IOSpec, ProcessDefaults, ProcessSpec, Proce
 from metaproc.models.plan import ResolvedAdapter, ResolvedStep
 from metaproc.models.runtime import AttemptDisposition
 from metaproc.osutils.memory_pressure import PressureLevel
+from metaproc.runpool.backend import PreparedLaunch
 from metaproc.runpool.event_models import ConcurrencyAdjustEvent, QuotaBackoffEvent
 from metaproc.runpool.event_reader import read_runpool_events
-from metaproc.runpool.pool import RunPool, RunPoolConfig
+from metaproc.runpool.mock_backend import MockBackend, MockBehavior
+from metaproc.runpool.pool import ProcessConfig, RunPool, RunPoolConfig
 
 # The terminal record Gemini CLI writes after its own retries against a Vertex per-minute
 # quota are exhausted. The message is long enough that ``extract_log_error`` truncates it,
@@ -231,25 +233,78 @@ class TestQuotaBackoffGovernor:
         the old ceiling, so its failure says nothing about the new one.
         """
         pool = _pool(tmp_path)
-        pool.record_failure_class("quota_exhausted", elapsed_s=400.0)
+        pool.record_failure_class("quota_exhausted", admitted_at=clock["value"] - 400.0)
         assert pool.current_max_concurrency == 15
 
         clock["value"] += 70.0
-        pool.record_failure_class("quota_exhausted", elapsed_s=420.0)
+        pool.record_failure_class("quota_exhausted", admitted_at=clock["value"] - 420.0)
         clock["value"] += 100.0
-        pool.record_failure_class("quota_exhausted", elapsed_s=580.0)
+        pool.record_failure_class("quota_exhausted", admitted_at=clock["value"] - 580.0)
         assert pool.current_max_concurrency == 15
+
+    def test_a_late_report_does_not_make_an_earlier_admission_look_recent(
+        self, tmp_path: Path, clock: dict[str, float]
+    ) -> None:
+        """Bookkeeping between exit and report (credential teardown, log compaction)
+        delays the report, never the admission the pool stamped."""
+        pool = _pool(tmp_path)
+        sibling_admitted_at = clock["value"] - 1.0
+        pool.record_failure_class("quota_exhausted", admitted_at=clock["value"] - 400.0)
+        assert pool.current_max_concurrency == 15
+
+        # The sibling ran 301 s and its report reached the pool 3 s after it exited.
+        clock["value"] += 303.0
+        pool.record_failure_class("quota_exhausted", admitted_at=sibling_admitted_at)
+        assert pool.current_max_concurrency == 15
+
+    def test_the_pool_stamps_admission_before_launch(self, tmp_path: Path) -> None:
+        """The stamp marks when the ceiling admitted the process, not when it started.
+
+        A slow launch (or a host-slot wait) after admission must not move a process
+        admitted before a cut to after it.
+        """
+        backend = MockBackend(
+            default_behavior=MockBehavior(exit_code=173, startup_delay_s=0.2, run_duration_s=0.01)
+        )
+
+        async def _run() -> tuple[float | None, float]:
+            pool = RunPool(
+                RunPoolConfig(
+                    max_concurrency=2,
+                    initial_concurrency=2,
+                    min_concurrency=1,
+                    monitor_interval_s=0.01,
+                    state_dir=tmp_path / "state",
+                    logs_dir=tmp_path / "logs",
+                ),
+                backend=backend,
+            )
+            try:
+                submitted_at = time.monotonic()
+                result = await pool.submit(
+                    ProcessConfig(launch=PreparedLaunch(command=("true",)), label="leaf")
+                )
+                assert result.admitted_at is not None
+                assert result.admitted_at >= submitted_at
+                return result.admitted_at, backend._launch_times["leaf"]
+            finally:
+                await pool.shutdown()
+
+        admitted_at, launched_at = asyncio.run(_run())
+        assert admitted_at is not None
+        assert launched_at - admitted_at >= 0.2
 
     def test_a_failure_admitted_after_the_cut_cuts_again(
         self, tmp_path: Path, clock: dict[str, float]
     ) -> None:
         pool = _pool(tmp_path)
-        pool.record_failure_class("quota_exhausted", elapsed_s=400.0)
+        cut_at = clock["value"]
+        pool.record_failure_class("quota_exhausted", admitted_at=cut_at - 400.0)
         assert pool.current_max_concurrency == 15
 
         clock["value"] += 200.0
-        # Launched 100s after the cut, under the reduced ceiling, and still refused.
-        pool.record_failure_class("quota_exhausted", elapsed_s=100.0)
+        # Admitted 100s after the cut, under the reduced ceiling, and still refused.
+        pool.record_failure_class("quota_exhausted", admitted_at=cut_at + 100.0)
         assert pool.current_max_concurrency == 7
 
     def test_an_unknown_launch_time_holds_without_cutting_again(
@@ -265,10 +320,10 @@ class TestQuotaBackoffGovernor:
         self, tmp_path: Path, clock: dict[str, float]
     ) -> None:
         pool = _pool(tmp_path, initial_concurrency=2, min_concurrency=1)
-        pool.record_failure_class("quota_exhausted", elapsed_s=1.0)
+        pool.record_failure_class("quota_exhausted", admitted_at=clock["value"] - 1.0)
         assert pool.current_max_concurrency == 1
         clock["value"] += 10.0
-        pool.record_failure_class("quota_exhausted", elapsed_s=1.0)
+        pool.record_failure_class("quota_exhausted", admitted_at=clock["value"] - 1.0)
         assert pool.current_max_concurrency == 1
 
     def test_recovery_waits_out_the_hold_then_ramps_gradually(
@@ -293,9 +348,9 @@ class TestQuotaBackoffGovernor:
         self, tmp_path: Path, clock: dict[str, float]
     ) -> None:
         pool = _pool(tmp_path, quota_backoff_hold_s=300.0)
-        pool.record_failure_class("quota_exhausted", elapsed_s=400.0)
+        pool.record_failure_class("quota_exhausted", admitted_at=600.0)
         clock["value"] = 1_200.0
-        pool.record_failure_class("quota_exhausted", elapsed_s=500.0)
+        pool.record_failure_class("quota_exhausted", admitted_at=700.0)
 
         clock["value"] = 1_400.0
         for _ in range(3):
@@ -329,8 +384,8 @@ class TestQuotaBackoffGovernor:
         assert pool._event_logger is not None
         pool._event_logger.open()
         try:
-            pool.record_failure_class("quota_exhausted", elapsed_s=30.0)
-            pool.record_failure_class("quota_exhausted", elapsed_s=300.0)
+            pool.record_failure_class("quota_exhausted", admitted_at=time.monotonic() - 30.0)
+            pool.record_failure_class("quota_exhausted", admitted_at=time.monotonic() - 300.0)
         finally:
             pool._event_logger.close()
 
@@ -441,14 +496,16 @@ def _scalar_run(
         outcome = outcomes[len(launches) - 1]
         if outcome == "quota":
             log_path.write_text(_quota_transcript(), encoding="utf-8")
-            # No real time passes here, so a zero run time places each launch after
-            # any cut an earlier attempt caused, as a relaunch under backoff would be.
-            return _ScalarLaunchResult(exit_code=173, kill_reason=None, elapsed_s=0.0)
+            # Each attempt is admitted when it launches, so a relaunch after backoff is
+            # admitted after any cut an earlier attempt caused.
+            return _ScalarLaunchResult(
+                exit_code=173, kill_reason=None, admitted_at=time.monotonic()
+            )
         log_path.write_text(
             json.dumps({"type": "result", "status": "success"}) + "\n", encoding="utf-8"
         )
         summary.write_text("# summary\n", encoding="utf-8")
-        return _ScalarLaunchResult(exit_code=0, kill_reason=None, elapsed_s=0.0)
+        return _ScalarLaunchResult(exit_code=0, kill_reason=None, admitted_at=time.monotonic())
 
     monkeypatch.setattr(run_process_module, "_run_scalar_agent_subprocess", _fake_launch)
     sleeper = _RecordedSleep()
@@ -617,6 +674,7 @@ class TestMappedAgentQuotaRetry:
                         exit_code=173 if outcome == "quota" else 0,
                         kill_reason=None,
                         elapsed_s=397.0,
+                        admitted_at=1_234.5,
                     )
                 )
                 return future
@@ -688,7 +746,9 @@ class TestMappedAgentQuotaRetry:
         assert attempts == [1, 2]
         assert scheduled == [(2, 0.05)]
         assert time.monotonic() - started >= 0.05
-        assert recorded == [(("quota_exhausted",), {"quota_reset_at": None, "elapsed_s": 397.0})]
+        assert recorded == [
+            (("quota_exhausted",), {"quota_reset_at": None, "admitted_at": 1_234.5})
+        ]
         history = read_attempt_history_at(state_dir)
         assert [row.disposition for row in history] == [
             AttemptDisposition.retryable,

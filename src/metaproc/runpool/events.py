@@ -393,12 +393,14 @@ class EventLogger:
         provider_ceiling: int,
         effective_target: int,
         hold_s: float,
-        elapsed_s: float | None,
+        admitted_s_ago: float | None,
     ) -> None:
         """Record the provider governor's response to one quota-exhausted failure.
 
         ``action`` is ``cut`` when the provider ceiling fell, or ``hold`` when the failure
         belonged to an episode an earlier cut already answered and only held recovery.
+        ``admitted_s_ago`` is how long before this response the failed process was
+        admitted, or ``None`` when its admission time is unknown.
         """
         self._write(
             {
@@ -408,7 +410,9 @@ class EventLogger:
                 "provider_ceiling": provider_ceiling,
                 "effective_target": effective_target,
                 "hold_s": hold_s,
-                "elapsed_s": round(elapsed_s, 1) if elapsed_s is not None else None,
+                "admitted_s_ago": (
+                    round(admitted_s_ago, 1) if admitted_s_ago is not None else None
+                ),
             }
         )
 

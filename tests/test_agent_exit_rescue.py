@@ -105,7 +105,7 @@ def _install_launch(
             path.write_text(text)
         if kill_reason == "timeout":
             raise subprocess.TimeoutExpired(_args[0], kwargs["timeout_s"] or 0)
-        return _ScalarLaunchResult(exit_code=exit_code, kill_reason=kill_reason, elapsed_s=None)
+        return _ScalarLaunchResult(exit_code=exit_code, kill_reason=kill_reason, admitted_at=None)
 
     monkeypatch.setattr("metaproc.commands.run_process._run_scalar_agent_subprocess", _fake_launch)
 

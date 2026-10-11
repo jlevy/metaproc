@@ -1975,12 +1975,12 @@ async def _run_agent_pool(  # noqa: PLR0913
         quota_reset_at = (
             parse_quota_reset_at(error_str) if fc == FailureClass.QUOTA_EXHAUSTED else None
         )
-        # How long the failed process ran lets the provider governor tell a failure
-        # admitted under its current ceiling from one admitted before its last cut.
+        # When the pool admitted the failed process lets the provider governor tell a
+        # failure admitted under its current ceiling from one admitted before its last cut.
         pool.record_failure_class(
             fc,
             quota_reset_at=quota_reset_at,
-            elapsed_s=shared.pop("process_elapsed_s", None),
+            admitted_at=shared.pop("process_admitted_at", None),
         )
         verdict = (
             classify_output_failures(output_failures, effective_outputs)
@@ -2198,7 +2198,7 @@ async def _run_agent_pool(  # noqa: PLR0913
             _classify_and_maybe_retry(shared, error_str)
             return
 
-        shared["process_elapsed_s"] = result.elapsed_s
+        shared["process_admitted_at"] = result.admitted_at
         if result.kill_reason is None and log_path is not None:
             item_runtime_config = cast(
                 "dict[str, object]",

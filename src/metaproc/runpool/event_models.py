@@ -194,7 +194,7 @@ class QuotaBackoffEvent(BaseModel):
     provider_ceiling: int
     effective_target: int
     hold_s: float
-    elapsed_s: float | None = None
+    admitted_s_ago: float | None = None
 
 
 class QuotaPauseTickEvent(BaseModel):

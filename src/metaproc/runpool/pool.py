@@ -17,7 +17,7 @@ import time
 import uuid
 from collections import deque
 from collections.abc import AsyncGenerator, Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
@@ -467,6 +467,13 @@ class ProcessResult:
     peak_rss_bytes: int | None
     peak_descendants: int | None
     log_size_bytes: int | None
+    admitted_at: float | None = None
+    """When the pool admitted the process under its concurrency ceiling.
+
+    A ``time.monotonic()`` reading from this process, taken when the process acquired a
+    pool slot and before any host-admission wait or backend launch. ``None`` when the
+    result did not come through pool admission.
+    """
 
 
 # ── Internal tracking ───────────────────────────────────────────
@@ -785,7 +792,7 @@ class RunPool:
         failure_class: str,
         *,
         quota_reset_at: datetime | None = None,
-        elapsed_s: float | None = None,
+        admitted_at: float | None = None,
     ) -> None:
         """Record a failure classification and let the provider governor act on it.
 
@@ -793,10 +800,11 @@ class RunPool:
         itself only sees exit codes; the caller has access to error details.
 
         ``quota_exhausted`` lowers the provider ceiling (see
-        :meth:`_apply_quota_backoff`); ``elapsed_s`` is how long the failed process ran,
-        from which the pool tells a failure admitted under the current ceiling from one
-        admitted before the last cut. ``quota_reset_at`` (optional) additionally pauses
-        submissions until the named reset window passes.
+        :meth:`_apply_quota_backoff`); ``admitted_at`` is the failed process's
+        :attr:`ProcessResult.admitted_at`, from which the pool tells a failure admitted
+        under the current ceiling from one admitted before the last cut.
+        ``quota_reset_at`` (optional) additionally pauses submissions until the named
+        reset window passes.
         """
         if self._owner_loop is not None:
             try:
@@ -811,7 +819,7 @@ class RunPool:
 
                 async def _record_on_owner() -> None:
                     self.record_failure_class(
-                        failure_class, quota_reset_at=quota_reset_at, elapsed_s=elapsed_s
+                        failure_class, quota_reset_at=quota_reset_at, admitted_at=admitted_at
                     )
 
                 # Finish before the scheduler can submit a queued retry, and
@@ -824,7 +832,7 @@ class RunPool:
         if failure_class == "rate_limited":
             self._apply_rate_limit_backoff()
         elif failure_class == "quota_exhausted":
-            self._apply_quota_backoff(elapsed_s)
+            self._apply_quota_backoff(admitted_at)
             if quota_reset_at is not None:
                 self.pause_for_quota(quota_reset_at)
 
@@ -954,7 +962,7 @@ class RunPool:
         self._set_capacity(new_cap, reason="rate_limit_burst")
         self._write_status()
 
-    def _apply_quota_backoff(self, elapsed_s: float | None) -> None:
+    def _apply_quota_backoff(self, admitted_at: float | None) -> None:
         """Lower the provider ceiling after a quota-exhausted failure, and hold it there.
 
         Unlike a single 429, a quota-exhausted failure arrives after the agent CLI has
@@ -963,18 +971,20 @@ class RunPool:
 
         One saturation episode still surfaces as several failures, because every process
         admitted under the old ceiling can fail after the cut. A failure cuts again only
-        when its process was launched after the latest cut, which means the lowered
-        ceiling was itself too high; earlier failures, and failures whose launch time is
-        unknown while a hold is active, only extend the hold. Provider recovery resumes
+        when its process was admitted after the latest cut, which means the lowered
+        ceiling was itself too high; earlier failures, and failures whose admission time
+        is unknown while a hold is active, only extend the hold. The admission time is
+        stamped by the pool, so a late report cannot make an earlier admission look
+        recent. Provider recovery resumes
         once ``quota_backoff_hold_s`` passes without another quota failure, at the
         ordinary provider ramp.
         """
         now = time.monotonic()
         holding = self._quota_hold_until is not None and now < self._quota_hold_until
-        if elapsed_s is None:
+        if admitted_at is None:
             cut = not holding
         else:
-            cut = self._quota_cut_at is None or now - elapsed_s >= self._quota_cut_at
+            cut = self._quota_cut_at is None or admitted_at >= self._quota_cut_at
         self._quota_hold_until = now + self._config.quota_backoff_hold_s
         self._consecutive_provider_clear = 0
 
@@ -1001,7 +1011,7 @@ class RunPool:
                 provider_ceiling=self._provider_ceiling,
                 effective_target=self._effective_target(),
                 hold_s=self._config.quota_backoff_hold_s,
-                elapsed_s=elapsed_s,
+                admitted_s_ago=now - admitted_at if admitted_at is not None else None,
             )
         new_cap = self._effective_target()
         if new_cap != old_cap:
@@ -1368,6 +1378,9 @@ class RunPool:
             await self._await_quota_pause()
             await self._semaphore.acquire()
             pool_sem_acquired = True
+            # Admission, not launch, is what the current ceiling governed: a host-slot
+            # wait can put the launch of a process admitted before a cut after it.
+            admitted_at = time.monotonic()
             if self._shutdown_event.is_set():
                 raise asyncio.CancelledError
             host_lease = await self._acquire_host_slot(config)
@@ -1375,7 +1388,10 @@ class RunPool:
                 raise asyncio.CancelledError
             self._pending_count -= 1
             pending_removed = True
-            result = await self._launch_and_monitor(config, host_lease=host_lease)
+            result = replace(
+                await self._launch_and_monitor(config, host_lease=host_lease),
+                admitted_at=admitted_at,
+            )
         except asyncio.CancelledError:
             if not future.done():
                 future.cancel()
