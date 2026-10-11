@@ -106,7 +106,7 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
         "credentials",
         "credential-setup.runbook",
         "Configuring credentials for each adapter: Claude, Codex, Gemini, pi, GCP.",
-        2700,
+        3300,
     ),
     Topic(
         "cloud-dispatch",
