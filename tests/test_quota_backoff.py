@@ -483,6 +483,7 @@ SCALAR_ADAPTER = "quota-backoff-test"
 SCALAR_FAILURE_MESSAGES = {
     "quota": GEMINI_TPM_QUOTA_MESSAGE,
     "disk_quota": "OSError: [Errno 122] Disk quota exceeded: 'runs/out/summary.md'",
+    "reset_clock": "You're out of extra usage · resets 3:10am (America/Los_Angeles)",
 }
 
 
@@ -703,6 +704,23 @@ class TestScalarAgentQuotaRetry:
         assert len(result.launches) == 1
         assert result.history[0].failure_class == "quota_exhausted"
         assert result.history[0].disposition == AttemptDisposition.permanent
+        assert result.pool.current_max_concurrency == 30
+
+    def test_a_named_reset_pauses_sibling_submissions(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A capped credential with a reset clock pauses the pool, as on the mapped path.
+
+        Without the pause, sibling leaves keep launching into the closed window and fail
+        permanently one at a time.
+        """
+        result = _scalar_run(tmp_path, monkeypatch, outcomes=["reset_clock"], max_retries=2)
+
+        assert result.succeeded is False
+        assert len(result.launches) == 1
+        assert result.history[0].failure_class == "quota_exhausted"
+        assert result.pool._quota_paused_until is not None
+        assert result.pool._quota_paused_until.strftime("%H:%M") == "03:10"
         assert result.pool.current_max_concurrency == 30
 
     def test_no_retry_budget_means_no_automatic_retry(

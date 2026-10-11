@@ -41,6 +41,7 @@ from metaproc.adapters.base import (
     validate_terminal_result_log,
 )
 from metaproc.adapters.registry import derive_variant, get_adapter, get_auth_capable
+from metaproc.agent_errors import parse_quota_reset_at
 from metaproc.cli import app, get_output
 from metaproc.cloud.gcp.resolve_token import resolve_gcp_token
 from metaproc.cloud.gcp.worker_dispatch import (
@@ -3088,16 +3089,20 @@ def _report_scalar_failure(
 ) -> None:
     """Report one classified scalar-leaf failure to the run pool's governors.
 
-    The provider governor reads scalar leaves exactly as it reads mapped ones: a
-    per-minute quota refusal here lowers the ceiling that admits this step's siblings,
-    not only this step's own retry.
+    The pool reads scalar leaves exactly as it reads mapped ones: a per-minute quota
+    refusal here lowers the ceiling that admits this step's siblings, not only this
+    step's own retry, and a quota failure that names its reset time pauses their
+    submissions until then.
     """
-    if pool is not None:
-        pool.record_failure_class(
-            failure_class,
-            rate_quota=failure_class == FailureClass.QUOTA_EXHAUSTED and is_rate_quota(error),
-            admitted_at=admitted_at,
-        )
+    if pool is None:
+        return
+    is_quota = failure_class == FailureClass.QUOTA_EXHAUSTED
+    pool.record_failure_class(
+        failure_class,
+        quota_reset_at=parse_quota_reset_at(error) if is_quota else None,
+        rate_quota=is_quota and is_rate_quota(error),
+        admitted_at=admitted_at,
+    )
 
 
 def _mark_scalar_prelaunch_failure_after_retry(state_dir: Path, *, error: str) -> None:
