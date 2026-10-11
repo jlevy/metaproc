@@ -10,6 +10,7 @@ import shutil
 import stat
 import tempfile
 import threading
+from collections.abc import Mapping
 from hashlib import sha256
 from pathlib import Path
 from typing import cast
@@ -135,6 +136,27 @@ _SYSTEM_SCOPE_REFUSAL = (
 def native_settings_scope(merged_config: dict[str, object]) -> object:
     """Return the scope a config resolves to, which ``validate_config`` checks."""
     return merged_config.get("native_settings_scope", GEMINI_DEFAULT_NATIVE_SETTINGS_SCOPE)
+
+
+_SETTINGS_SOURCE_REFUSAL = (
+    "names a Gemini settings file, and the adapter owns where Gemini reads its "
+    "settings; set native_settings instead"
+)
+_OWNED_STEP_ENV: dict[str, str] = {
+    "GEMINI_CLI_SYSTEM_SETTINGS_PATH": _SETTINGS_SOURCE_REFUSAL,
+    "GEMINI_CLI_SYSTEM_DEFAULTS_PATH": _SETTINGS_SOURCE_REFUSAL,
+    "GEMINI_SYSTEM_MD": (
+        "the adapter owns Gemini's system prompt file; set append_system_prompt instead"
+    ),
+}
+_OWNED_USER_SCOPE_STEP_ENV: dict[str, str] = {
+    "GEMINI_CLI_HOME": (
+        "the adapter gives each launch a private Gemini home holding its native settings, "
+        "and a step that names another home loses every one of them; set "
+        "native_settings_home_template for a prepared home, or native_settings_scope "
+        "'workspace'"
+    ),
+}
 
 
 _GEMINI_ALLOWED_KEYS = frozenset(
@@ -514,6 +536,17 @@ class GeminiCliAdapter:
                 )
             )
         return rejections
+
+    def validate_step_env(
+        self,
+        env: Mapping[str, str],
+        merged_config: dict[str, object],
+    ) -> list[ConfigRejection]:
+        """Refuse step ``env`` keys that would replace what ``prepare_env`` sets up."""
+        owned = dict(_OWNED_STEP_ENV)
+        if native_settings_scope(merged_config) == "user":
+            owned.update(_OWNED_USER_SCOPE_STEP_ENV)
+        return [ConfigRejection(key=key, reason=owned[key]) for key in env if key in owned]
 
     def prepare_env(
         self,

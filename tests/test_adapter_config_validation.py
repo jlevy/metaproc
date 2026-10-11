@@ -257,7 +257,7 @@ def _gemini_plan(
 
 
 class TestGeminiPlanValidation:
-    """A Gemini profile that would defeat the adapter's settings is caught at plan time."""
+    """A Gemini profile or step that would defeat the adapter's settings is caught at plan time."""
 
     def test_legacy_system_scope_is_dropped_with_a_warning(
         self, tmp_path: Path, caplog: LogCaptureFixture
@@ -276,3 +276,81 @@ class TestGeminiPlanValidation:
             ValueError, match="invalid adapter config for gemini-cli.*owned by root"
         ):
             _gemini_plan(tmp_path, profile_config={"native_settings_scope": "system"})
+
+    def test_step_env_naming_an_owned_variable_is_dropped_with_a_warning(
+        self, tmp_path: Path, caplog: LogCaptureFixture
+    ) -> None:
+        plan = _gemini_plan(
+            tmp_path,
+            step_env={
+                "GEMINI_CLI_HOME": "/elsewhere",
+                "GEMINI_CLI_SYSTEM_SETTINGS_PATH": "/elsewhere/settings.json",
+                "GEMINI_CLI_SYSTEM_DEFAULTS_PATH": "/elsewhere/defaults.json",
+                "GEMINI_SYSTEM_MD": "/elsewhere/system.md",
+                "EXAMPLE_FLAG": "1",
+            },
+        )
+
+        assert plan.steps[0].env == {"EXAMPLE_FLAG": "1"}
+        assert "invalid step env for gemini-cli" in caplog.text
+        for key in (
+            "GEMINI_CLI_HOME",
+            "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
+            "GEMINI_CLI_SYSTEM_DEFAULTS_PATH",
+            "GEMINI_SYSTEM_MD",
+        ):
+            assert key in caplog.text
+
+    def test_step_env_naming_an_owned_variable_is_refused_when_strict(
+        self, tmp_path: Path, monkeypatch: MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("METAPROC_ADAPTER_STRICT", "1")
+        with pytest.raises(ValueError, match="invalid step env for gemini-cli: GEMINI_CLI_HOME"):
+            _gemini_plan(tmp_path, step_env={"GEMINI_CLI_HOME": "/elsewhere"})
+
+    def test_workspace_scope_leaves_the_home_variable_to_the_step(
+        self, tmp_path: Path, caplog: LogCaptureFixture
+    ) -> None:
+        """Workspace scope writes no private home, so only the settings files are owned."""
+        plan = _gemini_plan(
+            tmp_path,
+            profile_config={
+                "native_settings_scope": "workspace",
+                "working_directory": str(tmp_path),
+            },
+            step_env={
+                "GEMINI_CLI_HOME": "/elsewhere",
+                "GEMINI_CLI_SYSTEM_SETTINGS_PATH": "/elsewhere/settings.json",
+            },
+        )
+
+        assert plan.steps[0].env == {"GEMINI_CLI_HOME": "/elsewhere"}
+        assert "GEMINI_CLI_SYSTEM_SETTINGS_PATH" in caplog.text
+
+    def test_other_adapters_keep_gemini_variables(self, tmp_path: Path) -> None:
+        spec = ProcessSpec.model_validate(
+            {
+                "name": "test",
+                "defaults": {
+                    "default_adapter": "claude-code-cli",
+                    "adapters": {
+                        "claude-code-cli": {"type": "claude-code-cli", "config": {}},
+                    },
+                },
+                "steps": [
+                    {
+                        "id": "summarize",
+                        "mode": "agent",
+                        "prompt_prefix": "do thing",
+                        "env": {"GEMINI_CLI_HOME": "/elsewhere"},
+                        "outputs": {"summary": {"path": "summary.md", "kind": "file"}},
+                    }
+                ],
+            }
+        )
+        process_path = tmp_path / "test.process.md"
+        _write(process_path, "---\nprocess:\n  name: test\n---\n")
+
+        plan = build_plan(spec, {}, process_path=process_path)
+
+        assert plan.steps[0].env == {"GEMINI_CLI_HOME": "/elsewhere"}

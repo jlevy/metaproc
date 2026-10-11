@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+from metaproc.adapters.base import StepEnvValidator
 from metaproc.adapters.registry import ADAPTER_REGISTRY, derive_variant, get_adapter
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.engine.discovery import discover_items_from_source
@@ -306,6 +307,41 @@ def _apply_adapter_validation(
         details,
     )
     return sanitized
+
+
+def _apply_step_env_validation(
+    *,
+    adapter_type: str,
+    authored_adapter_type: str,
+    merged_config: dict[str, object],
+    env: dict[str, str],
+) -> dict[str, str]:
+    """Check an agent step's ``env`` against the keys its adapter owns.
+
+    The launchers apply ``env`` after the adapter's ``prepare_env``, so an owned key
+    would silently replace the adapter's value. Rejections follow the adapter-config
+    rule: dropped with a warning in non-strict same-family planning, refused otherwise.
+    """
+    adapter = get_adapter(adapter_type)
+    if not env or not isinstance(adapter, StepEnvValidator):
+        return env
+
+    rejections = adapter.validate_step_env(env, merged_config)
+    if not rejections:
+        return env
+
+    details = "; ".join(f"{rejection.key}: {rejection.reason}" for rejection in rejections)
+    same_family = adapter_type == authored_adapter_type
+    if not same_family or _strict_adapter_validation_enabled():
+        raise ValueError(f"invalid step env for {adapter_type}: {details}")
+
+    rejected = {rejection.key for rejection in rejections}
+    log.warning(
+        "invalid step env for %s; dropped rejected keys from same-family step env: %s",
+        adapter_type,
+        details,
+    )
+    return {key: value for key, value in env.items() if key not in rejected}
 
 
 def _parse_symbolic_ref(ref: str, *, context: str) -> tuple[str, str]:
@@ -1068,6 +1104,13 @@ def build_plan(
             # environment. Entries with unresolved placeholders (for example
             # {{VARIANT}} or {{EVENT_ID}}) also remain for per-item resolution.
             resolved_env[env_key] = resolved_val
+        if step.mode == "agent":
+            resolved_env = _apply_step_env_validation(
+                adapter_type=adapter_type,
+                authored_adapter_type=authored_adapter_type,
+                merged_config=merged_config,
+                env=resolved_env,
+            )
 
         uses_path: str | None = None
         if step.mode == "composite":
