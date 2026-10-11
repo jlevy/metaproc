@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from metaproc.adapters.gemini_cli import GeminiCliAdapter
+from metaproc.config.env_vars import MetaprocEnv
 
 _AUTH_VARIABLES = (
     "GEMINI_API_KEY",
@@ -45,6 +46,11 @@ def auth_env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
             {"GOOGLE_GENAI_USE_GCA": "true", "GOOGLE_CLOUD_ACCESS_TOKEN": "example"},
             "oauth-personal",
             True,
+        ),
+        (
+            {"GOOGLE_GENAI_USE_GCA": "true", "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE": "true"},
+            "oauth-personal",
+            False,
         ),
         ({"GOOGLE_GENAI_USE_GCA": "1", "GEMINI_API_KEY": "example"}, "gemini-api-key", True),
         (
@@ -108,7 +114,6 @@ def test_prepare_env_refuses_a_login_the_private_home_cannot_hold(tmp_path: Path
     [
         {"GOOGLE_CLOUD_ACCESS_TOKEN": "example"},
         {"GOOGLE_APPLICATION_CREDENTIALS": "/example/credentials.json"},
-        {"GEMINI_FORCE_ENCRYPTED_FILE_STORAGE": "true"},
     ],
 )
 def test_prepare_env_accepts_a_login_from_outside_the_home(
@@ -117,6 +122,38 @@ def test_prepare_env_accepts_a_login_from_outside_the_home(
     environment = {"HOME": str(tmp_path), "GOOGLE_GENAI_USE_GCA": "true", **login}
 
     env = GeminiCliAdapter().prepare_env(environment, {"working_directory": str(tmp_path)})
+
+    assert env["GEMINI_CLI_HOME"]
+
+
+def test_prepare_env_refuses_the_keychain_flag_alone(tmp_path: Path) -> None:
+    """Without a usable OS keychain the CLI keeps that login inside the empty private home."""
+    environment = {
+        "HOME": str(tmp_path),
+        "GOOGLE_GENAI_USE_GCA": "true",
+        "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE": "true",
+    }
+
+    with pytest.raises(ValueError, match="GOOGLE_GENAI_USE_GCA") as refusal:
+        GeminiCliAdapter().prepare_env(environment, {"working_directory": str(tmp_path)})
+
+    assert "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE" in str(refusal.value)
+    assert "selectedType" in str(refusal.value)
+
+
+def test_prepare_env_accepts_the_keychain_flag_with_a_named_auth_type(tmp_path: Path) -> None:
+    """Naming the auth type is how an operator states that the host keychain holds a login."""
+    environment = {
+        "HOME": str(tmp_path),
+        "GOOGLE_GENAI_USE_GCA": "true",
+        "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE": "true",
+    }
+    config: dict[str, object] = {
+        "working_directory": str(tmp_path),
+        "native_settings": {"security": {"auth": {"selectedType": "oauth-personal"}}},
+    }
+
+    env = GeminiCliAdapter().prepare_env(environment, config)
 
     assert env["GEMINI_CLI_HOME"]
 
@@ -173,3 +210,17 @@ def test_auth_info_lists_modes_the_default_home_supports() -> None:
     assert "interactive login" not in info
     assert "GOOGLE_CLOUD_PROJECT" in info
     assert "native_settings_scope: workspace" in info
+
+
+@pytest.mark.parametrize(
+    "member",
+    [
+        MetaprocEnv.GOOGLE_GENAI_USE_GCA,
+        MetaprocEnv.GOOGLE_GENAI_USE_VERTEXAI,
+        MetaprocEnv.GEMINI_FORCE_ENCRYPTED_FILE_STORAGE,
+    ],
+)
+def test_registry_describes_switches_the_cli_reads_as_exactly_true(member: MetaprocEnv) -> None:
+    """gemini-cli compares these with `=== "true"`, so `1`, `yes` and `on` do nothing."""
+    assert "exactly `true`" in member.description
+    assert "truthy" not in member.description

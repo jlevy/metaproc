@@ -488,8 +488,9 @@ Modes, in the order gemini-cli checks the environment (each switch exactly `true
 - `GOOGLE_GENAI_USE_GCA` → Login with Google.
   The default private Gemini home holds no login, so `check_auth` reports it not ready
   and `prepare_env` refuses the launch unless `GOOGLE_CLOUD_ACCESS_TOKEN`,
-  `GOOGLE_APPLICATION_CREDENTIALS`, the OS keychain, a home template or a configured
-  auth type supplies one.
+  `GOOGLE_APPLICATION_CREDENTIALS`, a home template or a configured auth type supplies
+  one. `GEMINI_FORCE_ENCRYPTED_FILE_STORAGE` is not counted, because without a usable OS
+  keychain the CLI keeps that login inside the Gemini home.
 - `GOOGLE_GENAI_USE_VERTEXAI` → Vertex AI mode; uses `GOOGLE_API_KEY` if present (Vertex
   AI Express), otherwise `GOOGLE_CLOUD_PROJECT` + ADC.
 - `GOOGLE_GEMINI_BASE_URL` set → gateway mode, sending `GEMINI_API_KEY` if set.

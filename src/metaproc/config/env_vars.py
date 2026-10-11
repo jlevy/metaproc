@@ -198,7 +198,7 @@ class MetaprocEnv(EnvEnum):
     GEMINI_API_KEY = secret("Gemini API key for direct (non-Vertex) Gemini adapter use.")
     GOOGLE_API_KEY = secret("Google API key for direct Gemini adapter fallback.")
     GOOGLE_GENAI_USE_VERTEXAI = optional(
-        "When truthy, Gemini adapter routes through Vertex AI instead of the direct API."
+        "When exactly `true`, gemini-cli routes through Vertex AI instead of the direct API."
     )
     GOOGLE_CLOUD_PROJECT = optional("GCP project for Vertex AI model routing.")
     GOOGLE_GENAI_USE_GCA = optional(
@@ -212,8 +212,8 @@ class MetaprocEnv(EnvEnum):
         "Access token gemini-cli's Login with Google uses in place of a cached login."
     )
     GEMINI_FORCE_ENCRYPTED_FILE_STORAGE = optional(
-        "When exactly `true`, gemini-cli keeps its Google login in the OS keychain rather "
-        "than in the Gemini home."
+        "When exactly `true`, gemini-cli keeps its Google login in the OS keychain when the "
+        "host has a usable one, and otherwise in an encrypted file inside the Gemini home."
     )
     METAPROC_GCP_SECRET_GH_TOKEN = optional(
         "GCP Secret Manager ref that provides GH_TOKEN to Batch workers.",

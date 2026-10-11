@@ -131,10 +131,12 @@ development series.
 - **Gemini auth checks follow gemini-cli’s environment order.** `check_auth` evaluates
   `GOOGLE_GENAI_USE_GCA`, `GOOGLE_GENAI_USE_VERTEXAI` (each exactly `true`),
   `GOOGLE_GEMINI_BASE_URL`, then `GEMINI_API_KEY`, as the CLI does, and reports a
-  gateway as `gateway`. Login with Google is ready only when
-  `GOOGLE_CLOUD_ACCESS_TOKEN`, `GOOGLE_APPLICATION_CREDENTIALS` or the OS keychain
-  supplies a login, and without one a template-less `user`-scope launch is refused
-  instead of failing authentication or waiting for a browser login.
+  gateway as `gateway`. Login with Google is ready only when `GOOGLE_CLOUD_ACCESS_TOKEN`
+  or `GOOGLE_APPLICATION_CREDENTIALS` supplies a login, and without one a template-less
+  `user`-scope launch is refused, unless its settings name an auth type, instead of
+  failing authentication or waiting for a browser login.
+  `GEMINI_FORCE_ENCRYPTED_FILE_STORAGE` alone does not count, because without a usable
+  OS keychain the CLI keeps that login inside the Gemini home.
 
 ### Removed
 

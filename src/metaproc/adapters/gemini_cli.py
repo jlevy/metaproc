@@ -430,20 +430,23 @@ def _checked_workspace_settings(
 
 
 # gemini-cli's Login with Google reads a cached login from the Gemini home, the file
-# GOOGLE_APPLICATION_CREDENTIALS names, or GOOGLE_CLOUD_ACCESS_TOKEN; with
-# GEMINI_FORCE_ENCRYPTED_FILE_STORAGE it reads the OS keychain instead of the home.
+# GOOGLE_APPLICATION_CREDENTIALS names, or GOOGLE_CLOUD_ACCESS_TOKEN.
+# GEMINI_FORCE_ENCRYPTED_FILE_STORAGE is not a source on its own: it reads the OS keychain
+# when the host has a usable one, and otherwise an encrypted file inside the Gemini home.
 _GCA_LOGIN_SOURCES = ("GOOGLE_CLOUD_ACCESS_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS")
 _GCA_REMEDY = (
     "Unset GOOGLE_GENAI_USE_GCA to authenticate with GEMINI_API_KEY or Vertex AI, set "
     "GOOGLE_CLOUD_ACCESS_TOKEN, carry oauth_creds.json in a native_settings_home_template, "
-    "or set native_settings_scope 'workspace' to use the operator's ~/.gemini login"
+    "or set native_settings_scope 'workspace' to use the operator's ~/.gemini login. "
+    "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE=true supplies a login only when the host's OS "
+    "keychain holds one made under that flag (without a usable keychain the CLI keeps it "
+    "inside the Gemini home); where it does, name security.auth.selectedType "
+    "'oauth-personal' in the step's native_settings"
 )
 
 
 def _gca_login_source(env: Mapping[str, str]) -> str | None:
     """Name what supplies a Login with Google outside the Gemini home, if anything does."""
-    if env.get("GEMINI_FORCE_ENCRYPTED_FILE_STORAGE") == "true":
-        return "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE"
     return next((name for name in _GCA_LOGIN_SOURCES if env.get(name)), None)
 
 
@@ -829,7 +832,6 @@ class GeminiCliAdapter:
                 {
                     member.name: member.read_str(default="")
                     for member in (
-                        MetaprocEnv.GEMINI_FORCE_ENCRYPTED_FILE_STORAGE,
                         MetaprocEnv.GOOGLE_CLOUD_ACCESS_TOKEN,
                         MetaprocEnv.GOOGLE_APPLICATION_CREDENTIALS,
                     )
