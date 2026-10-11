@@ -25,9 +25,12 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from typer.testing import CliRunner
 
+import metaproc.commands.run_parallel as run_parallel_module
 import metaproc.commands.run_process as run_process_module
 from metaproc.adapters.registry import ADAPTER_REGISTRY
+from metaproc.cli import app
 from metaproc.commands.run_parallel import _run_agent_pool
 from metaproc.commands.run_process import (
     RunExecutionContext,
@@ -995,3 +998,71 @@ class TestMappedAgentQuotaRetry:
 
         assert run.results == [("synthetic-a", 1)]
         assert run.attempts == list(range(1, MAX_QUOTA_RETRIES_DEFAULT + 2))
+
+
+# ── Mapped code step ──────────────────────────────────────────────────────
+
+
+class _RecordedTime:
+    """Stand in for ``time`` inside ``run_parallel`` so a backoff is recorded, not slept."""
+
+    def __init__(self) -> None:
+        self.sleeps: list[float] = []
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(time, name)
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+
+
+def test_a_mapped_code_quota_retry_keeps_the_declared_backoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A code handler has not already waited through an agent CLI's internal retries,
+    and the mapped code loop runs items in sequence, so a one-minute quota floor there
+    would stall every sibling item for a minute per retry."""
+    monkeypatch.setenv("METAPROC_PREFLIGHT_MIN_DISK_GB", "0.1")
+    recorded_time = _RecordedTime()
+    monkeypatch.setattr(run_parallel_module, "time", recorded_time)
+    (tmp_path / "fail.py").write_text(
+        "def fail(context, step):\n"
+        "    raise RuntimeError('TPM quota exhausted. No spare capacity is currently available')\n"
+    )
+    (tmp_path / "items.md").write_text(
+        "---\nprogress:\n  process: code\n  items:\n    - ticker: SYNTH\n---\n"
+    )
+    process = tmp_path / "code.process.md"
+    process.write_text(
+        "---\nprocess:\n  name: code\n  steps:\n"
+        "    - id: query\n      mode: code\n      handler: fail.py:fail\n"
+        "      inputs:\n        items:\n"
+        f"          path: {tmp_path / 'items.md'}\n"
+        "          kind: file\n          format: frontmatter-md\n"
+        "      for_each:\n        over: items\n        bind: ticker\n"
+        "        bind_fields: [ticker]\n        key: '{{ticker}}'\n"
+        "        retry: {max_retries: 1, initial_backoff_s: 0}\n"
+        "---\n"
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-parallel",
+            str(process),
+            "--step",
+            "query",
+            "--items",
+            "SYNTH",
+            "--var",
+            f"RUNS_DIR={tmp_path / 'runs'}",
+            "--var",
+            "RUN_ID=code-quota",
+        ],
+    )
+
+    assert result.exit_code != 0
+    task = tmp_path / "runs" / "code-quota" / ".state" / "tasks" / "query" / "SYNTH"
+    history = read_attempt_history_at(task)
+    assert [attempt.failure_class for attempt in history] == ["quota_exhausted"] * 2
+    assert recorded_time.sleeps == [0.0]

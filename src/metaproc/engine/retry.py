@@ -733,10 +733,11 @@ exhausted window and pays for another session's work to learn nothing new.
 
 
 def retry_backoff_s(failure_class: FailureClass, retry_index: int, policy: RetryPolicy) -> float:
-    """Return the wait before retry *retry_index* (1-indexed) of a *failure_class* failure.
+    """Return the wait before agent retry *retry_index* (1-indexed) of a *failure_class* failure.
 
     The policy's exponential backoff, except that a quota failure waits at least
-    :data:`QUOTA_RETRY_MIN_BACKOFF_S`.
+    :data:`QUOTA_RETRY_MIN_BACKOFF_S`. For agent steps only: the floor assumes the agent
+    CLI already spent its own internal retries, which a code handler has not.
     """
     delay = compute_backoff(retry_index, policy)
     if failure_class == FailureClass.QUOTA_EXHAUSTED:

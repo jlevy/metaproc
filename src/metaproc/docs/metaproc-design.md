@@ -2201,9 +2201,10 @@ Handling follows the class: retriable classes retry per `RetryPolicy` on the poo
 A per-minute quota refusal lowers or holds the run pool’s provider ceiling; other
 `quota_exhausted` failures (hard caps, a capped credential, a full disk) do not move it.
 A per-minute quota refusal retries at most `MAX_QUOTA_RETRIES_DEFAULT` (3) times within
-the declared budget, waiting at least `QUOTA_RETRY_MIN_BACKOFF_S` (60 seconds), and a
-quota failure with a named reset time also pauses submissions until then rather than
-burning attempts against a closed window.
+the declared budget; an agent step waits at least `QUOTA_RETRY_MIN_BACKOFF_S` (60
+seconds) first, while a mapped code step keeps its policy backoff, because its items run
+in sequence. A quota failure with a named reset time also pauses submissions until then
+rather than burning attempts against a closed window.
 
 The execution paths apply these policies at different boundaries.
 Scalar agent steps classify operational and output failures, report each to the run pool

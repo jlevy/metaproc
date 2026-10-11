@@ -1010,7 +1010,11 @@ def run_parallel(
                                 failure_class=str(failure.failure_class),
                                 error=error_str,
                             )
-                            backoff = retry_backoff_s(failure.failure_class, attempt, retry_policy)
+                            # The policy backoff, without the agent quota floor: a handler
+                            # has not waited through an agent CLI's internal retries, and
+                            # this loop runs items in sequence, so a floor would stall every
+                            # sibling item behind each quota retry.
+                            backoff = compute_backoff(attempt, retry_policy)
                             out.progress(
                                 f"  {each}={item}: retryable ({error_str}), "
                                 f"retry in {backoff:.0f}s (attempt {attempt}/{cap + 1})"
