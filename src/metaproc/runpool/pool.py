@@ -986,8 +986,25 @@ class RunPool:
         earlier admission look recent. Provider recovery resumes
         once ``quota_backoff_hold_s`` passes without another quota failure, at the
         ordinary provider ramp.
+
+        Manual mode freezes both governors (:class:`ScaleOverride`), and its monitor tick
+        never runs provider recovery, so there the refusal is only logged, as
+        ``ignored``, and the ceiling and recovery stay as the operator set them.
         """
         now = time.monotonic()
+        if self._operator_mode_override == "manual":
+            log.warning(
+                "RunPool: quota exhausted; manual mode holds provider ceiling at %d",
+                self._provider_ceiling,
+            )
+            self._log_quota_backoff(
+                "ignored",
+                old_provider_ceiling=self._provider_ceiling,
+                effective_target=self._effective_target(),
+                hold_s=0.0,
+                admitted_s_ago=now - admitted_at if admitted_at is not None else None,
+            )
+            return
         admitted_after_cut = admitted_at is not None and (
             self._quota_cut_at is None or admitted_at >= self._quota_cut_at
         )
@@ -1023,18 +1040,37 @@ class RunPool:
             "cut" if cut else "hold",
             self._config.quota_backoff_hold_s,
         )
-        if self._event_logger is not None:
-            try:
-                self._event_logger.quota_backoff(
-                    action="cut" if cut else "hold",
-                    old_provider_ceiling=old_provider_ceiling,
-                    provider_ceiling=self._provider_ceiling,
-                    effective_target=new_cap,
-                    hold_s=self._config.quota_backoff_hold_s,
-                    admitted_s_ago=now - admitted_at if admitted_at is not None else None,
-                )
-            except OSError:
-                log.exception("Failed to record quota backoff")
+        self._log_quota_backoff(
+            "cut" if cut else "hold",
+            old_provider_ceiling=old_provider_ceiling,
+            effective_target=new_cap,
+            hold_s=self._config.quota_backoff_hold_s,
+            admitted_s_ago=now - admitted_at if admitted_at is not None else None,
+        )
+
+    def _log_quota_backoff(
+        self,
+        action: str,
+        *,
+        old_provider_ceiling: int,
+        effective_target: int,
+        hold_s: float,
+        admitted_s_ago: float | None,
+    ) -> None:
+        """Write one ``quota_backoff`` event; a failed sink never undoes the response."""
+        if self._event_logger is None:
+            return
+        try:
+            self._event_logger.quota_backoff(
+                action=action,
+                old_provider_ceiling=old_provider_ceiling,
+                provider_ceiling=self._provider_ceiling,
+                effective_target=effective_target,
+                hold_s=hold_s,
+                admitted_s_ago=admitted_s_ago,
+            )
+        except OSError:
+            log.exception("Failed to record quota backoff")
 
     def record_retry_scheduled(self, label: str, attempt: int, backoff_s: float) -> None:
         """Record that an item has been scheduled for retry after backoff.

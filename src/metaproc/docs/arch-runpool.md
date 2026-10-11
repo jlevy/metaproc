@@ -269,7 +269,9 @@ Provider recovery resumes at the ordinary ramp once `quota_backoff_hold_s` (300 
 by default) passes without another quota refusal.
 Each response is logged as a `quota_backoff` event with `action: cut` or `action: hold`,
 and a cut that changes capacity also logs `concurrency_adjust` with reason
-`quota_backoff`.
+`quota_backoff`. Manual mode (`pool override --mode manual`) freezes both governors, so
+there a refusal is logged with `action: ignored` and the provider ceiling stays where
+the operator left it.
 
 Other failures classified `quota_exhausted` (a daily, monthly, or billing cap, a capped
 credential, or unrelated text such as `Disk quota exceeded`) say nothing about

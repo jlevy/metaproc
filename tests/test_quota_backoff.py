@@ -57,6 +57,7 @@ from metaproc.runpool.event_models import ConcurrencyAdjustEvent, QuotaBackoffEv
 from metaproc.runpool.event_reader import read_runpool_events
 from metaproc.runpool.mock_backend import MockBackend, MockBehavior
 from metaproc.runpool.pool import ProcessConfig, RunPool, RunPoolConfig
+from metaproc.runpool.status import ScaleOverride, write_scale_override
 
 # The terminal record Gemini CLI writes after its own retries against a Vertex per-minute
 # quota are exhausted. The message is long enough that ``extract_log_error`` truncates it,
@@ -514,6 +515,43 @@ class TestQuotaBackoffGovernor:
         assert pool._provider_ceiling == 15
         assert pool.current_max_concurrency == 15
         assert pool._semaphore.capacity == pool._effective_target()
+
+    def test_manual_mode_freezes_the_quota_governor(
+        self, tmp_path: Path, clock: dict[str, float]
+    ) -> None:
+        """An operator who froze the pool at a hand-set cap keeps that cap.
+
+        Manual mode skips the provider governor's recovery, so a cut taken there would
+        never heal while the mode lasts.
+        """
+        pool = _pool(tmp_path)
+        write_scale_override(
+            tmp_path / "state" / "scale-override.yaml",
+            ScaleOverride(mode="manual", operator_cap=20),
+        )
+        pool._read_overrides()
+        pool._set_capacity(pool._effective_target(), reason="manual_override")
+        assert pool.current_max_concurrency == 20
+        assert pool._event_logger is not None
+        pool._event_logger.open()
+        reset_at = datetime.now(UTC) + timedelta(hours=1)
+        try:
+            pool.record_failure_class("quota_exhausted", rate_quota=True, admitted_at=999.0)
+            # A named reset is a submission gate, not a governor, and still applies.
+            pool.record_failure_class("quota_exhausted", quota_reset_at=reset_at)
+        finally:
+            pool._event_logger.close()
+
+        assert pool.current_max_concurrency == 20
+        assert pool._provider_ceiling == 30
+        assert pool._quota_hold_until is None
+        assert pool._quota_paused_until == reset_at
+        assert pool._failure_class_counts["quota_exhausted"] == 2
+        events = read_runpool_events(tmp_path / "logs" / "events.jsonl")
+        backoffs = [event for event in events if isinstance(event, QuotaBackoffEvent)]
+        assert [(e.action, e.old_provider_ceiling, e.provider_ceiling) for e in backoffs] == [
+            ("ignored", 30, 30)
+        ]
 
     def test_other_failure_classes_leave_the_provider_ceiling_alone(self, tmp_path: Path) -> None:
         pool = _pool(tmp_path)

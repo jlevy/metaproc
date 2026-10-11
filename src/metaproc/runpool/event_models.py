@@ -189,7 +189,7 @@ class QuotaBackoffEvent(BaseModel):
 
     event: Literal["quota_backoff"]
     ts: datetime
-    action: Literal["cut", "hold"]
+    action: Literal["cut", "hold", "ignored"]
     old_provider_ceiling: int
     provider_ceiling: int
     effective_target: int

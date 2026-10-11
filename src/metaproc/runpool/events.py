@@ -399,7 +399,8 @@ class EventLogger:
 
         ``action`` is ``cut`` when the provider ceiling fell, or ``hold`` when it did not:
         the failure belonged to an episode an earlier cut already answered, or the
-        ceiling was already at ``min_concurrency``, so it only held recovery.
+        ceiling was already at ``min_concurrency``, so it only held recovery. In manual
+        mode the governor is frozen and ``action`` is ``ignored``.
         ``admitted_s_ago`` is how long before this response the failed process was
         admitted, or ``None`` when its admission time is unknown.
         """
