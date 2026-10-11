@@ -292,8 +292,17 @@ See [arch-authentication.md](arch-authentication.md) for the design context.
 ### Gemini CLI (`gemini-cli`)
 
 Three auth modes, pick one.
-The adapter checks them in this order and uses the first it finds; detection logic lives
-in `src/metaproc/adapters/gemini_cli.py`.
+gemini-cli chooses the mode from the launch environment, in this order:
+`GOOGLE_GENAI_USE_GCA=true`, then `GOOGLE_GENAI_USE_VERTEXAI=true` (Modes 2 and 3), then
+`GOOGLE_GEMINI_BASE_URL`, then `GEMINI_API_KEY` (Mode 1). Each switch takes effect only
+when it is exactly `true`. `metaproc auth-check` reports the mode the CLI will select;
+detection logic lives in `src/metaproc/adapters/gemini_cli.py`. Two variables outrank
+the modes below and are easy to leave set by accident:
+
+| Variable | Effect |
+| --- | --- |
+| `GOOGLE_GENAI_USE_GCA` | `true` selects Login with Google ahead of every mode below. The default private Gemini home holds no login, so the adapter refuses the launch unless `GOOGLE_CLOUD_ACCESS_TOKEN` or `GOOGLE_APPLICATION_CREDENTIALS` supplies one, `GEMINI_FORCE_ENCRYPTED_FILE_STORAGE=true` keeps it in the OS keychain, a home template carries `oauth_creds.json`, or the settings name an auth type. |
+| `GOOGLE_GEMINI_BASE_URL` | Selects gateway auth ahead of Mode 1: requests go to that URL, with `GEMINI_API_KEY` if it is set. |
 
 **Mode 1 — Direct Gemini API (personal key).** One env var, no GCP needed.
 

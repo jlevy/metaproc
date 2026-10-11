@@ -384,10 +384,10 @@ def _overridden_settings(
     return overridden
 
 
-def _refuse_overriding_workspace_settings(
+def _checked_workspace_settings(
     directory: Path, native_settings: dict[str, object]
-) -> None:
-    """Refuse a user-scope launch whose working directory overrides Metaproc's settings.
+) -> dict[str, object]:
+    """Return a user-scope launch's workspace settings, refusing ones that override Metaproc's.
 
     Gemini ranks a trusted workspace's ``.gemini/settings.json`` above the user settings
     in the private home, and ``--skip-trust`` trusts every working directory, so such a
@@ -399,7 +399,7 @@ def _refuse_overriding_workspace_settings(
     try:
         text = settings_path.read_text(encoding="utf-8")
     except (FileNotFoundError, NotADirectoryError):
-        return
+        return {}
     except OSError as exc:
         raise ValueError(
             f"Cannot read Gemini workspace settings {settings_path} to confirm they leave "
@@ -426,6 +426,32 @@ def _refuse_overriding_workspace_settings(
             "every Metaproc launch trusts its working directory. Remove those keys or give "
             "them the step's values, or set working_directory to a directory without them"
         )
+    return cast("dict[str, object]", workspace)
+
+
+# gemini-cli's Login with Google reads a cached login from the Gemini home, the file
+# GOOGLE_APPLICATION_CREDENTIALS names, or GOOGLE_CLOUD_ACCESS_TOKEN; with
+# GEMINI_FORCE_ENCRYPTED_FILE_STORAGE it reads the OS keychain instead of the home.
+_GCA_LOGIN_SOURCES = ("GOOGLE_CLOUD_ACCESS_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS")
+_GCA_REMEDY = (
+    "Unset GOOGLE_GENAI_USE_GCA to authenticate with GEMINI_API_KEY or Vertex AI, set "
+    "GOOGLE_CLOUD_ACCESS_TOKEN, carry oauth_creds.json in a native_settings_home_template, "
+    "or set native_settings_scope 'workspace' to use the operator's ~/.gemini login"
+)
+
+
+def _gca_login_source(env: Mapping[str, str]) -> str | None:
+    """Name what supplies a Login with Google outside the Gemini home, if anything does."""
+    if env.get("GEMINI_FORCE_ENCRYPTED_FILE_STORAGE") == "true":
+        return "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE"
+    return next((name for name in _GCA_LOGIN_SOURCES if env.get(name)), None)
+
+
+def _names_auth_type(settings: dict[str, object]) -> bool:
+    """Whether ``settings`` choose an auth type, which outranks the environment fallback."""
+    security = settings.get("security")
+    auth = cast("dict[str, object]", security).get("auth") if isinstance(security, dict) else None
+    return isinstance(auth, dict) and bool(cast("dict[str, object]", auth).get("selectedType"))
 
 
 def _deep_merge_settings(
@@ -701,10 +727,23 @@ class GeminiCliAdapter:
             )
         elif scope == "user":
             # Popen with no cwd inherits this process's working directory.
-            _refuse_overriding_workspace_settings(
+            workspace = _checked_workspace_settings(
                 self.working_directory(merged_config) or Path.cwd(), native_settings
             )
             template = merged_config.get("native_settings_home_template")
+            if (
+                not template
+                and env.get("GOOGLE_GENAI_USE_GCA") == "true"
+                and _gca_login_source(env) is None
+                and not _names_auth_type(native_settings)
+                and not _names_auth_type(workspace)
+            ):
+                raise ValueError(
+                    "GOOGLE_GENAI_USE_GCA=true makes gemini-cli use Login with Google ahead of "
+                    "GEMINI_API_KEY and Vertex AI, and the private Gemini home holds no login, "
+                    "so the session would fail to authenticate or wait for a browser login. "
+                    + _GCA_REMEDY
+                )
             env["GEMINI_CLI_HOME"] = str(
                 _materialize_user_settings(
                     Path(str(template)) if template else None, native_settings
@@ -746,10 +785,13 @@ class GeminiCliAdapter:
         )
 
     def check_auth(self) -> AuthStatus:
-        cli_path = shutil.which("gemini")
-        gemini_api_key = MetaprocEnv.GEMINI_API_KEY.read_str(default=None)
-        vertex_ai = MetaprocEnv.GOOGLE_GENAI_USE_VERTEXAI.read_bool(default=False)
+        """Report the auth mode gemini-cli will select from the environment.
 
+        The private Gemini home names no auth type, so the CLI falls back to its
+        environment order: ``GOOGLE_GENAI_USE_GCA``, ``GOOGLE_GENAI_USE_VERTEXAI``
+        (each exactly ``true``), ``GOOGLE_GEMINI_BASE_URL``, then ``GEMINI_API_KEY``.
+        """
+        cli_path = shutil.which("gemini")
         if not cli_path:
             return AuthStatus(
                 adapter_type=self.adapter_type,
@@ -761,44 +803,67 @@ class GeminiCliAdapter:
                 setup_hint=GEMINI_CLI_INSTALL_HINT,
             )
 
-        if gemini_api_key:
+        def status(mode: str, ready: bool, details: str, hint: str = "") -> AuthStatus:
             return AuthStatus(
                 adapter_type=self.adapter_type,
                 cli_found=True,
                 cli_path=cli_path,
-                credentials_found=True,
-                auth_mode="gemini-api-key",
-                details="GEMINI_API_KEY is set",
-                setup_hint="",
+                credentials_found=ready,
+                auth_mode=mode,
+                details=details,
+                setup_hint=hint,
             )
 
-        if vertex_ai:
+        gemini_api_key = MetaprocEnv.GEMINI_API_KEY.read_str(default=None)
+        if MetaprocEnv.GOOGLE_GENAI_USE_GCA.read_str(default="") == "true":
+            login = _gca_login_source(
+                {
+                    member.name: member.read_str(default="")
+                    for member in (
+                        MetaprocEnv.GEMINI_FORCE_ENCRYPTED_FILE_STORAGE,
+                        MetaprocEnv.GOOGLE_CLOUD_ACCESS_TOKEN,
+                        MetaprocEnv.GOOGLE_APPLICATION_CREDENTIALS,
+                    )
+                }
+            )
+            if login is not None:
+                return status("oauth-personal", True, f"GOOGLE_GENAI_USE_GCA=true with {login}")
+            return status(
+                "oauth-personal",
+                False,
+                "GOOGLE_GENAI_USE_GCA=true selects Login with Google ahead of "
+                "GEMINI_API_KEY and Vertex AI, and the default private Gemini home holds "
+                "no login",
+                _GCA_REMEDY,
+            )
+
+        if MetaprocEnv.GOOGLE_GENAI_USE_VERTEXAI.read_str(default="") == "true":
             google_api_key = MetaprocEnv.GOOGLE_API_KEY.read_str(default=None)
             has_project = bool(MetaprocEnv.GOOGLE_CLOUD_PROJECT.read_str(default=None))
-            return AuthStatus(
-                adapter_type=self.adapter_type,
-                cli_found=True,
-                cli_path=cli_path,
-                credentials_found=bool(google_api_key) or has_project,
-                auth_mode="vertex-ai-express" if google_api_key else "vertex-ai",
-                details="Vertex AI mode configured",
-                setup_hint="",
+            return status(
+                "vertex-ai-express" if google_api_key else "vertex-ai",
+                bool(google_api_key) or has_project,
+                "Vertex AI mode configured",
             )
 
-        return AuthStatus(
-            adapter_type=self.adapter_type,
-            cli_found=True,
-            cli_path=cli_path,
-            credentials_found=False,
-            auth_mode="none",
-            details="No credentials configured",
-            setup_hint=(
-                "Pick one auth mode: "
-                "(1) export GEMINI_API_KEY=AIza... for the direct API, or "
-                "(2) export GOOGLE_GENAI_USE_VERTEXAI=true GOOGLE_CLOUD_PROJECT=<project> "
-                "for Vertex AI + ADC (reuses `gcloud auth application-default login`). "
-                "See src/metaproc/docs/credential-setup.runbook.md#gemini-cli for all three modes."
-            ),
+        if MetaprocEnv.GOOGLE_GEMINI_BASE_URL.read_str(default=""):
+            key = "with GEMINI_API_KEY" if gemini_api_key else "without GEMINI_API_KEY"
+            return status(
+                "gateway", True, f"GOOGLE_GEMINI_BASE_URL is set; requests go there {key}"
+            )
+
+        if gemini_api_key:
+            return status("gemini-api-key", True, "GEMINI_API_KEY is set")
+
+        return status(
+            "none",
+            False,
+            "No credentials configured",
+            "Pick one auth mode: "
+            "(1) export GEMINI_API_KEY=AIza... for the direct API, or "
+            "(2) export GOOGLE_GENAI_USE_VERTEXAI=true GOOGLE_CLOUD_PROJECT=<project> "
+            "for Vertex AI + ADC (reuses `gcloud auth application-default login`). "
+            "See src/metaproc/docs/credential-setup.runbook.md#gemini-cli for all three modes.",
         )
 
     def auth_info(self) -> str:

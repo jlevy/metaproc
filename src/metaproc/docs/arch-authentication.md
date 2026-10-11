@@ -140,6 +140,9 @@ The factories live in `src/metaproc/config/env_enum.py`.
 | `GEMINI_API_KEY` | `secret` | `gemini-cli` (direct API), `pi-cli` (google provider) |
 | `GOOGLE_API_KEY` | `secret` | `gemini-cli` (Vertex AI Express fallback) |
 | `GOOGLE_GENAI_USE_VERTEXAI` | `optional` | `gemini-cli` mode switch |
+| `GOOGLE_GENAI_USE_GCA` | `optional` | `gemini-cli` mode switch (Login with Google), checked first |
+| `GOOGLE_GEMINI_BASE_URL` | `optional` | `gemini-cli` gateway mode |
+| `GOOGLE_CLOUD_ACCESS_TOKEN` | `optional` | `gemini-cli` Login with Google without a cached login |
 | `GOOGLE_CLOUD_PROJECT` | `optional` | `pi-cli` (vertex-ai provider detection), Vertex SDK routing |
 | `PERPLEXITY_API_KEY` | `secret` | Tool wrapper web-search provider |
 | `GH_TOKEN` | `secret` | Git credential helper on Batch containers (not read on laptops) |
@@ -481,10 +484,16 @@ instead of the OpenAI-compatible path.
 
 **File:** `src/metaproc/adapters/gemini_cli.py`
 
-Modes:
+Modes, in the order gemini-cli checks the environment (each switch exactly `true`):
+- `GOOGLE_GENAI_USE_GCA` → Login with Google.
+  The default private Gemini home holds no login, so `check_auth` reports it not ready
+  and `prepare_env` refuses the launch unless `GOOGLE_CLOUD_ACCESS_TOKEN`,
+  `GOOGLE_APPLICATION_CREDENTIALS`, the OS keychain, a home template or a configured
+  auth type supplies one.
+- `GOOGLE_GENAI_USE_VERTEXAI` → Vertex AI mode; uses `GOOGLE_API_KEY` if present (Vertex
+  AI Express), otherwise `GOOGLE_CLOUD_PROJECT` + ADC.
+- `GOOGLE_GEMINI_BASE_URL` set → gateway mode, sending `GEMINI_API_KEY` if set.
 - `GEMINI_API_KEY` set → direct API mode.
-- `GOOGLE_GENAI_USE_VERTEXAI` truthy → Vertex AI mode; uses `GOOGLE_API_KEY` if present
-  (Vertex AI Express), otherwise `GOOGLE_CLOUD_PROJECT` + ADC.
 
 Used much less than Pi / Claude Code in current runs.
 
