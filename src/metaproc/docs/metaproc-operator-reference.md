@@ -798,8 +798,8 @@ step. A step’s own `native_settings` override Metaproc’s, so a step or adapt
 transform must not turn it off.
 
 By default each Gemini launch reads those settings from a private Gemini home
-(`native_settings_scope: user`), never the operator’s `~/.gemini`; authentication then
-comes from the launch environment.
+(`native_settings_scope: user`) rather than the operator’s `~/.gemini`; authentication
+then comes from the launch environment.
 Gemini ranks a trusted working directory’s `.gemini/settings.json` above that home, so
 the adapter refuses a launch whose working directory sets a setting Metaproc asserts to
 another value; that directory must be operator-authored.
@@ -815,8 +815,11 @@ The adapter writes the merged native settings to that directory’s
 It refuses a conflicting existing settings file or a symlink.
 Workspace settings remain after the invocation so retries use the same bytes.
 
-To serialize local agents while investigating shared Gemini project-registry startup
-contention, set `METAPROC_HOST_MAX_LOCAL_AGENTS=1` in the launcher environment.
+Under the default scope each private home has its own Gemini project registry, so
+launches do not share one.
+Under `workspace` scope every launch shares the operator’s registry; to serialize local
+agents while investigating its startup contention, set
+`METAPROC_HOST_MAX_LOCAL_AGENTS=1` in the launcher environment.
 This bounds agent admission across participating child pools and profiles; it does not
 govern Gemini processes launched outside Metaproc or orchestrators without that
 environment. It changes concurrency, not the model, prompt, timeout or retry policy.

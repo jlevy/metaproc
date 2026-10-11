@@ -360,8 +360,23 @@ default). The adapter writes its resolved native settings to that home’s
 `.gemini/settings.json` and sets `GEMINI_CLI_HOME` for the child, while retaining
 `HOME`, the working directory, provider environment, and any inherited
 `GEMINI_CLI_SYSTEM_SETTINGS_PATH`. Concurrent steps that share a working directory can
-therefore run with different settings, and no launch reads or writes the operator’s
-`~/.gemini`: its login, hooks, instructions, project registry and session history.
+therefore run with different settings, and no launch reads or writes the settings,
+login, hooks, instructions, project registry or session history in the operator’s
+`~/.gemini`.
+
+Three operator-home files can still reach a launch, because gemini-cli does not find
+them through `GEMINI_CLI_HOME`:
+
+- **`.env` files.** The CLI loads the nearest `.gemini/.env` or `.env` it finds walking
+  up from the working directory, so a working directory under the operator’s home can
+  pick up `~/.gemini/.env` or `~/.env`. Keep provider keys in the shell environment or
+  the project’s `.env`; a key kept in `~/.gemini/.env` works only for steps whose
+  working directory lies under the home.
+- **The sandbox policy file.** With `sandbox` configured, the CLI resolves
+  `~/.gemini/policies/sandbox.toml` against the real home.
+- **The home’s own settings, as a workspace.** A working directory equal to the
+  operator’s home makes `~/.gemini/settings.json` that launch’s workspace settings,
+  which the check below then applies to.
 
 The adapter never writes Gemini’s system settings file.
 Since gemini-cli 0.60.0 the CLI reads that file only when it and every directory above
@@ -387,6 +402,8 @@ instructions, authentication configuration, policies, hooks and their dependenci
 skills, and other assets the workflow requires.
 It must contain only regular files and directories; symlinks and special files are
 rejected. Do not include historical session state or caches.
+The template is a prepared directory, never a real home: every file in it, credentials
+included, is copied into each launch’s home and kept until the process exits.
 The adapter does not copy the ambient operator home or choose an authentication
 fallback. Each launch gets a separate private copy, and resolved `native_settings` are
 deep-merged over the template settings, preserving unrelated template keys.
@@ -406,11 +423,17 @@ This option does not bypass administrator policy.
 
 Private directories are owner-only; copied files are owner-readable and writable, with
 the owner’s executable bit preserved for scripts.
-Homes live in the adapter’s temporary directory until its process exits, and each
-collects that launch’s Gemini session state.
-Use a `TMPDIR` on a volume with room for it, and retain required session evidence before
-cleanup. A template requires POSIX no-follow directory descriptors and is rejected on
-platforms without them.
+Homes live in the adapter’s temporary directory, `$TMPDIR/metaproc-gemini-*`, one per
+launch, until the Metaproc process exits.
+Each collects that launch’s Gemini state: the full session transcript, including the
+contents of every file the agent read, tool outputs, shell history and logs, and, when a
+template carries `oauth_creds.json`, the tokens the CLI refreshes into its copy.
+Use a private `TMPDIR` on a volume with room for every launch the process makes, and
+retain required session evidence before the process exits.
+A normal exit removes the homes; a process killed by a signal or the out-of-memory
+killer leaves its `metaproc-gemini-*` directory behind, to be removed by hand.
+A template requires POSIX no-follow directory descriptors and is rejected on platforms
+without them.
 
 For composite processes, put these scalar settings in an execution profile supplied to
 the run. Profile selection and profile files propagate to child scopes; a root

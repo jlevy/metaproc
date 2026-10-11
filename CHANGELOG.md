@@ -103,13 +103,38 @@ development series.
   `native_settings_scope` now defaults to `user`: each launch gets a private Gemini home
   whose `.gemini/settings.json` holds the resolved native settings, and
   `native_settings_home_template` is optional.
-  Without a template, nothing from the operator’s `~/.gemini` is visible, so
-  authentication comes from the launch environment (`GEMINI_API_KEY`, or
-  `GOOGLE_GENAI_USE_VERTEXAI` with `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`),
-  and hooks, instructions and logins kept there no longer apply.
+  Without a template, the settings, login, hooks, instructions, extensions and MCP
+  servers in the operator’s `~/.gemini` no longer apply, so authentication comes from
+  the launch environment (`GEMINI_API_KEY`, or `GOOGLE_GENAI_USE_VERTEXAI` with
+  `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`). gemini-cli still finds `.env`
+  files by walking up from the working directory and resolves its sandbox policy file
+  against the real home, so keep provider keys in the shell environment or the project
+  `.env` rather than `~/.gemini/.env`. Each private home has its own project registry,
+  so launches no longer contend for a shared one.
   `native_settings_scope: system` is rejected; remove it to take the default, or set
   `workspace` to keep the operator’s `~/.gemini`. `native_settings_scope()` returns the
   scope a config resolves to.
+- **A Gemini working directory whose settings override the private home is refused.**
+  gemini-cli ranks a trusted working directory’s `.gemini/settings.json` above the
+  private home, and every Metaproc launch trusts its working directory, so a file there
+  could widen a step’s `tools.core`, re-enable subagents or turn session retention back
+  on. Under `user` scope a launch whose working directory sets a setting Metaproc asserts
+  to a different value now fails with the file and the keys, as `workspace` scope
+  already refused a conflicting file; equal values and other keys pass.
+- **A Gemini step’s `env` cannot replace the adapter’s settings variables.** Adapters
+  may implement `validate_step_env`, and planning treats a rejected key in an agent
+  step’s `env` like a rejected adapter-config key: dropped with a warning, or refused
+  under `METAPROC_ADAPTER_STRICT` or across adapter families.
+  The Gemini adapter rejects `GEMINI_CLI_SYSTEM_SETTINGS_PATH`,
+  `GEMINI_CLI_SYSTEM_DEFAULTS_PATH`, `GEMINI_SYSTEM_MD`, and `GEMINI_CLI_HOME` under
+  `user` scope.
+- **Gemini auth checks follow gemini-cli’s environment order.** `check_auth` evaluates
+  `GOOGLE_GENAI_USE_GCA`, `GOOGLE_GENAI_USE_VERTEXAI` (each exactly `true`),
+  `GOOGLE_GEMINI_BASE_URL`, then `GEMINI_API_KEY`, as the CLI does, and reports a
+  gateway as `gateway`. Login with Google is ready only when
+  `GOOGLE_CLOUD_ACCESS_TOKEN`, `GOOGLE_APPLICATION_CREDENTIALS` or the OS keychain
+  supplies a login, and without one a template-less `user`-scope launch is refused
+  instead of failing authentication or waiting for a browser login.
 
 ### Removed
 
@@ -117,6 +142,11 @@ development series.
   Build and write a fan-in document with `build_outcome_manifest(...).write(...)`.
 
 ### Fixed
+
+- **`auth-check --live` reports an adapter config it refuses.** A profile the adapter
+  refuses at launch, such as one still carrying Gemini’s
+  `native_settings_scope: system`, raised a traceback and stopped the remaining
+  adapters’ live checks; it is now a failed `invalid adapter configuration` result.
 
 - **A resume from a fresh checkout of the same revision reuses what the run completed.**
   A plan resolves a process’s `./` and `../` references to absolute paths, and a step’s
