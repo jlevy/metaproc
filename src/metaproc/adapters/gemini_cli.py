@@ -872,7 +872,12 @@ class GeminiCliAdapter:
             "\n"
             "  1. AI Studio API key: export GEMINI_API_KEY=AIza...\n"
             "  2. Vertex AI express: export GOOGLE_GENAI_USE_VERTEXAI=true + GOOGLE_API_KEY\n"
-            "  3. Personal OAuth: gemini (interactive login)\n"
+            "  3. Vertex AI + ADC: export GOOGLE_GENAI_USE_VERTEXAI=true "
+            "GOOGLE_CLOUD_PROJECT=<project>\n"
+            "\n"
+            "Each launch gets a private Gemini home, so a login made with an interactive\n"
+            "`gemini` session is not visible to it. To use one, carry oauth_creds.json in a\n"
+            "native_settings_home_template or set native_settings_scope: workspace.\n"
         )
 
     def bootstrap(self, home: Path) -> None:  # pyright: ignore[reportUnusedParameter]

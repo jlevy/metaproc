@@ -164,3 +164,12 @@ def test_workspace_scope_keeps_the_operator_login(tmp_path: Path) -> None:
     env = GeminiCliAdapter().prepare_env(environment, config)
 
     assert "GEMINI_CLI_HOME" not in env
+
+
+def test_auth_info_lists_modes_the_default_home_supports() -> None:
+    """An interactive login lives in a Gemini home that the default launch never reads."""
+    info = GeminiCliAdapter().auth_info()
+
+    assert "interactive login" not in info
+    assert "GOOGLE_CLOUD_PROJECT" in info
+    assert "native_settings_scope: workspace" in info
