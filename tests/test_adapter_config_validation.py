@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import textwrap
 from pathlib import Path
@@ -11,6 +12,7 @@ from pytest import LogCaptureFixture, MonkeyPatch
 
 from metaproc.engine.build_plan import build_plan
 from metaproc.models.authored import ProcessSpec
+from metaproc.models.plan import Plan
 
 
 def _write(path: Path, content: str) -> None:
@@ -203,3 +205,74 @@ class TestAdapterConfigValidation:
             _write(process_path, "---\nprocess:\n  name: test\n---\n")
             with pytest.raises(ValueError, match="invalid adapter config"):
                 build_plan(spec, {}, process_path=process_path)
+
+
+_GEMINI_PROFILE = "gemini-private"
+
+
+def _gemini_plan(
+    tmp_path: Path,
+    *,
+    profile_config: dict[str, object] | None = None,
+    step_env: dict[str, str] | None = None,
+) -> Plan:
+    """Plan one Gemini agent step under a profile file, as a run would."""
+    profiles = tmp_path / "profiles.yaml"
+    profiles.write_text(
+        json.dumps(
+            {
+                "profiles": {
+                    _GEMINI_PROFILE: {
+                        "adapter": "gemini-cli",
+                        "config": profile_config or {},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    spec = ProcessSpec.model_validate(
+        {
+            "name": "test",
+            "steps": [
+                {
+                    "id": "summarize",
+                    "mode": "agent",
+                    "prompt_prefix": "do thing",
+                    "env": step_env or {},
+                    "outputs": {"summary": {"path": "summary.md", "kind": "file"}},
+                }
+            ],
+        }
+    )
+    process_path = tmp_path / "test.process.md"
+    _write(process_path, "---\nprocess:\n  name: test\n---\n")
+    return build_plan(
+        spec,
+        {},
+        process_path=process_path,
+        adapter_override=_GEMINI_PROFILE,
+        profile_files=[profiles],
+    )
+
+
+class TestGeminiPlanValidation:
+    """A Gemini profile that would defeat the adapter's settings is caught at plan time."""
+
+    def test_legacy_system_scope_is_dropped_with_a_warning(
+        self, tmp_path: Path, caplog: LogCaptureFixture
+    ) -> None:
+        plan = _gemini_plan(tmp_path, profile_config={"native_settings_scope": "system"})
+
+        assert "native_settings_scope" not in plan.steps[0].adapter.config
+        assert "invalid adapter config for gemini-cli" in caplog.text
+        assert "owned by root" in caplog.text
+
+    def test_legacy_system_scope_is_refused_when_strict(
+        self, tmp_path: Path, monkeypatch: MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("METAPROC_ADAPTER_STRICT", "1")
+        with pytest.raises(
+            ValueError, match="invalid adapter config for gemini-cli.*owned by root"
+        ):
+            _gemini_plan(tmp_path, profile_config={"native_settings_scope": "system"})
