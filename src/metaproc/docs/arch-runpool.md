@@ -351,8 +351,9 @@ are treated differently on purpose.
 Provider pressure is a property of the run and the account, so a resume that reopens at
 full width against an API that was rate-limiting a minute ago has learned nothing.
 It is discarded only when the saved state shows the pressure is stale: no recent rate
-limits, no pending retries, and a prior operator cap below the current
-`max_concurrency`.
+limits, no pending retries, no quota hold still running, and a prior operator cap below
+the current `max_concurrency`. The hold itself is not restored, so after a resume
+provider recovery starts at once.
 
 `memory_ceiling` is never restored.
 It describes the host, and the host is free to have changed completely since the state

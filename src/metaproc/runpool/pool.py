@@ -716,8 +716,8 @@ class RunPool:
         # otherwise strand a higher-cap resume as DSQ-bound even after the
         # operator has raised the profile/run cap. When the old cap was lower,
         # the restored provider ceiling is below the fresh estimate, and there
-        # are no recent rate limits or pending retries, treat it as stale and
-        # floor it to the fresh estimate. Unlike memory, provider pressure is a
+        # are no recent rate limits, pending retries, or quota hold, treat it as
+        # stale and floor it to the fresh estimate. Unlike memory, provider pressure is a
         # property of the run and the account rather than the host, so it is
         # worth carrying across a resume when it is still live.
         if self._scale_state_path is not None and self._scale_state_path.exists():
@@ -742,11 +742,12 @@ class RunPool:
                     and controller.operator_cap < self._config.max_concurrency
                     and controller.recent_rate_limits == 0
                     and controller.pending_retries == 0
+                    and controller.quota_hold_remaining_s == 0
                 ):
                     log.info(
                         "Floored stale restored provider_ceiling=%d to fresh estimate %d "
                         "(prior operator_cap=%d, max_concurrency=%d); saved state had "
-                        "no recent rate limits or pending retries",
+                        "no recent rate limits, pending retries, or quota hold",
                         restored_provider,
                         starting,
                         controller.operator_cap,
@@ -2449,6 +2450,11 @@ class RunPool:
             bottleneck=self._classify_bottleneck(),
             recent_rate_limits=len(self._recent_rate_limits),
             pending_retries=self._pending_retries,
+            quota_hold_remaining_s=(
+                max(0.0, round(self._quota_hold_until - time.monotonic(), 1))
+                if self._quota_hold_until is not None
+                else 0.0
+            ),
         )
 
         return RunPoolStatus(

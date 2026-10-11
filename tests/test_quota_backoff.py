@@ -557,6 +557,28 @@ class TestQuotaBackoffGovernor:
             ("ignored", 30, 30)
         ]
 
+    def test_a_quota_cut_survives_a_resume_under_an_operator_cap(
+        self, tmp_path: Path, clock: dict[str, float]
+    ) -> None:
+        """A resume during the hold reopens at the cut ceiling, not at the operator cap.
+
+        The resume rule discards a restored provider ceiling as stale when the saved
+        state shows no live provider pressure; a quota hold is live pressure.
+        """
+        pool = _pool(tmp_path)
+        pool.record_failure_class("quota_exhausted", rate_quota=True, admitted_at=999.0)
+        assert pool.current_max_concurrency == 15
+        write_scale_override(
+            tmp_path / "state" / "scale-override.yaml", ScaleOverride(operator_cap=25)
+        )
+        pool._read_overrides()
+        pool._write_status()
+
+        resumed = _pool(tmp_path)
+
+        assert resumed._provider_ceiling == 15
+        assert resumed.current_max_concurrency == 15
+
     def test_other_failure_classes_leave_the_provider_ceiling_alone(self, tmp_path: Path) -> None:
         pool = _pool(tmp_path)
         for failure_class in ("timeout", "server_error", "crash", "invalid_output", "unknown"):
