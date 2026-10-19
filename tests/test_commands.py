@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 from pathlib import Path
 
@@ -448,3 +449,17 @@ class TestCompareMatrixCommand:
         assert result.exit_code != 0
         assert result.exception is not None
         assert "No items found" in str(result.exception)
+
+
+class TestCompressedTailCommand:
+    def test_once_summary_keeps_unfinished_compressed_attempt_visible(self, tmp_path: Path) -> None:
+        with gzip.open(tmp_path / "step_ctx_attempt1.jsonl.gz", "wt") as stream:
+            stream.write(
+                json.dumps({"type": "system", "subtype": "init", "model": "offline-model"}) + "\n"
+            )
+        result = runner.invoke(app, ["tail", str(tmp_path), "--once", "--summary"])
+        assert result.exit_code == 0
+        assert "step/ctx" in result.output
+        assert "init" in result.output
+        assert "active" in result.output
+        assert "done" not in result.output

@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 from pathlib import Path
 
+import pytest
+
+from metaproc.logutil.compaction import try_compact_log
 from metaproc.logutil.parsing import (
     ClaudeLogParser,
     CodexLogParser,
@@ -1190,3 +1194,171 @@ class TestClaudeLogParserThinking:
         assert "text" in kinds
         thinking_evts = [e for e in events if e.kind == "thinking"]
         assert "consider" in thinking_evts[0].summary
+
+
+class TestCompressedDiscovery:
+    def test_gzip_only_unfinished_attempt_is_readable(self, tmp_path: Path) -> None:
+        compressed = tmp_path / "step_ctx_attempt1.jsonl.gz"
+        body = json.dumps({"type": "system", "subtype": "init", "model": "offline-model"}) + "\n"
+        with gzip.open(compressed, "wt") as stream:
+            stream.write(body)
+        known: dict[Path, LogFile] = {}
+        discover_files([tmp_path], known, [0])
+        assert list(known) == [compressed.with_suffix("")]
+        log_file = next(iter(known.values()))
+        assert [event.kind for event in log_file.read_new_events()] == ["init"]
+        assert log_file.model == "offline-model"
+        assert not log_file.done
+        assert log_file.read_new_events() == []
+
+    def test_twins_prefer_plain_and_share_one_logical_attempt(self, tmp_path: Path) -> None:
+        plain = tmp_path / "step_ctx_attempt1.jsonl"
+        plain.write_text(json.dumps({"type": "system", "subtype": "init", "model": "plain"}) + "\n")
+        with gzip.open(plain.with_name(plain.name + ".gz"), "wt") as stream:
+            stream.write(json.dumps({"type": "system", "subtype": "init", "model": "gzip"}) + "\n")
+        known: dict[Path, LogFile] = {}
+        counter = [0]
+        discover_files([tmp_path], known, counter)
+        assert list(known) == [plain]
+        log_file = known[plain]
+        log_file.read_new_events()
+        assert log_file.model == "plain"
+        discover_files([tmp_path], known, counter)
+        assert counter == [1]
+        assert known[plain] is log_file
+        assert log_file.read_new_events() == []
+
+    def test_compaction_replays_stream_with_same_attempt_identity(self, tmp_path: Path) -> None:
+        plain = tmp_path / "step_ctx_attempt1.jsonl"
+        first = json.dumps({"type": "system", "subtype": "init", "model": "plain"}) + "\n"
+        plain.write_text(first)
+        known: dict[Path, LogFile] = {}
+        counter = [0]
+        discover_files([tmp_path], known, counter)
+        log_file = known[plain]
+        assert len(log_file.read_new_events()) == 1
+        with gzip.open(plain.with_name(plain.name + ".gz"), "wt") as stream:
+            stream.write(first + json.dumps({"type": "result", "is_error": False}) + "\n")
+        plain.unlink()
+        discover_files([tmp_path], known, counter)
+        assert list(known) == [plain]
+        assert counter == [1]
+        assert known[plain] is log_file
+        events = log_file.read_new_events()
+        assert [event.kind for event in events] == ["init", "result"]
+        assert log_file.read_new_events() == []
+
+
+class TestCompactionReplay:
+    def test_native_pi_rewrite_replays_terminal_usage_from_start(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        plain = tmp_path / "step_ctx_attempt1.jsonl"
+        plain.write_text(
+            json.dumps({"type": "session", "version": 3, "id": "fixture"})
+            + "\n"
+            + json.dumps({"type": "agent_start", "model": "offline-model"})
+            + "\n"
+            + json.dumps({"type": "message_update", "padding": "x" * 200_000})
+            + "\n"
+        )
+        known: dict[Path, LogFile] = {}
+        discover_files([tmp_path], known, [0])
+        log_file = known[plain]
+        log_file.read_new_events()
+        old_offset = log_file.offset
+        with plain.open("a") as stream:
+            stream.write(
+                json.dumps(
+                    {
+                        "type": "agent_end",
+                        "messages": [
+                            {
+                                "role": "assistant",
+                                "model": "offline-model",
+                                "provider": "fixture",
+                                "content": "y" * 300_000,
+                                "usage": {"input": 7, "output": 3, "cost": {"total": 0.5}},
+                            }
+                        ],
+                    }
+                )
+                + "\n"
+            )
+        try_compact_log(plain)
+        compressed = plain.with_name(plain.name + ".gz")
+        assert compressed.is_file() and not plain.exists()
+        discover_files([tmp_path], known, [0])
+        assert known[plain] is log_file
+        events = log_file.read_new_events()
+        fresh = LogFile(compressed, 0)
+        fresh.read_new_events()
+        assert old_offset > 200_000
+        assert fresh.done and log_file.done
+        assert log_file.usage_stats == fresh.usage_stats
+        assert log_file.usage_stats is not None
+        assert log_file.usage_stats.input_tokens == 7
+        assert log_file.usage_stats.steps == 1
+        assert sum(event.is_done for event in events) == 1
+        assert "previously emitted events may repeat" in caplog.text
+        assert log_file.read_new_events() == []
+
+    def test_replay_rebuilds_rate_limits_and_usage_instead_of_accumulating(
+        self, tmp_path: Path
+    ) -> None:
+        plain = tmp_path / "step_ctx_attempt1.jsonl"
+        rows = [
+            {"type": "system", "subtype": "init", "model": "offline-model"},
+            {"type": "rate_limit_event", "rate_limit_info": {"status": "allowed"}},
+            {
+                "type": "result",
+                "is_error": False,
+                "cost_usd": 0.5,
+                "usage": {"input_tokens": 7, "output_tokens": 3},
+                "padding": "x" * 150_000,
+            },
+        ]
+        plain.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        known: dict[Path, LogFile] = {}
+        discover_files([tmp_path], known, [0])
+        log_file = known[plain]
+        log_file.read_new_events()
+        assert log_file.done and len(log_file.rate_limit_events) == 1
+        try_compact_log(plain)
+        assert not plain.exists()
+        discover_files([tmp_path], known, [0])
+        events = log_file.read_new_events()
+        assert sum(event.is_done for event in events) == 1
+        assert len(log_file.rate_limit_events) == 1
+        assert log_file.usage_stats is not None
+        assert log_file.usage_stats.input_tokens == 7
+        assert log_file.usage_stats.steps == 1
+        assert log_file.cost_usd == 0.5
+        discover_files([tmp_path], known, [0])
+        assert log_file.read_new_events() == []
+        assert len(log_file.rate_limit_events) == 1
+
+    def test_atomic_same_path_replacement_clears_old_terminal_metadata(
+        self, tmp_path: Path
+    ) -> None:
+        plain = tmp_path / "step_ctx_attempt1.jsonl"
+        plain.write_text(
+            json.dumps(
+                {"type": "result", "is_error": True, "error": "old failure", "cost_usd": 0.5}
+            )
+            + "\n"
+        )
+        log_file = LogFile(plain, 0)
+        log_file.read_new_events()
+        assert log_file.done and log_file.is_error
+        replacement = tmp_path / "replacement"
+        replacement.write_text(
+            json.dumps({"type": "init", "session_id": "fresh", "model": "fresh-model"}) + "\n"
+        )
+        replacement.replace(plain)
+        events = log_file.read_new_events()
+        assert [event.kind for event in events] == ["init"]
+        assert log_file.model == "fresh-model"
+        assert not log_file.done and not log_file.is_error
+        assert log_file.error_message is None and log_file.cost_usd is None
+        assert log_file.usage_stats is None and not log_file.rate_limit_events

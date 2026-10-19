@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,7 +22,7 @@ from typing import Any, Protocol, cast, runtime_checkable
 
 from prettyfmt import fmt_timedelta
 
-from metaproc.io import ArtifactPath, logical_path
+from metaproc.io import ArtifactPath, iter_artifact_paths, logical_path
 from metaproc.logutil.usage import (
     UsageStats,
     extract_gemini_usage,
@@ -1643,8 +1642,15 @@ class LogFile:
 
     def __init__(self, path: Path, color_idx: int) -> None:
         self.path: Path = path
-        self.offset: int = 0
         self.color_idx: int = color_idx
+        self._read_path: Path | None = None
+        self._read_identity: tuple[int, int] | None = None
+        self._reset_read_state()
+        self._parse_name()
+
+    def _reset_read_state(self) -> None:
+        """Rebuild derived metadata from one retained stream, never add a replay to it."""
+        self.offset: int = 0
         self.done: bool = False
         self.is_error: bool = False
         self.cost_usd: float | None = None
@@ -1659,7 +1665,6 @@ class LogFile:
         self.rate_limit_events: list[LogEvent] = []
         self.parser: LogParser | None = None
         self._first_lines: list[str] = []
-        self._parse_name()
 
     def _parse_name(self) -> None:
         """Extract step-id and context from filename."""
@@ -1679,13 +1684,31 @@ class LogFile:
         return self.step_id
 
     def read_new_events(self) -> list[LogEvent]:
-        """Read new bytes from the file, parse through the adapter parser."""
+        """Read appended events; replacement streams replay with rebuilt per-file usage.
+
+        Compaction can rewrite events before compression, invalidating byte offsets.
+        Replayed events may repeat earlier display output; metadata is replaced, not summed.
+        """
         try:
             artifact = ArtifactPath(self.path)
-            size = artifact.logical_size
+            stat = self.path.stat()
+            identity = (stat.st_dev, stat.st_ino)
+            size = artifact.logical_size if artifact.is_gzip else stat.st_size
         except OSError:
             log.debug("Failed to stat %s", self.path, exc_info=True)
             return []
+
+        if self._read_identity is not None and (
+            self._read_identity != identity or self._read_path != self.path
+        ):
+            self._reset_read_state()
+            log.warning(
+                "Log storage changed for %s; replaying retained stream from start; "
+                "previously emitted events may repeat",
+                logical_path(self.path),
+            )
+        self._read_identity = identity
+        self._read_path = self.path
 
         if size <= self.offset:
             if size < self.offset:
@@ -1825,18 +1848,19 @@ def discover_files(
     known: dict[Path, LogFile],
     color_counter: list[int],
 ) -> None:
-    """Scan directories for new .jsonl files."""
+    """Discover logical JSONL streams, following physical replacements for safe replay."""
     for d in dirs:
         if not d.is_dir():
             continue
         try:
-            for entry in os.scandir(d):
-                if entry.name.endswith(".jsonl") and entry.is_file():
-                    p = Path(entry.path)
-                    if p not in known:
-                        lf = LogFile(p, color_counter[0] % len(COLORS))
-                        color_counter[0] += 1
-                        known[p] = lf
+            for path in iter_artifact_paths(d, "*.jsonl"):
+                key = logical_path(path)
+                if key not in known:
+                    known[key] = LogFile(path, color_counter[0] % len(COLORS))
+                    color_counter[0] += 1
+                else:
+                    # Keep the logical attempt; its reader detects replacement and replays.
+                    known[key].path = path
         except OSError:
             log.debug("Failed to scan directory for JSONL files", exc_info=True)
 
