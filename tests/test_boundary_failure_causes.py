@@ -42,6 +42,9 @@ from metaproc.models.authored import ProcessSpec
 def test_handler_resolution_failure_is_durable_and_does_not_abandon_siblings(
     tmp_path: Path, source: str | None, exception_type: str, detail: str
 ) -> None:
+    # Passed-test cleanup can reuse tmp_path while its external bytecode cache survives.
+    tmp_path = tmp_path / exception_type
+    tmp_path.mkdir()
     if source is not None:
         (tmp_path / "broken.py").write_text(source)
     (tmp_path / "healthy.py").write_text(
