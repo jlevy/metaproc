@@ -33,6 +33,7 @@ from metaproc.commands.claude_auth import _validate_creds_payload
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.config.providers import infer_provider, provider_by_name
 from metaproc.engine.preflight import check_disk_space
+from metaproc.engine.resource_sampling import run_command_in_process_group
 from metaproc.errors import CLIError
 from metaproc.io import fmf_read_frontmatter
 from metaproc.models.execution_profile import ExecutionProfileRegistry
@@ -462,7 +463,10 @@ def _run_live_check(
 
         t0 = time.monotonic()
         try:
-            proc = subprocess.run(
+            run_command = (
+                run_command_in_process_group if adapter_type == "gemini-cli" else subprocess.run
+            )
+            proc = run_command(
                 cmd,
                 capture_output=True,
                 text=True,

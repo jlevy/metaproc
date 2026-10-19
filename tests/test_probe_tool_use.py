@@ -71,7 +71,7 @@ class TestRunProbeSentinelDetection:
     def test_pass_when_sentinel_appears_in_stdout(self):
         with (
             patch("metaproc.commands.probe_tool_use.ADAPTER_REGISTRY") as mock_registry,
-            patch("subprocess.run") as mock_run,
+            patch("metaproc.commands.probe_tool_use.run_command_in_process_group") as mock_run,
         ):
             mock_registry.__contains__ = MagicMock(return_value=True)
             mock_registry.__getitem__ = MagicMock(return_value=self._adapter())
@@ -97,7 +97,7 @@ class TestRunProbeSentinelDetection:
     def test_fail_when_sentinel_missing(self):
         with (
             patch("metaproc.commands.probe_tool_use.ADAPTER_REGISTRY") as mock_registry,
-            patch("subprocess.run") as mock_run,
+            patch("metaproc.commands.probe_tool_use.run_command_in_process_group") as mock_run,
         ):
             mock_registry.__contains__ = MagicMock(return_value=True)
             mock_registry.__getitem__ = MagicMock(return_value=self._adapter())
@@ -116,7 +116,7 @@ class TestRunProbeSentinelDetection:
     def test_fail_when_subprocess_non_zero_exit(self):
         with (
             patch("metaproc.commands.probe_tool_use.ADAPTER_REGISTRY") as mock_registry,
-            patch("subprocess.run") as mock_run,
+            patch("metaproc.commands.probe_tool_use.run_command_in_process_group") as mock_run,
         ):
             mock_registry.__contains__ = MagicMock(return_value=True)
             mock_registry.__getitem__ = MagicMock(return_value=self._adapter())
@@ -135,7 +135,7 @@ class TestRunProbeSentinelDetection:
 
         with (
             patch("metaproc.commands.probe_tool_use.ADAPTER_REGISTRY") as mock_registry,
-            patch("subprocess.run") as mock_run,
+            patch("metaproc.commands.probe_tool_use.run_command_in_process_group") as mock_run,
         ):
             mock_registry.__contains__ = MagicMock(return_value=True)
             mock_registry.__getitem__ = MagicMock(return_value=self._adapter())

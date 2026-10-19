@@ -13,6 +13,7 @@ from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, TextIO
 
 import psutil
 
@@ -101,6 +102,79 @@ def sample_step_resources(
             )
         )
         yield sampler
+
+
+def run_command_in_process_group(
+    command: Sequence[str],
+    *,
+    env: Mapping[str, str],
+    cwd: Path | str | None = None,
+    timeout: float | None = None,
+    stdin: int | None = None,
+    stdout: TextIO | int | None = None,
+    stderr: int | None = None,
+    capture_output: bool = False,
+    text: Literal[True] = True,
+    check: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    """Run a text command with owned-group cleanup and no resource artifact writes.
+
+    File-directed stdout retains the child's raw bytes. On POSIX, interruption,
+    timeout, and normal leader exit clean up the isolated group through the same
+    identity-fenced owner as sampled commands. Windows retains leader-only cleanup.
+    """
+    if capture_output:
+        if stdout is not None or stderr is not None:
+            raise ValueError("stdout and stderr cannot be used with capture_output")
+        stdout = subprocess.PIPE
+        stderr = subprocess.PIPE
+    args = list(command)
+    process = subprocess.Popen(
+        args,
+        env=env,
+        cwd=cwd,
+        stdin=stdin,
+        stdout=stdout,
+        stderr=stderr,
+        text=text,
+        start_new_session=sys.platform != "win32",
+    )
+    leader_create_time = _process_create_time(process.pid)
+    try:
+        try:
+            output, errors = process.communicate(timeout=timeout)
+        except BaseException:
+            try:
+                _terminate_process_tree(
+                    process,
+                    leader_create_time=leader_create_time,
+                    ownership_observed_until=time.time(),
+                )
+                # Cleanup can refuse an unverifiable owner; never turn the original
+                # timeout or interrupt into an unbounded drain/context-manager wait.
+                process.communicate(timeout=_PROCESS_KILL_WAIT_S)
+            except Exception:
+                log.exception("Could not finish interrupted command cleanup")
+            raise
+        try:
+            _terminate_process_tree(
+                process,
+                leader_create_time=leader_create_time,
+                ownership_observed_until=time.time(),
+            )
+        except Exception:
+            log.exception("Could not finish completed command cleanup")
+    finally:
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except OSError:
+                    log.exception("Could not close an owned command pipe")
+    completed = subprocess.CompletedProcess(args, process.returncode, output, errors)
+    if check:
+        completed.check_returncode()
+    return completed
 
 
 def run_sampled_step_command(

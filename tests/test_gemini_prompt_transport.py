@@ -10,14 +10,21 @@ import shlex
 import shutil
 import stat
 import sys
+from contextlib import nullcontext, suppress
 from pathlib import Path
 from textwrap import dedent
 from typing import override
 
 import psutil
 import pytest
+from typer.testing import CliRunner
 
+from metaproc.adapters.base import AuthStatus
 from metaproc.adapters.gemini_cli import GeminiCliAdapter
+from metaproc.cli import app
+from metaproc.commands.auth_check import _run_live_check
+from metaproc.commands.probe_tool_use import _run_probe
+from metaproc.io import fmf_write, read_yaml_file
 from metaproc.runpool.backend import (
     LaunchHandle,
     LocalBackend,
@@ -237,3 +244,297 @@ def test_native_supervision_reaps_the_entire_prompt_pipeline(
                     await task
 
     asyncio.run(run())
+
+
+def test_empty_prompt_delivers_eof_without_changing_audit_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prepared, prompt = _prepare(
+        tmp_path,
+        monkeypatch,
+        "import os, sys; from pathlib import Path; "
+        "Path(os.environ['OUTPUT']).write_bytes(sys.stdin.buffer.read())",
+    )
+    prompt.write_bytes(b"")
+    assert asyncio.run(launch_and_supervise(LocalBackend(), prepared, timeout_s=5)) == 0
+    assert (tmp_path / "bytes").read_bytes() == b""
+    assert prompt.read_bytes() == b""
+
+
+@pytest.mark.parametrize("consumer", ["probe", "run-step", "auth-check"])
+@pytest.mark.parametrize("stop", ["timeout", "interrupt"])
+def test_direct_consumer_stop_does_not_leave_gemini_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, consumer: str, stop: str
+) -> None:
+    body = dedent(
+        """
+        import os
+        import signal
+        import time
+        from pathlib import Path
+        Path(os.environ['OUTPUT']).write_text(str(os.getpid()))
+        os.close(1)
+        os.close(2)
+        if os.environ.get('INTERRUPT_PID'):
+            time.sleep(0.1)
+            os.kill(int(os.environ['INTERRUPT_PID']), signal.SIGINT)
+        time.sleep(60)
+        """
+    )
+    prepared, _ = _prepare(tmp_path, monkeypatch, body)
+    assert prepared.env is not None
+    monkeypatch.setenv("PATH", prepared.env["PATH"] + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("OUTPUT", prepared.env["OUTPUT"])
+    monkeypatch.chdir(tmp_path)
+    pid_file = tmp_path / "bytes"
+    if stop == "interrupt":
+        monkeypatch.setenv("INTERRUPT_PID", str(os.getpid()))
+    try:
+        with (
+            pytest.raises(KeyboardInterrupt)
+            if stop == "interrupt" and consumer != "run-step"
+            else nullcontext()
+        ):
+            if consumer == "probe":
+                ok, message, _ = _run_probe("gemini-cli", "gemini-3.6-flash", None, timeout_s=1)
+                assert not ok and "timed out" in message
+            elif consumer == "auth-check":
+                monkeypatch.setattr(
+                    GeminiCliAdapter,
+                    "check_auth",
+                    lambda self: AuthStatus(
+                        "gemini-cli",
+                        True,
+                        "fake-gemini",
+                        True,
+                        "fixture",
+                        "no provider credentials",
+                        "",
+                    ),
+                )
+                results = _run_live_check("gemini-cli", "gemini-3.6-flash", timeout_s=1)
+                assert not results[0][0] and "timed out" in results[0][1]
+            else:
+                process = tmp_path / "timeout.process.md"
+                fmf_write(
+                    process,
+                    "",
+                    {
+                        "process": {
+                            "name": "timeout",
+                            "defaults": {
+                                "default_adapter": "gemini-cli",
+                                "adapters": {
+                                    "gemini-cli": {
+                                        "type": "gemini-cli",
+                                        "config": {
+                                            "model": "gemini-3.6-flash",
+                                            "timeout_s": 1,
+                                            "working_directory": str(tmp_path),
+                                            "native_settings_scope": "workspace",
+                                        },
+                                    }
+                                },
+                            },
+                            "steps": [
+                                {
+                                    "id": "agent",
+                                    "mode": "agent",
+                                    "prompt_prefix": "wait",
+                                    "outputs": {
+                                        "main": {"path": "{{run.dir}}/out.md", "kind": "file"}
+                                    },
+                                }
+                            ],
+                        }
+                    },
+                )
+                result = CliRunner().invoke(
+                    app,
+                    [
+                        "run-step",
+                        str(process),
+                        "--step",
+                        "agent",
+                        "--wait",
+                        "--var",
+                        f"RUNS_DIR={tmp_path / 'runs'}",
+                        "--var",
+                        "RUN_ID=timeout",
+                    ],
+                )
+                if stop == "interrupt":
+                    assert result.exit_code == 130, result.output
+                else:
+                    assert result.exit_code != 0 and "timed out" in (
+                        result.output + str(result.exception)
+                    ), result.output
+        assert pid_file.exists(), "fake Gemini did not start"
+        with suppress(psutil.NoSuchProcess):
+            process = psutil.Process(int(pid_file.read_text()))
+            assert process.status() == psutil.STATUS_ZOMBIE, "Gemini survived its caller's stop"
+    finally:
+        if pid_file.exists():
+            pid = int(pid_file.read_text())
+            with suppress(psutil.NoSuchProcess):
+                child = psutil.Process(pid)
+                if child.status() != psutil.STATUS_ZOMBIE:
+                    child.kill()
+                    child.wait(timeout=5)
+
+
+@pytest.mark.parametrize("mapped", [False, True], ids=["scalar", "for-each"])
+def test_native_agent_paths_stream_prompt_once_per_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mapped: bool
+) -> None:
+    body = dedent(
+        """
+        import json
+        import os
+        import stat
+        import sys
+        from pathlib import Path
+        if not stat.S_ISFIFO(os.fstat(0).st_mode):
+            print('expected piped stdin', file=sys.stderr)
+            sys.exit(42)
+        content = sys.stdin.buffer.read()
+        capture = Path(os.environ['CAPTURE_DIR'])
+        capture.mkdir(exist_ok=True)
+        item = os.environ['FAKE_ITEM']
+        (capture / (item + '.prompt')).write_bytes(content)
+        (capture / (item + '.argv')).write_text(json.dumps(sys.argv[1:]))
+        output = Path(os.environ['OUTPUT_FILE'])
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text('complete')
+        print(json.dumps({'type': 'init', 'model': 'gemini-3.6-flash'}))
+        print(json.dumps({'type': 'result', 'status': 'success', 'stats': {
+            'models': {'gemini-3.6-flash': {'input_tokens': 7, 'output_tokens': 1}}}}))
+        """
+    )
+    prepared, _ = _prepare(tmp_path, monkeypatch, body)
+    assert prepared.env is not None
+    monkeypatch.setenv("PATH", prepared.env["PATH"] + os.pathsep + os.environ["PATH"])
+    process = tmp_path / "native.process.md"
+    items = ["alfa", "brvo"] if mapped else ["scalar"]
+    item = "{{ticker}}" if mapped else "scalar"
+    marker = "complete Unicode — '$value'; prompt\n" * 4000
+    step: dict[str, object] = {
+        "id": "agent",
+        "mode": "agent",
+        "prompt_prefix": marker,
+        "env": {
+            "CAPTURE_DIR": str(tmp_path / "captures"),
+            "FAKE_ITEM": item,
+            "OUTPUT_FILE": "{{run.dir}}/" + item + ".txt",
+        },
+        "outputs": {"main": {"path": "{{run.dir}}/" + item + ".txt", "kind": "file"}},
+    }
+    spec: dict[str, object] = {
+        "name": "native-transport",
+        "defaults": {
+            "retry": {"max_retries": 0},
+            "default_adapter": "gemini-cli",
+            "adapters": {
+                "gemini-cli": {
+                    "type": "gemini-cli",
+                    "config": {
+                        "model": "gemini-3.6-flash",
+                        "permission_mode": "bypassPermissions",
+                        "output_format": "stream-json",
+                        "timeout_s": 5,
+                        "working_directory": str(tmp_path),
+                        "native_settings_scope": "workspace",
+                    },
+                }
+            },
+        },
+        "steps": [step],
+    }
+    if mapped:
+        roster = tmp_path / "items.md"
+        fmf_write(roster, "", {"progress": {"items": [{"ticker": value} for value in items]}})
+        spec["deps"] = {"items": {"path": str(roster), "as": "path"}}
+        step["for_each"] = {
+            "over": "deps.items",
+            "bind": "ticker",
+            "bind_fields": ["ticker"],
+            "key": "{{ticker}}",
+        }
+    fmf_write(process, "", {"process": spec})
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-process",
+            str(process),
+            "--var",
+            f"RUNS_DIR={tmp_path / 'runs'}",
+            "--var",
+            "RUN_ID=native",
+            "--max-concurrency",
+            "1",
+        ],
+    )
+    assert result.exit_code == 0, result.output + str(result.exception)
+    run = tmp_path / "runs/native"
+    state = read_yaml_file(run / ".state/process-status.yaml")
+    assert state["state"] == "completed"
+    events = [
+        json.loads(line) for line in (run / ".logs/runpool/events.jsonl").read_text().splitlines()
+    ]
+    assert sum(event["event"] == "pool_start" for event in events) == 1
+    assert sum(event["event"] == "process_start" for event in events) == len(items)
+    assert sum(event["event"] == "process_exit" for event in events) == len(items)
+    for value in items:
+        assert (run / (value + ".txt")).read_text() == "complete"
+        captured = (tmp_path / "captures" / (value + ".prompt")).read_bytes()
+        assert marker.encode() in captured
+        invocations = list((run / ".logs/tasks/agent").rglob("*.invocation.json"))
+        matching = []
+        for invocation in invocations:
+            record = json.loads(invocation.read_text())
+            if Path(record["argv"][4]).read_bytes() == captured:
+                matching.append(record)
+        # Mapped prompts share body; each native invocation remains one task.
+        assert len(invocations) == len(items)
+        assert matching
+        arguments = json.loads((tmp_path / "captures" / (value + ".argv")).read_text())
+        assert arguments[arguments.index("-m") + 1] == "gemini-3.6-flash"
+
+
+def test_successful_probe_reaps_a_descendant_after_the_cli_exits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    body = dedent(
+        """
+        import os
+        import re
+        import subprocess
+        import sys
+        from pathlib import Path
+        prompt = sys.stdin.read()
+        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+        Path(os.environ['OUTPUT']).write_text(str(child.pid))
+        target = re.search(r'file (.*?)\\?', prompt).group(1)
+        print(Path(target).read_text().splitlines()[0])
+        """
+    )
+    prepared, _ = _prepare(tmp_path, monkeypatch, body)
+    assert prepared.env is not None
+    monkeypatch.setenv("PATH", prepared.env["PATH"] + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("OUTPUT", prepared.env["OUTPUT"])
+    monkeypatch.chdir(tmp_path)
+    pid_file = tmp_path / "bytes"
+    try:
+        ok, message, _ = _run_probe("gemini-cli", "gemini-3.6-flash", None, timeout_s=5)
+        assert ok, message
+        with suppress(psutil.NoSuchProcess):
+            assert psutil.Process(int(pid_file.read_text())).status() == psutil.STATUS_ZOMBIE
+    finally:
+        if pid_file.exists():
+            with suppress(psutil.NoSuchProcess):
+                child = psutil.Process(int(pid_file.read_text()))
+                if child.status() != psutil.STATUS_ZOMBIE:
+                    child.kill()
+                    child.wait(timeout=5)

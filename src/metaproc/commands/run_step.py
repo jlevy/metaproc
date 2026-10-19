@@ -47,7 +47,11 @@ from metaproc.engine.placeholders import (
     resolve_templates,
 )
 from metaproc.engine.process_scope import expand_process_vars
-from metaproc.engine.resource_sampling import run_sampled_step_command, sample_step_resources
+from metaproc.engine.resource_sampling import (
+    run_command_in_process_group,
+    run_sampled_step_command,
+    sample_step_resources,
+)
 from metaproc.engine.runtime import (
     launch_step,
     prepare_step,
@@ -613,7 +617,12 @@ def run_step(
                 with log_path.open(  # write-contract: live-stream -- the child writes to it
                     "w", encoding="utf-8"
                 ) as log_fh:
-                    fg_proc = subprocess.run(
+                    run_command = (
+                        run_command_in_process_group
+                        if adapter_type == "gemini-cli"
+                        else subprocess.run
+                    )
+                    fg_proc = run_command(
                         cmd,
                         env=env,
                         cwd=cwd,

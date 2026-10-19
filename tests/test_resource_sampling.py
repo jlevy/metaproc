@@ -182,3 +182,121 @@ def test_completed_command_rejects_a_recycled_group_leader(
     )
 
     killpg.assert_not_called()
+
+
+@pytest.mark.parametrize("exit_code", [0, 42])
+def test_owned_command_preserves_captured_result_and_check_error(
+    tmp_path: Path, exit_code: int
+) -> None:
+    command = [
+        sys.executable,
+        "-c",
+        (
+            "import sys; print('Unicode — output'); "
+            f"print('diagnostic', file=sys.stderr); sys.exit({exit_code})"
+        ),
+    ]
+    completed = resource_sampling_module.run_command_in_process_group(
+        command,
+        env=dict(os.environ),
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    assert completed.args == command
+    assert completed.returncode == exit_code
+    assert completed.stdout == "Unicode — output\n"
+    assert completed.stderr == "diagnostic\n"
+    if exit_code:
+        with pytest.raises(subprocess.CalledProcessError) as failed:
+            resource_sampling_module.run_command_in_process_group(
+                command,
+                env=dict(os.environ),
+                cwd=tmp_path,
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=True,
+            )
+        assert failed.value.cmd == command
+        assert failed.value.returncode == exit_code
+        assert failed.value.output == completed.stdout
+        assert failed.value.stderr == completed.stderr
+
+
+def test_owned_command_preserves_file_stdout_bytes_and_handle(tmp_path: Path) -> None:
+    destination = tmp_path / "raw.log"
+    with destination.open("w") as output:
+        completed = resource_sampling_module.run_command_in_process_group(
+            [sys.executable, "-c", "import os; os.write(1, bytes([255,0,10]))"],
+            env=dict(os.environ),
+            cwd=tmp_path,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+        )
+        assert not output.closed
+        assert completed.returncode == 0
+        assert completed.stdout is None and completed.stderr is None
+    assert destination.read_bytes() == bytes([255, 0, 10])
+
+
+def test_owned_command_preserves_original_timeout_fields(tmp_path: Path) -> None:
+    command = [sys.executable, "-c", "import time; print('partial', flush=True); time.sleep(60)"]
+    with pytest.raises(subprocess.TimeoutExpired) as failed:
+        resource_sampling_module.run_command_in_process_group(
+            command,
+            env=dict(os.environ),
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=1,
+        )
+    assert failed.value.cmd == command
+    assert failed.value.timeout == 1
+    assert failed.value.output == b"partial\n"
+
+
+def test_owned_command_cleanup_refusal_preserves_timeout_without_unbounded_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = subprocess.TimeoutExpired(["fixture"], 1, output=b"retained", stderr=b"detail")
+    timeouts: list[float | None] = []
+
+    class RefusedProcess:
+        pid = 1234
+        returncode = None
+        stdin = None
+        stdout = None
+        stderr = None
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            self.wait()
+
+        def communicate(self, *, timeout: float | None = None) -> tuple[str, str]:
+            timeouts.append(timeout)
+            if timeout is None:
+                raise AssertionError("unbounded communicate")
+            raise original
+
+        def wait(self, timeout: float | None = None) -> int:
+            assert timeout is not None, "unbounded context-manager wait"
+            raise original
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: RefusedProcess())
+    monkeypatch.setattr(resource_sampling_module, "_process_create_time", lambda _pid: None)
+    monkeypatch.setattr(
+        resource_sampling_module, "_terminate_process_tree", lambda *args, **kwargs: None
+    )
+    with pytest.raises(subprocess.TimeoutExpired) as failed:
+        resource_sampling_module.run_command_in_process_group(["fixture"], env={}, timeout=1)
+    assert failed.value is original
+    assert failed.value.output == b"retained" and failed.value.stderr == b"detail"
+    assert timeouts and all(timeout is not None for timeout in timeouts)

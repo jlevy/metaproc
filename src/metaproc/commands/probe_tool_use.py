@@ -28,6 +28,7 @@ from metaproc.adapters.base import agent_seed_env
 from metaproc.adapters.registry import ADAPTER_REGISTRY
 from metaproc.cli import app, get_output
 from metaproc.config.providers import infer_provider
+from metaproc.engine.resource_sampling import run_command_in_process_group
 from metaproc.errors import CLIError
 from metaproc.models.execution_profile import ExecutionProfileRegistry
 
@@ -174,7 +175,8 @@ def _run_probe(
         return False, f"build_command/prepare_env failed: {exc}", ""
 
     try:
-        proc = subprocess.run(  # noqa: S603
+        run_command = run_command_in_process_group if harness == "gemini-cli" else subprocess.run
+        proc = run_command(
             cmd,
             capture_output=True,
             text=True,

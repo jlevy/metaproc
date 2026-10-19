@@ -693,7 +693,7 @@ class TestLiveCheckUsesTheProfileConfig:
             patch.object(gemini, "check_auth", return_value=status),
             patch("metaproc.adapters.gemini_cli._gemini_version_drift", return_value=None),
             patch(
-                "metaproc.commands.auth_check.subprocess.run",
+                "metaproc.commands.auth_check.run_command_in_process_group",
                 side_effect=self._stub_gemini(calls),
             ),
         ):
