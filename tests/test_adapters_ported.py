@@ -352,7 +352,10 @@ class TestGeminiCliAdapter:
         assert cmd == [
             "/bin/sh",
             "-c",
-            'prompt_file=$1; shift; exec "$@" < "$prompt_file"',
+            (
+                'prompt_file=$1; shift; exec 3< "$prompt_file" || exit; '
+                '/bin/cat <&3 3<&- | "$@" 3<&-'
+            ),
             "metaproc-gemini",
             str(self.prompt_file),
             "gemini",

@@ -606,10 +606,16 @@ class GeminiCliAdapter:
         # Gemini treats `@path` as a model-facing read request, where workspace ignore
         # rules apply. Its headless mode natively accepts piped input, so keep the
         # durable prompt file for audit while streaming that content into the CLI.
+        # A pipe avoids its timed stdin reader queuing a regular-file read behind
+        # other libuv work. Open first so a missing prompt cannot launch the CLI;
+        # close the extra descriptor in both children, keeping only the pipe input.
         return [
             "/bin/sh",
             "-c",
-            'prompt_file=$1; shift; exec "$@" < "$prompt_file"',
+            (
+                'prompt_file=$1; shift; exec 3< "$prompt_file" || exit; '
+                '/bin/cat <&3 3<&- | "$@" 3<&-'
+            ),
             "metaproc-gemini",
             str(prompt_file),
             "gemini",
