@@ -37,7 +37,7 @@ def check_disk_space(min_gb: float | None = None, path: str = ".") -> tuple[bool
             min_gb = float(
                 MetaprocEnv.METAPROC_PREFLIGHT_MIN_DISK_GB.read_str(default="5.0") or "5.0"
             )
-        except (ValueError, AttributeError):
+        except ValueError, AttributeError:
             min_gb = 5.0
     usage = shutil.disk_usage(path)
     free_gb = usage.free / (1024**3)
@@ -321,7 +321,7 @@ def _git(args: list[str], *, cwd: Path) -> str | None:
             text=True,
             timeout=5,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError, subprocess.TimeoutExpired:
         return None
     if result.returncode != 0:
         return None

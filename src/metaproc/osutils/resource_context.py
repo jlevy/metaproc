@@ -261,7 +261,7 @@ def _collect_cgroup() -> CgroupLimits:
 def _getrlimit(key: int) -> tuple[int, int] | None:
     try:
         return resource.getrlimit(key)
-    except (ValueError, OSError):
+    except ValueError, OSError:
         return None
 
 

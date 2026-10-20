@@ -198,7 +198,7 @@ def _should_drop_line(line: str) -> bool:
     # Slow path: parse and check top-level type.
     try:
         event = json.loads(line)
-    except (json.JSONDecodeError, ValueError):
+    except json.JSONDecodeError, ValueError:
         return False
     if not isinstance(event, dict):
         return False

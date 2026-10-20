@@ -889,7 +889,7 @@ def _get_git_sha() -> str:
         )
         if result.returncode == 0:
             return result.stdout.strip()
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except FileNotFoundError, subprocess.TimeoutExpired:
         pass
     return ""
 
@@ -2590,7 +2590,7 @@ def _contract_retry_decision(
         state_dir = compute_task_state_dir(run_dir, step_def_map[step_id], item_vars)
         try:
             status = read_status_at(state_dir)
-        except (ValueError, TypeError, ValidationError):
+        except ValueError, TypeError, ValidationError:
             return False
         failures = getattr(status, "output_failures", None) or []
         if not failures:

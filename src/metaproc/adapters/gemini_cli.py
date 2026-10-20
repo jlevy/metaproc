@@ -398,7 +398,7 @@ def _checked_workspace_settings(
     settings_path = directory / ".gemini" / "settings.json"
     try:
         text = settings_path.read_text(encoding="utf-8")
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError, NotADirectoryError:
         return {}
     except OSError as exc:
         raise ValueError(

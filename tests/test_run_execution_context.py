@@ -1514,7 +1514,7 @@ async def _wait_for_process_tree(path: Path) -> dict[str, int]:
                 key: int(value)
                 for key, value in json.loads(path.read_text(encoding="utf-8")).items()
             }
-        except (FileNotFoundError, json.JSONDecodeError):
+        except FileNotFoundError, json.JSONDecodeError:
             await asyncio.sleep(0.01)
     raise AssertionError(f"process tree did not publish its pids at {path}")
 
@@ -1837,7 +1837,7 @@ def test_real_sigint_cancels_run_and_cleans_command_tree(tmp_path: Path) -> None
             try:
                 pids = {key: int(value) for key, value in json.loads(pids_path.read_text()).items()}
                 break
-            except (FileNotFoundError, json.JSONDecodeError):
+            except FileNotFoundError, json.JSONDecodeError:
                 time.sleep(0.02)
         assert pids, "run-process did not launch its command tree"
 

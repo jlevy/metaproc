@@ -267,7 +267,7 @@ def _test_execution_context(
     max_concurrency: int | None = None,
     profile_files: Sequence[Path] = (),
     pool_dispatch_template: PoolDispatchConfig | None = None,
-) -> Generator[RunExecutionContext, None, None]:
+) -> Generator[RunExecutionContext]:
     context = RunExecutionContext.create(
         max_concurrency=max_concurrency,
         profile_files=profile_files,

@@ -36,7 +36,7 @@ def _git(cwd: Path, *args: str) -> str:
     """Run git in ``cwd`` and return stdout, or "" if the command fails."""
     try:
         result = subprocess.run(("git", *args), cwd=cwd, capture_output=True, text=True, check=True)
-    except (subprocess.CalledProcessError, OSError):
+    except subprocess.CalledProcessError, OSError:
         return ""
     return result.stdout
 

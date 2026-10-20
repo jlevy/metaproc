@@ -76,7 +76,7 @@ def _sentinel_present(stdout: str, sentinel: str) -> bool:
             continue
         try:
             event = json.loads(line)
-        except (json.JSONDecodeError, ValueError):
+        except json.JSONDecodeError, ValueError:
             continue
         accumulator.extend(_walk_text_strings(event))
     return sentinel in "".join(accumulator)

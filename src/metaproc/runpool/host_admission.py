@@ -299,7 +299,7 @@ def _process_create_time(pid: int | None) -> float | None:
         return None
     try:
         return float(psutil.Process(pid).create_time())
-    except (psutil.NoSuchProcess, psutil.AccessDenied):
+    except psutil.NoSuchProcess, psutil.AccessDenied:
         return None
 
 
@@ -373,7 +373,7 @@ def list_host_admission_slots(
 def _read_lease_file(lease_file: Path) -> dict[str, object] | None:
     try:
         raw = cast(object, json.loads(lease_file.read_text(encoding="utf-8")))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
+    except FileNotFoundError, json.JSONDecodeError, OSError:
         return None
     if not isinstance(raw, dict):
         return None
@@ -434,7 +434,7 @@ def _int_or_none(value: object) -> int | None:
         return None
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 
@@ -447,7 +447,7 @@ def _float_or_none(value: object) -> float | None:
         return None
     try:
         return float(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 

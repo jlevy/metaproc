@@ -584,7 +584,7 @@ def agent_reported_success(log_path: Path, tail_lines: int = 30) -> bool:
             continue
         try:
             event = json.loads(stripped)
-        except (json.JSONDecodeError, ValueError):
+        except json.JSONDecodeError, ValueError:
             continue
         if event.get("type") == "result":
             return str(event.get("status", "")) == "success"
@@ -619,7 +619,7 @@ def extract_log_error(log_path: Path, tail_lines: int = 30) -> str | None:
             continue
         try:
             event = json.loads(stripped)
-        except (json.JSONDecodeError, ValueError):
+        except json.JSONDecodeError, ValueError:
             continue
         etype = event.get("type")
         if etype == "agent_end":
@@ -652,7 +652,7 @@ def extract_log_error(log_path: Path, tail_lines: int = 30) -> str | None:
             continue
         try:
             event = json.loads(stripped)
-        except (json.JSONDecodeError, ValueError):
+        except json.JSONDecodeError, ValueError:
             continue
         if event.get("type") != "result":
             continue
@@ -688,7 +688,7 @@ def extract_log_error(log_path: Path, tail_lines: int = 30) -> str | None:
             continue
         try:
             json.loads(stripped)
-        except (json.JSONDecodeError, ValueError):
+        except json.JSONDecodeError, ValueError:
             continue
         last_structured = index
     for index in range(len(lines) - 1, last_structured, -1):

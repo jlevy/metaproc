@@ -321,7 +321,7 @@ def _suppression(
 def scan_file(path: Path) -> list[Finding]:
     try:
         text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+    except OSError, UnicodeDecodeError:
         return []
     try:
         tree = ast.parse(text, filename=str(path))

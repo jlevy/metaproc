@@ -271,5 +271,5 @@ def is_pool_alive(status: RunPoolStatus) -> bool:
     try:
         proc = psutil.Process(status.pid)
         return proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE
-    except (psutil.NoSuchProcess, psutil.AccessDenied):
+    except psutil.NoSuchProcess, psutil.AccessDenied:
         return False

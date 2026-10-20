@@ -604,7 +604,7 @@ class SlotCoordinator:
         for log_set in adapter_impl.native_session_log_sets():
             try:
                 _publish_native_session_log_set(lease.slot_dir, log_set, target_log_path)
-            except (OSError, ValueError):
+            except OSError, ValueError:
                 log.warning(
                     "slot_coordinator: failed to preserve native session log set %r from %s",
                     log_set.name,

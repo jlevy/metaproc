@@ -457,7 +457,7 @@ def expand_pool_exclude_by_quota_group(
     try:
         backend = pool_dispatch.coordinator.backend
         failing_entry = backend.get_entry(lease.adapter, lease.label)
-    except (KeyError, AttributeError):
+    except KeyError, AttributeError:
         return
     failing_group = failing_entry.state.quota_group
     if failing_group.kind == "unknown":

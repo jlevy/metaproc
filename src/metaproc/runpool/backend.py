@@ -414,7 +414,7 @@ class LocalBackend:
             for child in children:
                 with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
                     rss_bytes += child.memory_info().rss
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except psutil.NoSuchProcess, psutil.AccessDenied:
             return None
 
         # Log file size — read from the prepared launch's log_path.
@@ -438,7 +438,7 @@ def _process_create_time(pid: int) -> float | None:
     """Return a process identity timestamp, or ``None`` if it cannot be observed."""
     try:
         return psutil.Process(pid).create_time()
-    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+    except psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess:
         return None
 
 
@@ -457,7 +457,7 @@ def _same_running_process(pid: int, create_time: float) -> bool:
             and process.is_running()
             and process.status() != psutil.STATUS_ZOMBIE
         )
-    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+    except psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess:
         return False
 
 
@@ -470,7 +470,7 @@ def _prune_observed_descendants(handle: LaunchHandle) -> None:
     for child_pid, create_time in tuple(handle._observed_descendants.items()):  # noqa: SLF001
         try:
             owned = _same_process(child_pid, create_time) and os.getpgid(child_pid) == pid
-        except (ProcessLookupError, PermissionError):
+        except ProcessLookupError, PermissionError:
             owned = False
         if not owned:
             handle._observed_descendants.pop(child_pid, None)  # noqa: SLF001
@@ -490,7 +490,7 @@ def _refresh_owned_process_group_members(handle: LaunchHandle) -> list[psutil.Pr
     ):
         try:
             children = psutil.Process(pid).children(recursive=True)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except psutil.NoSuchProcess, psutil.AccessDenied:
             children = []
     elif leader_create_time is not None:
         current_leader_create_time = _process_create_time(pid)
@@ -516,7 +516,7 @@ def _refresh_owned_process_group_members(handle: LaunchHandle) -> list[psutil.Pr
             try:
                 if os.getpgid(candidate_pid) == pid:
                     children.append(candidate)
-            except (ProcessLookupError, PermissionError):
+            except ProcessLookupError, PermissionError:
                 continue
     for child in children:
         with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):

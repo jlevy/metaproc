@@ -71,7 +71,7 @@ def sample_step_resources(
     step_node_id: str,
     item_key: str | None = None,
     pid: int | None = None,
-) -> Generator[PsutilSampler, None, None]:
+) -> Generator[PsutilSampler]:
     """Persist psutil samples under the deepest known step hierarchy."""
     target = _sampling_target(run_dir, run_id, step_node_id)
     event_path = target.run_dir / LOGS_DIR / RESOURCE_EVENTS_FILE
@@ -249,7 +249,7 @@ def _process_create_time(pid: int) -> float | None:
     """Return a process identity timestamp when it can be observed."""
     try:
         return psutil.Process(pid).create_time()
-    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+    except psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess:
         return None
 
 
@@ -285,7 +285,7 @@ def _owned_command_group_exists(
         try:
             if os.getpgid(candidate_pid) == pgid:
                 return True
-        except (ProcessLookupError, PermissionError):
+        except ProcessLookupError, PermissionError:
             continue
     return False
 

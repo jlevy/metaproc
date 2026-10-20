@@ -115,7 +115,7 @@ def _extract_body_markdown(path: Path) -> str:
     """Return the markdown body that follows the frontmatter block."""
     try:
         body, _ = fmf_read(path)
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return ""
     return body or ""
 

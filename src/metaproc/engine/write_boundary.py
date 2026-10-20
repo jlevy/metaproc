@@ -400,7 +400,7 @@ def _git_status(repo_root: Path) -> dict[str, str]:
             capture_output=True,
             text=True,
         )
-    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+    except subprocess.CalledProcessError, FileNotFoundError, OSError:
         return {}
 
     statuses: dict[str, str] = {}

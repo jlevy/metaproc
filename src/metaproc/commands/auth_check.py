@@ -258,7 +258,7 @@ def _extract_observed_model(adapter_type: str, stdout: str) -> str | None:
             continue
         try:
             event = json.loads(line)
-        except (json.JSONDecodeError, ValueError):
+        except json.JSONDecodeError, ValueError:
             continue
         if not isinstance(event, dict):
             continue
@@ -535,7 +535,7 @@ def _extract_pi_jsonl_error(stdout: str) -> str | None:
             continue
         try:
             event = json.loads(line)
-        except (json.JSONDecodeError, ValueError):
+        except json.JSONDecodeError, ValueError:
             continue
         if not isinstance(event, dict):
             continue

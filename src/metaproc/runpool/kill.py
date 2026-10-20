@@ -259,7 +259,7 @@ def reap_subprocess_tree(parent_pid: int | None = None) -> dict[str, int]:
         # children of children…). This is what we need — orphan adapter-cli /
         # claude --print / etc. are typically grandchildren.
         descendants = parent.children(recursive=True)
-    except (psutil.NoSuchProcess, psutil.AccessDenied):
+    except psutil.NoSuchProcess, psutil.AccessDenied:
         counts["errors"] += 1
         return counts
 
