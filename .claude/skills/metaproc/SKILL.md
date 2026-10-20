@@ -93,7 +93,7 @@ Available via `metaproc help <topic>`, in recommended reading order:
 - **design** (~22.0k words): How Metaproc is built: spec format, runtime artifacts, adapters, robustness.
 - **framework** (~7.3k words): Background theory: the general model beneath any process framework, and Metaproc's mapping.
 - **operator** (~11.5k words): Runtime CLI reference: running, monitoring, and resuming processes.
-- **developer** (~1.4k words): Extending Metaproc and the 'Metaproc is the right wrapper' policy.
+- **developer** (~1.6k words): Extending Metaproc and the 'Metaproc is the right wrapper' policy.
 - **conventions** (~4.6k words): Framework-level naming, structure, and file-format rules.
 - **artifacts** (~2.2k words): Every runtime artifact Metaproc writes or reads: format, schema, lifecycle.
 - **execution-contracts** (~2.3k words): The durable contracts under task-level scheduling, and their rationale.

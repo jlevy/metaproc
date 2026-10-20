@@ -82,7 +82,7 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
         "developer",
         "metaproc-developer-guide",
         "Extending Metaproc and the 'Metaproc is the right wrapper' policy.",
-        1400,
+        1600,
     ),
     Topic(
         "conventions",

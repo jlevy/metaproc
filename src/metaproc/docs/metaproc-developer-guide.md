@@ -90,6 +90,16 @@ descendants, and flushed its captured log.
 A `mode: code` command therefore must not intentionally daemonize a child that should
 survive the step.
 
+The same contract covers every agent command, whichever adapter built it: detached
+(`launch_step`), pooled (`LocalBackend`), and blocking foreground launches such as
+`auth-check --live`, `probe-tool-use`, and `run-step --wait`
+(`run_command_in_process_group`). An agent CLI is a process tree.
+Tool calls and MCP servers run as its children, and an adapter’s `build_command` may
+wrap it in a shell, as Codex and Gemini do to feed the prompt through stdin.
+Because the launcher owns the whole group, an adapter declares nothing about process
+cleanup, and a call site never picks a launcher by adapter type: an adapter that needs a
+wrapper or a pipeline emits it, and the launcher reaps whatever it started.
+
 Long-running Python handlers executed by `run-process` must call
 `StepContext.cancel_requested()` at safe checkpoints and return promptly when it becomes
 true. Metaproc drains synchronous work that has already started; it does not abandon or
@@ -148,6 +158,7 @@ text instead of an opaque exit code.
 | A new step mode, fan-out, or gate semantic | a metaproc bead (framework change) |
 | A new artifact category multiple workflows emit | an `artifact-catalog.md` entry |
 | A new operator interaction pattern (prompts, confirmation gates) | a Claude Code skill that calls metaproc directly |
+| A behavior one agent CLI needs and another does not | the adapter’s own `build_command` or `prepare_env`, or an optional capability protocol in `adapters/base.py` probed through `adapters/registry.py`; never a comparison on the adapter type at a call site |
 
 A skill is orchestration glue plus pointers, never a documentation home: its substance
 must already live in a doc or a self-documenting CLI command (`metaproc help <topic>`,
