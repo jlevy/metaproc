@@ -11,6 +11,7 @@ import json
 import logging
 import shutil
 from collections.abc import Callable
+from compression import zstd
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -1091,6 +1092,35 @@ def test_long_result_line_after_a_capped_line_in_gzip(
     assert reading.capped_tool_results == 1
     assert reading.result is not None
     assert reading.result["stats"]["duration_ms"] == 5_000
+
+
+def test_long_result_line_after_a_capped_line_in_zstd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ops, "TOOL_RESULT_CAP_BYTES", 1024)
+    monkeypatch.setattr(ops, "SCAN_CHUNK_BYTES", 256)
+    path = tmp_path / "t.jsonl.zst"
+    long_line = json.dumps({"type": "tool_result", "output": "y" * 5000})
+    result = _gemini_result(5_000, "m") | {"padding": "z" * 900}
+    with zstd.open(path, "wt", encoding="utf-8") as stream:
+        stream.write(long_line + "\n" + json.dumps(result) + "\n")
+
+    reading = ops._read_transcript(path, ops._logical_size(path))
+
+    assert reading.capped_tool_results == 1
+    assert reading.result is not None
+    assert reading.result["stats"]["duration_ms"] == 5_000
+
+
+def test_damaged_transcript_reads_as_having_no_result(tmp_path: Path) -> None:
+    whole = gzip.compress(json.dumps(_gemini_result(5_000, "m")).encode() + b"\n")
+    path = tmp_path / "t.jsonl.gz"
+    path.write_bytes(whole[: len(whole) // 2])
+
+    reading = ops._read_transcript(path, ops._logical_size(path))
+
+    assert reading.result is None
+    assert reading.capped_tool_results == 0
 
 
 # ── Written document ──────────────────────────────────────────────

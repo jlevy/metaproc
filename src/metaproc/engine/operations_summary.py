@@ -12,7 +12,6 @@ end to end, in fixed-size chunks that never retain a whole line.
 
 from __future__ import annotations
 
-import gzip
 import json
 import logging
 import os
@@ -32,8 +31,7 @@ from strif import atomic_output_file, atomic_write_text
 
 from metaproc import paths as paths_mod
 from metaproc.engine.operations_render import render_summary_markdown
-from metaproc.io import ArtifactPath, iter_jsonl_objects
-from metaproc.io.gz_io import artifact_sidecar_path
+from metaproc.io import ArtifactPath, artifact_sidecar_path, iter_jsonl_objects, logical_path
 from metaproc.models.operations_summary import (
     OPERATIONS_SUMMARY_CONTRACT,
     OPERATIONS_SUMMARY_ENVELOPE,
@@ -1151,7 +1149,7 @@ def _retry_figures(evidence: _Evidence) -> RetryFigures:
         for path in _iter_named_files(tasks_dir, paths_mod.ATTEMPT_FILE, max_depth=5):
             try:
                 loaded = _load_yaml_mapping(path, strict=True)
-            except (OSError, ValueError, yaml.YAMLError):
+            except OSError, ValueError, yaml.YAMLError:
                 unreadable += 1
                 continue
             record: Mapping[str, Any] = loaded or {}
@@ -1471,19 +1469,13 @@ def _resource_figures(
 
 
 def _iter_transcripts(logs_tasks_dir: Path) -> Iterator[Path]:
-    """Yield agent stream transcripts, preferring a plain file over its ``.gz`` sibling."""
-    seen: set[str] = set()
+    """Yield agent stream transcripts once each, preferring a plain file over a compressed one."""
+    seen: set[Path] = set()
     for path in sorted(_iter_files(logs_tasks_dir, max_depth=4)):
-        name = path.name
-        if name.endswith(".jsonl"):
-            logical = str(path)
-        elif name.endswith(".jsonl.gz"):
-            logical = str(path)[: -len(".gz")]
-        else:
+        logical = logical_path(path)
+        if logical.suffix != ".jsonl" or logical in seen:
             continue
-        if logical in seen:
-            continue
-        if name.endswith(".gz") and Path(logical).is_file():
+        if logical != path and logical.is_file():
             continue
         seen.add(logical)
         yield path
@@ -1497,20 +1489,25 @@ def _logical_size(path: Path) -> int | None:
 
 
 def _read_transcript(path: Path, logical_size: int | None) -> _TranscriptReading:
-    """Return the terminal result and the count of capped tool-result lines."""
-    is_gzip = path.name.endswith(".gz")
-    needs_scan = is_gzip or (logical_size is not None and logical_size >= TOOL_RESULT_CAP_BYTES)
+    """Return the terminal result and the count of capped tool-result lines.
+
+    A plain transcript is read from its tail unless it is large enough to hold capped
+    tool results; a compressed one is always scanned end to end, since its decoded
+    stream cannot be entered from the end. An artifact that cannot be opened or
+    decoded reads as having no result.
+    """
+    artifact = ArtifactPath(path)
+    needs_scan = artifact.is_compressed or (
+        logical_size is not None and logical_size >= TOOL_RESULT_CAP_BYTES
+    )
     if not needs_scan:
         result = _tail_result(path)
         if result is not None or (logical_size or 0) <= TRANSCRIPT_TAIL_BYTES:
             return _TranscriptReading(result, 0)
     try:
-        if is_gzip:
-            with gzip.open(path, "rb") as stream:
-                return _scan_stream(stream)
-        with path.open("rb") as stream:
+        with artifact.open_binary() as stream:
             return _scan_stream(stream)
-    except (OSError, EOFError, gzip.BadGzipFile):
+    except OSError:
         return _TranscriptReading(None, 0)
 
 
@@ -1627,7 +1624,7 @@ def _requested_model(transcript: Path, profiles: Mapping[str, str]) -> str | Non
     sidecar = artifact_sidecar_path(transcript, ".jsonl.invocation.json")
     try:
         invocation = json.loads(sidecar.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
     if not isinstance(invocation, Mapping):
         return None

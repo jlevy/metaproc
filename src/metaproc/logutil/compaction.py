@@ -24,6 +24,7 @@ from typing import Any, cast
 from strif import atomic_output_file
 
 from metaproc.io import ArtifactPath
+from metaproc.io.compression import codec_for_path
 from metaproc.logutil.parsing import detect_adapter
 from metaproc.paths import is_native_session_log_path
 
@@ -249,11 +250,11 @@ def compact_log(path: Path, *, keep_original: bool = False) -> CompactionResult:
     is a no-op (the file is rewritten identically minus a compaction header).
     For Pi logs, cumulative ``message_update`` events are stripped.
 
-    Gzipped inputs (``.jsonl.gz``) are treated as ``already_compact``: the
-    post-step pipeline runs ``try_compact_log`` before ``gzip_text_path``,
-    so a ``.gz`` here means both passes already happened. Returning early
-    avoids the decompress + rewrite-as-plain round-trip that would
-    *un*-compress the file.
+    Compressed inputs (``.jsonl.gz``, ``.jsonl.zst``) are treated as
+    ``already_compact``: the post-step pipeline runs ``try_compact_log``
+    before ``gzip_text_path``, so a compressed file here means both passes
+    already happened. Returning early avoids the decompress + rewrite-as-plain
+    round-trip that would *un*-compress the file.
 
     File replacement uses atomic moves with a backup:
     1. Write compacted output to a ``.partial`` temp file
@@ -262,10 +263,10 @@ def compact_log(path: Path, *, keep_original: bool = False) -> CompactionResult:
     """
     path = Path(path)
     original_size = path.stat().st_size
-    if path.suffix.lower() == ".gz":
+    if codec_for_path(path) is not None:
         return CompactionResult(
             path=path,
-            adapter="gzipped",
+            adapter="compressed",
             original_size=original_size,
             original_lines=0,
             compacted_size=original_size,
@@ -355,7 +356,7 @@ def _is_already_compacted(lines: list[str]) -> bool:
             return False
         first_typed = cast(dict[str, Any], first)
         return first_typed.get("type") == COMPACTION_TYPE
-    except (json.JSONDecodeError, ValueError):
+    except json.JSONDecodeError, ValueError:
         return False
 
 
@@ -383,7 +384,7 @@ def _compact_pi(lines: list[str]) -> list[str]:
             continue
         try:
             event = json.loads(stripped)
-        except (json.JSONDecodeError, ValueError):
+        except json.JSONDecodeError, ValueError:
             # Keep non-JSON lines (noise, stderr) unchanged.
             result.append(line)
             continue
@@ -434,7 +435,7 @@ def _maybe_emit_final(update_json: str, end_event: dict[str, Any], result: list[
     # Parse the buffered update and look for thinking in its partial content.
     try:
         update = json.loads(update_json)
-    except (json.JSONDecodeError, ValueError):
+    except json.JSONDecodeError, ValueError:
         return
 
     update_typed = cast(dict[str, Any], update)
@@ -497,7 +498,7 @@ def check_log_runaway(log_path: Path) -> LogRunawayCheck | None:
     # Read the file and count output tokens from completed assistant messages.
     # We read the whole file rather than just the tail because message_end
     # events may be sparse (one per API round-trip) and we need the total.
-    # ``ArtifactPath`` reads transparently from ``.jsonl`` or ``.jsonl.gz``.
+    # ``ArtifactPath`` reads transparently from ``.jsonl`` or a compressed sibling.
     total_output_tokens = 0
     try:
         with ArtifactPath(log_path).open_text() as f:
@@ -510,7 +511,7 @@ def check_log_runaway(log_path: Path) -> LogRunawayCheck | None:
                     continue
                 try:
                     event = json.loads(line)
-                except (json.JSONDecodeError, ValueError):
+                except json.JSONDecodeError, ValueError:
                     continue
                 if not isinstance(event, dict):
                     continue
@@ -575,7 +576,7 @@ def _compact_codex(lines: list[str]) -> list[str]:
             continue
         try:
             event = json.loads(stripped)
-        except (json.JSONDecodeError, ValueError):
+        except json.JSONDecodeError, ValueError:
             out.append(line)
             continue
         if not isinstance(event, dict):
@@ -607,7 +608,7 @@ def try_compact_log(log_path: Path) -> None:
     it meets the ``gzip-text`` per-extension size threshold. Both passes
     are best-effort and never raise into the orchestration path. Reads
     elsewhere in the codebase use ``ArtifactPath``/``iter_text_lines``
-    and transparently handle the resulting ``.jsonl.gz``.
+    and transparently handle the resulting compressed file.
     """
     try:
         result = compact_log(log_path)

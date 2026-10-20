@@ -11,18 +11,21 @@ import pytest
 import strif
 
 import metaproc.io as io_mod
+from metaproc.io import artifact_io as _io_artifact_io
+from metaproc.io import compression as _io_compression
 from metaproc.io import frontmatter as _io_frontmatter
-from metaproc.io import gz_io as _io_gz_io
 from metaproc.io import secret_io as _io_secret_io
 from metaproc.io import templating as _io_templating
 
 EXPECTED_PUBLIC = {
+    "ArtifactDecodeError",
     "ArtifactPath",
     "FmFormatError",
     "SECRET_FILE_MODE",
     "TemplateRenderError",
     "YamlSerializationError",
     "artifact_exists",
+    "artifact_sidecar_path",
     "atomic_output_file",
     "atomic_write_bytes",
     "atomic_write_text",
@@ -63,10 +66,11 @@ def test_every_public_name_is_importable() -> None:
         assert hasattr(io_mod, name), name
 
 
-def test_gz_io_helpers_resolve_to_source_module() -> None:
+def test_artifact_io_helpers_resolve_to_source_module() -> None:
     for name in (
         "ArtifactPath",
         "artifact_exists",
+        "artifact_sidecar_path",
         "iter_artifact_paths",
         "iter_jsonl_objects",
         "iter_jsonl_records",
@@ -74,7 +78,8 @@ def test_gz_io_helpers_resolve_to_source_module() -> None:
         "logical_path",
         "resolve_existing_artifact",
     ):
-        assert getattr(io_mod, name) is getattr(_io_gz_io, name)
+        assert getattr(io_mod, name) is getattr(_io_artifact_io, name)
+    assert io_mod.ArtifactDecodeError is _io_compression.ArtifactDecodeError
 
 
 def test_frontmatter_artifact_helpers_resolve_to_source_module() -> None:

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,7 +23,7 @@ from typing import Any, Protocol, cast, runtime_checkable
 
 from prettyfmt import fmt_timedelta
 
-from metaproc.io import ArtifactPath, iter_artifact_paths, logical_path
+from metaproc.io import ArtifactDecodeError, ArtifactPath, iter_artifact_paths, logical_path
 from metaproc.logutil.usage import (
     UsageStats,
     extract_gemini_usage,
@@ -84,7 +85,7 @@ def _parse_json(line: str) -> dict[str, Any] | None:
         obj: Any = json.loads(line)
         if isinstance(obj, dict):
             return cast(dict[str, Any], obj)
-    except (json.JSONDecodeError, ValueError):
+    except json.JSONDecodeError, ValueError:
         pass
     return None
 
@@ -1644,7 +1645,7 @@ class LogFile:
         self.path: Path = path
         self.color_idx: int = color_idx
         self._read_path: Path | None = None
-        self._read_identity: tuple[int, int] | None = None
+        self._read_identity: tuple[int, ...] | None = None
         self._reset_read_state()
         self._parse_name()
 
@@ -1665,6 +1666,8 @@ class LogFile:
         self.rate_limit_events: list[LogEvent] = []
         self.parser: LogParser | None = None
         self._first_lines: list[str] = []
+        self._sealed: bool = False
+        self._decode_warned: bool = False
 
     def _parse_name(self) -> None:
         """Extract step-id and context from filename."""
@@ -1684,43 +1687,19 @@ class LogFile:
         return self.step_id
 
     def read_new_events(self) -> list[LogEvent]:
-        """Read appended events; replacement streams replay with rebuilt per-file usage.
+        """Read appended events; a replaced stream replays from the start with rebuilt per-file usage.
 
-        Compaction can rewrite events before compression, invalidating byte offsets.
-        Replayed events may repeat earlier display output; metadata is replaced, not summed.
+        A plain stream grows in place and is read from the retained offset; one that
+        shrank was rewritten and replays. A compressed stream is immutable once
+        published: it is read in full the first time its identity is seen and never
+        measured against a size, because the size a container records may describe one
+        member of several, and comparing an offset against it would replay a complete
+        stream forever. Any change to a compressed file's inode, size, or mtime is a
+        replacement. Replayed events may repeat earlier display output; metadata is
+        replaced, not summed.
         """
-        try:
-            artifact = ArtifactPath(self.path)
-            stat = self.path.stat()
-            identity = (stat.st_dev, stat.st_ino)
-            size = artifact.logical_size if artifact.is_gzip else stat.st_size
-        except OSError:
-            log.debug("Failed to stat %s", self.path, exc_info=True)
-            return []
-
-        if self._read_identity is not None and (
-            self._read_identity != identity or self._read_path != self.path
-        ):
-            self._reset_read_state()
-            log.warning(
-                "Log storage changed for %s; replaying retained stream from start; "
-                "previously emitted events may repeat",
-                logical_path(self.path),
-            )
-        self._read_identity = identity
-        self._read_path = self.path
-
-        if size <= self.offset:
-            if size < self.offset:
-                self.offset = 0
-            return []
-
-        try:
-            with ArtifactPath(self.path).open_text() as f:
-                f.seek(self.offset)
-                raw = f.read()
-                self.offset = f.tell()
-        except OSError:
+        raw = self._read_pending_text()
+        if not raw:
             return []
 
         raw_lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
@@ -1742,6 +1721,73 @@ class LogFile:
             events.extend(self.parser.parse_line(line))
         self._track_results(events)
         return events
+
+    def _read_pending_text(self) -> str | None:
+        """Return decoded text not yet parsed; ``None`` when there is none or the file is unreadable.
+
+        Identity comes from ``fstat`` on the handle the bytes are read through, so a
+        replacement between two polls is never read at the previous stream's offset.
+        """
+        artifact = ArtifactPath(self.path)
+        try:
+            stream = artifact.open_text()
+        except OSError as exc:
+            self._note_unreadable(exc)
+            return None
+        with stream:
+            try:
+                st = os.fstat(stream.fileno())
+            except OSError as exc:
+                self._note_unreadable(exc)
+                return None
+            identity: tuple[int, ...] = (st.st_dev, st.st_ino)
+            if artifact.is_compressed:
+                identity += (st.st_size, st.st_mtime_ns)
+            if self._read_identity is not None and (
+                self._read_identity != identity or self._read_path != self.path
+            ):
+                if self.parser is not None:
+                    log.warning(
+                        "Log storage changed for %s; replaying retained stream from start; "
+                        "previously emitted events may repeat",
+                        logical_path(self.path),
+                    )
+                self._reset_read_state()
+            self._read_identity = identity
+            self._read_path = self.path
+            try:
+                if artifact.is_compressed:
+                    if self._sealed:
+                        return None
+                    raw = stream.read()
+                    self._sealed = True
+                else:
+                    if st.st_size < self.offset:
+                        self._reset_read_state()
+                        log.warning(
+                            "Log %s shrank below its read offset; replaying from start; "
+                            "previously emitted events may repeat",
+                            logical_path(self.path),
+                        )
+                    elif st.st_size == self.offset:
+                        return None
+                    stream.seek(self.offset)
+                    raw = stream.read()
+                    self.offset = stream.tell()
+            except OSError as exc:
+                self._note_unreadable(exc)
+                return None
+        self._decode_warned = False
+        return raw
+
+    def _note_unreadable(self, exc: OSError) -> None:
+        """Record a read failure; the next poll retries. A decode failure warns once per stream."""
+        if isinstance(exc, ArtifactDecodeError):
+            if not self._decode_warned:
+                log.warning("Cannot decode %s; will retry: %s", logical_path(self.path), exc)
+                self._decode_warned = True
+            return
+        log.debug("Failed to read %s", self.path, exc_info=exc)
 
     def _track_results(self, events: list[LogEvent]) -> None:
         """Capture cost/duration/model/tokens from init and result events."""

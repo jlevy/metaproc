@@ -75,7 +75,7 @@ def read_events(path: Path) -> list[ResourceEvent]:
     is the audit trail the rest of the resource pipeline reconciles to.
     """
     out: list[ResourceEvent] = []
-    # ``iter_text_lines`` reads transparently from ``.jsonl`` or ``.jsonl.gz``.
+    # ``iter_text_lines`` reads transparently from ``.jsonl`` or a compressed sibling.
     for _line_no, line in iter_text_lines(path):
         stripped = line.strip()
         if not stripped:

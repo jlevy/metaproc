@@ -24,8 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from metaproc.agent_errors import classify_agent_error
-from metaproc.io import iter_artifact_paths, iter_jsonl_objects
-from metaproc.io.gz_io import artifact_sidecar_path
+from metaproc.io import artifact_sidecar_path, iter_artifact_paths, iter_jsonl_objects
 from metaproc.logutil.usage import sum_claude_usage
 from metaproc.trace.extractors.codex_agent import _is_codex_log
 from metaproc.trace.extractors.common import span_duration_ms, tool_usage_classification
@@ -226,7 +225,7 @@ def _load_invocation_sidecar(path: Path) -> dict[str, Any]:
         return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except json.JSONDecodeError, OSError:
         return {}
     return payload if isinstance(payload, dict) else {}
 

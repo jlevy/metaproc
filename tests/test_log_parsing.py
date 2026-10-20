@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import gzip
 import json
+import logging
+from compression import zstd
 from pathlib import Path
 
 import pytest
 
+from metaproc.io import ArtifactPath
 from metaproc.logutil.compaction import try_compact_log
 from metaproc.logutil.parsing import (
     ClaudeLogParser,
@@ -1213,19 +1216,63 @@ class TestCompressedDiscovery:
 
     def test_twins_prefer_plain_and_share_one_logical_attempt(self, tmp_path: Path) -> None:
         plain = tmp_path / "step_ctx_attempt1.jsonl"
-        plain.write_text(json.dumps({"type": "system", "subtype": "init", "model": "plain"}) + "\n")
         with gzip.open(plain.with_name(plain.name + ".gz"), "wt") as stream:
             stream.write(json.dumps({"type": "system", "subtype": "init", "model": "gzip"}) + "\n")
         known: dict[Path, LogFile] = {}
         counter = [0]
         discover_files([tmp_path], known, counter)
+        # A compressed-only attempt is discovered under its logical key.
         assert list(known) == [plain]
         log_file = known[plain]
         log_file.read_new_events()
-        assert log_file.model == "plain"
+        assert log_file.model == "gzip"
+        # A plain twin appears: it wins, under the same logical attempt, with no new color.
+        plain.write_text(json.dumps({"type": "system", "subtype": "init", "model": "plain"}) + "\n")
         discover_files([tmp_path], known, counter)
+        assert list(known) == [plain]
         assert counter == [1]
         assert known[plain] is log_file
+        assert log_file.path == plain
+        assert [event.kind for event in log_file.read_new_events()] == ["init"]
+        assert log_file.model == "plain"
+        assert log_file.read_new_events() == []
+
+    def test_zstd_only_unfinished_attempt_is_readable(self, tmp_path: Path) -> None:
+        compressed = tmp_path / "step_ctx_attempt1.jsonl.zst"
+        body = json.dumps({"type": "system", "subtype": "init", "model": "offline-model"}) + "\n"
+        compressed.write_bytes(zstd.compress(body.encode()))
+        known: dict[Path, LogFile] = {}
+        discover_files([tmp_path], known, [0])
+        assert list(known) == [compressed.with_suffix("")]
+        log_file = next(iter(known.values()))
+        assert [event.kind for event in log_file.read_new_events()] == ["init"]
+        assert log_file.model == "offline-model"
+        assert not log_file.done
+        assert log_file.read_new_events() == []
+
+    def test_zstd_compaction_replays_stream_with_same_attempt_identity(
+        self, tmp_path: Path
+    ) -> None:
+        plain = tmp_path / "step_ctx_attempt1.jsonl"
+        first = json.dumps({"type": "system", "subtype": "init", "model": "plain"}) + "\n"
+        plain.write_text(first)
+        known: dict[Path, LogFile] = {}
+        counter = [0]
+        discover_files([tmp_path], known, counter)
+        log_file = known[plain]
+        assert len(log_file.read_new_events()) == 1
+        compressed = plain.with_name(plain.name + ".zst")
+        body = first + json.dumps({"type": "result", "is_error": False}) + "\n"
+        compressed.write_bytes(zstd.compress(body.encode()))
+        plain.unlink()
+        discover_files([tmp_path], known, counter)
+        assert list(known) == [plain]
+        assert counter == [1]
+        assert known[plain] is log_file
+        assert log_file.path == compressed
+        events = log_file.read_new_events()
+        assert [event.kind for event in events] == ["init", "result"]
+        assert log_file.done
         assert log_file.read_new_events() == []
 
     def test_compaction_replays_stream_with_same_attempt_identity(self, tmp_path: Path) -> None:
@@ -1362,3 +1409,108 @@ class TestCompactionReplay:
         assert not log_file.done and not log_file.is_error
         assert log_file.error_message is None and log_file.cost_usd is None
         assert log_file.usage_stats is None and not log_file.rate_limit_events
+
+
+def _compress(suffix: str, text: str) -> bytes:
+    return gzip.compress(text.encode()) if suffix == ".gz" else zstd.compress(text.encode())
+
+
+_INIT = {"type": "system", "subtype": "init", "model": "offline-model"}
+_RATE_LIMIT = {"type": "rate_limit_event", "rate_limit_info": {"status": "allowed"}}
+
+
+def _result(**extra: object) -> dict[str, object]:
+    return {"type": "result", "is_error": False, "cost_usd": 0.5, **extra}
+
+
+class TestCompressedStreamContract:
+    def test_multi_member_gzip_is_read_once_and_never_replayed(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """ISIZE describes only the last member, so it is below the decoded size.
+
+        A reader comparing its offset against that figure would reset and replay the
+        whole stream on every poll; a sealed compressed stream is never measured.
+        """
+        head = "".join(json.dumps(row) + "\n" for row in (_INIT, _RATE_LIMIT))
+        tail = json.dumps(_result(padding="x" * 2000)) + "\n"
+        compressed = tmp_path / "step_ctx_attempt1.jsonl.gz"
+        compressed.write_bytes(gzip.compress(head.encode()) + gzip.compress(tail.encode()))
+        assert ArtifactPath(compressed).logical_size < len(head) + len(tail)
+
+        log_file = LogFile(compressed, 0)
+        with caplog.at_level(logging.WARNING):
+            events = log_file.read_new_events()
+            assert sum(event.is_done for event in events) == 1
+            assert log_file.done and log_file.cost_usd == 0.5
+            assert len(log_file.rate_limit_events) == 1
+            for _ in range(3):
+                assert log_file.read_new_events() == []
+        assert len(log_file.rate_limit_events) == 1
+        assert "replaying" not in caplog.text
+
+    @pytest.mark.parametrize("suffix", [".gz", ".zst"])
+    def test_damaged_compressed_attempt_is_retried_not_crashed(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture, suffix: str
+    ) -> None:
+        body = "".join(json.dumps(row) + "\n" for row in (_INIT, _result(padding="x" * 2000)))
+        whole = _compress(suffix, body)
+        compressed = tmp_path / f"step_ctx_attempt1.jsonl{suffix}"
+        compressed.write_bytes(whole[: len(whole) // 2])
+
+        log_file = LogFile(compressed, 0)
+        with caplog.at_level(logging.WARNING):
+            assert log_file.read_new_events() == []
+            assert log_file.read_new_events() == []
+        assert caplog.text.count("Cannot decode") == 1
+        assert not log_file.done
+
+        # The complete file arrives by atomic replacement and is read in full.
+        staged = tmp_path / "staged"
+        staged.write_bytes(whole)
+        staged.replace(compressed)
+        events = log_file.read_new_events()
+        assert sum(event.is_done for event in events) == 1
+        assert log_file.done
+        assert log_file.read_new_events() == []
+
+    def test_rewritten_compressed_file_with_the_same_inode_replays(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        compressed = tmp_path / "step_ctx_attempt1.jsonl.gz"
+        compressed.write_bytes(_compress(".gz", json.dumps(_INIT) + "\n"))
+        log_file = LogFile(compressed, 0)
+        assert [event.kind for event in log_file.read_new_events()] == ["init"]
+
+        body = "".join(json.dumps(row) + "\n" for row in (_INIT, _result()))
+        compressed.write_bytes(_compress(".gz", body))  # same inode, new bytes
+        with caplog.at_level(logging.WARNING):
+            events = log_file.read_new_events()
+        assert [event.kind for event in events] == ["init", "result"]
+        assert log_file.done
+        assert "Log storage changed" in caplog.text
+        assert log_file.read_new_events() == []
+
+    def test_shrunk_plain_stream_resets_every_derived_field(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        plain = tmp_path / "step_ctx_attempt1.jsonl"
+        rows = (_INIT, _RATE_LIMIT, _result(padding="x" * 2000))
+        plain.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        log_file = LogFile(plain, 0)
+        log_file.read_new_events()
+        assert log_file.done and log_file.cost_usd == 0.5
+        assert len(log_file.rate_limit_events) == 1
+
+        # Truncated and rewritten in place: same inode, shorter than the read offset.
+        plain.write_text(json.dumps({"type": "init", "session_id": "s", "model": "fresh"}) + "\n")
+        with caplog.at_level(logging.WARNING):
+            events = log_file.read_new_events()
+        assert [event.kind for event in events] == ["init"]
+        assert log_file.model == "fresh"
+        assert not log_file.done
+        assert log_file.cost_usd is None
+        assert log_file.rate_limit_events == []
+        assert log_file.usage_stats is None
+        assert "shrank" in caplog.text
+        assert log_file.read_new_events() == []
