@@ -11,7 +11,7 @@ maintainers = [
 readme = "README.md"
 license = "AGPL-3.0-or-later"
 license-files = ["LICENSE", "NOTICE.md"]
-requires-python = ">=3.12,<4.0"
+requires-python = ">=3.14,<4.0"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -19,8 +19,6 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Typing :: Typed",
     "Topic :: Software Development :: Libraries :: Application Frameworks",
@@ -210,10 +208,10 @@ skip = "tests/fixtures/trace_agents/*.jsonl,tests/fixtures/trace_agents/*.json"
 [tool.basedpyright]
 include = ["src", "tests", "devtools", "examples"]
 # Check against the oldest supported interpreter, not whichever one happens to be
-# active. Without this, basedpyright follows the local venv and a contributor on 3.14
-# passes a check that CI fails on 3.13, which is exactly how seven asyncio.run typing
-# errors reached main unnoticed.
-pythonVersion = "3.12"
+# active. Without this, basedpyright follows the local venv, and a contributor on a
+# newer interpreter passes a check that CI fails on the floor; that is how seven
+# asyncio.run typing errors once reached main. Keep this equal to requires-python.
+pythonVersion = "3.14"
 reportIgnoreCommentWithoutRule = false
 reportUnnecessaryTypeIgnoreComment = false
 reportMissingTypeStubs = false

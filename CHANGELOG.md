@@ -54,6 +54,11 @@ development series.
 
 ### Changed
 
+- **Metaproc requires Python 3.14.** The floor rises from 3.12 so that Zstandard support
+  comes from the standard library’s `compression.zstd` on every supported interpreter,
+  with no optional backend.
+  An environment on 3.12 or 3.13 cannot install this release; the previous release
+  remains available for it.
 - **A resume records launch-config changes instead of refusing them.** 0.4.1 refused a
   resume whose resolved variables differed from those `run-config.yaml` recorded, and
   one in a different run directory; only the run-directory refusal remains.

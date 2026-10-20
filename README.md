@@ -25,7 +25,7 @@ prompts, handlers, and policies to downstream packages.
 
 ## Installation
 
-Metaproc requires Python 3.12 or newer and uses [uv](https://docs.astral.sh/uv/). Run an
+Metaproc requires Python 3.14 or newer and uses [uv](https://docs.astral.sh/uv/). Run an
 exact release without a persistent installation:
 
 ```shell
