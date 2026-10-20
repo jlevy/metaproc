@@ -617,12 +617,9 @@ def run_step(
                 with log_path.open(  # write-contract: live-stream -- the child writes to it
                     "w", encoding="utf-8"
                 ) as log_fh:
-                    run_command = (
-                        run_command_in_process_group
-                        if adapter_type == "gemini-cli"
-                        else subprocess.run
-                    )
-                    fg_proc = run_command(
+                    # One launcher for every adapter: an agent CLI is a process tree,
+                    # and the launcher owns the group (see run_command_in_process_group).
+                    fg_proc = run_command_in_process_group(
                         cmd,
                         env=env,
                         cwd=cwd,

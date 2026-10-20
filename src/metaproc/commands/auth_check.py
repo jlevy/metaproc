@@ -463,10 +463,9 @@ def _run_live_check(
 
         t0 = time.monotonic()
         try:
-            run_command = (
-                run_command_in_process_group if adapter_type == "gemini-cli" else subprocess.run
-            )
-            proc = run_command(
+            # One launcher for every adapter: an agent CLI is a process tree, and the
+            # launcher owns the group (see run_command_in_process_group).
+            proc = run_command_in_process_group(
                 cmd,
                 capture_output=True,
                 text=True,

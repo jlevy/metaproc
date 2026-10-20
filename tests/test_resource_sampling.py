@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from contextlib import suppress
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Self, cast
@@ -300,3 +301,52 @@ def test_owned_command_cleanup_refusal_preserves_timeout_without_unbounded_wait(
     assert failed.value is original
     assert failed.value.output == b"retained" and failed.value.stderr == b"detail"
     assert timeouts and all(timeout is not None for timeout in timeouts)
+
+
+def _reaped(pid: int) -> bool:
+    try:
+        return psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return True
+
+
+def _kill_leftover(pid_file: Path) -> None:
+    if not pid_file.exists():
+        return
+    with suppress(psutil.NoSuchProcess, ValueError):
+        leftover = psutil.Process(int(pid_file.read_text(encoding="utf-8")))
+        if leftover.status() != psutil.STATUS_ZOMBIE:
+            leftover.kill()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="owned process groups are POSIX")
+def test_owned_command_timeout_reaps_a_descendant_of_a_plain_command(tmp_path: Path) -> None:
+    """Cleanup belongs to the launcher, not to a shell wrapper in the command.
+
+    A bare executable that forks a grandchild with detached stdio and then hangs is
+    the shape of any agent CLI running a tool; the grandchild must not outlive the
+    leader's timeout.
+    """
+    pid_file = tmp_path / "grandchild.pid"
+    command = [
+        sys.executable,
+        "-c",
+        (
+            "import subprocess, sys, time; "
+            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], "
+            "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); "
+            f"open({str(pid_file)!r}, 'w').write(str(child.pid)); "
+            "time.sleep(60)"
+        ),
+    ]
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            resource_sampling_module.run_command_in_process_group(
+                command, env=dict(os.environ), cwd=tmp_path, capture_output=True, timeout=3
+            )
+        assert pid_file.exists(), "fixture command did not start"
+        assert _reaped(int(pid_file.read_text(encoding="utf-8"))), (
+            "the leader's descendant survived the timeout"
+        )
+    finally:
+        _kill_leftover(pid_file)

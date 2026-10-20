@@ -175,8 +175,9 @@ def _run_probe(
         return False, f"build_command/prepare_env failed: {exc}", ""
 
     try:
-        run_command = run_command_in_process_group if harness == "gemini-cli" else subprocess.run
-        proc = run_command(
+        # One launcher for every adapter: an agent CLI is a process tree, and the
+        # launcher owns the group (see run_command_in_process_group).
+        proc = run_command_in_process_group(
             cmd,
             capture_output=True,
             text=True,

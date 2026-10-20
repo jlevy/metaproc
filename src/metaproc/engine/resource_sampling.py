@@ -117,11 +117,26 @@ def run_command_in_process_group(
     text: Literal[True] = True,
     check: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    """Run a text command with owned-group cleanup and no resource artifact writes.
+    """Run a text command as an owned process group, collected like ``subprocess.run``.
 
-    File-directed stdout retains the child's raw bytes. On POSIX, interruption,
-    timeout, and normal leader exit clean up the isolated group through the same
-    identity-fenced owner as sampled commands. Windows retains leader-only cleanup.
+    Every agent command Metaproc runs in the foreground goes through here, whichever
+    adapter built it: ``auth-check --live``, ``probe-tool-use``, and ``run-step
+    --wait`` (except its pi-cli log-filter branch, which still launches with a bare
+    ``Popen``). An agent CLI is never one process. It runs tool calls and MCP servers
+    as children, and an adapter's ``build_command`` may wrap it in a shell (Codex
+    redirects the prompt into ``exec``; Gemini keeps ``sh`` alive over a
+    ``cat | gemini`` pipeline). ``subprocess.run`` signals only the leader on timeout
+    or interrupt, so the rest of that tree survives it. Here the child starts its own
+    session, which makes the leader PID the group ID, and interruption, timeout, and
+    normal leader exit clean up the group through the same identity-fenced owner as
+    sampled code steps. Detached and pooled launches (``launch_step``,
+    ``LocalBackend``) hold the same contract; the developer guide states it under
+    "Launch and Cancellation Contracts". A call site therefore never selects a
+    launcher by adapter type.
+
+    Unlike :func:`run_sampled_step_command`, nothing is written to the run's resource
+    ledger. File-directed stdout retains the child's raw bytes. Windows retains
+    leader-only cleanup.
     """
     if capture_output:
         if stdout is not None or stderr is not None:

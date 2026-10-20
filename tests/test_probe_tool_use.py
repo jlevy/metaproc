@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
+import sys
+from contextlib import suppress
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import psutil
 import pytest
 from typer.testing import CliRunner
 
@@ -240,6 +245,61 @@ class TestCliEntry:
                 ],
             )
         assert result.exit_code == 0
+
+
+def _reaped(pid: int) -> bool:
+    try:
+        return psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return True
+
+
+def _kill_leftover(pid_file: Path) -> None:
+    if not pid_file.exists():
+        return
+    with suppress(psutil.NoSuchProcess, ValueError):
+        leftover = psutil.Process(int(pid_file.read_text(encoding="utf-8")))
+        if leftover.status() != psutil.STATUS_ZOMBIE:
+            leftover.kill()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="owned process groups are POSIX")
+def test_probe_timeout_reaps_the_descendants_of_any_adapter_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The probe runs every adapter's command as an owned process group.
+
+    The adapter here is not Gemini and emits no shell wrapper: a bare executable that
+    forks a grandchild with detached stdio and hangs, the shape of any agent CLI
+    running a tool. The grandchild must not outlive the probe's timeout.
+    """
+    pid_file = tmp_path / "grandchild.pid"
+    adapter = MagicMock()
+    adapter.build_command.return_value = [
+        sys.executable,
+        "-c",
+        (
+            "import subprocess, sys, time; "
+            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], "
+            "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); "
+            f"open({str(pid_file)!r}, 'w').write(str(child.pid)); "
+            "time.sleep(60)"
+        ),
+    ]
+    adapter.prepare_env.side_effect = lambda env, merged_config: dict(env)
+    monkeypatch.chdir(tmp_path)
+    try:
+        with patch.dict(
+            "metaproc.commands.probe_tool_use.ADAPTER_REGISTRY", {"claude-code-cli": adapter}
+        ):
+            ok, summary, _ = _run_probe("claude-code-cli", "sonnet", None, timeout_s=3)
+        assert not ok and "timed out" in summary
+        assert pid_file.exists(), "fake agent did not start"
+        assert _reaped(int(pid_file.read_text(encoding="utf-8"))), (
+            "the agent's descendant survived the timeout"
+        )
+    finally:
+        _kill_leftover(pid_file)
 
 
 if __name__ == "__main__":
