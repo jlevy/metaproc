@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
+import threading
+import time
 from contextlib import suppress
 from pathlib import Path
 from types import SimpleNamespace
@@ -265,8 +268,14 @@ def test_owned_command_preserves_original_timeout_fields(tmp_path: Path) -> None
 def test_owned_command_cleanup_refusal_preserves_timeout_without_unbounded_wait(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A leader whose group cannot be verified is still killed, as subprocess.run would.
+
+    The group is never signalled without proof of ownership, but the leader is this
+    process's unreaped child, so its PID cannot have been recycled.
+    """
     original = subprocess.TimeoutExpired(["fixture"], 1, output=b"retained", stderr=b"detail")
     timeouts: list[float | None] = []
+    killed: list[str] = []
 
     class RefusedProcess:
         pid = 1234
@@ -275,32 +284,33 @@ def test_owned_command_cleanup_refusal_preserves_timeout_without_unbounded_wait(
         stdout = None
         stderr = None
 
-        def __enter__(self) -> Self:
-            return self
+        def poll(self) -> int | None:
+            return None
 
-        def __exit__(self, *_: object) -> None:
-            self.wait()
+        def kill(self) -> None:
+            killed.append("leader")
 
         def communicate(self, *, timeout: float | None = None) -> tuple[str, str]:
             timeouts.append(timeout)
             if timeout is None:
                 raise AssertionError("unbounded communicate")
+            # A real wait takes its slice; sleeping keeps the leader poll from spinning.
+            time.sleep(min(timeout, resource_sampling_module._COMMAND_POLL_INTERVAL_S))
             raise original
 
         def wait(self, timeout: float | None = None) -> int:
-            assert timeout is not None, "unbounded context-manager wait"
+            assert timeout is not None, "unbounded wait"
             raise original
 
     monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: RefusedProcess())
     monkeypatch.setattr(resource_sampling_module, "_process_create_time", lambda _pid: None)
-    monkeypatch.setattr(
-        resource_sampling_module, "_terminate_process_tree", lambda *args, **kwargs: None
-    )
     with pytest.raises(subprocess.TimeoutExpired) as failed:
         resource_sampling_module.run_command_in_process_group(["fixture"], env={}, timeout=1)
     assert failed.value is original
+    assert failed.value.timeout == 1
     assert failed.value.output == b"retained" and failed.value.stderr == b"detail"
     assert timeouts and all(timeout is not None for timeout in timeouts)
+    assert killed == ["leader"]
 
 
 def _reaped(pid: int) -> bool:
@@ -350,3 +360,176 @@ def test_owned_command_timeout_reaps_a_descendant_of_a_plain_command(tmp_path: P
         )
     finally:
         _kill_leftover(pid_file)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="owned process groups are POSIX")
+def test_owned_command_collects_a_leader_whose_descendant_holds_its_pipes(
+    tmp_path: Path,
+) -> None:
+    """A tool subprocess that inherited the leader's stdout must not turn a finished
+    command into a timeout: the leader is polled, the survivor terminated, the output
+    collected."""
+    pid_file = tmp_path / "grandchild.pid"
+    command = [
+        sys.executable,
+        "-c",
+        (
+            "import subprocess, sys; "
+            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+            f"open({str(pid_file)!r}, 'w').write(str(child.pid)); "
+            "print('leader done', flush=True)"
+        ),
+    ]
+    started = time.monotonic()
+    try:
+        completed = resource_sampling_module.run_command_in_process_group(
+            command, env=dict(os.environ), cwd=tmp_path, capture_output=True, timeout=30
+        )
+        assert completed.returncode == 0
+        assert completed.stdout == "leader done\n"
+        assert time.monotonic() - started < 15, "the leader's exit was not noticed"
+        assert pid_file.exists(), "fixture command did not start"
+        assert _reaped(int(pid_file.read_text(encoding="utf-8"))), (
+            "the pipe-holding descendant survived the command"
+        )
+    finally:
+        _kill_leftover(pid_file)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="owned process groups are POSIX")
+def test_cleanup_refusal_kills_only_the_unreaped_leader(monkeypatch: pytest.MonkeyPatch) -> None:
+    process = MagicMock(pid=1234)
+    process.poll.return_value = None
+    process.wait.return_value = 0
+    killpg = MagicMock()
+    monkeypatch.setattr(os, "killpg", killpg)
+
+    resource_sampling_module._terminate_process_tree(
+        cast("subprocess.Popen[str]", process),
+        leader_create_time=None,
+        ownership_observed_until=20.0,
+    )
+
+    killpg.assert_not_called()
+    process.kill.assert_called_once_with()
+    process.wait.assert_called_once_with(timeout=resource_sampling_module._PROCESS_KILL_WAIT_S)
+
+
+_CALLER_SIGNALS: list[int] = [] if sys.platform == "win32" else [signal.SIGTERM, signal.SIGHUP]
+
+# The caller under test: a Python process that runs one owned command and otherwise
+# has the dispositions a terminal-launched metaproc has.
+_SIGNALLED_CALLER = """
+import os
+import signal
+import sys
+from metaproc.engine.resource_sampling import run_command_in_process_group
+signal.signal(signal.SIGTERM, signal.SIG_DFL)
+signal.signal(signal.SIGHUP, signal.SIG_DFL)
+run_command_in_process_group(
+    [sys.executable, "-c", os.environ["FIXTURE_BODY"]],
+    env=dict(os.environ),
+    capture_output=True,
+    timeout=60,
+)
+"""
+
+
+@pytest.mark.parametrize("signum", _CALLER_SIGNALS)
+def test_signal_to_the_caller_reaps_the_owned_group_before_the_caller_dies(
+    tmp_path: Path, signum: int
+) -> None:
+    """The command's session no longer receives a signal sent to the caller's group,
+    so the launcher must turn that signal into group cleanup before the caller dies
+    by it, as it did when the command shared the caller's group."""
+    pid_file = tmp_path / "pids"
+    body = (
+        "import os, subprocess, sys, time; "
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+        f"open({str(pid_file)!r}, 'w').write(f'{{os.getpid()}} {{child.pid}}'); "
+        "time.sleep(60)"
+    )
+    caller = subprocess.Popen(
+        [sys.executable, "-c", _SIGNALLED_CALLER],
+        env={**os.environ, "FIXTURE_BODY": body},
+        cwd=tmp_path,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    pids: list[int] = []
+    try:
+        deadline = time.monotonic() + 20
+        while len(pids) < 2 and time.monotonic() < deadline:
+            if pid_file.exists():
+                pids = [int(value) for value in pid_file.read_text(encoding="utf-8").split()]
+            if len(pids) < 2:
+                time.sleep(0.05)
+        assert len(pids) == 2, "fixture command did not start"
+        os.kill(caller.pid, signum)
+        _, stderr = caller.communicate(timeout=30)
+        assert caller.returncode == -signum, stderr
+        leader, grandchild = pids
+        assert _reaped(leader), "the command leader survived the caller's signal"
+        assert _reaped(grandchild), "the command's descendant survived the caller's signal"
+    finally:
+        if caller.poll() is None:
+            caller.kill()
+            caller.wait(timeout=5)
+        for pid in pids:
+            with suppress(psutil.NoSuchProcess):
+                leftover = psutil.Process(pid)
+                if leftover.status() != psutil.STATUS_ZOMBIE:
+                    leftover.kill()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="owned process groups are POSIX")
+def test_caller_signal_watch_replaces_only_default_dispositions() -> None:
+    """An ignored SIGHUP (nohup) stays ignored; a default SIGTERM is watched and then
+    restored."""
+    previous_term = signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    previous_hup = signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    try:
+        with resource_sampling_module._caller_signals_end_the_command() as watch:
+            assert signal.getsignal(signal.SIGTERM) == watch.handle
+            assert signal.getsignal(signal.SIGHUP) == signal.SIG_IGN
+        assert signal.getsignal(signal.SIGTERM) == signal.SIG_DFL
+        assert signal.getsignal(signal.SIGHUP) == signal.SIG_IGN
+    finally:
+        signal.signal(signal.SIGTERM, previous_term)
+        signal.signal(signal.SIGHUP, previous_hup)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="owned process groups are POSIX")
+def test_caller_signal_watch_keeps_a_callers_own_handler() -> None:
+    def policy(signum: int, frame: object) -> None:
+        del signum, frame
+
+    previous = signal.signal(signal.SIGTERM, policy)
+    try:
+        with resource_sampling_module._caller_signals_end_the_command():
+            assert signal.getsignal(signal.SIGTERM) is policy
+        assert signal.getsignal(signal.SIGTERM) is policy
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="owned process groups are POSIX")
+def test_caller_signal_watch_installs_nothing_off_the_main_thread() -> None:
+    previous = signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    seen: dict[str, object] = {}
+
+    def run() -> None:
+        with resource_sampling_module._caller_signals_end_the_command() as watch:
+            seen["sigterm"] = signal.getsignal(signal.SIGTERM)
+            seen["watch"] = watch
+
+    try:
+        worker = threading.Thread(target=run)
+        worker.start()
+        worker.join(timeout=10)
+        assert seen["sigterm"] == signal.SIG_DFL
+        assert seen["watch"] is not None
+    finally:
+        signal.signal(signal.SIGTERM, previous)

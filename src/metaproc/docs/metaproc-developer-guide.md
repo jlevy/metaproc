@@ -99,6 +99,9 @@ wrap it in a shell, as Codex and Gemini do to feed the prompt through stdin.
 Because the launcher owns the whole group, an adapter declares nothing about process
 cleanup, and a call site never picks a launcher by adapter type: an adapter that needs a
 wrapper or a pipeline emits it, and the launcher reaps whatever it started.
+A SIGTERM or SIGHUP to Metaproc itself ends a foreground command the same way: the
+launcher stops the group first, then dies by the signal; only SIGKILL leaves the tree
+behind.
 
 Long-running Python handlers executed by `run-process` must call
 `StepContext.cancel_requested()` at safe checkpoints and return promptly when it becomes

@@ -173,6 +173,15 @@ development series.
 
 ### Fixed
 
+- **Foreground agent commands clean up the whole process tree, for every adapter.**
+  `run-step --wait`, `auth-check --live`, and `probe-tool-use` launch the agent command
+  in its own process group and terminate every survivor on timeout, on an interrupt, and
+  on a SIGTERM or SIGHUP to Metaproc itself, which the command’s own session would
+  otherwise not receive; a Gemini prompt pipeline or a tool subprocess no longer
+  outlives the command.
+  A command whose leader has exited while a descendant still holds its output pipe is
+  collected rather than reported as timed out.
+
 - **`auth-check --live` reports an adapter config it refuses.** A profile the adapter
   refuses at launch, such as one still carrying Gemini’s
   `native_settings_scope: system`, raised a traceback and stopped the remaining
