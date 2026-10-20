@@ -9,6 +9,12 @@ development series.
 
 ### Added
 
+- **Zstandard artifacts, read and written.** Every reader that handles `.jsonl.gz` also
+  handles `.jsonl.zst`: `metaproc tail`, `status`, `stats`, `trace`, the operations
+  summary, and the `metaproc.io` helpers.
+  `metaproc gzip-text --codec zstd` writes Zstandard; gzip stays the default, and a run
+  directory holding both is ordinary.
+  Zstandard comes from the standard library, so no extra dependency is involved.
 - **Every run writes an operations summary.** Run finalization writes
   `operations-summary.md` (`metaproc.operations:AgentOperationsSummary/v1`) beside
   `resource-usage-summary.md`: real elapsed time, setup, per-stage shares, per-item
@@ -54,6 +60,20 @@ development series.
 
 ### Changed
 
+- **A damaged or foreign compressed log no longer crashes or loops `metaproc tail`.** A
+  truncated or corrupt `.gz` is skipped with one warning and retried on the next poll
+  instead of raising; a multi-member gzip, whose trailer understates the decoded size,
+  is read once instead of being replayed on every poll; a plain log that shrinks is
+  replayed with every derived field rebuilt.
+- **`metaproc.io` describes compression by codec, not by suffix.** `ArtifactPath` gains
+  `codec`, `is_compressed`, and `compression`, and loses `is_gzip`; `disk_size` and
+  `logical_size` keep their meaning under every codec.
+  A compressed artifact that cannot be decoded raises `ArtifactDecodeError`, an
+  `OSError`, so an existing `except OSError` covers it.
+  `metaproc.io.gz_io` is now `metaproc.io.artifact_io`, with the codec registry in
+  `metaproc.io.compression`; `artifact_sidecar_path` and `ArtifactDecodeError` join the
+  curated surface. In `metaproc.commands.gzip_text`, `gzip_file` is `compress_file`,
+  `GzipTextSummary.gzipped` is `compressed`, and both results carry the codec name.
 - **Metaproc requires Python 3.14.** The floor rises from 3.12 so that Zstandard support
   comes from the standard library’s `compression.zstd` on every supported interpreter,
   with no optional backend.

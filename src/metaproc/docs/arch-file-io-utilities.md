@@ -1,12 +1,12 @@
 ---
 title: "Architecture: File I/O Utilities"
-description: The curated metaproc.io public surface for atomic writes, gzip-transparent reads, frontmatter helpers, templates, and artifact paths.
+description: The curated metaproc.io public surface for atomic writes, compression-transparent reads, frontmatter helpers, templates, and artifact paths.
 author: metaproc team
 status: Approved
 ---
 # Architecture: File I/O Utilities (`metaproc.io`)
 
-**Date:** 2026-07-26 (last updated 2026-09-22) **Status:** Approved
+**Date:** 2026-07-26 (last updated 2026-10-20) **Status:** Approved
 
 `metaproc.io` is the curated public import surface for downstream callers and shared
 internal use. Every helper documented here is importable directly from `metaproc.io`:
@@ -18,21 +18,23 @@ from metaproc.io import (
 ```
 
 The surface re-exports helpers from `frontmatter_format` and `strif` without changing
-their behavior. Metaproc’s gzip-aware artifact readers and strict template renderer are
-local implementations.
+their behavior. Metaproc’s compression-aware artifact readers and strict template
+renderer are local implementations.
 
 ## Public Surface
 
 | Helper | Source | Purpose |
 | --- | --- | --- |
-| `iter_jsonl_objects` | `metaproc.io.gz_io` | Stream a JSONL file (gz-aware) as dicts |
-| `iter_jsonl_records` | `metaproc.io.gz_io` | Stream a JSONL file as `(line_no, dict)` |
-| `iter_text_lines` | `metaproc.io.gz_io` | Stream a text file (gz-aware) line by line |
-| `iter_artifact_paths` | `metaproc.io.gz_io` | Iterate matching artifact paths (gz-aware) |
-| `ArtifactPath` | `metaproc.io.gz_io` | Path with logical/physical/gz awareness |
-| `resolve_existing_artifact` | `metaproc.io.gz_io` | Find the on-disk path for a logical artifact |
-| `artifact_exists` | `metaproc.io.gz_io` | Check whether a logical artifact has any backing file |
-| `logical_path` | `metaproc.io.gz_io` | Strip the `.gz` suffix from a path |
+| `iter_jsonl_objects` | `metaproc.io.artifact_io` | Stream a JSONL file (plain or compressed) as dicts |
+| `iter_jsonl_records` | `metaproc.io.artifact_io` | Stream a JSONL file as `(line_no, dict)` |
+| `iter_text_lines` | `metaproc.io.artifact_io` | Stream a text file (plain or compressed) line by line |
+| `iter_artifact_paths` | `metaproc.io.artifact_io` | Iterate matching logical streams, one file each |
+| `ArtifactPath` | `metaproc.io.artifact_io` | A stored file and the logical artifact it holds |
+| `resolve_existing_artifact` | `metaproc.io.artifact_io` | Find the on-disk path for a logical artifact |
+| `artifact_exists` | `metaproc.io.artifact_io` | Check whether a logical artifact has any backing file |
+| `logical_path` | `metaproc.io.artifact_io` | Strip a compression suffix from a path |
+| `artifact_sidecar_path` | `metaproc.io.artifact_io` | A sidecar path next to the logical artifact name |
+| `ArtifactDecodeError` | `metaproc.io.compression` | `OSError` raised when a compressed artifact cannot be decoded |
 | `read_yaml_file` | `frontmatter_format` | Read a plain YAML file |
 | `write_yaml_file` | `frontmatter_format` | Write a plain YAML file (atomic) |
 | `from_yaml_string` | `frontmatter_format` | Parse a YAML string |
@@ -43,9 +45,9 @@ local implementations.
 | `fmf_write` | `frontmatter_format` | Write frontmatter MD (atomic) |
 | `FmFormatError` | `frontmatter_format` | Exception raised by frontmatter parse failures |
 | `YamlSerializationError` | `frontmatter_format` | Exception raised for cyclic mapping-based writes |
-| `fmf_read_artifact` | `metaproc.io.frontmatter` | gz-aware `fmf_read` |
-| `fmf_read_frontmatter_artifact` | `metaproc.io.frontmatter` | gz-aware `fmf_read_frontmatter` |
-| `read_yaml_artifact` | `metaproc.io.frontmatter` | gz-aware `read_yaml_file` |
+| `fmf_read_artifact` | `metaproc.io.frontmatter` | compression-aware `fmf_read` |
+| `fmf_read_frontmatter_artifact` | `metaproc.io.frontmatter` | compression-aware `fmf_read_frontmatter` |
+| `read_yaml_artifact` | `metaproc.io.frontmatter` | compression-aware `read_yaml_file` |
 | `atomic_output_file` | `strif` | Stage a file and publish it in one step (context manager) |
 | `atomic_write_text` | `strif` | Publish a whole string atomically (UTF-8) |
 | `atomic_write_bytes` | `strif` | Publish a whole byte buffer atomically |
@@ -74,9 +76,9 @@ module.
 | Read YAML from string | `metaproc.io.from_yaml_string(s)` |
 | Serialize to string | `metaproc.io.to_yaml_string(value)` |
 | Write YAML file (atomic) | `metaproc.io.write_yaml_file(value, path)` |
-| Read state-artifact YAML (gz-aware) | `metaproc.io.read_yaml_artifact(path)` |
-| Read frontmatter MD (gz-aware) | `metaproc.io.fmf_read_artifact(path)` |
-| Read frontmatter MD metadata only (gz-aware) | `metaproc.io.fmf_read_frontmatter_artifact(path)` |
+| Read state-artifact YAML (plain or compressed) | `metaproc.io.read_yaml_artifact(path)` |
+| Read frontmatter MD (plain or compressed) | `metaproc.io.fmf_read_artifact(path)` |
+| Read frontmatter MD metadata only (plain or compressed) | `metaproc.io.fmf_read_frontmatter_artifact(path)` |
 | Write frontmatter MD (atomic) | `metaproc.io.fmf_write(path, body, metadata)` |
 | Write a JSON or text file | `metaproc.io.atomic_write_text(path, text, make_parents=True)` |
 | Write a file from a producer that needs a pathname | `metaproc.io.atomic_output_file(path, make_parents=True)` |
@@ -84,8 +86,8 @@ module.
 | Copy a file or tree into a published location | `metaproc.io.copyfile_atomic` / `copytree_atomic` |
 | Private scratch file with no published destination | `metaproc.io.temp_output_file()` |
 | Create-only claim (lock, lease, slot) | `metaproc.io.mkdir_lock.acquire_mkdir_lock` |
-| Iterate JSONL records as dicts (gz-aware) | `metaproc.io.iter_jsonl_objects(path)` |
-| Iterate JSONL with line numbers (gz-aware) | `metaproc.io.iter_jsonl_records(path)` |
+| Iterate JSONL records as dicts (plain or compressed) | `metaproc.io.iter_jsonl_objects(path)` |
+| Iterate JSONL with line numbers (plain or compressed) | `metaproc.io.iter_jsonl_records(path)` |
 | Render a strict document template | `metaproc.io.render_template(text, values)` |
 | Append-only JSONL event log | `path.open("a")` + `json.dumps + "\n"` |
 
@@ -163,6 +165,37 @@ Strif moves the old destination to the backup before installing the new one, so 
 destination is briefly absent, and `status.yaml`, `process-status.yaml`,
 `runpool-status.yaml`, the orchestrator lease and the kill sentinel are all polled.
 
+## Compressed Artifacts
+
+A logical artifact such as `attempt.jsonl` may be stored as `attempt.jsonl`,
+`attempt.jsonl.gz`, or `attempt.jsonl.zst`. The codecs are a closed set of two, gzip and
+Zstandard, defined in `metaproc.io.compression`; each `Codec` owns its suffix, reader,
+writer, the decoded size its container records, its HTTP `Content-Encoding` token, and
+the backend exceptions it translates.
+`codec_for_path` is the only suffix test, and `ArtifactPath.codec` is the only place a
+reader consults it.
+
+`ArtifactPath` separates two sizes, and neither depends on the codec:
+
+- `disk_size` is the bytes the file occupies as stored.
+- `logical_size` is the bytes of the decoded stream.
+  It is read from the container when the container records it (always, for artifacts
+  Metaproc writes) and counted by decoding otherwise.
+  It serves display, thresholds, and cache keys; a reader tracking an offset into a
+  decoded stream must not compare against it, because a container’s figure can describe
+  one member or frame of several.
+
+A compressed artifact that cannot be decoded raises `ArtifactDecodeError`, an `OSError`,
+from the stream that reads it, so an `except OSError` around any artifact read already
+covers a truncated, corrupt, or mislabelled file, whichever codec wrote it.
+
+When one logical stream exists in more than one encoding, the plain file is preferred,
+then `.gz`, then `.zst`; `iter_artifact_paths`, `resolve_existing_artifact`, and
+`artifact_exists` all apply that order, and a `.partial` staging file is never an
+artifact. Metaproc’s own writers (`metaproc gzip-text` and the post-step log pass)
+produce `DEFAULT_WRITE_CODEC`, gzip today, with `--codec zstd` available; every
+registered codec is always readable, so mixed-codec run directories are ordinary.
+
 ## YAML Parser Boundaries
 
 Most modules parse YAML and frontmatter through `metaproc.io`. Modules may import
@@ -215,7 +248,8 @@ concise `# NOTE:` that explains why the behavior matters there.
 
 - `src/metaproc/io/__init__.py`
 - `src/metaproc/io/frontmatter.py`
-- `src/metaproc/io/gz_io.py`
+- `src/metaproc/io/artifact_io.py`
+- `src/metaproc/io/compression.py`
 - `src/metaproc/io/templating.py`
 - [`frontmatter-format`](https://github.com/jlevy/frontmatter-format)
 - [`strif`](https://github.com/jlevy/strif)

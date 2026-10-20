@@ -130,7 +130,7 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
         "arch-runpool",
         "arch-runpool",
         "Architecture: local process manager, adaptive concurrency, memory pressure.",
-        4600,
+        5100,
     ),
     Topic(
         "arch-harness",
@@ -154,7 +154,7 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
         "arch-file-io",
         "arch-file-io-utilities",
         "Architecture: the curated metaproc.io surface, write contracts, and frontmatter gotchas.",
-        1800,
+        2100,
     ),
 )
 

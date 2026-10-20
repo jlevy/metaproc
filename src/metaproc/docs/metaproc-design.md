@@ -6,7 +6,7 @@ status: Approved
 ---
 # Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-10-11) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-10-20) **Status:** Approved
 
 Also readable as `metaproc help design`.
 
@@ -938,7 +938,7 @@ Implemented CLI surface:
 - `liveness-watch` -- stall backstop supervisor for long-running dispatches
 - `resume-daemon` -- non-LLM checkpoint-driven re-dispatch loop for retry-later items
 - `run-manifest` -- validate and normalize run manifest YAML
-- `gzip-text` -- idempotently gzip text-format files to reclaim disk
+- `gzip-text` -- idempotently compress text-format files (gzip or zstd) to reclaim disk
 
 **GCP subcommands (`metaproc gcp ...`):**
 
@@ -2701,8 +2701,9 @@ the two helpers on its agent path, or reach past them to `repair_frontmatter_fil
 Both resolve a declared output path through the shared
 `validation.resolve_output_fpath`, so every pass over an output names the same file.
 Path resolution is shared; existence probing is not.
-Both rewriting passes read and write plain text, so neither follows validation’s `.gz`
-sibling, and a compressed artifact is validated without being repaired or conformed.
+Both rewriting passes read and write plain text, so neither follows validation’s
+compressed sibling, and a compressed artifact is validated without being repaired or
+conformed.
 
 #### Pass 1: YAML frontmatter auto-repair
 
