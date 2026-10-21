@@ -44,12 +44,22 @@ Start from [`.env.example`](https://github.com/jlevy/metaproc/blob/main/.env.exa
 and set only what the chosen execution mode requires.
 Never commit `.env`.
 
+The image interpreter is a compatibility boundary.
+`bootstrap_container()` force-reinstalls the shipped wheel into `/opt/venv` with
+`uv pip install`, which refuses a wheel whose `requires-python` the interpreter does not
+satisfy, so from 0.5.0 an image below Python 3.14 cannot run a dispatched run.
+This fails at container bootstrap rather than at build or test time, and reads as a
+wheel-install refusal rather than a version problem, so neither CI nor `make verify`
+catches it. To upgrade: rebuild the image on a 3.14 interpreter and re-pin it.
+To defer: pass `--no-wheel` to keep the image-baked Metaproc, or hold the dispatching
+side at 0.4.x until the image is rebuilt.
+
 | Variable | Purpose |
 | --- | --- |
 | `METAPROC_GCP_PROJECT` | GCP project containing Batch resources |
 | `METAPROC_GCP_REGION` | Batch region |
 | `METAPROC_GCP_SERVICE_ACCOUNT` | Explicit Batch identity; required when a run binds Secret Manager secrets or uses a Secret Manager auth pool |
-| `METAPROC_GCP_CONTAINER_IMAGE` | Image that can run Metaproc and the consumer |
+| `METAPROC_GCP_CONTAINER_IMAGE` | Image that can run Metaproc and the consumer; its `/opt/venv` must be on Python 3.14 or newer |
 | `METAPROC_GCS_BUCKET` | Wheel and workspace artifact transport |
 | `METAPROC_GCP_SECRET_GH_TOKEN` | Secret Manager ref used when a private repo must be cloned |
 | `METAPROC_GCP_FILESTORE_*` | Shared live execution and restart storage; `gcp run` requires a server unless `--no-filestore` selects ephemeral storage |

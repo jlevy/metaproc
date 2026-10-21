@@ -9,12 +9,15 @@ development series.
 
 ### Added
 
-- **Zstandard artifacts, read and written.** Every reader that handles `.jsonl.gz` also
-  handles `.jsonl.zst`: `metaproc tail`, `status`, `stats`, `trace`, the operations
-  summary, and the `metaproc.io` helpers.
+- **Zstandard artifacts, read and written.** Every Metaproc reader that handles
+  `.jsonl.gz` also handles `.jsonl.zst`: `metaproc tail`, `status`, `stats`, `trace`,
+  the operations summary, and the `metaproc.io` helpers.
   `metaproc gzip-text --codec zstd` writes Zstandard; gzip stays the default, and a run
   directory holding both is ordinary.
   Zstandard comes from the standard library, so no extra dependency is involved.
+  Metabrowser is not yet one of those readers: it decodes `.gz` but not `.zst`, so a
+  Zstandard transcript opens as binary with no charts in the browser view.
+  Keep transcripts on the gzip default where that view matters.
 - **Every run writes an operations summary.** Run finalization writes
   `operations-summary.md` (`metaproc.operations:AgentOperationsSummary/v1`) beside
   `resource-usage-summary.md`: real elapsed time, setup, per-stage shares, per-item
