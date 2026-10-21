@@ -375,15 +375,17 @@ counted.
 
 ### Several Execution Profiles in One Run
 
-`run-process` owns one RunPool per local run, and every scalar agent leaf (an agent step
-without `for_each`) submits to it, including leaves inside composite and mapped scopes.
+`run-process` owns one RunPool per local run, and every agent leaf submits to it, scalar
+or mapped, including leaves inside composite and mapped scopes.
 Steps can pin different execution profiles, so the pool may serve several.
 The first leaf to reach it sizes the pool from that leaf’s profile:
-`max_concurrency_hint` lowers the ceiling, and `estimated_process_rss_bytes` with
-`initial_memory_budget_fraction` set the startup estimate described above.
+`max_concurrency_hint` lowers the ceiling, `host_max_concurrency` sets the host-slot
+limit, and `estimated_process_rss_bytes` with `initial_memory_budget_fraction` set the
+startup estimate described above.
 
-A leaf on another profile joins the same pool as another lane when those three values
-resolve equal to the sizing profile’s (`estimated_process_rss_mb: 250` equals
+A leaf on another profile joins the same pool as another lane when those four values
+resolve equal to the sizing profile’s: the ceiling after the hint, the host-slot limit,
+the process estimate, and the budget fraction (`estimated_process_rss_mb: 250` equals
 `estimated_process_rss_bytes: 262144000`). Lanes add identity and counters, not
 admission: every lane shares the one semaphore and its memory, provider, and operator
 ceilings. `lanes` in `runpool-status.yaml` and `metaproc pool status` list every profile
