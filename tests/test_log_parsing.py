@@ -1474,6 +1474,38 @@ class TestCompressedStreamContract:
         assert log_file.done
         assert log_file.read_new_events() == []
 
+    @pytest.mark.parametrize("suffix", [".gz", ".zst"])
+    def test_a_damaged_compressed_attempt_is_decoded_once_per_identity(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture, suffix: str
+    ) -> None:
+        """Retrying must not mean re-decoding the whole artifact on every poll.
+
+        The bytes behind one identity cannot become decodable, so the stream is sealed
+        and later polls do no work; a copy that completes changes size or mtime, and
+        that identity change resets the seal. Without the seal a large damaged
+        transcript is fully decoded once per poll for the life of the ``tail``.
+        The seal is asserted directly because its only other signature is elapsed time.
+        """
+        body = "".join(json.dumps(row) + "\n" for row in (_INIT, _result(padding="x" * 4000)))
+        whole = _compress(suffix, body)
+        compressed = tmp_path / f"step_ctx_attempt1.jsonl{suffix}"
+        compressed.write_bytes(whole[: len(whole) // 2])
+
+        log_file = LogFile(compressed, 0)
+        with caplog.at_level(logging.WARNING):
+            assert log_file.read_new_events() == []
+        assert log_file._sealed is True
+        for _ in range(3):
+            assert log_file.read_new_events() == []
+        assert caplog.text.count("Cannot decode") == 1
+
+        staged = tmp_path / "staged"
+        staged.write_bytes(whole)
+        staged.replace(compressed)
+        assert sum(event.is_done for event in log_file.read_new_events()) == 1
+        assert log_file._sealed is True  # sealed again, now having read it in full
+        assert log_file.done
+
     def test_rewritten_compressed_file_with_the_same_inode_replays(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:

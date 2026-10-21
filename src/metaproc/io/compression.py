@@ -32,6 +32,9 @@ from typing import IO, ClassVar, cast
 
 # A Zstandard frame header is 6 to 18 bytes; reading the maximum covers every frame.
 _ZSTD_FRAME_HEADER_MAX = 18
+# Skippable frames use magic 0x184D2A50 through 0x184D2A5F and carry no content size.
+_ZSTD_SKIPPABLE_MAGIC_MIN = 0x184D2A50
+_ZSTD_SKIPPABLE_MAGIC_MAX = 0x184D2A5F
 
 
 class ArtifactDecodeError(OSError):
@@ -321,9 +324,18 @@ class _ZstdCodec(Codec):
         Metaproc's writer pledges it; :func:`compression.zstd.compress` records it; a
         streaming writer such as ``ZstdFile`` or the ``zstd`` CLI does not, and the
         answer is then ``None``.
+
+        A foreign file may lead with a skippable frame, as the seekable-zstd and
+        ``pzstd`` formats do. ``get_frame_info`` reports zero content for one, which is
+        a true statement about that frame and a false one about the artifact, so the
+        answer is ``None``: unknown rather than empty.
         """
         with path.open("rb") as fh:
             header = fh.read(_ZSTD_FRAME_HEADER_MAX)
+        if len(header) >= 4:
+            magic = int.from_bytes(header[:4], "little")
+            if _ZSTD_SKIPPABLE_MAGIC_MIN <= magic <= _ZSTD_SKIPPABLE_MAGIC_MAX:
+                return None
         try:
             return zstd.get_frame_info(header).decompressed_size
         except zstd.ZstdError as exc:

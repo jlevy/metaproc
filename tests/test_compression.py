@@ -167,6 +167,24 @@ def test_zstd_recorded_size_is_the_first_frames_content_size(tmp_path: Path) -> 
         assert len(fh.read()) == 5010
 
 
+def test_zstd_recorded_size_is_unknown_behind_a_skippable_frame(tmp_path: Path) -> None:
+    """A skippable frame records no content, which is unknown rather than empty.
+
+    ``get_frame_info`` reports zero for one, which is true of that frame and false of
+    the artifact; returning it would tell every consumer the stream is empty while
+    ``open_read`` hands back the whole payload. The seekable-zstd and ``pzstd``
+    formats both lead with one, so this is foreign input Metaproc can meet.
+    """
+    payload = b"z" * 4000
+    skippable = struct.pack("<II", 0x184D2A50, 4) + b"\x00\x00\x00\x00"
+    path = tmp_path / "blob.zst"
+    path.write_bytes(skippable + zstd.compress(payload))
+
+    assert ZSTD.recorded_size(path) is None
+    with ZSTD.open_read(path) as fh:
+        assert fh.read() == payload
+
+
 def test_zstd_recorded_size_rejects_a_non_frame(tmp_path: Path) -> None:
     bogus = tmp_path / "not-really.zst"
     bogus.write_bytes(b"plain text, not a frame")

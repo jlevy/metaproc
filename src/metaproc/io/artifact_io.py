@@ -16,13 +16,22 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import mimetypes
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any
 
-from metaproc.io.compression import CODECS, DEFAULT_WRITE_CODEC, Codec, codec_for_path
+from metaproc.io.compression import (
+    CODECS,
+    DEFAULT_WRITE_CODEC,
+    ArtifactDecodeError,
+    Codec,
+    codec_for_path,
+)
+
+log = logging.getLogger(__name__)
 
 # Chunk for counting a decoded stream whose container records no size.
 _COUNT_CHUNK = 1024 * 1024
@@ -100,13 +109,19 @@ def iter_artifact_paths(root: Path, pattern: str) -> Iterable[Path]:
 def iter_text_lines(path: Path, *, errors: str = "replace") -> Iterable[tuple[int, str]]:
     """Yield ``(line_no, line)`` from a plain or compressed text file.
 
-    A file that cannot be opened or decoded ends the iteration quietly, as every
-    reader of best-effort operational streams expects.
+    A file that cannot be opened ends the iteration quietly, as every reader of
+    best-effort operational streams expects. A file that opens but cannot be decoded
+    is damage rather than a short stream, and every caller here reports on what it
+    read, so it warns before ending: without that, a truncated artifact is
+    indistinguishable from a step that simply logged less.
     """
     try:
         with ArtifactPath(path).open_text(errors=errors) as fh:
             for line_no, line in enumerate(fh, start=1):
                 yield line_no, line.rstrip("\n")
+    except ArtifactDecodeError as exc:
+        log.warning("Stopped reading %s at undecodable data: %s", logical_path(path), exc)
+        return
     except OSError:
         return
 

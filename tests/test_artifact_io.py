@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import logging
 from compression import zstd
 from pathlib import Path
 
@@ -168,12 +169,31 @@ def test_corrupt_gzip_trailer_raises_decode_error(tmp_path: Path) -> None:
         fh.read()
 
 
-def test_iter_text_lines_ends_quietly_on_a_damaged_artifact(tmp_path: Path) -> None:
+def test_iter_text_lines_warns_and_stops_on_a_damaged_artifact(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Damage must not raise, and must not pass for a stream that merely said less.
+
+    Every caller reports on what it read, so a silent short read would make a truncated
+    transcript indistinguishable from a step that logged fewer events.
+    """
     whole = gzip.compress(_SAMPLE_BYTES)
     path = tmp_path / "events.jsonl.gz"
     path.write_bytes(whole[: len(whole) // 2])
-    lines = list(iter_text_lines(path))  # must not raise
+    with caplog.at_level(logging.WARNING):
+        lines = list(iter_text_lines(path))  # must not raise
     assert len(lines) < _SAMPLE_TEXT.count("\n")
+    assert "undecodable data" in caplog.text
+    assert "events.jsonl" in caplog.text
+
+
+def test_iter_text_lines_is_quiet_on_a_missing_artifact(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An absent best-effort stream is ordinary, so it stays silent."""
+    with caplog.at_level(logging.WARNING):
+        assert list(iter_text_lines(tmp_path / "absent.jsonl.gz")) == []
+    assert caplog.text == ""
 
 
 # ── Logical-stream identity ──────────────────────────────────────

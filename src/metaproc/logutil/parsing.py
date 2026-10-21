@@ -1775,6 +1775,11 @@ class LogFile:
                     raw = stream.read()
                     self.offset = stream.tell()
             except OSError as exc:
+                if artifact.is_compressed and isinstance(exc, ArtifactDecodeError):
+                    # Sealing bounds the work: the bytes behind this identity cannot
+                    # become decodable, and a copy that later completes changes the
+                    # size or mtime, whose identity change resets the seal.
+                    self._sealed = True
                 self._note_unreadable(exc)
                 return None
         self._decode_warned = False
