@@ -19,12 +19,28 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
   `respectGitIgnore: False`, so a Gemini step can read ignored files including `.env`.
   Disclosure has landed — the amended [v0.4.0 notes](docs/project/releases/v0.4.0.md)
   carry it, the shipped design doc states it, and the
-  [v0.4.1 notes](docs/project/releases/v0.4.1.md) repeat it as a standing caution — so
+  [v0.4.1](docs/project/releases/v0.4.1.md) and
+  [v0.5.0](docs/project/releases/v0.5.0.md) notes repeat it as a standing caution — so
   what remains is the behavior question disclosure does not settle: whether reading
   ignored files should become opt-in per step or per profile.
+- **Verify the GCP image interpreter** (`mp-mo74`): v0.5.0 requires Python 3.14, and
+  container bootstrap refuses the shipped wheel on an image whose `/opt/venv` is older.
+  The image build lives outside this repository, so the release went out unverified;
+  until the image is confirmed or rebuilt on 3.14 and re-pinned, dispatch with
+  `--no-wheel` or from 0.4.x, as the release notes and `metaproc help cloud-dispatch`
+  say.
 
 ## Active Development
 
+- **v0.5.0 release** (`mp-avdc`): the changelog,
+  [release notes](docs/project/releases/v0.5.0.md), and publishing pointer match the
+  tree. What remains is the tag itself and the publish it triggers; § Current Release
+  moves to v0.5.0 once that tag exists.
+  The release is a minor, not a patch, because it raises the Python floor to 3.14. Its
+  compatibility notes lead with that floor, the unverified GCP image interpreter
+  (`mp-mo74`), and Metabrowser not yet reading `.zst`; they also record that mapped
+  agent steps now share the run-owned pool, so a local run whose mapped agent steps pin
+  profiles with different pool resources fails where v0.4.1 ran it (`mp-8oak`).
 - **Process-tree and host safety** (`mp-bd6v`; umbrella feature `mp-qigc`): incubate a
   standalone `safeproc` package with owned pre-execution supervision and brokerless
   monitoring of existing process trees; add cross-platform host admission and

@@ -279,9 +279,12 @@ The selector cannot be combined with `--from`, `--force`, `--skip`, `--cloud`, o
 `--dry-run`. Its dry run is refused because a root-only preview cannot show the selected
 child plan.
 
-A local run serves the execution profiles its scalar agent steps pin from one run-owned
-pool, as long as those profiles’ `max_concurrency_hint`, `estimated_process_rss_bytes`,
-and `initial_memory_budget_fraction` resolve equal.
+A local run serves the execution profiles its agent steps pin, scalar or mapped, from
+one run-owned pool, as long as those profiles resolve an equal pool ceiling (after
+`max_concurrency_hint`), `host_max_concurrency`, `estimated_process_rss_bytes`, and
+`initial_memory_budget_fraction`. The bundled profiles for different agent CLIs do not
+all match, so a run that maps one step over a Claude profile and another over a Gemini
+or Codex profile needs those resources aligned in its own profiles.
 A leaf whose profile differs in any of them fails before launch with an error naming
 both values; align the resources or run those steps as separate runs.
 `metaproc pool status <run-dir>` lists one lane per profile served.

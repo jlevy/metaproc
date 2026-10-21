@@ -7,8 +7,53 @@ development series.
 
 ## [Unreleased][unreleased]
 
+## [0.5.0][] - 2026-10-21
+
 ### Added
 
+- **A run can cap its own spend.** `run-process --max-spend-usd X` sets one cap on the
+  run’s measured list cost, shared by every scope and kept for the run’s whole life: it
+  is recorded as `max_spend_usd` in `run-config.yaml`, a resume without the flag keeps
+  it, and measured spend is carried in `.state/spend-ledger.yaml`
+  (`metaproc:SpendLedger/0.1`), so a resume on a host without the earlier logs still
+  counts them. A mapped step may declare `spend: {per_item_usd, source, max_attempts}`;
+  after reuse picks the actionable items, it refuses to start when the spend already
+  measured plus items × attempts × price exceeds the cap, naming the cap that would
+  admit it. Mapped composite and code steps also stop starting items once measured spend
+  reaches the cap. `for_each.breaker: {max_failure_fraction, min_finished}` stops a
+  mapped composite or code step’s dispatch once too large a share of the items it
+  finished have failed.
+  Running items finish and undispatched items stay pending for a resume.
+  A stopped step keeps `state: failed` and gains a `stopped` record in
+  `process-status.yaml`; `metaproc status` labels the run `BUDGET-STOPPED` or
+  `BREAKER-STOPPED` with a `Stopped:` line per step.
+  A process may declare `spend_cap: {required, default_usd}`. Neither the price nor the
+  breaker enters a step fingerprint.
+- **One nested step or mapped item can be re-run through its parent.**
+  `run-process --only <root-step> --only-scope-step <path>` enters a composite child by
+  its exact scope path (each composite step and mapped item key, such as
+  `depth/ACME/fetch`), verifies that omitted ancestors completed, and re-runs the
+  selected step and its descendants while other items, pending ones included, stay
+  untouched. Repeat the flag to select several item keys under one mapped composite in
+  one bounded batch; a selector naming a mapped item itself runs its whole child and can
+  complete that item. `--scope-through-target` runs the target and its prerequisites and
+  stops before dependent steps.
+  A missing, duplicate, terminal, or differently shaped selection fails rather than
+  widening the run, and the selector cannot be combined with `--from`, `--force`,
+  `--skip`, `--cloud`, or `--dry-run`. `process-status.yaml` records
+  `selected_scope_step` (and `selected_scope_steps` for a batch) with
+  `selected_scope_mode`; `metaproc status` shows `SCOPED`, and completion checks do not
+  certify the full run until an unrestricted evaluation clears the marker.
+- **Agent CLIs’ own session records survive slot teardown.** A pooled Codex or Claude
+  attempt points the CLI’s config home into its credential slot, and the slot was
+  removed after every attempt along with the CLI’s rollout or transcript.
+  Codex rollouts (`.codex/sessions/**/rollout-*.jsonl[.zst]`) and, when a step sets
+  `no_session_persistence: false`, Claude project transcripts are now copied to
+  `<session-stem>.codex-sessions/` or `<session-stem>.claude-projects/` beside the
+  step’s session log under `.logs/native/`, owner-only, before the slot is removed.
+  Credential files and symlinks are never copied, a failure is logged without blocking
+  teardown, and `compact-logs` leaves these copies alone.
+  Adapters opt in through the optional `NativeSessionLogCapable` protocol.
 - **Zstandard artifacts, read and written.** Every Metaproc reader that handles
   `.jsonl.gz` also handles `.jsonl.zst`: `metaproc tail`, `status`, `stats`, `trace`,
   the operations summary, and the `metaproc.io` helpers.
@@ -26,8 +71,11 @@ development series.
   A figure the run cannot establish is null with a stated reason.
   A failure while summarizing is logged and never changes the run’s outcome.
   `metaproc operations summary RUN_DIR` builds the same document for a finished run
-  without writing, and `metaproc operations rollup RUN_DIR...` sets runs side by side
-  against a per-item chain-time target.
+  without writing (`--write` writes it), and `metaproc operations rollup RUN_DIR...`
+  sets runs side by side against a per-item chain-time target, reporting a run whose
+  summary does not read as `unreadable` rather than recomputing it.
+  A field added under the `v1` contract id is optional on read, so a summary written
+  before it still validates.
   A run that executed as a child scope of a larger run is summarized with its nested
   scopes and transcripts, whether read in place or from a copy.
   A run that never reaches finalization — killed by a signal, interrupted between the
@@ -64,10 +112,16 @@ development series.
 ### Changed
 
 - **A damaged or foreign compressed log no longer crashes or loops `metaproc tail`.** A
-  truncated or corrupt `.gz` is skipped with one warning and retried on the next poll
-  instead of raising; a multi-member gzip, whose trailer understates the decoded size,
-  is read once instead of being replayed on every poll; a plain log that shrinks is
-  replayed with every derived field rebuilt.
+  truncated or corrupt `.gz` is skipped with one warning instead of raising, and read
+  again only once the file changes; a multi-member gzip, whose trailer understates the
+  decoded size, is read once instead of being replayed on every poll; a plain log that
+  shrinks is replayed with every derived field rebuilt.
+  `tail` also discovers `.jsonl.gz` transcripts, so an attempt whose log was compressed
+  on close stays visible, and a transcript compacted or compressed while it is followed
+  is replayed once under the same attempt, with its usage rebuilt rather than added.
+  The line readers behind `trace`, `stats`, `pool`, and `auth usage` warn and stop at a
+  damaged compressed transcript, where a corrupt one used to end the read silently and a
+  truncated one raised.
 - **`metaproc.io` describes compression by codec, not by suffix.** `ArtifactPath` gains
   `codec`, `is_compressed`, and `compression`, and loses `is_gzip`; `disk_size` and
   `logical_size` keep their meaning under every codec.
@@ -75,13 +129,28 @@ development series.
   `OSError`, so an existing `except OSError` covers it.
   `metaproc.io.gz_io` is now `metaproc.io.artifact_io`, with the codec registry in
   `metaproc.io.compression`; `artifact_sidecar_path` and `ArtifactDecodeError` join the
-  curated surface. In `metaproc.commands.gzip_text`, `gzip_file` is `compress_file`,
+  curated surface. `gzip_sibling` is `compressed_sibling`, which takes a codec.
+  In `metaproc.commands.gzip_text`, `gzip_file` is `compress_file`,
+  `SourceChangedDuringGzip` is `SourceChangedDuringCompression`,
   `GzipTextSummary.gzipped` is `compressed`, and both results carry the codec name.
+  `metaproc gzip-text` text output names the codec: per-file lines read `gzip:` or
+  `zstd:` instead of `gzipped:`, the total reads `N compressed with <codec>`, and the
+  skip reason is `already-compressed`. `--level` defaults per codec; gzip’s is still 6.
+- **`metaproc.io` names a helper for every write contract.** The curated surface adds
+  `atomic_write_text`, `atomic_write_bytes`, `copyfile_atomic`, `copytree_atomic`,
+  `temp_output_file`, and `temp_output_dir`, plus `write_secret_text` and
+  `SECRET_FILE_MODE` for a file that must never be readable beyond its owner: it creates
+  the staged file at `0o600` before the first byte and commits it by rename.
+  `metaproc help artifacts` and `metaproc help arch-file-io` name each artifact’s
+  contract.
 - **Metaproc requires Python 3.14.** The floor rises from 3.12 so that Zstandard support
   comes from the standard library’s `compression.zstd` on every supported interpreter,
   with no optional backend.
   An environment on 3.12 or 3.13 cannot install this release; the previous release
   remains available for it.
+  A GCP Batch image whose `/opt/venv` interpreter is older than 3.14 refuses the shipped
+  wheel at container bootstrap; `metaproc help cloud-dispatch` describes the ways
+  through.
 - **A resume records launch-config changes instead of refusing them.** 0.4.1 refused a
   resume whose resolved variables differed from those `run-config.yaml` recorded, and
   one in a different run directory; only the run-directory refusal remains.
@@ -117,10 +186,7 @@ development series.
   every model id ending in `flash`, `gemini-3.5-flash` itself excepted, to
   `gemini-3.5-flash` unless `experimental.dynamicModelConfiguration` is on; with the
   settings metaproc writes, a request for `gemini-3.6-flash` is served by
-  `gemini-3.6-flash`. 0.59.0 was published on 2026-09-08 and clears the repository’s
-  14-day package cool-off on 2026-09-22; until then `npm install` under the repository’s
-  `.npmrc` refuses it.
-  0.60.0, the current npm `latest`, clears the cool-off on 2026-09-29 and is not pinned.
+  `gemini-3.6-flash`. Later releases, 0.60.0 among them, are not pinned.
 - **Gemini native settings reach the CLI through a private home by default.** The
   adapter wrote its native settings to a file in its temporary directory and named it
   with `GEMINI_CLI_SYSTEM_SETTINGS_PATH`. gemini-cli 0.60.0 and later read a system
@@ -128,9 +194,9 @@ development series.
   by neither group nor others, so the CLI skipped that file with a `Security Warning`
   transcript line, and every session ran without session-retention disabled, dynamic
   model configuration, the step’s tool restrictions or the subagent overrides.
-  `native_settings_scope` now defaults to `user`: each launch gets a private Gemini home
-  whose `.gemini/settings.json` holds the resolved native settings, and
-  `native_settings_home_template` is optional.
+  A new `native_settings_scope` adapter key defaults to `user`: each launch gets a
+  private Gemini home whose `.gemini/settings.json` holds the resolved native settings,
+  and an optional `native_settings_home_template` names a prepared home to copy into it.
   Without a template, the settings, login, hooks, instructions, extensions and MCP
   servers in the operator’s `~/.gemini` no longer apply, so authentication comes from
   the launch environment (`GEMINI_API_KEY`, or `GOOGLE_GENAI_USE_VERTEXAI` with
@@ -139,9 +205,12 @@ development series.
   against the real home, so keep provider keys in the shell environment or the project
   `.env` rather than `~/.gemini/.env`. Each private home has its own project registry,
   so launches no longer contend for a shared one.
-  `native_settings_scope: system` is rejected; remove it to take the default, or set
-  `workspace` to keep the operator’s `~/.gemini`. `native_settings_scope()` returns the
-  scope a config resolves to.
+  `native_settings_scope: workspace` keeps the operator’s `~/.gemini` and requires
+  `working_directory`; `system` is rejected, since the CLI would skip a system file
+  Metaproc wrote. `native_settings_scope()` returns the scope a config resolves to.
+  `auth-check --live` reports a Gemini config the adapter refuses at launch as a failed
+  `invalid adapter configuration` result rather than a traceback that stopped the
+  remaining adapters’ checks.
 - **A Gemini working directory whose settings override the private home is refused.**
   gemini-cli ranks a trusted working directory’s `.gemini/settings.json` above the
   private home, and every Metaproc launch trusts its working directory, so a file there
@@ -165,6 +234,37 @@ development series.
   failing authentication or waiting for a browser login.
   `GEMINI_FORCE_ENCRYPTED_FILE_STORAGE` alone does not count, because without a usable
   OS keychain the CLI keeps that login inside the Gemini home.
+- **Every executable leaf of a local run shares one adaptive controller.** A local
+  `run-process` mapped agent step now submits its items to the run-owned RunPool that
+  scalar agent leaves already used, instead of opening a pool of its own, and code
+  leaves (scalar and mapped `mode: code`) take permits from the same controller, so
+  memory and provider pressure throttle all of them and concurrent mapped steps share
+  one `--max-concurrency` ceiling.
+  A step’s `for_each.max_concurrency` still bounds that step.
+  The pool’s state and events are written once per run, to
+  `<run>/.state/runpool-status.yaml` and `<run>/.logs/runpool/`, rather than under
+  `.state/steps/<step>/` and `.logs/runpool/steps/<step>/`; `pool status`,
+  `pool rollup`, `pool health`, and `pool events` report `Code leaves:` and
+  `code_active=` counts (`active_code_count`, `pending_code_count`). Because every
+  mapped agent step now joins the run’s pool, the profile-equality rule below applies to
+  them: two mapped agent steps on profiles with different pool resources can no longer
+  run in one local run.
+  `run-parallel` and `--backend gcp-worker` keep their own pools.
+- **Code and handler failures record a bounded, redacted cause.** A failed command step
+  records `command exit code N` with the tail of its stderr, or of its stdout when
+  stderr is empty, and a failed Python handler records its exception type and message,
+  each at most twelve lines and 1,200 characters with a `[truncated]` marker, ending
+  with the attempt’s `log:` or `traceback:` path.
+  Terminal styling and control characters are removed, and framework secrets, declared
+  Secret Manager targets, `Bearer`/`Basic` values, credential-shaped `key=value` pairs,
+  URL user info, and credential-named environment values of at least eight characters
+  are replaced with `[redacted]` first.
+  Retry classification reads the full redacted evidence, so a rate-limit line removed by
+  clipping still retries and a word such as `quota` in a step id or item key no longer
+  makes a transient failure permanent.
+  The original output and traceback stay in the task log.
+  Handlers can produce the same summary with
+  `metaproc.runtime.diagnostics.summarize_diagnostic`.
 
 ### Removed
 
@@ -186,10 +286,54 @@ development series.
   A command whose leader has exited while a descendant still holds its output pipe is
   collected, with the output gathered so far, rather than reported as timed out.
 
-- **`auth-check --live` reports an adapter config it refuses.** A profile the adapter
-  refuses at launch, such as one still carrying Gemini’s
-  `native_settings_scope: system`, raised a traceback and stopped the remaining
-  adapters’ live checks; it is now a failed `invalid adapter configuration` result.
+- **An agent fan-out inside a composite child records its results.** A mapped agent step
+  inside a composite step’s child process composed its task identity from the child
+  process’s name, while the child scope recorded every other record under the identity
+  its parent derived, so an item that had just succeeded failed its own result write
+  with `result does not match latest attempt fields run_id`. Every record in a scope now
+  carries the scope’s one identity, and the mismatch error names both values.
+
+- **An output declared `optional` may be absent.** Output validation never read
+  `optional`, so a step that legitimately wrote nothing for an optional file or
+  directory output failed.
+  A missing optional output now passes; a present one is validated as before, and a
+  missing required output still fails.
+
+- **`run-process` code step logs are named by attempt id.** A command-backed code step
+  captured its output in `process_<UTC seconds>.log`, so two attempts started within one
+  second shared a file and the earlier attempt’s error pointed at the later one’s
+  output. It now writes `process_<attempt_id>.log`, as `run-step` and `run-parallel`
+  already did.
+
+- **Repeated Gemini tool calls are counted separately.** gemini-cli can reuse a tool id
+  for a later call once the earlier pair completes, and resource extraction and Gemini
+  traces keyed each call by that id alone, so a repeated call merged into the first.
+  A later occurrence now gets its own span (`tool-occurrence:<n>:...`); the first keeps
+  its existing id, so previously persisted events still deduplicate.
+
+- **A Gemini prompt reaches the CLI through a pipe.** The prompt file was redirected
+  into gemini-cli’s standard input as a regular file, which its timed stdin reader can
+  queue behind other I/O; it is now streamed through `/bin/cat` into a pipe.
+  A missing prompt file stops the launch before the CLI starts, and the CLI’s exit
+  status is preserved.
+
+- **Credential files are never readable beyond their owner, even briefly.** Claude’s
+  OAuth blob, onboarding marker, and sandbox allowlist, Codex’s `auth.json` and slot
+  `config.toml`, and the Gemini adapter’s temporary settings files were written and then
+  narrowed to `0o600`, leaving a window at the umask default, and none was written
+  atomically. `~/.pi/agent/models.json`, which the GCP container bootstrap writes and
+  which can carry a literal provider key from `METAPROC_PI_MODELS_JSON`, was never
+  narrowed at all; it is now written `0o600` in a `0o700` directory.
+  Each is published through `write_secret_text`. Trace files, RunPool invocation
+  sidecars, the committed skill copies, and the `.logs/` copy of a slot’s debug log are
+  also published atomically, so a crash leaves the previous file rather than a short one
+  that reads as valid.
+
+- **A reset-clock quota failure in a fan-out counts against its retry budget.** An item
+  whose quota failure named a reset time was rescheduled after the reset without
+  advancing its attempt number, so an item that kept meeting the cap relaunched a paid
+  session indefinitely.
+  It now keeps the reset-aware wait and stops at the step’s `max_retries`.
 
 - **A file handler in a checkout nested inside another imports its own checkout’s
   code.** While a file handler loaded, every enclosing directory holding
@@ -343,19 +487,6 @@ development series.
   such model with its invocation count; the summary body reports the list cost as a
   lower bound, and `metaproc resource-report` lists the models.
 
-- **An operations summary written by an earlier build still reads.** `PoolRow` and
-  `ParallelismFigures` gained `sample_source`, and `retries.by_step` gained `process`,
-  under the same `metaproc.operations:AgentOperationsSummary/v1` contract id, so every
-  document written before them failed to validate.
-  A field added under a contract id already in use is now optional on read: the
-  explained-null rule binds the figures a document states rather than the fields the
-  current model declares, and `process` on a retry row is null when the document
-  predates keying rows by it, which groups those rows by `step_id` alone.
-  `read_operations_summary` returns a result that separates a run with no summary from
-  one whose summary did not read, logging the second with its path and the error;
-  `metaproc operations rollup` reports such a run as `unreadable` instead of recomputing
-  it as though nothing was written.
-
 - **Agent leaves take a host slot when their pool admits them, not before.** A
   `run-process` agent leaf under the run-owned pool acquires its host slot inside that
   pool, after pool admission, with a limit defaulting to the pool’s ceiling instead of
@@ -367,13 +498,6 @@ development series.
   pool keeps the default of 4. Terminal host-admission refusals record `waited_s`, and
   `metaproc pool events --type host_admission_denied --summary` counts waits, bypassed
   launches, and terminal wait seconds.
-
-- **One run-owned pool compares the values each profile resolves to.** A profile joins
-  the run’s pool as another lane when the pool ceiling (`--max-concurrency` lowered by
-  `max_concurrency_hint`), host-slot limit, per-process RSS estimate, and initial memory
-  budget fraction it resolves to match the sizing profile’s, so hints at or above the
-  run’s ceiling no longer refuse each other, and a differing `host_max_concurrency` is
-  named in the refusal instead of being silently ignored.
 
 - **A composite step’s `execution_profile:` applies to its whole subtree.** The child
   process was planned with the launch `--variant` whatever profile the composite step
@@ -452,12 +576,33 @@ development series.
 
 - **A run serves several execution profiles from its one pool.** Steps pinned to
   different profiles no longer fail when the second profile reaches the run-owned
-  RunPool. A profile joins as another lane when its `max_concurrency_hint`,
-  `estimated_process_rss_bytes`, and `initial_memory_budget_fraction` resolve equal to
-  those of the profile that sized the pool, and `pool status` lists every lane.
+  RunPool. A profile joins as another lane when the pool ceiling it resolves to
+  (`--max-concurrency` lowered by its `max_concurrency_hint`), its host-slot limit, its
+  `estimated_process_rss_bytes`, and its `initial_memory_budget_fraction` equal those of
+  the profile that sized the pool, so a hint at or above the run’s ceiling matches an
+  unset one, and `pool status` lists every lane.
   A profile whose values differ still fails before launch, now with an error naming each
   differing value for both profiles, because the pool keeps no per-lane resource
   accounting. `RunPool.register_lane` adds a lane to status before its first launch.
+  The same rule now applies to mapped agent steps, which join the run’s pool too.
+
+### Documentation
+
+- `metaproc help concepts` restates §6.2 principle 7: a rerun against the same `RUN_ID`
+  is simple, resumable, transparent, idempotent, and flexible; reuse follows content,
+  and a resume refuses only to protect durable state, live work, or an
+  `on_change: new_run` binding.
+  `metaproc help developer` carries the same rule for extensions and states the launch
+  contract every adapter’s foreground command shares.
+- `metaproc help operator` gains the nested-scope selectors, **Spend Cap and Breaker
+  Stops**, and the launch-config changes a resume records;
+  `metaproc help execution-contracts` gains **Inputs: Identity, Reuse, and Evidence**;
+  `metaproc help arch-file-io` gains **Write Contracts**, and `metaproc help artifacts`
+  names each artifact’s contract and lists the credential files Metaproc writes.
+- `metaproc help cloud-dispatch` states the image interpreter boundary the 3.14 floor
+  creates and how to cross it.
+- The Agent Skill’s topic catalog is regenerated for the grown documents; its guidance
+  is unchanged.
 
 ## [0.4.1][] - 2026-09-10
 
@@ -1231,7 +1376,8 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
   implicitly. Schemas consumed through Metaproc must be self-contained: use local `$defs`
   references or a registered Pydantic model instead of network-resolved references.
 
-[unreleased]: https://github.com/jlevy/metaproc/compare/v0.4.1...HEAD
+[unreleased]: https://github.com/jlevy/metaproc/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/jlevy/metaproc/releases/tag/v0.5.0
 [0.4.1]: https://github.com/jlevy/metaproc/releases/tag/v0.4.1
 [0.4.0]: https://github.com/jlevy/metaproc/releases/tag/v0.4.0
 [0.3.0]: https://github.com/jlevy/metaproc/releases/tag/v0.3.0
