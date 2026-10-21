@@ -1,6 +1,6 @@
 # Installation
 
-Metaproc requires Python 3.12 or newer and is distributed through PyPI.
+Metaproc requires Python 3.14 or newer and is distributed through PyPI.
 
 ## Install uv
 
@@ -15,7 +15,7 @@ brew install uv
 Install a supported Python when needed:
 
 ```shell
-uv python install 3.12
+uv python install 3.14
 ```
 
 ## Run Metaproc

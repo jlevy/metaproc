@@ -57,7 +57,7 @@ def check_headers(
 
         try:
             spec = load_process_spec(path)
-        except (ValueError, TypeError, ValidationError):
+        except ValueError, TypeError, ValidationError:
             return
 
         process_root = path.parent

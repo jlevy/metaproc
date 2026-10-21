@@ -245,7 +245,7 @@ class MetaprocEngineExtractor:
         for result_yaml in sorted(state_root.rglob("result.yaml")):
             try:
                 payload = read_yaml_file(result_yaml)
-            except (YAMLError, OSError):
+            except YAMLError, OSError:
                 continue
             if not isinstance(payload, dict):
                 continue

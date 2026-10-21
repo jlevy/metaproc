@@ -9,6 +9,15 @@ development series.
 
 ### Added
 
+- **Zstandard artifacts, read and written.** Every Metaproc reader that handles
+  `.jsonl.gz` also handles `.jsonl.zst`: `metaproc tail`, `status`, `stats`, `trace`,
+  the operations summary, and the `metaproc.io` helpers.
+  `metaproc gzip-text --codec zstd` writes Zstandard; gzip stays the default, and a run
+  directory holding both is ordinary.
+  Zstandard comes from the standard library, so no extra dependency is involved.
+  Metabrowser is not yet one of those readers: it decodes `.gz` but not `.zst`, so a
+  Zstandard transcript opens as binary with no charts in the browser view.
+  Keep transcripts on the gzip default where that view matters.
 - **Every run writes an operations summary.** Run finalization writes
   `operations-summary.md` (`metaproc.operations:AgentOperationsSummary/v1`) beside
   `resource-usage-summary.md`: real elapsed time, setup, per-stage shares, per-item
@@ -54,6 +63,25 @@ development series.
 
 ### Changed
 
+- **A damaged or foreign compressed log no longer crashes or loops `metaproc tail`.** A
+  truncated or corrupt `.gz` is skipped with one warning and retried on the next poll
+  instead of raising; a multi-member gzip, whose trailer understates the decoded size,
+  is read once instead of being replayed on every poll; a plain log that shrinks is
+  replayed with every derived field rebuilt.
+- **`metaproc.io` describes compression by codec, not by suffix.** `ArtifactPath` gains
+  `codec`, `is_compressed`, and `compression`, and loses `is_gzip`; `disk_size` and
+  `logical_size` keep their meaning under every codec.
+  A compressed artifact that cannot be decoded raises `ArtifactDecodeError`, an
+  `OSError`, so an existing `except OSError` covers it.
+  `metaproc.io.gz_io` is now `metaproc.io.artifact_io`, with the codec registry in
+  `metaproc.io.compression`; `artifact_sidecar_path` and `ArtifactDecodeError` join the
+  curated surface. In `metaproc.commands.gzip_text`, `gzip_file` is `compress_file`,
+  `GzipTextSummary.gzipped` is `compressed`, and both results carry the codec name.
+- **Metaproc requires Python 3.14.** The floor rises from 3.12 so that Zstandard support
+  comes from the standard library’s `compression.zstd` on every supported interpreter,
+  with no optional backend.
+  An environment on 3.12 or 3.13 cannot install this release; the previous release
+  remains available for it.
 - **A resume records launch-config changes instead of refusing them.** 0.4.1 refused a
   resume whose resolved variables differed from those `run-config.yaml` recorded, and
   one in a different run directory; only the run-directory refusal remains.
@@ -144,6 +172,19 @@ development series.
   Build and write a fan-in document with `build_outcome_manifest(...).write(...)`.
 
 ### Fixed
+
+- **Foreground agent commands clean up their process group, for every adapter.**
+  `run-step --wait`, `auth-check --live`, and `probe-tool-use` launch the agent command
+  in its own process group and terminate every member still in it on timeout, on an
+  interrupt, and on a SIGTERM, SIGHUP or SIGQUIT to Metaproc itself, which the command’s
+  own session would otherwise not receive: a Gemini prompt pipeline, Codex’s shell
+  wrapper, and a tool subprocess that stayed in the group no longer outlive the command.
+  A tool a CLI detached into its own session (Gemini’s and pi’s shell tools do) is
+  beyond the group and is left to that CLI’s own signal handling, as before.
+  The one path not covered is `run-step --wait` with the pi-cli log filter, which still
+  waits on the leader alone.
+  A command whose leader has exited while a descendant still holds its output pipe is
+  collected, with the output gathered so far, rather than reported as timed out.
 
 - **`auth-check --live` reports an adapter config it refuses.** A profile the adapter
   refuses at launch, such as one still carrying Gemini’s

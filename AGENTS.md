@@ -57,7 +57,7 @@ pre-push gates.
   tool change.
 - Preserve the 14-day cool-off and package-scoped first-party exceptions.
   Commit `uv.lock` and `package-lock.json` when their dependencies change.
-- Support Python 3.12 through 3.14 and add complete annotations to changed code.
+- Support Python 3.14 and add complete annotations to changed code.
 - Keep local planning and execution independent of optional GCP dependencies and
   credentials.
 - Catch only errors the current layer can handle and preserve exception causes.

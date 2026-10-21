@@ -168,9 +168,10 @@ item keys, output ports, and fingerprints.
 Every other file under `.state/` is a record of execution, which is why a reader can
 distinguish a task that failed from one that was never declared.
 
-Large completed log files may be compacted and stored as `.jsonl.gz` or `.log.gz`. The
-logical file type remains `.jsonl` or `.log`; use metaproc commands and metabrowser
-instead of hand-written file readers so gzip passthrough works consistently.
+Large completed log files may be compacted and stored compressed, as `.jsonl.gz` or
+`.jsonl.zst` (likewise `.log.gz` or `.log.zst`). The logical file type remains `.jsonl`
+or `.log`; use metaproc commands and metabrowser instead of hand-written file readers so
+compression passthrough works consistently.
 
 Agents should not edit these files manually.
 
@@ -251,7 +252,7 @@ For the complete list of artifacts Metaproc emits and the format each one uses, 
 
 | Role | Format | Why |
 | --- | --- | --- |
-| Streams and many-record append-only files | **JSONL** (always) | Line-recoverable, streamable in chunks, typed via Pydantic discriminated unions. Gzipped (`.jsonl.gz`) when archived. |
+| Streams and many-record append-only files | **JSONL** (always) | Line-recoverable, streamable in chunks, typed via Pydantic discriminated unions. Compressed (`.jsonl.gz` or `.jsonl.zst`) when archived. |
 | Small to moderate machine-readable files | **YAML** (strongly recommended) | State, snapshots, configs. Readable from a terminal, comment-friendly, typed via Pydantic models. |
 | Large, deeply-nested, or complex machine-readable documents | **JSON** | YAML indentation becomes unreadable at depth and slower to parse; JSON wins for tree-shaped or perf-bound machine documents. |
 | Human-readable documents bundling structured and unstructured content | **Softschema MD** (YAML frontmatter with a Markdown body) | One file carries both representations; frontmatter is parsed by tooling, and the body is prose. See §Frontmatter Document Model. |

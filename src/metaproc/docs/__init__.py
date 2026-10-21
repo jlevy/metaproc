@@ -82,7 +82,7 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
         "developer",
         "metaproc-developer-guide",
         "Extending Metaproc and the 'Metaproc is the right wrapper' policy.",
-        1400,
+        1600,
     ),
     Topic(
         "conventions",
@@ -112,7 +112,7 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
         "cloud-dispatch",
         "cloud-dispatch.runbook",
         "Preparing, submitting, monitoring, and recovering GCP Batch workloads.",
-        1500,
+        1700,
     ),
     Topic(
         "arch-auth",
@@ -130,7 +130,7 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
         "arch-runpool",
         "arch-runpool",
         "Architecture: local process manager, adaptive concurrency, memory pressure.",
-        4600,
+        5100,
     ),
     Topic(
         "arch-harness",
@@ -154,7 +154,7 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
         "arch-file-io",
         "arch-file-io-utilities",
         "Architecture: the curated metaproc.io surface, write contracts, and frontmatter gotchas.",
-        1800,
+        2100,
     ),
 )
 

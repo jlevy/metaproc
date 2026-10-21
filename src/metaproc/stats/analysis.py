@@ -176,7 +176,7 @@ def analyze_runpool_events(events: list[RunPoolEvent]) -> RunPoolAnalysis:
             hours = total_s // 3600
             mins = (total_s % 3600) // 60
             metadata["duration"] = f"{hours}h {mins}m" if hours > 0 else f"{mins}m"
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             pass
 
     return RunPoolAnalysis(

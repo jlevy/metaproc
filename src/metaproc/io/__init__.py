@@ -29,20 +29,22 @@ from strif import (
     temp_output_file,
 )
 
-from metaproc.io.frontmatter import (
-    fmf_read_artifact,
-    fmf_read_frontmatter_artifact,
-    read_yaml_artifact,
-)
-from metaproc.io.gz_io import (
+from metaproc.io.artifact_io import (
     ArtifactPath,
     artifact_exists,
+    artifact_sidecar_path,
     iter_artifact_paths,
     iter_jsonl_objects,
     iter_jsonl_records,
     iter_text_lines,
     logical_path,
     resolve_existing_artifact,
+)
+from metaproc.io.compression import ArtifactDecodeError
+from metaproc.io.frontmatter import (
+    fmf_read_artifact,
+    fmf_read_frontmatter_artifact,
+    read_yaml_artifact,
 )
 from metaproc.io.secret_io import SECRET_FILE_MODE, write_secret_text
 from metaproc.io.templating import (
@@ -52,12 +54,14 @@ from metaproc.io.templating import (
 )
 
 __all__ = [
+    "ArtifactDecodeError",
     "ArtifactPath",
     "FmFormatError",
     "SECRET_FILE_MODE",
     "TemplateRenderError",
     "YamlSerializationError",
     "artifact_exists",
+    "artifact_sidecar_path",
     "atomic_output_file",
     "atomic_write_bytes",
     "atomic_write_text",

@@ -208,7 +208,7 @@ def _parse_pacific_reset_phrase(match: re.Match[str], *, now: datetime | None = 
     meridiem = match.group("meridiem")
     try:
         hour = int(hour_str)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     minute = int(minute_str) if minute_str else 0
 
@@ -336,7 +336,7 @@ def parse_claude_api_signals(*, debug_text: str = "", stdout: str = "") -> Claud
     if (m := _OAUTH_REFRESH_RE.search(debug_text)) is not None:
         try:
             oauth_status = int(m.group(1))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             oauth_status = None
 
     # Stream-json structured pass: parse each result event as JSON.
@@ -361,7 +361,7 @@ def parse_claude_api_signals(*, debug_text: str = "", stdout: str = "") -> Claud
     for m in _API_ERROR_STATUS_RE.finditer(debug_text):
         try:
             api_status = int(m.group(1))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             continue
     if api_status is None:
         api_status = structured_api_status
@@ -371,7 +371,7 @@ def parse_claude_api_signals(*, debug_text: str = "", stdout: str = "") -> Claud
                 try:
                     api_status = int(m.group(1))
                     break
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     continue
 
     request_id = ""
@@ -419,7 +419,7 @@ def parse_claude_api_signals(*, debug_text: str = "", stdout: str = "") -> Claud
                     try:
                         retry_after_s = int(group)
                         break
-                    except (TypeError, ValueError):
+                    except TypeError, ValueError:
                         continue
             if retry_after_s is not None:
                 break
@@ -431,7 +431,7 @@ def parse_claude_api_signals(*, debug_text: str = "", stdout: str = "") -> Claud
                     try:
                         retry_after_s = int(group)
                         break
-                    except (TypeError, ValueError):
+                    except TypeError, ValueError:
                         continue
 
     return ClaudeApiSignals(
@@ -1369,7 +1369,7 @@ def _extract_oauth_access_token(creds_path: Path) -> str | None:
         return None
     try:
         raw = json.loads(creds_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except json.JSONDecodeError, OSError:
         return None
     if not isinstance(raw, dict):
         return None
@@ -1405,7 +1405,7 @@ def _query_anthropic_oauth_usage(access_token: str) -> QuotaUsage | None:
             payload = json.loads(resp.read())
     except urllib.error.HTTPError as exc:
         return _quota_unavailable_from_http_error(exc)
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+    except urllib.error.URLError, TimeoutError, json.JSONDecodeError:
         return None
     except Exception:  # noqa: BLE001 — quota probe must never raise
         return None

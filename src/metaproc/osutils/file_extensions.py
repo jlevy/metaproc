@@ -16,23 +16,25 @@ Four independent sets, each scoped to one decision:
   watches for live writes. Kept tight because every entry costs one
   ``stat()`` per poll on the candidate-discovery walk; only formats
   metaproc actually appends to at runtime belong here. Notably
-  excludes ``.gz`` (write-once-sealed) and source code (not produced
-  at runtime).
+  excludes compressed suffixes (write-once-sealed) and source code
+  (not produced at runtime).
 
 * :data:`GZIP_DEFAULT_INCLUDE` — extensions ``metaproc gzip-text``
   compresses when no ``--include`` flag is passed. Deliberately a
-  *strict subset* of the browser-readable formats: gzipping any
+  *strict subset* of the browser-readable formats: compressing any
   browser-text extension would round-trip cleanly through the
-  ArtifactPath layer (the browser handles any ``*.gz`` suffix
-  transparently), but markdown / plain text / tabular files are
-  commonly opened in editors or grepped from the shell where the
-  ``.gz`` adds friction.
+  ArtifactPath layer (which handles every supported compression
+  suffix transparently), but markdown / plain text / tabular files
+  are commonly opened in editors or grepped from the shell where a
+  compression suffix adds friction. The per-extension size floors
+  decide whether a file is worth compressing at all, so they do not
+  depend on which codec writes it.
 
-Extensions beyond ``GZIP_DEFAULT_INCLUDE`` remain fully browsable
-when manually gzipped — the browser's ``ArtifactPath`` layer routes
-any ``*.gz`` suffix through ``open_text`` / passthrough, so
-``foo.html.gz`` opens as HTML, ``foo.xml.gz`` as XML, etc. The
-default just narrows what the sweep tool touches unprompted.
+Extensions beyond ``GZIP_DEFAULT_INCLUDE`` remain fully readable when
+compressed by hand — the ``ArtifactPath`` layer routes any supported
+suffix through ``open_text`` / passthrough, so ``foo.html.gz`` opens
+as HTML, ``foo.xml.zst`` as XML, etc. The default just narrows what
+the sweep tool touches unprompted.
 """
 
 from __future__ import annotations

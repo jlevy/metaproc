@@ -82,7 +82,7 @@ def compare_matrix(
                             variant_items[item_dir.name] = fm
                     else:
                         variant_items[item_dir.name] = {"_error": "missing frontmatter"}
-                except (FmFormatError, ValueError):
+                except FmFormatError, ValueError:
                     variant_items[item_dir.name] = {"_error": "parse error"}
         if variant_items:
             variant_data[variant] = variant_items

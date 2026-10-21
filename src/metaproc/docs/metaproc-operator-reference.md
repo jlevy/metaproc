@@ -376,6 +376,7 @@ Use a text viewer or ordinary read-only tools to inspect an actual source path:
 less '<source-log-path>'
 tail -n 100 -f '<active-source-log-path>'
 gzip -cd '<source-log-path>.gz' | less
+zstd -cd '<source-log-path>.zst' | less
 ```
 
 These commands read the captured file directly, without an additional Metaproc parser or
@@ -1253,9 +1254,11 @@ uv run metaproc gzip-text <old-run-dir>/artifacts \
   --min-size 262144
 ```
 
-Metaproc readers and metabrowser treat `.jsonl.gz`, `.log.gz`, and other gzipped text
+Metaproc readers treat `.jsonl.gz`, `.jsonl.zst`, `.log.gz`, and other compressed text
 files as their logical uncompressed types, so compressed logs remain inspectable through
-the normal status, tail, trace, stats, and browser surfaces.
+the normal status, tail, trace, and stats surfaces.
+`gzip-text` writes gzip unless `--codec zstd` is passed; metabrowser currently renders
+gzip artifacts transparently, not Zstandard ones.
 
 ## Stopping Runs
 

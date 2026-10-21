@@ -240,7 +240,7 @@ def _run_id_from_job_metadata(job: Any, identity_key: str) -> str | None:
                 continue
             try:
                 decoded = json.loads(raw_variables)
-            except (json.JSONDecodeError, TypeError):
+            except json.JSONDecodeError, TypeError:
                 continue
             if not isinstance(decoded, dict):
                 continue

@@ -131,7 +131,7 @@ def _relative_to_run(log_path: Path, run_dir: Path) -> Path | None:
     for candidate in candidates:
         try:
             return candidate.resolve().relative_to(resolved_run)
-        except (ValueError, OSError):
+        except ValueError, OSError:
             continue
     return None
 

@@ -4,6 +4,26 @@ required-version = ">=0.12.0,<0.13"
 exclude-newer = "14 days"
 
 [exclude-newer-package]
+# certifi 2026.10.19 published 2026-10-20T02:24:15Z, taken inside the cool-off to clear
+# GHSA-6q48-6c7w-9gw2 (critical): eight eMudhra intermediate CAs chaining to the
+# `emSign ECC Root CA - G3` root have compromised private keys, so a holder of one can
+# forge a certificate for any hostname and an on-path attacker can then read or modify
+# TLS traffic. Every release from 2019.03.09 carries that root, so no older pin avoids
+# it. Exposure here is the gcp and browser extras and the dev groups (certifi arrives
+# via httpcore, httpx, and requests); metaproc's core dependencies do not include it.
+#
+# Reviewed as a security fix, not a first-party exception, and audited as a trust-store
+# change rather than a code change: `core.py` is byte-identical, `__init__.py` differs
+# only in its version string, and the wheel otherwise adds only `certifi/tests/`. The
+# bundle drops `emSign ECC Root CA - G3` and `Atos TrustedRoot 2011`, keeps the three
+# unaffected emSign roots that 2026.10.18 had removed wholesale, and newly trusts four
+# roots from the Mozilla CA program: `SECOM TLS ECC Root CA 2024`, `SECOM TLS RSA Root
+# CA 2024`, `Telia EC TLS Root CA v3`, and `Telia RSA TLS Root CA v3`. Accepting this
+# pin accepts those four roots early; an ordinary relock would adopt them anyway.
+#
+# Drop this entry at the first ordinary relock after 2026-11-03, when 2026.10.19 clears
+# the 14-day window on its own.
+certifi = "2026-10-20T02:25:00Z"
 flowmark-rs = "2026-07-16T00:00:00Z"
 frontmatter-format = "2026-08-01T01:27:00Z"
 kpress = "2026-08-31T00:55:00Z"

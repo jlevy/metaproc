@@ -9,7 +9,7 @@ status: Approved
 Module-level notes, including using RunPool as a library, are in
 [`runpool/README.md`](../runpool/README.md).
 
-**Date:** 2026-04-06 (last updated 2026-10-11) **Status:** Approved
+**Date:** 2026-04-06 (last updated 2026-10-20) **Status:** Approved
 
 RunPool is Metaproc’s local agent process manager.
 It owns subprocess lifecycle, adaptive concurrency, host-level coordination, health
@@ -215,9 +215,10 @@ before drawing conclusions.
 CLI preflight checks disk headroom against its configured minimum before execution.
 That check is separate from the running pool and is not a per-launch disk reservation.
 
-Log compaction and gzip compression are Metaproc log utilities, not RunPool scheduling
-policy. RunPool should keep producing gzip-readable structured logs; compression should
-remain safe to run ad hoc and safe to run automatically on inactive large logs.
+Log compaction and compression are Metaproc log utilities, not RunPool scheduling
+policy. RunPool should keep producing structured logs that compress and read back
+cleanly; compression should remain safe to run ad hoc and safe to run automatically on
+inactive large logs.
 
 ## Adaptive Concurrency
 
@@ -513,10 +514,10 @@ It should include:
 Operators should use it instead of ad hoc reads of
 `~/.metaproc/runpool/host-slots/.../lease.json`.
 
-Readers must handle `.jsonl` and `.jsonl.gz` transparently.
-Historical status files from before a new telemetry field existed should remain readable
-for operator commands; new writers should still fail loudly if required live telemetry
-cannot be collected.
+Readers must handle `.jsonl` and its compressed forms (`.jsonl.gz`, `.jsonl.zst`)
+transparently. Historical status files from before a new telemetry field existed should
+remain readable for operator commands; new writers should still fail loudly if required
+live telemetry cannot be collected.
 
 ## Operational Rules
 

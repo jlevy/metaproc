@@ -314,7 +314,7 @@ def _read_plan_item_totals(run_dir: Path) -> dict[str, int]:
     """
     try:
         snapshot = read_run_plan(run_dir)
-    except (OSError, ValueError, YAMLError):
+    except OSError, ValueError, YAMLError:
         log.warning("Failed to read the run plan from %s", run_dir, exc_info=True)
         return {}
     if snapshot is None:
@@ -384,7 +384,7 @@ def _measure_subprocesses() -> tuple[int, int]:
                 with contextlib.suppress(ValueError):
                     total_rss_kb += int(rss_str)
         return count, total_rss_kb * 1024  # convert KB to bytes
-    except (subprocess.TimeoutExpired, OSError):
+    except subprocess.TimeoutExpired, OSError:
         return 0, 0
 
 
@@ -660,7 +660,7 @@ def _read_process_execution(
         return None, None, {}, None
     try:
         raw = read_yaml_file(path)
-    except (OSError, YAMLError, ValueError):
+    except OSError, YAMLError, ValueError:
         return None, None, {}, None
     if not isinstance(raw, dict):
         return None, None, {}, None
@@ -707,7 +707,7 @@ def _read_dispatch_stops(run_dir: Path) -> list[DispatchStop]:
     path = run_dir / STATE_DIR / "process-status.yaml"
     try:
         raw = read_yaml_file(path)
-    except (OSError, YAMLError, ValueError):
+    except OSError, YAMLError, ValueError:
         return []
     records = raw.get("stopped") if isinstance(raw, dict) else None
     if not isinstance(records, list):

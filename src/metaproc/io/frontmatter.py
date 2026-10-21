@@ -14,7 +14,7 @@ from typing import Any, cast
 from frontmatter_format import fmf_read, fmf_read_frontmatter, from_yaml_string, read_yaml_file
 from pydantic import BaseModel, ConfigDict, Field
 
-from metaproc.io.gz_io import ArtifactPath, resolve_existing_artifact
+from metaproc.io.artifact_io import ArtifactPath, resolve_existing_artifact
 from metaproc.models.authored import ProcessSpec
 from metaproc.models.plan import PlanEnvelope
 from metaproc.models.qa import QaReportEnvelope, QaSummaryEnvelope
@@ -106,27 +106,27 @@ def load_yaml_typed[T: BaseModel](path: Path, model: type[T]) -> T:
 
 
 def fmf_read_artifact(path: Path | str) -> tuple[str, dict[str, Any] | None]:
-    """Read frontmatter Markdown from a plain or gzipped artifact."""
+    """Read frontmatter Markdown from a plain or compressed artifact."""
     resolved = resolve_existing_artifact(Path(path))
-    if not ArtifactPath(resolved).is_gzip:
+    if not ArtifactPath(resolved).is_compressed:
         return fmf_read(resolved)
     with _temporary_text_artifact(resolved) as temp_path:
         return fmf_read(temp_path)
 
 
 def fmf_read_frontmatter_artifact(path: Path | str) -> dict[str, Any] | None:
-    """Read only frontmatter from a plain or gzipped artifact."""
+    """Read only frontmatter from a plain or compressed artifact."""
     resolved = resolve_existing_artifact(Path(path))
-    if not ArtifactPath(resolved).is_gzip:
+    if not ArtifactPath(resolved).is_compressed:
         return fmf_read_frontmatter(resolved)
     with _temporary_text_artifact(resolved) as temp_path:
         return fmf_read_frontmatter(temp_path)
 
 
 def read_yaml_artifact(path: Path | str) -> Any:
-    """Read a bare YAML file from a plain or gzipped artifact."""
+    """Read a bare YAML file from a plain or compressed artifact."""
     resolved = resolve_existing_artifact(Path(path))
-    if not ArtifactPath(resolved).is_gzip:
+    if not ArtifactPath(resolved).is_compressed:
         return read_yaml_file(resolved)
     with ArtifactPath(resolved).open_text() as fh:
         return from_yaml_string(fh.read())
@@ -140,7 +140,7 @@ class _temporary_text_artifact:
         self._path: Path | None = None
 
     def __enter__(self) -> Path:
-        suffix = self.path.with_suffix("").suffix
+        suffix = ArtifactPath(self.path).logical_ext
         tmp = tempfile.NamedTemporaryFile(
             "w",
             encoding="utf-8",

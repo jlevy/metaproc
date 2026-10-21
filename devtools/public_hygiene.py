@@ -202,7 +202,7 @@ def _scan_member(source: str, data: bytes, *, depth: int = 0) -> list[str]:
             try:
                 with gzip.GzipFile(fileobj=io.BytesIO(data)) as stream:
                     unpacked = stream.read(MAX_MEMBER_BYTES + 1)
-            except (EOFError, gzip.BadGzipFile, OSError):
+            except EOFError, gzip.BadGzipFile, OSError:
                 pass
             else:
                 if len(unpacked) > MAX_MEMBER_BYTES:
@@ -296,7 +296,7 @@ def _git_ignored(root: Path, paths: list[Path]) -> set[Path]:
             timeout=GIT_TIMEOUT_SECONDS,
             check=False,
         )
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         return set()
     if result.returncode not in (0, 1):
         return set()

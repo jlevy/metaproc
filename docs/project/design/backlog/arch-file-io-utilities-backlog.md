@@ -19,5 +19,10 @@ Where it might go is a project record and lives here.
 - Add a documentation contract check that compares the Public Surface table with
   `metaproc.io.__all__` so new exports cannot land without a deliberate documentation
   decision.
-- Add focused examples for template rendering and gzip-transparent artifact lookup if
-  downstream adoption shows that signatures alone are insufficient.
+- Add focused examples for template rendering if downstream adoption shows that
+  signatures alone are insufficient.
+  Compression-transparent artifact lookup is described in the shipped document’s
+  Compressed Artifacts section and in the
+  [artifact compression design record](../artifact-compression.md).
+- Switch `DEFAULT_WRITE_CODEC` to Zstandard once Metabrowser reads `.zst` and that
+  release is adopted here; the gates are listed in the design record.

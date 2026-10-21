@@ -24,7 +24,7 @@ _adapter = TypeAdapter(RunPoolEvent)
 def read_runpool_events(filepath: Path) -> list[RunPoolEvent]:
     """Read and parse all events from a runpool JSONL file.
 
-    Transparently handles ``.jsonl.gz`` files via :class:`ArtifactPath`.
+    Transparently handles compressed files via :class:`ArtifactPath`.
     Returns typed event models; malformed lines or unknown event types
     are silently skipped (logged at debug level).
     """
@@ -36,7 +36,7 @@ def read_runpool_events(filepath: Path) -> list[RunPoolEvent]:
                 continue
             try:
                 raw: dict[str, Any] = json.loads(stripped)
-            except (json.JSONDecodeError, ValueError):
+            except json.JSONDecodeError, ValueError:
                 log.debug("Skipping malformed JSON at %s:%d", filepath, line_no)
                 continue
             if not isinstance(raw, dict) or "event" not in raw:  # pyright: ignore[reportUnnecessaryIsInstance]

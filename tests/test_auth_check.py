@@ -336,7 +336,7 @@ class TestRunLiveCheck:
         """Live check reports pass when subprocess exits 0."""
         with (
             patch("metaproc.commands.auth_check.ADAPTER_REGISTRY") as mock_registry,
-            patch("subprocess.run") as mock_run,
+            patch("metaproc.commands.auth_check.run_command_in_process_group") as mock_run,
         ):
             mock_adapter = MagicMock()
             status = MagicMock()
@@ -361,7 +361,7 @@ class TestRunLiveCheck:
         """Live check reports failure when subprocess exits non-zero."""
         with (
             patch("metaproc.commands.auth_check.ADAPTER_REGISTRY") as mock_registry,
-            patch("subprocess.run") as mock_run,
+            patch("metaproc.commands.auth_check.run_command_in_process_group") as mock_run,
         ):
             mock_adapter = MagicMock()
             status = MagicMock()
@@ -388,7 +388,10 @@ class TestRunLiveCheck:
 
         with (
             patch("metaproc.commands.auth_check.ADAPTER_REGISTRY") as mock_registry,
-            patch("subprocess.run", side_effect=sp.TimeoutExpired("cmd", 5)),
+            patch(
+                "metaproc.commands.auth_check.run_command_in_process_group",
+                side_effect=sp.TimeoutExpired("cmd", 5),
+            ),
         ):
             mock_adapter = MagicMock()
             status = MagicMock()
@@ -431,7 +434,7 @@ class TestRunLiveCheckAssertModel:
         )
         with (
             patch("metaproc.commands.auth_check.ADAPTER_REGISTRY") as mock_registry,
-            patch("subprocess.run") as mock_run,
+            patch("metaproc.commands.auth_check.run_command_in_process_group") as mock_run,
         ):
             mock_registry.__getitem__ = MagicMock(return_value=self._adapter())
             proc = MagicMock()
@@ -457,7 +460,7 @@ class TestRunLiveCheckAssertModel:
         )
         with (
             patch("metaproc.commands.auth_check.ADAPTER_REGISTRY") as mock_registry,
-            patch("subprocess.run") as mock_run,
+            patch("metaproc.commands.auth_check.run_command_in_process_group") as mock_run,
         ):
             mock_registry.__getitem__ = MagicMock(return_value=self._adapter())
             proc = MagicMock()
@@ -482,7 +485,7 @@ class TestRunLiveCheckAssertModel:
         stdout_lines = '{"type":"result","is_error":false}\n'
         with (
             patch("metaproc.commands.auth_check.ADAPTER_REGISTRY") as mock_registry,
-            patch("subprocess.run") as mock_run,
+            patch("metaproc.commands.auth_check.run_command_in_process_group") as mock_run,
         ):
             mock_registry.__getitem__ = MagicMock(return_value=self._adapter())
             proc = MagicMock()
@@ -512,7 +515,7 @@ class TestRunLiveCheckAssertModel:
         )
         with (
             patch("metaproc.commands.auth_check.ADAPTER_REGISTRY") as mock_registry,
-            patch("subprocess.run") as mock_run,
+            patch("metaproc.commands.auth_check.run_command_in_process_group") as mock_run,
         ):
             mock_registry.__getitem__ = MagicMock(return_value=self._adapter())
             proc = MagicMock()
@@ -549,7 +552,7 @@ class TestRunLiveCheckAssertModel:
                     "providers: vertex-maas\nmodels: glm-5-maas zai-org/glm-5-maas",
                 ),
             ),
-            patch("subprocess.run") as mock_run,
+            patch("metaproc.commands.auth_check.run_command_in_process_group") as mock_run,
         ):
             mock_registry.__getitem__ = MagicMock(return_value=self._adapter())
             proc = MagicMock()
@@ -693,7 +696,7 @@ class TestLiveCheckUsesTheProfileConfig:
             patch.object(gemini, "check_auth", return_value=status),
             patch("metaproc.adapters.gemini_cli._gemini_version_drift", return_value=None),
             patch(
-                "metaproc.commands.auth_check.subprocess.run",
+                "metaproc.commands.auth_check.run_command_in_process_group",
                 side_effect=self._stub_gemini(calls),
             ),
         ):
@@ -823,7 +826,7 @@ class TestRunLiveCheckCodex:
             ),
             patch.object(real_codex, "check_auth", return_value=mock_status),
             patch("metaproc.adapters.codex_cli._codex_version_drift", return_value=None),
-            patch("subprocess.run") as mock_run,
+            patch("metaproc.commands.auth_check.run_command_in_process_group") as mock_run,
         ):
             mock_proc = MagicMock()
             mock_proc.returncode = 0
@@ -879,7 +882,7 @@ class TestRunLiveCheckCodex:
             ),
             patch.object(real_codex, "check_auth", return_value=mock_status),
             patch("metaproc.adapters.codex_cli._codex_version_drift", return_value=None),
-            patch("subprocess.run") as mock_run,
+            patch("metaproc.commands.auth_check.run_command_in_process_group") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0)
 
@@ -910,7 +913,10 @@ class TestClaudeLiveCheckFormat:
         adapter.prepare_env.return_value = {}
         with (
             patch("metaproc.commands.auth_check.ADAPTER_REGISTRY") as mock_registry,
-            patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="")),
+            patch(
+                "metaproc.commands.auth_check.run_command_in_process_group",
+                return_value=MagicMock(returncode=0, stdout=""),
+            ),
         ):
             mock_registry.__getitem__ = MagicMock(return_value=adapter)
             _run_live_check(
@@ -1259,7 +1265,7 @@ class TestRunLiveCheckPiRegistrationGate:
                 "metaproc.commands.auth_check._pi_list_models",
                 return_value=(True, "providers: anthropic\nmodels: opus sonnet"),
             ),
-            patch("subprocess.run") as mock_run,
+            patch("metaproc.commands.auth_check.run_command_in_process_group") as mock_run,
         ):
             mock_registry.__getitem__ = MagicMock(return_value=self._adapter())
             results = _run_live_check("pi-cli", "glm-5-maas", timeout_s=30)
@@ -1278,7 +1284,7 @@ class TestRunLiveCheckPiRegistrationGate:
                 "metaproc.commands.auth_check._pi_list_models",
                 return_value=(True, "providers: vertex-maas\nmodels: glm-5-maas"),
             ),
-            patch("subprocess.run") as mock_run,
+            patch("metaproc.commands.auth_check.run_command_in_process_group") as mock_run,
         ):
             mock_proc = MagicMock()
             mock_proc.returncode = 0
@@ -1307,7 +1313,7 @@ class TestRunLiveCheckPiRegistrationGate:
                 "metaproc.commands.auth_check._pi_list_models",
                 return_value=(True, "providers: vertex-maas\nmodels: glm-5-maas"),
             ),
-            patch("subprocess.run") as mock_run,
+            patch("metaproc.commands.auth_check.run_command_in_process_group") as mock_run,
         ):
             mock_proc = MagicMock()
             mock_proc.returncode = 0
@@ -1317,3 +1323,34 @@ class TestRunLiveCheckPiRegistrationGate:
 
         assert captured["merged_config"]["provider"] == "vertex-maas"
         assert captured["merged_config"]["model"] == "glm-5-maas"
+
+
+class TestLiveCheckLauncher:
+    """The live check never picks a launcher by adapter type.
+
+    Every adapter's command runs through `run_command_in_process_group`, which owns
+    the whole process tree; `subprocess.run` would signal only the leader.
+    """
+
+    @pytest.mark.parametrize("adapter_type", sorted(ADAPTER_REGISTRY))
+    def test_every_registered_adapter_runs_through_the_owned_group_launcher(
+        self, adapter_type: str
+    ) -> None:
+        adapter = MagicMock()
+        adapter.check_auth.return_value = MagicMock(cli_found=True, credentials_found=True)
+        adapter.build_command.return_value = ["fake-agent", "-p", "x"]
+        adapter.prepare_env.return_value = {}
+        adapter.working_directory.return_value = None
+        with (
+            patch.dict("metaproc.commands.auth_check.ADAPTER_REGISTRY", {adapter_type: adapter}),
+            patch("metaproc.commands.auth_check.run_command_in_process_group") as launcher,
+            patch("subprocess.run") as plain_run,
+        ):
+            launcher.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            results = _run_live_check(adapter_type, None, timeout_s=5)
+
+        assert results[0][0], results[0][1]
+        launcher.assert_called_once()
+        assert launcher.call_args.args[0][:3] == ["fake-agent", "-p", "x"]
+        assert launcher.call_args.kwargs["timeout"] == 5
+        plain_run.assert_not_called()

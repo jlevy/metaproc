@@ -44,6 +44,21 @@ def _single_sdist() -> Path:
     return sdists[0]
 
 
+def _without_record_hashes(text: str) -> str:
+    """Drop the hash column of a wheel RECORD, keeping each path and size.
+
+    A base64 SHA-256 is effectively random text over the token alphabet, so it can
+    spell a credential shape by chance (one build's METADATA hash contained
+    ``ghp_`` and twenty alphanumerics). Every hashed member is scanned itself.
+    """
+    rows = []
+    for line in text.splitlines():
+        head, sep, size = line.rpartition(",")
+        path, _, _ = head.rpartition(",")
+        rows.append(f"{path},{size}" if sep else line)
+    return "\n".join(rows)
+
+
 def _check_text_member(name: str, payload: bytes) -> None:
     if name.endswith("devtools/public_hygiene.py"):
         return
@@ -54,6 +69,8 @@ def _check_text_member(name: str, payload: bytes) -> None:
         if findings:
             raise RuntimeError(f"artifact hygiene failed: {findings[:10]}") from None
         return
+    if name.endswith(".dist-info/RECORD"):
+        text = _without_record_hashes(text)
     findings = find_hygiene_findings(name, text)
     if findings:
         raise RuntimeError(f"artifact hygiene failed: {findings[:10]}")

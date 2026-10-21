@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import os
+import sys
+from contextlib import suppress
 from pathlib import Path
+from unittest.mock import patch
 
+import psutil
 import pytest
 from typer.testing import CliRunner
 
+from metaproc.adapters.registry import ADAPTER_REGISTRY
 from metaproc.cli import app
 from metaproc.commands.helpers import enrich_single_item
 from metaproc.errors import CLIError
@@ -644,3 +650,96 @@ class TestEnrichSingleItem:
         )
         with pytest.raises(CLIError, match="no resolved for_each.over input is available"):
             enrich_single_item("no-src", step_def, "AAPL", {})
+
+
+def _reaped(pid: int) -> bool:
+    try:
+        return psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return True
+
+
+def _kill_leftover(pid_file: Path) -> None:
+    if not pid_file.exists():
+        return
+    with suppress(psutil.NoSuchProcess, ValueError):
+        leftover = psutil.Process(int(pid_file.read_text(encoding="utf-8")))
+        if leftover.status() != psutil.STATUS_ZOMBIE:
+            leftover.kill()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="owned process groups are POSIX")
+def test_run_step_wait_reaps_a_descendant_of_a_non_gemini_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--wait` runs every adapter's command as an owned process group.
+
+    Claude Code emits a bare argv with no shell wrapper. Its fake here forks a
+    grandchild with detached stdio, writes the step output, and exits 0; the
+    grandchild must be gone once the step is collected, because the launcher owns the
+    group and collects it before reporting the step.
+    """
+    monkeypatch.setenv("METAPROC_SKIP_CLAUDE_VERSION_CHECK", "1")
+    monkeypatch.chdir(tmp_path)
+    pid_file = tmp_path / "grandchild.pid"
+    process_path = tmp_path / "owned.process.md"
+    _write(
+        process_path,
+        """---
+process:
+  name: owned
+  defaults:
+    default_adapter: claude-code-cli
+    adapters:
+      claude-code-cli:
+        type: claude-code-cli
+        config:
+          timeout_s: 20
+  steps:
+    - id: agent
+      mode: agent
+      prompt_prefix: wait
+      env:
+        OUTPUT_FILE: "{{run.dir}}/out.md"
+      outputs:
+        main:
+          path: "{{run.dir}}/out.md"
+          kind: file
+---
+# owned
+""",
+    )
+    body = (
+        "import os, subprocess, sys; "
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], "
+        "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); "
+        f"open({str(pid_file)!r}, 'w').write(str(child.pid)); "
+        "open(os.environ['OUTPUT_FILE'], 'w').write('done')"
+    )
+    adapter = ADAPTER_REGISTRY["claude-code-cli"]
+    try:
+        with (
+            patch.object(adapter, "build_command", return_value=[sys.executable, "-c", body]),
+            patch.object(adapter, "prepare_env", side_effect=lambda env, merged_config: dict(env)),
+        ):
+            result = RUNNER.invoke(
+                app,
+                [
+                    "run-step",
+                    str(process_path),
+                    "--step",
+                    "agent",
+                    "--wait",
+                    *_runs_var(tmp_path),
+                    "--var",
+                    "RUN_ID=owned",
+                ],
+            )
+        assert result.exit_code == 0, result.output + str(result.exception)
+        assert (tmp_path / "runs" / "owned" / "out.md").read_text(encoding="utf-8") == "done"
+        assert pid_file.exists(), "fake agent did not start"
+        assert _reaped(int(pid_file.read_text(encoding="utf-8"))), (
+            "the agent's descendant survived the step"
+        )
+    finally:
+        _kill_leftover(pid_file)

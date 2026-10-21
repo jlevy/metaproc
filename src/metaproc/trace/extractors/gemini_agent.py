@@ -31,8 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from metaproc.agent_errors import classify_agent_error
-from metaproc.io import iter_artifact_paths, iter_jsonl_objects
-from metaproc.io.gz_io import artifact_sidecar_path
+from metaproc.io import artifact_sidecar_path, iter_artifact_paths, iter_jsonl_objects
 from metaproc.logutil.usage import UsageStats, extract_gemini_usage
 from metaproc.trace.extractors.common import (
     attempt_cost_attrs,
@@ -446,7 +445,7 @@ def _load_sidecar(path: Path) -> dict[str, Any]:
         return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return {}
     return payload if isinstance(payload, dict) else {}
 

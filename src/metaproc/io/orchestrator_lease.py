@@ -66,7 +66,7 @@ def _parse_pid(value: object) -> int | None:
         return None
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 
@@ -113,7 +113,7 @@ def _is_lease_stale(lease: dict[str, object]) -> bool:
         return True
     try:
         hb_time = _parse_iso(str(last_hb))
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return True
     age = (datetime.now(tz=UTC) - hb_time).total_seconds()
     return age > STALE_THRESHOLD_S

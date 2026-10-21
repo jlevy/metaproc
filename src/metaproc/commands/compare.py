@@ -69,7 +69,7 @@ def compare(
             start = datetime.fromisoformat(status["started_at"])
             end = datetime.fromisoformat(status["completed_at"])
             return fmt_timedelta((end - start).total_seconds())
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return "N/A"
 
     rows.append(("duration", _duration(status_a), _duration(status_b)))

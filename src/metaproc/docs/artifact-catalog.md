@@ -67,8 +67,8 @@ makes the destination briefly absent and several of these are polled continuousl
 ## Stream artifacts (JSONL)
 
 Append-only operational streams under `<run>/.logs/`. Line-recoverable, parseable in
-chunks. Gzip-passthrough (`.jsonl.gz`) supported via metaproc’s gz-aware readers; the
-logical type stays `.jsonl`.
+chunks. Compression passthrough (`.jsonl.gz`, `.jsonl.zst`) supported via metaproc’s
+compression-aware readers; the logical type stays `.jsonl`.
 
 | Filename | Path | Schema (Pydantic) | Writer | Primary readers |
 | --- | --- | --- | --- | --- |

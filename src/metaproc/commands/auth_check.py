@@ -33,6 +33,7 @@ from metaproc.commands.claude_auth import _validate_creds_payload
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.config.providers import infer_provider, provider_by_name
 from metaproc.engine.preflight import check_disk_space
+from metaproc.engine.resource_sampling import run_command_in_process_group
 from metaproc.errors import CLIError
 from metaproc.io import fmf_read_frontmatter
 from metaproc.models.execution_profile import ExecutionProfileRegistry
@@ -258,7 +259,7 @@ def _extract_observed_model(adapter_type: str, stdout: str) -> str | None:
             continue
         try:
             event = json.loads(line)
-        except (json.JSONDecodeError, ValueError):
+        except json.JSONDecodeError, ValueError:
             continue
         if not isinstance(event, dict):
             continue
@@ -462,7 +463,9 @@ def _run_live_check(
 
         t0 = time.monotonic()
         try:
-            proc = subprocess.run(
+            # One launcher for every adapter: an agent CLI is a process tree, and the
+            # launcher owns the group (see run_command_in_process_group).
+            proc = run_command_in_process_group(
                 cmd,
                 capture_output=True,
                 text=True,
@@ -535,7 +538,7 @@ def _extract_pi_jsonl_error(stdout: str) -> str | None:
             continue
         try:
             event = json.loads(line)
-        except (json.JSONDecodeError, ValueError):
+        except json.JSONDecodeError, ValueError:
             continue
         if not isinstance(event, dict):
             continue

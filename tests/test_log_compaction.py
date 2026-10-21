@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import shutil
+from compression import zstd
 from pathlib import Path
 
 import pytest
@@ -73,7 +75,7 @@ def test_pi_compaction_removes_streaming_events(pi_log: Path) -> None:
                 assert event.get("type") not in drop_types, (
                     f"Should have been stripped: {event.get('type')}"
                 )
-        except (json.JSONDecodeError, ValueError):
+        except json.JSONDecodeError, ValueError:
             pass
 
 
@@ -93,7 +95,7 @@ def test_pi_compaction_preserves_important_events(pi_log: Path) -> None:
                     "turn_end",
                 ):
                     original_keep_types.add(etype)
-        except (json.JSONDecodeError, ValueError):
+        except json.JSONDecodeError, ValueError:
             pass
 
     compact_log(pi_log)
@@ -105,7 +107,7 @@ def test_pi_compaction_preserves_important_events(pi_log: Path) -> None:
             event = json.loads(line)
             if isinstance(event, dict):
                 compacted_types.add(event.get("type", ""))
-        except (json.JSONDecodeError, ValueError):
+        except json.JSONDecodeError, ValueError:
             pass
 
     # compaction header adds "compaction" type
@@ -448,7 +450,7 @@ def test_pi_compaction_no_message_final_without_thinking(tmp_path: Path) -> None
 def _is_json_type(line: str, event_type: str) -> bool:
     try:
         return json.loads(line).get("type") == event_type
-    except (json.JSONDecodeError, ValueError):
+    except json.JSONDecodeError, ValueError:
         return False
 
 
@@ -568,3 +570,19 @@ def test_try_compact_log_gzips_freshly_written_file(tmp_path: Path) -> None:
     gz_path = log_path.with_suffix(log_path.suffix + ".gz")
     assert gz_path.exists(), "post-step hook must produce a .gz for fresh files"
     assert not log_path.exists(), "original should be unlinked after successful gzip"
+
+
+@pytest.mark.parametrize("suffix", [".gz", ".zst"])
+def test_compact_log_treats_a_compressed_input_as_already_compact(
+    tmp_path: Path, suffix: str
+) -> None:
+    payload = b'{"type": "session", "version": 3}\n'
+    path = tmp_path / f"pi.jsonl{suffix}"
+    path.write_bytes(gzip.compress(payload) if suffix == ".gz" else zstd.compress(payload))
+    before = path.read_bytes()
+
+    result = compact_log(path)
+
+    assert result.already_compact
+    assert result.adapter == "compressed"
+    assert path.read_bytes() == before

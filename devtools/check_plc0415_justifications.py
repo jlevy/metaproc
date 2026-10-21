@@ -52,7 +52,7 @@ def scan_file(path: Path) -> list[tuple[int, str]]:
     failures: list[tuple[int, str]] = []
     try:
         text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+    except OSError, UnicodeDecodeError:
         return failures
     all_lines = text.splitlines()
     for i, line in enumerate(all_lines, start=1):

@@ -842,7 +842,7 @@ def _inspect_auth_json(path: Path) -> tuple[str, str]:
     """Classify an auth.json file for check_auth reporting."""
     try:
         doc: Any = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except OSError, json.JSONDecodeError:
         return ("unknown", f"{path} exists but could not be parsed")
     if not isinstance(doc, dict):
         return ("unknown", f"{path} exists but is not a JSON object")

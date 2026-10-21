@@ -58,6 +58,9 @@ consumer that owns them.
 
 - [Contract failure primitives](design/contract-failure-primitives.md): the implemented
   foundation and compatibility rationale; remaining work is in the execution plan.
+- [Artifact compression](design/artifact-compression.md): the codec model for gzip and
+  Zstandard, the two sizes no caller picks by codec, logical-stream identity across
+  encodings, and what gates making zstd the write default.
 - [Design proposals](design/metaproc-design-proposals.md): the future-work backlog for
   the design doc. Not implemented; not shipped.
 - [`design/backlog/`](design/backlog/): per-document future work, one file per shipped

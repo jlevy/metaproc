@@ -11,8 +11,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 from metaproc.engine.dep_state import fingerprint_step
-from metaproc.io import read_yaml_file
-from metaproc.io.gz_io import artifact_exists, resolve_existing_artifact
+from metaproc.io import artifact_exists, read_yaml_file, resolve_existing_artifact
 from metaproc.io.state_io import (
     read_result_at,
     read_run_plan,

@@ -929,7 +929,7 @@ def _source_ref(log_path: Path, run_dir: Path, kind: SourceKind) -> SourceRef:
 def _relative_or_str(path: Path, run_dir: Path) -> Path | str:
     try:
         return path.resolve().relative_to(run_dir.resolve())
-    except (ValueError, OSError):
+    except ValueError, OSError:
         return str(path)
 
 

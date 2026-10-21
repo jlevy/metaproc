@@ -291,7 +291,7 @@ def _compute_recent_rate(analysis: RunPoolAnalysis, *, window_minutes: int) -> f
         return None
     try:
         parsed = [datetime.fromisoformat(t) for t in ts_strs]
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return None
     end = max(parsed)
     window_start = end - timedelta(minutes=window_minutes)
@@ -310,7 +310,7 @@ def _compute_hourly_breakdown(analysis: RunPoolAnalysis) -> list[HourlyBucket]:
     for ts_str in analysis.successful_exit_timestamps:
         try:
             t = datetime.fromisoformat(ts_str)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             continue
         # Bucket by hour in local ISO format (e.g., "2026-04-10 20:00")
         key = t.strftime("%Y-%m-%d %H:00")
@@ -641,7 +641,7 @@ def _read_desired_scale_state(run_dir: Path) -> ScaleState | None:
     for scale_state_path in [*step_scale_paths, *legacy_scale_paths]:
         try:
             state = read_scale_state(scale_state_path)
-        except (FileNotFoundError, ValueError, YAMLError):
+        except FileNotFoundError, ValueError, YAMLError:
             continue
         if state.desired_workers is None and state.desired_max_concurrency is None:
             continue

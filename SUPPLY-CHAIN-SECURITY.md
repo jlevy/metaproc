@@ -172,6 +172,40 @@ The package keeps the MIT license, Python `>=3.10` floor, and dependency metadat
 `2.7.0`; the lock change replaces only its version and two artifact records, with no
 transitive growth.
 
+`certifi` is locked at `2026.10.19`, replacing `2026.6.17`, without an advisory waiver.
+It fixes `GHSA-6q48-6c7w-9gw2` (critical): eight eMudhra intermediate CAs that chain to
+the `emSign ECC Root CA - G3` root have compromised private keys, so a holder of one can
+issue a certificate for any hostname, and an on-path attacker can then read or modify
+TLS traffic from any client trusting the bundle.
+
+Unlike the `urllib3` adoption above, this release was adopted *inside* the cool-off,
+through a package-scoped `exclude-newer-package` pin in `uv.toml`. Waiting was not an
+alternative to review here: every `certifi` release from `2019.03.09` carries the
+affected root, so no older pin avoids the advisory, and the fix is reachable rather than
+unreachable, which the waiver rule above resolves in favor of fixing.
+Exposure is the `gcp` and `browser` extras and the dev groups, which pull `certifi`
+through `httpcore`, `httpx`, and `requests`; Metaproc’s core dependencies do not include
+it.
+
+The release was audited as a trust-store change rather than a code change.
+`core.py` is byte-identical to `2026.6.17`, `__init__.py` differs only in its version
+string, and the wheel otherwise adds only `certifi/tests/`, so the substance is the PEM
+bundle.
+The bundle drops `emSign ECC Root CA - G3` and `Atos TrustedRoot 2011`, and keeps
+the three unaffected emSign roots that `2026.10.18` had removed wholesale before
+`2026.10.19` restored them.
+It also newly trusts four Mozilla CA program roots: `SECOM TLS ECC Root CA 2024`,
+`SECOM TLS RSA Root CA 2024`, `Telia EC TLS Root CA v3`, and `Telia RSA TLS Root CA v3`.
+Accepting this pin accepts those four roots earlier than an ordinary relock would, which
+is the substantive cost of adopting inside the cool-off.
+The [PyPI release](https://pypi.org/project/certifi/2026.10.19/) uploaded its wheel and
+source distribution on 2026-10-20, and the wheel carries a trusted-publishing
+attestation from `certifi/python-certifi` built by `release.yml`. The package keeps the
+MPL-2.0 license, the Python `>=3.7` floor, and the empty dependency metadata of
+`2026.6.17`, so the lock change replaces only its version and artifact records with no
+transitive growth. Drop the pin at the first ordinary relock after 2026-11-03, when the
+release clears the 14-day window on its own.
+
 Re-review a waiver whenever the closure changes such that the affected code could become
 reachable.
 

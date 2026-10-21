@@ -185,7 +185,7 @@ def parse_jsonl_event(line: str, event_type: str) -> dict[str, object] | None:
     """Parse a JSONL line and return it if its ``type`` matches *event_type*."""
     try:
         event: Any = json.loads(line)
-    except (json.JSONDecodeError, ValueError):
+    except json.JSONDecodeError, ValueError:
         return None
     if isinstance(event, dict) and cast("dict[str, Any]", event).get("type") == event_type:
         return cast("dict[str, object]", event)

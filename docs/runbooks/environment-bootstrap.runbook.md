@@ -16,7 +16,7 @@ For installed CLI use, see [installation.md](../installation.md).
 
 ## 1. Install the Locked Development Environment
 
-Metaproc requires Python 3.12 or newer, uv, Node 24.18.0, and npm 11.10.0.
+Metaproc requires Python 3.14 or newer, uv, Node 24.18.0, and npm 11.10.0.
 
 ```bash
 git clone https://github.com/jlevy/metaproc.git
