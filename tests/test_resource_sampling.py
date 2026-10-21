@@ -670,22 +670,22 @@ def test_caller_signal_during_timeout_cleanup_waits_for_the_bounded_cleanup(
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="owned process groups are POSIX")
-def test_caller_signal_watch_blocks_the_watched_signals_until_unblocked() -> None:
-    """A signal that lands between the fork and the cleanup scope stays pending: it
-    can neither leave the child unbound nor escape a half-installed handler."""
+def test_caller_signal_watch_defers_a_signal_until_armed() -> None:
+    """A signal that lands between the fork and the cleanup scope is recorded, not
+    raised, so it cannot leave the child unbound; ``arm`` then raises it inside that
+    scope so its cleanup still runs."""
     previous = {signum: signal.signal(signum, signal.SIG_DFL) for signum in _CALLER_SIGNALS}
     try:
         with resource_sampling_module._caller_signals_end_the_command() as watch:
-            assert set(_CALLER_SIGNALS) <= signal.pthread_sigmask(signal.SIG_BLOCK, [])
+            assert not set(_CALLER_SIGNALS) & signal.pthread_sigmask(signal.SIG_BLOCK, [])
             # Aimed at this thread, as a process-directed signal is when the CLI's
             # main thread is the only one, so it cannot land on a helper thread.
             signal.pthread_kill(threading.get_ident(), signal.SIGTERM)
-            assert signal.SIGTERM in signal.sigpending()
-            assert watch.received == []
-            # Consume it before anything could deliver it to this test process.
-            assert signal.sigwait([signal.SIGTERM]) == signal.SIGTERM
-            watch.unblock()
-            assert not set(_CALLER_SIGNALS) & signal.pthread_sigmask(signal.SIG_BLOCK, [])
+            assert watch.received == [signal.SIGTERM]
+            with pytest.raises(resource_sampling_module._CallerSignal):
+                watch.arm()
+            # Forget it so leaving the watch does not re-deliver it to this process.
+            watch.received.clear()
         assert not set(_CALLER_SIGNALS) & signal.pthread_sigmask(signal.SIG_BLOCK, [])
     finally:
         for signum, handler in previous.items():
@@ -696,9 +696,44 @@ def test_caller_signal_watch_blocks_the_watched_signals_until_unblocked() -> Non
 def test_caller_signal_watch_restores_the_callers_own_mask() -> None:
     before = signal.pthread_sigmask(signal.SIG_BLOCK, [signal.SIGUSR1])
     try:
-        with resource_sampling_module._caller_signals_end_the_command() as watch:
-            watch.unblock()
-            assert signal.SIGUSR1 in signal.pthread_sigmask(signal.SIG_BLOCK, [])
+        with resource_sampling_module._caller_signals_end_the_command():
+            assert signal.pthread_sigmask(signal.SIG_BLOCK, []) == before | {signal.SIGUSR1}
         assert signal.pthread_sigmask(signal.SIG_BLOCK, []) == before | {signal.SIGUSR1}
     finally:
         signal.pthread_sigmask(signal.SIG_SETMASK, before)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="owned process groups are POSIX")
+def test_owned_command_starts_with_the_callers_signal_mask() -> None:
+    """The child inherits the caller's mask, as under ``subprocess.run``: a command
+    started with SIGTERM blocked would never see its cleanup's SIGTERM, and a program
+    that keeps the inherited mask (bash, most native binaries) would then always wait
+    out the grace and be killed."""
+    script = "import signal; print(sorted(signal.pthread_sigmask(signal.SIG_BLOCK, [])))"
+    completed = resource_sampling_module.run_command_in_process_group(
+        [sys.executable, "-c", script], env=dict(os.environ), capture_output=True, timeout=30
+    )
+    assert completed.returncode == 0, completed.stderr
+    expected = sorted(int(s) for s in signal.pthread_sigmask(signal.SIG_BLOCK, []))
+    assert completed.stdout.strip() == str(expected)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="owned process groups are POSIX")
+def test_timeout_cleanup_reaches_a_command_that_handles_sigterm(tmp_path: Path) -> None:
+    """The cleanup's SIGTERM is delivered, so a command that exits on it ends within
+    the termination grace instead of being killed after it."""
+    ready = tmp_path / "ready"
+    script = (
+        "import pathlib, signal, sys, time\n"
+        "signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))\n"
+        f"pathlib.Path({str(ready)!r}).touch()\n"
+        "time.sleep(60)\n"
+    )
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        resource_sampling_module.run_command_in_process_group(
+            [sys.executable, "-c", script], env=dict(os.environ), capture_output=True, timeout=4
+        )
+    elapsed = time.monotonic() - started
+    assert ready.exists(), "fixture command did not start"
+    assert elapsed < 4 + resource_sampling_module._PROCESS_TERMINATION_GRACE_S - 1, elapsed

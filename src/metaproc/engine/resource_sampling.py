@@ -140,15 +140,19 @@ class _CallerSignalWatch:
     raising: bool = True
     #: A SIGINT seen while cleanup was shielded; raised once the cleanup is done.
     interrupted: bool = False
-    #: The caller's signal mask on entry while the watch is armed, or None when it is
-    #: not (Windows, or off the main thread).
+    #: False until the launcher is inside the scope that cleans up. A signal before
+    #: then (during the fork or the identity read) is only recorded, and ``arm``
+    #: raises it, so it can neither leave the child unbound nor go uncleaned.
+    armed: bool = False
+    #: The caller's signal mask on entry when handlers are installed, or None when
+    #: they are not (Windows, or off the main thread).
     previous_mask: frozenset[int] | None = field(default=None, repr=False)
     sigint_handler: Any = field(default=None, repr=False)
 
     def handle(self, signum: int, frame: FrameType | None) -> None:
         del frame
         self.received.append(signum)
-        if self.raising:
+        if self.armed and self.raising:
             self.raising = False
             raise _CallerSignal(signum, self)
 
@@ -156,10 +160,15 @@ class _CallerSignalWatch:
         del signum, frame
         self.interrupted = True
 
-    def unblock(self) -> None:
-        """Let the watched signals through, from inside the scope that cleans up."""
-        if self.previous_mask is not None:
-            signal.pthread_sigmask(signal.SIG_SETMASK, self.previous_mask)
+    def arm(self) -> None:
+        """Raise watched signals from now on, from inside the scope that cleans up.
+
+        A signal recorded before arming is raised here, so its cleanup still runs.
+        """
+        self.armed = True
+        if self.received and self.raising:
+            self.raising = False
+            raise _CallerSignal(self.received[0], self)
 
     def shield_cleanup(self) -> None:
         """Cleanup has begun: record later signals instead of raising, SIGINT included.
@@ -191,12 +200,14 @@ def _caller_signals_end_the_command() -> Generator[_CallerSignalWatch]:
     dispositions are replaced: an ignored SIGHUP (``nohup``) stays ignored, and a
     caller's own handler keeps its policy.
 
-    The watched signals are blocked from before the handlers go in until the launcher
-    calls ``unblock`` inside the scope that cleans up, and again while they come out,
-    so a signal cannot land between the fork and that scope, or leave a handler half
-    installed; the caller's own mask is restored afterwards, and a signal that arrived
-    while blocked is then delivered under the restored disposition. A SIGINT during
-    cleanup is recorded and raised afterwards (``shield_cleanup``).
+    The watched signals are blocked only while the handlers go in and come out, so
+    none can leave a handler half installed; the caller's own mask is restored around
+    the command, so the child inherits that mask rather than one blocking the signals
+    its cleanup sends. A signal that lands before the launcher calls ``arm`` inside
+    the scope that cleans up (during the fork or the identity read) is recorded, and
+    ``arm`` raises it there. A signal that arrives while the handlers come out is
+    delivered under the restored disposition once the caller's mask is back. A SIGINT
+    during cleanup is recorded and raised afterwards (``shield_cleanup``).
 
     Not covered: SIGKILL, and SIGSTOP followed by it. Off the main thread, where
     handlers cannot be installed, and on Windows, nothing is armed: the command still
@@ -214,13 +225,15 @@ def _caller_signals_end_the_command() -> Generator[_CallerSignalWatch]:
         for signum in _CALLER_SIGNALS:
             if signal.getsignal(signum) == signal.SIG_DFL:
                 previous_handlers[signum] = signal.signal(signum, watch.handle)
+        # A signal that was pending reaches the unarmed handler here and is recorded.
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
         try:
             yield watch
         except _CallerSignal as exc:
             if exc.watch is not watch:
                 raise  # an enclosing launch's signal; its own watch re-delivers it
     finally:
-        # The launcher unblocked; block again so no handler runs half removed.
+        # Block again so no handler runs half removed.
         signal.pthread_sigmask(signal.SIG_BLOCK, _CALLER_SIGNALS)
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
@@ -366,9 +379,10 @@ def run_command_in_process_group(
         stderr = subprocess.PIPE
     args = list(command)
     with _caller_signals_end_the_command() as caller_signals:
-        # The watched signals stay blocked through the fork and the identity read: a
-        # signal here would leave the child unbound or uncleaned. They are let through
-        # only inside the scope below, which cleans up after them.
+        # A watched signal during the fork or the identity read is only recorded: raised
+        # here it would leave the child unbound or uncleaned. ``arm`` raises it inside
+        # the scope below, which cleans up after it. The signals are not blocked here,
+        # since the child would inherit the mask and ignore its cleanup's SIGTERM.
         process = subprocess.Popen(
             args,
             env=env,
@@ -382,7 +396,7 @@ def run_command_in_process_group(
         leader_create_time = _process_create_time(process.pid)
         try:
             try:
-                caller_signals.unblock()
+                caller_signals.arm()
                 output, errors = _communicate_until_leader_exits(
                     process, timeout=timeout, leader_create_time=leader_create_time
                 )
