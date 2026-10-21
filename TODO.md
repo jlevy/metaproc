@@ -4,14 +4,14 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
 
 ## Current Release
 
-- **[v0.4.1](https://github.com/jlevy/metaproc/releases/tag/v0.4.1)** (`mp-m22t`):
-  published from tag `36ad4fa`, the squash merge of pull request 77 and the current tip
-  of main, so there is no gap between the published wheel and post-release main for a
-  co-developing consumer to pin around.
-  The release is a patch, not a minor: nothing public was removed or renamed and no
-  adapter default changed.
-  Its one behavior change is that an unrecognized explicit model name now fails the step
-  instead of silently running the adapter default, which is the fix itself.
+- **[v0.5.0](https://github.com/jlevy/metaproc/releases/tag/v0.5.0)** (`mp-avdc`):
+  published from tag `0714762`, the merge of pull request 110 and the current tip of
+  main, so there is no gap between the published wheel and post-release main.
+  The release is a minor, not a patch, because it raises the Python floor to 3.14. Its
+  compatibility notes lead with that floor, the unverified GCP image interpreter
+  (`mp-mo74`), and Metabrowser not yet reading `.zst`; they also record that a local run
+  whose mapped agent steps pin profiles with different pool resources now fails where
+  v0.4.1 ran it (`mp-8oak`).
 
 ## Release Follow-Ups
 
@@ -32,15 +32,6 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
 
 ## Active Development
 
-- **v0.5.0 release** (`mp-avdc`): the changelog,
-  [release notes](docs/project/releases/v0.5.0.md), and publishing pointer match the
-  tree. What remains is the tag itself and the publish it triggers; § Current Release
-  moves to v0.5.0 once that tag exists.
-  The release is a minor, not a patch, because it raises the Python floor to 3.14. Its
-  compatibility notes lead with that floor, the unverified GCP image interpreter
-  (`mp-mo74`), and Metabrowser not yet reading `.zst`; they also record that mapped
-  agent steps now share the run-owned pool, so a local run whose mapped agent steps pin
-  profiles with different pool resources fails where v0.4.1 ran it (`mp-8oak`).
 - **Process-tree and host safety** (`mp-bd6v`; umbrella feature `mp-qigc`): incubate a
   standalone `safeproc` package with owned pre-execution supervision and brokerless
   monitoring of existing process trees; add cross-platform host admission and
