@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import locale
 import logging
 import os
 import signal
@@ -15,7 +16,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import FrameType
-from typing import Any, Literal, NoReturn, TextIO
+from typing import IO, Any, Literal, TextIO
 
 import psutil
 
@@ -106,16 +107,26 @@ def sample_step_resources(
         yield sampler
 
 
+#: The caller-directed termination signals the launcher watches. Each would kill the
+#: caller under its default disposition without reaching the command's own session.
+_CALLER_SIGNALS: tuple[int, ...] = (
+    () if sys.platform == "win32" else (signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT)
+)
+
+
 class _CallerSignal(BaseException):
-    """A SIGTERM or SIGHUP the caller received while an owned command ran.
+    """A watched signal the caller received while an owned command ran.
 
     Raised from the launcher's signal handler so the command's cleanup runs. It never
     escapes :func:`run_command_in_process_group`, which re-delivers the signal instead.
+    ``watch`` names the watch whose handler raised it, so a launch nested inside another
+    passes an enclosing watch's signal through after its own cleanup.
     """
 
-    def __init__(self, signum: int) -> None:
+    def __init__(self, signum: int, watch: _CallerSignalWatch) -> None:
         super().__init__(signum)
         self.signum = signum
+        self.watch = watch
 
 
 @dataclass
@@ -123,60 +134,130 @@ class _CallerSignalWatch:
     """Termination signals seen while one owned command runs."""
 
     received: list[int] = field(default_factory=list)
-    #: The first signal raises so cleanup starts; later ones only record, so a second
-    #: SIGTERM cannot cut the group cleanup short. The launcher clears this itself
-    #: before cleanup that another failure started.
+    #: The first watched signal raises so cleanup starts; later ones only record, so a
+    #: second SIGTERM cannot cut the group cleanup short. The launcher clears this
+    #: itself, through ``shield_cleanup``, before cleanup that another failure started.
     raising: bool = True
+    #: A SIGINT seen while cleanup was shielded; raised once the cleanup is done.
+    interrupted: bool = False
+    #: The caller's signal mask on entry while the watch is armed, or None when it is
+    #: not (Windows, or off the main thread).
+    previous_mask: frozenset[int] | None = field(default=None, repr=False)
+    sigint_handler: Any = field(default=None, repr=False)
 
     def handle(self, signum: int, frame: FrameType | None) -> None:
         del frame
         self.received.append(signum)
         if self.raising:
             self.raising = False
-            raise _CallerSignal(signum)
+            raise _CallerSignal(signum, self)
+
+    def record_interrupt(self, signum: int, frame: FrameType | None) -> None:
+        del signum, frame
+        self.interrupted = True
+
+    def unblock(self) -> None:
+        """Let the watched signals through, from inside the scope that cleans up."""
+        if self.previous_mask is not None:
+            signal.pthread_sigmask(signal.SIG_SETMASK, self.previous_mask)
+
+    def shield_cleanup(self) -> None:
+        """Cleanup has begun: record later signals instead of raising, SIGINT included.
+
+        A watched signal is re-delivered, and a SIGINT raised as ``KeyboardInterrupt``,
+        once the bounded group cleanup has finished, so neither cuts it short. SIGINT is
+        shielded only while Python's own handler holds it; an ignored SIGINT stays so.
+        """
+        self.raising = False
+        if (
+            self.previous_mask is not None
+            and self.sigint_handler is None
+            and signal.getsignal(signal.SIGINT) is signal.default_int_handler
+        ):
+            self.sigint_handler = signal.signal(signal.SIGINT, self.record_interrupt)
 
 
 @contextmanager
 def _caller_signals_end_the_command() -> Generator[_CallerSignalWatch]:
-    """Make SIGTERM and SIGHUP to the caller end the owned command, not orphan it.
+    """Make SIGTERM, SIGHUP and SIGQUIT to the caller end the owned command, not orphan it.
 
     The command's session is not the caller's, so a signal to the caller's process
-    group (a dropped terminal's SIGHUP, ``kill``, GNU ``timeout``, a CI cancel) no
-    longer reaches the command, and Python's default disposition would then die
-    without running the launcher's cleanup. For the call's duration the two signals
-    raise instead, so the group is terminated; once the handlers are restored the
-    first signal is re-delivered under its default disposition, and the caller dies
-    by it as it did when the command shared its group. Only default dispositions are
-    replaced: an ignored SIGHUP (``nohup``) stays ignored, and a caller's own handler
-    keeps its policy. Off the main thread, where handlers cannot be installed, and on
-    Windows, where SIGHUP does not exist, nothing is installed and the command runs
-    as before. SIGKILL cannot be handled and still leaves the tree behind.
+    group (a dropped terminal's SIGHUP, ``kill``, GNU ``timeout``, a CI cancel, the
+    terminal's Ctrl-\\) no longer reaches the command, and Python's default disposition
+    would then die without running the launcher's cleanup. For the call's duration the
+    watched signals raise instead, so the group is terminated; once the handlers are
+    restored the first signal is re-delivered under its default disposition, and the
+    caller dies by it as it did when the command shared its group. Only default
+    dispositions are replaced: an ignored SIGHUP (``nohup``) stays ignored, and a
+    caller's own handler keeps its policy.
+
+    The watched signals are blocked from before the handlers go in until the launcher
+    calls ``unblock`` inside the scope that cleans up, and again while they come out,
+    so a signal cannot land between the fork and that scope, or leave a handler half
+    installed; the caller's own mask is restored afterwards, and a signal that arrived
+    while blocked is then delivered under the restored disposition. A SIGINT during
+    cleanup is recorded and raised afterwards (``shield_cleanup``).
+
+    Not covered: SIGKILL, and SIGSTOP followed by it. Off the main thread, where
+    handlers cannot be installed, and on Windows, nothing is armed: the command still
+    runs in its own session, so a group-directed signal does not reach it, and a
+    caller dying by one orphans it. No call site launches off the main thread.
     """
     watch = _CallerSignalWatch()
     if sys.platform == "win32" or threading.current_thread() is not threading.main_thread():
         yield watch
         return
-    previous: dict[int, Any] = {}
-    for signum in (signal.SIGTERM, signal.SIGHUP):
-        if signal.getsignal(signum) == signal.SIG_DFL:
-            previous[signum] = signal.signal(signum, watch.handle)
+    previous_mask = frozenset(signal.pthread_sigmask(signal.SIG_BLOCK, _CALLER_SIGNALS))
+    watch.previous_mask = previous_mask
+    previous_handlers: dict[int, Any] = {}
     try:
+        for signum in _CALLER_SIGNALS:
+            if signal.getsignal(signum) == signal.SIG_DFL:
+                previous_handlers[signum] = signal.signal(signum, watch.handle)
         try:
             yield watch
-        except _CallerSignal:
-            pass  # re-delivered below, once the handlers are restored
+        except _CallerSignal as exc:
+            if exc.watch is not watch:
+                raise  # an enclosing launch's signal; its own watch re-delivers it
     finally:
-        for signum, handler in previous.items():
+        # The launcher unblocked; block again so no handler runs half removed.
+        signal.pthread_sigmask(signal.SIG_BLOCK, _CALLER_SIGNALS)
+        for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
-        if watch.received:
-            _die_by_signal(watch.received[0])
+        if watch.sigint_handler is not None:
+            signal.signal(signal.SIGINT, watch.sigint_handler)
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+        _end_with_received_signals(watch)
 
 
-def _die_by_signal(signum: int) -> NoReturn:
-    """Re-deliver *signum* to this process under its restored default disposition."""
-    os.kill(os.getpid(), signum)
-    # Reached only if the signal did not terminate the process.
-    raise SystemExit(128 + signum)
+def _end_with_received_signals(watch: _CallerSignalWatch) -> None:
+    """Act on the signals recorded during the command, now that its cleanup is done."""
+    if watch.received:
+        signum = watch.received[0]
+        # Re-deliver under the restored default disposition; the caller dies by it.
+        os.kill(os.getpid(), signum)
+        # Reached only if the signal did not terminate the process.
+        raise SystemExit(128 + signum)
+    if watch.interrupted:
+        raise KeyboardInterrupt
+
+
+def _partial_text(stream: IO[str] | None, data: object) -> str | None:
+    """Decode a partial pipe read as the text-mode pipe itself would have.
+
+    No pipe gives None, as ``communicate`` does; a pipe nothing was read from gives
+    the empty text ``subprocess.run`` returns for it, where ``TimeoutExpired`` carries
+    None.
+    """
+    if stream is None:
+        return None
+    if isinstance(data, str):
+        return data
+    if not isinstance(data, bytes):
+        return ""
+    encoding = getattr(stream, "encoding", None) or locale.getpreferredencoding(False)
+    errors = getattr(stream, "errors", None) or "strict"
+    return data.decode(encoding, errors).replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _communicate_until_leader_exits(
@@ -184,14 +265,17 @@ def _communicate_until_leader_exits(
     *,
     timeout: float | None,
     leader_create_time: float | None,
-) -> tuple[str, str]:
+) -> tuple[str | None, str | None]:
     """Collect the command's output, bounded by *timeout* on the leader, not its tree.
 
     ``communicate`` returns only once stdout and stderr reach EOF, which a descendant
     that inherited the pipes postpones past the leader's exit. The leader is polled
-    instead: once it has exited, the survivors are terminated and the output drained.
-    A timeout keeps ``subprocess.run``'s exception, with the caller's timeout and the
-    partial output.
+    instead: once it has exited, the survivors in its group are terminated and the
+    output drained. A holder that left the group (a tool the CLI spawned with its own
+    session) is out of reach, so the drain is bounded and the output so far is the
+    command's output, as ``subprocess.run`` would have returned it once that process
+    exited. A timeout keeps ``subprocess.run``'s exception, with the caller's timeout
+    and the partial output.
     """
     started = time.monotonic()
     while True:
@@ -207,7 +291,18 @@ def _communicate_until_leader_exits(
                     leader_create_time=leader_create_time,
                     ownership_observed_until=time.time(),
                 )
-                return process.communicate(timeout=_PROCESS_KILL_WAIT_S)
+                try:
+                    return process.communicate(timeout=_PROCESS_KILL_WAIT_S)
+                except subprocess.TimeoutExpired as drain:
+                    log.warning(
+                        "Command %d exited, but a process outside its group still holds "
+                        "its output pipe; returning the output collected so far",
+                        process.pid,
+                    )
+                    return (
+                        _partial_text(process.stdout, drain.output),
+                        _partial_text(process.stderr, drain.stderr),
+                    )
             if timeout is not None and time.monotonic() - started >= timeout:
                 exc.timeout = timeout
                 raise
@@ -239,25 +334,30 @@ def run_command_in_process_group(
     session, which makes the leader PID the group ID, and the group is cleaned up
     through the same identity-fenced owner as sampled code steps:
 
-    - on timeout and on ``KeyboardInterrupt``, before the exception propagates;
-    - on SIGTERM and SIGHUP to the caller, which the command's session would not
-      otherwise receive (:func:`_caller_signals_end_the_command`); the caller then
-      dies by the signal as before. SIGKILL cannot be handled and leaves the tree
-      behind;
+    - on timeout and on ``KeyboardInterrupt``, before the exception propagates; a
+      second SIGINT during that cleanup is recorded and raised once it is done;
+    - on SIGTERM, SIGHUP and SIGQUIT to the caller, which the command's session would
+      not otherwise receive (:func:`_caller_signals_end_the_command`); the caller then
+      dies by the signal as before. Not covered: SIGKILL, and SIGSTOP followed by it;
     - on leader exit, including when a descendant still holds the leader's stdout or
       stderr pipe, which would otherwise keep ``communicate`` waiting until the
       timeout (:func:`_communicate_until_leader_exits`).
 
-    When the group cannot be verified as this command's, the leader alone is killed,
-    as ``subprocess.run`` would: it is this process's unreaped child, so its PID is
-    not recyclable. Detached and pooled launches (``launch_step``, ``LocalBackend``)
-    hold the same contract; the developer guide states it under "Launch and
-    Cancellation Contracts". A call site therefore never selects a launcher by
-    adapter type.
+    The group is what the launcher can reach. A tool subprocess the CLI detached into
+    its own session (Gemini's and pi's shell tools do) is beyond it and is left to the
+    CLI's own signal handling, as it was before. When the group cannot be verified as
+    this command's, the leader alone is killed, as ``subprocess.run`` would: it is this
+    process's unreaped child, so its PID is not recyclable. Detached and pooled
+    launches (``launch_step``, ``LocalBackend``) hold the same contract; the developer
+    guide states it under "Launch and Cancellation Contracts". A call site therefore
+    never selects a launcher by adapter type. Every call site is on the main thread;
+    off it, the signal watch is not armed (see the watch). A launch nested inside
+    another is not a use case, but an enclosing watch's signal passes through it
+    after its own cleanup.
 
     Unlike :func:`run_sampled_step_command`, nothing is written to the run's resource
     ledger. File-directed stdout retains the child's raw bytes. Windows retains
-    leader-only cleanup.
+    leader-only cleanup and no signal watch.
     """
     if capture_output:
         if stdout is not None or stderr is not None:
@@ -266,6 +366,9 @@ def run_command_in_process_group(
         stderr = subprocess.PIPE
     args = list(command)
     with _caller_signals_end_the_command() as caller_signals:
+        # The watched signals stay blocked through the fork and the identity read: a
+        # signal here would leave the child unbound or uncleaned. They are let through
+        # only inside the scope below, which cleans up after them.
         process = subprocess.Popen(
             args,
             env=env,
@@ -279,13 +382,14 @@ def run_command_in_process_group(
         leader_create_time = _process_create_time(process.pid)
         try:
             try:
+                caller_signals.unblock()
                 output, errors = _communicate_until_leader_exits(
                     process, timeout=timeout, leader_create_time=leader_create_time
                 )
             except BaseException:
-                # A caller signal arriving now is recorded and re-delivered after
-                # cleanup; raising it here would cut the group cleanup short.
-                caller_signals.raising = False
+                # A later signal, SIGINT included, is recorded and acted on after
+                # cleanup; raising it here would cut the bounded cleanup short.
+                caller_signals.shield_cleanup()
                 try:
                     _terminate_process_tree(
                         process,
@@ -298,7 +402,7 @@ def run_command_in_process_group(
                 except Exception:
                     log.exception("Could not finish interrupted command cleanup")
                 raise
-            caller_signals.raising = False
+            caller_signals.shield_cleanup()
             try:
                 _terminate_process_tree(
                     process,

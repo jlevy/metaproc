@@ -173,14 +173,18 @@ development series.
 
 ### Fixed
 
-- **Foreground agent commands clean up the whole process tree, for every adapter.**
+- **Foreground agent commands clean up their process group, for every adapter.**
   `run-step --wait`, `auth-check --live`, and `probe-tool-use` launch the agent command
-  in its own process group and terminate every survivor on timeout, on an interrupt, and
-  on a SIGTERM or SIGHUP to Metaproc itself, which the command’s own session would
-  otherwise not receive; a Gemini prompt pipeline or a tool subprocess no longer
-  outlives the command.
+  in its own process group and terminate every member still in it on timeout, on an
+  interrupt, and on a SIGTERM, SIGHUP or SIGQUIT to Metaproc itself, which the command’s
+  own session would otherwise not receive: a Gemini prompt pipeline, Codex’s shell
+  wrapper, and a tool subprocess that stayed in the group no longer outlive the command.
+  A tool a CLI detached into its own session (Gemini’s and pi’s shell tools do) is
+  beyond the group and is left to that CLI’s own signal handling, as before.
+  The one path not covered is `run-step --wait` with the pi-cli log filter, which still
+  waits on the leader alone.
   A command whose leader has exited while a descendant still holds its output pipe is
-  collected rather than reported as timed out.
+  collected, with the output gathered so far, rather than reported as timed out.
 
 - **`auth-check --live` reports an adapter config it refuses.** A profile the adapter
   refuses at launch, such as one still carrying Gemini’s

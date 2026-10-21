@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
@@ -415,24 +416,83 @@ def test_cleanup_refusal_kills_only_the_unreaped_leader(monkeypatch: pytest.Monk
     process.wait.assert_called_once_with(timeout=resource_sampling_module._PROCESS_KILL_WAIT_S)
 
 
-_CALLER_SIGNALS: list[int] = [] if sys.platform == "win32" else [signal.SIGTERM, signal.SIGHUP]
+_CALLER_SIGNALS: list[int] = (
+    [] if sys.platform == "win32" else [signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT]
+)
 
 # The caller under test: a Python process that runs one owned command and otherwise
-# has the dispositions a terminal-launched metaproc has.
+# has the dispositions a terminal-launched metaproc has. FIXTURE_ARGV is the command
+# as JSON; FIXTURE_TIMEOUT is the launcher's timeout and FIXTURE_GRACE the termination
+# grace, both optional.
 _SIGNALLED_CALLER = """
+import json
 import os
 import signal
 import sys
-from metaproc.engine.resource_sampling import run_command_in_process_group
-signal.signal(signal.SIGTERM, signal.SIG_DFL)
-signal.signal(signal.SIGHUP, signal.SIG_DFL)
-run_command_in_process_group(
-    [sys.executable, "-c", os.environ["FIXTURE_BODY"]],
+from metaproc.engine import resource_sampling
+for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
+    signal.signal(signum, signal.SIG_DFL)
+if os.environ.get("FIXTURE_GRACE"):
+    resource_sampling._PROCESS_TERMINATION_GRACE_S = float(os.environ["FIXTURE_GRACE"])
+timeout = os.environ.get("FIXTURE_TIMEOUT")
+resource_sampling.run_command_in_process_group(
+    json.loads(os.environ["FIXTURE_ARGV"]),
     env=dict(os.environ),
     capture_output=True,
-    timeout=60,
+    timeout=float(timeout) if timeout else 60,
 )
 """
+
+# A group that ignores SIGTERM: its cleanup has to wait out the termination grace and
+# escalate to SIGKILL, which is the window the anti-cut-short guards protect.
+_TERM_IGNORING_GROUP = 'trap "" TERM; sleep 60 & echo "$$ $!" > "$PID_FILE"; wait'
+
+
+def _start_signalled_caller(
+    tmp_path: Path,
+    argv: list[str],
+    *,
+    timeout: float | None = None,
+    grace: float | None = None,
+    extra_env: dict[str, str] | None = None,
+) -> subprocess.Popen[str]:
+    env = {**os.environ, "FIXTURE_ARGV": json.dumps(argv), **(extra_env or {})}
+    if timeout is not None:
+        env["FIXTURE_TIMEOUT"] = str(timeout)
+    if grace is not None:
+        env["FIXTURE_GRACE"] = str(grace)
+    return subprocess.Popen(
+        [sys.executable, "-c", _SIGNALLED_CALLER],
+        env=env,
+        cwd=tmp_path,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
+def _wait_for_pids(pid_file: Path, count: int, timeout_s: float = 20) -> list[int]:
+    deadline = time.monotonic() + timeout_s
+    pids: list[int] = []
+    while len(pids) < count and time.monotonic() < deadline:
+        if pid_file.exists():
+            pids = [int(value) for value in pid_file.read_text(encoding="utf-8").split()]
+        if len(pids) < count:
+            time.sleep(0.05)
+    assert len(pids) == count, "fixture command did not start"
+    return pids
+
+
+def _finish_caller(caller: subprocess.Popen[str], pids: list[int]) -> None:
+    if caller.poll() is None:
+        caller.kill()
+        caller.wait(timeout=5)
+    for pid in pids:
+        with suppress(psutil.NoSuchProcess):
+            leftover = psutil.Process(pid)
+            if leftover.status() != psutil.STATUS_ZOMBIE:
+                leftover.kill()
 
 
 @pytest.mark.parametrize("signum", _CALLER_SIGNALS)
@@ -449,24 +509,10 @@ def test_signal_to_the_caller_reaps_the_owned_group_before_the_caller_dies(
         f"open({str(pid_file)!r}, 'w').write(f'{{os.getpid()}} {{child.pid}}'); "
         "time.sleep(60)"
     )
-    caller = subprocess.Popen(
-        [sys.executable, "-c", _SIGNALLED_CALLER],
-        env={**os.environ, "FIXTURE_BODY": body},
-        cwd=tmp_path,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    caller = _start_signalled_caller(tmp_path, [sys.executable, "-c", body])
     pids: list[int] = []
     try:
-        deadline = time.monotonic() + 20
-        while len(pids) < 2 and time.monotonic() < deadline:
-            if pid_file.exists():
-                pids = [int(value) for value in pid_file.read_text(encoding="utf-8").split()]
-            if len(pids) < 2:
-                time.sleep(0.05)
-        assert len(pids) == 2, "fixture command did not start"
+        pids = _wait_for_pids(pid_file, 2)
         os.kill(caller.pid, signum)
         _, stderr = caller.communicate(timeout=30)
         assert caller.returncode == -signum, stderr
@@ -533,3 +579,126 @@ def test_caller_signal_watch_installs_nothing_off_the_main_thread() -> None:
         assert seen["watch"] is not None
     finally:
         signal.signal(signal.SIGTERM, previous)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="owned process groups are POSIX")
+@pytest.mark.parametrize("timeout", [None, 30], ids=["no-timeout", "timeout"])
+def test_owned_command_collects_a_leader_whose_detached_descendant_holds_its_pipes(
+    tmp_path: Path, timeout: float | None
+) -> None:
+    """A tool the CLI detached into its own session is beyond the group. Its hold on
+    the output pipe bounds the drain; it must not turn a finished command into a
+    timeout, as subprocess.run would not have once that process exited."""
+    pid_file = tmp_path / "grandchild.pid"
+    command = [
+        sys.executable,
+        "-c",
+        (
+            "import subprocess, sys; "
+            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], "
+            "start_new_session=True); "
+            f"open({str(pid_file)!r}, 'w').write(str(child.pid)); "
+            "print('leader done', flush=True)"
+        ),
+    ]
+    started = time.monotonic()
+    try:
+        completed = resource_sampling_module.run_command_in_process_group(
+            command, env=dict(os.environ), cwd=tmp_path, capture_output=True, timeout=timeout
+        )
+        assert completed.returncode == 0
+        assert completed.stdout == "leader done\n"
+        assert completed.stderr == ""
+        assert time.monotonic() - started < 20, "the bounded drain did not return"
+    finally:
+        _kill_leftover(pid_file)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="owned process groups are POSIX")
+def test_second_caller_signal_during_cleanup_waits_for_the_bounded_cleanup(
+    tmp_path: Path,
+) -> None:
+    """Mutation pin for the handler's raising guard: were every watched signal to
+    raise, a second SIGTERM would cut the cleanup short and leave the TERM-ignoring
+    group alive behind a caller that died at once."""
+    pid_file = tmp_path / "pids"
+    caller = _start_signalled_caller(
+        tmp_path, ["sh", "-c", _TERM_IGNORING_GROUP], extra_env={"PID_FILE": str(pid_file)}
+    )
+    pids: list[int] = []
+    try:
+        pids = _wait_for_pids(pid_file, 2)
+        started = time.monotonic()
+        os.kill(caller.pid, signal.SIGTERM)
+        time.sleep(1)
+        os.kill(caller.pid, signal.SIGTERM)
+        _, stderr = caller.communicate(timeout=40)
+        elapsed = time.monotonic() - started
+        assert caller.returncode == -signal.SIGTERM, stderr
+        assert all(_reaped(pid) for pid in pids), "the TERM-ignoring group survived"
+        assert elapsed >= 3, "the caller died before the termination grace ran out"
+    finally:
+        _finish_caller(caller, pids)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="owned process groups are POSIX")
+def test_caller_signal_during_timeout_cleanup_waits_for_the_bounded_cleanup(
+    tmp_path: Path,
+) -> None:
+    """Mutation pin for shielding the error path: were the cleanup a timeout started
+    not shielded, a SIGTERM during it would raise through it and leave the
+    TERM-ignoring group alive."""
+    pid_file = tmp_path / "pids"
+    caller = _start_signalled_caller(
+        tmp_path,
+        ["sh", "-c", _TERM_IGNORING_GROUP],
+        timeout=1,
+        grace=8,
+        extra_env={"PID_FILE": str(pid_file)},
+    )
+    pids: list[int] = []
+    try:
+        pids = _wait_for_pids(pid_file, 2)
+        # Inside the grace window the 1 s timeout opens, which runs until about 9 s.
+        time.sleep(2)
+        os.kill(caller.pid, signal.SIGTERM)
+        _, stderr = caller.communicate(timeout=40)
+        assert caller.returncode == -signal.SIGTERM, stderr
+        assert all(_reaped(pid) for pid in pids), "the TERM-ignoring group survived"
+    finally:
+        _finish_caller(caller, pids)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="owned process groups are POSIX")
+def test_caller_signal_watch_blocks_the_watched_signals_until_unblocked() -> None:
+    """A signal that lands between the fork and the cleanup scope stays pending: it
+    can neither leave the child unbound nor escape a half-installed handler."""
+    previous = {signum: signal.signal(signum, signal.SIG_DFL) for signum in _CALLER_SIGNALS}
+    try:
+        with resource_sampling_module._caller_signals_end_the_command() as watch:
+            assert set(_CALLER_SIGNALS) <= signal.pthread_sigmask(signal.SIG_BLOCK, [])
+            # Aimed at this thread, as a process-directed signal is when the CLI's
+            # main thread is the only one, so it cannot land on a helper thread.
+            signal.pthread_kill(threading.get_ident(), signal.SIGTERM)
+            assert signal.SIGTERM in signal.sigpending()
+            assert watch.received == []
+            # Consume it before anything could deliver it to this test process.
+            assert signal.sigwait([signal.SIGTERM]) == signal.SIGTERM
+            watch.unblock()
+            assert not set(_CALLER_SIGNALS) & signal.pthread_sigmask(signal.SIG_BLOCK, [])
+        assert not set(_CALLER_SIGNALS) & signal.pthread_sigmask(signal.SIG_BLOCK, [])
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="owned process groups are POSIX")
+def test_caller_signal_watch_restores_the_callers_own_mask() -> None:
+    before = signal.pthread_sigmask(signal.SIG_BLOCK, [signal.SIGUSR1])
+    try:
+        with resource_sampling_module._caller_signals_end_the_command() as watch:
+            watch.unblock()
+            assert signal.SIGUSR1 in signal.pthread_sigmask(signal.SIG_BLOCK, [])
+        assert signal.pthread_sigmask(signal.SIG_BLOCK, []) == before | {signal.SIGUSR1}
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, before)

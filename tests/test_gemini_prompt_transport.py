@@ -34,6 +34,11 @@ from metaproc.runpool.backend import (
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="Gemini launcher uses POSIX sh")
 
+# The deadline a direct consumer gives the fake CLI, which starts Python through sh. A
+# one-second deadline lost that race under load, before the CLI could record its PID
+# or send its interrupt; the headroom keeps the stop a stop and not a start failure.
+_STOP_TIMEOUT_S = 5
+
 
 def _prepare(
     tmp_path: Path,
@@ -296,7 +301,9 @@ def test_direct_consumer_stop_does_not_leave_gemini_running(
             else nullcontext()
         ):
             if consumer == "probe":
-                ok, message, _ = _run_probe("gemini-cli", "gemini-3.6-flash", None, timeout_s=1)
+                ok, message, _ = _run_probe(
+                    "gemini-cli", "gemini-3.6-flash", None, timeout_s=_STOP_TIMEOUT_S
+                )
                 assert not ok and "timed out" in message
             elif consumer == "auth-check":
                 monkeypatch.setattr(
@@ -312,7 +319,9 @@ def test_direct_consumer_stop_does_not_leave_gemini_running(
                         "",
                     ),
                 )
-                results = _run_live_check("gemini-cli", "gemini-3.6-flash", timeout_s=1)
+                results = _run_live_check(
+                    "gemini-cli", "gemini-3.6-flash", timeout_s=_STOP_TIMEOUT_S
+                )
                 assert not results[0][0] and "timed out" in results[0][1]
             else:
                 process = tmp_path / "timeout.process.md"
@@ -329,7 +338,7 @@ def test_direct_consumer_stop_does_not_leave_gemini_running(
                                         "type": "gemini-cli",
                                         "config": {
                                             "model": "gemini-3.6-flash",
-                                            "timeout_s": 1,
+                                            "timeout_s": _STOP_TIMEOUT_S,
                                             "working_directory": str(tmp_path),
                                             "native_settings_scope": "workspace",
                                         },
