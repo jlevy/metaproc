@@ -41,6 +41,12 @@ log = logging.getLogger(__name__)
 
 from metaproc import paths as paths_mod
 from metaproc.cli import app, get_output
+from metaproc.cloud.gcp.gcp_run_live import (
+    LiveView,
+    live_view_uri_of,
+    new_tail_lines,
+    summarize_status,
+)
 from metaproc.commands.helpers import load_process_spec
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.engine.build_plan import build_plan
@@ -338,6 +344,21 @@ def _query_jobs_by_run_id(run_id: str, project: str, region: str) -> list[Any]:
     return [*exact_jobs, *verified_legacy_jobs]
 
 
+def _live_statuses(jobs: list[Any]) -> dict[str, dict[str, Any] | None]:
+    """Each job's live-view status record, keyed by job name, for jobs that keep one."""
+    statuses: dict[str, dict[str, Any] | None] = {}
+    for job in jobs:
+        uri = live_view_uri_of(job)
+        if not uri:
+            continue
+        try:
+            statuses[job.name] = LiveView(uri).status()
+        except Exception as exc:  # noqa: BLE001 -- the live view is a monitoring copy
+            log.warning("Could not read the live view %s: %s", uri, exc)
+            statuses[job.name] = None
+    return statuses
+
+
 def _format_job_results(
     jobs: list[Any],
     *,
@@ -345,6 +366,7 @@ def _format_job_results(
     failed_only: bool,
     as_json: bool,
     out: OutputManager,
+    live: Mapping[str, dict[str, Any] | None] | None = None,
 ) -> None:
     """Format and display job results (shared by both status modes)."""
     from google.cloud.batch_v1.types import (  # noqa: PLC0415 -- optional [gcp-batch] dependency
@@ -370,6 +392,8 @@ def _format_job_results(
             "variant": labels.get("metaproc-variant", ""),
             "worker_id": labels.get("metaproc-worker-id", ""),
         }
+        if live and job_name in live:
+            info["live"] = live[job_name]
         results.append(info)
 
     # Sort: orchestrator first, then workers by worker_id.
@@ -409,6 +433,10 @@ def _format_job_results(
             if step:
                 label = f"{label} ({step})"
             out.data(f"  [{label}] {job_id}: {state}")
+        if "live" in r:
+            live_status = r["live"]
+            summary = summarize_status(live_status) if live_status else "no live view yet"
+            out.data(f"      live: {summary}")
 
 
 @gcp_app.command("status")
@@ -418,12 +446,18 @@ def gcp_status(
     project: str = typer.Option("", "--project", help="GCP project (default: from env)"),
     region: str = typer.Option("us-central1", "--region", help="GCP region"),
     as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
+    run_status: bool = typer.Option(
+        False,
+        "--run-status",
+        help="Also print the `metaproc status` of each run a job's live view watches.",
+    ),
 ) -> None:
     """Show Batch job status for a run.
 
     Existing directories resolve jobs from local runpool events. Exact Batch job
     resources resolve directly. Other strings use exact run-key lookup plus safe
-    legacy recovery.
+    legacy recovery. A `metaproc gcp run` job with its console on Filestore also shows
+    its live view: state, console size and when it last reported.
     """
     _require_gcp_batch()
     from google.cloud import batch_v1  # noqa: PLC0415 -- optional [gcp-batch] dependency
@@ -479,7 +513,19 @@ def gcp_status(
             out.progress(f"No Batch jobs found for run-id '{run_id}'.")
             raise typer.Exit(code=0)
 
-    _format_job_results(jobs, run_id=run_id, failed_only=failed_only, as_json=as_json, out=out)
+    live = _live_statuses(jobs)
+    _format_job_results(
+        jobs, run_id=run_id, failed_only=failed_only, as_json=as_json, out=out, live=live
+    )
+    if run_status and not as_json:
+        for job in jobs:
+            uri = live_view_uri_of(job)
+            if not uri:
+                continue
+            for name, text in LiveView(uri).run_statuses().items():
+                out.data("")
+                out.data(f"── {name} ({job.name.rsplit('/', 1)[-1]}) ──")
+                out.data(text.rstrip("\n"))
 
 
 @gcp_app.command("scale")
@@ -1145,6 +1191,11 @@ def gcp_logs(
         help="Include batch_agent_logs (VM agent heartbeats). "
         "Use when diagnosing bootstrap failures where the container never starts.",
     ),
+    use_cloud_logging: bool = typer.Option(
+        False,
+        "--cloud-logging",
+        help="Read Cloud Logging even for jobs that keep their console on Filestore.",
+    ),
 ) -> None:
     """Stream logs from Cloud Logging for a run's GCP Batch jobs.
 
@@ -1158,6 +1209,11 @@ def gcp_logs(
     Use ``--role orchestrator`` (or ``worker``) to narrow to one side of
     the split. Combine with ``--worker N`` to pin to a single worker.
     Use ``--follow`` to tail new entries as they arrive.
+
+    A ``metaproc gcp run`` job whose console is on Filestore puts only a heartbeat in
+    Cloud Logging; for it this prints the console's last lines from the job's live view
+    instead, and ``--follow`` polls that view. ``--cloud-logging`` reads the heartbeat
+    and bootstrap stream.
     """
     _require_gcp_batch()
     from google.cloud import (  # noqa: PLC0415 -- optional [gcp-batch] dependency
@@ -1218,6 +1274,9 @@ def gcp_logs(
             job = batch_client.get_job(batch_v1.GetJobRequest(name=target))
         except Exception as exc:
             raise CLIError(f"Failed to fetch Batch job {target}: {exc}") from exc
+        if not use_cloud_logging and not errors_only and live_view_uri_of(job):
+            _print_live_logs([job], out=out, limit=limit, follow=follow)
+            return
         job_uid = str(getattr(job, "uid", "") or "")
         if not job_uid:
             raise CLIError(f"Batch job {target} did not return a UID")
@@ -1246,6 +1305,9 @@ def gcp_logs(
             out.progress(f"No Batch jobs found for {scope}.")
             raise typer.Exit(code=0)
 
+        if not use_cloud_logging and not errors_only and all(live_view_uri_of(job) for job in jobs):
+            _print_live_logs(jobs, out=out, limit=limit, follow=follow)
+            return
         job_uids = [str(job.uid) for job in jobs if getattr(job, "uid", "")]
         if not job_uids:
             out.progress("Batch returned jobs without UIDs; cannot query logs.")
@@ -1285,6 +1347,59 @@ def gcp_logs(
 
     for entry in entries:
         out.data(_format_log_entry(entry))
+
+
+_LIVE_FOLLOW_POLL_SECONDS = 15.0
+
+
+def _print_live_logs(
+    jobs: list[Any],
+    *,
+    out: OutputManager,
+    limit: int,
+    follow: bool,
+    view_factory: Any = LiveView,
+    sleep: Any = time.sleep,
+) -> None:
+    """Print each job's console tail from its live view, and follow it if asked."""
+    views = [(job.name.rsplit("/", 1)[-1], view_factory(live_view_uri_of(job))) for job in jobs]
+    label = len(views) > 1
+    totals: dict[str, int] = {}
+    for name, view in views:
+        prefix = f"[{name}] " if label else ""
+        status = view.status() or {}
+        out.progress(f"{prefix}{summarize_status(status) if status else 'no live view yet'}")
+        lines = (view.tail() or "").splitlines()
+        for line in lines[-limit:] if limit > 0 else lines:
+            out.data(f"{prefix}{line}")
+        totals[name] = int(status.get("console_lines") or 0)
+    if not follow:
+        return
+    try:
+        while True:
+            sleep(_LIVE_FOLLOW_POLL_SECONDS)
+            running = False
+            for name, view in views:
+                prefix = f"[{name}] " if label else ""
+                status = view.status() or {}
+                total = int(status.get("console_lines") or 0)
+                if total > totals[name]:
+                    fresh, missed = new_tail_lines(view.tail() or "", totals[name], total)
+                    if missed:
+                        out.progress(
+                            f"{prefix}... {missed:,} lines are not in the live view; the "
+                            f"full console is {status.get('console_path', 'on Filestore')}"
+                        )
+                    for line in fresh:
+                        out.data(f"{prefix}{line}")
+                    totals[name] = total
+                if status.get("state") != "exited":
+                    running = True
+            if not running:
+                out.progress("Every followed job has exited.")
+                return
+    except KeyboardInterrupt:
+        out.progress("Stopped following logs.")
 
 
 _FOLLOW_POLL_SECONDS = 10.0
