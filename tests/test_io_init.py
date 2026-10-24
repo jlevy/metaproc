@@ -16,6 +16,7 @@ from metaproc.io import compression as _io_compression
 from metaproc.io import frontmatter as _io_frontmatter
 from metaproc.io import secret_io as _io_secret_io
 from metaproc.io import templating as _io_templating
+from metaproc.io import yaml_dump as _io_yaml_dump
 
 EXPECTED_PUBLIC = {
     "ArtifactDecodeError",
@@ -43,6 +44,7 @@ EXPECTED_PUBLIC = {
     "iter_jsonl_records",
     "iter_text_lines",
     "logical_path",
+    "new_dump_yaml",
     "new_yaml",
     "read_yaml_artifact",
     "read_yaml_file",
@@ -134,6 +136,10 @@ def test_strif_reexports_resolve_to_source() -> None:
         "temp_output_file",
     ):
         assert getattr(io_mod, name) is getattr(strif, name), name
+
+
+def test_yaml_dump_helper_resolves_to_source_module() -> None:
+    assert io_mod.new_dump_yaml is _io_yaml_dump.new_dump_yaml
 
 
 def test_secret_helpers_resolve_to_source_module() -> None:

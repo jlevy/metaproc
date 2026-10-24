@@ -28,6 +28,15 @@ development series.
   `--console cloud-logging` keeps the earlier behavior, which stays the default for
   `--no-wheel` jobs.
 
+### Fixed
+
+- **Pool status, scale-state, scale-override, and kill-sentinel files are written the
+  same with or without ruamel’s C extension.** With `_ruamel_yaml` installed, their safe
+  YAML handle switched to libyaml’s emitter, which wraps long values at different
+  points. They now dump through `metaproc.io.new_dump_yaml`, a `new_yaml` handle that
+  keeps the pure-Python emitter, so the bytes match what a process without the extension
+  writes.
+
 ## [0.5.0][] - 2026-10-21
 
 ### Added

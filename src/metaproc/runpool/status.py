@@ -15,7 +15,7 @@ from typing import Any
 import psutil
 from pydantic import BaseModel, Field
 
-from metaproc.io import atomic_output_file, new_yaml, read_yaml_file
+from metaproc.io import atomic_output_file, new_dump_yaml, read_yaml_file
 from metaproc.osutils.memory_pressure import PressureLevel
 from metaproc.runpool.concurrency import ConcurrencyPlan
 
@@ -25,10 +25,11 @@ from metaproc.runpool.concurrency import ConcurrencyPlan
 # so suppress_vals is disabled. to_yaml_string would otherwise drop them.
 # ruamel.yaml's add_representer mutates a class-level dispatch table, so the
 # YAML handle is rebuilt per-call to avoid pollution from concurrent
-# to_yaml_string callers in the same process.
+# to_yaml_string callers in the same process. new_dump_yaml keeps the pure emitter,
+# so the bytes do not change when ruamel's C extension is installed.
 def _dump_status_yaml(value: Any) -> str:
     buf = io.StringIO()
-    new_yaml(suppress_vals=lambda _v: False).dump(value, buf)
+    new_dump_yaml(suppress_vals=lambda _v: False).dump(value, buf)
     return buf.getvalue()
 
 

@@ -19,7 +19,7 @@ from pathlib import Path
 
 import psutil
 
-from metaproc.io import atomic_output_file, new_yaml, read_yaml_file
+from metaproc.io import atomic_output_file, new_dump_yaml, read_yaml_file
 from metaproc.paths import POOL_KILL_SENTINEL_FILE, POOL_STATUS_FILE, STATE_DIR
 from metaproc.runpool.status import ProcessStatus, is_pool_alive, read_status
 
@@ -67,7 +67,7 @@ def _write_sentinel(
     # Operators expect every sentinel field present (including `variant: null`
     # when no variant filter was set); disable None suppression.
     buf = io.StringIO()
-    new_yaml(suppress_vals=lambda _v: False).dump(data, buf)
+    new_dump_yaml(suppress_vals=lambda _v: False).dump(data, buf)
     content = buf.getvalue()
     sentinel_path = state_dir / POOL_KILL_SENTINEL_FILE
 
