@@ -217,7 +217,21 @@ cloud-provider listing/logging commands:
 | Which runs are active? | `metaproc gcp runs` |
 | What is the Batch state? | `metaproc gcp status <run-id>` |
 | What are workers logging? | `metaproc gcp logs <run-id> --follow` |
+| What is a `gcp run` job doing, and its watched run? | `metaproc gcp status <job> --run-status` |
 | Stop the run | `metaproc gcp cancel <run-id>` |
+
+A `metaproc gcp run` job that mounts Filestore and ships the current wheel keeps its
+console on Filestore, as a local run keeps its own: stdout and stderr are appended to
+`<mount>/logs/gcp-run/<job>/console.log`, and Cloud Logging receives only a heartbeat a
+minute, the exit line and the bootstrap output.
+At every heartbeat the job also rewrites a small live view beside its artifacts in the
+dispatch bucket (`gcp-run/<job>/live/`): the console’s last lines, a status record and
+the `metaproc status` of each run directory named with `--watch-run`.
+`metaproc gcp logs <job>` prints the console tail from that view and `--follow` polls
+it; `metaproc gcp status <job>` shows its state and freshness.
+The view is a monitoring copy: the Filestore console and the run tree are the record.
+`--console cloud-logging` keeps the whole console in Cloud Logging, which is also the
+default for a `--no-wheel` job whose image may predate the wrapper.
 
 For unattended runs, use the supported automation/monitoring mechanism in the active
 agent environment and have it call these commands.

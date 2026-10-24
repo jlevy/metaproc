@@ -9,6 +9,12 @@ typed secret-reference registry, builds the Job via
 ``batch_backend.create_single_task_job``, and submits it via the Batch
 client.
 
+With ``console_on_filestore`` the user command runs inside
+``gcp_run_console``, which appends its console to
+``<mount>/logs/gcp-run/<job_id>/console.log`` on the Filestore mount and keeps a
+small live view under ``live_gcs_uri`` for readers that may not mount Filestore;
+Cloud Logging then carries only the wrapper's heartbeat and the bootstrap output.
+
 ``build_gcp_run_job`` is the pure assembly half (no API calls), used by
 ``--dry-run`` and unit tests. ``dispatch_gcp_run`` is the side-effecting
 wrapper that actually submits.
@@ -30,6 +36,12 @@ from metaproc.cloud.gcp.batch_backend import (
     build_job_id,
     create_single_task_job,
     get_container_runs_dir,
+)
+from metaproc.cloud.gcp.gcp_run_console import (
+    CONSOLE_MODULE,
+    CONSOLE_PATH_ENV,
+    LIVE_GCS_ENV,
+    WATCH_ENV,
 )
 from metaproc.cloud.gcp.secret_hydration import (
     SECRET_REFS_ENV,
@@ -56,8 +68,19 @@ RESERVED_ENV_KEYS: frozenset[str] = frozenset(
         "METAPROC_WORKSPACE_PACKAGES",
         SECRET_REFS_ENV,
         "RUNS_DIR",
+        CONSOLE_PATH_ENV,
+        LIVE_GCS_ENV,
+        WATCH_ENV,
     }
 )
+
+# Where a job's console goes on the Filestore mount, under the job's own directory.
+CONSOLE_DIR = "logs/gcp-run"
+
+
+def console_path(config: GCPBatchConfig, job_id: str) -> str:
+    """The Filestore path of ``job_id``'s console, as the container sees it."""
+    return f"{config.filestore_mount_path.rstrip('/')}/{CONSOLE_DIR}/{job_id}/console.log"
 
 
 @dataclass(frozen=True)
@@ -81,6 +104,9 @@ class DispatchGcpRunOptions:
     job_name: str = ""
     spot: bool = True
     job_labels: Mapping[str, str] = field(default_factory=dict)
+    console_on_filestore: bool = False
+    live_gcs_uri: str = ""
+    watch_run_dirs: tuple[str, ...] = ()
 
 
 def _generate_job_id() -> str:
@@ -169,7 +195,29 @@ def build_gcp_run_job(
     if options.workspace_sha256 and SHA256_PATTERN.fullmatch(options.workspace_sha256) is None:
         raise ValueError("workspace_sha256 must be exactly 64 hexadecimal characters")
 
-    env_vars: dict[str, str] = {"METAPROC_GCP_RUN_CMD": json.dumps(cmd)}
+    job_id = options.job_name or _generate_job_id()
+    run_cmd = list(cmd)
+    console_env: dict[str, str] = {}
+    if options.console_on_filestore:
+        if not options.config.filestore_server:
+            raise ValueError("console_on_filestore requires a Filestore mount")
+        for run_dir in options.watch_run_dirs:
+            if not run_dir.startswith("/") or "," in run_dir:
+                raise ValueError(
+                    f"watch_run_dirs must be absolute, comma-free container paths: {run_dir!r}"
+                )
+        if options.live_gcs_uri and not options.live_gcs_uri.startswith("gs://"):
+            raise ValueError(f"live_gcs_uri must be a gs:// URI: {options.live_gcs_uri!r}")
+        run_cmd = ["python", "-m", CONSOLE_MODULE, "--", *cmd]
+        console_env[CONSOLE_PATH_ENV] = console_path(options.config, job_id)
+        if options.live_gcs_uri:
+            console_env[LIVE_GCS_ENV] = options.live_gcs_uri
+        if options.watch_run_dirs:
+            console_env[WATCH_ENV] = ",".join(options.watch_run_dirs)
+    elif options.live_gcs_uri or options.watch_run_dirs:
+        raise ValueError("live_gcs_uri and watch_run_dirs require console_on_filestore")
+
+    env_vars: dict[str, str] = {"METAPROC_GCP_RUN_CMD": json.dumps(run_cmd), **console_env}
     if options.wheel_gcs_uri:
         env_vars["METAPROC_WHEEL_GCS"] = options.wheel_gcs_uri
         env_vars["METAPROC_WHEEL_SHA256"] = options.wheel_sha256
@@ -200,7 +248,6 @@ def build_gcp_run_job(
         job_labels=labels,
     )
 
-    job_id = options.job_name or _generate_job_id()
     return job_id, job
 
 
