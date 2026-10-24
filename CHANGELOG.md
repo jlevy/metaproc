@@ -7,6 +7,15 @@ development series.
 
 ## [Unreleased][unreleased]
 
+### Changed
+
+- **A mapped composite opens as many item scopes as the run’s ceiling admits.** It used
+  to open at most 32 at once whatever `--max-concurrency` said, so a run with a ceiling
+  of 80 or 160 never had more than 32 items’ leaves competing for the pool.
+  Scopes hold no admission capacity of their own, so they now follow the run’s ceiling,
+  with 32 as the floor, and the pool’s memory and provider admission still bound the
+  work in flight.
+
 ### Added
 
 - **A `gcp run` job keeps its console on Filestore.** With the Filestore mount and the
