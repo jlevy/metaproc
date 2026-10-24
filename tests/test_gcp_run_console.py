@@ -201,3 +201,26 @@ def test_main_refuses_without_a_command_or_console(monkeypatch: pytest.MonkeyPat
     monkeypatch.delenv(console.CONSOLE_PATH_ENV, raising=False)
     assert console.main(["--"]) == 2
     assert console.main(["--", "true"]) == 2
+
+
+def test_watched_run_status_refreshes_on_its_own_slower_cadence(tmp_path: Path) -> None:
+    run_dir = tmp_path / "runs" / "run-abc"
+    settings = _settings(tmp_path, watch_dirs=(run_dir,), run_status_s=300.0)
+    settings.console_path.parent.mkdir(parents=True)
+    settings.console_path.write_text("x\n")
+    calls: list[str] = []
+    times = iter([0.0, 60.0, 120.0, 310.0, 320.0])
+    live = console.LiveView(
+        settings,
+        RecordingSink(),
+        ["true"],
+        io.StringIO(),
+        run_status=lambda path: calls.append(path.name) or "ok\n",
+        clock=lambda: next(times),
+    )
+    counter = console.ConsoleCounter(settings.console_path)
+    for _ in range(4):
+        live.publish(counter)
+    assert calls == ["run-abc", "run-abc"]  # at 0s and at 310s, not at 60s or 120s
+    live.publish(counter, final=True)
+    assert calls == ["run-abc", "run-abc", "run-abc"]

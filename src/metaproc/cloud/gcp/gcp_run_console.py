@@ -48,6 +48,9 @@ LIVE_TAIL_NAME = "console-tail.txt"
 LIVE_RUN_STATUS_DIR = "runs"
 
 DEFAULT_HEARTBEAT_SECONDS = 60.0
+# `metaproc status` of a large run takes a minute or more, so watched runs refresh less
+# often than the heartbeat, and always once at exit.
+DEFAULT_RUN_STATUS_SECONDS = 300.0
 DEFAULT_TAIL_LINES = 400
 RUN_STATUS_TIMEOUT_SECONDS = 120.0
 _TAIL_READ_CHUNK = 64 * 1024
@@ -85,6 +88,7 @@ class ConsoleSettings:
     watch_dirs: tuple[Path, ...] = ()
     heartbeat_s: float = DEFAULT_HEARTBEAT_SECONDS
     tail_lines: int = DEFAULT_TAIL_LINES
+    run_status_s: float = DEFAULT_RUN_STATUS_SECONDS
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> ConsoleSettings:
@@ -170,11 +174,14 @@ class LiveView:
         argv: Sequence[str],
         stdout: TextIO,
         run_status: Callable[[Path], str] = render_run_status,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._settings = settings
         self._sink = sink
         self._stdout = stdout
         self._run_status = run_status
+        self._clock = clock
+        self._run_status_at: float | None = None
         self._failures = 0
         self.record: dict[str, object] = {
             "console_path": str(settings.console_path),
@@ -187,9 +194,15 @@ class LiveView:
             "watch": [str(p) for p in settings.watch_dirs],
         }
 
-    def publish(self, counter: ConsoleCounter) -> None:
+    def publish(self, counter: ConsoleCounter, *, final: bool = False) -> None:
         if self._sink is None:
             return
+        now = self._clock()
+        refresh_runs = (
+            final
+            or self._run_status_at is None
+            or now - self._run_status_at >= self._settings.run_status_s
+        )
         self.record.update(
             updated_at=_utc_now(), console_bytes=counter.bytes, console_lines=counter.lines
         )
@@ -199,7 +212,7 @@ class LiveView:
                 read_tail(self._settings.console_path, self._settings.tail_lines),
                 "text/plain; charset=utf-8",
             )
-            for run_dir in self._settings.watch_dirs:
+            for run_dir in self._settings.watch_dirs if refresh_runs else ():
                 self._sink.put(
                     f"{LIVE_RUN_STATUS_DIR}/{run_dir.name}.txt",
                     self._run_status(run_dir),
@@ -211,6 +224,8 @@ class LiveView:
                 json.dumps(self.record, indent=2) + "\n",
                 "application/json",
             )
+            if refresh_runs:
+                self._run_status_at = now
         except Exception as exc:  # noqa: BLE001 -- the live view is a monitoring copy
             self._failures += 1
             if self._failures == 1 or self._failures % 10 == 0:
@@ -280,7 +295,7 @@ def run_with_console(
     code = _exit_code(returncode)
     counter.refresh()
     live.record.update(state="exited", exit_code=code)
-    live.publish(counter)
+    live.publish(counter, final=True)
     print(
         f"{LOG_PREFIX} exit {code}; console {counter.bytes:,} bytes, {counter.lines:,} lines "
         f"at {console}",
