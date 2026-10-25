@@ -76,7 +76,7 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
         "operator",
         "metaproc-operator-reference",
         "Runtime CLI reference: running, monitoring, and resuming processes.",
-        11500,
+        12700,
     ),
     Topic(
         "developer",
