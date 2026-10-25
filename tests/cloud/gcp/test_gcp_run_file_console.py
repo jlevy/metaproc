@@ -1,4 +1,4 @@
-"""A gcp-run job's console goes to Filestore, and the gcp CLI reads its live view."""
+"""A gcp-run job's console goes to a file, and the gcp CLI reads its live view."""
 
 from __future__ import annotations
 
@@ -52,13 +52,13 @@ def _env(job: Any) -> dict[str, str]:
 # ── dispatch ─────────────────────────────────────────────────
 
 
-def test_filestore_console_wraps_the_command_and_names_its_file() -> None:
+def test_file_console_wraps_the_command_and_names_its_file() -> None:
     job_id, job = build_gcp_run_job(
         ["bash", "worker.sh", "launch"],
         DispatchGcpRunOptions(
             config=_config(),
             job_name="batch-01-launch-01",
-            console_on_filestore=True,
+            console_to_file=True,
             live_gcs_uri="gs://bucket/gcp-run/batch-01-launch-01/live",
             watch_run_dirs=("/mnt/disks/filestore/runs/example/run-a",),
         ),
@@ -88,13 +88,13 @@ def test_cloud_logging_console_leaves_the_command_alone() -> None:
     assert CONSOLE_PATH_ENV not in env and LIVE_GCS_ENV not in env
 
 
-def test_filestore_console_needs_a_mount_and_live_view_needs_the_console() -> None:
-    with pytest.raises(ValueError, match="requires a Filestore mount"):
+def test_file_console_needs_a_mount_and_live_view_needs_the_console() -> None:
+    with pytest.raises(ValueError, match="requires a run-storage mount"):
         build_gcp_run_job(
             ["true"],
-            DispatchGcpRunOptions(config=_config(filestore_server=""), console_on_filestore=True),
+            DispatchGcpRunOptions(config=_config(filestore_server=""), console_to_file=True),
         )
-    with pytest.raises(ValueError, match="require console_on_filestore"):
+    with pytest.raises(ValueError, match="require console_to_file"):
         build_gcp_run_job(
             ["true"], DispatchGcpRunOptions(config=_config(), live_gcs_uri="gs://b/live")
         )
@@ -102,7 +102,7 @@ def test_filestore_console_needs_a_mount_and_live_view_needs_the_console() -> No
         build_gcp_run_job(
             ["true"],
             DispatchGcpRunOptions(
-                config=_config(), console_on_filestore=True, watch_run_dirs=("runs/a",)
+                config=_config(), console_to_file=True, watch_run_dirs=("runs/a",)
             ),
         )
 
@@ -125,7 +125,7 @@ def test_console_env_is_dispatcher_owned() -> None:
         ("auto", "10.0.0.2", False, True),
         ("auto", "10.0.0.2", True, False),
         ("auto", "", False, False),
-        ("filestore", "10.0.0.2", True, True),
+        ("file", "10.0.0.2", True, True),
         ("cloud-logging", "10.0.0.2", False, False),
     ],
 )
@@ -138,19 +138,23 @@ def test_console_choice(console: str, server: str, no_wheel: bool, expected: boo
 
 
 def test_console_choice_refusals() -> None:
-    with pytest.raises(typer.BadParameter, match="needs the Filestore mount"):
+    with pytest.raises(typer.BadParameter, match="needs the run-storage mount"):
         cmd_gcp_run._resolve_console(
-            "filestore", config=_config(filestore_server=""), no_wheel=False, watch_run=None
+            "file", config=_config(filestore_server=""), no_wheel=False, watch_run=None
         )
-    with pytest.raises(typer.BadParameter, match="needs the Filestore console"):
+    with pytest.raises(typer.BadParameter, match="needs the file console"):
         cmd_gcp_run._resolve_console(
             "cloud-logging", config=_config(), no_wheel=False, watch_run=["/mnt/runs/a"]
         )
     with pytest.raises(typer.BadParameter, match="must be one of"):
         cmd_gcp_run._resolve_console("stdout", config=_config(), no_wheel=False, watch_run=None)
+    # The destination is named for what it is, a file; Filestore is only the mount.
+    assert cmd_gcp_run.CONSOLE_CHOICES == ("auto", "file", "cloud-logging")
+    with pytest.raises(typer.BadParameter, match="must be one of auto, file, cloud-logging"):
+        cmd_gcp_run._resolve_console("filestore", config=_config(), no_wheel=False, watch_run=None)
 
 
-def test_run_command_dispatches_the_filestore_console_by_default(
+def test_run_command_dispatches_the_file_console_by_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("METAPROC_GCP_PROJECT", "p")
@@ -191,10 +195,10 @@ def test_run_command_dispatches_the_filestore_console_by_default(
         )
     assert result.exit_code == 0, result.output
     options = captured["options"]
-    assert options.console_on_filestore
+    assert options.console_to_file
     assert options.live_gcs_uri == "gs://dispatch-bucket/gcp-run/job-x/live"
     assert options.watch_run_dirs == ("/mnt/disks/filestore/runs/example/run-a",)
-    assert "console: /mnt/disks/filestore/logs/gcp-run/job-x/console.log" in result.output
+    assert "console file: /mnt/disks/filestore/logs/gcp-run/job-x/console.log" in result.output
     assert "live view: gs://dispatch-bucket/gcp-run/job-x/live" in result.output
 
 
@@ -256,7 +260,7 @@ def test_live_view_uri_comes_from_the_jobs_own_spec() -> None:
     _, job = build_gcp_run_job(
         ["true"],
         DispatchGcpRunOptions(
-            config=_config(), console_on_filestore=True, live_gcs_uri="gs://b/gcp-run/j/live"
+            config=_config(), console_to_file=True, live_gcs_uri="gs://b/gcp-run/j/live"
         ),
     )
     assert gcp_run_live.live_view_uri_of(job) == "gs://b/gcp-run/j/live"

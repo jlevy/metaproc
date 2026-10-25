@@ -456,7 +456,7 @@ def gcp_status(
 
     Existing directories resolve jobs from local runpool events. Exact Batch job
     resources resolve directly. Other strings use exact run-key lookup plus safe
-    legacy recovery. A `metaproc gcp run` job with its console on Filestore also shows
+    legacy recovery. A `metaproc gcp run` job whose console goes to a file also shows
     its live view: state, console size and when it last reported.
     """
     _require_gcp_batch()
@@ -1194,7 +1194,7 @@ def gcp_logs(
     use_cloud_logging: bool = typer.Option(
         False,
         "--cloud-logging",
-        help="Read Cloud Logging even for jobs that keep their console on Filestore.",
+        help="Read Cloud Logging even for jobs whose console goes to a file.",
     ),
 ) -> None:
     """Stream logs from Cloud Logging for a run's GCP Batch jobs.
@@ -1210,7 +1210,7 @@ def gcp_logs(
     the split. Combine with ``--worker N`` to pin to a single worker.
     Use ``--follow`` to tail new entries as they arrive.
 
-    A ``metaproc gcp run`` job whose console is on Filestore puts only a heartbeat in
+    A ``metaproc gcp run`` job whose console goes to a file puts only a heartbeat in
     Cloud Logging; for it this prints the console's last lines from the job's live view
     instead, and ``--follow`` polls that view. ``--cloud-logging`` reads the heartbeat
     and bootstrap stream.
@@ -1388,7 +1388,7 @@ def _print_live_logs(
                     if missed:
                         out.progress(
                             f"{prefix}... {missed:,} lines are not in the live view; the "
-                            f"full console is {status.get('console_path', 'on Filestore')}"
+                            f"full console is {status.get('console_path', "in the job's console file")}"
                         )
                     for line in fresh:
                         out.data(f"{prefix}{line}")

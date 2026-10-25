@@ -1,7 +1,7 @@
 """Read a ``metaproc gcp run`` job's live view: its console tail, status and run status.
 
-A job whose console is on Filestore (``gcp_run_console``) keeps a small live view in the
-dispatch bucket, because a laptop may not mount Filestore. This module finds that view
+A job whose console goes to a file (``gcp_run_console``) keeps a small live view in the
+dispatch bucket, because a laptop need not mount the job's storage. This module finds that view
 from the job's own Batch spec and reads it, so ``metaproc gcp logs`` and
 ``metaproc gcp status`` show what the job is doing without Cloud Logging.
 """
@@ -97,7 +97,7 @@ def new_tail_lines(tail: str, previous_total: int, total: int) -> tuple[list[str
 
     ``total`` is the console's line count when the tail was written. When more lines
     arrived since the last poll than the tail holds, the follower shows the whole tail
-    and reports the gap, which the Filestore console still holds in full.
+    and reports the gap, which the console file still holds in full.
     """
     lines = tail.splitlines()
     fresh = max(0, total - previous_total)

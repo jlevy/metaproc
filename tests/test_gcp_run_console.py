@@ -1,4 +1,4 @@
-"""The gcp-run console wrapper keeps a job's console on Filestore, not in Cloud Logging."""
+"""The gcp-run console wrapper keeps a job's console in a file, not in Cloud Logging."""
 
 from __future__ import annotations
 

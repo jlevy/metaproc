@@ -1,19 +1,21 @@
-"""Run one ``metaproc gcp run`` command with its console on Filestore.
+"""Run one ``metaproc gcp run`` command with its console in a file.
 
 A local run prints its console to the operator's terminal and keeps its records in the
-run tree. On GCP the run tree already lives on the persistent Filestore mount; this
-wrapper puts the console there too, so a job's complete output is a Filestore file like
-any other run record. Cloud Logging receives only this wrapper's start line, a heartbeat
-and the exit line, besides the bootstrap output written before the wrapper starts.
+run tree. On GCP the job's run tree lives on a persistent run-storage mount (in a
+Filestore deployment, the Filestore share); this wrapper appends the console there too,
+so a job's complete output is a file like any other run record. Cloud Logging receives
+only this wrapper's start line, a heartbeat and the exit line, besides the bootstrap
+output written before the wrapper starts.
 
-A machine that may not mount Filestore reads the job through a small live view in GCS,
-rewritten every heartbeat and once at exit: the console's last lines, a status record and
-the ``metaproc status`` of each run directory the dispatcher named. The view is a
-monitoring copy; the Filestore console and the run tree remain the record.
+A machine that does not mount the job's storage reads the job through a small live view
+in GCS. At every heartbeat and once at exit the wrapper rewrites the console's last lines
+and a status record; it renders the ``metaproc status`` of each run directory the
+dispatcher named every ``DEFAULT_RUN_STATUS_SECONDS`` (five minutes) and once at exit.
+The view is a monitoring copy; the console file and the run tree remain the record.
 
 The dispatcher runs ``python -m metaproc.cloud.gcp.gcp_run_console -- <cmd>`` and sets:
 
-    METAPROC_GCP_RUN_CONSOLE_PATH  Filestore file the console is appended to
+    METAPROC_GCP_RUN_CONSOLE_PATH  file the console is appended to, on the run-storage mount
     METAPROC_GCP_RUN_LIVE_GCS      optional gs:// prefix of the live view
     METAPROC_GCP_RUN_WATCH         optional comma-separated run directories
 """
@@ -244,7 +246,7 @@ def run_with_console(
     stdout: TextIO,
     run_status: Callable[[Path], str] = render_run_status,
 ) -> int:
-    """Run ``argv`` with its stdout and stderr appended to the Filestore console."""
+    """Run ``argv`` with its stdout and stderr appended to the console file."""
     console = settings.console_path
     console.parent.mkdir(parents=True, exist_ok=True)
     live = LiveView(settings, sink, argv, stdout, run_status)
