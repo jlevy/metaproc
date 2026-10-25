@@ -975,7 +975,8 @@ plus `pool events` to inspect contention.
 | How do several runs compare per item? | `uv run --frozen metaproc operations rollup <run-dir> <run-dir>...` |
 | Which auth labels were used? | `uv run metaproc auth usage <run-dir>` |
 | What is the cloud Batch state? | `uv run metaproc gcp status <run-id>` |
-| What did cloud jobs log? | `uv run metaproc gcp logs <run-id>` |
+| What did cloud jobs log (console live view or Cloud Logging)? | `uv run --frozen metaproc gcp logs <run-id>` |
+| Why did a cloud job fail before starting its console wrapper? | `uv run --frozen metaproc gcp logs <job> --cloud-logging --include-agent-logs` |
 | What do the declared-output checks report? | `uv run --frozen metaproc validate <process.process.md> --step <step-id> --run-root <run-dir> --var KEY=value` |
 | What does one artifact’s registered contract report? | `uv run --frozen metaproc softschema validate <artifact> --schema <contract-id>` |
 

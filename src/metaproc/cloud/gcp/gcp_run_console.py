@@ -1,58 +1,62 @@
-"""Run one ``metaproc gcp run`` command with its console on Filestore.
+"""Run one ``metaproc gcp run`` command with its console in a persistent file.
 
-A local run prints its console to the operator's terminal and keeps its records in the
-run tree. On GCP the run tree already lives on the persistent Filestore mount; this
-wrapper puts the console there too, so a job's complete output is a Filestore file like
-any other run record. Cloud Logging receives only this wrapper's start line, a heartbeat
-and the exit line, besides the bootstrap output written before the wrapper starts.
-
-A machine that may not mount Filestore reads the job through a small live view in GCS,
-rewritten every heartbeat and once at exit: the console's last lines, a status record and
-the ``metaproc status`` of each run directory the dispatcher named. The view is a
-monitoring copy; the Filestore console and the run tree remain the record.
+The console file is the complete record. Cloud Logging receives the wrapper's start,
+heartbeat and exit lines, plus bootstrap output from before the wrapper starts.
+A bounded GCS monitoring snapshot carries the tail and its count in one atomic object.
+One daemon publishes coalesced snapshots; another caches watched-run status, refreshed
+at most every five minutes. Neither renderer nor network I/O blocks child supervision.
+The wrapper gives final publication a bounded grace period and never waits for a fresh
+watched-run render at exit.
 
 The dispatcher runs ``python -m metaproc.cloud.gcp.gcp_run_console -- <cmd>`` and sets:
 
-    METAPROC_GCP_RUN_CONSOLE_PATH  Filestore file the console is appended to
+    METAPROC_GCP_RUN_CONSOLE_PATH  persistent console file, opened for append
     METAPROC_GCP_RUN_LIVE_GCS      optional gs:// prefix of the live view
     METAPROC_GCP_RUN_WATCH         optional comma-separated run directories
 """
 
 from __future__ import annotations
 
-import json
 import os
+import posixpath
 import shlex
 import signal
 import socket
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import FrameType
-from typing import Protocol, TextIO
+from typing import Any, Protocol, TextIO
+
+from metaproc.models.gcp_console_live import (
+    MAX_LIVE_OBJECT_BYTES,
+    MAX_RUN_STATUS_BYTES,
+    MAX_TAIL_BYTES,
+    ConsoleLiveSnapshot,
+    WatchedRunSnapshot,
+)
 
 CONSOLE_PATH_ENV = "METAPROC_GCP_RUN_CONSOLE_PATH"
 LIVE_GCS_ENV = "METAPROC_GCP_RUN_LIVE_GCS"
 WATCH_ENV = "METAPROC_GCP_RUN_WATCH"
-
 CONSOLE_MODULE = "metaproc.cloud.gcp.gcp_run_console"
 LOG_PREFIX = "[gcp-run-console]"
-
-# Names of the live view's objects under METAPROC_GCP_RUN_LIVE_GCS.
 LIVE_STATUS_NAME = "status.json"
 LIVE_TAIL_NAME = "console-tail.txt"
 LIVE_RUN_STATUS_DIR = "runs"
-
 DEFAULT_HEARTBEAT_SECONDS = 60.0
-# `metaproc status` of a large run takes a minute or more, so watched runs refresh less
-# often than the heartbeat, and always once at exit.
 DEFAULT_RUN_STATUS_SECONDS = 300.0
 DEFAULT_TAIL_LINES = 400
 RUN_STATUS_TIMEOUT_SECONDS = 120.0
+UPLOAD_REQUEST_SECONDS = 5.0
+PUBLICATION_BUDGET_SECONDS = 30.0
+FINALIZE_GRACE_SECONDS = 2.0
 _TAIL_READ_CHUNK = 64 * 1024
 
 
@@ -63,7 +67,7 @@ class LiveSink(Protocol):
 
 
 class GcsLiveSink:
-    """Write live-view objects under a ``gs://bucket/prefix`` URI."""
+    """Write live-view objects with no implicit retries or unbounded retry deadline."""
 
     def __init__(self, uri: str) -> None:
         if not uri.startswith("gs://"):
@@ -78,7 +82,28 @@ class GcsLiveSink:
 
     def put(self, name: str, text: str, content_type: str) -> None:
         path = f"{self._prefix}/{name}" if self._prefix else name
-        self._bucket.blob(path).upload_from_string(text, content_type=content_type, timeout=30)
+        blob: Any = self._bucket.blob(path)
+        blob.upload_from_string(
+            text, content_type=content_type, timeout=UPLOAD_REQUEST_SECONDS, retry=None
+        )
+
+
+def normalize_watch_dirs(paths: Sequence[str | Path]) -> tuple[Path, ...]:
+    """Keep stable basename keys; reject collisions before dispatch or execution.
+
+    These are container paths, so normalization is lexical POSIX normalization, without
+    following symlinks or resolving them against the launcher's filesystem.
+    """
+    names: dict[str, Path] = {}
+    for value in paths:
+        path = Path(posixpath.normpath(str(value)))
+        previous = names.get(path.name)
+        if previous is not None and previous != path:
+            raise ValueError(
+                f"watched paths have the same basename {path.name!r}: {previous}, {path}"
+            )
+        names[path.name] = path
+    return tuple(names.values())
 
 
 @dataclass(frozen=True)
@@ -90,69 +115,118 @@ class ConsoleSettings:
     tail_lines: int = DEFAULT_TAIL_LINES
     run_status_s: float = DEFAULT_RUN_STATUS_SECONDS
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "watch_dirs", normalize_watch_dirs(self.watch_dirs))
+        if self.heartbeat_s <= 0 or self.run_status_s <= 0:
+            raise ValueError("heartbeat_s and run_status_s must be positive")
+
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> ConsoleSettings:
         console_path = env.get(CONSOLE_PATH_ENV, "").strip()
         if not console_path:
             raise ValueError(f"{CONSOLE_PATH_ENV} is required")
-        watch = tuple(Path(p) for p in env.get(WATCH_ENV, "").split(",") if p.strip())
         return cls(
             console_path=Path(console_path),
             live_gcs=env.get(LIVE_GCS_ENV, "").strip(),
-            watch_dirs=watch,
+            watch_dirs=tuple(
+                Path(p.strip()) for p in env.get(WATCH_ENV, "").split(",") if p.strip()
+            ),
         )
 
 
 class ConsoleCounter:
-    """Count the console's bytes and lines incrementally, reading only what is new."""
+    """Count each appended byte once, retaining the last complete-line boundary."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
         self.bytes = 0
         self.lines = 0
+        self.complete_bytes = 0
 
     def refresh(self) -> None:
         with self.path.open("rb") as handle:
+            # Capture one EOF; a writer appending continuously cannot extend this scan.
+            end = os.fstat(handle.fileno()).st_size
             handle.seek(self.bytes)
-            while chunk := handle.read(_TAIL_READ_CHUNK):
+            while self.bytes < end:
+                chunk = handle.read(min(_TAIL_READ_CHUNK, end - self.bytes))
+                if not chunk:
+                    break
+                last = chunk.rfind(b"\n")
+                if last >= 0:
+                    self.complete_bytes = self.bytes + last + 1
                 self.bytes += len(chunk)
                 self.lines += chunk.count(b"\n")
 
 
-def read_tail(path: Path, lines: int) -> str:
-    """The last ``lines`` lines of ``path``, read backward from its end."""
+@dataclass(frozen=True)
+class ConsoleTail:
+    text: str
+    truncated: bool = False
+    start_partial: bool = False
+
+
+def _tail_snapshot(path: Path, lines: int, end: int | None = None) -> ConsoleTail:
+    """Read at most 256 KiB once; a giant logical line contributes a marked suffix."""
     if lines <= 0:
-        return ""
+        return ConsoleTail("")
+    if end is not None and end < 0:
+        raise ValueError("console snapshot byte boundary must be nonnegative")
     with path.open("rb") as handle:
-        handle.seek(0, os.SEEK_END)
-        end = position = handle.tell()
-        data = b""
-        while position > 0 and data.count(b"\n") <= lines:
-            step = min(_TAIL_READ_CHUNK, position)
-            position -= step
-            handle.seek(position)
-            data = handle.read(step) + data
-        del end
-    tail = data.splitlines(keepends=True)[-lines:]
-    return b"".join(tail).decode("utf-8", errors="replace")
+        if end is None:
+            end = handle.seek(0, os.SEEK_END)
+        start = max(0, end - MAX_TAIL_BYTES)
+        handle.seek(start)
+        data = handle.read(end - start)
+    parts = data.split(b"\n")
+    terminated = bool(data) and parts[-1] == b""
+    if terminated:
+        parts.pop()
+    selected = parts[-lines:]
+    partial = start > 0 and len(selected) == len(parts)
+    if partial and len(selected) > 1:
+        # The byte limit cut an older line; retain only the following complete lines.
+        selected = selected[1:]
+        partial = False
+    raw = b"\n".join(selected) + (b"\n" if terminated and selected else b"")
+    if partial:
+        # A valid UTF-8 line may be cut inside its first codepoint.
+        raw = raw.lstrip(bytes(range(0x80, 0xC0)))
+    text = raw.decode("utf-8", errors="replace")
+    encoded = text.encode("utf-8")
+    if len(encoded) > MAX_TAIL_BYTES:
+        text = encoded[-MAX_TAIL_BYTES:].decode("utf-8", errors="ignore")
+        partial = True
+    return ConsoleTail(text, start > 0 or len(parts) > lines, partial)
+
+
+def read_tail(path: Path, lines: int, end: int | None = None) -> str:
+    """Last ``lines`` newline-delimited records, capped at 256 KiB of scan and output."""
+    return _tail_snapshot(path, lines, end).text
 
 
 def render_run_status(run_dir: Path) -> str:
-    """``metaproc status`` for one run directory, as the operator would see it locally."""
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "metaproc", "status", str(run_dir)],
-            capture_output=True,
-            text=True,
-            timeout=RUN_STATUS_TIMEOUT_SECONDS,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return f"metaproc status {run_dir} timed out after {RUN_STATUS_TIMEOUT_SECONDS:.0f}s\n"
-    text = result.stdout
-    if result.returncode != 0:
-        text += f"\nmetaproc status exited {result.returncode}\n{result.stderr}"
-    return text
+    """Render a watched run with a time limit and a 64 KiB captured-output limit."""
+    # Private staging prevents capture_output from retaining an unbounded pipe in RAM.
+    with tempfile.TemporaryFile() as output:
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "metaproc", "status", str(run_dir)],
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                timeout=RUN_STATUS_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return f"metaproc status {run_dir} timed out after {RUN_STATUS_TIMEOUT_SECONDS:.0f}s\n"
+        output.seek(0)
+        raw = output.read(MAX_RUN_STATUS_BYTES)
+        text = raw.decode("utf-8", errors="replace")
+        if output.read(1):
+            text += "\n[watched status truncated]\n"
+        if result.returncode != 0:
+            text += f"\nmetaproc status exited {result.returncode}\n"
+        return text
 
 
 def _utc_now() -> str:
@@ -164,8 +238,60 @@ def _exit_code(returncode: int) -> int:
     return 128 - returncode if returncode < 0 else returncode
 
 
+class _WatchedRuns:
+    """One serial renderer, cached results, and no queue of stale refresh requests."""
+
+    def __init__(self, settings: ConsoleSettings, render: Callable[[Path], str]) -> None:
+        self._settings = settings
+        self._render = render
+        self._lock = threading.Lock()
+        self._ready = threading.Event()
+        self._closed = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._busy = False
+        self._next_at = 0.0
+        self._cached = {p.name: WatchedRunSnapshot(path=str(p)) for p in settings.watch_dirs}
+
+    def snapshot(self, now: float, *, refresh: bool) -> dict[str, WatchedRunSnapshot]:
+        with self._lock:
+            if refresh and self._cached and not self._busy and now >= self._next_at:
+                self._busy = True
+                self._next_at = now + self._settings.run_status_s
+                if self._thread is None:
+                    self._thread = threading.Thread(
+                        target=self._work, name="gcp-console-render", daemon=True
+                    )
+                    self._thread.start()
+                self._ready.set()
+            return dict(self._cached)
+
+    def _work(self) -> None:
+        while True:
+            self._ready.wait()
+            self._ready.clear()
+            if self._closed.is_set():
+                return
+            for path in self._settings.watch_dirs:
+                if self._closed.is_set():
+                    return
+                try:
+                    text = self._render(path)
+                except Exception as exc:  # noqa: BLE001 -- diagnostic monitoring copy
+                    text = f"metaproc status {path} failed: {exc}\n"
+                text = text.encode("utf-8")[:MAX_RUN_STATUS_BYTES].decode("utf-8", errors="ignore")
+                status = WatchedRunSnapshot(path=str(path), text=text, updated_at=_utc_now())
+                with self._lock:
+                    self._cached[path.name] = status
+            with self._lock:
+                self._busy = False
+
+    def close(self) -> None:
+        self._closed.set()
+        self._ready.set()
+
+
 class LiveView:
-    """Publish the status record, console tail and watched run status; never fail the job."""
+    """Build consistent snapshots and publish monitoring copies without failing a job."""
 
     def __init__(
         self,
@@ -179,61 +305,144 @@ class LiveView:
         self._settings = settings
         self._sink = sink
         self._stdout = stdout
-        self._run_status = run_status
         self._clock = clock
-        self._run_status_at: float | None = None
+        self._watched = _WatchedRuns(settings, run_status)
+        self._published_runs: dict[str, WatchedRunSnapshot] = {}
         self._failures = 0
         self.record: dict[str, object] = {
             "console_path": str(settings.console_path),
             "argv": list(argv),
             "host": socket.gethostname(),
-            "batch_job_id": os.environ.get("BATCH_JOB_ID", ""),
             "started_at": _utc_now(),
             "state": "running",
             "exit_code": None,
             "watch": [str(p) for p in settings.watch_dirs],
         }
 
+    def snapshot(self, counter: ConsoleCounter, *, final: bool = False) -> ConsoleLiveSnapshot:
+        end = counter.bytes if final else counter.complete_bytes
+        tail = _tail_snapshot(self._settings.console_path, self._settings.tail_lines, end)
+        return ConsoleLiveSnapshot.model_validate(
+            {
+                **self.record,
+                "updated_at": _utc_now(),
+                "console_bytes": counter.bytes,
+                "console_complete_bytes": counter.complete_bytes,
+                "console_lines": counter.lines
+                + int(final and counter.bytes > counter.complete_bytes),
+                "console_tail": tail.text,
+                "tail_truncated": tail.truncated,
+                "tail_start_partial": tail.start_partial,
+                "watch_status": self._watched.snapshot(self._clock(), refresh=not final),
+            }
+        )
+
     def publish(self, counter: ConsoleCounter, *, final: bool = False) -> None:
-        if self._sink is None:
+        if self._sink is not None:
+            try:
+                self.publish_snapshot(self.snapshot(counter, final=final))
+            except Exception as exc:  # noqa: BLE001 -- local snapshot is also monitoring
+                self.report_failure(exc)
+
+    def publish_snapshot(self, snapshot: ConsoleLiveSnapshot) -> None:
+        sink = self._sink
+        if sink is None:
             return
-        now = self._clock()
-        refresh_runs = (
-            final
-            or self._run_status_at is None
-            or now - self._run_status_at >= self._settings.run_status_s
-        )
-        self.record.update(
-            updated_at=_utc_now(), console_bytes=counter.bytes, console_lines=counter.lines
-        )
+        started = time.monotonic()
+
+        def put(name: str, text: str, content_type: str) -> None:
+            if time.monotonic() - started >= PUBLICATION_BUDGET_SECONDS:
+                raise TimeoutError("live publication exceeded its total time budget")
+            if len(text.encode("utf-8")) > MAX_LIVE_OBJECT_BYTES:
+                raise ValueError("live object exceeds its 4 MiB size limit")
+            sink.put(name, text, content_type)
+
         try:
-            self._sink.put(
-                LIVE_TAIL_NAME,
-                read_tail(self._settings.console_path, self._settings.tail_lines),
-                "text/plain; charset=utf-8",
-            )
-            for run_dir in self._settings.watch_dirs if refresh_runs else ():
-                self._sink.put(
-                    f"{LIVE_RUN_STATUS_DIR}/{run_dir.name}.txt",
-                    self._run_status(run_dir),
-                    "text/plain; charset=utf-8",
-                )
-            # Last, so a reader that sees the record's counts also sees a tail at least as new.
-            self._sink.put(
-                LIVE_STATUS_NAME,
-                json.dumps(self.record, indent=2) + "\n",
-                "application/json",
-            )
-            if refresh_runs:
-                self._run_status_at = now
+            text = snapshot.model_dump_json(indent=2, by_alias=True) + "\n"
+            # Validate before replacing either compatibility object. Modern readers use
+            # only status.json, so neither overwrite order can mix their generations.
+            if len(text.encode("utf-8")) > MAX_LIVE_OBJECT_BYTES:
+                raise ValueError("live snapshot exceeds its 4 MiB size limit")
+            put(LIVE_TAIL_NAME, snapshot.console_tail, "text/plain; charset=utf-8")
+            put(LIVE_STATUS_NAME, text, "application/json")
+            for name, status in snapshot.watch_status.items():
+                if status.updated_at is not None and self._published_runs.get(name) != status:
+                    put(
+                        f"{LIVE_RUN_STATUS_DIR}/{name}.txt",
+                        f"Updated: {status.updated_at}\n{status.text}",
+                        "text/plain; charset=utf-8",
+                    )
+                    self._published_runs[name] = status
         except Exception as exc:  # noqa: BLE001 -- the live view is a monitoring copy
-            self._failures += 1
-            if self._failures == 1 or self._failures % 10 == 0:
-                print(
-                    f"{LOG_PREFIX} live view update failed ({self._failures}): {exc}",
-                    file=self._stdout,
-                    flush=True,
-                )
+            self.report_failure(exc)
+
+    def report_failure(self, exc: Exception) -> None:
+        self._failures += 1
+        if self._failures == 1 or self._failures % 10 == 0:
+            print(
+                f"{LOG_PREFIX} live view update failed ({self._failures}): {exc}",
+                file=self._stdout,
+                flush=True,
+            )
+
+    def close(self) -> None:
+        self._watched.close()
+
+
+class _Publisher:
+    """One daemon and one replaceable pending snapshot, regardless of sink latency."""
+
+    def __init__(self, live: LiveView) -> None:
+        self._live = live
+        self._lock = threading.Lock()
+        self._ready = threading.Event()
+        self._finished = threading.Event()
+        self._closed = threading.Event()
+        self._pending: ConsoleLiveSnapshot | None = None
+        self._thread = threading.Thread(target=self._work, name="gcp-console-publish", daemon=True)
+        self._thread.start()
+
+    def submit(self, counter: ConsoleCounter, *, final: bool = False) -> None:
+        try:
+            snapshot = self._live.snapshot(counter, final=final)
+        except Exception as exc:  # noqa: BLE001 -- snapshot errors cannot kill the command
+            self._live.report_failure(exc)
+            if final:
+                self._finished.set()
+            return
+        with self._lock:
+            self._pending = snapshot
+        self._ready.set()
+
+    def _work(self) -> None:
+        while True:
+            self._ready.wait()
+            self._ready.clear()
+            if self._closed.is_set():
+                return
+            with self._lock:
+                snapshot, self._pending = self._pending, None
+            if snapshot is not None:
+                self._live.publish_snapshot(snapshot)
+                if snapshot.state == "exited":
+                    self._finished.set()
+                    return
+
+    def finish(self, counter: ConsoleCounter) -> None:
+        self.submit(counter, final=True)
+        if not self._finished.wait(FINALIZE_GRACE_SECONDS):
+            print(
+                f"{LOG_PREFIX} final live update exceeded {FINALIZE_GRACE_SECONDS:g}s grace; "
+                "Batch state and the console file remain authoritative",
+                file=self._live._stdout,
+                flush=True,
+            )
+        self.close()
+
+    def close(self) -> None:
+        self._closed.set()
+        self._ready.set()
+        self._live.close()
 
 
 def run_with_console(
@@ -244,36 +453,56 @@ def run_with_console(
     stdout: TextIO,
     run_status: Callable[[Path], str] = render_run_status,
 ) -> int:
-    """Run ``argv`` with its stdout and stderr appended to the Filestore console."""
+    """Run ``argv`` with its stdout and stderr appended to the console file."""
     console = settings.console_path
     console.parent.mkdir(parents=True, exist_ok=True)
     live = LiveView(settings, sink, argv, stdout, run_status)
     started = time.monotonic()
-    with console.open("ab") as handle:
-        # One header line, whatever the argv holds.
-        command = shlex.join(argv).replace("\n", "\\n")
-        handle.write(f"== {_utc_now()} {command}\n".encode())
-        handle.flush()
-        live_target = settings.live_gcs or "none"
-        print(f"{LOG_PREFIX} console {console}; live view {live_target}", file=stdout, flush=True)
-        # Its own session, so a forwarded signal reaches every process the command starts.
-        child = subprocess.Popen(  # noqa: S603 -- the dispatcher's argv, as execvp would run it
-            list(argv),
-            stdin=subprocess.DEVNULL,
-            stdout=handle,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
+    child: subprocess.Popen[bytes] | None = None
+    held: list[int] = []
+    previous: dict[int, int | Callable[[int, FrameType | None], object] | None] = {}
+    publisher: _Publisher | None = None
 
     def forward(signum: int, _frame: FrameType | None) -> None:
+        if child is None:
+            held.append(signum)
+            return
         try:
             os.killpg(child.pid, signum)
         except ProcessLookupError:
             pass
 
-    previous = {sig: signal.signal(sig, forward) for sig in (signal.SIGTERM, signal.SIGINT)}
-    counter = ConsoleCounter(console)
     try:
+        # Install before Popen creates the independent child process group.
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            previous[sig] = signal.signal(sig, forward)
+        with console.open("ab") as handle:
+            command = shlex.join(argv).replace("\n", "\\n")
+            handle.write(f"== {_utc_now()} {command}\n".encode())
+            handle.flush()
+            print(
+                f"{LOG_PREFIX} console {console}; live view {settings.live_gcs or 'none'}",
+                file=stdout,
+                flush=True,
+            )
+            child = subprocess.Popen(  # noqa: S603 -- dispatcher argv, as execvp would run it
+                list(argv),
+                stdin=subprocess.DEVNULL,
+                stdout=handle,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        for signum in held:
+            forward(signum, None)
+        counter = ConsoleCounter(console)
+        if sink is not None:
+            try:
+                publisher = _Publisher(live)
+            except RuntimeError as exc:
+                live.report_failure(exc)
+            if publisher is not None:
+                counter.refresh()
+                publisher.submit(counter)
         while True:
             try:
                 returncode = child.wait(timeout=settings.heartbeat_s)
@@ -287,22 +516,34 @@ def run_with_console(
                     file=stdout,
                     flush=True,
                 )
-                live.publish(counter)
+                if publisher is not None:
+                    publisher.submit(counter)
+        code = _exit_code(returncode)
+        counter.refresh()
+        live.record.update(state="exited", exit_code=code)
+        if publisher is not None:
+            publisher.finish(counter)
+        print(
+            f"{LOG_PREFIX} exit {code}; console {counter.bytes:,} bytes, "
+            f"{counter.lines + int(counter.bytes > counter.complete_bytes):,} lines at {console}",
+            file=stdout,
+            flush=True,
+        )
+        return code
     finally:
+        if publisher is not None:
+            publisher.close()
+        else:
+            live.close()
+        if child is not None and child.poll() is None:
+            # A setup/snapshot failure must not leave the independent group running.
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            child.wait()
         for sig, handler in previous.items():
             signal.signal(sig, handler)
-
-    code = _exit_code(returncode)
-    counter.refresh()
-    live.record.update(state="exited", exit_code=code)
-    live.publish(counter, final=True)
-    print(
-        f"{LOG_PREFIX} exit {code}; console {counter.bytes:,} bytes, {counter.lines:,} lines "
-        f"at {console}",
-        file=stdout,
-        flush=True,
-    )
-    return code
 
 
 def main(args: Sequence[str] | None = None) -> int:
@@ -321,7 +562,7 @@ def main(args: Sequence[str] | None = None) -> int:
     if settings.live_gcs:
         try:
             sink = GcsLiveSink(settings.live_gcs)
-        except Exception as exc:  # noqa: BLE001 -- run without a live view rather than not at all
+        except Exception as exc:  # noqa: BLE001 -- monitoring must not prevent execution
             print(f"{LOG_PREFIX} no live view: {exc}", file=sys.stdout, flush=True)
     return run_with_console(argv, settings, sink=sink, stdout=sys.stdout)
 
