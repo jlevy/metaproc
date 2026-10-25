@@ -25,6 +25,8 @@ from metaproc.models.resources import ResourcesDocument, read_resources_document
 
 _ROOT = Path(__file__).resolve().parents[1]
 
+# Step events record elapsed time rounded to 0.1 s, so the completed step sleeps long
+# enough for its wall time to be measured on a fast host.
 _PROCESS = """\
 ---
 process:
@@ -32,7 +34,7 @@ process:
   steps:
     - id: quick
       mode: code
-      command: "sh -c 'echo quick > {{run.dir}}/quick.txt'"
+      command: "sh -c 'sleep 0.2 && echo quick > {{run.dir}}/quick.txt'"
       outputs:
         out:
           path: "{{run.dir}}/quick.txt"
@@ -56,7 +58,7 @@ process:
   steps:
     - id: quick
       mode: code
-      command: "sh -c 'echo quick > {{run.dir}}/quick.txt'"
+      command: "sh -c 'sleep 0.2 && echo quick > {{run.dir}}/quick.txt'"
       outputs:
         out:
           path: "{{run.dir}}/quick.txt"
