@@ -2973,17 +2973,18 @@ normalized budgets under `.state/run-config.yaml:resources`; resume never rewrit
 Budgets are observational and do not refuse or terminate work.
 The terminal finalizer runs before lease release on success, failure, propagated
 timeout, or cancellation.
-A SIGTERM never reaches that `finally`: the hard reaper kills the orchestrator’s
-descendants and then re-raises the signal under its default disposition.
-So the reaper writes the reports itself first.
+A SIGTERM, SIGHUP or SIGQUIT never reaches that `finally`: the hard reaper kills the
+orchestrator’s descendants and then re-raises the signal under its default disposition.
+It is installed for SIGHUP and SIGQUIT only when the orchestrator does not inherit them
+ignored. So the reaper writes the reports itself first.
 It writes `resource-usage-summary.md` with `finalization.incomplete: true` and no
 totals, then runs the same finalization on a separate thread until 8 seconds after the
 signal arrived, and the complete reports replace the incomplete one.
 That bound, measured from the signal, keeps the whole exit inside the 10 seconds
-`docker stop` allows before SIGKILL. Both record `state: cancelled` and
-`terminal_error_type: SIGTERM`, or the body’s own outcome when the signal arrives during
-terminal finalization; a signal after the resource rollup is written leaves it as it is,
-and only the operations summary is written again.
+`docker stop` allows before SIGKILL. Both record `state: cancelled` and the signal as
+`terminal_error_type`, or the body’s own outcome when the signal arrives during terminal
+finalization; a signal after the resource rollup is written leaves it as it is, and only
+the operations summary is written again.
 `metaproc status` recovers missing, stale, or incomplete reports once the orchestrator
 is inactive. While a resume runs, it writes only the report an earlier launch left
 missing or incomplete, and leaves `resource-events.jsonl`, which the live orchestrator
@@ -3010,7 +3011,7 @@ stages, step durations, concurrency, attempt dispositions, agent models, and res
 It writes no `.jsonl` and never calls resource recovery, so it cannot make the resource
 projections stale. A section whose evidence cannot be read is null with its reason, and
 any failure is logged without changing the run’s outcome.
-A SIGTERM runs that path from the hard reaper, as above.
+Those signals run that path from the hard reaper, as above.
 A run can still skip it: killed by SIGKILL, interrupted between the resource and
 operations finalizers, or with a fold that raised.
 So `metaproc status` on an inactive run writes the summary when it is missing, whether

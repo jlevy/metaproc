@@ -1178,15 +1178,19 @@ Cross-check volume against `metaproc stats <run-dir>` and
 
 Run finalization writes `operations-summary.md` at the run root, beside
 `resource-usage-summary.md`, for completed, failed, cancelled, and timed-out runs alike.
-A SIGTERM to the orchestrator, from `metaproc kill` or a supervisor, writes both before
-the orchestrator dies by the signal.
+A SIGTERM, SIGHUP or SIGQUIT to the orchestrator (from `metaproc kill`, a supervisor, or
+a terminal that hangs up) writes both before the orchestrator dies by that signal.
+A SIGHUP or SIGQUIT the orchestrator was started ignoring stays ignored, as under
+`nohup` or for a background job of a non-interactive shell.
 The hard reaper kills the orchestrator’s descendants, writes a resource summary marked
 `finalization.incomplete: true` with every total unmeasured, then runs the same
 finalization until 8 seconds after the signal arrived; its complete summaries replace
 the incomplete one.
 The whole exit fits inside the 10 seconds `docker stop` allows before
 SIGKILL; a Kubernetes pod and a Compute Engine Spot VM’s shutdown allow 30. Both record
-`state: cancelled` and `terminal_error_type: SIGTERM`.
+`state: cancelled` and the signal as `terminal_error_type` (`SIGTERM`, `SIGHUP` or
+`SIGQUIT`). Ctrl-C (SIGINT) instead cancels the run cooperatively, and its normal
+finalization writes both with `terminal_error_type: KeyboardInterrupt`.
 
 A run can still end without a complete pair: killed by SIGKILL (`metaproc kill --force`,
 or a supervisor escalating after its grace period), a rollup that did not finish within

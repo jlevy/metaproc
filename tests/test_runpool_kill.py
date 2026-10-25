@@ -322,17 +322,32 @@ def test_reap_subprocess_tree_no_descendants_returns_zero() -> None:
 def test_install_subprocess_reaper_signal_handlers_idempotent() -> None:
     """install_subprocess_reaper_signal_handlers() can be called multiple times."""
 
+    handled = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT)
     # Save original handlers to restore after the test.
-    orig_term = signal.signal(signal.SIGTERM, signal.SIG_DFL)
-    orig_int = signal.signal(signal.SIGINT, signal.SIG_DFL)
+    originals = {signum: signal.signal(signum, signal.SIG_DFL) for signum in handled}
     try:
         install_subprocess_reaper_signal_handlers()
         install_subprocess_reaper_signal_handlers()  # second call is a no-op (handlers replaced)
         # If we got here without an exception, the function is idempotent.
-        current_term = signal.getsignal(signal.SIGTERM)
-        current_int = signal.getsignal(signal.SIGINT)
-        assert current_term is not signal.SIG_DFL
-        assert current_int is not signal.SIG_DFL
+        for signum in handled:
+            assert signal.getsignal(signum) not in (signal.SIG_DFL, signal.SIG_IGN), signum
     finally:
-        signal.signal(signal.SIGTERM, orig_term)
-        signal.signal(signal.SIGINT, orig_int)
+        for signum, handler in originals.items():
+            signal.signal(signum, handler)
+
+
+def test_install_subprocess_reaper_signal_handlers_keeps_ignored_sighup_and_sigquit() -> None:
+    """A run started under ``nohup``, or as a background job, keeps ignoring them."""
+
+    handled = (signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT)
+    originals = {signum: signal.getsignal(signum) for signum in handled}
+    try:
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        signal.signal(signal.SIGQUIT, signal.SIG_IGN)
+        install_subprocess_reaper_signal_handlers(include_sigint=False)
+        assert signal.getsignal(signal.SIGHUP) is signal.SIG_IGN
+        assert signal.getsignal(signal.SIGQUIT) is signal.SIG_IGN
+        assert signal.getsignal(signal.SIGTERM) not in (signal.SIG_DFL, signal.SIG_IGN)
+    finally:
+        for signum, handler in originals.items():
+            signal.signal(signum, handler)

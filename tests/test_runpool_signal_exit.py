@@ -16,9 +16,10 @@ import time
 from pathlib import Path
 
 import psutil
+import pytest
 
 _STAND_IN = """\
-import subprocess, sys, threading, time
+import resource, signal, subprocess, sys, threading, time
 from pathlib import Path
 
 from metaproc.runpool.kill import (
@@ -53,6 +54,12 @@ def finish(signum):
     record(f"finish {signum.name}")
 
 
+# SIGQUIT's default action dumps core, which these tests have no use for.
+resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+if mode == "ignores-hup-and-quit":
+    # As under nohup, or as a shell starts a background job: inherited and kept.
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    signal.signal(signal.SIGQUIT, signal.SIG_IGN)
 install_subprocess_reaper_signal_handlers(include_sigint=False)
 unregister = register_signal_exit_work(SignalExitWork(mark=mark, finish=finish, timeout_s=timeout_s))
 if mode == "unregistered":
@@ -116,15 +123,37 @@ def _wait(proc: subprocess.Popen[bytes], timeout_s: float = 30) -> int:
             proc.wait(timeout=10)
 
 
+@pytest.mark.parametrize(
+    "signum", [signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT], ids=lambda s: s.name
+)
 def test_exit_work_marks_then_finishes_before_the_process_dies_by_the_signal(
-    tmp_path: Path,
+    tmp_path: Path, signum: signal.Signals
 ) -> None:
     proc = _start(tmp_path, "normal")
 
-    proc.send_signal(signal.SIGTERM)
+    proc.send_signal(signum)
 
     returncode = _wait(proc)
     reaped = _child_gone(tmp_path)
+    assert returncode == -signum
+    assert _records(tmp_path) == [f"mark {signum.name}", f"finish {signum.name}"]
+    assert reaped
+
+
+def test_an_inherited_ignored_sighup_or_sigquit_stays_ignored(tmp_path: Path) -> None:
+    proc = _start(tmp_path, "ignores-hup-and-quit")
+
+    proc.send_signal(signal.SIGHUP)
+    proc.send_signal(signal.SIGQUIT)
+    time.sleep(1.0)
+    survived = proc.poll() is None
+    ignored_records = _records(tmp_path)
+
+    proc.send_signal(signal.SIGTERM)
+    returncode = _wait(proc)
+    reaped = _child_gone(tmp_path)
+    assert survived, "an ignored signal ended the process"
+    assert ignored_records == []
     assert returncode == -signal.SIGTERM
     assert _records(tmp_path) == ["mark SIGTERM", "finish SIGTERM"]
     assert reaped

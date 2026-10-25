@@ -123,8 +123,8 @@ Pattern documented in the standalone
 | Filename | Path | Envelope key + schema | Writer | Primary readers |
 | --- | --- | --- | --- | --- |
 | `usage.md` | `<run>/` | `usage` / `metaproc:UsageReport/0.2` | `commands/write_usage.py` via `logutil/usage.py:write_usage_report` | human operator |
-| `resource-usage-summary.md` | `<run>/` | `resource_usage` / `metaproc.resources:ResourceUsageSummary/v1` | `engine/resource_summary.py`, at terminal finalization, on SIGTERM from the hard reaper (first with `finalization.incomplete: true`, then complete), and by status recovery | human operator, SoftSchema validation |
-| `operations-summary.md` | `<run>/` | `agent_operations` / `metaproc.operations:AgentOperationsSummary/v1` | `engine/operations_summary.py`, after resource finalization in `commands/run_process.py` (on SIGTERM too), or when missing after status-triggered resource recovery in `commands/status.py` | human operator, `metaproc operations rollup`, SoftSchema validation |
+| `resource-usage-summary.md` | `<run>/` | `resource_usage` / `metaproc.resources:ResourceUsageSummary/v1` | `engine/resource_summary.py`, at terminal finalization, on SIGTERM, SIGHUP or SIGQUIT from the hard reaper (first with `finalization.incomplete: true`, then complete), and by status recovery | human operator, SoftSchema validation |
+| `operations-summary.md` | `<run>/` | `agent_operations` / `metaproc.operations:AgentOperationsSummary/v1` | `engine/operations_summary.py`, after resource finalization in `commands/run_process.py` (on SIGTERM, SIGHUP or SIGQUIT too), or when missing after status-triggered resource recovery in `commands/status.py` | human operator, `metaproc operations rollup`, SoftSchema validation |
 | `qa-report.md` (per-item) | `<run>/<artifact-tree>/.../` | `qa` / domain-defined | downstream QA plugin handler | human operator |
 | `qa-summary.md` (per-process) | `<run>/<artifact-tree>/.../` | `qa_summary` / domain-defined | downstream QA plugin handler | human operator |
 

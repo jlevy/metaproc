@@ -9,16 +9,20 @@ development series.
 
 ### Fixed
 
-- **A SIGTERM’d run keeps its usage summaries.** The hard reaper that kills a
-  `run-process` orchestrator’s descendants on SIGTERM re-raises the signal under its
-  default disposition, so the run’s `finally`, and with it the only writer of
-  `resource-usage-summary.md` and `operations-summary.md`, never ran: a run stopped by
-  `metaproc kill` or a supervisor had neither until a later `metaproc status` on the
-  inactive run, and a resume made it active and blocked that too.
-  The reaper now writes both before the orchestrator dies by the signal, with
-  `state: cancelled` and `terminal_error_type: SIGTERM`: first a resource summary marked
-  `finalization.incomplete: true` with every total unmeasured, then, on a thread, the
-  complete finalization, which replaces it.
+- **A run stopped by SIGTERM, SIGHUP or SIGQUIT keeps its usage summaries.** The hard
+  reaper that kills a `run-process` orchestrator’s descendants on SIGTERM re-raises the
+  signal under its default disposition, so the run’s `finally`, and with it the only
+  writer of `resource-usage-summary.md` and `operations-summary.md`, never ran: a run
+  stopped by `metaproc kill` or a supervisor had neither until a later `metaproc status`
+  on the inactive run, and a resume made it active and blocked that too.
+  SIGHUP and SIGQUIT had no handler at all, so a dropped terminal also left the run’s
+  steps running as orphans.
+  The reaper now handles all three, and an inherited ignored SIGHUP or SIGQUIT (`nohup`,
+  a background job) stays ignored.
+  It writes both summaries before the orchestrator dies by the signal, with
+  `state: cancelled` and the signal as `terminal_error_type`: first a resource summary
+  marked `finalization.incomplete: true` with every total unmeasured, then, on a thread,
+  the complete finalization, which replaces it.
   The work must be done 8 seconds after the signal arrives, inside the 10 seconds
   `docker stop` allows before SIGKILL. Descendants are still reaped first, and again
   after; a repeated signal neither aborts nor repeats the work.

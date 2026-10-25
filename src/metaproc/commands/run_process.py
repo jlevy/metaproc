@@ -7260,8 +7260,9 @@ def run_process_command(
         )
 
     # Leave SIGINT at Python's default so asyncio.Runner translates Ctrl-C into
-    # cooperative task cancellation. SIGTERM retains the hard descendant reaper, which
-    # writes the run's summaries before the orchestrator dies by the signal.
+    # cooperative task cancellation. SIGTERM, SIGHUP and SIGQUIT retain the hard
+    # descendant reaper, which writes the run's summaries before the orchestrator dies by
+    # the signal.
     install_subprocess_reaper_signal_handlers(include_sigint=False)
 
     finalization_state = FinalizationState.COMPLETED

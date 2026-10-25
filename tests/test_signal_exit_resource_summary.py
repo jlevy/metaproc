@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 
 import psutil
+import pytest
 
 from metaproc.engine.operations_summary import read_operations_summary
 from metaproc.io import fmf_read_frontmatter
@@ -168,6 +169,74 @@ def test_sigterm_mid_run_writes_both_summaries_and_still_reaps_descendants(
     assert operations is not None and operations.run is not None
     assert operations.trigger == "finalization"
     assert (operations.run.state, operations.run.state_source) == ("cancelled", "finalization")
+
+
+_WITHOUT_CORE_DUMPS = """\
+import resource, sys
+
+import metaproc.cli
+
+# SIGQUIT's default action dumps core, which this test has no use for.
+resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+sys.argv = ["metaproc", "run-process", *sys.argv[1:]]
+metaproc.cli.main()
+"""
+
+
+def _kill_if_alive(pid: int) -> None:
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+@pytest.mark.parametrize("signum", [signal.SIGHUP, signal.SIGQUIT], ids=lambda s: s.name)
+def test_sighup_and_sigquit_end_a_run_as_sigterm_does(
+    tmp_path: Path, signum: signal.Signals
+) -> None:
+    """A dropped terminal's SIGHUP, or a SIGQUIT, reaps the steps and writes both
+    summaries before the orchestrator dies by that signal."""
+    process_path = tmp_path / "signal-exit.process.md"
+    process_path.write_text(_PROCESS)
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "run-1"
+    with (tmp_path / "launch.log").open("wb") as log_file:
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                _WITHOUT_CORE_DUMPS,
+                str(process_path),
+                "--var",
+                f"RUNS_DIR={runs_dir}",
+                "--var",
+                "RUN_ID=run-1",
+            ],
+            cwd=_ROOT,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
+    step_pid: int | None = None
+    try:
+        step_pid = _slow_step_pid(run_dir, proc)
+        proc.send_signal(signum)
+        returncode = proc.wait(timeout=60)
+        reaped = _gone(step_pid)
+    finally:
+        _stop(proc)
+        if step_pid is not None:
+            _kill_if_alive(step_pid)
+
+    assert returncode == -signum
+    assert reaped, f"slow step PID {step_pid} survived the orchestrator"
+    summary = _resource_summary(run_dir)
+    assert summary.finalization.state is FinalizationState.CANCELLED
+    assert summary.finalization.trigger == "terminal"
+    assert summary.finalization.terminal_error_type == signum.name
+    assert summary.finalization.incomplete is False
+    operations = read_operations_summary(run_dir).summary
+    assert operations is not None and operations.run is not None
+    assert (operations.trigger, operations.run.state) == ("finalization", "cancelled")
 
 
 _STALLED_ROLLUP = """\

@@ -12,6 +12,7 @@ import io
 import logging
 import os
 import signal
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -412,28 +413,40 @@ def _run_signal_exit_work(signum: signal.Signals, *, received_at: float) -> None
     reap_subprocess_tree()
 
 
+_IGNORABLE_HARD_STOP_SIGNALS: tuple[signal.Signals, ...] = (
+    () if sys.platform == "win32" else (signal.SIGHUP, signal.SIGQUIT)
+)
+"""Hard-stop signals the reaper handles only when the process does not ignore them."""
+
+
 def install_subprocess_reaper_signal_handlers(*, include_sigint: bool = True) -> None:
     """Install hard-reaper signal handlers for uncooperative process exit.
 
-    Without this, when an operator runs ``kill -TERM <orchestrator_pid>``,
-    Python's default SIGTERM behavior is to exit immediately without running
-    any cleanup. Any subprocess children spawned by the orchestrator
-    (adapter CLIs, adapter-cli, vite-node, etc.) survive as orphans and burn
-    CPU until they hit their own timeouts (which can be hours).
+    Without this, when an operator runs ``kill -TERM <orchestrator_pid>``, or the
+    orchestrator's terminal hangs up (SIGHUP) or is sent SIGQUIT, Python's default
+    behavior is to exit immediately without running any cleanup. Any subprocess
+    children spawned by the orchestrator (adapter CLIs, adapter-cli, vite-node, etc.)
+    run in process groups of their own, survive as orphans and burn CPU until they hit
+    their own timeouts (which can be hours).
+
+    The handler is installed for SIGTERM, SIGHUP and SIGQUIT. An inherited ignored SIGHUP
+    or SIGQUIT stays ignored: ``nohup`` ignores SIGHUP, and a non-interactive shell starts
+    a background job with SIGQUIT ignored.
 
     This handler:
     1. Reaps the subprocess tree synchronously (SIGKILL all descendants).
     2. Runs any work registered with :func:`register_signal_exit_work`: every ``mark``
        on the handler's thread, then every ``finish`` on its own thread, until its
        ``timeout_s`` after the signal arrived, then reaps again.
-    3. Re-raises the default signal so the orchestrator dies by it.
+    3. Re-raises the same signal under its default disposition, so the orchestrator dies
+       by it and its exit status names it.
 
     A repeated signal while that runs is ignored: the first already ends the process,
     and its exit work is neither aborted nor started twice.
 
     ``run-process`` passes ``include_sigint=False`` so ``asyncio.Runner`` owns Ctrl-C
-    and can drain run-owned resources cooperatively. SIGTERM remains the hard-stop
-    backstop for environments that terminate the orchestrator externally.
+    and can drain run-owned resources cooperatively. SIGTERM, SIGHUP and SIGQUIT remain
+    the hard-stop backstop for environments that terminate the orchestrator externally.
 
     Idempotent — calling twice is a no-op (signal handlers are replaced,
     not stacked).
@@ -467,5 +480,8 @@ def install_subprocess_reaper_signal_handlers(*, include_sigint: bool = True) ->
             os.kill(os.getpid(), signum)
 
     signal.signal(signal.SIGTERM, _handler)
+    for signum in _IGNORABLE_HARD_STOP_SIGNALS:
+        if signal.getsignal(signum) is not signal.SIG_IGN:
+            signal.signal(signum, _handler)
     if include_sigint:
         signal.signal(signal.SIGINT, _handler)
