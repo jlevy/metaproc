@@ -1182,12 +1182,15 @@ A SIGTERM to the orchestrator, from `metaproc kill` or a supervisor, writes both
 the orchestrator dies by the signal.
 The hard reaper kills the orchestrator’s descendants, writes a resource summary marked
 `finalization.incomplete: true` with every total unmeasured, then runs the same
-finalization for up to 10 seconds; its complete summaries replace the incomplete one.
-Both record `state: cancelled` and `terminal_error_type: SIGTERM`.
+finalization until 8 seconds after the signal arrived; its complete summaries replace
+the incomplete one.
+The whole exit fits inside the 10 seconds `docker stop` allows before
+SIGKILL; a Kubernetes pod and a Compute Engine Spot VM’s shutdown allow 30. Both record
+`state: cancelled` and `terminal_error_type: SIGTERM`.
 
 A run can still end without a complete pair: killed by SIGKILL (`metaproc kill --force`,
 or a supervisor escalating after its grace period), a rollup that did not finish within
-those 10 seconds, or a fold that raised.
+those 8 seconds, or a fold that raised.
 `metaproc status` is the backstop.
 On an inactive run it rebuilds missing, stale, or incomplete resource artifacts, then
 writes a missing operations summary with `trigger: status`. On a resume that is running,
@@ -1301,7 +1304,7 @@ uv run metaproc kill <run-dir>
 
 Either way the orchestrator gets SIGTERM and writes the run’s summaries before it exits
 ([Reading the Operations Summary](#reading-the-operations-summary)), so `metaproc kill`
-waits up to 13 seconds for it to exit.
+waits up to 11 seconds for it to exit.
 `--force` sends SIGKILL, which writes nothing; the next `metaproc status` writes the
 summaries instead.
 

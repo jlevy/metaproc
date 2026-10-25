@@ -17,10 +17,11 @@ development series.
   inactive run, and a resume made it active and blocked that too.
   The reaper now writes both before the orchestrator dies by the signal, with
   `state: cancelled` and `terminal_error_type: SIGTERM`: first a resource summary marked
-  `finalization.incomplete: true` with every total unmeasured, then, on a thread bounded
-  at 10 seconds, the complete finalization, which replaces it.
-  Descendants are still reaped first, and again after; a repeated signal neither aborts
-  nor repeats the work.
+  `finalization.incomplete: true` with every total unmeasured, then, on a thread, the
+  complete finalization, which replaces it.
+  The work must be done 8 seconds after the signal arrives, inside the 10 seconds
+  `docker stop` allows before SIGKILL. Descendants are still reaped first, and again
+  after; a repeated signal neither aborts nor repeats the work.
   `metaproc status` rebuilds an incomplete summary like a missing one, and on a running
   resume it writes the summary an earlier launch left missing or incomplete (SIGKILL, or
   a rollup that outran the bound) without rewriting the live
@@ -29,7 +30,7 @@ development series.
   Status never replaces a summary the orchestrator writes while status reads the run’s
   evidence: writers publish holding `.state/finalization.lock`, and status publishes
   only if the resource summary is still the one it found and the operations summary is
-  still absent. `metaproc kill` waits up to 13 seconds, not 3, for the orchestrator to
+  still absent. `metaproc kill` waits up to 11 seconds, not 3, for the orchestrator to
   exit.
 
 ## [0.5.0][] - 2026-10-21

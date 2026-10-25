@@ -2977,16 +2977,18 @@ A SIGTERM never reaches that `finally`: the hard reaper kills the orchestrator�
 descendants and then re-raises the signal under its default disposition.
 So the reaper writes the reports itself first.
 It writes `resource-usage-summary.md` with `finalization.incomplete: true` and no
-totals, then runs the same finalization on a separate thread for up to 10 seconds, and
-the complete reports replace the incomplete one.
-Both record `state: cancelled` and `terminal_error_type: SIGTERM`, or the body’s own
-outcome when the signal arrives during terminal finalization; a signal after the
-resource rollup is written leaves it as it is, and only the operations summary is
-written again. `metaproc status` recovers missing, stale, or incomplete reports once the
-orchestrator is inactive.
-While a resume runs, it writes only the report an earlier launch left missing or
-incomplete, and leaves `resource-events.jsonl`, which the live orchestrator appends to,
-as it is. Every writer reads its evidence first and publishes holding the run’s
+totals, then runs the same finalization on a separate thread until 8 seconds after the
+signal arrived, and the complete reports replace the incomplete one.
+That bound, measured from the signal, keeps the whole exit inside the 10 seconds
+`docker stop` allows before SIGKILL. Both record `state: cancelled` and
+`terminal_error_type: SIGTERM`, or the body’s own outcome when the signal arrives during
+terminal finalization; a signal after the resource rollup is written leaves it as it is,
+and only the operations summary is written again.
+`metaproc status` recovers missing, stale, or incomplete reports once the orchestrator
+is inactive. While a resume runs, it writes only the report an earlier launch left
+missing or incomplete, and leaves `resource-events.jsonl`, which the live orchestrator
+appends to, as it is.
+Every writer reads its evidence first and publishes holding the run’s
 `.state/finalization.lock`, and status publishes only if the resource summary is still
 the one it found when it decided to recover, so a summary the orchestrator writes while
 status reads is never replaced by status’s older reading.

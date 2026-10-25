@@ -194,7 +194,7 @@ def kill_pool(
         os.kill(pool_status.pid, signal.SIGTERM)
 
     # Poll for the pool's exit, allowing for the summaries its signal-exit work writes.
-    deadline = time.monotonic() + SIGNAL_EXIT_WORK_TIMEOUT_S + 3.0
+    deadline = time.monotonic() + SIGNAL_EXIT_WAIT_S
     while time.monotonic() < deadline:
         if not is_pool_alive(pool_status):
             break
@@ -285,13 +285,21 @@ def reap_subprocess_tree(parent_pid: int | None = None) -> dict[str, int]:
     return counts
 
 
-SIGNAL_EXIT_WORK_TIMEOUT_S = 10.0
-"""How long the hard reaper lets registered exit work run before dying by the signal.
+SIGNAL_EXIT_WORK_TIMEOUT_S = 8.0
+"""Seconds from a hard-stop signal's arrival by which registered exit work must be done.
 
-Enough for a typical run's resource rollup, and inside the grace period supervisors
-allow before SIGKILL (10 seconds for ``docker stop``, 30 for Kubernetes and for GCE
-preemption).
+The bound covers the handler from the moment the signal arrives: the first reap, every
+``mark``, and every ``finish``. Only the second reap and the re-raise follow it.
+``docker stop`` sends SIGKILL 10 seconds after SIGTERM to a Linux container that sets no
+stop timeout of its own, the shortest default grace among the supervisors that stop a
+run (a Kubernetes pod's ``terminationGracePeriodSeconds`` defaults to 30, and a Compute
+Engine Spot VM's shutdown period is at most 30), so those two get the last 2 seconds.
+Under a supervisor with a shorter grace, the run keeps the incomplete summary ``mark``
+wrote.
 """
+
+SIGNAL_EXIT_WAIT_S = SIGNAL_EXIT_WORK_TIMEOUT_S + 3.0
+"""How long ``metaproc kill`` waits for a SIGTERM'd orchestrator to write its exit work and die."""
 
 
 @dataclass(frozen=True)
@@ -301,8 +309,10 @@ class SignalExitWork:
     ``mark`` runs first, on the signal handler's own thread, so what it writes survives
     even when ``finish`` cannot complete. It must be quick and take no lock: the handler
     interrupts the main thread between any two bytecodes, and whatever lock that thread
-    held stays held. ``finish`` runs on a thread of its own for at most ``timeout_s``
-    seconds; what it has not done by then is abandoned with the process.
+    held stays held. ``finish`` runs on a thread of its own until ``timeout_s`` seconds
+    after the signal arrived; what it has not done by then is abandoned with the process.
+    A ``finish`` that waits on a lock the main thread held, a logging handler's included,
+    is abandoned that way, so it can only cut ``finish`` short, never hang the exit.
     """
 
     mark: Callable[[signal.Signals], None]
@@ -376,8 +386,11 @@ def register_signal_exit_work(work: SignalExitWork) -> Callable[[], None]:
     return unregister
 
 
-def _run_signal_exit_work(signum: signal.Signals) -> None:
-    """Run every registered exit work: each mark, then each finish under its bound."""
+def _run_signal_exit_work(signum: signal.Signals, *, received_at: float) -> None:
+    """Run every registered exit work: each mark, then each finish until its bound.
+
+    Each bound runs from ``received_at``, the signal's arrival on the monotonic clock.
+    """
     workers = list(_signal_exit.workers)
     if not workers:
         return
@@ -386,11 +399,10 @@ def _run_signal_exit_work(signum: signal.Signals) -> None:
             worker.work.mark(signum)
         except Exception:
             log.exception("Signal-exit mark failed after %s", signum.name)
-    started = time.monotonic()
     for worker in workers:
         worker.start(signum)
     for worker in workers:
-        if not worker.wait(started + worker.work.timeout_s - time.monotonic()):
+        if not worker.wait(received_at + worker.work.timeout_s - time.monotonic()):
             log.warning(
                 "Signal-exit work did not finish within %.0fs of %s; exiting without it",
                 worker.work.timeout_s,
@@ -412,8 +424,8 @@ def install_subprocess_reaper_signal_handlers(*, include_sigint: bool = True) ->
     This handler:
     1. Reaps the subprocess tree synchronously (SIGKILL all descendants).
     2. Runs any work registered with :func:`register_signal_exit_work`: every ``mark``
-       on the handler's thread, then every ``finish`` on its own thread, bounded by its
-       ``timeout_s``, then reaps again.
+       on the handler's thread, then every ``finish`` on its own thread, until its
+       ``timeout_s`` after the signal arrived, then reaps again.
     3. Re-raises the default signal so the orchestrator dies by it.
 
     A repeated signal while that runs is ignored: the first already ends the process,
@@ -431,6 +443,7 @@ def install_subprocess_reaper_signal_handlers(*, include_sigint: bool = True) ->
     """
 
     def _handler(signum: int, _frame: object) -> None:
+        received_at = time.monotonic()
         if _signal_exit.exiting:
             return
         _signal_exit.exiting = True
@@ -447,7 +460,7 @@ def install_subprocess_reaper_signal_handlers(*, include_sigint: bool = True) ->
                 counts["permission_denied"],
                 counts["errors"],
             )
-            _run_signal_exit_work(received)
+            _run_signal_exit_work(received, received_at=received_at)
         finally:
             # Re-raise with default handler so the orchestrator dies by the signal.
             signal.signal(signum, signal.SIG_DFL)
