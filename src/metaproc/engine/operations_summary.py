@@ -30,6 +30,7 @@ from frontmatter_format import fmf_split_frontmatter, fmf_write
 from strif import atomic_output_file, atomic_write_text
 
 from metaproc import paths as paths_mod
+from metaproc.engine.finalization_lock import finalization_publish_lock
 from metaproc.engine.operations_render import render_summary_markdown
 from metaproc.io import ArtifactPath, artifact_sidecar_path, iter_jsonl_objects, logical_path
 from metaproc.models.operations_summary import (
@@ -235,17 +236,24 @@ def finalize_operations_summary(
     *,
     outcome: FinalizationState | None,
     trigger: Literal["finalization", "status"] = "finalization",
+    if_absent: bool = False,
 ) -> Path | None:
     """Write the summary at run finalization; log and return ``None`` on any failure.
 
     An observability artifact must never change a run's outcome. ``metaproc status``
     passes ``trigger="status"`` and no outcome when it recovers a run that ended without
     finalizing, such as one killed by a signal, so run state comes from the resource usage
-    summary that recovery just wrote.
+    summary that recovery just wrote. It also passes ``if_absent``: the summary is then
+    published only if none is there under the run's finalization lock, so one the run's
+    own finalization wrote while status folded stands. Returns ``None`` when it is not
+    written.
     """
     try:
         summary = build_operations_summary(run_dir, outcome=outcome, trigger=trigger)
-        return write_operations_summary(summary, run_dir)
+        with finalization_publish_lock(run_dir):
+            if if_absent and (run_dir / OPERATIONS_SUMMARY_FILE).exists():
+                return None
+            return write_operations_summary(summary, run_dir)
     except Exception:  # noqa: BLE001 - reporting cannot replace process outcome
         log.exception("operations summary failed for %s", run_dir)
         return None

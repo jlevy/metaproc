@@ -26,7 +26,11 @@ development series.
   a rollup that outran the bound) without rewriting the live
   `.logs/resource-events.jsonl`. `incomplete` is serialized only when true, so complete
   summaries and `resources.json` keep their shape.
-  `metaproc kill` waits up to 13 seconds, not 3, for the orchestrator to exit.
+  Status never replaces a summary the orchestrator writes while status reads the run’s
+  evidence: writers publish holding `.state/finalization.lock`, and status publishes
+  only if the resource summary is still the one it found and the operations summary is
+  still absent. `metaproc kill` waits up to 13 seconds, not 3, for the orchestrator to
+  exit.
 
 ## [0.5.0][] - 2026-10-21
 

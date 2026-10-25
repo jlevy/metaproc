@@ -8,13 +8,22 @@ resource summary; then status writes that summary without touching the live ledg
 from __future__ import annotations
 
 import os
+import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from metaproc import paths as paths_mod
 from metaproc.commands.run_process import _write_run_config
 from metaproc.commands.status import _recover_resource_artifacts
-from metaproc.engine.operations_summary import read_operations_summary
+from metaproc.engine import operations_summary, resource_finalization, resource_rollup
+from metaproc.engine.operations_summary import (
+    finalize_operations_summary,
+    read_operations_summary,
+)
 from metaproc.engine.resource_finalization import (
     finalize_run_resources,
     resource_artifacts_need_recovery,
@@ -24,6 +33,7 @@ from metaproc.engine.run_status import RunStatus
 from metaproc.io import fmf_read_frontmatter
 from metaproc.logutil.resource_events import ResourceEventLogger
 from metaproc.models.authored import ProgressCounts
+from metaproc.models.operations_summary import AgentOperationsSummary
 from metaproc.models.resource_budget import FinalizationState
 from metaproc.models.resource_summary import ResourceUsageSummary
 from metaproc.models.resources import (
@@ -35,6 +45,15 @@ from metaproc.models.resources import (
     read_resources_document,
 )
 from metaproc.runpool.process_events import ProcessEventLogger
+
+
+def _usage(input_tokens: int) -> UsageEvent:
+    return UsageEvent(
+        ts=datetime(2026, 8, 3, tzinfo=UTC),
+        hierarchy=HierarchyRef(run_id="old/run-1"),
+        metrics=Metrics(input_tokens=input_tokens),
+        source=SourceRef(kind="agent_log", path=f"local-{input_tokens}.jsonl"),
+    )
 
 
 def _seed(tmp_path: Path, *, launches: int = 1) -> Path:
@@ -50,14 +69,8 @@ def _seed(tmp_path: Path, *, launches: int = 1) -> Path:
         backend="local",
         variant=None,
     )
-    event = UsageEvent(
-        ts=datetime(2026, 8, 3, tzinfo=UTC),
-        hierarchy=HierarchyRef(run_id="old/run-1"),
-        metrics=Metrics(input_tokens=3),
-        source=SourceRef(kind="agent_log", path="local.jsonl"),
-    )
     with ResourceEventLogger(run_dir / ".logs" / "resource-events.jsonl") as logger:
-        logger.write(event)
+        logger.write(_usage(3))
     for _ in range(launches):
         _record_launch(run_dir)
     return run_dir
@@ -153,6 +166,95 @@ def test_active_resume_rebuilds_an_incomplete_summary(tmp_path: Path) -> None:
     assert summary.finalization.incomplete is False
     assert summary.finalization.state is FinalizationState.CANCELLED
     assert summary.totals.input_tokens == 3
+
+
+def _resume_finalizes(run_dir: Path) -> None:
+    """The live resume does more work, then runs its own terminal finalization."""
+    with ResourceEventLogger(run_dir / ".logs" / "resource-events.jsonl") as logger:
+        logger.write(_usage(5))
+    finalize_run_resources(run_dir, outcome=FinalizationState.COMPLETED)
+    finalize_operations_summary(run_dir, outcome=FinalizationState.COMPLETED)
+
+
+def _assert_terminal_artifacts(run_dir: Path) -> None:
+    summary = _summary(run_dir)
+    assert (summary.finalization.trigger, summary.finalization.recovered) == ("terminal", False)
+    assert summary.totals.input_tokens == 8
+    document = read_resources_document(run_dir / "resources.json")
+    assert isinstance(document, ResourcesDocument) and document.finalization is not None
+    assert (document.finalization.trigger, document.finalization.recovered) == ("terminal", False)
+    operations = read_operations_summary(run_dir).summary
+    assert operations is not None and operations.trigger == "finalization"
+
+
+def test_active_backfill_keeps_a_terminal_finalization_that_lands_while_it_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Status has read the evidence for its backfill when the resume finalizes: the
+    resume's complete summaries stand, and the older reading is not written over them."""
+    run_dir = _seed(tmp_path, launches=2)
+    real_project = resource_rollup.project_resource_document
+    landed: list[bool] = []
+
+    def project_then_resume_finalizes(**kwargs: Any) -> ResourcesDocument:
+        document = real_project(**kwargs)
+        if not landed:
+            landed.append(True)
+            _resume_finalizes(run_dir)
+        return document
+
+    monkeypatch.setattr(
+        resource_finalization, "project_resource_document", project_then_resume_finalizes
+    )
+
+    _recover_resource_artifacts(run_dir, _status(run_dir, active=True))
+
+    assert landed
+    _assert_terminal_artifacts(run_dir)
+
+
+def test_status_keeps_an_operations_summary_the_run_writes_while_status_folds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Status found no operations summary and is folding one when the resume finalizes:
+    the resume's summary stands, so the two summaries agree."""
+    run_dir = _seed(tmp_path, launches=2)
+    real_build = operations_summary.build_operations_summary
+    landed: list[bool] = []
+
+    def build_then_resume_finalizes(run_dir_arg: Path, **kwargs: Any) -> AgentOperationsSummary:
+        summary = real_build(run_dir_arg, **kwargs)
+        if not landed:
+            landed.append(True)
+            _resume_finalizes(run_dir)
+        return summary
+
+    monkeypatch.setattr(operations_summary, "build_operations_summary", build_then_resume_finalizes)
+
+    _recover_resource_artifacts(run_dir, _status(run_dir, active=True))
+
+    assert landed
+    _assert_terminal_artifacts(run_dir)
+
+
+def test_terminal_finalization_waits_for_a_publication_in_progress(tmp_path: Path) -> None:
+    """Writers publish one at a time, so a check made before publishing still holds."""
+    run_dir = _seed(tmp_path, launches=2)
+    lock = run_dir / ".state" / "finalization.lock"
+    lock.mkdir(parents=True)
+    finalizer = threading.Thread(
+        target=finalize_run_resources,
+        args=(run_dir,),
+        kwargs={"outcome": FinalizationState.COMPLETED},
+    )
+    finalizer.start()
+    try:
+        time.sleep(0.5)
+        assert not (run_dir / "resource-usage-summary.md").exists()
+    finally:
+        lock.rmdir()
+        finalizer.join(timeout=30)
+    assert _summary(run_dir).finalization.trigger == "terminal"
 
 
 def test_inactive_status_rebuilds_an_incomplete_summary_and_keeps_its_state(

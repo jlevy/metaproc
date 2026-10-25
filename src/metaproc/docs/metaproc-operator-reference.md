@@ -1196,6 +1196,10 @@ one, plus a missing operations summary beside it, and leaves
 `.logs/resource-events.jsonl`, which the live orchestrator appends to, as it is; the
 resume’s own finalization replaces both.
 It writes an operations summary only when the file is absent.
+Status never replaces a summary the orchestrator writes while status is reading the
+run’s evidence: each writer publishes holding `.state/finalization.lock`, and status
+publishes only if the resource summary is still the one it found, and the operations
+summary still absent.
 Its frontmatter is `metaproc.operations:AgentOperationsSummary/v1`; the body renders the
 same values. Point it at a run root: a top-level run, a batch root, or a child run of a
 batch, in place or copied elsewhere.

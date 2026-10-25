@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
+from metaproc.engine.finalization_lock import finalization_publish_lock
 from metaproc.engine.resource_hierarchy import build_hierarchy_skeleton
 from metaproc.engine.resource_reconciliation import reconcile_resource_events
 from metaproc.engine.resource_rollup import (
@@ -111,8 +112,70 @@ def finalize_run_resources(
     historical error strings to reinterpret it, and it performs no network calls.
     ``terminal_signal`` names the hard-stop signal that ended the run when no error did.
     ``write_events=False`` leaves ``.logs/resource-events.jsonl`` as it is, for a run
-    whose live orchestrator may still append to it.
+    whose live orchestrator may still append to it. The evidence is read first; the
+    projections are then published under the run's finalization lock.
     """
+    result = _build_finalization(
+        run_dir,
+        outcome=outcome,
+        legacy_run_id=legacy_run_id,
+        trigger=trigger,
+        terminal_error=terminal_error,
+        terminal_signal=terminal_signal,
+        finalized_at=finalized_at,
+        bundle=bundle,
+    )
+    with finalization_publish_lock(run_dir):
+        _publish_finalization(result, run_dir, write_events=write_events)
+    return result
+
+
+def recover_run_resources(
+    run_dir: Path,
+    *,
+    outcome: FinalizationState,
+    observed_summary: bytes | None,
+    bundle: PlanBundle | None = None,
+    write_events: bool = True,
+) -> bool:
+    """Rebuild a run's resource projections for ``metaproc status``; return whether it did.
+
+    ``observed_summary`` is the run's ``resource-usage-summary.md`` as status found it
+    when it decided to recover (:func:`resource_usage_summary_snapshot`). Reading the
+    evidence can take minutes on a large run, and the run's own orchestrator can finalize
+    meanwhile: a resume that ends, or a launch started after status found the run
+    inactive. So the projections are published only if, under the finalization lock, the
+    summary is still the one status observed; a different one is the orchestrator's, and
+    status's older reading would replace its outcome and totals for good.
+    """
+    result = _build_finalization(run_dir, outcome=outcome, trigger="status", bundle=bundle)
+    with finalization_publish_lock(run_dir):
+        if resource_usage_summary_snapshot(run_dir) != observed_summary:
+            return False
+        _publish_finalization(result, run_dir, write_events=write_events)
+    return True
+
+
+def resource_usage_summary_snapshot(run_dir: Path) -> bytes | None:
+    """Return the bytes of the run's ``resource-usage-summary.md``, or ``None`` if absent."""
+    try:
+        return (run_dir / RESOURCE_USAGE_SUMMARY_FILE).read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+def _build_finalization(
+    run_dir: Path,
+    *,
+    outcome: FinalizationState,
+    trigger: Literal["terminal", "resume", "status", "recovery"],
+    legacy_run_id: str | None = None,
+    terminal_error: BaseException | None = None,
+    terminal_signal: signal.Signals | None = None,
+    finalized_at: datetime | None = None,
+    bundle: PlanBundle | None = None,
+) -> ResourceBuildResult:
+    """Replay local evidence into finalized resource projections, writing nothing."""
     snapshot = read_resource_run_snapshot(run_dir)
     config = _read_run_config(run_dir)
     resolved_run_id = _resolved_run_id(snapshot, config=config, legacy_run_id=legacy_run_id)
@@ -166,15 +229,19 @@ def finalize_run_resources(
         finalization=finalization,
         summary_path=RESOURCE_USAGE_SUMMARY_FILE,
     )
-    result = ResourceBuildResult(
+    return ResourceBuildResult(
         document=document,
         events=events,
         document_path=run_dir / RESOURCES_RELATIVE,
         events_path=ledger_path,
     )
+
+
+def _publish_finalization(
+    result: ResourceBuildResult, run_dir: Path, *, write_events: bool
+) -> None:
     write_resource_artifacts(result, write_events=write_events)
-    write_resource_usage_summary(document, run_dir)
-    return result
+    write_resource_usage_summary(result.document, run_dir)
 
 
 def resource_run_id(run_dir: Path) -> str:

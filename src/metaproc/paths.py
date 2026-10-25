@@ -168,6 +168,9 @@ INPUT_BINDINGS_FILE = "input-bindings.yaml"
 ORCHESTRATOR_LEASE_FILE = "orchestrator-lease.yaml"
 """Active orchestrator lease — heartbeat, owner identity, stale takeover."""
 
+FINALIZATION_LOCK_DIR = "finalization.lock"
+"""Held while a run's resource and operations summaries are published (a mkdir lock)."""
+
 DISPATCH_MANIFEST_FILE = "dispatch-manifest.yaml"
 """Per-step dispatch manifest — worker job IDs for adoption on resume."""
 

@@ -2985,6 +2985,10 @@ outcome when the signal arrives during terminal finalization.
 is inactive. While a resume runs, it writes only the report an earlier launch left
 missing or incomplete, and leaves `resource-events.jsonl`, which the live orchestrator
 appends to, as it is.
+Every writer reads its evidence first and publishes holding the run’s
+`.state/finalization.lock`, and status publishes only if the resource summary is still
+the one it found when it decided to recover, so a summary the orchestrator writes while
+status reads is never replaced by status’s older reading.
 Recovery uses local evidence and the frozen snapshot without provider calls or cached
 totals.
 
