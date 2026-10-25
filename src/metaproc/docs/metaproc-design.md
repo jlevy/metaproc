@@ -945,8 +945,9 @@ Implemented CLI surface:
 - `gcp status <target>` -- show Batch job status (auto-detect: local run dir or run-id)
 - `gcp scale <target> --step <step>` -- update desired topology for an active cloud
   fan-out step
-- `gcp logs <target>` -- stream Cloud Logging entries (auto-detect: local run dir or
-  run-id)
+- `gcp logs <target>` -- read a file-console job’s bounded live view or Cloud Logging
+  (auto-detect: local run dir, run-id, or exact job resource); `--include-agent-logs`
+  selects Cloud Logging for bootstrap diagnosis
 - `gcp cancel <target>` -- cancel running/queued Batch jobs (auto-detect: local run dir
   or run-id)
 - `gcp runs` -- list all active metaproc runs across the project

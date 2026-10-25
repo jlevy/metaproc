@@ -74,7 +74,8 @@ class MetaprocEnv(EnvEnum):
         "Serialized JSON command used by the `gcp-run` entrypoint. Set by the dispatcher."
     )
     METAPROC_GCP_RUN_CONSOLE_PATH = optional(
-        "Filestore file a `gcp-run` job's console is appended to. Set by the dispatcher.",
+        "File a `gcp-run` job's console is appended to, on the job's run-storage mount. "
+        "Set by the dispatcher.",
         "/mnt/filestore/logs/gcp-run/<job-id>/console.log",
     )
     METAPROC_GCP_RUN_LIVE_GCS = optional(

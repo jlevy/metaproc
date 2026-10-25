@@ -9,11 +9,11 @@ typed secret-reference registry, builds the Job via
 ``batch_backend.create_single_task_job``, and submits it via the Batch
 client.
 
-With ``console_on_filestore`` the user command runs inside
-``gcp_run_console``, which appends its console to
-``<mount>/logs/gcp-run/<job_id>/console.log`` on the Filestore mount and keeps a
-small live view under ``live_gcs_uri`` for readers that may not mount Filestore;
-Cloud Logging then carries only the wrapper's heartbeat and the bootstrap output.
+With ``console_to_file`` the user command runs inside ``gcp_run_console``, which
+appends its console to the console file on the job's run-storage mount,
+``<mount>/logs/gcp-run/<job_id>/console.log``, and keeps a small live view under
+``live_gcs_uri`` for readers that do not mount the job's storage; Cloud Logging then
+carries only the wrapper's heartbeat and the bootstrap output.
 
 ``build_gcp_run_job`` is the pure assembly half (no API calls), used by
 ``--dry-run`` and unit tests. ``dispatch_gcp_run`` is the side-effecting
@@ -42,6 +42,7 @@ from metaproc.cloud.gcp.gcp_run_console import (
     CONSOLE_PATH_ENV,
     LIVE_GCS_ENV,
     WATCH_ENV,
+    normalize_watch_dirs,
 )
 from metaproc.cloud.gcp.secret_hydration import (
     SECRET_REFS_ENV,
@@ -74,12 +75,12 @@ RESERVED_ENV_KEYS: frozenset[str] = frozenset(
     }
 )
 
-# Where a job's console goes on the Filestore mount, under the job's own directory.
+# Where a job's console file goes on its run-storage mount, under the job's own directory.
 CONSOLE_DIR = "logs/gcp-run"
 
 
 def console_path(config: GCPBatchConfig, job_id: str) -> str:
-    """The Filestore path of ``job_id``'s console, as the container sees it."""
+    """The path of ``job_id``'s console file on its run-storage mount, as the container sees it."""
     return f"{config.filestore_mount_path.rstrip('/')}/{CONSOLE_DIR}/{job_id}/console.log"
 
 
@@ -104,7 +105,7 @@ class DispatchGcpRunOptions:
     job_name: str = ""
     spot: bool = True
     job_labels: Mapping[str, str] = field(default_factory=dict)
-    console_on_filestore: bool = False
+    console_to_file: bool = False
     live_gcs_uri: str = ""
     watch_run_dirs: tuple[str, ...] = ()
 
@@ -198,9 +199,12 @@ def build_gcp_run_job(
     job_id = options.job_name or _generate_job_id()
     run_cmd = list(cmd)
     console_env: dict[str, str] = {}
-    if options.console_on_filestore:
+    if options.console_to_file:
         if not options.config.filestore_server:
-            raise ValueError("console_on_filestore requires a Filestore mount")
+            raise ValueError(
+                "console_to_file requires a run-storage mount (the console file must "
+                "outlive the task)"
+            )
         for run_dir in options.watch_run_dirs:
             if not run_dir.startswith("/") or "," in run_dir:
                 raise ValueError(
@@ -212,10 +216,11 @@ def build_gcp_run_job(
         console_env[CONSOLE_PATH_ENV] = console_path(options.config, job_id)
         if options.live_gcs_uri:
             console_env[LIVE_GCS_ENV] = options.live_gcs_uri
-        if options.watch_run_dirs:
-            console_env[WATCH_ENV] = ",".join(options.watch_run_dirs)
+        watch_dirs = normalize_watch_dirs(options.watch_run_dirs)
+        if watch_dirs:
+            console_env[WATCH_ENV] = ",".join(str(path) for path in watch_dirs)
     elif options.live_gcs_uri or options.watch_run_dirs:
-        raise ValueError("live_gcs_uri and watch_run_dirs require console_on_filestore")
+        raise ValueError("live_gcs_uri and watch_run_dirs require console_to_file")
 
     env_vars: dict[str, str] = {"METAPROC_GCP_RUN_CMD": json.dumps(run_cmd), **console_env}
     if options.wheel_gcs_uri:

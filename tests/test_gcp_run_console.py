@@ -1,16 +1,21 @@
-"""The gcp-run console wrapper keeps a job's console on Filestore, not in Cloud Logging."""
+"""The gcp-run console wrapper keeps a job's console in a file, not in Cloud Logging."""
 
 from __future__ import annotations
 
 import io
 import json
+import os
+import select
+import shlex
 import signal
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 from pathlib import Path
 
+import psutil
 import pytest
 
 from metaproc.cloud.gcp import gcp_run_console as console
@@ -116,13 +121,13 @@ def test_heartbeats_reach_stdout_and_refresh_the_live_view(tmp_path: Path) -> No
     assert "running 0:00:00" in stdout.getvalue()
     assert "line 0" not in stdout.getvalue()
     assert sink.objects[console.LIVE_TAIL_NAME].splitlines() == ["line 3", "line 4"]
-    assert sink.objects["runs/run-abc.txt"] == "status of run-abc\n"
+    assert sink.objects["runs/run-abc.txt"].endswith("\nstatus of run-abc\n")
     record = json.loads(sink.objects[console.LIVE_STATUS_NAME])
     assert record["state"] == "exited" and record["exit_code"] == 0
     assert record["console_lines"] == 6  # the header line and five child lines
     assert record["console_path"] == str(settings.console_path)
-    # The status record is written after the tail on every publish.
-    assert sink.puts[-1] == console.LIVE_STATUS_NAME
+    # Each modern status object carries its own tail/count pair.
+    assert record["console_tail"] == sink.objects[console.LIVE_TAIL_NAME]
     assert sink.puts.count(console.LIVE_STATUS_NAME) >= 2
 
 
@@ -140,7 +145,14 @@ def test_live_view_failures_never_fail_the_job(tmp_path: Path) -> None:
 def test_sigterm_reaches_the_command_and_its_children(tmp_path: Path) -> None:
     settings = _settings(tmp_path, heartbeat_s=0.2)
     script = tmp_path / "trap.sh"
-    script.write_text("trap 'echo got TERM; exit 42' TERM\nsleep 30 &\nwait\n")
+    ready = tmp_path / "child-ready"
+    os.mkfifo(ready)
+    ready_fd = os.open(ready, os.O_RDWR | os.O_NONBLOCK)
+    script.write_text(
+        "trap 'wait \"$grandchild_pid\"; echo got TERM; exit 42' TERM\n"
+        "sleep 30 &\ngrandchild_pid=$!\n"
+        f"printf '%s\\n' \"$grandchild_pid\" > {shlex.quote(str(ready))}\nwait\n"
+    )
     wrapper = subprocess.Popen(
         [sys.executable, "-m", console.CONSOLE_MODULE, "--", "bash", str(script)],
         env={
@@ -150,15 +162,28 @@ def test_sigterm_reaches_the_command_and_its_children(tmp_path: Path) -> None:
         stdout=subprocess.PIPE,
         text=True,
     )
-    deadline = time.monotonic() + 10
-    while not settings.console_path.exists() and time.monotonic() < deadline:
-        time.sleep(0.05)
-    time.sleep(0.5)
-    wrapper.send_signal(signal.SIGTERM)
-    out, _ = wrapper.communicate(timeout=10)
-    assert wrapper.returncode == 42
-    assert "got TERM" in settings.console_path.read_text()
-    assert "exit 42" in out
+    grandchild: psutil.Process | None = None
+    try:
+        assert select.select([ready_fd], [], [], 10)[0], "child process never became ready"
+        grandchild = psutil.Process(int(os.read(ready_fd, 32).strip()))
+        wrapper.send_signal(signal.SIGTERM)
+        out, _ = wrapper.communicate(timeout=10)
+        assert wrapper.returncode == 42
+        assert "got TERM" in settings.console_path.read_text()
+        assert "exit 42" in out
+        assert not grandchild.is_running()  # the command waited for and reaped it
+    finally:
+        os.close(ready_fd)
+        if wrapper.poll() is None:
+            for process in psutil.Process(wrapper.pid).children(recursive=True):
+                try:
+                    process.kill()
+                except psutil.NoSuchProcess:
+                    pass
+            wrapper.kill()
+            wrapper.wait(timeout=5)
+        if grandchild is not None and grandchild.is_running():
+            grandchild.kill()
 
 
 def test_read_tail_returns_the_last_lines_of_a_large_file(tmp_path: Path) -> None:
@@ -209,18 +234,35 @@ def test_watched_run_status_refreshes_on_its_own_slower_cadence(tmp_path: Path) 
     settings.console_path.parent.mkdir(parents=True)
     settings.console_path.write_text("x\n")
     calls: list[str] = []
-    times = iter([0.0, 60.0, 120.0, 310.0, 320.0])
+    now = [0.0]
+    rendered = threading.Semaphore(0)
+
+    def render(path: Path) -> str:
+        calls.append(path.name)
+        rendered.release()
+        return "ok\n"
+
+    sink = RecordingSink()
     live = console.LiveView(
         settings,
-        RecordingSink(),
+        sink,
         ["true"],
         io.StringIO(),
-        run_status=lambda path: calls.append(path.name) or "ok\n",
-        clock=lambda: next(times),
+        run_status=render,
+        clock=lambda: now[0],
     )
     counter = console.ConsoleCounter(settings.console_path)
-    for _ in range(4):
+    live.publish(counter)
+    assert rendered.acquire(timeout=2)
+    now[0] = 120.0
+    live.publish(counter)
+    assert calls == ["run-abc"]
+    now[0] = 310.0
+    deadline = time.monotonic() + 2
+    while len(calls) < 2 and time.monotonic() < deadline:
         live.publish(counter)
-    assert calls == ["run-abc", "run-abc"]  # at 0s and at 310s, not at 60s or 120s
+    assert rendered.acquire(timeout=2)
+    assert calls == ["run-abc", "run-abc"]
     live.publish(counter, final=True)
-    assert calls == ["run-abc", "run-abc", "run-abc"]
+    live.close()
+    assert calls == ["run-abc", "run-abc"]  # exit uses the cache instead of starting a render
