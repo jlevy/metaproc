@@ -35,7 +35,13 @@ development series.
   YAML handle switched to libyaml’s emitter, which wraps long values at different
   points. They now dump through `metaproc.io.new_dump_yaml`, a `new_yaml` handle that
   keeps the pure-Python emitter, so the bytes match what a process without the extension
-  writes.
+  writes. This fixes writing only.
+  Safe C parser compatibility remains a separate dependency concern: under
+  `frontmatter-format==0.4.0`, flow-sequence URLs such as
+  `sources: [https://example.com/a]` still fail when the C parser is active.
+  Enabling the extension in an existing workflow requires a reader compatibility update
+  and its own validation; see
+  [installation](docs/installation.md#optional-yaml-c-extension).
 
 ## [0.5.0][] - 2026-10-21
 

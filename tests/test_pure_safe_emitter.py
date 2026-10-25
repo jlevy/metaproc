@@ -7,9 +7,10 @@ does not flush the output stream at the end of a dump, so a dump to a handle tha
 never closed or flushed leaves an empty file. Metaproc's safe writers therefore pin the
 pure emitter, and their bytes must not depend on whether the extension is installed.
 
-The comparison tests need the extension and skip without it. The reference output is
-produced by the same writer with the extension hidden from ruamel, which is exactly what
-a process without the extension writes.
+The comparison tests need the extension and skip without it in the ordinary suite.
+``make test-yaml-c-emitter`` requires the native implementation and fails if it is
+unavailable. The reference output is produced by the same writer with the extension
+hidden from ruamel, which is exactly what a process without the extension writes.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from textwrap import dedent
 from typing import Any
 
 import pytest
@@ -67,6 +69,14 @@ requires_c_emitter = pytest.mark.skipif(
 # ``CEmitter`` is ``None`` in ``ruamel.yaml.main`` when the extension is absent; the
 # module does not export it, so reach it untyped.
 _RUAMEL_MAIN: Any = ruamel.yaml.main
+
+if os.environ.get("METAPROC_REQUIRE_C_EMITTER") == "1" and (
+    _C_IMPORT_ERROR is not None or _RUAMEL_MAIN.CEmitter is None
+):
+    raise RuntimeError(
+        "The native YAML emitter lane requires an importable _ruamel_yaml CEmitter: "
+        f"{_C_IMPORT_ERROR or 'ruamel.yaml.main.CEmitter is unavailable'}"
+    )
 
 SRC_ROOT = Path(__file__).resolve().parents[1] / "src" / "metaproc"
 
@@ -246,6 +256,25 @@ def test_dump_yaml_handle_uses_the_pure_emitter() -> None:
     assert yaml.Emitter is ruamel.yaml.emitter.Emitter
 
 
+def test_dump_yaml_preserves_public_factory_suppression_behavior() -> None:
+    data = {"null": None, "empty": {}, "zero": 0, "text": "keep", "drop": "omit"}
+    default_output = io.StringIO()
+    new_dump_yaml().dump(data, default_output)
+    assert YAML(typ="safe", pure=True).load(default_output.getvalue()) == {
+        "zero": 0,
+        "text": "keep",
+        "drop": "omit",
+    }
+
+    for suppress in (None, lambda value: value == "omit"):
+        actual = io.StringIO()
+        expected = io.StringIO()
+        new_dump_yaml(suppress_vals=suppress).dump(data, actual)
+        with _pure_emitter_only():
+            new_yaml(suppress_vals=suppress).dump(data, expected)
+        assert actual.getvalue() == expected.getvalue()
+
+
 @requires_c_emitter
 def test_dump_to_an_unclosed_handle_is_complete(tmp_path: Path) -> None:
     data = {"reason": LONG_REASON, "variant": None, "drain": True}
@@ -314,13 +343,49 @@ def test_no_source_builds_a_safe_yaml_handle_outside_the_dump_factory() -> None:
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
+            if (rel, owners.get(node, "")) in LOAD_ONLY_YAML_SITES:
+                continue
             name = _callee_name(node)
             if name == "new_yaml" and rel != DUMP_FACTORY_MODULE and not _is_round_trip(node):
                 offenders.append(f"{rel}:{node.lineno} new_yaml() without typ='rt'")
             if name == "YAML" and not (_is_round_trip(node) or _is_pure(node)):
-                if (rel, owners.get(node, "")) not in LOAD_ONLY_YAML_SITES:
-                    offenders.append(f"{rel}:{node.lineno} YAML() without typ='rt' or pure=True")
+                offenders.append(f"{rel}:{node.lineno} YAML() without typ='rt' or pure=True")
     assert offenders == [], (
         "Build dumping handles with metaproc.io.new_dump_yaml so the pure emitter is kept "
-        "when ruamel's C extension is installed: " + ", ".join(offenders)
+        "when ruamel's C extension is installed. For parsing-only handles, record the "
+        "site in LOAD_ONLY_YAML_SITES: " + ", ".join(offenders)
     )
+
+
+def test_source_guard_accepts_both_load_only_constructors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "engine" / "yaml_repair.py"
+    path.parent.mkdir()
+    path.write_text(
+        dedent("""\
+            def _ruamel_safe_load(text):
+                YAML(typ="safe").load(text)
+                new_yaml().load(text)
+            """),
+        encoding="utf-8",
+    )
+    monkeypatch.setitem(globals(), "SRC_ROOT", tmp_path)
+    test_no_source_builds_a_safe_yaml_handle_outside_the_dump_factory()
+
+
+def test_source_guard_rejects_both_unapproved_dump_constructors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "writer.py"
+    path.write_text(
+        dedent("""\
+            def write(data, stream):
+                YAML(typ="safe").dump(data, stream)
+                new_yaml().dump(data, stream)
+            """),
+        encoding="utf-8",
+    )
+    monkeypatch.setitem(globals(), "SRC_ROOT", tmp_path)
+    with pytest.raises(AssertionError, match=r"YAML\(\).*new_yaml\(\)"):
+        test_no_source_builds_a_safe_yaml_handle_outside_the_dump_factory()

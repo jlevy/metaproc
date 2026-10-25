@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: File I/O Utilities (`metaproc.io`)
 
-**Date:** 2026-07-26 (last updated 2026-10-24) **Status:** Approved
+**Date:** 2026-07-26 (last updated 2026-10-25) **Status:** Approved
 
 `metaproc.io` is the curated public import surface for downstream callers and shared
 internal use. Every helper documented here is importable directly from `metaproc.io`:
@@ -251,6 +251,14 @@ these. The longer version:
    the same with or without the extension.
    `to_yaml_string`, `write_yaml_file`, and `fmf_write` dump in round-trip mode, which
    always uses the pure emitter.
+   This guarantee covers writing only: `from_yaml_string`, `read_yaml_file`, and
+   process/frontmatter readers can still select the safe C parser.
+   With `frontmatter-format==0.4.0`, the public call
+   `from_yaml_string('sources: [https://example.com/a]')` raises `ScannerError` with
+   that parser and succeeds with the pure parser.
+   Enabling the extension for downstream speed requires a separately reviewed reader
+   compatibility update and validation of process/frontmatter inputs, including
+   flow-sequence URLs and scalar interpretation.
 
 If a specific call site relies on any of these behaviors in a non-obvious way, add a
 concise `# NOTE:` that explains why the behavior matters there.

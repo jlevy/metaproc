@@ -16,16 +16,22 @@ from typing import Any
 
 import ruamel.yaml.emitter
 from frontmatter_format import KeySort, YamlTyp, new_yaml
-from frontmatter_format.yaml_util import none_or_empty_dict
 from ruamel.yaml import YAML
 
 __all__ = ["new_dump_yaml"]
 
 
+class _Omitted:
+    """Leave an argument at the public factory's default."""
+
+
+_OMITTED = _Omitted()
+
+
 def new_dump_yaml(
     *,
     key_sort: KeySort[str] | None = None,
-    suppress_vals: Callable[[Any], bool] | None = none_or_empty_dict,
+    suppress_vals: Callable[[Any], bool] | None | _Omitted = _OMITTED,
     stringify_unknown: bool = False,
     typ: YamlTyp = "safe",
     allow_aliases: bool = False,
@@ -36,14 +42,18 @@ def new_dump_yaml(
     process without the C extension, and the stream is flushed at the end of each dump.
     Round-trip handles already use the pure ``RoundTripEmitter`` and are returned as
     built. Use the handle for dumping; parsing goes through ``read_yaml_file`` and
-    ``from_yaml_string``.
+    ``from_yaml_string``. This does not change their parser or resolve compatibility
+    differences when the C extension is installed.
     """
+    suppression_options: dict[str, Any] = {}
+    if suppress_vals is not _OMITTED:
+        suppression_options["suppress_vals"] = suppress_vals
     yaml = new_yaml(
         key_sort=key_sort,
-        suppress_vals=suppress_vals,
         stringify_unknown=stringify_unknown,
         typ=typ,
         allow_aliases=allow_aliases,
+        **suppression_options,
     )
     # ruamel resolves the emitter class from this attribute at each dump, so replacing
     # it here is equivalent to constructing the handle with ``pure=True``.
