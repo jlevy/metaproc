@@ -251,6 +251,98 @@ def test_sigterm_leaves_an_incomplete_summary_when_the_rollup_cannot_finish(
     assert rebuilt.totals.wall_time_s is not None and rebuilt.totals.wall_time_s > 0
 
 
+_QUICK_PROCESS = """\
+---
+process:
+  name: signal-exit-quick
+  steps:
+    - id: quick
+      mode: code
+      command: "sh -c 'echo quick > {{run.dir}}/quick.txt'"
+      outputs:
+        out:
+          path: "{{run.dir}}/quick.txt"
+          kind: file
+---
+# Quick
+"""
+
+_STALLED_OPERATIONS_SUMMARY = """\
+import functools, sys, time
+from pathlib import Path
+
+import metaproc.cli
+from metaproc.commands import run_process
+from metaproc.runpool import kill
+
+out = Path(sys.argv[1])
+real_finalize_run_resources = run_process.finalize_run_resources
+
+
+def counted_rollup(*args, **kwargs):
+    with (out / "rollups.txt").open("a") as handle:
+        handle.write(kwargs["trigger"] + "\\n")
+    return real_finalize_run_resources(*args, **kwargs)
+
+
+def stalled_operations_summary(*_args, **_kwargs):
+    (out / "operations.started").write_text("started")
+    time.sleep(600)
+
+
+# The resource rollup runs as usual; the operations summary after it never finishes.
+run_process.finalize_run_resources = counted_rollup
+run_process.finalize_operations_summary = stalled_operations_summary
+run_process.SignalExitWork = functools.partial(kill.SignalExitWork, timeout_s=1.0)
+sys.argv = ["metaproc", "run-process", *sys.argv[2:]]
+metaproc.cli.main()
+"""
+
+
+def test_a_signal_after_the_resource_rollup_keeps_it(tmp_path: Path) -> None:
+    """The body completed and its resource rollup is written; a SIGTERM while the
+    operations summary is being written neither marks that rollup incomplete nor runs it
+    again, and the run keeps the body's outcome."""
+    process_path = tmp_path / "quick.process.md"
+    process_path.write_text(_QUICK_PROCESS)
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "run-1"
+    with (tmp_path / "launch.log").open("wb") as log_file:
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                _STALLED_OPERATIONS_SUMMARY,
+                str(tmp_path),
+                str(process_path),
+                "--var",
+                f"RUNS_DIR={runs_dir}",
+                "--var",
+                "RUN_ID=run-1",
+            ],
+            cwd=_ROOT,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
+    try:
+        deadline = time.monotonic() + 45
+        while not (tmp_path / "operations.started").exists():
+            assert proc.poll() is None, (tmp_path / "launch.log").read_text()
+            assert time.monotonic() < deadline, "the operations summary never started"
+            time.sleep(0.1)
+        proc.send_signal(signal.SIGTERM)
+        returncode = proc.wait(timeout=60)
+    finally:
+        _stop(proc)
+
+    assert returncode == -signal.SIGTERM
+    assert (tmp_path / "rollups.txt").read_text().splitlines() == ["terminal"]
+    summary = _resource_summary(run_dir)
+    assert summary.finalization.incomplete is False
+    assert summary.finalization.state is FinalizationState.COMPLETED
+    assert summary.finalization.terminal_error_type is None
+
+
 def test_a_failing_step_writes_both_summaries(tmp_path: Path) -> None:
     process_path = tmp_path / "failing.process.md"
     process_path.write_text(_FAILING_PROCESS)

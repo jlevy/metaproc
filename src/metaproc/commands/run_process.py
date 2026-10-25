@@ -2038,12 +2038,15 @@ class _RunExit:
 
     ``outcome`` is ``None`` while the body runs, so a signal there ends the run as
     cancelled; once the body ends it holds the causal outcome, which a signal during
-    terminal finalization keeps. ``finalized`` turns true once that finalization has run,
-    and the signal-exit work then has nothing left to write.
+    terminal finalization keeps. ``resources_finalized`` turns true once the resource
+    rollup is written, so a signal after it leaves that rollup alone; ``finalized`` turns
+    true once the operations summary is too, and the signal-exit work then has nothing
+    left to write.
     """
 
     outcome: FinalizationState | None = None
     error: BaseException | None = None
+    resources_finalized: bool = False
     finalized: bool = False
 
 
@@ -2065,7 +2068,7 @@ def _signal_exit_work(run_dir: Path, *, run_exit: _RunExit, bundle: PlanBundle) 
         return signum if run_exit.outcome is None else None
 
     def mark(signum: signal.Signals) -> None:
-        if run_exit.finalized:
+        if run_exit.finalized or run_exit.resources_finalized:
             return
         signal_ended = ended_by(signum)
         write_incomplete_resource_usage_summary(
@@ -2084,14 +2087,15 @@ def _signal_exit_work(run_dir: Path, *, run_exit: _RunExit, bundle: PlanBundle) 
     def finish(signum: signal.Signals) -> None:
         if run_exit.finalized:
             return
-        finalize_run_resources(
-            run_dir,
-            outcome=outcome(),
-            trigger="terminal",
-            terminal_error=run_exit.error,
-            terminal_signal=ended_by(signum),
-            bundle=bundle,
-        )
+        if not run_exit.resources_finalized:
+            finalize_run_resources(
+                run_dir,
+                outcome=outcome(),
+                trigger="terminal",
+                terminal_error=run_exit.error,
+                terminal_signal=ended_by(signum),
+                bundle=bundle,
+            )
         finalize_operations_summary(run_dir, outcome=outcome())
 
     return SignalExitWork(mark=mark, finish=finish)
@@ -7382,6 +7386,7 @@ def run_process_command(
                     terminal_error=terminal_error,
                     bundle=snapshot_bundle,
                 )
+                run_exit.resources_finalized = True
             except Exception:  # noqa: BLE001 - reporting cannot replace process outcome
                 log.exception("resource finalization failed for %s", run_dir)
             except BaseException:

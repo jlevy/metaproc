@@ -2980,12 +2980,13 @@ It writes `resource-usage-summary.md` with `finalization.incomplete: true` and n
 totals, then runs the same finalization on a separate thread for up to 10 seconds, and
 the complete reports replace the incomplete one.
 Both record `state: cancelled` and `terminal_error_type: SIGTERM`, or the body’s own
-outcome when the signal arrives during terminal finalization.
-`metaproc status` recovers missing, stale, or incomplete reports once the orchestrator
-is inactive. While a resume runs, it writes only the report an earlier launch left
-missing or incomplete, and leaves `resource-events.jsonl`, which the live orchestrator
-appends to, as it is.
-Every writer reads its evidence first and publishes holding the run’s
+outcome when the signal arrives during terminal finalization; a signal after the
+resource rollup is written leaves it as it is, and only the operations summary is
+written again. `metaproc status` recovers missing, stale, or incomplete reports once the
+orchestrator is inactive.
+While a resume runs, it writes only the report an earlier launch left missing or
+incomplete, and leaves `resource-events.jsonl`, which the live orchestrator appends to,
+as it is. Every writer reads its evidence first and publishes holding the run’s
 `.state/finalization.lock`, and status publishes only if the resource summary is still
 the one it found when it decided to recover, so a summary the orchestrator writes while
 status reads is never replaced by status’s older reading.
