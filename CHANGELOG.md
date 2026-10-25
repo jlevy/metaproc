@@ -7,6 +7,21 @@ development series.
 
 ## [Unreleased][unreleased]
 
+### Added
+
+- **A `gcp run` job keeps its console in a file.** With the Filestore mount and the
+  shipped wheel, the command runs inside `metaproc.cloud.gcp.gcp_run_console`, which
+  appends its output to `<mount>/logs/gcp-run/<job>/console.log` and sends Cloud Logging
+  only a start line, a heartbeat a minute and the exit line.
+  A bounded atomic live view in the dispatch bucket pairs the console tail and its
+  cursor on each heartbeat.
+  A background worker caches the `metaproc status` of each `--watch-run` directory every
+  five minutes, so `metaproc gcp logs <job>` and
+  `metaproc gcp status <job> --run-status` read the job without mounting Filestore.
+  `--console file` requests the file explicitly; `--console cloud-logging` keeps the
+  whole stream in Cloud Logging, which stays the default for `--no-wheel` jobs.
+  Live following also stops at terminal Batch state when a final upload is missing.
+
 ### Changed
 
 - **A mapped composite opens as many item scopes as the run’s ceiling admits.** It used
@@ -15,18 +30,6 @@ development series.
   Scopes hold no admission capacity of their own, so they now follow the run’s ceiling,
   with 32 as the floor, and the pool’s memory and provider admission still bound the
   work in flight.
-
-### Added
-
-- **A `gcp run` job keeps its console on Filestore.** With the Filestore mount and the
-  shipped wheel, the command runs inside `metaproc.cloud.gcp.gcp_run_console`, which
-  appends its output to `<mount>/logs/gcp-run/<job>/console.log` and sends Cloud Logging
-  only a start line, a heartbeat a minute and the exit line.
-  A live view in the dispatch bucket carries the console tail, a status record and the
-  `metaproc status` of each `--watch-run` directory, so `metaproc gcp logs <job>` and
-  `metaproc gcp status <job> --run-status` read the job without mounting Filestore.
-  `--console cloud-logging` keeps the earlier behavior, which stays the default for
-  `--no-wheel` jobs.
 
 ### Fixed
 

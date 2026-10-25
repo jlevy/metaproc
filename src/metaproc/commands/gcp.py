@@ -23,7 +23,7 @@ import logging
 import re
 import time
 from collections import defaultdict, deque
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -43,9 +43,16 @@ from metaproc import paths as paths_mod
 from metaproc.cli import app, get_output
 from metaproc.cloud.gcp.gcp_run_live import (
     LiveView,
+    describe_missing_view,
     live_view_uri_of,
     new_tail_lines,
     summarize_status,
+    tail_lines,
+)
+from metaproc.cloud.gcp.gcp_run_logs import (
+    MAX_CONSECUTIVE_ERRORS,
+    TERMINAL_STATES,
+    _job_state_name,
 )
 from metaproc.commands.helpers import load_process_spec
 from metaproc.config.env_vars import MetaprocEnv
@@ -55,6 +62,7 @@ from metaproc.io import (
     iter_jsonl_objects,
     resolve_existing_artifact,
 )
+from metaproc.models.gcp_console_live import LIVE_SNAPSHOT_VERSION
 from metaproc.output import OutputManager
 from metaproc.paths import (
     DISPATCH_MANIFEST_FILE,
@@ -374,6 +382,7 @@ def _format_job_results(
     )
 
     results = []
+    job_names: dict[str, str] = {}
     for job in jobs:
         labels = dict(job.labels)
         role = labels.get("metaproc-role", labels.get("metaproc-dispatch", "unknown"))
@@ -394,6 +403,7 @@ def _format_job_results(
         }
         if live and job_name in live:
             info["live"] = live[job_name]
+        job_names[job_id] = job_name
         results.append(info)
 
     # Sort: orchestrator first, then workers by worker_id.
@@ -435,7 +445,11 @@ def _format_job_results(
             out.data(f"  [{label}] {job_id}: {state}")
         if "live" in r:
             live_status = r["live"]
-            summary = summarize_status(live_status) if live_status else "no live view yet"
+            summary = (
+                summarize_status(live_status, state)
+                if live_status
+                else describe_missing_view(job_names[job_id], state)
+            )
             out.data(f"      live: {summary}")
 
 
@@ -456,7 +470,7 @@ def gcp_status(
 
     Existing directories resolve jobs from local runpool events. Exact Batch job
     resources resolve directly. Other strings use exact run-key lookup plus safe
-    legacy recovery. A `metaproc gcp run` job with its console on Filestore also shows
+    legacy recovery. A `metaproc gcp run` job whose console goes to a file also shows
     its live view: state, console size and when it last reported.
     """
     _require_gcp_batch()
@@ -1168,7 +1182,11 @@ def _format_log_entry(entry: Any) -> str:
 def gcp_logs(
     target: str = typer.Argument(..., help="Run directory, run-id, or Batch job resource"),
     item: str = typer.Option("", "--item", help="Filter to a specific item label"),
-    errors_only: bool = typer.Option(False, "--errors", help="Show only ERROR+ severity"),
+    errors_only: bool = typer.Option(
+        False,
+        "--errors",
+        help="Read Cloud Logging entries with ERROR+ severity; file text has no severity.",
+    ),
     limit: int = typer.Option(100, "--limit", help="Maximum number of log entries"),
     project: str = typer.Option("", "--project", help="GCP project (default: from env)"),
     region: str = typer.Option("us-central1", "--region", help="GCP region"),
@@ -1183,21 +1201,25 @@ def gcp_logs(
         help="Pin to a single worker index (requires --role worker).",
     ),
     follow: bool = typer.Option(
-        False, "--follow", "-f", help="Tail mode: poll every 10s, de-dup on insertId."
+        False,
+        "--follow",
+        "-f",
+        help="Follow new entries: live files every 15s, Cloud Logging every 10s.",
     ),
     include_agent_logs: bool = typer.Option(
         False,
         "--include-agent-logs",
         help="Include batch_agent_logs (VM agent heartbeats). "
-        "Use when diagnosing bootstrap failures where the container never starts.",
+        "Use when diagnosing bootstrap failures where the container never starts. "
+        "Selects Cloud Logging for file-console jobs.",
     ),
     use_cloud_logging: bool = typer.Option(
         False,
         "--cloud-logging",
-        help="Read Cloud Logging even for jobs that keep their console on Filestore.",
+        help="Read Cloud Logging even for jobs whose console goes to a file.",
     ),
 ) -> None:
-    """Stream logs from Cloud Logging for a run's GCP Batch jobs.
+    """Read a job's file-console live view or Cloud Logging.
 
     Resolves Batch job IDs from run events, an exact Batch job resource, or an
     exact run key with safe legacy recovery, then filters Cloud Logging on those
@@ -1210,10 +1232,12 @@ def gcp_logs(
     the split. Combine with ``--worker N`` to pin to a single worker.
     Use ``--follow`` to tail new entries as they arrive.
 
-    A ``metaproc gcp run`` job whose console is on Filestore puts only a heartbeat in
+    A ``metaproc gcp run`` job whose console goes to a file puts only a heartbeat in
     Cloud Logging; for it this prints the console's last lines from the job's live view
     instead, and ``--follow`` polls that view. ``--cloud-logging`` reads the heartbeat
-    and bootstrap stream.
+    and bootstrap stream. ``--include-agent-logs`` and ``--errors`` also select Cloud
+    Logging. A live-file follow stops at a recorded exit or terminal Batch state,
+    draining the available tail even when the final upload is missing.
     """
     _require_gcp_batch()
     from google.cloud import (  # noqa: PLC0415 -- optional [gcp-batch] dependency
@@ -1274,8 +1298,18 @@ def gcp_logs(
             job = batch_client.get_job(batch_v1.GetJobRequest(name=target))
         except Exception as exc:
             raise CLIError(f"Failed to fetch Batch job {target}: {exc}") from exc
-        if not use_cloud_logging and not errors_only and live_view_uri_of(job):
-            _print_live_logs([job], out=out, limit=limit, follow=follow)
+        if (
+            not use_cloud_logging
+            and not errors_only
+            and not include_agent_logs
+            and live_view_uri_of(job)
+        ):
+            _print_live_logs(
+                [job],
+                out=out,
+                limit=limit,
+                follow=follow,
+            )
             return
         job_uid = str(getattr(job, "uid", "") or "")
         if not job_uid:
@@ -1305,7 +1339,12 @@ def gcp_logs(
             out.progress(f"No Batch jobs found for {scope}.")
             raise typer.Exit(code=0)
 
-        if not use_cloud_logging and not errors_only and all(live_view_uri_of(job) for job in jobs):
+        if (
+            not use_cloud_logging
+            and not errors_only
+            and not include_agent_logs
+            and all(live_view_uri_of(job) for job in jobs)
+        ):
             _print_live_logs(jobs, out=out, limit=limit, follow=follow)
             return
         job_uids = [str(job.uid) for job in jobs if getattr(job, "uid", "")]
@@ -1350,6 +1389,35 @@ def gcp_logs(
 
 
 _LIVE_FOLLOW_POLL_SECONDS = 15.0
+_LIVE_BATCH_REQUEST_SECONDS = 10
+
+
+class _BatchJobStateReader:
+    """One lazy client per follow, with bounded RPCs and explicit transport cleanup."""
+
+    def __init__(self) -> None:
+        self._client: Any = None
+
+    def __call__(self, job_name: str) -> str | None:
+        from google.cloud import batch_v1  # noqa: PLC0415 -- optional [gcp-batch] dependency
+
+        try:
+            if self._client is None:
+                self._client = batch_v1.BatchServiceClient()
+            return _job_state_name(
+                self._client.get_job(
+                    batch_v1.GetJobRequest(name=job_name),
+                    timeout=_LIVE_BATCH_REQUEST_SECONDS,
+                    retry=None,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 -- unknown state; the follow goes on
+            log.warning("Could not read the Batch state of %s: %s", job_name, exc)
+            return None
+
+    def close(self) -> None:
+        if self._client is not None:
+            self._client.transport.close()
 
 
 def _print_live_logs(
@@ -1358,48 +1426,121 @@ def _print_live_logs(
     out: OutputManager,
     limit: int,
     follow: bool,
+    job_state: Callable[[str], str | None] | None = None,
     view_factory: Any = LiveView,
     sleep: Any = time.sleep,
 ) -> None:
-    """Print each job's console tail from its live view, and follow it if asked."""
-    views = [(job.name.rsplit("/", 1)[-1], view_factory(live_view_uri_of(job))) for job in jobs]
+    """Print each job's console tail from its live view, and follow it if asked.
+
+    A followed job is done when its view records an exit or Batch reports it ended.
+    ``job_state`` reads the Batch state, and it is read before the view on every poll:
+    the wrapper's last update lands before Batch can mark the job ended, so a view read
+    after an ended state is the last the job will write.
+    """
+    views = [(job.name, view_factory(live_view_uri_of(job))) for job in jobs]
     label = len(views) > 1
+
+    def prefix_of(job_name: str) -> str:
+        return f"[{job_name.rsplit('/', 1)[-1]}] " if label else ""
+
     totals: dict[str, int] = {}
-    for name, view in views:
-        prefix = f"[{name}] " if label else ""
+    failures: dict[str, int] = {}
+    owned_reader = _BatchJobStateReader() if job_state is None else None
+    read_state = job_state or owned_reader
+
+    def console_tail(status: dict[str, Any], view: Any) -> str:
+        if status.get("snapshot_version") == LIVE_SNAPSHOT_VERSION:
+            return str(status["console_tail"])
+        return (view.tail() or "") if status else ""
+
+    active: list[tuple[str, Any]] = []
+    every_exit_recorded = True
+    for job, (job_name, view) in zip(jobs, views, strict=True):
+        prefix = prefix_of(job_name)
+        batch_state = _job_state_name(job)
         status = view.status() or {}
-        out.progress(f"{prefix}{summarize_status(status) if status else 'no live view yet'}")
-        lines = (view.tail() or "").splitlines()
+        summary = (
+            summarize_status(status, batch_state)
+            if status
+            else describe_missing_view(job_name, batch_state)
+        )
+        out.progress(f"{prefix}{summary}")
+        if status and "snapshot_version" not in status:
+            out.progress(f"{prefix}Legacy live view: separate tail/count objects are best effort.")
+        if status.get("tail_start_partial"):
+            out.progress(
+                f"{prefix}Live tail starts inside a long line; the console file holds it in full."
+            )
+        lines = tail_lines(console_tail(status, view))
         for line in lines[-limit:] if limit > 0 else lines:
             out.data(f"{prefix}{line}")
-        totals[name] = int(status.get("console_lines") or 0)
+        totals[job_name] = int(status.get("console_lines") or 0)
+        if status.get("state") == "exited":
+            continue
+        if batch_state in TERMINAL_STATES:
+            every_exit_recorded = False
+            continue
+        active.append((job_name, view))
     if not follow:
         return
     try:
-        while True:
+        while active:
             sleep(_LIVE_FOLLOW_POLL_SECONDS)
-            running = False
-            for name, view in views:
-                prefix = f"[{name}] " if label else ""
+            still_running: list[tuple[str, Any]] = []
+            for job_name, view in active:
+                prefix = prefix_of(job_name)
+                assert read_state is not None
+                batch_state = read_state(job_name)
+                failures[job_name] = 0 if batch_state else failures.get(job_name, 0) + 1
                 status = view.status() or {}
                 total = int(status.get("console_lines") or 0)
-                if total > totals[name]:
-                    fresh, missed = new_tail_lines(view.tail() or "", totals[name], total)
+                if total > totals[job_name]:
+                    fresh, missed = new_tail_lines(
+                        console_tail(status, view), totals[job_name], total
+                    )
                     if missed:
                         out.progress(
                             f"{prefix}... {missed:,} lines are not in the live view; the "
-                            f"full console is {status.get('console_path', 'on Filestore')}"
+                            f"full console is {status.get('console_path', "in the job's console file")}"
                         )
                     for line in fresh:
                         out.data(f"{prefix}{line}")
-                    totals[name] = total
-                if status.get("state") != "exited":
-                    running = True
-            if not running:
-                out.progress("Every followed job has exited.")
-                return
+                    totals[job_name] = total
+                if status.get("state") == "exited":
+                    if batch_state in TERMINAL_STATES:
+                        out.progress(f"{prefix}{summarize_status(status, batch_state)}")
+                    continue
+                if batch_state in TERMINAL_STATES:
+                    every_exit_recorded = False
+                    out.progress(f"{prefix}{_ended_without_exit(job_name, batch_state, status)}")
+                    continue
+                if failures[job_name] >= MAX_CONSECUTIVE_ERRORS:
+                    raise CLIError(
+                        f"Could not refresh Batch state for {job_name} after "
+                        f"{MAX_CONSECUTIVE_ERRORS} polls; stopped following."
+                    )
+                still_running.append((job_name, view))
+            active = still_running
+        out.progress(
+            "Every followed job has exited."
+            if every_exit_recorded
+            else "Every followed job has ended."
+        )
     except KeyboardInterrupt:
         out.progress("Stopped following logs.")
+    finally:
+        if owned_reader is not None:
+            owned_reader.close()
+
+
+def _ended_without_exit(job_name: str, batch_state: str, status: Mapping[str, Any]) -> str:
+    """Why a follow stops on a job that Batch ended without the view recording an exit."""
+    if not status:
+        return describe_missing_view(job_name, batch_state)
+    return (
+        f"{summarize_status(dict(status), batch_state)}. The job ended before its final "
+        "update, so its console file may hold lines the live view does not."
+    )
 
 
 _FOLLOW_POLL_SECONDS = 10.0

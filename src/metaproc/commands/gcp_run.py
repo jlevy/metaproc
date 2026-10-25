@@ -40,6 +40,7 @@ from metaproc.cloud.gcp.dispatch_artifacts import (
     upload_wheel_to_gcs,
     upload_workspace_to_gcs,
 )
+from metaproc.cloud.gcp.gcp_run_console import normalize_watch_dirs
 from metaproc.cloud.gcp.gcp_run_dispatch import (
     RESERVED_ENV_KEYS,
     DispatchGcpRunOptions,
@@ -60,7 +61,7 @@ log = logging.getLogger(__name__)
 DEFAULT_MACHINE_TYPE = "e2-standard-4"
 DEFAULT_TIMEOUT_S = 3600
 DEFAULT_RUNS_DIR = "/mnt/filestore/runs"
-CONSOLE_CHOICES = ("auto", "filestore", "cloud-logging")
+CONSOLE_CHOICES = ("auto", "file", "cloud-logging")
 LIVE_VIEW_DIR = "live"
 
 
@@ -72,27 +73,28 @@ def live_view_uri(bucket: str, job_id: str, prefix: str = DEFAULT_GCS_PREFIX) ->
 def _resolve_console(
     console: str, *, config: GCPBatchConfig, no_wheel: bool, watch_run: list[str] | None
 ) -> bool:
-    """Whether the job's console goes to Filestore.
+    """Whether the job's console goes to a file rather than to Cloud Logging.
 
-    ``auto`` chooses Filestore whenever the job mounts it and ships the current wheel,
-    which carries the console wrapper; an image-baked Metaproc may predate it, so a
+    The file is on the job's run-storage mount, so it outlives the task. ``auto``
+    chooses the file whenever the job has that mount and ships the current wheel, which
+    carries the console wrapper; an image-baked Metaproc may predate it, so a
     ``--no-wheel`` job keeps the Cloud Logging console unless asked otherwise.
     """
     if console not in CONSOLE_CHOICES:
         raise typer.BadParameter(
             f"--console must be one of {', '.join(CONSOLE_CHOICES)}", param_hint="--console"
         )
-    if console == "filestore" and not config.filestore_server:
+    if console == "file" and not config.filestore_server:
         raise typer.BadParameter(
-            "--console filestore needs the Filestore mount; drop --no-filestore",
+            "--console file needs the run-storage mount; drop --no-filestore",
             param_hint="--console",
         )
-    on_filestore = console == "filestore" or (
+    to_file = console == "file" or (
         console == "auto" and bool(config.filestore_server) and not no_wheel
     )
-    if watch_run and not on_filestore:
+    if watch_run and not to_file:
         raise typer.BadParameter(
-            "--watch-run needs the Filestore console (--console filestore)",
+            "--watch-run needs the file console (--console file)",
             param_hint="--watch-run",
         )
     for run_dir in watch_run or ():
@@ -101,7 +103,11 @@ def _resolve_console(
                 f"--watch-run must be an absolute, comma-free container path: {run_dir!r}",
                 param_hint="--watch-run",
             )
-    return on_filestore
+    try:
+        normalize_watch_dirs(watch_run or ())
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--watch-run") from exc
+    return to_file
 
 
 def _parse_kv_pairs(items: list[str] | None, flag_name: str) -> dict[str, str]:
@@ -390,9 +396,10 @@ def run_command(
         "auto",
         "--console",
         help=(
-            "Where the command's console goes: filestore (a file on the mount, with a "
+            "Where the command's console goes: file (appended to "
+            "<mount>/logs/gcp-run/<job>/console.log on the job's run-storage mount, with a "
             "heartbeat in Cloud Logging and a live view in the dispatch bucket), "
-            "cloud-logging, or auto (filestore when the job mounts Filestore and ships "
+            "cloud-logging, or auto (file when the job has a run-storage mount and ships "
             "the wheel)."
         ),
     ),
@@ -401,7 +408,7 @@ def run_command(
         "--watch-run",
         help=(
             "Container path of a run directory whose `metaproc status` the live view "
-            "keeps current. Repeatable; needs the Filestore console."
+            "keeps current. Repeatable; needs the file console."
         ),
     ),
 ) -> None:
@@ -415,8 +422,8 @@ def run_command(
     `/mnt/filestore` (with `RUNS_DIR=/mnt/filestore/runs`), resolves
     registered Secret Manager refs (`GH_TOKEN`, `CLAUDE_CODE_CREDS_JSON`), and
     `execvp`'s `cmd`
-    inside the container. With the Filestore console (the default when the job mounts
-    Filestore and ships the wheel) the command's output is appended to
+    inside the container. With the file console (the default when the job has a
+    run-storage mount and ships the wheel) the command's output is appended to
     `<mount>/logs/gcp-run/<job>/console.log`, Cloud Logging carries a heartbeat, and
     `metaproc gcp logs` and `metaproc gcp status` read a live view from the dispatch
     bucket.
@@ -430,7 +437,7 @@ def run_command(
         no_filestore=no_filestore,
     )
 
-    console_on_filestore = _resolve_console(
+    console_to_file = _resolve_console(
         console, config=config, no_wheel=no_wheel, watch_run=watch_run
     )
 
@@ -521,8 +528,8 @@ def run_command(
         extra_secrets=extra_secrets,
         job_name=job_id,
         spot=spot,
-        console_on_filestore=console_on_filestore,
-        live_gcs_uri=live_view_uri(bucket, job_id) if console_on_filestore and bucket else "",
+        console_to_file=console_to_file,
+        live_gcs_uri=live_view_uri(bucket, job_id) if console_to_file and bucket else "",
         watch_run_dirs=tuple(watch_run or ()),
     )
 
@@ -534,8 +541,8 @@ def run_command(
 
     job_resource_name = dispatch_gcp_run(list(cmd), options)
     typer.echo(job_resource_name)
-    if console_on_filestore:
-        typer.echo(f"console: {console_path(config, job_id)} (Filestore)")
+    if console_to_file:
+        typer.echo(f"console file: {console_path(config, job_id)}")
         if options.live_gcs_uri:
             typer.echo(f"live view: {options.live_gcs_uri}")
 
