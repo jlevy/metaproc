@@ -98,7 +98,7 @@ Available via `metaproc help <topic>`, in recommended reading order:
 - **artifacts** (~2.2k words): Every runtime artifact Metaproc writes or reads: format, schema, lifecycle.
 - **execution-contracts** (~2.3k words): The durable contracts under task-level scheduling, and their rationale.
 - **credentials** (~3.3k words): Configuring credentials for each adapter: Claude, Codex, Gemini, pi, GCP.
-- **cloud-dispatch** (~1.7k words): Preparing, submitting, monitoring, and recovering GCP Batch workloads.
+- **cloud-dispatch** (~2.3k words): Preparing, submitting, monitoring, and recovering GCP Batch workloads.
 - **arch-auth** (~8.9k words): Architecture: credential pools, adapter auth modes, and secret handling.
 - **arch-cloud** (~5.7k words): Architecture: GCP Batch dispatch, orchestrator and worker placement.
 - **arch-runpool** (~5.1k words): Architecture: local process manager, adaptive concurrency, memory pressure.
