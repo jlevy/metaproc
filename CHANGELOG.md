@@ -7,6 +7,27 @@ development series.
 
 ## [Unreleased][unreleased]
 
+### Fixed
+
+- **A SIGTERM’d run keeps its usage summaries.** The hard reaper that kills a
+  `run-process` orchestrator’s descendants on SIGTERM re-raises the signal under its
+  default disposition, so the run’s `finally`, and with it the only writer of
+  `resource-usage-summary.md` and `operations-summary.md`, never ran: a run stopped by
+  `metaproc kill` or a supervisor had neither until a later `metaproc status` on the
+  inactive run, and a resume made it active and blocked that too.
+  The reaper now writes both before the orchestrator dies by the signal, with
+  `state: cancelled` and `terminal_error_type: SIGTERM`: first a resource summary marked
+  `finalization.incomplete: true` with every total unmeasured, then, on a thread bounded
+  at 10 seconds, the complete finalization, which replaces it.
+  Descendants are still reaped first, and again after; a repeated signal neither aborts
+  nor repeats the work.
+  `metaproc status` rebuilds an incomplete summary like a missing one, and on a running
+  resume it writes the summary an earlier launch left missing or incomplete (SIGKILL, or
+  a rollup that outran the bound) without rewriting the live
+  `.logs/resource-events.jsonl`. `incomplete` is serialized only when true, so complete
+  summaries and `resources.json` keep their shape.
+  `metaproc kill` waits up to 13 seconds, not 3, for the orchestrator to exit.
+
 ## [0.5.0][] - 2026-10-21
 
 ### Added

@@ -17,6 +17,7 @@ import logging
 import os
 import re
 import shlex
+import signal
 import subprocess
 import textwrap
 import time
@@ -157,9 +158,10 @@ from metaproc.engine.placeholders import (
 )
 from metaproc.engine.preflight import run_preflight
 from metaproc.engine.process_scope import expand_process_vars
-from metaproc.engine.resource_finalization import finalize_run_resources
+from metaproc.engine.resource_finalization import finalize_run_resources, resource_run_id
 from metaproc.engine.resource_sampling import run_sampled_step_command, sample_step_resources
 from metaproc.engine.resource_snapshot import build_resource_run_snapshot
+from metaproc.engine.resource_summary import write_incomplete_resource_usage_summary
 from metaproc.engine.retry import (
     FailureClass,
     RetryVerdict,
@@ -227,6 +229,7 @@ from metaproc.logutil.compaction import try_compact_log
 from metaproc.models.authored import IOSpec, ProcessSpec, ProcessStep, RetryPolicy, StepContext
 from metaproc.models.lane import ExecutionLane
 from metaproc.models.plan import Plan, ResolvedStep, RunPlanSnapshot, RunPlanStep
+from metaproc.models.plan_bundle import PlanBundle
 from metaproc.models.resource_budget import FinalizationState
 from metaproc.models.resource_snapshot import ResourceRunSnapshot
 from metaproc.models.runtime import (
@@ -251,7 +254,11 @@ from metaproc.paths import STATE_DIR as _STATE_DIR
 from metaproc.paths import TASKS_SUBDIR as _TASKS_SUBDIR
 from metaproc.runpool.backend import LocalBackend, PreparedLaunch, launch_and_supervise
 from metaproc.runpool.events import EventLogger
-from metaproc.runpool.kill import install_subprocess_reaper_signal_handlers
+from metaproc.runpool.kill import (
+    SignalExitWork,
+    install_subprocess_reaper_signal_handlers,
+    register_signal_exit_work,
+)
 from metaproc.runpool.pool import (
     ProcessConfig,
     RunPool,
@@ -2023,6 +2030,71 @@ def _record_process_output_failure(run_dir: Path, error: CLIError) -> None:
         ]
     path = run_dir / STATE_DIR / "process-status.yaml"
     atomic_write_text(path, to_yaml_string(data), make_parents=True)
+
+
+@dataclasses.dataclass(slots=True)
+class _RunExit:
+    """How the process body ended, as the signal-exit work reads it.
+
+    ``outcome`` is ``None`` while the body runs, so a signal there ends the run as
+    cancelled; once the body ends it holds the causal outcome, which a signal during
+    terminal finalization keeps. ``finalized`` turns true once that finalization has run,
+    and the signal-exit work then has nothing left to write.
+    """
+
+    outcome: FinalizationState | None = None
+    error: BaseException | None = None
+    finalized: bool = False
+
+
+def _signal_exit_work(run_dir: Path, *, run_exit: _RunExit, bundle: PlanBundle) -> SignalExitWork:
+    """The summaries a hard-stop signal writes before the orchestrator dies by it.
+
+    ``mark`` writes a resource usage summary that records the outcome and is marked
+    incomplete, so the run keeps one whatever happens next; ``finish`` then runs the
+    resource and operations finalization the run's ``finally`` would have run, and its
+    complete summary replaces the incomplete one.
+    """
+    run_id = resource_run_id(run_dir)
+
+    def outcome() -> FinalizationState:
+        return run_exit.outcome or FinalizationState.CANCELLED
+
+    def ended_by(signum: signal.Signals) -> signal.Signals | None:
+        # The signal ended the run only if it arrived while the body was running.
+        return signum if run_exit.outcome is None else None
+
+    def mark(signum: signal.Signals) -> None:
+        if run_exit.finalized:
+            return
+        signal_ended = ended_by(signum)
+        write_incomplete_resource_usage_summary(
+            run_dir,
+            run_id=run_id,
+            state=outcome(),
+            terminal_error_type=(
+                type(run_exit.error).__name__
+                if run_exit.error is not None
+                else signal_ended.name
+                if signal_ended is not None
+                else None
+            ),
+        )
+
+    def finish(signum: signal.Signals) -> None:
+        if run_exit.finalized:
+            return
+        finalize_run_resources(
+            run_dir,
+            outcome=outcome(),
+            trigger="terminal",
+            terminal_error=run_exit.error,
+            terminal_signal=ended_by(signum),
+            bundle=bundle,
+        )
+        finalize_operations_summary(run_dir, outcome=outcome())
+
+    return SignalExitWork(mark=mark, finish=finish)
 
 
 def _read_recorded_step_hash(run_dir: Path, step_id: str) -> str | None:
@@ -7184,11 +7256,20 @@ def run_process_command(
         )
 
     # Leave SIGINT at Python's default so asyncio.Runner translates Ctrl-C into
-    # cooperative task cancellation. SIGTERM retains the hard descendant reaper.
+    # cooperative task cancellation. SIGTERM retains the hard descendant reaper, which
+    # writes the run's summaries before the orchestrator dies by the signal.
     install_subprocess_reaper_signal_handlers(include_sigint=False)
 
     finalization_state = FinalizationState.COMPLETED
     terminal_error: BaseException | None = None
+    run_exit = _RunExit()
+    try:
+        unregister_signal_exit = register_signal_exit_work(
+            _signal_exit_work(run_dir, run_exit=run_exit, bundle=snapshot_bundle)
+        )
+    except BaseException:
+        release_lease(run_dir)
+        raise
     try:
         _publish_run_plan(
             run_dir,
@@ -7290,6 +7371,8 @@ def run_process_command(
         terminal_error = exc
         raise
     finally:
+        # A signal from here on finalizes with the outcome the body ended with.
+        run_exit.outcome, run_exit.error = finalization_state, terminal_error
         try:
             try:
                 finalize_run_resources(
@@ -7316,7 +7399,9 @@ def run_process_command(
                     raise
                 log.exception("operations summary interrupted for %s", run_dir)
         finally:
+            run_exit.finalized = True
             release_lease(run_dir)
+            unregister_signal_exit()
 
     overall_elapsed = fmt_timedelta(time.monotonic() - overall_start)
     out.progress(f"\n=== Process '{spec.name}' completed ({overall_elapsed}) ===")

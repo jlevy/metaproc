@@ -128,7 +128,7 @@ class ResourceBuildResult:
 _RESOURCE_EVENT_ADAPTER: TypeAdapter[ResourceEvent] = TypeAdapter(ResourceEvent)
 
 
-def write_resource_artifacts(result: ResourceBuildResult) -> None:
+def write_resource_artifacts(result: ResourceBuildResult, *, write_events: bool = True) -> None:
     """Persist ``resources.json`` and ``resource-events.jsonl`` atomically.
 
     Uses :func:`strif.atomic_write_text` so a crashed run never leaves a
@@ -137,17 +137,22 @@ def write_resource_artifacts(result: ResourceBuildResult) -> None:
     ``result``; the caller is expected to populate them via the
     ``write=True`` path on :func:`build_resource_artifacts` or by setting
     them explicitly before calling this helper.
+
+    ``write_events=False`` writes only ``resources.json`` and leaves the ledger as it is,
+    for a run whose live orchestrator still appends to it: replacing the file would
+    send those appends to the unlinked copy.
     """
     if result.document_path is None or result.events_path is None:
         msg = "ResourceBuildResult.document_path and events_path must be set to persist"
         raise ValueError(msg)
-    atomic_write_text(
-        result.events_path,
-        "".join(
-            _RESOURCE_EVENT_ADAPTER.dump_json(event).decode() + "\n" for event in result.events
-        ),
-        make_parents=True,
-    )
+    if write_events:
+        atomic_write_text(
+            result.events_path,
+            "".join(
+                _RESOURCE_EVENT_ADAPTER.dump_json(event).decode() + "\n" for event in result.events
+            ),
+            make_parents=True,
+        )
     atomic_write_text(
         result.document_path,
         result.document.model_dump_json(by_alias=True, indent=2),

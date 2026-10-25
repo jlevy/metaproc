@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from datetime import UTC, datetime
 from importlib import resources
 from pathlib import Path
 
-from frontmatter_format import fmf_write
+from frontmatter_format import fmf_read_frontmatter, fmf_write
 from strif import atomic_output_file, atomic_write_text
 
-from metaproc.models.resource_budget import BudgetStatus
+from metaproc.models.resource_budget import BudgetStatus, FinalizationState, ResourceFinalization
 from metaproc.models.resource_summary import (
     RESOURCE_USAGE_SUMMARY_CONTRACT,
     ResourceUsageSummary,
 )
-from metaproc.models.resources import MeterRollup, ResourcesDocument
+from metaproc.models.resources import MeterRollup, Metrics, ResourcesDocument
 
 RESOURCE_USAGE_SUMMARY_FILE = "resource-usage-summary.md"
 RESOURCE_USAGE_SCHEMA_RELATIVE = ".state/schemas/resource-usage-summary.v1.schema.yaml"
@@ -33,6 +35,56 @@ def write_resource_usage_summary(document: ResourcesDocument, run_dir: Path) -> 
         budgets=document.budget_evaluations,
         finalization=document.finalization,
     )
+    return _write_summary(summary, run_dir)
+
+
+def write_incomplete_resource_usage_summary(
+    run_dir: Path,
+    *,
+    run_id: str,
+    state: FinalizationState,
+    terminal_error_type: str | None,
+    finalized_at: datetime | None = None,
+) -> Path:
+    """Persist a summary that records how a run ended and none of its totals.
+
+    A hard-stop signal writes this before attempting the run's rollup, so the run has a
+    summary even when the rollup cannot finish before the process dies; a finished
+    rollup replaces it. It reads no run evidence and takes no lock, so it is safe to call
+    from a signal handler. ``finalization.incomplete`` marks it, and status recovery
+    rebuilds it from local evidence.
+    """
+    summary = ResourceUsageSummary(
+        run_id=run_id,
+        totals=Metrics(),
+        finalization=ResourceFinalization(
+            state=state,
+            trigger="terminal",
+            finalized_at=finalized_at or datetime.now(UTC),
+            terminal_error_type=terminal_error_type,
+            incomplete=True,
+        ),
+    )
+    return _write_summary(summary, run_dir)
+
+
+def read_resource_usage_finalization(run_dir: Path) -> ResourceFinalization | None:
+    """Return the finalization a run's summary records, or ``None`` if none reads."""
+    path = run_dir / RESOURCE_USAGE_SUMMARY_FILE
+    if not path.is_file():
+        return None
+    try:
+        metadata = fmf_read_frontmatter(path)
+        envelope = metadata.get("resource_usage") if isinstance(metadata, Mapping) else None
+        finalization = envelope.get("finalization") if isinstance(envelope, Mapping) else None
+        if finalization is None:
+            return None
+        return ResourceFinalization.model_validate(finalization)
+    except Exception:  # noqa: BLE001 - an unreadable summary records no finalization
+        return None
+
+
+def _write_summary(summary: ResourceUsageSummary, run_dir: Path) -> Path:
     schema_path = run_dir / RESOURCE_USAGE_SCHEMA_RELATIVE
     _write_schema_sidecar(schema_path)
     target = run_dir / RESOURCE_USAGE_SUMMARY_FILE
@@ -68,6 +120,21 @@ def _render_summary(summary: ResourceUsageSummary) -> str:
         f"Run `{summary.run_id}` finished with `{summary.finalization.state.value}`.",
         "Machine-consumed values are in the validated YAML frontmatter; this body is explanatory.",
         "",
+    ]
+    if summary.finalization.incomplete:
+        error_type = summary.finalization.terminal_error_type
+        ended_by = f"`{error_type}`" if error_type else "a hard-stop signal"
+        lines.extend(
+            [
+                (
+                    f"The orchestrator exited on {ended_by} before its resource rollup "
+                    "finished, so every total is unmeasured. `metaproc status` rebuilds this "
+                    "summary from the run's local evidence."
+                ),
+                "",
+            ]
+        )
+    lines += [
         "| Quantity | Value |",
         "| --- | ---: |",
         f"| Input tokens | {_format_quantity(totals.input_tokens)} |",

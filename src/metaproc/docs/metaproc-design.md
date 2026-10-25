@@ -6,7 +6,7 @@ status: Approved
 ---
 # Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-10-20) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-10-25) **Status:** Approved
 
 Also readable as `metaproc help design`.
 
@@ -2973,8 +2973,19 @@ normalized budgets under `.state/run-config.yaml:resources`; resume never rewrit
 Budgets are observational and do not refuse or terminate work.
 The terminal finalizer runs before lease release on success, failure, propagated
 timeout, or cancellation.
-`metaproc status` may recover missing or stale reports only after the orchestrator is
-inactive, using local evidence and the frozen snapshot without provider calls or cached
+A SIGTERM never reaches that `finally`: the hard reaper kills the orchestrator’s
+descendants and then re-raises the signal under its default disposition.
+So the reaper writes the reports itself first.
+It writes `resource-usage-summary.md` with `finalization.incomplete: true` and no
+totals, then runs the same finalization on a separate thread for up to 10 seconds, and
+the complete reports replace the incomplete one.
+Both record `state: cancelled` and `terminal_error_type: SIGTERM`, or the body’s own
+outcome when the signal arrives during terminal finalization.
+`metaproc status` recovers missing, stale, or incomplete reports once the orchestrator
+is inactive. While a resume runs, it writes only the report an earlier launch left
+missing or incomplete, and leaves `resource-events.jsonl`, which the live orchestrator
+appends to, as it is.
+Recovery uses local evidence and the frozen snapshot without provider calls or cached
 totals.
 
 `resource-usage-summary.md` stores all structured values in the `resource_usage`
@@ -2992,12 +3003,14 @@ stages, step durations, concurrency, attempt dispositions, agent models, and res
 It writes no `.jsonl` and never calls resource recovery, so it cannot make the resource
 projections stale. A section whose evidence cannot be read is null with its reason, and
 any failure is logged without changing the run’s outcome.
-A run can skip that terminal path: killed by a signal, interrupted between the resource
-and operations finalizers, or with a fold that raised.
+A SIGTERM runs that path from the hard reaper, as above.
+A run can still skip it: killed by SIGKILL, interrupted between the resource and
+operations finalizers, or with a fold that raised.
 So `metaproc status` on an inactive run writes the summary when it is missing, whether
 or not the resource artifacts beside it also need recovering, and leaves an existing one
-alone. `metaproc operations summary` and `metaproc operations rollup` read the same fold
-for finished runs.
+alone. On an active resume it writes a missing summary only beside the resource summary
+it backfills. `metaproc operations summary` and `metaproc operations rollup` read the
+same fold for finished runs.
 
 ## 17. Run Pool and Process Management
 

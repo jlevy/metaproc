@@ -1178,11 +1178,24 @@ Cross-check volume against `metaproc stats <run-dir>` and
 
 Run finalization writes `operations-summary.md` at the run root, beside
 `resource-usage-summary.md`, for completed, failed, cancelled, and timed-out runs alike.
-A run can end without one: killed by a signal, interrupted between the resource and
-operations finalizers, or with a fold that raised.
-Once such a run is inactive, the next `metaproc status` on it writes the missing summary
-with `trigger: status`, recovering its resource artifacts first if they are stale.
-It writes one only when the file is absent.
+A SIGTERM to the orchestrator, from `metaproc kill` or a supervisor, writes both before
+the orchestrator dies by the signal.
+The hard reaper kills the orchestrator’s descendants, writes a resource summary marked
+`finalization.incomplete: true` with every total unmeasured, then runs the same
+finalization for up to 10 seconds; its complete summaries replace the incomplete one.
+Both record `state: cancelled` and `terminal_error_type: SIGTERM`.
+
+A run can still end without a complete pair: killed by SIGKILL (`metaproc kill --force`,
+or a supervisor escalating after its grace period), a rollup that did not finish within
+those 10 seconds, or a fold that raised.
+`metaproc status` is the backstop.
+On an inactive run it rebuilds missing, stale, or incomplete resource artifacts, then
+writes a missing operations summary with `trigger: status`. On a resume that is running,
+it writes the resource summary only when an earlier launch left none or an incomplete
+one, plus a missing operations summary beside it, and leaves
+`.logs/resource-events.jsonl`, which the live orchestrator appends to, as it is; the
+resume’s own finalization replaces both.
+It writes an operations summary only when the file is absent.
 Its frontmatter is `metaproc.operations:AgentOperationsSummary/v1`; the body renders the
 same values. Point it at a run root: a top-level run, a batch root, or a child run of a
 batch, in place or copied elsewhere.
@@ -1281,6 +1294,12 @@ uv run metaproc kill <run-dir>
   worker subprocesses
 - if the run is still in an early code or bundle stage before the first pool exists, it
   targets the same-host orchestrator lease owner and clears the lease after termination
+
+Either way the orchestrator gets SIGTERM and writes the run’s summaries before it exits
+([Reading the Operations Summary](#reading-the-operations-summary)), so `metaproc kill`
+waits up to 13 seconds for it to exit.
+`--force` sends SIGKILL, which writes nothing; the next `metaproc status` writes the
+summaries instead.
 
 Useful options:
 

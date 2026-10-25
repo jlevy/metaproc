@@ -486,6 +486,10 @@ $defs:
         format: date-time
         title: Finalized At
         type: string
+      incomplete:
+        default: false
+        title: Incomplete
+        type: boolean
       recovered:
         default: false
         title: Recovered
@@ -602,4 +606,4 @@ title: ResourceUsageSummary
 type: object
 x-softschema:
   contract: metaproc.resources:ResourceUsageSummary/v1
-  schema_sha256: e457b3201f3084f2cbd38b7c439c6f53e441592fbc184e0f45c2dccaaa94b42a
+  schema_sha256: 5a98b5276d771097f4c9cf82cfbe1b5546dd887b35f061c8fa73ae51e8b001d9
