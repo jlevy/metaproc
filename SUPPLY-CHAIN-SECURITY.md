@@ -206,6 +206,17 @@ MPL-2.0 license, the Python `>=3.7` floor, and the empty dependency metadata of
 transitive growth. Drop the pin at the first ordinary relock after 2026-11-03, when the
 release clears the 14-day window on its own.
 
+`opentelemetry-api` is locked at `1.45.1`, replacing `1.43.0`, without an advisory
+waiver. It fixes `GHSA-xcq7-p3pf-p88h`, unbounded `tracestate` parsing.
+Metaproc does not import OpenTelemetry; it arrives transitively through the Google Cloud
+client libraries of the `gcp` extras.
+The [PyPI release](https://pypi.org/project/opentelemetry-api/1.45.1/) uploaded its
+wheel and source distribution on 2026-10-06, more than 14 days before adoption, so the
+ordinary cool-off admits it; PyPI reports no provenance bundle for the wheel.
+The package keeps the Apache-2.0 license, the Python `>=3.10` floor and the
+`typing-extensions>=4.5.0` dependency of `1.43.0`, so the lock change replaces only its
+version and artifact records, with no transitive growth.
+
 Re-review a waiver whenever the closure changes such that the affected code could become
 reachable.
 
