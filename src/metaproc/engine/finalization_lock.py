@@ -124,11 +124,16 @@ def finalization_publish_lock(
         yield
     finally:
         _local_holder = previous
-        if _owner_is_self(lock_path):
-            lease.release()
-        else:
+        if not _owner_is_self(lock_path):
             # Reclaimed as dead while we published; the lock is a live contender's now.
             log.warning("finalization lock %s was reclaimed while held; not releasing", lock_path)
+        else:
+            try:
+                lease.release()
+            except OSError:
+                # The lock was replaced between the check above and the release, so what
+                # stands there is not ours either. Reporting cannot fail a publication.
+                log.warning("finalization lock %s could not be released", lock_path, exc_info=True)
 
 
 def _write_owner(lock_path: Path) -> None:

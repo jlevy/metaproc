@@ -49,20 +49,23 @@ development series.
   completion. The record holds what a launch observed and nothing else — recovery never
   writes one, since an inference that outlived its evidence would be worse than no
   record — and artifacts that disagree with it read as needing recovery.
-  A run with no record, killed by SIGKILL or finalized before the record existed, falls
-  back to the newer of its two projections.
-  Every writer of the three files — terminal finalization, signal-exit work, status
-  recovery, `resource-report`, Metabrowser recovery and `operations summary --write` —
-  publishes holding `.state/finalization.lock`, and status publishes only if the summary
-  and the recorded outcome are still the ones it found.
-  That lock now excludes: its holder records a PID and host inside it, a publisher on
-  the same host reclaims it only once that PID is gone, age alone reclaims only a holder
-  this host cannot probe (after 5 minutes, not 5 seconds), release cannot remove another
-  publisher’s lock, and signal-exit work inherits a lock its own process holds instead
-  of waiting on the thread its signal interrupted.
+  A resume does not replace the record until it finalizes, so a record older than the
+  run’s most recently started launch is set aside rather than attributed to a resume
+  that SIGKILL ended. A run with no usable record falls back to the newer of its two
+  projections. Every writer of the three files — terminal finalization, signal-exit work,
+  status recovery, `resource-report`, Metabrowser recovery and
+  `operations summary --write` — publishes holding `.state/finalization.lock`, and
+  status publishes only if the summary and the recorded outcome are still the ones it
+  found. That lock now excludes: its holder records a PID and host inside it, a publisher
+  on the same host reclaims it only once that PID is gone, age alone reclaims only a
+  holder this host cannot probe (after 5 minutes, not 5 seconds), release cannot remove
+  another publisher’s lock, and signal-exit work inherits a lock its own process holds
+  instead of waiting on the thread its signal interrupted.
   The shared mkdir-lock utility discards the holder record with the lock it belongs to,
-  refuses a lock path that is a symlink rather than deleting through it, and reaches its
-  timeout rather than spinning when a lock it judged stale cannot be removed.
+  removes a lock through a handle on the directory itself — so a path swapped for a
+  symlink cannot redirect the deletion, and a lock another holder acquires meanwhile is
+  refused rather than removed — and reaches its timeout, with a logged reason, rather
+  than spinning when a lock it judged stale cannot be removed.
 
 ## [0.6.0][] - 2026-10-26
 

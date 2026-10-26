@@ -68,9 +68,13 @@ def _seed(tmp_path: Path, *, launches: int = 1) -> Path:
     )
     _add_usage(run_dir, 3)
     for _ in range(launches):
-        with ProcessEventLogger(paths_mod.process_events_log(run_dir)) as events:
-            events.process_start(process="old", run_id="old/run-1", backend="local", step_count=1)
+        _record_launch(run_dir)
     return run_dir
+
+
+def _record_launch(run_dir: Path) -> None:
+    with ProcessEventLogger(paths_mod.process_events_log(run_dir)) as events:
+        events.process_start(process="old", run_id="old/run-1", backend="local", step_count=1)
 
 
 def _add_usage(run_dir: Path, input_tokens: int) -> None:
@@ -210,6 +214,38 @@ def test_recovery_does_not_replace_an_observed_outcome(tmp_path: Path) -> None:
     _recover_resource_artifacts(run_dir, _status(run_dir, active=False))
 
     assert finalization_outcome_path(run_dir).read_bytes() == recorded
+
+
+def test_a_killed_resume_does_not_inherit_the_earlier_launchs_outcome(tmp_path: Path) -> None:
+    """A resume does not replace the record until it finalizes, so a resume killed by
+    SIGKILL leaves the earlier launch's record in place. Reporting that would name a
+    signal that ended a launch which is no longer the latest."""
+    run_dir = _seed(tmp_path, launches=1)
+    write_incomplete_resource_usage_summary(
+        run_dir,
+        run_id="old/run-1",
+        state=FinalizationState.CANCELLED,
+        terminal_error_type="SIGTERM",
+    )
+    assert infer_causal_outcome(run_dir) == resource_finalization.CausalOutcome(
+        state=FinalizationState.CANCELLED, terminal_error_type="SIGTERM"
+    )
+
+    # A resume starts, does more work, and is killed before it can finalize.
+    _record_launch(run_dir)
+    _add_usage(run_dir, 5)
+
+    assert resource_finalization.current_recorded_outcome(run_dir) is None
+    # Inferred from evidence instead: the earlier launch's own incomplete summary.
+    assert infer_causal_outcome(run_dir).state is FinalizationState.CANCELLED
+    assert resource_artifacts_need_recovery(run_dir)
+
+    # And the resume's own finalization replaces the record, which is current again.
+    finalize_run_resources(run_dir, outcome=FinalizationState.COMPLETED)
+
+    current = resource_finalization.current_recorded_outcome(run_dir)
+    assert current is not None and current.state is FinalizationState.COMPLETED
+    assert not resource_artifacts_need_recovery(run_dir)
 
 
 def test_recovery_records_no_outcome_of_its_own(tmp_path: Path) -> None:

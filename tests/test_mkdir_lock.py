@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 
 import pytest
 
+from metaproc.io import mkdir_lock as mkdir_lock_module
 from metaproc.io.mkdir_lock import (
     MkdirLockTimeoutError,
     acquire_mkdir_lock,
@@ -93,6 +95,98 @@ def test_a_lock_path_that_is_a_symlink_is_refused_not_followed(tmp_path):
 
     assert kept.read_text() == "not the lock's to delete"
     assert lock_path.is_symlink()
+
+
+class _Listing(list[os.DirEntry[str]]):
+    """A directory listing that reads like `os.scandir`'s result, already consumed."""
+
+    def __enter__(self):
+        return iter(self)
+
+    def __exit__(self, *_exc: object) -> bool:
+        return False
+
+
+def _swap_the_lock_during_cleanup(tmp_path, monkeypatch, lock_path, replace):
+    """Run *replace* once, after the lock directory has been listed and before its
+    entries are removed — the window a swap has to work in."""
+    real_scandir = os.scandir
+    swapped = []
+
+    def scandir_then_swap(target):
+        with real_scandir(target) as entries:
+            listing = _Listing(entries)
+        if not swapped:
+            swapped.append(True)
+            replace()
+        return listing
+
+    monkeypatch.setattr("os.scandir", scandir_then_swap)
+    return swapped
+
+
+def test_reclaim_refuses_to_remove_a_lock_acquired_while_it_ran(tmp_path, monkeypatch):
+    """Another contender can reclaim this same lock and a new holder can take the path
+    while this removal runs. Deleting that holder's record and its lock would put two
+    holders in the critical section."""
+    lock_path = tmp_path / "resource.lock"
+    lock_path.mkdir()
+    (lock_path / "owner").write_text("1 first-holder\n")
+
+    def another_holder_takes_the_path():
+        lock_path.rename(tmp_path / "evicted.lock")
+        lock_path.mkdir()
+        (lock_path / "owner").write_text("2 second-holder\n")
+
+    swapped = _swap_the_lock_during_cleanup(
+        tmp_path, monkeypatch, lock_path, another_holder_takes_the_path
+    )
+
+    with pytest.raises(FileExistsError):
+        mkdir_lock_module._remove_lock_dir(lock_path)
+
+    assert swapped
+    assert lock_path.is_dir(), "the new holder's lock was removed"
+    assert (lock_path / "owner").read_text() == "2 second-holder\n"
+
+
+def test_reclaim_does_not_delete_through_a_path_swapped_for_a_symlink(tmp_path, monkeypatch):
+    """Someone who can write the lock's parent can swap it for a symlink part way
+    through. Children are unlinked relative to the directory this removal opened, so a
+    swap cannot redirect them."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    kept = outside / "owner"
+    kept.write_text("not the lock's to delete")
+    lock_path = tmp_path / "resource.lock"
+    lock_path.mkdir()
+    (lock_path / "owner").write_text("1 first-holder\n")
+
+    def swap_for_a_symlink():
+        lock_path.rename(tmp_path / "moved.lock")
+        lock_path.symlink_to(outside, target_is_directory=True)
+
+    swapped = _swap_the_lock_during_cleanup(tmp_path, monkeypatch, lock_path, swap_for_a_symlink)
+
+    with pytest.raises(OSError):
+        mkdir_lock_module._remove_lock_dir(lock_path)
+
+    assert swapped
+    assert kept.read_text() == "not the lock's to delete"
+
+
+def test_a_failed_reclaim_is_logged(tmp_path, caplog):
+    """An acquisition that times out against a lock nobody holds is otherwise
+    unexplainable, so the reclaim that could not be done says why."""
+    lock_path = tmp_path / "resource.lock"
+    lock_path.mkdir()
+    (lock_path / "unexpected-subdir").mkdir()
+
+    with caplog.at_level(logging.DEBUG, logger=mkdir_lock_module.__name__):
+        with pytest.raises(MkdirLockTimeoutError):
+            acquire_mkdir_lock(lock_path, timeout=0.1, is_stale=lambda _path: True)
+
+    assert any("could not reclaim" in record.message for record in caplog.records)
 
 
 def test_a_reclaim_that_cannot_be_done_still_reaches_the_timeout(tmp_path):

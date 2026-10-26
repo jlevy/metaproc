@@ -1217,10 +1217,13 @@ The run’s own orchestrator writes it, first in every publication and before an
 else on a hard stop.
 Recovery never writes it, since it infers an outcome from evidence rather than observing
 one, and an inference that outlived that evidence would be worse than no record.
-A run with no record — killed by SIGKILL, or finalized by a Metaproc from before the
-record — is inferred from evidence exactly as before, from the newer of its two
-projections. A run’s artifacts read as needing recovery whenever they disagree with its
-record, so a projection that lost a race is rebuilt rather than believed.
+A resume does not replace the record until it finalizes, so a record older than the
+run’s most recently started launch is set aside: a resume killed by SIGKILL is not
+reported with the signal that ended the launch before it.
+A run with no usable record — none at all, or only an earlier launch’s — is inferred
+from evidence exactly as before, from the newer of its two projections.
+A run’s artifacts read as needing recovery whenever they disagree with its record, so a
+projection that lost a race is rebuilt rather than believed.
 
 Every writer of these three files publishes holding `.state/finalization.lock`: terminal
 finalization, the hard reaper’s signal-exit work, status recovery, `resource-report`,

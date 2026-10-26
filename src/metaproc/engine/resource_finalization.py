@@ -77,15 +77,17 @@ def infer_causal_outcome(
 ) -> CausalOutcome:
     """Preserve a causal outcome, then infer only from persisted terminal progress.
 
-    The run's own ``.state/finalization-outcome.json`` is the authority: a launch records
-    it first in every publication, and recovery never writes one, so it only ever holds
-    an observed outcome. A run with no record — killed by SIGKILL, or finalized before
-    the record existed — falls back to the newer of the two projections' own
+    The run's own ``.state/finalization-outcome.json`` is the authority, as long as the
+    launch that wrote it is the run's latest: a launch records it first in every
+    publication, and recovery never writes one, so it only ever holds an observed
+    outcome. A run with no usable record — none at all, because SIGKILL observes nothing
+    or the run predates the record, or one an earlier launch wrote and a later launch
+    never replaced — falls back to the newer of the two projections' own
     finalizations, by the time each records, since either can be an earlier launch's: a
     resumed launch can publish ``resources.json`` and be killed before its summary, and a
     hard-stop signal writes an incomplete summary beside an earlier ``resources.json``.
     """
-    recorded = read_finalization_outcome(run_dir)
+    recorded = current_recorded_outcome(run_dir)
     if recorded is not None:
         return CausalOutcome(state=recorded.state, terminal_error_type=recorded.terminal_error_type)
 
@@ -113,6 +115,59 @@ def infer_causal_outcome(
         if totals.completed + totals.cached >= totals.total:
             return CausalOutcome(state=FinalizationState.COMPLETED)
     return CausalOutcome(state=FinalizationState.FAILED)
+
+
+def current_recorded_outcome(run_dir: Path) -> ResourceFinalization | None:
+    """Return the run's recorded outcome when its latest launch is the one that wrote it.
+
+    A resume does not replace the record until it finalizes, so a resumed launch killed
+    by SIGKILL leaves the earlier launch's record in place. Reporting that as this run's
+    outcome would name a signal that ended a launch which is no longer the latest, so a
+    record older than the newest recorded launch is set aside and the run is inferred
+    from evidence instead.
+    """
+    recorded = read_finalization_outcome(run_dir)
+    if recorded is None or not _records_the_latest_launch(run_dir, recorded):
+        return None
+    return recorded
+
+
+def _records_the_latest_launch(run_dir: Path, recorded: ResourceFinalization) -> bool:
+    """Return whether *recorded* was written by the run's most recently started launch."""
+    started = _latest_launch_start(run_dir)
+    if started is None:
+        return True  # No launch is recorded to be newer than it.
+    return _as_utc(recorded.finalized_at) >= _as_utc(started)
+
+
+def _latest_launch_start(run_dir: Path) -> datetime | None:
+    """Return when the run's most recently started orchestrator launch began.
+
+    Every ``run-process`` launch that starts the root process appends one
+    ``process_start`` to the run's root process events; nested scopes log elsewhere.
+    """
+    path = process_events_log(run_dir)
+    if not path.is_file():
+        return None
+    latest: datetime | None = None
+    for event in iter_jsonl_objects(path):
+        if event.get("event") != "process_start":
+            continue
+        raw = event.get("ts")
+        if not isinstance(raw, str):
+            continue
+        try:
+            started = datetime.fromisoformat(raw)
+        except ValueError:
+            continue
+        if latest is None or started > latest:
+            latest = started
+    return latest
+
+
+def _as_utc(moment: datetime) -> datetime:
+    """Read a timestamp with no zone as UTC, which is what every writer here records."""
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
 
 
 def _newest_projected_finalization(run_dir: Path) -> ResourceFinalization | None:
@@ -360,7 +415,13 @@ def resource_artifacts_need_recovery(run_dir: Path) -> bool:
     if summarized is not None and summarized.incomplete:
         return True
     recorded = read_finalization_outcome(run_dir)
-    if summarized is not None and recorded is not None and not _agrees(summarized, recorded):
+    if (
+        summarized is not None
+        and recorded is not None
+        and not _agrees(summarized, recorded)
+        # Checked only on disagreement: reading the launch log costs more than this scan.
+        and _records_the_latest_launch(run_dir, recorded)
+    ):
         # The projections are an older or a lost-race publication; the record is causal.
         return True
     try:

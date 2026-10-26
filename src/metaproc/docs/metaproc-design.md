@@ -3015,9 +3015,13 @@ Recovery reads it to choose both the state and the `terminal_error_type`
 it publishes, and never writes it: recovery infers an outcome from evidence rather than
 observing one, and an inference that outlived that evidence would be worse than no
 record at all, since the record takes precedence over both projections.
-A run with no record — killed by SIGKILL, or finalized before the record existed — falls
-back to the newer of its two projections’ own finalizations, by the time each records,
-rather than to a fixed order between them.
+A resume does not replace the record until it finalizes, so a record older than the
+run’s most recently started launch — one its root `process-events.jsonl` recorded after
+it — is set aside: a resume killed by SIGKILL must not be reported with the signal that
+ended the launch before it.
+A run with no usable record — none at all, or only an earlier launch’s — falls back to
+the newer of its two projections’ own finalizations, by the time each records, rather
+than to a fixed order between them.
 Artifacts that disagree with the record read as needing recovery.
 
 Every writer of these three files reads its evidence first and publishes holding the
