@@ -4,14 +4,16 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
 
 ## Current Release
 
-- **[v0.5.0](https://github.com/jlevy/metaproc/releases/tag/v0.5.0)** (`mp-avdc`):
-  published from tag `0714762`, the merge of pull request 110 and the current tip of
+- **[v0.6.0](https://github.com/jlevy/metaproc/releases/tag/v0.6.0)** (`mp-f7g0`):
+  published from tag `4289836`, the merge of pull request 120 and the current tip of
   main, so there is no gap between the published wheel and post-release main.
-  The release is a minor, not a patch, because it raises the Python floor to 3.14. Its
-  compatibility notes lead with that floor, the unverified GCP image interpreter
-  (`mp-mo74`), and Metabrowser not yet reading `.zst`; they also record that a local run
-  whose mapped agent steps pin profiles with different pool resources now fails where
-  v0.4.1 ran it (`mp-8oak`).
+  The release is a minor, not a patch: the `gcp run` file console adds CLI surface, the
+  `softschema` and `frontmatter-format` floors rise to `0.9.1` and `0.5.1`, and a mapped
+  composite now opens as many item scopes as the run ceiling admits where it used to
+  stop at 32, so a process tuned against that implicit cap runs more work at once.
+  Its compatibility notes carry forward the unverified GCP image interpreter (`mp-mo74`)
+  and the Gemini `respectGitIgnore` default (`mp-x1qh`). It shipped without pull request
+  117, which stays open under review.
 
 ## Release Follow-Ups
 
@@ -26,23 +28,14 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
 - **Verify the GCP image interpreter** (`mp-mo74`): Metaproc has required Python 3.14
   since v0.5.0, and container bootstrap refuses the shipped wheel on an image whose
   `/opt/venv` is older.
-  The image build lives outside this repository, so v0.5.0 went out unverified and
-  v0.6.0 is staged to go out the same way; until the image is confirmed or rebuilt on
-  3.14 and re-pinned, dispatch with `--no-wheel` or from 0.4.x, as the release notes and
+  The image build lives outside this repository, so v0.5.0 and v0.6.0 both went out
+  unverified; until the image is confirmed or rebuilt on 3.14 and re-pinned, dispatch
+  with `--no-wheel` or from 0.4.x, as the release notes and
   `metaproc help cloud-dispatch` say.
+  Two consecutive releases have now shipped around this, so confirming the image is
+  worth doing before a third.
 
 ## Active Development
-
-- **v0.6.0 release** (`mp-f7g0`): the changelog,
-  [release notes](docs/project/releases/v0.6.0.md), and publishing pointer match the
-  tree. What remains is the tag itself and the publish it triggers; § Current Release
-  moves to v0.6.0 once that tag exists.
-  The release is a minor, not a patch: the `gcp run` file console adds CLI surface, the
-  `softschema` and `frontmatter-format` floors rise, and a mapped composite now opens as
-  many item scopes as the run ceiling admits where it used to stop at 32, so a process
-  tuned against that implicit cap runs more work at once.
-  Its compatibility notes also carry forward the unverified GCP image interpreter
-  (`mp-mo74`) and the Gemini `respectGitIgnore` default (`mp-x1qh`).
 
 - **Process-tree and host safety** (`mp-bd6v`; umbrella feature `mp-qigc`): incubate a
   standalone `safeproc` package with owned pre-execution supervision and brokerless
