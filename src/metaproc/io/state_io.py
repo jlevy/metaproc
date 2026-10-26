@@ -9,15 +9,17 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from io import StringIO
 from pathlib import Path
 
-from frontmatter_format import read_yaml_file, to_yaml_string
+from frontmatter_format import read_yaml_file
 from ruamel.yaml import YAMLError
 from strif import atomic_write_text
 
 from metaproc.engine.placeholders import resolve_templates
 from metaproc.errors import AttemptTerminalConflictError
 from metaproc.ids import new_timestamped_typed_id, require_typed_id
+from metaproc.io.yaml_dump import new_dump_yaml
 from metaproc.models.authored import IOSpec
 from metaproc.models.plan import RunPlanSnapshot
 from metaproc.models.runtime import (
@@ -63,7 +65,11 @@ def _write_record_at(state_dir: Path, filename: str, data: dict[str, object]) ->
     is no inner ``.state/`` subdir.
     """
     target = state_dir / filename
-    atomic_write_text(target, to_yaml_string(data), make_parents=True)
+    # Empty mappings can be required record fields (item, inputs). Retain them while
+    # preserving null omission and the same round-trip emitter as to_yaml_string.
+    stream = StringIO()
+    new_dump_yaml(typ="rt", suppress_vals=lambda value: value is None).dump(data, stream)
+    atomic_write_text(target, stream.getvalue(), make_parents=True)
     return target
 
 
