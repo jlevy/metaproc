@@ -9,7 +9,7 @@ host can probe, and release cannot take a lock another publisher now holds.
 from __future__ import annotations
 
 import os
-import socket
+import platform
 import subprocess
 import sys
 import threading
@@ -34,7 +34,7 @@ def _held_by(run_dir: Path, *, pid: int, host: str | None = None, age_s: float =
     lock_path = finalization_lock_path(run_dir)
     lock_path.mkdir(parents=True)
     (lock_path / FINALIZATION_LOCK_OWNER_FILE).write_text(
-        f"{pid} {host if host is not None else socket.gethostname()}\n", encoding="utf-8"
+        f"{pid} {host if host is not None else platform.node()}\n", encoding="utf-8"
     )
     if age_s:
         old = time.time() - age_s
@@ -115,7 +115,7 @@ def test_release_does_not_remove_another_publishers_lock(tmp_path: Path) -> None
         assert lock_path.is_dir()
         # What a contender that reclaimed and re-created the lock leaves behind.
         (lock_path / FINALIZATION_LOCK_OWNER_FILE).write_text(
-            f"{os.getppid()} {socket.gethostname()}\n", encoding="utf-8"
+            f"{os.getppid()} {platform.node()}\n", encoding="utf-8"
         )
 
     assert lock_path.is_dir(), "release removed a lock this process no longer owned"

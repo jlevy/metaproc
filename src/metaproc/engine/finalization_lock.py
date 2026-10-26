@@ -28,14 +28,12 @@ from __future__ import annotations
 
 import logging
 import os
-import socket
+import platform
 import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-
-import psutil
 
 from metaproc.io.mkdir_lock import acquire_mkdir_lock
 from metaproc.paths import FINALIZATION_LOCK_DIR, STATE_DIR
@@ -43,7 +41,12 @@ from metaproc.paths import FINALIZATION_LOCK_DIR, STATE_DIR
 log = logging.getLogger(__name__)
 
 FINALIZATION_LOCK_OWNER_FILE = "owner"
-"""Holder record inside the lock directory: ``<pid> <host>`` on one line."""
+"""Holder record inside the lock directory: ``<pid> <host>`` on one line.
+
+The host is ``platform.node()`` and the liveness probe is ``os.kill(pid, 0)``, the pair
+:mod:`metaproc.io.orchestrator_lease` already uses to decide whether a run's lease owner
+is gone.
+"""
 
 FINALIZATION_LOCK_STALE_S = 300.0
 """Age at which a held lock is reclaimed without knowing whether its holder died.
@@ -135,7 +138,7 @@ def _write_owner(lock_path: Path) -> None:
         # directory whose atomic `mkdir` is what made it the holder; "x" refuses an
         # existing record, which would be another publisher's.
         with (lock_path / FINALIZATION_LOCK_OWNER_FILE).open("x", encoding="utf-8") as handle:
-            handle.write(f"{os.getpid()} {socket.gethostname()}\n")
+            handle.write(f"{os.getpid()} {platform.node()}\n")
     except OSError:
         # Without the record the lock still excludes; it is then reclaimed by age only.
         log.debug("could not record the finalization lock holder at %s", lock_path, exc_info=True)
@@ -160,7 +163,7 @@ def _owner_is_self(lock_path: Path) -> bool:
     if owner is None:
         # No record reads. Only a holder writes one, so the lock is still this hold's.
         return True
-    return owner == (os.getpid(), socket.gethostname())
+    return owner == (os.getpid(), platform.node())
 
 
 def _holder_is_gone(lock_path: Path) -> bool:
@@ -175,19 +178,30 @@ def _holder_is_gone(lock_path: Path) -> bool:
     owner = _read_owner(lock_path)
     if owner is not None:
         pid, host = owner
-        if host == socket.gethostname() and pid != os.getpid():
+        if host == platform.node() and pid != os.getpid():
             return not _pid_is_running(pid)
     return _lock_age_s(lock_path) > FINALIZATION_LOCK_STALE_S
 
 
 def _pid_is_running(pid: int) -> bool:
-    """Return whether *pid* names a live process on this host."""
+    """Return whether *pid* names a live process on this host.
+
+    The same probe, and the same host identity above, that
+    :mod:`metaproc.io.orchestrator_lease` uses to decide whether a lease's owner is gone,
+    so a run has one answer to "is that process still there".
+    """
     if pid <= 0:
         return False
     try:
-        return psutil.pid_exists(pid)
-    except Exception:  # noqa: BLE001 - an unanswerable probe keeps the holder alive
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # POSIX reports EPERM when the process exists but this user cannot signal it.
         return True
+    except OSError:  # An unanswerable probe keeps the holder alive.
+        return True
+    return True
 
 
 def _lock_age_s(lock_path: Path) -> float:
