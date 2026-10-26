@@ -7,6 +7,66 @@ development series.
 
 ## [Unreleased][unreleased]
 
+### Fixed
+
+- **A run stopped by SIGTERM, SIGHUP or SIGQUIT keeps its usage summaries.** The hard
+  reaper that kills a `run-process` orchestrator’s descendants on SIGTERM re-raises the
+  signal under its default disposition, so the run’s `finally`, and with it the only
+  writer of `resource-usage-summary.md` and `operations-summary.md`, never ran: a run
+  stopped by `metaproc kill` or a supervisor had neither until a later `metaproc status`
+  on the inactive run, and a resume made it active and blocked that too.
+  SIGHUP and SIGQUIT had no handler at all, so a dropped terminal also left the run’s
+  steps running as orphans.
+  The reaper now handles all three, and an inherited ignored SIGHUP or SIGQUIT (`nohup`,
+  a background job) stays ignored.
+  It writes both summaries before the orchestrator dies by the signal, with
+  `state: cancelled` and the signal as `terminal_error_type`: first a resource summary
+  marked `finalization.incomplete: true` with every total unmeasured, then, on a thread,
+  the complete finalization, which replaces it.
+  The work must be done 8 seconds after the signal arrives, inside the 10 seconds
+  `docker stop` allows before SIGKILL. Descendants are still reaped first, and again
+  after; a repeated signal neither aborts nor repeats the work.
+  `metaproc status` rebuilds an incomplete summary like a missing one, and on a running
+  resume it writes the summary an earlier launch left missing or incomplete (SIGKILL, or
+  a rollup that outran the bound) without rewriting the live
+  `.logs/resource-events.jsonl`, which the signal-exit work also leaves alone while the
+  psutil samplers still append to it.
+  `incomplete` is serialized only when true, so complete summaries and `resources.json`
+  keep their shape. `metaproc kill` waits up to 11 seconds, not 3, for the orchestrator
+  to exit; with `--force` and a pool it still SIGTERMs the orchestrator, so the
+  summaries are written, and only an orchestrator killed before its first pool writes
+  nothing.
+- **A run records how it ended where no later writer can replace it.** `resources.json`
+  and `resource-usage-summary.md` are projections, each replaced whole, so a publication
+  interrupted between them left one of each launch and recovery could read an older
+  complete summary as the run’s outcome.
+  How the latest launch ended is now recorded on its own in
+  `.state/finalization-outcome.json`, written first in every publication and before
+  anything else on a hard stop.
+  `metaproc status`, `metaproc resource-report` and the Metabrowser resource view all
+  read it, so a rebuilt summary keeps the state and the signal that ended the run, and a
+  run stopped by SIGTERM is no longer reported as failed or as an earlier launch’s
+  completion. The record holds what a launch observed and nothing else — recovery never
+  writes one, since an inference that outlived its evidence would be worse than no
+  record — and artifacts that disagree with it read as needing recovery.
+  A resume does not replace the record until it finalizes, so a record older than the
+  run’s most recently started launch is set aside rather than attributed to a resume
+  that SIGKILL ended. A run with no usable record falls back to the newer of its two
+  projections. Every writer of the three files — terminal finalization, signal-exit work,
+  status recovery, `resource-report`, Metabrowser recovery and
+  `operations summary --write` — publishes holding `.state/finalization.lock`, and
+  status publishes only if the summary and the recorded outcome are still the ones it
+  found. That lock now excludes: its holder records a PID and host inside it, a publisher
+  on the same host reclaims it only once that PID is gone, age alone reclaims only a
+  holder this host cannot probe (after 5 minutes, not 5 seconds), release cannot remove
+  another publisher’s lock, and signal-exit work inherits a lock its own process holds
+  instead of waiting on the thread its signal interrupted.
+  The shared mkdir-lock utility discards the holder record with the lock it belongs to,
+  removes a lock through a handle on the directory itself — so a path swapped for a
+  symlink cannot redirect the deletion, and a lock another holder acquires meanwhile is
+  refused rather than removed — and reaches its timeout, with a logged reason, rather
+  than spinning when a lock it judged stale cannot be removed.
+
 ## [0.6.0][] - 2026-10-26
 
 ### Added

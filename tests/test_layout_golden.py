@@ -401,6 +401,7 @@ def test_state_tree_snapshot_matches_expected_shape(smoke_run: Path) -> None:
 
     expected = {
         # Run-level
+        "finalization-outcome.json",
         "process-status.yaml",
         "run-config.yaml",
         "run-plan.yaml",

@@ -1180,11 +1180,64 @@ Cross-check volume against `metaproc stats <run-dir>` and
 
 Run finalization writes `operations-summary.md` at the run root, beside
 `resource-usage-summary.md`, for completed, failed, cancelled, and timed-out runs alike.
-A run can end without one: killed by a signal, interrupted between the resource and
-operations finalizers, or with a fold that raised.
-Once such a run is inactive, the next `metaproc status` on it writes the missing summary
-with `trigger: status`, recovering its resource artifacts first if they are stale.
-It writes one only when the file is absent.
+A SIGTERM, SIGHUP or SIGQUIT to the orchestrator (from `metaproc kill`, a supervisor, or
+a terminal that hangs up) writes both before the orchestrator dies by that signal.
+A SIGHUP or SIGQUIT the orchestrator was started ignoring stays ignored, as under
+`nohup` or for a background job of a non-interactive shell.
+The hard reaper kills the orchestrator’s descendants, writes a resource summary marked
+`finalization.incomplete: true` with every total unmeasured, then runs the same
+finalization until 8 seconds after the signal arrived; its complete summaries replace
+the incomplete one.
+The whole exit fits inside the 10 seconds `docker stop` allows before
+SIGKILL; a Kubernetes pod and a Compute Engine Spot VM’s shutdown allow 30. Both record
+`state: cancelled` and the signal as `terminal_error_type` (`SIGTERM`, `SIGHUP` or
+`SIGQUIT`). Ctrl-C (SIGINT) instead cancels the run cooperatively, and its normal
+finalization writes both with `terminal_error_type: KeyboardInterrupt`.
+
+A run can still end without a complete pair: killed by SIGKILL (`metaproc kill --force`
+before the run’s first pool exists, or a supervisor escalating after its grace period),
+a rollup that did not finish within those 8 seconds, or a fold that raised.
+`metaproc status` is the backstop.
+On an inactive run it rebuilds missing, stale, or incomplete resource artifacts, then
+writes a missing operations summary with `trigger: status`. On a resume that is running,
+it writes the resource summary only when an earlier launch left none or an incomplete
+one, plus a missing operations summary beside it, and leaves
+`.logs/resource-events.jsonl`, which the live orchestrator appends to, as it is; the
+resume’s own finalization replaces both.
+It writes an operations summary only when the file is absent.
+
+Both summaries are projections: a writer replaces each whole, and a run interrupted
+between the two leaves one of them an earlier launch’s. So how the run’s latest launch
+ended is recorded on its own, in `.state/finalization-outcome.json`, and that record is
+what every recovery path reads: `metaproc status`, `metaproc resource-report` and the
+Metabrowser resource view all report the state and the `terminal_error_type` it holds,
+so a summary rebuilt from evidence still names the signal that ended the run.
+The record holds one thing: what a launch of this run observed.
+The run’s own orchestrator writes it, first in every publication and before anything
+else on a hard stop.
+Recovery never writes it, since it infers an outcome from evidence rather than observing
+one, and an inference that outlived that evidence would be worse than no record.
+A resume does not replace the record until it finalizes, so a record older than the
+run’s most recently started launch is set aside: a resume killed by SIGKILL is not
+reported with the signal that ended the launch before it.
+A run with no usable record — none at all, or only an earlier launch’s — is inferred
+from evidence exactly as before, from the newer of its two projections.
+A run’s artifacts read as needing recovery whenever they disagree with its record, so a
+projection that lost a race is rebuilt rather than believed.
+
+Every writer of these three files publishes holding `.state/finalization.lock`: terminal
+finalization, the hard reaper’s signal-exit work, status recovery, `resource-report`,
+Metabrowser recovery, and `metaproc operations summary --write`. The one exception is
+the hard reaper’s first act, which records the outcome and the incomplete summary
+without the lock: the signal interrupts the orchestrator’s main thread wherever it is,
+and a lock that thread holds would never be released.
+Under the lock, status publishes only if the resource summary and the recorded outcome
+are still the ones it found, and the operations summary still absent — so a summary the
+orchestrator writes while status reads is never replaced by status’s older reading.
+A held lock is reclaimed only from a holder that is gone: the holder records its PID and
+host inside the lock directory, and a publisher on the same host reclaims it the moment
+that PID is no longer running, never because the lock is merely old.
+Age reclaims only a lock whose holder this host cannot probe, after 5 minutes.
 Its frontmatter is `metaproc.operations:AgentOperationsSummary/v1`; the body renders the
 same values. Point it at a run root: a top-level run, a batch root, or a child run of a
 batch, in place or copied elsewhere.
@@ -1283,6 +1336,21 @@ uv run metaproc kill <run-dir>
   worker subprocesses
 - if the run is still in an early code or bundle stage before the first pool exists, it
   targets the same-host orchestrator lease owner and clears the lease after termination
+
+Either way the orchestrator gets SIGTERM and writes the run’s summaries before it exits
+([Reading the Operations Summary](#reading-the-operations-summary)), so `metaproc kill`
+waits up to 11 seconds for it to exit.
+
+`--force` escalates to SIGKILL, and what that reaches depends on which window the run is
+in:
+
+- with a pool, the selected worker subprocesses get SIGKILL, but the pool process — the
+  orchestrator itself — still gets SIGTERM, so it writes the run’s summaries as above
+- before the first pool exists, the orchestrator is the lease owner and gets SIGKILL,
+  which no process can handle, so it writes nothing and the next `metaproc status` on
+  the inactive run writes the summaries instead
+
+Use `--force` to stop work immediately, not to skip the summaries.
 
 Useful options:
 

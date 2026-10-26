@@ -102,6 +102,9 @@ wrapper or a pipeline emits it, and the launcher reaps whatever it started.
 A SIGTERM, SIGHUP or SIGQUIT to Metaproc itself ends a foreground command the same way:
 the launcher stops the group first, then dies by the signal, and a Ctrl-C during that
 cleanup waits for it.
+The same three signals to a `run-process` orchestrator run its hard reaper instead: it
+kills every descendant, writes the run’s resource and operations summaries, and dies by
+the signal. Ctrl-C cancels a run cooperatively, and SIGKILL writes nothing.
 What the group cannot reach is left behind: a tool a CLI detached into its own session,
 which the CLI’s own signal handling must stop, and the whole tree after a SIGKILL, or a
 SIGSTOP followed by one.

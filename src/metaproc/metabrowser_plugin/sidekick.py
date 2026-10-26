@@ -436,17 +436,9 @@ def resources_handler(request: Request) -> JSONResponse:
                 )
             from metaproc.engine.resource_finalization import (  # noqa: PLC0415 -- optional rebuild path
                 finalize_run_resources,
-            )
-            from metaproc.models.resource_budget import (  # noqa: PLC0415 -- optional rebuild path
-                FinalizationState,
-            )
-            from metaproc.models.resources import (  # noqa: PLC0415 -- optional rebuild path
-                ResourcesDocument,
-                ResourcesDocumentV2,
-                read_resources_document_json,
+                infer_causal_outcome,
             )
 
-            outcome = FinalizationState.FAILED
             snapshot_bundle = None
             if process_rel:
                 process_path = resolve_path(process_rel)
@@ -457,20 +449,16 @@ def resources_handler(request: Request) -> JSONResponse:
                         {"error": "process not found", "process": process_rel}, status_code=404
                     )
                 snapshot_bundle = load_plan_bundle(process_path)
-            if cache_path.exists():
-                try:
-                    prior = read_resources_document_json(cache_path.read_text())
-                    if (
-                        isinstance(prior, (ResourcesDocument, ResourcesDocumentV2))
-                        and prior.finalization is not None
-                    ):
-                        outcome = prior.finalization.state
-                except Exception:  # noqa: BLE001 - refresh intentionally repairs malformed cache
-                    pass
+            # The same causal-outcome selection status and `resource-report` use: the
+            # run's recorded outcome, then the newer of its two projections. Reading the
+            # cached document alone would rewrite a hard stop's `cancelled/SIGTERM` as
+            # failed where no cache exists, or as an earlier launch's `completed`.
+            causal = infer_causal_outcome(target)
             try:
                 document = finalize_run_resources(
                     target,
-                    outcome=outcome,
+                    outcome=causal.state,
+                    terminal_error_type=causal.terminal_error_type,
                     trigger="recovery",
                     bundle=snapshot_bundle,
                 ).document
