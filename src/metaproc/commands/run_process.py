@@ -286,6 +286,17 @@ def _sync_executor_worker_count(max_concurrency: int | None) -> int:
     return max(_MIN_SYNC_EXECUTOR_WORKERS, max_concurrency or 0)
 
 
+def _mapped_scope_concurrency(max_concurrency: int | None) -> int:
+    """How many item scopes of one mapped composite may be open at once.
+
+    A scope holds no admission capacity of its own; its leaves acquire the run's, so
+    the run's ceiling already bounds the work in flight. A fixed scope limit below that
+    ceiling would keep the pool from ever filling, so scopes follow the ceiling, with
+    `_DEFAULT_MAPPED_SCOPE_CONCURRENCY` as the floor for small or unset ceilings.
+    """
+    return max(_DEFAULT_MAPPED_SCOPE_CONCURRENCY, max_concurrency or 0)
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class RunPoolResources:
     """The values a run-owned RunPool is sized from, as one execution profile resolves them.
@@ -4602,7 +4613,7 @@ async def _execute_composite_fan_out_step(
         # every scope acquire the run-owned admission authority themselves; making
         # the scope acquire that capacity would strand a slot while it waits between
         # child stages and can deadlock at a run limit of one.
-        max_concurrency=_DEFAULT_MAPPED_SCOPE_CONCURRENCY,
+        max_concurrency=_mapped_scope_concurrency(execution_context.max_concurrency),
         step_concurrency=fan_out.max_concurrency,
         dispatch=dispatch,
     )

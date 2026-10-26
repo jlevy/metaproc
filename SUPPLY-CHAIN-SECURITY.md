@@ -220,6 +220,33 @@ version and artifact records, with no transitive growth.
 Re-review a waiver whenever the closure changes such that the affected code could become
 reachable.
 
+## Native YAML Emitter Test Dependency
+
+The isolated `make test-yaml-c-emitter` lane uses `ruamel.yaml.clib==0.2.15` to test the
+optional C emitter that the ordinary installation does not provide.
+This is the native implementation used by `ruamel.yaml`; no existing pure-Python
+dependency can exercise that boundary.
+
+The [PyPI release](https://pypi.org/project/ruamel.yaml.clib/0.2.15/) is maintained by
+Anthon van der Neut, points to the
+[ruamel-yaml-clib source](https://sourceforge.net/p/ruamel-yaml-clib/code/ci/default/tree/),
+and carries the MIT license.
+Its reviewed CPython 3.14 wheels for Linux x86_64 (`manylinux_2_17`/`manylinux_2_28`)
+and macOS arm64 were uploaded on 2025-11-16, outside the 14-day cool-off.
+Each contains the native `_ruamel_yaml` extension and distribution metadata, with no
+Python dependencies or install scripts.
+
+[`devtools/requirements-yaml-c-emitter.txt`](devtools/requirements-yaml-c-emitter.txt)
+pins the version and the two PyPI SHA-256 wheel hashes.
+The lane permits binary wheels only and requires matching hashes, so it cannot fall back
+to an unreviewed source build or another platform’s artifact.
+It installs into a separate target directory exposed only to the emitter tests, leaving
+`uv.lock`, production dependencies, and the ordinary suite unchanged.
+The lane fails if the extension or C emitter is unavailable; it tests the actual status,
+scale-state, scale-override, and kill-sentinel writers.
+This is writer coverage, not approval to enable the safe C parser for workflow inputs;
+see [installation](docs/installation.md#optional-yaml-c-extension).
+
 ## Verification
 
 `devtools/check_supply_chain.py` checks only safeguards that span configuration files:

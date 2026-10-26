@@ -7,6 +7,45 @@ development series.
 
 ## [Unreleased][unreleased]
 
+### Added
+
+- **A `gcp run` job keeps its console in a file.** With the Filestore mount and the
+  shipped wheel, the command runs inside `metaproc.cloud.gcp.gcp_run_console`, which
+  appends its output to `<mount>/logs/gcp-run/<job>/console.log` and sends Cloud Logging
+  only a start line, a heartbeat a minute and the exit line.
+  A bounded atomic live view in the dispatch bucket pairs the console tail and its
+  cursor on each heartbeat.
+  A background worker caches the `metaproc status` of each `--watch-run` directory every
+  five minutes, so `metaproc gcp logs <job>` and
+  `metaproc gcp status <job> --run-status` read the job without mounting Filestore.
+  `--console file` requests the file explicitly; `--console cloud-logging` keeps the
+  whole stream in Cloud Logging, which stays the default for `--no-wheel` jobs.
+  Live following also stops at terminal Batch state when a final upload is missing.
+
+### Changed
+
+- **A mapped composite opens as many item scopes as the run’s ceiling admits.** It used
+  to open at most 32 at once whatever `--max-concurrency` said, so a run with a ceiling
+  of 80 or 160 never had more than 32 items’ leaves competing for the pool.
+  Scopes hold no admission capacity of their own, so they now follow the run’s ceiling,
+  with 32 as the floor, and the pool’s memory and provider admission still bound the
+  work in flight.
+
+### Fixed
+
+- **Pool status, scale-state, scale-override, and kill-sentinel files are written the
+  same with or without ruamel’s C extension.** With `_ruamel_yaml` installed, their safe
+  YAML handle switched to libyaml’s emitter, which wraps long values at different
+  points. They now dump through `metaproc.io.new_dump_yaml`, a `new_yaml` handle that
+  keeps the pure-Python emitter, so the bytes match what a process without the extension
+  writes. This fixes writing only.
+  Safe C parser compatibility remains a separate dependency concern: under
+  `frontmatter-format==0.4.0`, flow-sequence URLs such as
+  `sources: [https://example.com/a]` still fail when the C parser is active.
+  Enabling the extension in an existing workflow requires a reader compatibility update
+  and its own validation; see
+  [installation](docs/installation.md#optional-yaml-c-extension).
+
 ## [0.5.0][] - 2026-10-21
 
 ### Added

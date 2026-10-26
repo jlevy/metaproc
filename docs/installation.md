@@ -48,6 +48,22 @@ metaproc gcp --help
 
 The base installation remains independent of Google Cloud packages and credentials.
 
+### Optional YAML C extension
+
+Metaproc does not install `ruamel.yaml.clib`. If another dependency installs this
+extension, Metaproc’s pool writers keep the same bytes through their pure-Python
+emitter, but safe readers can select the C parser.
+With `frontmatter-format==0.4.0`, `from_yaml_string('sources: [https://example.com/a]')`
+raises `ScannerError` with that parser and succeeds with the pure parser.
+The writer guarantee does not establish reader compatibility.
+
+Before enabling the extension for speed in an existing workflow environment, adopt a
+separately reviewed reader compatibility update and validate process and frontmatter
+inputs, including flow-sequence URLs and scalar interpretation.
+See the
+[YAML I/O gotchas](../src/metaproc/docs/arch-file-io-utilities.md#frontmatter_format-gotchas)
+for the writer/reader boundary.
+
 ## Run a Source Checkout
 
 Before a version is published, or when developing locally, run the checked-out source
