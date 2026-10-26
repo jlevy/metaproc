@@ -26,9 +26,9 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
 - **Verify the GCP image interpreter** (`mp-mo74`): Metaproc has required Python 3.14
   since v0.5.0, and container bootstrap refuses the shipped wheel on an image whose
   `/opt/venv` is older.
-  The image build lives outside this repository, so both v0.5.0 and v0.6.0 went out
-  unverified; until the image is confirmed or rebuilt on 3.14 and re-pinned, dispatch
-  with `--no-wheel` or from 0.4.x, as the release notes and
+  The image build lives outside this repository, so v0.5.0 went out unverified and
+  v0.6.0 is staged to go out the same way; until the image is confirmed or rebuilt on
+  3.14 and re-pinned, dispatch with `--no-wheel` or from 0.4.x, as the release notes and
   `metaproc help cloud-dispatch` say.
 
 ## Active Development

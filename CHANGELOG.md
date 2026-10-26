@@ -14,7 +14,8 @@ development series.
 - **A `gcp run` job keeps its console in a file.** With the Filestore mount and the
   shipped wheel, the command runs inside `metaproc.cloud.gcp.gcp_run_console`, which
   appends its output to `<mount>/logs/gcp-run/<job>/console.log` and sends Cloud Logging
-  only a start line, a heartbeat a minute and the exit line.
+  only a start line, a heartbeat a minute and the exit line, alongside the bootstrap
+  output from before the wrapper starts.
   A bounded atomic live view in the dispatch bucket pairs the console tail and its
   cursor on each heartbeat.
   A background worker caches the `metaproc status` of each `--watch-run` directory every
