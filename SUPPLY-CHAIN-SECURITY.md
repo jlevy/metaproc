@@ -51,24 +51,31 @@ version number.
 
 Seven exact first-party releases are exempt from the ordinary cool-off for this release:
 
-- `softschema==0.8.0`, the current release, adopted inside the cool-off as a first-party
-  release. Reviewed against `0.7.0`: same MIT license, same `jlevy/softschema` source
-  repository, same Python floor of `>=3.11,<4.0`, and the same five direct dependencies
-  (`frontmatter-format`, `jsonschema`, `pydantic`, `ruamel-yaml`, `strif`), so it adds
-  no transitive surface.
-  It adds a `repair` subcommand and the corresponding public API (`load_artifact`,
-  `repair_artifact`, `conform_artifact`, `repair_and_validate_artifact`, and
-  `resolve_bound_schema`), leaves every existing subcommand’s flags unchanged, and
-  leaves ordinary schema verdicts unchanged.
-  Two result-shape additions matter to a consumer reading results against a closed
-  schema: `repairs` is now always present on a validate result, and TypeScript semantic
-  error records may carry `expected`. Metaproc’s contract-failure adapter tolerates
-  both, and the full suite runs against this exact release.
-  Metaproc keeps its own `metaproc softschema repair`, which routes through
-  `metaproc.engine.yaml_repair`, so the new upstream subcommand is not yet on Metaproc’s
-  execution path;
-- `frontmatter-format==0.4.0`, required by SoftSchema 0.4.0 and used directly for
-  deterministic alias-free Metaproc artifact writes;
+- `softschema==0.9.0`, adopted with the owner’s explicit first-party cool-off exemption
+  on 2026-10-25. Reviewed against `0.8.0`: same MIT license, `jlevy/softschema` source
+  repository, Python `>=3.11,<4.0` floor, and five direct dependencies.
+  Its frontmatter-format floor rises to `>=0.5.0`; no transitive dependencies are added.
+  Validation result constructors require explicit `execution` evidence, and model-only
+  enforcement produces an advisory.
+  Metaproc forwards both native layer records and warnings without constructing results
+  or inventing execution evidence for retained reports.
+  The release also hardens portable YAML/frontmatter input and adds guarded JSON and
+  C-parser paths with a pure-parser fallback.
+  Its public `yaml_parser_mode()` reports the effective mode;
+- `frontmatter-format==0.5.0`, adopted under the same owner exemption and required by
+  Softschema 0.9.0. Reviewed against `0.4.0`: same MIT license,
+  `jlevy/frontmatter-format` source repository, Python `>=3.10,<4.0` floor, and sole
+  `ruamel-yaml>=0.18.10` dependency.
+  The used APIs remain available.
+  It adds guarded C-first readers, a pure-parser fallback and public
+  `yaml_parser_mode()`, while keeping pure emitters and instance-local representers and
+  constructors. Both release wheels were non-yanked and matched their PyPI SHA-256
+  digests, and neither contains installation hooks.
+  Their runtime modules match the published
+  [Softschema](https://github.com/jlevy/softschema/tree/80859868fbfaad952681ba23d38b03aa1efd7045/packages/python/src/softschema)
+  and
+  [frontmatter-format](https://github.com/jlevy/frontmatter-format/tree/a9c3dc019b00e618049e710e4ea62351a656dbdd/src/frontmatter_format)
+  release sources. Only these two package ceilings advance;
 - `metabrowser==0.9.1`, the current release, used by the development and plugin test
   group and by the optional `browser` extra.
   Reviewed against `0.1.0`, the release it replaces here: same AGPL-3.0-or-later license

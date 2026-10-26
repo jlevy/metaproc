@@ -9,10 +9,10 @@ exclude-newer-span = "P14D"
 [options.exclude-newer-package]
 flowmark-rs = "2026-07-16T00:00:00Z"
 certifi = "2026-10-20T02:25:00Z"
-frontmatter-format = "2026-08-01T01:27:00Z"
+frontmatter-format = "2026-10-25T20:51:00Z"
 kpress = "2026-08-31T00:55:00Z"
 metabrowser = "2026-09-01T21:49:00Z"
-softschema = "2026-08-30T20:12:00Z"
+softschema = "2026-10-26T01:41:00Z"
 
 [[package]]
 name = "annotated-doc"
@@ -319,14 +319,14 @@ wheels = [
 
 [[package]]
 name = "frontmatter-format"
-version = "0.4.0"
+version = "0.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "ruamel-yaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/da/ea/e71223bb3eb80354cd15d4c4895f6ff28941d46750945d81ac11c48c6391/frontmatter_format-0.4.0.tar.gz", hash = "sha256:dd7bc579b50e12a236c03427826a9af14fd2029e20dcae927e68f7440538e75a", size = 17068, upload-time = "2026-08-01T01:26:20.316Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0d/83/b6964897c71758657ef7eae455dcc46dc4138266d59435e90cb8dd35c4a8/frontmatter_format-0.5.0.tar.gz", hash = "sha256:7b489c6cd1182b38cb2478eaf8d6351c8b0633d831f1325f8ed1a0cd8867e72f", size = 28265, upload-time = "2026-10-25T20:50:58.66Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/10/a1/0f9fdbe478d31b3b804e58b9436c4e53d89166c472fefff6990df4da39da/frontmatter_format-0.4.0-py3-none-any.whl", hash = "sha256:71d6b416c6b05242d934b6228d2386311f2f9216d4d1d47549e6cadf7963fe76", size = 15676, upload-time = "2026-08-01T01:26:19.434Z" },
+    { url = "https://files.pythonhosted.org/packages/45/39/7f28ad014ef6712b76675c2072e85a44123c9c0d75865d43cbabb2a53531/frontmatter_format-0.5.0-py3-none-any.whl", hash = "sha256:779f561c2d7c853fe0a76ec016ee7fff8e1e8415bc64b81a53d8ffb8abe45fcb", size = 27476, upload-time = "2026-10-25T20:50:57.458Z" },
 ]
 
 [[package]]
@@ -1002,7 +1002,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "cachetools", specifier = ">=7.0.5" },
-    { name = "frontmatter-format", specifier = ">=0.4.0,<0.5" },
+    { name = "frontmatter-format", specifier = ">=0.5.0,<0.6" },
     { name = "google-auth", marker = "extra == 'gcp'", specifier = ">=2.49" },
     { name = "google-auth", marker = "extra == 'gcp-batch'", specifier = ">=2.49" },
     { name = "google-cloud-asset", marker = "extra == 'gcp-batch'", specifier = ">=3.27" },
@@ -1022,7 +1022,7 @@ requires-dist = [
     { name = "requests", marker = "extra == 'gcp'", specifier = ">=2.0" },
     { name = "requests", marker = "extra == 'gcp-batch'", specifier = ">=2.0" },
     { name = "ruamel-yaml", specifier = ">=0.19.1" },
-    { name = "softschema", specifier = ">=0.8.0,<0.9" },
+    { name = "softschema", specifier = ">=0.9.0,<0.10" },
     { name = "starlette", marker = "extra == 'browser'", specifier = ">=1.3.1" },
     { name = "strif", specifier = ">=3.1.0" },
     { name = "typer", specifier = ">=0.24.1" },
@@ -1563,7 +1563,7 @@ wheels = [
 
 [[package]]
 name = "softschema"
-version = "0.8.0"
+version = "0.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "frontmatter-format" },
@@ -1572,9 +1572,9 @@ dependencies = [
     { name = "ruamel-yaml" },
     { name = "strif" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8c/ed/554452eab30132f5c9f839a86b9f7d61a23885b05ac46555ed36a552505f/softschema-0.8.0.tar.gz", hash = "sha256:36535db859d3629483082edf4692df624752ad87a2455123b1b5fc7857e4281b", size = 185363, upload-time = "2026-08-30T20:11:41.467Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/26/fd/c30b92416d44a123289c36c54ef8ac16612fcbf502550987fb38896f52aa/softschema-0.9.0.tar.gz", hash = "sha256:9e8126e37c56797d08075da4a7a67b31bbcc0c6b8083687b9964e6ac678de470", size = 267350, upload-time = "2026-10-26T01:40:16.021Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e3/ec/989de4e72a391b17f9518a5b6dff2eb72255f39b41f02eba0d96c60c9f6a/softschema-0.8.0-py3-none-any.whl", hash = "sha256:2f97adb747ac6ec30635e1da551f3ab7bd65ff2f56810cac227c7eb3a6bc36c7", size = 156774, upload-time = "2026-08-30T20:11:42.574Z" },
+    { url = "https://files.pythonhosted.org/packages/ee/48/a796673911aa1389fb5aa9894e81e57d81652dbf5f9f672fe147ee1d1fed/softschema-0.9.0-py3-none-any.whl", hash = "sha256:96aab676e7ffe378d7f02b4da6392635c0d13b2c30d5591b914f16609f4e5fff", size = 206352, upload-time = "2026-10-26T01:40:17.005Z" },
 ]
 
 [[package]]

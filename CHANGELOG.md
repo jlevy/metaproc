@@ -7,6 +7,16 @@ development series.
 
 ## [Unreleased][unreleased]
 
+### Changed
+
+- Validation reports use Softschema 0.9 and include each layer’s actual `execution`
+  (`not_run`, `completed`, or `errored`). Built-in model-only checks include the
+  `document-enforcement-via-model-only` advisory.
+  Execution remains unknown in retained reports without that evidence.
+- YAML and frontmatter utilities require frontmatter-format 0.5, whose readers use
+  guarded C-parser paths when available and fall back to the pure parser.
+  Its writers retain deterministic pure-Python emitters.
+
 ## [0.5.0][] - 2026-10-21
 
 ### Added
