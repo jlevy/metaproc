@@ -3,13 +3,17 @@ type: is
 id: is-01m5x6qsqqtjxt5m417w8z7y7c
 title: "PR 117 Q1-Q7: signal-exit registration, outcome snapshot and live ledger"
 kind: bug
-status: open
+status: closed
 priority: 1
-version: 1
+version: 2
 labels: []
 dependencies: []
 created_at: 2026-10-26T22:54:14.263Z
-updated_at: 2026-10-26T22:54:14.263Z
+updated_at: 2026-10-26T23:42:13.820Z
+closed_at: 2026-10-26T23:42:13.820Z
+close_reason: "Fixed on PR #117 at 90e0bb6. Q1: the signal-exit work is registered before the hard-stop handlers are installed, with cleanup if installation fails; boundary-signal regression fails on the previous head with no summary at all. Q2: terminal_error_type carried forward from the recorded outcome. Q4: the body publishes one frozen outcome-and-error snapshot at each resolution point. Q5/Q6: owner-aware lock plus an in-process lease handoff for signal-exit publication. Q7: write_events=False on the signal path, with an inode regression. Q3 answered on its thread: the mark must stay lock-free, and the durable record plus the under-lock comparison is what makes it safe. Every thread replied to; six of seven resolved, Q3 left open for the owner's judgement on that design decision."
+resolution: null
+duplicate_of: null
 ---
 Qodo review on PR #117, 2026-10-26.
 

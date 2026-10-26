@@ -3,13 +3,17 @@ type: is
 id: is-01m5x6qhmm2d8cb2d3pvf6mvba
 title: "PR 117 A1-A4: one causal-outcome authority for run reports"
 kind: bug
-status: open
+status: closed
 priority: 1
-version: 1
+version: 2
 labels: []
 dependencies: []
 created_at: 2026-10-26T22:54:05.971Z
-updated_at: 2026-10-26T22:54:05.971Z
+updated_at: 2026-10-26T23:42:03.268Z
+closed_at: 2026-10-26T23:42:03.268Z
+close_reason: "Fixed on PR #117 at 90e0bb6: .state/finalization-outcome.json as the single causal-outcome authority (written only by a launch that observed its outcome), owner-aware finalization lock with ownership-safe release and an in-process handoff for signal-exit work, and Metabrowser plus resource-report recovery routed through infer_causal_outcome. Three further defects found in this round's own work were fixed in it: a recovery-written record made its inference permanent (15e2855), the lock used a different liveness convention from the orchestrator lease (66183d8), and lock reclaim followed a symlinked lock path and spun on a failed reclaim (90e0bb6). Regressions in tests/test_finalization_outcome.py, test_finalization_lock.py, test_mkdir_lock.py, test_metabrowser_api_resources.py and test_signal_exit_resource_summary.py. make verify green: 5718 passed, 15 skipped. PR left open for the owner to land."
+resolution: null
+duplicate_of: null
 ---
 Senior review A on PR #117 found four High findings sharing one root cause: resource-usage-summary.md served both as a signal's durable outcome record and as status's optimistic publication token, and the publish lock did not exclude.
 
