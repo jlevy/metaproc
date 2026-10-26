@@ -48,6 +48,21 @@ metaproc gcp --help
 
 The base installation remains independent of Google Cloud packages and credentials.
 
+### Optional YAML C extension
+
+Metaproc does not install `ruamel.yaml.clib`. When the extension is present, the
+supported frontmatter-format and Softschema releases use their checked C parser on
+compatible inputs and fall back to the pure parser for guarded syntax or parser errors.
+Their public `yaml_parser_mode()` functions report `c-first` or `pure` for the current
+environment. `FRONTMATTER_FORMAT_PURE_YAML=1` and `SOFTSCHEMA_PURE_YAML=1` force the
+corresponding reader to use the pure parser.
+
+Frontmatter-format’s YAML factories and Metaproc’s pool writers keep deterministic
+pure-Python emitters with or without the extension.
+See the
+[YAML I/O gotchas](../src/metaproc/docs/arch-file-io-utilities.md#frontmatter_format-gotchas)
+for the writer/reader boundary.
+
 ## Run a Source Checkout
 
 Before a version is published, or when developing locally, run the checked-out source

@@ -73,6 +73,20 @@ class MetaprocEnv(EnvEnum):
     METAPROC_GCP_RUN_CMD = optional(
         "Serialized JSON command used by the `gcp-run` entrypoint. Set by the dispatcher."
     )
+    METAPROC_GCP_RUN_CONSOLE_PATH = optional(
+        "File a `gcp-run` job's console is appended to, on the job's run-storage mount. "
+        "Set by the dispatcher.",
+        "/mnt/filestore/logs/gcp-run/<job-id>/console.log",
+    )
+    METAPROC_GCP_RUN_LIVE_GCS = optional(
+        "GCS prefix of a `gcp-run` job's live view (console tail, status, run status). "
+        "Set by the dispatcher.",
+        "gs://<your-gcs-bucket>/gcp-run/<job-id>/live",
+    )
+    METAPROC_GCP_RUN_WATCH = optional(
+        "Comma-separated run directories whose `metaproc status` a `gcp-run` job's live "
+        "view keeps current. Set by the dispatcher."
+    )
     METAPROC_GCP_SECRET_REFS_JSON = optional(
         "Dispatcher-owned JSON mapping of runtime env names to Secret Manager version refs."
     )

@@ -213,8 +213,48 @@ MPL-2.0 license, the Python `>=3.7` floor, and the empty dependency metadata of
 transitive growth. Drop the pin at the first ordinary relock after 2026-11-03, when the
 release clears the 14-day window on its own.
 
+`opentelemetry-api` is locked at `1.45.1`, replacing `1.43.0`, without an advisory
+waiver. It fixes `GHSA-xcq7-p3pf-p88h`, unbounded `tracestate` parsing.
+Metaproc does not import OpenTelemetry; it arrives transitively through the Google Cloud
+client libraries of the `gcp` extras.
+The [PyPI release](https://pypi.org/project/opentelemetry-api/1.45.1/) uploaded its
+wheel and source distribution on 2026-10-06, more than 14 days before adoption, so the
+ordinary cool-off admits it; PyPI reports no provenance bundle for the wheel.
+The package keeps the Apache-2.0 license, the Python `>=3.10` floor and the
+`typing-extensions>=4.5.0` dependency of `1.43.0`, so the lock change replaces only its
+version and artifact records, with no transitive growth.
+
 Re-review a waiver whenever the closure changes such that the affected code could become
 reachable.
+
+## Native YAML Emitter Test Dependency
+
+The isolated `make test-yaml-c-emitter` lane uses `ruamel.yaml.clib==0.2.15` to test the
+optional C emitter that the ordinary installation does not provide.
+This is the native implementation used by `ruamel.yaml`; no existing pure-Python
+dependency can exercise that boundary.
+
+The [PyPI release](https://pypi.org/project/ruamel.yaml.clib/0.2.15/) is maintained by
+Anthon van der Neut, points to the
+[ruamel-yaml-clib source](https://sourceforge.net/p/ruamel-yaml-clib/code/ci/default/tree/),
+and carries the MIT license.
+Its reviewed CPython 3.14 wheels for Linux x86_64 (`manylinux_2_17`/`manylinux_2_28`)
+and macOS arm64 were uploaded on 2025-11-16, outside the 14-day cool-off.
+Each contains the native `_ruamel_yaml` extension and distribution metadata, with no
+Python dependencies or install scripts.
+
+[`devtools/requirements-yaml-c-emitter.txt`](devtools/requirements-yaml-c-emitter.txt)
+pins the version and the two PyPI SHA-256 wheel hashes.
+The lane permits binary wheels only and requires matching hashes, so it cannot fall back
+to an unreviewed source build or another platform’s artifact.
+It installs into a separate target directory exposed only to the emitter tests, leaving
+`uv.lock`, production dependencies, and the ordinary suite unchanged.
+The lane fails if the extension or C emitter is unavailable; it tests the actual status,
+scale-state, scale-override, and kill-sentinel writers.
+This lane covers writer bytes.
+The supported frontmatter-format and Softschema releases independently guard their
+C-first readers and fall back to pure parsing; see
+[installation](docs/installation.md#optional-yaml-c-extension).
 
 ## Verification
 

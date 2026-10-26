@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: Cloud Execution
 
-**Date:** 2026-04-12 (last updated 2026-09-23) **Status:** Approved
+**Date:** 2026-04-12 (last updated 2026-10-25) **Status:** Approved
 
 For the overall metaproc framework design, see [metaproc-design.md](metaproc-design.md);
 for the run pool process management subsystem, see [arch-runpool.md](arch-runpool.md).
@@ -542,7 +542,10 @@ Confirm a live container’s effective limits with `gcp resources` (CLI) or by r
 - **`gcp scale <target> --step <step>`**: updates desired worker topology for an active
   fan-out step by writing `scale-state.yaml` and, when possible, reconciling new worker
   jobs immediately.
-- **`gcp logs <target>`**: streams logs from Cloud Logging.
+- **`gcp logs <target>`**: reads a file-console job’s bounded live snapshot, or Cloud
+  Logging for other jobs.
+  `--cloud-logging`, `--include-agent-logs`, and `--errors` select Cloud Logging; file
+  following also stops at terminal Batch state.
   Auto-detects local dir or run-id and uses the same exact-first job resolution.
 - **`gcp cancel <target>`**: cancels all running/queued Batch jobs.
   Auto-detects local dir or run-id and uses the same exact-first job resolution.
@@ -709,7 +712,7 @@ path.
 | --- | --- |
 | `gcp status` | Show orchestrator and worker job states |
 | `gcp scale` | Change desired worker topology for an active cloud fan-out step |
-| `gcp logs` | Stream logs from Cloud Logging |
+| `gcp logs` | Read file-console live views or Cloud Logging |
 | `gcp cancel` | Cancel running/queued Batch jobs |
 | `gcp runs` | List all active metaproc runs |
 | `gcp run` | Run one command or local-backend DAG in a single Batch task |
@@ -733,6 +736,8 @@ path.
 | `cloud/gcp/gcp_run_dispatch.py` | `metaproc gcp run` job builder and Batch submission |
 | `cloud/gcp/gcp_run_entrypoint.py` | `metaproc gcp run` task entrypoint for wheel installation and command execution |
 | `cloud/gcp/gcp_run_logs.py` | Blocking log tail and exit-code propagation |
+| `cloud/gcp/gcp_run_console.py` | Persistent console append, child signal supervision, bounded background live publication and watched-status cache |
+| `cloud/gcp/gcp_run_live.py` | Bounded live-snapshot reader with deployed legacy-writer support |
 | `cloud/gcp/billing.py` | Approximate billable hours from machine type and worker runtime spans |
 
 ### 3.15 `metaproc gcp run`: Single-Task Placement
@@ -772,6 +777,20 @@ A full shipped workspace without editable package installation retains ordinary 
 project resolution.
 The entrypoint runs adapter `bootstrap()` hooks per §2.8 and executes
 the JSON-encoded argv from `METAPROC_GCP_RUN_CMD` with `execvp`.
+
+With the run-storage mount and a shipped wheel, `--console auto` wraps the command in
+`gcp_run_console`, which appends stdout and stderr to
+`<mount>/logs/gcp-run/<job>/console.log`. `--console file` selects that destination
+explicitly. Cloud Logging carries bootstrap output and wrapper heartbeats; the full
+console stays in the file.
+A background publisher writes an atomic tail/count snapshot to the dispatch bucket,
+while an independent renderer caches watched-run status with freshness timestamps.
+`gcp logs <job>` and `gcp status <job> --run-status` read those monitoring copies
+without mounting the storage.
+`--console cloud-logging` keeps the whole console in Cloud Logging and is the auto
+choice without a shipped wheel.
+For bounds, legacy behavior, terminal follow and the live-prefix IAM contract, see
+[Monitoring](cloud-dispatch.runbook.md#6-monitoring).
 
 The default workspace archive excludes both the historical top-level `metaproc/` source
 layout and a `vendor/metaproc` gitlink.

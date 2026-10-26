@@ -217,7 +217,81 @@ cloud-provider listing/logging commands:
 | Which runs are active? | `metaproc gcp runs` |
 | What is the Batch state? | `metaproc gcp status <run-id>` |
 | What are workers logging? | `metaproc gcp logs <run-id> --follow` |
+| What is a `gcp run` job doing, and its watched run? | `metaproc gcp status <job> --run-status` |
 | Stop the run | `metaproc gcp cancel <run-id>` |
+
+A `metaproc gcp run` job that mounts Filestore and ships the current wheel keeps its
+console in a file, as a local run keeps its own: stdout and stderr are appended to
+`<mount>/logs/gcp-run/<job>/console.log`, and Cloud Logging receives only a heartbeat a
+minute, the exit line and the bootstrap output.
+Every minute a background publisher refreshes a bounded live view beside its artifacts
+in the dispatch bucket (`gcp-run/<job>/live/`). One atomic `status.json` snapshot
+(`metaproc:ConsoleLiveSnapshot/0.1`, `snapshot_version: 1`) pairs the console tail and
+its line count.
+The tail contains at most 400 lines and 256 KiB; a byte-truncated line is
+marked as a suffix. Running snapshots expose complete newline-delimited lines; the final
+snapshot includes an unterminated last line exactly once.
+The console file keeps the original bytes.
+An independent serial renderer caches `metaproc status` for each `--watch-run` directory
+at most every five minutes, with a 120-second timeout and 64 KiB output limit per
+render. Cached entries carry their own `updated_at`; a pending or stale render does not
+delay the console heartbeat.
+Distinct watched paths must have different basenames; repeating the same normalized path
+watches it once. `metaproc gcp logs <job>` prints the console tail from that view and
+`--follow` polls it every 15 seconds; `metaproc gcp status <job>` shows its state and
+freshness, and `--run-status` shows cached watched status with its render timestamp.
+A file-console follow also refreshes authoritative Batch state and drains the available
+tail before stopping at a terminal state.
+A missing final snapshot is reported as a lost live record with the Batch outcome; the
+console file may contain later lines.
+Temporary Batch read failures keep polling; ten consecutive failures stop following with
+an error. Queued and scheduled jobs remain followable before their first snapshot.
+
+Publication uses one worker and one coalesced pending snapshot.
+Uploads disable SDK retries, use five-second request timeouts, and stop starting new
+writes after a 30-second publication budget.
+Exit gives the publisher two seconds total to finish; it uses cached watched status and
+starts no final render.
+A slow or unavailable sink can leave a stale view while the command still completes.
+Readers bound snapshot downloads to 4 MiB. Deployed legacy writers without
+`snapshot_version` remain readable with an explicit best-effort warning: their separate
+count and tail objects can come from different updates.
+Oversize legacy tails are rejected rather than downloaded in full.
+The view is a monitoring copy: the persistent console and the run tree are the record.
+`--console file` requests the file destination explicitly.
+`--console cloud-logging` keeps the whole console in Cloud Logging, which is also the
+default for a `--no-wheel` job whose image may predate the wrapper.
+For a file-console job, `--cloud-logging` reads bootstrap and wrapper heartbeat output;
+`--include-agent-logs` also selects Cloud Logging and includes VM agent startup logs.
+Use `metaproc gcp logs <job> --cloud-logging --include-agent-logs` to diagnose a job
+that never reaches its console wrapper.
+`--errors` selects ERROR-and-above Cloud Logging entries; it cannot severity-filter
+plain console text. A mixed selection of file-console and Cloud Logging jobs uses Cloud
+Logging for the selection.
+
+### Live-copy access
+
+The worker service account needs `storage.objects.create` and `storage.objects.delete`
+on its live prefix to replace these objects; Object Creator alone does not allow
+replacement. Operators need `storage.objects.get`, plus `storage.objects.list` when
+discovering legacy watched-status objects.
+Scope these permissions to the intended bucket or managed folder, using a custom role or
+conditional grant where appropriate.
+The bucket contains console text, argv, paths and host metadata, so its readers must
+match the intended log-reader policy.
+See Google’s
+[object permissions](https://docs.cloud.google.com/storage/docs/access-control/iam-permissions#object_permissions)
+and
+[predefined roles](https://docs.cloud.google.com/storage/docs/access-control/iam-roles).
+
+Before unattended deployment, verify these existing grants with a harmless canary under
+the live prefix: write it and overwrite it as the worker identity, then read it and list
+it as the operator identity.
+Remove the canary afterward.
+This is a deployment authorization check, not an IAM change.
+If publication fails, the command continues and Cloud Logging contains
+`live view update failed`; use the bootstrap/heartbeat fallback above while repairing
+live-copy access.
 
 For unattended runs, use the supported automation/monitoring mechanism in the active
 agent environment and have it call these commands.

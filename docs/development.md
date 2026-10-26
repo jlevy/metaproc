@@ -129,6 +129,15 @@ retains historical framework [performance notes](performance-notes.md).
 - Live integration tests under `tests/integration/` and `tests/cloud/` require their
   documented credentials or infrastructure and otherwise skip.
 
+`make test-yaml-c-emitter` runs the emitter comparison tests with a separately
+hash-pinned `ruamel.yaml.clib` wheel and fails if the C implementation is unavailable.
+CI runs this lane on Linux/Python 3.14 alongside the ordinary full suite.
+Its reviewed wheels also support local macOS arm64/Python 3.14 execution.
+The extension lives outside the ordinary import path, so `make test` retains its
+pure-Python environment.
+The native lane checks writer compatibility; the safe C parser’s reader compatibility
+boundary is documented in [installation](installation.md#optional-yaml-c-extension).
+
 The Metabrowser plugin is checked JavaScript validated by Biome and TypeScript.
 Biome does not provide static floating-promise analysis for JavaScript, so this project
 does not yet claim the shared promise-safety lint floor.
