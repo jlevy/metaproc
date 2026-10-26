@@ -78,12 +78,12 @@ test:
 PROJECT_ENV = $(shell $(UV_RUN) python -c 'import sys; print(sys.prefix)')
 
 # Keep the optional native parser off the ordinary suite's import path. This lane
-# checks writer bytes and repair behavior at the guarded native-reader boundary.
+# checks writer bytes, state persistence and repair at the guarded native-reader boundary.
 YAML_C_EMITTER_DIR ?= $(PROJECT_ENV)/yaml-c-emitter
 
 test-yaml-c-emitter: | install
 	$(UV) pip install --python "$(PROJECT_ENV)" --target "$(YAML_C_EMITTER_DIR)" --no-deps --only-binary :all: --require-hashes -r devtools/requirements-yaml-c-emitter.txt
-	METAPROC_REQUIRE_C_EMITTER=1 PYTHONPATH="$(YAML_C_EMITTER_DIR)" $(UV_RUN) pytest -q -n 0 tests/test_pure_safe_emitter.py tests/test_yaml_repair.py
+	METAPROC_REQUIRE_C_EMITTER=1 PYTHONPATH="$(YAML_C_EMITTER_DIR)" $(UV_RUN) pytest -q -n 0 tests/test_pure_safe_emitter.py tests/test_yaml_repair.py tests/test_io.py
 
 # No advisory waivers are active. SUPPLY-CHAIN-SECURITY.md, "Audited Advisory
 # Waivers", owns the rationale and removal condition for any that are added here.
