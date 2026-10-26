@@ -667,3 +667,217 @@ def test_live_exit_is_drained_even_on_the_tenth_unavailable_batch_read(
     )
     assert [call.args[0] for call in out.data.call_args_list] == ["one", "last"]
     assert out.progress.call_args_list[-1].args[0] == "Every followed job has exited."
+
+
+def _storage_unavailable() -> Exception:
+    from google.api_core.exceptions import (  # noqa: PLC0415 -- optional [gcp-batch] dependency
+        ServiceUnavailable,
+    )
+
+    return ServiceUnavailable("fixture: storage unavailable")
+
+
+class _RunningBatchState:
+    def __call__(self, _name: str) -> str:
+        return "RUNNING"
+
+    def close(self) -> None:
+        pass
+
+
+def _bounded_sleep(limit: int) -> Callable[[float], None]:
+    polls = 0
+
+    def sleep(_seconds: float) -> None:
+        nonlocal polls
+        polls += 1
+        assert polls <= limit, f"still following after {limit} polls"
+
+    return sleep
+
+
+@pytest.mark.parametrize("failed_polls", [1, 9])
+def test_transient_live_view_read_errors_do_not_end_a_follow(
+    monkeypatch: pytest.MonkeyPatch, failed_polls: int
+) -> None:
+    class View:
+        reads = 0
+
+        def status(self) -> dict[str, Any]:
+            self.reads += 1
+            if 1 < self.reads <= 1 + failed_polls:
+                raise _storage_unavailable()
+            done = self.reads > 1
+            return {
+                "snapshot_version": 1,
+                "state": "exited" if done else "running",
+                "exit_code": 0 if done else None,
+                "console_lines": 2 if done else 1,
+                "console_tail": "one\ntwo\n" if done else "one\n",
+            }
+
+    monkeypatch.setattr(gcp, "_BatchJobStateReader", _RunningBatchState, raising=False)
+    out = MagicMock()
+    gcp._print_live_logs(
+        [_job("RUNNING")],
+        out=out,
+        limit=10,
+        follow=True,
+        view_factory=lambda _: View(),
+        sleep=_bounded_sleep(failed_polls + 1),
+    )
+    assert [call.args[0] for call in out.data.call_args_list] == ["one", "two"]
+    assert out.progress.call_args_list[-1].args[0] == "Every followed job has exited."
+
+
+def test_repeated_live_view_read_failures_stop_with_an_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class View:
+        reads = 0
+
+        def status(self) -> dict[str, Any]:
+            self.reads += 1
+            if self.reads > 1:
+                raise _storage_unavailable()
+            return {
+                "snapshot_version": 1,
+                "state": "running",
+                "console_lines": 0,
+                "console_tail": "",
+            }
+
+    monkeypatch.setattr(gcp, "_BatchJobStateReader", _RunningBatchState, raising=False)
+    with pytest.raises(CLIError, match="live view of .* after 10 polls"):
+        gcp._print_live_logs(
+            [_job("RUNNING")],
+            out=MagicMock(),
+            limit=10,
+            follow=True,
+            view_factory=lambda _: View(),
+            sleep=_bounded_sleep(10),
+        )
+
+
+@pytest.mark.parametrize("follow", [False, True])
+def test_an_unreadable_first_live_view_read_is_reported_not_raised(
+    monkeypatch: pytest.MonkeyPatch, follow: bool
+) -> None:
+    class View:
+        reads = 0
+
+        def status(self) -> dict[str, Any]:
+            self.reads += 1
+            if self.reads == 1:
+                raise _storage_unavailable()
+            return {
+                "snapshot_version": 1,
+                "state": "exited",
+                "exit_code": 0,
+                "console_lines": 1,
+                "console_tail": "only\n",
+            }
+
+    monkeypatch.setattr(gcp, "_BatchJobStateReader", _RunningBatchState, raising=False)
+    out = MagicMock()
+    gcp._print_live_logs(
+        [_job("RUNNING")],
+        out=out,
+        limit=10,
+        follow=follow,
+        view_factory=lambda _: View(),
+        sleep=_bounded_sleep(1),
+    )
+    messages = [call.args[0] for call in out.progress.call_args_list]
+    assert messages[0].startswith("live view unreadable: ")
+    assert "storage unavailable" in messages[0]
+    printed = [call.args[0] for call in out.data.call_args_list]
+    if follow:
+        assert printed == ["only"]
+        assert messages[-1] == "Every followed job has exited."
+    else:
+        assert printed == [] and len(messages) == 1
+
+
+def test_an_unsupported_snapshot_version_is_an_operator_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = json.dumps({"snapshot_version": 2, "state": "running"}).encode()
+
+    class Blob:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def exists(self, **kwargs: Any) -> bool:
+            return self.name.endswith(console.LIVE_STATUS_NAME)
+
+        def download_as_bytes(self, *, start: int, end: int, **kwargs: Any) -> bytes:
+            return record[start : end + 1]
+
+    client = SimpleNamespace(bucket=lambda _: SimpleNamespace(blob=Blob))
+    view = gcp_run_live.LiveView("gs://offline/live", client_factory=lambda: client)
+    with pytest.raises(CLIError, match="unsupported live snapshot version 2; upgrade metaproc"):
+        view.status()
+    monkeypatch.setattr(gcp, "_BatchJobStateReader", _RunningBatchState, raising=False)
+    with pytest.raises(CLIError, match="unsupported live snapshot version 2"):
+        gcp._print_live_logs(
+            [_job("RUNNING")],
+            out=MagicMock(),
+            limit=10,
+            follow=True,
+            view_factory=lambda _: view,
+            sleep=_bounded_sleep(0),
+        )
+
+
+def test_wrapper_exit_stops_a_watched_status_render_in_flight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pid_file = tmp_path / "render.pid"
+    # Stands in for the interpreter that runs `metaproc status`: it records its PID and
+    # outlives the workload unless the wrapper stops it.
+    fake_python = tmp_path / "fake-python"
+    fake_python.write_text(f'#!/bin/sh\necho $$ > "{pid_file}"\nexec sleep 30\n')
+    fake_python.chmod(0o755)
+    # The workload exits only after the render has started.
+    workload = [
+        sys.executable,
+        "-c",
+        textwrap.dedent(
+            f"""
+            import os, time
+            deadline = time.monotonic() + 10
+            while not os.path.exists({str(pid_file)!r}) and time.monotonic() < deadline:
+                time.sleep(0.01)
+            time.sleep(0.1)
+            """
+        ),
+    ]
+    monkeypatch.setattr(console, "FINALIZE_GRACE_SECONDS", 0.1, raising=False)
+    monkeypatch.setattr(sys, "executable", str(fake_python))
+    settings = console.ConsoleSettings(
+        console_path=tmp_path / "console.log",
+        heartbeat_s=0.05,
+        watch_dirs=(tmp_path / "run-a",),
+    )
+    pid = 0
+    try:
+        code = console.run_with_console(workload, settings, sink=Sink(), stdout=io.StringIO())
+        assert code == 0
+        assert pid_file.exists(), "the watched-status render never started"
+        pid = int(pid_file.read_text())
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            pytest.fail("the watched-status render outlived the wrapper")
+    finally:
+        if pid:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
