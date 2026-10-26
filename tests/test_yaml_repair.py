@@ -21,6 +21,62 @@ from metaproc.io import fmf_read
 
 class TestRepairFrontmatterFile:
     @pytest.mark.parametrize("pure", [False, True], ids=["native-preferred", "forced-pure"])
+    @pytest.mark.parametrize(
+        "siblings",
+        [
+            "  sources: [https://example.com/a, {label: hi}]\n  mapping: {label: hi}\n",
+            "  literal: |\n    fact: Name: value\n",
+            "  folded: >\n    fact: Name: value\n",
+            '  quoted: "Name: value" # retained comment\n',
+            '  escaped: "Name: \\"value\\"" # retained comment\n',
+            "  shared: &shared {label: hi}\n  alias: *shared\n",
+            "  shared: &shared hi\n  sources: [*shared, {label: hi}]\n",
+        ],
+    )
+    def test_repair_preserves_valid_sibling_context(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pure: bool, siblings: str
+    ) -> None:
+        if pure:
+            monkeypatch.setenv("FRONTMATTER_FORMAT_PURE_YAML", "1")
+        else:
+            monkeypatch.delenv("FRONTMATTER_FORMAT_PURE_YAML", raising=False)
+        if os.environ.get("METAPROC_REQUIRE_C_EMITTER") == "1":
+            assert yaml_parser_mode() == ("pure" if pure else "c-first")
+        record = tmp_path / "record.md"
+        original = (
+            "---\nrecord:\n"
+            + siblings
+            + "  detail: Strong result (Note: actually Q1)\n---\n# Body\n"
+        )
+        expected = original.replace(
+            "detail: Strong result (Note: actually Q1)",
+            'detail: "Strong result (Note: actually Q1)"',
+        )
+        record.write_text(original)
+        assert repair_frontmatter_file(record) is True
+        assert record.read_text() == expected
+        assert fmf_read(record)[0] == "# Body\n"
+
+    @pytest.mark.parametrize("count, repaired", [(8, True), (9, False)])
+    def test_repair_budget_is_atomic(self, tmp_path: Path, count: int, repaired: bool) -> None:
+        record = tmp_path / "record.md"
+        original = (
+            "---\nrecord:\n"
+            + "".join(
+                f"  detail_{index}: Strong result (Note: actually Q1)\n" for index in range(count)
+            )
+            + "---\n# Body\n"
+        )
+        record.write_text(original)
+        assert repair_frontmatter_file(record) is repaired
+        if repaired:
+            _, meta = fmf_read(record)
+            assert meta is not None
+            assert list(meta["record"].values()) == ["Strong result (Note: actually Q1)"] * count
+        else:
+            assert record.read_text() == original
+
+    @pytest.mark.parametrize("pure", [False, True], ids=["native-preferred", "forced-pure"])
     def test_preserves_valid_flow_collections(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pure: bool
     ) -> None:

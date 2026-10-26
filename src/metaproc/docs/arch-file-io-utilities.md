@@ -209,6 +209,10 @@ Two engine paths select their parser or serializer behavior explicitly:
   after heuristic repair.
   Documents the supported reader already accepts keep their original bytes and values; a
   native-parser rejection alone does not trigger repair.
+  For malformed input, only the parser-identified failing scalar is quoted, preserving
+  valid siblings and their YAML context.
+  Repair stops after eight corrections; unsupported or still-invalid input is left
+  unchanged, with no partial write.
 - **`metaproc/engine/schema_conform.py`** builds its serializer through the curated
   `new_yaml`, but in **round-trip** mode (`typ="rt"`) rather than the default `safe`,
   and reconfigures it: `allow_aliases=True` so an author’s anchor is not expanded into a

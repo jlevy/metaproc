@@ -46,9 +46,15 @@ from pathlib import Path
 
 from frontmatter_format import from_yaml_string
 from ruamel.yaml.error import YAMLError as RuamelYAMLError
+from ruamel.yaml.parser import ParserError
+from ruamel.yaml.scanner import ScannerError
 from strif import atomic_output_file
 
 log = logging.getLogger(__name__)
+
+# Best-effort repair must not repeatedly parse a large document once per field.
+# Eight corrections allow ordinary agent mistakes while bounding full-document work.
+_MAX_SCALAR_REPAIRS = 8
 
 
 def _ruamel_safe_load(text: str) -> None:
@@ -133,8 +139,9 @@ def repair_frontmatter_file(path: Path) -> bool:
 
     Tries to parse the frontmatter with the downstream validator's guarded
     safe reader. If parsing succeeds, returns False (no
-    repair needed). If parsing fails, attempts to quote problematic values
-    and writes the repaired content back, then re-verifies.
+    repair needed). On a syntax error, quotes only the scalar on the parser's
+    failing line and rechecks the full document. At most eight corrections are
+    attempted. Unsupported or over-budget input remains byte-for-byte unchanged.
 
     Returns True if a repair was applied, False otherwise.
     """
@@ -152,40 +159,35 @@ def repair_frontmatter_file(path: Path) -> bool:
 
     frontmatter = content[4 : end_idx + 1]  # between the --- markers
 
-    # Valid frontmatter needs no repair, including documents the guarded reader
-    # handles through its pure-parser fallback.
-    try:
-        _ruamel_safe_load(frontmatter)
-        return False
-    except RuamelYAMLError:
-        pass
-
-    # Attempt repair: quote values with problematic colons
+    # The parser's full-document context distinguishes a malformed scalar from
+    # valid flow collections, anchored values, comments and block-scalar bodies.
+    # Never sweep sibling lines merely because one scalar made the document fail.
     lines = frontmatter.split("\n")
-    repaired_lines: list[str] = []
-    changed = False
+    changed_lines: set[int] = set()
+    for _ in range(_MAX_SCALAR_REPAIRS + 1):
+        repaired_frontmatter = "\n".join(lines)
+        try:
+            _ruamel_safe_load(repaired_frontmatter)
+            break
+        except (ParserError, ScannerError) as error:
+            mark = error.problem_mark
+            if mark is None or len(changed_lines) == _MAX_SCALAR_REPAIRS:
+                return False
+            line_index = mark.line
+            if not 0 <= line_index < len(lines) or line_index in changed_lines:
+                return False
+            match = _PROBLEMATIC_VALUE_RE.match(lines[line_index])
+            if match is None or not _value_needs_quoting(match.group(2)):
+                return False
+            prefix = lines[line_index][: match.start(2)]
+            lines[line_index] = f"{prefix}{_quote_value(match.group(2))}"
+            changed_lines.add(line_index)
+        except RuamelYAMLError:
+            # Duplicate keys, unsafe tags and other semantic errors are not
+            # malformed scalars. Refuse without publishing any partial changes.
+            return False
 
-    for line in lines:
-        m = _PROBLEMATIC_VALUE_RE.match(line)
-        if m:
-            prefix = m.group(0)[: m.start(2) - m.start(0)]  # "  key: "
-            value = m.group(2)
-            if _value_needs_quoting(value):
-                repaired_lines.append(f"{prefix}{_quote_value(value)}")
-                changed = True
-                continue
-        repaired_lines.append(line)
-
-    if not changed:
-        return False
-
-    repaired_frontmatter = "\n".join(repaired_lines)
-
-    # Verify the repaired document against the same guarded reader.
-    try:
-        _ruamel_safe_load(repaired_frontmatter)
-    except RuamelYAMLError:
-        log.warning("YAML repair attempted but still fails for %s", path)
+    if not changed_lines:
         return False
 
     # Write repaired content back
