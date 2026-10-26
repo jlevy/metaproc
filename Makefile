@@ -73,12 +73,16 @@ PYTEST_ARGS ?= -n logical
 test:
 	$(UV_RUN) pytest $(PYTEST_ARGS)
 
+# The environment `make install` synced: `.venv`, or UV_PROJECT_ENVIRONMENT when set.
+# Recursive, so it is resolved only when a recipe uses it, after install has run.
+PROJECT_ENV = $(shell $(UV_RUN) python -c 'import sys; print(sys.prefix)')
+
 # Keep the optional native parser off the ordinary suite's import path. Its reader
 # compatibility is a separate dependency concern; this lane checks writer bytes only.
-YAML_C_EMITTER_DIR ?= $(CURDIR)/.venv/yaml-c-emitter
+YAML_C_EMITTER_DIR ?= $(PROJECT_ENV)/yaml-c-emitter
 
 test-yaml-c-emitter: | install
-	$(UV) pip install --python .venv/bin/python --target "$(YAML_C_EMITTER_DIR)" --no-deps --only-binary :all: --require-hashes -r devtools/requirements-yaml-c-emitter.txt
+	$(UV) pip install --python "$(PROJECT_ENV)" --target "$(YAML_C_EMITTER_DIR)" --no-deps --only-binary :all: --require-hashes -r devtools/requirements-yaml-c-emitter.txt
 	METAPROC_REQUIRE_C_EMITTER=1 PYTHONPATH="$(YAML_C_EMITTER_DIR)" $(UV_RUN) pytest -q -n 0 tests/test_pure_safe_emitter.py
 
 # No advisory waivers are active. SUPPLY-CHAIN-SECURITY.md, "Audited Advisory
