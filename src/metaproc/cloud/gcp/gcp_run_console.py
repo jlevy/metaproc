@@ -5,8 +5,8 @@ heartbeat and exit lines, plus bootstrap output from before the wrapper starts.
 A bounded GCS monitoring snapshot carries the tail and its count in one atomic object.
 One daemon publishes coalesced snapshots; another caches watched-run status, refreshed
 at most every five minutes. Neither renderer nor network I/O blocks child supervision.
-The wrapper gives final publication a bounded grace period and never waits for a fresh
-watched-run render at exit.
+The wrapper gives final publication a bounded grace period, never waits for a fresh
+watched-run render at exit, and stops a render that is still running.
 
 The dispatcher runs ``python -m metaproc.cloud.gcp.gcp_run_console -- <cmd>`` and sets:
 
@@ -205,28 +205,57 @@ def read_tail(path: Path, lines: int, end: int | None = None) -> str:
     return _tail_snapshot(path, lines, end).text
 
 
-def render_run_status(run_dir: Path) -> str:
-    """Render a watched run with a time limit and a 64 KiB captured-output limit."""
-    # Private staging prevents capture_output from retaining an unbounded pipe in RAM.
-    with tempfile.TemporaryFile() as output:
-        try:
-            result = subprocess.run(
-                [sys.executable, "-m", "metaproc", "status", str(run_dir)],
-                stdout=output,
-                stderr=subprocess.STDOUT,
-                timeout=RUN_STATUS_TIMEOUT_SECONDS,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            return f"metaproc status {run_dir} timed out after {RUN_STATUS_TIMEOUT_SECONDS:.0f}s\n"
-        output.seek(0)
-        raw = output.read(MAX_RUN_STATUS_BYTES)
-        text = raw.decode("utf-8", errors="replace")
-        if output.read(1):
-            text += "\n[watched status truncated]\n"
-        if result.returncode != 0:
-            text += f"\nmetaproc status exited {result.returncode}\n"
-        return text
+class RunStatusRenderer:
+    """Render watched runs with ``metaproc status``; ``cancel`` stops a render in flight.
+
+    Each render has a time limit and a 64 KiB captured-output limit. After ``cancel``
+    no render starts, so an exiting wrapper leaves no ``metaproc status`` behind.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._process: subprocess.Popen[bytes] | None = None
+        self._cancelled = False
+
+    def __call__(self, run_dir: Path) -> str:
+        # Private staging prevents a pipe from retaining unbounded output in RAM.
+        with tempfile.TemporaryFile() as output:
+            with self._lock:
+                if self._cancelled:
+                    return f"metaproc status {run_dir} not started: the wrapper is exiting\n"
+                process = subprocess.Popen(  # noqa: S603 -- this interpreter, fixed argv
+                    [sys.executable, "-m", "metaproc", "status", str(run_dir)],
+                    stdout=output,
+                    stderr=subprocess.STDOUT,
+                )
+                self._process = process
+            try:
+                returncode = process.wait(timeout=RUN_STATUS_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+                return (
+                    f"metaproc status {run_dir} timed out after {RUN_STATUS_TIMEOUT_SECONDS:.0f}s\n"
+                )
+            finally:
+                with self._lock:
+                    self._process = None
+            output.seek(0)
+            raw = output.read(MAX_RUN_STATUS_BYTES)
+            text = raw.decode("utf-8", errors="replace")
+            if output.read(1):
+                text += "\n[watched status truncated]\n"
+            if returncode != 0:
+                text += f"\nmetaproc status exited {returncode}\n"
+            return text
+
+    def cancel(self) -> None:
+        with self._lock:
+            self._cancelled = True
+            process = self._process
+        if process is not None:
+            # Popen.kill skips a process it has already reaped.
+            process.kill()
 
 
 def _utc_now() -> str:
@@ -288,6 +317,8 @@ class _WatchedRuns:
     def close(self) -> None:
         self._closed.set()
         self._ready.set()
+        if isinstance(self._render, RunStatusRenderer):
+            self._render.cancel()
 
 
 class LiveView:
@@ -299,14 +330,14 @@ class LiveView:
         sink: LiveSink | None,
         argv: Sequence[str],
         stdout: TextIO,
-        run_status: Callable[[Path], str] = render_run_status,
+        run_status: Callable[[Path], str] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._settings = settings
         self._sink = sink
         self._stdout = stdout
         self._clock = clock
-        self._watched = _WatchedRuns(settings, run_status)
+        self._watched = _WatchedRuns(settings, run_status or RunStatusRenderer())
         self._published_runs: dict[str, WatchedRunSnapshot] = {}
         self._failures = 0
         self.record: dict[str, object] = {
@@ -451,7 +482,7 @@ def run_with_console(
     *,
     sink: LiveSink | None,
     stdout: TextIO,
-    run_status: Callable[[Path], str] = render_run_status,
+    run_status: Callable[[Path], str] | None = None,
 ) -> int:
     """Run ``argv`` with its stdout and stderr appended to the console file."""
     console = settings.console_path
