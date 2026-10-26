@@ -62,19 +62,21 @@ Seven exact first-party releases are exempt from the ordinary cool-off for this 
   The release also hardens portable YAML/frontmatter input and adds guarded JSON and
   C-parser paths with a pure-parser fallback.
   Its public `yaml_parser_mode()` reports the effective mode;
-- `frontmatter-format==0.5.0`, adopted under the same owner exemption and required by
-  Softschema 0.9.0. Reviewed against `0.4.0`: same MIT license,
-  `jlevy/frontmatter-format` source repository, Python `>=3.10,<4.0` floor, and sole
-  `ruamel-yaml>=0.18.10` dependency.
-  The used APIs remain available.
+- `frontmatter-format==0.5.1`, adopted under the same owner exemption in the
+  compatibility series required by Softschema 0.9.0. Reviewed against `0.4.0`: same MIT
+  license, `jlevy/frontmatter-format` source repository, Python `>=3.10,<4.0` floor, and
+  sole `ruamel-yaml>=0.18.10` dependency, now excluding `0.19.0`. The lock keeps
+  `0.19.1`. The used APIs remain available.
   It adds guarded C-first readers, a pure-parser fallback and public
   `yaml_parser_mode()`, while keeping pure emitters and instance-local representers and
-  constructors. Both release wheels were non-yanked and matched their PyPI SHA-256
-  digests, and neither contains installation hooks.
+  constructors. The 0.5.1 patch adds unique atomic temporary writes with mode
+  preservation, scalar escaping and a clib-specific native-parser gate.
+  Both release wheels were non-yanked and matched their PyPI SHA-256 digests, and
+  neither contains installation hooks.
   Their runtime modules match the published
   [Softschema](https://github.com/jlevy/softschema/tree/80859868fbfaad952681ba23d38b03aa1efd7045/packages/python/src/softschema)
   and
-  [frontmatter-format](https://github.com/jlevy/frontmatter-format/tree/a9c3dc019b00e618049e710e4ea62351a656dbdd/src/frontmatter_format)
+  [frontmatter-format](https://github.com/jlevy/frontmatter-format/tree/a9e062a1859dc4ad2a68cc8343ca3b8a6c40ca4c/src/frontmatter_format)
   release sources. Only these two package ceilings advance;
 - `metabrowser==0.9.1`, the current release, used by the development and plugin test
   group and by the optional `browser` extra.
