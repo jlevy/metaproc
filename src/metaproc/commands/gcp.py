@@ -52,7 +52,7 @@ from metaproc.cloud.gcp.gcp_run_live import (
 from metaproc.cloud.gcp.gcp_run_logs import (
     MAX_CONSECUTIVE_ERRORS,
     TERMINAL_STATES,
-    _job_state_name,
+    job_state_name,
 )
 from metaproc.commands.helpers import load_process_spec
 from metaproc.config.env_vars import MetaprocEnv
@@ -536,7 +536,14 @@ def gcp_status(
             uri = live_view_uri_of(job)
             if not uri:
                 continue
-            for name, text in LiveView(uri).run_statuses().items():
+            try:
+                run_statuses = LiveView(uri).run_statuses()
+            except Exception as exc:  # noqa: BLE001 -- the live view is a monitoring copy
+                out.progress(
+                    f"Could not read watched-run status for {job.name.rsplit('/', 1)[-1]}: {exc}"
+                )
+                continue
+            for name, text in run_statuses.items():
                 out.data("")
                 out.data(f"── {name} ({job.name.rsplit('/', 1)[-1]}) ──")
                 out.data(text.rstrip("\n"))
@@ -1404,7 +1411,7 @@ class _BatchJobStateReader:
         try:
             if self._client is None:
                 self._client = batch_v1.BatchServiceClient()
-            return _job_state_name(
+            return job_state_name(
                 self._client.get_job(
                     batch_v1.GetJobRequest(name=job_name),
                     timeout=_LIVE_BATCH_REQUEST_SECONDS,
@@ -1436,6 +1443,11 @@ def _print_live_logs(
     ``job_state`` reads the Batch state, and it is read before the view on every poll:
     the wrapper's last update lands before Batch can mark the job ended, so a view read
     after an ended state is the last the job will write.
+
+    View reads make one bounded attempt each. A failed read is reported and retried on
+    the next poll, and the first good read after a failed first read prints the
+    available tail. Ten consecutive failed reads of either Batch state or the view stop
+    the follow with an error; an unsupported snapshot version stops it at once.
     """
     views = [(job.name, view_factory(live_view_uri_of(job))) for job in jobs]
     label = len(views) > 1
@@ -1445,6 +1457,7 @@ def _print_live_logs(
 
     totals: dict[str, int] = {}
     failures: dict[str, int] = {}
+    view_failures: dict[str, int] = {}
     owned_reader = _BatchJobStateReader() if job_state is None else None
     read_state = job_state or owned_reader
 
@@ -1453,12 +1466,27 @@ def _print_live_logs(
             return str(status["console_tail"])
         return (view.tail() or "") if status else ""
 
+    def read_view(view: Any, cursor: int | None) -> tuple[dict[str, Any], str]:
+        """The view's status, and its tail when there is anything past ``cursor``."""
+        status = view.status() or {}
+        wanted = cursor is None or int(status.get("console_lines") or 0) > cursor
+        return status, console_tail(status, view) if wanted else ""
+
     active: list[tuple[str, Any]] = []
     every_exit_recorded = True
     for job, (job_name, view) in zip(jobs, views, strict=True):
         prefix = prefix_of(job_name)
-        batch_state = _job_state_name(job)
-        status = view.status() or {}
+        batch_state = job_state_name(job)
+        try:
+            status, tail = read_view(view, None)
+        except CLIError:
+            raise
+        except Exception as exc:  # noqa: BLE001 -- the live view is a monitoring copy
+            out.progress(f"{prefix}live view unreadable: {exc}")
+            view_failures[job_name] = 1
+            totals[job_name] = 0
+            active.append((job_name, view))
+            continue
         summary = (
             summarize_status(status, batch_state)
             if status
@@ -1471,7 +1499,7 @@ def _print_live_logs(
             out.progress(
                 f"{prefix}Live tail starts inside a long line; the console file holds it in full."
             )
-        lines = tail_lines(console_tail(status, view))
+        lines = tail_lines(tail)
         for line in lines[-limit:] if limit > 0 else lines:
             out.data(f"{prefix}{line}")
         totals[job_name] = int(status.get("console_lines") or 0)
@@ -1492,12 +1520,24 @@ def _print_live_logs(
                 assert read_state is not None
                 batch_state = read_state(job_name)
                 failures[job_name] = 0 if batch_state else failures.get(job_name, 0) + 1
-                status = view.status() or {}
+                try:
+                    status, tail = read_view(view, totals[job_name])
+                except CLIError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 -- retried on the next poll
+                    view_failures[job_name] = view_failures.get(job_name, 0) + 1
+                    log.warning("Could not read the live view of %s: %s", job_name, exc)
+                    if view_failures[job_name] >= MAX_CONSECUTIVE_ERRORS:
+                        raise CLIError(
+                            f"Could not read the live view of {job_name} after "
+                            f"{MAX_CONSECUTIVE_ERRORS} polls; stopped following."
+                        ) from exc
+                    still_running.append((job_name, view))
+                    continue
+                view_failures[job_name] = 0
                 total = int(status.get("console_lines") or 0)
                 if total > totals[job_name]:
-                    fresh, missed = new_tail_lines(
-                        console_tail(status, view), totals[job_name], total
-                    )
+                    fresh, missed = new_tail_lines(tail, totals[job_name], total)
                     if missed:
                         out.progress(
                             f"{prefix}... {missed:,} lines are not in the live view; the "

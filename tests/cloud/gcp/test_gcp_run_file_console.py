@@ -378,8 +378,22 @@ def _live_objects(**record: Any) -> dict[str, str]:
     }
 
 
+class UnavailableClient:
+    """A bucket whose every read fails the way a storage outage does."""
+
+    def bucket(self, _name: str) -> Any:
+        from google.api_core.exceptions import (  # noqa: PLC0415 -- [gcp-batch] extra
+            ServiceUnavailable,
+        )
+
+        def fail(*_args: Any, **_kwargs: Any) -> Any:
+            raise ServiceUnavailable("fixture: storage unavailable")
+
+        return MagicMock(blob=MagicMock(return_value=MagicMock(exists=fail)), list_blobs=fail)
+
+
 def _invoke(
-    args: list[str], *, jobs: list[Any], objects: dict[str, str]
+    args: list[str], *, jobs: list[Any], objects: dict[str, str], storage: Any = None
 ) -> tuple[Any, MagicMock, MagicMock]:
     from metaproc.cli import app  # noqa: PLC0415 -- the full CLI, as an operator runs it
 
@@ -395,7 +409,7 @@ def _invoke(
         patch("google.cloud.logging.Client", return_value=logging_client) as logging_cls,
         patch("metaproc.commands.gcp._query_jobs_by_run_id", return_value=jobs),
         # The live view's own reader, on a fake bucket.
-        patch("google.cloud.storage.Client", return_value=FakeClient(objects)),
+        patch("google.cloud.storage.Client", return_value=storage or FakeClient(objects)),
     ):
         result = CliRunner().invoke(app, args)
     return result, logging_cls, logging_client
@@ -436,6 +450,16 @@ def test_gcp_status_before_the_job_writes_its_view() -> None:
     result, _, _ = _invoke(["gcp", "status", JOB_NAME], jobs=[_batch_job()], objects={})
     assert result.exit_code == 0, result.output
     assert "live: no live view yet" in result.output
+
+
+def test_gcp_status_and_logs_report_an_unreadable_live_view_without_a_traceback() -> None:
+    for args in (["gcp", "status", JOB_NAME, "--run-status"], ["gcp", "logs", JOB_NAME]):
+        result, logging_cls, _ = _invoke(
+            args, jobs=[_batch_job()], objects={}, storage=UnavailableClient()
+        )
+        assert result.exit_code == 0, (args, result.output, result.exception)
+        assert "fixture: storage unavailable" in result.output
+        logging_cls.assert_not_called()
 
 
 def test_gcp_status_of_a_cloud_logging_job_has_no_live_line() -> None:

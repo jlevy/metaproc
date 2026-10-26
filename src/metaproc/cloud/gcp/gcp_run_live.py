@@ -14,6 +14,7 @@ from metaproc.cloud.gcp.gcp_run_console import (
     LIVE_TAIL_NAME,
 )
 from metaproc.cloud.gcp.gcp_run_logs import TERMINAL_STATES
+from metaproc.errors import CLIError
 from metaproc.models.gcp_console_live import (
     LIVE_SNAPSHOT_VERSION,
     MAX_LIVE_OBJECT_BYTES,
@@ -66,7 +67,11 @@ def _read_blob(blob: Any, max_bytes: int) -> str:
 
 @dataclass(frozen=True)
 class LiveView:
-    """One job's monitoring copy; missing objects return ``None``."""
+    """One job's monitoring copy; missing objects return ``None``.
+
+    Each read is one bounded request without SDK retries, so a read can fail on a
+    transient storage error. A caller that follows the view retries on its next poll.
+    """
 
     uri: str
     client_factory: Callable[[], Any] = _default_client
@@ -92,7 +97,10 @@ class LiveView:
         version = record.get("snapshot_version")
         if version is not None:
             if version != LIVE_SNAPSHOT_VERSION:
-                raise ValueError(f"unsupported live snapshot version {version!r}")
+                # Persistent, unlike a failed read: a newer writer published this view.
+                raise CLIError(
+                    f"unsupported live snapshot version {version!r}; upgrade metaproc to read it"
+                )
             return ConsoleLiveSnapshot.model_validate(record).model_dump(mode="json", by_alias=True)
         return record
 

@@ -66,7 +66,7 @@ def _job_id_from_resource_name(resource_name: str) -> str:
     return resource_name.rsplit("/", 1)[-1]
 
 
-def _job_state_name(job: Any) -> str:
+def job_state_name(job: Any) -> str:
     """Read the State enum off a Batch Job; tolerate string / .name / Enum repr."""
     state = job.status.state
     name = getattr(state, "name", None)
@@ -183,7 +183,7 @@ def tail_gcp_run_logs(
                     return 1
                 continue
 
-            state = _job_state_name(job)
+            state = job_state_name(job)
             if state != previous_state:
                 out(f"{LOG_PREFIX} state={state}")
                 previous_state = state

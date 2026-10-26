@@ -244,14 +244,15 @@ A file-console follow also refreshes authoritative Batch state and drains the av
 tail before stopping at a terminal state.
 A missing final snapshot is reported as a lost live record with the Batch outcome; the
 console file may contain later lines.
-Temporary Batch read failures keep polling; ten consecutive failures stop following with
-an error. Queued and scheduled jobs remain followable before their first snapshot.
+Temporary Batch or live-view read failures keep polling; ten consecutive failures of
+either stop following with an error, and an unsupported snapshot version stops it at
+once. Queued and scheduled jobs remain followable before their first snapshot.
 
 Publication uses one worker and one coalesced pending snapshot.
 Uploads disable SDK retries, use five-second request timeouts, and stop starting new
 writes after a 30-second publication budget.
-Exit gives the publisher two seconds total to finish; it uses cached watched status and
-starts no final render.
+Exit gives the publisher two seconds total to finish; it uses cached watched status,
+starts no final render and stops a render still in progress.
 A slow or unavailable sink can leave a stale view while the command still completes.
 Readers bound snapshot downloads to 4 MiB. Deployed legacy writers without
 `snapshot_version` remain readable with an explicit best-effort warning: their separate
