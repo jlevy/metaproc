@@ -40,6 +40,8 @@ development series.
 
 ### Fixed
 
+- Task status completion times use the accepted durable attempt’s end time, so resuming
+  a cached task keeps its state bytes unchanged across clock ticks.
 - **Pool status, scale-state, scale-override, and kill-sentinel files are written the
   same with or without ruamel’s C extension.** With `_ruamel_yaml` installed, their safe
   YAML handle switched to libyaml’s emitter, which wraps long values at different

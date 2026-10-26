@@ -709,6 +709,9 @@ def mark_completed_at(
     rather than only in progress output.
     """
     current = _read_or_use_at(state_dir, running_record)
+    terminal = end_status_attempt_at(
+        state_dir, current, disposition=AttemptDisposition.succeeded, anomalies=anomalies
+    )
     record = StatusRecord(
         run_id=current.run_id,
         step_id=current.step_id,
@@ -719,10 +722,7 @@ def mark_completed_at(
         generation=current.generation,
         fence_epoch=current.fence_epoch,
         started_at=current.started_at,
-        completed_at=_now_iso(),
-    )
-    end_status_attempt_at(
-        state_dir, current, disposition=AttemptDisposition.succeeded, anomalies=anomalies
+        completed_at=terminal.ended_at if terminal is not None else _now_iso(),
     )
     write_status_at(state_dir, record)
     return record
@@ -775,6 +775,18 @@ def mark_failed_at(
     so a reader does not have to recover that from ``error``.
     """
     current = _read_or_use_at(state_dir, running_record)
+    terminal = (
+        end_status_attempt_at(
+            state_dir,
+            current,
+            disposition=attempt_disposition,
+            failure_class=failure_class,
+            error=error,
+            output_failures=output_failures,
+        )
+        if attempt_disposition is not None
+        else None
+    )
     record = StatusRecord(
         run_id=current.run_id,
         step_id=current.step_id,
@@ -785,20 +797,11 @@ def mark_failed_at(
         generation=current.generation,
         fence_epoch=current.fence_epoch,
         started_at=current.started_at,
-        completed_at=_now_iso(),
+        completed_at=terminal.ended_at if terminal is not None else _now_iso(),
         error=error,
         failure_class=failure_class,
         output_failures=list(output_failures or []),
     )
-    if attempt_disposition is not None:
-        end_status_attempt_at(
-            state_dir,
-            current,
-            disposition=attempt_disposition,
-            failure_class=failure_class,
-            error=error,
-            output_failures=output_failures,
-        )
     write_status_at(state_dir, record)
     return record
 
@@ -834,6 +837,13 @@ def mark_failed_synthetic_at(
         generation=generation,
         fence_epoch=fence_epoch,
     )
+    if attempt_disposition is not None:
+        durable_attempt = end_attempt_at(
+            state_dir,
+            attempt_id=durable_attempt.attempt_id,
+            disposition=attempt_disposition,
+            error=error,
+        )
     record = StatusRecord(
         run_id=run_id,
         step_id=step_id,
@@ -844,16 +854,9 @@ def mark_failed_synthetic_at(
         generation=durable_attempt.generation,
         fence_epoch=durable_attempt.fence_epoch,
         started_at=durable_attempt.started_at,
-        completed_at=durable_attempt.started_at,
+        completed_at=durable_attempt.ended_at or durable_attempt.started_at,
         error=error,
     )
-    if attempt_disposition is not None:
-        end_attempt_at(
-            state_dir,
-            attempt_id=durable_attempt.attempt_id,
-            disposition=attempt_disposition,
-            error=error,
-        )
     write_status_at(state_dir, record)
     return record
 

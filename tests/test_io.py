@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+from itertools import count
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -56,6 +58,7 @@ from metaproc.paths import (
     ATTEMPTS_SUBDIR,
     COLLECTED_INPUTS_FILE,
     STATE_DIR,
+    STATUS_FILE,
     TASKS_SUBDIR,
     attempt_state_dir,
 )
@@ -304,6 +307,45 @@ class TestMarkTransitions:
         completed = mark_completed_at(tmp_path, running_record=running)
         assert completed.state == "completed"
         assert completed.completed_at is not None
+
+    @pytest.mark.parametrize("transition", ["completed", "failed", "synthetic"])
+    def test_terminal_status_keeps_its_bytes_across_reconciliation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, transition: str
+    ) -> None:
+        run_dir = tmp_path / "run"
+        state_dir = run_dir / STATE_DIR / TASKS_SUBDIR / "leaf"
+        ticks = count()
+        origin = datetime(2026, 1, 1)
+        monkeypatch.setattr(
+            "metaproc.io.state_io._now_iso",
+            lambda: (origin + timedelta(seconds=next(ticks))).isoformat(),
+        )
+        if transition == "synthetic":
+            terminal = mark_failed_synthetic_at(
+                state_dir,
+                run_id="fixture/run",
+                step_id="leaf",
+                item={"step": "leaf"},
+                error="launch failed",
+            )
+        else:
+            running = mark_running_at(
+                state_dir, run_id="fixture/run", step_id="leaf", item={"step": "leaf"}
+            )
+            terminal = (
+                mark_completed_at(state_dir, running_record=running)
+                if transition == "completed"
+                else mark_failed_at(state_dir, running_record=running, error="work failed")
+            )
+        durable = read_attempt_history_at(state_dir)[-1]
+        assert terminal.completed_at == durable.ended_at
+        status_path = state_dir / STATUS_FILE
+        attempt_path = attempt_state_dir(state_dir, durable.attempt_id) / ATTEMPT_FILE
+        original = (status_path.read_bytes(), attempt_path.read_bytes())
+
+        assert reconcile_stale_running(run_dir) == 0
+
+        assert (status_path.read_bytes(), attempt_path.read_bytes()) == original
 
     def test_task_attempt_v01_shape_stays_readable_by_the_previous_release(self, tmp_path):
         """An additive Pydantic field is a format break when the old model forbids extras."""
