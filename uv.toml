@@ -25,11 +25,11 @@ exclude-newer = "14 days"
 # the 14-day window on its own.
 certifi = "2026-10-20T02:25:00Z"
 flowmark-rs = "2026-07-16T00:00:00Z"
-frontmatter-format = "2026-08-01T01:27:00Z"
+# frontmatter-format 0.5.1 is an audited first-party patch. It preserves guarded
+# readers and adds unique atomic writes, mode preservation and scalar escaping.
+frontmatter-format = "2026-10-26T06:27:00Z"
 kpress = "2026-08-31T00:55:00Z"
 metabrowser = "2026-09-01T21:49:00Z"
-# softschema 0.8.0 published 2026-08-30T20:11:42Z. It is an audited first-party
-# exception, carrying the `repair` subcommand (conform an artifact to its declared types,
-# write it, then validate, reporting every change) and an explicit `--profile` override
-# for the frontmatter-md / pure-yaml distinction that was previously left to inference.
-softschema = "2026-08-30T20:12:00Z"
+# softschema 0.9.1 is an audited first-party patch. It requires frontmatter-format
+# 0.5.1 and restricts native parsing to the checked ruamel.yaml.clib implementation.
+softschema = "2026-10-26T06:55:00Z"

@@ -52,6 +52,7 @@ from metaproc.io.templating import (
     render_template,
     strip_template_frontmatter,
 )
+from metaproc.io.yaml_dump import new_dump_yaml
 
 __all__ = [
     "ArtifactDecodeError",
@@ -79,6 +80,7 @@ __all__ = [
     "iter_jsonl_records",
     "iter_text_lines",
     "logical_path",
+    "new_dump_yaml",
     "new_yaml",
     "read_yaml_artifact",
     "read_yaml_file",

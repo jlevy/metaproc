@@ -975,7 +975,8 @@ plus `pool events` to inspect contention.
 | How do several runs compare per item? | `uv run --frozen metaproc operations rollup <run-dir> <run-dir>...` |
 | Which auth labels were used? | `uv run metaproc auth usage <run-dir>` |
 | What is the cloud Batch state? | `uv run metaproc gcp status <run-id>` |
-| What did cloud jobs log? | `uv run metaproc gcp logs <run-id>` |
+| What did cloud jobs log (console live view or Cloud Logging)? | `uv run --frozen metaproc gcp logs <run-id>` |
+| Why did a cloud job fail before starting its console wrapper? | `uv run --frozen metaproc gcp logs <job> --cloud-logging --include-agent-logs` |
 | What do the declared-output checks report? | `uv run --frozen metaproc validate <process.process.md> --step <step-id> --run-root <run-dir> --var KEY=value` |
 | What does one artifact’s registered contract report? | `uv run --frozen metaproc softschema validate <artifact> --schema <contract-id>` |
 
@@ -1005,17 +1006,17 @@ Use `metaproc softschema validate <artifact> --schema <contract-id>` to inspect 
 individual artifact’s registered contract result.
 
 Read each validation layer separately from the overall verdict.
-With the supported SoftSchema 0.8 releases, `structural` and `semantic` each report
-`ok`, `errors`, and `skipped_reason`, and `structural.engine` names the structural
-evaluator type.
-A layer with a `skipped_reason` did not evaluate the payload, so its `ok`
-is the library’s default for that case rather than a verdict.
-These reports carry no execution fields and no other evidence of which evaluators ran.
+With the supported Softschema 0.9 releases, `structural` and `semantic` each report
+`ok`, `execution`, `errors`, and `skipped_reason`, and `structural.engine` names the
+structural evaluator type.
+`execution: completed` means the evaluator returned a verdict; `not_run` means it never
+started evaluating the payload, and `errored` means it started without returning a
+verdict. A layer’s `ok` is an acceptance verdict only when execution completed.
 A schema’s `status: enforced` declares policy and does not prove either evaluator ran.
 Metaproc forwards the installed SoftSchema library’s layer records unchanged.
-When reviewing a retained artifact, preserve that absence of evidence or revalidate the
-artifact, and identify any new result as a review-time check rather than evidence of
-what ran originally.
+Retained reports without execution fields have unknown execution.
+Preserve that absence of evidence or revalidate the artifact, and identify any new
+result as a review-time check rather than evidence of what ran originally.
 
 #### Built-in contract checks
 
@@ -1024,11 +1025,12 @@ The models check types and declared invariants, including cross-field rules; eac
 model’s own extra-field and coercion policies apply.
 The bindings retain `status: enforced` and do not bind an independent JSON Schema.
 
-The model verdict is the `semantic` layer: `ok` and `errors` record acceptance or
-rejection, with no `skipped_reason`. The structural layer reports
-`skipped_reason: inferred_via_model` with `ok: true` because it did not run; its
-`engine: json_schema` label identifies the available engine, not an invocation.
-The report’s `warnings` list is empty.
+The model verdict is the `semantic` layer: `execution: completed`, `ok`, and `errors`
+record acceptance or rejection, with no `skipped_reason`. The structural layer reports
+`execution: not_run`, `skipped_reason: inferred_via_model`, and `ok: true` because it
+did not run; its `engine: json_schema` label identifies the available engine, not an
+invocation. The report includes the `document-enforcement-via-model-only` advisory in
+`warnings`.
 
 A valid result establishes acceptance by the Python model; it does not establish
 independent structural validation or equivalent validation in another language.

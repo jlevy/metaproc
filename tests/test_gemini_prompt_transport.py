@@ -188,6 +188,8 @@ def test_native_supervision_reaps_the_entire_prompt_pipeline(
         import sys
         import time
         from pathlib import Path
+        # Reproduce a slow interpreter start before the worker publishes its PID.
+        time.sleep(1.2)
         child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
         Path(os.environ['OUTPUT']).write_text(f'{os.getpid()} {child.pid}')
         time.sleep(60)
@@ -209,11 +211,11 @@ def test_native_supervision_reaps_the_entire_prompt_pipeline(
     async def run() -> None:
         backend = RecordingBackend()
         task = asyncio.create_task(
-            launch_and_supervise(backend, prepared, timeout_s=1 if stop == "timeout" else 5)
+            launch_and_supervise(backend, prepared, timeout_s=_STOP_TIMEOUT_S)
         )
         ready = tmp_path / "bytes"
         try:
-            for _ in range(200):
+            for _ in range(_STOP_TIMEOUT_S * 100):
                 if ready.exists():
                     break
                 await asyncio.sleep(0.01)

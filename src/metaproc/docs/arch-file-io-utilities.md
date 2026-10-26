@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: File I/O Utilities (`metaproc.io`)
 
-**Date:** 2026-07-26 (last updated 2026-10-20) **Status:** Approved
+**Date:** 2026-07-26 (last updated 2026-10-26) **Status:** Approved
 
 `metaproc.io` is the curated public import surface for downstream callers and shared
 internal use. Every helper documented here is importable directly from `metaproc.io`:
@@ -40,6 +40,7 @@ renderer are local implementations.
 | `from_yaml_string` | `frontmatter_format` | Parse a YAML string |
 | `to_yaml_string` | `frontmatter_format` | Serialize to a YAML string |
 | `new_yaml` | `frontmatter_format` | Custom ruamel YAML handle (advanced) |
+| `new_dump_yaml` | `metaproc.io.yaml_dump` | `new_yaml` handle for dumping that keeps the pure-Python emitter |
 | `fmf_read` | `frontmatter_format` | Read frontmatter MD (body + metadata) |
 | `fmf_read_frontmatter` | `frontmatter_format` | Read frontmatter MD (metadata only) |
 | `fmf_write` | `frontmatter_format` | Write frontmatter MD (atomic) |
@@ -76,6 +77,7 @@ module.
 | Read YAML from string | `metaproc.io.from_yaml_string(s)` |
 | Serialize to string | `metaproc.io.to_yaml_string(value)` |
 | Write YAML file (atomic) | `metaproc.io.write_yaml_file(value, path)` |
+| Dump through a configured handle (e.g. keep explicit nulls) | `metaproc.io.new_dump_yaml(...).dump(value, stream)` |
 | Read state-artifact YAML (plain or compressed) | `metaproc.io.read_yaml_artifact(path)` |
 | Read frontmatter MD (plain or compressed) | `metaproc.io.fmf_read_artifact(path)` |
 | Read frontmatter MD metadata only (plain or compressed) | `metaproc.io.fmf_read_frontmatter_artifact(path)` |
@@ -200,11 +202,17 @@ registered codec is always readable, so mixed-codec run directories are ordinary
 
 Most modules parse YAML and frontmatter through `metaproc.io`. Modules may import
 `ruamel.yaml.YAMLError` directly to catch the dependency’s specific parse failures.
-Two production paths hold a parser handle of their own:
+Two engine paths select their parser or serializer behavior explicitly:
 
-- **`metaproc/engine/yaml_repair.py`** uses `ruamel.yaml.YAML(typ='safe').load(...)`
-  directly because the LLM-output repair path needs the parser handle in strict mode,
-  and the module does a manual `---\n` split before any parser touches the text.
+- **`metaproc/engine/yaml_repair.py`** splits frontmatter manually before calling
+  `frontmatter_format.from_yaml_string` for guarded validity checks, both before and
+  after heuristic repair.
+  Documents the supported reader already accepts keep their original bytes and values; a
+  native-parser rejection alone does not trigger repair.
+  For malformed input, only the parser-identified failing scalar is quoted, preserving
+  valid siblings and their YAML context.
+  Repair stops after eight corrections; unsupported or still-invalid input is left
+  unchanged, with no partial write.
 - **`metaproc/engine/schema_conform.py`** builds its serializer through the curated
   `new_yaml`, but in **round-trip** mode (`typ="rt"`) rather than the default `safe`,
   and reconfigures it: `allow_aliases=True` so an author’s anchor is not expanded into a
@@ -227,8 +235,8 @@ these. The longer version:
 2. **`to_yaml_string` suppresses `None` and empty-dict values by default.** PyYAML’s
    `safe_dump` does not.
    If you need a `None` value to round-trip (e.g., as an explicit `key: null` in the
-   output), use `new_yaml(suppress_vals=())` to get a parser handle that does not
-   suppress, then call its `.dump` method.
+   output), use `new_dump_yaml(suppress_vals=lambda _v: False)` to get a handle that
+   does not suppress, then call its `.dump` method.
 3. **Only `---`, `----`, `<!---`, `#---`, `//---`, `/*---` are valid frontmatter
    delimiters.** Five-dash openers (`-----`) are rejected by the parser.
 4. **Hash-style frontmatter (`#---`) allows `#`-prefixed lines (shebang, PEP 723
@@ -240,6 +248,18 @@ these. The longer version:
    replaced. Low-level YAML helpers expose `allow_aliases=True` when aliases are
    deliberate; `fmf_write` callers can supply raw YAML frontmatter for that advanced
    case.
+6. **YAML dumping handles keep pure-Python emitters.** The supported frontmatter-format
+   `new_yaml()` factory uses pure parsing and emitting even with `_ruamel_yaml`
+   installed. Metaproc’s `new_dump_yaml` takes the same arguments and keeps the pure
+   emitter if a customizer changes it, so output stays deterministic and complete at the
+   end of each dump. `to_yaml_string`, `write_yaml_file`, and `fmf_write` dump in
+   round-trip mode, which always uses the pure emitter.
+   `from_yaml_string`, `read_yaml_file`, and frontmatter readers use the checked C
+   parser on compatible inputs, with guards and parser-error fallback to pure ruamel.
+   Frontmatter-format’s public `yaml_parser_mode()` reports `c-first` or `pure`;
+   `FRONTMATTER_FORMAT_PURE_YAML=1` forces pure parsing.
+   Softschema exposes the same mode API for validation inputs, with
+   `SOFTSCHEMA_PURE_YAML=1` as its control.
 
 If a specific call site relies on any of these behaviors in a non-obvious way, add a
 concise `# NOTE:` that explains why the behavior matters there.

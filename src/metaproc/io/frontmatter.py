@@ -22,7 +22,7 @@ from metaproc.models.runtime import MapItem
 from metaproc.models.usage import UsageEnvelope
 
 # NOTE: read uses typ="safe" — YAML comments are NOT preserved across read-then-write.
-# NOTE: to_yaml_string suppresses None and empty-dict values by default; pass new_yaml(suppress_vals=...) to override.
+# NOTE: to_yaml_string suppresses None and empty-dict values by default; dump with new_dump_yaml(suppress_vals=...) to override.
 # NOTE: only ---, ----, <!---, #---, //---, /*--- are valid frontmatter delimiters; ----- (five dashes) is rejected.
 # NOTE: hash-style (#---) files allow #-prefixed lines (shebang, PEP 723) before the delimiter; other styles do not.
 

@@ -112,7 +112,7 @@ TOPIC_REGISTRY: tuple[Topic, ...] = (
         "cloud-dispatch",
         "cloud-dispatch.runbook",
         "Preparing, submitting, monitoring, and recovering GCP Batch workloads.",
-        1700,
+        2300,
     ),
     Topic(
         "arch-auth",

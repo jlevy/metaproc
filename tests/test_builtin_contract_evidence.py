@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -9,7 +10,7 @@ from typing import Any
 
 import pytest
 from pydantic import BaseModel
-from softschema import SchemaStatus, StructuralResult, validate_artifact
+from softschema import SchemaStatus, validate_artifact
 
 from metaproc.commands.softschema import _artifact_result_payload
 from metaproc.io import fmf_write, to_yaml_string
@@ -190,39 +191,6 @@ def test_builtin_native_artifact_verdict(
         assert not result.semantic.errors
 
 
-@pytest.mark.skipif(
-    "execution" in StructuralResult.__dataclass_fields__,
-    reason="Describes the pinned SoftSchema 0.8 report; replace when the pin moves (mp-3pu3)",
-)
-@pytest.mark.parametrize("case", _CASES, ids=lambda case: case.contract_id)
-@pytest.mark.parametrize("rejected", [False, True], ids=["accepted", "rejected"])
-def test_builtin_model_report_matches_the_pinned_softschema_release(
-    tmp_path: Path, case: BuiltinArtifact, rejected: bool
-) -> None:
-    """The operator reference's built-in contract description matches the pinned library."""
-    path = _write_artifact(tmp_path, case, rejected=rejected)
-    result = validate_artifact(
-        path, contract_id=case.contract_id, registry=PluginRegistryImpl().softschemas
-    )
-    report: dict[str, Any] = _artifact_result_payload(result)
-    assert report["structural"] == {
-        "ok": True,
-        "errors": [],
-        "engine": "json_schema",
-        "skipped_reason": "inferred_via_model",
-    }
-    assert report["semantic"]["ok"] is not rejected
-    assert report["semantic"]["skipped_reason"] is None
-    assert report["warnings"] == []
-
-
-@pytest.mark.skipif(
-    "execution" not in StructuralResult.__dataclass_fields__,
-    reason=(
-        "SoftSchema 0.9 execution evidence is unavailable in the pinned 0.8 dependency; "
-        "unskip when the pin moves (mp-3pu3)"
-    ),
-)
 @pytest.mark.parametrize("case", _CASES, ids=lambda case: case.contract_id)
 @pytest.mark.parametrize("rejected", [False, True], ids=["accepted", "rejected"])
 def test_builtin_model_evidence_survives_report_serialization(
@@ -234,17 +202,23 @@ def test_builtin_model_evidence_survives_report_serialization(
         path, contract_id=case.contract_id, registry=PluginRegistryImpl().softschemas
     )
     report: dict[str, Any] = _artifact_result_payload(result)
+    serialized_report = json.loads(json.dumps(report))
     assert report["status"] == "enforced"
     assert report["outcome"] == ("invalid" if rejected else "valid")
-    assert report["structural"] == {
+    assert serialized_report["structural"] == {
         "ok": True,
         "execution": "not_run",
         "errors": [],
         "engine": "json_schema",
         "skipped_reason": "inferred_via_model",
     }
-    assert asdict(result.semantic)["execution"] == "completed"
+    assert serialized_report["semantic"]["execution"] == "completed"
     assert report["semantic"] == asdict(result.semantic)
+    if rejected:
+        assert any(
+            error["loc"] == list(case.error_location)
+            for error in serialized_report["semantic"]["errors"]
+        )
     assert [warning["code"] for warning in report["warnings"]] == [
         "document-enforcement-via-model-only"
     ]

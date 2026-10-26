@@ -7,8 +7,51 @@ development series.
 
 ## [Unreleased][unreleased]
 
+### Added
+
+- **A `gcp run` job keeps its console in a file.** With the Filestore mount and the
+  shipped wheel, the command runs inside `metaproc.cloud.gcp.gcp_run_console`, which
+  appends its output to `<mount>/logs/gcp-run/<job>/console.log` and sends Cloud Logging
+  only a start line, a heartbeat a minute and the exit line.
+  A bounded atomic live view in the dispatch bucket pairs the console tail and its
+  cursor on each heartbeat.
+  A background worker caches the `metaproc status` of each `--watch-run` directory every
+  five minutes, so `metaproc gcp logs <job>` and
+  `metaproc gcp status <job> --run-status` read the job without mounting Filestore.
+  `--console file` requests the file explicitly; `--console cloud-logging` keeps the
+  whole stream in Cloud Logging, which stays the default for `--no-wheel` jobs.
+  Live following also stops at terminal Batch state when a final upload is missing.
+
+### Changed
+
+- Validation reports use Softschema 0.9 and include each layer’s actual `execution`
+  (`not_run`, `completed`, or `errored`). Built-in model-only checks include the
+  `document-enforcement-via-model-only` advisory.
+  Execution remains unknown in retained reports without that evidence.
+- YAML and frontmatter utilities require frontmatter-format 0.5, whose readers use
+  guarded C-parser paths when available and fall back to the pure parser.
+  Its writers retain deterministic pure-Python emitters.
+- **A mapped composite opens as many item scopes as the run’s ceiling admits.** It used
+  to open at most 32 at once whatever `--max-concurrency` said, so a run with a ceiling
+  of 80 or 160 never had more than 32 items’ leaves competing for the pool.
+  Scopes hold no admission capacity of their own, so they now follow the run’s ceiling,
+  with 32 as the floor, and the pool’s memory and provider admission still bound the
+  work in flight.
+
 ### Fixed
 
+- Frontmatter repair preserves valid flow collections accepted by the guarded reader,
+  including URL values that ruamel’s raw C scanner rejects.
+- Task status completion times use the accepted durable attempt’s end time, so resuming
+  a cached task keeps its state bytes unchanged across clock ticks.
+- **Pool status, scale-state, scale-override, and kill-sentinel files are written the
+  same with or without ruamel’s C extension.** With `_ruamel_yaml` installed, their safe
+  YAML handle switched to libyaml’s emitter, which wraps long values at different
+  points. They now dump through `metaproc.io.new_dump_yaml`, a `new_yaml` handle that
+  keeps the pure-Python emitter, so the bytes match what a process without the extension
+  writes. The supported frontmatter-format release also supplies guarded C-first readers
+  and pure-parser fallback; see
+  [installation](docs/installation.md#optional-yaml-c-extension).
 - **A run stopped by SIGTERM, SIGHUP or SIGQUIT keeps its usage summaries.** The hard
   reaper that kills a `run-process` orchestrator’s descendants on SIGTERM re-raises the
   signal under its default disposition, so the run’s `finally`, and with it the only
@@ -29,13 +72,34 @@ development series.
   `metaproc status` rebuilds an incomplete summary like a missing one, and on a running
   resume it writes the summary an earlier launch left missing or incomplete (SIGKILL, or
   a rollup that outran the bound) without rewriting the live
-  `.logs/resource-events.jsonl`. `incomplete` is serialized only when true, so complete
-  summaries and `resources.json` keep their shape.
-  Status never replaces a summary the orchestrator writes while status reads the run’s
-  evidence: writers publish holding `.state/finalization.lock`, and status publishes
-  only if the resource summary is still the one it found and the operations summary is
-  still absent. `metaproc kill` waits up to 11 seconds, not 3, for the orchestrator to
-  exit.
+  `.logs/resource-events.jsonl`, which the signal-exit work also leaves alone while the
+  psutil samplers still append to it. `incomplete` is serialized only when true, so
+  complete summaries and `resources.json` keep their shape.
+  `metaproc kill` waits up to 11 seconds, not 3, for the orchestrator to exit; with
+  `--force` and a pool it still SIGTERMs the orchestrator, so the summaries are written,
+  and only an orchestrator killed before its first pool writes nothing.
+- **A run records how it ended where no later writer can replace it.**
+  `resources.json` and `resource-usage-summary.md` are projections, each replaced whole,
+  so a publication interrupted between them left one of each launch and recovery could
+  read an older complete summary as the run’s outcome.
+  How the latest launch ended is now recorded on its own in
+  `.state/finalization-outcome.json`, written first in every publication and before
+  anything else on a hard stop.
+  `metaproc status`, `metaproc resource-report` and the Metabrowser resource view all
+  read it, so a rebuilt summary keeps the state and the signal that ended the run, and a
+  run stopped by SIGTERM is no longer reported as failed or as an earlier launch’s
+  completion. A recovering writer only fills in a record that is absent, and artifacts
+  that disagree with the record read as needing recovery.
+  A run finalized before this record falls back to the newer of its two projections.
+  Every writer of the three files — terminal finalization, signal-exit work, status
+  recovery, `resource-report`, Metabrowser recovery and `operations summary --write` —
+  publishes holding `.state/finalization.lock`, and status publishes only if the summary
+  and the recorded outcome are still the ones it found.
+  That lock now excludes: its holder records a PID and host inside it, a publisher on
+  the same host reclaims it only once that PID is gone, age alone reclaims only a holder
+  this host cannot probe (after 5 minutes, not 5 seconds), release cannot remove another
+  publisher’s lock, and signal-exit work inherits a lock its own process holds instead
+  of waiting on the thread its signal interrupted.
 
 ## [0.5.0][] - 2026-10-21
 

@@ -111,6 +111,26 @@ externally-owned payloads (arena cache).
 The invocation sidecar is misaligned with the policy and is planned to convert to
 `*.invocation.yaml` — see **Pending renames** below.
 
+### Cloud console monitoring
+
+`gcp run` keeps its console outside individual run directories because one Batch job may
+contain several runs.
+The console file is an append stream at `<mount>/logs/gcp-run/<job>/console.log`.
+`gcp_run_console.py` owns the append handle and child process group; operators with the
+mount read the complete bytes.
+
+The same writer atomically replaces `gcp-run/<job>/live/status.json` in the dispatch
+bucket.
+Its typed `ConsoleLiveSnapshot` (`metaproc:ConsoleLiveSnapshot/0.1`) contains the
+console’s bounded tail, matching byte boundary and logical line count, truncation flags,
+child state and cached watched-run status with per-entry timestamps.
+`gcp_run_live.py`, `gcp logs`, and `gcp status` read this monitoring copy.
+The `console-tail.txt` and `runs/<basename>.txt` objects are compatibility copies for
+older readers; separate reads of those copies do not form a transaction.
+Current readers recognize `snapshot_version: 1` and consume one status object instead.
+See [Monitoring](cloud-dispatch.runbook.md#6-monitoring) for bounds, permissions,
+cadence and recovery when the final update is absent.
+
 ## Human reports (softschema MD)
 
 YAML frontmatter (typed envelope) plus markdown body.

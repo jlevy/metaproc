@@ -1,0 +1,6 @@
+# Isolated emitter-test dependency; never installed by make install or into site-packages.
+# Reviewed PyPI 0.2.15 wheels, published 2025-11-16; see SUPPLY-CHAIN-SECURITY.md.
+# CPython 3.14: Linux x86_64 (manylinux) and macOS arm64, respectively.
+ruamel.yaml.clib==0.2.15 \
+    --hash=sha256:2812ff359ec1f30129b62372e5f22a52936fac13d5d21e70373dbca5d64bb97c \
+    --hash=sha256:480894aee0b29752560a9de46c0e5f84a82602f2bc5c6cde8db9a345319acfdf
