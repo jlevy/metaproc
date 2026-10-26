@@ -30,6 +30,6 @@ flowmark-rs = "2026-07-16T00:00:00Z"
 frontmatter-format = "2026-10-26T06:27:00Z"
 kpress = "2026-08-31T00:55:00Z"
 metabrowser = "2026-09-01T21:49:00Z"
-# softschema 0.9.0 is an audited first-party release. It requires explicit execution
-# evidence in validation results and adds guarded portable YAML/JSON readers.
-softschema = "2026-10-26T01:41:00Z"
+# softschema 0.9.1 is an audited first-party patch. It requires frontmatter-format
+# 0.5.1 and restricts native parsing to the checked ruamel.yaml.clib implementation.
+softschema = "2026-10-26T06:55:00Z"

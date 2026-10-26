@@ -51,19 +51,22 @@ version number.
 
 Seven exact first-party releases are exempt from the ordinary cool-off for this release:
 
-- `softschema==0.9.0`, adopted with the owner’s explicit first-party cool-off exemption
+- `softschema==0.9.1`, adopted with the owner’s explicit first-party cool-off exemption
   on 2026-10-25. Reviewed against `0.8.0`: same MIT license, `jlevy/softschema` source
   repository, Python `>=3.11,<4.0` floor, and five direct dependencies.
-  Its frontmatter-format floor rises to `>=0.5.0`; no transitive dependencies are added.
+  Its frontmatter-format floor rises to `>=0.5.1`; no transitive dependencies are added.
   Validation result constructors require explicit `execution` evidence, and model-only
   enforcement produces an advisory.
   Metaproc forwards both native layer records and warnings without constructing results
   or inventing execution evidence for retained reports.
   The release also hardens portable YAML/frontmatter input and adds guarded JSON and
   C-parser paths with a pure-parser fallback.
-  Its public `yaml_parser_mode()` reports the effective mode;
+  Its public `yaml_parser_mode()` reports the effective mode.
+  The 0.9.1 patch restricts native parsing to the checked clib implementation, fixes
+  `doctor` runner suggestions and excludes ruamel.yaml `0.19.0`; the lock keeps
+  `0.19.1`. The validation-result API and bundled schemas are unchanged;
 - `frontmatter-format==0.5.1`, adopted under the same owner exemption in the
-  compatibility series required by Softschema 0.9.0. Reviewed against `0.4.0`: same MIT
+  compatibility series required by Softschema 0.9.1. Reviewed against `0.4.0`: same MIT
   license, `jlevy/frontmatter-format` source repository, Python `>=3.10,<4.0` floor, and
   sole `ruamel-yaml>=0.18.10` dependency, now excluding `0.19.0`. The lock keeps
   `0.19.1`. The used APIs remain available.
@@ -74,7 +77,7 @@ Seven exact first-party releases are exempt from the ordinary cool-off for this 
   Both release wheels were non-yanked and matched their PyPI SHA-256 digests, and
   neither contains installation hooks.
   Their runtime modules match the published
-  [Softschema](https://github.com/jlevy/softschema/tree/80859868fbfaad952681ba23d38b03aa1efd7045/packages/python/src/softschema)
+  [Softschema](https://github.com/jlevy/softschema/tree/c01e5fd85aa51e7d3b32621c964fd8335ebf115c/packages/python/src/softschema)
   and
   [frontmatter-format](https://github.com/jlevy/frontmatter-format/tree/a9e062a1859dc4ad2a68cc8343ca3b8a6c40ca4c/src/frontmatter_format)
   release sources. Only these two package ceilings advance;
