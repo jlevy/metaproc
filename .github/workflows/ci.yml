@@ -98,7 +98,7 @@ jobs:
         if: matrix.yaml == 'pure'
         run: make test
 
-      - name: Test native YAML emitter compatibility
+      - name: Test native YAML writers and repair readers
         if: matrix.yaml == 'c'
         run: make test-yaml-c-emitter
 

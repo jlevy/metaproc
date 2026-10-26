@@ -1,12 +1,10 @@
 """YAML handles for dumping that keep ruamel's pure-Python emitter.
 
-When ruamel's optional C extension (``_ruamel_yaml``) is importable, every
-``YAML(typ="safe")`` handle, including the default ``new_yaml()``, emits through
-libyaml's ``CEmitter``. That emitter breaks long plain scalars at different points than
-the pure ``Emitter``, so the same values serialize to different bytes depending on what
-is installed, and it does not flush the output stream when a dump ends, so a dump to a
-handle that is never flushed or closed leaves an empty file. Metaproc's own safe writers
-use :func:`new_dump_yaml`, which keeps the pure emitter in either environment.
+Raw ``ruamel.yaml.YAML(typ="safe")`` handles can select libyaml's ``CEmitter`` when
+the optional C extension is installed. Its wrapping and flushing differ from the pure
+emitter. Metaproc's writers use :func:`new_dump_yaml` to name the deterministic dump
+contract. The supported frontmatter-format factory already uses pure emitters; this
+factory preserves its options and keeps the pure emitter if a customizer changes it.
 """
 
 from __future__ import annotations

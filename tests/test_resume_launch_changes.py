@@ -24,6 +24,8 @@ import json
 import logging
 import textwrap
 from collections.abc import Mapping
+from datetime import datetime, timedelta
+from itertools import count
 from pathlib import Path
 from typing import Any
 
@@ -987,6 +989,7 @@ def test_a_composite_child_scope_holds_the_inputs_it_binds(tmp_path: Path) -> No
 
 def test_a_child_binding_holds_under_a_parent_value_the_parent_only_records(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A parent that records a value still cannot move it inside a child that binds it.
 
@@ -996,6 +999,13 @@ def test_a_child_binding_holds_under_a_parent_value_the_parent_only_records(
     step then fails with the child's refusal before the scope is touched, and the run
     does not continue under the new value.
     """
+    # Crossing a clock tick must not rewrite an already completed child's status.
+    ticks = count()
+    origin = datetime(2026, 1, 1)
+    monkeypatch.setattr(
+        "metaproc.io.state_io._now_iso",
+        lambda: (origin + timedelta(seconds=next(ticks))).isoformat(),
+    )
     parent = _write_composite_process(
         tmp_path / "proc",
         with_value="{{AS_OF}}",

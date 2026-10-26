@@ -188,14 +188,18 @@ def _assert_same_bytes_as_pure(write: Callable[[Path], object], tmp_path: Path) 
 
 
 def _assert_fixture_discriminates(pure_path: Path) -> None:
-    """The written values, dumped through an unpinned safe handle, must differ.
+    """The written values, dumped through the actual C emitter, must differ.
 
     Without this the comparison could pass on a fixture whose scalars both emitters
     happen to break identically, and an emitter switch would go unnoticed.
     """
     values = read_yaml_file(pure_path)
     unpinned = io.StringIO()
-    new_yaml(suppress_vals=lambda _value: False).dump(values, unpinned)
+    native = new_yaml(suppress_vals=lambda _value: False)
+    # frontmatter-format keeps its own factory pure; the negative control must
+    # explicitly select C without changing its representers or suppression policy.
+    native.Emitter = _RUAMEL_MAIN.CEmitter
+    native.dump(values, unpinned)
     assert unpinned.getvalue() != pure_path.read_text(encoding="utf-8")
 
 

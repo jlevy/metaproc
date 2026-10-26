@@ -24,6 +24,13 @@ development series.
 
 ### Changed
 
+- Validation reports use Softschema 0.9 and include each layer’s actual `execution`
+  (`not_run`, `completed`, or `errored`). Built-in model-only checks include the
+  `document-enforcement-via-model-only` advisory.
+  Execution remains unknown in retained reports without that evidence.
+- YAML and frontmatter utilities require frontmatter-format 0.5, whose readers use
+  guarded C-parser paths when available and fall back to the pure parser.
+  Its writers retain deterministic pure-Python emitters.
 - **A mapped composite opens as many item scopes as the run’s ceiling admits.** It used
   to open at most 32 at once whatever `--max-concurrency` said, so a run with a ceiling
   of 80 or 160 never had more than 32 items’ leaves competing for the pool.
@@ -33,17 +40,17 @@ development series.
 
 ### Fixed
 
+- Frontmatter repair preserves valid flow collections accepted by the guarded reader,
+  including URL values that ruamel’s raw C scanner rejects.
+- Task status completion times use the accepted durable attempt’s end time, so resuming
+  a cached task keeps its state bytes unchanged across clock ticks.
 - **Pool status, scale-state, scale-override, and kill-sentinel files are written the
   same with or without ruamel’s C extension.** With `_ruamel_yaml` installed, their safe
   YAML handle switched to libyaml’s emitter, which wraps long values at different
   points. They now dump through `metaproc.io.new_dump_yaml`, a `new_yaml` handle that
   keeps the pure-Python emitter, so the bytes match what a process without the extension
-  writes. This fixes writing only.
-  Safe C parser compatibility remains a separate dependency concern: under
-  `frontmatter-format==0.4.0`, flow-sequence URLs such as
-  `sources: [https://example.com/a]` still fail when the C parser is active.
-  Enabling the extension in an existing workflow requires a reader compatibility update
-  and its own validation; see
+  writes. The supported frontmatter-format release also supplies guarded C-first readers
+  and pure-parser fallback; see
   [installation](docs/installation.md#optional-yaml-c-extension).
 
 ## [0.5.0][] - 2026-10-21

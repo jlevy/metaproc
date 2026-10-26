@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: File I/O Utilities (`metaproc.io`)
 
-**Date:** 2026-07-26 (last updated 2026-10-25) **Status:** Approved
+**Date:** 2026-07-26 (last updated 2026-10-26) **Status:** Approved
 
 `metaproc.io` is the curated public import surface for downstream callers and shared
 internal use. Every helper documented here is importable directly from `metaproc.io`:
@@ -202,11 +202,17 @@ registered codec is always readable, so mixed-codec run directories are ordinary
 
 Most modules parse YAML and frontmatter through `metaproc.io`. Modules may import
 `ruamel.yaml.YAMLError` directly to catch the dependency’s specific parse failures.
-Two production paths hold a parser handle of their own:
+Two engine paths select their parser or serializer behavior explicitly:
 
-- **`metaproc/engine/yaml_repair.py`** uses `ruamel.yaml.YAML(typ='safe').load(...)`
-  directly because the LLM-output repair path needs the parser handle in strict mode,
-  and the module does a manual `---\n` split before any parser touches the text.
+- **`metaproc/engine/yaml_repair.py`** splits frontmatter manually before calling
+  `frontmatter_format.from_yaml_string` for guarded validity checks, both before and
+  after heuristic repair.
+  Documents the supported reader already accepts keep their original bytes and values; a
+  native-parser rejection alone does not trigger repair.
+  For malformed input, only the parser-identified failing scalar is quoted, preserving
+  valid siblings and their YAML context.
+  Repair stops after eight corrections; unsupported or still-invalid input is left
+  unchanged, with no partial write.
 - **`metaproc/engine/schema_conform.py`** builds its serializer through the curated
   `new_yaml`, but in **round-trip** mode (`typ="rt"`) rather than the default `safe`,
   and reconfigures it: `allow_aliases=True` so an author’s anchor is not expanded into a
@@ -242,23 +248,18 @@ these. The longer version:
    replaced. Low-level YAML helpers expose `allow_aliases=True` when aliases are
    deliberate; `fmf_write` callers can supply raw YAML frontmatter for that advanced
    case.
-6. **A `new_yaml()` handle switches emitters when ruamel’s C extension is installed.**
-   With `_ruamel_yaml` importable, every safe handle (the `new_yaml` default) emits
-   through libyaml’s `CEmitter`, which breaks long plain scalars at different points and
-   does not flush the stream at the end of a dump, so a dump to a handle that is never
-   flushed or closed leaves an empty file.
-   `new_dump_yaml` takes the same arguments and keeps the pure emitter, so its output is
-   the same with or without the extension.
-   `to_yaml_string`, `write_yaml_file`, and `fmf_write` dump in round-trip mode, which
-   always uses the pure emitter.
-   This guarantee covers writing only: `from_yaml_string`, `read_yaml_file`, and
-   process/frontmatter readers can still select the safe C parser.
-   With `frontmatter-format==0.4.0`, the public call
-   `from_yaml_string('sources: [https://example.com/a]')` raises `ScannerError` with
-   that parser and succeeds with the pure parser.
-   Enabling the extension for downstream speed requires a separately reviewed reader
-   compatibility update and validation of process/frontmatter inputs, including
-   flow-sequence URLs and scalar interpretation.
+6. **YAML dumping handles keep pure-Python emitters.** The supported frontmatter-format
+   `new_yaml()` factory uses pure parsing and emitting even with `_ruamel_yaml`
+   installed. Metaproc’s `new_dump_yaml` takes the same arguments and keeps the pure
+   emitter if a customizer changes it, so output stays deterministic and complete at the
+   end of each dump. `to_yaml_string`, `write_yaml_file`, and `fmf_write` dump in
+   round-trip mode, which always uses the pure emitter.
+   `from_yaml_string`, `read_yaml_file`, and frontmatter readers use the checked C
+   parser on compatible inputs, with guards and parser-error fallback to pure ruamel.
+   Frontmatter-format’s public `yaml_parser_mode()` reports `c-first` or `pure`;
+   `FRONTMATTER_FORMAT_PURE_YAML=1` forces pure parsing.
+   Softschema exposes the same mode API for validation inputs, with
+   `SOFTSCHEMA_PURE_YAML=1` as its control.
 
 If a specific call site relies on any of these behaviors in a non-obvious way, add a
 concise `# NOTE:` that explains why the behavior matters there.

@@ -50,16 +50,15 @@ The base installation remains independent of Google Cloud packages and credentia
 
 ### Optional YAML C extension
 
-Metaproc does not install `ruamel.yaml.clib`. If another dependency installs this
-extension, Metaproc’s pool writers keep the same bytes through their pure-Python
-emitter, but safe readers can select the C parser.
-With `frontmatter-format==0.4.0`, `from_yaml_string('sources: [https://example.com/a]')`
-raises `ScannerError` with that parser and succeeds with the pure parser.
-The writer guarantee does not establish reader compatibility.
+Metaproc does not install `ruamel.yaml.clib`. When the extension is present, the
+supported frontmatter-format and Softschema releases use their checked C parser on
+compatible inputs and fall back to the pure parser for guarded syntax or parser errors.
+Their public `yaml_parser_mode()` functions report `c-first` or `pure` for the current
+environment. `FRONTMATTER_FORMAT_PURE_YAML=1` and `SOFTSCHEMA_PURE_YAML=1` force the
+corresponding reader to use the pure parser.
 
-Before enabling the extension for speed in an existing workflow environment, adopt a
-separately reviewed reader compatibility update and validate process and frontmatter
-inputs, including flow-sequence URLs and scalar interpretation.
+Frontmatter-format’s YAML factories and Metaproc’s pool writers keep deterministic
+pure-Python emitters with or without the extension.
 See the
 [YAML I/O gotchas](../src/metaproc/docs/arch-file-io-utilities.md#frontmatter_format-gotchas)
 for the writer/reader boundary.

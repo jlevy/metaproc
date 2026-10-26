@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import os
+from datetime import datetime, timedelta
+from itertools import count
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from frontmatter_format import read_yaml_file
+from frontmatter_format import from_yaml_string, read_yaml_file, yaml_parser_mode
 from pydantic import BaseModel, ValidationError
 
 from metaproc.io import to_yaml_string
@@ -23,9 +26,11 @@ from metaproc.io.state_io import (
     end_attempt_at,
     end_status_attempt_at,
     mark_completed_at,
+    mark_deferred_at,
     mark_failed_at,
     mark_failed_synthetic_at,
     mark_running_at,
+    read_attempt_at,
     read_attempt_history_at,
     read_collected_inputs_at,
     read_result_at,
@@ -56,6 +61,7 @@ from metaproc.paths import (
     ATTEMPTS_SUBDIR,
     COLLECTED_INPUTS_FILE,
     STATE_DIR,
+    STATUS_FILE,
     TASKS_SUBDIR,
     attempt_state_dir,
 )
@@ -142,6 +148,116 @@ class TestExtractItemsFromEnvelope:
 
 
 # ── State I/O tests ──────────────────────────────────────────────
+
+
+class TestEmptyStateMappings:
+    @pytest.fixture(autouse=True, params=[False, True], ids=["native-preferred", "forced-pure"])
+    def parser_mode(self, request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+        pure = bool(request.param)
+        monkeypatch.setenv("FRONTMATTER_FORMAT_PURE_YAML", "1" if pure else "0")
+        if pure or os.environ.get("METAPROC_REQUIRE_C_EMITTER") == "1":
+            assert yaml_parser_mode() == ("pure" if pure else "c-first")
+
+    def test_running_empty_item_round_trip(self, tmp_path: Path) -> None:
+        running = mark_running_at(tmp_path, run_id="fixture/run", step_id="leaf", item={})
+
+        assert read_status_at(tmp_path) == running
+        assert read_yaml_file(tmp_path / STATUS_FILE)["item"] == {}
+        durable = read_attempt_history_at(tmp_path)[-1]
+        assert durable.item == {}
+        assert (
+            read_yaml_file(attempt_state_dir(tmp_path, durable.attempt_id) / ATTEMPT_FILE)["item"]
+            == {}
+        )
+
+    @pytest.mark.parametrize("transition", ["completed", "failed", "synthetic", "deferred"])
+    def test_empty_item_transition_round_trip(self, tmp_path: Path, transition: str) -> None:
+        run_dir = tmp_path / "run"
+        state_dir = run_dir / STATE_DIR / TASKS_SUBDIR / "leaf"
+        if transition == "synthetic":
+            terminal = mark_failed_synthetic_at(
+                state_dir, run_id="fixture/run", step_id="leaf", item={}, error="launch failed"
+            )
+        else:
+            running = mark_running_at(state_dir, run_id="fixture/run", step_id="leaf", item={})
+            if transition == "completed":
+                terminal = mark_completed_at(state_dir, running_record=running)
+            elif transition == "deferred":
+                terminal = mark_deferred_at(state_dir, running_record=running)
+            else:
+                terminal = mark_failed_at(state_dir, running_record=running, error="work failed")
+
+        assert read_status_at(state_dir) == terminal
+        assert terminal.item == {}
+        original = (state_dir / STATUS_FILE).read_bytes()
+        assert reconcile_stale_running(run_dir) == 0
+        assert (state_dir / STATUS_FILE).read_bytes() == original
+
+    @pytest.mark.parametrize(
+        "disposition", [None, AttemptDisposition.succeeded, AttemptDisposition.permanent]
+    )
+    def test_reconciles_empty_item_projection(
+        self, tmp_path: Path, disposition: AttemptDisposition | None
+    ) -> None:
+        run_dir = tmp_path / "run"
+        state_dir = run_dir / STATE_DIR / TASKS_SUBDIR / "leaf"
+        running = mark_running_at(state_dir, run_id="fixture/run", step_id="leaf", item={})
+        if disposition is not None:
+            end_status_attempt_at(state_dir, running, disposition=disposition)
+
+        assert reconcile_stale_running(run_dir) == 1
+
+        status = read_status_at(state_dir)
+        assert status is not None
+        assert status.item == {}
+        assert status.attempt_id == running.attempt_id
+        assert status.state == (
+            "completed" if disposition is AttemptDisposition.succeeded else "failed"
+        )
+        durable = read_attempt_history_at(state_dir)[-1]
+        assert durable.item == {}
+        assert durable.disposition is (disposition or AttemptDisposition.lost)
+        assert status.completed_at == durable.ended_at
+        original = (state_dir / STATUS_FILE).read_bytes()
+        assert reconcile_stale_running(run_dir) == 0
+        assert (state_dir / STATUS_FILE).read_bytes() == original
+
+    def test_latest_launch_preserves_empty_item_and_nested_mapping(self, tmp_path: Path) -> None:
+        record = AttemptRecord(
+            run_id="fixture/run", step_id="leaf", item={}, runtime={"config": {}}
+        )
+        path = write_attempt_at(tmp_path, record)
+
+        assert read_attempt_at(tmp_path) == record
+        raw = read_yaml_file(path)
+        assert raw["item"] == {}
+        assert raw["runtime"] == {"config": {}}
+        assert "step_hash" not in raw
+
+    def test_collected_inputs_preserves_empty_required_mapping(self, tmp_path: Path) -> None:
+        record = CollectedInputsRecord(
+            run_id="fixture/run", step_id="leaf", recorded_at="2026-01-01T00:00:00", inputs={}
+        )
+        write_collected_inputs_at(tmp_path, record)
+
+        assert read_collected_inputs_at(tmp_path) == record
+        assert read_yaml_file(tmp_path / COLLECTED_INPUTS_FILE)["inputs"] == {}
+
+    def test_missing_item_is_still_invalid(self, tmp_path: Path) -> None:
+        (tmp_path / STATUS_FILE).write_text("run_id: fixture/run\nstep_id: leaf\nstate: running\n")
+        with pytest.raises(ValidationError, match="item"):
+            read_status_at(tmp_path)
+
+    def test_state_writer_keeps_null_omission_and_general_yaml_defaults(
+        self, tmp_path: Path
+    ) -> None:
+        record = StatusRecord(run_id="fixture/run", step_id="leaf", item={}, state="running")
+        write_status_at(tmp_path, record)
+        raw = read_yaml_file(tmp_path / STATUS_FILE)
+        assert "error" not in raw
+        assert "completed_at" not in raw
+        assert "last_heartbeat_at" not in raw
+        assert "item" not in from_yaml_string(to_yaml_string({"item": {}, "state": "running"}))
 
 
 class TestStateIO:
@@ -304,6 +420,45 @@ class TestMarkTransitions:
         completed = mark_completed_at(tmp_path, running_record=running)
         assert completed.state == "completed"
         assert completed.completed_at is not None
+
+    @pytest.mark.parametrize("transition", ["completed", "failed", "synthetic"])
+    def test_terminal_status_keeps_its_bytes_across_reconciliation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, transition: str
+    ) -> None:
+        run_dir = tmp_path / "run"
+        state_dir = run_dir / STATE_DIR / TASKS_SUBDIR / "leaf"
+        ticks = count()
+        origin = datetime(2026, 1, 1)
+        monkeypatch.setattr(
+            "metaproc.io.state_io._now_iso",
+            lambda: (origin + timedelta(seconds=next(ticks))).isoformat(),
+        )
+        if transition == "synthetic":
+            terminal = mark_failed_synthetic_at(
+                state_dir,
+                run_id="fixture/run",
+                step_id="leaf",
+                item={"step": "leaf"},
+                error="launch failed",
+            )
+        else:
+            running = mark_running_at(
+                state_dir, run_id="fixture/run", step_id="leaf", item={"step": "leaf"}
+            )
+            terminal = (
+                mark_completed_at(state_dir, running_record=running)
+                if transition == "completed"
+                else mark_failed_at(state_dir, running_record=running, error="work failed")
+            )
+        durable = read_attempt_history_at(state_dir)[-1]
+        assert terminal.completed_at == durable.ended_at
+        status_path = state_dir / STATUS_FILE
+        attempt_path = attempt_state_dir(state_dir, durable.attempt_id) / ATTEMPT_FILE
+        original = (status_path.read_bytes(), attempt_path.read_bytes())
+
+        assert reconcile_stale_running(run_dir) == 0
+
+        assert (status_path.read_bytes(), attempt_path.read_bytes()) == original
 
     def test_task_attempt_v01_shape_stays_readable_by_the_previous_release(self, tmp_path):
         """An additive Pydantic field is a format break when the old model forbids extras."""

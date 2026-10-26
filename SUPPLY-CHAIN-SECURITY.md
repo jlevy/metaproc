@@ -51,24 +51,36 @@ version number.
 
 Seven exact first-party releases are exempt from the ordinary cool-off for this release:
 
-- `softschema==0.8.0`, the current release, adopted inside the cool-off as a first-party
-  release. Reviewed against `0.7.0`: same MIT license, same `jlevy/softschema` source
-  repository, same Python floor of `>=3.11,<4.0`, and the same five direct dependencies
-  (`frontmatter-format`, `jsonschema`, `pydantic`, `ruamel-yaml`, `strif`), so it adds
-  no transitive surface.
-  It adds a `repair` subcommand and the corresponding public API (`load_artifact`,
-  `repair_artifact`, `conform_artifact`, `repair_and_validate_artifact`, and
-  `resolve_bound_schema`), leaves every existing subcommand’s flags unchanged, and
-  leaves ordinary schema verdicts unchanged.
-  Two result-shape additions matter to a consumer reading results against a closed
-  schema: `repairs` is now always present on a validate result, and TypeScript semantic
-  error records may carry `expected`. Metaproc’s contract-failure adapter tolerates
-  both, and the full suite runs against this exact release.
-  Metaproc keeps its own `metaproc softschema repair`, which routes through
-  `metaproc.engine.yaml_repair`, so the new upstream subcommand is not yet on Metaproc’s
-  execution path;
-- `frontmatter-format==0.4.0`, required by SoftSchema 0.4.0 and used directly for
-  deterministic alias-free Metaproc artifact writes;
+- `softschema==0.9.1`, adopted with the owner’s explicit first-party cool-off exemption
+  on 2026-10-25. Reviewed against `0.8.0`: same MIT license, `jlevy/softschema` source
+  repository, Python `>=3.11,<4.0` floor, and five direct dependencies.
+  Its frontmatter-format floor rises to `>=0.5.1`; no transitive dependencies are added.
+  Validation result constructors require explicit `execution` evidence, and model-only
+  enforcement produces an advisory.
+  Metaproc forwards both native layer records and warnings without constructing results
+  or inventing execution evidence for retained reports.
+  The release also hardens portable YAML/frontmatter input and adds guarded JSON and
+  C-parser paths with a pure-parser fallback.
+  Its public `yaml_parser_mode()` reports the effective mode.
+  The 0.9.1 patch restricts native parsing to the checked clib implementation, fixes
+  `doctor` runner suggestions and excludes ruamel.yaml `0.19.0`; the lock keeps
+  `0.19.1`. The validation-result API and bundled schemas are unchanged;
+- `frontmatter-format==0.5.1`, adopted under the same owner exemption in the
+  compatibility series required by Softschema 0.9.1. Reviewed against `0.4.0`: same MIT
+  license, `jlevy/frontmatter-format` source repository, Python `>=3.10,<4.0` floor, and
+  sole `ruamel-yaml>=0.18.10` dependency, now excluding `0.19.0`. The lock keeps
+  `0.19.1`. The used APIs remain available.
+  It adds guarded C-first readers, a pure-parser fallback and public
+  `yaml_parser_mode()`, while keeping pure emitters and instance-local representers and
+  constructors. The 0.5.1 patch adds unique atomic temporary writes with mode
+  preservation, scalar escaping and a clib-specific native-parser gate.
+  Both release wheels were non-yanked and matched their PyPI SHA-256 digests, and
+  neither contains installation hooks.
+  Their runtime modules match the published
+  [Softschema](https://github.com/jlevy/softschema/tree/c01e5fd85aa51e7d3b32621c964fd8335ebf115c/packages/python/src/softschema)
+  and
+  [frontmatter-format](https://github.com/jlevy/frontmatter-format/tree/a9e062a1859dc4ad2a68cc8343ca3b8a6c40ca4c/src/frontmatter_format)
+  release sources. Only these two package ceilings advance;
 - `metabrowser==0.9.1`, the current release, used by the development and plugin test
   group and by the optional `browser` extra.
   Reviewed against `0.1.0`, the release it replaces here: same AGPL-3.0-or-later license
@@ -223,7 +235,7 @@ reachable.
 ## Native YAML Emitter Test Dependency
 
 The isolated `make test-yaml-c-emitter` lane uses `ruamel.yaml.clib==0.2.15` to test the
-optional C emitter that the ordinary installation does not provide.
+optional C emitter and guarded reader that the ordinary installation does not provide.
 This is the native implementation used by `ruamel.yaml`; no existing pure-Python
 dependency can exercise that boundary.
 
@@ -240,12 +252,15 @@ Python dependencies or install scripts.
 pins the version and the two PyPI SHA-256 wheel hashes.
 The lane permits binary wheels only and requires matching hashes, so it cannot fall back
 to an unreviewed source build or another platform’s artifact.
-It installs into a separate target directory exposed only to the emitter tests, leaving
+It installs into a separate target directory exposed only to these YAML tests, leaving
 `uv.lock`, production dependencies, and the ordinary suite unchanged.
 The lane fails if the extension or C emitter is unavailable; it tests the actual status,
 scale-state, scale-override, and kill-sentinel writers.
-This is writer coverage, not approval to enable the safe C parser for workflow inputs;
-see [installation](docs/installation.md#optional-yaml-c-extension).
+It also checks frontmatter repair with the guarded reader in C-first and forced-pure
+modes, preserving valid flow collections and repairing malformed scalars.
+The supported frontmatter-format and Softschema releases guard their C-first readers and
+fall back to pure parsing; see
+[installation](docs/installation.md#optional-yaml-c-extension).
 
 ## Verification
 
