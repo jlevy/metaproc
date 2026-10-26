@@ -3,13 +3,17 @@ type: is
 id: is-01m5x5d4yy46gsrkknxhy6qpvc
 title: Publish the v0.6.0 release
 kind: task
-status: open
+status: closed
 priority: 1
-version: 1
+version: 2
 labels: []
 dependencies: []
 created_at: 2026-10-26T22:30:56.733Z
-updated_at: 2026-10-26T22:30:56.733Z
+updated_at: 2026-10-26T22:55:11.247Z
+closed_at: 2026-10-26T22:55:11.246Z
+close_reason: "Published. Tag v0.6.0 points at 4289836 (merge of PR 120, tip of main). Evidence in docs/publishing.md order: make verify green on an identical tree (c91f734, 5671 passed, 15 skipped); CI green on 4289836 (lint, test 3.14 pure, test 3.14 c, distribution); publish.yml run 40415435300 succeeded including its own make verify gate; PyPI shows 0.6.0 with requires-python >=3.14,<4.0, AGPL-3.0-or-later, the Python 3.14 classifier, homepage/issues/repository/changelog links, wheel and sdist, and the release notes as its description; the four step-9 uvx smoke tests (--help, --version, skill metaproc, env --template) all passed from a clean directory outside the checkout, with --version reporting 0.6.0. TODO.md Current Release moved to v0.6.0 in c39938d. Shipped without PR 117, which stays open under review. mp-mo74 (GCP image interpreter) remains unverified for a second consecutive release."
+resolution: null
+duplicate_of: null
 ---
 Release v0.6.0 from main.
 
