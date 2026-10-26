@@ -40,6 +40,8 @@ development series.
 
 ### Fixed
 
+- Frontmatter repair preserves valid flow collections accepted by the guarded reader,
+  including URL values that ruamel’s raw C scanner rejects.
 - Task status completion times use the accepted durable attempt’s end time, so resuming
   a cached task keeps its state bytes unchanged across clock ticks.
 - **Pool status, scale-state, scale-override, and kill-sentinel files are written the

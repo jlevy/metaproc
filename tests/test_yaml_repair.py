@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import ast
 import inspect
+import os
 from pathlib import Path
 from types import ModuleType
 
 import pytest
+from frontmatter_format import yaml_parser_mode
 from typer.testing import CliRunner
 
 from metaproc.cli import app
@@ -18,6 +20,28 @@ from metaproc.io import fmf_read
 
 
 class TestRepairFrontmatterFile:
+    @pytest.mark.parametrize("pure", [False, True], ids=["native-preferred", "forced-pure"])
+    def test_preserves_valid_flow_collections(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pure: bool
+    ) -> None:
+        if pure:
+            monkeypatch.setenv("FRONTMATTER_FORMAT_PURE_YAML", "1")
+        else:
+            monkeypatch.delenv("FRONTMATTER_FORMAT_PURE_YAML", raising=False)
+        if os.environ.get("METAPROC_REQUIRE_C_EMITTER") == "1":
+            assert yaml_parser_mode() == ("pure" if pure else "c-first")
+
+        record = tmp_path / "record.md"
+        original = b"---\nrecord:\n  sources: [https://example.com/a, {label: hi}]\n---\n# Body\n"
+        record.write_bytes(original)
+        expected = ("# Body\n", {"record": {"sources": ["https://example.com/a", {"label": "hi"}]}})
+        assert fmf_read(record) == expected
+
+        assert repair_frontmatter_file(record) is False
+
+        assert record.read_bytes() == original
+        assert fmf_read(record) == expected
+
     def test_repairs_inline_notes_with_colons(self, tmp_path: Path) -> None:
         """Values with unquoted colons mid-value should get quoted."""
         record = tmp_path / "record.md"

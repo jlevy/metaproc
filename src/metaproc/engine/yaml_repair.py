@@ -31,22 +31,20 @@ LLM artifact.
 two-pass generation with a deterministic templater could be safer). This
 module is a stopgap until that lands.
 
-**Parser harmonization:** downstream validation (via
-``frontmatter_format`` → ``ruamel.yaml``) is stricter than PyYAML. A document
-that passed PyYAML's ``yaml.safe_load`` could still fail ``ruamel.yaml``
-validation, so the operator would see "repaired YAML" log lines followed by
-``invalid_outputs`` failures. We use ``ruamel.yaml`` for the self-check so
-the repair's pass/fail decision tracks the validator's strictness.
+**Parser harmonization:** the self-check uses ``frontmatter_format``'s guarded
+safe reader, matching downstream validation. A raw ruamel C scanner can reject
+valid flow collections that the guarded reader accepts through its pure-parser
+fallback. Such documents must remain unchanged, while malformed scalars still
+receive the narrow repair below.
 """
 
 from __future__ import annotations
 
-import io
 import logging
 import re
 from pathlib import Path
 
-from ruamel.yaml import YAML
+from frontmatter_format import from_yaml_string
 from ruamel.yaml.error import YAMLError as RuamelYAMLError
 from strif import atomic_output_file
 
@@ -54,10 +52,8 @@ log = logging.getLogger(__name__)
 
 
 def _ruamel_safe_load(text: str) -> None:
-    """Parse YAML via ruamel.yaml YAML(typ='safe') — the same path the
-    downstream frontmatter validator uses. Raises RuamelYAMLError on failure.
-    """
-    YAML(typ="safe").load(io.StringIO(text))
+    """Check YAML with the guarded safe reader used by downstream validation."""
+    from_yaml_string(text)
 
 
 # Matches a YAML key-value line where the value portion contains an unquoted
@@ -135,8 +131,8 @@ def repair_frontmatter_file(path: Path) -> bool:
     Calling this on human-authored or programmatically-generated YAML masks
     real bugs — fix invalid YAML at its source instead.
 
-    Tries to parse the frontmatter with ruamel.yaml (the same parser the
-    downstream validator uses). If parsing succeeds, returns False (no
+    Tries to parse the frontmatter with the downstream validator's guarded
+    safe reader. If parsing succeeds, returns False (no
     repair needed). If parsing fails, attempts to quote problematic values
     and writes the repaired content back, then re-verifies.
 
@@ -156,9 +152,8 @@ def repair_frontmatter_file(path: Path) -> bool:
 
     frontmatter = content[4 : end_idx + 1]  # between the --- markers
 
-    # Try parsing first — if it works, no repair needed.
-    # Use ruamel.yaml (the validator's parser) so we don't waste a repair
-    # cycle on a document PyYAML accepts but the validator will reject.
+    # Valid frontmatter needs no repair, including documents the guarded reader
+    # handles through its pure-parser fallback.
     try:
         _ruamel_safe_load(frontmatter)
         return False
@@ -186,9 +181,7 @@ def repair_frontmatter_file(path: Path) -> bool:
 
     repaired_frontmatter = "\n".join(repaired_lines)
 
-    # Verify the repair actually fixes the YAML against the SAME parser
-    # the downstream validator uses (ruamel.yaml). Using PyYAML here would
-    # let through documents the validator rejects, defeating the repair.
+    # Verify the repaired document against the same guarded reader.
     try:
         _ruamel_safe_load(repaired_frontmatter)
     except RuamelYAMLError:

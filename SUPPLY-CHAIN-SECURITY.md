@@ -232,7 +232,7 @@ reachable.
 ## Native YAML Emitter Test Dependency
 
 The isolated `make test-yaml-c-emitter` lane uses `ruamel.yaml.clib==0.2.15` to test the
-optional C emitter that the ordinary installation does not provide.
+optional C emitter and guarded reader that the ordinary installation does not provide.
 This is the native implementation used by `ruamel.yaml`; no existing pure-Python
 dependency can exercise that boundary.
 
@@ -249,13 +249,14 @@ Python dependencies or install scripts.
 pins the version and the two PyPI SHA-256 wheel hashes.
 The lane permits binary wheels only and requires matching hashes, so it cannot fall back
 to an unreviewed source build or another platform’s artifact.
-It installs into a separate target directory exposed only to the emitter tests, leaving
+It installs into a separate target directory exposed only to these YAML tests, leaving
 `uv.lock`, production dependencies, and the ordinary suite unchanged.
 The lane fails if the extension or C emitter is unavailable; it tests the actual status,
 scale-state, scale-override, and kill-sentinel writers.
-This lane covers writer bytes.
-The supported frontmatter-format and Softschema releases independently guard their
-C-first readers and fall back to pure parsing; see
+It also checks frontmatter repair with the guarded reader in C-first and forced-pure
+modes, preserving valid flow collections and repairing malformed scalars.
+The supported frontmatter-format and Softschema releases guard their C-first readers and
+fall back to pure parsing; see
 [installation](docs/installation.md#optional-yaml-c-extension).
 
 ## Verification
