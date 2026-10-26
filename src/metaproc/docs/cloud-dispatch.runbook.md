@@ -220,7 +220,7 @@ cloud-provider listing/logging commands:
 | What is a `gcp run` job doing, and its watched run? | `metaproc gcp status <job> --run-status` |
 | Stop the run | `metaproc gcp cancel <run-id>` |
 
-A `metaproc gcp run` job that mounts Filestore and ships the current wheel keeps its
+A `metaproc gcp run` job with a run-storage mount that ships the current wheel keeps its
 console in a file, as a local run keeps its own: stdout and stderr are appended to
 `<mount>/logs/gcp-run/<job>/console.log`, and Cloud Logging receives only a heartbeat a
 minute, the exit line and the bootstrap output.

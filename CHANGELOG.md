@@ -11,7 +11,7 @@ development series.
 
 ### Added
 
-- **A `gcp run` job keeps its console in a file.** With the Filestore mount and the
+- **A `gcp run` job keeps its console in a file.** With the run-storage mount and the
   shipped wheel, the command runs inside `metaproc.cloud.gcp.gcp_run_console`, which
   appends its output to `<mount>/logs/gcp-run/<job>/console.log` and sends Cloud Logging
   only a start line, a heartbeat a minute and the exit line, alongside the bootstrap
@@ -20,7 +20,7 @@ development series.
   cursor on each heartbeat.
   A background worker caches the `metaproc status` of each `--watch-run` directory every
   five minutes, so `metaproc gcp logs <job>` and
-  `metaproc gcp status <job> --run-status` read the job without mounting Filestore.
+  `metaproc gcp status <job> --run-status` read the job without mounting the share.
   `--console file` requests the file explicitly; `--console cloud-logging` keeps the
   whole stream in Cloud Logging, which stays the default for `--no-wheel` jobs.
   Live following also stops at terminal Batch state when a final upload is missing.
