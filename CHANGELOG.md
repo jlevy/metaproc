@@ -73,15 +73,16 @@ development series.
   resume it writes the summary an earlier launch left missing or incomplete (SIGKILL, or
   a rollup that outran the bound) without rewriting the live
   `.logs/resource-events.jsonl`, which the signal-exit work also leaves alone while the
-  psutil samplers still append to it. `incomplete` is serialized only when true, so
-  complete summaries and `resources.json` keep their shape.
-  `metaproc kill` waits up to 11 seconds, not 3, for the orchestrator to exit; with
-  `--force` and a pool it still SIGTERMs the orchestrator, so the summaries are written,
-  and only an orchestrator killed before its first pool writes nothing.
-- **A run records how it ended where no later writer can replace it.**
-  `resources.json` and `resource-usage-summary.md` are projections, each replaced whole,
-  so a publication interrupted between them left one of each launch and recovery could
-  read an older complete summary as the run’s outcome.
+  psutil samplers still append to it.
+  `incomplete` is serialized only when true, so complete summaries and `resources.json`
+  keep their shape. `metaproc kill` waits up to 11 seconds, not 3, for the orchestrator
+  to exit; with `--force` and a pool it still SIGTERMs the orchestrator, so the
+  summaries are written, and only an orchestrator killed before its first pool writes
+  nothing.
+- **A run records how it ended where no later writer can replace it.** `resources.json`
+  and `resource-usage-summary.md` are projections, each replaced whole, so a publication
+  interrupted between them left one of each launch and recovery could read an older
+  complete summary as the run’s outcome.
   How the latest launch ended is now recorded on its own in
   `.state/finalization-outcome.json`, written first in every publication and before
   anything else on a hard stop.

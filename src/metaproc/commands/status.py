@@ -12,9 +12,10 @@ from prettyfmt import fmt_timedelta
 from ruamel.yaml import YAMLError
 
 from metaproc.cli import app, get_output
+from metaproc.engine.finalization_outcome import finalization_outcome_snapshot
 from metaproc.engine.operations_summary import OPERATIONS_SUMMARY_FILE, finalize_operations_summary
 from metaproc.engine.resource_finalization import (
-    infer_recovery_outcome,
+    infer_causal_outcome,
     recover_run_resources,
     resource_artifacts_need_recovery,
     resource_usage_summary_snapshot,
@@ -130,7 +131,10 @@ def _recover_resource_artifacts(run_dir: Path, status: RunStatus) -> None:
     if not evidence_exists:
         return
     try:
-        # Taken before deciding, so a summary written after it is never replaced.
+        # Taken before deciding, so neither a summary nor a causal outcome recorded
+        # after it is replaced by what this fold reads. The run's own writers record the
+        # outcome first, so a record taken first catches every later publication.
+        observed_outcome = finalization_outcome_snapshot(run_dir)
         observed_summary = resource_usage_summary_snapshot(run_dir)
         if status.is_active:
             needs_recovery = resume_needs_resource_backfill(run_dir)
@@ -142,12 +146,16 @@ def _recover_resource_artifacts(run_dir: Path, status: RunStatus) -> None:
     if status.is_active and not needs_recovery:
         return
     if needs_recovery:
-        outcome = infer_recovery_outcome(run_dir, totals=status.totals)
+        # Carries forward what ended the run, the signal a hard stop recorded included,
+        # so the rebuilt summary keeps it.
+        causal = infer_causal_outcome(run_dir, totals=status.totals)
         try:
             recover_run_resources(
                 run_dir,
-                outcome=outcome,
+                outcome=causal.state,
+                terminal_error_type=causal.terminal_error_type,
                 observed_summary=observed_summary,
+                observed_outcome=observed_outcome,
                 bundle=load_plan_bundle_from_run(run_dir),
                 write_events=not status.is_active,
             )

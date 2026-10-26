@@ -171,6 +171,9 @@ ORCHESTRATOR_LEASE_FILE = "orchestrator-lease.yaml"
 FINALIZATION_LOCK_DIR = "finalization.lock"
 """Held while a run's resource and operations summaries are published (a mkdir lock)."""
 
+FINALIZATION_OUTCOME_FILE = "finalization-outcome.json"
+"""How the run's latest launch ended — the record every recovery path reads."""
+
 DISPATCH_MANIFEST_FILE = "dispatch-manifest.yaml"
 """Per-step dispatch manifest — worker job IDs for adoption on resume."""
 

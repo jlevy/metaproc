@@ -43,7 +43,12 @@ it's good enough here.
 - **Stale-lock reclaim**: if the holder crashes and leaves the lock dir
   behind, contenders may treat the lock as stale once its mtime is older than
   ``stale_after`` and attempt to rmdir it. Pass ``stale_after=None`` for
-  long-lived locks that must never be reclaimed by age alone.
+  long-lived locks that must never be reclaimed by age alone, or ``is_stale``
+  for a predicate that can check the recorded owner's liveness.
+- **Owner metadata**: a holder may write small files directly inside the lock
+  directory — its PID and host, for an ``is_stale`` predicate to read. Both
+  release and stale reclaim remove those files before removing the directory,
+  so owner metadata never wedges the lock. Subdirectories are not removed.
 - **Fail-loud on timeout**: if the lock cannot be acquired within
   ``timeout``, :class:`MkdirLockTimeoutError` is raised. The caller must
   decide how to respond — this module never silently proceeds without the
@@ -140,7 +145,7 @@ def acquire_mkdir_lock(
                 is_stale=is_stale,
             ):
                 with contextlib.suppress(FileNotFoundError, OSError):
-                    lock_path.rmdir()
+                    _remove_lock_dir(lock_path)
                 continue
             if time.monotonic() >= deadline:
                 msg = (
@@ -169,15 +174,33 @@ def _lock_should_be_reclaimed(
     return age > stale_after
 
 
+def _remove_lock_dir(lock_path: Path) -> None:
+    """Remove a lock directory, discarding owner metadata a holder left inside it.
+
+    Only regular files directly inside the directory are removed: a lock
+    directory holds a holder's own small records and nothing else.
+    """
+    try:
+        entries = list(lock_path.iterdir())
+    except FileNotFoundError, NotADirectoryError:
+        entries = []
+    for entry in entries:
+        if entry.is_file():
+            with contextlib.suppress(FileNotFoundError, OSError):
+                entry.unlink()
+    lock_path.rmdir()
+
+
 def release_mkdir_lock(lock_path: Path) -> bool:
     """Release a mkdir lock path if it exists.
 
-    Returns ``True`` when the directory was removed and ``False`` when it
-    was already absent. Other ``OSError`` cases are left to the caller so
-    split acquire/release flows can log stuck locks.
+    Owner metadata the holder wrote directly inside the lock directory is
+    removed with it. Returns ``True`` when the directory was removed and
+    ``False`` when it was already absent. Other ``OSError`` cases are left to
+    the caller so split acquire/release flows can log stuck locks.
     """
     try:
-        lock_path.rmdir()
+        _remove_lock_dir(lock_path)
     except FileNotFoundError:
         return False
     return True

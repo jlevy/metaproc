@@ -10,6 +10,7 @@ from pathlib import Path
 import typer
 
 from metaproc.cli import app, get_output
+from metaproc.engine.finalization_lock import finalization_publish_lock
 from metaproc.engine.operations_render import render_rollup_markdown, render_summary_markdown
 from metaproc.engine.operations_rollup import build_operations_rollup
 from metaproc.engine.operations_summary import (
@@ -60,7 +61,10 @@ def operations_summary(
     _require_run_dir(run_dir)
     summary = build_operations_summary(run_dir)
     if write:
-        target = write_operations_summary(summary, run_dir)
+        # Published under the run's lock, like every other writer of this file, so it
+        # cannot interleave with a finalizing orchestrator or with status recovery.
+        with finalization_publish_lock(run_dir):
+            target = write_operations_summary(summary, run_dir)
         get_output().progress(f"Wrote {target}")
     if fmt is SummaryFormat.md:
         sys.stdout.write(render_summary_markdown(summary))

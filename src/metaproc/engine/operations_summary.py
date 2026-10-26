@@ -237,6 +237,7 @@ def finalize_operations_summary(
     outcome: FinalizationState | None,
     trigger: Literal["finalization", "status"] = "finalization",
     if_absent: bool = False,
+    signal_exit: bool = False,
 ) -> Path | None:
     """Write the summary at run finalization; log and return ``None`` on any failure.
 
@@ -246,11 +247,13 @@ def finalize_operations_summary(
     summary that recovery just wrote. It also passes ``if_absent``: the summary is then
     published only if none is there under the run's finalization lock, so one the run's
     own finalization wrote while status folded stands. Returns ``None`` when it is not
-    written.
+    written. ``signal_exit=True`` marks the publication a hard-stop signal runs, which
+    inherits a lock this process holds rather than waiting for the interrupted thread
+    that will never release it.
     """
     try:
         summary = build_operations_summary(run_dir, outcome=outcome, trigger=trigger)
-        with finalization_publish_lock(run_dir):
+        with finalization_publish_lock(run_dir, adopt_local_holder=signal_exit):
             if if_absent and (run_dir / OPERATIONS_SUMMARY_FILE).exists():
                 return None
             return write_operations_summary(summary, run_dir)

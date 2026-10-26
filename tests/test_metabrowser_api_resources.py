@@ -17,6 +17,7 @@ from metabrowser import server as proc_browser
 
 from metaproc.commands.run_process import _write_run_config
 from metaproc.metabrowser_plugin import sidekick
+from metaproc.models.resource_budget import FinalizationState
 from metaproc.models.resource_snapshot import ResourceRunSnapshot, ResourceTopologyNode
 from metaproc.models.resources import RESOURCES_DOCUMENT_CONTRACT
 
@@ -298,3 +299,82 @@ def test_snapshot_refresh_rejects_active_run(
     assert status == 409
     assert "active" in payload["error"]
     assert not (run_dir / "resources.json").exists()
+
+
+def _snapshot_run(tmp_path: Path, process_rel: str, run_dir: Path) -> None:
+    """Give the run the immutable snapshot that makes refresh a recovery."""
+    _write_run_config(
+        run_dir,
+        process_name="parent",
+        process_path=tmp_path / process_rel,
+        run_id="2026-04-21",
+        variables={},
+        backend="local",
+        variant=None,
+        resource_snapshot=ResourceRunSnapshot(
+            hierarchy=ResourceTopologyNode(
+                node_type="run",
+                node_id="parent/2026-04-21",
+                label="parent/2026-04-21",
+            ),
+            mapped_composite_step_ids=[],
+        ),
+    )
+
+
+def test_snapshot_refresh_keeps_a_hard_stops_cancellation_without_a_cache(
+    tmp_path: Path,
+) -> None:
+    """The run was ended by a signal and left only its incomplete summary. Browser
+    recovery used to initialize the outcome to `failed` and override it only from a
+    cached document, so a run with no cache was rewritten as failed."""
+    from metaproc.engine.resource_summary import (  # noqa: PLC0415 -- test-local
+        write_incomplete_resource_usage_summary,
+    )
+
+    process_rel, run_dir_rel = _setup(tmp_path)
+    run_dir = tmp_path / run_dir_rel
+    _snapshot_run(tmp_path, process_rel, run_dir)
+    write_incomplete_resource_usage_summary(
+        run_dir,
+        run_id="parent/2026-04-21",
+        state=FinalizationState.CANCELLED,
+        terminal_error_type="SIGTERM",
+    )
+
+    status, payload = _call(run_dir=run_dir_rel, refresh="1")
+
+    assert status == 200, payload
+    assert payload["finalization"]["state"] == "cancelled"
+    assert payload["finalization"]["terminal_error_type"] == "SIGTERM"
+    assert payload["finalization"].get("incomplete") is None
+
+
+def test_snapshot_refresh_keeps_a_hard_stops_cancellation_over_an_earlier_cache(
+    tmp_path: Path,
+) -> None:
+    """An earlier launch's completed document is still beside the signal's marker;
+    recovery must not read it as this run's outcome."""
+    from metaproc.engine.resource_finalization import (  # noqa: PLC0415 -- test-local
+        finalize_run_resources,
+    )
+    from metaproc.engine.resource_summary import (  # noqa: PLC0415 -- test-local
+        write_incomplete_resource_usage_summary,
+    )
+
+    process_rel, run_dir_rel = _setup(tmp_path)
+    run_dir = tmp_path / run_dir_rel
+    _snapshot_run(tmp_path, process_rel, run_dir)
+    finalize_run_resources(run_dir, outcome=FinalizationState.COMPLETED)
+    write_incomplete_resource_usage_summary(
+        run_dir,
+        run_id="parent/2026-04-21",
+        state=FinalizationState.CANCELLED,
+        terminal_error_type="SIGHUP",
+    )
+
+    status, payload = _call(run_dir=run_dir_rel, refresh="1")
+
+    assert status == 200, payload
+    assert payload["finalization"]["state"] == "cancelled"
+    assert payload["finalization"]["terminal_error_type"] == "SIGHUP"

@@ -2043,71 +2043,109 @@ def _record_process_output_failure(run_dir: Path, error: CLIError) -> None:
     atomic_write_text(path, to_yaml_string(data), make_parents=True)
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class _BodyOutcome:
+    """The outcome and error the process body resolved on, as one indivisible value.
+
+    A signal interrupts the main thread between any two bytecodes, so the signal-exit
+    work must never read half of a two-field update: a run that failed with an error
+    would otherwise be recorded as having failed with none. One store of one frozen value
+    is what both signal callbacks read.
+    """
+
+    outcome: FinalizationState
+    error: BaseException | None
+
+
 @dataclasses.dataclass(slots=True)
 class _RunExit:
     """How the process body ended, as the signal-exit work reads it.
 
-    ``outcome`` is ``None`` while the body runs, so a signal there ends the run as
-    cancelled; once the body ends it holds the causal outcome, which a signal during
-    terminal finalization keeps. ``resources_finalized`` turns true once the resource
-    rollup is written, so a signal after it leaves that rollup alone; ``finalized`` turns
-    true once the operations summary is too, and the signal-exit work then has nothing
-    left to write.
+    ``body`` is ``None`` while the body runs, so a signal there ends the run as
+    cancelled; it is stored the moment the body resolves, before anything the terminal
+    path does, so a signal between the body and its finalization keeps the body's own
+    outcome rather than reporting a cancellation. ``resources_finalized`` turns true once
+    the resource rollup is written, so a signal after it leaves that rollup alone;
+    ``finalized`` turns true once the operations summary is too, and the signal-exit work
+    then has nothing left to write.
     """
 
-    outcome: FinalizationState | None = None
-    error: BaseException | None = None
+    body: _BodyOutcome | None = None
     resources_finalized: bool = False
     finalized: bool = False
 
+    def resolve(self, outcome: FinalizationState, error: BaseException | None) -> None:
+        """Publish the body's outcome once, in one store. Later calls keep the first."""
+        if self.body is None:
+            self.body = _BodyOutcome(outcome=outcome, error=error)
 
-def _signal_exit_work(run_dir: Path, *, run_exit: _RunExit, bundle: PlanBundle) -> SignalExitWork:
+
+def _signal_exit_work(
+    run_dir: Path, *, run_exit: _RunExit, bundle: PlanBundle | None
+) -> SignalExitWork:
     """The summaries a hard-stop signal writes before the orchestrator dies by it.
 
-    ``mark`` writes a resource usage summary that records the outcome and is marked
-    incomplete, so the run keeps one whatever happens next; ``finish`` then runs the
+    ``mark`` records the run's causal outcome and writes a resource usage summary marked
+    incomplete, so the run keeps both whatever happens next; ``finish`` then runs the
     resource and operations finalization the run's ``finally`` would have run, and its
     complete summary replaces the incomplete one.
+
+    ``mark`` takes no lock: the handler interrupts the main thread wherever it is, and a
+    lock that thread holds is never released. Its record is the newest causal fact about
+    the run, and no recovery writer replaces one — status compares it again under the lock
+    before it publishes — so nothing later overwrites what the signal recorded.
     """
     run_id = resource_run_id(run_dir)
 
-    def outcome() -> FinalizationState:
-        return run_exit.outcome or FinalizationState.CANCELLED
+    def resolved() -> tuple[_BodyOutcome, bool]:
+        """The body's outcome, or a cancellation, and whether the signal is what ended it.
 
-    def ended_by(signum: signal.Signals) -> signal.Signals | None:
-        # The signal ended the run only if it arrived while the body was running.
-        return signum if run_exit.outcome is None else None
+        One read of one field decides both, so the two cannot disagree.
+        """
+        body = run_exit.body
+        if body is not None:
+            return body, False
+        return _BodyOutcome(outcome=FinalizationState.CANCELLED, error=None), True
 
     def mark(signum: signal.Signals) -> None:
         if run_exit.finalized or run_exit.resources_finalized:
             return
-        signal_ended = ended_by(signum)
+        body, signal_ended_run = resolved()
+        signal_ended = signum if signal_ended_run else None
+        error_type = (
+            type(body.error).__name__
+            if body.error is not None
+            else signal_ended.name
+            if signal_ended is not None
+            else None
+        )
+        # Records the run's causal outcome first, then the incomplete summary.
         write_incomplete_resource_usage_summary(
             run_dir,
             run_id=run_id,
-            state=outcome(),
-            terminal_error_type=(
-                type(run_exit.error).__name__
-                if run_exit.error is not None
-                else signal_ended.name
-                if signal_ended is not None
-                else None
-            ),
+            state=body.outcome,
+            terminal_error_type=error_type,
         )
 
     def finish(signum: signal.Signals) -> None:
         if run_exit.finalized:
             return
+        body, signal_ended_run = resolved()
         if not run_exit.resources_finalized:
             finalize_run_resources(
                 run_dir,
-                outcome=outcome(),
+                outcome=body.outcome,
                 trigger="terminal",
-                terminal_error=run_exit.error,
-                terminal_signal=ended_by(signum),
+                terminal_error=body.error,
+                terminal_signal=signum if signal_ended_run else None,
                 bundle=bundle,
+                # The psutil samplers are daemon threads that still hold append handles
+                # on the ledger; replacing it would send their samples to the unlinked
+                # copy and drop what is in flight. A later recovery rewrites it.
+                write_events=False,
+                signal_exit=True,
             )
-        finalize_operations_summary(run_dir, outcome=outcome())
+        finalize_operations_summary(run_dir, outcome=body.outcome, signal_exit=True)
 
     return SignalExitWork(mark=mark, finish=finish)
 
@@ -7270,20 +7308,28 @@ def run_process_command(
             "measured so far" + (f" ({unpriced} logs have no list price)" if unpriced else "")
         )
 
-    # Leave SIGINT at Python's default so asyncio.Runner translates Ctrl-C into
-    # cooperative task cancellation. SIGTERM, SIGHUP and SIGQUIT retain the hard
-    # descendant reaper, which writes the run's summaries before the orchestrator dies by
-    # the signal.
-    install_subprocess_reaper_signal_handlers(include_sigint=False)
-
     finalization_state = FinalizationState.COMPLETED
     terminal_error: BaseException | None = None
     run_exit = _RunExit()
+    # Registered before the handlers are installed, so no handled signal can arrive while
+    # the registry is empty: such a signal would re-raise at once and leave the run
+    # neither an incomplete summary nor a finalization. An unregistered worker never
+    # runs, so registering first costs nothing but an idle thread.
     try:
         unregister_signal_exit = register_signal_exit_work(
             _signal_exit_work(run_dir, run_exit=run_exit, bundle=snapshot_bundle)
         )
     except BaseException:
+        release_lease(run_dir)
+        raise
+    # Leave SIGINT at Python's default so asyncio.Runner translates Ctrl-C into
+    # cooperative task cancellation. SIGTERM, SIGHUP and SIGQUIT retain the hard
+    # descendant reaper, which writes the run's summaries before the orchestrator dies by
+    # the signal.
+    try:
+        install_subprocess_reaper_signal_handlers(include_sigint=False)
+    except BaseException:
+        unregister_signal_exit()
         release_lease(run_dir)
         raise
     try:
@@ -7374,21 +7420,29 @@ def run_process_command(
             )
             _record_process_output_failure(run_dir, error)
             raise error
+        # The body is resolved. A signal from here on reports this outcome, not a
+        # cancellation: the snapshot is published as each outcome is selected, not once
+        # the terminal path is entered, so no signal can land between the two.
+        run_exit.resolve(finalization_state, terminal_error)
     except (TimeoutError, subprocess.TimeoutExpired) as exc:
         finalization_state = FinalizationState.TIMED_OUT
         terminal_error = exc
+        run_exit.resolve(finalization_state, terminal_error)
         raise
     except (KeyboardInterrupt, asyncio.CancelledError) as exc:
         finalization_state = FinalizationState.CANCELLED
         terminal_error = exc
+        run_exit.resolve(finalization_state, terminal_error)
         raise
     except BaseException as exc:
         finalization_state = FinalizationState.FAILED
         terminal_error = exc
+        run_exit.resolve(finalization_state, terminal_error)
         raise
     finally:
-        # A signal from here on finalizes with the outcome the body ended with.
-        run_exit.outcome, run_exit.error = finalization_state, terminal_error
+        # Already resolved above, except where a signal-raised exception escaped before
+        # its own resolve; the first store stands either way.
+        run_exit.resolve(finalization_state, terminal_error)
         try:
             try:
                 finalize_run_resources(

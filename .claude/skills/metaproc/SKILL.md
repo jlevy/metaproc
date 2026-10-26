@@ -90,12 +90,12 @@ kickoff sequence and defer to the metaproc CLI for execution.
 Available via `metaproc help <topic>`, in recommended reading order:
 
 - **concepts** (~8.1k words): Start here. Vocabulary, ownership boundaries, step modes, optimization loops.
-- **design** (~22.0k words): How Metaproc is built: spec format, runtime artifacts, adapters, robustness.
+- **design** (~23.5k words): How Metaproc is built: spec format, runtime artifacts, adapters, robustness.
 - **framework** (~7.3k words): Background theory: the general model beneath any process framework, and Metaproc's mapping.
-- **operator** (~12.7k words): Runtime CLI reference: running, monitoring, and resuming processes.
+- **operator** (~13.2k words): Runtime CLI reference: running, monitoring, and resuming processes.
 - **developer** (~1.6k words): Extending Metaproc and the 'Metaproc is the right wrapper' policy.
 - **conventions** (~4.6k words): Framework-level naming, structure, and file-format rules.
-- **artifacts** (~2.2k words): Every runtime artifact Metaproc writes or reads: format, schema, lifecycle.
+- **artifacts** (~2.6k words): Every runtime artifact Metaproc writes or reads: format, schema, lifecycle.
 - **execution-contracts** (~2.3k words): The durable contracts under task-level scheduling, and their rationale.
 - **credentials** (~3.3k words): Configuring credentials for each adapter: Claude, Codex, Gemini, pi, GCP.
 - **cloud-dispatch** (~2.3k words): Preparing, submitting, monitoring, and recovering GCP Batch workloads.

@@ -7,18 +7,27 @@ an operator.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import psutil
 import pytest
 
+from metaproc.commands.run_process import _RunExit, _signal_exit_work
+from metaproc.commands.status import _recover_resource_artifacts
+from metaproc.engine import resource_finalization
+from metaproc.engine.finalization_outcome import read_finalization_outcome
 from metaproc.engine.operations_summary import read_operations_summary
+from metaproc.engine.resource_finalization import resource_artifacts_need_recovery
+from metaproc.engine.run_status import RunStatus
 from metaproc.io import fmf_read_frontmatter
+from metaproc.models.authored import ProgressCounts
 from metaproc.models.resource_budget import FinalizationState
 from metaproc.models.resource_summary import ResourceUsageSummary
 from metaproc.models.resources import ResourcesDocument, read_resources_document
@@ -493,3 +502,227 @@ def test_status_backfills_a_resumed_run_whose_earlier_orchestrator_was_killed(
     assert terminal.finalization.terminal_error_type == "SIGTERM"
     operations = read_operations_summary(run_dir).summary
     assert operations is not None and operations.trigger == "finalization"
+
+
+_SIGNAL_AT_THE_REGISTRATION_BOUNDARY = """\
+import os, signal, sys
+
+import metaproc.cli
+from metaproc.commands import run_process
+
+real_install = run_process.install_subprocess_reaper_signal_handlers
+
+
+def install_then_signal(*args, **kwargs):
+    real_install(*args, **kwargs)
+    # The earliest instant a handled signal can arrive: the handler is installed and
+    # nothing has run since. The run's exit work has to be registered by now, or the
+    # handler finds an empty registry and re-raises with nothing written.
+    os.kill(os.getpid(), signal.SIGTERM)
+
+
+run_process.install_subprocess_reaper_signal_handlers = install_then_signal
+sys.argv = ["metaproc", "run-process", *sys.argv[1:]]
+metaproc.cli.main()
+"""
+
+
+def test_a_signal_at_the_registration_boundary_still_writes_a_summary(
+    tmp_path: Path,
+) -> None:
+    """A hard-stop signal that lands the moment the handlers are installed finds the
+    run's exit work registered, so the run still records how it ended."""
+    process_path = tmp_path / "signal-exit.process.md"
+    process_path.write_text(_PROCESS)
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "run-1"
+    with (tmp_path / "launch.log").open("wb") as log_file:
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                _SIGNAL_AT_THE_REGISTRATION_BOUNDARY,
+                str(process_path),
+                "--var",
+                f"RUNS_DIR={runs_dir}",
+                "--var",
+                "RUN_ID=run-1",
+            ],
+            cwd=_ROOT,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
+    try:
+        returncode = proc.wait(timeout=60)
+    finally:
+        _stop(proc)
+
+    assert returncode == -signal.SIGTERM, (tmp_path / "launch.log").read_text()
+    summary = _resource_summary(run_dir)
+    assert summary.finalization.state is FinalizationState.CANCELLED
+    assert summary.finalization.terminal_error_type == "SIGTERM"
+    recorded = read_finalization_outcome(run_dir)
+    assert recorded is not None
+    assert (recorded.state, recorded.terminal_error_type) == (
+        FinalizationState.CANCELLED,
+        "SIGTERM",
+    )
+
+
+def test_signal_exit_leaves_the_live_resource_ledger_alone(tmp_path: Path) -> None:
+    """The psutil samplers are daemon threads holding append handles on the ledger while
+    the exit work runs. Replacing the file would send their samples to the unlinked copy
+    and drop whatever is in flight, so the exit work leaves it as it is."""
+    process_path = tmp_path / "signal-exit.process.md"
+    process_path.write_text(_PROCESS)
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "run-1"
+    proc = _launch(process_path, runs_dir, "run-1", "launch")
+    try:
+        _slow_step_pid(run_dir, proc)
+        ledger = run_dir / ".logs" / "resource-events.jsonl"
+        deadline = time.monotonic() + 45
+        while not ledger.is_file():
+            assert proc.poll() is None, "run-process exited before sampling began"
+            assert time.monotonic() < deadline, f"no resource ledger under {run_dir}"
+            time.sleep(0.1)
+        inode_before = ledger.stat().st_ino
+        lines_before = len(ledger.read_text().splitlines())
+
+        proc.send_signal(signal.SIGTERM)
+        returncode = proc.wait(timeout=60)
+    finally:
+        _stop(proc)
+
+    assert returncode == -signal.SIGTERM
+    assert ledger.stat().st_ino == inode_before, "the exit work replaced the live ledger"
+    assert len(ledger.read_text().splitlines()) >= lines_before
+    # The projections are still published from everything the ledger holds.
+    assert _resource_summary(run_dir).finalization.state is FinalizationState.CANCELLED
+
+
+def _inactive_status(run_dir: Path) -> RunStatus:
+    return RunStatus(run_dir=run_dir, is_active=False, totals=ProgressCounts(total=1, completed=1))
+
+
+def test_status_past_its_check_cannot_erase_a_real_signals_cancellation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Status compared an absent summary and took the publication lock; a real SIGTERM
+    then ended the run, whose mark takes no lock, and whose bounded finish could not
+    complete. Status's own projection may land, but the run's recorded cancellation
+    stands, reads as needing recovery, and the next recovery restores it."""
+    process_path = tmp_path / "signal-exit.process.md"
+    process_path.write_text(_PROCESS)
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "run-1"
+    with (tmp_path / "launch.log").open("wb") as log_file:
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                _STALLED_ROLLUP,
+                str(process_path),
+                "--var",
+                f"RUNS_DIR={runs_dir}",
+                "--var",
+                "RUN_ID=run-1",
+            ],
+            cwd=_ROOT,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
+    real_publish = resource_finalization._publish_finalization
+    signalled: list[int] = []
+
+    def signal_the_run_then_publish(*args: Any, **kwargs: Any) -> None:
+        if not signalled:
+            proc.send_signal(signal.SIGTERM)
+            signalled.append(proc.wait(timeout=60))
+        real_publish(*args, **kwargs)
+
+    try:
+        step_pid = _slow_step_pid(run_dir, proc)
+        monkeypatch.setattr(
+            resource_finalization, "_publish_finalization", signal_the_run_then_publish
+        )
+        _recover_resource_artifacts(run_dir, _inactive_status(run_dir))
+        monkeypatch.undo()
+    finally:
+        _stop(proc)
+
+    assert signalled == [-signal.SIGTERM]
+    assert _gone(step_pid)
+    # Status was genuinely past its check: its own projection replaced the marker.
+    published = _resource_summary(run_dir).finalization
+    assert (published.trigger, published.state) == ("status", FinalizationState.COMPLETED)
+    recorded = read_finalization_outcome(run_dir)
+    assert recorded is not None, "the signal's causal outcome was lost"
+    assert (recorded.state, recorded.terminal_error_type) == (
+        FinalizationState.CANCELLED,
+        "SIGTERM",
+    )
+    assert resource_artifacts_need_recovery(run_dir)
+
+    _recover_resource_artifacts(run_dir, _inactive_status(run_dir))
+
+    restored = _resource_summary(run_dir).finalization
+    assert (restored.state, restored.terminal_error_type) == (
+        FinalizationState.CANCELLED,
+        "SIGTERM",
+    )
+    assert not resource_artifacts_need_recovery(run_dir)
+
+
+def test_the_bodys_outcome_and_its_error_are_one_indivisible_value() -> None:
+    """A signal interrupts the main thread between any two bytecodes, so the exit work
+    must never read an outcome without the error it was selected with."""
+    run_exit = _RunExit()
+    assert run_exit.body is None
+
+    error = RuntimeError("the step failed")
+    run_exit.resolve(FinalizationState.FAILED, error)
+    body = run_exit.body
+    assert body is not None
+    assert (body.outcome, body.error) == (FinalizationState.FAILED, error)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        body.error = None  # pyright: ignore[reportAttributeAccessIssue]
+
+    # The body resolves once; a later store cannot split or replace the pair.
+    run_exit.resolve(FinalizationState.COMPLETED, None)
+    assert run_exit.body is body
+
+
+def test_a_signal_once_the_body_resolved_records_the_bodys_own_outcome(
+    tmp_path: Path,
+) -> None:
+    """The run had already failed when the signal arrived: the mark records that
+    failure and its error, not a cancellation by the signal."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    run_exit = _RunExit()
+    run_exit.resolve(FinalizationState.FAILED, RuntimeError("the step failed"))
+
+    _signal_exit_work(run_dir, run_exit=run_exit, bundle=None).mark(signal.SIGTERM)
+
+    recorded = read_finalization_outcome(run_dir)
+    assert recorded is not None
+    assert (recorded.state, recorded.terminal_error_type, recorded.incomplete) == (
+        FinalizationState.FAILED,
+        "RuntimeError",
+        True,
+    )
+
+
+def test_a_signal_while_the_body_runs_records_the_signal(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    _signal_exit_work(run_dir, run_exit=_RunExit(), bundle=None).mark(signal.SIGHUP)
+
+    recorded = read_finalization_outcome(run_dir)
+    assert recorded is not None
+    assert (recorded.state, recorded.terminal_error_type) == (
+        FinalizationState.CANCELLED,
+        "SIGHUP",
+    )

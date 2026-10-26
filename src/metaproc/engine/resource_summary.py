@@ -10,6 +10,7 @@ from pathlib import Path
 from frontmatter_format import fmf_read_frontmatter, fmf_write
 from strif import atomic_output_file, atomic_write_text
 
+from metaproc.engine.finalization_outcome import write_finalization_outcome
 from metaproc.models.resource_budget import BudgetStatus, FinalizationState, ResourceFinalization
 from metaproc.models.resource_summary import (
     RESOURCE_USAGE_SUMMARY_CONTRACT,
@@ -46,24 +47,30 @@ def write_incomplete_resource_usage_summary(
     terminal_error_type: str | None,
     finalized_at: datetime | None = None,
 ) -> Path:
-    """Persist a summary that records how a run ended and none of its totals.
+    """Record how a run ended, then persist a summary of that and none of its totals.
 
     A hard-stop signal writes this before attempting the run's rollup, so the run has a
     summary even when the rollup cannot finish before the process dies; a finished
     rollup replaces it. It reads no run evidence and takes no lock, so it is safe to call
     from a signal handler. ``finalization.incomplete`` marks it, and status recovery
     rebuilds it from local evidence.
+
+    The same finalization goes to the run's durable outcome record first, so the causal
+    outcome survives even this summary being replaced: a projection is replaced whole by
+    whichever writer publishes last, and the record is what every recovery path reads.
     """
+    finalization = ResourceFinalization(
+        state=state,
+        trigger="terminal",
+        finalized_at=finalized_at or datetime.now(UTC),
+        terminal_error_type=terminal_error_type,
+        incomplete=True,
+    )
+    write_finalization_outcome(run_dir, finalization)
     summary = ResourceUsageSummary(
         run_id=run_id,
         totals=Metrics(),
-        finalization=ResourceFinalization(
-            state=state,
-            trigger="terminal",
-            finalized_at=finalized_at or datetime.now(UTC),
-            terminal_error_type=terminal_error_type,
-            incomplete=True,
-        ),
+        finalization=finalization,
     )
     return _write_summary(summary, run_dir)
 

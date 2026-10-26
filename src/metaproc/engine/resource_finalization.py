@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import signal
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
 from metaproc.engine.finalization_lock import finalization_publish_lock
+from metaproc.engine.finalization_outcome import (
+    finalization_outcome_snapshot,
+    read_finalization_outcome,
+    write_finalization_outcome,
+)
 from metaproc.engine.resource_hierarchy import build_hierarchy_skeleton
 from metaproc.engine.resource_reconciliation import reconcile_resource_events
 from metaproc.engine.resource_rollup import (
@@ -47,32 +53,46 @@ RESOURCE_EVENTS_RELATIVE = ".logs/resource-events.jsonl"
 RESOURCES_RELATIVE = "resources.json"
 
 
+@dataclass(frozen=True)
+class CausalOutcome:
+    """How a run ended, as recovery reconstructs it from what the run recorded."""
+
+    state: FinalizationState
+    terminal_error_type: str | None = None
+
+
 def infer_recovery_outcome(
     run_dir: Path,
     *,
     totals: ProgressCounts | None = None,
 ) -> FinalizationState:
-    """Preserve a causal state, then infer only from persisted terminal progress.
+    """Return only the state of :func:`infer_causal_outcome`."""
+    return infer_causal_outcome(run_dir, totals=totals).state
 
-    The summary is read first: an incomplete one, written when a hard-stop signal ended
-    the run before its rollup finished, holds the latest causal state, while the
-    ``resources.json`` beside it can be an earlier launch's.
+
+def infer_causal_outcome(
+    run_dir: Path,
+    *,
+    totals: ProgressCounts | None = None,
+) -> CausalOutcome:
+    """Preserve a causal outcome, then infer only from persisted terminal progress.
+
+    The run's own ``.state/finalization-outcome.json`` is the authority: a launch records
+    it first in every publication, and recovery only ever adds one where none is. A run
+    from before that record falls back to the newer of the two projections' own
+    finalizations, by the time each records, since either can be an earlier launch's: a
+    resumed launch can publish ``resources.json`` and be killed before its summary, and a
+    hard-stop signal writes an incomplete summary beside an earlier ``resources.json``.
     """
-    summarized = read_resource_usage_finalization(run_dir)
-    if summarized is not None:
-        return summarized.state
+    recorded = read_finalization_outcome(run_dir)
+    if recorded is not None:
+        return CausalOutcome(state=recorded.state, terminal_error_type=recorded.terminal_error_type)
 
-    resources_path = run_dir / RESOURCES_RELATIVE
-    if resources_path.exists():
-        try:
-            document = read_resources_document(resources_path)
-            if (
-                isinstance(document, (ResourcesDocument, ResourcesDocumentV2))
-                and document.finalization is not None
-            ):
-                return document.finalization.state
-        except Exception:  # noqa: BLE001 - stale or malformed projections are rebuilt
-            pass
+    projected = _newest_projected_finalization(run_dir)
+    if projected is not None:
+        return CausalOutcome(
+            state=projected.state, terminal_error_type=projected.terminal_error_type
+        )
 
     process_status_path = run_dir / ".state" / "process-status.yaml"
     if process_status_path.exists():
@@ -82,7 +102,7 @@ def infer_recovery_outcome(
                 state = process_status.get("state")
                 if isinstance(state, str):
                     try:
-                        return FinalizationState(state)
+                        return CausalOutcome(state=FinalizationState(state))
                     except ValueError:
                         pass
         except Exception:  # noqa: BLE001 - recovery falls back to task progress
@@ -90,8 +110,38 @@ def infer_recovery_outcome(
 
     if totals is not None and totals.total > 0:
         if totals.completed + totals.cached >= totals.total:
-            return FinalizationState.COMPLETED
-    return FinalizationState.FAILED
+            return CausalOutcome(state=FinalizationState.COMPLETED)
+    return CausalOutcome(state=FinalizationState.FAILED)
+
+
+def _newest_projected_finalization(run_dir: Path) -> ResourceFinalization | None:
+    """Return the later of the run's two projections' finalizations, or ``None``.
+
+    Ties go to the summary: a publication writes ``resources.json`` first and the summary
+    last, so the two carry one finalization, and an incomplete summary a signal wrote
+    beside an untouched ``resources.json`` is never older than it.
+    """
+    summarized = read_resource_usage_finalization(run_dir)
+    projected = _resources_document_finalization(run_dir)
+    if summarized is None:
+        return projected
+    if projected is None:
+        return summarized
+    return summarized if summarized.finalized_at >= projected.finalized_at else projected
+
+
+def _resources_document_finalization(run_dir: Path) -> ResourceFinalization | None:
+    """Return the finalization ``resources.json`` records, or ``None`` if none reads."""
+    resources_path = run_dir / RESOURCES_RELATIVE
+    if not resources_path.exists():
+        return None
+    try:
+        document = read_resources_document(resources_path)
+    except Exception:  # noqa: BLE001 - stale or malformed projections are rebuilt
+        return None
+    if isinstance(document, (ResourcesDocument, ResourcesDocumentV2)):
+        return document.finalization
+    return None
 
 
 def finalize_run_resources(
@@ -102,18 +152,25 @@ def finalize_run_resources(
     trigger: Literal["terminal", "resume", "status", "recovery"] = "terminal",
     terminal_error: BaseException | None = None,
     terminal_signal: signal.Signals | None = None,
+    terminal_error_type: str | None = None,
     finalized_at: datetime | None = None,
     bundle: PlanBundle | None = None,
     write_events: bool = True,
+    signal_exit: bool = False,
 ) -> ResourceBuildResult:
     """Replay local evidence and atomically replace all resource projections.
 
     The caller supplies the causal terminal outcome. This function never inspects
     historical error strings to reinterpret it, and it performs no network calls.
-    ``terminal_signal`` names the hard-stop signal that ended the run when no error did.
-    ``write_events=False`` leaves ``.logs/resource-events.jsonl`` as it is, for a run
-    whose live orchestrator may still append to it. The evidence is read first; the
-    projections are then published under the run's finalization lock.
+    ``terminal_signal`` names the hard-stop signal that ended the run when no error did,
+    and ``terminal_error_type`` names what ended it when only a record of it survives, as
+    recovery has. ``write_events=False`` leaves ``.logs/resource-events.jsonl`` as it is,
+    for a run whose live orchestrator may still append to it. ``signal_exit=True`` marks
+    the publication a hard-stop signal runs, which inherits a lock this process holds
+    rather than waiting for the interrupted thread that will never release it.
+
+    The evidence is read first; the run's causal outcome and then its projections are
+    published under the run's finalization lock.
     """
     result = _build_finalization(
         run_dir,
@@ -122,10 +179,11 @@ def finalize_run_resources(
         trigger=trigger,
         terminal_error=terminal_error,
         terminal_signal=terminal_signal,
+        terminal_error_type=terminal_error_type,
         finalized_at=finalized_at,
         bundle=bundle,
     )
-    with finalization_publish_lock(run_dir):
+    with finalization_publish_lock(run_dir, adopt_local_holder=signal_exit):
         _publish_finalization(result, run_dir, write_events=write_events)
     return result
 
@@ -135,22 +193,37 @@ def recover_run_resources(
     *,
     outcome: FinalizationState,
     observed_summary: bytes | None,
+    observed_outcome: bytes | None = None,
+    terminal_error_type: str | None = None,
     bundle: PlanBundle | None = None,
     write_events: bool = True,
 ) -> bool:
     """Rebuild a run's resource projections for ``metaproc status``; return whether it did.
 
-    ``observed_summary`` is the run's ``resource-usage-summary.md`` as status found it
-    when it decided to recover (:func:`resource_usage_summary_snapshot`). Reading the
-    evidence can take minutes on a large run, and the run's own orchestrator can finalize
-    meanwhile: a resume that ends, or a launch started after status found the run
-    inactive. So the projections are published only if, under the finalization lock, the
-    summary is still the one status observed; a different one is the orchestrator's, and
-    status's older reading would replace its outcome and totals for good.
+    ``observed_summary`` and ``observed_outcome`` are the run's
+    ``resource-usage-summary.md`` and ``.state/finalization-outcome.json`` as status found
+    them when it decided to recover (:func:`resource_usage_summary_snapshot`,
+    :func:`~metaproc.engine.finalization_outcome.finalization_outcome_snapshot`). Reading
+    the evidence can take minutes on a large run, and the run's own orchestrator can
+    record an outcome or finalize meanwhile: a resume that ends, a launch started after
+    status found the run inactive, or a hard-stop signal, whose mark takes no lock. So the
+    projections are published only if, under the finalization lock, both are still the
+    ones status observed; anything else is the orchestrator's, and status's older reading
+    would replace its outcome and totals for good.
+
+    Recovery never replaces the recorded outcome: it writes one only where none is.
     """
-    result = _build_finalization(run_dir, outcome=outcome, trigger="status", bundle=bundle)
+    result = _build_finalization(
+        run_dir,
+        outcome=outcome,
+        trigger="status",
+        terminal_error_type=terminal_error_type,
+        bundle=bundle,
+    )
     with finalization_publish_lock(run_dir):
         if resource_usage_summary_snapshot(run_dir) != observed_summary:
+            return False
+        if finalization_outcome_snapshot(run_dir) != observed_outcome:
             return False
         _publish_finalization(result, run_dir, write_events=write_events)
     return True
@@ -172,6 +245,7 @@ def _build_finalization(
     legacy_run_id: str | None = None,
     terminal_error: BaseException | None = None,
     terminal_signal: signal.Signals | None = None,
+    terminal_error_type: str | None = None,
     finalized_at: datetime | None = None,
     bundle: PlanBundle | None = None,
 ) -> ResourceBuildResult:
@@ -206,16 +280,19 @@ def _build_finalization(
     events = reconcile_resource_events([*extracted_events, *persisted_events])
 
     if terminal_error is not None:
-        terminal_error_type: str | None = type(terminal_error).__name__
+        resolved_error_type: str | None = type(terminal_error).__name__
+    elif terminal_signal is not None:
+        resolved_error_type = terminal_signal.name
     else:
-        terminal_error_type = terminal_signal.name if terminal_signal is not None else None
+        # What recovery carries forward from the record the ended launch left.
+        resolved_error_type = terminal_error_type
     finalization = ResourceFinalization(
         state=outcome,
         trigger=trigger,
         finalized_at=finalized_at or datetime.now(UTC),
         recovered=trigger in {"status", "recovery"},
         source_event_count=len(events),
-        terminal_error_type=terminal_error_type,
+        terminal_error_type=resolved_error_type,
     )
     document = project_resource_document(
         # Keep item/file/tool leaves materialized while parsing raw evidence.
@@ -240,6 +317,16 @@ def _build_finalization(
 def _publish_finalization(
     result: ResourceBuildResult, run_dir: Path, *, write_events: bool
 ) -> None:
+    """Record the causal outcome, then replace the projections that carry it.
+
+    The outcome goes first, so a publication interrupted part way — by the signal that a
+    bounded exit cannot outrun, or by the process dying — still leaves the newest causal
+    fact where every recovery path reads it. A recovering writer inferred its outcome
+    rather than observing it, so it only fills in a record that is absent.
+    """
+    finalization = result.document.finalization
+    if finalization is not None:
+        write_finalization_outcome(run_dir, finalization, if_absent=finalization.recovered)
     write_resource_artifacts(result, write_events=write_events)
     write_resource_usage_summary(result.document, run_dir)
 
@@ -270,6 +357,10 @@ def resource_artifacts_need_recovery(run_dir: Path) -> bool:
     summarized = read_resource_usage_finalization(run_dir)
     if summarized is not None and summarized.incomplete:
         return True
+    recorded = read_finalization_outcome(run_dir)
+    if summarized is not None and recorded is not None and not _agrees(summarized, recorded):
+        # The projections are an older or a lost-race publication; the record is causal.
+        return True
     try:
         projection_mtime = min(
             resources_path.stat().st_mtime_ns,
@@ -283,6 +374,14 @@ def resource_artifacts_need_recovery(run_dir: Path) -> bool:
         )
     except OSError:
         return True
+
+
+def _agrees(summarized: ResourceFinalization, recorded: ResourceFinalization) -> bool:
+    """Return whether a published summary carries the run's recorded causal outcome."""
+    return (
+        summarized.state is recorded.state
+        and summarized.terminal_error_type == recorded.terminal_error_type
+    )
 
 
 def resume_needs_resource_backfill(run_dir: Path) -> bool:
