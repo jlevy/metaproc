@@ -7,6 +7,8 @@ development series.
 
 ## [Unreleased][unreleased]
 
+## [0.6.0][] - 2026-10-26
+
 ### Added
 
 - **A `gcp run` job keeps its console in a file.** With the Filestore mount and the
@@ -1422,7 +1424,8 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
   implicitly. Schemas consumed through Metaproc must be self-contained: use local `$defs`
   references or a registered Pydantic model instead of network-resolved references.
 
-[unreleased]: https://github.com/jlevy/metaproc/compare/v0.5.0...HEAD
+[unreleased]: https://github.com/jlevy/metaproc/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/jlevy/metaproc/releases/tag/v0.6.0
 [0.5.0]: https://github.com/jlevy/metaproc/releases/tag/v0.5.0
 [0.4.1]: https://github.com/jlevy/metaproc/releases/tag/v0.4.1
 [0.4.0]: https://github.com/jlevy/metaproc/releases/tag/v0.4.0
