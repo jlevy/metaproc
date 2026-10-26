@@ -143,10 +143,12 @@ def acquire_mkdir_lock(
                 lock_path,
                 stale_after=stale_after,
                 is_stale=is_stale,
-            ):
-                with contextlib.suppress(FileNotFoundError, OSError):
-                    _remove_lock_dir(lock_path)
+            ) and _reclaim_lock_dir(lock_path):
+                # Reclaimed: retry at once rather than waiting out a poll interval.
                 continue
+            # A lock that should be reclaimed but cannot be — one whose path is not a
+            # lock at all, or whose directory this process may not write — still has to
+            # reach the deadline. Retrying a failing reclaim without it would spin.
             if time.monotonic() >= deadline:
                 msg = (
                     f"could not acquire lock {lock_path} within {timeout:.0f}s "
@@ -174,18 +176,44 @@ def _lock_should_be_reclaimed(
     return age > stale_after
 
 
+def _reclaim_lock_dir(lock_path: Path) -> bool:
+    """Try to remove a lock judged stale; return whether the path is now free.
+
+    A reclaim that cannot be done is not an error here — the contender falls back to
+    waiting and, in time, to a loud timeout.
+    """
+    try:
+        _remove_lock_dir(lock_path)
+    except FileNotFoundError:
+        return True  # Another contender got there first.
+    except OSError:
+        return False
+    return True
+
+
 def _remove_lock_dir(lock_path: Path) -> None:
     """Remove a lock directory, discarding owner metadata a holder left inside it.
 
-    Only regular files directly inside the directory are removed: a lock
-    directory holds a holder's own small records and nothing else.
+    Only regular files directly inside the directory are removed, and only ones
+    that are not themselves links: a lock directory holds a holder's own small
+    records and nothing else.
+
+    A lock path that is a symlink is refused rather than followed. A lock is a
+    directory this module created with ``mkdir(2)``, so a symlink in its place is
+    not a lock, and deleting through one would reach files outside the lock --
+    which matters most on exactly the shared filesystems this module is for,
+    where the lock's parent may be writable by another tenant. Refusing makes
+    such a lock unacquirable, which is loud, rather than destructive.
     """
+    if lock_path.is_symlink():
+        msg = f"refusing to remove a lock path that is a symlink: {lock_path}"
+        raise NotADirectoryError(msg)
     try:
         entries = list(lock_path.iterdir())
     except FileNotFoundError, NotADirectoryError:
         entries = []
     for entry in entries:
-        if entry.is_file():
+        if entry.is_file(follow_symlinks=False):
             with contextlib.suppress(FileNotFoundError, OSError):
                 entry.unlink()
     lock_path.rmdir()

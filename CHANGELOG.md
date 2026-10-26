@@ -60,6 +60,9 @@ development series.
   this host cannot probe (after 5 minutes, not 5 seconds), release cannot remove another
   publisher’s lock, and signal-exit work inherits a lock its own process holds instead
   of waiting on the thread its signal interrupted.
+  The shared mkdir-lock utility discards the holder record with the lock it belongs to,
+  refuses a lock path that is a symlink rather than deleting through it, and reaches its
+  timeout rather than spinning when a lock it judged stale cannot be removed.
 
 ## [0.6.0][] - 2026-10-26
 
