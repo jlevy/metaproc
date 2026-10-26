@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: File I/O Utilities (`metaproc.io`)
 
-**Date:** 2026-07-26 (last updated 2026-10-25) **Status:** Approved
+**Date:** 2026-07-26 (last updated 2026-10-26) **Status:** Approved
 
 `metaproc.io` is the curated public import surface for downstream callers and shared
 internal use. Every helper documented here is importable directly from `metaproc.io`:
@@ -202,11 +202,13 @@ registered codec is always readable, so mixed-codec run directories are ordinary
 
 Most modules parse YAML and frontmatter through `metaproc.io`. Modules may import
 `ruamel.yaml.YAMLError` directly to catch the dependency’s specific parse failures.
-Two production paths hold a parser handle of their own:
+Two engine paths select their parser or serializer behavior explicitly:
 
-- **`metaproc/engine/yaml_repair.py`** uses `ruamel.yaml.YAML(typ='safe').load(...)`
-  directly because the LLM-output repair path needs the parser handle in strict mode,
-  and the module does a manual `---\n` split before any parser touches the text.
+- **`metaproc/engine/yaml_repair.py`** splits frontmatter manually before calling
+  `frontmatter_format.from_yaml_string` for guarded validity checks, both before and
+  after heuristic repair.
+  Documents the supported reader already accepts keep their original bytes and values; a
+  native-parser rejection alone does not trigger repair.
 - **`metaproc/engine/schema_conform.py`** builds its serializer through the curated
   `new_yaml`, but in **round-trip** mode (`typ="rt"`) rather than the default `safe`,
   and reconfigures it: `allow_aliases=True` so an author’s anchor is not expanded into a
