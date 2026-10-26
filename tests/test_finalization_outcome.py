@@ -195,7 +195,7 @@ def test_recovery_keeps_the_signal_that_ended_the_run(tmp_path: Path) -> None:
     assert not resource_artifacts_need_recovery(run_dir)
 
 
-def test_recovery_does_not_replace_a_recorded_outcome(tmp_path: Path) -> None:
+def test_recovery_does_not_replace_an_observed_outcome(tmp_path: Path) -> None:
     """Recovery infers an outcome from evidence; a launch observed one. The launch's
     record stands, so repeated recovery cannot drift away from it."""
     run_dir = _seed(tmp_path, launches=1)
@@ -210,6 +210,27 @@ def test_recovery_does_not_replace_a_recorded_outcome(tmp_path: Path) -> None:
     _recover_resource_artifacts(run_dir, _status(run_dir, active=False))
 
     assert finalization_outcome_path(run_dir).read_bytes() == recorded
+
+
+def test_recovery_records_no_outcome_of_its_own(tmp_path: Path) -> None:
+    """A run killed by SIGKILL observed nothing, so there is nothing to record. Recovery
+    writes no record: an inference that outlived the evidence it was drawn from would be
+    worse than no record, since the record takes precedence over both projections."""
+    run_dir = _seed(tmp_path, launches=1)
+
+    _recover_resource_artifacts(run_dir, _status(run_dir, active=False))
+
+    assert not finalization_outcome_path(run_dir).exists()
+    assert _summary(run_dir).finalization.recovered is True
+    # The outcome still reads back from the projections recovery published.
+    assert infer_causal_outcome(run_dir).state is FinalizationState.COMPLETED
+
+    # Evidence the first recovery could not see still changes the answer.
+    (run_dir / ".state" / "process-status.yaml").write_text("state: failed\n", encoding="utf-8")
+    (run_dir / "resource-usage-summary.md").unlink()
+    (run_dir / "resources.json").unlink()
+
+    assert infer_causal_outcome(run_dir).state is FinalizationState.FAILED
 
 
 def test_a_status_publication_past_its_check_cannot_erase_the_signal(

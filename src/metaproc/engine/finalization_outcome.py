@@ -6,16 +6,20 @@ other is this one's. Neither can be the authority on how a run ended, because a 
 can interrupt a publication between the two, and because ``metaproc status`` rebuilds
 both from evidence it read before the run's own orchestrator published.
 
-So the causal outcome is recorded on its own, in ``.state/finalization-outcome.json``:
+So the causal outcome is recorded on its own, in ``.state/finalization-outcome.json``.
+The record holds one thing and nothing else: **what a launch of this run observed.**
 
 - The run's own orchestrator writes it, and may replace what an earlier launch wrote. It
   is written first in every publication, so an interrupted publication still leaves the
   outcome, and a hard-stop signal writes it before anything else.
 - Recovery — ``metaproc status``, ``metaproc resource-report``, the Metabrowser
-  sidekick — only ever writes it where none is. Recovery infers an outcome from persisted
-  evidence; it never observes one, so it must not overwrite what a launch observed.
+  sidekick — never writes it. Recovery infers an outcome from persisted evidence rather
+  than observing one, and an inference that outlived the evidence it was drawn from
+  would be worse than no record at all.
 - Every recovery path reads it to choose the outcome it publishes, so a rebuilt summary
-  keeps the state and the signal name the launch recorded.
+  keeps the state and the signal name the launch recorded. A run with no record — one
+  killed by SIGKILL, or finalized by a Metaproc from before the record — is inferred
+  from evidence exactly as it was before.
 
 The record holds a :class:`~metaproc.models.resource_budget.ResourceFinalization`, the
 same shape the projections carry, so a reader needs no second contract.
@@ -53,21 +57,18 @@ def read_finalization_outcome(run_dir: Path) -> ResourceFinalization | None:
         return None
 
 
-def write_finalization_outcome(
-    run_dir: Path, finalization: ResourceFinalization, *, if_absent: bool = False
-) -> bool:
-    """Record how the run ended; return whether this call wrote it.
+def write_finalization_outcome(run_dir: Path, finalization: ResourceFinalization) -> None:
+    """Record how the run's latest launch ended, replacing any earlier launch's record.
 
-    ``if_absent=True`` keeps a record already there, for a recovery writer that inferred
-    its outcome rather than observing it. Call it holding the run's finalization lock,
-    except from a hard-stop signal handler, which can take no lock and writes the newest
-    causal fact there is.
+    Only a launch that observed its own outcome calls this. Call it holding the run's
+    finalization lock, except from a hard-stop signal handler, which can take no lock and
+    writes the newest causal fact there is.
     """
-    path = finalization_outcome_path(run_dir)
-    if if_absent and path.exists():
-        return False
-    atomic_write_text(path, finalization.model_dump_json(exclude_none=False), make_parents=True)
-    return True
+    atomic_write_text(
+        finalization_outcome_path(run_dir),
+        finalization.model_dump_json(exclude_none=False),
+        make_parents=True,
+    )
 
 
 def finalization_outcome_snapshot(run_dir: Path) -> bytes | None:

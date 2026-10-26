@@ -1212,11 +1212,15 @@ ended is recorded on its own, in `.state/finalization-outcome.json`, and that re
 what every recovery path reads: `metaproc status`, `metaproc resource-report` and the
 Metabrowser resource view all report the state and the `terminal_error_type` it holds,
 so a summary rebuilt from evidence still names the signal that ended the run.
-The run’s own orchestrator writes the record, first in every publication and before
-anything else on a hard stop; recovery only ever writes one where none is, since it
-infers an outcome rather than observing one.
-A run’s artifacts read as needing recovery whenever they disagree with the record, so a
-projection that lost a race is rebuilt rather than believed.
+The record holds one thing: what a launch of this run observed.
+The run’s own orchestrator writes it, first in every publication and before anything
+else on a hard stop.
+Recovery never writes it, since it infers an outcome from evidence rather than observing
+one, and an inference that outlived that evidence would be worse than no record.
+A run with no record — killed by SIGKILL, or finalized by a Metaproc from before the
+record — is inferred from evidence exactly as before, from the newer of its two
+projections. A run’s artifacts read as needing recovery whenever they disagree with its
+record, so a projection that lost a race is rebuilt rather than believed.
 
 Every writer of these three files publishes holding `.state/finalization.lock`: terminal
 finalization, the hard reaper’s signal-exit work, status recovery, `resource-report`,

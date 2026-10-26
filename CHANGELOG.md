@@ -46,9 +46,11 @@ development series.
   `metaproc status`, `metaproc resource-report` and the Metabrowser resource view all
   read it, so a rebuilt summary keeps the state and the signal that ended the run, and a
   run stopped by SIGTERM is no longer reported as failed or as an earlier launch’s
-  completion. A recovering writer only fills in a record that is absent, and artifacts
-  that disagree with the record read as needing recovery.
-  A run finalized before this record falls back to the newer of its two projections.
+  completion. The record holds what a launch observed and nothing else — recovery never
+  writes one, since an inference that outlived its evidence would be worse than no
+  record — and artifacts that disagree with it read as needing recovery.
+  A run with no record, killed by SIGKILL or finalized before the record existed, falls
+  back to the newer of its two projections.
   Every writer of the three files — terminal finalization, signal-exit work, status
   recovery, `resource-report`, Metabrowser recovery and `operations summary --write` —
   publishes holding `.state/finalization.lock`, and status publishes only if the summary

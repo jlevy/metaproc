@@ -3007,12 +3007,17 @@ leaves one of each launch, and recovery rebuilds both from evidence it read befo
 run’s own orchestrator published.
 So the causal outcome is recorded on its own, in `.state/finalization-outcome.json`,
 holding the same `ResourceFinalization` the projections carry.
+The record holds one thing: what a launch of this run observed.
 The run’s own orchestrator writes it — first in every publication, and before anything
 else on a hard stop — and may replace what an earlier launch wrote, since it observed
-its own outcome. Recovery writes one only where none is, and reads it to choose both the
-state and the `terminal_error_type` it publishes.
-A run from before this record falls back to the newer of its two projections’ own
-finalizations, by the time each records, rather than to a fixed order between them.
+its own outcome.
+Recovery reads it to choose both the state and the `terminal_error_type`
+it publishes, and never writes it: recovery infers an outcome from evidence rather than
+observing one, and an inference that outlived that evidence would be worse than no
+record at all, since the record takes precedence over both projections.
+A run with no record — killed by SIGKILL, or finalized before the record existed — falls
+back to the newer of its two projections’ own finalizations, by the time each records,
+rather than to a fixed order between them.
 Artifacts that disagree with the record read as needing recovery.
 
 Every writer of these three files reads its evidence first and publishes holding the

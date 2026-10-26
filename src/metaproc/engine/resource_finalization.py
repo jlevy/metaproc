@@ -78,8 +78,9 @@ def infer_causal_outcome(
     """Preserve a causal outcome, then infer only from persisted terminal progress.
 
     The run's own ``.state/finalization-outcome.json`` is the authority: a launch records
-    it first in every publication, and recovery only ever adds one where none is. A run
-    from before that record falls back to the newer of the two projections' own
+    it first in every publication, and recovery never writes one, so it only ever holds
+    an observed outcome. A run with no record — killed by SIGKILL, or finalized before
+    the record existed — falls back to the newer of the two projections' own
     finalizations, by the time each records, since either can be an earlier launch's: a
     resumed launch can publish ``resources.json`` and be killed before its summary, and a
     hard-stop signal writes an incomplete summary beside an earlier ``resources.json``.
@@ -211,7 +212,7 @@ def recover_run_resources(
     ones status observed; anything else is the orchestrator's, and status's older reading
     would replace its outcome and totals for good.
 
-    Recovery never replaces the recorded outcome: it writes one only where none is.
+    Recovery writes no outcome record of its own: the record is what a launch observed.
     """
     result = _build_finalization(
         run_dir,
@@ -322,11 +323,12 @@ def _publish_finalization(
     The outcome goes first, so a publication interrupted part way — by the signal that a
     bounded exit cannot outrun, or by the process dying — still leaves the newest causal
     fact where every recovery path reads it. A recovering writer inferred its outcome
-    rather than observing it, so it only fills in a record that is absent.
+    rather than observing it, so it writes no record: the record holds what a launch of
+    this run observed, and nothing else.
     """
     finalization = result.document.finalization
-    if finalization is not None:
-        write_finalization_outcome(run_dir, finalization, if_absent=finalization.recovered)
+    if finalization is not None and not finalization.recovered:
+        write_finalization_outcome(run_dir, finalization)
     write_resource_artifacts(result, write_events=write_events)
     write_resource_usage_summary(result.document, run_dir)
 
