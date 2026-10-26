@@ -164,6 +164,7 @@ def repair_frontmatter_file(path: Path) -> bool:
     # Never sweep sibling lines merely because one scalar made the document fail.
     lines = frontmatter.split("\n")
     changed_lines: set[int] = set()
+    repaired_frontmatter = frontmatter
     for _ in range(_MAX_SCALAR_REPAIRS + 1):
         repaired_frontmatter = "\n".join(lines)
         try:
