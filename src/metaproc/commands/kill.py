@@ -19,7 +19,7 @@ from metaproc.io import read_yaml_file
 from metaproc.io.orchestrator_lease import clear_orchestrator_lease
 from metaproc.output import OutputFormat
 from metaproc.paths import ORCHESTRATOR_LEASE_FILE, STATE_DIR
-from metaproc.runpool.kill import KillResult, kill_pool
+from metaproc.runpool.kill import SIGNAL_EXIT_WAIT_S, KillResult, kill_pool
 
 
 def _format_text(result: KillResult) -> str:
@@ -153,7 +153,8 @@ def _send_signal(pid: int, sig: signal_mod.Signals) -> str:
 
 
 def _wait_for_exit(pid: int) -> str:
-    deadline = time.monotonic() + 3.0
+    # A SIGTERM'd orchestrator writes its run's summaries before it dies.
+    deadline = time.monotonic() + SIGNAL_EXIT_WAIT_S
     while time.monotonic() < deadline:
         try:
             os.kill(pid, 0)

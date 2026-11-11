@@ -260,6 +260,14 @@ class ResourceFinalization(BaseModel):
     recovered: bool = False
     source_event_count: int = Field(default=0, ge=0)
     terminal_error_type: str | None = Field(default=None, max_length=256)
+    """The exception that ended the run, or the signal (``SIGTERM``) when one did."""
+    incomplete: bool = Field(default=False, exclude_if=lambda value: not value)
+    """True when the run ended before its rollup finished, so no total is measured.
+
+    Only a hard-stop signal writes one, before attempting the rollup; status recovery
+    rebuilds it from local evidence. Serialized only when true, so a complete projection
+    carries no such key.
+    """
 
 
 def collect_resource_budgets(plan: Plan) -> list[ResourceBudgetSpec]:

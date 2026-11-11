@@ -20,7 +20,7 @@ from strif import atomic_write_text
 from metaproc.cli import app, get_output
 from metaproc.engine.resource_finalization import (
     finalize_run_resources,
-    infer_recovery_outcome,
+    infer_causal_outcome,
 )
 from metaproc.engine.resource_rollup import build_resource_artifacts
 from metaproc.engine.resource_snapshot import read_resource_run_snapshot
@@ -100,9 +100,11 @@ def resource_report(
             status = scan_run_status(run_dir, include_system=False)
             if status.is_active:
                 raise CLIError("Resource recovery is unavailable while the run is active.")
+            causal = infer_causal_outcome(run_dir, totals=status.totals)
             document = finalize_run_resources(
                 run_dir,
-                outcome=infer_recovery_outcome(run_dir, totals=status.totals),
+                outcome=causal.state,
+                terminal_error_type=causal.terminal_error_type,
                 trigger="recovery",
                 bundle=load_plan_bundle_from_run(run_dir),
             ).document
@@ -151,9 +153,11 @@ def _build_and_persist(
     bundle = load_plan_bundle(spec, params=params)
     status = scan_run_status(run_dir, include_system=False)
     if not status.is_active:
+        causal = infer_causal_outcome(run_dir, totals=status.totals)
         return finalize_run_resources(
             run_dir,
-            outcome=infer_recovery_outcome(run_dir, totals=status.totals),
+            outcome=causal.state,
+            terminal_error_type=causal.terminal_error_type,
             legacy_run_id=run_id,
             trigger="recovery",
             bundle=bundle,

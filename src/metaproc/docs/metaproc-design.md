@@ -6,7 +6,7 @@ status: Approved
 ---
 # Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-10-25) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-10-26) **Status:** Approved
 
 Also readable as `metaproc help design`.
 
@@ -2974,9 +2974,71 @@ normalized budgets under `.state/run-config.yaml:resources`; resume never rewrit
 Budgets are observational and do not refuse or terminate work.
 The terminal finalizer runs before lease release on success, failure, propagated
 timeout, or cancellation.
-`metaproc status` may recover missing or stale reports only after the orchestrator is
-inactive, using local evidence and the frozen snapshot without provider calls or cached
+A SIGTERM, SIGHUP or SIGQUIT never reaches that `finally`: the hard reaper kills the
+orchestrator’s descendants and then re-raises the signal under its default disposition.
+It is installed for SIGHUP and SIGQUIT only when the orchestrator does not inherit them
+ignored. So the reaper writes the reports itself first.
+It records the run’s outcome and writes `resource-usage-summary.md` with
+`finalization.incomplete: true` and no totals, then runs the same finalization on a
+separate thread until 8 seconds after the signal arrived, and the complete reports
+replace the incomplete one.
+That bound, measured from the signal, keeps the whole exit inside the 10 seconds
+`docker stop` allows before SIGKILL. Both record `state: cancelled` and the signal as
+`terminal_error_type`, or the body’s own outcome when the signal arrives during terminal
+finalization; the body publishes that outcome and its error as one value the moment it
+resolves, so a signal between the body and its finalization reports what the body did.
+A signal after the resource rollup is written leaves it as it is, and only the
+operations summary is written again.
+The signal-exit work leaves `resource-events.jsonl` alone: the psutil samplers are
+daemon threads still appending to it, and replacing the file would send their samples to
+the unlinked copy. `metaproc status` recovers missing, stale, or incomplete reports once
+the orchestrator is inactive.
+While a resume runs, it writes only the report an earlier launch left missing or
+incomplete, and leaves `resource-events.jsonl` as it is.
+Recovery uses local evidence and the frozen snapshot without provider calls or cached
 totals.
+
+#### One Authority on How a Run Ended
+
+`resources.json` and `resource-usage-summary.md` are projections, each replaced whole by
+whichever writer publishes last.
+Neither can be the authority on how a run ended: a publication interrupted between them
+leaves one of each launch, and recovery rebuilds both from evidence it read before the
+run’s own orchestrator published.
+So the causal outcome is recorded on its own, in `.state/finalization-outcome.json`,
+holding the same `ResourceFinalization` the projections carry.
+The record holds one thing: what a launch of this run observed.
+The run’s own orchestrator writes it — first in every publication, and before anything
+else on a hard stop — and may replace what an earlier launch wrote, since it observed
+its own outcome.
+Recovery reads it to choose both the state and the `terminal_error_type`
+it publishes, and never writes it: recovery infers an outcome from evidence rather than
+observing one, and an inference that outlived that evidence would be worse than no
+record at all, since the record takes precedence over both projections.
+A resume does not replace the record until it finalizes, so a record older than the
+run’s most recently started launch — one its root `process-events.jsonl` recorded after
+it — is set aside: a resume killed by SIGKILL must not be reported with the signal that
+ended the launch before it.
+A run with no usable record — none at all, or only an earlier launch’s — falls back to
+the newer of its two projections’ own finalizations, by the time each records, rather
+than to a fixed order between them.
+Artifacts that disagree with the record read as needing recovery.
+
+Every writer of these three files reads its evidence first and publishes holding the
+run’s `.state/finalization.lock`: terminal finalization, the signal-exit work, status
+recovery, `resource-report`, Metabrowser recovery and `operations summary --write`. Only
+the hard reaper’s first act is unlocked, because the signal interrupts the main thread
+wherever it is and a lock that thread holds is never released; the signal’s record is
+the newest causal fact there is, and no recovery writer replaces one.
+Under the lock, status publishes only if the resource summary and the recorded outcome
+are still the ones it found when it decided to recover, so a summary the orchestrator
+writes while status reads is never replaced by status’s older reading.
+For that check to mean anything the lock has to exclude, so a held lock is reclaimed
+only from a holder known to be gone: the holder records its PID and host inside the lock
+directory, a publisher on the same host reclaims it when that PID stops running, and age
+alone reclaims only a holder this host cannot probe.
+Signal-exit work inherits a lock its own process holds rather than waiting for the
+interrupted thread or stealing a live lock.
 
 `resource-usage-summary.md` stores all structured values in the `resource_usage`
 frontmatter envelope and carries the complete SoftSchema contract/schema/envelope/status
@@ -2993,12 +3055,14 @@ stages, step durations, concurrency, attempt dispositions, agent models, and res
 It writes no `.jsonl` and never calls resource recovery, so it cannot make the resource
 projections stale. A section whose evidence cannot be read is null with its reason, and
 any failure is logged without changing the run’s outcome.
-A run can skip that terminal path: killed by a signal, interrupted between the resource
-and operations finalizers, or with a fold that raised.
+Those signals run that path from the hard reaper, as above.
+A run can still skip it: killed by SIGKILL, interrupted between the resource and
+operations finalizers, or with a fold that raised.
 So `metaproc status` on an inactive run writes the summary when it is missing, whether
 or not the resource artifacts beside it also need recovering, and leaves an existing one
-alone. `metaproc operations summary` and `metaproc operations rollup` read the same fold
-for finished runs.
+alone. On an active resume it writes a missing summary only beside the resource summary
+it backfills. `metaproc operations summary` and `metaproc operations rollup` read the
+same fold for finished runs.
 
 ## 17. Run Pool and Process Management
 

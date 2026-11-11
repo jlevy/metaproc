@@ -12,11 +12,14 @@ from prettyfmt import fmt_timedelta
 from ruamel.yaml import YAMLError
 
 from metaproc.cli import app, get_output
+from metaproc.engine.finalization_outcome import finalization_outcome_snapshot
 from metaproc.engine.operations_summary import OPERATIONS_SUMMARY_FILE, finalize_operations_summary
 from metaproc.engine.resource_finalization import (
-    finalize_run_resources,
-    infer_recovery_outcome,
+    infer_causal_outcome,
+    recover_run_resources,
     resource_artifacts_need_recovery,
+    resource_usage_summary_snapshot,
+    resume_needs_resource_backfill,
 )
 from metaproc.engine.run_status import (
     # fmt: skip -- re-export block
@@ -110,38 +113,63 @@ def _optional_config_string(config: dict[object, object], key: str) -> str | Non
 
 
 def _recover_resource_artifacts(run_dir: Path, status: RunStatus) -> None:
-    """Best-effort local recovery for an inactive run with resource evidence."""
-    if status.is_active:
-        return
+    """Best-effort local recovery of a run's resource artifacts and operations summary.
+
+    An inactive run gets missing, incomplete, or stale resource artifacts rebuilt. An
+    active run is its live orchestrator's to finalize and is left alone, with one
+    exception: a resume whose earlier launch ended without a complete resource summary
+    (killed by SIGKILL, or by a hard-stop signal before its rollup finished). That run
+    gets the summary from local evidence, and the resource ledger, which the live
+    orchestrator still appends to, is left as it is.
+
+    Neither rebuild replaces a summary the run's orchestrator wrote while status was
+    reading the evidence, and an operations summary is written only where none is.
+    """
     evidence_exists = (run_dir / ".state" / "run-config.yaml").exists() or (
         run_dir / ".logs" / "resource-events.jsonl"
     ).exists()
     if not evidence_exists:
         return
     try:
-        needs_recovery = resource_artifacts_need_recovery(run_dir)
+        # Taken before deciding, so neither a summary nor a causal outcome recorded
+        # after it is replaced by what this fold reads. The run's own writers record the
+        # outcome first, so a record taken first catches every later publication.
+        observed_outcome = finalization_outcome_snapshot(run_dir)
+        observed_summary = resource_usage_summary_snapshot(run_dir)
+        if status.is_active:
+            needs_recovery = resume_needs_resource_backfill(run_dir)
+        else:
+            needs_recovery = resource_artifacts_need_recovery(run_dir)
     except Exception:  # noqa: BLE001 - status must survive observability scan failures
         log.exception("could not inspect resource artifact freshness for %s", run_dir)
         return
+    if status.is_active and not needs_recovery:
+        return
     if needs_recovery:
-        outcome = infer_recovery_outcome(run_dir, totals=status.totals)
+        # Carries forward what ended the run, the signal a hard stop recorded included,
+        # so the rebuilt summary keeps it.
+        causal = infer_causal_outcome(run_dir, totals=status.totals)
         try:
-            finalize_run_resources(
+            recover_run_resources(
                 run_dir,
-                outcome=outcome,
-                trigger="status",
+                outcome=causal.state,
+                terminal_error_type=causal.terminal_error_type,
+                observed_summary=observed_summary,
+                observed_outcome=observed_outcome,
                 bundle=load_plan_bundle_from_run(run_dir),
+                write_events=not status.is_active,
             )
         except Exception:  # noqa: BLE001 - status remains available if reporting recovery fails
-            log.exception("resource artifact recovery failed for inactive run %s", run_dir)
+            log.exception("resource artifact recovery failed for run %s", run_dir)
             return
     # An operations summary can be missing while the resource artifacts beside it are
-    # fresh: a signal between the two finalizers, a fold that raised at finalization, or
+    # fresh: a SIGKILL between the two finalizers, a fold that raised at finalization, or
     # resources an earlier status already recovered. So the summary is checked on its
-    # own, not only after a recovery. It is write-once — a run that has one keeps it —
-    # and it reads the run's state from the resource summary either way.
+    # own, not only after a recovery. It is write-once — a run that has one keeps it,
+    # including one its orchestrator writes while status folds — and it reads the run's
+    # state from the resource summary either way.
     if not (run_dir / OPERATIONS_SUMMARY_FILE).exists():
-        finalize_operations_summary(run_dir, outcome=None, trigger="status")
+        finalize_operations_summary(run_dir, outcome=None, trigger="status", if_absent=True)
 
 
 def _format_text(status: RunStatus, *, steps_only: bool = False, stale_only: bool = False) -> str:
