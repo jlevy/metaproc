@@ -6079,7 +6079,7 @@ async def _orchestrate(
             # chain executor's per-task checks decide what resume reuses.
             # A mapped composite likewise re-enters item discovery so child-process
             # outputs, not only the parent's published subset, are revalidated.
-            if (
+            reusable = (
                 not step_force
                 and step_id not in _chain_head_of
                 and not (target.mode == "composite" and target.fan_out is not None)
@@ -6092,7 +6092,16 @@ async def _orchestrate(
                     step=target,
                     expected_run_id=run_id,
                 )
-            ):
+            )
+            if reusable and target.reuse_policy == "never":
+                # Only the walk declines the completion. An omitted ancestor's completion
+                # still satisfies `_verify_ancestors`, and each downstream step is judged
+                # by its own policy. `build_plan` refuses `never` on a mapped step.
+                out.progress(
+                    f"  Step '{step_id}': completed earlier; reuse_policy never — running again"
+                )
+                reusable = False
+            if reusable:
                 completed_entry: dict[str, Any] = {
                     "state": "completed",
                     "note": "previously completed",

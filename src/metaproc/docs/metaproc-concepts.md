@@ -863,11 +863,13 @@ Reliability comes from absence of moving parts.
      A step is reused while its fingerprint (its definition, its runbook bytes, and its
      resolved fields) is unchanged and, for a `collect:` consumer, while the outcomes it
      was handed still hold; it reruns when either changes.
-     A value a step reads at runtime or binds through `with:` is not in its fingerprint,
-     so such a step is reused when that value changes, and `--from <step> --force`
-     re-does it. Reuse must close that gap by following the content of what a step reads,
-     through content digests of its inputs ([metaproc-design.md](metaproc-design.md)
-     §10.3), not by refusing the change.
+     A step that declares `reuse_policy: exact_inputs` also follows the content of its
+     handler’s source file and of its declared file inputs, whose digests join its
+     fingerprint ([metaproc-design.md](metaproc-design.md) §10.3). Any other value a
+     step reads at runtime or binds through `with:` is not in its fingerprint, so such a
+     step is reused when that value changes, and `--from <step> --force` re-does it.
+     Reuse must close the rest of that gap the same way, by following the content of
+     what a step reads, not by refusing the change.
      A digest is a cache key that decides reuse, never a seal that aborts a run.
    - **Flexible.** Operational change mid-flight is normal: a corrected process file, a
      changed variable, a patched artifact, a forced or narrowed rerun.

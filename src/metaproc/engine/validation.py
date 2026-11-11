@@ -154,6 +154,30 @@ def validate_scope_collisions(spec: ProcessSpec) -> list[str]:
     return errors
 
 
+def validate_reuse_policies(spec: ProcessSpec) -> list[str]:
+    """Reject ``reuse_policy: never`` on a mapped step, declared or inherited.
+
+    A mapped step reuses work per item, through item discovery and the per-task checks
+    of the chain and composite executors, and none of them re-runs a completed item on
+    the step's say. Refusing the combination keeps a spec from promising a re-run that
+    would not happen.
+    """
+    errors: list[str] = []
+    for step in spec.steps:
+        if step.for_each is None:
+            continue
+        policy = step.reuse_policy or spec.defaults.reuse_policy
+        if policy != "never":
+            continue
+        source = "the step" if step.reuse_policy is not None else "defaults"
+        errors.append(
+            f"step '{step.id}': reuse_policy 'never' (from {source}) is not supported on a "
+            f"mapped (for_each) step; declare reuse_policy: validated_outputs or "
+            f"exact_inputs on the step, and use --from {step.id} --force to re-run its items"
+        )
+    return errors
+
+
 def validate_framework_template_names(spec: ProcessSpec) -> list[str]:
     """Reject dotted placeholders outside the reserved framework namespaces."""
     errors: list[str] = []

@@ -7,6 +7,30 @@ development series.
 
 ## [Unreleased][unreleased]
 
+### Added
+
+- **`reuse_policy: exact_inputs` puts a step’s handler and input files in its
+  fingerprint.** A step that declares it, or inherits it from `defaults`, also hashes
+  the bytes of its handler’s source file and of each declared file input the run does
+  not write, so editing either re-runs the step and its downstream on the next resume.
+  Inputs the run produces, `collect:` documents, a mapped step’s roster, directories,
+  and per-item paths stay out of the hash; `metaproc help design` §10.3 has the list.
+  A step that does not declare it keeps the fingerprint it had, so upgrading re-runs
+  nothing in a resumable run.
+
+### Fixed
+
+- **`reuse_policy: never` re-runs a scalar step on every launch.** The value was
+  accepted and ignored, so a resume reused the step’s completion.
+  Downstream steps are still reused under their own policies.
+  A mapped step that declares or inherits `never` is refused at planning, because item
+  reuse does not consult the step’s policy.
+- **`reuse_policy` accepts only `validated_outputs`, `exact_inputs`, and `never`.** Any
+  other value loaded and acted as `validated_outputs` on a scalar step and as trusting
+  recorded item state on a mapped one; such a spec now fails to load and the error lists
+  the allowed values. On a mapped step, `exact_inputs` re-checks completed items’
+  declared outputs, as `validated_outputs` does.
+
 ## [0.6.0][] - 2026-10-26
 
 ### Added

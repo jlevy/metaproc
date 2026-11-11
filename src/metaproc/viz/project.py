@@ -327,6 +327,9 @@ def _project_step_details(
         prompt_paths=list(step.prompt_paths),
         produced_refs=list(step.produced_refs),
         checkout_root=step.checkout_root,
+        exact_input_files=(
+            dict(step.exact_input_files) if step.exact_input_files is not None else None
+        ),
         prompt_prefix=step.prompt_prefix,
         inputs=_clone_io_map(step.inputs),
         outputs=_clone_io_map(step.outputs),

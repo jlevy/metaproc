@@ -226,16 +226,16 @@ def test_merge_defaults_budget_inheritance():
 
 def test_merge_defaults_reuse_policy_fallback():
     step = ProcessStep(id="s1", mode="agent")
-    defaults = ProcessDefaults(reuse_policy="always_rerun")
+    defaults = ProcessDefaults(reuse_policy="never")
     merged = merge_defaults(step, defaults)
-    assert merged["reuse_policy"] == "always_rerun"
+    assert merged["reuse_policy"] == "never"
 
 
 def test_merge_defaults_reuse_policy_step_override():
-    step = ProcessStep(id="s1", mode="agent", reuse_policy="skip_all")
-    defaults = ProcessDefaults(reuse_policy="always_rerun")
+    step = ProcessStep(id="s1", mode="agent", reuse_policy="exact_inputs")
+    defaults = ProcessDefaults(reuse_policy="never")
     merged = merge_defaults(step, defaults)
-    assert merged["reuse_policy"] == "skip_all"
+    assert merged["reuse_policy"] == "exact_inputs"
 
 
 # ── validate_step_contract ────────────────────────────────────────

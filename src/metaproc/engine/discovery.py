@@ -89,9 +89,11 @@ def discover_items_from_source(
     """Extract actionable item contexts from a fan-out source file.
 
     ``reuse_policy`` controls how previously-completed items are treated:
-    - ``validated_outputs`` (default): re-check that declared outputs exist on disk;
-      demote to actionable if any are missing or invalid.
+    - ``validated_outputs`` (default) and ``exact_inputs``: re-check that declared
+      outputs exist on disk; demote to actionable if any are missing or invalid.
+      ``exact_inputs`` differs only in what the step fingerprint covers.
     - ``trust_state``: filter any item with state=completed/cached without re-checking.
+      Internal callers pass it where a later per-task check decides reuse.
 
     Passing ``None`` (same type as a step's optional ``reuse_policy`` field)
     is treated as trust-state — i.e. do not re-validate — matching the
@@ -174,7 +176,7 @@ def discover_items_from_source(
                 state = status_record.state
                 if state in ("completed", "cached"):
                     if (
-                        reuse_policy == "validated_outputs"
+                        reuse_policy in ("validated_outputs", "exact_inputs")
                         and output_paths
                         and artifact_dir is not None
                     ):

@@ -100,6 +100,15 @@ def fingerprint_step(step: ResolvedStep) -> str:
     bytes it reads are, and those are still hashed. A path outside the checkout,
     such as a run directory or a launch input kept beside the runs, is hashed as
     it is.
+
+    A step whose ``reuse_policy`` is ``exact_inputs`` carries
+    ``exact_input_files``: its handler's source file and the declared file inputs
+    the run does not produce. Each one's role and content digest are hashed, so
+    editing the handler or an authored input re-runs the step. A file that does
+    not exist, or is a directory, hashes as that fact rather than failing, so a
+    missing optional input still fingerprints and its arrival is a change. Every
+    other step has no such field, and its fingerprint is the contract and
+    runbook hash described above.
     """
     # ``produced_refs`` is derived from the plan's deps rather than authored, and
     # excluding it keeps the contract hash of every step that has none exactly
@@ -107,7 +116,9 @@ def fingerprint_step(step: ResolvedStep) -> str:
     # it is where the step was planned from, which the hash must not depend on. The
     # declared item price (``spend``) and the dispatch breaker govern whether items
     # start, not what an item produces, so repricing a step or retuning its breaker
-    # must not invalidate completed work.
+    # must not invalidate completed work. ``exact_input_files`` enters below through
+    # the bytes it names; its paths are where the files sit on this host, and a
+    # handler installed in site-packages sits outside any checkout.
     payload = step.model_dump(
         mode="json",
         exclude_none=True,
@@ -116,6 +127,7 @@ def fingerprint_step(step: ResolvedStep) -> str:
             "produced_refs": True,
             "checkout_root": True,
             "spend": True,
+            "exact_input_files": True,
         },
     )
     root_pattern = _checkout_root_pattern(step.checkout_root) if step.checkout_root else None
@@ -144,7 +156,27 @@ def fingerprint_step(step: ResolvedStep) -> str:
             continue
         hasher.update(b"\x00")
         hasher.update(content)
+    for role, path_str in sorted((step.exact_input_files or {}).items()):
+        hasher.update(b"\x00exact\x00")
+        hasher.update(role.encode("utf-8"))
+        hasher.update(b"\x00")
+        hasher.update(_exact_input_content(Path(path_str)))
     return hasher.hexdigest()[:16]
+
+
+def _exact_input_content(path: Path) -> bytes:
+    """What one ``exact_input_files`` entry contributes to a step fingerprint.
+
+    A file's SHA-256, streamed so a large input is never held in memory, or a marker
+    for a path that is a directory or does not exist.
+    """
+    if path.is_dir():
+        return b"directory"
+    try:
+        with path.open("rb") as fh:
+            return b"file\x00" + hashlib.file_digest(fh, "sha256").digest()
+    except FileNotFoundError:
+        return b"missing"
 
 
 _CHECKOUT_TOKEN = "<checkout>"

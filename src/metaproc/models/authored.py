@@ -59,6 +59,20 @@ class AdapterConfig(BaseModel):
 # ── Shared / nested ─────────────────────────────────────────────
 
 
+ReusePolicy = Literal["validated_outputs", "exact_inputs", "never"]
+"""Whether a later run against the same ``RUN_ID`` may reuse a step's completion.
+
+- ``validated_outputs``: reuse a completion whose declared outputs still validate and
+  whose fingerprint still matches.
+- ``exact_inputs``: as ``validated_outputs``, and the fingerprint also covers the bytes
+  of the handler's source file and of each authored file input
+  (``ResolvedStep.exact_input_files``).
+- ``never``: run the step again on every walk that reaches it. Scalar steps only.
+
+Semantics: ``metaproc help design``, §10.2.
+"""
+
+
 class ProcessDefaults(BaseModel):
     """Process-level defaults inherited by all steps.
 
@@ -70,7 +84,7 @@ class ProcessDefaults(BaseModel):
     default_adapter: str = "default"
     default_execution_profile: str | None = None
     recommended_execution_profiles: list[str] = Field(default_factory=list)
-    reuse_policy: str = "validated_outputs"
+    reuse_policy: ReusePolicy = "validated_outputs"
     retry: RetryPolicy | None = None
 
     @property
@@ -636,8 +650,8 @@ class ProcessStep(BaseModel):
     token_budget: int | None = None
     spend: StepSpend | None = None
 
-    # reuse policy
-    reuse_policy: str | None = None
+    # reuse policy; unset inherits ``defaults.reuse_policy``
+    reuse_policy: ReusePolicy | None = None
 
     # failure propagation
     on_failure: Literal["block", "continue"] = Field(

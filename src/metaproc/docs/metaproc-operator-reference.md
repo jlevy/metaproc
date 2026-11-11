@@ -523,8 +523,11 @@ The orchestrator decides what to reuse from fingerprints; you do not pass
 
 Each completed step records a 16-character fingerprint covering the step’s contract (id,
 declared inputs/outputs, adapter config) plus the bytes of any runbook file referenced
-via `prompt_paths` or composite `uses`. On rerun against the same `RUN_ID`, the
-orchestrator notices the fingerprint flip and:
+via `prompt_paths` or composite `uses`. A step that declares
+`reuse_policy: exact_inputs` (on the step, or inherited from `defaults`) also covers the
+bytes of its handler’s source file and of each declared file input the run does not
+write; `metaproc help design` §10.3 lists what that leaves out.
+On rerun against the same `RUN_ID`, the orchestrator notices the fingerprint flip and:
 
 1. Treats the edited step as not-completed even though its outputs still exist.
 2. Renames downstream `status.yaml` files to `status.yaml.stale` so descendants
@@ -559,6 +562,15 @@ that *produces* it does, and the cascade carries that downstream.
 Use `--from <step> --force` to re-run the consumer and its downstream after editing a
 generated runbook in place.
 `--from` alone only narrows the walk: a completed step it selects is still reused.
+
+### Steps that always run
+
+A scalar step that declares `reuse_policy: never`, or inherits it from `defaults`, runs
+on every launch that reaches it, completed or not, and the launch prints
+`Step '<step>': completed earlier; reuse_policy never — running again`. Its downstream
+steps are still reused under their own policies, and `metaproc status --steps` lists the
+completed step as `current`. A mapped step cannot declare `never`; the plan is refused
+with the step named, and `--from <step> --force` re-runs its items instead.
 
 ### When a collected input changes
 
@@ -634,15 +646,16 @@ re-ran. Use `--from <step> --force` for those.
 ### When to reach for a flag
 
 The fingerprint covers runbook bytes and the declared step contract.
-It does **not** cover Python handler code.
-Use a flag when the change is invisible to the fingerprint or you want to override its
-decision:
+It covers Python handler code and input file contents **only** for a step that declares
+`reuse_policy: exact_inputs`. Use a flag when the change is invisible to the fingerprint
+or you want to override its decision:
 
 | Situation | Flag |
 | --- | --- |
 | Pure runbook / prompt edit | none — rerun with same `RUN_ID` |
 | Failed mapped items finished, feeding a `collect:` consumer | none — rerun with same `RUN_ID` |
-| Edited a `mode: code` handler (fingerprint-blind) | `--from <step> --force` |
+| Edited the handler or an authored input file of an `exact_inputs` step | none — rerun with same `RUN_ID` |
+| Edited a `mode: code` handler of any other step (fingerprint-blind) | `--from <step> --force` |
 | Want to rerun only one step in isolation, ignore the cascade | `--only <step> --force` |
 | Skip a step you know is fine, override caching | `--skip <step>` |
 | Force a rerun the fingerprint thinks is unnecessary | `--force` |
