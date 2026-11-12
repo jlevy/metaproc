@@ -6,7 +6,7 @@ status: Approved
 ---
 # Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-10-25) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-11-12) **Status:** Approved
 
 Also readable as `metaproc help design`.
 
@@ -154,7 +154,7 @@ schema_conform (contract-directed scalar quoting for agent-written YAML)
 discovery (resume-safe item filtering)
 usage (extraction, pricing, aggregation)
 process_events (structured DAG event logging)
-viz (pure projection of Plan -> VizModel; browser and static SVG/HTML renderers; see MetaBrowser architecture)
+viz (pure projection of Plan -> VizModel; browser and static SVG/HTML renderers; see Metabrowser architecture)
 runtime_projection (read-only task and accepted-output projection from existing runtime records)
 
 Cloud subsystems (cloud/gcp/)
@@ -889,7 +889,7 @@ Implemented CLI surface:
 - `plan` -- resolve and display execution plan; `--format {yaml,svg,html}` emits a
   resolved plan YAML or renders the process as a static visualization.
   See the public
-  [MetaBrowser architecture](https://github.com/jlevy/metabrowser/blob/main/docs/architecture.md)
+  [Metabrowser architecture](https://github.com/jlevy/metabrowser/blob/main/docs/architecture.md)
   for the browser visualization plane.
 - `deps` -- show declared deps with inferred runtime state for the planned run
 - `validate` -- validate declared outputs
@@ -1152,7 +1152,7 @@ The framework provides six complementary monitoring layers:
 | Process-level | `pool status` | `runpool-status.yaml` | Live process health (RSS, descendants, kills) |
 | DAG-level | `tail` | `process-events.jsonl` | Process orchestrator events (step lifecycle, levels) |
 | Cloud-level | `gcp status <run-id>` | GCP Batch API | Orchestrator and worker states by exact run key, with a legacy-label fallback |
-| Visual | `metab` (external MetaBrowser CLI) | source logs, runpool events, process events, derived trace | Browser-based charts and log exploration |
+| Visual | `metab` (external Metabrowser CLI) | source logs, runpool events, process events, derived trace | Browser-based charts and log exploration |
 
 `tail` answers “what is this agent doing right now?”
 `status` answers “how is the run going overall?”
@@ -1165,13 +1165,13 @@ For agent orchestration, `status --check` and `wait` replace ad-hoc shell monito
 See section 18 for details.
 For run pool design details, see [arch-runpool.md](arch-runpool.md).
 
-### Supporting Tool: MetaBrowser (`metab`)
+### Supporting Tool: Metabrowser (`metab`)
 
-The external `metab` CLI (from the standalone MetaBrowser package) launches a local web
+The external `metab` CLI (from the standalone Metabrowser package) launches a local web
 server for browsing run artifacts, logs, and results.
 The complete architecture, including the file-kind registry, view registry, charts,
 visualization plane, and remote tunnel, lives in
-[MetaBrowser architecture](https://github.com/jlevy/metabrowser/blob/main/docs/architecture.md).
+[Metabrowser architecture](https://github.com/jlevy/metabrowser/blob/main/docs/architecture.md).
 
 When the `viz-model` route receives a run directory, Metaproc attaches a rebuildable
 task and output projection to `VizModel`. The browser is a consumer of that projection,

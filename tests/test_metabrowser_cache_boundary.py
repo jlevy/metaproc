@@ -1,4 +1,4 @@
-"""Cache-boundary contracts for metaproc's MetaBrowser plugin."""
+"""Cache-boundary contracts for metaproc's Metabrowser plugin."""
 
 from __future__ import annotations
 

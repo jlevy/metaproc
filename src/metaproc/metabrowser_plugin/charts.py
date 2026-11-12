@@ -6,7 +6,7 @@ metaproc's runpool process manager writes, and reuses metaproc's
 ``stats.analysis`` for the one-pass event aggregation.
 
 When Metaproc is not installed, both the kind-detection manifest and the chart
-extractor are absent; runpool-log files use MetaBrowser's generic JSONL
+extractor are absent; runpool-log files use Metabrowser's generic JSONL
 fallback.
 
 Memoization uses a bounded LRU keyed on

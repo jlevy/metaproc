@@ -1,12 +1,12 @@
 // Metaproc-owned browser views for process, resource, chart, and stats artifacts.
 //
-// This classic script loads after MetaBrowser's generic shell and before the plugin
+// This classic script loads after Metabrowser's generic shell and before the plugin
 // entry point. It intentionally uses the shell's public browser helpers while keeping
-// Metaproc-specific rendering out of the standalone MetaBrowser package.
+// Metaproc-specific rendering out of the standalone Metabrowser package.
 
 var mb = window.metabrowser;
 if (!mb) {
-  throw new Error("Metaproc domain views require the MetaBrowser plugin SDK");
+  throw new Error("Metaproc domain views require the Metabrowser plugin SDK");
 }
 var _perf = mb.perf;
 var esc = mb.escapeHtml;
@@ -16,7 +16,7 @@ function errorMessage(value) {
   return value instanceof Error ? value.message : String(value);
 }
 
-// Share data-hook work across views for the current preview. MetaBrowser mounts
+// Share data-hook work across views for the current preview. Metabrowser mounts
 // non-default tabs lazily, but concurrent renders and the Visual/Steps pair can
 // still ask for the same payload. Disposing any asynchronous view clears this
 // cache so a file reload never reuses stale data.

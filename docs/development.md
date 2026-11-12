@@ -66,7 +66,7 @@ An address in a commit *body* still does.
 | [`src/metaproc/runpool/`](../src/metaproc/runpool/) | Adaptive concurrency controller and event log. |
 | [`src/metaproc/adapters/`](../src/metaproc/adapters/) | One module per agent adapter (Claude Code, Gemini, Pi, Codex). |
 | [`src/metaproc/logutil/`](../src/metaproc/logutil/) | JSONL log parsing and usage extraction; the shared parser layer. |
-| [`src/metaproc/metabrowser_plugin/`](../src/metaproc/metabrowser_plugin/) | Metaproc-owned MetaBrowser file kinds, visualizations, log adapters, and data hooks. |
+| [`src/metaproc/metabrowser_plugin/`](../src/metaproc/metabrowser_plugin/) | Metaproc-owned Metabrowser file kinds, visualizations, log adapters, and data hooks. |
 | [`src/metaproc/viz/`](../src/metaproc/viz/) | Process-spec visualization (DAG and render targets). |
 | [`src/metaproc/cloud/gcp/`](../src/metaproc/cloud/gcp/) | GCP Batch dispatch and worker bootstrap. |
 | [`src/metaproc/io/`](../src/metaproc/io/) | Frontmatter, schema tokens, lock files, dispatch manifests. |
@@ -238,9 +238,9 @@ histories, and backlogs these documents were separated from.
 ## Cross-References
 
 - [README.md](../README.md): repository entry point with the full doc index.
-- [MetaBrowser architecture](https://github.com/jlevy/metabrowser/blob/main/docs/architecture.md)
+- [Metabrowser architecture](https://github.com/jlevy/metabrowser/blob/main/docs/architecture.md)
   describes the standalone browser design and package boundary.
-- [Metaproc MetaBrowser plugin](../src/metaproc/metabrowser_plugin/README.md):
+- [Metaproc Metabrowser plugin](../src/metaproc/metabrowser_plugin/README.md):
   Metaproc-owned views, data hooks, assets, and validation.
 - [environment-bootstrap.runbook.md](runbooks/environment-bootstrap.runbook.md):
   end-to-end setup for running real metaproc workloads.

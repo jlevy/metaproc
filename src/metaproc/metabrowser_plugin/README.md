@@ -1,7 +1,7 @@
-# Metaproc MetaBrowser Plugin
+# Metaproc Metabrowser Plugin
 
 This package supplies Metaproc-specific file classification, visualizations, log
-adapters, and server data hooks for [MetaBrowser](https://github.com/jlevy/metabrowser).
+adapters, and server data hooks for [Metabrowser](https://github.com/jlevy/metabrowser).
 It keeps run and process concepts out of the generic browser while preserving rich views
 when `metaproc` is installed.
 
@@ -11,7 +11,7 @@ factory in the `metabrowser.plugins` entry-point group.
 
 ## Capabilities
 
-The manifest claims five Metaproc-owned file kinds at higher priority than MetaBrowser’s
+The manifest claims five Metaproc-owned file kinds at higher priority than Metabrowser’s
 generic fallbacks:
 
 | File kind | Views |
@@ -26,12 +26,12 @@ The plugin also provides:
 
 - data hooks under `/api/plugin/metaproc/<route>` for process visualization, charts,
   statistics, resource snapshots, structure reports, and diagnostics
-- `runpool` and `process` JSONL adapters registered through MetaBrowser’s public adapter
+- `runpool` and `process` JSONL adapters registered through Metabrowser’s public adapter
   registry
 - renderer lifecycle cleanup that prevents stale asynchronous responses from updating a
   replaced preview and disposes chart resources
 
-Without this plugin, MetaBrowser handles these files through its generic Markdown, JSON,
+Without this plugin, Metabrowser handles these files through its generic Markdown, JSON,
 or JSONL fallbacks.
 
 ## Discovery and Public APIs
@@ -56,12 +56,12 @@ for the supported manifest, Python, and browser contracts.
 The repository resolves the published `metabrowser==0.12.0` package from PyPI, whose
 browser plugin SDK 0.7 the manifest targets.
 Package policy rejects workspace source overrides and restoration of an in-tree
-MetaBrowser package.
+Metabrowser package.
 
 The plugin owns its ELK.js graph-layout dependency.
 It ships the audited `elkjs@0.10.0` browser bundle and EPL-2.0 license in the Metaproc
 wheel, then loads the bundle before `viz.js`. This keeps process-visualization code out
-of generic MetaBrowser and makes the renderer work without a CDN dependency.
+of generic Metabrowser and makes the renderer work without a CDN dependency.
 The vendored bundle’s SHA-256 digest is
 `48d338d5aeddd9503ccf1d12661c11b5d7d43c6afc5f66c7ddb2ea4170c0f6bf`.
 
@@ -103,13 +103,13 @@ The focused test boundary includes:
   members and the exact packaged asset set
 - [browser contract](../../../tests/test_metabrowser_plugin_e2e.py) and
   [rendering behavior](../../../tests/test_metabrowser_plugin_render.py) against
-  installed MetaBrowser resources
+  installed Metabrowser resources
 - [renderer lifecycle](../../../tests/test_metabrowser_plugin_lifecycle.py) for stale
   response suppression and chart disposal
 - integration coverage under the other `test_metabrowser_*.py` modules for file kinds,
   server hooks, KPress rendering, charts, visualizations, and CSS contracts
 
-An isolated wheel environment containing released MetaBrowser and the historical
+An isolated wheel environment containing released Metabrowser and the historical
 implementation plugin wheels must report every discovered plugin as healthy through
 `metab --doctor`.
 

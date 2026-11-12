@@ -1,4 +1,4 @@
-"""Installed-package contract for the Metaproc MetaBrowser plugin."""
+"""Installed-package contract for the Metaproc Metabrowser plugin."""
 
 from __future__ import annotations
 

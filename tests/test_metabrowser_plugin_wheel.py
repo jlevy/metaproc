@@ -1,4 +1,4 @@
-"""Distribution contract for MetaBrowser assets shipped in the Metaproc wheel."""
+"""Distribution contract for Metabrowser assets shipped in the Metaproc wheel."""
 
 from __future__ import annotations
 
