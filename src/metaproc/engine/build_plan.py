@@ -11,7 +11,6 @@ from typing import cast
 from metaproc.adapters.base import StepEnvValidator
 from metaproc.adapters.registry import ADAPTER_REGISTRY, derive_variant, get_adapter
 from metaproc.config.env_vars import MetaprocEnv
-from metaproc.engine.code_handler import locate_handler_source
 from metaproc.engine.discovery import discover_items_from_source
 from metaproc.engine.graph import validate_step_graph
 from metaproc.engine.lane_expand import materialize_execution_lanes
@@ -730,75 +729,6 @@ def _resolve_produced_refs(
     return list(dict.fromkeys(produced))
 
 
-def _resolve_exact_input_files(
-    step: ProcessStep,
-    resolved: ResolvedStep,
-    *,
-    resolved_deps: dict[str, ResolvedDep],
-    step_outputs: dict[str, dict[str, IOSpec]],
-    process_dir: Path,
-    ancestor_ids: set[str],
-) -> dict[str, str]:
-    """Return the files an ``exact_inputs`` step's fingerprint hashes, for ``exact_input_files``.
-
-    The handler's source file, and each declared file input the run does not write.
-
-    An input the run writes is left out for the reason ``produced_refs`` is: it does not
-    exist when the plan is published and does by the time the step runs, so hashing it
-    would give one step two fingerprints and the runtime projection would reject its
-    output as stale. Its producer's fingerprint covers it and cascades downstream. That
-    covers a ``ref`` to another step's output, a dep that declares ``produced_by``, a
-    ``collect:`` document, which the orchestrator rebuilds before the step runs and
-    compares by its own digest, a raw path an upstream step declares as an output, and
-    a path the step declares as its own output, which would otherwise change under the
-    step on every run.
-
-    The roster a mapped step's ``for_each.over`` names is left out too: item discovery
-    reuses completed items when the roster grows, and a roster in the fingerprint would
-    re-run every item instead. A directory or stream input, and a path that still holds
-    a per-item placeholder, has no single file to read and stays covered by its path in
-    the resolved step alone.
-    """
-    files: dict[str, str] = {}
-    if step.handler:
-        try:
-            files["handler"] = str(locate_handler_source(step.handler, process_dir))
-        except (ImportError, ValueError) as exc:
-            raise ValueError(
-                f"step '{step.id}': reuse_policy exact_inputs hashes the handler's source "
-                f"file, which cannot be located: {exc}"
-            ) from exc
-
-    produced = {
-        normalize_path_key(output.path)
-        for producer_id in ancestor_ids
-        for output in step_outputs.get(producer_id, {}).values()
-        if output.path
-    }
-    produced.update(
-        normalize_path_key(output.path) for output in resolved.outputs.values() if output.path
-    )
-    roster = step.for_each.over if step.for_each is not None else None
-    for name, authored in step.inputs.items():
-        if name == roster or authored.collect or authored.kind in ("directory", "stream"):
-            continue
-        if authored.ref:
-            if not is_dep_ref(authored.ref):
-                continue
-            dep = resolved_deps.get(
-                parse_dep_ref(authored.ref, context=f"step '{step.id}' input '{name}'")
-            )
-            if dep is None or dep.produced_by:
-                continue
-        path = resolved.inputs[name].path
-        if not path or "{{" in path or "}}" in path:
-            continue
-        if normalize_path_key(path) in produced:
-            continue
-        files[f"inputs.{name}"] = path
-    return files
-
-
 def _validate_raw_path_dataflow(
     step: ProcessStep,
     *,
@@ -1251,23 +1181,13 @@ def build_plan(
         authored_step = steps_by_id.get(resolved.step_id)
         if authored_step is None:
             continue
-        ancestor_ids = _transitive_ancestors(resolved.step_id, needs_by_step)
         resolved.produced_refs = _resolve_produced_refs(
             authored_step,
             resolved_deps=resolved_deps,
             step_outputs=step_outputs,
             params=params,
-            ancestor_ids=ancestor_ids,
+            ancestor_ids=_transitive_ancestors(resolved.step_id, needs_by_step),
         )
-        if resolved.reuse_policy == "exact_inputs":
-            resolved.exact_input_files = _resolve_exact_input_files(
-                authored_step,
-                resolved,
-                resolved_deps=resolved_deps,
-                step_outputs=step_outputs,
-                process_dir=process_path.parent,
-                ancestor_ids=ancestor_ids,
-            )
 
     graph_errors = validate_step_graph(resolved_steps)
     if graph_errors:

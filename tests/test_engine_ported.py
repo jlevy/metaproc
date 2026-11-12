@@ -232,10 +232,10 @@ def test_merge_defaults_reuse_policy_fallback():
 
 
 def test_merge_defaults_reuse_policy_step_override():
-    step = ProcessStep(id="s1", mode="agent", reuse_policy="exact_inputs")
+    step = ProcessStep(id="s1", mode="agent", reuse_policy="validated_outputs")
     defaults = ProcessDefaults(reuse_policy="never")
     merged = merge_defaults(step, defaults)
-    assert merged["reuse_policy"] == "exact_inputs"
+    assert merged["reuse_policy"] == "validated_outputs"
 
 
 # ── validate_step_contract ────────────────────────────────────────

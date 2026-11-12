@@ -171,12 +171,6 @@ class StepDetails(BaseModel):
     its fingerprint when the same revision is planned from another checkout; see
     ``fingerprint_step``.
     """
-    exact_input_files: dict[str, str] | None = None
-    """For an ``exact_inputs`` step, the files whose bytes its fingerprint covers, by role.
-
-    Surfaced so a reader can tell which handler and input edits re-run the step; see
-    ``ResolvedStep.exact_input_files``.
-    """
     prompt_prefix: str | None = None
 
     inputs: dict[str, IOSpec] = Field(default_factory=dict)

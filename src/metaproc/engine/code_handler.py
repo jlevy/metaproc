@@ -16,41 +16,12 @@ from typing import cast
 from metaproc.engine.placeholders import resolve_templates
 from metaproc.models.authored import CodeHandler
 
-__all__ = ["CodeHandler", "locate_handler_source", "resolve_code_handler", "resolve_templates"]
+__all__ = ["CodeHandler", "resolve_code_handler", "resolve_templates"]
 
 
 def _looks_like_file_path(ref: str) -> bool:
     """A handler ref is a file path if it ends in .py or contains a path separator."""
     return ref.endswith(".py") or "/" in ref
-
-
-def locate_handler_source(handler_ref: str, process_dir: Path) -> Path:
-    """Return the file ``resolve_code_handler`` loads *handler_ref* from, without loading it.
-
-    A file-path ref resolves against *process_dir* exactly as it does at load time, and
-    the file need not exist yet. A module-path ref is found through
-    ``importlib.util.find_spec``, which imports the module's parent packages but not
-    the module itself. Raises ``ValueError`` for a malformed ref and ``ImportError``
-    when the module has no source file on this interpreter's path.
-    """
-    ref_part, sep, func_name = handler_ref.rpartition(":")
-    if not sep or not ref_part or not func_name:
-        msg = (
-            f"handler '{handler_ref}' must be 'file.py:function_name' "
-            f"or 'package.module:function_name'"
-        )
-        raise ValueError(msg)
-    if _looks_like_file_path(ref_part):
-        return (process_dir / ref_part).resolve()
-    try:
-        spec = importlib.util.find_spec(ref_part)
-    except (ImportError, ValueError) as exc:
-        msg = f"cannot locate handler module '{ref_part}': {exc}"
-        raise ImportError(msg) from exc
-    if spec is None or not spec.has_location or spec.origin is None:
-        msg = f"cannot locate handler module '{ref_part}': no source file found"
-        raise ImportError(msg)
-    return Path(spec.origin).resolve()
 
 
 def resolve_code_handler(

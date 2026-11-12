@@ -594,14 +594,12 @@ def test_discover_rejects_duplicate_resolved_item_keys_before_state_writes(tmp_p
     assert not (run_dir / STATE_DIR / TASKS_SUBDIR).exists()
 
 
-@pytest.mark.parametrize("reuse_policy", ["validated_outputs", "exact_inputs"])
-def test_discover_revalidates_completed_with_validated_outputs_policy(tmp_path, reuse_policy):
+def test_discover_revalidates_completed_with_validated_outputs_policy(tmp_path):
     """reuse_policy=validated_outputs: completed items with missing outputs are demoted to actionable.
 
     Scenario: AAPL was marked completed on a prior run, but its declared output file
     no longer exists (e.g. deleted, wrong path, different environment). The default
     reuse_policy is 'validated_outputs' — discovery must re-validate and retry.
-    ``exact_inputs`` validates outputs the same way and adds content to the fingerprint.
     """
 
     progress_path = tmp_path / "progress.md"
@@ -647,7 +645,7 @@ def test_discover_revalidates_completed_with_validated_outputs_policy(tmp_path, 
         step_def,
         output_paths=step_outputs,
         params={},
-        reuse_policy=reuse_policy,
+        reuse_policy="validated_outputs",
         run_dir=tmp_path,
     )
     # AAPL demoted to actionable because prediction.yaml is missing

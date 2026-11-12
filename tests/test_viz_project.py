@@ -113,7 +113,7 @@ process:
       output_root: "runs/scaffold"
       max_budget_usd: 0.25
       token_budget: 10000
-      reuse_policy: validated_outputs
+      reuse_policy: never
     - id: predict
       mode: agent
       description: Predict for each ticker.
@@ -140,7 +140,7 @@ process:
           path: "{{run.dir}}/predict/{{ticker}}/prediction.md"
       variant: sonnet
       max_budget_usd: 5.0
-      reuse_policy: exact_inputs
+      reuse_policy: validated_outputs
     - id: retro
       mode: manual
       description: Human retrospective.
@@ -194,7 +194,7 @@ def test_field_coverage_every_step_and_dep_field_round_trips(tmp_path: Path) -> 
     assert predict.adapter.max_budget_usd == 2.5
     assert predict.variant == "sonnet"
     assert predict.max_budget_usd == 5.0
-    assert predict.reuse_policy == "exact_inputs"
+    assert predict.reuse_policy == "validated_outputs"
     assert predict.fan_out is not None
     assert predict.fan_out.over == "deps.tickers"
     assert predict.fan_out.bind == "ticker"
@@ -209,7 +209,7 @@ def test_field_coverage_every_step_and_dep_field_round_trips(tmp_path: Path) -> 
     assert scaffold.env == {"SCAFFOLD_FLAG": "1"}
     assert scaffold.max_budget_usd == 0.25
     assert scaffold.token_budget == 10000
-    assert scaffold.reuse_policy == "validated_outputs"
+    assert scaffold.reuse_policy == "never"
     assert scaffold.output_root == "runs/scaffold"
 
     # Dep: every authored field is populated

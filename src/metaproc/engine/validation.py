@@ -154,27 +154,39 @@ def validate_scope_collisions(spec: ProcessSpec) -> list[str]:
     return errors
 
 
-def validate_reuse_policies(spec: ProcessSpec) -> list[str]:
-    """Reject ``reuse_policy: never`` on a mapped step, declared or inherited.
+EXACT_INPUTS_DESIGN_BEAD = "mp-gg7r"
+"""The metaproc tracker bead that owns the design of ``reuse_policy: exact_inputs``."""
 
-    A mapped step reuses work per item, through item discovery and the per-task checks
-    of the chain and composite executors, and none of them re-runs a completed item on
-    the step's say. Refusing the combination keeps a spec from promising a re-run that
-    would not happen.
+
+def validate_reuse_policies(spec: ProcessSpec) -> list[str]:
+    """Reject the ``reuse_policy`` values the runtime cannot honour, declared or inherited.
+
+    Each refusal keeps a spec from relying on a reuse rule that would not be applied:
+
+    - ``exact_inputs`` is specified (``metaproc help design`` §10.2) but not implemented.
+    - ``never`` on a mapped step: a mapped step reuses work per item, through item
+      discovery and the per-task checks of the chain and composite executors, and none
+      of them re-runs a completed item on the step's say.
     """
     errors: list[str] = []
     for step in spec.steps:
-        if step.for_each is None:
-            continue
         policy = step.reuse_policy or spec.defaults.reuse_policy
-        if policy != "never":
-            continue
         source = "the step" if step.reuse_policy is not None else "defaults"
-        errors.append(
-            f"step '{step.id}': reuse_policy 'never' (from {source}) is not supported on a "
-            f"mapped (for_each) step; declare reuse_policy: validated_outputs or "
-            f"exact_inputs on the step, and use --from {step.id} --force to re-run its items"
-        )
+        if policy == "exact_inputs":
+            errors.append(
+                f"step '{step.id}': reuse_policy 'exact_inputs' (from {source}) is specified "
+                "in `metaproc help design` §10.2 but not yet implemented; its design is "
+                f"tracked as bead {EXACT_INPUTS_DESIGN_BEAD} in the metaproc repository. "
+                "Declare reuse_policy: validated_outputs, and use "
+                f"--from {step.id} --force to re-run the step after editing its handler "
+                "or inputs"
+            )
+        elif policy == "never" and step.for_each is not None:
+            errors.append(
+                f"step '{step.id}': reuse_policy 'never' (from {source}) is not supported "
+                "on a mapped (for_each) step; declare reuse_policy: validated_outputs on "
+                f"the step, and use --from {step.id} --force to re-run its items"
+            )
     return errors
 
 

@@ -131,11 +131,6 @@ def _relativize_viz_paths(viz: Any) -> None:
                 node.step.checkout_root = (
                     relativize_path(node.step.checkout_root) or node.step.checkout_root
                 )
-            if node.step.exact_input_files is not None:
-                node.step.exact_input_files = {
-                    role: relativize_path(path) or path
-                    for role, path in node.step.exact_input_files.items()
-                }
             if node.step.output_root is not None:
                 node.step.output_root = relativize_path(node.step.output_root)
             node.step.prompt_paths = [relativize_path(p) or p for p in node.step.prompt_paths]

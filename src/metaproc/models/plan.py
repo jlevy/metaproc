@@ -97,16 +97,6 @@ class ResolvedStep(BaseModel):
     from two checkouts of one revision has one fingerprint. ``None`` when the process is
     not inside a checkout; its paths are then hashed as they are.
     """
-    exact_input_files: dict[str, str] | None = None
-    """For a step whose ``reuse_policy`` is ``exact_inputs``: the files whose bytes its
-    fingerprint covers, keyed by role.
-
-    ``handler`` is a code step's handler source file; ``inputs.<name>`` is each declared
-    file input the run does not itself produce. Set by ``build_plan``, which knows which
-    inputs the run writes, and read by ``fingerprint_step``, so every fingerprint of one
-    step hashes the same set, as with ``produced_refs``. ``None`` for every other step;
-    it then contributes nothing to the fingerprint.
-    """
     execution_profile: str | None = None
     artifact_namespace: str | None = None
     variant: str | None = None
