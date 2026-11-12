@@ -36,9 +36,12 @@ def load_plan_bundle(
     ``uses_path`` points at another ``.process.md`` file.
 
     When *validate_spec* is False, spec-level validation (fan-out contracts,
-    framework template names, scope collisions, agent write boundaries) is
-    skipped so viewers can render structurally-valid-but-semantically-invalid
-    specs. See :func:`metaproc.engine.build_plan.build_plan`.
+    framework template names, scope collisions, reuse policies, agent write
+    boundaries) is skipped so viewers can render
+    structurally-valid-but-semantically-invalid specs. See
+    :func:`metaproc.engine.build_plan.build_plan`. When it is True, each child is
+    also validated for where it runs: a child of a mapped composite, directly or
+    through scalar composites, cannot declare ``reuse_policy: never``.
     """
     resolved_path = resolve_process_path(process_path)
     return _load_bundle(resolved_path, dict(params or {}), validate_spec=validate_spec)
@@ -76,6 +79,7 @@ def _load_bundle(
     params: dict[str, str],
     *,
     validate_spec: bool,
+    mapped_composite: tuple[str, str] | None = None,
 ) -> PlanBundle:
     spec = load_process_spec(process_path)
     expanded = expand_process_vars(spec, params, process_dir=process_path.parent)
@@ -85,6 +89,7 @@ def _load_bundle(
         process_path=process_path,
         validate_required_inputs=False,
         validate_spec=validate_spec,
+        mapped_composite=mapped_composite,
     )
     body = _extract_body_markdown(process_path)
     children: dict[str, PlanBundle] = {}
@@ -93,7 +98,12 @@ def _load_bundle(
             child_path = _resolve_child_path(process_path, step.uses_path)
             if child_path.exists():
                 children[step.step_id] = _load_bundle(
-                    child_path, dict(step.with_), validate_spec=validate_spec
+                    child_path,
+                    dict(step.with_),
+                    validate_spec=validate_spec,
+                    mapped_composite=(
+                        (spec.name, step.step_id) if step.fan_out is not None else mapped_composite
+                    ),
                 )
     return PlanBundle(
         plan=plan,

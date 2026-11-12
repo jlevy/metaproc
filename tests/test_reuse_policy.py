@@ -30,6 +30,7 @@ from metaproc.engine.process_scope import expand_process_vars
 from metaproc.errors import ValidationError as MetaprocValidationError
 from metaproc.models.authored import IOSpec, ProcessDefaults, ProcessStep
 from metaproc.models.plan import FanOut, Plan, ResolvedAdapter, ResolvedStep
+from metaproc.viz_loader import load_plan_bundle
 
 _ROSTER = (
     "---\nprogress:\n  schema: metaproc:ProgressSpec/0.1\n  process: mapped\n"
@@ -525,6 +526,22 @@ def test_never_under_a_mapped_composite_is_refused_before_the_run_starts(
     assert "mapped composite step 'wrap'" in message
     assert not (runs_dir / "r1").exists()
     assert _logged(log) == []
+
+
+def test_a_validated_bundle_load_refuses_never_under_a_mapped_composite_and_a_viewer_does_not(
+    tmp_path: Path,
+) -> None:
+    """The refusal belongs to spec validation, so every validated composite load makes it,
+    and a viewer that skips spec validation still renders the tree."""
+    process, _ = _composite_tree(tmp_path, mapped=True, nested=True, never="step")
+    params = {"RUN_ID": "r1", "RUNS_DIR": str(tmp_path / "runs")}
+
+    with pytest.raises(ValueError, match="mapped composite step 'wrap'"):
+        load_plan_bundle(process, params=params)
+
+    viewed = load_plan_bundle(process, params=params, validate_spec=False)
+    leaf = viewed.children["wrap"].children["inner"]
+    assert [step.reuse_policy for step in leaf.plan.steps] == ["never", "validated_outputs"]
 
 
 def _child_with_a_mapped_never_default(root: Path) -> Path:
