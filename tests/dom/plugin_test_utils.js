@@ -115,14 +115,70 @@ function shellScriptPath(metabrowserRoot, name) {
   return fs.existsSync(legacy) ? legacy : direct;
 }
 
-/** Load every shell script the plugin SDK and built-ins depend on, in the page's order. */
-function loadShell(metabrowserRoot, load) {
+// Bundles the page fetches on demand through asset-loader.js rather than as startup
+// scripts. Keep in sync with `asset_bundles` in metabrowser's server.py. A bundle whose
+// files this Metabrowser does not ship is left unpublished, so an older host keeps its
+// own "Unknown asset bundle" behavior instead of a forged one.
+const ON_DEMAND_BUNDLES = {
+  mustache: [{ file: "vendor/mustache.min.js", provides: "Mustache" }],
+  "sdk-views": [{ file: "plugin-sdk-views.js", provides: "MetabrowserSourceLineAnchors" }],
+};
+
+/**
+ * Publish ON_DEMAND_BUNDLES the way the server does and evaluate a requested bundle in
+ * the sandbox when asset-loader.js appends its <script> tag.
+ */
+function installAssetBundles(sandbox, metabrowserRoot, load) {
+  const published = {};
+  for (const [name, entries] of Object.entries(ON_DEMAND_BUNDLES)) {
+    const resolved = entries.map((entry) => ({
+      src: path.join(metabrowserRoot, "static", entry.file),
+      provides: entry.provides,
+    }));
+    if (resolved.every((entry) => fs.existsSync(entry.src))) {
+      published[name] = resolved;
+    }
+  }
+  sandbox.METABROWSER_ASSET_BUNDLES = published;
+  // asset-loader.js announces each script it loads with a window event.
+  sandbox.Event ??= Event;
+  sandbox.CustomEvent ??= CustomEvent;
+  sandbox.dispatchEvent ??= () => true;
+  const document = sandbox.document;
+  const createElement = document.createElement;
+  document.createElement = (tag, ...rest) =>
+    tag === "script" ? { tagName: "SCRIPT", remove() {} } : createElement(tag, ...rest);
+  document.head = {
+    ...document.head,
+    appendChild(script) {
+      setTimeout(() => {
+        try {
+          load(script.src, path.basename(script.src));
+        } catch {
+          script.onerror?.();
+          return;
+        }
+        script.onload?.();
+      }, 0);
+    },
+  };
+}
+
+/**
+ * Load every shell script the plugin SDK and built-ins depend on, in the page's order.
+ * With a sandbox, also publish the on-demand bundles the SDK fetches before it renders.
+ */
+function loadShell(metabrowserRoot, load, sandbox) {
+  if (sandbox) {
+    installAssetBundles(sandbox, metabrowserRoot, load);
+  }
   for (const name of SHELL_SCRIPTS) {
     load(shellScriptPath(metabrowserRoot, name), name);
   }
 }
 
 module.exports = {
+  ON_DEMAND_BUNDLES,
   SHELL_SCRIPTS,
   evaluateModule,
   isEsm,

@@ -25,7 +25,11 @@ if (!metaprocContract) {
 }
 const pending = [];
 const requestCounts = new Map();
-const chartLifecycle = { disposeCalls: 0, renderCalls: 0 };
+const chartLifecycle = {
+  /** @type {Array<string | null>} */
+  disposedContainers: [],
+  renderCalls: 0,
+};
 
 const sandbox = {
   console,
@@ -85,12 +89,18 @@ function ok(payload) {
 }
 
 async function main() {
-  loadShell(metabrowserRoot, load);
-  // The real SDK 0.5 host loads plugin assets by selected kind. A Metaproc selection
+  loadShell(metabrowserRoot, load, sandbox);
+  // The real SDK host loads plugin assets by selected kind. A Metaproc selection
   // starts with neither foreign built-in, so Metaproc has to request both before
   // borrowing their renderers. Supplying the namespaces up front would reproduce the
   // eager 0.1 host and hide a missing lazy dependency.
   const ensureKindCalls = [];
+  // MetabrowserCharts lives on the host's on-demand "chart" bundle, so the Charts view
+  // must request it; the mock above stands in for what the bundle installs.
+  const ensureAssetCalls = [];
+  sandbox.metabrowser.ensureAsset = async (name) => {
+    ensureAssetCalls.push(name);
+  };
   sandbox.metabrowser.builtins = {};
   sandbox.metabrowser.ensureKindAssets = async (kind) => {
     ensureKindCalls.push(kind);
@@ -124,8 +134,8 @@ async function main() {
     container.innerHTML = `rendered:${viz.name}`;
   };
   sandbox.MetabrowserCharts = {
-    dispose() {
-      chartLifecycle.disposeCalls += 1;
+    dispose(container) {
+      chartLifecycle.disposedContainers.push(container?.name ?? null);
     },
     renderPayload(container, data) {
       chartLifecycle.renderCalls += 1;
@@ -216,8 +226,14 @@ async function main() {
   }
   statsRequests[0].resolve(ok({}));
   await Promise.all([firstStatsRender, secondStatsRender]);
+  // The current layout nests runpool logs below `.logs/`; they belong to the same run.
+  stats.render({ name: "nested-stats", innerHTML: "" }, { path: "run/.logs/runpool/events.jsonl" });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const statsRequestKeys = [...requestCounts.keys()].filter((key) =>
+    key.startsWith("/api/plugin/metaproc/stats"),
+  );
 
-  charts.dispose();
+  charts.dispose(secondCharts);
   const freshCharts = { name: "fresh-charts", innerHTML: "" };
   const freshChartsRender = charts.render(freshCharts, { path: "run/.logs/pool.jsonl" });
   const freshChartRequests = matchingRequests("charts?path=run%2F.logs%2Fpool.jsonl");
@@ -313,13 +329,15 @@ async function main() {
         "/api/plugin/metaproc/charts?path=run%2F.logs%2Fpool.jsonl",
       ),
       statsRequestCount: requestCounts.get("/api/plugin/metaproc/stats?path=run"),
-      chartDisposeCalls: chartLifecycle.disposeCalls,
+      statsRequestKeys,
+      chartDisposedContainers: chartLifecycle.disposedContainers,
       chartRenderCalls: chartLifecycle.renderCalls,
       resourceHtml: resourceContainer.innerHTML,
       runtimeRequestCount: requestCounts.get(
         "/api/plugin/metaproc/viz-model?run_dir=runs%2Fcurrent",
       ),
       ensureKindCalls,
+      ensureAssetCalls,
       renderedViewRegistered: Boolean(
         sandbox.metabrowser.getRegisteredView("process-spec", "rendered"),
       ),

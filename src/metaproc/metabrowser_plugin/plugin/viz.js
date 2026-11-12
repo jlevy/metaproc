@@ -1348,7 +1348,9 @@
       // Hover tooltip — Identity block, same classes + rows as the
       // drawer section. Uses the shared custom-tooltip system
       // (window.MetabrowserTooltip) so file-tree and viz tooltips share
-      // one DOM node, one stylesheet, and one delay/fade.
+      // one DOM node, one stylesheet, and one delay/fade. The host anchors the tooltip
+      // to the element it is given and places it once, so it takes the node, not the
+      // pointer event, and needs no mousemove tracking.
       var _tipEl = null;
       canvas.addEventListener("mouseover", (ev) => {
         var target = ev.target instanceof Element ? ev.target : null;
@@ -1368,16 +1370,7 @@
           return;
         }
         _tipEl = nodeEl;
-        tip.show(html, ev);
-      });
-      canvas.addEventListener("mousemove", (ev) => {
-        if (!_tipEl) {
-          return;
-        }
-        var tip = global.MetabrowserTooltip;
-        if (tip) {
-          tip.move(ev);
-        }
+        tip.show(html, nodeEl);
       });
       canvas.addEventListener("mouseout", (ev) => {
         if (!_tipEl) {

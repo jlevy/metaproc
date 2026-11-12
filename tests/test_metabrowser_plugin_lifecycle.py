@@ -64,7 +64,10 @@ def test_async_views_ignore_stale_responses_and_share_requests_until_dispose() -
     assert payload["failedVizModelRequestCount"] == 2
     assert payload["chartRequestCount"] == 2
     assert payload["statsRequestCount"] == 1
-    assert payload["chartDisposeCalls"] == 1
+    assert payload["statsRequestKeys"] == ["/api/plugin/metaproc/stats?path=run"]
+    # MetabrowserCharts keys Chart.js instances by container, so the plugin must pass
+    # the container the host disposes; a bare dispose() destroys nothing.
+    assert payload["chartDisposedContainers"] == ["second-charts"]
     assert payload["chartRenderCalls"] == 2
     assert payload["runtimeRequestCount"] == 1
     assert "Runtime tasks and outputs" in payload["resourceHtml"]
@@ -78,5 +81,7 @@ def test_async_views_ignore_stale_responses_and_share_requests_until_dispose() -
     assert "batch / review" in payload["resourceHtml"]
     assert "declared child scope has no durable state" in payload["resourceHtml"]
     assert payload["ensureKindCalls"] == ["markdown", "agent-log"]
+    # One per Charts render: two shared renders and the fresh one after dispose.
+    assert payload["ensureAssetCalls"] == ["chart", "chart", "chart"]
     assert payload["renderedViewRegistered"] is True
     assert payload["sourceViewRegistered"] is True

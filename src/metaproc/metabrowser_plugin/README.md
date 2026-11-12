@@ -53,9 +53,10 @@ Browser code uses the documented `window.metabrowser` SDK, including
 [plugin authoring guide](https://github.com/jlevy/metabrowser/blob/main/docs/plugins.md)
 for the supported manifest, Python, and browser contracts.
 
-The repository resolves the published `metabrowser==0.1.0` package from PyPI. Package
-policy rejects workspace source overrides and restoration of an in-tree MetaBrowser
-package.
+The repository resolves the published `metabrowser==0.12.0` package from PyPI, whose
+browser plugin SDK 0.7 the manifest targets.
+Package policy rejects workspace source overrides and restoration of an in-tree
+MetaBrowser package.
 
 The plugin owns its ELK.js graph-layout dependency.
 It ships the audited `elkjs@0.10.0` browser bundle and EPL-2.0 license in the Metaproc
@@ -68,8 +69,8 @@ From the consumer workspace, inspect the discovered plugin with:
 
 ```shell
 uv sync --all-packages --all-groups --locked
-uv run --package metaproc metab plugins show metaproc
-uv run --package metaproc metab plugins doctor
+uv run --frozen --package metaproc metab --plugin metaproc --json
+uv run --frozen --package metaproc metab --doctor --json
 ```
 
 ## Package Layout
@@ -110,7 +111,7 @@ The focused test boundary includes:
 
 An isolated wheel environment containing released MetaBrowser and the historical
 implementation plugin wheels must report every discovered plugin as healthy through
-`metab plugins doctor`.
+`metab --doctor`.
 
 The consumer repository also owns the browser-asset quality gate after extraction.
 `npm run check:metaproc-browser` runs Biome and TypeScript `checkJs` over the packaged

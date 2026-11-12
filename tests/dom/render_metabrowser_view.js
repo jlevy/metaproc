@@ -85,6 +85,10 @@ const sandbox = {
   Promise,
   Set,
   Map,
+  // The SDK builds API requests with `new URL(path, location.origin)`.
+  URL,
+  URLSearchParams,
+  location: { origin: "http://localhost" },
   fetch: () => Promise.reject(new Error("fetch unavailable in shim")),
   Mustache: { render: (tpl) => tpl },
   Chart: () => {},
@@ -108,7 +112,7 @@ function load(filepath, label) {
   vm.runInContext(src, sandbox, { filename: label });
 }
 
-loadShell(metabrowserRoot, load);
+loadShell(metabrowserRoot, load, sandbox);
 
 // Joined here rather than inside main(): the argument checks above narrow these away from
 // `string | undefined`, and that narrowing does not reach into a function body.

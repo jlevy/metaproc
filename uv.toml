@@ -29,7 +29,10 @@ flowmark-rs = "2026-07-16T00:00:00Z"
 # readers and adds unique atomic writes, mode preservation and scalar escaping.
 frontmatter-format = "2026-10-26T06:27:00Z"
 kpress = "2026-08-31T00:55:00Z"
-metabrowser = "2026-09-01T21:49:00Z"
+# metabrowser 0.12.0 was published 2026-11-09T16:34:59Z. The owner exempted it from the
+# cool-off on 2026-11-11 as a first-party release: its browser plugin SDK 0.7 is the
+# contract the Metaproc plugin now targets, and discovery refuses any other SDK.
+metabrowser = "2026-11-09T16:36:00Z"
 # softschema 0.9.1 is an audited first-party patch. It requires frontmatter-format
 # 0.5.1 and restricts native parsing to the checked ruamel.yaml.clib implementation.
 softschema = "2026-10-26T06:55:00Z"

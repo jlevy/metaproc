@@ -35,6 +35,8 @@ type MetabrowserSdk = {
     parameters: Record<string, unknown>,
   ): Promise<unknown>;
   formatSize(value: number): string;
+  /** Load a host on-demand bundle, such as "chart", before touching its globals. */
+  ensureAsset(name: string): Promise<void>;
   /** Load plugins that declare support for a kind before borrowing their renderers. */
   ensureKindAssets(kind: string): Promise<void>;
   /**
@@ -50,7 +52,7 @@ type MetabrowserSdk = {
   registerView(
     kind: string,
     view: string,
-    spec: { dispose?: () => void; render: CallableFunction },
+    spec: { dispose?: (container: HTMLElement) => void; render: CallableFunction },
   ): void;
   render(template: string, values: object): string;
   wrapWithCopy(html: string): string;
@@ -81,7 +83,7 @@ type MetaprocVizData = {
 type MetaprocDomainViewRuntime = {
   [name: string]: CallableFunction;
   clearPluginDataRequests(): void;
-  disposeCharts(): void;
+  disposeCharts(container: HTMLElement): void;
   loadCharts(container: HTMLElement, path: string, isCurrent: () => boolean): Promise<void>;
   loadStats(container: HTMLElement, path: string, isCurrent: () => boolean): Promise<void>;
   loadVisual(container: HTMLElement, path: string, isCurrent: () => boolean): Promise<void>;
@@ -97,7 +99,7 @@ declare global {
       layout(input: object): Promise<unknown>;
     };
     MetabrowserCharts?: {
-      dispose(): void;
+      dispose(container: HTMLElement): void;
       renderPayload(container: HTMLElement, chartData: unknown): unknown;
     };
     MetabrowserFileTypes?: {
@@ -106,8 +108,7 @@ declare global {
     MetabrowserIcons?: MetabrowserIconRegistry;
     MetabrowserTooltip?: {
       hide(): void;
-      move(event: MouseEvent): void;
-      show(html: string, event: MouseEvent): void;
+      show(html: string, anchor: Element): void;
     };
     MetaprocDomainViews: MetaprocDomainViewRuntime;
     MetaprocResourceSelection?: {
