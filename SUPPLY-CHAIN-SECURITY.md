@@ -229,6 +229,25 @@ The package keeps the Apache-2.0 license, the Python `>=3.10` floor and the
 `typing-extensions>=4.5.0` dependency of `1.43.0`, so the lock change replaces only its
 version and artifact records, with no transitive growth.
 
+`pyasn1` is locked at `0.6.5`, replacing `0.6.4`, without an advisory waiver.
+It fixes `GHSA-9m75-vc3g-4x39`, `GHSA-mm57-4v3p-rchx`, `GHSA-fm9c-5rcf-2q5p`, and
+`GHSA-2qm8-x737-gmw5` (each high, CVSS 7.5): quadratic-time decoding of constructed
+strings and indefinite-length `ANY` values, binary `REAL` values, schemaless containers,
+and constructed `BIT STRING` values.
+Metaproc does not import `pyasn1`; it arrives through `pyasn1-modules`, which
+`google-auth` requires for the `gcp` extras.
+Its only importer in this closure is the `_python_rsa` fallback in `google-auth`, which
+also needs the `rsa` package; the lock does not contain `rsa`, so nothing loads the
+decoder. The [PyPI release](https://pypi.org/project/pyasn1/0.6.5/) uploaded its wheel
+and source distribution on 2026-10-27, more than 14 days before adoption, so the
+ordinary cool-off admits it; PyPI reports no provenance bundle for either file, as for
+`0.6.4`. Both artifacts were compared with the unsigned upstream tag `v0.6.5` (commit
+`5d16736`): the wheel’s 32 modules and 149 of the source distribution’s 156 files are
+byte-identical to the tag, and the remaining files are setuptools-generated metadata.
+The package keeps the BSD-2-Clause license, the Python `>=3.8` floor and the empty
+dependency metadata of `0.6.4`, so the lock change replaces only its version and
+artifact records, with no transitive growth.
+
 Re-review a waiver whenever the closure changes such that the affected code could become
 reachable.
 
