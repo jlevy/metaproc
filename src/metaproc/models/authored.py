@@ -64,10 +64,10 @@ ReusePolicy = Literal["validated_outputs", "exact_inputs", "never"]
 
 - ``validated_outputs``: reuse a completion whose declared outputs still validate and
   whose fingerprint still matches.
-- ``exact_inputs``: as ``validated_outputs``, and the fingerprint also covers the bytes
-  of the handler's source file and of each authored file input
-  (``ResolvedStep.exact_input_files``).
-- ``never``: run the step again on every walk that reaches it. Scalar steps only.
+- ``exact_inputs``: specified but not implemented. A spec that declares it loads, so a
+  viewer can render it, and planning refuses it (``validate_reuse_policies``).
+- ``never``: run the step again on every walk that reaches it. Planning refuses it on a
+  mapped step and in the item scopes of a mapped composite.
 
 Semantics: ``metaproc help design``, §10.2.
 """

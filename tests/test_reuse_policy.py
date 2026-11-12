@@ -6,7 +6,8 @@ A spec may declare ``validated_outputs`` (the default), ``exact_inputs`` or ``ne
 any other value is rejected when the spec loads.
 
 - ``never`` re-runs a scalar step on every walk that reaches it. Its downstream steps
-  are judged by their own policy. Planning refuses it on a mapped step.
+  are judged by their own policy. Planning refuses it on a mapped step and on any step
+  that runs inside the item scopes of a mapped composite.
 - ``exact_inputs`` is specified but not implemented, so planning refuses it.
 - The pinned values below are the fingerprints these fixtures have, so a change that
   would re-run completed steps in every resumable run fails here first.
@@ -204,24 +205,115 @@ def test_a_never_ancestor_left_out_of_the_walk_still_counts_as_completed(
     run_dir = runs_dir / "never-ancestor-run"
     assert _run(process, runs_dir, "never-ancestor-run").exit_code == 0
 
-    narrowed = CliRunner().invoke(
+    narrowed = _run(process, runs_dir, "never-ancestor-run", "--from", "last", "--force")
+    assert narrowed.exit_code == 0, narrowed.output
+    assert _invocations(run_dir) == ["stamp", "last", "last"]
+
+
+def _stamp_then_last(tmp_path: Path, name: str) -> Path:
+    """``stamp`` declares ``never``; ``last`` runs after it under the default policy."""
+    return _write_process(
+        tmp_path / "checkout",
+        name,
+        [_code_step("stamp", reuse_policy="never"), _code_step("last", needs=("stamp",))],
+    )
+
+
+def test_from_alone_reruns_a_never_step_it_selects(tmp_path: Path) -> None:
+    """``--from`` without ``--force`` reuses a completed step it selects, except one whose
+    policy is ``never``; the steps after it are still judged by their own policy."""
+    process = _stamp_then_last(tmp_path, "never-from")
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "r1"
+    assert _run(process, runs_dir, "r1").exit_code == 0
+
+    narrowed = _run(process, runs_dir, "r1", "--from", "stamp")
+    assert narrowed.exit_code == 0, narrowed.output
+    assert "Step 'stamp': completed earlier; reuse_policy never — running again" in narrowed.output
+    assert "Step 'last': already completed" in narrowed.output
+    assert _invocations(run_dir) == ["stamp", "last", "stamp"]
+
+
+def test_a_satisfied_override_wins_over_never(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``metaproc override <step> --satisfied`` is checked before reuse, ``never`` included."""
+    process = _stamp_then_last(tmp_path, "never-override")
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "r1"
+    assert _run(process, runs_dir, "r1").exit_code == 0
+
+    monkeypatch.setenv("RUNS_DIR", str(runs_dir))
+    override = CliRunner().invoke(
         app,
         [
-            "run-process",
+            "override",
+            "r1",
+            "stamp",
+            "--satisfied",
+            "--note",
+            "accepted by hand",
+            "--process",
             str(process),
             "--var",
             f"RUNS_DIR={runs_dir}",
-            "--var",
-            "RUN_ID=never-ancestor-run",
-            "--from",
-            "last",
-            "--force",
-            "--backend",
-            "local",
         ],
     )
-    assert narrowed.exit_code == 0, narrowed.output
-    assert _invocations(run_dir) == ["stamp", "last", "last"]
+    assert override.exit_code == 0, override.output
+
+    resumed = _run(process, runs_dir, "r1")
+    assert resumed.exit_code == 0, resumed.output
+    assert "Step 'stamp': satisfied via override — skipping" in resumed.output
+    assert _invocations(run_dir) == ["stamp", "last"]
+
+
+def test_never_on_a_manual_step_accepts_its_recorded_acknowledgment_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``never`` manual step re-enters its executor on every launch, which accepts the
+    acknowledgment already recorded instead of waiting for a new one."""
+    monkeypatch.setattr("metaproc.commands.run_process.MANUAL_ACK_TIMEOUT_S", 0)
+    flows = tmp_path / "flows"
+    flows.mkdir()
+    process = flows / "manual.process.md"
+    process.write_text(
+        "---\n"
+        "process:\n"
+        "  name: manual\n"
+        "  steps:\n"
+        "    - id: approve\n"
+        "      mode: manual\n"
+        "      reuse_policy: never\n"
+        "---\n"
+        "# Manual\n",
+        encoding="utf-8",
+    )
+    runs_dir = tmp_path / "runs"
+    acknowledged = CliRunner().invoke(
+        app,
+        [
+            "run-step",
+            str(process),
+            "--step",
+            "approve",
+            "--var",
+            f"RUNS_DIR={runs_dir}",
+            "--var",
+            "RUN_ID=r1",
+            "--operator",
+            "alice",
+        ],
+    )
+    assert acknowledged.exit_code == 0, acknowledged.output
+
+    for _ in range(2):
+        launched = _run(process, runs_dir, "r1")
+        assert launched.exit_code == 0, launched.output
+        assert (
+            "Step 'approve': completed earlier; reuse_policy never — running again"
+            in launched.output
+        )
+        assert "waiting for operator acknowledgment" not in launched.output
 
 
 def _mapped_spec(tmp_path: Path, *, step_policy: str | None, default_policy: str | None) -> Path:
@@ -275,6 +367,215 @@ def test_a_mapped_step_may_override_a_never_default(tmp_path: Path) -> None:
     process = _mapped_spec(tmp_path, step_policy="validated_outputs", default_policy="never")
     plan = _plan(process, {"RUN_ID": "r1", "RUNS_DIR": str(tmp_path / "runs")})
     assert [step.reuse_policy for step in plan.steps] == ["validated_outputs"]
+
+
+# ── never inside composites ───────────────────────────────────────
+
+
+def _scope_handler(log: Path, name: str) -> str:
+    """A handler that logs ``<name> <scope dir>`` to *log* and writes its declared output."""
+    return textwrap.dedent(
+        f'''\
+        """Handler for the {name} step."""
+
+        from __future__ import annotations
+
+        from pathlib import Path
+
+
+        def run(variables: dict[str, str], step: object) -> None:  # noqa: ARG001
+            out = Path(step.outputs["out"].path)  # type: ignore[attr-defined]
+            out.parent.mkdir(parents=True, exist_ok=True)
+            with Path({str(log)!r}).open("a", encoding="utf-8") as fh:
+                fh.write("{name} " + out.parent.name + "\\n")
+            out.write_text("{name} done\\n", encoding="utf-8")
+        '''
+    )
+
+
+_ITEMS = "---\nprogress:\n  items:\n    - item: a\n    - item: b\n---\n# Items\n"
+
+_FOR_EACH_ITEM = (
+    "      for_each:\n"
+    "        over: deps.items\n"
+    "        bind: item\n"
+    "        bind_fields: [item]\n"
+    '        key: "{{item}}"\n'
+)
+
+
+def _child_spec(name: str, *, never: str) -> str:
+    """A two-step child process: ``tick``, then ``tock``.
+
+    *never* puts ``reuse_policy: never`` on ``tick`` (``"step"``) or in the process
+    defaults (``"defaults"``).
+    """
+    defaults = "  defaults:\n    reuse_policy: never\n" if never == "defaults" else ""
+    tick_policy = "      reuse_policy: never\n" if never == "step" else ""
+    return (
+        "---\n"
+        "process:\n"
+        f"  name: {name}\n"
+        f"{defaults}"
+        "  steps:\n"
+        "    - id: tick\n"
+        "      mode: code\n"
+        '      handler: "tick.py:run"\n'
+        f"{tick_policy}"
+        "      outputs:\n"
+        '        out: {path: "{{run.dir}}/tick.txt", kind: file}\n'
+        "    - id: tock\n"
+        "      mode: code\n"
+        '      handler: "tock.py:run"\n'
+        "      needs: [tick]\n"
+        "      outputs:\n"
+        '        out: {path: "{{run.dir}}/tock.txt", kind: file}\n'
+        "---\n"
+        f"# {name}\n"
+    )
+
+
+def _composite_spec(name: str, *, step_id: str, uses: str, mapped: bool) -> str:
+    """A process whose one step is a composite running ``deps.<uses>``."""
+    return (
+        "---\n"
+        "process:\n"
+        f"  name: {name}\n"
+        "  deps:\n"
+        f"    {uses}: {{path: ./{uses}.process.md, as: path}}\n"
+        "    items: {path: ./items.md, as: path}\n"
+        "  steps:\n"
+        f"    - id: {step_id}\n"
+        "      mode: composite\n"
+        f"      uses: deps.{uses}\n"
+        f"{_FOR_EACH_ITEM if mapped else ''}"
+        "---\n"
+        f"# {name}\n"
+    )
+
+
+def _composite_tree(root: Path, *, mapped: bool, nested: bool, never: str) -> tuple[Path, Path]:
+    """``parent`` runs composite ``wrap``; ``wrap`` runs ``leaf``, or ``middle`` when nested.
+
+    ``wrap`` is mapped over two items when *mapped*. ``middle`` runs ``leaf`` through the
+    scalar composite ``inner``. ``leaf`` is :func:`_child_spec`. Returns the parent
+    process and the invocation log.
+    """
+    flows = root / "flows"
+    flows.mkdir(parents=True)
+    (root / ".git").mkdir()
+    log = root / "invocations.log"
+    for name in ("tick", "tock"):
+        (flows / f"{name}.py").write_text(_scope_handler(log, name), encoding="utf-8")
+    (flows / "items.md").write_text(_ITEMS, encoding="utf-8")
+    (flows / "leaf.process.md").write_text(_child_spec("leaf", never=never), encoding="utf-8")
+    if nested:
+        (flows / "middle.process.md").write_text(
+            _composite_spec("middle", step_id="inner", uses="leaf", mapped=False),
+            encoding="utf-8",
+        )
+    parent = flows / "parent.process.md"
+    parent.write_text(
+        _composite_spec(
+            "parent", step_id="wrap", uses="middle" if nested else "leaf", mapped=mapped
+        ),
+        encoding="utf-8",
+    )
+    return parent, log
+
+
+def _logged(log: Path) -> list[str]:
+    return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+
+
+def test_never_in_the_child_of_a_scalar_composite_reruns_on_every_launch(tmp_path: Path) -> None:
+    """A scalar composite is entered on every walk, so its child ``never`` step runs again."""
+    process, log = _composite_tree(tmp_path, mapped=False, nested=False, never="step")
+    runs_dir = tmp_path / "runs"
+
+    launched = _run(process, runs_dir, "r1")
+    assert launched.exit_code == 0, launched.output
+    assert _logged(log) == ["tick wrap", "tock wrap"]
+
+    resumed = _run(process, runs_dir, "r1")
+    assert resumed.exit_code == 0, resumed.output
+    assert "Step 'tick': completed earlier; reuse_policy never — running again" in resumed.output
+    assert "Step 'tock': already completed" in resumed.output
+    assert _logged(log) == ["tick wrap", "tock wrap", "tick wrap"]
+
+
+@pytest.mark.parametrize("dry_run", [False, True], ids=["launch", "dry-run"])
+@pytest.mark.parametrize("nested", [False, True], ids=["child", "grandchild"])
+@pytest.mark.parametrize("never", ["step", "defaults"])
+def test_never_under_a_mapped_composite_is_refused_before_the_run_starts(
+    tmp_path: Path, dry_run: bool, nested: bool, never: str
+) -> None:
+    """A completed item scope of a mapped composite is not re-entered, so a ``never``
+    step anywhere below it would not run again; the launch refuses it as it refuses
+    ``never`` on a mapped step, before the run directory exists."""
+    process, log = _composite_tree(tmp_path, mapped=True, nested=nested, never=never)
+    runs_dir = tmp_path / "runs"
+
+    result = _run(process, runs_dir, "r1", *(["--dry-run"] if dry_run else []))
+
+    assert isinstance(result.exception, MetaprocValidationError), result.output
+    message = str(result.exception)
+    source = "the step" if never == "step" else "defaults"
+    assert f"step 'tick': reuse_policy 'never' (from {source})" in message
+    assert "mapped composite step 'wrap'" in message
+    assert not (runs_dir / "r1").exists()
+    assert _logged(log) == []
+
+
+def _child_with_a_mapped_never_default(root: Path) -> Path:
+    """A scalar composite ``wrap`` whose child's mapped step inherits ``never``."""
+    flows = root / "flows"
+    flows.mkdir(parents=True)
+    (root / ".git").mkdir()
+    (flows / "items.md").write_text(_ITEMS, encoding="utf-8")
+    (flows / "each.py").write_text(
+        _scope_handler(root / "invocations.log", "each"), encoding="utf-8"
+    )
+    (flows / "leaf.process.md").write_text(
+        "---\n"
+        "process:\n"
+        "  name: leaf\n"
+        "  defaults:\n"
+        "    reuse_policy: never\n"
+        "  deps:\n"
+        "    items: {path: ./items.md, as: path}\n"
+        "  steps:\n"
+        "    - id: each\n"
+        "      mode: code\n"
+        '      handler: "each.py:run"\n'
+        f"{_FOR_EACH_ITEM}"
+        "      outputs:\n"
+        '        out: {path: "{{run.dir}}/each-{{item}}.txt", kind: file}\n'
+        "---\n"
+        "# leaf\n",
+        encoding="utf-8",
+    )
+    parent = flows / "parent.process.md"
+    parent.write_text(
+        _composite_spec("parent", step_id="wrap", uses="leaf", mapped=False), encoding="utf-8"
+    )
+    return parent
+
+
+@pytest.mark.parametrize("dry_run", [False, True], ids=["launch", "dry-run"])
+def test_never_inherited_by_a_mapped_step_of_a_child_process_is_refused_before_the_run_starts(
+    tmp_path: Path, dry_run: bool
+) -> None:
+    """A child process is planned with the root's validation before anything is written,
+    so a dry run refuses what the launch refuses, and neither ends in a traceback."""
+    process = _child_with_a_mapped_never_default(tmp_path)
+    runs_dir = tmp_path / "runs"
+
+    result = _run(process, runs_dir, "r1", *(["--dry-run"] if dry_run else []))
+
+    assert isinstance(result.exception, MetaprocValidationError), result.output
+    assert "step 'each': reuse_policy 'never' (from defaults)" in str(result.exception)
+    assert not (runs_dir / "r1").exists()
 
 
 # ── Accepted values ───────────────────────────────────────────────

@@ -26,6 +26,7 @@ from metaproc.models.authored import (
     IOSpec,
     ParseConfig,
     RetryPolicy,
+    ReusePolicy,
     StepSpend,
 )
 
@@ -185,7 +186,7 @@ class StepDetails(BaseModel):
     max_budget_usd: float | None = None
     token_budget: int | None = None
     spend: StepSpend | None = None
-    reuse_policy: Literal["validated_outputs", "exact_inputs", "never"] | None = None
+    reuse_policy: ReusePolicy | None = None
     on_failure: Literal["block", "continue"] = "block"
     execution_profile: str | None = None
     artifact_namespace: str | None = None

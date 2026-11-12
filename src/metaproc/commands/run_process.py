@@ -187,6 +187,7 @@ from metaproc.engine.validation import (
     repair_declared_outputs,
     validate_item_outputs,
     validate_item_outputs_detailed,
+    validate_reuse_policies,
 )
 from metaproc.engine.write_boundary import (
     WriteTarget,
@@ -227,6 +228,7 @@ from metaproc.logutil.compaction import try_compact_log
 from metaproc.models.authored import IOSpec, ProcessSpec, ProcessStep, RetryPolicy, StepContext
 from metaproc.models.lane import ExecutionLane
 from metaproc.models.plan import Plan, ResolvedStep, RunPlanSnapshot, RunPlanStep
+from metaproc.models.plan_bundle import PlanBundle
 from metaproc.models.resource_budget import FinalizationState
 from metaproc.models.resource_snapshot import ResourceRunSnapshot
 from metaproc.models.runtime import (
@@ -1324,6 +1326,27 @@ def _validate_backend_topology(
             f"({', '.join(unsupported)}); run the orchestrator on one host or use "
             "agent/code fan-out for partitioned work"
         )
+
+
+def _composite_reuse_policy_errors(
+    bundle: PlanBundle, *, mapped_composite: tuple[str, str] | None = None
+) -> list[str]:
+    """Return the reuse-policy errors a child process has only because of where it runs.
+
+    Each child plan in *bundle* was built with the root's spec validation, which refuses
+    what a process cannot declare anywhere. What remains depends on the composite tree:
+    a process that runs in the item scopes of a mapped composite, directly or through
+    scalar composites, cannot declare ``reuse_policy: never``, because a completed item
+    scope is not re-entered (``validate_reuse_policies``).
+    """
+    mapped_ids = {step.id for step in bundle.spec.steps if step.for_each is not None}
+    errors: list[str] = []
+    for step_id, child in bundle.children.items():
+        enclosing = (bundle.spec.name, step_id) if step_id in mapped_ids else mapped_composite
+        if enclosing is not None:
+            errors.extend(validate_reuse_policies(child.spec, mapped_composite=enclosing))
+        errors.extend(_composite_reuse_policy_errors(child, mapped_composite=enclosing))
+    return errors
 
 
 def _serialize_plan_profiles(plan: Plan) -> list[dict[str, object]]:
@@ -6096,7 +6119,8 @@ async def _orchestrate(
             if reusable and target.reuse_policy == "never":
                 # Only the walk declines the completion. An omitted ancestor's completion
                 # still satisfies `_verify_ancestors`, and each downstream step is judged
-                # by its own policy. `build_plan` refuses `never` on a mapped step.
+                # by its own policy. Planning refuses `never` on a mapped step and in the
+                # item scopes of a mapped composite, which this walk would not reach.
                 out.progress(
                     f"  Step '{step_id}': completed earlier; reuse_policy never — running again"
                 )
@@ -6659,6 +6683,20 @@ def run_process_command(
         variables["ARTIFACT_NAMESPACE"] = plan.artifact_namespace
         variables.setdefault("VARIANT", plan.artifact_namespace)
 
+    # Every composite child process is planned here, under the root's spec validation,
+    # so a dry run refuses what a launch refuses and neither writes the run directory
+    # first. The bundle also feeds the run's resource snapshot below.
+    try:
+        snapshot_bundle = load_plan_bundle(process_path, params=variables)
+    except (TypeError, ValueError) as exc:
+        raise ValidationError(str(exc)) from exc
+    snapshot_bundle = dataclasses.replace(snapshot_bundle, plan=plan, spec=spec)
+    composite_reuse_errors = _composite_reuse_policy_errors(snapshot_bundle)
+    if composite_reuse_errors:
+        raise ValidationError(
+            "invalid reuse policies:\n" + "\n".join(f"  - {e}" for e in composite_reuse_errors)
+        )
+
     # Validate step references
     all_step_ids = {s.step_id for s in plan.steps}
     for s in skip:
@@ -6914,8 +6952,6 @@ def run_process_command(
         auth_exclude_labels=tuple(auth_exclude_labels),
         auth_cross_quota_group=auth_cross_quota_group,
     )
-    snapshot_bundle = load_plan_bundle(process_path, params=variables)
-    snapshot_bundle = dataclasses.replace(snapshot_bundle, plan=plan, spec=spec)
     resource_snapshot = (
         None
         if paths_mod.run_config_file(run_dir).exists()
