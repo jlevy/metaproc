@@ -154,6 +154,60 @@ def validate_scope_collisions(spec: ProcessSpec) -> list[str]:
     return errors
 
 
+EXACT_INPUTS_DESIGN_BEAD = "mp-gg7r"
+"""The metaproc tracker bead that owns the design of ``reuse_policy: exact_inputs``."""
+
+
+def validate_reuse_policies(
+    spec: ProcessSpec, *, mapped_composite: tuple[str, str] | None = None
+) -> list[str]:
+    """Reject the ``reuse_policy`` values the runtime cannot honour, declared or inherited.
+
+    Each refusal keeps a spec from relying on a reuse rule that would not be applied:
+
+    - ``exact_inputs`` is specified (``metaproc help design`` §10.2) but not implemented.
+    - ``never`` on a mapped step: a mapped step reuses work per item, through item
+      discovery and the per-task checks of the chain and composite executors, and none
+      of them re-runs a completed item on the step's say.
+    - ``never`` on any step of a process that runs in the item scopes of a mapped
+      composite, directly or through scalar composites. *mapped_composite* names the
+      nearest such composite as ``(process name, step id)``; the caller that plans the
+      composite tree passes it, since a spec cannot tell where it is used. A completed
+      item scope is checked for valid outputs and not re-entered, so the step would not
+      run again.
+    """
+    errors: list[str] = []
+    for step in spec.steps:
+        policy = step.reuse_policy or spec.defaults.reuse_policy
+        source = "the step" if step.reuse_policy is not None else "defaults"
+        if policy == "exact_inputs":
+            errors.append(
+                f"step '{step.id}': reuse_policy 'exact_inputs' (from {source}) is specified "
+                "in `metaproc help design` §10.2 but not yet implemented; its design is "
+                f"tracked as bead {EXACT_INPUTS_DESIGN_BEAD} in the metaproc repository. "
+                "Declare reuse_policy: validated_outputs, and use "
+                f"--from {step.id} --force to re-run the step after editing its handler "
+                "or inputs"
+            )
+        elif policy == "never" and step.for_each is not None:
+            errors.append(
+                f"step '{step.id}': reuse_policy 'never' (from {source}) is not supported "
+                "on a mapped (for_each) step; declare reuse_policy: validated_outputs on "
+                f"the step, and use --from {step.id} --force to re-run its items"
+            )
+        elif policy == "never" and mapped_composite is not None:
+            composite_process, composite_step = mapped_composite
+            errors.append(
+                f"step '{step.id}': reuse_policy 'never' (from {source}) is not supported "
+                f"in process '{spec.name}', which runs in the item scopes of mapped "
+                f"composite step '{composite_step}' (process '{composite_process}'): a "
+                "completed item scope is not re-entered, so the step would not run again. "
+                "Declare reuse_policy: validated_outputs, and use "
+                f"--from {composite_step} --force to re-run the item scopes"
+            )
+    return errors
+
+
 def validate_framework_template_names(spec: ProcessSpec) -> list[str]:
     """Reject dotted placeholders outside the reserved framework namespaces."""
     errors: list[str] = []

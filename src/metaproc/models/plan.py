@@ -15,6 +15,7 @@ from metaproc.models.authored import (
     IOSpec,
     ParseConfig,
     RetryPolicy,
+    ReusePolicy,
     StepSpend,
     ValueType,
 )
@@ -68,7 +69,7 @@ class ResolvedStep(BaseModel):
     resources: dict[str, object] = Field(default_factory=dict)
     prompt_prefix: str | None = None
     prompt_paths: list[str] = Field(default_factory=list)
-    reuse_policy: str | None = None
+    reuse_policy: ReusePolicy | None = None
     fan_out: FanOut | None = None
     handler: str | None = None
     command: str | None = None

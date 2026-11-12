@@ -6079,7 +6079,7 @@ async def _orchestrate(
             # chain executor's per-task checks decide what resume reuses.
             # A mapped composite likewise re-enters item discovery so child-process
             # outputs, not only the parent's published subset, are revalidated.
-            if (
+            reusable = (
                 not step_force
                 and step_id not in _chain_head_of
                 and not (target.mode == "composite" and target.fan_out is not None)
@@ -6092,7 +6092,17 @@ async def _orchestrate(
                     step=target,
                     expected_run_id=run_id,
                 )
-            ):
+            )
+            if reusable and target.reuse_policy == "never":
+                # Only the walk declines the completion. An omitted ancestor's completion
+                # still satisfies `_verify_ancestors`, and each downstream step is judged
+                # by its own policy. Planning refuses `never` on a mapped step and in the
+                # item scopes of a mapped composite, which this walk would not reach.
+                out.progress(
+                    f"  Step '{step_id}': completed earlier; reuse_policy never — running again"
+                )
+                reusable = False
+            if reusable:
                 completed_entry: dict[str, Any] = {
                     "state": "completed",
                     "note": "previously completed",
@@ -6650,6 +6660,16 @@ def run_process_command(
         variables["ARTIFACT_NAMESPACE"] = plan.artifact_namespace
         variables.setdefault("VARIANT", plan.artifact_namespace)
 
+    # Every composite child process is planned here with spec validation, including the
+    # checks that depend on where a child runs, so a dry run refuses what a launch
+    # refuses and neither writes the run directory first. The bundle also feeds the
+    # run's resource snapshot below.
+    try:
+        snapshot_bundle = load_plan_bundle(process_path, params=variables)
+    except (TypeError, ValueError) as exc:
+        raise ValidationError(str(exc)) from exc
+    snapshot_bundle = dataclasses.replace(snapshot_bundle, plan=plan, spec=spec)
+
     # Validate step references
     all_step_ids = {s.step_id for s in plan.steps}
     for s in skip:
@@ -6905,8 +6925,6 @@ def run_process_command(
         auth_exclude_labels=tuple(auth_exclude_labels),
         auth_cross_quota_group=auth_cross_quota_group,
     )
-    snapshot_bundle = load_plan_bundle(process_path, params=variables)
-    snapshot_bundle = dataclasses.replace(snapshot_bundle, plan=plan, spec=spec)
     resource_snapshot = (
         None
         if paths_mod.run_config_file(run_dir).exists()

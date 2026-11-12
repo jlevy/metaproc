@@ -23,6 +23,7 @@ from metaproc.engine.process_scope import (
 from metaproc.engine.validation import (
     validate_fan_out_contracts,
     validate_framework_template_names,
+    validate_reuse_policies,
     validate_scope_collisions,
 )
 from metaproc.engine.write_boundary import (
@@ -801,16 +802,23 @@ def build_plan(
     config_overrides: dict[str, str] | None = None,
     validate_required_inputs: bool = True,
     validate_spec: bool = True,
+    mapped_composite: tuple[str, str] | None = None,
 ) -> Plan:
     """Build a resolved plan from a process spec and parameter values.
 
     *params* must be pre-expanded via ``expand_process_vars``.
 
-    When *validate_spec* is False, the four spec-level validators (fan-out
-    contracts, framework template names, scope collisions, agent write
-    boundaries) still run but their errors are ignored. Callers that only
+    When *validate_spec* is False, the five spec-level validators (fan-out
+    contracts, framework template names, scope collisions, reuse policies, agent
+    write boundaries) still run but their errors are ignored. Callers that only
     need the resolved plan shape — e.g. viz — can use this to render authored
     specs that would otherwise fail validation.
+
+    *mapped_composite* is set when this process runs in the item scopes of a mapped
+    composite, directly or through scalar composites, as ``(process name, step id)``
+    of the nearest one. A spec cannot tell where it is used, so the caller that plans
+    the composite tree passes it, and the reuse-policy validator then also refuses
+    ``reuse_policy: never`` on every step (``validate_reuse_policies``).
     """
 
     profile_registry = _load_profile_registry(process_path, profile_files)
@@ -867,6 +875,11 @@ def build_plan(
     scope_errors = validate_scope_collisions(spec)
     if validate_spec and scope_errors:
         msg = "invalid scope collisions:\n" + "\n".join(f"  - {e}" for e in scope_errors)
+        raise ValueError(msg)
+
+    reuse_errors = validate_reuse_policies(spec, mapped_composite=mapped_composite)
+    if validate_spec and reuse_errors:
+        msg = "invalid reuse policies:\n" + "\n".join(f"  - {e}" for e in reuse_errors)
         raise ValueError(msg)
 
     if validate_required_inputs:

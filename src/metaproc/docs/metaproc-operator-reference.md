@@ -558,7 +558,34 @@ Editing such a file by hand therefore does not re-run its consumer; changing the
 that *produces* it does, and the cascade carries that downstream.
 Use `--from <step> --force` to re-run the consumer and its downstream after editing a
 generated runbook in place.
-`--from` alone only narrows the walk: a completed step it selects is still reused.
+`--from` alone only narrows the walk: a completed step it selects is still reused,
+unless it declares `reuse_policy: never`.
+
+### Steps that always run
+
+A scalar step that declares `reuse_policy: never`, or inherits it from `defaults`, runs
+again on every launch whose walk reaches it, completed or not, even when `--from <step>`
+selects it without `--force`. The launch prints
+`Step '<step>': completed earlier; reuse_policy never — running again`. Its downstream
+steps are still reused under their own policies, and `metaproc status --steps` lists the
+completed step as `current`. Two records take precedence:
+
+- `metaproc override <step> --satisfied` is checked first, so the launch prints
+  `satisfied via override — skipping` and does not run the step.
+- A `never` manual step accepts the acknowledgment it already recorded and re-validates
+  its outputs; it does not wait for a new acknowledgment.
+
+The child steps of a scalar composite follow their own policies, `never` included.
+Planning refuses `never` on a mapped step and on any step that runs in the item scopes
+of a mapped composite, directly or through scalar composites, because a completed item
+there is not re-entered.
+`run-process` and `run-process --dry-run` both refuse such a spec before writing the run
+directory, naming the step; use `--from <step> --force` to re-run a mapped step’s items
+or a mapped composite’s item scopes.
+
+`reuse_policy: exact_inputs` is planned, not yet accepted: planning refuses it, and
+`metaproc help design` §10.2 explains why.
+Re-run a step whose handler or input file changed with `--from <step> --force`.
 
 ### When a collected input changes
 

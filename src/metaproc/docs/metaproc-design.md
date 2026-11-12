@@ -6,7 +6,7 @@ status: Approved
 ---
 # Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-10-25) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-11-12) **Status:** Approved
 
 Also readable as `metaproc help design`.
 
@@ -789,7 +789,7 @@ fan-out dispatch.
 | `env` | agent, code | environment variables injected into the subprocess |
 | `max_budget_usd` | agent | per-step spending cap (passed to CLI as `--max-budget-usd`) |
 | `token_budget` | agent | per-step token budget (`.process.md` config field, no CLI flag equivalent) |
-| `reuse_policy` | all | `validated_outputs`, `exact_inputs`, or `never` |
+| `reuse_policy` | all | `validated_outputs` (default) or `never` (scalar steps outside a mapped composite); `exact_inputs` is planned, not yet accepted; unset inherits `defaults.reuse_policy` (§10.2) |
 
 ## 7. Analysis Reference Profile
 
@@ -1370,18 +1370,55 @@ Future hardening can add:
 ## 10.2 Reuse Policy
 
 The design uses `reuse_policy` rather than a bare `cache` field.
+A step sets it, or inherits it from `defaults.reuse_policy`, to say whether a later run
+against the same `RUN_ID` may reuse the step’s completion.
+Loading a spec rejects any value outside this table, and planning refuses the uses below
+that the runtime cannot honour.
 
-Values:
+| Value | A completion is reused when | Use for |
+| --- | --- | --- |
+| `validated_outputs` (default) | its declared outputs still validate and its fingerprint (§10.3) still matches | most steps |
+| `exact_inputs` | planned, not yet accepted: planning refuses it | deterministic code steps, once implemented |
+| `never` | never: the step runs on every walk that reaches it | always-run scalar steps |
 
-- `validated_outputs`
-- `exact_inputs`
-- `never`
+For a mapped step, `validated_outputs` re-checks each completed item’s declared outputs
+during item discovery (§10.5).
 
-Semantics:
+**`exact_inputs`** is planned, not yet accepted.
+It is meant to reuse a deterministic code step only while the bytes it runs and reads
+are unchanged, and its design is tracked as bead `mp-gg7r` in the Metaproc repository.
+A spec that declares it, on a step or through `defaults`, still loads, so a viewer can
+render it, but planning refuses it with an error that names that bead: accepting it
+would promise a content check that no part of the runtime makes.
+Until it is implemented, re-run a step whose handler or input file changed with
+`--from <step> --force` (§10.3).
 
-- `validated_outputs` for most agent and manual steps
-- `exact_inputs` for deterministic code steps
-- `never` for always-run steps
+**`never`** changes only what the level walk does with the step’s own completion.
+An ancestor that `--from` or `--only` leaves out still counts as completed when it is,
+and a `never` step that `--from` selects runs again without `--force`. Each downstream
+step is judged by its own policy, so a step that must follow every re-run of a `never`
+step declares `never` too.
+A satisfied override (`metaproc override <step> --satisfied`) is checked before the
+step’s completion, so it wins over `never` and the step is skipped.
+A `never` manual step re-enters its executor, which accepts the acknowledgment already
+recorded and re-validates the step’s outputs instead of waiting for a new one.
+`metaproc status --steps` lists a completed `never` step as `current`; the next launch
+runs it regardless. A scalar composite is entered on every walk whatever its policy, so
+its child steps follow their own policies, `never` included.
+
+Planning refuses `never`, set on the step or through `defaults`, where a completed item
+would not be re-entered:
+
+- **On a mapped step:** a mapped step reuses work per item through item discovery and
+  the per-task checks of the chain and composite executors, none of which re-runs a
+  completed item on the step’s say.
+  `--from <step> --force` re-runs its items.
+- **On any step that runs in the item scopes of a mapped composite**, directly or
+  through scalar composites: a completed item scope is checked for valid outputs and not
+  re-entered. `--from <composite> --force` re-runs the item scopes.
+
+`run-process` plans every composite child before it writes the run directory, so a
+launch and `--dry-run` refuse these specs alike, with the step and the reason named.
 
 ## 10.3 Reuse Key Inputs
 
@@ -1416,7 +1453,8 @@ Nothing is lost: the producing step’s own fingerprint covers that content and
 cascades downstream through the dep graph.
 The visible consequence is that hand-editing a generated runbook does not re-run its
 consumer; `--from <step> --force` forces that, since `--from` alone only narrows the
-walk and reuses a completed step it selects.
+walk and reuses a completed step it selects, unless that step declares
+`reuse_policy: never` (§10.2).
 
 A step’s collected fan-in documents are a second invalidation signal, kept out of the
 fingerprint because they are execution state: the plan publishes fingerprints at launch,
@@ -1481,7 +1519,8 @@ not a pending one, and the step reads by its new completion.
 Recovery semantics are explicit:
 
 - `completed` with validated outputs, a matching fingerprint, and unchanged collected
-  outcomes -> skip
+  outcomes -> skip, unless the step declares `reuse_policy: never`
+- `completed` under `reuse_policy: never` -> rerun this step only
 - `completed` with a fingerprint mismatch -> rerun this step and downstream
 - collected fan-in document reports outcomes other than those last delivered -> rerun
   this step and downstream

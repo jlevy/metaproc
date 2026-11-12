@@ -14,7 +14,6 @@ The projector populates every authored step/dep field into ``StepDetails`` and
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Literal, cast
 
 from metaproc.models.authored import (
     AdapterConfig,
@@ -26,6 +25,13 @@ from metaproc.models.authored import (
     ValueType,
 )
 from metaproc.models.plan import FanOut, ResolvedAdapter, ResolvedDep, ResolvedStep
+
+# PlanBundle moved to metaproc.models.plan_bundle so engine and runtime
+# code can consume it without reaching into the viz package. This re-export
+# (with the explicit `as` form) keeps existing
+# `from metaproc.viz.project import PlanBundle` callers working without
+# triggering basedpyright's reportPrivateLocalImportUsage.
+from metaproc.models.plan_bundle import PlanBundle as PlanBundle
 from metaproc.models.viz import (
     AdapterSummary,
     DefaultsBlock,
@@ -42,17 +48,6 @@ from metaproc.models.viz import (
     VizModel,
     VizNode,
 )
-
-ReusePolicy = Literal["validated_outputs", "exact_inputs", "never"]
-_VALID_REUSE_POLICIES = frozenset({"validated_outputs", "exact_inputs", "never"})
-
-
-# PlanBundle moved to metaproc.models.plan_bundle so engine and runtime
-# code can consume it without reaching into the viz package. This re-export
-# (with the explicit `as` form) keeps existing
-# `from metaproc.viz.project import PlanBundle` callers working without
-# triggering basedpyright's reportPrivateLocalImportUsage.
-from metaproc.models.plan_bundle import PlanBundle as PlanBundle  # noqa: E402
 
 
 def build_viz_model(
@@ -311,9 +306,6 @@ def _project_step_details(
     source_path: str,
     process_schema_token: str,
 ) -> StepDetails:
-    reuse: ReusePolicy | None = None
-    if step.reuse_policy in _VALID_REUSE_POLICIES:
-        reuse = cast("ReusePolicy", step.reuse_policy)
     return StepDetails(
         step_id=step.step_id,
         mode=step.mode,
@@ -339,7 +331,7 @@ def _project_step_details(
         max_budget_usd=step.max_budget_usd,
         token_budget=step.token_budget,
         spend=step.spend,
-        reuse_policy=reuse,
+        reuse_policy=step.reuse_policy,
         on_failure=step.on_failure,
         execution_profile=step.execution_profile,
         artifact_namespace=step.artifact_namespace,
