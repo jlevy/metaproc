@@ -7,29 +7,43 @@ development series.
 
 ## [Unreleased][unreleased]
 
-### Added
-
-- **`reuse_policy: exact_inputs` puts a step’s handler and input files in its
-  fingerprint.** A step that declares it, or inherits it from `defaults`, also hashes
-  the bytes of its handler’s source file and of each declared file input the run does
-  not write, so editing either re-runs the step and its downstream on the next resume.
-  Inputs the run produces, `collect:` documents, a mapped step’s roster, directories,
-  and per-item paths stay out of the hash; `metaproc help design` §10.3 has the list.
-  A step that does not declare it keeps the fingerprint it had, so upgrading re-runs
-  nothing in a resumable run.
-
 ### Fixed
 
-- **`reuse_policy: never` re-runs a scalar step on every launch.** The value was
-  accepted and ignored, so a resume reused the step’s completion.
-  Downstream steps are still reused under their own policies.
-  A mapped step that declares or inherits `never` is refused at planning, because item
-  reuse does not consult the step’s policy.
-- **`reuse_policy` accepts only `validated_outputs`, `exact_inputs`, and `never`.** Any
-  other value loaded and acted as `validated_outputs` on a scalar step and as trusting
-  recorded item state on a mapped one; such a spec now fails to load and the error lists
-  the allowed values. On a mapped step, `exact_inputs` re-checks completed items’
-  declared outputs, as `validated_outputs` does.
+- **`reuse_policy: never` re-runs a scalar step on every launch whose walk reaches it.**
+  The value was accepted and ignored, so a resume reused the step’s completion.
+  Now the launch prints `completed earlier; reuse_policy never — running again` and runs
+  the step, including when `--from <step>` selects it without `--force`. Downstream
+  steps are still reused under their own policies, and the child steps of a scalar
+  composite follow their own.
+  A satisfied override (`metaproc override <step> --satisfied`) still skips the step,
+  and a `never` manual step accepts the acknowledgment it already recorded.
+  Planning refuses `never`, declared or inherited, where a completed item is not
+  re-entered: on a mapped step, and on any step that runs in the item scopes of a mapped
+  composite, directly or through scalar composites.
+- **`reuse_policy` accepts only `validated_outputs`, `exact_inputs`, and `never`, and
+  planning refuses `exact_inputs`.** Any other value loaded and acted as
+  `validated_outputs` on a scalar step and as trusting recorded item state on a mapped
+  one; such a spec now fails to load and the error lists the allowed values.
+  `exact_inputs` is planned, not yet accepted (`metaproc help design` §10.2): no release
+  has implemented it, and it acted as those other values did.
+  A spec that declares it still loads, so a viewer can render it, but planning refuses
+  it with an error that names its design bead.
+- **`run-process` refuses an invalid composite child process before it writes the run
+  directory.** A child process was planned only after the launch created the run
+  directory, so a child spec that fails validation ended the launch in a traceback with
+  an empty run directory left behind, and `--dry-run` accepted it.
+  `run-process` now plans every composite child right after the root, with the same
+  validation, and both a launch and `--dry-run` exit 2 with the error.
+
+Upgrading changes no step’s fingerprint.
+A resumable run whose spec declares or inherits a value this release refuses (`never`
+where it is not supported, `exact_inputs`, or an undocumented value) does not resume
+until the spec is edited, and the edit changes the fingerprint of each step it touches,
+because the policy is part of the step’s definition.
+The step and its downstream re-run once on that resume, a mapped step re-runs every
+item, and editing a child process of a mapped composite re-enters every item scope,
+where the edited steps re-run.
+Resume such a run at the release it launched with to avoid that.
 
 ## [0.6.0][] - 2026-10-26
 

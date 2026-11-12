@@ -789,7 +789,7 @@ fan-out dispatch.
 | `env` | agent, code | environment variables injected into the subprocess |
 | `max_budget_usd` | agent | per-step spending cap (passed to CLI as `--max-budget-usd`) |
 | `token_budget` | agent | per-step token budget (`.process.md` config field, no CLI flag equivalent) |
-| `reuse_policy` | all | `validated_outputs` (default), `exact_inputs`, or `never` (scalar steps only); unset inherits `defaults.reuse_policy` (§10.2) |
+| `reuse_policy` | all | `validated_outputs` (default) or `never` (scalar steps outside a mapped composite); `exact_inputs` is planned, not yet accepted; unset inherits `defaults.reuse_policy` (§10.2) |
 
 ## 7. Analysis Reference Profile
 
@@ -1372,37 +1372,65 @@ Future hardening can add:
 The design uses `reuse_policy` rather than a bare `cache` field.
 A step sets it, or inherits it from `defaults.reuse_policy`, to say whether a later run
 against the same `RUN_ID` may reuse the step’s completion.
-Loading a spec rejects any value outside this table.
+Loading a spec rejects any value outside this table, and planning refuses the uses below
+that the runtime cannot honour.
 
 | Value | A completion is reused when | Use for |
 | --- | --- | --- |
-| `validated_outputs` (default) | its declared outputs still validate and its fingerprint (§10.3) still matches | most agent and manual steps |
-| `exact_inputs` | the same, and the fingerprint also covers the handler’s source file and each authored file input (§10.3) | deterministic code steps |
+| `validated_outputs` (default) | its declared outputs still validate and its fingerprint (§10.3) still matches | most steps |
+| `exact_inputs` | planned, not yet accepted: planning refuses it | deterministic code steps, once implemented |
 | `never` | never: the step runs on every walk that reaches it | always-run scalar steps |
 
-For a mapped step, `validated_outputs` and `exact_inputs` both re-check each completed
-item’s declared outputs during item discovery (§10.5).
+For a mapped step, `validated_outputs` re-checks each completed item’s declared outputs
+during item discovery (§10.5).
 
-`never` changes only what the level walk does with the step’s own completion.
-An ancestor that `--from` or `--only` leaves out still counts as completed when it is.
-Each downstream step is judged by its own policy, so a step that must follow every
-re-run of a `never` step declares `never` too.
-A composite is entered on every walk whatever its policy, and its child steps follow
-their own. `metaproc status --steps` lists a completed `never` step as `current`; the
-next launch runs it regardless.
-A mapped step cannot declare `never`, directly or through `defaults`: planning refuses
-it, because a mapped step reuses work per item through item discovery and the per-task
-checks of the chain and composite executors, none of which re-runs a completed item on
-the step’s say. `--from <step> --force` re-runs a mapped step’s items.
+**`exact_inputs`** is planned, not yet accepted.
+It is meant to reuse a deterministic code step only while the bytes it runs and reads
+are unchanged, and its design is tracked as bead `mp-gg7r` in the Metaproc repository.
+A spec that declares it, on a step or through `defaults`, still loads, so a viewer can
+render it, but planning refuses it with an error that names that bead: accepting it
+would promise a content check that no part of the runtime makes.
+Until it is implemented, re-run a step whose handler or input file changed with
+`--from <step> --force` (§10.3).
+
+**`never`** changes only what the level walk does with the step’s own completion.
+An ancestor that `--from` or `--only` leaves out still counts as completed when it is,
+and a `never` step that `--from` selects runs again without `--force`. Each downstream
+step is judged by its own policy, so a step that must follow every re-run of a `never`
+step declares `never` too.
+A satisfied override (`metaproc override <step> --satisfied`) is checked before the
+step’s completion, so it wins over `never` and the step is skipped.
+A `never` manual step re-enters its executor, which accepts the acknowledgment already
+recorded and re-validates the step’s outputs instead of waiting for a new one.
+`metaproc status --steps` lists a completed `never` step as `current`; the next launch
+runs it regardless. A scalar composite is entered on every walk whatever its policy, so
+its child steps follow their own policies, `never` included.
+
+Planning refuses `never`, set on the step or through `defaults`, where a completed item
+would not be re-entered:
+
+- **On a mapped step:** a mapped step reuses work per item through item discovery and
+  the per-task checks of the chain and composite executors, none of which re-runs a
+  completed item on the step’s say.
+  `--from <step> --force` re-runs its items.
+- **On any step that runs in the item scopes of a mapped composite**, directly or
+  through scalar composites: a completed item scope is checked for valid outputs and not
+  re-entered. `--from <composite> --force` re-runs the item scopes.
+
+`run-process` plans every composite child before it writes the run directory, so a
+launch and `--dry-run` refuse these specs alike, with the step and the reason named.
 
 ## 10.3 Reuse Key Inputs
 
-A step’s fingerprint is its reuse key.
-It covers the resolved step definition, which carries the parameter values resolved into
-the step’s fields and its declared reuse policy, and the bytes of each runbook its
-`prompt_paths` and composite `uses_path` name.
-A step whose policy is `exact_inputs` adds content digests of its handler and inputs,
-described under Exact Inputs below.
+For agent steps, the reuse decision can eventually consider:
+
+- process spec digest
+- instruction digests
+- parameter values
+- input artifact digests
+- declared reuse policy
+
+This provides a path from simple existence-based reuse toward fingerprint-based reuse.
 
 The fingerprint is a first-class invalidation signal on resume.
 The orchestrator stores the step’s current fingerprint at completion time (mirrored at
@@ -1425,29 +1453,8 @@ Nothing is lost: the producing step’s own fingerprint covers that content and
 cascades downstream through the dep graph.
 The visible consequence is that hand-editing a generated runbook does not re-run its
 consumer; `--from <step> --force` forces that, since `--from` alone only narrows the
-walk and reuses a completed step it selects.
-
-**Exact Inputs.** A step whose `reuse_policy` is `exact_inputs` also hashes the files
-`build_plan` lists on `ResolvedStep.exact_input_files`: under `handler`, a code step’s
-handler source file, and under `inputs.<name>`, each declared input the run does not
-itself write. A file-path handler resolves against the process file’s directory, as it
-does when it loads. A module-path handler is found through `importlib.util.find_spec`,
-which imports its parent packages, and planning refuses a module it cannot find.
-Each entry contributes its role and the file’s SHA-256, or a marker when the path does
-not exist or is a directory, so a missing optional input still fingerprints and its
-arrival is a change.
-An input the run writes is left out for the reason a produced runbook is: a `ref` to
-another step’s output, a dep that declares `produced_by`, a `collect:` document, a raw
-path an upstream step declares as an output, and a path the step declares as its own
-output, which would otherwise change under the step on every run.
-The roster a mapped step’s `for_each.over` names is left out too: item discovery reuses
-completed items when the roster grows, and a hashed roster would re-run every item.
-Directory and stream inputs, and paths that still hold a per-item placeholder, have no
-single file to hash and are covered by their resolved paths alone.
-Modules the handler imports are outside the hash, as is the script a `command:` step
-runs; to bind one, declare it as a dep and as an input of the step.
-A step that does not declare `exact_inputs` has no `exact_input_files`, and its
-fingerprint is the contract and runbook hash alone.
+walk and reuses a completed step it selects, unless that step declares
+`reuse_policy: never` (§10.2).
 
 A step’s collected fan-in documents are a second invalidation signal, kept out of the
 fingerprint because they are execution state: the plan publishes fingerprints at launch,
