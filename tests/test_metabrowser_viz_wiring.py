@@ -70,7 +70,7 @@ def test_legacy_duplicate_viz_assets_are_absent(repo_root: Path) -> None:
 def test_metaproc_plugin_registers_visual_view() -> None:
     """Visual tab is wired through the metaproc plugin's index.js
     and domain_views.js loader, which fetches from the plugin data hook.
-    MetaBrowser core must not retain domain-specific visual loading."""
+    Metabrowser core must not retain domain-specific visual loading."""
     app_js = (METABROWSER_PACKAGE_ROOT / "static" / "app.js").read_text()
     plugin_js = (METAPROC_PLUGIN_ROOT / "index.js").read_text()
     domain_views_js = (METAPROC_PLUGIN_ROOT / "domain_views.js").read_text()

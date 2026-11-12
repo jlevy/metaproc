@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: Cloud Execution
 
-**Date:** 2026-04-12 (last updated 2026-10-25) **Status:** Approved
+**Date:** 2026-04-12 (last updated 2026-11-12) **Status:** Approved
 
 For the overall metaproc framework design, see [metaproc-design.md](metaproc-design.md);
 for the run pool process management subsystem, see [arch-runpool.md](arch-runpool.md).
@@ -139,7 +139,7 @@ topology without changing the two public placement axes.
 
 SSH remains a valid control transport for a future persistent-host placement, but it is
 not a pipeline state transport.
-The open-source MetaBrowser project owns the maintained
+The open-source Metabrowser project owns the maintained
 [SSH command, IAP, tunnel, and disconnect-watchdog utilities](https://github.com/jlevy/metabrowser/blob/main/src/metabrowser/cli/ssh_utils.py)
 and their
 [remote-command integration](https://github.com/jlevy/metabrowser/blob/main/src/metabrowser/cli/remote.py).

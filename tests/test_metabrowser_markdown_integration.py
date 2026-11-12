@@ -1,4 +1,4 @@
-"""Markdown integration contracts for the metaproc MetaBrowser plugin."""
+"""Markdown integration contracts for the metaproc Metabrowser plugin."""
 
 from __future__ import annotations
 

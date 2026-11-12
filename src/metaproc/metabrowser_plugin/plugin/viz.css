@@ -3,7 +3,7 @@
  *
  * Rule: this file contains NO literal color values — every color must
  * resolve through `var(--viz-*)` or an existing shared token. See the
- * `--viz-*` palette supplied by the MetaBrowser host for the source of truth.
+ * `--viz-*` palette supplied by the Metabrowser host for the source of truth.
  * A unit test enforces the rule; adding a hex/rgb/hsl literal here will fail
  * CI (see tests/test_viz_css_no_literal_colors.py).
  */

@@ -23,7 +23,7 @@ extra_styles = ["viz.css", "domain_views.css"]
 # metaproc-domain HTTP responses; metabrowser core has no knowledge
 # of these endpoints.
 #
-# Client-side renderers and their state live entirely in this plugin. MetaBrowser core
+# Client-side renderers and their state live entirely in this plugin. Metabrowser core
 # discovers the manifest and mounts registered views without knowing their view IDs.
 
 [[kind]]
@@ -65,7 +65,7 @@ match = { ext = ".jsonl", adapter = "process" }
 priority = 100
 
 # Python sidekick exposes the canonical metaproc-domain data hooks under
-# /api/plugin/metaproc/<route>. MetaBrowser core has no corresponding routes.
+# /api/plugin/metaproc/<route>. Metabrowser core has no corresponding routes.
 
 [[data_hook]]
 route = "info"
@@ -97,7 +97,7 @@ route = "structure-report"
 sidekick = "metaproc.metabrowser_plugin.sidekick:structure_report_handler"
 methods = ["GET"]
 
-# Views are owned by this plugin. MetaBrowser core's view registry has no process-spec,
+# Views are owned by this plugin. Metabrowser core's view registry has no process-spec,
 # resource-report, runpool-log, or process-log entries.
 
 # process-spec: viz DAG + rendered markdown body + source + plugin "Steps"

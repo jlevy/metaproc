@@ -2,7 +2,7 @@
 
 The visualization stylesheet must only express colors through ``var(--...)``
 tokens; no hex / rgb / rgba / hsl / hsla / named-color literals. The tokens
-themselves live in the MetaBrowser host and consumer plugin styles so that a theme
+themselves live in the Metabrowser host and consumer plugin styles so that a theme
 change in one place repaints the graph.
 
 A violation of this test means a literal color slipped into viz.css —

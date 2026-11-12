@@ -1,4 +1,4 @@
-// Metaproc MetaBrowser plugin entry point.
+// Metaproc Metabrowser plugin entry point.
 //
 // Owns metaproc-domain views (process-spec, resource-report, runpool-log,
 // process-log). The "Steps" view (process-spec) is implemented entirely in

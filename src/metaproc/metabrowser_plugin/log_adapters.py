@@ -1,6 +1,6 @@
-"""Register metaproc-owned JSONL adapters with MetaBrowser.
+"""Register metaproc-owned JSONL adapters with Metabrowser.
 
-MetaBrowser owns the generic adapter registry and normalized event contract. The
+Metabrowser owns the generic adapter registry and normalized event contract. The
 metaproc package owns the run-pool and process event schemas, their detectors, and
 their parsers. This bridge keeps those domain details out of the standalone browser
 package while preserving the existing log and live-stream behavior for consumer workflow.

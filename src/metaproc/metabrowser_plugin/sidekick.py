@@ -1,4 +1,4 @@
-"""Python sidekick for the Metaproc MetaBrowser plugin.
+"""Python sidekick for the Metaproc Metabrowser plugin.
 
 Owns metaproc-domain server-side handlers for plugin routes. Core metabrowser
 depends only on the generic plugin protocol; this sidekick owns the handlers
@@ -10,7 +10,7 @@ Handlers exposed under ``/api/plugin/metaproc/<route>``:
   smoke-test endpoint.
 * ``viz-model`` — process-spec VizModel envelope.
 * ``charts`` — runpool-log and agent-log chart series. Agent-log charts use
-  MetaBrowser's public chart API; runpool-log charts use Metaproc's
+  Metabrowser's public chart API; runpool-log charts use Metaproc's
   ``stats.analysis`` for full event aggregation.
 * ``stats`` — runpool-log run stats. Wraps
   ``metaproc.stats.engine.compute_run_stats``.
@@ -19,7 +19,7 @@ Handlers exposed under ``/api/plugin/metaproc/<route>``:
 * ``structure-report`` — read-only softschema structure projection for a
   process and optional run directory.
 
-The handlers use MetaBrowser's public path resolvers so plugin requests cannot
+The handlers use Metabrowser's public path resolvers so plugin requests cannot
 escape the served root.
 """
 

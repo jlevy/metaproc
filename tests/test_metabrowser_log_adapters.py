@@ -1,7 +1,7 @@
-"""Unit coverage for the Metaproc-owned MetaBrowser log adapter bridge.
+"""Unit coverage for the Metaproc-owned Metabrowser log adapter bridge.
 
 The bridge in ``metaproc.metabrowser_plugin.log_adapters`` registers detectors
-and parser factories with MetaBrowser's adapter registry at plugin import time.
+and parser factories with Metabrowser's adapter registry at plugin import time.
 These tests pin the detector predicates, the ``MetaprocLogEvent`` to
 ``metabrowser.LogEvent`` field mapping, and the parser bridge round-trip so a
 regression fails here by name instead of silently degrading runpool/process
@@ -122,5 +122,5 @@ def test_registration_is_idempotent_and_detects_domain_logs() -> None:
 
     assert detect_adapter([json.dumps(RUNPOOL_POOL_START)]) == "runpool"
     assert detect_adapter([json.dumps(PROCESS_STEP_START)]) == "process"
-    # Non-domain input falls through to MetaBrowser's builtin/unknown handling.
+    # Non-domain input falls through to Metabrowser's builtin/unknown handling.
     assert detect_adapter([json.dumps({"event": "unrelated"})]) == "unknown"

@@ -354,9 +354,9 @@ the same commit. Stale perf docs are worse than no perf docs.
 ## Cross-References
 
 - [development.md](development.md) — concise framework dev guide.
-- [MetaBrowser architecture](https://github.com/jlevy/metabrowser/blob/main/docs/architecture.md)
+- [Metabrowser architecture](https://github.com/jlevy/metabrowser/blob/main/docs/architecture.md)
   — the standalone browser design.
-- [Metaproc MetaBrowser plugin](../src/metaproc/metabrowser_plugin/README.md) — the
+- [Metaproc Metabrowser plugin](../src/metaproc/metabrowser_plugin/README.md) — the
   Metaproc-owned browser integration.
 - [conventions.md](../src/metaproc/docs/conventions.md) — naming and structure rules;
   some apply to perf-relevant code (e.g. caching key naming).

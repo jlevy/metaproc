@@ -129,7 +129,7 @@ These are for people working on Metaproc itself; all of them ship in the package
   frontmatter_format gotchas.
 
 The Metabrowser integration is split between the external
-[MetaBrowser architecture](https://github.com/jlevy/metabrowser/blob/main/docs/architecture.md)
+[Metabrowser architecture](https://github.com/jlevy/metabrowser/blob/main/docs/architecture.md)
 and the Metaproc-owned [plugin](src/metaproc/metabrowser_plugin/README.md); RunPool’s
 module-level notes live in [`runpool/README.md`](src/metaproc/runpool/README.md).
 
