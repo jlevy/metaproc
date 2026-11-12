@@ -11,8 +11,11 @@ flowmark-rs = "2026-07-16T00:00:00Z"
 certifi = "2026-10-20T02:25:00Z"
 frontmatter-format = "2026-10-26T06:27:00Z"
 kpress = "2026-08-31T00:55:00Z"
-metabrowser = "2026-09-01T21:49:00Z"
+metabrowser = "2026-11-09T16:35:00Z"
 softschema = "2026-10-26T06:55:00Z"
+
+[manifest]
+overrides = [{ name = "softschema", specifier = ">=0.9.1,<0.10" }]
 
 [[package]]
 name = "annotated-doc"
@@ -911,7 +914,7 @@ wheels = [
 
 [[package]]
 name = "metabrowser"
-version = "0.9.1"
+version = "0.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cachetools" },
@@ -927,15 +930,16 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "pyyaml" },
     { name = "ruamel-yaml" },
+    { name = "softschema" },
     { name = "starlette" },
     { name = "strif" },
     { name = "typer" },
     { name = "uvicorn" },
     { name = "watchfiles" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/2a/0d/8655f20990bceec21d357be33ff765343f7ac91634624a8defc92663a7a1/metabrowser-0.9.1.tar.gz", hash = "sha256:00e0028979438a49729ba7294d762083cd1439d341b220cd9fde30bc1f52fcf5", size = 2617818, upload-time = "2026-09-01T21:48:08.215Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/93/92/b734afb099a1ee86f3a5403ec2b358e2df9bc696e15f0a46408538b206a3/metabrowser-0.12.0.tar.gz", hash = "sha256:c69959e38157ac3737af3ee8e3ce2411b60363250fdfb193d57976c384e34fbc", size = 5933553, upload-time = "2026-11-09T16:35:01.676Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/77/e9/76219fa4e8e3ad79ddbe8a179e9367ef6a56cee9e9674215fb418c68c765/metabrowser-0.9.1-py3-none-any.whl", hash = "sha256:6406b3970f8da533f49dfa7c0b561ded5446531e3b8ea02cc3704bd37b0cb6bc", size = 1028934, upload-time = "2026-09-01T21:48:06.712Z" },
+    { url = "https://files.pythonhosted.org/packages/9b/76/48254a60345f237c6c2731b3230bedf80fd98eb78caf075705f1105eb133/metabrowser-0.12.0-py3-none-any.whl", hash = "sha256:5f080045c5416c82b007996f86e3bfd9f8309c98e0331c833379b7cd584332bc", size = 1879606, upload-time = "2026-11-09T16:34:59.771Z" },
 ]
 
 [[package]]
@@ -1013,7 +1017,7 @@ requires-dist = [
     { name = "google-cloud-secret-manager", marker = "extra == 'gcp-batch'", specifier = ">=2.20" },
     { name = "google-cloud-storage", marker = "extra == 'gcp-batch'", specifier = ">=2.18" },
     { name = "jsonschema", specifier = ">=4.26.0" },
-    { name = "metabrowser", marker = "extra == 'browser'", specifier = "==0.9.1" },
+    { name = "metabrowser", marker = "extra == 'browser'", specifier = "==0.12.0" },
     { name = "pathspec", specifier = ">=1.0.4" },
     { name = "prettyfmt", specifier = ">=0.4.1" },
     { name = "psutil", specifier = ">=7.2.2" },
