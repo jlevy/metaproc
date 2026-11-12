@@ -7,6 +7,27 @@ development series.
 
 ## [Unreleased][unreleased]
 
+### Fixed
+
+- **The Metabrowser plugin targets browser plugin SDK 0.7.** Metabrowser 0.12 refuses a
+  manifest that declares any other SDK, so on a current release none of the plugin’s
+  process, runpool, resource, or structure views loaded and those files fell back to
+  generic Markdown, JSON, and JSONL views.
+- **Runpool charts load and release their Chart.js instances.** The Charts view now
+  requests the host’s on-demand `chart` bundle before drawing, where Metabrowser 0.12
+  moved `MetabrowserCharts`, and passes its container to `MetabrowserCharts.dispose`,
+  which releases only the charts it drew there.
+- **The Stats view finds the run behind a nested runpool log.** It took the run
+  directory from `.logs/<file>` only, so `.logs/runpool/events.jsonl` and step or worker
+  logs asked the server for stats on the log path and failed.
+- **A process graph’s hover card sits under its node.** The plugin passed the pointer
+  event where the host’s tooltip takes the anchor element, so the card opened in the
+  window’s top-left corner.
+- **Process graphs read in the dark theme.** The host supplies dark values only for its
+  text, surface, and border tokens, so step, dependency, and file cards, chips, edges,
+  and error panels kept light pastels under light text.
+  The plugin now defines their dark values.
+
 ## [0.6.0][] - 2026-10-26
 
 ### Added

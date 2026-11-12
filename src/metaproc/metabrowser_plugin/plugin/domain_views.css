@@ -10,6 +10,70 @@
   --standalone-node-process-fill: hsl(260 50% 96%);
 }
 
+/* Dark values for the process-visualization palette. The host's `:root` supplies light
+ * values for every `--viz-*` token but dark values only for its text, surface and border
+ * tokens, so without this block kind accents, chips, edges and errors keep their light
+ * pastels under the dark theme's light text. Kind accents and neutral roles alias the
+ * host's dark surfaces and borders; hued roles keep their light hue at dark lightness. */
+[data-theme="dark"] {
+  --ft-md-process-bg: hsl(261 25% 24%);
+  --ft-md-process-border: hsl(261 20% 42%);
+  --standalone-node-process-fill: hsl(260 22% 24%);
+  --viz-accent-process-bg: var(--viz-surface-sunken);
+  --viz-accent-process-border: var(--viz-border-strong);
+
+  --viz-accent-step-bg: var(--viz-surface-card);
+  --viz-accent-step-border: var(--viz-border-strong);
+  --viz-accent-step-icon: var(--viz-text);
+  --viz-accent-file-bg: var(--viz-surface-sunken);
+  --viz-accent-file-border: var(--viz-border-strong);
+  --viz-accent-dep-bg: oklch(29% 0.03 58.1);
+  --viz-accent-dep-border: oklch(46% 0.06 67);
+  --viz-accent-dep-icon: oklch(78% 0.09 62);
+  --viz-accent-focus: oklch(68% 0.13 259.5);
+  --viz-accent-focus-glow: oklch(68% 0.13 259.5 / 0.3);
+
+  --viz-chip-type-bg: var(--viz-chip-bg);
+  --viz-chip-type-border: var(--viz-chip-border);
+  --viz-chip-type-text: var(--viz-text-muted);
+  --viz-chip-adapter-bg: oklch(30% 0.04 175);
+  --viz-chip-adapter-border: oklch(45% 0.06 175);
+  --viz-chip-adapter-text: oklch(82% 0.07 170);
+  --viz-chip-fan-bg: oklch(31% 0.05 108);
+  --viz-chip-fan-border: oklch(47% 0.09 109);
+  --viz-chip-fan-text: oklch(84% 0.1 110);
+  --viz-chip-mode-bg: oklch(30% 0.05 274);
+  --viz-chip-mode-border: oklch(46% 0.08 274);
+  --viz-chip-mode-text: oklch(82% 0.09 270);
+  --viz-chip-model-bg: oklch(30% 0.03 213);
+  --viz-chip-model-border: oklch(45% 0.05 213);
+  --viz-chip-model-text: oklch(82% 0.06 215);
+  --viz-chip-role-bg: oklch(31% 0.05 96);
+  --viz-chip-role-border: oklch(47% 0.08 96);
+  --viz-chip-role-text: oklch(85% 0.09 93);
+  --viz-chip-variant-bg: oklch(30% 0.06 293);
+  --viz-chip-variant-border: oklch(46% 0.1 293);
+  --viz-chip-variant-text: oklch(82% 0.11 292);
+
+  --viz-edge-default: oklch(58% 0.03 264);
+  --viz-edge-produces: oklch(64% 0.07 228);
+  --viz-edge-consumes: oklch(64% 0.05 136);
+
+  --viz-error-bg: oklch(28% 0.04 17);
+  --viz-error-border: oklch(45% 0.08 18);
+  --viz-error-text: var(--viz-text);
+  --viz-error-title: oklch(78% 0.11 22);
+  --viz-error-hint: oklch(76% 0.07 21);
+
+  --viz-panel-desc: var(--viz-text-meta);
+  --viz-panel-link: oklch(76% 0.12 265);
+  --viz-panel-row-muted: var(--viz-surface-sunken);
+  --viz-toggle-on-bg: oklch(32% 0.05 255);
+  --viz-toggle-on-border: oklch(56% 0.1 254);
+  --viz-toggle-on-text: oklch(86% 0.07 265);
+  --viz-hover-filter: brightness(1.15);
+}
+
 /* ── Stats tab ─────────────────────────────────────────────── */
 
 .stats-grid {

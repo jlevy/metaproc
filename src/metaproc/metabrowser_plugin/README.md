@@ -68,8 +68,8 @@ From the consumer workspace, inspect the discovered plugin with:
 
 ```shell
 uv sync --all-packages --all-groups --locked
-uv run --package metaproc metab plugins show metaproc
-uv run --package metaproc metab plugins doctor
+uv run --frozen --package metaproc metab --plugin metaproc --json
+uv run --frozen --package metaproc metab --doctor --json
 ```
 
 ## Package Layout
@@ -110,7 +110,7 @@ The focused test boundary includes:
 
 An isolated wheel environment containing released MetaBrowser and the historical
 implementation plugin wheels must report every discovered plugin as healthy through
-`metab plugins doctor`.
+`metab --doctor`.
 
 The consumer repository also owns the browser-asset quality gate after extraction.
 `npm run check:metaproc-browser` runs Biome and TypeScript `checkJs` over the packaged

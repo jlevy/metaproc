@@ -82,6 +82,10 @@ const sandbox = {
   Promise,
   Set,
   Map,
+  // The SDK builds API requests with `new URL(path, location.origin)`.
+  URL,
+  URLSearchParams,
+  location: { origin: "http://localhost" },
   // Mustache and Chart globals are referenced by some plugins. We don't
   // render in the shim; just stub them so module loading does not throw.
   Mustache: { render: (tpl) => tpl },
@@ -110,7 +114,7 @@ function load(filepath, label) {
 
 // ── 1. Plugin SDK ─────────────────────────────────────────────────
 
-loadShell(metabrowserRoot, load);
+loadShell(metabrowserRoot, load, sandbox);
 
 if (!sandbox.metabrowser) {
   fail("the plugin SDK did not set window.metabrowser");

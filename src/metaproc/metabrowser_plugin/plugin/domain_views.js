@@ -1363,7 +1363,13 @@ function global_MetaprocViz() {
 
 async function loadCharts(container, path, isCurrent) {
   try {
-    var chartData = await requestPluginData("charts", { path: path });
+    // MetabrowserCharts and Chart.js are on the host's on-demand "chart" bundle. The
+    // payload and the bundle are independent network work, so request them together.
+    var results = await Promise.all([
+      requestPluginData("charts", { path: path }),
+      mb.ensureAsset("chart"),
+    ]);
+    var chartData = results[0];
     if (!isCurrent()) {
       return;
     }
@@ -1377,9 +1383,9 @@ async function loadCharts(container, path, isCurrent) {
   }
 }
 
-function disposeCharts() {
+function disposeCharts(container) {
   if (window.MetabrowserCharts?.dispose) {
-    window.MetabrowserCharts.dispose();
+    window.MetabrowserCharts.dispose(container);
   }
 }
 
@@ -1394,7 +1400,9 @@ function renderChartsPayload(container, chartData) {
 // ── Stats tab ──────────────────────────────────────────────────
 
 async function loadStats(container, filePath, isCurrent) {
-  var runDir = filePath.replace(/\/?\.logs\/[^/]+$/, "") || ".";
+  // Runpool logs sit at several depths under `.logs/` (runpool/, steps/<id>/, worker
+  // directories), so the run directory is everything before the `.logs` segment.
+  var runDir = filePath.replace(/(?:^|\/)\.logs\/.*$/, "") || ".";
 
   try {
     var stats = await requestPluginData("stats", { path: runDir });

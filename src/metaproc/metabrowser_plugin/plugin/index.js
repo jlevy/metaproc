@@ -4,7 +4,7 @@
 // process-log). The "Steps" view (process-spec) is implemented entirely in
 // this file as a Mustache template + shared plugin-data request. The
 // "Document" and "Source" views (process-spec) reuse the renderers exported by the
-// markdown built-in plugin's index.js (mb.builtins.markdown.*). SDK 0.5 loads plugin
+// markdown built-in plugin's index.js (mb.builtins.markdown.*). The SDK loads plugin
 // assets by selected kind, so this entry point explicitly loads every foreign kind
 // whose renderer it embeds before reading the corresponding namespace.
 //
@@ -90,9 +90,9 @@ if (metaprocSdk) {
         const current = ++generation;
         await render(container, ctx, () => current === generation);
       },
-      dispose() {
+      dispose(container) {
         generation += 1;
-        dispose();
+        dispose(container);
       },
     };
   }
@@ -141,10 +141,12 @@ if (metaprocSdk) {
     domainViews().clearPluginDataRequests();
   }
 
-  function disposeChartView() {
+  // Charts are owned per container: the host disposes each view with the container it
+  // rendered into, and MetabrowserCharts keys its Chart.js instances by that container.
+  function disposeChartView(container) {
     const views = domainViews();
     views.clearPluginDataRequests();
-    views.disposeCharts();
+    views.disposeCharts(container);
   }
 
   mb.registerView("process-spec", "steps", asyncView(renderSteps, disposeAsyncData));
