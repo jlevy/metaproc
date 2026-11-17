@@ -4,19 +4,45 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
 
 ## Current Release
 
+- **[v0.6.1](https://github.com/jlevy/metaproc/releases/tag/v0.6.1)**: the changelog,
+  [release notes](docs/project/releases/v0.6.1.md), and publishing pointer match the
+  tree. The tag is the owner’s to create, so the tag SHA here is
+  `PLACEHOLDER — fill in when the tag exists`, as is the pull request it merges.
+  The release is a patch, not a minor: it carries four Metabrowser plugin fixes, every
+  one of them wrong since v0.4.0, and lock-only security bumps for `pyasn1`,
+  `opentelemetry-api`, and `certifi`, none of which is a declared dependency.
+  No public CLI surface, process-file field, runtime artifact shape, plugin entry point,
+  or adapter default changed, and no dependency floor moved.
+  The browser SDK 0.7 port’s plugin code ships, because it runs correctly on the pinned
+  Metabrowser 0.9.1; what was withdrawn before release is its `metabrowser==0.12.0` pin
+  and the manifest’s `sdk_version = "0.7"`, because 0.12.0 declares `softschema==0.8.1`
+  while Metaproc requires `softschema>=0.9.1,<0.10`, so `metaproc[browser]` could not be
+  installed from PyPI at all.
+  Its compatibility notes carry forward the unverified GCP image interpreter (`mp-mo74`)
+  and the Gemini `respectGitIgnore` default (`mp-x1qh`).
+
 - **[v0.6.0](https://github.com/jlevy/metaproc/releases/tag/v0.6.0)** (`mp-f7g0`):
-  published from tag `4289836`, the merge of pull request 120 and the current tip of
-  main, so there is no gap between the published wheel and post-release main.
+  published from tag `4289836`, the merge of pull request 120 and the tip of main at the
+  time, so there was no gap between the published wheel and post-release main.
   The release is a minor, not a patch: the `gcp run` file console adds CLI surface, the
   `softschema` and `frontmatter-format` floors rise to `0.9.1` and `0.5.1`, and a mapped
   composite now opens as many item scopes as the run ceiling admits where it used to
   stop at 32, so a process tuned against that implicit cap runs more work at once.
-  Its compatibility notes carry forward the unverified GCP image interpreter (`mp-mo74`)
-  and the Gemini `respectGitIgnore` default (`mp-x1qh`). It shipped without pull request
-  117, which stays open under review.
+  It shipped without pull request 117, which stays open under review.
 
 ## Release Follow-Ups
 
+- **Re-port the Metabrowser plugin to browser SDK 0.7**: the port’s plugin code is in
+  main and runs on the pinned Metabrowser 0.9.1, so only the host contract was withdrawn
+  for v0.6.1 — the `metabrowser==0.12.0` pin, its cool-off exception and cutoff, and the
+  manifest’s `sdk_version = "0.7"`. 0.12.0 declares `softschema==0.8.1` while Metaproc
+  requires `softschema>=0.9.1,<0.10`, and `[tool.uv] override-dependencies` resolves
+  that only for this workspace: an override never reaches wheel metadata, so the
+  published extra could not install.
+  Blocked on a Metabrowser release whose declared range admits Softschema 0.9. Once one
+  exists, restore the pin, the cutoff entry, and the manifest version together, verify
+  `metaproc[browser]` installs from a built wheel, and carry it in v0.7.0 rather than a
+  patch, since discovery refuses any other SDK and the pair moves as one.
 - **Decide the Gemini `respectGitIgnore` default** (`mp-x1qh`): v0.4.0 shipped
   `respectGitIgnore: False`, so a Gemini step can read ignored files including `.env`.
   Disclosure has landed — the amended [v0.4.0 notes](docs/project/releases/v0.4.0.md)
