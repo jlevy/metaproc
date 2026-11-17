@@ -4,14 +4,24 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
 
 ## Current Release
 
-- **[v0.6.0](https://github.com/jlevy/metaproc/releases/tag/v0.6.0)** (`mp-f7g0`):
-  published from tag `4289836`, the merge of pull request 120 and the tip of main at the
-  time, so there was no gap between the published wheel and post-release main.
-  The release is a minor, not a patch: the `gcp run` file console adds CLI surface, the
-  `softschema` and `frontmatter-format` floors rise to `0.9.1` and `0.5.1`, and a mapped
-  composite now opens as many item scopes as the run ceiling admits where it used to
-  stop at 32, so a process tuned against that implicit cap runs more work at once.
-  It shipped without pull request 117, which stays open under review.
+- **[v0.6.1](https://github.com/jlevy/metaproc/releases/tag/v0.6.1)**: published from
+  tag `5ea6732`, the merge of pull request 125 and the current tip of main, so there is
+  no gap between the published wheel and post-release main.
+  The release is a patch: four Metabrowser plugin fixes, all present in v0.6.0 — two
+  dating to v0.2.0 and two to v0.4.0 — and lock-only security bumps for `pyasn1`,
+  `opentelemetry-api`, and `certifi`, none of which is a declared dependency.
+  No public CLI surface, process-file field, runtime artifact shape, plugin entry point,
+  or adapter default changed, and no dependency floor moved.
+  The browser SDK 0.7 port’s plugin code ships, because it runs correctly on the pinned
+  Metabrowser 0.9.1; what was withdrawn before release is its `metabrowser==0.12.0` pin
+  and the manifest’s `sdk_version = "0.7"`, because 0.12.0 declares `softschema==0.8.1`
+  while Metaproc requires `softschema>=0.9.1,<0.10`, so `metaproc[browser]` would not
+  have installed from PyPI at all.
+  The published extra was verified after the tag: `metaproc[browser]==0.6.1` resolves
+  `metabrowser==0.9.1` with `softschema==0.9.1`, and `metab --doctor` loads the plugin
+  at SDK 0.5. Its compatibility notes carry forward the unverified GCP image interpreter
+  (`mp-mo74`) and the Gemini `respectGitIgnore` default (`mp-x1qh`), and it shipped
+  without pull request 117, which stays open under review.
 
 ## Release Follow-Ups
 
@@ -45,23 +55,6 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
   worth doing before a third.
 
 ## Active Development
-
-- **v0.6.1 release**: the changelog, [release notes](docs/project/releases/v0.6.1.md),
-  and publishing pointer match the tree.
-  What remains is the tag itself and the publish it triggers; § Current Release moves to
-  v0.6.1 once that tag exists.
-  The release is a patch, not a minor: it carries four Metabrowser plugin fixes, every
-  present in v0.6.0 — two dating to v0.2.0 and two to v0.4.0 — and lock-only security
-  bumps for `pyasn1`, `opentelemetry-api`, and `certifi`, none of which is a declared
-  dependency. No public CLI surface, process-file field, runtime artifact shape, plugin
-  entry point, or adapter default changed, and no dependency floor moved.
-  The browser SDK 0.7 port’s plugin code ships, because it runs correctly on the pinned
-  Metabrowser 0.9.1; what was withdrawn before release is its `metabrowser==0.12.0` pin
-  and the manifest’s `sdk_version = "0.7"`, because 0.12.0 declares `softschema==0.8.1`
-  while Metaproc requires `softschema>=0.9.1,<0.10`, so `metaproc[browser]` could not be
-  installed from PyPI at all.
-  Its compatibility notes carry forward the unverified GCP image interpreter (`mp-mo74`)
-  and the Gemini `respectGitIgnore` default (`mp-x1qh`).
 
 - **Process-tree and host safety** (`mp-bd6v`; umbrella feature `mp-qigc`): incubate a
   standalone `safeproc` package with owned pre-execution supervision and brokerless
