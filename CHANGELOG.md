@@ -15,7 +15,7 @@ development series.
   the host’s on-demand `chart` bundle, so unless another view had already loaded
   Chart.js the run summary appeared over the host’s “Charts are unavailable” notice.
   The view now requests the bundle alongside its data.
-- **The Stats view finds the run behind a nested runpool log.** Since v0.4.0 it took the
+- **The Stats view finds the run behind a nested runpool log.** Since v0.2.0 it took the
   run directory from `.logs/<file>` only, so `.logs/runpool/events.jsonl` and step or
   worker logs asked the server for stats on the log path and failed.
 - **A process graph’s hover card sits under its node.** Since v0.4.0 the plugin passed
@@ -23,7 +23,7 @@ development series.
   never placed, and each mouse move over a node raised an error calling a `move()` the
   host does not have.
 - **Process graphs read in the dark theme.** The host supplies dark values only for its
-  text, surface, and border tokens, so since v0.4.0 step, dependency, and file cards,
+  text, surface, and border tokens, so since v0.2.0 step, dependency, and file cards,
   chips, edges, and error panels kept light pastels under light text.
   The plugin now defines their dark values.
 

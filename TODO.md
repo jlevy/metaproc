@@ -51,10 +51,10 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
   What remains is the tag itself and the publish it triggers; § Current Release moves to
   v0.6.1 once that tag exists.
   The release is a patch, not a minor: it carries four Metabrowser plugin fixes, every
-  one of them wrong since v0.4.0, and lock-only security bumps for `pyasn1`,
-  `opentelemetry-api`, and `certifi`, none of which is a declared dependency.
-  No public CLI surface, process-file field, runtime artifact shape, plugin entry point,
-  or adapter default changed, and no dependency floor moved.
+  present in v0.6.0 — two dating to v0.2.0 and two to v0.4.0 — and lock-only security
+  bumps for `pyasn1`, `opentelemetry-api`, and `certifi`, none of which is a declared
+  dependency. No public CLI surface, process-file field, runtime artifact shape, plugin
+  entry point, or adapter default changed, and no dependency floor moved.
   The browser SDK 0.7 port’s plugin code ships, because it runs correctly on the pinned
   Metabrowser 0.9.1; what was withdrawn before release is its `metabrowser==0.12.0` pin
   and the manifest’s `sdk_version = "0.7"`, because 0.12.0 declares `softschema==0.8.1`

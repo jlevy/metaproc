@@ -196,9 +196,9 @@ through a package-scoped `exclude-newer-package` pin in `uv.toml`. Waiting was n
 alternative to review there: every `certifi` release from `2019.03.09` carries the
 affected root, so no older pin avoids the advisory, and the fix is reachable rather than
 unreachable, which the waiver rule above resolves in favor of fixing.
-Exposure is the `gcp` and `browser` extras and the dev groups, which pull `certifi`
-through `httpcore`, `httpx`, and `requests`; Metaproc’s core dependencies do not include
-it.
+Exposure is the `gcp` extras and the dev groups, which pull `certifi` through `requests`
+and through `httpcore` and `httpx` respectively; the `browser` extra does not reach it,
+and Metaproc’s core dependencies do not include it.
 
 That pin recorded its own removal condition: the first ordinary relock after 2026-11-03,
 when `2026.10.19` cleared the 14-day window on its own.
