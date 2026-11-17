@@ -141,8 +141,8 @@ if (metaprocSdk) {
     domainViews().clearPluginDataRequests();
   }
 
-  // Charts are owned per container: the host disposes each view with the container it
-  // rendered into, and MetabrowserCharts keys its Chart.js instances by that container.
+  // The host disposes each view with the container it rendered into, so pass that
+  // container on to `MetabrowserCharts.dispose`, which is free to narrow to it.
   function disposeChartView(container) {
     const views = domainViews();
     views.clearPluginDataRequests();
