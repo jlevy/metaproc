@@ -53,8 +53,8 @@ Browser code uses the documented `window.metabrowser` SDK, including
 [plugin authoring guide](https://github.com/jlevy/metabrowser/blob/main/docs/plugins.md)
 for the supported manifest, Python, and browser contracts.
 
-The repository resolves the published `metabrowser==0.12.0` package from PyPI, whose
-browser plugin SDK 0.7 the manifest targets.
+The repository resolves the published `metabrowser==0.9.1` package from PyPI, whose
+browser plugin SDK 0.5 the manifest targets.
 Package policy rejects workspace source overrides and restoration of an in-tree
 Metabrowser package.
 

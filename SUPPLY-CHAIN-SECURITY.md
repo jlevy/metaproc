@@ -81,21 +81,20 @@ Seven exact first-party releases are exempt from the ordinary cool-off for this 
   and
   [frontmatter-format](https://github.com/jlevy/frontmatter-format/tree/a9e062a1859dc4ad2a68cc8343ca3b8a6c40ca4c/src/frontmatter_format)
   release sources. Only these two package ceilings advance;
-- `metabrowser==0.12.0`, the current release, used by the development and plugin test
+- `metabrowser==0.9.1`, the current release, used by the development and plugin test
   group and by the optional `browser` extra.
-  Published 2026-11-09 and exempted from the 14-day cool-off by the owner on 2026-11-11
-  as a first-party release.
-  Reviewed against `0.9.1`, the release it replaces here: same AGPL-3.0-or-later
-  license, `jlevy/metabrowser` source repository and Python `>=3.12` floor, and a
-  non-yanked pure-Python wheel whose locked SHA-256 matches PyPI. Relocking changed only
-  its own version and added its `softschema` dependency.
-  It advances the browser plugin SDK from 0.5 to 0.7, a contract change: discovery
-  refuses a manifest targeting any other SDK, so it was adopted together with the plugin
-  port that answers it.
-  It pins `softschema==0.8.1` exactly, which conflicts with Metaproc’s
-  `softschema>=0.9.1,<0.10`; `override-dependencies` in `[tool.uv]` resolves Softschema
-  0.9.1 for it, and the plugin suite and `metab --doctor` pass on that pair;
-- `kpress==0.3.5`, the current release, pinned exactly by `metabrowser==0.12.0` and so
+  Reviewed against `0.1.0`, the release it replaces here: same AGPL-3.0-or-later license
+  and `jlevy/metabrowser` source repository, and relocking changed exactly two packages
+  while adding and removing no transitive ones.
+  Its Python floor rises from 3.11 to 3.12, which this project already requires.
+  It advances the browser plugin SDK from 0.1 to 0.5, which is a contract change rather
+  than a version bump: plugin discovery refuses a manifest targeting the wrong SDK, so
+  this release was adopted together with the plugin migration that answers it.
+  The 0.9.0-to-0.9.1 step within that adoption is a reviewed patch release carrying two
+  correctness fixes — lazy plugin-view binding and schema-4 folder-rollup identity —
+  with no license, source-repository, or dependency change and no Metaproc runtime or
+  compatibility-layer change of its own;
+- `kpress==0.3.5`, the current release, pinned exactly by `metabrowser==0.9.1` and so
   adopted with it rather than chosen separately.
   Reviewed as a compatible first-party maintenance update: same source repository and
   license, and no added dependencies;
@@ -185,50 +184,66 @@ The package keeps the MIT license, Python `>=3.10` floor, and dependency metadat
 `2.7.0`; the lock change replaces only its version and two artifact records, with no
 transitive growth.
 
-`certifi` is locked at `2026.10.19`, replacing `2026.6.17`, without an advisory waiver.
-It fixes `GHSA-6q48-6c7w-9gw2` (critical): eight eMudhra intermediate CAs that chain to
-the `emSign ECC Root CA - G3` root have compromised private keys, so a holder of one can
-issue a certificate for any hostname, and an on-path attacker can then read or modify
-TLS traffic from any client trusting the bundle.
+`certifi` is locked at `2026.10.23`, replacing `2026.10.19`, without an advisory waiver.
+`2026.10.19` fixed `GHSA-6q48-6c7w-9gw2` (critical): eight eMudhra intermediate CAs that
+chain to the `emSign ECC Root CA - G3` root have compromised private keys, so a holder
+of one can issue a certificate for any hostname, and an on-path attacker can then read
+or modify TLS traffic from any client trusting the bundle.
+`2026.10.23` keeps that fix and answers no advisory of its own.
 
-Unlike the `urllib3` adoption above, this release was adopted *inside* the cool-off,
+Unlike the `urllib3` adoption above, `2026.10.19` was adopted *inside* the cool-off,
 through a package-scoped `exclude-newer-package` pin in `uv.toml`. Waiting was not an
-alternative to review here: every `certifi` release from `2019.03.09` carries the
+alternative to review there: every `certifi` release from `2019.03.09` carries the
 affected root, so no older pin avoids the advisory, and the fix is reachable rather than
 unreachable, which the waiver rule above resolves in favor of fixing.
-Exposure is the `gcp` and `browser` extras and the dev groups, which pull `certifi`
-through `httpcore`, `httpx`, and `requests`; Metaproc’s core dependencies do not include
-it.
+Exposure is the `gcp` extras and the dev groups, which pull `certifi` through `requests`
+and through `httpcore` and `httpx` respectively; the `browser` extra does not reach it,
+and Metaproc’s core dependencies do not include it.
 
-The release was audited as a trust-store change rather than a code change.
-`core.py` is byte-identical to `2026.6.17`, `__init__.py` differs only in its version
-string, and the wheel otherwise adds only `certifi/tests/`, so the substance is the PEM
-bundle.
-The bundle drops `emSign ECC Root CA - G3` and `Atos TrustedRoot 2011`, and keeps
-the three unaffected emSign roots that `2026.10.18` had removed wholesale before
-`2026.10.19` restored them.
-It also newly trusts four Mozilla CA program roots: `SECOM TLS ECC Root CA 2024`,
-`SECOM TLS RSA Root CA 2024`, `Telia EC TLS Root CA v3`, and `Telia RSA TLS Root CA v3`.
-Accepting this pin accepts those four roots earlier than an ordinary relock would, which
-is the substantive cost of adopting inside the cool-off.
-The [PyPI release](https://pypi.org/project/certifi/2026.10.19/) uploaded its wheel and
-source distribution on 2026-10-20, and the wheel carries a trusted-publishing
-attestation from `certifi/python-certifi` built by `release.yml`. The package keeps the
-MPL-2.0 license, the Python `>=3.7` floor, and the empty dependency metadata of
-`2026.6.17`, so the lock change replaces only its version and artifact records with no
-transitive growth. Drop the pin at the first ordinary relock after 2026-11-03, when the
-release clears the 14-day window on its own.
+That pin recorded its own removal condition: the first ordinary relock after 2026-11-03,
+when `2026.10.19` cleared the 14-day window on its own.
+This is that relock, so the entry is gone and `certifi` resolves under the global
+cool-off again. An `exclude-newer-package` entry is only a ceiling, so once the release
+it admitted had cleared the global window the entry admitted nothing further and instead
+held the trust store at `2026.10.19`, hiding `2026.10.23`.
 
-`opentelemetry-api` is locked at `1.45.1`, replacing `1.43.0`, without an advisory
-waiver. It fixes `GHSA-xcq7-p3pf-p88h`, unbounded `tracestate` parsing.
+`2026.10.23` was audited as a trust-store change rather than a code change, on the same
+terms as the release it replaces: `core.py` is byte-identical to `2026.10.19`,
+`__init__.py` differs only in its version string, and the two wheels otherwise carry the
+same modules, so the substance is the PEM bundle.
+It removes two more emSign roots, `emSign Root CA - C1` and `emSign ECC Root CA - C3`,
+taking the bundle from 120 certificates to 118 and leaving `emSign Root CA - G1` as the
+only emSign root still trusted; `2026.10.19` had restored all three of those after
+`2026.10.18` removed every emSign root wholesale.
+The bundle diff is 51 removed lines and no added line, so this relock trusts strictly
+less than the pin it replaces, and the four Mozilla CA program roots that pin accepted
+early (`SECOM TLS ECC Root CA 2024`, `SECOM TLS RSA Root CA 2024`,
+`Telia EC TLS Root CA v3`, and `Telia RSA TLS Root CA v3`) are unchanged here.
+The [PyPI release](https://pypi.org/project/certifi/2026.10.23/) uploaded its wheel and
+source distribution on 2026-10-23, more than 14 days before adoption, so the ordinary
+cool-off admits it; the wheel carries a trusted-publishing attestation from
+`certifi/python-certifi` built by `release.yml`, and its locked SHA-256 matches PyPI.
+The package keeps the MPL-2.0 license, the Python `>=3.7` floor, and the empty
+dependency metadata of `2026.10.19`, so the lock change replaces only its version and
+artifact records with no transitive growth.
+
+`opentelemetry-api` is locked at `1.45.2`, replacing `1.45.1`, without an advisory
+waiver. It fixes `GHSA-mf5v-w3w3-f6cg` / `CVE-2026-126360` (moderate, CVSS 5.3):
+quadratic-time `traceparent` parsing, a denial of service against any caller that parses
+an attacker-supplied trace header.
+Every release before `1.45.2` carries it, `1.45.1` included, so the `1.45.1` entry this
+replaces was accurate when written and went stale when the advisory was published on
+2026-11-13; the fix it recorded, `GHSA-xcq7-p3pf-p88h` for unbounded `tracestate`
+parsing, is untouched and remains in effect.
 Metaproc does not import OpenTelemetry; it arrives transitively through the Google Cloud
 client libraries of the `gcp` extras.
-The [PyPI release](https://pypi.org/project/opentelemetry-api/1.45.1/) uploaded its
-wheel and source distribution on 2026-10-06, more than 14 days before adoption, so the
-ordinary cool-off admits it; PyPI reports no provenance bundle for the wheel.
-The package keeps the Apache-2.0 license, the Python `>=3.10` floor and the
-`typing-extensions>=4.5.0` dependency of `1.43.0`, so the lock change replaces only its
-version and artifact records, with no transitive growth.
+The [PyPI release](https://pypi.org/project/opentelemetry-api/1.45.2/) uploaded its
+wheel and source distribution on 2026-10-29, more than 14 days before adoption, so the
+ordinary cool-off admits it with a plain relock and no package-scoped pin; PyPI reports
+no provenance bundle for the wheel, as for `1.45.1`. The package keeps the Apache-2.0
+license, the Python `>=3.10` floor and the `typing-extensions>=4.5.0` dependency of
+`1.45.1`, so the lock change replaces only its version and artifact records, with no
+transitive growth.
 
 `pyasn1` is locked at `0.6.5`, replacing `0.6.4`, without an advisory waiver.
 It fixes `GHSA-9m75-vc3g-4x39`, `GHSA-mm57-4v3p-rchx`, `GHSA-fm9c-5rcf-2q5p`, and

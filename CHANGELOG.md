@@ -7,32 +7,31 @@ development series.
 
 ## [Unreleased][unreleased]
 
+## [0.6.1][] - 2026-11-17
+
 ### Fixed
 
-- **The Metabrowser plugin targets browser plugin SDK 0.7.** Metabrowser 0.12 refuses a
-  manifest that declares any other SDK, so on a current release none of the plugin’s
-  process, runpool, resource, or structure views loaded and those files fell back to
-  generic Markdown, JSON, and JSONL views.
-- **Runpool charts load and release their Chart.js instances.** The Charts view now
-  requests the host’s on-demand `chart` bundle before drawing, where Metabrowser 0.12
-  moved `MetabrowserCharts`, and passes its container to `MetabrowserCharts.dispose`,
-  which releases only the charts it drew there.
-- **The Stats view finds the run behind a nested runpool log.** It took the run
-  directory from `.logs/<file>` only, so `.logs/runpool/events.jsonl` and step or worker
-  logs asked the server for stats on the log path and failed.
-- **A process graph’s hover card sits under its node.** The plugin passed the pointer
-  event where the host’s tooltip takes the anchor element, so the card opened in the
-  window’s top-left corner.
+- **Runpool charts draw on first open.** Since v0.4.0 the Charts view never requested
+  the host’s on-demand `chart` bundle, so unless another view had already loaded
+  Chart.js the run summary appeared over the host’s “Charts are unavailable” notice.
+  The view now requests the bundle alongside its data.
+- **The Stats view finds the run behind a nested runpool log.** Since v0.2.0 it took the
+  run directory from `.logs/<file>` only, so `.logs/runpool/events.jsonl` and step or
+  worker logs asked the server for stats on the log path and failed.
+- **A process graph’s hover card sits under its node.** Since v0.4.0 the plugin passed
+  the pointer event where the host’s tooltip takes the anchor element, so the card was
+  never placed, and each mouse move over a node raised an error calling a `move()` the
+  host does not have.
 - **Process graphs read in the dark theme.** The host supplies dark values only for its
-  text, surface, and border tokens, so step, dependency, and file cards, chips, edges,
-  and error panels kept light pastels under light text.
+  text, surface, and border tokens, so since v0.2.0 step, dependency, and file cards,
+  chips, edges, and error panels kept light pastels under light text.
   The plugin now defines their dark values.
 
 ## [0.6.0][] - 2026-10-26
 
 ### Added
 
-- **A `gcp run` job keeps its console in a file.** With the Filestore mount and the
+- **A `gcp run` job keeps its console in a file.** With the run-storage mount and the
   shipped wheel, the command runs inside `metaproc.cloud.gcp.gcp_run_console`, which
   appends its output to `<mount>/logs/gcp-run/<job>/console.log` and sends Cloud Logging
   only a start line, a heartbeat a minute and the exit line, alongside the bootstrap
@@ -41,7 +40,7 @@ development series.
   cursor on each heartbeat.
   A background worker caches the `metaproc status` of each `--watch-run` directory every
   five minutes, so `metaproc gcp logs <job>` and
-  `metaproc gcp status <job> --run-status` read the job without mounting Filestore.
+  `metaproc gcp status <job> --run-status` read the job without mounting the share.
   `--console file` requests the file explicitly; `--console cloud-logging` keeps the
   whole stream in Cloud Logging, which stays the default for `--no-wheel` jobs.
   Live following also stops at terminal Batch state when a final upload is missing.
@@ -1446,7 +1445,8 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
   implicitly. Schemas consumed through Metaproc must be self-contained: use local `$defs`
   references or a registered Pydantic model instead of network-resolved references.
 
-[unreleased]: https://github.com/jlevy/metaproc/compare/v0.6.0...HEAD
+[unreleased]: https://github.com/jlevy/metaproc/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/jlevy/metaproc/releases/tag/v0.6.1
 [0.6.0]: https://github.com/jlevy/metaproc/releases/tag/v0.6.0
 [0.5.0]: https://github.com/jlevy/metaproc/releases/tag/v0.5.0
 [0.4.1]: https://github.com/jlevy/metaproc/releases/tag/v0.4.1

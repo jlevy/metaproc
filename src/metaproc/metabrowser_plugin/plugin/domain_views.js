@@ -1363,8 +1363,8 @@ function global_MetaprocViz() {
 
 async function loadCharts(container, path, isCurrent) {
   try {
-    // MetabrowserCharts and Chart.js are on the host's on-demand "chart" bundle. The
-    // payload and the bundle are independent network work, so request them together.
+    // Chart.js is on the host's on-demand "chart" bundle. The payload and the bundle
+    // are independent network work, so request them together.
     var results = await Promise.all([
       requestPluginData("charts", { path: path }),
       mb.ensureAsset("chart"),
