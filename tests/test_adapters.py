@@ -370,12 +370,13 @@ class TestClaudeCodeCliAdapterAuthCapable:
         assert env == {"CLAUDE_CONFIG_DIR": str(tmp_path)}
 
     def test_debug_capture_args_under_slot(self, tmp_path):
-        # Workers must launch with `claude -d api
-        # --debug-file=<slot>/claude-code-debug.log` so the OAuth refresh
-        # attempt boundaries and per-attempt API errors land in a
-        # slot-scoped file the classifier can read post-run.
+        # Workers launch with `claude --debug-file <slot>/claude-code-debug.log`
+        # (unfiltered): a category filter such as `--debug=api` drops the
+        # uncategorized `[ERROR] API error` lines the classifier reads, so the
+        # OAuth refresh boundaries and per-attempt API errors land in a
+        # slot-scoped file only when no filter is set.
         args = self.adapter.debug_capture_args(tmp_path)
-        assert args == ["-d", "api", "--debug-file", str(tmp_path / "claude-code-debug.log")]
+        assert args == ["--debug-file", str(tmp_path / "claude-code-debug.log")]
 
     def test_debug_capture_args_isolates_slots(self, tmp_path):
         # Each slot gets its own debug file; concurrent items must not
