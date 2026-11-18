@@ -571,6 +571,7 @@ class TestPiCliAdapter:
             "-p",
             f"@{self.prompt_file}",
             "--no-session",
+            "--no-mcp",
             "--provider",
             "openai",
             "--model",

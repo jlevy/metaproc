@@ -1073,7 +1073,7 @@ Anthropic-supported paths over reverse-engineered ones —
 
 Slot directories are credential-bearing and must be wiped after every run.
 But the adapter writes diagnostic files into the slot during execution
-(`claude -d api --debug-file=<slot>/claude-code-debug.log`), and those files are the
+(`claude --debug-file <slot>/claude-code-debug.log`), and those files are the
 only evidence of OAuth-refresh attempts, per-attempt API errors, and `AxiosError`
 payloads. Without them, post-mortem on a wave of identical failures is impossible — the
 operator only sees `auth_outcome: classification=unknown, reason=exit-code-1`.
@@ -1089,7 +1089,8 @@ class AuthCapableCliAdapter(Adapter, Protocol):
 ```
 
 `ClaudeCodeCliAdapter` returns `("claude-code-debug.log",)`. `CodexCliAdapter` and
-others currently return `()` until they grow equivalents to `claude -d api`. Filenames
+others currently return `()` until they grow an equivalent of Claude Code’s
+`--debug-file` log. Filenames
 are adapter-namespaced so multiple adapters’ diagnostics coexist in the run’s `.logs/`
 tree without collision.
 
@@ -1232,7 +1233,12 @@ on its `EntryState`. Slot bootstrap branches on `vehicle`:
   omits `CLAUDE_CODE_OAUTH_TOKEN` (it IS the credential) but scrubs every other
   higher-precedence var (`ANTHROPIC_AUTH_TOKEN`, `apiKeyHelper`, cloud-provider mode
   flags, the provisioning-only `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` /
-  `CLAUDE_CODE_OAUTH_SCOPES`). Defense-in-depth: materialize_credential asserts no stray
+  `CLAUDE_CODE_OAUTH_SCOPES`, and the Anthropic profile and Workload Identity
+  Federation variables `ANTHROPIC_PROFILE`, `ANTHROPIC_FEDERATION_RULE_ID`,
+  `ANTHROPIC_ORGANIZATION_ID`, `ANTHROPIC_IDENTITY_TOKEN[_FILE]`,
+  `ANTHROPIC_SERVICE_ACCOUNT_ID` and `ANTHROPIC_WORKSPACE_ID`, which Claude Code ranks
+  above stored `/login` credentials; an active `oidc_federation` profile file in the
+  Anthropic configuration directory is not covered). Defense-in-depth: materialize_credential asserts no stray
   `.credentials.json` or `settings.json` exists in the slot — a leaked `apiKeyHelper`
   would otherwise silently outvote the static token in the precedence chain.
 - **Vehicle B (`LOGIN_CREDENTIALS`, legacy / fallback)** — the existing

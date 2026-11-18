@@ -199,7 +199,11 @@ set it up:
    Vehicle A keeps `CLAUDE_CODE_OAUTH_TOKEN` (it IS the credential) and scrubs the
    higher-precedence vars *that the harness is willing to override silently*:
    cloud-provider mode flags, `ANTHROPIC_AUTH_TOKEN`, `apiKeyHelper` helper,
-   `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`, etc.
+   `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`, and the Anthropic profile and Workload Identity
+   Federation variables (`ANTHROPIC_PROFILE`, `ANTHROPIC_FEDERATION_RULE_ID`,
+   `ANTHROPIC_ORGANIZATION_ID`, `ANTHROPIC_IDENTITY_TOKEN[_FILE]`,
+   `ANTHROPIC_SERVICE_ACCOUNT_ID`, `ANTHROPIC_WORKSPACE_ID`), which Claude Code ranks
+   above stored `/login` credentials.
 
    **`ANTHROPIC_API_KEY` is deliberately not scrubbed.** Enterprise API-key mode is an
    explicit operator choice; silently masking it would hide an intentional config from

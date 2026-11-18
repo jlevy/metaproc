@@ -78,7 +78,9 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         name="anthropic",
         label="Anthropic",
         api_key_env=MetaprocEnv.ANTHROPIC_API_KEY,
-        model_name_match=lambda n: n.startswith("claude-") or n in {"fable", "opus", "sonnet", "haiku"},
+        model_name_match=lambda n: (
+            n.startswith("claude-") or n in {"fable", "opus", "sonnet", "haiku"}
+        ),
     ),
     ProviderSpec(
         name="openai",
@@ -101,9 +103,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         label="Moonshot",
         api_key_env=MetaprocEnv.MOONSHOT_API_KEY,
         gcp_secret_ref_env=MetaprocEnv.METAPROC_GCP_SECRET_MOONSHOT_API_KEY,
-        gcp_secret_description=(
-            "Moonshot API key (pi-cli moonshot provider, Kimi direct API)"
-        ),
+        gcp_secret_description=("Moonshot API key (pi-cli moonshot provider, Kimi direct API)"),
         model_name_match=lambda n: n.startswith("kimi-"),
     ),
     ProviderSpec(

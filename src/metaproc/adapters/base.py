@@ -533,7 +533,7 @@ class AuthCapableCliAdapter(Adapter, Protocol):
         so post-mortem can correlate API-level debug output with the
         captured stream-json session log. Returns ``()`` for adapters
         that don't write any (current default for codex / gemini /
-        pi until they grow equivalents to ``claude -d api``).
+        pi until they grow an equivalent of Claude Code's ``--debug-file`` log).
 
         Filenames are namespaced by adapter (e.g. ``claude-code-debug.log``
         rather than ``debug.log``) so a future multi-adapter slot or
